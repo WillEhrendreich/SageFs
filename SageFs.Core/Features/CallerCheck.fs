@@ -237,13 +237,41 @@ let callersAsync (options: FSharpProjectOptions option) (sources: OtherSources) 
     return decide sources answer subjects
   }
 
-/// Reads the project's other source files from disk. A file that cannot be read makes the whole answer unreadable:
-/// a caller in it could be anywhere, so nothing is claimed.
+/// The re-signed functions a save of `file` has to define in the same patch. A caller's patch is compiled against the
+/// COMPILED module, so a call to a function another file re-signed binds to the old signature and does not compile unless
+/// the new definition is in the same submission. Only a re-signed function has a definition to carry (a removed one is
+/// gone), and only when a declaration this save patched holds a pending call to it (a site outside any declaration counts
+/// when the file is patched at all).
+let dependenciesOf (state: CallersState) (file: string) (patched: string list) : SignatureEdit list =
+  let pending =
+    match state with
+    | CallersState.CallersPending(first, rest, _) -> first :: rest
+    | CallersState.CallersCurrent
+    | CallersState.CallersNotChecked _
+    | CallersState.CallersNotReported -> []
+  let holdsAPatchedCall (p: PendingCallers) =
+    p.First :: p.Rest
+    |> List.exists (fun s -> samePath s.File file && (String.IsNullOrEmpty s.Caller || List.contains s.Caller patched))
+  pending
+  |> List.filter (fun p -> p.Edit.Cause = SignatureCause.ReSigned && holdsAPatchedCall p)
+  |> List.map _.Edit
+
+/// The declaration a re-signed function is now, found by its qualified name in its file's current declarations.
+let definitionOf (decls: FileDecls) (edit: SignatureEdit) : SourceDecl option =
+  decls.Decls
+  |> List.tryFind (fun d -> d.Kind = DeclKind.FunctionDecl && qualifiedName decls d = edit.Declaration)
+
+/// Reads the project's other source files from disk, by their full paths (the spelling a landing uses for the same file). A
+/// signature file or a script is not a caller. A file that cannot be read makes the whole answer unreadable: a caller in it
+/// could be anywhere, so nothing is claimed.
 let readOthers (savedFile: string) (projectFiles: string list) : OtherSources =
   match projectFiles with
   | [] -> OtherSources.NotLoaded
   | files ->
-    let others = files |> List.filter (fun f -> not (samePath f savedFile))
+    let others =
+      files
+      |> List.filter (fun f -> f.EndsWith(".fs", StringComparison.OrdinalIgnoreCase) && not (samePath f savedFile))
+      |> List.map fullPath
     let read (path: string) =
       try Ok { Path = path; Text = File.ReadAllText path }
       with ex -> Error(path, ex.Message)

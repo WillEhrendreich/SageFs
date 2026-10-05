@@ -114,12 +114,15 @@ let private messageWithCallers (callers: CallerState.CallersState) (message: str
   | news, "" -> sprintf "%s\nCallers in other files: %s" message news
   | news, remedy -> sprintf "%s\nCallers in other files: %s\n→ %s" message news remedy
 
-/// The action a report suggests: the outcome's own when it has one, else the callers' (a patched save has no remedy of its
-/// own, and its callers are the thing to do next).
-let private actionWithCallers (callers: CallerState.CallersState) (outcomeRemedy: string) : string =
-  match outcomeRemedy with
-  | "" -> CallerState.CallersState.remedy callers
-  | own -> own
+/// The action a report suggests. When the save changed the process and callers are on an old method, the callers' remedy
+/// comes first: the outcome's own ("exercise the changed code") is a way to confirm a patch, and a caller that still runs
+/// the old method is the thing to do next. When nothing changed (a refusal, a compile failure) the outcome's own stays,
+/// because there the save itself has to be fixed first; the callers' sentence is in the message either way.
+let private actionWithCallers (callers: CallerState.CallersState) (changedTheProcess: bool) (outcomeRemedy: string) : string =
+  match changedTheProcess, CallerState.CallersState.remedy callers, outcomeRemedy with
+  | true, callersRemedy, _ when callersRemedy <> "" -> callersRemedy
+  | _, callersRemedy, "" -> callersRemedy
+  | _, _, own -> own
 
 /// The whole truth about a save, in the shape every client reads. Built here
 /// and nowhere else, so the browser overlay, the Neovim plugin and an editor
@@ -144,7 +147,7 @@ let reportWith (callers: CallerState.CallersState) (outcome: ReloadOutcome) : De
     Patched = patched
     Considered = considered
     Message = messageWithCallers callers (Outcome.describeForUser outcome)
-    SuggestedAction = actionWithCallers callers (Outcome.remedy outcome |> Option.defaultValue "")
+    SuggestedAction = actionWithCallers callers (Outcome.processChanged outcome) (Outcome.remedy outcome |> Option.defaultValue "")
     Reasons = reasonsIn outcome |> List.map refusalOf
     Kept = keptIn outcome
     Declarations =
@@ -220,7 +223,7 @@ let private notApplied (case: string) (message: string) (remedy: string) : DevRe
       Patched = 0
       Considered = 0
       Message = messageWithCallers callers (match remedy with | "" -> message | r -> sprintf "%s\n→ %s" message r)
-      SuggestedAction = actionWithCallers callers remedy
+      SuggestedAction = actionWithCallers callers false remedy
       Reasons = []
       Kept = []
       Declarations = []

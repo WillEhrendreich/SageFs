@@ -89,6 +89,10 @@ type ActorResult = {
   ProjectTargets: (string * string) list
   /// Each loaded project classified as executable, library or test.
   ProjectRoles: SageFs.ProjectLoading.ClassifiedProject list
+  /// Each loaded project as the compiler checks it: its source files in compile order and its references. What a
+  /// save that re-signs a function is checked with, to find the callers in the project's other files
+  /// (`CallerCheck.callersAsync`). Empty for a bare session, which has no project to check.
+  CheckOptions: FSharp.Compiler.CodeAnalysis.FSharpProjectOptions list
 }
 
 /// Phase 1: Create the actor and return callbacks immediately.
@@ -173,7 +177,7 @@ let createActorImmediate a =
     mkAppStateActor a.FsiKind a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent tracedBuild sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = SageFs.ProjectLoading.classifiedProjectsOf sln |> SageFs.ProjectLoading.withConcerns hostPrep.Concerns }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = SageFs.ProjectLoading.classifiedProjectsOf sln |> SageFs.ProjectLoading.withConcerns hostPrep.Concerns; CheckOptions = originalSln.FsProjects }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

@@ -38,6 +38,11 @@ let tests =
       report.SuggestedAction |> Expect.stringContains "a Patched outcome has no remedy of its own, so the callers' is the action" "Save Pages.fs"
       CallersState.ofJson report.Callers |> Expect.equal "the structure rides along" (Result.Ok pending)
 
+    testCase "WHY — a pending patch's own remedy is to exercise the code, but a caller on the old method is what to do first, so that is the action" <| fun _ ->
+      let report = ReloadBroadcast.reportWith pending (Outcome.PatchPending(1, 1, []))
+      report.SuggestedAction |> Expect.stringContains "the callers' remedy leads" "Save Pages.fs"
+      report.Message |> Expect.stringContains "the outcome's own words are still in the message" "Exercise the changed code"
+
     testCase "WHY — with nothing pending the report's words are exactly what they were before this state existed" <| fun _ ->
       let outcome = Outcome.Patched(1, 1)
       let report = ReloadBroadcast.reportWith CallersState.CallersCurrent outcome

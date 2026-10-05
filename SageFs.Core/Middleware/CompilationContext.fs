@@ -599,20 +599,28 @@ let mapDiagnosticColumn (columnOffset: int) (col: int) = max 0 (col - columnOffs
 let lineDirective (filePath: string) (startLine: int) : string =
   sprintf "# %d \"%s\"" startLine (filePath.Replace("\\", "\\\\").Replace("\"", "\\\""))
 
-/// Writes the patch text: the file's module path, then per container its opens,
+/// The declarations of ONE file that go into a patch: the functions to re-emit, under the file's own module path.
+type PatchUnit = {
+  FilePath: string
+  Decls: SageFs.Features.ReloadPlanning.FileDecls
+  Functions: SageFs.Features.ReloadPlanning.SourceDecl list
+}
+
+/// Writes the patch text: the module paths of the files the patch has declarations from, then per container its opens,
 /// `open global.<compiled module>`, the stand-ins for carried state, and the
 /// re-emitted declarations. `standIns` pairs a carried declaration with its
-/// already-rendered stand-in lines.
+/// already-rendered stand-in lines, and belongs to `primary`, the file the save is of.
+/// `definitions` are declarations of OTHER files the primary's depend on (a function another file re-signed): they are
+/// written first, in the same tree, so the primary's declarations resolve to them.
 let private renderPatch
-    (filePath: string)
-    (decls: SageFs.Features.ReloadPlanning.FileDecls)
-    (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
+    (primary: PatchUnit)
     (standIns: (SageFs.Features.ReloadPlanning.SourceDecl * string list) list)
+    (definitions: PatchUnit list)
     : PreprocessResult =
-  let path = decls.ModulePath
+  let path = primary.Decls.ModulePath
   let pad depth = String.replicate depth "  "
 
-  let emitDecl (indent: string) (f: SageFs.Features.ReloadPlanning.SourceDecl) =
+  let emitDecl (unit': PatchUnit) (indent: string) (f: SageFs.Features.ReloadPlanning.SourceDecl) =
     let text =
       splitLines f.Text
       |> Array.map (fun l ->
@@ -620,58 +628,61 @@ let private renderPatch
         | "" -> ""
         | _ -> indent + l)
       |> Array.toList
-    lineDirective filePath f.StartLine :: text
+    lineDirective unit'.FilePath f.StartLine :: text
 
   /// One thing to write inside a container. Stand-ins go first, so the
   /// functions after them resolve the carried name to the stand-in.
-  let emitItem (indent: string) (item: Choice<string list, SageFs.Features.ReloadPlanning.SourceDecl>) =
+  let emitItem (unit': PatchUnit) (indent: string) (item: Choice<string list, SageFs.Features.ReloadPlanning.SourceDecl>) =
     match item with
     | Choice1Of2 standInLines -> standInLines
-    | Choice2Of2 f -> emitDecl indent f
+    | Choice2Of2 f -> emitDecl unit' indent f
 
   // A function declared inside `namespace X` + `module Y =` must be re-emitted
   // inside `Y`, not flattened into `X`: the compiled method it has to pair with
   // is `X.Y.f`, and `open global.X.Y` is what makes the types it mentions the
   // COMPILED ones rather than freshly re-declared FSI copies. Emitting the
-  // whole file's containers as one nested tree (rather than one block per
+  // whole patch's containers as one nested tree (rather than one block per
   // container) is what keeps `module X =` from being declared twice in a single
-  // submission when two nested modules both changed.
+  // submission when two nested modules both changed, or when two files share a root.
   let rec emitTree
       (depth: int)
       (qualified: string list)
-      (items: (string list * Choice<string list, SageFs.Features.ReloadPlanning.SourceDecl>) list) =
+      (items: (string list * PatchUnit * Choice<string list, SageFs.Features.ReloadPlanning.SourceDecl>) list) =
     let indent = pad depth
-    let here = items |> List.filter (fst >> List.isEmpty) |> List.map snd
+    let here = items |> List.filter (fun (p, _, _) -> List.isEmpty p)
     let nested =
       items
-      |> List.filter (fst >> List.isEmpty >> not)
-      |> List.groupBy (fun (container, _) -> List.head container)
-      |> List.map (fun (name, xs) -> name, xs |> List.map (fun (container, d) -> List.tail container, d))
+      |> List.filter (fun (p, _, _) -> not (List.isEmpty p))
+      |> List.groupBy (fun (p, _, _) -> List.head p)
+      |> List.map (fun (name, xs) -> name, xs |> List.map (fun (p, u, c) -> List.tail p, u, c))
     let hereLines =
       match here with
       | [] -> []
       | _ ->
-        let opens = decls.Opens |> List.map (fun o -> sprintf "%sopen %s" indent o)
+        let opens =
+          here
+          |> List.map (fun (_, u, _) -> u)
+          |> List.distinctBy _.FilePath
+          |> List.collect (fun u -> u.Decls.Opens |> List.map (fun o -> sprintf "%sopen %s" indent o))
         let compiledModule =
           match qualified with
           | [] -> []
           | _ -> [ sprintf "%sopen global.%s" indent (String.concat "." qualified) ]
-        opens @ compiledModule @ (here |> List.collect (emitItem indent))
+        opens @ compiledModule @ (here |> List.collect (fun (_, u, item) -> emitItem u indent item))
     let nestedLines =
       nested
       |> List.collect (fun (name, xs) ->
         sprintf "%smodule %s =" indent name :: emitTree (depth + 1) (qualified @ [ name ]) xs)
     hereLines @ nestedLines
 
-  let headers = path |> List.mapi (fun depth part -> sprintf "%smodule %s =" (pad depth) part)
-  let items =
-    (standIns |> List.map (fun (d, lines) -> d.Container, Choice1Of2 lines))
-    @ (functions |> List.map (fun f -> f.Container, Choice2Of2 f))
-  let body = emitTree path.Length path items
-  { Code = headers @ body |> String.concat "\n"
+  let itemsOf (u: PatchUnit) (unitStandIns: (SageFs.Features.ReloadPlanning.SourceDecl * string list) list) =
+    (unitStandIns |> List.map (fun (d, lines) -> u.Decls.ModulePath @ d.Container, u, Choice1Of2 lines))
+    @ (u.Functions |> List.map (fun f -> u.Decls.ModulePath @ f.Container, u, Choice2Of2 f))
+  let items = (definitions |> List.collect (fun u -> itemsOf u [])) @ itemsOf primary standIns
+  { Code = emitTree 0 [] items |> String.concat "\n"
     LineOffset = 0
     ColumnOffset = 2 * path.Length
-    OriginalFilePath = Some filePath }
+    OriginalFilePath = Some primary.FilePath }
 
 /// Re-emits only the given functions inside the file's module path, opened onto
 /// the COMPILED module (`open global.…`) so they bind to the running app's own
@@ -681,7 +692,7 @@ let emitStableIdentity
     (decls: SageFs.Features.ReloadPlanning.FileDecls)
     (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
     : PreprocessResult =
-  renderPatch filePath decls functions []
+  renderPatch { FilePath = filePath; Decls = decls; Functions = functions } [] []
 
 /// The same patch for functions that use unedited non-public `let mutable`s
 /// (`carried`). Each one gets a same-named stand-in bound to the app's own
@@ -689,11 +700,16 @@ let emitStableIdentity
 /// module, so the patch compiles without re-declaring the binding and throwing
 /// away its live value. `Error` when a stand-in can't be written; the caller
 /// then restarts rather than patching with something that doesn't compile.
-let emitPatchCarrying
+///
+/// `definitions` are declarations of other files that the functions call and that a save re-signed: a patch is compiled
+/// against the COMPILED module, so without the new definition in the same submission the call binds to the old signature
+/// and does not compile. They are written first.
+let emitPatchWithDefinitions
     (filePath: string)
     (decls: SageFs.Features.ReloadPlanning.FileDecls)
     (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
     (carried: SageFs.Features.ReloadPlanning.SourceDecl list)
+    (definitions: PatchUnit list)
     : Result<PreprocessResult, SageFs.Features.ReloadPlanning.SourceDecl * SageFs.Features.LiveStateEmit.LiveStateError> =
   let pad depth = String.replicate depth "  "
   carried
@@ -705,4 +721,13 @@ let emitPatchCarrying
            |> Result.map (fun lines -> done' @ [ d, lines ])
            |> Result.mapError (fun reason -> d, reason)))
        (Ok [])
-  |> Result.map (renderPatch filePath decls functions)
+  |> Result.map (fun standIns -> renderPatch { FilePath = filePath; Decls = decls; Functions = functions } standIns definitions)
+
+/// `emitPatchWithDefinitions` with nothing to define.
+let emitPatchCarrying
+    (filePath: string)
+    (decls: SageFs.Features.ReloadPlanning.FileDecls)
+    (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
+    (carried: SageFs.Features.ReloadPlanning.SourceDecl list)
+    : Result<PreprocessResult, SageFs.Features.ReloadPlanning.SourceDecl * SageFs.Features.LiveStateEmit.LiveStateError> =
+  emitPatchWithDefinitions filePath decls functions carried []

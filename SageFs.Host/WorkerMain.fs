@@ -911,6 +911,48 @@ let run (sessionId: string) (port: int) = async {
   // The source each running app's DLL was built from, advanced after every
   // applied patch: what a save is compared with to decide patch vs restart.
   let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
+  // Who is still on the OLD method after a save re-signed or removed a function (`CallerState`). One ledger for this
+  // worker, because one worker is one process with one set of old methods. Every report the worker broadcasts carries its
+  // state (`ReloadBroadcast.standingCallers`), so a save's pending event and the confirmation after it say the same thing.
+  let callerLedger = ref Features.CallerState.CallerLedger.empty
+  let recordCallers (event: Features.CallerState.LedgerEvent) =
+    lock callerLedger (fun () -> callerLedger.Value <- Features.CallerState.CallerLedger.apply event callerLedger.Value)
+  Features.ReloadBroadcast.standingCallers.Value <-
+    fun () -> lock callerLedger (fun () -> Features.CallerState.CallerLedger.stateOf callerLedger.Value)
+  // The source files of a project directory, as a project would compile them (not what a build left behind).
+  let projectSources (projectDir: string) =
+    IO.Directory.GetFiles(projectDir, "*.fs", IO.SearchOption.AllDirectories)
+    |> Array.filter (fun f ->
+      let n = f.Replace('\\', '/')
+      not (n.Contains("/obj/") || n.Contains("/bin/")))
+  // The callers of whatever a save re-signed or removed, in the project's OTHER files. The compiler is given the options
+  // of the project the file belongs to (without its referenced projects: their built assemblies are in its references,
+  // and re-checking their sources on every such save would cost a project each); without options the answer is by name.
+  // Every way this cannot be answered is a named `CallersCheck.NotChecked` or a name match that says why, never silence.
+  let callersOfSave (filePath: string) (baseline: Features.ReloadPlanning.FileDecls) (current: Features.ReloadPlanning.FileDecls) =
+    async {
+      let full = IO.Path.GetFullPath filePath
+      match Features.CallerCheck.subjectsOf full baseline current with
+      | [] -> return []
+      | subjects ->
+        let options =
+          result.CheckOptions
+          |> List.tryFind (fun o -> o.SourceFiles |> Array.exists (fun f -> String.Equals(IO.Path.GetFullPath f, full, StringComparison.Ordinal)))
+          |> Option.map (fun o -> { o with ReferencedProjects = [||] })
+        let files =
+          match options with
+          | Some o -> Array.toList o.SourceFiles
+          | None -> result.ProjectDirectories |> List.collect (projectSources >> Array.toList)
+        let others = Features.CallerCheck.readOthers full files
+        let! checks = Features.CallerCheck.callersAsync options others subjects
+        for edit, check in checks do
+          Log.info "Hot reload: callers of %s (%s): %A" edit.Declaration (Features.CallerState.SignatureCause.token edit.Cause) check
+        return checks
+    }
+  // What a save that landed tells the ledger: it moved these declarations onto new code, and it may have left callers behind.
+  let recordLanding (filePath: string) (current: Features.ReloadPlanning.FileDecls) (patched: Features.ReloadPlanning.SourceDecl list) (checks: (Features.CallerState.SignatureEdit * Features.CallerState.CallersCheck) list) =
+    recordCallers (Features.CallerState.LedgerEvent.FileLanded(IO.Path.GetFullPath filePath, patched |> List.map (Features.CallerCheck.qualifiedName current)))
+    recordCallers (Features.CallerState.LedgerEvent.Checked checks)
   // Whether this worker was started to take run_app saves as metadata deltas, as its daemon decided (the daemon
   // gave it the runtime variable that makes its assemblies editable, and said so in SAGEFS_METADATA_DELTA).
   let deltaMode = Features.MetadataDelta.MetadataDeltaMode.fromEnvironment ()
@@ -1345,6 +1387,8 @@ let run (sessionId: string) (port: int) = async {
               // value is now consulted instead of discarded.
               (migrationWorthFor migrationSubjectFor first)
             |> Async.AwaitTask
+          // The process the app runs in is new: nothing is on an old method any more.
+          recordCallers Features.CallerState.LedgerEvent.AppRestarted
           Features.ReloadBroadcast.broadcastOutcome (Features.ReloadOutcome.ReloadOutcome.Restarted reasons)
           return SaveHandling.Reported
         | _ ->
@@ -1427,7 +1471,22 @@ let run (sessionId: string) (port: int) = async {
               Log.info "Hot reload: %s — %s" fileName (Features.ReloadOutcome.ReloadOutcome.describe outcome)
               return SaveHandling.Reported
             | _ ->
-            match Middleware.CompilationContext.emitPatchCarrying filePath current functions carried with
+            // A caller whose file is saved AFTER another file re-signed what it calls: its patch is compiled against the
+            // compiled module, where that function still has its old signature, so the new definition rides in the same
+            // submission (see `emitPatchWithDefinitions`).
+            let definitions : Middleware.CompilationContext.PatchUnit list =
+              let standing = lock callerLedger (fun () -> Features.CallerState.CallerLedger.stateOf callerLedger.Value)
+              Features.CallerCheck.dependenciesOf
+                standing
+                (IO.Path.GetFullPath filePath)
+                (functions |> List.map (Features.CallerCheck.qualifiedName current))
+              |> List.choose (fun edit ->
+                match reloadBaselines.TryGetValue edit.File with
+                | true, declaring ->
+                  Features.CallerCheck.definitionOf declaring edit
+                  |> Option.map (fun d -> { Middleware.CompilationContext.PatchUnit.FilePath = edit.File; Decls = declaring; Functions = [ d ] })
+                | _ -> None)
+            match Middleware.CompilationContext.emitPatchWithDefinitions filePath current functions carried definitions with
             | Error (unreachable, reason) ->
               Log.info "Hot reload: %s can't carry '%s' into the patch: %s" fileName unreachable.Name (Features.LiveStateEmit.LiveStateError.describe reason)
               let user = functions |> List.tryHead |> Option.map _.Name |> Option.defaultValue fileName
@@ -1526,6 +1585,14 @@ let run (sessionId: string) (port: int) = async {
                     | [] -> patched
                     | raced -> Features.ReloadOutcome.ReloadOutcome.RestartRequired raced
                   recordKept ()
+                  // The callers of whatever this save re-signed or removed, in the project's other files, are still on the
+                  // old method until those files are saved. Recorded BEFORE the first word on the save, so the pending
+                  // event and everything after it carry them.
+                  match Features.ReloadOutcome.ReloadOutcome.processChanged outcome with
+                  | true ->
+                    let! checks = callersOfSave filePath baseline current
+                    recordLanding filePath current functions checks
+                  | false -> ()
                   announce (Features.PatchConfirmation.watchedOfLanded landed (entryProbesOf response)) outcome
                   Log.info "Hot reload: %s — %s (%s)"
                     fileName
@@ -1589,6 +1656,8 @@ let run (sessionId: string) (port: int) = async {
                 (Features.ReloadOutcome.MetadataDeltaOutcome.Pending (considered, considered, landed.Watched |> List.map _.Declaration))
             for failure in landed.HandlerFailures do
               Log.warn "Hot reload: a metadata-update handler threw after the delta landed: %s" failure
+            // A delta refuses a signature change, so this save re-signed nothing; it moved these declarations onto new code.
+            recordLanding filePath current functions []
             announceDelta landed.Watched outcome
             Log.info "Hot reload: %s — %s (%s; by metadata delta: build %.0f ms, diff and write %.0f ms, apply %.0f ms)"
               fileName
@@ -1924,6 +1993,8 @@ let run (sessionId: string) (port: int) = async {
                     match declsOnDisk with
                     | Ok decls ->
                       let landed, planned = Features.ReloadPlanning.confirmWholeFileLanding decls.Decls reloaded reachedRunningProcess
+                      // A file with no baseline cannot say what it re-signed, but what it moved onto new code still lands.
+                      recordLanding filePath decls landed []
                       Features.PatchConfirmation.watchedOfLanded landed probes, planned
                     | Error _ ->
                       // Nothing was diffed, so the functions watched are the ones the
@@ -2039,12 +2110,6 @@ let run (sessionId: string) (port: int) = async {
         | Ok decls -> reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
         | Error reason -> Log.warn "Hot reload: %s cannot be patched in place (%s)" source reason
     Log.debug "Hot reload: baselined %d source file(s) in %s" sources.Length projectDir
-
-  let projectSources (projectDir: string) =
-    IO.Directory.GetFiles(projectDir, "*.fs", IO.SearchOption.AllDirectories)
-    |> Array.filter (fun f ->
-      let n = f.Replace('\\', '/')
-      not (n.Contains("/obj/") || n.Contains("/bin/")))
 
   let watchForHotReload (projectPath: string) (assemblyPath: string) =
     match workerConfig.Workflow, IO.Path.GetDirectoryName(IO.Path.GetFullPath projectPath) with
