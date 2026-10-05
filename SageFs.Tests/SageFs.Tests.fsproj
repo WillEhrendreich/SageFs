@@ -189,6 +189,7 @@
         <Compile Include="OutputPanelLayoutBrowserTests.fs" />
         <Compile Include="DashboardSessionSwitchOutputBrowserTests.fs" />
         <Compile Include="DashboardLiveBindingsDockBrowserTests.fs" />
+        <Compile Include="NewSessionDialogBrowserTests.fs" />
         <Compile Include="HygieneBrowserTests.fs" />
         <Compile Include="DashboardDisconnectIndicatorBrowserTests.fs" />
         <Compile Include="ElmDaemonTests.fs" />
