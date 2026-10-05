@@ -457,6 +457,8 @@
         <!-- What a live-bindings row knows about the file it may be written back to: the persistence state, the knob's step,
              the row's own undo trail. Pure; the file reading and the writes are the daemon's (LiveBindingsTweakService). -->
         <Compile Include="Features\Tweak\BindingTweak.fs" />
+        <!-- The pane's rows assembled from the files, the walk, what the dashboard did to each row and the last reload. -->
+        <Compile Include="Features\Tweak\BindingTweakRows.fs" />
         <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
         <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —
