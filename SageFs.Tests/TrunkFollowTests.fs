@@ -22,7 +22,8 @@ let private pendingFacts : ReloadFacts =
     Message = "applied"
     SuggestedAction = ""
     Mechanism = ReloadOutcome.PatchMechanism.MetadataDelta
-    Declarations = [] }
+    Declarations = []
+    Callers = SageFs.Features.CallerState.CallersState.CallersCurrent }
 
 let private file (name: string) : SavedFile = { Path = Path.Combine("/trunk", name); Kind = SaveKind.Changed }
 

@@ -19,7 +19,8 @@ let private facts (case: ReloadCase) (mechanism: PatchMechanism) (declarations: 
     Message = "m"
     SuggestedAction = ""
     Mechanism = mechanism
-    Declarations = declarations }
+    Declarations = declarations
+    Callers = SageFs.Features.CallerState.CallersState.CallersCurrent }
 
 let private finished (case: ReloadCase) (mechanism: PatchMechanism) (declarations: string list) : SessionReload =
   SessionReload.Finished (facts case mechanism declarations)

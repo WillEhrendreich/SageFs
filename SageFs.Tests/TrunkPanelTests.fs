@@ -15,7 +15,7 @@ open SageFs.Server.DashboardFragments
 let private landing (n: int) : LandedLanding = { Landing = LandingId (sprintf "l-%d" n); Commit = sprintf "c%d00000000" n }
 
 let private facts (case: ReloadCase) (mechanism: ReloadOutcome.PatchMechanism) : ReloadFacts =
-  { Case = case; Patched = 0; Considered = 1; Message = "m"; SuggestedAction = ""; Mechanism = mechanism; Declarations = [] }
+  { Case = case; Patched = 0; Considered = 1; Message = "m"; SuggestedAction = ""; Mechanism = mechanism; Declarations = []; Callers = SageFs.Features.CallerState.CallersState.CallersCurrent }
 
 let private followed (n: int) (verdicts: FileVerdict list) (machine: TrunkMachine) : TrunkMachine =
   let moving, _ = step machine (TrunkEvent.Landed (landing n))

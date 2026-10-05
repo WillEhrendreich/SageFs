@@ -190,14 +190,15 @@ let private freshnessOf (harness: Harness) (id: SessionId) : ReplFreshness =
 let private deltaFacts (case: ReloadCase) (declarations: string list) : SessionReload =
   SessionReload.Finished
     { Case = case; Patched = 1; Considered = 1; Message = "m"; SuggestedAction = ""
-      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta; Declarations = declarations }
+      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta; Declarations = declarations
+      Callers = SageFs.Features.CallerState.CallersState.CallersCurrent }
 
 let private deltaPending (declarations: string list) = deltaFacts ReloadCase.PatchPending declarations
 let private deltaPatched (declarations: string list) = deltaFacts ReloadCase.Patched declarations
 
 let private restartRequired : SessionReload =
   SessionReload.Finished
-    { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 2; Message = "restart the app to apply this"; SuggestedAction = "restart"; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch; Declarations = [] }
+    { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 2; Message = "restart the app to apply this"; SuggestedAction = "restart"; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch; Declarations = []; Callers = SageFs.Features.CallerState.CallersState.CallersCurrent }
 
 [<Tests>]
 let reloadTests =
@@ -259,7 +260,7 @@ let reloadTests =
         let info = createSession harness
         let restarted =
           SessionReload.Finished
-            { Case = ReloadCase.Restarted; Patched = 0; Considered = 1; Message = "Restarted the app"; SuggestedAction = ""; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch; Declarations = [] }
+            { Case = ReloadCase.Restarted; Patched = 0; Considered = 1; Message = "Restarted the app"; SuggestedAction = ""; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch; Declarations = []; Callers = SageFs.Features.CallerState.CallersState.CallersCurrent }
         harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, restarted))
         let! _ = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, RestartPlan.RespawnOnly, reply))
         reloadOf harness info.Id |> Expect.equal "the verdict that caused the swap survives it" restarted })

@@ -101,10 +101,30 @@ let private keptIn (outcome: ReloadOutcome) : DevReload.KeptStateReport list =
   | ReloadOutcome.RestartRequired _
   | ReloadOutcome.CompileFailed _ -> []
 
+/// Where callers in other files stand right now, read when a report is built. A worker sets it once, to a function over its
+/// own ledger (`CallerLedger`), because one worker is one process with one set of old methods; the default says nothing is
+/// pending, which is what a process that has re-signed nothing says too. A report is built from whatever this holds at that
+/// moment, so every event of a save carries the state the save left, the confirmation after the patch included.
+let standingCallers : (unit -> CallerState.CallersState) ref = ref (fun () -> CallerState.CallersState.CallersCurrent)
+
+/// A report's words with the callers' sentence after them, when there is one. A client that shows only `message` shows it.
+let private messageWithCallers (callers: CallerState.CallersState) (message: string) : string =
+  match CallerState.CallersState.describe callers, CallerState.CallersState.remedy callers with
+  | "", _ -> message
+  | news, "" -> sprintf "%s\nCallers in other files: %s" message news
+  | news, remedy -> sprintf "%s\nCallers in other files: %s\n→ %s" message news remedy
+
+/// The action a report suggests: the outcome's own when it has one, else the callers' (a patched save has no remedy of its
+/// own, and its callers are the thing to do next).
+let private actionWithCallers (callers: CallerState.CallersState) (outcomeRemedy: string) : string =
+  match outcomeRemedy with
+  | "" -> CallerState.CallersState.remedy callers
+  | own -> own
+
 /// The whole truth about a save, in the shape every client reads. Built here
 /// and nowhere else, so the browser overlay, the Neovim plugin and an editor
 /// extension necessarily say the same thing about the same save.
-let reportOf (outcome: ReloadOutcome) : DevReload.ReloadReport =
+let reportWith (callers: CallerState.CallersState) (outcome: ReloadOutcome) : DevReload.ReloadReport =
   let patched, considered =
     match outcome with
     | ReloadOutcome.Patched(patched, considered) -> patched, considered
@@ -123,20 +143,24 @@ let reportOf (outcome: ReloadOutcome) : DevReload.ReloadReport =
     Mechanism = PatchMechanism.wireName (Outcome.mechanismOf outcome)
     Patched = patched
     Considered = considered
-    Message = Outcome.describeForUser outcome
-    SuggestedAction = Outcome.remedy outcome |> Option.defaultValue ""
+    Message = messageWithCallers callers (Outcome.describeForUser outcome)
+    SuggestedAction = actionWithCallers callers (Outcome.remedy outcome |> Option.defaultValue "")
     Reasons = reasonsIn outcome |> List.map refusalOf
     Kept = keptIn outcome
     Declarations =
       match outcome with
       | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(_, _, declarations)) -> declarations
-      | _ -> [] }
+      | _ -> []
+    Callers = CallerState.CallersState.toJson callers }
+
+/// `reportWith`, for the callers state this process holds now.
+let reportOf (outcome: ReloadOutcome) : DevReload.ReloadReport = reportWith (standingCallers.Value ()) outcome
 
 /// The single translation. `refreshes` on the result always equals
 /// `ReloadOutcome.shouldRefreshBrowser` on the input — that equality is pinned
 /// by a test, and it is what stops the two from drifting apart again.
-let eventOf (outcome: ReloadOutcome) : DevReload.DevReloadEvent =
-  let report = reportOf outcome
+let eventWith (callers: CallerState.CallersState) (outcome: ReloadOutcome) : DevReload.DevReloadEvent =
+  let report = reportWith callers outcome
   match outcome with
   | ReloadOutcome.PatchPending _
   | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending _) -> DevReload.Applied report
@@ -155,6 +179,9 @@ let eventOf (outcome: ReloadOutcome) : DevReload.DevReloadEvent =
   // overlay without a refresh. With a patch alongside it, the patch refreshes.
   | ReloadOutcome.KeptLiveState(patched, _, _, _) when patched > 0 -> DevReload.Patched report
   | ReloadOutcome.KeptLiveState _ -> DevReload.NotApplied report
+
+/// `eventWith`, for the callers state this process holds now.
+let eventOf (outcome: ReloadOutcome) : DevReload.DevReloadEvent = eventWith (standingCallers.Value ()) outcome
 
 /// Deliver an event through the broadcast API that matches its case. Every
 /// terminal event a save produces goes through here, so `broadcastPatched`'s
@@ -186,26 +213,34 @@ let broadcastCompileFailure (summary: string) (diagnostics: DevReload.DevReloadD
 /// case name and a remedy, because a client that cannot branch on it and a
 /// user who cannot act on it are both stuck.
 let private notApplied (case: string) (message: string) (remedy: string) : DevReload.DevReloadEvent =
+  let callers = standingCallers.Value ()
   DevReload.NotApplied
     { Outcome = case
       Mechanism = ""
       Patched = 0
       Considered = 0
-      Message = (match remedy with | "" -> message | r -> sprintf "%s\n→ %s" message r)
-      SuggestedAction = remedy
+      Message = messageWithCallers callers (match remedy with | "" -> message | r -> sprintf "%s\n→ %s" message r)
+      SuggestedAction = actionWithCallers callers remedy
       Reasons = []
       Kept = []
-      Declarations = [] }
+      Declarations = []
+      Callers = CallerState.CallersState.toJson callers }
 
 /// A save whose declarations are byte-identical to what the running build
 /// already has. Not a reload and not a failure: there is nothing to fetch and
 /// nothing for the user to do, so no remedy is invented. Refreshing here would
 /// be the byte-identical refresh this whole subsystem exists to prevent.
+///
+/// "Already current" is only said when no caller in another file is still on an old method: a save of a caller's file
+/// with no edit moves nothing, and the report has to say so beside the callers' state, not contradict it.
 let unchanged (fileName: string) : DevReload.DevReloadEvent =
-  notApplied
-    "Unchanged"
-    (sprintf "%s saved — no declaration changed, so the running app is already current." fileName)
-    ""
+  let message =
+    match standingCallers.Value () with
+    | CallerState.CallersState.CallersCurrent -> sprintf "%s saved — no declaration changed, so the running app is already current." fileName
+    | CallerState.CallersState.CallersPending _
+    | CallerState.CallersState.CallersNotChecked _
+    | CallerState.CallersState.CallersNotReported -> sprintf "%s saved — no declaration changed, so nothing moved." fileName
+  notApplied "Unchanged" message ""
 
 /// A save that never reached the compiler because the previous save's compile
 /// still holds it.

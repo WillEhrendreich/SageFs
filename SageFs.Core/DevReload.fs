@@ -239,6 +239,11 @@ type ReloadReport = {
   /// worker applied in its own process names them, because those are what the REPL, which runs the build from before the
   /// patch, is then behind on. The wire only carries the field when there are some.
   Declarations: string list
+  /// Whether callers in OTHER files are still on a method this save (or an earlier one) replaced or removed, as the JSON
+  /// object `CallerState.CallersState.toJson` writes: its state token, its words, and who and where. This file is embedded in
+  /// the isolated FSI host, which has no `CallerState`, so the report carries the finished text and the payload splices it in
+  /// as it stands. Empty means the report says nothing about callers, which a reader takes as `CallersNotReported`.
+  Callers: string
 }
 
 /// Events that flow to clients (browser overlay, editors) over the long-lived
@@ -279,7 +284,7 @@ type DevReloadEvent =
 
 module ReloadReport =
   /// The report for an event that carries no outcome of its own.
-  let none = { Outcome = ""; Mechanism = ""; Patched = 0; Considered = 0; Message = ""; SuggestedAction = ""; Reasons = []; Kept = []; Declarations = [] }
+  let none = { Outcome = ""; Mechanism = ""; Patched = 0; Considered = 0; Message = ""; SuggestedAction = ""; Reasons = []; Kept = []; Declarations = []; Callers = "" }
 
 module DevReloadEvent =
 
@@ -334,8 +339,13 @@ module DevReloadEvent =
       match r.Declarations with
       | [] -> ""
       | names -> sprintf ""","declarations":[%s]""" (names |> List.map json |> String.concat ",")
+    // Already JSON (see `ReloadReport.Callers`), so it is spliced in whole.
+    let callers =
+      match r.Callers with
+      | "" -> ""
+      | finished -> sprintf ""","callers":%s""" finished
     sprintf
-      """"outcome":%s,"patched":%d,"considered":%d,"message":%s,"suggestedAction":%s,"reasons":[%s]%s%s%s"""
+      """"outcome":%s,"patched":%d,"considered":%d,"message":%s,"suggestedAction":%s,"reasons":[%s]%s%s%s%s"""
       (json r.Outcome)
       r.Patched
       r.Considered
@@ -345,6 +355,7 @@ module DevReloadEvent =
       mechanism
       declarations
       kept
+      callers
 
   /// The bare JSON payload for one event — no SSE framing. `sseData` wraps
   /// this into a `data: ...\n\n` frame for the long-lived stream; `LastReload`

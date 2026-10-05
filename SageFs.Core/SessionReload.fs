@@ -55,6 +55,10 @@ type ReloadFacts = {
   /// The declarations a patch applied in the worker's own process put in front of it, by the compiled names. Empty for any
   /// verdict that is not such a patch.
   Declarations: string list
+  /// Whether callers in OTHER files are still on a method this save or an earlier one replaced or removed. The worker's own
+  /// ledger, carried on every report, so it is `CallersCurrent` again once the callers' files have landed. A payload that
+  /// says nothing about it is `CallersNotReported`, never `CallersCurrent`.
+  Callers: SageFs.Features.CallerState.CallersState
 }
 
 [<RequireQualifiedAccess>]
@@ -75,6 +79,8 @@ type ReloadPayloadError =
   | UnknownEventType of eventType: string
   | NoOutcome
   | UnknownOutcome of token: string
+  /// The `callers` object is there and is not one this daemon can read.
+  | BadCallers of detail: string
 
 module ReloadPayloadError =
   let describe (error: ReloadPayloadError) : string =
@@ -83,6 +89,7 @@ module ReloadPayloadError =
     | ReloadPayloadError.UnknownEventType eventType -> sprintf "unknown reload event type '%s'" eventType
     | ReloadPayloadError.NoOutcome -> "a finished reload event has no outcome"
     | ReloadPayloadError.UnknownOutcome token -> sprintf "unknown reload outcome '%s'" token
+    | ReloadPayloadError.BadCallers detail -> sprintf "the callers state could not be read: %s" detail
 
 module ReloadCase =
   /// The worker's own token for each outcome (`ReloadBroadcast` writes them from
@@ -143,24 +150,33 @@ module SessionReload =
         match root.TryGetProperty name with
         | true, value when value.ValueKind = JsonValueKind.Number -> value.GetInt32()
         | _ -> 0
+      // No `callers` field is a worker that said nothing, which is not a worker that said all is well.
+      let callers () : Result<SageFs.Features.CallerState.CallersState, ReloadPayloadError> =
+        match root.TryGetProperty "callers" with
+        | true, value when value.ValueKind = JsonValueKind.Object ->
+          SageFs.Features.CallerState.CallersState.ofElement value |> Result.mapError ReloadPayloadError.BadCallers
+        | _ -> Result.Ok SageFs.Features.CallerState.CallersState.CallersNotReported
       let finished () : Result<SessionReload, ReloadPayloadError> =
         match root.TryGetProperty "outcome" with
         | true, value when value.ValueKind = JsonValueKind.String ->
           ReloadCase.ofToken (value.GetString())
-          |> Result.map (fun case ->
-            SessionReload.Finished
-              { Case = case
-                Patched = count "patched"
-                Considered = count "considered"
-                Message = text "message"
-                SuggestedAction = text "suggestedAction"
-                Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.ofWireName (text "mechanism")
-                Declarations =
-                  match root.TryGetProperty "declarations" with
-                  | true, names when names.ValueKind = JsonValueKind.Array ->
-                    [ for n in names.EnumerateArray() do
-                        if n.ValueKind = JsonValueKind.String then yield n.GetString() ]
-                  | _ -> [] })
+          |> Result.bind (fun case ->
+            callers ()
+            |> Result.map (fun callersState ->
+              SessionReload.Finished
+                { Case = case
+                  Patched = count "patched"
+                  Considered = count "considered"
+                  Message = text "message"
+                  SuggestedAction = text "suggestedAction"
+                  Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.ofWireName (text "mechanism")
+                  Declarations =
+                    match root.TryGetProperty "declarations" with
+                    | true, names when names.ValueKind = JsonValueKind.Array ->
+                      [ for n in names.EnumerateArray() do
+                          if n.ValueKind = JsonValueKind.String then yield n.GetString() ]
+                    | _ -> []
+                  Callers = callersState }))
         | _ -> Result.Error ReloadPayloadError.NoOutcome
       match text "type" with
       | "none" -> Result.Ok SessionReload.NoReloadYet
@@ -194,7 +210,9 @@ module SessionReload =
            // client — the sibling `ReplFreshness.toWire` below emits the same field, which is what
            // made the omission visible. A client that asked "what changed" got an empty list, and
            // the round trip was not an identity.
-           declarations = facts.Declarations |> List.toArray |}
+           declarations = facts.Declarations |> List.toArray
+           // Always a field, like `replFreshness`: a client never has to read an absence as "fine".
+           callers = SageFs.Features.CallerState.CallersState.toElement facts.Callers |}
 
   /// One line for a person or an agent: what the save did, or that it is still
   /// compiling, or that nothing has been saved yet.
