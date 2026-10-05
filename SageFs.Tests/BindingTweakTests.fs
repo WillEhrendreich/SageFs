@@ -338,7 +338,8 @@ let controlTests =
       Control.ofState (PersistenceState.Writing(WriteKind.UndoStep, place)) (SourceFacts.OneSource place) |> Expect.equal "writing" Control.NoControl
       Control.ofState (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) SourceFacts.NoFileBindsIt |> Expect.equal "repl" Control.NoControl
       Control.ofState (PersistenceState.Ambiguous [ place; place ]) (SourceFacts.ManySources [ place; place ]) |> Expect.equal "ambiguous" Control.NoControl
-      Control.ofState (PersistenceState.DiffersFromFile("12", place)) (SourceFacts.OneSource place) |> Expect.equal "differs" Control.NoControl
+      Control.ofState (PersistenceState.DiffersFromFile("12", place)) (SourceFacts.OneSource place)
+      |> Expect.equal "the control still changes the file's one expression, so tuning in a loop keeps working" (Control.RealStepper(9.8, Step.Fraction 1))
       Control.ofState (PersistenceState.Held) SourceFacts.NoFileBindsIt |> Expect.equal "held" Control.NoControl
 
     testCase "after a refusal the control is the one for the expression the file holds NOW" <| fun _ ->

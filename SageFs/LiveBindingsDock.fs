@@ -12,6 +12,10 @@
 /// still the only render path and a push never resets what the user chose.
 ///
 /// A row the walk listed without reading keeps its click-to-run button, its deadline and its refusals exactly as they were.
+///
+/// A row the session's files have something to say about gets a strip under it (`LiveBindingsTweakView`): where its value lives, and
+/// the knob the state allows. The pane is handed that as a `TweakView` (`renderDockWith`); one with none draws exactly what it drew
+/// before, and a row not in the view gets no strip.
 module SageFs.Server.LiveBindingsDock
 
 open System

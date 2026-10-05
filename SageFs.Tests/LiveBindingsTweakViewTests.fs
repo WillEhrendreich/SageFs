@@ -119,7 +119,7 @@ let describeTests =
           Callers = CallerState.CallersState.CallersNotReported }
       for case in ReloadCase.all do
         match describeReload (RowReload.Watching("Tuning.fs", ReloadWatch.Reported(facts case))) with
-        | ReloadLine.Line(text, _) ->
+        | ReloadLine.Line(text, _, _) ->
           text |> Expect.stringContains (sprintf "%s is named" (ReloadCase.token case)) (ReloadCase.token case)
           text |> Expect.stringContains "the declaration is named" "Game.Tuning.gravity"
         | ReloadLine.NoLine -> failtestf "%s is not said" (ReloadCase.token case)

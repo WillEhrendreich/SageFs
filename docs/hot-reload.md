@@ -586,7 +586,7 @@ What it will not do, and what it does about it:
 Where it falls short:
 
 - An `expression` is parsed, not type-checked. A type error shows up as a failed reload verdict, the app keeps serving its last good value, and `undo` puts the old text back. Every reply that wrote an expression says so.
-- It writes the file. Dragging a value live in the running app, before you save, is not built, and neither is the dashboard or editor control that would call this tool.
+- It writes the file. Dragging a value live in the running app, before you save, is not built, and neither is an editor control that would call this tool. The dashboard's Live Bindings pane calls the same door (not the tool): a row whose binding name a project file declares says so (`in source`), and a number gets a drag handle, step buttons and the arrow keys, a bool a switch, a string or a formula a field. Each change is one write per settle, with the hash the row last showed, and each row has its own undo and redo. The pane matches a row to a file by the binding's name, because the live values carry no file or line; two files declaring the name is `ambiguous`, never a first match, and a value the REPL bound that no file holds says `REPL only`. What the pane does not do yet: apply a value to the running app before it is saved, and say a value was copied at startup.
 - If hot reload is not watching the file, the file changes and the running app does not. The reply says so.
 - A journal holds 5000 events per file per session. Past that a new write is refused and undo still works. Compacting a journal is not built.
 - A nested module declared with a dotted name (`module A.B =` inside a file) cannot be addressed.

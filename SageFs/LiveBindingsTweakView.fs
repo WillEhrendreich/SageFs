@@ -133,7 +133,7 @@ let describe (state: PersistenceState) : Described =
     { Label = "differs from the file"
       Tone = Tone.Notice
       Detail =
-        sprintf "The REPL holds %s and the file says %s (%s). Nothing here can tell which came last, so the pane offers no write. Evaluate the binding again to bring them back in step." live place.Text (whereOf place) }
+        sprintf "The REPL holds %s and the file says %s (%s). The knob changes the file. Evaluate the binding again, or let hot reload take the write, to bring the two back in step." live place.Text (whereOf place) }
   | PersistenceState.StaleAddress stale ->
     let nowText =
       match stale.Now with
@@ -182,32 +182,41 @@ let detailShown (state: PersistenceState) : DetailShown =
 [<RequireQualifiedAccess>]
 type ReloadLine =
   | NoLine
-  | Line of text: string * Tone
+  /// The line, its tone, and the longer text for the tooltip (the worker's own wording of what happened and what to do).
+  | Line of text: string * Tone * more: string
 
-/// What the app did with the row's write, in words. A verdict names its case and, when a patch named them, the declarations.
+/// What a reload verdict means for the one value that was written, in a few words.
+let private reloadMeaning (case: ReloadCase) : string * Tone =
+  match case with
+  | ReloadCase.Patched -> "the app is running the new code", Tone.Good
+  | ReloadCase.PatchPending -> "applied, and the new code has not run yet", Tone.Notice
+  | ReloadCase.NeverEntered -> "applied, and the new code was never entered", Tone.Notice
+  | ReloadCase.Restarted -> "the app restarted to take it", Tone.Notice
+  | ReloadCase.NoEffect -> "nothing in the running process changed", Tone.Quiet
+  | ReloadCase.RestartRequired -> "the app needs a restart to take it", Tone.Bad
+  | ReloadCase.CompileFailed -> "the file did not compile, and the app kept its last code", Tone.Bad
+  | ReloadCase.KeptLiveState -> "a live value was kept instead of reset", Tone.Notice
+
+/// What the app did with the row's write, in words. A verdict names its case and, when a patch named them, the declarations; the
+/// worker's own longer wording is the tooltip.
 let describeReload (reload: RowReload) : ReloadLine =
   match reload with
   | RowReload.NoWriteYet -> ReloadLine.NoLine
-  | RowReload.Watching(_, ReloadWatch.AwaitingReload) -> ReloadLine.Line("waiting for the app to take it", Tone.Quiet)
-  | RowReload.Watching(_, ReloadWatch.Compiling) -> ReloadLine.Line("hot reload is compiling it", Tone.Notice)
+  | RowReload.Watching(_, ReloadWatch.AwaitingReload) -> ReloadLine.Line("waiting for the app to take it", Tone.Quiet, "")
+  | RowReload.Watching(_, ReloadWatch.Compiling) -> ReloadLine.Line("hot reload is compiling it", Tone.Notice, "")
   | RowReload.Watching(_, ReloadWatch.NoNewReport) ->
-    ReloadLine.Line("no new reload report arrived: hot reload may not be running, or the verdict is the same as the last one", Tone.Quiet)
+    ReloadLine.Line(
+      "no new reload report arrived",
+      Tone.Quiet,
+      "Hot reload may not be running, or its verdict is the same as the last one's, which cannot be told apart from no verdict."
+    )
   | RowReload.Watching(_, ReloadWatch.Reported facts) ->
     let named =
       match facts.Declarations with
       | [] -> ""
       | declarations -> sprintf " (%s)" (String.concat ", " (declarations |> List.truncate 3))
-    let tone =
-      match facts.Case with
-      | ReloadCase.Patched -> Tone.Good
-      | ReloadCase.PatchPending
-      | ReloadCase.KeptLiveState
-      | ReloadCase.NeverEntered
-      | ReloadCase.Restarted -> Tone.Notice
-      | ReloadCase.NoEffect -> Tone.Quiet
-      | ReloadCase.RestartRequired
-      | ReloadCase.CompileFailed -> Tone.Bad
-    ReloadLine.Line(sprintf "%s%s: %s" (ReloadCase.token facts.Case) named facts.Message, tone)
+    let meaning, tone = reloadMeaning facts.Case
+    ReloadLine.Line(sprintf "%s%s: %s" (ReloadCase.token facts.Case) named meaning, tone, sprintf "%s %s" facts.Message facts.SuggestedAction)
 
 // ── script text ──
 
@@ -428,7 +437,12 @@ let private reloadNodes (view: RowView) : XmlNode list =
   let line =
     match describeReload view.Reload with
     | ReloadLine.NoLine -> []
-    | ReloadLine.Line(text, tone) -> [ Elem.span [ Attr.class' (sprintf "live-reload %s" (Tone.cssClass tone)); testid "tweak-reload" ] [ textEnc text ] ]
+    | ReloadLine.Line(text, tone, more) ->
+      [ Elem.span
+          [ Attr.class' (sprintf "live-reload %s" (Tone.cssClass tone))
+            testid "tweak-reload"
+            Attr.title (attrEnc more) ]
+          [ textEnc text ] ]
   line @ notWatched
 
 /// The strip under a row: the state as a chip and a sentence, the knob where the state allows one, the row's undo and redo, and what

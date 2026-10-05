@@ -423,6 +423,10 @@ module Control =
       | SourceFacts.PartNotSpelled _ -> Control.NoControl
     match state with
     | PersistenceState.InSource place -> ofSource place
+    // The control changes the FILE, and the file has exactly one expression here: that the REPL holds another value (a write has
+    // not been taken by the running session yet, or the REPL rebound the name) does not make it ambiguous which expression a
+    // write goes to. The chip says the two differ, so a person tuning in a loop can keep stepping.
+    | PersistenceState.DiffersFromFile(_, place) -> ofSource place
     | PersistenceState.Derived(place, DerivedWhy.AFormula) -> Control.ExpressionField place.Text
     | PersistenceState.Derived(_, DerivedWhy.AContainer) -> Control.NoControl
     | PersistenceState.Refused _
@@ -430,7 +434,6 @@ module Control =
     | PersistenceState.NotInAFile _
     | PersistenceState.Held
     | PersistenceState.Ambiguous _
-    | PersistenceState.DiffersFromFile _
     | PersistenceState.Writing _ -> Control.NoControl
 
 /// A row's state and the control that state allows, from the three facts. The one place the two are decided together, so a row
