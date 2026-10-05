@@ -75,7 +75,12 @@ jobs:
     - name: Warn when release bypassed the Definition of Done gate
       if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bypass_dod == 'true' }}
       shell: bash
-      run: echo "::warning::Release Definition of Done gate BYPASSED via workflow_dispatch. Remaining obligations tracked in issues #127 (hot-reload), #128 (live-testing), #129 (friction)."
+      # Block scalar, not `run: echo "..."`: in an unquoted YAML scalar a space plus `#` starts
+      # a comment, so everything from "issues #127" onward was truncated, the quote never closed,
+      # and bash exited 2 on `unexpected EOF while looking for matching '"'`. That is why this
+      # step had never been exercised without failing: bypass_dod was never used before.
+      run: |
+        echo "::warning::Release Definition of Done gate BYPASSED via workflow_dispatch. Remaining obligations tracked in issues #127 (hot-reload), #128 (live-testing), #129 (friction)."
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
