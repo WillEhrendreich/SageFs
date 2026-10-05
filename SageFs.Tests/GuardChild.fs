@@ -138,9 +138,17 @@ let private outcomeLine (scenario: GuardScenario) (evaluated: MemberEvaluated) :
   sprintf "GUARDCHILD scenario=%s result=%s trip=%s guarded=%d pending=%d"
     (GuardScenario.toArgument scenario) result trip (GuardCoverage.guardedCount evaluated.Guards.Coverage) Guard.Pending
 
-/// The deadline and grace a child uses: short, because a child that is stopped says so within milliseconds.
-let private childLimits : Limits =
-  { Deadline = TestTimeouts.blockedGetterBudget
+/// The deadline and grace a child uses. Short for the scenarios that only END at the deadline or are stopped by a
+/// guard within milliseconds (a spin, a wait): the clock is what finishes them, so a short one keeps the case quick.
+/// Long for the two that end on their own (a getter that returns, and one that recurses until the stack guard throws):
+/// there the GUARD is what is under test, and 150 ms lost to the machine (JIT, a patcher, a recursion to the stack
+/// limit in a process starting on a loaded box) made the deadline win and the case say `timed-out` instead of `stack`.
+let private childLimits (scenario: GuardScenario) : Limits =
+  { Deadline =
+      match scenario with
+      | Returns
+      | RecursesForever -> TestTimeouts.patienceBrief
+      | _ -> TestTimeouts.blockedGetterBudget
     InterruptGrace = TestTimeouts.interruptGrace
     MaxAbandoned = 4 }
 
@@ -159,7 +167,7 @@ let tryRun (argv: string[]) : ChildRun =
       eprintfn "%s" message
       ChildRun.Ran 2
     | Result.Ok scenario ->
-      let evaluator = Evaluator(childLimits, unfiltered, GuardScenario.guardingFor scenario)
+      let evaluator = Evaluator(childLimits scenario, unfiltered, GuardScenario.guardingFor scenario)
       let property = typeof<Victim>.GetProperty (GuardScenario.getterName scenario)
       let evaluated = evaluator.RunGuarded property (box (Victim()))
       printfn "%s" (outcomeLine scenario evaluated)
