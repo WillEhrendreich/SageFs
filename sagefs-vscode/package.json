@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Inline F# evaluation, tests that re-run on your edits, and hot reload for your running app, all from one SageFs session.",
-  "version": "0.6.897",
+  "version": "0.6.898",
   "publisher": "willehrendreich",
   "license": "MIT",
   "icon": "icon.png",
