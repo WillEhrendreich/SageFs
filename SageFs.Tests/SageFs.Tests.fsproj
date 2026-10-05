@@ -452,6 +452,8 @@
         <Compile Include="ReflectionReadTrackingTests.fs" />
         <Compile Include="ReflectionReadSurfaceTests.fs" />
         <Compile Include="ReloadBroadcastTests.fs" />
+        <Compile Include="BrowserAssetsTests.fs" />
+        <Compile Include="BrowserAssetReloadTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />
         <Compile Include="IdentifierScanTests.fs" />
         <Compile Include="EvalTimelineTests.fs" />

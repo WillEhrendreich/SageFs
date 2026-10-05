@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="WebSharper" Version="10.1.6.676" />
+    <PackageVersion Include="WebSharper.FSharp" Version="10.1.6.676" />
+  </ItemGroup>
+</Project>

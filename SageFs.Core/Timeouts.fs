@@ -481,6 +481,8 @@ module Timeouts =
   /// one change (the default watch config and `DevReloadConfig`). An editor
   /// writes a save as several events. No recorded reason for 200ms.
   let fileWatchDebounce = TimeSpan.FromMilliseconds(200.0)
+
+  let browserAssetBuild = envOrDefault "SAGEFS_BROWSER_ASSET_BUILD_SECONDS" 300.0
   /// A change to a file within this window of that file's last compile is
   /// dropped as the watcher's duplicate event for one save, not a new edit.
   /// No recorded reason for 500ms.

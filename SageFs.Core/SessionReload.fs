@@ -21,6 +21,8 @@ open System.Text.Json
 /// and a contract test pins the two together.
 [<RequireQualifiedAccess>]
 type ReloadCase =
+  | AssetsRebuilt
+  | Unchanged
   /// The new code has been seen running.
   | Patched
   /// Applied, and the new code has not been seen running yet. Resolves into
@@ -96,6 +98,8 @@ module ReloadCase =
   /// the `ReloadOutcome` case names). One spelling per case.
   let token (case: ReloadCase) : string =
     match case with
+    | ReloadCase.AssetsRebuilt -> "AssetsRebuilt"
+    | ReloadCase.Unchanged -> "Unchanged"
     | ReloadCase.Patched -> "Patched"
     | ReloadCase.PatchPending -> "PatchPending"
     | ReloadCase.NeverEntered -> "NeverEntered"
@@ -108,7 +112,7 @@ module ReloadCase =
   /// Every case, so a parser and a test can walk them. The token function above
   /// is exhaustive, so a new case cannot be added without a token.
   let all : ReloadCase list =
-    [ ReloadCase.Patched; ReloadCase.PatchPending; ReloadCase.NeverEntered; ReloadCase.Restarted; ReloadCase.NoEffect
+    [ ReloadCase.AssetsRebuilt; ReloadCase.Unchanged; ReloadCase.Patched; ReloadCase.PatchPending; ReloadCase.NeverEntered; ReloadCase.Restarted; ReloadCase.NoEffect
       ReloadCase.RestartRequired; ReloadCase.CompileFailed; ReloadCase.KeptLiveState ]
 
   let ofToken (text: string) : Result<ReloadCase, ReloadPayloadError> =
@@ -185,7 +189,7 @@ module SessionReload =
         (match text "file" with
          | "" -> Result.Ok (SessionReload.Compiling None)
          | file -> Result.Ok (SessionReload.Compiling (Some file)))
-      | "pending" | "patched" | "neverentered" | "restarted" | "noeffect" | "failed" -> finished ()
+      | "assetsrebuilt" | "pending" | "patched" | "neverentered" | "restarted" | "noeffect" | "failed" -> finished ()
       | other -> Result.Error (ReloadPayloadError.UnknownEventType other)
     with :? JsonException as ex -> Result.Error (ReloadPayloadError.NotJson ex.Message)
 
@@ -265,7 +269,7 @@ module ReplFreshness =
         ReplFreshness.BehindApp (1, merged [])
       | (ReloadCase.Patched | ReloadCase.NeverEntered | ReloadCase.KeptLiveState), ReplFreshness.BehindApp (saves, known) ->
         ReplFreshness.BehindApp (saves, merged known)
-      | (ReloadCase.Restarted | ReloadCase.NoEffect | ReloadCase.RestartRequired | ReloadCase.CompileFailed), _ -> freshness
+      | (ReloadCase.AssetsRebuilt | ReloadCase.Unchanged | ReloadCase.Restarted | ReloadCase.NoEffect | ReloadCase.RestartRequired | ReloadCase.CompileFailed), _ -> freshness
     | SessionReload.Finished _
     | SessionReload.Compiling _
     | SessionReload.NoReloadYet -> freshness

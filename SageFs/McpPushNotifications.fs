@@ -181,6 +181,8 @@ module PushEvent =
       // compile failure is an error (the app is still serving the old code).
       let icon =
         match facts.Case with
+        | SageFs.ReloadCase.AssetsRebuilt -> "🌐"
+        | SageFs.ReloadCase.Unchanged -> "●"
         | SageFs.ReloadCase.Patched | SageFs.ReloadCase.Restarted -> "🔥"
         | SageFs.ReloadCase.KeptLiveState when facts.Patched > 0 -> "🔥"
         // Applied, and nobody has seen the new code run yet: neither a landing nor a refusal.

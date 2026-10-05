@@ -261,6 +261,7 @@ type ReloadReport = {
 /// caller that tries.
 type DevReloadEvent =
   | Compiling of fileName: string option
+  | AssetsRebuilt of report: ReloadReport * sourceFile: string * assetCount: int * contentHash: string
   /// Definitions were re-pointed into the running process and their new code
   /// has NOT been seen running yet. The page refreshes (the change may well be
   /// live, and the refresh is usually what makes the new code run), and a
@@ -294,6 +295,7 @@ module DevReloadEvent =
   let refreshes =
     function
     | Applied _
+    | AssetsRebuilt _
     | Restarted _ -> true
     | Compiling _
     | Patched _
@@ -304,6 +306,7 @@ module DevReloadEvent =
   /// The outcome a client renders. `Compiling` has none — it is not terminal.
   let report =
     function
+    | AssetsRebuilt(r, _, _, _)
     | Applied r
     | Patched r
     | NeverEntered r
@@ -370,6 +373,9 @@ module DevReloadEvent =
     match evt with
     | Compiling None -> """{"type":"compiling"}"""
     | Compiling (Some file) -> sprintf """{"type":"compiling","file":%s}""" (json file)
+    | AssetsRebuilt(r, file, assetCount, contentHash) ->
+      sprintf """{"type":"assetsrebuilt","file":%s,"assetCount":%d,"contentHash":%s,%s}"""
+        (json file) assetCount (json contentHash) (reportFields r)
     | Applied r -> sprintf """{"type":"pending",%s}""" (reportFields r)
     | Patched r -> sprintf """{"type":"patched",%s}""" (reportFields r)
     | NeverEntered r -> sprintf """{"type":"neverentered",%s}""" (reportFields r)
@@ -515,6 +521,7 @@ let private eventLabel (evt: DevReloadEvent) =
   match evt with
   | Compiling None -> "Compiling"
   | Compiling (Some f) -> sprintf "Compiling(%s)" f
+  | AssetsRebuilt(_, _, assetCount, _) -> sprintf "AssetsRebuilt(%d)" assetCount
   | Applied r -> sprintf "Applied(%d of %d)" r.Patched r.Considered
   | Patched r -> sprintf "Patched(%d of %d)" r.Patched r.Considered
   | NeverEntered r -> sprintf "NeverEntered(%d of %d)" r.Patched r.Considered
@@ -542,6 +549,9 @@ let broadcastCompiling (fileName: string option) = broadcast (Compiling fileName
 /// Signal every client that a patch is applied and its new code has not been
 /// seen running yet. The page refreshes on this one.
 let broadcastApplied (report: ReloadReport) = broadcast (Applied report)
+
+let broadcastAssetsRebuilt (report: ReloadReport) (sourceFile: string) (assetCount: int) (contentHash: string) =
+  broadcast (AssetsRebuilt(report, sourceFile, assetCount, contentHash))
 
 /// Signal every client that some re-pointed definitions' new code has not run
 /// within the bound. Closes the overlay WITHOUT a refresh.

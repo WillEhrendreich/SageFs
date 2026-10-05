@@ -123,6 +123,7 @@ let start (watched: WatchedDecl list) (outcome: ReloadOutcome) : Begun =
   | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched _)
   | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered _)
   | ReloadOutcome.Patched _
+  | ReloadOutcome.AssetsRebuilt _
   | ReloadOutcome.NoEffect _
   | ReloadOutcome.Restarted _
   | ReloadOutcome.RestartRequired _

@@ -561,6 +561,14 @@ let escalationOf
 let run (sessionId: string) (port: int) = async {
   enableStdoutAutoFlush ()
   let workerConfig = Args.WorkerConfig.fromEnvironment sessionId port
+  let browserAssets =
+    match workerConfig.Workflow with
+    | WorkflowTypes.SessionWorkflow.HotReload _ ->
+      match BrowserAssetReload.load (Environment.CurrentDirectory) with
+      | Ok config -> config
+      | Error error -> invalidArg BrowserAssetReload.configFileName (BrowserAssetReload.ConfigLoadError.describe error)
+    | WorkflowTypes.SessionWorkflow.Interactive
+    | WorkflowTypes.SessionWorkflow.LiveTesting -> None
   // Tell DevReload Harmony patches which port to inject into user scripts.
   // Set BEFORE warmup/init: init scripts may start the user's WebApplication,
   // and the Harmony RunAsync prefix consults workerPort — if it's still 0 the
@@ -1024,8 +1032,27 @@ let run (sessionId: string) (port: int) = async {
   let savePipeline : (FileWatcher.FileChange -> Async<unit>) option ref = ref None
 
   // Start file watcher unless no-watch was set
+  let watchedDirectories =
+    result.ProjectDirectories
+    @ (browserAssets |> Option.map BrowserAssets.sourceRoots |> Option.defaultValue [])
+    |> List.distinct
+  use browserAssetLifetime = new CancellationTokenSource()
+  let browserAssetJobs = System.Collections.Concurrent.ConcurrentDictionary<Guid, Threading.Tasks.Task<DevReload.DevReloadEvent>>()
+  let rebuildBrowserAssets =
+    browserAssets |> Option.map (fun config ->
+      let run = BrowserAssetReload.createRunner config
+      fun filePath -> async {
+        let id = Guid.NewGuid()
+        let job =
+          lock browserAssetJobs (fun () ->
+            let job = BrowserAssetReload.rebuild run filePath browserAssetLifetime.Token |> Async.StartAsTask
+            browserAssetJobs.TryAdd(id, job) |> ignore
+            job)
+        try return! job |> Async.AwaitTask
+        finally browserAssetJobs.TryRemove id |> ignore
+      })
   let fileWatcher =
-    match workerConfig.NoWatch || List.isEmpty result.ProjectDirectories with
+    match workerConfig.NoWatch || List.isEmpty watchedDirectories with
     | true ->
       match workerConfig.NoWatch with
       | true -> Log.info "File watcher disabled (SAGEFS_NO_WATCH=1)"
@@ -1033,9 +1060,9 @@ let run (sessionId: string) (port: int) = async {
       None
     | false ->
       Log.info "File watcher starting for %d directories: %s"
-        result.ProjectDirectories.Length
-        (String.Join(", ", result.ProjectDirectories))
-      let config = FileWatcher.defaultWatchConfig result.ProjectDirectories
+        watchedDirectories.Length
+        (String.Join(", ", watchedDirectories))
+      let config = FileWatcher.defaultWatchConfig watchedDirectories
       // Chesterton's fence: per-watcher CompilationState tracks module context
       // across hot-reload cycles. Without this, each reload is context-free —
       // preprocessForFsi can't determine which modules are already `open`'d,
@@ -1779,7 +1806,7 @@ let run (sessionId: string) (port: int) = async {
             return! restartOrFallBack fileName first rest }
       /// The save pipeline for one change. The part that has to happen the moment the change arrives (counting it, and
       /// cancelling an older eval of the same file) happens when this is called; the returned async is the rest.
-      let beginChange (change: FileWatcher.FileChange) : Async<unit> =
+      let beginClrChange (change: FileWatcher.FileChange) : Async<unit> =
         let ext = IO.Path.GetExtension(change.FilePath)
         let kind = match change.Kind with
                    | FileWatcher.FileChangeKind.Changed -> "Modified"
@@ -2073,6 +2100,13 @@ let run (sessionId: string) (port: int) = async {
           finally
             compilationLock.Release() |> ignore
         }
+      let beginChange (change: FileWatcher.FileChange) =
+        match BrowserAssetReload.route browserAssets change, rebuildBrowserAssets with
+        | BrowserAssetReload.SaveRoute.BrowserAssets filePath, Some run ->
+          run filePath |> Async.Ignore
+        | BrowserAssetReload.SaveRoute.BrowserAssets _, None ->
+          invalidOp "Browser asset route has no build runner."
+        | BrowserAssetReload.SaveRoute.Existing _, _ -> beginClrChange change
       // A save is one pipeline whoever hands it in. The watcher hands it saves it saw, and a landing hands it the files it moved.
       // A worker told to take its saves from landings only drops what the watcher saw: the daemon wrote those files itself and
       // is about to hand them over, and the pipeline would otherwise run the same save twice.
@@ -2208,8 +2242,15 @@ let run (sessionId: string) (port: int) = async {
             let change : FileWatcher.FileChange = { FilePath = file.Path; Kind = kind; Timestamp = DateTimeOffset.UtcNow }
             let verdict (outcome: Features.TrunkFollow.FileOutcome) : Features.TrunkFollow.FileVerdict =
               { File = file.Path; Outcome = outcome }
-            match FileWatcher.fileChangeAction change with
-            | FileWatcher.FileChangeAction.Reload path when HotReloadState.isWatched path !result.HotReloadStateRef ->
+            match BrowserAssetReload.route browserAssets change with
+            | BrowserAssetReload.SaveRoute.BrowserAssets path ->
+              match rebuildBrowserAssets with
+              | Some run ->
+                let! event = run path
+                return verdict (Features.TrunkFollow.outcomeOfPayload (DevReload.DevReloadEvent.payloadJson event))
+              | None -> return verdict Features.TrunkFollow.FileOutcome.NotWatched
+            | BrowserAssetReload.SaveRoute.Existing (FileWatcher.FileChangeAction.Reload path)
+                when HotReloadState.isWatched path !result.HotReloadStateRef ->
               let before = DevReload.LastReload.sequence ()
               do! pipeline change
               // The first terminal event the save recorded is what the save said. Later ones (a restarted app coming back, a patch
@@ -2218,15 +2259,17 @@ let run (sessionId: string) (port: int) = async {
               | [] ->
                 return verdict (Features.TrunkFollow.FileOutcome.NoVerdict "the save pipeline recorded no outcome for it (it was superseded, or the compiler stayed busy)")
               | said :: _ -> return verdict (Features.TrunkFollow.outcomeOfPayload said)
-            | FileWatcher.FileChangeAction.Reload _ -> return verdict Features.TrunkFollow.FileOutcome.NotWatched
-            | FileWatcher.FileChangeAction.SoftReset ->
+            | BrowserAssetReload.SaveRoute.Existing (FileWatcher.FileChangeAction.Reload _) ->
+              return verdict Features.TrunkFollow.FileOutcome.NotWatched
+            | BrowserAssetReload.SaveRoute.Existing FileWatcher.FileChangeAction.SoftReset ->
               return
                 verdict (
                   Features.TrunkFollow.FileOutcome.NeedsRebuild
                     "a project file changed, so the project's references or its compile list changed, which a running process cannot take in place"
                 )
-            | FileWatcher.FileChangeAction.RecoverFromOverflow _
-            | FileWatcher.FileChangeAction.Ignore -> return verdict Features.TrunkFollow.FileOutcome.NotWatched
+            | BrowserAssetReload.SaveRoute.Existing (FileWatcher.FileChangeAction.RecoverFromOverflow _)
+            | BrowserAssetReload.SaveRoute.Existing FileWatcher.FileChangeAction.Ignore ->
+              return verdict Features.TrunkFollow.FileOutcome.NotWatched
           }
         let! verdicts = files |> List.map applyOne |> Async.Sequential
         return Features.TrunkFollow.SessionOutcome.Delivered (Array.toList verdicts)
@@ -2252,6 +2295,7 @@ let run (sessionId: string) (port: int) = async {
   }
 
   use cts = new CancellationTokenSource()
+  use _cancelBrowserAssets = cts.Token.Register(fun () -> browserAssetLifetime.Cancel())
 
   // Handle process signals — guard against ObjectDisposedException
   // if the CTS is disposed before the event fires (e.g. daemon kills worker)
@@ -2335,4 +2379,7 @@ let run (sessionId: string) (port: int) = async {
 
   // Clean up file watcher
   fileWatcher |> Option.iter (fun w -> w.Dispose())
+  browserAssetLifetime.Cancel()
+  let remainingAssetJobs = lock browserAssetJobs (fun () -> browserAssetJobs.Values |> Seq.toArray)
+  do! Threading.Tasks.Task.WhenAll remainingAssetJobs |> Async.AwaitTask |> Async.Ignore
 }

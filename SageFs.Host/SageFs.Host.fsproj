@@ -40,6 +40,7 @@
         <Compile Include="DevReloadInjector.fs" />
         <Compile Include="AppRunner.fs" />
         <Compile Include="RunAppDelta.fs" />
+        <Compile Include="BrowserAssetReload.fs" />
         <Compile Include="WorkerHttpTransport.fs" />
         <Compile Include="WorkerMain.fs" />
         <Compile Include="Program.fs" />

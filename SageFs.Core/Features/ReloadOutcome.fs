@@ -283,6 +283,7 @@ type MetadataDeltaOutcome =
 /// unrepresentable.
 [<RequireQualifiedAccess>]
 type ReloadOutcome =
+  | AssetsRebuilt of sourceFile: string * assetCount: int * contentHash: string
   /// At least one method was re-pointed AND its new body has been seen
   /// running, so the running process serves the new code for those. Both
   /// numbers are reported so a partial reload is visible as partial rather than
@@ -358,6 +359,7 @@ module ReloadOutcome =
     | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered(_, _, entered, _)) -> entered > 0
     | ReloadOutcome.NoEffect _
     | ReloadOutcome.RestartRequired _
+    | ReloadOutcome.AssetsRebuilt _
     | ReloadOutcome.CompileFailed _ -> false
 
   /// How the outcome reached the process. Read by the report, so a client never infers it from the words.
@@ -371,6 +373,7 @@ module ReloadOutcome =
     | ReloadOutcome.NoEffect _
     | ReloadOutcome.Restarted _
     | ReloadOutcome.RestartRequired _
+    | ReloadOutcome.AssetsRebuilt _
     | ReloadOutcome.CompileFailed _ -> PatchMechanism.NoPatch
 
   /// A browser reload is honest only when the bytes it will fetch may be new.
@@ -385,6 +388,7 @@ module ReloadOutcome =
     function
     | ReloadOutcome.PatchPending _
     | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending _)
+    | ReloadOutcome.AssetsRebuilt _
     | ReloadOutcome.Restarted _ -> true
     | ReloadOutcome.Patched _
     | ReloadOutcome.KeptLiveState _
@@ -399,6 +403,8 @@ module ReloadOutcome =
   /// "Reloaded 1 of 448 libraries" discipline, so a no-op is visible.
   let describe =
     function
+    | ReloadOutcome.AssetsRebuilt(sourceFile, assetCount, _) ->
+      sprintf "Rebuilt %d browser asset(s) after %s changed" assetCount sourceFile
     | ReloadOutcome.Patched(patched, considered) ->
       sprintf "Hot reloaded %d of %d changed definition(s)" patched considered
     | ReloadOutcome.NoEffect(considered, reasons) ->
@@ -469,6 +475,7 @@ module ReloadOutcome =
   /// is already resolved and the user needs no instruction.
   let remedy =
     function
+    | ReloadOutcome.AssetsRebuilt _
     | ReloadOutcome.Patched _
     | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched _)
     | ReloadOutcome.Restarted _ -> None
@@ -519,6 +526,7 @@ module ReloadOutcome =
       | ReloadOutcome.Restarted _
       | ReloadOutcome.KeptLiveState _
       | ReloadOutcome.ByMetadataDelta _
+      | ReloadOutcome.AssetsRebuilt _
       | ReloadOutcome.CompileFailed _ -> outcome
 
   /// Folds the bindings a save KEPT into what its patch did. Only outcomes
@@ -540,6 +548,7 @@ module ReloadOutcome =
     | _ :: _, ReloadOutcome.NoEffect _
     | _ :: _, ReloadOutcome.Restarted _
     | _ :: _, ReloadOutcome.RestartRequired _
+    | _ :: _, ReloadOutcome.AssetsRebuilt _
     | _ :: _, ReloadOutcome.CompileFailed _
     // A delta patches methods and the objects keep their fields, so it has no bindings to keep.
     | _ :: _, ReloadOutcome.ByMetadataDelta _

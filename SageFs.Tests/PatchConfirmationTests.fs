@@ -55,7 +55,7 @@ let tests =
         | Begun.NothingToWatch o -> failtestf "a pending patch must be watched, got %A" o
 
       testCase "WHY — an outcome that is not a pending patch has nothing to confirm and passes through untouched" <| fun _ ->
-        for o in [ Outcome.NoEffect(2, []); Outcome.RestartRequired []; Outcome.CompileFailed "x"; Outcome.Restarted []; Outcome.Patched(1, 1) ] do
+        for o in [ Outcome.AssetsRebuilt("Client.fs", 1, "abc123"); Outcome.NoEffect(2, []); Outcome.RestartRequired []; Outcome.CompileFailed "x"; Outcome.Restarted []; Outcome.Patched(1, 1) ] do
           PatchConfirmation.start [ decl "A.f" [ 1L ] ] o |> Expect.equal (sprintf "%A" o) (Begun.NothingToWatch o)
 
       testCase "WHY — a pending patch with nothing to watch is not claimed, instead of staying pending forever" <| fun _ ->
