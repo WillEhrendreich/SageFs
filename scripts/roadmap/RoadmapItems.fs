@@ -108,15 +108,19 @@ let items : Item list =
       [ "docs/hot-reload.md" ]
       "`nudge_value` writes the file, but nothing in the dashboard or the editors lets you drag a number. I'd put a knob on a live binding in the dashboard, a scrub key in Neovim and Alt-drag in VS Code, and apply the drag to the running app before you save it."
 
+    // These two live in the sagefs.nvim repo, so a landmark cannot resolve them here (it names a file in this
+    // tree). What marks them is the doc below, which is in this tree and now describes what ships: `:SageFsDebugTest`
+    // drives nvim-dap against the hold/release routes, and the plugin reads the daemon's wire. Kept open rather than
+    // marked on a claim, and moved to Built when a landmark can point at something real.
     item "neovim-debug-a-failing-test" "Debug a failing test from Neovim" Editors Next
       NoLandmarkYet
       [ "docs/LIVE_TESTING_GUIDE.md" ]
-      "The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim plugin has to wire nvim-dap to those routes, and that work lives in the sagefs.nvim repo."
+      "The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim side is done too, in the sagefs.nvim repo: `:SageFsDebugTest` puts a failing test on the board and wires nvim-dap to those routes, on `<leader>rtg` and `D` on a panel row. The release goes out on `configurationDone`, when the adapter has really attached, so a slow attach is the daemon's to wait out rather than a grace period on this side. Still open is a full attach inside our own tests."
 
     item "neovim-catches-up" "The Neovim plugin catches up with the daemon" Editors Next
       NoLandmarkYet
       [ "docs/sse-events.md"; "docs/mcp-tools.md" ]
-      "The plugin shows hot reload's pending and never-entered states, the live-values pane with its Safe mode click, workflow switching and the session's own app state, and it names the session on every session-scoped call. Still to wire: `nudge_value`, the slow-eval heartbeat events and nvim-dap."
+      "The plugin shows hot reload's pending and never-entered states, the live-values pane with its Safe mode click, workflow switching and the session's own app state, and it names the session on every session-scoped call. It reads a tool's answer as its first text block, finds a nudged value by the range the daemon reports, sends the session's id with every nudge, shows a vetoed landing with who vetoed it and why, and lists the files a re-sign left on the old method with how sure each match is. Still to wire: the slow-eval heartbeat events."
 
     item "debug-failing-tests-in-vscode" "Debug failing tests properly in VS Code" LiveTesting Next
       NoLandmarkYet
