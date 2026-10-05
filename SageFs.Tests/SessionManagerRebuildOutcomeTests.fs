@@ -33,7 +33,7 @@ let private withHarness (build: Async<Result<string, SageFsError>>) (run: Harnes
   task {
     use cancellation = new CancellationTokenSource()
     let mailbox, readSnapshot =
-      createWith (mkRuntime build) cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+      createWith (mkRuntime build) cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ _ -> ())
     try
       do! run { Mailbox = mailbox; ReadSnapshot = readSnapshot }
     finally

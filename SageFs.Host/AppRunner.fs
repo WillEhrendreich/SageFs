@@ -363,17 +363,33 @@ let private launch
         hostBuilt.TrySetResult host |> ignore
       | _ -> ()
   use _subscription = subscribeHosting onEvent
-  // #82: surface the running app's stdout. The app writes to Console.Out on the
-  // thread below; install a persistent line-tagging tee (APP_OUTPUT=<line> to the
-  // real stdout FD) so the daemon's kept-alive worker-stdout reader routes it to
-  // the session output panel. Idempotent + left installed: it survives the eval
-  // loop's temporary Console.SetOut/restore (the eval captures it as originalOut).
+  // #82: surface the running app's STDOUT AND STDERR. The app writes to Console.Out and
+  // Console.Error on the thread below; install persistent line-tagging tees (APP_OUTPUT=<line>
+  // to the real stdout FD, APP_ERROR=<line> to the real stderr FD) so the daemon's kept-alive
+  // worker readers route both to the session output panel with the stream attached. stderr was
+  // NOT captured before: the writer was installed on Console.Out alone, so an app that only ever
+  // wrote to Console.Error produced nothing the daemon could read, and the pane's errors-only filter
+  // had nothing to filter on. Idempotent + left installed: each survives the eval loop's
+  // temporary Console.SetOut/restore (the eval captures it as originalOut).
   let () =
-    match System.Console.Out with
-    | :? SageFs.AppOutput.AppOutputWriter -> ()
-    | _ ->
-      let rawStdout = new System.IO.StreamWriter(System.Console.OpenStandardOutput(), AutoFlush = true)
-      System.Console.SetOut(new SageFs.AppOutput.AppOutputWriter(rawStdout))
+    // Each stream is checked on ITS OWN writer: testing `Console.Error` against `Console.Out` would say
+    // "already tagged" as soon as stdout was tee'd, and stderr would never be installed at all.
+    let tee (current: System.IO.TextWriter) (openStandard: unit -> System.IO.TextWriter) (set: System.IO.TextWriter -> unit) (stream: SageFs.AppOutput.Stream) =
+      match current with
+      | :? SageFs.AppOutput.AppOutputWriter -> ()
+      | _ -> set (new SageFs.AppOutput.AppOutputWriter(openStandard (), stream))
+
+    tee
+      System.Console.Out
+      (fun () -> new System.IO.StreamWriter(System.Console.OpenStandardOutput(), AutoFlush = true))
+      System.Console.SetOut
+      SageFs.AppOutput.Stream.Stdout
+
+    tee
+      System.Console.Error
+      (fun () -> new System.IO.StreamWriter(System.Console.OpenStandardError(), AutoFlush = true))
+      System.Console.SetError
+      SageFs.AppOutput.Stream.Stderr
   let thread =
     Thread(
       (fun () ->

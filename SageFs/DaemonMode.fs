@@ -2182,9 +2182,10 @@ let run
   let mutable onWarmupProgressCallback : (string -> string -> unit) =
     fun _ _ -> ()
   // #82: assigned after elmRuntime exists (below) — routes a run_app'd app's
-  // stdout lines to the session output panel via TuiEvent.OutputEmitted.
-  let mutable onAppOutputCallback : (string -> string -> unit) =
-    fun _ _ -> ()
+  // stdout AND stderr lines to the session output panel via TuiEvent.OutputEmitted, with the
+  // stream attached so the app-output pane can filter on it.
+  let mutable onAppOutputCallback : (string -> SageFs.AppOutput.Stream -> string -> unit) =
+    fun _ _ _ -> ()
   // Assigned after elmRuntime exists (below): when a session becomes ready,
   // auto-enable live testing if its workflow is LiveTesting, so a LiveTesting
   // session re-runs the affected tests as you type (debounced keystrokes) from
@@ -2203,7 +2204,7 @@ let run
           OnSessionReady = fun sid -> stateChangedEvent.Trigger (SessionReady sid); onSessionReadyExtra sid
           OnWarmupProgress = fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress
           OnSessionFaulted = fun sid error -> stateChangedEvent.Trigger (SessionFaulted (sid, error))
-          OnAppOutput = fun sid line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) line
+          OnAppOutput = fun sid stream line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) stream line
           OnSupervisorAlarm = fun alarm -> Log.warn "[SessionManager] %s" (SupervisorWatchdog.describe alarm)
           OnSupervisorHealth = SupervisorHealthWatch.report }
 
@@ -2237,23 +2238,38 @@ let run
   // output rate. Kind = Info (not Result) so app output never triggers the
   // binding-scope rebuild, which parses only Result output for `val` bindings.
   let appOutputGate = obj ()
-  let appOutputPending = System.Collections.Generic.Dictionary<string, System.Text.StringBuilder>()
+
+  // Keyed by session, and each value keeps (stream, line) PAIRS rather than a joined string. The earlier shape
+  // was a StringBuilder per session, which cannot represent a session whose app interleaves stdout and stderr: the
+  // stream is a property of the LINE, and joining first loses it. So the batch is a list of pairs and the flush
+  // emits one OutputEmitted per line, which is also what the pane reads.
+  let appOutputPending = System.Collections.Generic.Dictionary<string, (SageFs.AppOutput.Stream * string) list>()
   let flushAppOutput () =
     let toFlush =
       lock appOutputGate (fun () ->
-        let items = [ for kv in appOutputPending -> kv.Key, kv.Value.ToString() ]
+        let items = [ for kv in appOutputPending -> kv.Key, List.rev kv.Value ]
         appOutputPending.Clear()
         items)
-    for (sidStr, text) in toFlush do
-      let trimmed = text.TrimEnd('\n')
-      if trimmed.Length > 0 then
-        elmRuntime.Dispatch(
-          SageFsMsg.Event(
-            TuiEvent.OutputEmitted
-              { Kind = OutputKind.Info
-                Text = trimmed
-                Timestamp = System.DateTime.UtcNow
-                SessionId = sidStr }))
+
+    for (sidStr, pending) in toFlush do
+      for (stream, line) in pending do
+        if not (String.IsNullOrWhiteSpace line) then
+          // `OutputKind` is about how a line is COLOURED, not which stream it came from, so the stream is not
+          // squeezed into it. stderr gets `Failure` because that is what it means to a reader, and it is the
+          // distinction the app-output pane's errors-only filter is built on.
+          let kind =
+            match stream with
+            | SageFs.AppOutput.Stream.Stdout -> OutputKind.Info
+            | SageFs.AppOutput.Stream.Stderr -> OutputKind.Failure
+
+          elmRuntime.Dispatch(
+            SageFsMsg.Event(
+              TuiEvent.OutputEmitted
+                { Kind = kind
+                  Text = line
+                  Timestamp = System.DateTime.UtcNow
+                  SessionId = sidStr }))
+
   // Persistent periodic flusher (every 150ms; a no-op when nothing is pending).
   // MUST be rooted for the daemon's lifetime: a `System.Threading.Timer` whose
   // only reference is an unused local is collected (the task state machine never
@@ -2264,14 +2280,12 @@ let run
       (fun _ -> try flushAppOutput () with ex -> Log.warn "[app-output] flush failed: %s" ex.Message),
       null, 150, 150)
   onAppOutputCallback <-
-    fun sidStr line ->
+    fun sidStr stream line ->
       lock appOutputGate (fun () ->
+        let entry = (stream, line)
         match appOutputPending.TryGetValue sidStr with
-        | true, sb -> sb.Append(line: string).Append('\n') |> ignore
-        | false, _ ->
-          let sb = System.Text.StringBuilder()
-          sb.Append(line: string).Append('\n') |> ignore
-          appOutputPending.[sidStr] <- sb)
+        | true, pending -> appOutputPending.[sidStr] <- entry :: pending
+        | false, _ -> appOutputPending.[sidStr] <- [ entry ])
 
   // The single owner of this daemon's implicit cohort (cohort-integration-plan.md
   // Slice 2, D1/D2/D4/D5): holds the live CohortState, appends every applied

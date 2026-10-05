@@ -46,7 +46,7 @@ let private withManager (runtime: SessionManagerRuntime) (body: Harness -> Task<
         ignore
         (fun _ _ -> ())
         (fun _ _ -> ())
-        (fun _ _ -> ())
+        (fun _ _ _ -> ())
     let! outcome =
       (body { Mailbox = mailbox })
         .ContinueWith(fun (t: Task<unit>) ->

@@ -105,9 +105,9 @@ module SessionManager =
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
     | WorkerWarmupProgress of SessionId * progress: string
-    /// One APP_OUTPUT= line of a run_app'd app's stdout, routed to the session
-    /// output stream so the dashboard shows a running console/game app (#82).
-    | WorkerAppOutput of SessionId * line: string
+    /// One APP_OUTPUT= / APP_ERROR= line of a run_app'd app, routed to the session output
+    /// stream so the pane shows a running console/game app (#82), with the stream it came from.
+    | WorkerAppOutput of SessionId * stream: SageFs.AppOutput.Stream * line: string
     /// The worker said what a save did (its `/__sagefs__/reload` stream), so the
     /// session records it and every surface reads it from there.
     | ReloadObserved of SessionId * SessionReload
@@ -304,7 +304,7 @@ module SessionManager =
         OnReady = fun workerPid baseUrl -> inbox.Post(SessionCommand.WorkerReady(sessionId, workerPid, baseUrl, HttpWorkerClient.httpProxy baseUrl))
         OnSpawnFailed = fun workerPid reason -> inbox.Post(SessionCommand.WorkerSpawnFailed(sessionId, workerPid, reason))
         OnStartTimedOut = fun workerPid timeout tail -> inbox.Post(SessionCommand.WorkerStartTimedOut(sessionId, workerPid, timeout, tail))
-        OnAppOutput = fun line -> inbox.Post(SessionCommand.WorkerAppOutput(sessionId, line)) }
+        OnAppOutput = fun stream line -> inbox.Post(SessionCommand.WorkerAppOutput(sessionId, stream, line)) }
 
   /// Stop a worker gracefully: send Shutdown with a bounded wait, then kill the
   /// whole process tree. The bounded wait is essential — HttpWorkerClient.httpProxy
@@ -405,7 +405,7 @@ module SessionManager =
       OnSessionReady: SessionId -> unit
       OnWarmupProgress: SessionId -> string -> unit
       OnSessionFaulted: SessionId -> string -> unit
-      OnAppOutput: SessionId -> string -> unit
+      OnAppOutput: SessionId -> SageFs.AppOutput.Stream -> string -> unit
       /// The loop is wedged, restarted, or failed a command (see SupervisorWatchdog).
       OnSupervisorAlarm: SupervisorWatchdog.SupervisorAlarm -> unit
       /// Health changed (an alarm degraded it, or a good command cleared it); the daemon feeds SupervisorHealthWatch.
@@ -423,7 +423,7 @@ module SessionManager =
         OnSessionReady = ignore
         OnWarmupProgress = fun _ _ -> ()
         OnSessionFaulted = fun _ _ -> ()
-        OnAppOutput = fun _ _ -> ()
+        OnAppOutput = fun _ _ _ -> ()
         OnSupervisorAlarm = ignore
         OnSupervisorHealth = ignore
         OnCommandStart = ignore
@@ -1241,8 +1241,8 @@ module SessionManager =
           onWarmupProgress id progress
           return newState
 
-        | SessionCommand.WorkerAppOutput(id, line) ->
-          onAppOutput id line  // route a running app's stdout to session output (#82)
+        | SessionCommand.WorkerAppOutput(id, stream, line) ->
+          onAppOutput id stream line  // route a running app's stdout/stderr to session output (#82)
           return state
 
         | SessionCommand.ReloadObserved(id, reload) ->
@@ -1563,7 +1563,7 @@ module SessionManager =
     (onSessionReady: SessionId -> unit)
     (onWarmupProgress: SessionId -> string -> unit)
     (onSessionFaulted: SessionId -> string -> unit)
-    (onAppOutput: SessionId -> string -> unit) =
+    (onAppOutput: SessionId -> SageFs.AppOutput.Stream -> string -> unit) =
     createWithAlarm runtime ct
       { SessionManagerCallbacks.silent with
           OnSessionProgressChanged = onSessionProgressChanged
@@ -1582,7 +1582,7 @@ module SessionManager =
     (onSessionReady: SessionId -> unit)
     (onWarmupProgress: SessionId -> string -> unit)
     (onSessionFaulted: SessionId -> string -> unit)
-    (onAppOutput: SessionId -> string -> unit) =
+    (onAppOutput: SessionId -> SageFs.AppOutput.Stream -> string -> unit) =
     createWith
       defaultRuntime
       ct

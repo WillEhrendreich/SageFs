@@ -53,7 +53,7 @@ let private withHarness (run: Harness -> unit) =
       ignore
       (fun sid text -> progress.Add(sid, text))
       (fun sid msg -> faulted.Add(sid, msg))
-      (fun _ _ -> ())
+      (fun _ _ _ -> ())
   try
     run
       { Mailbox = mailbox

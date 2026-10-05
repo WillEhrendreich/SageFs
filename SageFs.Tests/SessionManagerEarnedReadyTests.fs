@@ -41,7 +41,7 @@ let private withHarness (run: Harness -> unit) =
       ignore
       (fun _ _ -> ())
       (fun sid msg -> faultedEvents.Add(sid, msg))
-      (fun _ _ -> ())
+      (fun _ _ _ -> ())
   try
     run { Mailbox = mailbox; FaultedEvents = faultedEvents }
   finally

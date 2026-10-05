@@ -69,7 +69,7 @@ let tests =
 
       let cts = new CancellationTokenSource(int Timeouts.integrationDaemonReady.TotalMilliseconds)
       let mgr, _ =
-        SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+        SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ _ -> ())
       let createdSessionId : SessionId option ref = ref None
 
       try

@@ -11,7 +11,7 @@ open SageFs
 
 let private capture (write: TextWriter -> unit) =
   let sink = new StringWriter()
-  use w = new AppOutput.AppOutputWriter(sink)
+  use w = new AppOutput.AppOutputWriter(sink, AppOutput.Stream.Stdout)
   write w
   sink.ToString()
 
@@ -46,7 +46,8 @@ let appOutputTests =
 
     testCase "tryParse recognizes an APP_OUTPUT= record and extracts the payload" <| fun _ ->
       AppOutput.tryParse (AppOutput.prefix + "hello world")
-      |> Expect.equal "payload extracted" (Some "hello world")
+      |> Expect.equal "payload extracted, with the stream it arrived on"
+        (Some(AppOutput.Stream.Stdout, "hello world"))
 
     testCase "tryParse ignores a non-APP_OUTPUT line (e.g. WARMUP_PROGRESS or the port line)" <| fun _ ->
       AppOutput.tryParse "WARMUP_PROGRESS=2/4 loading"

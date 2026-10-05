@@ -71,7 +71,7 @@ let tests =
       // `Stream` is closed on purpose: the pane's ErrorsOnly filter matches on it, and a token outside the set
       // would have to be guessed at, which is how a stdout line ends up rendered as an error.
       AppOutput.Stream.all
-      |> Expect.map string
+      |> List.map string
       |> Expect.equal "exactly the two process streams" [ "Stdout"; "Stderr" ]
 
     // ---- writing, at the source where the stream was being lost ----------------------------------------------------
@@ -79,7 +79,9 @@ let tests =
     testCase "WHY — a writer tags with its own prefix, so an error line is tagged as an error from the first byte" <| fun _ ->
       let target = new System.IO.StringWriter()
       let errWriter = new AppOutput.AppOutputWriter(target, AppOutput.Stream.Stderr)
-      errWriter.Write("boom")
+      // The newline is not decoration: the writer's contract (and the test in AppOutputTests that pins it) is that a
+      // trailing partial line is NOT emitted, so a tag is only ever visible on a completed line.
+      errWriter.Write("boom\n")
       errWriter.Flush()
       let text = target.ToString()
       text |> Expect.stringContains "the stderr tag is what the reader sees" "APP_ERROR=boom"
@@ -89,14 +91,12 @@ let tests =
     testCase "WHY — an stdout writer and a stderr writer produce different tags from the same text" <| fun _ ->
       let outTarget = new System.IO.StringWriter()
       let outWriter = new AppOutput.AppOutputWriter(outTarget, AppOutput.Stream.Stdout)
-      outWriter.Write("same text")
-      outWriter.Flush()
+      outWriter.Write("same text\n")
       outWriter.Flush()
 
       let errTarget = new System.IO.StringWriter()
       let errWriter = new AppOutput.AppOutputWriter(errTarget, AppOutput.Stream.Stderr)
-      errWriter.Write("same text")
-      errWriter.Flush()
+      errWriter.Write("same text\n")
       errWriter.Flush()
 
       AppOutput.tryParse (outTarget.ToString().TrimEnd('\n'))
@@ -112,8 +112,7 @@ let tests =
       writer.Flush()
       target.ToString()
       |> Expect.equal "nothing is emitted before the newline" ""
-      writer.Write(" a whole line")
-      writer.Flush()
+      writer.Write(" a whole line\n")
       writer.Flush()
       AppOutput.tryParse (target.ToString().TrimEnd('\n'))
       |> Expect.equal "and the record is whole when it lands" (Some(AppOutput.Stream.Stdout, "half a whole line"))
@@ -133,21 +132,17 @@ let tests =
       // sees a line neither app wrote.
       let target = new System.IO.StringWriter()
       let writer = new AppOutput.AppOutputWriter(target, AppOutput.Stream.Stdout)
-      let many = [ 1 .. 40 ]
       let threads =
-        many
+        [ 1 .. 40 ]
         |> List.map (fun i ->
-          System.Threading.Thread(fun () ->
-            writer.Write(sprintf "thread-%d" i)
-            writer.Flush() :> unit))
-        |> List.iter (fun t -> t.Start())
-      many |> List.iter (fun _ -> ())
-      System.Threading.Thread.Sleep 200
-      writer.Flush()
+          // One Write carrying its own newline: without the lock two threads' fragments land in the one shared
+          // buffer and produce a line neither app wrote (or a record that does not parse at all).
+          System.Threading.Thread(fun () -> writer.Write(sprintf "thread-%d\n" i)))
+      threads |> List.iter (fun t -> t.Start())
+      threads |> List.iter (fun t -> t.Join())
       writer.Flush()
       let lines = target.ToString().Split('\n', System.StringSplitOptions.RemoveEmptyEntries)
-      let bad = lines |> List.filter (fun l -> AppOutput.tryParse l |> Option.isNone)
-      bad |> Expect.equal "every emitted record carries the tag" []
+      let bad = lines |> Array.filter (fun l -> AppOutput.tryParse l |> Option.isNone)
+      bad |> Expect.equal "every emitted record carries the tag" [||]
       lines.Length |> Expect.equal "and each thread's record landed whole" 40
-      threads |> ignore
   ]

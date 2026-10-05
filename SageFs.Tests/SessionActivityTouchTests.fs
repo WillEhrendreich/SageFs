@@ -69,7 +69,7 @@ let private withHarness (run: Harness -> Threading.Tasks.Task<unit>) = task {
       ignore
       (fun _ _ -> ())
       (fun _ _ -> ())
-      (fun _ _ -> ())
+      (fun _ _ _ -> ())
   try
     do! run { Mailbox = mailbox; ReadSnapshot = readSnapshot }
   finally

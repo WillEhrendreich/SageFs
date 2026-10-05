@@ -20,8 +20,10 @@ type WorkerStartupEvents =
     /// whether to try again with more patience (`StartEscalation`) or to give up and say what it waited for.
     /// The worker's pid, what it was given and waited, then the tail of its stderr, kept to explain a give-up.
     OnStartTimedOut: int -> StartTimeout -> string -> unit
-    /// One `APP_OUTPUT=` line of a run_app'd app's stdout.
-    OnAppOutput: string -> unit }
+    /// One APP_OUTPUT= / APP_ERROR= line of a run_app'd app, with the stream it came from. The stream is
+    /// carried rather than dropped because the app-output pane filters on it, and which process stream a line
+    /// arrived on cannot be recovered once it has been flattened to a string.
+    OnAppOutput: SageFs.AppOutput.Stream -> string -> unit }
 
 module WorkerStartup =
 
@@ -117,20 +119,29 @@ module WorkerStartup =
           cts.CancelAfter(System.Threading.Timeout.Infinite)
           ledger.Record StartStage.WorkerPort (DateTime.UtcNow - started)
           events.OnReady workerPid baseUrl
-          // #82: keep reading stdout past the port line for a run_app'd app's
-          // APP_OUTPUT= lines (to EOF; read errors/EOF swallowed, not a spawn fail).
-          let appOutTask =
-            WorkerSpawn.runOnDedicatedThread "sagefs-worker-stdout-reader" (fun () ->
+          // #82: keep reading stdout AND stderr past the port line, for a run_app'd app's
+          // APP_OUTPUT= / APP_ERROR= lines (to EOF; read errors/EOF swallowed, not a spawn fail).
+          // Two readers because there are two streams: a single reader on stdout would never see a line an app
+          // wrote only to Console.Error, which is most of what a stack trace is.
+          let readAppOutput (name: string) (reader: System.IO.StreamReader) =
+            WorkerSpawn.runOnDedicatedThread name (fun () ->
               try
-                let mutable l = proc.StandardOutput.ReadLine()
+                let mutable l = reader.ReadLine()
                 while not (isNull l) do
                   (match AppOutput.tryParse l with
-                   | Some payload -> events.OnAppOutput payload
+                   | Some (stream, payload) -> events.OnAppOutput stream payload
                    | None -> ())
-                  l <- proc.StandardOutput.ReadLine()
+                  l <- reader.ReadLine()
               with _ -> ())
+
+          let appOutTask =
+            readAppOutput "sagefs-worker-stdout-reader" proc.StandardOutput
+
+          let appErrTask =
+            readAppOutput "sagefs-worker-stderr-reader" proc.StandardError
           do! stderrTask |> Async.AwaitTask
           do! appOutTask |> Async.AwaitTask
+          do! appErrTask |> Async.AwaitTask
         | Some _ ->
           // Absolute-deadline branch above: found <- Some "" with a reason
           // parked in timeoutReason, distinct from "process exited" (which

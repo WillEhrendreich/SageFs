@@ -538,7 +538,7 @@ let sessionManagerLifecycleTests =
     // real HTTP), not a decision: nothing here is a candidate for DST.
     testTask "create session, eval code, stop session" {
       let cts = new CancellationTokenSource(int Timeouts.integrationDaemonReady.TotalMilliseconds)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ _ -> ())
 
       let! createResult =
         mgr.PostAndAsyncReply(fun reply ->
@@ -635,7 +635,7 @@ let sessionManagerLifecycleTests =
     // undisturbed. This is the minimal union of both.
     testTask "two independent sessions stay routable, and a killed worker restarts on a new pid" {
       let cts = new CancellationTokenSource(int Timeouts.integrationDaemonReady.TotalMilliseconds)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ _ -> ())
 
       // Two sessions for the SAME directory are one session by design — the
       // owner rejects the duplicate — so the second lives in its own dir.
