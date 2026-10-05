@@ -149,7 +149,7 @@ let memberEvaluationGuardTests =
         releases.Count |> Expect.equal "the abandoned thread may still run guarded code, so the guards stay" 0
       finally
         release.Set()
-      releases.Released.Wait TestTimeouts.patienceBrief |> Expect.isTrue "when the thread ends the guards come off"
+      releases.Released.Wait TestTimeouts.patience |> Expect.isTrue "when the thread ends the guards come off"
       releases.Count |> Expect.equal "once" 1
 
     testSequenced (
@@ -188,7 +188,11 @@ let realGuardsOnAbandonedThreadTests =
         (SageFs.Features.GuardPatcher.patchedCount (), 0) |> Expect.isGreaterThan "something of ours is still patched"
       finally
         release.Set()
-      gone.Wait TestTimeouts.patienceBrief |> Expect.isTrue "when the thread ended the guards came off"
+      // An event wait, so the long bound costs nothing when it passes. Taking the guards off is a Harmony unpatch,
+      // which queues behind every other patch operation in the process, and the default tiers run a lot of those at
+      // once: five seconds was not always enough for the unpatch to be reached (it failed in the net10 gate, and
+      // passed alone six of six).
+      gone.Wait TestTimeouts.patience |> Expect.isTrue "when the thread ended the guards came off"
       target.HelperRan |> Expect.equal "the entry guard stopped the thread before the helper's body ran" 0
 
     testCase "WHY - guarded code runs, and a guarded loop is stopped, on the thread the syscall filter is installed on" <| fun _ ->
