@@ -146,11 +146,15 @@ let escapingTests =
              | other -> other) = text))
 
     testCase "a hostile file text never lands as markup, in the chip, the sentence, the field or the script" <| fun _ ->
-      let hostile = place "<img src=x onerror=alert(1)>" (ItemKind.Knob(LiteralValue.Text "<img src=x onerror=alert(1)>"))
-      let view = { rowOf (PersistenceState.InSource hostile) (Control.LiteralField(LiteralKindName.Text, "<img src=x onerror=alert(1)>")) with Place = PlaceOf.Placed hostile }
-      let raw = renderStrip key view Placement.OnLeafRow |> renderNode
-      raw.Contains "<img" |> Expect.isFalse "never injected as an element"
-      raw.Contains "onerror=alert" |> Expect.isTrue "the text is there, escaped, as text"
+      for text in [ "<img src=x onerror=alert(1)>"; "a\" onfocus=\"alert(1)"; "it's \"quoted\"\nand multi-line" ] do
+        let hostile = place text (ItemKind.Knob(LiteralValue.Text text))
+        for control in [ Control.LiteralField(LiteralKindName.Text, text); Control.ExpressionField text ] do
+          let view = { rowOf (PersistenceState.InSource hostile) control with Place = PlaceOf.Placed hostile }
+          let raw = renderStrip key view Placement.OnLeafRow |> renderNode
+          raw.Contains "<img" |> Expect.isFalse "never injected as an element"
+          raw.Contains "\" onfocus=\"" |> Expect.isFalse "a quote in the text never ends an attribute"
+          // A newline is harmless in text and in a title, but in a script it would end the string literal.
+          Regex.IsMatch(raw, "data-(on|signals|show)[^=]*=\"[^\"]*\n") |> Expect.isFalse "a newline never reaches a script raw"
   ]
 
 let private count (needle: string) (html: string) = html.Split([| needle |], StringSplitOptions.None).Length - 1
@@ -169,7 +173,7 @@ let controlTests =
       html |> Expect.stringContains "the readout follows the signal" "data-text"
       html |> Expect.stringContains "the endpoint the write posts to" TweakSignals.Endpoint
       html |> Expect.stringContains "the state is readable by a test" "data-state=\"InSource\""
-      count "session-btn" html |> Expect.isGreaterThanOrEqual "uniform square buttons" 2
+      (count "session-btn" html, 2) |> Expect.isGreaterThanOrEqual "uniform square buttons"
 
     testCase "an integer steps by whole units, a bool is a toggle, a string and a formula are fields with Enter and Escape" <| fun _ ->
       let integer = place "100" (ItemKind.Knob(LiteralValue.Integer 100L))
@@ -212,6 +216,15 @@ let controlTests =
       let html = strip view
       html |> Expect.stringContains "the reload line" "data-testid=\"tweak-reload\""
       html |> Expect.stringContains "the not-watched note" "not watching"
+
+    testCase "a value that is simply in its file keeps its sentence in the tooltip, and anything a person must act on or understand keeps it on the row" <| fun _ ->
+      strip (rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))) |> fun html -> html.Contains "tweak-detail" |> Expect.isFalse "in source: no wall of text"
+      strip (rowOf (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl) |> Expect.stringContains "REPL only says why on the row" "data-testid=\"tweak-detail\""
+      for state in states do
+        match state with
+        | PersistenceState.InSource _
+        | PersistenceState.Derived(_, DerivedWhy.AContainer) -> ()
+        | other -> detailShown other |> Expect.equal (sprintf "%s explains itself on the row" (PersistenceState.token other)) DetailShown.OnTheRow
 
     testCase "a row in a summary (a record, a list) shows its state in words but never a control: a click there would toggle the details" <| fun _ ->
       let html = renderStrip key (rowOf (PersistenceState.Derived(gravity, DerivedWhy.AContainer)) Control.NoControl) Placement.InsideSummary |> decoded

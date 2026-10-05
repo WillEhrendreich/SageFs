@@ -19,9 +19,11 @@ open Falco.Markup
 open Falco.Datastar
 open SageFs
 open SageFs.Features
+open SageFs.Features.Tweak.BindingTweak
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 open SageFs.Server.DockPanes
+open SageFs.Server.LiveBindingsTweakView
 
 /// Client-side state of the dock. All three are plain signals declared once in the page shell.
 module DockSignals =
@@ -37,6 +39,8 @@ module DockSignals =
     [ Ds.signal (LiveFilter, "")
       Ds.signal (LivePins, ",")
       Ds.signal (LivePanePinned, false) ]
+    // What a row's knob stages before it posts (LiveBindingsTweakView): declared once, with the dock's own.
+    @ TweakSignals.initial
 
 module DockIds =
   let [<Literal>] Dock = "live-dock"
@@ -179,7 +183,7 @@ let renderCollapsedBar (why: CollapsedBecause) (display: PinDisplay) : XmlNode =
 let private renderEmptyState : XmlNode =
   Elem.div [ Attr.id DockIds.EmptyState; Attr.class' "live-empty"; testid "live-bindings-empty" ] [ textEnc (CollapsedBecause.text NothingBoundYet) ]
 
-let private renderTree (sessionId: string) (view: LiveBindingsPane.PaneView) : XmlNode list =
+let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindingsPane.PaneView) : XmlNode list =
   let evaluateEndpoint = sprintf "/api/sessions/%s/live-values/evaluate" (Uri.EscapeDataString sessionId)
   let modeEndpoint = sprintf "/api/sessions/%s/live-values/mode" (Uri.EscapeDataString sessionId)
   let kindBadge (node: LiveValueTree.LiveValueNode) =
@@ -249,12 +253,24 @@ let private renderTree (sessionId: string) (view: LiveBindingsPane.PaneView) : X
         Elem.span [ Attr.class' "live-preview" ] [ textEnc (sprintf "= %s" node.Preview) ]
         yield! kindBadge node
       ]
+    // What the files say about this row and what can be done about it (LiveBindingsTweakView): one strip under a row the pane
+    // has something to say about, and nothing at all under one it has not. A strip inside a summary is never interactive, because
+    // a click there would toggle the details.
+    let key : RowKey = { Binding = binding; Labels = path }
+    let stripFor (placement: Placement) : XmlNode list =
+      match TweakView.tryRow tweaks key with
+      | Some view -> [ renderStrip key view placement ]
+      | None -> []
+    let withStrip (rowNode: XmlNode) : XmlNode =
+      match stripFor Placement.OnLeafRow with
+      | [] -> rowNode
+      | strip -> Elem.div [ Attr.class' "live-row" ] (rowNode :: strip)
     match node.Kind, List.isEmpty node.Children with
-    | LiveValueTree.NodeKind.NotEvaluated reason, _ -> heldRow binding path node reason
-    | _, true -> row
+    | LiveValueTree.NodeKind.NotEvaluated reason, _ -> withStrip (heldRow binding path node reason)
+    | _, true -> withStrip row
     | _, false ->
       signalDetails (nodeSignal binding path) [ Attr.class' "live-node" ] [
-        Elem.summary [ Attr.class' "live-node-summary" ] [ row ]
+        Elem.summary [ Attr.class' "live-node-summary" ] [ row; yield! stripFor Placement.InsideSummary ]
         Elem.div [ Attr.class' "live-children" ] [
           yield! node.Children |> List.map (fun child -> renderNode binding (path @ [ child.Label ]) child)
         ]
@@ -323,7 +339,7 @@ let private renderTree (sessionId: string) (view: LiveBindingsPane.PaneView) : X
     ] ]
 
 /// The open pane: a header (what opened it, when it was read, a filter, the pin), then the tree.
-let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
+let renderPaneWith (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
   let stamp =
     match source with
     | WalkedBindings view -> sprintf "gen %d · %s" view.Snapshot.Generation (view.Snapshot.CapturedAt.ToLocalTime().ToString("HH:mm:ss"))
@@ -331,7 +347,7 @@ let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecaus
     | NothingBound -> ""
   let body =
     match source with
-    | WalkedBindings view -> renderTree sessionId view
+    | WalkedBindings view -> renderTree sessionId tweaks view
     | PrintedBindings scope -> [ Elem.div [ Attr.id DockIds.Tree; Attr.class' "live-tree" ] [ renderBindingsPanel (Some scope) ] ]
     | NothingBound -> [ Elem.div [ Attr.id DockIds.Tree; Attr.class' "live-tree" ] [ renderEmptyState ] ]
   // The text panel carries `bindings-panel` itself, so the wrapper must not repeat it.
@@ -359,21 +375,30 @@ let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecaus
     yield! body
   ]
 
+/// The open pane with no knob: what a session whose files have not been asked about shows.
+let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
+  renderPaneWith TweakView.none sessionId source because display
+
 /// The dock, decided and drawn. Both answers of the pin are rendered when the pin can matter (the signal picks between them);
-/// when a session has bindings, or there is no session to pin on, only the one answer exists.
-let renderDock (session: SessionInView) (sessionId: string) (source: BindingsSource) : XmlNode =
+/// when a session has bindings, or there is no session to pin on, only the one answer exists. `tweaks` is what the session's files
+/// say about each row (the persistence state and the knob): rows it has nothing for are drawn as they always were.
+let renderDockWith (tweaks: TweakView) (session: SessionInView) (sessionId: string) (source: BindingsSource) : XmlNode =
   let facts : PaneFacts = { Session = session; Bindings = BindingsSource.presence source; Pin = Unpinned }
   let shell (children: XmlNode list) = Elem.div [ Attr.id DockIds.Dock; Attr.class' "live-dock" ] children
   match PaneState.decide facts DockPane.LiveBindings with
-  | PaneOpen because -> shell [ renderPane sessionId source because ShownAlways ]
+  | PaneOpen because -> shell [ renderPaneWith tweaks sessionId source because ShownAlways ]
   | PaneCollapsed why ->
     match CollapsedBecause.pin why with
     | PinNotOffered -> shell [ renderCollapsedBar why ShownAlways ]
     | PinOffered ->
       match PaneState.decide { facts with Pin = Pinned } DockPane.LiveBindings with
       | PaneOpen pinnedBecause ->
-        shell [ renderCollapsedBar why ShownUnlessPinned; renderPane sessionId source pinnedBecause ShownOnlyWhilePinned ]
+        shell [ renderCollapsedBar why ShownUnlessPinned; renderPaneWith tweaks sessionId source pinnedBecause ShownOnlyWhilePinned ]
       | PaneCollapsed _ -> shell [ renderCollapsedBar why ShownAlways ]
+
+/// The dock with no knob (a session whose files have not been asked about, and the no-session page).
+let renderDock (session: SessionInView) (sessionId: string) (source: BindingsSource) : XmlNode =
+  renderDockWith TweakView.none session sessionId source
 
 /// A brief highlight on a value that changed. It is drawn from what the SSE morph really rewrote, so only a changed value
 /// flashes and nothing polls: the browser's own mutation record says a `.live-preview` text node was replaced, and that cell

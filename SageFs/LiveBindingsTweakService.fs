@@ -201,6 +201,20 @@ module Service =
   /// A session that is gone takes its memory with it.
   let forget (service: Service) (sessionId: string) : unit = service.Memories.TryRemove sessionId |> ignore
 
+  /// The files a session owns, as the dashboard's worker data lists them.
+  let ownedOf (sessionId: string) (workingDirectory: string) (files: (string * HotReloadWatch) list) : OwnedFiles =
+    let full (path: string) = Path.GetFullPath(path, workingDirectory)
+    { Session = sessionId
+      WorkingDirectory = workingDirectory
+      Paths = files |> List.map (fun (path, _) -> full path) |> Set.ofList
+      Watched =
+        files
+        |> List.choose (fun (path, watch) ->
+          match watch with
+          | HotReloadWatch.Watched -> Some(full path)
+          | HotReloadWatch.NotWatched -> None)
+        |> Set.ofList }
+
   let isFSharpSource (path: string) : bool =
     let extension = Path.GetExtension path
     String.Equals(extension, ".fs", StringComparison.OrdinalIgnoreCase) || String.Equals(extension, ".fsx", StringComparison.OrdinalIgnoreCase)
@@ -327,7 +341,9 @@ module Service =
       return { Files = files; Unreadable = unreadable }
     }
 
-  /// The rows for a session's walked values, from what its files say now and what the dashboard did to each row.
+  /// The rows for a session's walked values, from what its files say now and what the dashboard did to each row. A row waits for the
+  /// reload verdict of its write for as long as a save waits for its compile (`Timeouts.compileQueueWait`): past that no verdict is
+  /// coming, and the row says so.
   let viewFor
     (service: Service)
     (sessionId: string)
@@ -339,9 +355,27 @@ module Service =
       match snapshot.Bindings with
       | [] -> return TweakView.none
       | _ ->
-        let! index = indexFor service owned (Rows.namesOf snapshot)
-        return Rows.build index snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.tweakReloadReportPatience
+        let! index = indexFor service owned (namesOf snapshot)
+        return Rows.build index snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.compileQueueWait
     }
+
+  /// The rows for a session whose file list the dashboard may not have. A list that is not known makes every row say the files are
+  /// unknown, never that no file holds it.
+  let viewForFiles
+    (service: Service)
+    (sessionId: string)
+    (workingDirectory: string)
+    (files: Result<(string * bool) list, string>)
+    (snapshot: LiveValueTree.LiveValueSnapshot)
+    (current: SessionReload)
+    : Task<TweakView> =
+    match files with
+    | Ok listed ->
+      let owned = ownedOf sessionId workingDirectory (listed |> List.map (fun (path, watched) -> path, HotReloadWatch.ofFlag watched))
+      viewFor service sessionId owned snapshot current
+    | Error reason ->
+      let unknown : SourceIndex = { Files = []; Unreadable = [ "the session's project files", reason ] }
+      Task.FromResult(Rows.build unknown snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.compileQueueWait)
 
   /// The expression the row was showing when it was clicked, as the page reported it. The cached inspection has the real one
   /// (with its span and kind) when the hash still matches; otherwise it is what the page said, with no position.
@@ -408,17 +442,3 @@ module Service =
         update service sessionId (Memory.finished resolved.Row attempted result baseline (service.Env.Now()))
         changed ()
     }
-
-  /// The files a session owns, as the dashboard's worker data lists them.
-  let ownedOf (sessionId: string) (workingDirectory: string) (files: (string * HotReloadWatch) list) : OwnedFiles =
-    let full (path: string) = Path.GetFullPath(path, workingDirectory)
-    { Session = sessionId
-      WorkingDirectory = workingDirectory
-      Paths = files |> List.map (fun (path, _) -> full path) |> Set.ofList
-      Watched =
-        files
-        |> List.choose (fun (path, watch) ->
-          match watch with
-          | HotReloadWatch.Watched -> Some(full path)
-          | HotReloadWatch.NotWatched -> None)
-        |> Set.ofList }

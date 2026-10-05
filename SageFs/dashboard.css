@@ -1513,6 +1513,132 @@ h2 {
   font-size: 0.7rem;
 }
 
+/* The knob on a live binding's row (LiveBindingsTweakView.fs): a strip under the row that says where the value lives and, where
+   the state allows, lets it be changed. Single-column flow with no breakpoint, like the rest of the dock: the chip, the control,
+   the history buttons and the reload line each wrap onto the next line, the sentence takes a line of its own, and nothing is ever
+   pushed wider than the column. The buttons are the uniform .session-btn square. */
+.live-row {
+  min-width: 0;
+}
+
+.live-tweak {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 2px 0 6px 1.2em;
+  font-size: 0.7rem;
+}
+
+.live-state {
+  padding: 0 0.5em;
+  border: 1px solid currentColor;
+  font-size: 0.6rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.live-tone-good {
+  color: var(--fg-green);
+}
+
+.live-tone-notice {
+  color: var(--fg-yellow);
+}
+
+.live-tone-bad {
+  color: var(--fg-red);
+}
+
+.live-tone-quiet {
+  color: var(--fg-dim);
+}
+
+.live-where {
+  min-width: 0;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+.live-detail {
+  flex: 1 1 100%;
+  min-width: 0;
+  color: var(--fg-dim);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.live-knob {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.live-slider {
+  flex: 1 1 8rem;
+  min-width: 6rem;
+  max-width: 16rem;
+  height: 28px;
+  margin: 0;
+  accent-color: var(--fg-yellow);
+}
+
+.live-readout {
+  min-width: 5ch;
+  padding: 0 0.4em;
+  color: var(--fg-yellow);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.live-toggle {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  accent-color: var(--fg-yellow);
+}
+
+.live-field {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  max-width: 28rem;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-default);
+  color: var(--fg-default);
+  border: 1px solid var(--border-normal);
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 12px;
+
+  &:focus {
+    outline: 1px solid var(--border-focus);
+    border-color: var(--border-focus);
+  }
+}
+
+.live-field-hint {
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.live-reload {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.live-step:disabled,
+.live-history:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .session-selected {
   background: var(--bg-selection);
   border-left: 3px solid var(--border-focus);

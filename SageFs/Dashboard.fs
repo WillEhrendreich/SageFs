@@ -849,20 +849,36 @@ let buildDashboardSnapshotWithSessions
               AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory (q.GetSessionWorkingDir sessionId) }
         | None -> renderSessionContextEmpty
       | false -> renderSessionContextEmpty
+    // The bottom dock. The live watch window takes priority; the text-parsed panel stands in for a session that has
+    // not produced a live snapshot yet. DockPanes decides which of the two (or the reason line) is drawn.
+    let bindingsSource =
+      match q.GetLiveBindings sessionId with
+      | Some view -> LiveBindingsDock.BindingsSource.ofWalked view
+      | None ->
+        LiveBindingsDock.BindingsSource.ofPrinted (
+          resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
+    // What the session's files say about each walked row: its persistence state and the knob it allows.
+    let! tweakView =
+      match bindingsSource with
+      | LiveBindingsDock.WalkedBindings walked ->
+        let files =
+          match hrState with
+          | Some hr -> Ok(hr.files |> List.map (fun f -> f.path, f.watched))
+          | None -> Error "the session's worker did not list its project files"
+        let reload =
+          sessions
+          |> List.tryFind (fun s -> s.Id = sessionId)
+          |> Option.map (fun s -> s.Reload)
+          |> Option.defaultValue SessionReload.NoReloadYet
+        q.GetTweakView sessionId workingDir files walked.Snapshot reload
+      | LiveBindingsDock.PrintedBindings _
+      | LiveBindingsDock.NothingBound -> System.Threading.Tasks.Task.FromResult SageFs.Features.Tweak.BindingTweak.TweakView.none
     let bindingsPanel =
-      // The bottom dock. The live watch window takes priority; the text-parsed panel stands in for a session that has
-      // not produced a live snapshot yet. DockPanes decides which of the two (or the reason line) is drawn.
-      let source =
-        match q.GetLiveBindings sessionId with
-        | Some view -> LiveBindingsDock.BindingsSource.ofWalked view
-        | None ->
-          LiveBindingsDock.BindingsSource.ofPrinted (
-            resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
       let session =
         match sid.Length > 0 with
         | true -> DockPanes.SessionInView
         | false -> DockPanes.NoSessionInView
-      LiveBindingsDock.renderDock session (WorkerProtocol.SessionId.value sessionId) source
+      LiveBindingsDock.renderDockWith tweakView session (WorkerProtocol.SessionId.value sessionId) bindingsSource
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let warmupProgress = q.GetWarmupProgress sessionId

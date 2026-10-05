@@ -3368,6 +3368,10 @@ let run
             | Some config -> config.ValueWalk
             | None -> ValueWalk.standard }
   let liveBindingsAdaptive = liveBindingsHub.Adaptive
+  // What the dashboard's live-bindings knob remembers per session (what it did to each row, each file's undo trail), and the file
+  // reads it caches. It writes through the same nudge door `nudge_value` does, with the same shared per-file locks and journals.
+  let tweakService =
+    SageFs.Server.LiveBindingsTweakService.Service.create (SageFs.Server.LiveBindingsTweakService.Env.production (McpNudge.defaultTweaksDir ()))
 
   // Permanent binding-scope subscriber — updates sharedBindingScope on eval
   // completion regardless of MCP SSE client connectivity. Fixes the dashboard
@@ -3789,6 +3793,10 @@ let run
     |> Seq.filter (fun k -> not (liveIds.Contains k))
     |> Seq.toList
     |> List.iter (SageFs.Features.LiveBindingsPane.PaneStore.remove liveBindingsHub.Notes)
+    tweakService.Memories.Keys
+    |> Seq.filter (fun k -> not (liveIds.Contains k))
+    |> Seq.toList
+    |> List.iter (SageFs.Server.LiveBindingsTweakService.Service.forget tweakService)
     match sweepStaleSessionState liveIds liveBindingsAdaptive sharedFeatureState (elmRuntime.GetModel().RecentOutput) with
     | [] -> ()
     | stale -> log.LogInformation("Swept {Count} stale session state entries", stale.Length)
@@ -4159,6 +4167,9 @@ let run
     GetBindingScopeSnapshot = fun () -> System.Threading.Volatile.Read(&sharedBindingScope.contents)
     GetLiveBindings = fun sessionId ->
       SageFs.Features.LiveBindingsPane.viewOf liveBindingsHub (WorkerProtocol.SessionId.value sessionId)
+    GetTweakView = fun sessionId workingDirectory files snapshot reload ->
+      SageFs.Server.LiveBindingsTweakService.Service.viewForFiles
+        tweakService (WorkerProtocol.SessionId.value sessionId) workingDirectory files snapshot reload
     GetLiveTestingStatus = fun () ->
       let model = elmRuntime.GetModel()
       let activeId =
@@ -4462,7 +4473,9 @@ let run
     let hub = Some liveBindingsHub
     [ Dashboard.mapPostRaw "/api/sessions/{sid}/live-values/evaluate" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsEvaluate askFor hub ctx)
       Dashboard.mapPostRaw "/api/sessions/{sid}/live-values/mode" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsSetMode askFor hub ctx)
-      Dashboard.mapGetRaw "/api/sessions/{sid}/live-values/mode" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsReadMode askFor hub ctx) ]
+      Dashboard.mapGetRaw "/api/sessions/{sid}/live-values/mode" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsReadMode askFor hub ctx)
+      // The knob on a live binding's row: one write (or undo, or redo) through the nudge door, answered on the page's own stream.
+      Dashboard.mapPostRaw "/dashboard/tweak" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.handler dashboardQueries dashboardInfra tweakService) ]
 
   let dashboardTask =
     startDashboardServer log bindHost daemonOrigins dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints @ liveBindingsEndpoints) cts.Token

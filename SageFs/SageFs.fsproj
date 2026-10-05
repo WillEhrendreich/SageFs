@@ -110,6 +110,8 @@
         <Compile Include="NewSessionDialog.fs" />
         <Compile Include="NewSessionDiscovery.fs" />
     <Compile Include="DashboardFragments.fs" />
+        <!-- The live-bindings knob's row: the persistence state in words, and the control a state allows. Typed Datastar helpers only. -->
+        <Compile Include="LiveBindingsTweakView.fs" />
         <Compile Include="LiveBindingsDock.fs" />
         <Compile Include="NewSessionDialogView.fs" />
         <Compile Include="DashboardNewSession.fs" />
@@ -143,6 +145,7 @@
         <Compile Include="McpNudge.fs" />
         <!-- After McpNudge: the dashboard's live-bindings knob writes through the same door (its ports, its shared file locks). -->
         <Compile Include="LiveBindingsTweakService.fs" />
+        <Compile Include="LiveBindingsTweakRoute.fs" />
         <Compile Include="McpRunTests.fs" />
         <Compile Include="McpAnalysis.fs" />
         <Compile Include="McpDebugTest.fs" />

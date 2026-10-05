@@ -156,15 +156,6 @@ module Timeouts =
   /// one journal record and renames one file, which is milliseconds, so a wait this long means the holder is
   /// stuck. The caller is refused with `FileBusy` and told to retry, rather than parked behind it.
   let nudgeFileLock = TimeSpan.FromSeconds(10.0)
-  /// How long a live-bindings row waits, after its write, for the session to report a reload verdict that is not the one
-  /// before it. A save is compiled and patched by the worker (a build of one file, then the patch), which takes seconds on a
-  /// big project. Past this the row says no new report arrived (two saves with the same verdict cannot be told apart by
-  /// the verdict alone, and hot reload may not be running), instead of waiting on a word that is not coming.
-  let tweakReloadReportPatience = TimeSpan.FromSeconds(20.0)
-  /// How long a live-bindings row's debounce waits after the last step or key press before it writes. A drag and a run of
-  /// presses are one edit: the pane writes once per settle, with the hash it last read. About one blink of an eye after the
-  /// last move, short enough to feel direct and long enough that five quick presses are one write.
-  let tweakSettleDebounce = TimeSpan.FromMilliseconds(300.0)
   /// The longest `wait_seconds` get_session_status will park a caller for.
   /// A larger request is clamped to this, never refused.
   let statusWaitCap = TimeSpan.FromSeconds(60.0)

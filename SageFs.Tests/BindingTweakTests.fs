@@ -327,7 +327,7 @@ let controlTests =
       Step.ofRealText "1.0" |> Expect.equal "one decimal" (Step.Fraction 1)
       Step.ofRealText "0.12" |> Expect.equal "two decimals" (Step.Fraction 2)
       Step.ofRealText "12.5<m/s>" |> Expect.equal "the unit is not a decimal" (Step.Fraction 1)
-      Step.ofRealText "1_000.25" |> Expect.equal "an underscore is not a digit" (Step.Fraction 2)
+      Step.ofRealText "12_345.25" |> Expect.equal "an underscore is not a digit" (Step.Fraction 2)
       Step.ofRealText "5." |> Expect.equal "nothing after the point" Step.Whole
       Step.ofRealText "1e3" |> Expect.equal "an exponent spelling has none" Step.Whole
       Step.size (Step.Fraction 2) |> Expect.floatClose "one hundredth" Accuracy.high 0.01
@@ -443,7 +443,8 @@ let reloadWatchTests =
         Mechanism = Features.ReloadOutcome.PatchMechanism.NoPatch
         Declarations = [ "Game.Tuning.gravity" ]
         Callers = Features.CallerState.CallersState.CallersNotReported }
-    let patience = TimeSpan.FromSeconds 5.0
+    let patience = SageFs.Timeouts.compileQueueWait
+    let soon = TimeSpan.FromTicks(patience.Ticks / 5L)
 
     testCase "a new verdict is reported as it is, with its declarations" <| fun _ ->
       let baseline = SessionReload.Finished(facts ReloadCase.Patched)
@@ -457,7 +458,7 @@ let reloadWatchTests =
     testCase "a compile in progress is compiling, and the unchanged verdict waits, then says no new report arrived" <| fun _ ->
       let baseline = SessionReload.Finished(facts ReloadCase.Patched)
       ReloadWatch.ofSession baseline (SessionReload.Compiling None) TimeSpan.Zero patience |> Expect.equal "compiling" ReloadWatch.Compiling
-      ReloadWatch.ofSession baseline baseline (TimeSpan.FromSeconds 1.0) patience |> Expect.equal "waiting" ReloadWatch.AwaitingReload
+      ReloadWatch.ofSession baseline baseline soon patience |> Expect.equal "waiting" ReloadWatch.AwaitingReload
       ReloadWatch.ofSession baseline baseline patience patience |> Expect.equal "silent" ReloadWatch.NoNewReport
       ReloadWatch.ofSession SessionReload.NoReloadYet SessionReload.NoReloadYet patience patience |> Expect.equal "no reload ever" ReloadWatch.NoNewReport
   ]

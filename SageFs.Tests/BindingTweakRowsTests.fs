@@ -20,7 +20,7 @@ open SageFs.Tests.BindingTweakTests
 
 type TuningRecord = { JumpVelocity: float; MaxHealth: int; Scaled: float }
 
-let patience = TimeSpan.FromSeconds 5.0
+let patience = SageFs.Timeouts.compileQueueWait
 
 let walked (values: (string * obj) list) : LiveValueTree.LiveValueSnapshot =
   LiveValueTree.buildSnapshot "s" 1L (values |> List.map (fun (name, value) -> name, "t", value))
@@ -203,9 +203,9 @@ let memoryTests =
         file |> Expect.equal "the file" "Tuning.fs"
         facts.Declarations |> Expect.equal "the declaration named" [ "Game.Tuning.gravity" ]
       | other -> failtestf "expected the verdict, got %A" other
-      let quiet = Rows.build tuningIndex (walked [ "gravity", box 9.8 ]) wrote SessionReload.NoReloadYet TimeSpan.TicksPerSecond patience
+      let quiet = Rows.build tuningIndex (walked [ "gravity", box 9.8 ]) wrote SessionReload.NoReloadYet (patience.Ticks / 4L) patience
       (TweakView.tryRow quiet gravityKey).Value.Reload |> Expect.equal "still waiting" (RowReload.Watching("Tuning.fs", ReloadWatch.AwaitingReload))
-      let silent = Rows.build tuningIndex (walked [ "gravity", box 9.8 ]) wrote SessionReload.NoReloadYet (10L * TimeSpan.TicksPerSecond) patience
+      let silent = Rows.build tuningIndex (walked [ "gravity", box 9.8 ]) wrote SessionReload.NoReloadYet (patience.Ticks * 2L) patience
       (TweakView.tryRow silent gravityKey).Value.Reload |> Expect.equal "honest silence" (RowReload.Watching("Tuning.fs", ReloadWatch.NoNewReport))
 
     testPropertyWithConfig propConfig "write then undo then redo then undo leaves the trail where the door's history fold would: empty, with one redo"

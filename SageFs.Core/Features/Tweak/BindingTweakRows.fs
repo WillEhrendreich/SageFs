@@ -116,7 +116,7 @@ module Rows =
     (live: LiveShape)
     (facts: SourceFacts)
     : RowView =
-    let state = PersistenceState.derive live facts (Memory.outcomeOf memory key)
+    let state, control = stateAndControl live facts (Memory.outcomeOf memory key)
     let place = PlaceOf.ofFacts facts
     let trail =
       match place with
@@ -127,7 +127,7 @@ module Rows =
       | PlaceOf.Placed source -> SourceRef.addressText source
       | PlaceOf.NotPlaced -> RowKey.text key
     { State = state
-      Control = Control.ofState state facts
+      Control = control
       Place = place
       Watching = watchingOf index place
       Reload = reloadOf memory current now patience key
@@ -175,6 +175,6 @@ module Rows =
         | SourceFacts.PartNotSpelled _ -> [ own ])
     { Rows = Map.ofList rows }
 
-  /// The names a pane asks the files about: its top-level bindings.
-  let namesOf (snapshot: LiveValueTree.LiveValueSnapshot) : Set<string> =
-    snapshot.Bindings |> List.map (fun binding -> binding.Name) |> Set.ofList
+/// The names a pane asks the files about: its top-level bindings.
+let namesOf (snapshot: LiveValueTree.LiveValueSnapshot) : Set<string> =
+  snapshot.Bindings |> List.map (fun binding -> binding.Name) |> Set.ofList

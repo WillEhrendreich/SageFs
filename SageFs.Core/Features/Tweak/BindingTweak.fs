@@ -433,6 +433,12 @@ module Control =
     | PersistenceState.DiffersFromFile _
     | PersistenceState.Writing _ -> Control.NoControl
 
+/// A row's state and the control that state allows, from the three facts. The one place the two are decided together, so a row
+/// cannot show a state and offer a control that state does not allow.
+let stateAndControl (live: LiveShape) (source: SourceFacts) (outcome: RowOutcome) : PersistenceState * Control =
+  let state = PersistenceState.derive live source outcome
+  state, Control.ofState state source
+
 [<RequireQualifiedAccess>]
 type StepRefusal =
   /// The step would leave the numbers a literal can spell.
