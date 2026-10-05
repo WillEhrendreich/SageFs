@@ -501,6 +501,19 @@ let discovery =
           found.Candidates |> List.map (fun c -> c.Frameworks)
           |> Expect.equal "named by imports" [ Frameworks.NamedByImports ])
 
+    testCase "WHY — a project whose framework comes from the Directory.Build.props above it shows that framework, not a shrug" <| fun _ ->
+      withTempDir (fun dir ->
+        File.WriteAllText(
+          Path.Combine(dir, "Directory.Build.props"),
+          "<Project><PropertyGroup><TargetFrameworks>net10.0;net11.0</TargetFrameworks></PropertyGroup></Project>")
+        Directory.CreateDirectory(Path.Combine(dir, "App")) |> ignore
+        File.WriteAllText(Path.Combine(dir, "App", "App.fsproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />")
+        match discover [] dir with
+        | Error refusal -> failtestf "expected found, got %A" refusal
+        | Ok (found, _) ->
+          found.Candidates |> List.map (fun c -> c.Frameworks)
+          |> Expect.equal "inherited from the props file" [ Frameworks.Declared [ "net10.0"; "net11.0" ] ])
+
     testCase "WHY — noise folders (bin, obj, worktrees) are not offered as projects" <| fun _ ->
       withTempDir (fun dir ->
         Directory.CreateDirectory(Path.Combine(dir, "bin")) |> ignore
