@@ -509,6 +509,17 @@ let discovery =
         | Error refusal -> failtestf "expected found, got %A" refusal
         | Ok (found, _) -> found.Candidates |> Expect.isEmpty "nothing real here")
 
+    testCase "WHY — a directory that sits under a folder named like noise (.claude/worktrees, packages, bin) is still searched: only what is INSIDE it can be noise" <| fun _ ->
+      withTempDir (fun root ->
+        let inside = Path.Combine(root, ".claude", "worktrees", "agent-x", "packages", "obj")
+        Directory.CreateDirectory(Path.Combine(inside, "App")) |> ignore
+        File.WriteAllText(Path.Combine(inside, "App", "App.fsproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>")
+        match discover [] inside with
+        | Error refusal -> failtestf "expected found, got %A" refusal
+        | Ok (found, _) ->
+          found.Candidates |> List.map (fun c -> c.Path)
+          |> Expect.equal "the project is found although every ancestor segment looks like noise" [ Path.Combine("App", "App.fsproj") ])
+
     testCase "WHY — a bare request resolves to the one bare target, with nothing read from the disk" <| fun _ ->
       resolveTargets (request "/work/repo" Target.Bare)
       |> Result.map List.length
