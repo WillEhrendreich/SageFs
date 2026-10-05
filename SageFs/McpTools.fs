@@ -1507,12 +1507,16 @@ SAFETY:
         expression: string,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
-        working_directory: string
+        working_directory: string,
+        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: nudge_value called: action={Action}, file={File}", action, file)
         let raw : SageFs.Features.Tweak.Nudge.RawNudge =
           { Action = action; File = file; Address = address; Seen = seen; Literal = literal; Expression = expression }
-        SageFs.McpNudge.nudgeValue ctx working_directory raw |> withEcho ctx "nudge_value"
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
+        SageFs.McpNudge.nudgeValue ctx sid working_directory raw |> withEcho ctx "nudge_value"
 
     // ── Session Management Tools ──────────────
 

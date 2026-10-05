@@ -443,6 +443,7 @@ let describedTests =
     testCase "WHY - the file parameter does not claim the file must be watched, because an unwatched project file is accepted" <| fun _ ->
       let file = nudgeMethod.GetParameters() |> Array.find (fun p -> p.Name = "file")
       (descriptionOf file).Contains "watches" |> Expect.isFalse "no claim that the file must be one hot reload watches"
+  ]
 
 // ── two sessions in one directory ──
 
@@ -522,22 +523,27 @@ let sessionIdTests =
     testTask "WHY - a member token bound to one session cannot reach another session's files by naming its id" {
       let dir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-nudgetool-%s" (Guid.NewGuid().ToString("N")))
       Directory.CreateDirectory dir |> ignore
-      let file = Path.Combine(dir, "Tuning.fs")
-      File.WriteAllText(file, tuningSource)
+      let mineFile = Path.Combine(dir, "Mine.fs")
+      let theirFile = Path.Combine(dir, "Theirs.fs")
+      File.WriteAllText(mineFile, tuningSource)
+      File.WriteAllText(theirFile, tuningSource)
       try
-        use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker file true
-        let port = Uri(server.BaseUrl).Port
+        use! (mineServer: WorkerHttpTransport.HttpWorkerServer) = startWorker mineFile true
+        use! (theirServer: WorkerHttpTransport.HttpWorkerServer) = startWorker theirFile true
         let mine = SessionId.newId ()
         let theirs = SessionId.newId ()
-        let ctx = contextOver [ infoFor mine dir port; infoFor theirs dir port ] (Some mine)
-        let! reply = McpNudge.nudgeValueIn (Path.Combine(dir, "tweaks")) ctx (Some(SessionId.value theirs)) dir (rawSet file gravity "9.8" "12.5")
-        text (json reply) "outcome" |> Expect.equal "refused" "Refused"
-        File.ReadAllText file |> Expect.equal "untouched" tuningSource
+        let ctx = contextOver [ infoFor mine dir (Uri(mineServer.BaseUrl).Port); infoFor theirs dir (Uri(theirServer.BaseUrl).Port) ] (Some mine)
+        // Naming the other session does not reach it: the registry the token sees has no such session, so the call is
+        // held to the session the token is bound to, whose files do not include the other's.
+        let! reply = McpNudge.nudgeValueIn (Path.Combine(dir, "tweaks")) ctx (Some(SessionId.value theirs)) dir (rawSet theirFile gravity "9.8" "12.5")
+        text (json reply) "refusal" |> Expect.equal "the other session's file is not the bound session's" "NotOwned"
+        File.ReadAllText theirFile |> Expect.equal "the other session's file is untouched" tuningSource
+        let! onMine = McpNudge.nudgeValueIn (Path.Combine(dir, "tweaks")) ctx (Some(SessionId.value theirs)) dir (rawSet mineFile gravity "9.8" "12.5")
+        text (json onMine) "outcome" |> Expect.equal "it works through the session the token is bound to" "Written"
       finally
         (try Directory.Delete(dir, true) with _ -> ())
     }
 
     testCase "WHY - the registered tool takes a session_id like the other session tools, so a client has a way to name the session" <| fun _ ->
       nudgeMethod.GetParameters() |> Array.map (fun p -> p.Name) |> Array.contains "session_id" |> Expect.isTrue "session_id is a parameter"
-  ]
   ]

@@ -162,10 +162,11 @@ module McpNudge =
   let client = new HttpClient(Timeout = Timeouts.workerHttpRead)
 
   /// The files the session a call resolves to owns: its projects' files, and which of
-  /// them hot reload is watching.
-  let ownedFilesOf (ctx: McpContext) (workingDirectory: string option) : Task<Result<OwnedFiles, NudgeRefusal>> =
+  /// them hot reload is watching. A `sessionId` wins over the directory, as in every other
+  /// session tool, so two sessions in one directory can be told apart.
+  let ownedFilesOf (ctx: McpContext) (sessionId: string option) (workingDirectory: string option) : Task<Result<OwnedFiles, NudgeRefusal>> =
     task {
-      let! resolution = resolveSessionId ctx "mcp" None workingDirectory
+      let! resolution = resolveSessionId ctx "mcp" sessionId workingDirectory
       match resolution with
       | Routable sessionId ->
         match WorkerProtocol.SessionId.validate sessionId with
@@ -201,14 +202,14 @@ module McpNudge =
 
   /// `nudge_value` with journals under `tweaksDir`: resolve the session, then `nudgeWith`
   /// the real disk and the daemon's shared locks.
-  let nudgeValueIn (tweaksDir: string) (ctx: McpContext) (workingDirectory: string) (raw: RawNudge) : Task<string> =
+  let nudgeValueIn (tweaksDir: string) (ctx: McpContext) (sessionId: string option) (workingDirectory: string) (raw: RawNudge) : Task<string> =
     task {
       let wd = if String.IsNullOrWhiteSpace workingDirectory then None else Some workingDirectory
-      match! ownedFilesOf ctx wd with
+      match! ownedFilesOf ctx sessionId wd with
       | Error refusal -> return render (Error refusal)
       | Ok owned -> return! nudgeWith owned (productionPorts tweaksDir) locks raw
     }
 
   /// `nudge_value`: `nudgeValueIn` the daemon's own tweaks directory.
-  let nudgeValue (ctx: McpContext) (workingDirectory: string) (raw: RawNudge) : Task<string> =
-    nudgeValueIn (defaultTweaksDir ()) ctx workingDirectory raw
+  let nudgeValue (ctx: McpContext) (sessionId: string option) (workingDirectory: string) (raw: RawNudge) : Task<string> =
+    nudgeValueIn (defaultTweaksDir ()) ctx sessionId workingDirectory raw
