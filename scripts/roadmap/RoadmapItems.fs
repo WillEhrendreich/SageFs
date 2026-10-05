@@ -176,9 +176,9 @@ let items : Item list =
       "Live bindings become a real pane in REPL mode, and cohort shows only while one is running. A pane hidden for being irrelevant says why and can be pinned open."
 
     item "app-output-pane" "App output in its own pane" Dashboard Next
-      NoLandmarkYet
+      (landmark "SageFs/AppOutputView.fs" "render")
       []
-      "stdout and stderr from a running app get their own pane with follow, pause and search, so a chatty app stops burying your evals. The daemon already receives the app's output lines, and the pane is what's missing."
+      "stdout and stderr from a running app get their own pane with follow, pause and search, so a chatty app stops burying your evals. The daemon holds one AppOutputPane per session, fed the same lines the transcript is fed from; the dock decides from that buffer and draws the answer, so the two cannot disagree about what the app wrote."
 
     item "new-session-dialog" "A guided new-session dialog" Dashboard Now
       (landmark "SageFs/NewSessionDialog.fs" "NewSessionDialog")

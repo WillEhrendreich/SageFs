@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 11, Later 18, Exploring 17. Already built: 23.
+On the page today: Now 0, Next 10, Later 18, Exploring 17. Already built: 24.
 
 ## Next
 
@@ -35,7 +35,6 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 - **More settings editable from the dashboard.** The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime. ([configuration.md](configuration.md))
 - **Dashboard panels that follow your context.** Live bindings become a real pane in REPL mode, and cohort shows only while one is running. A pane hidden for being irrelevant says why and can be pinned open.
-- **App output in its own pane.** stdout and stderr from a running app get their own pane with follow, pause and search, so a chatty app stops burying your evals. The daemon already receives the app's output lines, and the pane is what's missing.
 
 ### Docs and onboarding
 
@@ -161,6 +160,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 
 ### Dashboard
 
+- **App output in its own pane.** stdout and stderr from a running app get their own pane with follow, pause and search, so a chatty app stops burying your evals. The daemon holds one AppOutputPane per session, fed the same lines the transcript is fed from; the dock decides from that buffer and draws the answer, so the two cannot disagree about what the app wrote. Code: [`SageFs/AppOutputView.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/AppOutputView.fs)
 - **A guided new-session dialog.** A plus button on the Sessions list opens a dialog that finds projects under a directory you can edit, says in a line what each workflow means, and warns before you make a second session in the same directory, naming the one that exists. A refusal from the daemon shows in the dialog with its next action, and Create closes it into a starting card at once. The no-session picker's Open Directory card still has its own form. Code: [`SageFs/NewSessionDialog.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/NewSessionDialog.fs)
 
 ### Platform and install
