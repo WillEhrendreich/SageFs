@@ -12,12 +12,13 @@ let syntaxHighlightTests = testSequenced <| testList "SyntaxHighlight" [
     let code = "let x = 1\nlet y = x + 2\nprintfn \"%d\" y"
     for _ in 1..1000 do
       SyntaxHighlight.tokenize theme code |> ignore
-    let sw = Stopwatch.StartNew()
+    // The best of several batches, not the average of one run: a loaded machine only ever adds time (`PerfBudget.minMs`).
     let n = TestMagnitudes.tokenizeRuns
-    for _ in 1..n do
-      SyntaxHighlight.tokenize theme code |> ignore
-    sw.Stop()
-    let usPerOp = sw.Elapsed.TotalMicroseconds / float n
+    let bestBatchMs =
+      PerfBudget.minMs 10 (fun () ->
+        for _ in 1..n do
+          SyntaxHighlight.tokenize theme code |> ignore)
+    let usPerOp = bestBatchMs * 1000.0 / float n
     printfn "tokenize cached: %.3fµs/op" usPerOp
     Expect.isLessThan "should be < 5µs" (usPerOp, 5.0)
 

@@ -55,11 +55,10 @@ let diffEmitTests =
       CellGrid.writeString g 0 0 fg bg CellAttrs.None "Hello World"
       let prev = CellGrid.clone g
       AnsiEmitter.emitDiff prev g 0 0 |> ignore
-      let sw = System.Diagnostics.Stopwatch.StartNew()
+      // The best of several batches, not the average of one run: a loaded machine only ever adds time (`PerfBudget.minMs`).
       let iters = 100
-      for _ in 1 .. iters do AnsiEmitter.emitDiff prev g 0 0 |> ignore
-      sw.Stop()
-      let usPerOp = float sw.Elapsed.TotalMicroseconds / float iters
+      let bestBatchMs = PerfBudget.minMs 20 (fun () -> for _ in 1 .. iters do AnsiEmitter.emitDiff prev g 0 0 |> ignore)
+      let usPerOp = bestBatchMs * 1000.0 / float iters
       printfn "emitDiff (no changes, 60x200): %.1f µs/op" usPerOp
       (usPerOp, 100.0) |> Expect.isLessThan "no-change diff should be under 100µs"
 

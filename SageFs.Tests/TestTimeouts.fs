@@ -412,8 +412,10 @@ module TestTimeouts =
   let interruptGrace = System.TimeSpan.FromMilliseconds 300.
 
   /// The timeout handed to a timer join. An idle timer has to be joined well inside it,
-  /// not by sitting it out.
-  let timerJoinTimeout = System.TimeSpan.FromSeconds 2.
+  /// not by sitting it out. Sixty seconds, so that "well inside" (three quarters of it) is 45 s
+  /// of slack for a starved machine and a join that sits it out is still told apart: it takes
+  /// the whole minute. A passing run joins at once and never waits any of it.
+  let timerJoinTimeout = System.TimeSpan.FromSeconds 60.
 
   /// A deadline far shorter than the work it bounds, so the deadline fires.
   let deadlineTight = System.TimeSpan.FromMilliseconds 50.

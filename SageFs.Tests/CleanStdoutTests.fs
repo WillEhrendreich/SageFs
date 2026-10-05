@@ -72,12 +72,13 @@ let cleanStdoutTests =
         |> String.concat "\n"
       // Warmup (JIT + regex compilation)
       cleanStdout bigInput |> ignore
-      let sw = System.Diagnostics.Stopwatch.StartNew()
+      // The best of several batches, not the average of one run: a loaded machine only ever adds time (`PerfBudget.minMs`).
       let iters = 100
-      for _ in 1 .. iters do
-        cleanStdout bigInput |> ignore
-      sw.Stop()
-      let usPerOp = float sw.Elapsed.TotalMicroseconds / float iters
+      let bestBatchMs =
+        PerfBudget.minMs 20 (fun () ->
+          for _ in 1 .. iters do
+            cleanStdout bigInput |> ignore)
+      let usPerOp = bestBatchMs * 1000.0 / float iters
       printfn "cleanStdout: %.1f µs/op (%d iterations)" usPerOp iters
       (usPerOp, 1000.0) |> Expect.isLessThan "cleanStdout should be under 1000µs for 500 lines"
   ]
