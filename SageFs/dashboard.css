@@ -31,6 +31,12 @@
   --color-info: #7fb4ca;
   --font-size: 14px;
   --sidebar-width: 320px;
+  /* The bottom dock is a SECONDARY surface: the transcript above it is what a session is
+     read for. One home for its ceiling, mirroring --sidebar-width, so a resize control has
+     a single value to write and the default can be reasoned about here rather than at the
+     rule that uses it. 45vh put it level with the output panel; 30vh keeps the transcript
+     roughly twice its height. */
+  --dock-max-height: min(30vh, 18rem);
   --tabline-h: 36px;
   --statusline-h: 28px;
   --cmdline-h: 32px;
@@ -1250,7 +1256,7 @@ h2 {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  max-height: min(45vh, 26rem);
+  max-height: var(--dock-max-height);
   border-top: 1px solid var(--border-normal);
   background: var(--bg-panel);
 }
