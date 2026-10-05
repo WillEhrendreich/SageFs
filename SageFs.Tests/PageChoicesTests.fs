@@ -47,6 +47,24 @@ let pageChoicesTests =
       choices.Find("page-2", -1) |> Expect.equal "the next oldest is gone" -1
       choices.Find("page-5", -1) |> Expect.equal "the newest is kept" 5
 
+    testCase "WHY — Update applies a change to the page's current choice, starting from the default for a page that never chose" <| fun _ ->
+      let choices = PageChoices<int>(8)
+      choices.Update("page-a", 10, fun n -> n + 1) |> Expect.equal "from the default" 11
+      choices.Update("page-a", 10, fun n -> n + 1) |> Expect.equal "from the stored choice" 12
+      choices.Find("page-a", -1) |> Expect.equal "stored" 12
+
+    testCase "WHY — concurrent Updates never lose one, because two clicks on one page arrive on two threads" <| fun _ ->
+      let choices = PageChoices<int>(8)
+      let updates = 2000
+      System.Threading.Tasks.Parallel.For(0, updates, fun _ -> choices.Update("page-a", 0, fun n -> n + 1) |> ignore) |> ignore
+      choices.Find("page-a", -1) |> Expect.equal "every increment landed" updates
+
+    testCase "WHY — Update on a new page joins the eviction order like Set does, so it stays bounded" <| fun _ ->
+      let choices = PageChoices<int>(3)
+      for i in 1 .. 5 do choices.Update(sprintf "page-%d" i, 0, fun n -> n + i) |> ignore
+      choices.Count |> Expect.equal "never more than the capacity" 3
+      choices.Find("page-5", -1) |> Expect.equal "the newest is kept" 5
+
     testCase "WHY — a capacity that could hold nothing is refused at construction, because a store that evicts every choice as it is made would look like it works" <| fun _ ->
       Expect.throws "zero" (fun () -> PageChoices<int>(0) |> ignore)
       Expect.throws "negative" (fun () -> PageChoices<int>(-4) |> ignore)

@@ -103,6 +103,10 @@ let genEvent : Gen<Event> =
     genRequest |> Gen.map Event.Submit
     Gen.constant Event.Created
     genRefusal |> Gen.map Event.Failed
+    gen {
+      let! dir = genDir
+      let! reason = genRefusal
+      return Event.Rejected(dir, reason) }
     Gen.constant Event.Dismiss ]
 
 let states = Arb.fromGen genState
@@ -179,6 +183,20 @@ let stateMachine =
       let creating = NewSessionDialog.Creating(request "/work/repo" Target.Bare, foundIn "/work/repo")
       NewSessionDialog.step creating Event.Dismiss
       |> Expect.equal "still creating" creating
+
+    testCase "WHY — a click that is refused before the daemon (nothing typed, nothing ticked) shows the refusal and keeps the choices" <| fun _ ->
+      let found = foundIn "/work/repo"
+      NewSessionDialog.step (NewSessionDialog.Choosing found) (Event.Rejected("/work/repo", Refusal.NothingPicked))
+      |> Expect.equal "Refused with the earlier choices" (NewSessionDialog.Refused(Refusal.NothingPicked, found))
+
+    testCase "WHY — a refused click from a state with nothing found shows an empty list for the directory it was about" <| fun _ ->
+      NewSessionDialog.step NewSessionDialog.Closed (Event.Rejected("/work/repo", Refusal.NoDirectory))
+      |> Expect.equal "refused, nothing to list" (NewSessionDialog.Refused(Refusal.NoDirectory, Found.nothing "/work/repo"))
+
+    testCase "WHY — a refusal does not interrupt a create that is already running" <| fun _ ->
+      let creating = NewSessionDialog.Creating(request "/work/repo" Target.Bare, foundIn "/work/repo")
+      NewSessionDialog.step creating (Event.Rejected("/work/repo", Refusal.NothingPicked))
+      |> Expect.equal "unchanged" creating
 
     testProperty "WHY — step is total: every event in every state gives a state, never an exception" <|
       Prop.forAll states (fun state ->
@@ -343,6 +361,37 @@ let requests =
       TargetKind.tryOfKey "garbage" |> Expect.isNone "unknown is not a kind"
   ]
 
+[<Tests>]
+let defaults =
+  testList "DefaultChoice — what is ticked when discovery finishes" [
+
+    testCase "WHY — a solution is ticked on its own: it already covers its projects" <| fun _ ->
+      let found =
+        { foundIn "/work/repo" with
+            Candidates =
+              [ candidate "All.slnx" CandidateKind.Solution Frameworks.WholeSolution
+                candidate "App/App.fsproj" CandidateKind.Project (Frameworks.Declared [ "net10.0" ]) ] }
+      DefaultChoice.ofFound found
+      |> Expect.equal "the solution" (TargetKind.LoadProjects, [ "All.slnx" ])
+
+    testCase "WHY — a lone project is ticked, because there is nothing else to choose" <| fun _ ->
+      DefaultChoice.ofFound (foundIn "/work/repo")
+      |> Expect.equal "the project" (TargetKind.LoadProjects, [ "App.fsproj" ])
+
+    testCase "WHY — several projects and no solution tick nothing: that is the person's choice, and Create waits for it" <| fun _ ->
+      let found =
+        { foundIn "/work/repo" with
+            Candidates =
+              [ candidate "A/A.fsproj" CandidateKind.Project (Frameworks.Declared [ "net10.0" ])
+                candidate "B/B.fsproj" CandidateKind.Project (Frameworks.Declared [ "net10.0" ]) ] }
+      DefaultChoice.ofFound found
+      |> Expect.equal "none ticked, still loading projects" (TargetKind.LoadProjects, [])
+
+    testCase "WHY — nothing found means Bare, the only thing that can be created here" <| fun _ ->
+      DefaultChoice.ofFound (Found.nothing "/work/empty")
+      |> Expect.equal "bare" (TargetKind.BareSession, [])
+  ]
+
 // ── What the dialog says ────────────────────────────────────────────────────
 
 let isSaying (message: string) (text: string) =
@@ -455,6 +504,23 @@ let discovery =
         match discover [] dir with
         | Error refusal -> failtestf "expected found, got %A" refusal
         | Ok (found, _) -> found.Candidates |> Expect.isEmpty "nothing real here")
+
+    testCase "WHY — a bare request resolves to the one bare target, with nothing read from the disk" <| fun _ ->
+      resolveTargets (request "/work/repo" Target.Bare)
+      |> Result.map List.length
+      |> Expect.equal "one bare target" (Ok 1)
+
+    testCase "WHY — a ticked project that escapes the working directory is refused by name, never quietly dropped" <| fun _ ->
+      withTempDir (fun dir ->
+        match resolveTargets (request dir (Target.Load("../outside.fsproj", []))) with
+        | Error (Refusal.Daemon (SageFsError.UnsafeSessionPath _)) -> ()
+        | other -> failtestf "expected an UnsafeSessionPath refusal, got %A" other)
+
+    testCase "WHY — ticked projects inside the directory resolve to targets, in the order they were ticked" <| fun _ ->
+      withTempDir (fun dir ->
+        match resolveTargets (request dir (Target.Load("B/B.fsproj", [ "A/A.fsproj" ]))) with
+        | Ok targets -> SessionProjectTarget.paths targets |> Expect.equal "ticked order" [ Path.Combine(dir, "B/B.fsproj"); Path.Combine(dir, "A/A.fsproj") ]
+        | Error refusal -> failtestf "expected targets, got %A" refusal)
 
     testCase "WHY — a live session in the same directory comes back as an overlap, so the dialog can warn before creating" <| fun _ ->
       withTempDir (fun dir ->
