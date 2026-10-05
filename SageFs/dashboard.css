@@ -471,36 +471,75 @@ h2 {
   opacity: 0.75;
 }
 
-/* ── Eval Area ────────────────────────────────────────────────── */
+/* ── Evaluate popover ─────────────────────────────────────────── */
 
-.eval-area {
-  flex-shrink: 0;
-  padding: 0;
-  border-top: 1px solid var(--border-normal);
-  /* The most of the window an eval's answer may take under the Evaluate box. The area never shrinks, so an answer
-     of a few hundred lines would take the whole column and leave the output panel a few pixels; it scrolls instead. */
-  --eval-result-max-height: 30vh;
+/* Evaluate is a small button in the output header that pops a box open (EvaluatePopover.fs). The box is fixed to the
+   viewport, so the output panel it sits over can never clip it and no width can push it off the screen: it is at most the
+   viewport wide less a gutter, and at most the viewport high less the header, and it scrolls inside that. */
+.output-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
+.eval-pop > summary {
+  list-style: none;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+}
+
+.eval-pop[open] > summary {
+  background: var(--fg-blue);
+  color: var(--bg-default);
+}
+
+.eval-pop-body {
+  position: fixed;
+  z-index: 60;
+  top: calc(var(--tabline-h) + 2.75rem);
+  right: 0.75rem;
+  width: min(42rem, calc(100vw - 1.5rem));
+  max-height: calc(100vh - var(--tabline-h) - 4rem);
+  overflow-y: auto;
+  padding: 0.5rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-focus);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* The most of the window an eval's answer may take under the box: it scrolls instead of growing the box. */
   & #eval-result {
-    max-height: var(--eval-result-max-height);
+    max-height: 30vh;
     overflow-y: auto;
   }
+}
 
-  & summary {
-    list-style: none;
-    user-select: none;
-    padding: 4px 8px;
-    background: var(--bg-panel);
-    cursor: pointer;
+.eval-pop-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 0.4rem;
+}
 
-    &::-webkit-details-marker {
-      display: none;
-    }
+.eval-pop-title {
+  margin-right: auto;
+  font-weight: 700;
+  color: var(--fg-blue);
+}
 
-    & span:first-child::before {
-      content: '';
-    }
-  }
+.eval-pop-size {
+  font-size: 0.75rem;
+}
+
+.eval-pop-input {
+  position: relative;
+}
+
+.eval-btn-file {
+  background: var(--fg-blue);
+  cursor: pointer;
 }
 
 .eval-input {
@@ -1000,12 +1039,205 @@ h2 {
 
 /* ── Live Bindings Watch Window ──────────────────────────────────── */
 
+/* The bottom dock (LiveBindingsDock.fs). Single-column flow with no breakpoint: the dock is as wide as the column and never
+   wider, every row and header wraps, and the tree scrolls inside a bounded height, so no width can overflow, overlap or
+   squeeze the output panel above to nothing. The dock never takes more than a bounded part of the window. */
+
+/* Applied by `data-class` to a pane the pin or the filter hides. */
+.live-hidden {
+  display: none !important;
+}
+
+.live-dock {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-height: min(45vh, 26rem);
+  border-top: 1px solid var(--border-normal);
+  background: var(--bg-panel);
+}
+
+.live-dock-bar,
+.live-pane-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.8rem;
+  padding: 4px 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.live-pane-bar {
+  border-bottom: 1px solid var(--border-normal);
+}
+
+.live-dock-reason {
+  flex: 1 1 14rem;
+  min-width: 0;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+.live-pane-title {
+  color: var(--fg-red);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.live-pane-count,
+.live-pane-stamp {
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.live-pane-stamp:empty {
+  display: none;
+}
+
+/* The pane inside the dock: not the bordered, padded card the sidebar panels are. */
+.panel.live-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  border: none;
+}
+
+.live-pane > .live-pane-head,
+.live-pane > .live-containment {
+  padding: 0 8px;
+}
+
+.live-filter {
+  flex: 1 1 10rem;
+  min-width: 8rem;
+  max-width: 24rem;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-default);
+  color: var(--fg-default);
+  border: 1px solid var(--border-normal);
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 12px;
+
+  &:focus {
+    outline: 1px solid var(--border-focus);
+    border-color: var(--border-focus);
+  }
+}
+
+/* A button that says it is on: the pane's pin and a pinned binding's pin. */
+.session-btn-on {
+  background: var(--fg-yellow);
+  color: var(--bg-default);
+}
+
+.live-pane-pin {
+  margin-left: auto;
+}
+
+.live-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 2px 8px 6px;
+  font-size: 0.75rem;
+}
+
+/* A top-level binding: a square pin button, and the tree beside it. A pinned one rides to the top of the column. */
+.live-binding {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 0 6px;
+  align-items: start;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border-normal);
+
+  &.live-pinned {
+    order: -1;
+    background: color-mix(in oklch, var(--fg-yellow) 8%, transparent);
+  }
+}
+
+.live-binding-tree {
+  min-width: 0;
+}
+
+.live-empty {
+  padding: 0.5rem 0;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+/* A node that opens: its caret sits in the gutter, so a row with children and a row without line up. */
+.live-node > summary {
+  position: relative;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+
+  &::before {
+    content: '▸';
+    position: absolute;
+    left: 0;
+    color: var(--fg-dim);
+  }
+}
+
+.live-node[open] > summary::before {
+  content: '▾';
+}
+
+.live-children {
+  margin-left: 0.5em;
+  padding-left: 0.7em;
+  border-left: 1px solid var(--border-normal);
+}
+
+.live-name {
+  color: var(--fg-cyan);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.live-kind {
+  padding: 0 0.4em;
+  border: 1px solid var(--border-normal);
+  color: var(--fg-dim);
+  font-size: 0.6rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.live-type {
+  color: var(--fg-dim);
+  font-size: 0.7rem;
+}
+
+.live-mode-btn {
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.7rem;
+}
+
 .live-binding-node {
   display: flex;
   align-items: baseline;
-  gap: 0.4em;
-  padding: 2px 0;
+  gap: 0 0.5em;
+  padding: 2px 0 2px 1.2em;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .live-preview {
@@ -1561,7 +1793,7 @@ h2 {
        floor so the output/eval area isn't crushed toward zero height
        when the (now full-width, below it) sidebar content is tall. */
     flex: 1 1 auto;
-    min-height: 320px;
+    min-height: 36rem;
   }
 
   .sidebar {
@@ -1602,11 +1834,10 @@ h2 {
     display: none;
   }
 
-  .eval-area {
-    /* eval-area has no horizontal padding at desktop width (its
-       children carry their own); give it a side gutter here so the
-       eval textarea/buttons aren't flush against the screen edge. */
-    padding: 0 0.75rem;
+  .live-dock {
+    /* The stacked layout scrolls as one column, so the output above the dock keeps a floor of its own: the dock is
+       bounded, and the main area is tall enough for both. */
+    max-height: 22rem;
   }
 
   #output-panel {

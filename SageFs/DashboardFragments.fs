@@ -282,14 +282,14 @@ let signalDetails (signalName: string) (attrs: XmlAttribute list) (children: Xml
 
 /// Reduce arbitrary (possibly FSI-derived) text to identifier characters, for
 /// splicing into a Datastar signal name inside an attribute expression.
-let private signalIdent (s: string) : string =
+let signalIdent (s: string) : string =
   s |> String.map (fun c -> match Char.IsAsciiLetterOrDigit c || c = '_' with | true -> c | false -> '_')
 
 /// The signal that says one held row's click is out: it disables that row's button and shows that row's evaluating mark.
 /// Each segment (the binding, then every label down to the getter) is written as lowercase hex and the segments are
 /// joined with an underscore, which hex never contains, so two different rows never share a signal. Joining readable
 /// names did: a/b_c, a_b/c and a-b/c all came out as the same name, and pressing one showed evaluating on the others.
-let private liveEvaluatingSignal (binding: string) (path: string list) : string =
+let liveEvaluatingSignal (binding: string) (path: string list) : string =
   let hexOf (text: string) = Convert.ToHexStringLower(Text.Encoding.UTF8.GetBytes text)
   sprintf "liveEvaluating_%s_%s" (hexOf binding) (path |> List.map hexOf |> String.concat "_")
 
@@ -1388,7 +1388,7 @@ let private coverageStatusLabel (status: Features.Treemap.CoverageStatus) =
 
 /// A single-quoted JS string literal for splicing a node id into a Datastar
 /// expression (`Ds.onEvent`/`Ds.show` bodies are raw JS, not attribute text).
-let private jsStringLiteral (s: string) =
+let jsStringLiteral (s: string) =
   "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'"
 
 let private coveragePercent (probeCount: int) (coveredCount: int) =
@@ -2237,124 +2237,23 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
               Elem.div [ Attr.style "display:flex;align-items:center;gap:16px;" ] [
                 Elem.h2 [] [ Text.raw "Output" ]
               ]
-              Elem.button
-                [ Attr.class' "panel-header-btn"
-                  Attr.create "aria-label" "Clear — clear the output panel"
-                  Ds.onClick (Ds.post "/dashboard/clear-output") ]
-                [ Text.raw "[CLEAR]" ]
+              // Evaluate is a small button out of the way (it pops a box open); the live bindings own the bottom region.
+              Elem.div [ Attr.class' "output-actions" ] [
+                EvaluatePopover.render (renderKeyboardHelp ())
+                Elem.button
+                  [ Attr.class' "panel-header-btn"
+                    Attr.create "aria-label" "Clear — clear the output panel"
+                    Ds.onClick (Ds.post "/dashboard/clear-output") ]
+                  [ Text.raw "[CLEAR]" ]
+              ]
             ]
             snap.OutputPanel
             renderOutputNewEvalsPill ()
           ]
-          // Eval area — collapsed by default via <details>
-          signalDetails Signals.EvaluateSectionOpen [ Attr.id DomIds.EvaluateSection; Attr.class' "eval-area" ] [
-            Elem.create "summary" [ Attr.class' "flex-between"; Attr.style "cursor: pointer;" ] [
-              Elem.span [ Attr.style "color: var(--fg-blue); font-weight: bold; font-size: 0.85rem;" ] [ Text.raw "▸ Evaluate" ]
-              Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
-                Elem.span [ Ds.text """$code ? ($code.split('\\n').length + 'L ' + $code.length + 'c') : ''""" ] []
-              ]
-            ]
-            // Keyboard help toggle — outside <summary> to avoid a11y issues (interactive inside summary)
-            Elem.div [ Attr.style "display: flex; justify-content: flex-end; padding: 2px 0;" ] [
-              Elem.button
-                [ Attr.class' "panel-header-btn"
-                  Attr.create "aria-label" "Toggle keyboard shortcuts help"
-                  Ds.onEvent ("click", "$helpVisible = !$helpVisible") ]
-                [ Text.raw "⌨" ]
-            ]
-            Elem.div [ Attr.id DomIds.KeyboardHelpWrapper; Ds.show "$helpVisible" ] [
-              renderKeyboardHelp ()
-            ]
-            Elem.div [ Attr.style "position: relative;" ] [
-              Elem.textarea
-                [ Attr.class' "eval-input"
-                  Attr.id DomIds.EvalTextarea
-                  Ds.bind Signals.Code
-                  Attr.create "placeholder" "Enter F# code... (Alt+Enter to eval, ;; auto-appended)"
-                  // NOTE: Datastar evaluates data-on expressions with `this`
-                  // unbound — the element must be reached via event.target,
-                  // never `this`. (A `this.` reference throws "Cannot read
-                  // properties of undefined (reading 'substring')" at runtime.)
-                  Ds.onEvent ("keydown", "var t=event.target; if(event.altKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=t.selectionStart; var e=t.selectionEnd; t.value=t.value.substring(0,s)+'  '+t.value.substring(e); t.selectionStart=t.selectionEnd=s+2; t.dispatchEvent(new Event('input')) } if(event.key === 'Escape') { document.getElementById('completion-dropdown').style.display='none' }")
-                  Ds.onEvent ("input.debounce_300ms", sprintf "var t=event.target; var c=t.value[t.selectionStart-1]; $%s = t.selectionStart; if(c==='.'||(c>='a'&&c<='z')||(c>='A'&&c<='Z')){@post('/dashboard/completions')}" Signals.CursorPos)
-                  Attr.create "spellcheck" "false" ]
-                []
-              Elem.div
-                [ Attr.id DomIds.CompletionDropdown
-                  Attr.style "display:none; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:0; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
-                []
-            ]
-            Elem.div
-              [ Attr.class' "eval-controls" ]
-              [
-                // Eval / reset / hard-reset share one in-flight signal so every
-                // action button is disabled while ANY of them is running — a
-                // click can never double-fire a destructive reset behind an eval.
-                Elem.button
-                  [ Attr.class' "eval-btn"
-                    testid "eval"
-                    Attr.create "aria-label" "Evaluate — run the code in the editor"
-                    Ds.indicator Signals.ActionLoading
-                    Ds.attr' ("disabled", "$actionLoading")
-                    Ds.onClick (Ds.post "/dashboard/eval") ]
-                  [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
-                    Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "▶ " ]
-                    Text.raw "[EVAL]" ]
-                // Cancel appears the moment EVAL/RESET/HARD_RESET goes
-                // in-flight (same $actionLoading signal that disables them) —
-                // it must NOT bind its own `disabled` to that signal, or a
-                // running eval could never be reached to cancel it. Its own
-                // $cancelLoading only guards against double-submitting the
-                // cancel request itself. Best-effort: this cooperatively
-                // cancels (CTS + thread interrupt) — it stops an eval blocked
-                // on I/O, but cannot preempt a tight CPU loop with no yield
-                // point (e.g. `while true do ()`); Hard Reset remains the
-                // guaranteed way out of that case.
-                Elem.button
-                  [ Attr.class' "eval-btn eval-btn-cancel"
-                    testid "cancel-eval"
-                    Attr.create "aria-label" "Cancel — request cancellation of the in-flight evaluation (best-effort; cannot stop a tight loop with no I/O)"
-                    Ds.show "$actionLoading"
-                    Ds.indicator Signals.CancelLoading
-                    Ds.attr' ("disabled", "$cancelLoading")
-                    Ds.onClick (Ds.post "/dashboard/cancel-eval") ]
-                  [ Elem.span [ Ds.show "$cancelLoading" ] [ Text.raw "⏳ " ]
-                    Elem.span [ Ds.show "!$cancelLoading" ] [ Text.raw "⛔ " ]
-                    Text.raw "[CANCEL]" ]
-                Elem.button
-                  [ Attr.class' "eval-btn eval-btn-reset"
-                    testid "reset"
-                    Attr.create "aria-label" "Reset — restart the FSI session, keeping loaded projects"
-                    Ds.indicator Signals.ActionLoading
-                    Ds.attr' ("disabled", "$actionLoading")
-                    Ds.onClick (Ds.post "/dashboard/reset") ]
-                  [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
-                    Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "↻ " ]
-                    Text.raw "[RESET]" ]
-                Elem.button
-                  [ Attr.class' "eval-btn eval-btn-reset eval-btn-hard"
-                    testid "hard-reset"
-                    Attr.create "aria-label" "Hard Reset — rebuild and restart the FSI session from scratch"
-                    Ds.indicator Signals.ActionLoading
-                    Ds.attr' ("disabled", "$actionLoading")
-                    Ds.onClick (Ds.post "/dashboard/hard-reset") ]
-                  [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
-                    Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "✖ " ]
-                    Text.raw "[HARD_RESET]" ]
-                Elem.label
-                  [ Attr.class' "eval-btn"
-                    Attr.create "aria-label" "Load File — read a local .fs/.fsx/.fsi file into the editor"
-                    Attr.style "background: var(--fg-blue); cursor: pointer;" ]
-                  [ Elem.input
-                      [ Attr.type' "file"
-                        Attr.accept ".fs,.fsx,.fsi"
-                        Attr.style "display: none;"
-                        Attr.create "onchange" "if(this.files[0]){var f=this.files[0];var r=new FileReader();r.onload=function(){var ta=document.getElementById('eval-textarea');ta.value=r.result;ta.dispatchEvent(new Event('input'))};r.readAsText(f);this.value=''}" ]
-                    Text.raw "📂 Load File" ]
-              ]
-            Elem.div [ Attr.id DomIds.EvalResult ] []
-          ]
         ]
+        // The bottom dock: the live bindings (a watch window) where the Evaluate bar used to be. Whether it shows a tree
+        // or one line saying why not is DockPanes' decision; the snapshot carries the answer already drawn.
+        snap.BindingsPanel
       ]
       // Resize handle between main area and sidebar
       Elem.div [ Attr.class' "resize-handle"; Attr.id DomIds.SidebarResize ] []
@@ -2386,11 +2285,10 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           Elem.div [ Attr.class' "panel" ] [
             snap.SessionsPanel
           ]
-          // Dynamic sidebar panels — expanded-only (hot reload, live testing, bindings, session context)
+          // Dynamic sidebar panels — expanded-only (hot reload, live testing, session context). The bindings are in the dock.
           Elem.div [ Attr.class' "expanded-only" ] [
             snap.HotReloadPanel
             snap.LiveTestingPanel
-            snap.BindingsPanel
             snap.SessionContextPanel
             snap.FrictionPanel
             snap.CohortPanel
@@ -3619,8 +3517,8 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
   let shadowedCount =
     snapshot |> Option.map (fun s -> s.ShadowedBindings.Length) |> Option.defaultValue 0
   Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
-    // Shares Signals.BindingsPanelOpen with renderLiveBindingsPanel — the two
-    // are mutually exclusive renders of the same DOM id, so one open state.
+    // The text panel the dock shows while a session has printed bindings but no
+    // walk has come back (LiveBindingsDock.PrintedBindings).
     signalDetails Signals.BindingsPanelOpen [] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
         Text.raw "📦 "
@@ -3678,162 +3576,6 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
                   ]
               ]
             ]
-    ]
-  ]
-
-/// Render the live bindings watch window — a recursive, fully-delineated tree
-/// of the actual bound values in the FSI session (debugger-style).
-/// Each binding shows name : type + compact preview, with expandable children.
-///
-/// A row the walk listed without reading says why. A getter that can be run gets one small square button that posts the
-/// click through Datastar and shows an evaluating state in the row at once; the answer arrives with the next morph, because
-/// the click changes the same store every push reads. The header shows the session's real walk mode as the pressed one of
-/// three choices, how many rows are listed and not read, and how the last clicked getter was kept from doing harm.
-/// Everything wraps: a row or the header is a flex-wrap flow with no breakpoint, so no width makes it overflow or overlap.
-let renderLiveBindingsPanel (sessionId: string) (view: SageFs.Features.LiveBindingsPane.PaneView option) =
-  let evaluateEndpoint = sprintf "/api/sessions/%s/live-values/evaluate" (Uri.EscapeDataString sessionId)
-  let modeEndpoint = sprintf "/api/sessions/%s/live-values/mode" (Uri.EscapeDataString sessionId)
-  let kindBadge (node: SageFs.Features.LiveValueTree.LiveValueNode) =
-    match node.Kind with
-    | SageFs.Features.LiveValueTree.NodeKind.Closure ->
-      [ Elem.span [ Attr.class' "live-closure-badge"; Attr.create "aria-label""Best-effort expansion of captured values" ] [ Text.raw "~(best-effort)" ] ]
-    | SageFs.Features.LiveValueTree.NodeKind.Cycle ->
-      [ Elem.span [ Attr.class' "live-cycle" ] [ Text.raw "↩ (cycle)" ] ]
-    | SageFs.Features.LiveValueTree.NodeKind.Truncated ->
-      [ Elem.span [ Attr.class' "live-truncated" ] [ Text.raw "… (truncated)" ] ]
-    | _ -> []
-  // The click's payload is staged in the signals the daemon route reads (`$binding`, `$path`), then posted.
-  let evaluateClick (binding: string) (path: string list) =
-    let stagedPath = path |> List.map jsStringLiteral |> String.concat ", "
-    attrEnc (sprintf "$binding = %s; $path = [%s]; " (jsStringLiteral binding) stagedPath + Ds.post evaluateEndpoint)
-  let heldRow (binding: string) (path: string list) (node: SageFs.Features.LiveValueTree.LiveValueNode) (reason: SageFs.Features.LiveValueTree.NotEvaluatedReason) =
-    let action = SageFs.Features.LiveBindingsPane.rowActionOf reason
-    let rowClass =
-      match action with
-      | SageFs.Features.LiveBindingsPane.ClickToRun -> "live-binding-node live-held-row"
-      | SageFs.Features.LiveBindingsPane.NothingToClick -> "live-binding-node live-held-row"
-      | SageFs.Features.LiveBindingsPane.ClickFailed -> "live-binding-node live-held-row live-held-unknown"
-    let indicator = liveEvaluatingSignal binding path
-    Elem.div [ Attr.class' rowClass; Attr.style (sprintf "padding-left: %dem;" node.Depth) ] [
-      Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [ textEnc node.Label ]
-      Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem;" ] [ textEnc node.TypeName ]
-      Elem.span [ Attr.class' "live-held-reason"; Attr.style "font-size: 0.7rem;" ] [
-        match action with
-        | SageFs.Features.LiveBindingsPane.ClickFailed -> textEnc (sprintf "unknown: %s" node.Preview)
-        | SageFs.Features.LiveBindingsPane.ClickToRun
-        | SageFs.Features.LiveBindingsPane.NothingToClick -> textEnc node.Preview
-      ]
-      match action with
-      | SageFs.Features.LiveBindingsPane.ClickToRun ->
-        Elem.button
-          [ Attr.class' "session-btn live-held-btn"
-            Attr.create "aria-label" (attrEnc (sprintf "Run %s now: it runs your code under a deadline" node.Label))
-            Attr.create "title" (attrEnc (sprintf "Run %s now. It runs your code, under a deadline and, where the OS allows, a syscall filter." node.Label))
-            Ds.indicator indicator
-            Ds.attr' ("disabled", sprintf "$%s" indicator)
-            Ds.onClick (evaluateClick binding path) ]
-          [ Text.raw "▶" ]
-        Elem.span [ Attr.class' "live-held-evaluating"; Ds.show (sprintf "$%s" indicator) ] [ Text.raw "⏳ evaluating…" ]
-      | SageFs.Features.LiveBindingsPane.NothingToClick
-      | SageFs.Features.LiveBindingsPane.ClickFailed -> ()
-    ]
-  let rec renderNode (binding: string) (path: string list) (node: SageFs.Features.LiveValueTree.LiveValueNode) =
-    let hasChildren = not (List.isEmpty node.Children)
-    // Text.create escapes — labels, type names, and previews are FSI-derived
-    // DATA, not trusted markup. A string preview containing <script> (e.g. a
-    // bound value holding HTML) must never inject into the dashboard DOM.
-    let row =
-      Elem.div [ Attr.class' "live-binding-node"; Attr.style (sprintf "padding-left: %dem;" (node.Depth)) ] [
-        Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [ textEnc node.Label ]
-        Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; margin-left: 0.4em;" ] [ textEnc node.TypeName ]
-        Elem.span [ Attr.class' "live-preview"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; margin-left: 0.4em; overflow-wrap: anywhere;" ] [
-          textEnc (sprintf "= %s" node.Preview)
-        ]
-        yield! kindBadge node
-      ]
-    match node.Kind, hasChildren with
-    | SageFs.Features.LiveValueTree.NodeKind.NotEvaluated reason, _ -> heldRow binding path node reason
-    | _, false -> row
-    | _, true ->
-      // Per-node signal for open/closed state — survives Datastar morphs.
-      // The label is FSI-derived data spliced into a Datastar expression inside
-      // an attribute, so reduce it to identifier characters only.
-      let nodeSignal = sprintf "open_%s_%d" (signalIdent (node.Label.Replace("(", "").Replace(")", ""))) node.Depth
-      signalDetails nodeSignal [ Attr.style "font-size: 0.75rem;" ] [
-        Elem.summary [ Attr.style "cursor: pointer; user-select: none; list-style: none;" ] [ row ]
-        Elem.div [ Attr.style "margin-top: 2px;" ] [
-          yield! node.Children |> List.map (fun child -> renderNode binding (path @ [ child.Label ]) child)
-        ]
-      ]
-  let walkModeLoading = "liveWalkModeLoading"
-  let modeButton (current: ValueWalk) (choice: ValueWalk) =
-    let name = ValueWalk.name choice
-    let pressed, label =
-      match choice = current with
-      | true -> "true", sprintf "● %s" name
-      | false -> "false", name
-    Elem.button
-      [ Attr.class' "eval-btn"
-        Attr.style "height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
-        Attr.create "aria-pressed" pressed
-        Attr.title (attrEnc (ValueWalk.consequence choice))
-        Attr.create "aria-label" (attrEnc (sprintf "Walk live values in %s mode. %s" name (ValueWalk.consequence choice)))
-        Ds.indicator walkModeLoading
-        Ds.attr' ("disabled", sprintf "$%s" walkModeLoading)
-        Ds.onClick (attrEnc (sprintf "$mode = %s; " (jsStringLiteral name) + Ds.post modeEndpoint)) ]
-      [ textEnc label ]
-  let header (paneView: SageFs.Features.LiveBindingsPane.PaneView) =
-    let held = SageFs.Features.LiveBindingsPane.notEvaluatedCount paneView.Snapshot
-    Elem.div [ Attr.class' "live-pane-head" ] [
-      Elem.div [ Attr.class' "live-mode"; Attr.create "role" "group"; Attr.create "aria-label" "How much of a class the live bindings run to show it" ] [
-        yield! ValueWalk.all |> List.map (modeButton paneView.Notes.Mode)
-      ]
-      match held with
-      | 0 -> ()
-      | n -> Elem.span [ Attr.class' "live-held-count" ] [ textEnc (sprintf "%d not evaluated" n) ]
-      match SageFs.Features.LiveBindingsPane.containmentLine paneView.Notes.Click with
-      | SageFs.Features.LiveBindingsPane.NothingClickedYet -> ()
-      | SageFs.Features.LiveBindingsPane.LineSays text -> Elem.div [ Attr.class' "live-containment" ] [ textEnc (sprintf "last click: %s" text) ]
-    ]
-  let count = view |> Option.map (fun v -> v.Snapshot.Bindings.Length) |> Option.defaultValue 0
-  let gen = view |> Option.map (fun v -> v.Snapshot.Generation) |> Option.defaultValue 0L
-  let captured =
-    view
-    |> Option.map (fun v -> v.Snapshot.CapturedAt.ToLocalTime().ToString("HH:mm:ss"))
-    |> Option.defaultValue ""
-  Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
-    signalDetails Signals.BindingsPanelOpen [] [
-      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
-        Text.raw "🔴 "
-        textEnc (sprintf "Live Bindings (%d)" count)
-        match view with
-        | Some _ ->
-          Elem.span [ Attr.style "color: var(--fg-dim, #666); font-weight: normal; font-size: 0.65rem; margin-left: 0.5em;" ] [
-            textEnc (sprintf "gen %d · %s" gen captured)
-          ]
-        | None -> ()
-      ]
-      match view with
-      | None ->
-        Elem.div [ Attr.class' "meta" ] [ Text.raw "No live bindings yet — evaluate some code" ]
-      | Some paneView ->
-        header paneView
-        match paneView.Snapshot.Bindings with
-        | [] ->
-          Elem.div [ Attr.class' "meta" ] [ Text.raw "No active bindings" ]
-        | bindings ->
-          Elem.div [ Attr.style "font-size: 0.75rem; max-height: 24em; overflow-y: auto;" ] [
-            yield! bindings |> List.map (fun b ->
-              Elem.div [ Attr.style "border-bottom: 1px solid var(--border, #333); padding: 2px 0;" ] [
-                renderNode b.Name [] b.Root
-              ])
-          ]
-          match paneView.Snapshot.Truncated with
-          | true ->
-            Elem.div [ Attr.class' "live-truncated"; Attr.style "font-size: 0.65rem; margin-top: 4px;" ] [
-              Text.raw "Some values truncated (depth/children limits)"
-            ]
-          | false -> ()
     ]
   ]
 

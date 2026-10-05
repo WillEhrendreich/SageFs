@@ -172,15 +172,15 @@ let completionInsertScript () =
     };
   """ DomIds.EvalTextarea DomIds.CompletionDropdown) ]
 
-/// Details toggle — update arrow indicator when eval section opens/closes.
-let detailsToggleScript () =
+/// The Evaluate popover takes focus when it opens, so a keystroke after the button (or key `e`) is already in the box.
+let evaluatePopoverFocusScript () =
   Elem.script [] [ Text.raw (sprintf """
     document.addEventListener('toggle', function(e) {
-      if (e.target.id !== '%s') return;
-      var label = e.target.querySelector('summary span:first-child');
-      if (label) label.textContent = e.target.open ? '\u25be Evaluate' : '\u25b8 Evaluate';
+      if (e.target.id !== '%s' || !e.target.open) return;
+      var box = document.getElementById('%s');
+      if (box) box.focus();
     }, true);
-  """ DomIds.EvaluateSection) ]
+  """ DomIds.EvaluateSection DomIds.EvalTextarea) ]
 
 /// Keyboard shortcuts, font-size adjustment, session navigation, sidebar resize.
 let keyboardHandlerScript () =
@@ -192,9 +192,13 @@ let keyboardHandlerScript () =
         if(e.ctrlKey&&(e.key==='='||e.key==='+')){e.preventDefault();idx=Math.min(sizes.length-1,idx+1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
         if(e.ctrlKey&&e.key==='-'){e.preventDefault();idx=Math.max(0,idx-1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
         if(e.ctrlKey&&e.key==='Tab'){e.preventDefault();d(e.shiftKey?'sessionCyclePrev':'sessionCycleNext');return;}
+        // Escape closes the Evaluate popover. The box's own handler claims an Escape that only dismisses its completion list.
+        if(e.key==='Escape'){var pop=document.getElementById('%s');if(pop&&pop.open){pop.open=false;return;}}
         var tag=(e.target.tagName||'').toLowerCase();
         if(tag!=='input'&&tag!=='textarea'){
           var a=null,v=null;
+          // Key e opens the Evaluate popover, which takes focus when it opens.
+          if(e.key==='%s'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){var ev=document.getElementById('%s');if(ev){e.preventDefault();ev.open=true;return;}}
           if(e.key==='j'||e.key==='ArrowDown'){a='sessionNavDown';}
           if(e.key==='k'||e.key==='ArrowUp'){a='sessionNavUp';}
           // Enter on a focused button/link/summary/select is that control's own activation (the unseen-eval pill, every panel button), never session select.
@@ -225,7 +229,7 @@ let keyboardHandlerScript () =
         });
       }
     })();
-  """ DomIds.SidebarResize DomIds.Sidebar) ]
+  """ DomIds.EvaluateSection EvaluatePopover.OpenKey DomIds.EvaluateSection DomIds.SidebarResize DomIds.Sidebar) ]
 
 /// Render the dashboard HTML shell with pre-rendered initial content.
 /// Providing initialContent eliminates the loading-screen flash — the browser
@@ -265,13 +269,16 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       Elem.div (DashboardConnection.monitorAttributes ()) []
       DashboardConnection.hardBanner ()
       DashboardConnection.softBanner ()
+      // The dock's own signals (filter, pins, the pane pin), declared once out here so no morph can reset them.
+      Elem.div LiveBindingsDock.DockSignals.initial []
       Elem.div [ Attr.id DomIds.Main ] [ initialContent ]
       // Polite announcement of unseen evals. Out here in the shell rather than
       // next to the pill, because a morph rewrites text inside #main and a
       // live region would re-announce on every push.
       Elem.div [ Attr.class' "sr-only"; Attr.create "role" "status"; Attr.create "aria-live" "polite"; Attr.create "aria-atomic" "true"; Ds.text OutputFollow.announceExpr ] []
       completionInsertScript ()
-      detailsToggleScript ()
+      evaluatePopoverFocusScript ()
+      LiveBindingsDock.flashScript ()
       keyboardHandlerScript ()
     ]
   ]
@@ -843,11 +850,19 @@ let buildDashboardSnapshotWithSessions
         | None -> renderSessionContextEmpty
       | false -> renderSessionContextEmpty
     let bindingsPanel =
-      // Live watch window takes priority; fall back to the text-parsed panel
-      // for sessions that haven't produced a live snapshot yet.
-      match q.GetLiveBindings sessionId with
-      | Some view -> renderLiveBindingsPanel (WorkerProtocol.SessionId.value sessionId) (Some view)
-      | None -> renderBindingsPanel (resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
+      // The bottom dock. The live watch window takes priority; the text-parsed panel stands in for a session that has
+      // not produced a live snapshot yet. DockPanes decides which of the two (or the reason line) is drawn.
+      let source =
+        match q.GetLiveBindings sessionId with
+        | Some view -> LiveBindingsDock.BindingsSource.ofWalked view
+        | None ->
+          LiveBindingsDock.BindingsSource.ofPrinted (
+            resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
+      let session =
+        match sid.Length > 0 with
+        | true -> DockPanes.SessionInView
+        | false -> DockPanes.NoSessionInView
+      LiveBindingsDock.renderDock session (WorkerProtocol.SessionId.value sessionId) source
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let warmupProgress = q.GetWarmupProgress sessionId
@@ -1040,7 +1055,7 @@ let buildNoSessionSnapshotWithSessionsSorted
       SessionPicker = renderSessionPickerSorted previousSort previous
       ThemePicker = renderThemePicker defaultThemeName
       ThemeVars = renderThemeVars defaultThemeName
-      BindingsPanel = renderBindingsPanel None
+      BindingsPanel = LiveBindingsDock.renderDock DockPanes.NoSessionInView "" LiveBindingsDock.NothingBound
       FrictionPanel = Elem.div [ Attr.id DomIds.FrictionPanel ] []
       // Cohort panel: only rendered when a session is selected (cohort data is
       // daemon-scoped and irrelevant without a session to scope it against).

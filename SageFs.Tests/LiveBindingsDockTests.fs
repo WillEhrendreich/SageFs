@@ -76,13 +76,16 @@ let dockStateTests =
       html.Contains "live-pane-pin" |> Expect.isFalse "no pin"
       html.Contains(sprintf "id=\"%s\"" DomIds.BindingsPanel) |> Expect.isFalse "no pane to open"
 
-    testCase "FSI's printed bindings still show when no walk has come back, as a flat list that says where it read them" <| fun _ ->
+    testCase "FSI's printed bindings still show when no walk has come back, in the text panel, and say where they were read from" <| fun _ ->
       let printed : BindingExplorer.BindingInfo =
         { Name = "x"; TypeSig = "int"; Value = Some "3"; CellIndex = 1; ShadowedBy = []; ReferencedIn = [] }
-      let html = dock (PrintedBindings [ printed ])
+      let scope : BindingExplorer.BindingScopeSnapshot =
+        { Bindings = [ printed ]; ActiveBindings = Map.ofList [ "x", printed ]; ShadowedBindings = [] }
+      let html = dock (PrintedBindings scope)
       html |> Expect.stringContains "its name" "x"
       html |> Expect.stringContains "its value" "= 3"
-      html |> Expect.stringContains "where it was read from" "printed"
+      html |> Expect.stringContains "where it was read from" "printed output"
+      (count (sprintf "id=\"%s\"" DomIds.BindingsPanel) html) |> Expect.equal "the id appears once" 1
 
     testPropertyWithConfig propConfig "whatever the session holds, the dock is never blank: it shows bindings or a reason"
       (Prop.forAll (Arb.fromGen (Gen.zip (Gen.elements [ NoSessionInView; SessionInView ]) (Gen.choose (0, 6)))) (fun (session, n) ->
@@ -100,7 +103,7 @@ let dockTreeTests =
 
     testCase "every row shows its kind in a word, from one exhaustive function" <| fun _ ->
       let html = dock (WalkedBindings(view [ person; scores ]))
-      count "live-kind" html |> Expect.isGreaterThanOrEqual "a kind on every row" 5
+      (count "live-kind" html, 5) |> Expect.isGreaterThanOrEqual "a kind on every row"
       html |> Expect.stringContains "a record" ">record<"
       html |> Expect.stringContains "a list" ">list<"
       html |> Expect.stringContains "a leaf" ">value<"
@@ -109,7 +112,7 @@ let dockTreeTests =
 
     testCase "the filter is a typed signal binding, and each binding hides itself by name through a typed class toggle" <| fun _ ->
       let html = dock (WalkedBindings(view [ person; scores ]))
-      html |> Expect.stringContains "the filter box is bound" (sprintf "data-bind:%s" DockSignals.LiveFilter)
+      html |> Expect.stringContains "the filter box is bound (Datastar writes the camelCase signal in kebab case)" "data-bind:live-filter"
       html |> Expect.stringContains "a binding hides when the filter does not match" "data-class:live-hidden"
       html |> Expect.stringContains "matching is by lowercase name" "'person'.includes("
       html |> Expect.stringContains "a notice when nothing matches" "no binding's name contains that"
@@ -122,8 +125,8 @@ let dockTreeTests =
       html |> Expect.stringContains "the morph leaves class and aria-pressed to the client" "data-preserve-attr=\"class aria-pressed\""
 
     testCase "two nodes that share a label never share an open signal, even under different bindings" <| fun _ ->
-      let a = binding "a" NodeKind.Record [ node "inner" NodeKind.Record [ node "x" NodeKind.Leaf "1" [] ] ]
-      let b = binding "b" NodeKind.Record [ node "inner" NodeKind.Record [ node "x" NodeKind.Leaf "1" [] ] ]
+      let a = binding "a" NodeKind.Record [ node "inner" NodeKind.Record "{ x = 1 }" [ node "x" NodeKind.Leaf "1" [] ] ]
+      let b = binding "b" NodeKind.Record [ node "inner" NodeKind.Record "{ x = 1 }" [ node "x" NodeKind.Leaf "1" [] ] ]
       let html = renderDock SessionInView "abcd1234" (WalkedBindings(view [ a; b ])) |> renderNode
       let ids =
         Text.RegularExpressions.Regex.Matches(html, "<details id=\"(open_[^\"]+)\"")
@@ -138,6 +141,25 @@ let dockTreeTests =
       let html = dock (WalkedBindings { v with Snapshot = { v.Snapshot with Truncated = true } })
       html |> Expect.stringContains "the row marker" "… (truncated)"
       html |> Expect.stringContains "the note" "Some values truncated"
+
+    testCase "every element whose class the client owns has an id, so the morph matches it by id and never by position" <| fun _ ->
+      let sources =
+        [ WalkedBindings(view [ person; scores ])
+          NothingBound
+          WalkedBindings(view [ person ]) ]
+      for source in sources do
+        for session in [ SessionInView; NoSessionInView ] do
+          let html = renderDock session "abcd1234" source |> renderNode
+          let clientOwned = html.Split('<') |> Array.filter (fun tag -> tag.Contains "data-preserve-attr=\"class")
+          for tag in clientOwned do
+            tag.Contains " id=\"" |> Expect.isTrue (sprintf "a client-owned class needs an id: <%s" (tag.Substring(0, min 80 tag.Length)))
+
+    testCase "the tooling's own bindings are neither shown nor counted, so a session with only those has no bindings yet" <| fun _ ->
+      let own = binding "_SageFsHotReload" NodeKind.Leaf []
+      match BindingsSource.ofWalked (view [ own; person ]) with
+      | WalkedBindings v -> v.Snapshot.Bindings |> List.map (fun b -> b.Name) |> Expect.equal "only the user's" [ "person" ]
+      | other -> failtestf "expected walked bindings, got %A" other
+      BindingsSource.ofWalked (view [ own ]) |> BindingsSource.presence |> Expect.equal "none yet" NoBindingsYet
 
     testCase "a name that is markup is shown as text and never lands in an attribute as markup" <| fun _ ->
       let hostile = binding "<img src=x onerror=alert(1)>" NodeKind.Leaf []

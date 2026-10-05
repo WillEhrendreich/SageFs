@@ -106,7 +106,9 @@
         <Compile Include="DashboardTypes.fs" />
         <Compile Include="DashboardConnection.fs" />
         <Compile Include="DockPanes.fs" />
+        <Compile Include="EvaluatePopover.fs" />
     <Compile Include="DashboardFragments.fs" />
+        <Compile Include="LiveBindingsDock.fs" />
         <Compile Include="CohortInspector.fs" />
         <Compile Include="SettingsPanel.fs" />
         <Compile Include="Dashboard.fs" />
