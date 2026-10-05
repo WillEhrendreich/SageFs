@@ -1607,7 +1607,17 @@ pipeline "sagefs" {
         let hostShards =
           match Int32.TryParse(Environment.GetEnvironmentVariable "SAGEFS_HOST_SHARDS") with
           | true, n when n >= 1 -> n
-          | _ -> TierSchedule.hostShardCount (readJsonMap suiteDurationsFile)
+          | _ ->
+            // The machine as the host tier sees it: the threads this process may use and the memory the runtime may use.
+            let machine : TierSchedule.Machine =
+              { UsableThreads = Environment.ProcessorCount
+                TotalMemoryBytes = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes }
+            let count = TierSchedule.hostShardCount machine (readJsonMap suiteDurationsFile)
+            printfn "host shards: %d (cap %d for %d threads, %d GiB; %d hosts each, %d live of at most %d)"
+              count (TierSchedule.hostShardCap machine) machine.UsableThreads
+              (machine.TotalMemoryBytes / TierPlan.Admission.bytesPerGiB) TierSchedule.hostsPerShard
+              (count * TierSchedule.hostsPerShard) (TierSchedule.liveHostCap machine)
+            count
         let ltShards = 4
         let always =
           testTier "--summary"

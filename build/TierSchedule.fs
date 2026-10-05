@@ -110,28 +110,68 @@ let shardLoads (count: int) (durations: Map<string, float>) (suites: string list
       |> List.filter (fun s -> plan[s] = shard)
       |> List.sumBy (fun s -> durations.TryFind s |> Option.defaultValue fallback) ]
 
-/// Today's shard count, and the most there will be: past the heaviest suite more shards shorten nothing, and every shard
-/// is one more process tree (the scheduler admits them by what the machine has, so a high count is safe, not free).
+/// The fewest host shards there will be: past the heaviest suite more shards shorten nothing, and with fewer than this the
+/// longest shard is a suite plus a queue. It is a floor, not a promise: a machine too small to carry this many live hosts
+/// still gets this many shards (the scheduler admits them by what the machine has, so they queue, and a longer run is
+/// better than a wrong partition).
 let minHostShards = 5
-let maxHostShards = 8
+
+/// What a machine has, as far as the host tier is concerned. A snapshot taken once per run (threads this process may use,
+/// physical memory the runtime may use), never a live reading: the picker must give the same answer for the same history.
+type Machine = { UsableThreads: int; TotalMemoryBytes: int64 }
+
+/// How many host cases one test process runs at once (`HostSlots`, `TestMagnitudes.concurrentHosts`: a test pins the two
+/// equal, because the build cannot reference the tests).
+let hostsPerShard = 3
+
+/// Live hosts per usable thread. Measured on the 16-thread development machine, with the other tiers running beside the host
+/// shards:
+///   5 shards x 3 = 15 live hosts (0.94 per thread): five gates, all green, shards 458 to 517 s;
+///   8 shards x 3 = 24 live hosts (1.50 per thread): two gates, both red, with load-induced flakes
+///   (RunAppDeltaTests.fs:321 connection refused, HostCoreAdoptionOrphanSweepTests.fs:84 marker pid mismatch).
+/// One per thread is the highest figure that has a green gate under it, and rounds to the 15 that passed. Do not raise it
+/// without a green gate at the higher figure: the cases that flaked are timing cases, and a shard that is slower because the
+/// machine is loaded is the cost of the host count, not a bug in the cases.
+let liveHostsPerThread = 1
+
+/// The most memory one live host peaks at. A host shard (3 hosts, the FSI sessions and the apps they run) peaked at 2.9 to 5.0
+/// GiB over those gates (tier-durations.costs.json); 5.0 / 3 = 1.67 GiB, rounded up to a whole 2 GiB.
+let peakBytesPerHost = 2L * Admission.bytesPerGiB
+
+/// How many hosts the machine can have live at once for the host tier: the lower of what its threads carry
+/// (`liveHostsPerThread`) and what its memory holds once the reserve every unit leaves for the OS and its neighbours
+/// (`Admission.memoryReserveBytes`) is taken off, each host at its peak. Never negative, and never lower on a bigger machine.
+let liveHostCap (machine: Machine) : int =
+  let byThreads = max 0 machine.UsableThreads * liveHostsPerThread
+  let byMemory = max 0L (machine.TotalMemoryBytes - Admission.memoryReserveBytes) / peakBytesPerHost
+  int (min (int64 byThreads) byMemory)
+
+/// The most shards the machine carries: each is `hostsPerShard` live hosts. At least one, so the cap is a number a count can
+/// be compared with; `hostShardCount` applies the floor.
+let hostShardCap (machine: Machine) : int =
+  max 1 (liveHostCap machine / hostsPerShard)
 
 /// A shard may be this much longer than the best a count can do, before another shard is asked for.
 let hostShardTolerance = 0.05
 
 /// How many host shards the recorded suite weights call for: the smallest count whose longest shard (by
 /// `TierPlan.assign`) is within `hostShardTolerance` of the best any count can do, which is the heaviest suite alone or a
-/// perfect split at the cap. With no history it is `minHostShards`, today's count.
-let hostShardCount (suiteSeconds: Map<string, float>) : int =
+/// perfect split at the machine's cap (`hostShardCap`, never below `minHostShards`). The weights are sequential-equivalent
+/// seconds, so a shard's real length is shorter than the weights say (the 5-shard partition of the recorded weights
+/// predicts 969 s and ran in 458 to 517 s): the count is bounded by the machine, not chased down to the weights.
+/// With no history it is `minHostShards`.
+let hostShardCount (machine: Machine) (suiteSeconds: Map<string, float>) : int =
   match suiteSeconds.IsEmpty with
   | true -> minHostShards
   | false ->
+    let cap = max minHostShards (hostShardCap machine)
     let suites = suiteSeconds |> Map.toList |> List.map fst
     let heaviest = suiteSeconds |> Map.fold (fun m _ v -> max m v) 0.0
     let total = suiteSeconds |> Map.fold (fun s _ v -> s + v) 0.0
-    let target = max heaviest (total / float maxHostShards) * (1.0 + hostShardTolerance)
-    [ minHostShards .. maxHostShards ]
+    let target = max heaviest (total / float cap) * (1.0 + hostShardTolerance)
+    [ minHostShards .. cap ]
     |> List.tryFind (fun n -> List.max (shardLoads n suiteSeconds suites) <= target)
-    |> Option.defaultValue maxHostShards
+    |> Option.defaultValue cap
 
 /// Whether the shards between them were handed every host case exactly once.
 type Coverage =
