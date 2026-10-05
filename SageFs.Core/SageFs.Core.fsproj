@@ -454,6 +454,9 @@
         <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />
         <!-- What the live-bindings pane knows beyond the tree (mode, last click, held-row count). Needs the protocol's MemberOutcome. -->
         <Compile Include="Features\LiveBindingsPane.fs" />
+        <!-- What a live-bindings row knows about the file it may be written back to: the persistence state, the knob's step,
+             the row's own undo trail. Pure; the file reading and the writes are the daemon's (LiveBindingsTweakService). -->
+        <Compile Include="Features\Tweak\BindingTweak.fs" />
         <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
         <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —

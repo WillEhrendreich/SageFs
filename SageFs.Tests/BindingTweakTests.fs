@@ -15,6 +15,7 @@ open SageFs.Features.Tweak.TweakAddress
 open SageFs.Features.Tweak.LiteralEdit
 open SageFs.Features.Tweak.TweakLog
 open SageFs.Features.Tweak.Nudge
+open SageFs.Features.Tweak
 open SageFs.Features.Tweak.BindingTweak
 open SageFs.Tests.SharedGenerators
 
@@ -51,13 +52,21 @@ let real (file: string) (binding: string) (text: string) : SourceRef =
   sourceAt file binding text (ItemKind.Knob(LiteralValue.Real(Double.Parse(text, Globalization.CultureInfo.InvariantCulture))))
 
 let fileOf (name: string) (items: SourceRef list) : FileInspection =
-  { File = name; Watching = WatchStatus.Watched; Items = items; UndoSteps = 0; RedoSteps = 0 }
+  { File = name; Watching = WatchStatus.Watched; Items = items; Wholes = []; UndoSteps = 0; RedoSteps = 0 }
 
-/// The door's own inspection of a file's text, as the pane's index holds it.
-let inspectedItems (file: string) (text: string) : SourceRef list =
-  match inspect file text EventLog.empty InspectTarget.WholeFile with
+let inspectedWith (file: string) (text: string) (target: InspectTarget) : SourceRef list =
+  match inspect file text EventLog.empty target with
   | Ok(NudgeOutcome.Inspected inspection) -> inspection.Items |> List.map (SourceRef.ofItem file)
   | other -> failtestf "inspect did not list the file: %A" other
+
+/// The door's own inspection of a file's text, as the pane's index holds it: the listing, and the whole right-hand side of every
+/// binding named in `names` that the listing carries only parts of.
+let inspectedFile (file: string) (text: string) (names: string list) : FileInspection =
+  let items = inspectedWith file text InspectTarget.WholeFile
+  let wholes =
+    SourceIndex.wholesToRead (Set.ofList names) items
+    |> List.collect (fun address -> inspectedWith file text (InspectTarget.OneAddress address))
+  { fileOf file items with Wholes = wholes }
 
 let indexOf (files: FileInspection list) : SourceIndex = { Files = files; Unreadable = [] }
 
@@ -186,8 +195,7 @@ let sourceIndexTests =
       SourceIndex.factsFor index "gravity" [] |> Expect.equal "the unreadable file does not unsettle a finding" (SourceFacts.OneSource gravity)
 
     testCase "the door's own inspection of a real file: a binding, a record field and a field the file does not spell as a literal" <| fun _ ->
-      let items = inspectedItems "Tuning.fs" tuningFile
-      let index = indexOf [ fileOf "Tuning.fs" items ]
+      let index = indexOf [ inspectedFile "Tuning.fs" tuningFile [ "gravity"; "tuning" ] ]
       match SourceIndex.factsFor index "gravity" [] with
       | SourceFacts.OneSource gravity -> gravity.Text |> Expect.equal "the literal's text" "9.8"
       | other -> failtestf "gravity: %A" other
@@ -201,12 +209,32 @@ let sourceIndexTests =
     testPropertyWithConfig propConfig "a part is looked up in the one file that declares the binding, never in another"
       (Prop.forAll (arbitrary (Gen.elements [ "a.fs"; "b.fs" ])) (fun owner ->
         let other = if owner = "a.fs" then "b.fs" else "a.fs"
-        let ownerItems = inspectedItems owner "module Game.Tuning\nlet tuning =\n  { A = 1.5 }\n"
-        let otherItems = inspectedItems other "module Other\nlet unrelated =\n  { A = 9.5 }\n"
-        let index = indexOf [ fileOf owner ownerItems; fileOf other otherItems ]
+        let ownerFile = inspectedFile owner "module Game.Tuning\nlet tuning =\n  { A = 1.5 }\n" [ "tuning" ]
+        let otherFile = inspectedFile other "module Other\nlet unrelated =\n  { A = 9.5 }\n" [ "tuning" ]
+        let index = indexOf [ ownerFile; otherFile ]
         match SourceIndex.factsFor index "tuning" [ PathStep.RecordField "A" ] with
         | SourceFacts.OneSource part -> part.File = owner && part.Text = "1.5"
         | _ -> false))
+
+    testCase "a record binding has no item of its own in the listing: its whole right-hand side is read for the names asked about, and only those" <| fun _ ->
+      let items = inspectedWith "Tuning.fs" tuningFile InspectTarget.WholeFile
+      SourceIndex.wholesToRead (Set.ofList [ "tuning"; "gravity"; "elsewhere" ]) items
+      |> List.map NudgeAddress.format
+      |> Expect.equal "the record, and not the literal that is listed whole, nor a name the file lacks" [ "Game.Tuning.tuning" ]
+      let whole = inspectedWith "Tuning.fs" tuningFile (InspectTarget.OneAddress(addressOf "tuning" []))
+      whole |> List.map (fun r -> r.Kind) |> Expect.equal "a record is a formula as far as a knob goes" [ ItemKind.Formula ]
+
+    testCase "a declaration whose whole expression was not read is not guessed at: the files are unknown for it" <| fun _ ->
+      let unread = indexOf [ fileOf "Tuning.fs" (inspectedWith "Tuning.fs" tuningFile InspectTarget.WholeFile) ]
+      match SourceIndex.factsFor unread "tuning" [] with
+      | SourceFacts.FilesUnknown reason -> reason |> Expect.stringContains "names the binding and the file" "tuning in Tuning.fs"
+      | other -> failtestf "expected FilesUnknown, got %A" other
+
+    testCase "a script that binds a name twice names both declarations, because the door can only ever reach the first" <| fun _ ->
+      let index = indexOf [ inspectedFile "s.fsx" "let gravity = 9.8\nlet gravity = 12.0\n" [ "gravity" ] ]
+      match SourceIndex.factsFor index "gravity" [] with
+      | SourceFacts.ManySources places -> places |> List.map (fun p -> p.Text) |> Expect.equal "both, in order" [ "9.8"; "12.0" ]
+      | other -> failtestf "expected the ambiguity to be named, got %A" other
   ]
 
 [<Tests>]
@@ -283,9 +311,9 @@ let controlTests =
   testList "the control a row offers, and the arithmetic of a step" [
 
     testCase "each literal kind gets its own control, and a formula gets an expression field" <| fun _ ->
-      let items = inspectedItems "Tuning.fs" tuningFile
+      let file = inspectedFile "Tuning.fs" tuningFile [ "jump"; "tuning" ]
       let control name =
-        match SourceIndex.factsFor (indexOf [ fileOf "Tuning.fs" items ]) name [] with
+        match SourceIndex.factsFor (indexOf [ file ]) name [] with
         | SourceFacts.OneSource place -> Control.ofSource place
         | other -> failtestf "%s: %A" name other
       control "gravity" |> Expect.equal "real" (Control.RealStepper(9.8, Step.Fraction 1))
