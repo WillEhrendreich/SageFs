@@ -557,6 +557,18 @@ module Timeouts =
   /// hold is dropped and the test never runs. Two minutes covers a cold adapter start
   /// with room to spare, and a stuck client does not keep a test parked for long.
   let debugHold = forMachine (TimeSpan.FromMinutes(2.0))
+  /// How long a host waits for a debugger that is still attaching, once the editor has released the test and
+  /// none is attached yet. An editor that releases as soon as its attach request is accepted can be ahead of the
+  /// debugger: netcoredbg took longer than 1.5 s to finish attaching to the FSI host after the editor's
+  /// configurationDone. A debugger that arrives inside this wait runs the test, and one that does not is told it
+  /// never came. Five seconds is over three times the 1.5 s that was already too short, a guess with no longer
+  /// measurement behind it, and a person with no debugger at all waits that long once to be told so. It is a wait
+  /// for the machine (a debugger process starting and attaching), so it scales with the tier.
+  let debugAttachGrace = forMachine (TimeSpan.FromSeconds(5.0))
+  /// How often the host looks at whether a debugger has attached during `debugAttachGrace`. The runtime raises
+  /// no event when a debugger attaches (only `Debugger.IsAttached` says), so this is the one look that has to be
+  /// repeated; everything that reacts to the answer is an event.
+  let debugAttachLook = TimeSpan.FromMilliseconds(50.0)
   /// How long one debug-continue request waits for the test to finish before it
   /// answers "still running" and the client asks again. A test stopped on a
   /// breakpoint can sit for as long as the person likes, so the wait is cut into

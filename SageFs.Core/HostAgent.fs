@@ -325,7 +325,8 @@ module TestDebug =
     | Attached of TestResult
     /// Nobody released the test inside the bound, so it never ran.
     | NoDebuggerWithin of bound: TimeSpan
-    /// The editor released the test but no debugger was attached to the host, so it never ran.
+    /// The editor released the test and no debugger attached to the host within the wait for one that is still
+    /// attaching, so it never ran.
     | ReleasedWithoutDebugger
     /// The host holds nothing under this ticket (it was never issued, or the host restarted).
     | NoSuchHold
@@ -350,6 +351,10 @@ module TestDebug =
   type Hold =
     | Idle
     | Holding of ticket: DebugTicket * test: TestCase
+    /// The editor released the test while no debugger was attached yet. The host waits, for a bounded time, for a
+    /// debugger that is still attaching: an editor can release as soon as its attach request is accepted, ahead of
+    /// the debugger. The shell raises `DebuggerArrived` when one shows up and `AttachWindowSpent` when the time runs out.
+    | Awaiting of ticket: DebugTicket * test: TestCase
     | Running of ticket: DebugTicket
     | Ended of ticket: DebugTicket * outcome: DebugEnd
 
@@ -357,6 +362,10 @@ module TestDebug =
   type HoldEvent =
     | Begin of ticket: DebugTicket * test: TestCase
     | Release of ticket: DebugTicket * presence: DebuggerPresence
+    /// A debugger attached while the host was waiting for one.
+    | DebuggerArrived of ticket: DebugTicket
+    /// The wait for a debugger that is still attaching ran out.
+    | AttachWindowSpent of ticket: DebugTicket
     | Expire of ticket: DebugTicket
     | Finished of ticket: DebugTicket * result: TestResult
     | HostEnding of reason: string
@@ -365,6 +374,8 @@ module TestDebug =
   [<RequireQualifiedAccess>]
   type HoldEffect =
     | ArmExpiry
+    /// Watch for a debugger for the length of the wait, then raise `DebuggerArrived` or `AttachWindowSpent`.
+    | AwaitAttach of ticket: DebugTicket
     | StartTest of ticket: DebugTicket * test: TestCase
     | RefuseOpen of holder: DebugTicket
     | NoEffect
@@ -375,25 +386,35 @@ module TestDebug =
     match event, hold with
     | HoldEvent.Begin(ticket, test), (Hold.Idle | Hold.Ended _) -> Hold.Holding(ticket, test), HoldEffect.ArmExpiry
     | HoldEvent.Begin _, Hold.Holding(holder, _)
+    | HoldEvent.Begin _, Hold.Awaiting(holder, _)
     | HoldEvent.Begin _, Hold.Running holder -> hold, HoldEffect.RefuseOpen holder
     | HoldEvent.Release(ticket, presence), Hold.Holding(held, test) when ticket = held ->
       match presence with
       | DebuggerPresence.DebuggerAttached -> Hold.Running ticket, HoldEffect.StartTest(ticket, test)
-      | DebuggerPresence.NoDebugger -> Hold.Ended(ticket, DebugEnd.ReleasedWithoutDebugger), HoldEffect.NoEffect
+      | DebuggerPresence.NoDebugger -> Hold.Awaiting(ticket, test), HoldEffect.AwaitAttach ticket
+    // Another release while waiting: if the debugger is there now, do not make it wait for the next look.
+    | HoldEvent.Release(ticket, DebuggerPresence.DebuggerAttached), Hold.Awaiting(held, test) when ticket = held ->
+      Hold.Running ticket, HoldEffect.StartTest(ticket, test)
+    | HoldEvent.DebuggerArrived ticket, Hold.Awaiting(held, test) when ticket = held ->
+      Hold.Running ticket, HoldEffect.StartTest(ticket, test)
+    | HoldEvent.AttachWindowSpent ticket, Hold.Awaiting(held, _) when ticket = held ->
+      Hold.Ended(ticket, DebugEnd.ReleasedWithoutDebugger), HoldEffect.NoEffect
     | HoldEvent.Expire ticket, Hold.Holding(held, _) when ticket = held ->
       Hold.Ended(ticket, DebugEnd.NoDebuggerWithin bound), HoldEffect.NoEffect
     | HoldEvent.Finished(ticket, result), Hold.Running running when ticket = running ->
       Hold.Ended(ticket, DebugEnd.Attached result), HoldEffect.NoEffect
-    | HoldEvent.HostEnding reason, (Hold.Holding(ticket, _) | Hold.Running ticket) ->
+    | HoldEvent.HostEnding reason, (Hold.Holding(ticket, _) | Hold.Awaiting(ticket, _) | Hold.Running ticket) ->
       Hold.Ended(ticket, DebugEnd.HostLost reason), HoldEffect.NoEffect
     | _ -> hold, HoldEffect.NoEffect
 
   /// What a ticket's holder is told about the slot. A hold still waiting for its release counts as still going: the
-  /// shell always releases before it observes, so that case is only ever seen between the two.
+  /// shell always releases before it observes, so that case is only ever seen between the two. One waiting for a
+  /// debugger counts as still going too: the editor hears how it ended when the wait does.
   let observe (ticket: DebugTicket) (hold: Hold) : DebugProgress =
     match hold with
     | Hold.Running running when running = ticket -> DebugProgress.StillRunning
     | Hold.Holding(held, _) when held = ticket -> DebugProgress.StillRunning
+    | Hold.Awaiting(held, _) when held = ticket -> DebugProgress.StillRunning
     | Hold.Ended(ended, outcome) when ended = ticket -> DebugProgress.Ended outcome
     | _ -> DebugProgress.Ended DebugEnd.NoSuchHold
 
@@ -465,6 +486,9 @@ module TestDebug =
   type DebuggerProbe =
     { /// Is a managed debugger attached to this process right now.
       Presence: unit -> DebuggerPresence
+      /// Watch for a debugger for at most `span`: `DebuggerAttached` the moment one attaches, `NoDebugger` once the whole
+      /// span has passed without one. The shell turns the answer into an event for the pure hold.
+      AwaitAttach: TimeSpan -> Async<DebuggerPresence>
       /// Make attaching possible for the length of a hold (a no-op where nothing stands in the way).
       OpenForAttach: unit -> AttachAccess
       /// Take back what OpenForAttach did.
@@ -495,6 +519,21 @@ module TestDebug =
           match System.Diagnostics.Debugger.IsAttached with
           | true -> DebuggerPresence.DebuggerAttached
           | false -> DebuggerPresence.NoDebugger
+      // The runtime raises no event when a debugger attaches, so this is the one place that looks again and again: every
+      // `debugAttachLook` until the span is spent. Everything that reacts to the answer is an event.
+      AwaitAttach =
+        fun span ->
+          let clock = System.Diagnostics.Stopwatch.StartNew()
+          let rec look () =
+            async {
+              match System.Diagnostics.Debugger.IsAttached, clock.Elapsed >= span with
+              | true, _ -> return DebuggerPresence.DebuggerAttached
+              | false, true -> return DebuggerPresence.NoDebugger
+              | false, false ->
+                do! Async.Sleep Timeouts.debugAttachLook
+                return! look ()
+            }
+          look ()
       OpenForAttach =
         fun () ->
           attachAccess (readYamaScope ()) (fun () ->
@@ -521,6 +560,7 @@ module TestDebug =
       pid: int,
       probe: DebuggerProbe,
       bound: TimeSpan,
+      attachGrace: TimeSpan,
       runTest: TestCase -> Async<TestResult>,
       symbolsOf: TestCase -> SymbolSupport
     ) =
@@ -535,6 +575,14 @@ module TestDebug =
       | Hold.Holding _ -> true
       | _ -> false
 
+    /// The door the host opened stays open while a debugger can still attach: through the hold, and through the wait for
+    /// one that is mid-attach.
+    let isDoorOpen (hold: Hold) =
+      match hold with
+      | Hold.Holding _
+      | Hold.Awaiting _ -> true
+      | _ -> false
+
     let rec apply (event: HoldEvent) : HoldEffect =
       let before, after, effect =
         lock gate (fun () ->
@@ -542,11 +590,12 @@ module TestDebug =
           let after, effect = step bound before event
           hold <- after
           before, after, effect)
-      // Leaving Holding closes the door the host opened and cancels the expiry that is no longer needed.
+      // Leaving Holding cancels the expiry that is no longer needed, and leaving the open door's states closes it.
       match isHolding before, isHolding after with
-      | true, false ->
-        probe.CloseForAttach()
-        lock gate (fun () -> expiry.Cancel())
+      | true, false -> lock gate (fun () -> expiry.Cancel())
+      | _ -> ()
+      match isDoorOpen before, isDoorOpen after with
+      | true, false -> probe.CloseForAttach()
       | _ -> ()
       match after with
       | Hold.Ended _ ->
@@ -563,6 +612,19 @@ module TestDebug =
               | Choice1Of2 result -> result
               | Choice2Of2 ex -> TestResult.Failed(TestFailure.ExceptionThrown(ex.Message, string ex.StackTrace), TimeSpan.Zero)
             apply (HoldEvent.Finished(ticket, result)) |> ignore
+          }
+        )
+      | HoldEffect.AwaitAttach ticket ->
+        Async.Start(
+          async {
+            // A probe that throws is a debugger that never came, not a hold that waits for ever.
+            let! looked = probe.AwaitAttach attachGrace |> Async.Catch
+            let event =
+              match looked with
+              | Choice1Of2 DebuggerPresence.DebuggerAttached -> HoldEvent.DebuggerArrived ticket
+              | Choice1Of2 DebuggerPresence.NoDebugger
+              | Choice2Of2 _ -> HoldEvent.AttachWindowSpent ticket
+            apply event |> ignore
           }
         )
       | HoldEffect.ArmExpiry
@@ -616,9 +678,10 @@ module TestDebug =
 
 /// The agent of one process. It owns that process's reload registry (single owner: `AfterEval` is called from the one
 /// eval thread, and the lock makes any other caller safe), the runner for tests defined interactively, and the runner
-/// for tests found in the project assemblies.
+/// for tests found in the project assemblies. `debugAttachGrace` is how long a released test waits for a debugger that is
+/// still attaching (`Timeouts.debugAttachGrace` in the product).
 [<Sealed>]
-type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor list) =
+type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor list, debugAttachGrace: TimeSpan) =
   let gate = obj ()
   let mutable state = startState init
   // Before anything else runs: the probes and the startup window's watch have
@@ -645,6 +708,7 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
       Environment.ProcessId,
       TestDebug.systemProbe,
       Timeouts.debugHold,
+      debugAttachGrace,
       (fun test ->
         let runners = lock gate (fun () -> [ yield! Option.toList dynamicRunner; yield! Option.toList projectRunner ])
         firstAnswer runners test),
@@ -653,6 +717,8 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
         | true -> TestDebug.SymbolSupport.DefinedByEval
         | false -> TestDebug.SymbolSupport.CompiledWithSymbols)
     )
+
+  new(init, sources, executors) = Agent(init, sources, executors, Timeouts.debugAttachGrace)
 
   new(init, sources) = Agent(init, sources, BuiltInExecutors.builtIn)
 
