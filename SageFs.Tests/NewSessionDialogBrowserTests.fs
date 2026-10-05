@@ -254,13 +254,15 @@ let createJourney (daemon: Daemon) (seen: Seen) : Task<unit> = task {
   // The card warms to Ready, read from the page and not only from the API. A ready session's card says "running".
   let! sessions = sessionsNow daemon
   let id = idFor sessions samplesDir
+  // A cold worker on a busy machine takes the harness's warmup budget, not a page's.
+  let warmup = TestTimeouts.asMs SageFs.Timeouts.browserJourneyWarmup
   let! ready =
-    waitUntil BrowserWaits.daemonWork (fun () -> task {
+    waitUntil warmup (fun () -> task {
       let! text = page.Locator(sprintf "#session-card-%s" id).InnerTextAsync()
       return text.ToLowerInvariant().Contains "running"
     })
   ready |> Expect.isTrue "the card shows the session running once it has warmed up"
-  do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
+  do! PlaywrightExpect.waitForSelectorText warmup page "#session-status" "Ready"
   do! waitForState page "closed"
   assertNoErrors "create" seen
 }
