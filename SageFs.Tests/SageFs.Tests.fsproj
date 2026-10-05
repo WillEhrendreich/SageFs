@@ -99,6 +99,7 @@
         <Compile Include="CallerStateTests.fs" />
         <Compile Include="CallerCheckTests.fs" />
         <Compile Include="CallerWireTests.fs" />
+        <Compile Include="CallerPatchEmitTests.fs" />
         <Compile Include="LiveTestActivityTests.fs" />
         <Compile Include="AppRunnerTests.fs" />
         <Compile Include="AppRunOrchestrationTests.fs" />
