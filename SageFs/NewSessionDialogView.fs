@@ -246,8 +246,20 @@ let workflowGroup (hint: WorkflowHint) : XmlNode =
         ])
   ]
 
+/// True while projects are to be loaded and none is ticked: the one reason Create waits that the person can fix.
+let pickNeededExpr : string =
+  sprintf "%s === '%s' && %s.length === 0"
+    (signalRef NewSessionNames.TargetSignal)
+    loadKey
+    (signalRef NewSessionNames.ProjectsSignal)
+
 let footer (createLabel: string) (disabledExpr: string) : XmlNode =
   Elem.div [ Attr.class' "nsd-foot" ] [
+    Elem.span
+      [ Attr.class' "nsd-meta nsd-hint"
+        Attr.create "role" "status"
+        Ds.show pickNeededExpr ]
+      [ Text.raw "Tick a project, or choose Bare, to create." ]
     Elem.button
       [ Attr.type' "button"
         Attr.class' "eval-btn nsd-secondary"

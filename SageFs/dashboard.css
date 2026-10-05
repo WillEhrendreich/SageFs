@@ -1222,6 +1222,12 @@ h2 {
   border-top: 1px solid var(--border-normal);
 }
 
+/* Why Create is dimmed, on the left of the footer, wrapping above the buttons when the row is narrow. */
+.nsd-hint {
+  flex: 1 1 100%;
+  align-self: center;
+}
+
 /* The card a create shows in the Sessions list the moment the dialog closes. */
 .session-starting {
   padding: 10px 0;
