@@ -298,7 +298,7 @@ data: {"SessionId":"<id>", "Narratives": [{"TestId":"string", "TestName":"string
 
 ## Debugging a failing test
 
-You can debug a failing test from VS Code. A failing test gets a Debug lens next to its result, a Debug link in the hover of its gutter mark, and Debug Test in the Test Explorer (that is also what puts Debug Test on the glyph). Neovim does not have it yet.
+You can debug a failing test from VS Code and from Neovim. In VS Code a failing test gets a Debug lens next to its result, a Debug link in the hover of its gutter mark, and Debug Test in the Test Explorer (that is also what puts Debug Test on the glyph). In Neovim, `:SageFsDebugTest` debugs the failing test on the cursor's line (or the file's only failing test after you confirm, or a test you name by name or id), `<leader>rtg` does the same from a buffer, and `D` on a row of the test panel debugs that row's test. Neovim attaches through [nvim-dap](https://github.com/mfussenegger/nvim-dap) and netcoredbg. Without nvim-dap it still holds the test and prints the process id to attach to.
 
 How it works: the test runs in the process that loaded your code, which is the isolated FSI host (or the worker, for an in-process session). So the editor attaches a .NET debugger to that process.
 
@@ -308,7 +308,7 @@ How it works: the test runs in the process that loaded your code, which is the i
 
 If nobody releases the test within two minutes (`Timeouts.debugHold`), the host drops the hold and the test never runs. If the debugger is not attached when the test is released, the test does not run either. Nothing runs without a debugger.
 
-**Which debugger you need.** One that provides the `coreclr` debug type. In Microsoft's VS Code that is the C# extension (`ms-dotnettools.csharp`). If nothing installed provides it, the extension says so and offers to install it. Microsoft's debugger is licensed for Microsoft's own build of VS Code. In another build you need some other extension that provides `coreclr`.
+**Which debugger you need.** One that provides the `coreclr` debug type. In Microsoft's VS Code that is the C# extension (`ms-dotnettools.csharp`). If nothing installed provides it, the extension says so and offers to install it. Microsoft's debugger is licensed for Microsoft's own build of VS Code. In another build you need some other extension that provides `coreclr`. In Neovim it is netcoredbg, which nvim-dap drives as its `coreclr` adapter.
 
 **What the debugger can stop in.**
 
@@ -336,4 +336,4 @@ The other statuses are `hold_already_open`, `no_debugger_within`, `released_with
 ## Editor Integrations
 
 - **VS Code**: `FileAnnotationsListener.fs` parses file_annotations. `Extension.fs` renders coverage gutter decorations + inline failures. `TestControllerAdapter.fs` enriches test items with failure narratives, and registers the Debug profile. `TestDebugCommand.fs` and `TestDebugPure.fs` debug a failing test (see above).
-- **Neovim**: lives in its own repo, [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) (not in this tree). Its `testing.lua` caches source_locations and failure_narratives, `telescope_picker.lua` jumps to source on `<CR>`, and `commands.lua` shows a narrative floating window on `<C-d>`.
+- **Neovim**: lives in its own repo, [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) (not in this tree). Its `testing.lua` caches source_locations and failure_narratives, `telescope_picker.lua` jumps to source on `<CR>`, and `commands.lua` shows a narrative floating window on `<C-d>`. `debug_test.lua` and `debug_test_ui.lua` debug a failing test through nvim-dap (`:SageFsDebugTest`, `<leader>rtg`, `D` on a panel row; see above).
