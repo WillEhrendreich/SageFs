@@ -646,7 +646,11 @@ Trunk: checkout=/data/cohort-trunk landings (2):
 
 The case (`PatchPending`, `Patched`, `Restarted`, `RestartRequired`, `NoEffect`, `CompileFailed`) and the mechanism (`detour`,
 `metadata-delta`) are the ones `get_session_status` reports in `lastReload`. A patch is `PatchPending` until its new body has
-run, and the line changes to `Patched` when the worker says it has seen that. A restart names its cause on the line. A
+run, and the line changes to `Patched` when the worker says it has seen that. A restart names its cause on the line.
+`lastReload` also carries `callers`: when a save re-signs or removes a function, it lists, per declaration, the file, line
+and calling declaration of every caller in another file that still calls the old one (`CallersPending`), with the next
+action ("Save Pages.fs"); it reads `CallersCurrent` once those files have landed, and `CallersNotChecked` with the reason
+when the project's other files could not be searched. A
 landing that was blocked, withdrawn or is still being verified never reaches the trunk, and a trunk session that runs no app
 only records the landing. A worker in a trunk session takes its saves from landings only, so a save a person makes in the
 trunk checkout is not hot reloaded there.

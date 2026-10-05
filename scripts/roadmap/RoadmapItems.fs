@@ -183,10 +183,10 @@ let items : Item list =
       [ "docs/how-isolation-works.md" ]
       "Someone reported a `#r` NuGet package with a native library failing in plain FSI. I couldn't reproduce that on Linux: SQLite, SkiaSharp and LibGit2Sharp all load in plain FSI and in a bare SageFs session. What did fail was a project session, because the package's native library sits in the NuGet cache and the isolated host never looked there. The host now finds it from the project's restore, and a library that won't load is named with its package, this runtime and what to do. Windows, macOS and arm64 are untested."
 
-    item "cross-file-signature-callers" "Callers in other files follow a signature change" HotReload Next
-      NoLandmarkYet
+    item "cross-file-signature-callers" "Callers in other files follow a signature change" HotReload Now
+      (landmark "SageFs.Core/Features/CallerState.fs" "CallerState")
       [ "docs/hot-reload.md"; "docs/decisions.md" ]
-      "When a save re-signs a function, a caller in another file keeps calling the old method until you save that file too. The build wouldn't pass until you did, so the window is short, but the old behavior runs in it. A cross-file check of who calls what would close it."
+      "When a save re-signs or removes a function, the reload report now lists every caller in another file that still calls the old one, with file, line and the next action, and it clears when that file is saved and patched. A caller saved on its own lands against the new definition. If the other files can't be searched it says so instead of staying quiet. A caller that needs no edit stays listed until a restart."
 
     item "tokens-bound-to-a-session" "A member token bound to one session" Agents Now
       (landmark "SageFs.Core/Capability.fs" "RouteBinding")
