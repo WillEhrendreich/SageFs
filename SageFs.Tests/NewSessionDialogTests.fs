@@ -391,6 +391,22 @@ let defaults =
       DefaultChoice.ofFound found
       |> Expect.equal "none ticked, still loading projects" (TargetKind.LoadProjects, [])
 
+    testCase "WHY — the ticks the page holds line up with the boxes it draws: one entry per candidate, the path when ticked and empty when not" <| fun _ ->
+      let found =
+        { foundIn "/work/repo" with
+            Candidates =
+              [ candidate "A/A.fsproj" CandidateKind.Project (Frameworks.Declared [ "net10.0" ])
+                candidate "B/B.fsproj" CandidateKind.Project (Frameworks.Declared [ "net10.0" ])
+                candidate "C/C.fsproj" CandidateKind.Project (Frameworks.Declared [ "net10.0" ]) ] }
+      DefaultChoice.aligned found [ "B/B.fsproj" ]
+      |> Expect.equal "positions follow the candidates" [ ""; "B/B.fsproj"; "" ]
+      DefaultChoice.aligned found []
+      |> Expect.equal "nothing ticked is still one empty entry per box" [ ""; ""; "" ]
+
+    testCase "WHY — what the page sends back is only the ticked entries, in the order of the boxes" <| fun _ ->
+      DefaultChoice.ticked [ ""; "B/B.fsproj"; ""; "D/D.fsproj" ]
+      |> Expect.equal "empty entries are not ticks" [ "B/B.fsproj"; "D/D.fsproj" ]
+
     testCase "WHY — nothing found means Bare, the only thing that can be created here" <| fun _ ->
       DefaultChoice.ofFound (Found.nothing "/work/empty")
       |> Expect.equal "bare" (TargetKind.BareSession, [])

@@ -86,7 +86,9 @@ let view =
     testCase "WHY — when Create is waiting on a tick the footer says so, and only then, because a dimmed button must explain itself" <| fun _ ->
       let h = html (NewSessionDialog.Choosing twoCandidates)
       h |> contains "Tick a project, or choose Bare" "the hint names both ways forward"
-      h |> contains (sprintf "data-show=\"$%s === '%s' && $%s.length === 0\"" NewSessionNames.TargetSignal (TargetKind.key TargetKind.LoadProjects) NewSessionNames.ProjectsSignal) "shown only while projects are to be loaded and none is ticked"
+      // Datastar binds an array signal to its checkboxes by POSITION (one entry per box: its value when ticked,
+      // empty when not), so "none ticked" is "no entry has anything in it", never "the array is empty".
+      h |> contains (sprintf "data-show=\"$%s === '%s' && !$%s.some(Boolean)\"" NewSessionNames.TargetSignal (TargetKind.key TargetKind.LoadProjects) NewSessionNames.ProjectsSignal) "shown only while projects are to be loaded and none is ticked"
 
     testCase "WHY — a directory with nothing to load says so and leaves Bare as the way forward" <| fun _ ->
       let h = html (NewSessionDialog.Choosing (Found.nothing "/work/empty"))
