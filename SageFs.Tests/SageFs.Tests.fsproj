@@ -159,6 +159,7 @@
         <Compile Include="DashboardSnapshotTests.fs" />
         <Compile Include="DashboardDiscoverUxTests.fs" />
         <Compile Include="NewSessionDialogTests.fs" />
+        <Compile Include="NewSessionDialogViewTests.fs" />
         <Compile Include="DashboardTestIdTests.fs" />
         <Compile Include="ReplFreshnessDashboardTests.fs" />
         <Compile Include="OutputFollowTests.fs" />
