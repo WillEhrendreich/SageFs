@@ -21,6 +21,7 @@
         <Compile Include="FixtureBuildCache.fs" />
         <Compile Include="HostSlots.fs" />
         <Compile Include="TestInfrastructure.fs" />
+        <Compile Include="PerfBudget.fs" />
         <Compile Include="SourceStateFixtures.fs" />
         <Compile Include="RunnerLogging.fs" />
         <Compile Include="TestCountBadge.fs" />
@@ -557,7 +558,6 @@
         <Compile Include="DaemonResumeOutcomeTests.fs" />
         <Compile Include="MultiTargetReferenceOutcomeTests.fs" />
         <Compile Include="DstSeedCorpusTests.fs" />
-        <Compile Include="PerfBudget.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />
         <Compile Include="DaemonPruneTests.fs" />
         <Compile Include="StructAuditTests.fs" />

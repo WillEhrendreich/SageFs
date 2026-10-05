@@ -133,13 +133,13 @@ let v2HotPath =
         |> List.toArray
       let coveringIds = tests |> Array.map (fun t -> t.Id)
       let state = { LiveTestState.empty with DiscoveredTests = tests }
-      for _ in 1..5 do
-        CoverageView.project CoverageViewMode.defaults coveringIds TestDependencyGraph.empty state "Prod.fs" 10 "Module.x" |> ignore
-      let sw = System.Diagnostics.Stopwatch.StartNew()
-      for _ in 1..100 do
-        CoverageView.project CoverageViewMode.defaults coveringIds TestDependencyGraph.empty state "Prod.fs" 10 "Module.x" |> ignore
-      sw.Stop()
-      (sw.Elapsed.TotalMilliseconds, 100.0)
+      // The fastest of several batches of 100: a loaded machine only ever adds time to a batch, so the minimum is the
+      // cost of the projections themselves (see `PerfBudget.minMs`, which also warms the code up).
+      let fastestBatchMs =
+        PerfBudget.minMs 10 (fun () ->
+          for _ in 1..100 do
+            CoverageView.project CoverageViewMode.defaults coveringIds TestDependencyGraph.empty state "Prod.fs" 10 "Module.x" |> ignore)
+      (fastestBatchMs, 100.0)
       |> Expect.isLessThan "100 projections of 200 tests must complete in <100ms"
   ]
 

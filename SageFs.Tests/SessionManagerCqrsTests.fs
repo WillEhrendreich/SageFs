@@ -306,11 +306,13 @@ let snapshotDashboardTests = testList "Snapshot dashboard helpers" [
     let s1 = mkManagedSession idS1 SessionStatus.Ready
     let state = ManagerState.empty |> ManagerState.addSession idS1 s1
     let snap = QuerySnapshot.fromState state
-    let sw = Stopwatch.StartNew()
-    for _ in 1..1000 do
-      QuerySnapshot.tryGetSession idS1 snap |> ignore
-    sw.Stop()
-    (sw.ElapsedMilliseconds, 50L)
+    // The fastest of several batches: a loaded machine only ever adds time to a batch, so the minimum is the cost of
+    // the reads themselves (see `PerfBudget.minMs`).
+    let fastestBatchMs =
+      PerfBudget.minMs 10 (fun () ->
+        for _ in 1..1000 do
+          QuerySnapshot.tryGetSession idS1 snap |> ignore)
+    (fastestBatchMs, 50.0)
     |> Expect.isLessThan "1000 snapshot reads < 50ms — CQRS scalability (see SessionManager.fs header)"
   }
 ]

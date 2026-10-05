@@ -45,23 +45,25 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
 
   testCaseTask "WHY (daemon-side) — a chain stamped ModelChanged through MorphWritten reports a positive total and enters the ring — because the statusline's p50/p99 read this ring, not the in-flight slot" <| fun () -> task {
     let tracker = EvalLatencyTrace.Tracker(256)
+    // The test's own stopwatch brackets the whole chain, so what the tracker reports can be compared with
+    // what really elapsed around it and not with a number of milliseconds a loaded machine can overrun.
+    let outside = System.Diagnostics.Stopwatch.StartNew()
     tracker.StampModelChanged()
     // A real, small, measurable gap — not a mock clock — so this proves the
     // Stopwatch-based math actually elapses time, not just that fields got set.
     do! System.Threading.Tasks.Task.Delay TestTimeouts.measurableGap
     tracker.StampPushReceived()
     tracker.StampMorphWritten()
+    outside.Stop()
     let snapshot = tracker.Snapshot()
     snapshot.Length |> Expect.equal "one completed chain in the ring" 1
     let total = EvalLatencyTrace.Sample.totalMs snapshot.[0]
     total |> Expect.isSome "a chain that reached MorphWritten has a total"
-    // Budget: vision §7.4 — "eval-to-pixel under 5ms once the sleep and the
-    // render-then-compare are gone" for the daemon's OWN processing; the
-    // instrumentation's overhead over a 2ms artificial gap must stay well
-    // under any real render's budget, not balloon it. 200ms is a generous
-    // CI-noise ceiling — the point is "close to the real ~2ms gap", not a
-    // hard perf assertion on a shared CI runner.
-    (total.Value, 200.0) |> Expect.isLessThan (sprintf "chain total %.3fms should track the ~2ms gap, not balloon" total.Value)
+    // The chain lies inside the test's own bracket, so it cannot be longer than the bracket: the
+    // instrumentation invents no time, however slow the machine is. (A fixed ceiling in milliseconds
+    // measured the machine's load, not the tracker.)
+    (total.Value, outside.Elapsed.TotalMilliseconds)
+    |> Expect.isLessThanOrEqual (sprintf "chain total %.3fms is inside the %.3fms the test measured around it" total.Value outside.Elapsed.TotalMilliseconds)
     (total.Value, 0.0) |> Expect.isGreaterThanOrEqual "chain total is never negative"
   }
 
@@ -80,17 +82,23 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
     tracker.StampModelChanged()
     do! System.Threading.Tasks.Task.Delay TestTimeouts.settle
     // Second ModelChanged: this is the one a now-connected client's push
-    // agent will actually observe and render.
+    // agent will actually observe and render. The test's own stopwatch starts here, so it
+    // brackets the second chain and nothing of the first.
+    let second = System.Diagnostics.Stopwatch.StartNew()
     tracker.StampModelChanged()
     tracker.StampPushReceived()
     tracker.StampMorphWritten()
+    second.Stop()
     let snapshot = tracker.Snapshot()
     snapshot.Length |> Expect.equal "one completed chain" 1
     let total = (EvalLatencyTrace.Sample.totalMs snapshot.[0]).Value
-    // If the first (stale) ModelChanged had leaked into this total, it would
-    // be >= the 50ms sleep. It must instead track the SECOND ModelChanged,
-    // which was immediately followed by Push/Morph with no sleep.
-    (total, 50.0) |> Expect.isLessThan (sprintf "total %.3fms must reflect only the second ModelChanged, not the 50ms-stale first one" total)
+    // If the first (stale) ModelChanged had leaked into this total, it would reach back past
+    // the start of the bracket by the settle between the two, so it would be longer than the
+    // bracket. It must instead lie inside it: the SECOND ModelChanged, immediately followed
+    // by Push/Morph with no sleep. Compared with the bracket and not with a number of
+    // milliseconds, so how slow the machine is does not move the verdict.
+    (total, second.Elapsed.TotalMilliseconds)
+    |> Expect.isLessThanOrEqual (sprintf "total %.3fms must reflect only the second ModelChanged (the bracket around it is %.3fms), not the stale first one" total second.Elapsed.TotalMilliseconds)
   }
 
   testCase "WHY — the ring caps at its capacity — because vision §3.4 specifies 'ring of the last 256', and an unbounded ring would grow forever over a long daemon session" <| fun _ ->

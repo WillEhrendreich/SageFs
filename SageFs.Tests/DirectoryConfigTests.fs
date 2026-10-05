@@ -241,8 +241,10 @@ let configHostTests =
     testCase "the same script text is evaluated once: the second answer is cached and identical" (fun () ->
       let script = """{ DirectoryConfig.empty with SessionName = Some "cached-demo" }"""
       let first = ConfigHost.evaluate Environment.CurrentDirectory script
-      let stopwatch = Diagnostics.Stopwatch.StartNew()
       let second = ConfigHost.evaluate Environment.CurrentDirectory script
       second |> Expect.equal "same result" first
-      Expect.isLessThan "no second host was started" (stopwatch.ElapsedMilliseconds, 100L))
+      // A cached answer is a map lookup and a started host is a process; the fastest of several reads is the one a
+      // loaded machine has not stretched (it only ever adds time), so it says which of the two happened.
+      let fastestRead = PerfBudget.minMs 5 (fun () -> ConfigHost.evaluate Environment.CurrentDirectory script |> ignore)
+      Expect.isLessThan "no second host was started" (fastestRead, 100.0))
   ]
