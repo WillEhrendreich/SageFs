@@ -233,6 +233,7 @@ module DomIds =
   let [<Literal>] OutputSection = "output-section"
   let [<Literal>] Sidebar = "sidebar"
   let [<Literal>] SidebarResize = "sidebar-resize"
+  let [<Literal>] DockResize = "dock-resize"
   let [<Literal>] BindingsPanel = "bindings-panel"
   let [<Literal>] DaemonHealth = "daemon-health"
   let [<Literal>] FailureNarratives = "failure-narratives"
@@ -268,6 +269,12 @@ module Signals =
   let [<Literal>] Code = "code"
   let [<Literal>] HelpVisible = "helpVisible"
   let [<Literal>] SidebarOpen = "sidebarOpen"
+  /// The bottom dock's ceiling, as a CSS length (its initial value is the same `min(30vh, 18rem)`
+  /// the stylesheet starts with). Datastar writes it into a `style` attribute rather than JS poking
+  /// a custom property, so the drag is a signal and the inline script stays under its budget.
+  let [<Literal>] DockHeight = "dockHeight"
+  /// True while the dock's resize handle is being dragged, so pointermove knows a drag is live.
+  let [<Literal>] DockResizing = "dockResizing"
   let [<Literal>] NewSessionDir = "newSessionDir"
   let [<Literal>] ManualProjects = "manualProjects"
   let [<Literal>] EvalLoading = "evalLoading"

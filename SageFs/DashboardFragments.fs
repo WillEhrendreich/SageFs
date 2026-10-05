@@ -2254,6 +2254,36 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         ]
         // The bottom dock: the live bindings (a watch window) where the Evaluate bar used to be. Whether it shows a tree
         // or one line saying why not is DockPanes' decision; the snapshot carries the answer already drawn.
+        // Drag handle between the transcript and the dock. The transcript is the surface you read;
+        // the dock is secondary and its ceiling (--dock-max-height) is what this writes.
+        //
+        // Pointer events, not mouse, and setPointerCapture so a drag that leaves the 4px strip still
+        // delivers move/up to it. No script for this: Datastar attributes on the element, which is how
+        // every other interaction on this page is written, and it keeps the inline-JS budget intact.
+        Elem.div [
+          Attr.class' "resize-handle dock-resize"
+          Attr.id DomIds.DockResize
+          Ds.onEvent ("pointerdown", "event.preventDefault(); $dockResizing = true; event.target.setPointerCapture(event.pointerId)")
+          Ds.onEvent (
+            "pointermove",
+            sprintf
+              "if(!$%s)return; var h=Math.max(80,Math.min(Math.round(innerHeight*0.8),innerHeight-event.clientY)); $%s=h+'px'"
+              Signals.DockResizing
+              Signals.DockHeight
+          )
+          Ds.onEvent (
+            "pointerup",
+            sprintf
+              "if(!$%s)return; $%s=false; try{localStorage.setItem('sagefs.dockHeight',$%s)}catch(e){}"
+              Signals.DockResizing
+              Signals.DockResizing
+              Signals.DockHeight
+          )
+          Ds.onEvent (
+            "dblclick",
+            sprintf "$%s='min(30vh, 18rem)'; try{localStorage.removeItem('sagefs.dockHeight')}catch(e){}" Signals.DockHeight
+          )
+        ] []
         snap.BindingsPanel
       ]
       // Resize handle between main area and sidebar

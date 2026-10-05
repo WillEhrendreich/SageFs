@@ -266,6 +266,16 @@ h2 {
   }
 }
 
+/* The horizontal one, between the transcript and the bottom dock: it drags the dock's
+   ceiling, --dock-max-height, which lives in :root beside --sidebar-width so both the
+   CSS default and the drag have one value to agree on. Same 4px grab target, so a row
+   of them never reads as two different thicknesses. */
+.dock-resize {
+  width: auto;
+  height: 4px;
+  cursor: row-resize;
+}
+
 /* ── Panels ───────────────────────────────────────────────────── */
 
 .panel {
