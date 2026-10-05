@@ -44,6 +44,7 @@ let mkQueries (getAllSessionsCount: int ref) (sessions: WorkerProtocol.SessionIn
     GetSessionCoverageTreemap = fun _ -> None
     GetSessionBindings = fun _ -> [||]
     GetLiveBindings = fun _ -> None
+    GetAppOutput = fun _ -> None
     GetTweakView = fun _ _ _ _ _ -> System.Threading.Tasks.Task.FromResult SageFs.Features.Tweak.BindingTweak.TweakView.none
     GetBindingScopeSnapshot = fun () -> None
     GetLiveTestingStatus = fun () -> ""

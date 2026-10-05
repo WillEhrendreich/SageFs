@@ -2244,11 +2244,39 @@ let run
   // stream is a property of the LINE, and joining first loses it. So the batch is a list of pairs and the flush
   // emits one OutputEmitted per line, which is also what the pane reads.
   let appOutputPending = System.Collections.Generic.Dictionary<string, (SageFs.AppOutput.Stream * string) list>()
+
+  // The dock's second pane: one AppOutputPane per session. Fed the SAME lines, under the SAME lock, as
+  // the ones dispatched to TuiEvent.OutputEmitted — one source of truth, so the pane's follow/pause/search
+  // filter and the transcript above it can never disagree about what the app wrote. Written only here;
+  // read through appOutputFor below.
+  let appOutputPanes = System.Collections.Generic.Dictionary<string, SageFs.Server.AppOutputPane.AppOutputPane>()
+
+  /// The pane for one session, or None if the app has never written anything for it. Taken under the
+  /// flush's own lock, so a render never sees half a flush.
+  let appOutputFor (sidStr: string) : SageFs.Server.AppOutputPane.AppOutputPane option =
+    lock appOutputGate (fun () ->
+      match appOutputPanes.TryGetValue sidStr with
+      | true, pane -> Some pane
+      | false, _ -> None)
+
   let flushAppOutput () =
     let toFlush =
       lock appOutputGate (fun () ->
         let items = [ for kv in appOutputPending -> kv.Key, List.rev kv.Value ]
         appOutputPending.Clear()
+        for (sidStr, pending) in items do
+          for (stream, line) in pending do
+            if not (String.IsNullOrWhiteSpace line) then
+              let paneStream =
+                match stream with
+                | SageFs.AppOutput.Stream.Stdout -> SageFs.Server.AppOutputPane.OutputStream.Stdout
+                | SageFs.AppOutput.Stream.Stderr -> SageFs.Server.AppOutputPane.OutputStream.Stderr
+              let pane =
+                match appOutputPanes.TryGetValue sidStr with
+                | true, existing -> existing
+                | false, _ -> SageFs.Server.AppOutputPane.AppOutputPane.create
+              appOutputPanes.[sidStr] <-
+                SageFs.Server.AppOutputPane.AppOutputPane.feedText paneStream line pane
         items)
 
     for (sidStr, pending) in toFlush do
@@ -4181,6 +4209,7 @@ let run
     GetBindingScopeSnapshot = fun () -> System.Threading.Volatile.Read(&sharedBindingScope.contents)
     GetLiveBindings = fun sessionId ->
       SageFs.Features.LiveBindingsPane.viewOf liveBindingsHub (WorkerProtocol.SessionId.value sessionId)
+    GetAppOutput = fun sessionId -> appOutputFor (WorkerProtocol.SessionId.value sessionId)
     GetTweakView = fun sessionId workingDirectory files snapshot reload ->
       SageFs.Server.LiveBindingsTweakService.Service.viewForFiles
         tweakService (WorkerProtocol.SessionId.value sessionId) workingDirectory files snapshot reload

@@ -103,10 +103,13 @@
         <Compile Include="McpFrictionRecorder.fs" />
         <Compile Include="PageChoices.fs" />
         <Compile Include="SourceStateProbe.fs" />
+        <!-- AppOutputPane before DashboardTypes: the query record carries the pane, so a compile-order
+             problem rather than missing code (F# builds top-to-bottom). The file is pure — it opens
+             only System — so it has no ordering requirement of its own to respect here. -->
+        <Compile Include="AppOutputPane.fs" />
         <Compile Include="DashboardTypes.fs" />
         <Compile Include="DashboardConnection.fs" />
         <Compile Include="DockPanes.fs" />
-        <Compile Include="AppOutputPane.fs" />
         <Compile Include="EvaluatePopover.fs" />
         <Compile Include="NewSessionDialog.fs" />
         <Compile Include="NewSessionDiscovery.fs" />

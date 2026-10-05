@@ -1282,6 +1282,9 @@ type DashboardQueries = {
   /// Live reflection-walked binding tree for a session (debugger watch window),
   /// from the adaptive store. None until the first eval snapshot arrives.
   GetLiveBindings: WorkerProtocol.SessionId -> Features.LiveBindingsPane.PaneView option
+  /// What the session's running app has written, as the dock's second pane sees it: the same buffer
+  /// the transcript above was fed from, so the two can't disagree. None when nothing has arrived yet.
+  GetAppOutput: WorkerProtocol.SessionId -> SageFs.Server.AppOutputPane.AppOutputPane option
   /// What the session's own files say about each live binding's row (its persistence state and the knob it allows): the session, its
   /// working directory, the files its worker lists (path, and whether hot reload watches it; or why the list is not known), the walked
   /// values, and the session's last reload verdict. Reads the files only as far as the bindings' names ask (`LiveBindingsTweakService`).
