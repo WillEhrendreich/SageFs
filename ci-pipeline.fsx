@@ -1595,8 +1595,11 @@ let sagefsPipeline = pipeline "sagefs" {
   }
 
   stage "ratchets" {
-    // Also a test run (`SageFs.Tests.dll --ratchets`), so skipped with the rest.
-    when' (not bypassTests)
+    // NOT skipped under the bypass, even though it runs the ratchet lane: this stage is what
+    // starts the format, samples and fsi-host background jobs, and the stages after it only
+    // join them. Skipping it fails those joins ("background job format was never started"),
+    // which is exactly what the first bypassed run did. It costs seconds and is a read of the
+    // tree; the expensive, flaky thing is `test tiers` below.
     // Every ratchet before anything slow. A line budget, a blocking-call budget, a
     // literal count, a stale generated page or a CI-wiring check used to fail
     // twenty minutes into the gate; they are pure reads of the tree, so they run
