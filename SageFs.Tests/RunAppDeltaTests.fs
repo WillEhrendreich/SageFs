@@ -400,20 +400,27 @@ let private median (values: float list) : float =
   let sorted = List.sort values
   sorted[sorted.Length / 2]
 
-let private spinMs (app: RunningApp) : Task<float> = task {
+/// What one run of the call-heavy loop cost. The cost cases compare `CpuMs`, the CPU time the process spent on the
+/// loop: a loaded machine adds waiting for a core to the wall time, and that is not what the route costs.
+/// `WallMs` is reported beside it and never asserted on.
+type SpinRun = { CpuMs: float; WallMs: float }
+
+let private spinMs (app: RunningApp) : Task<SpinRun> = task {
   let! answer = get app "spin"
-  return float (answer.Substring(0, answer.IndexOf ':'))
+  match answer.Split ':' with
+  | [| cpu; wall; _count |] -> return { CpuMs = float cpu; WallMs = float wall }
+  | other -> return failwithf "the spin handler answers cpu:wall:count, got %A" other
 }
 
-let private spinTimes (mode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<float list> = task {
+let private spinTimes (mode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<SpinRun list> = task {
   let! app = startRunAppWith mode runtime
   try
     // The first run pays the JIT and the first-request costs.
     let! _ = spinMs app
-    let times = ResizeArray<float>()
+    let times = ResizeArray<SpinRun>()
     for _ in 1 .. spinRuns do
-      let! ms = spinMs app
-      times.Add ms
+      let! run = spinMs app
+      times.Add run
     return List.ofSeq times
   finally
     stop app
@@ -434,14 +441,18 @@ let costCases (runtime: HostRuntime) : Test list =
     testTask (sprintf "[%s] a process started so it can take a delta runs a call-heavy loop within a small multiple of one that was not" (HostRuntime.moniker runtime)) {
       let! off = spinTimes SageFs.Features.MetadataDelta.MetadataDeltaMode.Off runtime
       let! on = spinTimes SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime
-      let ratio = median on / median off
+      let cpu (runs: SpinRun list) = runs |> List.map (fun r -> r.CpuMs)
+      let wall (runs: SpinRun list) = runs |> List.map (fun r -> r.WallMs)
+      let ratio = median (cpu on) / median (cpu off)
       eprintfn "DELTA-COST machine: %s" (machine ())
-      eprintfn "DELTA-COST [%s] %d calls of a NoInlining method, n=%d runs after a warm-up: route off %s ms (median %.0f), route on %s ms (median %.0f), ratio %.2f"
+      eprintfn "DELTA-COST [%s] %d calls of a NoInlining method, n=%d runs after a warm-up, CPU time: route off %s ms (median %.0f), route on %s ms (median %.0f), ratio %.2f; wall time off %s ms, on %s ms (reported, not asserted)"
         (HostRuntime.moniker runtime) 50000000 spinRuns
-        (off |> List.map (sprintf "%.0f") |> String.concat ", ") (median off)
-        (on |> List.map (sprintf "%.0f") |> String.concat ", ") (median on)
+        (cpu off |> List.map (sprintf "%.0f") |> String.concat ", ") (median (cpu off))
+        (cpu on |> List.map (sprintf "%.0f") |> String.concat ", ") (median (cpu on))
         ratio
-      (ratio, spinCostBound) |> Expect.isLessThan (sprintf "the route's cost on a call-heavy loop (off %A ms, on %A ms)" off on)
+        (wall off |> List.map (sprintf "%.0f") |> String.concat ", ")
+        (wall on |> List.map (sprintf "%.0f") |> String.concat ", ")
+      (ratio, spinCostBound) |> Expect.isLessThan (sprintf "the route's CPU cost on a call-heavy loop (off %A ms, on %A ms)" (cpu off) (cpu on))
     }
     testTask (sprintf "[%s] what a save costs: file written to new code served, with the build, the diff and the runtime's call apart, against a process start" (HostRuntime.moniker runtime)) {
       let! app, started = startRunAppTimed SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime

@@ -72,13 +72,21 @@ let step (x: int) : int = x + 1
 let spinCalls = 50000000
 
 /// A call-heavy loop, the work a process that can be edited pays for most (a call into an editable method cannot be
-/// bound directly). Returns how many milliseconds it took, and the count, so nothing can drop the loop.
+/// bound directly). Returns the CPU milliseconds the process spent on it, the wall milliseconds it took and the count,
+/// so nothing can drop the loop. The CPU figure is what a cost comparison reads: on a loaded machine the wall figure
+/// carries the time the loop spent waiting for a core, which says nothing about what the loop costs. While the loop
+/// runs the rest of the app is idle, so the process's CPU time is the loop's.
 let spin () : string =
+  let self = System.Diagnostics.Process.GetCurrentProcess()
+  let cpuBefore = self.TotalProcessorTime
   let watch = System.Diagnostics.Stopwatch.StartNew()
   let mutable acc = 0
   for _ in 1 .. spinCalls do
     acc <- step acc
-  string watch.Elapsed.TotalMilliseconds + ":" + string acc
+  let wall = watch.Elapsed.TotalMilliseconds
+  self.Refresh()
+  let cpu = (self.TotalProcessorTime - cpuBefore).TotalMilliseconds
+  string cpu + ":" + string wall + ":" + string acc
 
 // -- the edits a metadata delta cannot take ------------------------------------------------------------------
 
