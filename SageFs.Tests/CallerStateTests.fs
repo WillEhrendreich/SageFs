@@ -192,10 +192,11 @@ let tests =
         CallersState.remedy state |> Expect.stringContains "gives an action" "Shop.Tags.stamp"
 
       testCase "WHY — a site matched by name only says so, with the reason the compiler was not used" <| fun _ ->
-        let byName = { pagesSite with Evidence = SiteEvidence.MatchedByName(NameOnlyReason.CompilerTimedOut(System.TimeSpan.FromSeconds 20.0)) }
+        let bound = SageFs.Timeouts.callerCheck
+        let byName = { pagesSite with Evidence = SiteEvidence.MatchedByName(NameOnlyReason.CompilerTimedOut bound) }
         let state = CallerLedger.empty |> checkedWith [ tags, callers byName [] ] |> CallerLedger.stateOf
         CallersState.describe state |> Expect.stringContains "by name" "by name"
-        CallersState.describe state |> Expect.stringContains "why the compiler was not used" "20"
+        CallersState.describe state |> Expect.stringContains "why the compiler was not used, and for how long" (sprintf "%.0fs" bound.TotalSeconds)
     ]
 
     testList "the wire" [

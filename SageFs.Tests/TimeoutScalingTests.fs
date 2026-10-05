@@ -94,7 +94,7 @@ let private machineScaled : Set<string> =
         "liveTestConfirmationDeadline"; "liveValueBindingBudget"; "memberEvaluationDeadline"
         "liveTestWatcherShutdown"; "rebuildReadyWait"; "buildCompletion"; "hostBuildRun"; "gitQuick"; "gitRebase"
         "gitWorktreeAdd"; "cohortIntegrationSettle"; "testRunAwaitSlack"; "leaseTtlSessionCreate"
-        "leaseTtlTestSuite"; "frictionSlowFirstSuccess"; "compileQueueWait"; "compileBudget"; "reloadPlanningCheck"; "callerCheck"
+        "leaseTtlTestSuite"; "frictionSlowFirstSuccess"; "compileQueueWait"; "compileBudget"; "reloadPlanningCheck"
         "appHostAppearGrace"; "appHostStart"; "appHostStop"; "appEntryFinishGrace"; "appRunnerShutdown"
         "debugHold"; "restartStartupCrashWindow"; "watchdogGracePeriod"; "workerHealthProbeTimeout"
         "workerEndpointFetch"; "workerWarmupContextFetch"; "outputCommitWait"; "gracefulShutdownWatchdog"
@@ -107,7 +107,8 @@ let private derivedFromMachine : (string * string) list =
   [ "hostBuildLockWait", "hostBuildRun"
     "workflowSwitchRequest", "buildCompletion"
     "leaseTtlRebuild", "buildCompletion"
-    "leaseTtlFullBuild", "buildCompletion" ]
+    "leaseTtlFullBuild", "buildCompletion"
+    "callerCheck", "reloadPlanningCheck" ]
 
 /// Declared as another fixed duration, or as no time at all, so there is no TimeSpan on their own line.
 let private derivedFromFixed : Set<string> = set [ "cohortSettledRetention"; "notRun" ]

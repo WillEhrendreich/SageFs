@@ -1,14 +1,14 @@
-/// Who is still on the OLD method after a save re-signed or removed a function.
-///
-/// A function whose signature changed is a NEW method to the running app: the callers saved with it move onto it, and the
-/// old method stays in the process for whatever still holds it. A caller in ANOTHER file of the project is not saved with
-/// it, so it keeps calling the old method until that file is saved too. The build would not pass until it is, so the
-/// window is short, but while it is open the old behavior runs and nothing said so.
-///
-/// This is the state that says so. It is a closed set, a session's worker holds one ledger of it, every reload report
-/// carries the ledger's current state, and it clears exactly when a caller's declaration is patched. Pure: the decisions
-/// about WHO calls what live in `CallerCheck`, and the wire is read by clients that do not know the planner.
-module SageFs.Features.CallerState
+// Who is still on the OLD method after a save re-signed or removed a function.
+//
+// A function whose signature changed is a NEW method to the running app: the callers saved with it move onto it, and the
+// old method stays in the process for whatever still holds it. A caller in ANOTHER file of the project is not saved with
+// it, so it keeps calling the old method until that file is saved too. The build would not pass until it is, so the
+// window is short, but while it is open the old behavior runs and nothing said so.
+//
+// This is the state that says so. It is a closed set, a session's worker holds one ledger of it, every reload report
+// carries the ledger's current state, and it clears exactly when a caller's declaration is patched. Pure: the decisions
+// about WHO calls what live in `CallerCheck`, and the wire is read by clients that do not know the planner.
+namespace SageFs.Features.CallerState
 
 open System
 open System.IO
@@ -114,6 +114,25 @@ type CallersState =
   | CallersNotChecked of first: UncheckedCallers * rest: UncheckedCallers list
   /// The report carries no word on callers (a worker that predates the field). Not `CallersCurrent`: nobody said all is well.
   | CallersNotReported
+
+/// Why a callers object could not be read. A closed set, so the daemon can log the reason and a test can assert which.
+[<RequireQualifiedAccess>]
+type CallersReadError =
+  | NotJson of detail: string
+  /// The `state` is not one this reader knows.
+  | UnknownState of token: string
+  /// A token in `field` is not one this reader knows.
+  | UnknownToken of field: string * token: string
+  /// A state that names declarations has none to name.
+  | NothingListed of detail: string
+
+module CallersReadError =
+  let describe (error: CallersReadError) : string =
+    match error with
+    | CallersReadError.NotJson detail -> sprintf "not JSON: %s" detail
+    | CallersReadError.UnknownState token -> sprintf "unknown callers state '%s'" token
+    | CallersReadError.UnknownToken(field, token) -> sprintf "unknown %s '%s'" field token
+    | CallersReadError.NothingListed detail -> detail
 
 /// What happened that moves the ledger.
 [<RequireQualifiedAccess>]
@@ -403,12 +422,12 @@ module CallersState =
     | true, v when v.ValueKind = JsonValueKind.Array -> [ for item in v.EnumerateArray() -> item ]
     | _ -> []
 
-  let private readEdit (e: JsonElement) : Result<SignatureEdit, string> =
+  let private readEdit (e: JsonElement) : Result<SignatureEdit, CallersReadError> =
     match SignatureCause.ofToken (text e "cause") with
     | Some cause -> Ok { Declaration = text e "declaration"; Cause = cause; File = text e "declaredIn" }
-    | None -> Error(sprintf "unknown cause '%s'" (text e "cause"))
+    | None -> Error(CallersReadError.UnknownToken("cause", text e "cause"))
 
-  let private readSite (e: JsonElement) : Result<CallSite, string> =
+  let private readSite (e: JsonElement) : Result<CallSite, CallersReadError> =
     let line =
       match e.TryGetProperty "line" with
       | true, v when v.ValueKind = JsonValueKind.Number -> v.GetInt32()
@@ -419,11 +438,11 @@ module CallersState =
       | "MatchedByName" ->
         match NameOnlyReason.ofToken (text e "nameOnlyReason") (text e "nameOnlyDetail") with
         | Some why -> Ok(SiteEvidence.MatchedByName why)
-        | None -> Error(sprintf "unknown name-only reason '%s'" (text e "nameOnlyReason"))
-      | other -> Error(sprintf "unknown evidence '%s'" other)
+        | None -> Error(CallersReadError.UnknownToken("nameOnlyReason", text e "nameOnlyReason"))
+      | other -> Error(CallersReadError.UnknownToken("evidence", other))
     evidence |> Result.map (fun ev -> { File = text e "file"; Line = line; Caller = text e "caller"; Evidence = ev })
 
-  let private allOk (results: Result<'a, string> list) : Result<'a list, string> =
+  let private allOk (results: Result<'a, CallersReadError> list) : Result<'a list, CallersReadError> =
     results
     |> List.fold
       (fun acc r ->
@@ -433,47 +452,47 @@ module CallersState =
         | Ok xs, Ok x -> Ok(xs @ [ x ]))
       (Ok [])
 
-  let private readPending (e: JsonElement) : Result<PendingCallers, string> =
+  let private readPending (e: JsonElement) : Result<PendingCallers, CallersReadError> =
     match readEdit e, items e "sites" |> List.map readSite |> allOk with
     | Ok edit, Ok(first :: rest) -> Ok { Edit = edit; First = first; Rest = rest }
-    | Ok _, Ok [] -> Error "a pending declaration with no sites"
+    | Ok _, Ok [] -> Error(CallersReadError.NothingListed "a pending declaration has no sites")
     | Error e, _
     | _, Error e -> Error e
 
-  let private readUnchecked (e: JsonElement) : Result<UncheckedCallers, string> =
+  let private readUnchecked (e: JsonElement) : Result<UncheckedCallers, CallersReadError> =
     match readEdit e, UncheckedReason.ofToken (text e "why") (text e "whySubject") (text e "whyDetail") with
     | Ok edit, Some why -> Ok { Unresolved = edit; Why = why }
     | Error e, _ -> Error e
-    | Ok _, None -> Error(sprintf "unknown unchecked reason '%s'" (text e "why"))
+    | Ok _, None -> Error(CallersReadError.UnknownToken("why", text e "why"))
 
   /// Reads the object `toJson` writes. The words are not read back: they are derived from the state, so what a daemon
   /// shows is always what this module would say, whatever wording the worker had.
-  let ofElement (e: JsonElement) : Result<CallersState, string> =
+  let ofElement (e: JsonElement) : Result<CallersState, CallersReadError> =
     match text e "state" with
     | "CallersCurrent" -> Ok CallersState.CallersCurrent
     | "CallersNotReported" -> Ok CallersState.CallersNotReported
     | "CallersPending" ->
       match items e "pending" |> List.map readPending |> allOk, items e "notChecked" |> List.map readUnchecked |> allOk with
       | Ok(first :: rest), Ok unchecked -> Ok(CallersState.CallersPending(first, rest, unchecked))
-      | Ok [], _ -> Error "CallersPending with nothing pending"
+      | Ok [], _ -> Error(CallersReadError.NothingListed "CallersPending with nothing pending")
       | Error e, _
       | _, Error e -> Error e
     | "CallersNotChecked" ->
       match items e "notChecked" |> List.map readUnchecked |> allOk with
       | Ok(first :: rest) -> Ok(CallersState.CallersNotChecked(first, rest))
-      | Ok [] -> Error "CallersNotChecked with nothing unchecked"
+      | Ok [] -> Error(CallersReadError.NothingListed "CallersNotChecked with nothing unchecked")
       | Error e -> Error e
-    | other -> Error(sprintf "unknown callers state '%s'" other)
+    | other -> Error(CallersReadError.UnknownState other)
 
   /// Reads the JSON text `toJson` writes. Empty text is a report with no word on callers.
-  let ofJson (json: string) : Result<CallersState, string> =
+  let ofJson (json: string) : Result<CallersState, CallersReadError> =
     match String.IsNullOrWhiteSpace json with
     | true -> Ok CallersState.CallersNotReported
     | false ->
       try
         use doc = JsonDocument.Parse json
         ofElement doc.RootElement
-      with :? JsonException as ex -> Error ex.Message
+      with :? JsonException as ex -> Error(CallersReadError.NotJson ex.Message)
 
   /// The same object as a value a JSON serializer writes as it stands, for the daemon's status shapes.
   let toElement (state: CallersState) : JsonElement =

@@ -519,8 +519,9 @@ module Timeouts =
   /// How long the whole-project compiler check that finds the callers of a re-signed or removed function may take
   /// (`CallerCheck.callersAsync`). It checks every file of the project, not one, so it gets more than the single-file
   /// check; a save that re-signs a function waits this long at most, and past it the callers are matched by name and the
-  /// report says the compiler timed out. No recorded reason for 30s.
-  let callerCheck = forMachine (TimeSpan.FromSeconds(30.0))
+  /// report says the compiler timed out. Three single-file checks: it is the same compiler over every file of the project
+  /// instead of one, and it scales through `reloadPlanningCheck` with the machine. No recorded reason for the three.
+  let callerCheck = reloadPlanningCheck * 3.0
 
   // -- Running an app (run_app) --
   /// How long an app's entry point may run before it builds a host. If it has not by then,

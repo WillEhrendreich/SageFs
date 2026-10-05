@@ -189,7 +189,7 @@ let tests =
         |> Expect.equal "not searchable" (CallersCheck.NotChecked(UncheckedReason.NotSearchableByName "(+++)"))
 
       testCase "WHY — a compiler that timed out leaves the name matches in place and says it timed out" <| fun _ ->
-        let bound = TimeSpan.FromSeconds 20.0
+        let bound = SageFs.Timeouts.callerCheck
         let found =
           decideOne (OtherSources.Loaded [ other "/p/Pages.fs" pagesText ]) (CompilerAnswer.Unavailable(NameOnlyReason.CompilerTimedOut bound)) (aSubject SignatureCause.ReSigned)
         sitesOf found

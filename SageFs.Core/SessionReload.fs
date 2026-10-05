@@ -154,7 +154,8 @@ module SessionReload =
       let callers () : Result<SageFs.Features.CallerState.CallersState, ReloadPayloadError> =
         match root.TryGetProperty "callers" with
         | true, value when value.ValueKind = JsonValueKind.Object ->
-          SageFs.Features.CallerState.CallersState.ofElement value |> Result.mapError ReloadPayloadError.BadCallers
+          SageFs.Features.CallerState.CallersState.ofElement value
+          |> Result.mapError (SageFs.Features.CallerState.CallersReadError.describe >> ReloadPayloadError.BadCallers)
         | _ -> Result.Ok SageFs.Features.CallerState.CallersState.CallersNotReported
       let finished () : Result<SessionReload, ReloadPayloadError> =
         match root.TryGetProperty "outcome" with
