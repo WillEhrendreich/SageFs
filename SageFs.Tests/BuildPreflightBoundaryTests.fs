@@ -48,7 +48,7 @@ let tests =
       let ops = createSessionOps mailbox (fun () -> SessionManager.QuerySnapshot.empty) manifest
       try
         let create = ops.CreateSession [ SessionProjectTarget.Project project ] dir WorkflowTypes.SessionWorkflow.Interactive
-        let! completed = Task.WhenAny(create, Task.Delay TestTimeouts.patienceTight)
+        let! completed = Task.WhenAny(create, Task.Delay TestTimeouts.patience)
         if not (obj.ReferenceEquals(completed, create :> Task)) then
           failtest "session create reached the mailbox instead of returning NeedsRebuild"
         let! result = create

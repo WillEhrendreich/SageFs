@@ -663,7 +663,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '4'))
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '2'))
     dispatch (SageFsMsg.Editor EditorAction.Submit)
-    let! doneSignal = TestDeps.awaitTcs 5000 resultArrived
+    let! doneSignal = TestDeps.awaitTcs (TestTimeouts.asMs TestTimeouts.patience) resultArrived
     doneSignal |> Expect.isTrue "should have eval result in output"
     log.EvalCalls |> Expect.hasLength "1 eval" 1
     lastRegions
@@ -696,13 +696,13 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor
       (EditorAction.CreateSession ["New.fsproj"]))
-    let! createdSignal = TestDeps.awaitTcs 5000 created
+    let! createdSignal = TestDeps.awaitTcs (TestTimeouts.asMs TestTimeouts.patience) created
     createdSignal |> Expect.isTrue "should create the session"
     lastModel.Value.Sessions.Sessions
     |> Expect.hasLength "1 session" 1
     dispatch (SageFsMsg.Editor
       (EditorAction.StopSession "a1b2c3d4"))
-    let! stoppedSignal = TestDeps.awaitTcs 5000 stopped
+    let! stoppedSignal = TestDeps.awaitTcs (TestTimeouts.asMs TestTimeouts.patience) stopped
     stoppedSignal |> Expect.isTrue "should stop the session"
     lastModel.Value.Sessions.Sessions
     |> Expect.isEmpty "0 sessions"
@@ -732,7 +732,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor EditorAction.TriggerCompletion)
-    let! menuSignal = TestDeps.awaitTcs 5000 menuArrived
+    let! menuSignal = TestDeps.awaitTcs (TestTimeouts.asMs TestTimeouts.patience) menuArrived
     menuSignal |> Expect.isTrue "should have menu"
     lastModel.Value.Editor.CompletionMenu
     |> Expect.isSome "should have menu"
@@ -981,7 +981,7 @@ module RunEndHarness =
                     Trigger = RunTrigger.FileSave
                     SessionId = Some (SessionId.value sid) }))
       let! _settled =
-        TestDeps.awaitCondition 5000 (fun () ->
+        TestDeps.awaitCondition (TestTimeouts.asMs TestTimeouts.patience) (fun () ->
           match expectation with
           | CompletesItself -> everyTestHasAResult () && completion () = ReportedCompletion
           | LeavesCompletionToSupersedingRun -> everyTestHasAResult ())

@@ -31,7 +31,7 @@ let private cleanupSession (mgr: MailboxProcessor<SageFs.SessionManager.SessionC
     | Some id ->
       try
         let! _ =
-          mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.StopSession(id, reply)), 5000)
+          mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.StopSession(id, reply)), TestTimeouts.asMs TestTimeouts.patience)
           |> Async.StartAsTask
         ()
       with _ -> ()

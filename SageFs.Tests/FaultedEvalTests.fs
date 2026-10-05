@@ -21,7 +21,7 @@ let faultedEvalTests =
     testTask "faulted session rejects eval without losing faulted state" {
       let! (result: SageFs.ActorCreation.ActorResult) = createFaultedActorResult ()
       let! becameFaulted =
-        SageFs.Tests.TestInfrastructure.awaitCondition 5000 (fun () -> result.GetSessionState() = SessionState.Faulted)
+        SageFs.Tests.TestInfrastructure.awaitCondition (TestTimeouts.asMs TestTimeouts.patience) (fun () -> result.GetSessionState() = SessionState.Faulted)
       becameFaulted
       |> Expect.isTrue "actor should enter faulted state when warmup fails"
 
@@ -44,7 +44,7 @@ let faultedEvalTests =
     testTask "faulted session rejects enablestdout without crashing" {
       let! (result: SageFs.ActorCreation.ActorResult) = createFaultedActorResult ()
       let! becameFaulted =
-        SageFs.Tests.TestInfrastructure.awaitCondition 5000 (fun () -> result.GetSessionState() = SessionState.Faulted)
+        SageFs.Tests.TestInfrastructure.awaitCondition (TestTimeouts.asMs TestTimeouts.patience) (fun () -> result.GetSessionState() = SessionState.Faulted)
       becameFaulted
       |> Expect.isTrue "actor should enter faulted state when warmup fails"
 

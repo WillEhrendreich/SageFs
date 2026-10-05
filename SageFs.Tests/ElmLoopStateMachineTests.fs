@@ -15,11 +15,11 @@ type TestRegion = CountRegion of int | LogRegion of string list
 
 let initialModel = { Count = 0; Log = [] }
 
-let waitForAsync (condition: unit -> bool) (timeoutMs: int) =
+let waitForAsync (condition: unit -> bool) (ceiling: TimeSpan) =
   task {
     let sw = Diagnostics.Stopwatch.StartNew()
     let mutable ok = false
-    while not ok && sw.ElapsedMilliseconds < int64 timeoutMs do
+    while not ok && sw.Elapsed < ceiling do
       if condition () then ok <- true
       else do! Task.Delay TestTimeouts.pollTight
     return ok
@@ -65,7 +65,7 @@ let elmLoopStateMachineTests =
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch Increment
-      let! updated = waitForAsync (fun () -> (rt.GetModel()).Count = 1) 5000
+      let! updated = waitForAsync (fun () -> (rt.GetModel()).Count = 1) TestTimeouts.patience
       updated |> Expect.isTrue "model should update after Increment"
       (rt.GetModel()).Count |> Expect.equal "Count should be 1 after Increment" 1
       cts.Cancel()
@@ -78,7 +78,7 @@ let elmLoopStateMachineTests =
       let rt = ElmLoop.start prog initialModel cts.Token
 
       for _ in 1..5 do rt.Dispatch Increment
-      let! updated = waitForAsync (fun () -> (rt.GetModel()).Count = 5) 5000
+      let! updated = waitForAsync (fun () -> (rt.GetModel()).Count = 5) TestTimeouts.patience
       updated |> Expect.isTrue "model should reach 5"
       (rt.GetModel()).Count |> Expect.equal "Count should be 5 after 5 Increments" 5
       cts.Cancel()
@@ -91,7 +91,7 @@ let elmLoopStateMachineTests =
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch (TriggerEffect "hello")
-      let! logged = waitForAsync (fun () -> (rt.GetModel()).Log |> List.contains "hello") 5000
+      let! logged = waitForAsync (fun () -> (rt.GetModel()).Log |> List.contains "hello") TestTimeouts.patience
       logged |> Expect.isTrue "effect should dispatch AddLog"
       (rt.GetModel()).Log
       |> List.contains "hello"
@@ -107,7 +107,7 @@ let elmLoopStateMachineTests =
 
       rt.Dispatch Increment
       let! rendered = waitForAsync (fun () ->
-        rt.GetRegions() |> List.contains (CountRegion 1)) 5000
+        rt.GetRegions() |> List.contains (CountRegion 1)) TestTimeouts.patience
       rendered |> Expect.isTrue "regions should contain CountRegion 1"
       cts.Cancel()
       cts.Dispose()
@@ -122,7 +122,7 @@ let elmLoopStateMachineTests =
       // Initial OnModelChanged fires during start
       let initialCallCount = calls.Count
       rt.Dispatch Increment
-      let! fired = waitForAsync (fun () -> calls.Count > initialCallCount) 5000
+      let! fired = waitForAsync (fun () -> calls.Count > initialCallCount) TestTimeouts.patience
       fired |> Expect.isTrue "callback should fire"
       let model, regions =
         calls |> Seq.find (fun (m, _) -> m.Count = 1)
@@ -153,7 +153,7 @@ let elmLoopStateMachineTests =
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch Increment
-      let! settled = waitForAsync (fun () -> (rt.GetModel()).Count = 1) 5000
+      let! settled = waitForAsync (fun () -> (rt.GetModel()).Count = 1) TestTimeouts.patience
       settled |> Expect.isTrue "loop should settle within timeout"
       cts.Cancel()
       cts.Dispose()
@@ -169,7 +169,7 @@ let elmLoopStateMachineTests =
       rt.Dispatch (AddLog "a")
       let! updated = waitForAsync (fun () ->
         let regions = rt.GetRegions()
-        regions = [ CountRegion 2; LogRegion ["a"] ]) 5000
+        regions = [ CountRegion 2; LogRegion ["a"] ]) TestTimeouts.patience
       updated |> Expect.isTrue "regions reflect final state"
       cts.Cancel()
       cts.Dispose()
@@ -198,7 +198,7 @@ let elmLoopStateMachineTests =
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch (TriggerEffect "async")
-      let! updated = waitForAsync (fun () -> (rt.GetModel()).Count = 1) 5000
+      let! updated = waitForAsync (fun () -> (rt.GetModel()).Count = 1) TestTimeouts.patience
       updated |> Expect.isTrue "DelayedMsg effect should have dispatched Increment"
       (rt.GetModel()).Count
       |> Expect.equal "DelayedMsg effect should have dispatched Increment" 1
@@ -214,11 +214,11 @@ let elmLoopStateMachineTests =
       rt.Dispatch Increment
       rt.Dispatch Increment
       rt.Dispatch (AddLog "before-reset")
-      let! counted = waitForAsync (fun () -> (rt.GetModel()).Count = 2) 5000
+      let! counted = waitForAsync (fun () -> (rt.GetModel()).Count = 2) TestTimeouts.patience
       counted |> Expect.isTrue "model should reach 2"
 
       rt.Dispatch Reset
-      let! reset = waitForAsync (fun () -> (rt.GetModel()).Count = 0) 5000
+      let! reset = waitForAsync (fun () -> (rt.GetModel()).Count = 0) TestTimeouts.patience
       reset |> Expect.isTrue "model should reset to 0"
       let m = rt.GetModel()
       m.Count |> Expect.equal "Count should be 0 after Reset" 0

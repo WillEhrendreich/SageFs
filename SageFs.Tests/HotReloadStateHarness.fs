@@ -307,7 +307,8 @@ let private until (budget: TimeSpan) (describe: unit -> string) (probe: unit -> 
 let get (app: RunningApp) (route: string) : Task<string> =
   http.GetStringAsync(sprintf "http://127.0.0.1:%d/%s" app.AppPort route)
 
-/// Read `route` until it serves `want`, for up to 5s. The verdict and the app
+/// Read `route` until it serves `want`, for up to `TestTimeouts.patience` (the wait ends the moment it does, so a
+/// loaded machine costs a passing run nothing). The verdict and the app
 /// travel on different sockets, so one read right after the verdict can race
 /// the detour. If it never flips, the final value comes back and the caller's
 /// assertion says what it was.
@@ -315,7 +316,7 @@ let settle (app: RunningApp) (route: string) (want: string) : Task<string> = tas
   let sw = Stopwatch.StartNew()
   let! first = get app route
   let mutable served = first
-  while served <> want && sw.ElapsedMilliseconds < 5000L do
+  while served <> want && sw.Elapsed < TestTimeouts.patience do
     do! Task.Delay TestTimeouts.pollQuick
     let! next = get app route
     served <- next

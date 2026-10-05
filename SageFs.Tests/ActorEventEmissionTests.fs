@@ -87,7 +87,7 @@ let actorEventEmissionTests =
         actor.PostAndAsyncReply(fun r -> GetDiagnostics("let x: int = \"oops\"", r))
         |> Async.StartAsTask
       // The event is emitted on the actor's own thread after the reply lands.
-      let! ok = TestInfrastructure.awaitCondition 2000 (fun () ->
+      let! ok = TestInfrastructure.awaitCondition (TestTimeouts.asMs TestTimeouts.patience) (fun () ->
         lock captured (fun () ->
           captured
           |> Seq.exists (function DiagnosticsChecked _ -> true | _ -> false)))

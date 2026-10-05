@@ -148,12 +148,14 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.WorkerShuttingDown
 }
 
-/// Slow handler that simulates a long eval — the critical test.
-let slowEvalHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
+/// Handler that simulates a long eval — the critical test. The eval says when it has started and then
+/// stays in flight until the test releases it, so "a status read answered while the eval was running" is
+/// a fact about the order of events and not about how many milliseconds either took.
+let gatedEvalHandler (evalStarted: TaskCompletionSource<unit>) (release: Task) (msg: WorkerMessage) : Async<WorkerResponse> = async {
   match msg with
   | WorkerMessage.EvalCode(_, rid) ->
-    // 3000ms gives a large margin over the 1000ms GetStatus threshold even on loaded CI machines
-    do! Async.Sleep TestTimeouts.evalOutlastingStatusProbe
+    evalStarted.TrySetResult() |> ignore
+    do! release |> Async.AwaitTask
     return WorkerResponse.EvalResult(rid, Ok "done", [], Map.empty)
   | WorkerMessage.GetStatus rid ->
     // Status is always instant
@@ -241,26 +243,26 @@ let httpRoundTripTests =
 let concurrencyTests =
   testList "WorkerHttpTransport.concurrency" [
     testTask "GetStatus responds instantly during long eval" {
-      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer slowEvalHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+      let evalStarted = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+      let release = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer (gatedEvalHandler evalStarted release.Task) (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
 
-        // Start a long eval in the background (takes 3000ms)
+        // Start a long eval in the background; it stays in flight until this test releases it
         let evalTask =
           proxy (WorkerMessage.EvalCode("slow", "eval-1"))
           |> Async.StartAsTask
 
-        // Give it a moment to start processing on the server
-        do! Task.Delay TestTimeouts.workStartSettle
+        // The server says when the eval is running, so no guess at how long it takes to get there
+        do! evalStarted.Task.WaitAsync TestTimeouts.patience
 
-        // GetStatus should respond well before the eval finishes
-        let sw = System.Diagnostics.Stopwatch.StartNew()
-        let! statusResp = proxy (WorkerMessage.GetStatus "s1") |> Async.StartAsTask
-        sw.Stop()
-
-        // 1000ms threshold: eval takes 3000ms so this gives 2000ms margin even on slow CI
-        (sw.ElapsedMilliseconds < 1000L)
-        |> Expect.isTrue "status should complete in under 1000ms (eval takes 3000ms)"
+        // GetStatus answers while the eval is still in flight: the eval cannot finish before the release below
+        // (A server that queued the status behind the eval would never answer it, because the release
+        // comes after: the ceiling turns that into a failure instead of a hang.)
+        let! statusResp = (proxy (WorkerMessage.GetStatus "s1") |> Async.StartAsTask).WaitAsync TestTimeouts.patience
+        evalTask.IsCompleted
+        |> Expect.isFalse "the status was answered while the eval was still running"
 
         match statusResp with
         | WorkerResponse.StatusResult(rid, snap) ->
@@ -268,9 +270,14 @@ let concurrencyTests =
           snap.Status |> Expect.equal "status" SessionStatus.Evaluating
         | other -> failwithf "unexpected: %A" other
 
-        // Don't wait for eval — dispose will cancel it, keeping the test fast
-        evalTask.ContinueWith(fun (_: System.Threading.Tasks.Task<WorkerResponse>) -> ()) |> ignore
+        // Let the eval finish and say so, so nothing is left running behind the test
+        release.TrySetResult() |> ignore
+        let! evalReply = evalTask.WaitAsync TestTimeouts.patience
+        match evalReply with
+        | WorkerResponse.EvalResult(rid, _, _, _) -> rid |> Expect.equal "the eval's own replyId" "eval-1"
+        | other -> failwithf "unexpected eval reply: %A" other
       finally
+        release.TrySetResult() |> ignore
         disposeServer server
     }
   ] |> testSequenced

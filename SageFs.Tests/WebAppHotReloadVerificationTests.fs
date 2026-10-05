@@ -676,7 +676,7 @@ let webAppHotReloadVerificationTests =
                 let sw = Stopwatch.StartNew()
                 let! first = shape name
                 let mutable v = first
-                while v <> want && sw.ElapsedMilliseconds < 5000L do
+                while v <> want && sw.Elapsed < TestTimeouts.patience do
                   do! Task.Delay TestTimeouts.poll
                   let! next = shape name
                   v <- next

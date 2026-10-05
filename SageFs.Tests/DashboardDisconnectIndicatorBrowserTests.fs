@@ -440,7 +440,7 @@ let pausedPageJourney () =
 
     let window = Diagnostics.Stopwatch.StartNew()
     let mutable everClaimedDown = false
-    while window.Elapsed < TestTimeouts.patienceBrief do
+    while window.Elapsed < TestTimeouts.pageQuietWatch do
       let! shown = bannerVisible page
       let! stillConnected = dataConnected page "true"
       if shown || not stillConnected then everClaimedDown <- true

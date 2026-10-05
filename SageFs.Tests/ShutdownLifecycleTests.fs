@@ -123,7 +123,7 @@ let shutdownLifecycleTests =
         |> Expect.isTrue
           (sprintf "stopWorker must return within a bound even when the Shutdown proxy hangs (pid %d)" pid)
         do! stop
-        let! dead = awaitCondition 5000 (fun () -> isDead pid)
+        let! dead = awaitCondition (TestTimeouts.asMs TestTimeouts.patience) (fun () -> isDead pid)
         dead
         |> Expect.isTrue (sprintf "the hung worker process (pid %d) must be dead after stopWorker" pid)
       finally

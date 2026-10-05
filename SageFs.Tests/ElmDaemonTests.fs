@@ -86,6 +86,7 @@ module ElmDaemonTestHelpers =
       | [] -> None
       | m :: _ -> Some m
     member _.Regions = regionHistory |> List.rev
+    /// Waits up to `timeout` milliseconds (the shape `ElmDaemon.dispatchAndWait` takes) for the next update.
     member _.WaitForUpdate(timeout: int) =
       evt.Wait(timeout) |> ignore
       evt.Reset()
@@ -207,14 +208,14 @@ let elmDaemonTests =
           ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         // consume initial render signal
-        tracker.WaitForUpdate 500
+        tracker.WaitForUpdate (TestTimeouts.asMs TestTimeouts.patience)
 
         runtime.Dispatch (
           SageFsMsg.Event (
             TuiEvent.EvalCompleted ("s", "result-42", [])))
 
         // Give time for dispatch to process
-        tracker.WaitForUpdate 500
+        tracker.WaitForUpdate (TestTimeouts.asMs TestTimeouts.patience)
 
         tracker.LatestModel
         |> Option.bind (fun m ->
@@ -287,13 +288,13 @@ let elmDaemonTests =
         let runtime =
           ElmDaemon.startHeadless deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
-        tracker.WaitForUpdate 500
+        tracker.WaitForUpdate (TestTimeouts.asMs TestTimeouts.patience)
 
         runtime.Dispatch (
           SageFsMsg.Event (
             TuiEvent.EvalCompleted ("s", "result-42", [])))
 
-        tracker.WaitForUpdate 500
+        tracker.WaitForUpdate (TestTimeouts.asMs TestTimeouts.patience)
 
         tracker.Regions
         |> List.last
@@ -325,7 +326,7 @@ let elmDaemonTests =
           ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         // consume initial render signal
-        tracker.WaitForUpdate 500
+        tracker.WaitForUpdate (TestTimeouts.asMs TestTimeouts.patience)
 
         let result =
           ElmDaemon.dispatchAndWait
@@ -334,7 +335,7 @@ let elmDaemonTests =
             tracker.WaitForUpdate
             (SageFsMsg.Event (
               TuiEvent.EvalCompleted ("s", "sync-result", [])))
-            1000
+            (TestTimeouts.asMs TestTimeouts.patience)
 
         result.RecentOutput.GetBuffer("s")
         |> Seq.exists (fun line -> line.Text = "sync-result")

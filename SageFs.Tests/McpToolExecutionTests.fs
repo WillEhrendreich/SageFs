@@ -88,7 +88,10 @@ let tests =
 
       let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
       let toolTask = tools.hard_reset_fsi_session(true, "")
-      let! completed = Task.WhenAny(toolTask, Task.Delay TestTimeouts.promptReturn)
+      // The restart is gated on `allowRestartFinish`, which is opened only after the call has returned, so a call
+      // that waited for the restart could never return: the ceiling is the long event bound and costs nothing
+      // when the call returns at once.
+      let! completed = Task.WhenAny(toolTask, Task.Delay TestTimeouts.patience)
 
       obj.ReferenceEquals(completed, toolTask)
       |> Expect.isTrue "tool call should return immediately for rebuild hard reset"

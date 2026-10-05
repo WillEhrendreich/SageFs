@@ -248,7 +248,7 @@ let private killDaemon (proc: Process) =
   try
     if not proc.HasExited then
       proc.Kill(entireProcessTree = true)
-      proc.WaitForExit 5000 |> ignore
+      proc.WaitForExit TestTimeouts.patience |> ignore
   with _ -> ()
   proc.Dispose()
 
@@ -608,7 +608,7 @@ let tests =
               UseShellExecute = false)
           let pgrepProc = Process.Start pgrepPsi
           let! (leftovers: string) = pgrepProc.StandardOutput.ReadToEndAsync()
-          pgrepProc.WaitForExit 5000 |> ignore
+          pgrepProc.WaitForExit TestTimeouts.patience |> ignore
           pgrepProc.Dispose()
           leftovers.Trim()
           |> Expect.isEmpty "no process may still reference this test's isolated SAGEFS_DATA_DIR after teardown"

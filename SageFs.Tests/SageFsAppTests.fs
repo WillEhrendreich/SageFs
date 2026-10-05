@@ -2349,11 +2349,11 @@ let elmIntegrationTests = testList "ElmLoop integration" [
       OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
-    let! _ = rendered.WaitAsync(1000)
+    let! _ = rendered.WaitAsync TestTimeouts.patience
     lastRegions.Value |> Expect.hasLength "initial render should have 6 regions" 6
 
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar 'h'))
-    let! _ = rendered.WaitAsync(1000)
+    let! _ = rendered.WaitAsync TestTimeouts.patience
     lastModel.Value.Value.Editor.Buffer
     |> ValidatedBuffer.text
     |> Expect.equal "should have h" "h"
@@ -2364,10 +2364,10 @@ let elmIntegrationTests = testList "ElmLoop integration" [
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     dispatch (SageFsMsg.Event (TuiEvent.SessionCreated snap))
-    let! _ = rendered.WaitAsync(1000)
+    let! _ = rendered.WaitAsync TestTimeouts.patience
 
     dispatch (SageFsMsg.Event (TuiEvent.EvalCompleted ("aa000001", "val x = 42", [])))
-    let! _ = rendered.WaitAsync(1000)
+    let! _ = rendered.WaitAsync TestTimeouts.patience
     outputFor "aa000001" lastModel.Value.Value
     |> Expect.hasLength "should have output" 1
     let outputRegion = lastRegions.Value |> List.find (fun r -> r.Id = "output")
@@ -2377,38 +2377,38 @@ let elmIntegrationTests = testList "ElmLoop integration" [
 
   testTask "unchanged ListSessions polls stay silent but real session refreshes still render" {
     let rendered = new System.Threading.SemaphoreSlim(0)
-    let callbackCount = ref 0
+    // How many sessions each render showed, in the order the renders happened.
+    let sessionsPerRender = System.Collections.Concurrent.ConcurrentQueue<int>()
     let program : ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> = {
       Update = SageFsUpdate.update
       Render = SageFsRender.render
       ExecuteEffect = fun _ _ -> async { () }
-      OnModelChanged = fun _ _ ->
-        callbackCount.Value <- callbackCount.Value + 1
+      OnModelChanged = fun model _ ->
+        sessionsPerRender.Enqueue model.Sessions.Sessions.Length
         rendered.Release() |> ignore
       OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
-    let! _ = rendered.WaitAsync(1000)
-    let initialCallbackCount = callbackCount.Value
-
-    dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-    let! renderedAgain = rendered.WaitAsync(250)
-    renderedAgain
-    |> Expect.isFalse "an unchanged poll should not trigger another render"
-    callbackCount.Value
-    |> Expect.equal "callback count should stay the same after the no-op poll" initialCallbackCount
+    let! initialRender = rendered.WaitAsync TestTimeouts.patience
+    initialRender |> Expect.isTrue "the loop renders once when it starts"
 
     let snap : SessionSnapshot = {
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "" }
+    // An unchanged poll and then a real refresh. The loop handles messages in the order they were dispatched, so a
+    // render the poll caused would come before the refresh's, and would show no session. Nothing here waits for
+    // "nothing happened": the order does the proving, however slow the machine is.
+    dispatch (SageFsMsg.Editor EditorAction.ListSessions)
     dispatch (SageFsMsg.Event (TuiEvent.SessionsRefreshed [snap]))
-    let! refreshed = rendered.WaitAsync(1000)
+    let! refreshed = rendered.WaitAsync TestTimeouts.patience
     refreshed
     |> Expect.isTrue "a real session refresh should still render"
-    callbackCount.Value
-    |> Expect.equal "real session refresh should render exactly once" (initialCallbackCount + 1)
+    sessionsPerRender.ToArray()
+    |> Array.skip 1
+    |> Array.head
+    |> Expect.equal "the first render after the unchanged poll and the refresh already shows the refreshed session, so the poll rendered nothing" 1
   }
 
   testTask "effects are dispatched asynchronously" {
@@ -2436,7 +2436,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '1'))
     dispatch (SageFsMsg.Editor EditorAction.Submit)
-    let! received = SageFs.Tests.TestInfrastructure.awaitTcs 5000 resultReceived
+    let! received = SageFs.Tests.TestInfrastructure.awaitTcs (TestTimeouts.asMs TestTimeouts.patience) resultReceived
     effectExecuted |> Expect.isTrue "effect should have been executed"
     received |> Expect.isTrue "result should have been received"
   }

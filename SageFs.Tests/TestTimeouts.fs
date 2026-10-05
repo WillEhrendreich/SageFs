@@ -46,7 +46,11 @@ module TestTimeouts =
   /// reporting, a long poll answering) but goes through the thread pool and can be starved.
   let patienceInProcess = secs 10.
   /// Ceiling on in-process work with no real I/O (an Elm loop reaching a model, a host stopping).
-  let patienceBrief = secs 5.
+  /// It is the same 20 s as `patience`: a ceiling on an event costs a passing run nothing, and a
+  /// starved thread pool on a loaded machine (a load average past 40 happens here) stretches a
+  /// "few milliseconds" turn well past the 5 s this used to be. Never use it as the length of a
+  /// wait that is meant to elapse; that is what the settles below are for.
+  let patienceBrief = secs 20.
   /// Ceiling on a wait that is a few message hops and nothing else.
   let patienceTight = secs 2.
 
@@ -275,16 +279,19 @@ module TestTimeouts =
 
   /// The ceiling on a wait for something a loaded machine still does within a few
   /// seconds: a host starting or stopping, a child process dying, a call parking.
-  let shortPatience = System.TimeSpan.FromSeconds 10.
+  /// How long a page is watched for a claim that must NOT appear (a "daemon not running" banner on a page that
+  /// was only suspended). A negative watch, so it is the length of the window and not a ceiling: a loaded
+  /// machine only takes fewer looks inside it, which cannot make the watch fail.
+  let pageQuietWatch = System.TimeSpan.FromSeconds 5.
+
+  /// Twenty seconds for the same reason as `patience`: it is a ceiling, and a passing run never reaches it.
+  let shortPatience = System.TimeSpan.FromSeconds 20.
 
   /// The ceiling on an in-process event that normally lands in milliseconds (an outcome
   /// report, a timer firing, a callback, a file watcher callback, a status notification from a
-  /// background task). Five seconds absorbs a starved thread pool.
-  let briefPatience = System.TimeSpan.FromSeconds 5.
-
-  /// The ceiling on a cancellation or an expiry to take effect. It has to stay below the
-  /// read windows those tests prove were NOT waited out.
-  let cancelPatience = System.TimeSpan.FromSeconds 3.
+  /// background task). Twenty seconds absorbs a starved thread pool at a load average of 40; a
+  /// passing run never reaches it.
+  let briefPatience = System.TimeSpan.FromSeconds 20.
 
   /// The ceiling on a call documented to return at once, or a probe of a local endpoint
   /// that should answer at once, while the work it started carries on in the background.
@@ -341,9 +348,6 @@ module TestTimeouts =
   /// A real wall-clock gap so a timestamp taken after it is strictly later than one
   /// taken before it, not the same tick.
   let clockGap = System.TimeSpan.FromMilliseconds 30.
-
-  /// A moment for a server to start on a slow request before the test sends the next one.
-  let workStartSettle = System.TimeSpan.FromMilliseconds 200.
 
   /// How long a test watches for an answer that must NOT come yet (a caller parked on a session
   /// that is still rebuilding). The session manager answers a parked caller in the same step that
@@ -527,18 +531,16 @@ module TestTimeouts =
 
   // `patience` (20 s) is defined once, in the A to K section, and used here too.
 
-  /// How fast a tool call that must not wait on a background rebuild has to return. The call
-  /// does no real work, so this only fails when it blocks.
-  let promptReturn = System.TimeSpan.FromSeconds 1.
-
   /// How many of the owner monitor's own poll intervals a test waits for it to notice that
   /// the process it watches is gone. The monitor polls on `SageFs.OwnerMonitor.pollIntervalMs`
   /// (the worker's parent monitor uses the same value), so this follows the product's cadence.
   let monitorPollsAllowed = 5
 
-  /// Ceiling on a process monitor noticing a dead or recycled pid and cancelling.
+  /// Ceiling on a process monitor noticing a dead or recycled pid and cancelling: the poll intervals it
+  /// needs (`monitorPollsAllowed`) plus the long event bound, because on a loaded machine the monitor's
+  /// own timer turns come late. A passing run ends the wait when the monitor cancels and never reaches it.
   let monitorNotice =
-    System.TimeSpan.FromMilliseconds (float (SageFs.OwnerMonitor.pollIntervalMs * monitorPollsAllowed))
+    patience + System.TimeSpan.FromMilliseconds (float (SageFs.OwnerMonitor.pollIntervalMs * monitorPollsAllowed))
 
   /// How long a test lets an in-process subscriber callback fire, or lets the same callback
   /// show it does not fire a second time. There is no signal to wait on for "nothing happened".
@@ -698,9 +700,6 @@ module TestTimeouts =
   /// How long a slow, steady stream runs: a quarter past `streamWindowSteady`, so a window that was
   /// armed once and never re-armed would have expired inside it.
   let steadyStreamLasts = streamWindowSteady + streamWindowSteady / 4.
-  /// An eval that outlasts the worker's one-second status threshold by a wide margin, even on a
-  /// loaded runner.
-  let evalOutlastingStatusProbe = secs 3.
   /// A worker whose HTTP server is wedged: the proxy never answers within the test.
   let hungWorkerReply = secs 60.
   /// How long a stop of that hung worker may take before the case calls it a hang. Half the proxy's hang,
@@ -756,11 +755,13 @@ module TestTimeouts =
   // Process waits.
 
   /// A short-lived helper process the test ran to completion (git, a CLI call), or a process it
-  /// just killed, finishing and being gone. A cold runner takes seconds.
-  let childExit = secs 5.
+  /// just killed, finishing and being gone. A cold runner takes seconds and a machine at a load
+  /// average of 40 takes more, so this is the long event bound: the wait ends when the process
+  /// does, and a passing run never reaches it.
+  let childExit = secs 20.
   /// A helper or a killed process tree that takes real work to finish or tear down: a daemon with
   /// its workers, a hot reload app host, a git checkout.
-  let childExitSlow = secs 15.
+  let childExitSlow = secs 30.
   /// Let the async readers on a process's output drain after it exited, so the log is complete.
   let readerFlush = secs 1.
 

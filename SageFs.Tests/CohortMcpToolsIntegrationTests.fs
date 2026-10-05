@@ -112,7 +112,7 @@ let killDaemon (proc: Process) =
   try
     if not proc.HasExited then
       proc.Kill(entireProcessTree = true)
-      proc.WaitForExit 5000 |> ignore
+      proc.WaitForExit TestTimeouts.patience |> ignore
   with _ -> ()
   proc.Dispose()
 

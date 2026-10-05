@@ -360,12 +360,12 @@ let elmLoopTests = testList "ElmLoop" [
       OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program 0 System.Threading.CancellationToken.None).Dispatch
-    signal.Wait(1000) |> ignore; signal.Reset()
+    signal.Wait(TestTimeouts.patience) |> ignore; signal.Reset()
     dispatch 5
-    signal.Wait(1000) |> ignore; signal.Reset()
+    signal.Wait(TestTimeouts.patience) |> ignore; signal.Reset()
     rendered |> Expect.equal "should render 5" ["5"]
     dispatch 3
-    signal.Wait(1000) |> ignore; signal.Reset()
+    signal.Wait(TestTimeouts.patience) |> ignore; signal.Reset()
     rendered |> Expect.equal "should render 8" ["8"]
 ]
 
