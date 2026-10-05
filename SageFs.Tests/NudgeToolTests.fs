@@ -283,7 +283,7 @@ let sessionTests =
       let file = Path.Combine(dir, "Tuning.fs")
       use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker file true
       let ctx = contextFor dir (SessionLifecycleStatus.Ready { Pid = 42; Port = Some(Uri(server.BaseUrl).Port) }) true
-      match! McpNudge.ownedFilesOf ctx (Some dir) with
+      match! McpNudge.ownedFilesOf ctx None (Some dir) with
       | Ok owned ->
         owned.Paths |> Set.contains (Path.GetFullPath file) |> Expect.isTrue "the project file is owned"
         owned.Watched |> Set.contains (Path.GetFullPath file) |> Expect.isTrue "and watched"
@@ -301,12 +301,12 @@ let sessionTests =
         use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker file true
         let ctx = contextFor dir (SessionLifecycleStatus.Ready { Pid = 42; Port = Some(Uri(server.BaseUrl).Port) }) true
         let original = File.ReadAllBytes file
-        let! set = McpNudge.nudgeValueIn tweaks ctx dir (rawSet file gravity "9.8" "12.5")
+        let! set = McpNudge.nudgeValueIn tweaks ctx None dir (rawSet file gravity "9.8" "12.5")
         text (json set) "outcome" |> Expect.equal "written" "Written"
         File.ReadAllText file |> Expect.equal "only that literal changed on the real disk" (tuningSource.Replace("9.8", "12.5"))
         Directory.GetFiles(tweaks, "*.events", SearchOption.AllDirectories).Length |> Expect.equal "one journal, outside the repo's source" 1
         Directory.GetFiles(dir, "*.tmp").Length |> Expect.equal "no temp file left beside the source" 0
-        let! undone = McpNudge.nudgeValueIn tweaks ctx dir { Action = "undo"; File = file; Address = ""; Seen = ""; Literal = ""; Expression = "" }
+        let! undone = McpNudge.nudgeValueIn tweaks ctx None dir { Action = "undo"; File = file; Address = ""; Seen = ""; Literal = ""; Expression = "" }
         text (json undone) "outcome" |> Expect.equal "undone" "Undone"
         File.ReadAllBytes file |> Expect.equal "byte-identical to before the nudge" original
       finally
@@ -321,7 +321,7 @@ let sessionTests =
       try
         use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker file false
         let ctx = contextFor dir (SessionLifecycleStatus.Ready { Pid = 42; Port = Some(Uri(server.BaseUrl).Port) }) true
-        let! reply = McpNudge.nudgeValueIn (Path.Combine(dir, "tweaks")) ctx dir (rawSet file gravity "9.8" "12.5")
+        let! reply = McpNudge.nudgeValueIn (Path.Combine(dir, "tweaks")) ctx None dir (rawSet file gravity "9.8" "12.5")
         let parsed = json reply
         text parsed "outcome" |> Expect.equal "still written" "Written"
         field parsed "notes" |> strings |> Expect.contains "the note" (RunNote.token RunNote.FileNotWatched)
@@ -339,7 +339,7 @@ let sessionTests =
       try
         use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker file true
         let ctx = contextFor dir (SessionLifecycleStatus.Ready { Pid = 42; Port = Some(Uri(server.BaseUrl).Port) }) true
-        let! reply = McpNudge.nudgeValueIn (Path.Combine(dir, "tweaks")) ctx dir (rawSet stranger gravity "9.8" "12.5")
+        let! reply = McpNudge.nudgeValueIn (Path.Combine(dir, "tweaks")) ctx None dir (rawSet stranger gravity "9.8" "12.5")
         text (json reply) "refusal" |> Expect.equal "named" "NotOwned"
         File.ReadAllText stranger |> Expect.equal "untouched" tuningSource
       finally
@@ -348,13 +348,13 @@ let sessionTests =
 
     testTask "WHY - with no session the call is refused as such, with the routing advice, not as an error" {
       let ctx = contextFor "/tmp/none" SessionLifecycleStatus.Stopped false
-      let! reply = McpNudge.nudgeValueIn "/tmp/none/tweaks" ctx "/tmp/none" (rawSet "/tmp/none/Tuning.fs" gravity "9.8" "12.5")
+      let! reply = McpNudge.nudgeValueIn "/tmp/none/tweaks" ctx None "/tmp/none" (rawSet "/tmp/none/Tuning.fs" gravity "9.8" "12.5")
       text (json reply) "refusal" |> Expect.equal "no session" "NoSessionToAct"
     }
 
     testTask "WHY - a session with no worker to ask cannot say what it owns, so the call is refused rather than guessed" {
       let ctx = contextFor "/tmp/none" (SessionLifecycleStatus.Ready { Pid = 42; Port = None }) true
-      let! reply = McpNudge.nudgeValueIn "/tmp/none/tweaks" ctx "/tmp/none" (rawSet "/tmp/none/Tuning.fs" gravity "9.8" "12.5")
+      let! reply = McpNudge.nudgeValueIn "/tmp/none/tweaks" ctx None "/tmp/none" (rawSet "/tmp/none/Tuning.fs" gravity "9.8" "12.5")
       text (json reply) "refusal" |> Expect.equal "project files unknown" "ProjectFilesUnknown"
     }
 
@@ -367,7 +367,7 @@ let sessionTests =
         use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker file true
         let ctx = contextFor dir (SessionLifecycleStatus.Ready { Pid = 42; Port = Some(Uri(server.BaseUrl).Port) }) true
         let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
-        let! reply = tools.nudge_value("wiggle", file, "", "", "", "", dir)
+        let! reply = tools.nudge_value("wiggle", file, "", "", "", "", dir, "")
         text (json reply) "refusal" |> Expect.equal "the unknown action is named" "UnknownAction"
         File.ReadAllText file |> Expect.equal "nothing written" tuningSource
       finally
@@ -443,4 +443,101 @@ let describedTests =
     testCase "WHY - the file parameter does not claim the file must be watched, because an unwatched project file is accepted" <| fun _ ->
       let file = nudgeMethod.GetParameters() |> Array.find (fun p -> p.Name = "file")
       (descriptionOf file).Contains "watches" |> Expect.isFalse "no claim that the file must be one hot reload watches"
+
+// ── two sessions in one directory ──
+
+let infoFor (sid: SessionId) (workingDirectory: string) (port: int) : SessionInfo =
+  { Id = sid
+    Name = None
+    Projects = [ "Tuning.fsproj" ]
+    WorkingDirectory = workingDirectory
+    SolutionRoot = None
+    CreatedAt = DateTime.UtcNow
+    LastActivity = DateTime.UtcNow
+    Status = SessionLifecycleStatus.Ready { Pid = 42; Port = Some port }
+    Workflow = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
+    ActiveProject = None
+    ProjectRoles = []
+    App = AppRun.AppRunState.NotRunning
+    Rebuild = LastRebuild.NeverRebuilt
+    Reload = SessionReload.NoReloadYet
+    Freshness = SageFs.ReplFreshness.InSync }
+
+/// A context whose registry serves exactly `infos`, optionally seen through a member token bound to `bound`.
+let contextOver (infos: SessionInfo list) (bound: SessionId option) : McpContext =
+  let single = contextFor "/unused" SessionLifecycleStatus.Stopped false
+  let ops =
+    { SessionManagementOps.stub with
+        GetSessionInfo = fun sid -> Task.FromResult(infos |> List.tryFind (fun i -> i.Id = sid))
+        GetAllSessions = fun () -> Task.FromResult infos
+        GetProxy = fun sid -> Task.FromResult(if infos |> List.exists (fun i -> i.Id = sid) then Some(fun _ -> async { return WorkerResponse.WorkerShuttingDown }) else None) }
+  let seen =
+    match bound with
+    | Some sid -> RouteGate.confine (fun () -> Capability.RouteBinding.BoundToSession(SessionId.value sid)) (fun _ _ -> true) ops
+    | None -> ops
+  { single with SessionOps = seen; SessionMap = Collections.Concurrent.ConcurrentDictionary<string, string>() }
+
+[<Tests>]
+let sessionIdTests =
+  testList "nudge_value and a session named by id" [
+    testTask "WHY - two sessions in one directory cannot be told apart by the directory, so the call is refused and nothing is written" {
+      let dir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-nudgetool-%s" (Guid.NewGuid().ToString("N")))
+      Directory.CreateDirectory dir |> ignore
+      let file = Path.Combine(dir, "Tuning.fs")
+      File.WriteAllText(file, tuningSource)
+      try
+        use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker file true
+        let port = Uri(server.BaseUrl).Port
+        let ctx = contextOver [ infoFor (SessionId.newId ()) dir port; infoFor (SessionId.newId ()) dir port ] None
+        let! reply = McpNudge.nudgeValueIn (Path.Combine(dir, "tweaks")) ctx None dir (rawSet file gravity "9.8" "12.5")
+        text (json reply) "refusal" |> Expect.equal "ambiguous directory" "NoSessionToAct"
+        File.ReadAllText file |> Expect.equal "untouched" tuningSource
+      finally
+        (try Directory.Delete(dir, true) with _ -> ())
+    }
+
+    testTask "WHY - the session id picks one of two sessions in the same directory, and the files that session owns are the files it may touch" {
+      let dir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-nudgetool-%s" (Guid.NewGuid().ToString("N")))
+      Directory.CreateDirectory dir |> ignore
+      let first = Path.Combine(dir, "First.fs")
+      let second = Path.Combine(dir, "Second.fs")
+      File.WriteAllText(first, tuningSource)
+      File.WriteAllText(second, tuningSource)
+      try
+        use! (serverOne: WorkerHttpTransport.HttpWorkerServer) = startWorker first true
+        use! (serverTwo: WorkerHttpTransport.HttpWorkerServer) = startWorker second true
+        let one = SessionId.newId ()
+        let two = SessionId.newId ()
+        let ctx = contextOver [ infoFor one dir (Uri(serverOne.BaseUrl).Port); infoFor two dir (Uri(serverTwo.BaseUrl).Port) ] None
+        let tweaks = Path.Combine(dir, "tweaks")
+        let! onSecond = McpNudge.nudgeValueIn tweaks ctx (Some(SessionId.value two)) dir (rawSet second gravity "9.8" "12.5")
+        text (json onSecond) "outcome" |> Expect.equal "written through the session that owns the file" "Written"
+        let! onWrong = McpNudge.nudgeValueIn tweaks ctx (Some(SessionId.value two)) dir (rawSet first gravity "9.8" "12.5")
+        text (json onWrong) "refusal" |> Expect.equal "the other session's file is not this session's" "NotOwned"
+        File.ReadAllText first |> Expect.equal "the other session's file is untouched" tuningSource
+      finally
+        (try Directory.Delete(dir, true) with _ -> ())
+    }
+
+    testTask "WHY - a member token bound to one session cannot reach another session's files by naming its id" {
+      let dir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-nudgetool-%s" (Guid.NewGuid().ToString("N")))
+      Directory.CreateDirectory dir |> ignore
+      let file = Path.Combine(dir, "Tuning.fs")
+      File.WriteAllText(file, tuningSource)
+      try
+        use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker file true
+        let port = Uri(server.BaseUrl).Port
+        let mine = SessionId.newId ()
+        let theirs = SessionId.newId ()
+        let ctx = contextOver [ infoFor mine dir port; infoFor theirs dir port ] (Some mine)
+        let! reply = McpNudge.nudgeValueIn (Path.Combine(dir, "tweaks")) ctx (Some(SessionId.value theirs)) dir (rawSet file gravity "9.8" "12.5")
+        text (json reply) "outcome" |> Expect.equal "refused" "Refused"
+        File.ReadAllText file |> Expect.equal "untouched" tuningSource
+      finally
+        (try Directory.Delete(dir, true) with _ -> ())
+    }
+
+    testCase "WHY - the registered tool takes a session_id like the other session tools, so a client has a way to name the session" <| fun _ ->
+      nudgeMethod.GetParameters() |> Array.map (fun p -> p.Name) |> Array.contains "session_id" |> Expect.isTrue "session_id is a parameter"
+  ]
   ]
