@@ -6,10 +6,10 @@
 /// empty pane that simply has no output.
 ///
 /// WHY THE LINES ARE SERVER-SIDE. The decision is a pure function of the buffer and the pane's settings, so
-/// the server renders what it says and the SSE morph carries it. The pane's own follow/pause/search/filter
-/// controls are not drawn yet — they change the settings the decision reads, which needs a route and a
-/// signal, and that is the next piece. Until then the pane runs at its defaults (following, showing, both
-/// streams, no search), which is what `AppOutputPane.create` gives it.
+/// the server renders what it says and the SSE morph carries it. The follow/pause/search/filter controls are
+/// POSTs rather than client signals for the same reason: a signal would change what the browser shows while
+/// the server went on rendering something else, and the two would disagree at the first morph. The control
+/// writes the setting and a state change re-renders, so there is one answer to "what does the pane show".
 ///
 /// WHY NO PIN BUTTON. The pin only matters for a pane collapsed because the app has not written yet, and an
 /// empty pane has nothing to show. `CollapsedBecause` still reports the offer and `DockPanes` still decides
@@ -17,6 +17,7 @@
 module SageFs.Server.AppOutputView
 
 open Falco.Markup
+open Falco.Datastar
 open SageFs
 open SageFs.Server.DashboardFragments
 open SageFs.Server.DockPanes
@@ -30,6 +31,10 @@ module AppOutputIds =
   let [<Literal>] Lines = "app-output-lines"
   let [<Literal>] EmptyState = "app-output-empty"
   let [<Literal>] NoMatch = "app-output-nomatch"
+  let [<Literal>] Follow = "app-output-follow"
+  let [<Literal>] Pause = "app-output-pause"
+  let [<Literal>] Search = "app-output-search"
+  let [<Literal>] Stream = "app-output-stream"
 
 /// One line of app output. The class comes from `AppOutputLine.cssClass`, so the name a line is coloured by
 /// is decided in one place and the CSS cannot drift from the decision about which stream it came from.
@@ -49,6 +54,53 @@ let renderCollapsedBar (why: CollapsedBecause) : XmlNode =
     Elem.span [ Attr.class' "live-dock-reason" ] [ textEnc (CollapsedBecause.text why) ]
   ]
 
+/// The four controls the roadmap asks for: follow, pause, search and the stream filter.
+///
+/// Each POSTs the value it is moving TO rather than toggling blind, so the request says what it wants and
+/// the render says what happened. The pressed state comes from the server's pane, so a control can never
+/// show itself on while the decision still thinks it is off.
+let private controls (pane: AppOutputPane) : XmlNode list =
+  let following = AppOutputPane.following pane
+  let paused = AppOutputPane.paused pane
+  let filter = pane.StreamFilter
+
+  let toggle (id: string) (testId: string) (label: string) (onLabel: string) (offLabel: string) (isOn: bool) (target: string) =
+    Elem.button [
+      Attr.id id
+      Attr.class' ("session-btn" + (if isOn then " session-btn-on" else ""))
+      Attr.type' "button"
+      Attr.create "aria-label" label
+      Attr.create "aria-pressed" (if isOn then "true" else "false")
+      testid testId
+      Ds.onEvent ("click", sprintf "@post('/dashboard/app-output/%s', {value: '%b'})" target (not isOn))
+    ] [ textEnc (if isOn then onLabel else offLabel) ]
+
+  let streamChoice (value: string) (label: string) (wanted: OutputStreamFilter) =
+    Elem.button [
+      Attr.class' ("session-btn" + (if filter = wanted then " session-btn-on" else ""))
+      Attr.type' "button"
+      Attr.create "aria-label" (sprintf "Show %s" label)
+      testid (sprintf "app-output-stream-%s" value)
+      Ds.onEvent ("click", sprintf "@post('/dashboard/app-output/stream', {value: '%s'})" value)
+    ] [ textEnc label ]
+
+  [
+    toggle AppOutputIds.Follow "app-output-follow" "Follow new output, or hold the view still" "following" "held still" following "follow"
+    toggle AppOutputIds.Pause "app-output-pause" "Pause the pane, or show what it is holding" "paused" "showing" paused "pause"
+    Elem.input [
+      Attr.id AppOutputIds.Search
+      Attr.class' "live-filter"
+      Attr.type' "text"
+      Attr.create "placeholder" "filter lines"
+      Attr.create "value" pane.Search
+      testid "app-output-search"
+      Ds.onEvent ("input", "@post('/dashboard/app-output/search', {value: event.target.value})")
+    ]
+    streamChoice "both" "all" BothStreams
+    streamChoice "errors" "errors" ErrorsOnly
+    streamChoice "output" "output" OutputOnly
+  ]
+
 /// The pane when it has something to show: what opened it, what the pane says about itself, and the lines
 /// the decision said are visible.
 let renderBody (pane: AppOutputPane) (because: OpenBecause) : XmlNode =
@@ -57,6 +109,7 @@ let renderBody (pane: AppOutputPane) (because: OpenBecause) : XmlNode =
       Elem.span [ Attr.class' "live-pane-title" ] [ textEnc "App output" ]
       Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
       Elem.span [ Attr.class' "live-pane-stamp" ] [ textEnc (AppOutputPane.header pane) ]
+      yield! controls pane
     ]
     // A search that matched nothing says so. Without this it is indistinguishable from an app that
     // printed nothing, which is a different fact and has a different fix.

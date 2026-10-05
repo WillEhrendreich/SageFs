@@ -2802,6 +2802,44 @@ let createLiveTestingToggleHandler
     Response.sseStartResponse ctx |> ignore
   }
 
+/// One control on the app-output pane: follow, pause, search or the stream filter.
+///
+/// WHY A POST AND NOT A CLIENT SIGNAL. `AppOutputPane.visible` is the decision and the renderer draws it,
+/// so the setting has to reach the buffer the decision reads. A signal would change what the browser shows
+/// while the server went on rendering something else, and the two would disagree the moment the SSE morph
+/// arrived. So the control writes the setting, then triggers a state change: the next render is the one
+/// that shows it, from one source.
+///
+/// The session comes from `Signals.ViewingSessionId`, read exactly as `set-theme` reads it, so a control
+/// always acts on the session this tab is looking at and never on a daemon global. With no viewing session
+/// there is nothing to act on, and the request is refused rather than silently doing nothing.
+let createAppOutputControlHandler
+  (q: DashboardQueries)
+  (triggerStateChange: unit -> unit)
+  (apply: string -> SageFs.Server.AppOutputPane.AppOutputPane -> SageFs.Server.AppOutputPane.AppOutputPane)
+  : HttpHandler =
+  fun ctx -> task {
+    use! doc = readSignalsJsonSized ctx
+    let viewingId =
+      match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
+      | true, prop -> prop.GetString()
+      | _ -> ""
+
+    let value =
+      match ctx.Request.Query.ContainsKey "value" with
+      | true -> ctx.Request.Query.["value"].ToString()
+      | false -> ""
+
+    match String.IsNullOrEmpty viewingId, WorkerProtocol.SessionId.validate viewingId with
+    | true, _ -> ctx.Response.StatusCode <- 400
+    | false, Error _ -> ctx.Response.StatusCode <- 400
+    | false, Ok sid ->
+      q.SetAppOutput sid (apply value)
+      triggerStateChange ()
+
+    Response.sseStartResponse ctx |> ignore
+  }
+
 /// Phase 2 item 16 of sagefs-multiagent-vision.md (§6.5 "the inspector") —
 /// `GET /dashboard/inspect/<kind>/<id>`. A standalone request/response page
 /// (never a fragment on the dashboard's SSE stream, see `CohortInspector`'s
@@ -3167,6 +3205,25 @@ let createEndpoints
     yield post "/dashboard/cohort/scrub" (createCohortScrubHandler infra)
     yield post "/dashboard/live-testing/enable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.EnableLiveTesting)
     yield post "/dashboard/live-testing/disable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.DisableLiveTesting)
+    // The app-output pane's four controls. Each writes one setting and lets the state change re-render,
+    // so what is on screen is always the decision over the real buffer and never the browser's idea of it.
+    yield post "/dashboard/app-output/follow"
+      (createAppOutputControlHandler q infra.TriggerStateChange (fun v pane ->
+        SageFs.Server.AppOutputPane.AppOutputPane.setFollowing (v = "true") pane))
+    yield post "/dashboard/app-output/pause"
+      (createAppOutputControlHandler q infra.TriggerStateChange (fun v pane ->
+        SageFs.Server.AppOutputPane.AppOutputPane.setPaused (v = "true") pane))
+    yield post "/dashboard/app-output/search"
+      (createAppOutputControlHandler q infra.TriggerStateChange (fun v pane ->
+        SageFs.Server.AppOutputPane.AppOutputPane.setSearch v pane))
+    yield post "/dashboard/app-output/stream"
+      (createAppOutputControlHandler q infra.TriggerStateChange (fun v pane ->
+        let filter =
+          match v with
+          | "errors" -> SageFs.Server.AppOutputPane.ErrorsOnly
+          | "output" -> SageFs.Server.AppOutputPane.OutputOnly
+          | _ -> SageFs.Server.AppOutputPane.BothStreams
+        SageFs.Server.AppOutputPane.AppOutputPane.setStreamFilter filter pane))
     yield post "/dashboard/session/create" (createCreateSessionHandler q infra (DashboardActions.createInteractive a) a.SwitchSession)
     yield! DashboardNewSession.routes q infra a
     yield post "/dashboard/config/disable-auto-open" (createToggleWarmupAutoOpenHandler a false)

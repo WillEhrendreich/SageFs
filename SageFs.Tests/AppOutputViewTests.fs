@@ -79,4 +79,32 @@ let appOutputViewTests =
       (openHtml <> closedHtml) |> Expect.isTrue "open and collapsed are not the same drawing"
       openHtml |> Expect.stringContains "open draws the body" "app-output-lines"
       closedHtml |> Expect.stringContains "collapsed draws the bar" "app-output-bar"
+
+    // ── the controls, and why they are POSTs ──────────────────────────────────────────────────────
+
+    testCase "WHY — each control posts the setting it changes, because the decision reads the server's buffer and a client-only toggle would disagree with it at the first morph" <| fun _ ->
+      let html = draw paneWithBothLines (HasAppOutput 2) SessionInView
+      html |> Expect.stringContains "follow" "/dashboard/app-output/follow"
+      html |> Expect.stringContains "pause" "/dashboard/app-output/pause"
+      html |> Expect.stringContains "search" "/dashboard/app-output/search"
+      html |> Expect.stringContains "stream" "/dashboard/app-output/stream"
+
+    testCase "WHY — nothing is hand-written: every interaction is a Datastar attribute, the same rule the rest of the dock is held to" <| fun _ ->
+      let html = draw paneWithBothLines (HasAppOutput 2) SessionInView
+      html.Contains " onclick=" |> Expect.isFalse "no raw onclick"
+      html.Contains " oninput=" |> Expect.isFalse "no raw oninput"
+
+    testCase "WHY — a control shows the state the SERVER holds, so it can never look on while the decision has it off" <| fun _ ->
+      let paused = { paneWithBothLines with Paused = Held }
+      let html = draw paused (HasAppOutput 2) SessionInView
+      html |> Expect.stringContains "the pause control says it is paused" "paused"
+      html |> Expect.stringContains "and reports it to assistive tech" "aria-pressed=\"true\""
+      // The pane is held, so its own header says how much it is holding — not "2 lines" as if showing.
+      html |> Expect.stringContains "and the header agrees" "while paused"
+
+    testCase "every control has an id of its own, so the morph matches it by id and never by position" <| fun _ ->
+      let html = draw paneWithBothLines (HasAppOutput 2) SessionInView
+      html |> Expect.stringContains "follow" "id=\"app-output-follow\""
+      html |> Expect.stringContains "pause" "id=\"app-output-pause\""
+      html |> Expect.stringContains "search" "id=\"app-output-search\""
   ]

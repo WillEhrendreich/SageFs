@@ -4210,6 +4210,17 @@ let run
     GetLiveBindings = fun sessionId ->
       SageFs.Features.LiveBindingsPane.viewOf liveBindingsHub (WorkerProtocol.SessionId.value sessionId)
     GetAppOutput = fun sessionId -> appOutputFor (WorkerProtocol.SessionId.value sessionId)
+    SetAppOutput = fun sessionId change ->
+      lock appOutputGate (fun () ->
+        let sidStr = WorkerProtocol.SessionId.value sessionId
+        match appOutputPanes.TryGetValue sidStr with
+        | true, pane -> appOutputPanes.[sidStr] <- change pane
+        | false, _ ->
+          // Applied to a fresh pane too: pausing or filtering a buffer nothing has arrived in yet is a
+          // real choice, and dropping it because the buffer is empty would mean the control appears to
+          // do nothing until the app happens to print. Only the write happens here — who re-renders is
+          // the caller's, which triggers a state change.
+          appOutputPanes.[sidStr] <- change SageFs.Server.AppOutputPane.AppOutputPane.create)
     GetTweakView = fun sessionId workingDirectory files snapshot reload ->
       SageFs.Server.LiveBindingsTweakService.Service.viewForFiles
         tweakService (WorkerProtocol.SessionId.value sessionId) workingDirectory files snapshot reload
