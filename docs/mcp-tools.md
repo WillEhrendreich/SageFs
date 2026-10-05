@@ -444,7 +444,7 @@ explores every command against every landing and target, with a twin for each ru
   the list of members who are. A member acting under a token can't take the seat, because no token may call
   the conductor's tools and the seat would be stuck with them.
 - **Where it shows.** `get_cohort_status` prints a veto as `Blocked(vetoed by <member>: "<reason>")` plus the
-  two ways out.
+  two ways out, and the dashboard's cohort panel lists each landing the same way.
 
 A Verifier token may `veto_landing` (that's the role that reads the tests). Observer and Analysis tokens may
 not. `delegate_conductor` and `resolve_veto` are conductor-only and in no token role, like `reassign_claim`.

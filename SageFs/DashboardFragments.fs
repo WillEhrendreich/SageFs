@@ -2972,6 +2972,20 @@ let private cohortClaimStateLabel (state: SageFs.Cohort.ClaimState<MemberTable.M
   | SageFs.Cohort.ClaimState.Released(by, at) ->
     sprintf "released by %s at %s" (MemberTable.MemberId.display by) (at.ToLocalTime().ToString("HH:mm:ss"))
 
+/// One landing's state for the panel: short, and a veto names who vetoed and why, because that is the
+/// state the conductor has to act on (`resolve_veto`).
+let private cohortLandingStateLabel (state: SageFs.Cohort.LandingState<MemberTable.MemberId>) : string =
+  match state with
+  | SageFs.Cohort.LandingState.Queued -> "queued"
+  | SageFs.Cohort.LandingState.Rebasing _ -> "rebasing"
+  | SageFs.Cohort.LandingState.Verifying _ -> "verifying"
+  | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.VetoedBy(by, reason), _) ->
+    sprintf "vetoed by %s: %s — awaiting the conductor" (MemberTable.MemberId.display by) reason
+  // default policy: every other blocker is "blocked" here; the reason lives in get_cohort_status.
+  | SageFs.Cohort.LandingState.Blocked _ -> "blocked"
+  | SageFs.Cohort.LandingState.Landed _ -> "landed"
+  | SageFs.Cohort.LandingState.Withdrawn -> "withdrawn"
+
 /// Pure render of one cohort frame. `frame`'s arrays are index-aligned
 /// (`CohortFrame` doc, Cohort.fs) — every lookup here is a plain array index,
 /// never a `Map` walk.
@@ -3076,6 +3090,36 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
             | _ ->
               Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
                 textEnc (Features.CohortBoundedView.claimOverflowLabel claimView)
+              ]
+          ]
+        // Landings: a vetoed one says who vetoed it and why. Bounded like the other lists, with the total in the header.
+        match frame.LandingIds.Length with
+        | 0 -> ()
+        | landingCount ->
+          let landingView = Features.CohortBoundedView.landings Features.CohortBoundedView.rowCap frame
+          Elem.div [] [
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+              textEnc (sprintf "Landings (%d)" landingCount)
+            ]
+            Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
+              for i in landingView.Shown do
+                let (SageFs.Cohort.LandingId landingId) = frame.LandingIds.[i]
+                let requester =
+                  match frame.LandingRequesterIndex.[i] >= 0 && frame.LandingRequesterIndex.[i] < frame.MemberIds.Length with
+                  | true -> MemberTable.MemberId.display frame.MemberIds.[frame.LandingRequesterIndex.[i]]
+                  | false -> "(unknown member)"
+                Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [
+                  Elem.div [] [ textEnc landingId ]
+                  Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+                    textEnc (sprintf "%s · %s" requester (cohortLandingStateLabel frame.LandingState.[i]))
+                  ]
+                ]
+            ]
+            match landingView.HiddenTotal with
+            | 0 -> ()
+            | _ ->
+              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+                textEnc (Features.CohortBoundedView.landingOverflowLabel landingView)
               ]
           ]
         renderCohortMatrix frame
