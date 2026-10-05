@@ -161,7 +161,7 @@ module SourceIndex =
     |> List.filter (fun key -> not (Set.contains key wholeKeys))
     |> List.map (fun (modulePath, name) -> { ModulePath = modulePath; BindingName = name; Path = [] })
 
-  let private unreadableReason (index: SourceIndex) : string =
+  let unreadableReason (index: SourceIndex) : string =
     index.Unreadable |> List.map (fun (file, why) -> sprintf "%s: %s" file why) |> String.concat "; "
 
   /// Every place a name is declared, by file and module. A name declared twice in one script shows as two owners, told apart by where they sit.
@@ -298,7 +298,7 @@ module PersistenceState =
     | PersistenceState.Writing _ -> "Writing"
 
   /// A stale outcome stops applying when the file is back to the text the row was showing.
-  let private staleStillApplies (source: SourceFacts) (attempted: SourceRef) : bool =
+  let staleStillApplies (source: SourceFacts) (attempted: SourceRef) : bool =
     match source with
     | SourceFacts.OneSource now -> now.Hash <> attempted.Hash
     | SourceFacts.NoFileBindsIt
@@ -306,7 +306,7 @@ module PersistenceState =
     | SourceFacts.ManySources _
     | SourceFacts.PartNotSpelled _ -> true
 
-  let private ofRefusal (refusal: NudgeRefusal) (attempted: SourceRef) : PersistenceState =
+  let ofRefusal (refusal: NudgeRefusal) (attempted: SourceRef) : PersistenceState =
     match refusal with
     | NudgeRefusal.SourceMoved(_, actual, currentText) ->
       PersistenceState.StaleAddress { Seen = attempted; Now = StaleNow.Edited(currentText, actual) }
@@ -315,7 +315,7 @@ module PersistenceState =
       PersistenceState.StaleAddress { Seen = attempted; Now = StaleNow.Gone(NudgeRefusal.describeResolve why) }
     | other -> PersistenceState.Refused(other, attempted)
 
-  let private ofSource (live: LiveShape) (source: SourceFacts) : PersistenceState =
+  let ofSource (live: LiveShape) (source: SourceFacts) : PersistenceState =
     match source with
     | SourceFacts.NoFileBindsIt -> PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt
     | SourceFacts.FilesUnknown reason -> PersistenceState.NotInAFile(NotInFileWhy.OwnedFilesUnknown reason)
@@ -358,7 +358,7 @@ type Step =
   | Fraction of decimals: int
 
 module Step =
-  let private afterPoint = Regex(@"^-?[0-9_]*\.([0-9_]*)", RegexOptions.Compiled)
+  let afterPoint = Regex(@"^-?[0-9_]*\.([0-9_]*)", RegexOptions.Compiled)
 
   /// The decimals a real literal spells (`1.0` is 1, `0.12` is 2, `5.` and `1e3` are 0, an underscore is not a digit).
   let decimalsOf (text: string) : int =

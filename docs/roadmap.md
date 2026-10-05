@@ -28,8 +28,8 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Editors
 
-- **Debug a failing test from Neovim.** The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim plugin has to wire nvim-dap to those routes, and that work lives in the sagefs.nvim repo. ([LIVE_TESTING_GUIDE.md](LIVE_TESTING_GUIDE.md))
-- **The Neovim plugin catches up with the daemon.** The plugin shows hot reload's pending and never-entered states, the live-values pane with its Safe mode click, workflow switching and the session's own app state, and it names the session on every session-scoped call. Still to wire: `nudge_value`, the slow-eval heartbeat events and nvim-dap. ([sse-events.md](sse-events.md), [mcp-tools.md](mcp-tools.md))
+- **Debug a failing test from Neovim.** The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim side is done too, in the sagefs.nvim repo: `:SageFsDebugTest` puts a failing test on the board and wires nvim-dap to those routes, on `<leader>rtg` and `D` on a panel row. The release goes out on `configurationDone`, when the adapter has really attached, so a slow attach is the daemon's to wait out rather than a grace period on this side. Still open is a full attach inside our own tests. ([LIVE_TESTING_GUIDE.md](LIVE_TESTING_GUIDE.md))
+- **The Neovim plugin catches up with the daemon.** The plugin shows hot reload's pending and never-entered states, the live-values pane with its Safe mode click, workflow switching and the session's own app state, and it names the session on every session-scoped call. It reads a tool's answer as its first text block, finds a nudged value by the range the daemon reports, sends the session's id with every nudge, shows a vetoed landing with who vetoed it and why, and lists the files a re-sign left on the old method with how sure each match is. Still to wire: the slow-eval heartbeat events. ([sse-events.md](sse-events.md), [mcp-tools.md](mcp-tools.md))
 
 ### Dashboard
 

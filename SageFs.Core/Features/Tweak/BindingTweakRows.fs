@@ -91,7 +91,7 @@ module Memory =
   let forgetRow (key: RowKey) (memory: Memory) : Memory = { memory with Outcomes = Map.remove key memory.Outcomes }
 
 module Rows =
-  let private watchingOf (index: SourceIndex) (place: PlaceOf) : WatchStatus =
+  let watchingOf (index: SourceIndex) (place: PlaceOf) : WatchStatus =
     match place with
     | PlaceOf.NotPlaced -> WatchStatus.NotWatched
     | PlaceOf.Placed source ->
@@ -99,14 +99,14 @@ module Rows =
       | file :: _ -> file.Watching
       | [] -> WatchStatus.NotWatched
 
-  let private reloadOf (memory: Memory) (current: SessionReload) (now: int64) (patience: TimeSpan) (key: RowKey) : RowReload =
+  let reloadOf (memory: Memory) (current: SessionReload) (now: int64) (patience: TimeSpan) (key: RowKey) : RowReload =
     match Map.tryFind key memory.Writes with
     | None -> RowReload.NoWriteYet
     | Some write ->
       let waited = TimeSpan.FromTicks(max 0L (now - write.At))
       RowReload.Watching(write.File, ReloadWatch.ofSession write.Baseline current waited patience)
 
-  let private viewOf
+  let viewOf
     (index: SourceIndex)
     (memory: Memory)
     (current: SessionReload)

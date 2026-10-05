@@ -50,9 +50,9 @@ module TweakSignals =
       Ds.signal (Verb, "")
       Ds.signal (Value, "") ]
 
-  let private hexOf (text: string) : string = Convert.ToHexStringLower(Text.Encoding.UTF8.GetBytes text)
+  let hexOf (text: string) : string = Convert.ToHexStringLower(Text.Encoding.UTF8.GetBytes text)
 
-  let private named (prefix: string) (key: RowKey) : string = sprintf "%s_%s" prefix (hexOf (RowKey.text key))
+  let named (prefix: string) (key: RowKey) : string = sprintf "%s_%s" prefix (hexOf (RowKey.text key))
 
   let stepsOf (key: RowKey) : string = named "twSteps" key
   let fieldOf (key: RowKey) : string = named "twField" key
@@ -186,7 +186,7 @@ type ReloadLine =
   | Line of text: string * Tone * more: string
 
 /// What a reload verdict means for the one value that was written, in a few words.
-let private reloadMeaning (case: ReloadCase) : string * Tone =
+let reloadMeaning (case: ReloadCase) : string * Tone =
   match case with
   | ReloadCase.Patched -> "the app is running the new code", Tone.Good
   | ReloadCase.PatchPending -> "applied, and the new code has not run yet", Tone.Notice
@@ -249,10 +249,10 @@ type Placement =
   /// Inside a `<summary>`: a click there toggles the details, so the state is said and nothing is offered.
   | InsideSummary
 
-let private invariant (value: float) : string = value.ToString("R", CultureInfo.InvariantCulture)
+let invariant (value: float) : string = value.ToString("R", CultureInfo.InvariantCulture)
 
 /// The script that stages a row's request in the page's signals and posts it. `valueJs` is a JS expression for the value.
-let private stagePostJs (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
+let stagePostJs (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
   sprintf
     "$%s = %s; $%s = %s; $%s = %s; $%s = %s; $%s = %s; $%s = %s; $%s = %s; %s"
     TweakSignals.Row (jsText (RowKey.text key))
@@ -265,16 +265,16 @@ let private stagePostJs (key: RowKey) (place: SourceRef) (verb: string) (valueJs
     (Ds.post TweakSignals.Endpoint)
 
 /// The same, as an attribute value: the script is escaped once, here.
-let private stageAndPost (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
+let stageAndPost (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
   attrEnc (stagePostJs key place verb valueJs)
 
 /// One write per settle: the handler runs once, a moment after the last change event, not on every one. Datastar's own modifier
 /// (`data-on:change__debounce.300ms`), written by the typed helper. The pause is the one the as-you-type typecheck waits after
 /// the last keystroke (`Timeouts.liveTestFcsDebounce`): short enough to feel direct, long enough that five quick presses are one write.
-let private settled : OnEventModifier list =
+let settled : OnEventModifier list =
   [ OnEventModifier.Debounce { TimeSpan = Timeouts.liveTestFcsDebounce; Leading = false; NoTrailing = false } ]
 
-let private stepButton (key: RowKey) (glyph: string) (label: string) (testName: string) (delta: int) : XmlNode =
+let stepButton (key: RowKey) (glyph: string) (label: string) (testName: string) (delta: int) : XmlNode =
   Elem.button
     [ Attr.class' "session-btn live-step"
       Attr.type' "button"
@@ -294,7 +294,7 @@ let private stepButton (key: RowKey) (glyph: string) (label: string) (testName: 
 
 /// A number: a drag handle that counts steps from where the row stands, the two step buttons, and a readout that shows where the
 /// count would land. The arrow keys are the range input's own. One write per settle.
-let private stepper (key: RowKey) (place: SourceRef) (current: string) (landing: string) (label: string) : XmlNode =
+let stepper (key: RowKey) (place: SourceRef) (current: string) (landing: string) (label: string) : XmlNode =
   let steps = TweakSignals.stepsOf key
   Elem.span
     [ Attr.class' "live-knob"
@@ -324,7 +324,7 @@ let private stepper (key: RowKey) (place: SourceRef) (current: string) (landing:
         [ textEnc current ]
       stepButton key "+" (sprintf "Step %s up" label) "tweak-step-up" 1 ]
 
-let private toggle (key: RowKey) (place: SourceRef) (value: bool) (label: string) : XmlNode =
+let toggle (key: RowKey) (place: SourceRef) (value: bool) (label: string) : XmlNode =
   Elem.input
     ([ Attr.id (TweakSignals.sliderId key)
        Attr.class' "live-toggle"
@@ -341,7 +341,7 @@ let private toggle (key: RowKey) (place: SourceRef) (value: bool) (label: string
 
 /// A field for a string, a character, a union case or an expression. Enter applies, Escape puts back what the file holds, and a hint
 /// shows while what is typed differs from it.
-let private field (key: RowKey) (place: SourceRef) (value: string) (verb: string) (testName: string) (label: string) : XmlNode =
+let field (key: RowKey) (place: SourceRef) (value: string) (verb: string) (testName: string) (label: string) : XmlNode =
   let signal = TweakSignals.fieldOf key
   let hint = sprintf "%s-hint" (TweakSignals.sliderId key)
   Elem.span [ Attr.class' "live-knob live-field-wrap" ] [
@@ -375,7 +375,7 @@ let private field (key: RowKey) (place: SourceRef) (value: string) (verb: string
       [ Text.raw "Enter to apply, Escape to cancel" ]
   ]
 
-let private historyButton (key: RowKey) (place: SourceRef) (glyph: string) (verb: string) (testName: string) (step: HistoryStep) : XmlNode =
+let historyButton (key: RowKey) (place: SourceRef) (glyph: string) (verb: string) (testName: string) (step: HistoryStep) : XmlNode =
   let common =
     [ Attr.class' "session-btn live-history"
       Attr.type' "button"
@@ -399,7 +399,7 @@ let private historyButton (key: RowKey) (place: SourceRef) (glyph: string) (verb
   | HistoryStep.NothingToStep ->
     Elem.button (common @ [ Attr.create "disabled" ""; Attr.title (attrEnc (sprintf "Nothing to %s." verb)) ]) [ Text.raw glyph ]
 
-let private controlNodes (key: RowKey) (view: RowView) : XmlNode list =
+let controlNodes (key: RowKey) (view: RowView) : XmlNode list =
   match view.Place with
   | PlaceOf.NotPlaced -> []
   | PlaceOf.Placed place ->
@@ -418,7 +418,7 @@ let private controlNodes (key: RowKey) (view: RowView) : XmlNode list =
     | Control.ExpressionField text -> [ field key place text "expression" "tweak-expression" (sprintf "Expression for %s" label) ]
     | Control.NoControl -> []
 
-let private historyNodes (key: RowKey) (view: RowView) : XmlNode list =
+let historyNodes (key: RowKey) (view: RowView) : XmlNode list =
   match view.Place, view.Undo, view.Redo with
   | PlaceOf.NotPlaced, _, _ -> []
   | PlaceOf.Placed _, HistoryStep.NothingToStep, HistoryStep.NothingToStep -> []
@@ -426,7 +426,7 @@ let private historyNodes (key: RowKey) (view: RowView) : XmlNode list =
     [ historyButton key place "↶" "undo" "tweak-undo" undo
       historyButton key place "↷" "redo" "tweak-redo" redo ]
 
-let private reloadNodes (view: RowView) : XmlNode list =
+let reloadNodes (view: RowView) : XmlNode list =
   let notWatched =
     match view.Watching, view.Place with
     | WatchStatus.NotWatched, PlaceOf.Placed place ->

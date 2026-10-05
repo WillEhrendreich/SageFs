@@ -220,7 +220,7 @@ module Service =
     String.Equals(extension, ".fs", StringComparison.OrdinalIgnoreCase) || String.Equals(extension, ".fsx", StringComparison.OrdinalIgnoreCase)
 
   // The names a file declares at the start of a line: `let`, `let mutable`, `let rec`, `let inline`, `and`, with their access words.
-  let private declaration =
+  let declaration =
     Regex(@"^[ \t]*(?:let|and)[ \t]+(?:(?:rec|mutable|inline|private|internal|public)[ \t]+)*(?<name>[A-Za-z_][A-Za-z0-9_']*)", RegexOptions.Compiled ||| RegexOptions.Multiline)
 
   let declaredNames (text: string) : Set<string> =
@@ -245,10 +245,10 @@ module Service =
     | Error refusal -> Task.FromResult(Error refusal)
     | Ok request -> execute service.Env.Ports service.Env.Locks Timeouts.nudgeFileLock request
 
-  let private inspectRaw (path: string) (address: string) : RawNudge =
+  let inspectRaw (path: string) (address: string) : RawNudge =
     { Action = NudgeAction.toToken NudgeAction.Inspect; File = path; Address = address; Seen = ""; Literal = ""; Expression = "" }
 
-  let private itemsOf (path: string) (ran: Ran) : Result<SourceRef list * Inspection, string> =
+  let itemsOf (path: string) (ran: Ran) : Result<SourceRef list * Inspection, string> =
     match ran.Outcome with
     | NudgeOutcome.Inspected inspection -> Ok(inspection.Items |> List.map (SourceRef.ofItem path), inspection)
     | other -> Error(sprintf "the door answered an inspect with %s" (NudgeOutcome.token other))
