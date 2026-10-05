@@ -72,7 +72,7 @@ type Fixture = {
 /// The live-state fixture: values a save has to leave alone.
 let stateFixture =
   { Folder = "HotReloadStateFixture"
-    Sources = [ "State.fs"; "App.fs" ]
+    Sources = [ "State.fs"; "Pages.fs"; "App.fs" ]
     Project = "StateFixture"
     ReadyRoute = "count" }
 

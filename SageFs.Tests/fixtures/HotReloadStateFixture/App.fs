@@ -11,7 +11,7 @@ module App =
   let run (port: int) =
     let builder = WebApplication.CreateBuilder()
     let app = builder.Build()
-    for name, handler in State.handlers do
+    for name, handler in State.handlers @ Pages.handlers do
       app.MapGet("/" + name, Func<_, _>(fun (ctx: HttpContext) ->
         ctx.Response.ContentType <- "text/plain"
         ctx.Response.WriteAsync(handler ()))) |> ignore

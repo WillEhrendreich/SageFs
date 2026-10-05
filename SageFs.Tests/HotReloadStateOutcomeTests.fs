@@ -389,6 +389,56 @@ let private keepTieringLapsesAndFailsClosed (runtime: HostRuntime) =
     })
   }
 
+/// Callers in other files follow a signature change. A save that re-signs `stamp` in State.fs is a new method to the app,
+/// and its caller in Pages.fs is another file, so it is not saved with it: it keeps calling the old method. The report says
+/// so, naming the file and the line and what to do, until that file is saved; then the caller serves the new method and the
+/// state clears. Both halves are read from the same running process: what the app serves, and what the worker reports.
+let private callerInAnotherFileFollowsASignatureChange (runtime: HostRuntime) =
+  testTask (sprintf "[%s] callers in other files: a caller of a re-signed function runs the old method and the report says so until its own file is saved" (HostRuntime.moniker runtime)) {
+    do! withApp runtime (fun app -> task {
+      let pages = System.IO.Path.Combine(app.RunDir, "Pages.fs")
+      let callLine = (System.IO.File.ReadAllLines pages |> Array.findIndex (fun l -> l.Contains "State.stamp 7")) + 1
+      let! original = get app "stamped"
+      original |> Expect.equal "the caller serves the original method" "S1-7"
+
+      let! resigned =
+        save app "let stamp (n: int) : string = \"S1-\" + string n" "let stamp (n: int) (suffix: string) : string = \"S2-\" + string n + suffix"
+      let report = json resigned
+      str report "outcome"
+      |> Expect.equal (sprintf "the re-signed function is applied, a new method.\nVerdict: %s\nHost log:\n%s" resigned (RunningApp.log app)) "PatchPending"
+      let callers = report.GetProperty "callers"
+      str callers "state"
+      |> Expect.equal (sprintf "a caller in another file is still on the old method, so the save cannot say all is well.\nVerdict: %s\nHost log:\n%s" resigned (RunningApp.log app)) "CallersPending"
+      let pendingDecl = callers.GetProperty("pending").[0]
+      str pendingDecl "declaration" |> Expect.equal "names the re-signed declaration" "StateFixture.State.stamp"
+      str pendingDecl "cause" |> Expect.equal "and what happened to it" "ReSigned"
+      let site = pendingDecl.GetProperty("sites").[0]
+      System.IO.Path.GetFileName(str site "file") |> Expect.equal "names the caller's file" "Pages.fs"
+      str site "line" |> Expect.equal "and the line of the call" (string callLine)
+      str site "caller" |> Expect.equal "and the declaration that holds it" "StateFixture.Pages.stamped"
+      str report "message" |> Expect.stringContains "the words a client that shows only the message shows" "Pages.fs"
+      str report "suggestedAction" |> Expect.stringContains "the next action" "Save Pages.fs"
+
+      let! stillOld = get app "stamped"
+      stillOld |> Expect.equal "the caller in the other file still runs the OLD method, which is what the report said" "S1-7"
+      let! lastOutcome = getWorker app "/hotreload/last-outcome"
+      lastOutcome |> Expect.stringContains "the worker's last outcome, which the daemon reads, carries it too" "CallersPending"
+
+      let! landed = saveEdits app pages [ "State.stamp 7", "State.stamp 7 \"!\"" ]
+      let landedReport = json landed
+      str landedReport "outcome"
+      |> Expect.equal (sprintf "the caller's save is applied.\nVerdict: %s\nHost log:\n%s" landed (RunningApp.log app)) "PatchPending"
+      str (landedReport.GetProperty "callers") "state"
+      |> Expect.equal (sprintf "its file landed, so nothing is on the old method.\nVerdict: %s\nHost log:\n%s" landed (RunningApp.log app)) "CallersCurrent"
+      let! served = settle app "stamped" "S2-7!"
+      served
+      |> Expect.equal (sprintf "the caller now runs the new method.\nVerdict: %s\nHost log:\n%s" landed (RunningApp.log app)) "S2-7!"
+      let! confirmed = HotReloadStateHarness.confirmed app
+      str (json confirmed |> fun c -> c.GetProperty "callers") "state"
+      |> Expect.equal (sprintf "and the confirmation that follows says the same.\nLast: %s" confirmed) "CallersCurrent"
+    })
+  }
+
 /// One suite per runtime, so the partition can put the two in different shards, and the cases of a suite run a few at a
 /// time: each is a host, a run dir and a port of its own (`HostSlots`).
 [<Tests>]
@@ -409,5 +459,6 @@ let hotReloadStateOutcomeTests =
         markOnReflectRestarts runtime
         exactEveryReadPatches runtime
         keepTieringLapsesAndFailsClosed runtime
+        callerInAnotherFileFollowsASignatureChange runtime
       ]
   ]

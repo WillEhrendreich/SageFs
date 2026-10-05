@@ -94,6 +94,11 @@ let reflectDrop () : string =
 /// Only called after a save, to see what the app serves.
 let reflectPeek () : string = string (reflectedProperty().GetValue(null))
 
+// ── a function other files call: re-signed while a caller in another file still calls the old one ─
+
+/// What the callers case re-signs. Pages.fs is a different file, so a save of this one does not carry its caller.
+let stamp (n: int) : string = "S1-" + string n
+
 // ── the route table, captured BY VALUE at startup like a Falco route list ───
 
 let handlers : (string * (unit -> string)) list =
