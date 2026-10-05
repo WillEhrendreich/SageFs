@@ -59,6 +59,25 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
+    # SseParityTests derives the SSE parity check by reading the plugin repo's own
+    # Lua, and this runner has no sibling checkout: _work/SageFs/sagefs.nvim does not
+    # exist. `nvimRepoDir` is a module-level `let`, so the DirectoryNotFoundException
+    # lands in the type initializer and aborts the process the --ratchets lane runs
+    # (exit 134), rather than failing a test assertion. Gated commits never noticed,
+    # because their job here is only a file lookup; an ungated push runs the whole
+    # pipeline, which is how this surfaced. Checked out beside the main one and
+    # pointed at with the env var the test already documents, so nothing hardcodes a
+    # path on one machine.
+    - name: Checkout the Neovim plugin (SseParityTests reads its Lua)
+      uses: actions/checkout@v5
+      with:
+        repository: WillEhrendreich/sagefs.nvim
+        path: sagefs.nvim
+
+    - name: Point the SSE parity test at it
+      shell: bash
+      run: echo "SAGEFS_NVIM_DIR=$GITHUB_WORKSPACE/sagefs.nvim" >> "$GITHUB_ENV"
+
     # Same reason as publish.yml: a step's PATH resolves dotnet to the distro's
     # dotnet-host (a runtime, no SDKs). A gated commit never notices, because
     # the gate is then only a file lookup, but an ungated one runs the whole
@@ -215,6 +234,25 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
+
+    # SseParityTests derives the SSE parity check by reading the plugin repo's own
+    # Lua, and this runner has no sibling checkout: _work/SageFs/sagefs.nvim does not
+    # exist. `nvimRepoDir` is a module-level `let`, so the DirectoryNotFoundException
+    # lands in the type initializer and aborts the process the --ratchets lane runs
+    # (exit 134), rather than failing a test assertion. Gated commits never noticed,
+    # because their job here is only a file lookup; an ungated push runs the whole
+    # pipeline, which is how this surfaced. Checked out beside the main one and
+    # pointed at with the env var the test already documents, so nothing hardcodes a
+    # path on one machine.
+    - name: Checkout the Neovim plugin (SseParityTests reads its Lua)
+      uses: actions/checkout@v5
+      with:
+        repository: WillEhrendreich/sagefs.nvim
+        path: sagefs.nvim
+
+    - name: Point the SSE parity test at it
+      shell: bash
+      run: echo "SAGEFS_NVIM_DIR=$GITHUB_WORKSPACE/sagefs.nvim" >> "$GITHUB_ENV"
 
     - name: Checkout forked MCP SDK
       uses: actions/checkout@v5
