@@ -399,7 +399,11 @@ module CohortVetoSpec =
     | Some e -> Some e
     | None -> if isCompletionCmd cmd then None else pend
 
-  let explore (decide: Decide) (cap: int) : ExploreResult =
+  /// Explore `decide`'s whole bounded space, or stop at the first state or step that violates `stopOn`. A twin only has to
+  /// show that ONE rule is violated, and the violation is usually a few steps from the start, so a twin run stops there
+  /// instead of paying for the full space. `Complete` is false for a run that stopped early: it proves nothing about the
+  /// rest of the space, and nothing reads it.
+  let exploreUntil (decide: Decide) (cap: int) (stopOn: string option) : ExploreResult =
     let visited = HashSet<CohortState<Member> * CohortEffect<Member> option>(HashIdentity.Structural)
     let frontier = Queue<CohortState<Member> * CohortEffect<Member> option>()
     let start = (startState (), None)
@@ -408,7 +412,8 @@ module CohortVetoSpec =
     let violations = HashSet<string>()
     let reached = HashSet<string>()
     let mutable capped = false
-    while frontier.Count > 0 && not capped do
+    let stopped () = match stopOn with Some rule -> violations.Contains rule | None -> false
+    while frontier.Count > 0 && not capped && not (stopped ()) do
       let (s, pend) = frontier.Dequeue()
       for (name, rule) in stateRules do
         if not (rule s) then violations.Add name |> ignore
@@ -426,10 +431,12 @@ module CohortVetoSpec =
             if visited.Count > cap then capped <- true else frontier.Enqueue node
         | Error _ -> ()
     { Nodes = visited.Count
-      Complete = (frontier.Count = 0 && not capped)
+      Complete = (frontier.Count = 0 && not capped && not (stopped ()))
       Capped = capped
       Violations = violations |> Seq.sort |> List.ofSeq
       Reached = reached |> Seq.sort |> List.ofSeq }
+
+  let explore (decide: Decide) (cap: int) : ExploreResult = exploreUntil decide cap None
 
   let defaultCap = 500_000
 

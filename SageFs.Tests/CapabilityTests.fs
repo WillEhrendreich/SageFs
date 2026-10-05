@@ -210,7 +210,7 @@ let roleTests =
       may RolePreset.Verifier "send_fsharp_code" |> Expect.isFalse "Verifier does not evaluate"
       may RolePreset.Implementer "send_fsharp_code" |> Expect.isTrue "Implementer evaluates"
       may RolePreset.Implementer "acquire_claim" |> Expect.isTrue "Implementer claims"
-      for conductorOnly in [ "mint_member"; "revoke_member"; "reassign_claim"; "set_integration_ref"; "manage_local_data"; "tidy_workspace" ] do
+      for conductorOnly in [ "mint_member"; "revoke_member"; "reassign_claim"; "delegate_conductor"; "resolve_veto"; "set_integration_ref"; "manage_local_data"; "tidy_workspace" ] do
         may RolePreset.Implementer conductorOnly |> Expect.isFalse (sprintf "Implementer must not call %s" conductorOnly)
 
     testCase "WHY - a tool nobody classified is refused, never allowed by default" <| fun () ->

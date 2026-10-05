@@ -337,3 +337,58 @@ module McpCohortTools =
             | Some(Cohort.LandingId lid) -> Ok (sprintf "Landing %s queued." lid)
             | None -> Error (SageFsError.Unexpected (exn "request_landing committed with no LandingQueued event")))
     }
+
+  /// Conductor-only, and only from a SITTING conductor (`Cohort.decide` refuses `NotConductor` for a member and
+  /// `ConductorVacant` for an empty seat, so this cannot fill a vacancy). `toMember` names the recipient by ITS
+  /// OWN display string, as `get_cohort_status` prints it; the caller's identity is `memberIdFor`, never an
+  /// argument. A recipient who acts under a member token is refused here, because the seat would be stranded with
+  /// someone no token class lets call the conductor's tools.
+  let delegateConductor (ctx: McpContext) (agentName: string) (toMember: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+    task {
+      let by = memberIdFor agentName
+      let target = resolveMemberByDisplay ctx toMember workingDirectory
+      match target with
+      | MemberTable.MemberId.Capability _ ->
+        return Error (CohortErrorMapping.delegationRefusalToSageFsError (CohortErrorMapping.DelegationRefusal.TargetHoldsToken target))
+      | MemberTable.MemberId.Mcp _
+      | MemberTable.MemberId.Minted _
+      | MemberTable.MemberId.Browser _ ->
+        let! result = commitCohort ctx (Cohort.CohortCommand.DelegateConductor(by, target, scopeOf workingDirectory))
+        return
+          result
+          |> Result.map (fun _ ->
+            sprintf
+              "%s is the conductor now. You are an ordinary member of this cohort again: only they can run the conductor's tools (reassign_claim, delegate_conductor, resolve_veto, set_integration_ref, mint_member, revoke_member)."
+              (MemberTable.MemberId.display target))
+    }
+
+  /// The landing's own requester takes it back. `Cohort.decide` refuses `NotLandingRequester` for anyone else and
+  /// `LandingNotInExpectedState` for a landing that is already over.
+  let withdrawLanding (ctx: McpContext) (agentName: string) (landingId: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+    task {
+      let who = memberIdFor agentName
+      let! result = commitCohort ctx (Cohort.CohortCommand.WithdrawLanding(who, Cohort.LandingId landingId, scopeOf workingDirectory))
+      return result |> Result.map (fun _ -> sprintf "Withdrew landing %s; it will not land, and the queue moved on." landingId)
+    }
+
+  /// A seated member who is not an observer objects to a live landing, with a reason. `Cohort.decide` owns every
+  /// rule (standing, a reason, a live landing); this only names the caller and the landing.
+  let vetoLanding (ctx: McpContext) (agentName: string) (landingId: string) (reason: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+    task {
+      let by = memberIdFor agentName
+      let! result = commitCohort ctx (Cohort.CohortCommand.VetoLanding(by, Cohort.LandingId landingId, reason, scopeOf workingDirectory))
+      return
+        result
+        |> Result.map (fun _ ->
+          sprintf
+            "Vetoed landing %s. It is blocked and out of the queue, so it holds nobody behind it. The conductor clears the veto with resolve_veto (the landing queues again), or its requester withdraws it with withdraw_landing."
+            landingId)
+    }
+
+  /// Conductor-only: clear a veto, and the landing queues again as it was.
+  let resolveVeto (ctx: McpContext) (agentName: string) (landingId: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+    task {
+      let by = memberIdFor agentName
+      let! result = commitCohort ctx (Cohort.CohortCommand.ResolveVeto(by, Cohort.LandingId landingId, scopeOf workingDirectory))
+      return result |> Result.map (fun _ -> sprintf "Cleared the veto on landing %s; it is queued again and its claims are re-checked when it reaches the front." landingId)
+    }

@@ -359,7 +359,8 @@ Registered tools, by area:
 4. **Hot reload**: enable_hot_reload, disable_hot_reload, set_reflection_read_mode,
    reset_hot_reload_state
 5. **Cohort and landings**: join_cohort, leave_cohort, get_cohort_status, acquire_claim,
-   release_claim, request_landing, reassign_claim, set_integration_ref, mint_member, revoke_member
+   release_claim, request_landing, reassign_claim, set_integration_ref, mint_member, revoke_member,
+   delegate_conductor, withdraw_landing, veto_landing, resolve_veto
 6. **Leases and workspace**: acquire_full_build_lease, acquire_test_suite_lease,
    acquire_run_app_lease, release_work_lease, get_workspace_hygiene, tidy_workspace,
    manage_local_data

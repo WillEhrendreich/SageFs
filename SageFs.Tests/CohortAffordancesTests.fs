@@ -139,11 +139,24 @@ let cohortAffordancesTests =
         tools |> Set.contains Affordances.CohortTool.ReassignClaim |> Expect.isFalse "reassign is conductor-only"
       }
 
-      test "Observer and Verifier are status-read-only from cohortTools itself" {
-        [ JoinableRole.Observer; JoinableRole.Verifier ]
-        |> List.iter (fun role ->
-          Affordances.cohortTools (Authority.Member(alice, role))
-          |> Expect.equal (sprintf "%A sees only get_cohort_status from cohortTools" role) (set [ Affordances.CohortTool.GetStatus ]))
+      test "an Observer is status-read-only from cohortTools itself" {
+        Affordances.cohortTools (Authority.Member(alice, JoinableRole.Observer))
+        |> Expect.equal "an Observer sees only get_cohort_status from cohortTools" (set [ Affordances.CohortTool.GetStatus ])
+      }
+
+      test "a Verifier reads the cohort and may veto a landing, and nothing else" {
+        Affordances.cohortTools (Authority.Member(alice, JoinableRole.Verifier))
+        |> Expect.equal
+          "a Verifier sees get_cohort_status and veto_landing from cohortTools"
+          (set [ Affordances.CohortTool.GetStatus; Affordances.CohortTool.VetoLanding ])
+      }
+
+      test "an Implementer may withdraw its own landing and veto another's, but not delegate or clear a veto" {
+        let tools = Affordances.cohortTools (Authority.Member(alice, JoinableRole.Implementer))
+        tools |> Set.contains Affordances.CohortTool.WithdrawLanding |> Expect.isTrue "withdraw"
+        tools |> Set.contains Affordances.CohortTool.VetoLanding |> Expect.isTrue "veto"
+        tools |> Set.contains Affordances.CohortTool.DelegateConductor |> Expect.isFalse "delegating is conductor-only"
+        tools |> Set.contains Affordances.CohortTool.ResolveVeto |> Expect.isFalse "clearing a veto is conductor-only"
       }
 
       test "join_cohort and get_cohort_status are reachable to every authority via checkCohortToolAllowed" {
@@ -173,11 +186,12 @@ let cohortAffordancesTests =
     ]
 
     testList "CohortTool.toToolName" [
-      test "names exactly the 10 cohort MCP tool names — no more, no fewer" {
+      test "names exactly the cohort MCP tool names — no more, no fewer" {
         let expected =
           set [ "join_cohort"; "leave_cohort"; "acquire_claim"; "release_claim"
                 "reassign_claim"; "request_landing"; "get_cohort_status"; "set_integration_ref"
-                "mint_member"; "revoke_member" ]
+                "mint_member"; "revoke_member"; "delegate_conductor"; "withdraw_landing"
+                "veto_landing"; "resolve_veto" ]
         Affordances.CohortTool.all
         |> List.map Affordances.CohortTool.toToolName
         |> Set.ofList

@@ -729,6 +729,19 @@ module Cohort =
     | FastForward of LandingId * toSha: string
     | Notify of 'm * CohortEvent<'m>
 
+  /// Why a member may not veto a landing: the rule, not a message. `NotAMember` is a caller with no seat (never
+  /// joined, or departed); `ReadOnlyRole` is a seat whose role reads and does not decide.
+  [<RequireQualifiedAccess>]
+  type VetoRefusal =
+    | NotAMember
+    | ReadOnlyRole
+
+  /// Why a veto's reason is refused: a veto names a reason, and the reason is bounded like a landing statement.
+  [<RequireQualifiedAccess>]
+  type VetoReasonRefusal =
+    | Blank
+    | TooLong of max: int
+
   [<RequireQualifiedAccess>]
   type CohortError<'m> =
     | DuplicateJoin of 'm
@@ -757,10 +770,23 @@ module Cohort =
     /// a never-bound cohort), `why` why. Distinct from `NotConductor` because
     /// it implies a different user action: `NotConductor` is "the conductor can
     /// do it for you", `ConductorVacant` is "NOBODY can — a human has to
-    /// appoint a conductor first". There is deliberately no delegate tool to
-    /// suggest, and no auto-promotion to lean on: a vacancy is a typed state a
+    /// appoint a conductor first". `delegate_conductor` exists now, but only a
+    /// SITTING conductor can issue it, so it cannot fill an empty seat; there is
+    /// no auto-promotion to lean on either: a vacancy is a typed state a
     /// person fills.
     | ConductorVacant of former: 'm option * since: DateTime * why: VacancyReason
+    /// `DelegateConductor` named a member who is not present, so the seat would have gone to nobody. Carries the
+    /// roster of members who ARE present, so the refusal says who the conductor can pick instead.
+    | DelegateTargetAbsent of target: 'm * present: 'm list
+    /// `DelegateConductor` named the sitting conductor: the seat would not move, and a handoff that hands
+    /// nothing is not recorded.
+    | DelegateToSelf of 'm
+    /// A veto from a caller who may not veto: a seat-less caller, or an observer. Carries the rule it broke.
+    | VetoRefused of by: 'm * VetoRefusal
+    /// A veto names a reason, and the reason it was given is blank or longer than a statement may be.
+    | InvalidVetoReason of VetoReasonRefusal
+    /// The landing is already vetoed, by `by`. The first veto and its reason stand; a second does not overwrite them.
+    | LandingAlreadyVetoed of LandingId * by: 'm
     /// The command names a cohort this one is NOT — `requested` is the scope the
     /// caller arrived with, `cohort` is the scope this state was opened at. This
     /// is the refusal that keeps a member from acting on a cohort it is not in:
@@ -1327,12 +1353,22 @@ module Cohort =
       | Ok () ->
       match Authority.present by state with
       | Authority.Conductor _ ->
-        if not (isPresent state toMember) then Error(CohortError.MemberNotPresent toMember)
+        if by = toMember then Error(CohortError.DelegateToSelf by)
+        elif not (isPresent state toMember) then
+          // The roster rides on the refusal: who IS here, so the conductor can pick one of them.
+          let roster =
+            state.Members
+            |> Map.toList
+            |> List.choose (fun (m, r) ->
+              match r.Presence with
+              | MemberPresence.Present -> Some m
+              | MemberPresence.Departed _ -> None)
+          Error(CohortError.DelegateTargetAbsent(toMember, roster))
         else
           // `toMember` is Present by that guard, which is the `Bound` invariant.
-          // Note this also fills a VACANT seat — a conductor who comes back can
-          // hand the role on to whoever is left. Only a live conductor can do
-          // it; there is no way for the holder of a vacancy to delegate one.
+          // `by` is the sitting conductor (the `Authority.Conductor` arm), so this
+          // never fills a VACANT seat: only a live conductor can delegate, and the
+          // holder of a vacancy is not one.
           let newState = { state with Conductor = ConductorBinding.Bound toMember }
           Ok(newState, [ CohortEvent.ConductorDelegated(by, toMember) ], [])
       // default policy: only a bound Conductor may delegate — every other
@@ -1706,41 +1742,67 @@ module Cohort =
         | _ -> Error(refuseConductorOnly clock by state)
 
     | CohortCommand.VetoLanding(by, id, reason, scope) ->
-      // roast-2day-cmd §RISK/§1: `VetoLanding` has NO authority gate on
-      // purpose (v1's design, unchanged here — see the command's doc
-      // comment) — "any present member may object" is the intended right,
-      // not a bug to close by gating it Conductor-only. What WAS a real bug:
-      // this arm set `Blocked` and never popped the queue, so if the vetoed
-      // landing was at the front, the ENTIRE serial queue jammed behind it —
-      // and, unlike `HeadMoved`/`StaleClaimFence` above, the requester's own
-      // `WithdrawLanding` was the only escape even though `NextAction` says
-      // `AwaitConductor` (a promise the code never kept). Two fixes land
-      // together: (1) `blockAndPop`, so a veto never jams anyone else's
-      // landing; (2) `ResolveVeto` (below), a genuine conductor verb that
-      // makes `AwaitConductor` true rather than aspirational.
+      // WHO MAY VETO (decided when a tool first issued this command, with the
+      // evidence in `docs/mcp-tools.md`): a SEATED member who is not an
+      // observer. The earlier design said "any present member may object" and
+      // gated nothing, which let a caller with no seat at all (never joined, or
+      // departed) block a landing, and an observer — a role defined as reading,
+      // not deciding — hold the queue. A veto is a verdict on someone else's
+      // work, so it needs a seat; an observer's seat does not carry verdicts.
+      // The conductor may veto (it is a member too), and the cure for a veto
+      // stays the conductor's: `ResolveVeto` below.
+      //
+      // A veto lands on a LIVE landing (Queued/Rebasing/Verifying). A landing
+      // that is over (Landed/Withdrawn) is refused, never accepted as a no-op;
+      // a landing already vetoed keeps its first vetoer and reason; and a
+      // landing blocked for another reason keeps THAT diagnosis (a veto must
+      // not relabel a rebase conflict as "awaiting the conductor", which
+      // `ResolveVeto` would then re-queue as if the conflict never happened).
+      //
+      // The pop (`blockAndPop`) is the roast-2day-cmd fix: a vetoed front
+      // landing used to jam the whole serial queue behind it.
       match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
+      let standing =
+        match Authority.present by state with
+        | Authority.Conductor _
+        | Authority.Member(_, JoinableRole.Implementer)
+        | Authority.Member(_, JoinableRole.Verifier) -> Ok ()
+        | Authority.Member(_, JoinableRole.Observer) -> Error(CohortError.VetoRefused(by, VetoRefusal.ReadOnlyRole))
+        | Authority.Anonymous -> Error(CohortError.VetoRefused(by, VetoRefusal.NotAMember))
+      match standing with
+      | Error e -> Error e
+      | Ok () ->
+      // Stored trimmed, bounded like a landing statement: a reason is read by the conductor and the requester.
+      let reasonText = if isNull reason then "" else reason.Trim()
+      let reasonVerdict =
+        if reasonText.Length = 0 then Error(CohortError.InvalidVetoReason VetoReasonRefusal.Blank)
+        elif reasonText.Length > Statement.maxLength then Error(CohortError.InvalidVetoReason(VetoReasonRefusal.TooLong Statement.maxLength))
+        else Ok ()
+      match reasonVerdict with
       | Error e -> Error e
       | Ok () ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
         match req.State with
-        | LandingState.Landed _
-        | LandingState.Withdrawn -> Error(CohortError.LandingNotInExpectedState(id, "non-terminal"))
-        // default policy: any non-terminal LandingState (Queued/Rebasing/
-        // Verifying/Blocked, and any future case) can be vetoed — the two
-        // terminal states are enumerated above as the exclusions, so this is
-        // the safe direction to default a new LandingState case into.
-        | _ ->
+        | LandingState.Queued
+        | LandingState.Rebasing _
+        | LandingState.Verifying _ ->
           let advanced, advEvents, advEffects =
-            blockAndPop state id req (LandingBlocker.VetoedBy(by, reason)) NextAction.AwaitConductor
+            blockAndPop state id req (LandingBlocker.VetoedBy(by, reasonText)) NextAction.AwaitConductor
           // `blockAndPop` always yields at least one event (this landing's own
           // `LandingStateChanged`) — insert the dedicated `LandingVetoed` audit
           // event right after it, same relative order the pre-blockAndPop code
           // had, ahead of anything `advanceQueue` produced for the NEXT landing.
           match advEvents with
-          | stateChanged :: rest -> Ok(advanced, stateChanged :: CohortEvent.LandingVetoed(id, by, reason) :: rest, advEffects)
-          | [] -> Ok(advanced, [ CohortEvent.LandingVetoed(id, by, reason) ], advEffects)
+          | stateChanged :: rest -> Ok(advanced, stateChanged :: CohortEvent.LandingVetoed(id, by, reasonText) :: rest, advEffects)
+          | [] -> Ok(advanced, [ CohortEvent.LandingVetoed(id, by, reasonText) ], advEffects)
+        | LandingState.Blocked(LandingBlocker.VetoedBy(first, _), _) -> Error(CohortError.LandingAlreadyVetoed(id, first))
+        | LandingState.Blocked _
+        | LandingState.Landed _
+        | LandingState.Withdrawn -> Error(CohortError.LandingNotInExpectedState(id, "queued, rebasing or verifying"))
 
     | CohortCommand.ResolveVeto(by, id, scope) ->
       // roast-2day-cmd §1/§RISK's missing conductor verb. Design choice

@@ -217,7 +217,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 66 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 70 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -233,9 +233,10 @@ let toolRegistrationTests =
         // hot-loop questions) + get_workspace_hygiene and tidy_workspace (what
         // agents left behind on the machine, and the plan that tidies it) +
         // mint_member and revoke_member (per-run member tokens, Capability.fs) +
-        // nudge_value (the door onto the live-tweak engine).
+        // nudge_value (the door onto the live-tweak engine) + delegate_conductor,
+        // withdraw_landing, veto_landing and resolve_veto (the cohort commands that had no tool).
         methods.Length
-          |> Expect.equal "MCP tool method count" 66
+          |> Expect.equal "MCP tool method count" 70
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -411,9 +412,10 @@ let stateTransitionSafetyTests =
         // Slice 2) + the 1 item-14c cohort tool (set_integration_ref) +
         // reset_hot_reload_state + manage_local_data +
         // set_reflection_read_mode = 53.
+        // Every state against every registered tool: the product, not a typed-in count that goes stale with each tool.
         tested
         |> Expect.equal
-          "should test 5 states × 66 tools = 330" 330
+          "every (state, tool) pair was checked" (List.length allStates * Array.length toolNames)
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

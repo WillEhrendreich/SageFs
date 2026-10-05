@@ -47,7 +47,7 @@ let private discoverEverything = FeatureDiscovery.discoverOver registered Featur
 /// Names that look like tools (a verb prefix and an underscore) in some text an agent reads, that tools/list does
 /// not have: a typo, or a tool that left without the text being fixed.
 let private unregisteredToolNamesIn (text: string) : string list =
-  let verbs = [ "get"; "list"; "run"; "set"; "create"; "switch"; "stop"; "enable"; "disable"; "explain"; "suggest"; "plan"; "preview"; "check"; "send"; "reset"; "acquire"; "release"; "export"; "manage"; "report"; "tidy"; "discover"; "decompose"; "cancel"; "request"; "reassign"; "join"; "leave" ]
+  let verbs = [ "get"; "list"; "run"; "set"; "create"; "switch"; "stop"; "enable"; "disable"; "explain"; "suggest"; "plan"; "preview"; "check"; "send"; "reset"; "acquire"; "release"; "export"; "manage"; "report"; "tidy"; "discover"; "decompose"; "cancel"; "request"; "reassign"; "join"; "leave"; "withdraw"; "delegate"; "veto"; "resolve" ]
   Regex(sprintf @"\b(?:%s)_[a-z_]+\b" (String.Join("|", verbs))).Matches(text)
   |> Seq.map (fun m -> m.Value)
   |> Seq.filter (fun name -> not (registeredNames.Contains name))

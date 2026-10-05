@@ -554,6 +554,9 @@ let architectureTests =
       // Cases with no production construction site today. Each entry names
       // the reason — remove the entry the moment a real construction site
       // lands, or the "allow-list rot" test below will fail.
+      // NOTE (now wired): DelegateConductor, WithdrawLanding, VetoLanding and ResolveVeto were removed
+      // from this list when `delegate_conductor`, `withdraw_landing`, `veto_landing` and `resolve_veto`
+      // landed (McpCohortTools.fs). The roast-7 §5 finding was exactly these four.
       // NOTE (roast-7 §5, now wired): RenewLease and Tick were removed from this
       // list when the daemon's cohort lease reaper landed — a 60s timer in
       // DaemonMode.cohortReaperCallback renews each active Present member's lease
@@ -569,21 +572,6 @@ let architectureTests =
            `Join` does not already do. It stays on this list rather than being deleted because \
            `CohortState.empty ()` takes no scope and a replay has to reconstruct one; the daemon \
            gets its scope from the first `Join` it applies, and no tool needs to say 'open' first."
-          "DelegateConductor",
-          "constructed only by SageFs.Tests today; no MCP tool or dashboard \
-           action delegates the conductor role yet (roast-7 §5)"
-          "WithdrawLanding",
-          "constructed only by SageFs.Tests today; no MCP tool or dashboard \
-           action withdraws a queued landing yet (roast-7 §5)"
-          "VetoLanding",
-          "constructed only by SageFs.Tests today; no MCP tool or dashboard \
-           action vetoes a queued landing yet (roast-7 §5)"
-          "ResolveVeto",
-          "constructed only by SageFs.Tests/SageFs.Simulation today; no MCP \
-           tool or dashboard action resolves a veto yet — the command exists \
-           so `VetoLanding`'s NextAction.AwaitConductor has a real recovery \
-           path, wiring the MCP/dashboard verb is follow-up work (armfix, \
-           cmd-handoff.md item B2)"
         ]
 
       let cohortEffectAllowList =

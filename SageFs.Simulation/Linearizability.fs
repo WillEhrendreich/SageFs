@@ -87,6 +87,14 @@ module Linearizability =
     /// differ between permutations of the same order, so only the refusal
     /// matters — the same reasoning as `DuplicateJoin`/`UnknownClaim` above.
     | WrongCohortScope
+    /// The four veto/delegation refusals: each is its own kind, because which member is named, and the roster
+    /// carried with the absent-target refusal, may differ between permutations of the same order. Only the refusal
+    /// matters, as for `DuplicateJoin`.
+    | DelegateTargetAbsent
+    | DelegateToSelf
+    | VetoRefused
+    | InvalidVetoReason
+    | LandingAlreadyVetoed
 
   let private kindOf (err: CohortError<'m>) : ErrorKind =
     match err with
@@ -108,6 +116,11 @@ module Linearizability =
     | CohortError.NotConductor _ -> ErrorKind.NotConductor
     | CohortError.ConductorVacant _ -> ErrorKind.ConductorVacant
     | CohortError.WrongCohortScope _ -> ErrorKind.WrongCohortScope
+    | CohortError.DelegateTargetAbsent _ -> ErrorKind.DelegateTargetAbsent
+    | CohortError.DelegateToSelf _ -> ErrorKind.DelegateToSelf
+    | CohortError.VetoRefused _ -> ErrorKind.VetoRefused
+    | CohortError.InvalidVetoReason _ -> ErrorKind.InvalidVetoReason
+    | CohortError.LandingAlreadyVetoed _ -> ErrorKind.LandingAlreadyVetoed
 
   /// `Ok () ↔ Ok ()`; `Error e1 ↔ Error e2` iff same `ErrorKind` (payload —
   /// e.g. WHICH member holds a conflicting claim — is allowed to differ

@@ -88,10 +88,13 @@ module Capability =
     | CohortRead
     /// Join or leave the cohort.
     | CohortMembership
-    /// Claim a scope, release it, queue a landing.
+    /// Claim a scope, release it, queue a landing, withdraw your own landing.
     | CohortWork
-    /// Reassign claims, configure the integration, mint and revoke members.
-    /// Conductor only: no preset holds it.
+    /// Object to a landing with a reason. A verdict on someone else's work, so
+    /// the Verifier preset holds it and the Observer and Analysis presets do not.
+    | CohortReview
+    /// Reassign claims, hand the conductor seat on, clear a veto, configure the
+    /// integration, mint and revoke members. Conductor only: no preset holds it.
     | CohortAdmin
     /// Read daemon, session and project status; point at a session.
     | SessionRead
@@ -117,6 +120,7 @@ module Capability =
       [ ToolClass.CohortRead
         ToolClass.CohortMembership
         ToolClass.CohortWork
+        ToolClass.CohortReview
         ToolClass.CohortAdmin
         ToolClass.SessionRead
         ToolClass.Feedback
@@ -133,6 +137,7 @@ module Capability =
       | ToolClass.CohortRead -> "CohortRead"
       | ToolClass.CohortMembership -> "CohortMembership"
       | ToolClass.CohortWork -> "CohortWork"
+      | ToolClass.CohortReview -> "CohortReview"
       | ToolClass.CohortAdmin -> "CohortAdmin"
       | ToolClass.SessionRead -> "SessionRead"
       | ToolClass.Feedback -> "Feedback"
@@ -152,8 +157,10 @@ module Capability =
       function
       | ToolClass.CohortRead -> [ "get_cohort_status" ]
       | ToolClass.CohortMembership -> [ "join_cohort"; "leave_cohort" ]
-      | ToolClass.CohortWork -> [ "acquire_claim"; "release_claim"; "request_landing" ]
-      | ToolClass.CohortAdmin -> [ "reassign_claim"; "set_integration_ref"; "mint_member"; "revoke_member" ]
+      | ToolClass.CohortWork -> [ "acquire_claim"; "release_claim"; "request_landing"; "withdraw_landing" ]
+      | ToolClass.CohortReview -> [ "veto_landing" ]
+      | ToolClass.CohortAdmin ->
+        [ "reassign_claim"; "delegate_conductor"; "resolve_veto"; "set_integration_ref"; "mint_member"; "revoke_member" ]
       | ToolClass.SessionRead ->
         [ "get_daemon_status"; "get_session_status"; "list_sessions"; "get_available_projects"
           "list_runnable_projects"; "get_friction_report"; "get_friction_summary"; "discover_features"
@@ -224,7 +231,7 @@ module Capability =
     let private analysisClasses = Set.add ToolClass.CodeAnalysis observerClasses
 
     let private verifierClasses =
-      analysisClasses |> Set.add ToolClass.TestRun |> Set.add ToolClass.Leases
+      analysisClasses |> Set.add ToolClass.TestRun |> Set.add ToolClass.Leases |> Set.add ToolClass.CohortReview
 
     let private implementerClasses =
       verifierClasses
@@ -399,7 +406,8 @@ module Capability =
       tagged
         RouteKind.InCohort
         [ "get_cohort_status"; "join_cohort"; "leave_cohort"; "acquire_claim"; "release_claim"
-          "request_landing"; "reassign_claim"; "set_integration_ref"; "mint_member"; "revoke_member" ]
+          "request_landing"; "withdraw_landing"; "veto_landing"; "reassign_claim"; "delegate_conductor"
+          "resolve_veto"; "set_integration_ref"; "mint_member"; "revoke_member" ]
       @ tagged
           RouteKind.OnSession
           [ "get_session_status"; "list_runnable_projects"; "discover_features"; "get_recent_fsi_events"

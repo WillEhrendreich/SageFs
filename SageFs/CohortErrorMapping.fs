@@ -78,7 +78,7 @@ module CohortErrorMapping =
     | Cohort.CohortError.NotLandingRequester(Cohort.LandingId lid, who) ->
       failed
         (sprintf "%s did not request landing %s." (mid who) lid)
-        "Only the landing's requester can act on it; check get_cohort_status."
+        "Only the landing's requester can withdraw it: ask them to run withdraw_landing, or, if you object to it, veto_landing it with a reason. get_cohort_status names the requester."
     | Cohort.CohortError.LandingNotAtFrontOfQueue(Cohort.LandingId lid) ->
       failed
         (sprintf "Landing %s is not at the front of the landing queue." lid)
@@ -90,9 +90,40 @@ module CohortErrorMapping =
     | Cohort.CohortError.NotConductor who ->
       failed
         (sprintf "This is a conductor-only action, and %s is not the cohort conductor." (mid who))
-        // No tool hands the conductor role to another member (DelegateConductor has no MCP verb), so
-        // the old advice, "have the conductor delegate the role to you", sent an agent to nothing.
-        "Ask the cohort conductor to perform it; get_cohort_status names the conductor."
+        "Ask the cohort conductor to perform it, or to hand you the seat with delegate_conductor; get_cohort_status names the conductor."
+    | Cohort.CohortError.DelegateTargetAbsent(target, present) ->
+      failed
+        (sprintf
+          "%s is not a present member of this cohort, so the conductor seat cannot go to them. Present members: %s."
+          (mid target)
+          (match present with
+           | [] -> "(none)"
+           | members -> members |> List.map mid |> String.concat ", "))
+        "Call delegate_conductor again with one of the present members, named exactly as get_cohort_status prints them."
+    | Cohort.CohortError.DelegateToSelf who ->
+      failed
+        (sprintf "%s already holds the conductor seat, so there is nobody to hand it to." (mid who))
+        "Name another present member in delegate_conductor, or keep the seat."
+    | Cohort.CohortError.VetoRefused(by, Cohort.VetoRefusal.NotAMember) ->
+      failed
+        (sprintf "%s has no seat in this cohort, and a veto is a seated member's objection." (mid by))
+        "Call join_cohort with the SAME working_directory you pass here, then veto."
+    | Cohort.CohortError.VetoRefused(by, Cohort.VetoRefusal.ReadOnlyRole) ->
+      failed
+        (sprintf "%s joined as an Observer, and an Observer reads the cohort and does not decide on a landing." (mid by))
+        "Ask a Verifier, an Implementer or the conductor to veto it, or leave and join again as a Verifier."
+    | Cohort.CohortError.InvalidVetoReason Cohort.VetoReasonRefusal.Blank ->
+      failed
+        "A veto names a reason, and the reason given was blank."
+        "Say why the landing should not go ahead: the requester and the conductor read it in get_cohort_status."
+    | Cohort.CohortError.InvalidVetoReason(Cohort.VetoReasonRefusal.TooLong max) ->
+      failed
+        (sprintf "A veto reason may be at most %d characters." max)
+        "Shorten the reason to the one thing the requester has to change."
+    | Cohort.CohortError.LandingAlreadyVetoed(Cohort.LandingId lid, by) ->
+      failed
+        (sprintf "Landing %s is already vetoed by %s; the first veto and its reason stand." lid (mid by))
+        "Nothing more to do: the conductor clears it with resolve_veto, or the requester withdraws it with withdraw_landing."
     // A VACANT seat is a different refusal from NotConductor and gets different
     // advice: there is no conductor to ask. The honest next step is a human one —
     // no MCP tool can fill a vacancy, and nothing is auto-promoted into one, so
@@ -106,13 +137,29 @@ module CohortErrorMapping =
         (sprintf "This is a conductor-only action, and the conductor seat is VACANT %s." seat)
         (match former with
          | Some _ ->
-           "No MCP tool can fill a conductor seat and nothing is auto-promoted into one: a person must restore a conductor before this can run. Meanwhile do the work that needs no conductor — acquire_claim, release_claim, request_landing."
+           "No MCP tool can fill an empty conductor seat: delegate_conductor hands the seat on only from a SITTING conductor, and nothing is auto-promoted into one. A person must restore a conductor before this can run. Meanwhile do the work that needs no conductor: acquire_claim, release_claim, request_landing, withdraw_landing, veto_landing."
          | None ->
            "No member has ever been conductor in this cohort. The first member to join binds the seat, so join_cohort (if you have not) is what fills it.")
 
   // ── Member tokens (Capability.fs) ───────────────────────────────────────
 
-  let private failed reason suggestion = SageFsError.CohortActionFailed(reason, suggestion)
+  let failed reason suggestion = SageFsError.CohortActionFailed(reason, suggestion)
+
+  /// Why the conductor seat may not go to a member the cohort does know. The cohort's own refusals (a member who
+  /// is absent, oneself) are `CohortError`s; this one is about WHO the member is, which only the shell knows.
+  [<RequireQualifiedAccess>]
+  type DelegationRefusal =
+    /// The member acts under a minted token. A token holder is judged by its tool classes on every call, and no
+    /// token class includes the conductor's administration, so the seat would sit with someone who cannot use it
+    /// and cannot hand it on: nothing would move it until their lease lapsed.
+    | TargetHoldsToken of MemberTable.MemberId
+
+  let delegationRefusalToSageFsError (refusal: DelegationRefusal) : SageFsError =
+    match refusal with
+    | DelegationRefusal.TargetHoldsToken target ->
+      failed
+        (sprintf "%s acts under a member token, and no member token may call the conductor's tools, so the conductor seat would be stranded with them." (MemberTable.MemberId.display target))
+        "Delegate to a member who joined on its own connection (get_cohort_status lists them without a cap: prefix), or keep the seat."
 
   let private scopeText (prefix: Capability.ScopePrefix) =
     match Capability.ScopePrefix.value prefix with
@@ -124,8 +171,9 @@ module CohortErrorMapping =
     match toolClass with
     | Capability.ToolClass.CohortRead -> "reading the cohort"
     | Capability.ToolClass.CohortMembership -> "joining or leaving the cohort"
-    | Capability.ToolClass.CohortWork -> "claiming scopes and queueing landings"
-    | Capability.ToolClass.CohortAdmin -> "administering the cohort (minting, revoking, reassigning, configuring the integration)"
+    | Capability.ToolClass.CohortWork -> "claiming scopes, and queueing and withdrawing landings"
+    | Capability.ToolClass.CohortReview -> "objecting to a landing (a veto)"
+    | Capability.ToolClass.CohortAdmin -> "administering the cohort (minting, revoking, reassigning, handing the seat on, clearing a veto, configuring the integration)"
     | Capability.ToolClass.SessionRead -> "reading status and sessions"
     | Capability.ToolClass.Feedback -> "reporting friction"
     | Capability.ToolClass.CodeAnalysis -> "analysing code and history"

@@ -103,7 +103,8 @@ let surveyedNames =
     "set_reflection_read_mode"; "reset_hot_reload_state"; "discover_features"
     "report_friction"; "get_friction_report"; "get_friction_summary"
     "join_cohort"; "leave_cohort"; "get_cohort_status"; "acquire_claim"; "release_claim"
-    "request_landing"; "reassign_claim"; "set_integration_ref"; "mint_member"; "revoke_member" ]
+    "request_landing"; "reassign_claim"; "set_integration_ref"; "mint_member"; "revoke_member"
+    "delegate_conductor"; "withdraw_landing"; "veto_landing"; "resolve_veto" ]
 
 let names = toolNamesFromSource ()
 printfn "survey lists %d tool(s); source registration yields %d" surveyedNames.Length names.Length

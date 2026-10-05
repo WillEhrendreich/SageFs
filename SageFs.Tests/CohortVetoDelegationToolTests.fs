@@ -95,7 +95,7 @@ let refused (what: string) (result: Result<string, SageFsError>) : string =
 let repo = molinaRepo
 let wd = Some molinaRepo
 
-let status (ctx: McpContext) = task {
+let status (ctx: McpContext) : System.Threading.Tasks.Task<string> = task {
   match! McpCohortIntegration.getCohortStatus ctx wd with
   | Result.Ok text -> return text
   | Result.Error err -> return failtestf "status: %s" (SageFsError.describeForAgent err)
@@ -162,8 +162,8 @@ let toolBodyTests =
       refused "a member clearing a veto" notConductor |> Expect.stringContains "says conductor-only" "conductor"
       let! cleared = McpCohortTools.resolveVeto ctx "alice" lid wd
       ok "resolve_veto" cleared |> Expect.stringContains "confirms" lid
-      let! text = status ctx
-      Expect.isFalse "the veto is gone from the status" (text.Contains "hold")
+      let! (text: string) = status ctx
+      text.Contains("hold") |> Expect.isFalse "the veto is gone from the status"
     }
 
     testTask "delegate_conductor moves the seat, and get_cohort_status says who holds it now" {

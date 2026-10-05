@@ -82,6 +82,10 @@ let requiredParamsByTool =
     "acquire_claim", set ["agentName"; "scope"; "purpose"]
     "release_claim", set ["agentName"; "claimId"; "fence"]
     "reassign_claim", set ["agentName"; "claimId"; "toMember"]
+    "delegate_conductor", set ["agentName"; "toMember"]
+    "withdraw_landing", set ["agentName"; "landingId"]
+    "veto_landing", set ["agentName"; "landingId"; "reason"]
+    "resolve_veto", set ["agentName"; "landingId"]
     "request_landing", set ["agentName"; "claims"; "commits"; "statement"]
     // Item 14c: both args required — v1 has no optional routing here either.
     "set_integration_ref", set ["agentName"; "integrationRef"]
@@ -246,7 +250,9 @@ let descriptionPropertyTests =
       // + get_workspace_hygiene and tidy_workspace: what agents left behind, and the plan that tidies it.
       // + mint_member and revoke_member: per-run member tokens (Capability.fs).
       // + nudge_value: the door onto the live-tweak engine.
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 66
+      // + delegate_conductor, withdraw_landing, veto_landing and resolve_veto: the four cohort commands that
+      // existed in the core with no tool to issue them.
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 70
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

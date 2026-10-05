@@ -230,7 +230,11 @@ let private gatingDomain : Map<string, ToolGate> =
     "acquire_claim", ToolGate.AlwaysAvailable
     "release_claim", ToolGate.AlwaysAvailable
     "reassign_claim", ToolGate.AlwaysAvailable
+    "delegate_conductor", ToolGate.AlwaysAvailable
     "request_landing", ToolGate.AlwaysAvailable
+    "withdraw_landing", ToolGate.AlwaysAvailable
+    "veto_landing", ToolGate.AlwaysAvailable
+    "resolve_veto", ToolGate.AlwaysAvailable
     "get_cohort_status", ToolGate.AlwaysAvailable
     // Item 14c: configuring the integration ref/worktree is conductor-only
     // (enforced by `cohortTools` below) but, like every other cohort tool,
@@ -329,7 +333,15 @@ type CohortTool =
   | AcquireClaim
   | ReleaseClaim
   | ReassignClaim
+  /// Conductor-only: hand the seat to another present member.
+  | DelegateConductor
   | RequestLanding
+  /// The landing's own requester takes it back.
+  | WithdrawLanding
+  /// A seated non-observer objects to a live landing, with a reason.
+  | VetoLanding
+  /// Conductor-only: clear a veto and queue the landing again.
+  | ResolveVeto
   | GetStatus
   /// Item 14c: configure the cohort's integration ref/worktree/branch.
   /// Conductor-only (`cohortTools` below) — the same treatment as
@@ -341,7 +353,7 @@ type CohortTool =
   | RevokeMember
 
 module CohortTool =
-  /// The exact MCP tool names the 10 cohort tools are registered under
+  /// The exact MCP tool names the cohort tools are registered under
   /// (`Affordances.fs`'s own `gatingDomain` "Cohort tools v1" entries above —
   /// all `AlwaysAvailable` there at the per-SESSION-state layer; this module
   /// is the authority-aware refinement layered on top for Slice 3/item 14c).
@@ -352,7 +364,11 @@ module CohortTool =
     | CohortTool.AcquireClaim -> "acquire_claim"
     | CohortTool.ReleaseClaim -> "release_claim"
     | CohortTool.ReassignClaim -> "reassign_claim"
+    | CohortTool.DelegateConductor -> "delegate_conductor"
     | CohortTool.RequestLanding -> "request_landing"
+    | CohortTool.WithdrawLanding -> "withdraw_landing"
+    | CohortTool.VetoLanding -> "veto_landing"
+    | CohortTool.ResolveVeto -> "resolve_veto"
     | CohortTool.GetStatus -> "get_cohort_status"
     | CohortTool.SetIntegrationRef -> "set_integration_ref"
     | CohortTool.MintMember -> "mint_member"
@@ -364,7 +380,11 @@ module CohortTool =
       CohortTool.AcquireClaim
       CohortTool.ReleaseClaim
       CohortTool.ReassignClaim
+      CohortTool.DelegateConductor
       CohortTool.RequestLanding
+      CohortTool.WithdrawLanding
+      CohortTool.VetoLanding
+      CohortTool.ResolveVeto
       CohortTool.GetStatus
       CohortTool.SetIntegrationRef
       CohortTool.MintMember
@@ -455,9 +475,11 @@ module RetiredTool =
 ///   Anonymous                    -> status only
 ///   Member(_, Observer)          -> status only
 ///   Member(_, Verifier)          -> status only
-///   Member(_, Implementer)       -> status, join, leave, claim/release, request_landing
-///   Conductor _                  -> every tool, including reassign_claim
-///                                    and set_integration_ref (item 14c)
+///   Member(_, Verifier)          -> status, veto_landing
+///   Member(_, Implementer)       -> status, join, leave, claim/release, request_landing,
+///                                    withdraw_landing, veto_landing
+///   Conductor _                  -> every tool, including reassign_claim, delegate_conductor,
+///                                    resolve_veto and set_integration_ref (item 14c)
 ///
 /// `join_cohort` is deliberately NOT threaded into the `Anonymous` arm here
 /// — see `alwaysReachableCohortTools`.
@@ -468,14 +490,17 @@ let cohortTools (authority: Cohort.Authority<'m>) : Set<CohortTool> =
   | Cohort.Authority.Member(_, Cohort.JoinableRole.Observer) ->
     set [ CohortTool.GetStatus ]
   | Cohort.Authority.Member(_, Cohort.JoinableRole.Verifier) ->
-    set [ CohortTool.GetStatus ]
+    set [ CohortTool.GetStatus
+          CohortTool.VetoLanding ]
   | Cohort.Authority.Member(_, Cohort.JoinableRole.Implementer) ->
     set [ CohortTool.GetStatus
           CohortTool.Join
           CohortTool.Leave
           CohortTool.AcquireClaim
           CohortTool.ReleaseClaim
-          CohortTool.RequestLanding ]
+          CohortTool.RequestLanding
+          CohortTool.WithdrawLanding
+          CohortTool.VetoLanding ]
   | Cohort.Authority.Conductor _ ->
     Set.ofList CohortTool.all
 
@@ -536,7 +561,7 @@ let checkCohortToolAllowed (authority: Cohort.Authority<'m>) (tool: CohortTool) 
 
 // ── Authority over the WHOLE tool surface, not the cohort verbs ───────────
 //
-// WHY THIS SECTION EXISTS. `cohortTools` above is keyed on the ten COHORT
+// WHY THIS SECTION EXISTS. `cohortTools` above is keyed on the COHORT
 // verbs. Every other tool name fell through it (`checkCohortAuthorityGate`
 // returned `None`) and landed on the session-state gate, which knows nothing
 // about roles. So a member whose role is `Observer` — a name that reads like
@@ -659,14 +684,18 @@ type ToolName =
   | AcquireTestSuiteLease
   | AcquireRunAppLease
   | ReleaseWorkLease
-  // Cohort verbs — the ten `CohortTool`s, spelled the same way here so the two
+  // Cohort verbs — the `CohortTool`s, spelled the same way here so the two
   // sets are comparable (`cohortToolByName` below holds them together).
   | JoinCohort
   | LeaveCohort
   | AcquireClaim
   | ReleaseClaim
   | ReassignClaim
+  | DelegateConductor
   | RequestLanding
+  | WithdrawLanding
+  | VetoLanding
+  | ResolveVeto
   | GetCohortStatus
   | SetIntegrationRef
   | MintMember
@@ -739,7 +768,11 @@ module ToolName =
     | ToolName.AcquireClaim -> "acquire_claim"
     | ToolName.ReleaseClaim -> "release_claim"
     | ToolName.ReassignClaim -> "reassign_claim"
+    | ToolName.DelegateConductor -> "delegate_conductor"
     | ToolName.RequestLanding -> "request_landing"
+    | ToolName.WithdrawLanding -> "withdraw_landing"
+    | ToolName.VetoLanding -> "veto_landing"
+    | ToolName.ResolveVeto -> "resolve_veto"
     | ToolName.GetCohortStatus -> "get_cohort_status"
     | ToolName.SetIntegrationRef -> "set_integration_ref"
     | ToolName.MintMember -> "mint_member"
@@ -807,7 +840,11 @@ module ToolName =
       ToolName.AcquireClaim
       ToolName.ReleaseClaim
       ToolName.ReassignClaim
+      ToolName.DelegateConductor
       ToolName.RequestLanding
+      ToolName.WithdrawLanding
+      ToolName.VetoLanding
+      ToolName.ResolveVeto
       ToolName.GetCohortStatus
       ToolName.SetIntegrationRef
       ToolName.MintMember
@@ -828,7 +865,7 @@ module ToolName =
 
   let allToolNames : string list = all |> List.map toToolName
 
-  /// The ten cohort verbs as `ToolName`s, so `cohortTools` and `authorityTools`
+  /// The cohort verbs as `ToolName`s, so `cohortTools` and `authorityTools`
   /// are comparable and the old cohort gate is provably a SUBSET of the new
   /// one (there is a test for exactly that, and the compiler keeps
   /// `toCohortTool` total — a new cohort verb forces a case here).
@@ -838,7 +875,11 @@ module ToolName =
       ToolName.AcquireClaim
       ToolName.ReleaseClaim
       ToolName.ReassignClaim
+      ToolName.DelegateConductor
       ToolName.RequestLanding
+      ToolName.WithdrawLanding
+      ToolName.VetoLanding
+      ToolName.ResolveVeto
       ToolName.GetCohortStatus
       ToolName.SetIntegrationRef
       ToolName.MintMember
@@ -846,8 +887,8 @@ module ToolName =
 
   /// The cohort verb `tool` names, or `None` for the other tools — which is
   /// how a caller knows a non-cohort tool must not be looked up in
-  /// `CohortTool`. There is a wildcard arm because `ToolName` covers all 65
-  /// registered tools and only 10 of them ARE cohort verbs, but the ten
+  /// `CohortTool`. There is a wildcard arm because `ToolName` covers every
+  /// registered tool and only some of them ARE cohort verbs, but the
   /// mapping arms above are explicit, so a RENAMED cohort verb cannot quietly
   /// fall through the wildcard into `GetStatus`.
   let tryCohortTool (tool: ToolName) : CohortTool option =
@@ -857,14 +898,18 @@ module ToolName =
     | ToolName.AcquireClaim -> Some CohortTool.AcquireClaim
     | ToolName.ReleaseClaim -> Some CohortTool.ReleaseClaim
     | ToolName.ReassignClaim -> Some CohortTool.ReassignClaim
+    | ToolName.DelegateConductor -> Some CohortTool.DelegateConductor
     | ToolName.RequestLanding -> Some CohortTool.RequestLanding
+    | ToolName.WithdrawLanding -> Some CohortTool.WithdrawLanding
+    | ToolName.VetoLanding -> Some CohortTool.VetoLanding
+    | ToolName.ResolveVeto -> Some CohortTool.ResolveVeto
     | ToolName.GetCohortStatus -> Some CohortTool.GetStatus
     | ToolName.SetIntegrationRef -> Some CohortTool.SetIntegrationRef
     | ToolName.MintMember -> Some CohortTool.MintMember
     | ToolName.RevokeMember -> Some CohortTool.RevokeMember
     | _ -> None
 
-  /// Whether `tool` is one of the ten cohort verbs. Derived from the mapping
+  /// Whether `tool` is one of the cohort verbs. Derived from the mapping
   /// above rather than from the name list, so the two cannot disagree.
   let isCohortTool (tool: ToolName) : bool = Option.isSome (tryCohortTool tool)
 
@@ -996,6 +1041,7 @@ module ToolRole =
   let verifierOnlyTools : Set<ToolName> =
     set [ ToolName.RunTests
           ToolName.TargetedVerify
+          ToolName.VetoLanding
           ToolName.AcquireFullBuildLease
           ToolName.AcquireTestSuiteLease
           ToolName.AcquireRunAppLease
@@ -1019,6 +1065,8 @@ module ToolRole =
   /// `TidyWorkspace` STAYS, because it deletes, and that is exactly the power worth gating.
   let conductorOnlyTools : Set<ToolName> =
     set [ ToolName.ReassignClaim
+          ToolName.DelegateConductor
+          ToolName.ResolveVeto
           ToolName.SetIntegrationRef
           ToolName.MintMember
           ToolName.RevokeMember
@@ -1161,7 +1209,7 @@ module AuthorityRefusal =
 /// session-state gate by INTERSECTION — a call must pass both, and this gate
 /// runs FIRST so a refused call never reaches session resolution.
 ///
-/// It does not widen anything `cohortTools` decided: the ten cohort verbs are
+/// It does not widen anything `cohortTools` decided: the cohort verbs are
 /// intersected with `checkCohortToolAllowed` too, so the old cohort gate
 /// remains exactly as strict and the two can only ever agree.
 ///

@@ -23,7 +23,7 @@ sees only the tools its role allows. And a daemon started with
 `SAGEFS_IDENTITY_POLICY=TokenRequired` shows a connection with no token only
 the status tools, unless that connection is the conductor.
 
-The full advertised set is 66 tools, grouped below. This is separate
+The full advertised set is 70 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those
 HTTP endpoints are not MCP tools.
@@ -411,10 +411,43 @@ daemon's own cohort instead of the one the call acts in. If you see that text, t
 | `acquire_claim` | Take an exclusive claim over a file or project (`file:<path>` or `project:<path>`) so others know it's yours to edit. |
 | `release_claim` | Release a claim you hold. The presented fence must match the current one. |
 | `reassign_claim` | Conductor-only: reassign an orphaned claim to a present member. |
+| `delegate_conductor` | Conductor-only: hand the conductor seat to another **present** member. Only a sitting conductor can issue it, so it cannot fill an empty seat. Refused with the roster of present members when the target is not here, when it is yourself, and when it acts under a member token (no token may call the conductor's tools, so the seat would be stranded). |
 | `request_landing` | Queue a landing: your commits are rebased onto the integration head, verified against affected tests, and fast-forwarded in. Landings are strictly serial (one FIFO queue). |
+| `withdraw_landing` | Take back a landing **you** requested, in any state short of landed or already withdrawn (a vetoed one included). Nobody else can withdraw it, the conductor included. |
+| `veto_landing` | Object to a **live** landing (queued, rebasing or verifying) with a reason. It is blocked, awaiting the conductor, and leaves the queue so it holds nobody behind it. Allowed for a seated Implementer, Verifier or the conductor; refused for an Observer, for someone who never joined and for a member who left. A landing that landed, was withdrawn, is blocked for another reason or is already vetoed is refused, and the first veto and its reason stand. |
+| `resolve_veto` | Conductor-only: clear a veto. The landing queues again as it was, and its claims are checked again when it reaches the front. |
 | `set_integration_ref` | Conductor-only: configure the git ref that landings rebase onto, in a dedicated integration worktree, and the trunk checkout the landings are carried to. The reply names both (`worktree=` and `trunk=`). |
 | `mint_member` | Conductor-only: mint a per-run member token bound to a role, a scope prefix, the one session or checkout it may act on, and an expiry. The token comes back once. See [member tokens](#member-tokens-one-identity-per-agent-run). |
 | `revoke_member` | Conductor-only: cut a member token off. It is refused from the next call, its seat departs and its claims are orphaned. |
+
+### Veto, withdraw and delegate
+
+Four commands sat in the cohort core for a long time with nothing that could issue them: handing the
+conductor seat on, withdrawing a landing, vetoing one, and clearing a veto. So a conductor couldn't leave
+cleanly, nobody could object to a landing, and a vetoed landing said it was waiting for the conductor when the
+conductor had no verb to answer with. They're tools now (`delegate_conductor`, `withdraw_landing`,
+`veto_landing`, `resolve_veto`), and the rules are the cohort's own. `SageFs.Simulation/CohortVetoSpec.fs`
+explores every command against every landing and target, with a twin for each rule that the proof has to catch.
+
+- **Who may veto.** A seated Implementer, a Verifier, or the conductor. The old design said any present member
+  and checked nothing, so someone who never joined, or who had left, could block a landing, and so could an
+  Observer, whose whole job is reading. A veto needs a reason (1 to 1000 characters) and a landing that's still
+  live (queued, rebasing or verifying). Vetoing one that already landed or was withdrawn is refused, not
+  quietly accepted. So is vetoing one that's blocked for another reason (a veto would relabel a rebase conflict
+  as "awaiting the conductor") or already vetoed (the first vetoer and reason stand).
+- **Who may withdraw.** Only the landing's requester.
+- **Who may clear a veto or delegate.** Only the sitting conductor. An empty seat is refused as `VACANT`, and
+  nothing in the tool surface fills one: delegating needs a conductor to do it, and nobody gets promoted by a
+  timer. A person has to restore a conductor.
+- **One conductor at a time.** The seat is a single binding. A delegation moves it from the caller to a present
+  member in one step and the caller is an ordinary member after. A target who isn't present gets refused with
+  the list of members who are. A member acting under a token can't take the seat, because no token may call
+  the conductor's tools and the seat would be stuck with them.
+- **Where it shows.** `get_cohort_status` prints a veto as `Blocked(vetoed by <member>: "<reason>")` plus the
+  two ways out.
+
+A Verifier token may `veto_landing` (that's the role that reads the tests). Observer and Analysis tokens may
+not. `delegate_conductor` and `resolve_veto` are conductor-only and in no token role, like `reassign_claim`.
 
 Claim paths are canonical. `file:src/Foo/../Bar/x.fs` is `file:src/Bar/x.fs`, so
 the two overlap, and a path that climbs out of the repo (`file:../x.fs`) or is
@@ -494,11 +527,11 @@ class is refused, so a new tool cannot be reachable by accident.
 |:---|:---|:---|
 | `Observer` | `get_cohort_status`, `join_cohort`, `leave_cohort`, `get_daemon_status`, `get_session_status`, `list_sessions`, `get_available_projects`, `list_runnable_projects`, `get_friction_report`, `get_friction_summary`, `discover_features`, `get_recent_fsi_events`, `switch_session`, `report_friction` | Observer |
 | `Analysis` | `check_fsharp_code`, `diagnose`, `coverage_intel`, `impact_forecast`, `suggest_next_action`, `plan_ripple`, `preview_what_if`, `suggest_next_cell`, `get_cell_dependencies`, `decompose_pipeline`, `explain_test_failure`, `list_tests`, `suggest_repair`, `get_session_filmstrip`, `get_eval_timeline`, `get_eval_diff`, `get_message_journal`, `export_notebook`, `export_session_transcript`. No eval, no tests. | Observer |
-| `Verifier` | `run_tests`, `targeted_verify`, `acquire_full_build_lease`, `acquire_test_suite_lease`, `acquire_run_app_lease`, `release_work_lease`. No eval. | Verifier |
-| `Implementer` | `send_fsharp_code`, `cancel_eval`, `manage_scratch_pad`, the session tools (`create_*_session`, `reset_fsi_session`, `hard_reset_fsi_session`, `switch_workflow`, `stop_session`, the hot reload tools), `run_app`, `stop_app`, `acquire_claim`, `release_claim`, `request_landing` | Implementer |
+| `Verifier` | `run_tests`, `targeted_verify`, `acquire_full_build_lease`, `acquire_test_suite_lease`, `acquire_run_app_lease`, `release_work_lease`, `veto_landing`. No eval. | Verifier |
+| `Implementer` | `send_fsharp_code`, `cancel_eval`, `manage_scratch_pad`, the session tools (`create_*_session`, `reset_fsi_session`, `hard_reset_fsi_session`, `switch_workflow`, `stop_session`, the hot reload tools), `run_app`, `stop_app`, `acquire_claim`, `release_claim`, `request_landing`, `withdraw_landing` | Implementer |
 
-No role can call `mint_member`, `revoke_member`, `reassign_claim`,
-`set_integration_ref`, `manage_local_data`, `get_workspace_hygiene` or
+No role can call `mint_member`, `revoke_member`, `reassign_claim`, `delegate_conductor`,
+`resolve_veto`, `set_integration_ref`, `manage_local_data`, `get_workspace_hygiene` or
 `tidy_workspace`. A token call also passes the cohort's own role check, so an
 Observer, Analysis or Verifier token can read the cohort but not claim a scope or
 queue a landing. `tools/list` shows a token only the tools its role allows. The

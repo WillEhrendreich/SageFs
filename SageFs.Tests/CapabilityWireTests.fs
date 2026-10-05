@@ -266,12 +266,13 @@ let gateTests =
       })
     }
 
-    testCase "WHY - the cohort's refusal no longer tells an agent the conductor can delegate, because no tool does" <| fun () ->
+    testCase "WHY - the cohort's refusal tells an agent the conductor can hand the seat on, and the tool it names exists" <| fun () ->
       let text =
         CohortErrorMapping.toSageFsError (CohortError.NotConductor(MemberId.Minted "worker"))
         |> SageFsError.describeForAgent
       text |> Expect.stringContains "still says it is conductor-only" "conductor"
-      text.Contains("delegate", StringComparison.OrdinalIgnoreCase) |> Expect.isFalse "there is no delegate tool, so the advice is false"
+      text |> Expect.stringContains "names the tool that hands the seat on" "delegate_conductor"
+      Affordances.declaredGateTools |> Expect.contains "and that tool is registered, so the advice is not a dead end" "delegate_conductor"
 
     testCase "WHY - tools/list shows each caller only what it can call" <| fun () ->
       let registered = Affordances.declaredGateTools

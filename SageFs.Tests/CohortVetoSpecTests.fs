@@ -8,26 +8,35 @@ open SageFs.Simulation
 // `VetoLanding`, `ResolveVeto`). See SageFs.Simulation/CohortVetoSpec.fs: five actors, every command against every
 // landing and every target, every pipeline outcome, and a twin per rule that must be caught by it.
 
+/// One exploration of the real reducer, shared by the two tests that read it.
+let proof = lazy (CohortVetoSpec.proof ())
+
 [<Tests>]
 let tests =
   testList "DST cohort veto, withdraw and delegation spec (exhaustive proof)" [
 
     testCase "the bounded space is fully enumerated and no rule is violated at any state or step" <| fun _ ->
-      let r = CohortVetoSpec.proof ()
+      let r = proof.Value
       r.Complete |> Expect.isTrue "the frontier emptied within the cap, so an empty violation list is a proof of the bound"
       r.Capped |> Expect.isFalse "the cap was not hit"
       Expect.isGreaterThan "the model reaches a non-trivial space" (r.Nodes, 500)
       r.Violations |> Expect.equal "no rule is violated" []
 
     testCase "the exploration actually reaches every step the rules are about, so the proof is not vacuous" <| fun _ ->
-      let r = CohortVetoSpec.proof ()
+      let r = proof.Value
       let expected = CohortVetoSpec.facts |> List.map fst |> List.sort
       r.Reached |> Expect.equal "every named fact was reached at some step" expected
 
     testCase "every twin is caught by the rule it was built for" <| fun _ ->
-      for (name, twin, rule) in CohortVetoSpec.twins do
-        let r = CohortVetoSpec.explore twin CohortVetoSpec.defaultCap
-        r.Violations |> Expect.contains (sprintf "the twin '%s' must violate %s" name rule) rule
+      // Each twin is its own exploration and shares nothing with the others, so they run side by side.
+      let verdicts =
+        CohortVetoSpec.twins
+        |> Array.ofList
+        |> Array.Parallel.map (fun (name, twin, rule) ->
+          let r = CohortVetoSpec.exploreUntil twin CohortVetoSpec.defaultCap (Some rule)
+          name, rule, r.Violations)
+      for (name, rule, violations) in verdicts do
+        violations |> Expect.contains (sprintf "the twin '%s' must violate %s" name rule) rule
 
     testCase "every rule has at least one twin, except the structural one, so no rule passes vacuously" <| fun _ ->
       let covered = CohortVetoSpec.twins |> List.map (fun (_, _, rule) -> rule) |> Set.ofList

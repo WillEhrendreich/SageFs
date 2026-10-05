@@ -72,6 +72,19 @@ module CohortStatusText =
       sprintf "present (as of %s)" nowStamp
     | SageFs.Cohort.SeatState.Departed since -> sprintf "departed at %s" (since.ToString "u")
 
+  /// One landing's state, in words an agent can act on. A veto names WHO vetoed and WHY, and the two ways out;
+  /// `%A` of the blocker printed the member as a union case and the reason in quotes with no next step.
+  let landingStateText (state: SageFs.Cohort.LandingState<SageFs.MemberTable.MemberId>) : string =
+    match state with
+    | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.VetoedBy(by, reason), _) ->
+      sprintf
+        "Blocked(vetoed by %s: \"%s\") awaiting the conductor: resolve_veto clears it, withdraw_landing takes it back"
+        (SageFs.MemberTable.MemberId.display by)
+        reason
+    // default policy: every other state keeps its structural rendering; only a veto carries a member and a
+    // free-text reason that the structural form prints badly.
+    | other -> sprintf "%A" other
+
   let render (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) : string =
     let sb = System.Text.StringBuilder()
     let conductorText =
@@ -155,10 +168,10 @@ module CohortStatusText =
         let commits = String.concat "," frame.LandingCommits.[i]
         sb.AppendLine(
           sprintf
-            "  - %s requester=%s state=%A %s statement=\"%s\" commits=[%s]"
+            "  - %s requester=%s state=%s %s statement=\"%s\" commits=[%s]"
             lid
             requester
-            frame.LandingState.[i]
+            (landingStateText frame.LandingState.[i])
             queuePos
             (Cohort.Statement.value frame.LandingStatement.[i])
             commits

@@ -2664,6 +2664,126 @@ OUTPUT: Confirmation text, or an error (not conductor / claim not orphaned / tar
         |> withEchoOutcome ctx "reassign_claim"
 
     [<McpServerTool>]
+    [<Description("""Hand the conductor seat to another PRESENT cohort member. CONDUCTOR-ONLY, and only from a SITTING conductor — refused with a "not the cohort conductor" error for anyone else, and refused with "the conductor seat is VACANT" when nobody holds it (this tool cannot fill an empty seat).
+
+You stop being the conductor the moment it succeeds; the new conductor alone can then run reassign_claim, delegate_conductor, resolve_veto, set_integration_ref, mint_member and revoke_member. A member acting under a member token cannot be the recipient (no token may call the conductor's tools, so the seat would be stranded).
+
+WHEN TO USE: You are the conductor and are leaving, or another member should run the cohort from here.
+
+OUTPUT: Confirmation naming the new conductor, or a refusal: not conductor, vacant seat, the target is not present (the reply lists the members who are), the target is yourself, or the target holds a member token.""")>]
+    member _.delegate_conductor(
+        [<Description("Your agent or model name — must be the cohort's current conductor.")>]
+        agentName: string,
+        [<Description("The new conductor's display name exactly as get_cohort_status prints it (e.g. 'mcp:...' or a plain agent name). Must be a present member.")>]
+        toMember: string,
+        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: delegate_conductor called by {AgentName}, to={ToMember}", agentName, toMember)
+        task {
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
+          let! result = SageFs.McpCohortTools.delegateConductor ctx agentName toMember wd
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "delegate_conductor"
+
+    [<McpServerTool>]
+    [<Description("""Withdraw a landing YOU requested, whatever state it is in short of Landed or already withdrawn (queued, rebasing, verifying, or blocked — including blocked by a veto). Only the landing's own requester may withdraw it; nobody else can, not even the conductor.
+
+WHEN TO USE: Your landing should not go ahead (you found a mistake, a veto was raised and you would rather resubmit, or its blocker means you will redo it).
+
+OUTPUT: Confirmation, or a refusal: not the requester, no such landing, or the landing is already over. The landing id comes from request_landing's output or get_cohort_status.""")>]
+    member _.withdraw_landing(
+        [<Description("Your agent or model name — must be the one that requested the landing.")>]
+        agentName: string,
+        [<Description("The landing id (from request_landing's output or get_cohort_status).")>]
+        landingId: string,
+        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: withdraw_landing called by {AgentName}, landing={LandingId}", agentName, landingId)
+        task {
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
+          let! result = SageFs.McpCohortTools.withdrawLanding ctx agentName landingId wd
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "withdraw_landing"
+
+    [<McpServerTool>]
+    [<Description("""Object to someone's landing, with a reason. The landing is blocked (awaiting the conductor) and taken out of the queue, so it holds nobody behind it. Allowed for a seated Implementer, Verifier or the conductor; an Observer, someone who never joined, or a member who left is refused. Only a LIVE landing can be vetoed (queued, rebasing or verifying): a landing that already landed or was withdrawn, one that is blocked for another reason, and one that is already vetoed are all refused, and the first veto and its reason stand.
+
+The conductor clears a veto with resolve_veto (the landing queues again, its claims re-checked at the front); the requester can instead withdraw_landing. get_cohort_status shows who vetoed and why.
+
+WHEN TO USE: The landing is wrong or premature and you can say why in a sentence.
+
+OUTPUT: Confirmation, or a refusal naming the rule: no seat, read-only role, blank or over-long reason, unknown landing, or the landing is not live.""")>]
+    member _.veto_landing(
+        [<Description("Your agent or model name — must match the name you joined with.")>]
+        agentName: string,
+        [<Description("The landing id to veto (from request_landing's output or get_cohort_status).")>]
+        landingId: string,
+        [<Description("Why the landing should not go ahead (1-1000 chars). The requester and the conductor read it in get_cohort_status.")>]
+        reason: string,
+        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: veto_landing called by {AgentName}, landing={LandingId}", agentName, landingId)
+        task {
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
+          let! result = SageFs.McpCohortTools.vetoLanding ctx agentName landingId reason wd
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "veto_landing"
+
+    [<McpServerTool>]
+    [<Description("""Clear a veto on a landing, and queue it again as it was. CONDUCTOR-ONLY — refused with a "not the cohort conductor" error for anyone else, and with "the conductor seat is VACANT" when nobody holds the seat.
+
+The landing goes to the back of the queue; its claims are checked again when it reaches the front, so a claim that went stale while it sat vetoed surfaces then. Only a landing that is currently vetoed can be cleared.
+
+WHEN TO USE: get_cohort_status shows a landing blocked by a veto, and you have read the reason and decided it should proceed.
+
+OUTPUT: Confirmation, or a refusal: not the conductor, no such landing, or the landing is not vetoed.""")>]
+    member _.resolve_veto(
+        [<Description("Your agent or model name — must be the cohort's current conductor.")>]
+        agentName: string,
+        [<Description("The vetoed landing's id (from get_cohort_status).")>]
+        landingId: string,
+        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: resolve_veto called by {AgentName}, landing={LandingId}", agentName, landingId)
+        task {
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
+          let! result = SageFs.McpCohortTools.resolveVeto ctx agentName landingId wd
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "resolve_veto"
+
+    [<McpServerTool>]
     [<Description("""Queue a landing request: your commits are rebased onto the integration head, verified (affected tests, served from the content-addressed cache when inputs are unchanged), and fast-forwarded in. v1 landings are strictly serial (one FIFO queue): the daemon's landing performer processes them in order through real git rebase/fast-forward — so this queues the request AND the pipeline runs it; watch its progress via get_cohort_status / the cohort://status resource.
 
 OUTPUT: Confirmation text with the new landing id, or a validation error (invalid statement, unknown/stale claim).""")>]
@@ -2702,7 +2822,7 @@ OUTPUT: Confirmation text with the new landing id, or a validation error (invali
 
 WHEN TO USE: Before acquiring a claim (check for conflicts), to see who else is in the cohort, or to find a claim/landing id to act on.
 
-OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing queue — each landing's id, requester, state (Queued/Rebasing/Verifying/Blocked/Landed/Withdrawn), queue position, and the current integration head. The same landing state is on the cohort://status MCP resource, so you can subscribe instead of polling.
+OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing queue — each landing's id, requester, state (Queued/Rebasing/Verifying/Blocked/Landed/Withdrawn), queue position, and the current integration head. A vetoed landing reads `Blocked(vetoed by <member>: "<reason>")`, followed by the two ways out: the conductor's resolve_veto or the requester's withdraw_landing. The same landing state is on the cohort://status MCP resource, so you can subscribe instead of polling.
 
 Once an integration is configured it ends with the trunk: one `trunk <landing id>: ...` line per landing that landed, saying what the trunk session's running app did with it (the file, the outcome such as PatchPending, Patched or Restarted, the mechanism such as metadata-delta or detour, and the cause of a restart), or that there is no running app to update.""")>]
     member _.get_cohort_status(

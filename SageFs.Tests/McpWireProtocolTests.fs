@@ -48,6 +48,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "create_project_session"
       "create_solution_session"
       "decompose_pipeline"
+      "delegate_conductor"
       "diagnose"
       "disable_hot_reload"
       "discover_features"
@@ -89,6 +90,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "release_work_lease"
       "reset_fsi_session"
       "reset_hot_reload_state"
+      "resolve_veto"
       "run_app"
       "run_tests"
       "send_fsharp_code"
@@ -103,6 +105,8 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "switch_workflow"
       "targeted_verify"
       "tidy_workspace"
+      "veto_landing"
+      "withdraw_landing"
     ]
     let actual =
       findMcpToolMethods ()

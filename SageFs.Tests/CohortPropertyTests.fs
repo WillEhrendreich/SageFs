@@ -90,6 +90,8 @@ type Intent =
   | IFastForward of landingIdx: int
   | IWithdraw of agent: int * landingIdx: int
   | IVeto of by: int * landingIdx: int
+  | IDelegate of by: int * toAgent: int
+  | IResolveVeto of by: int * landingIdx: int
 
 let private genIntent =
   Gen.frequency [
@@ -114,6 +116,29 @@ let private genIntent =
 
 let private genIntents =
   Gen.choose (5, 40) |> Gen.bind (fun n -> Gen.listOfLength n genIntent)
+
+/// The ordinary intents plus the four commands tools issue now. Kept out of `genIntent` on purpose: property 21
+/// pins that WITHOUT a delegation the seat never moves, and mixing delegations into that history would end it.
+let genDelegatingIntent =
+  Gen.frequency [
+    4, genIntent
+    4, Gen.map2 (fun b t -> IDelegate(b, t)) (Gen.choose (1, 4)) (Gen.choose (1, 5))
+    4, Gen.map2 (fun a c -> IRequestLanding(a, c)) (Gen.choose (1, 4)) (Gen.choose (0, 1000))
+    3, Gen.map2 (fun b l -> IVeto(b, l)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
+    3, Gen.map2 (fun b l -> IResolveVeto(b, l)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
+    2, Gen.map2 (fun a l -> IWithdraw(a, l)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
+  ]
+
+/// Four agents seated first (1 joins first, so it is the conductor; 2 and 1 implement, 3 verifies, 4 observes), so a
+/// generated history spends its steps on the commands under test and not on getting anyone into the cohort.
+let seating = [ IJoin(1, JoinableRole.Implementer); IJoin(2, JoinableRole.Implementer); IJoin(3, JoinableRole.Verifier); IJoin(4, JoinableRole.Observer) ]
+
+/// A history that includes delegations, vetoes, clears and withdrawals.
+type DelegatingHistory = DelegatingHistory of Intent list
+
+type DelegatingGenerators =
+  static member History() =
+    Arb.fromGen (Gen.choose (10, 60) |> Gen.bind (fun n -> Gen.listOfLength n genDelegatingIntent) |> Gen.map (fun intents -> DelegatingHistory(seating @ intents)))
 
 type private CohortGenerators =
   static member Intent() = Arb.fromGen genIntent
@@ -245,6 +270,12 @@ let private applyIntent (h: Harness) (intent: Intent) : Harness =
     match resolveLanding h l with
     | None -> h
     | Some lid -> applyCommand h (CohortCommand.VetoLanding(agentOf by, lid, "veto reason", machine))
+  // `toAgent` 5 is an agent that never joins (`agentOf` maps 1..4), so absent targets are generated too.
+  | IDelegate(by, toA) -> applyCommand h (CohortCommand.DelegateConductor(agentOf by, (if toA = 5 then { Id = 5; Display = "agent-5" } else agentOf toA), machine))
+  | IResolveVeto(by, l) ->
+    match resolveLanding h l with
+    | None -> h
+    | Some lid -> applyCommand h (CohortCommand.ResolveVeto(agentOf by, lid, machine))
 
 let private run (intents: Intent list) : Harness = intents |> List.fold applyIntent (initHarness ())
 
@@ -333,6 +364,12 @@ let private toLedger (intents: Intent list) : LedgerEntry<Agent> list =
         else
           let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
           Some(CohortCommand.VetoLanding(agentOf by, lid, "veto reason", machine))
+      | IDelegate(by, toA) -> Some(CohortCommand.DelegateConductor(agentOf by, (if toA = 5 then { Id = 5; Display = "agent-5" } else agentOf toA), machine))
+      | IResolveVeto(by, l) ->
+        if state.Landings.IsEmpty then None
+        else
+          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
+          Some(CohortCommand.ResolveVeto(agentOf by, lid, machine))
     match cmdOpt with
     | None -> ()
     | Some cmd ->
@@ -715,7 +752,8 @@ let cohortPropertyTests =
           | _ -> false
         let refusedToNonMember =
           match decide h2.Clock [| 2uy |] h2.State (CohortCommand.DelegateConductor(conductor, stranger, machine)) with
-          | Error(CohortError.MemberNotPresent m) -> m = stranger
+          // The refusal names the target and carries the roster of present members, so the caller can pick one.
+          | Error(CohortError.DelegateTargetAbsent(m, roster)) -> m = stranger && List.sort roster = List.sort [ conductor; other ]
           | _ -> false
         let delegationOk =
           match decide h2.Clock [| 3uy |] h2.State (CohortCommand.DelegateConductor(conductor, other, machine)) with
@@ -767,6 +805,147 @@ let cohortPropertyTests =
           // one, which would mean something unbound it without ever saying so
           | ConductorBinding.NeverBound -> false
         | _ -> false
+    ]
+
+    testList "delegation, veto and withdrawal — the commands tools issue (22-27)" [
+
+      // Seeded: a failing run reproduces from the seed the runner prints, and CI reruns the same histories.
+      // Histories mix every ordinary intent with delegations (including to an agent that never joined),
+      // vetoes, clears and withdrawals.
+      let delegatingConfig = { cohortConfig with arbitrary = [ typeof<DelegatingGenerators> ]; replay = Some(0x5EEDUL, 0xC0407UL, None) }
+
+      let isPresentIn (state: CohortState<Agent>) (who: Agent) =
+        match Map.tryFind who state.Members with
+        | Some { Presence = MemberPresence.Present } -> true
+        | _ -> false
+
+      let presentRoster (state: CohortState<Agent>) : Agent list =
+        state.Members
+        |> Map.toList
+        |> List.choose (fun (m, r) -> match r.Presence with MemberPresence.Present -> Some m | MemberPresence.Departed _ -> None)
+
+      let conductorsIn (state: CohortState<Agent>) : Agent list =
+        state.Members |> Map.toList |> List.map fst |> List.filter (fun m -> Authority.present m state = Authority.Conductor m)
+
+      testCase "28: the generated histories actually reach each command (accepted, not only attempted), so 22-27 are not vacuous" <| fun _ ->
+        let histories =
+          Gen.sample 300 (DelegatingGenerators.History() |> Arb.toGen)
+          |> Array.map (fun (DelegatingHistory intents) -> run intents)
+        let accepted (matches: CohortCommand<Agent> -> bool) =
+          histories |> Array.sumBy (fun h -> h.Steps |> List.filter (fun s -> matches s.Command) |> List.length)
+        let delegated = accepted (function CohortCommand.DelegateConductor _ -> true | _ -> false)
+        let vetoed = accepted (function CohortCommand.VetoLanding _ -> true | _ -> false)
+        let cleared = accepted (function CohortCommand.ResolveVeto _ -> true | _ -> false)
+        let withdrawn = accepted (function CohortCommand.WithdrawLanding _ -> true | _ -> false)
+        Expect.isGreaterThan "delegations are accepted in generated histories" (delegated, 10)
+        Expect.isGreaterThan "vetoes are accepted" (vetoed, 10)
+        Expect.isGreaterThan "vetoes are cleared" (cleared, 0)
+        Expect.isGreaterThan "withdrawals are accepted" (withdrawn, 10)
+
+      testPropertyWithConfig delegatingConfig "22: a delegation leaves exactly one conductor, the named present member, and the old holder is an ordinary member" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        h.Steps
+        |> List.forall (fun step ->
+          step.Events
+          |> List.forall (function
+            | CohortEvent.ConductorDelegated(from, target) ->
+              Authority.present from step.Before = Authority.Conductor from
+              && Authority.present target step.After = Authority.Conductor target
+              && Authority.present from step.After <> Authority.Conductor from
+              && List.length (conductorsIn step.After) = 1
+            | _ -> true))
+
+      testPropertyWithConfig delegatingConfig "23: the seat moves from one bound member to another by a delegation by the holder, and by nothing else" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        h.Steps
+        |> List.forall (fun step ->
+          match step.Before.Conductor, step.After.Conductor with
+          | ConductorBinding.Bound before, ConductorBinding.Bound now when before <> now ->
+            (match step.Command with
+             | CohortCommand.DelegateConductor(by, target, _) -> by = before && target = now
+             | _ -> false)
+          | _ -> true)
+
+      testPropertyWithConfig delegatingConfig "24: an accepted veto came from a seated non-observer, with a reason, on a live landing; and the first veto stands" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        h.Steps
+        |> List.forall (fun step ->
+          match step.Command with
+          | CohortCommand.VetoLanding(by, id, reason, _) ->
+            let standing =
+              match Authority.present by step.Before with
+              | Authority.Conductor _
+              | Authority.Member(_, JoinableRole.Implementer)
+              | Authority.Member(_, JoinableRole.Verifier) -> true
+              | Authority.Member(_, JoinableRole.Observer)
+              | Authority.Anonymous -> false
+            let live =
+              match Map.tryFind id step.Before.Landings with
+              | Some { State = LandingState.Queued }
+              | Some { State = LandingState.Rebasing _ }
+              | Some { State = LandingState.Verifying _ } -> true
+              | _ -> false
+            let recorded =
+              match step.After.Landings.[id].State with
+              | LandingState.Blocked(LandingBlocker.VetoedBy(vetoer, text), NextAction.AwaitConductor) -> vetoer = by && text = reason.Trim()
+              | _ -> false
+            standing && reason.Trim() <> "" && live && recorded && not (List.contains id step.After.Queue)
+          | _ -> true)
+
+      testPropertyWithConfig delegatingConfig "25: after any history, a veto, a clear or a withdrawal of a landing that landed or was withdrawn is REFUSED for everyone, never accepted as a no-op" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        let settled =
+          h.State.Landings
+          |> Map.toList
+          |> List.filter (fun (_, l) -> match l.State with LandingState.Landed _ | LandingState.Withdrawn -> true | _ -> false)
+          |> List.map fst
+        [ for lid in settled do
+            for who in [ agentOf 1; agentOf 2; agentOf 3; agentOf 4 ] do
+              yield CohortCommand.VetoLanding(who, lid, "late", machine)
+              yield CohortCommand.ResolveVeto(who, lid, machine)
+              yield CohortCommand.WithdrawLanding(who, lid, machine) ]
+        |> List.forall (fun cmd ->
+          match decide h.Clock [| 9uy |] h.State cmd with
+          | Error _ -> true
+          | Ok _ -> false)
+
+      testPropertyWithConfig delegatingConfig "26: an accepted withdrawal is by the landing's own requester, and an accepted clear is by the conductor of a vetoed landing" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        h.Steps
+        |> List.forall (fun step ->
+          match step.Command with
+          | CohortCommand.WithdrawLanding(who, id, _) -> step.Before.Landings.[id].Requester = who
+          | CohortCommand.ResolveVeto(by, id, _) ->
+            Authority.present by step.Before = Authority.Conductor by
+            && (match step.Before.Landings.[id].State with LandingState.Blocked(LandingBlocker.VetoedBy _, _) -> true | _ -> false)
+          | _ -> true)
+
+      testPropertyWithConfig delegatingConfig "27: a delegation to someone who is not present is refused with the roster of those who are; a delegation by anyone but the sitting conductor is refused" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        let roster = presentRoster h.State |> List.sort
+        let everyone = [ for i in 1 .. 5 -> if i = 5 then { Id = 5; Display = "agent-5" } else agentOf i ]
+        match h.State.Conductor with
+        | ConductorBinding.Bound conductor ->
+          everyone
+          |> List.forall (fun target ->
+            match decide h.Clock [| 9uy |] h.State (CohortCommand.DelegateConductor(conductor, target, machine)) with
+            | Ok _ -> isPresentIn h.State target && target <> conductor
+            | Error(CohortError.DelegateToSelf who) -> who = conductor && target = conductor
+            | Error(CohortError.DelegateTargetAbsent(refused, listed)) -> refused = target && not (isPresentIn h.State target) && List.sort listed = roster
+            | Error _ -> false)
+          && (everyone
+              |> List.filter (fun by -> by <> conductor)
+              |> List.forall (fun by ->
+                match decide h.Clock [| 9uy |] h.State (CohortCommand.DelegateConductor(by, conductor, machine)) with
+                | Error(CohortError.NotConductor who) -> who = by
+                | _ -> false))
+        | ConductorBinding.NeverBound
+        | ConductorBinding.Vacant _ ->
+          everyone
+          |> List.forall (fun by ->
+            match decide h.Clock [| 9uy |] h.State (CohortCommand.DelegateConductor(by, by, machine)) with
+            | Error(CohortError.ConductorVacant _) -> true
+            | _ -> false)
     ]
 
     testList "read model (10)" [
