@@ -88,6 +88,12 @@ let view =
       h |> contains "No projects" "says nothing was found"
       h |> contains (sprintf "value=\"%s\"" (TargetKind.key TargetKind.BareSession)) "Bare is still offered"
 
+    testCase "WHY — with no directory yet the dialog asks for one instead of claiming nothing was found there" <| fun _ ->
+      let h = html (NewSessionDialog.Choosing (Found.nothing ""))
+      h |> contains "Choose a directory" "asks for a directory"
+      h |> excludes "No projects or solutions found" "does not report a find in nothing"
+      h |> excludes "role=\"alert\"" "no alarm for an empty box"
+
     testCase "WHY — all three workflows appear with their one line, as a labelled radio group" <| fun _ ->
       let h = html (NewSessionDialog.Choosing twoCandidates)
       h |> contains "<fieldset" "a group"

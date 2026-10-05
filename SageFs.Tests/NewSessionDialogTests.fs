@@ -158,6 +158,10 @@ let stateMachine =
       |> Expect.equal "refused in the dialog"
         (NewSessionDialog.Refused(Refusal.DirectoryMissing "/nope", Found.nothing "/nope"))
 
+    testCase "WHY — opening on an empty directory box is not a refusal: the dialog waits for a directory, with nothing to list" <| fun _ ->
+      NewSessionDialog.step (NewSessionDialog.Discovering "") (Event.Missing("", Refusal.NoDirectory))
+      |> Expect.equal "Choosing with nothing found, no red banner" (NewSessionDialog.Choosing (Found.nothing ""))
+
     testCase "WHY — Submit moves to Creating and keeps what discovery found, so a refusal can show the choices again" <| fun _ ->
       let found = foundIn "/work/repo"
       let req = request "/work/repo" Target.Bare
