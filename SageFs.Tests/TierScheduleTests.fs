@@ -198,6 +198,25 @@ let tests =
         let big = { small with UsableThreads = threads.Get + moreThreads.Get }
         hostShardCount big suites >= hostShardCount small suites
 
+    // ── the FSI host prebuild ──
+    // A case builds the host for the SDK its project pins. Only the repo's pinned SDK was prebuilt, so a case on net10 paid
+    // a cold host build (about 11 s, 24 CPU s) inside the case.
+    testCase "WHY — every installed SDK gets a host prebuilt, the repo's pinned one first so the tiers' own SDK is ready earliest" <| fun _ ->
+      hostPrebuildSdks "11.0.100-rc.1" [ "10.0.401"; "11.0.100-rc.1" ]
+      |> Expect.equal "pinned first, then the rest" [ "11.0.100-rc.1"; "10.0.401" ]
+
+    testCase "WHY — a pinned SDK that the listing did not show is still prebuilt: the pin is what the tiers ask for" <| fun _ ->
+      hostPrebuildSdks "11.0.100" [ "10.0.401" ]
+      |> Expect.equal "the pin, then the installed" [ "11.0.100"; "10.0.401" ]
+
+    testProperty "WHY — the prebuild set is the pin and every installed SDK, each once: a missing one is a cold build in a case, a repeat is a wasted build" <|
+      fun (pinned: NonEmptyString) (installed: NonEmptyString list) ->
+        let installedVersions = installed |> List.map (fun v -> v.Get)
+        let result = hostPrebuildSdks pinned.Get installedVersions
+        List.head result = pinned.Get
+        && result = List.distinct result
+        && Set.ofList result = Set.ofList (pinned.Get :: installedVersions)
+
     // ── coverage ──
     testCase "WHY — shards that between them registered every host case are Covered" <| fun _ ->
       checkHostCoverage 330 [ 61; 36; 76; 71; 86 ] |> Expect.equal "61+36+76+71+86" Covered
