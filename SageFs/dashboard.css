@@ -1271,7 +1271,11 @@ h2 {
   background: var(--bg-panel);
 }
 
+/* `app-output-bar` is the second pane's collapsed bar: the same strip, its own class, because two panes
+   share one dock and a shared class makes an open bindings pane beside a collapsed output pane read as a
+   collapsed bindings pane. */
 .live-dock-bar,
+.app-output-bar,
 .live-pane-bar {
   display: flex;
   flex-wrap: wrap;
@@ -1307,6 +1311,29 @@ h2 {
 
 .live-pane-stamp:empty {
   display: none;
+}
+
+/* The app-output pane's lines. stdout is ordinary output; stderr is the one you are reading for, so it is
+   coloured and never muted — a stack trace rendered as ordinary text is the failure this pane exists to
+   stop. Both keep the terminal's own face, because this is program output and not prose. */
+.app-output-lines {
+  overflow-y: auto;
+  padding: 4px 8px;
+  font-family: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.app-output-line {
+  padding: 1px 0;
+}
+
+.app-output-stdout {
+  color: var(--fg-default);
+}
+
+.app-output-stderr {
+  color: var(--fg-red);
 }
 
 /* The pane inside the dock: not the bordered, padded card the sidebar panels are. */

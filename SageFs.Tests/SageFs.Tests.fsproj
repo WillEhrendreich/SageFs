@@ -837,6 +837,7 @@
         <Compile Include="DashboardPanelVisibilityTests.fs" />
         <Compile Include="DockPanesTests.fs" />
         <Compile Include="AppOutputPaneTests.fs" />
+        <Compile Include="AppOutputViewTests.fs" />
         <Compile Include="AppOutputProtocolTests.fs" />
         <Compile Include="CohortTerritoryPanelTests.fs" />
         <Compile Include="CohortInspectorTests.fs" />

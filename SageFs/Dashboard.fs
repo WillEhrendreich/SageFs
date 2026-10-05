@@ -882,7 +882,12 @@ let buildDashboardSnapshotWithSessions
         match sid.Length > 0 with
         | true -> DockPanes.SessionInView
         | false -> DockPanes.NoSessionInView
-      LiveBindingsDock.renderDockWith tweakView session (WorkerProtocol.SessionId.value sessionId) bindingsSource
+      LiveBindingsDock.renderDockWith
+        tweakView
+        session
+        (WorkerProtocol.SessionId.value sessionId)
+        bindingsSource
+        (q.GetAppOutput sessionId)
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let warmupProgress = q.GetWarmupProgress sessionId

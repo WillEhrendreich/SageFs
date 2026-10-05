@@ -386,27 +386,51 @@ let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecaus
 /// The dock, decided and drawn. Both answers of the pin are rendered when the pin can matter (the signal picks between them);
 /// when a session has bindings, or there is no session to pin on, only the one answer exists. `tweaks` is what the session's files
 /// say about each row (the persistence state and the knob): rows it has nothing for are drawn as they always were.
-let renderDockWith (tweaks: TweakView) (session: SessionInView) (sessionId: string) (source: BindingsSource) : XmlNode =
-  // `AppOutput` is NoAppOutput here on purpose: this function renders the LIVE BINDINGS pane and is
-  // handed nothing about the app's streams. The app-output pane's own fact arrives when the daemon
-  // starts holding its buffer (AppOutputPane.feedText on the 150ms flush); until then the dock's
-  // second pane has genuinely seen nothing, so saying so is the accurate answer rather than a placeholder.
-  let facts : PaneFacts = { Session = session; Bindings = BindingsSource.presence source; AppOutput = NoAppOutput; Pin = Unpinned }
+let renderDockWith
+  (tweaks: TweakView)
+  (session: SessionInView)
+  (sessionId: string)
+  (source: BindingsSource)
+  (appOutput: SageFs.Server.AppOutputPane.AppOutputPane option)
+  : XmlNode =
+  // The app-output pane's fact comes from the buffer it is handed, not from a separate count: two
+  // sources for one decision is how a pane opens on output the drawer cannot find.
+  let appPresence =
+    match appOutput with
+    | Some pane -> AppOutputPresence.ofCount (SageFs.Server.AppOutputPane.AppOutputBuffer.count pane.Buffer)
+    | None -> AppOutputPresence.NoAppOutput
+
+  let facts : PaneFacts =
+    { Session = session
+      Bindings = BindingsSource.presence source
+      AppOutput = appPresence
+      Pin = Unpinned }
+
   let shell (children: XmlNode list) = Elem.div [ Attr.id DockIds.Dock; Attr.class' "live-dock" ] children
-  match PaneState.decide facts DockPane.LiveBindings with
-  | PaneOpen because -> shell [ renderPaneWith tweaks sessionId source because ShownAlways ]
-  | PaneCollapsed why ->
-    match CollapsedBecause.pin why with
-    | PinNotOffered -> shell [ renderCollapsedBar why ShownAlways ]
-    | PinOffered ->
-      match PaneState.decide { facts with Pin = Pinned } DockPane.LiveBindings with
-      | PaneOpen pinnedBecause ->
-        shell [ renderCollapsedBar why ShownUnlessPinned; renderPaneWith tweaks sessionId source pinnedBecause ShownOnlyWhilePinned ]
-      | PaneCollapsed _ -> shell [ renderCollapsedBar why ShownAlways ]
+
+  let liveBindings =
+    match PaneState.decide facts DockPane.LiveBindings with
+    | PaneOpen because -> [ renderPaneWith tweaks sessionId source because ShownAlways ]
+    | PaneCollapsed why ->
+      match CollapsedBecause.pin why with
+      | PinNotOffered -> [ renderCollapsedBar why ShownAlways ]
+      | PinOffered ->
+        match PaneState.decide { facts with Pin = Pinned } DockPane.LiveBindings with
+        | PaneOpen pinnedBecause ->
+          [ renderCollapsedBar why ShownUnlessPinned; renderPaneWith tweaks sessionId source pinnedBecause ShownOnlyWhilePinned ]
+        | PaneCollapsed _ -> [ renderCollapsedBar why ShownAlways ]
+
+  // Qualified rather than `open`: AppOutputView has its own `renderCollapsedBar`, and opening it here
+  // would make this file's own one silently resolve to the other pane's.
+  let appOutputPane =
+    let pane = Option.defaultValue SageFs.Server.AppOutputPane.AppOutputPane.create appOutput
+    [ SageFs.Server.AppOutputView.render (PaneState.decide facts DockPane.AppOutput) pane ]
+
+  shell (liveBindings @ appOutputPane)
 
 /// The dock with no knob (a session whose files have not been asked about, and the no-session page).
 let renderDock (session: SessionInView) (sessionId: string) (source: BindingsSource) : XmlNode =
-  renderDockWith TweakView.none session sessionId source
+  renderDockWith TweakView.none session sessionId source None
 
 /// A brief highlight on a value that changed. It is drawn from what the SSE morph really rewrote, so only a changed value
 /// flashes and nothing polls: the browser's own mutation record says a `.live-preview` text node was replaced, and that cell

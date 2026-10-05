@@ -114,6 +114,8 @@
         <Compile Include="NewSessionDialog.fs" />
         <Compile Include="NewSessionDiscovery.fs" />
     <Compile Include="DashboardFragments.fs" />
+    <!-- After DashboardFragments (textEnc/testid) and DockPanes (the decision it draws). -->
+    <Compile Include="AppOutputView.fs" />
         <!-- The live-bindings knob's row: the persistence state in words, and the control a state allows. Typed Datastar helpers only. -->
         <Compile Include="LiveBindingsTweakView.fs" />
         <Compile Include="LiveBindingsDock.fs" />
