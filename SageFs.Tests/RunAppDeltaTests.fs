@@ -443,7 +443,11 @@ let costCases (runtime: HostRuntime) : Test list =
       let! on = spinTimes SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime
       let cpu (runs: SpinRun list) = runs |> List.map (fun r -> r.CpuMs)
       let wall (runs: SpinRun list) = runs |> List.map (fun r -> r.WallMs)
-      let ratio = median (cpu on) / median (cpu off)
+      // The cheapest run of each mode, not the median: on a loaded machine a run only ever costs MORE (a sibling
+      // hyperthread, a tiering compile that landed inside it), so the cheapest is the one closest to what the
+      // route costs. Ten runs alone at a load average of 6 to 27 put the ratio of CPU medians between 0.73 and 1.47;
+      // the ratio printed below is of the cheapest runs.
+      let ratio = List.min (cpu on) / List.min (cpu off)
       eprintfn "DELTA-COST machine: %s" (machine ())
       eprintfn "DELTA-COST [%s] %d calls of a NoInlining method, n=%d runs after a warm-up, CPU time: route off %s ms (median %.0f), route on %s ms (median %.0f), ratio %.2f; wall time off %s ms, on %s ms (reported, not asserted)"
         (HostRuntime.moniker runtime) 50000000 spinRuns
