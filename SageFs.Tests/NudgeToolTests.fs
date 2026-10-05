@@ -97,6 +97,48 @@ let renderTests =
       text formula "kind" |> Expect.equal "a formula" "Formula"
       text reply "listing" |> Expect.equal "complete" "Complete"
       ((field reply "undoSteps").GetInt32(), (field reply "redoSteps").GetInt32()) |> Expect.equal "no history yet" (0, 0)
+
+    testCase "WHY - an inspected value says where it sits (line, column, endLine, endColumn) so a client never searches the file for its text" <| fun _ ->
+      let world = create ()
+      let reply = McpNudge.render (inspectAll world) |> json
+      let items = field reply "items" |> fun e -> [ for item in e.EnumerateArray() -> item ]
+      let lines = tuningSource.Split '\n'
+      let sliceOf (item: JsonElement) : string =
+        let line = (field item "line").GetInt32()
+        let column = (field item "column").GetInt32()
+        let endLine = (field item "endLine").GetInt32()
+        let endColumn = (field item "endColumn").GetInt32()
+        match line = endLine with
+        | true -> lines.[line - 1].Substring(column, endColumn - column)
+        | false ->
+          let first = lines.[line - 1].Substring column
+          let middle = [ for n in line .. endLine - 2 -> lines.[n] ]
+          let last = lines.[endLine - 1].Substring(0, endColumn)
+          String.Join("\n", [ first ] @ middle @ [ last ])
+      for item in items do
+        sliceOf item |> Expect.equal (sprintf "the span of %s holds exactly its text" (text item "address")) (text item "text")
+      let gravityItem = items |> List.find (fun i -> text i "address" = NudgeAddress.format gravity)
+      ((field gravityItem "line").GetInt32(), (field gravityItem "column").GetInt32())
+      |> Expect.equal "lines are the parser's own (1-based) and columns are 0-based, as the diagnostics wire has them" (3, 14)
+
+    testCase "WHY - a literal's value comes typed by its kind, so a client reads a number as a number and a union case as its name" <| fun _ ->
+      let world = create ()
+      let reply = McpNudge.render (inspectAll world) |> json
+      let items = field reply "items" |> fun e -> [ for item in e.EnumerateArray() -> item ]
+      let valueOf (address: TweakAddress) = field (items |> List.find (fun i -> text i "address" = NudgeAddress.format address)) "value"
+      (valueOf gravity).ValueKind |> Expect.equal "a real is a JSON number" JsonValueKind.Number
+      (valueOf gravity).GetDouble() |> Expect.equal "its value" 9.8
+      (valueOf maxHealth).ValueKind |> Expect.equal "an integer is a JSON number" JsonValueKind.Number
+      (valueOf maxHealth).GetInt64() |> Expect.equal "its value" 100L
+      (valueOf difficulty).GetString() |> Expect.equal "a union case is its name" "Easy"
+      (valueOf label).GetString() |> Expect.equal "text is its content, without the quotes the source spells it with" "A"
+
+    testCase "WHY - a formula has no value to read, so it carries no value field at all, not a null a client would mistake for a literal" <| fun _ ->
+      let world = create ()
+      let reply = McpNudge.render (inspectAll world) |> json
+      let formula = field reply "items" |> fun e -> [ for item in e.EnumerateArray() -> item ] |> List.find (fun i -> text i "address" = NudgeAddress.format jumpVelocity)
+      let mutable found = JsonElement()
+      formula.TryGetProperty("value", &found) |> Expect.isFalse "no value on a formula"
   ]
 
 [<Tests>]
@@ -366,4 +408,27 @@ let identityTests =
 
     testCase "WHY - the tool is registered, so tools/list and discovery carry it" <| fun _ ->
       RegisteredTools.describe typeof<SageFsTools> |> List.map (fun t -> t.Name) |> Expect.contains "registered" "nudge_value"
+  ]
+
+// ── what the tool says about itself ──
+
+let private nudgeMethod = typeof<SageFsTools>.GetMethod "nudge_value"
+
+let private descriptionOf (attributes: Reflection.ICustomAttributeProvider) : string =
+  match attributes.GetCustomAttributes(typeof<System.ComponentModel.DescriptionAttribute>, false) |> Array.tryHead with
+  | Some(:? System.ComponentModel.DescriptionAttribute as d) -> d.Description
+  | _ -> ""
+
+[<Tests>]
+let describedTests =
+  testList "nudge_value describes what it does" [
+    testCase "WHY - the tool says a file outside the session's projects is refused as NotOwned, and a project file hot reload does not watch is written with the FileNotWatched note, because that is what the code does" <| fun _ ->
+      let description = descriptionOf nudgeMethod
+      let notOwned = NudgeRefusal.token (NudgeRefusal.NotOwned("x", NotOwnedWhy.NotAmongProjectFiles))
+      description |> Expect.stringContains "names the refusal for a file outside the projects" notOwned
+      description |> Expect.stringContains "names the note for an unwatched project file" (RunNote.token RunNote.FileNotWatched)
+
+    testCase "WHY - the file parameter does not claim the file must be watched, because an unwatched project file is accepted" <| fun _ ->
+      let file = nudgeMethod.GetParameters() |> Array.find (fun p -> p.Name = "file")
+      (descriptionOf file).Contains "watches" |> Expect.isFalse "no claim that the file must be one hot reload watches"
   ]
