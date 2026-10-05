@@ -19,6 +19,19 @@ let private cost (cpu: float) (peakGiB: int) : TierCost.Cost =
 let private history (wall: (string * float) list) (costs: (string * TierCost.Cost) list) =
   { Wall = Map.ofList wall; Costs = Map.ofList costs }
 
+/// The machine the gates were measured on (16 threads, 62 GiB), and one that carries 8 shards (24 threads).
+let private thisMachine = { UsableThreads = 16; TotalMemoryBytes = 62L * Admission.bytesPerGiB }
+let private roomyMachine = { UsableThreads = 24; TotalMemoryBytes = 64L * Admission.bytesPerGiB }
+
+/// The 102 suites of ~/.local/share/sagefs-gate/suite-durations.json at 2026-10-04 (4,888 s, heaviest 422 s), whole seconds,
+/// the one-second suites and below dropped. The uncapped picker said 8 shards for these; the gates that passed ran 5.
+let private realShapedSuites =
+  [ 422; 398; 371; 349; 276; 265; 264; 222; 215; 202; 142; 140; 102; 96; 90; 75; 71; 68; 67; 63; 63; 54; 49; 48; 44; 44; 40; 35; 33
+    32; 32; 28; 28; 25; 23; 22; 22; 20; 19; 17; 17; 15; 14; 13; 11; 11; 10; 9; 9; 9; 9; 8; 7; 7; 7; 7; 6; 6; 6; 6; 5; 5; 5; 5; 5; 5
+    5; 5; 3; 3; 3; 3; 3; 3; 3; 2; 2; 2; 2; 2; 2; 1; 1; 1; 1; 1; 1; 1; 1; 1 ]
+  |> List.mapi (fun i w -> sprintf "suite-%03d" i, float w)
+  |> Map.ofList
+
 [<Tests>]
 let tests =
   testList "TierSchedule" [
@@ -116,26 +129,74 @@ let tests =
 
     // ── how many shards ──
     testCase "WHY — with no history the host tier gets today's shard count" <| fun _ ->
-      hostShardCount Map.empty |> Expect.equal "the floor" minHostShards
+      hostShardCount thisMachine Map.empty |> Expect.equal "the floor" minHostShards
 
     testCase "WHY — more shards are asked for only while they shorten the longest one: past the heaviest suite they buy nothing" <| fun _ ->
       // 75 suites with the real shape: one 360 s suite, one 350 s, one 264 s, and a long tail.
       let heavy = [ "a", 360.0; "b", 350.0; "c", 264.0; "d", 143.0; "e", 132.0 ]
       let tail = [ for i in 1 .. 70 -> sprintf "t%d" i, 20.0 ]
       let weights = Map.ofList (heavy @ tail)
-      let n = hostShardCount weights
+      let n = hostShardCount roomyMachine weights
       (n > minHostShards) |> Expect.isTrue "the tail can be spread, so more shards than the floor"
-      (n <= maxHostShards) |> Expect.isTrue "never past the cap"
+      (n <= hostShardCap roomyMachine) |> Expect.isTrue "never past the cap"
       let longest = shardLoads n weights (weights |> Map.toList |> List.map fst) |> List.max
       (longest <= 360.0 * (1.0 + hostShardTolerance) + 1e-6) |> Expect.isTrue "the longest shard is within the tolerance of the heaviest suite"
 
     testCase "WHY — one suite that dwarfs the rest gains nothing from more shards, so the count stays at the floor" <| fun _ ->
-      hostShardCount (Map.ofList [ "huge", 900.0; "a", 10.0; "b", 10.0 ]) |> Expect.equal "the floor" minHostShards
+      hostShardCount roomyMachine (Map.ofList [ "huge", 900.0; "a", 10.0; "b", 10.0 ]) |> Expect.equal "the floor" minHostShards
 
     testProperty "WHY — the shard count stays between the floor and the cap, whatever the weights" <|
       fun (weights: PositiveInt list) ->
-        let n = hostShardCount (weights |> List.mapi (fun i w -> sprintf "s%d" i, float w.Get) |> Map.ofList)
-        n >= minHostShards && n <= maxHostShards
+        let n = hostShardCount roomyMachine (weights |> List.mapi (fun i w -> sprintf "s%d" i, float w.Get) |> Map.ofList)
+        n >= minHostShards && n <= hostShardCap roomyMachine
+
+    // ── how many shards THIS machine carries ──
+    // The shard count is not a free choice: every shard runs `hostsPerShard` hosts at once, so shards x hosts is the number
+    // of live hosts. 8 shards x 3 = 24 live hosts on 16 threads failed twice with load-induced flakes (a connection
+    // refused, a pid mismatch); 5 x 3 = 15 passed in 458 to 517 s.
+    testCase "WHY — the hosts per shard here are the hosts the test process runs at once, or the cap counts the wrong thing" <| fun _ ->
+      hostsPerShard |> Expect.equal "TestMagnitudes.concurrentHosts" TestMagnitudes.concurrentHosts
+
+    testCase "WHY — this machine class (16 threads, 62 GiB) carries 5 shards: 15 live hosts, the count that passed, not the 24 that flaked" <| fun _ ->
+      hostShardCap thisMachine |> Expect.equal "five" 5
+      (hostShardCap thisMachine * hostsPerShard <= liveHostCap thisMachine) |> Expect.isTrue "the live hosts fit the cap"
+      ((hostShardCap thisMachine + 1) * hostsPerShard > liveHostCap thisMachine) |> Expect.isTrue "and one more shard would not"
+
+    testCase "WHY — the picker, given the real suite weights, picks 5 without an override" <| fun _ ->
+      hostShardCount thisMachine realShapedSuites |> Expect.equal "the count the passing gates ran" 5
+
+    testCase "WHY — on a machine that carries 8 the same weights call for 8: the cap is what held it at 5, not the weights" <| fun _ ->
+      hostShardCount roomyMachine realShapedSuites |> Expect.equal "what the picker said before the cap" 8
+
+    testCase "WHY — memory binds when the machine has threads to spare: each live host has a peak to fit in" <| fun _ ->
+      let threadRich = { UsableThreads = 64; TotalMemoryBytes = 24L * Admission.bytesPerGiB }
+      (int64 (liveHostCap threadRich) * peakBytesPerHost <= threadRich.TotalMemoryBytes - Admission.memoryReserveBytes)
+      |> Expect.isTrue "hosts x peak fit what is left after the reserve"
+      (liveHostCap threadRich < threadRich.UsableThreads) |> Expect.isTrue "memory, not threads, is what set it"
+
+    testProperty "WHY — a bigger machine never lowers the cap: a cap that fell as the machine grew would be a modelling error" <|
+      fun (threads: PositiveInt) (gib: PositiveInt) (moreThreads: PositiveInt) (moreGib: PositiveInt) ->
+        let small = { UsableThreads = threads.Get; TotalMemoryBytes = int64 gib.Get * Admission.bytesPerGiB }
+        let big = { UsableThreads = threads.Get + moreThreads.Get; TotalMemoryBytes = small.TotalMemoryBytes + int64 moreGib.Get * Admission.bytesPerGiB }
+        liveHostCap big >= liveHostCap small && hostShardCap big >= hostShardCap small
+
+    testProperty "WHY — the picked count never puts more live hosts on a machine than its cap, unless the floor says so" <|
+      fun (threads: PositiveInt) (gib: PositiveInt) (weights: PositiveInt list) ->
+        let machine = { UsableThreads = threads.Get; TotalMemoryBytes = int64 gib.Get * Admission.bytesPerGiB }
+        let n = hostShardCount machine (weights |> List.mapi (fun i w -> sprintf "s%d" i, float w.Get) |> Map.ofList)
+        n = minHostShards || n * hostsPerShard <= liveHostCap machine
+
+    testProperty "WHY — scaling every weight by the same power of two changes no count: the picker reads the shape, not the unit" <|
+      fun (weights: PositiveInt list) (exponent: PositiveInt) ->
+        let suites k = weights |> List.mapi (fun i w -> sprintf "s%d" i, float w.Get * k) |> Map.ofList
+        hostShardCount roomyMachine (suites 1.0) = hostShardCount roomyMachine (suites (2.0 ** float (exponent.Get % 5)))
+
+    testProperty "WHY — a higher cap never lowers the count: the target only gets tighter, so the first count that meets it only moves up" <|
+      fun (weights: PositiveInt list) (threads: PositiveInt) (moreThreads: PositiveInt) ->
+        let suites = weights |> List.mapi (fun i w -> sprintf "s%d" i, float w.Get) |> Map.ofList
+        let small = { thisMachine with UsableThreads = threads.Get }
+        let big = { small with UsableThreads = threads.Get + moreThreads.Get }
+        hostShardCount big suites >= hostShardCount small suites
 
     // ── coverage ──
     testCase "WHY — shards that between them registered every host case are Covered" <| fun _ ->
