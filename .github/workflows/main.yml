@@ -223,8 +223,14 @@ jobs:
     # publish.yml (workflow_run on this build's success) downloads exactly this
     # `release-assets` bundle and ships it. It is the bundle the gate built and
     # checksummed, not a rebuild.
+    #
+    # workflow_dispatch counts as well as push: the emergency bypass input only
+    # exists on workflow_dispatch, so requiring push made the two mutually
+    # exclusive and a green bypassed build uploaded nothing — publish then had no
+    # artifact to download. Checked on ref, so a dispatch on any other branch still
+    # does not publish.
     - name: Upload release bundle
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       uses: actions/upload-artifact@v4
       with:
         name: release-assets
