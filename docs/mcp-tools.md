@@ -154,6 +154,18 @@ The daemon must be reachable on 37749 (the bridge's default). Point it
 somewhere else with `SAGEFS_MCP_PORT`. If the daemon is not running, the
 bridge starts one.
 
+## Reading a tool reply
+
+A tool's answer is the FIRST text content block of its result. When the daemon saw events since your
+last call (a warmup finished, a test run landed), it adds one more text block after it, which starts with
+`📡 SageFs events since last call:`. The echo is its own block, never part of the answer's text, so a tool
+whose answer is JSON (`nudge_value` is one) is valid JSON on its own. A client that joins every text block into one string will see the echo glued on
+the end: read the first block (or `structuredContent`, where a tool has it) and treat any later block as
+the daemon talking. Agents still get the echo, because their client shows every block.
+
+Positions in a reply (`line`, `column`, `endLine`, `endColumn`) are the parser's own: lines count from 1,
+columns from 0 (counted in characters, not bytes), and `endColumn` is one past the last character.
+
 ## Execution and status
 
 | Tool | What it does |
@@ -189,7 +201,7 @@ bridge starts one.
 | `disable_hot_reload` | Turn it off. |
 | `reset_hot_reload_state` | List the live state a save kept when you edited its initializer (binding, kept value, waiting initializer), or pass a binding to run only that initializer in the running app. |
 | `set_reflection_read_mode` | Show how hot reload watches values read through reflection (the mode, whether the watch is on, and any question a hot reflective loop raised), or pass `exact-every-read`, `mark-on-reflect` or `probe-callers` to switch the running app. No restart. See [Hot Reload](hot-reload.md#reflection-reads). |
-| `nudge_value` | Nudge one value in a source file the session owns and write it back as just that expression. `action=inspect` lists what can be nudged (each address, its text, its hash and, for a literal, its kind). `action=set` takes a literal or an expression plus the hash you inspected. `action=undo` and `action=redo` step through what the tool wrote. Only the session's project files are touched, a stale address is refused with the reason and never guessed, the file is replaced by a rename so a failed write leaves it byte-identical, and every write is journaled first. A member token needs the Implementer role. See [Hot Reload](hot-reload.md#nudging-a-value). |
+| `nudge_value` | Nudge one value in a source file the session owns and write it back as just that expression. `action=inspect` lists what can be nudged (each address, its text, its hash, where it sits as `line`, `column`, `endLine` and `endColumn` and, for a literal, its kind and its `value` typed by that kind). `action=set` takes a literal or an expression plus the hash you inspected. `action=undo` and `action=redo` step through what the tool wrote. Pass `session_id` when several sessions share a directory. Only the session's project files are touched (a file outside them is refused as `NotOwned`; a project file hot reload is not watching is written, and the reply carries the `FileNotWatched` note), a stale address is refused with the reason and never guessed, the file is replaced by a rename so a failed write leaves it byte-identical, and every write is journaled first. A member token needs the Implementer role. See [Hot Reload](hot-reload.md#nudging-a-value). |
 | `run_app` | Run the session's executable project the way `dotnet run` would, with hot reload. Applies `launchSettings.json` (first "Project" profile) and picks a free loopback port when the project sets no URL. Restarts an Interactive session into the Hot Reload workflow first, so REPL bindings are lost. Saving source then hot-patches the running app, including a route table built once at startup. |
 | `stop_app` | Stop the app started by `run_app`. Its web host stops and frees its port; the session keeps running. |
 

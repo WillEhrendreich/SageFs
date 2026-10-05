@@ -569,13 +569,13 @@ You can change one value in a source file the session owns without opening the f
 
 The tool has four actions:
 
-- `inspect` lists what can be nudged in a file: each value's address (`Game.Tuning.tuning/{JumpVelocity}/BinOp.Right`), its text, its hash and, for a literal, its kind. It also says how much history the file has and where undo stands.
+- `inspect` lists what can be nudged in a file: each value's address (`Game.Tuning.tuning/{JumpVelocity}/BinOp.Right`), its text, its hash, where it sits (`line`, `column`, `endLine`, `endColumn`: lines from 1, columns from 0) and, for a literal, its kind and its `value` typed by that kind (a number, a boolean, or the text or case name). It also says how much history the file has and where undo stands.
 - `set` takes an address, the hash `inspect` gave for it, and either a `literal` (read as the kind the literal already is, so `13.2` for a float, `true` for a bool, `Hard` for a union case) or an `expression` (any F# expression, such as `gravity * 2.0`). A literal keeps your style: `1.0` stays `1.0`, `0x1F` stays hex, `12.5<m/s>` keeps its unit.
 - `undo` and `redo` step back and forward through what the tool wrote to that file.
 
 What it will not do, and what it does about it:
 
-- It only touches the project files of the session you call it for. Anything else is refused as `NotOwned`, and so is a symbolic link, because a rename over a link would replace the link.
+- It only touches the project files of the session you call it for. Anything else is refused as `NotOwned`, and so is a symbolic link, because a rename over a link would replace the link. A project file hot reload is not watching is still written, and the reply says so with the `FileNotWatched` note. When several sessions share a directory, pass `session_id`: the directory alone is refused as ambiguous.
 - It never guesses at a stale address. If the expression changed since you inspected it you get `SourceMoved` with the text that is there now. If the binding was renamed you get `AddressMoved` with the new address to confirm, and nothing is written until you send it again. If it is gone you get `AddressGone`.
 - A failed write leaves the file byte-identical. The file is replaced by renaming a finished temp file over it, so a crash at any step leaves the old file or the new one, never half of one.
 - Every write is journaled before the file changes, in a per-file journal under the tweaks folder of SageFs's data directory. A crash between the record and the rename leaves a record for a write that did not land, and the next call finds it, marks it undone and says so. A torn record is removed the same way.
