@@ -209,6 +209,10 @@ let private accessText (access: AttachAccess) : string * string =
   | AttachAccess.Open -> "open", ""
   | AttachAccess.Blocked reason -> "blocked", reason
 
+/// `text` as one finished sentence: whatever full stops it already ends with become one, so a reason that carries its own
+/// does not read "..".
+let endSentence (text: string) : string = text.TrimEnd().TrimEnd('.') + "."
+
 let private endWire (ended: DebugEnd) : DebugWire =
   match ended with
   | DebugEnd.Attached result ->
@@ -228,7 +232,7 @@ let private endWire (ended: DebugEnd) : DebugWire =
   | DebugEnd.NoSuchHold ->
     emptyWire DebugStatus.NoSuchHold "The test host holds no test under that ticket. It restarted, or the hold ran out. Start debugging again."
   | DebugEnd.HostLost reason ->
-    emptyWire DebugStatus.HostLost (sprintf "The test host ended while it held the test: %s. Start debugging again once the session is Ready." reason)
+    emptyWire DebugStatus.HostLost (sprintf "The test host ended while it held the test: %s Start debugging again once the session is Ready." (endSentence reason))
 
 /// The wire form of an answer, and the HTTP status to send it with.
 let toWire (answer: DebugAnswer) : int * DebugWire =
