@@ -184,7 +184,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
             cliArgs
             |> Array.filter (fun a -> a <> "--integration-browser")
           let result =
-            SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-browser" browserArgv (testList "browser journeys" [ DashboardBrowserTests.tests; LiveBindingsBrowserTests.tests; OutputPanelLayoutBrowserTests.tests; DashboardSessionSwitchOutputBrowserTests.tests; DashboardLiveBindingsDockBrowserTests.tests; NewSessionDialogBrowserTests.tests; HygieneBrowserTests.tests; ReplFreshnessDashboardTests.browserTests ])
+            SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-browser" browserArgv (testList "browser journeys" [ DashboardBrowserTests.tests; LiveBindingsBrowserTests.tests; OutputPanelLayoutBrowserTests.tests; DashboardSessionSwitchOutputBrowserTests.tests; DashboardLiveBindingsDockBrowserTests.tests; DashboardLiveBindingsTweakBrowserTests.tests; NewSessionDialogBrowserTests.tests; HygieneBrowserTests.tests; ReplFreshnessDashboardTests.browserTests ])
           exitWith result
   with ex ->
     eprintfn "Browser runner: %s" (ex.ToString())

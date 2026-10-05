@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A tuning file for the live-bindings knob's browser journey (SageFs.Tests/DashboardLiveBindingsTweakBrowserTests.fs).
+       Tuning.fs holds the literals a person nudges from the dashboard: a real, an integer, a bool, a string, a formula and a
+       record. The journey copies this directory to a temp dir of its own and never edits it in place. Nothing else in the repo
+       references this project. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Tuning.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+
+</Project>

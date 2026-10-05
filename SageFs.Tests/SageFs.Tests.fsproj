@@ -190,6 +190,8 @@
         <Compile Include="DashboardSessionSwitchOutputBrowserTests.fs" />
         <Compile Include="DashboardLiveBindingsDockBrowserTests.fs" />
         <Compile Include="NewSessionDialogBrowserTests.fs" />
+        <!-- The live-bindings knob: a step writes a file through the nudge door, and the file's bytes are the proof. -->
+        <Compile Include="DashboardLiveBindingsTweakBrowserTests.fs" />
         <Compile Include="HygieneBrowserTests.fs" />
         <Compile Include="DashboardDisconnectIndicatorBrowserTests.fs" />
         <Compile Include="ElmDaemonTests.fs" />
