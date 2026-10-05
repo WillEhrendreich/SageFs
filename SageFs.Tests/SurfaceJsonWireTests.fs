@@ -225,9 +225,10 @@ let private sseCases : (string * SseEvent * string) list =
     "HotReloadChanged", SseEvent.HotReloadChanged s, """{"hotReloadChanged":true,"sessionId":"0a000001"}"""
     // `declarations` is empty here because this fixture's `finishedReload` declares none — the KEY is
     // what is pinned: the payload carries the field at all, which it did not before c3a7beca, so a
-    // client could not tell "nothing needed patching" from "the sender never said".
+    // client could not tell "nothing needed patching" from "the sender never said". `callers` is pinned the same way: the
+    // state of callers in other files is always a field, and it says CallersCurrent rather than saying nothing.
     "ReloadReported finished", SseEvent.ReloadReported (s, finishedReload),
-      """{"reloadReported":{"considered":3,"declarations":[],"mechanism":"metadata-delta","message":"patched 2","outcome":"Patched","patched":2,"state":"finished","suggestedAction":""},"sessionId":"0a000001"}"""
+      """{"reloadReported":{"callers":{"state":"CallersCurrent","message":"","suggestedAction":"","pending":[],"notChecked":[]},"considered":3,"declarations":[],"mechanism":"metadata-delta","message":"patched 2","outcome":"Patched","patched":2,"state":"finished","suggestedAction":""},"sessionId":"0a000001"}"""
     "ReloadReported none", SseEvent.ReloadReported (s, SessionReload.NoReloadYet), """{"sessionId":"0a000001"}"""
     "FileReloaded", SseEvent.FileReloaded (s, "a.fs"), """{"fileReloaded":"a.fs","sessionId":"0a000001"}"""
     "SessionFaulted", SseEvent.SessionFaulted (s, "boom \"x\""), esc """{"error":"boom ~u0022x~u0022","sessionFaulted":"0a000001"}"""
