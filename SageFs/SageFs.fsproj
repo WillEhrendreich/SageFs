@@ -107,6 +107,8 @@
         <Compile Include="DashboardConnection.fs" />
         <Compile Include="DockPanes.fs" />
         <Compile Include="EvaluatePopover.fs" />
+        <Compile Include="NewSessionDialog.fs" />
+        <Compile Include="NewSessionDiscovery.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="LiveBindingsDock.fs" />
         <Compile Include="CohortInspector.fs" />

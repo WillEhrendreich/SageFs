@@ -12,6 +12,7 @@ open FsCheck
 open FsCheck.FSharp
 open SageFs
 open SageFs.WorkflowTypes
+open SageFs.Server.DashboardTypes
 open SageFs.Server.NewSessionDialog
 open SageFs.Server.NewSessionDiscovery
 
@@ -344,6 +345,9 @@ let requests =
 
 // ── What the dialog says ────────────────────────────────────────────────────
 
+let private isSaying (message: string) (text: string) =
+  (text.Trim().Length > 0) |> Expect.isTrue message
+
 [<Tests>]
 let words =
   testList "Refusal and workflow words — plain, specific, with a next step" [
@@ -359,9 +363,9 @@ let words =
           Refusal.Daemon (SageFsError.SupervisorBusy(9, 8))
           Refusal.Daemon (SageFsError.SessionCreationFailed "boom") ]
       for refusal in all do
-        (Refusal.title refusal).Trim().Length |> Expect.isGreaterThan (sprintf "%A has a title" refusal) 0
-        (Refusal.detail refusal).Trim().Length |> Expect.isGreaterThan (sprintf "%A says what happened" refusal) 0
-        (Refusal.nextAction refusal).Trim().Length |> Expect.isGreaterThan (sprintf "%A says what to do" refusal) 0
+        Refusal.title refusal |> isSaying (sprintf "%A has a title" refusal)
+        Refusal.detail refusal |> isSaying (sprintf "%A says what happened" refusal)
+        Refusal.nextAction refusal |> isSaying (sprintf "%A says what to do" refusal)
 
     testCase "WHY — a missing directory names the directory, because that is the thing the person can fix" <| fun _ ->
       Refusal.detail (Refusal.DirectoryMissing "/nope/where")
@@ -369,7 +373,7 @@ let words =
 
     testCase "WHY — a project that is not built says to build it" <| fun _ ->
       Refusal.nextAction (Refusal.Daemon (SageFsError.NeedsRebuild [ "App.dll" ]))
-      |> Expect.stringContains "build is the next step" "build"
+      |> Expect.stringContains "build is the next step" "Build"
 
     testCase "WHY — a refused duplicate says to switch to the session that is already there" <| fun _ ->
       Refusal.nextAction (Refusal.Daemon (SageFsError.DuplicateSession("a1", "/work/repo")))
@@ -388,13 +392,13 @@ let words =
       for workflow in WorkflowChoice.all do
         let line = WorkflowChoice.oneLine workflow
         line.Contains "\n" |> Expect.isFalse (sprintf "%s is one line" (WorkflowChoice.key workflow))
-        line.Length |> Expect.isLessThan (sprintf "%s stays short enough to read at a glance" (WorkflowChoice.key workflow)) 130
-        line.Length |> Expect.isGreaterThan (sprintf "%s says something" (WorkflowChoice.key workflow)) 20
+        (line.Length < 130) |> Expect.isTrue (sprintf "%s stays short enough to read at a glance" (WorkflowChoice.key workflow))
+        (line.Length > 20) |> Expect.isTrue (sprintf "%s says something" (WorkflowChoice.key workflow))
 
     testCase "WHY — frameworks read as the person would say them" <| fun _ ->
       Frameworks.describe (Frameworks.Declared [ "net10.0"; "net11.0" ]) |> Expect.equal "joined" "net10.0, net11.0"
       Frameworks.describe Frameworks.WholeSolution |> Expect.equal "a solution has no single framework" "whole solution"
-      (Frameworks.describe Frameworks.NamedByImports).Length |> Expect.isGreaterThan "says where it comes from" 0
+      Frameworks.describe Frameworks.NamedByImports |> isSaying "says where it comes from"
   ]
 
 // ── Discovery: the one place that reads the disk ────────────────────────────
