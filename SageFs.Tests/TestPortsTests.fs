@@ -42,9 +42,12 @@ let testPortsTests =
 
     testCase "fails with a clear message when the assigned range has no free pair" <| fun _ ->
       // A 2-port range whose only possible pair is already held.
-      use occupied = new TcpListener(IPAddress.Loopback, 26001)
+      // The held port is the one the OS hands out, not a number written here that something else on the machine
+      // may already hold, and the range is the two ports around it: a range of 2 has the single pair (held - 1, held).
+      use occupied = new TcpListener(IPAddress.Loopback, 0)
       occupied.Start()
-      withPortRange (Some "26000-26002") (fun () ->
+      let held = (occupied.LocalEndpoint :?> IPEndPoint).Port
+      withPortRange (Some (sprintf "%d-%d" (held - 1) (held + 1))) (fun () ->
         Expect.throwsT<System.Exception> "no free pair in a fully-occupied range"
           (fun () -> TestPorts.reservePair () |> ignore))
   ]

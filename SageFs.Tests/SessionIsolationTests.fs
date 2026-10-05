@@ -540,55 +540,41 @@ module WorkingDirRoutingPriority =
       | other ->
         failtestf "expected Gone mismatch error but got %A" other
     }
+    // These two used to SET the process's working directory to a temp directory, which every other case in the
+    // suite that reads it (the cohort tools derive their scope from it) could observe mid-flight, and then
+    // deleted that directory. The daemon's current directory is whatever the process already has, and the
+    // routing compares paths as text, so the sessions are given THAT directory and nothing is mutated.
     testTask "falls back to the session matching the daemon current directory" {
-      let originalDir = Environment.CurrentDirectory
-      let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
-      let currentDir = Path.Combine(root, "current")
-      let otherDir = Path.Combine(root, "other")
-      Directory.CreateDirectory(currentDir) |> ignore
-      Directory.CreateDirectory(otherDir) |> ignore
-      Environment.CurrentDirectory <- currentDir
-      try
-        let currentSession = mkInfo (testSessionId "5a6e0001") currentDir
-        let otherSession = mkInfo (testSessionId "4a120002") otherDir
-        let ctx =
-          mkCtx [currentSession; otherSession] (Map.ofList ["5a6e0001",dummyProxy; "4a120002",dummyProxy])
-        let! resolved = resolveSessionId ctx "mcp" None None
-        resolved |> Expect.equal "current directory session should be selected" (Routable "5a6e0001")
-        activeSessionId ctx "mcp" |> Expect.equal "current directory session should become cached" "5a6e0001"
-      finally
-        Environment.CurrentDirectory <- originalDir
-        try Directory.Delete(root, true) with _ -> ()
+      let currentDir = Environment.CurrentDirectory
+      let otherDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "other")
+      let currentSession = mkInfo (testSessionId "5a6e0001") currentDir
+      let otherSession = mkInfo (testSessionId "4a120002") otherDir
+      let ctx =
+        mkCtx [currentSession; otherSession] (Map.ofList ["5a6e0001",dummyProxy; "4a120002",dummyProxy])
+      let! resolved = resolveSessionId ctx "mcp" None None
+      resolved |> Expect.equal "current directory session should be selected" (Routable "5a6e0001")
+      activeSessionId ctx "mcp" |> Expect.equal "current directory session should become cached" "5a6e0001"
     }
     testTask "current directory fallback returns an ambiguity error when multiple sessions share the daemon directory" {
-      let originalDir = Environment.CurrentDirectory
-      let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
-      let currentDir = Path.Combine(root, "current")
-      let otherDir = Path.Combine(root, "other")
-      Directory.CreateDirectory(currentDir) |> ignore
-      Directory.CreateDirectory(otherDir) |> ignore
-      Environment.CurrentDirectory <- currentDir
-      try
-        let currentA = mkInfo (testSessionId "5a6e0001") currentDir
-        let currentB = mkInfo (testSessionId "4a120002") currentDir
-        let otherSession = mkInfo (testSessionId "8c340003") otherDir
-        let ctx =
-          mkCtx [currentA; currentB; otherSession] (Map.ofList ["5a6e0001",dummyProxy; "4a120002",dummyProxy; "8c340003",dummyProxy])
-        let! resolved = resolveSessionId ctx "mcp" None None
-        match resolved with
-        | Routable sid ->
-          failtestf "expected current directory ambiguity error but resolved '%s'" sid
-        | Gone msg ->
-          msg |> Expect.stringContains "should describe the ambiguity" "Multiple sessions match the current working directory"
-          msg |> Expect.stringContains "should list the first matching session" "5a6e0001"
-          msg |> Expect.stringContains "should list the second matching session" "4a120002"
-          activeSessionId ctx "mcp"
-          |> Expect.equal "cache should remain empty after ambiguity" ""
-        | other ->
-          failtestf "expected Gone ambiguity error but got %A" other
-      finally
-        Environment.CurrentDirectory <- originalDir
-        try Directory.Delete(root, true) with _ -> ()
+      let currentDir = Environment.CurrentDirectory
+      let otherDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "other")
+      let currentA = mkInfo (testSessionId "5a6e0001") currentDir
+      let currentB = mkInfo (testSessionId "4a120002") currentDir
+      let otherSession = mkInfo (testSessionId "8c340003") otherDir
+      let ctx =
+        mkCtx [currentA; currentB; otherSession] (Map.ofList ["5a6e0001",dummyProxy; "4a120002",dummyProxy; "8c340003",dummyProxy])
+      let! resolved = resolveSessionId ctx "mcp" None None
+      match resolved with
+      | Routable sid ->
+        failtestf "expected current directory ambiguity error but resolved '%s'" sid
+      | Gone msg ->
+        msg |> Expect.stringContains "should describe the ambiguity" "Multiple sessions match the current working directory"
+        msg |> Expect.stringContains "should list the first matching session" "5a6e0001"
+        msg |> Expect.stringContains "should list the second matching session" "4a120002"
+        activeSessionId ctx "mcp"
+        |> Expect.equal "cache should remain empty after ambiguity" ""
+      | other ->
+        failtestf "expected Gone ambiguity error but got %A" other
     }
     testTask "WHY — resolveSessionId — an unrouted status read during warmup must not undo a deliberate switch_session (issue #140)" {
       // Repro shape from #140: two sessions share a working directory.
@@ -876,8 +862,11 @@ module ResetIsolation =
           GetProcessTelemetry = fun () -> None } : McpContext
 
       let hardResetTask = hardResetSession ctx "agent1" true (Some "aaa00001") None
-      let! completed = Task.WhenAny(hardResetTask, Task.Delay TestTimeouts.immediateReply)
+      let! completed = Task.WhenAny(hardResetTask, Task.Delay TestTimeouts.patience)
 
+      // The restart is gated on `allowRestartFinish`, which this test opens only after the call has returned, so a
+      // call that waited for the restart could never return. The ceiling is the long event bound: it costs nothing
+      // when the call returns at once, and a starved turn on a loaded machine does not turn that into a failure.
       obj.ReferenceEquals(completed, hardResetTask)
       |> Expect.isTrue "rebuild hard reset should return immediately"
 
@@ -939,7 +928,7 @@ module ResetIsolation =
       let resetTask = resetSession ctx "agent1" (Some sid) None
 
       let! started =
-        waitForAsync 5000 (fun () ->
+        waitForAsync (TestTimeouts.asMs TestTimeouts.patience) (fun () ->
           Task.FromResult(resetStarted.Task.IsCompleted))
 
       started

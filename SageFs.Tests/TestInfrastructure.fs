@@ -89,6 +89,15 @@ module DaemonIdentity =
       doc.RootElement.GetProperty("pid").GetInt32() = pid
     with _ -> false
 
+/// Serialize process-global environment-variable mutations across test lists.
+/// Expecto runs test LISTS in parallel, so two lists mutating the same env
+/// var (SAGEFS_DEVRELOAD kill-switch tests + HotReloadTool env-reading tests)
+/// race: one test's SetEnvironmentVariable can be observed mid-flight by the
+/// other, producing intermittent failures that pass in isolation.
+/// Defined ahead of `TestPorts`, whose allocator reads an environment variable
+/// that `TestPortsTests` sets, so it takes the same lock.
+let envLock = obj()
+
 /// The one port allocator every real-daemon-spawning test harness goes
 /// through. A daemon binds two ports — the MCP port it is given, and the
 /// dashboard at that port + 1 — so "free" means both are free, proven by
@@ -181,8 +190,8 @@ module TestPorts =
       Some bound
     with :? SocketException -> None
 
-  /// One (mcpPort, dashboardPort) pair, free right now.
-  let reservePair () : int * int =
+  /// One (mcpPort, dashboardPort) pair, free right now, from whatever range is assigned at this moment.
+  let reservePairNow () : int * int =
     let mcpPort =
       match assignedRange () with
       | Some(lo, hi) ->
@@ -201,6 +210,12 @@ module TestPorts =
         |> Option.defaultWith (fun () ->
           failwith "TestPorts.reservePair: unable to reserve a free ephemeral loopback port pair")
     mcpPort, mcpPort + 1
+
+  /// One (mcpPort, dashboardPort) pair, free right now. It reads `SAGEFS_TEST_PORT_RANGE`, which `TestPortsTests`
+  /// sets to made-up ranges (one of them fully occupied on purpose) under `envLock`, so a caller in another list
+  /// takes the same lock: without it a daemon harness running beside those cases is handed their range and
+  /// fails with "no free port pair in the assigned range". The lock is held for the scan only.
+  let reservePair () : int * int = lock envLock reservePairNow
 
 /// Structural registry of [Integration] suites. Every integration suite is
 /// registered here together with the runner that owns it, so:
@@ -945,13 +960,6 @@ type CaptureTeeStream(inner: System.IO.Stream, capture: System.Text.StringBuilde
   override _.Write(buffer: System.ReadOnlySpan<byte>) =
     inner.Write buffer
     keep buffer
-
-/// Serialize process-global environment-variable mutations across test lists.
-/// Expecto runs test LISTS in parallel, so two lists mutating the same env
-/// var (SAGEFS_DEVRELOAD kill-switch tests + HotReloadTool env-reading tests)
-/// race: one test's SetEnvironmentVariable can be observed mid-flight by the
-/// other, producing intermittent failures that pass in isolation.
-let envLock = obj()
 
 let withEnvVar (name: string) (value: string option) (f: unit -> 'T) : 'T =
   lock envLock (fun () ->

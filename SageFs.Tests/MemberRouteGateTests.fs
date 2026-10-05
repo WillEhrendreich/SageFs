@@ -161,8 +161,10 @@ let mutable private entropyCounter = 0
 
 /// Mint straight into the table (the cohort is not the subject here) and present the token.
 let tokenFor (store: CapabilityStore) (preset: RolePreset) (route: RouteBinding) : ResolvedCapability =
-  entropyCounter <- entropyCounter + 1
-  let hash = TokenHash.ofToken (Token.ofEntropy (Array.create Token.entropyBytes (byte entropyCounter)))
+  // Cases of one list run in parallel and all mint through here, so the counter is bumped atomically: a plain
+  // read-increment-write hands two cases the same entropy, and two tokens with one hash are one token.
+  let n = System.Threading.Interlocked.Increment(&entropyCounter)
+  let hash = TokenHash.ofToken (Token.ofEntropy (Array.create Token.entropyBytes (byte n)))
   store.Mint(now, conductorMinter, grantFor preset route, hash)
   |> Result.mapError (sprintf "%A")
   |> Expect.wantOk "the conductor mints a bound token"

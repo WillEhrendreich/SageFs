@@ -205,26 +205,23 @@ let forwardingTests =
       File.WriteAllText(script, "#!/bin/sh\necho \"SEEN=$SAGEFS_DETERMINISM_POLICY\"\n")
       File.SetUnixFileMode(script, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
 
-      let saved =
-        [ ProcessEnvironment.forwardPrefixesEnvVar; "SAGEFS_DETERMINISM_POLICY" ]
-        |> List.map (fun k -> k, Environment.GetEnvironmentVariable k)
       try
-        Environment.SetEnvironmentVariable(ProcessEnvironment.forwardPrefixesEnvVar, "SAGEFS_DETERMINISM_")
-        Environment.SetEnvironmentVariable("SAGEFS_DETERMINISM_POLICY", "loss=40;latency=250ms")
+        // Both variables are process-wide, and Expecto runs this list's cases beside other lists, so they are set
+        // and restored under the suite's one environment lock (`withEnvVar`), as every other test that sets one does.
+        TestInfrastructure.withEnvVar ProcessEnvironment.forwardPrefixesEnvVar (Some "SAGEFS_DETERMINISM_") (fun () ->
+          TestInfrastructure.withEnvVar "SAGEFS_DETERMINISM_POLICY" (Some "loss=40;latency=250ms") (fun () ->
+            let psi = new ProcessStartInfo()
+            psi.FileName <- "bash"
+            psi.ArgumentList.Add(script)
+            psi.UseShellExecute <- false
+            psi.RedirectStandardOutput <- true
+            // EXACTLY the call the worker spawn site makes (SessionManager.startWorkerProcess).
+            ProcessEnvironment.applyToWithForwarding psi []
 
-        let psi = new ProcessStartInfo()
-        psi.FileName <- "bash"
-        psi.ArgumentList.Add(script)
-        psi.UseShellExecute <- false
-        psi.RedirectStandardOutput <- true
-        // EXACTLY the call the worker spawn site makes (SessionManager.startWorkerProcess).
-        ProcessEnvironment.applyToWithForwarding psi []
-
-        use proc = Process.Start psi
-        let out = proc.StandardOutput.ReadToEnd()
-        proc.WaitForExit 30000 |> ignore
-        out |> Expect.stringContains "the tool's variable reached the spawned process" "loss=40;latency=250ms"
+            use proc = Process.Start psi
+            let out = proc.StandardOutput.ReadToEnd()
+            proc.WaitForExit TestTimeouts.patience |> ignore
+            out |> Expect.stringContains "the tool's variable reached the spawned process" "loss=40;latency=250ms"))
       finally
-        saved |> List.iter (fun (k, v) -> Environment.SetEnvironmentVariable(k, v))
         try Directory.Delete(workDir, true) with _ -> ()
   ]
