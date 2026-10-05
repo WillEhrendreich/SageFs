@@ -65,10 +65,18 @@ let tests =
             let ownsThisSession (dir: string) =
               Path.GetFileName(dir)
                 .StartsWith(sprintf "%s%s-" HostCoreAdoption.adoptedRootPrefix idValue, StringComparison.Ordinal)
+            // A session that restarts its worker (on a loaded machine the cold build can outlast a start window)
+            // materializes a NEW private root for the new worker, and the old worker's root is only removed once
+            // that worker's exit is seen. Taking the first root of the session picked the old one and failed on the
+            // pid ("the recorded owner is this session's actual worker pid", twice in the gate, passing alone). The
+            // root under test is the one the CURRENT worker owns.
+            let markerOf (dir: string) =
+              try File.ReadAllText(Path.Combine(dir, HostCoreAdoption.adoptedRootOwnerMarkerFileName)).Trim()
+              with _ -> ""
             let root =
               Directory.GetDirectories(Path.GetTempPath(), HostCoreAdoption.adoptedRootPrefix + "*")
               |> Array.filter ownsThisSession
-              |> Array.tryHead
+              |> Array.tryFind (fun dir -> markerOf dir = string session.Process.Id)
 
             match root with
             | None ->
