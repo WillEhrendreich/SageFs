@@ -438,6 +438,8 @@
         <Compile Include="NudgeMutationTests.fs" />
         <Compile Include="NudgeSimDstTests.fs" />
         <Compile Include="NudgeToolTests.fs" />
+        <!-- What a live-bindings row knows about the file it may be written back to: the persistence state, the knob's step. -->
+        <Compile Include="BindingTweakTests.fs" />
         <Compile Include="RetentionSimDstTests.fs" />
         <Compile Include="LiveStateEmitTests.fs" />
         <Compile Include="ValueReadsTests.fs" />
