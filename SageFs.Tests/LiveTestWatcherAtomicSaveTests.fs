@@ -37,13 +37,13 @@ let private watchAfter (save: string -> unit) = task {
     // after a session is added, so this race never occurs there.)
     manager.WatchedDirectories |> ignore
     // A fixed settle cannot say when the OS watcher starts delivering events, and a save that lands before it does
-    // is never reported. So the save is made again, once per `patienceTight`, until the watcher reports one or the
+    // is never reported. So the save is made again, once per `repeatActionEvery`, until the watcher reports one or the
     // ceiling passes: the case proves that a save of this SHAPE is reported, not that a particular instant is.
     let started = Diagnostics.Stopwatch.StartNew()
     let mutable outcome = NothingReported
     while outcome = NothingReported && started.Elapsed < TestTimeouts.briefPatience do
       save target
-      let! winner = Task.WhenAny(reloaded.Task :> Task, Task.Delay TestTimeouts.patienceTight)
+      let! winner = Task.WhenAny(reloaded.Task :> Task, Task.Delay TestTimeouts.repeatActionEvery)
       match obj.ReferenceEquals(winner, reloaded.Task) with
       | true -> outcome <- Reloaded reloaded.Task.Result
       | false -> ()

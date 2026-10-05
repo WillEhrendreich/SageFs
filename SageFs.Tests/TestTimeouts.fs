@@ -51,8 +51,10 @@ module TestTimeouts =
   /// "few milliseconds" turn well past the 5 s this used to be. Never use it as the length of a
   /// wait that is meant to elapse; that is what the settles below are for.
   let patienceBrief = secs 20.
-  /// Ceiling on a wait that is a few message hops and nothing else.
-  let patienceTight = secs 2.
+  /// How long a case that repeats an action until an event follows (a save made again until the watcher
+  /// reports it) waits for the event after each attempt before it acts again. Longer than the
+  /// watcher's own debounce, so an attempt's event has time to arrive before the next attempt can reset it.
+  let repeatActionEvery = secs 2.
 
   // Settles: a short, fixed window where nothing can be awaited.
 
@@ -277,13 +279,13 @@ module TestTimeouts =
 
   // `patience` (20 s) is defined once, in the section above, and used here too.
 
-  /// The ceiling on a wait for something a loaded machine still does within a few
-  /// seconds: a host starting or stopping, a child process dying, a call parking.
   /// How long a page is watched for a claim that must NOT appear (a "daemon not running" banner on a page that
   /// was only suspended). A negative watch, so it is the length of the window and not a ceiling: a loaded
   /// machine only takes fewer looks inside it, which cannot make the watch fail.
   let pageQuietWatch = System.TimeSpan.FromSeconds 5.
 
+  /// The ceiling on a wait for something a loaded machine still does within a few
+  /// seconds: a host starting or stopping, a child process dying, a call parking.
   /// Twenty seconds for the same reason as `patience`: it is a ceiling, and a passing run never reaches it.
   let shortPatience = System.TimeSpan.FromSeconds 20.
 
@@ -292,10 +294,6 @@ module TestTimeouts =
   /// background task). Twenty seconds absorbs a starved thread pool at a load average of 40; a
   /// passing run never reaches it.
   let briefPatience = System.TimeSpan.FromSeconds 20.
-
-  /// The ceiling on a call documented to return at once, or a probe of a local endpoint
-  /// that should answer at once, while the work it started carries on in the background.
-  let immediateReply = System.TimeSpan.FromSeconds 1.
 
   /// The ceiling on a real child process reaching a state that needs it to start up.
   let processStartPatience = System.TimeSpan.FromSeconds 60.

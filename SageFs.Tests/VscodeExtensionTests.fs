@@ -172,7 +172,7 @@ module VscodeFixture =
 
   /// Whether the CDP endpoint currently answers /json/version.
   let cdpResponds () = task {
-    use client = new Net.Http.HttpClient(Timeout = TestTimeouts.immediateReply)
+    use client = new Net.Http.HttpClient(Timeout = TestTimeouts.httpProbe)
     try
       let! resp =
         client.GetStringAsync(
