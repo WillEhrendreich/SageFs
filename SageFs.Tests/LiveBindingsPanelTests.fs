@@ -41,7 +41,11 @@ let private view (mode: ValueWalk) (click: ClickReport) (bindings: LiveBindingVa
 let private box (children: LiveValueNode list) : LiveBindingValue =
   { Name = "box"; TypeSignature = "Box"; Root = node "box" NodeKind.Class children }
 
-let private panel (v: PaneView) = DashboardFragments.renderLiveBindingsPanel "abcd1234" (Some v) |> decoded
+/// The open pane for a walked view, drawn the way the dock draws it for a session that has these bindings.
+let private openPane (v: PaneView) : XmlNode =
+  LiveBindingsDock.renderPane "abcd1234" (LiveBindingsDock.WalkedBindings v) (DockPanes.SessionHasBindings v.Snapshot.Bindings.Length) LiveBindingsDock.ShownAlways
+
+let private panel (v: PaneView) = openPane v |> decoded
 
 /// A class binding with one held getter at the end of `path`: a bare label is a getter of the binding, more labels are
 /// nested records on the way down to it.
@@ -135,7 +139,7 @@ let heldRowTests =
       |> Expect.equal (sprintf "every look-alike row has a signal of its own, got %A" (List.zip lookAlikeRows signals)) lookAlikeRows.Length
 
     testCase "a label that is markup is shown as text" <| fun _ ->
-      let html = DashboardFragments.renderLiveBindingsPanel "abcd1234" (Some(view WalkSafe NoClickYet [ box [ held "<script>alert(1)</script>" NotEvaluatedReason.GetterRunsCode ] ]))
+      let html = openPane (view WalkSafe NoClickYet [ box [ held "<script>alert(1)</script>" NotEvaluatedReason.GetterRunsCode ] ])
       let raw = renderNode html
       raw.Contains "<script>alert(1)" |> Expect.isFalse "never injected into the page"
   ]
@@ -180,7 +184,7 @@ let headerTests =
       html |> Expect.stringContains "a wrapping row" "live-held-row"
 
     testCase "a session with no snapshot yet still renders the panel, with no controls to mislead" <| fun _ ->
-      let html = DashboardFragments.renderLiveBindingsPanel "abcd1234" None |> decoded
+      let html = LiveBindingsDock.renderPane "abcd1234" LiveBindingsDock.NothingBound DockPanes.PinnedByUser LiveBindingsDock.ShownAlways |> decoded
       html |> Expect.stringContains "the panel keeps its id" DomIds.BindingsPanel
       html.Contains "live-values/mode" |> Expect.isFalse "no mode control with no values"
   ]

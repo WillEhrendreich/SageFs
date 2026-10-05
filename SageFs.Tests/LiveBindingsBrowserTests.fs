@@ -149,7 +149,9 @@ let private paneHtml : string =
           Truncated = false
           CapturedAt = DateTimeOffset.UnixEpoch }
       Notes = { Mode = SageFs.ValueWalk.standard; Click = SageFs.Features.LiveBindingsPane.NoClickYet } }
-  let pane = SageFs.Server.DashboardFragments.renderLiveBindingsPanel "abcd1234" (Some view) |> renderNode
+  let pane =
+    SageFs.Server.LiveBindingsDock.renderPane "abcd1234" (SageFs.Server.LiveBindingsDock.WalkedBindings view) (SageFs.Server.DockPanes.SessionHasBindings 2) SageFs.Server.LiveBindingsDock.ShownAlways
+    |> renderNode
   // The pane sits in the sidebar, well away from the page's left edge, as it does in the dashboard.
   sprintf "<!doctype html><html><head><meta charset=\"utf-8\"><style>%s</style></head><body><div style=\"margin-left: 700px; width: 300px\">%s</div></body></html>" SageFs.Server.Dashboard.dashboardCss pane
 

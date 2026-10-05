@@ -470,6 +470,7 @@
         <Compile Include="LiveBindingsPaneTests.fs" />
         <Compile Include="LiveBindingsWireTests.fs" />
         <Compile Include="LiveBindingsPanelTests.fs" />
+        <Compile Include="LiveBindingsDockTests.fs" />
         <!-- Layer 2 of getter containment: guards woven into the code a clicked getter can reach. -->
         <Compile Include="GuardCoverageTests.fs" />
         <Compile Include="GuardRuntimeTests.fs" />
