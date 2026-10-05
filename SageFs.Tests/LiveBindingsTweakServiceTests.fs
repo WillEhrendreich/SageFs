@@ -45,7 +45,7 @@ let withSandbox (body: Sandbox -> Task<unit>) : Task<unit> =
           Locks = FileLocks()
           Stamp = Env.stampOf
           Now = fun () -> clock.Value }
-      let files = [ {| path = tuning; watched = true |}; {| path = unrelated; watched = false |} ]
+      let files = [ tuning, HotReloadWatch.Watched; unrelated, HotReloadWatch.NotWatched ]
       do!
         body
           { Dir = dir
