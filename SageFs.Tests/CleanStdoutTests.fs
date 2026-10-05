@@ -65,7 +65,8 @@ let cleanStdoutTests =
       let result = cleanStdout input
       result |> Expect.equal "normal output should pass through" "val x: int = 42"
 
-    testCase "cleanStdout processes 500 lines in under 1000µs" <| fun _ ->
+    // `testSequenced`: it forces collections (`PerfBudget.minMs`), which in the parallel pool stop every other case.
+    testSequenced <| testCase "cleanStdout processes 500 lines in under 1000µs" (fun _ ->
       let bigInput =
         [| for i in 1 .. 500 ->
              sprintf "  [15:%02d:%02d INF] Evaluation line %d with some content  <Expecto>" (i/60) (i%60) i |]
@@ -80,5 +81,5 @@ let cleanStdoutTests =
             cleanStdout bigInput |> ignore)
       let usPerOp = bestBatchMs * 1000.0 / float iters
       printfn "cleanStdout: %.1f µs/op (%d iterations)" usPerOp iters
-      (usPerOp, 1000.0) |> Expect.isLessThan "cleanStdout should be under 1000µs for 500 lines"
+      (usPerOp, 1000.0) |> Expect.isLessThan "cleanStdout should be under 1000µs for 500 lines")
   ]

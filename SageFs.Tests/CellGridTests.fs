@@ -393,7 +393,11 @@ let junctionTests = testList "resolveJunctions connects box-drawing characters" 
   }
 ]
 
-let performanceTests = testList "Performance stays within allocation budgets" [
+// `testSequenced`: these time code against a budget, and `PerfBudget.minMs` forces a collection before every batch.
+// In the parallel pool that is a stop-the-world pause for every other case (a full suite run saw other cases'
+// 10 s HTTP requests time out behind them), and the timing beside the pool's load is what made them flaky at all.
+// A sequenced case runs after the pool, alone.
+let performanceTests = testSequenced <| testList "Performance stays within allocation budgets" [
   test "CellGrid clear 200x60 under 100µs" {
     let grid = CellGrid.create 60 200
     // The cost is the best batch the machine ran, not the average of one long run (see the full frame case below).

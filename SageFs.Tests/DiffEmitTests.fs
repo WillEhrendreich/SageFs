@@ -50,7 +50,8 @@ let diffEmitTests =
       let output = AnsiEmitter.emitDiff prev g 0 0
       output |> Expect.stringContains "contiguous cells should appear together" "BBBB"
 
-    testCase "performance: no-change diff under 100µs for 60x200" <| fun _ ->
+    // `testSequenced`: it forces collections (`PerfBudget.minMs`), which in the parallel pool stop every other case.
+    testSequenced <| testCase "performance: no-change diff under 100µs for 60x200" (fun _ ->
       let g = CellGrid.create 60 200
       CellGrid.writeString g 0 0 fg bg CellAttrs.None "Hello World"
       let prev = CellGrid.clone g
@@ -60,7 +61,7 @@ let diffEmitTests =
       let bestBatchMs = PerfBudget.minMs 20 (fun () -> for _ in 1 .. iters do AnsiEmitter.emitDiff prev g 0 0 |> ignore)
       let usPerOp = bestBatchMs * 1000.0 / float iters
       printfn "emitDiff (no changes, 60x200): %.1f µs/op" usPerOp
-      (usPerOp, 100.0) |> Expect.isLessThan "no-change diff should be under 100µs"
+      (usPerOp, 100.0) |> Expect.isLessThan "no-change diff should be under 100µs")
 
     testCase "clone produces independent copy" <| fun _ ->
       let g = CellGrid.create 5 10

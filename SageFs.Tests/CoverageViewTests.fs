@@ -125,7 +125,9 @@ let v2HealthIsHonest =
 
 [<Tests>]
 let v2HotPath =
-  testList "CoverageView v2 - hot path is tight" [
+  // `testSequenced`: the timing case forces collections (`PerfBudget.minMs`), which in the parallel pool stop every
+  // other case, and it is measured against a budget; a sequenced case runs after the pool, alone.
+  testSequenced <| testList "CoverageView v2 - hot path is tight" [
 
     testCase "WHY - hot-path - 100 projections of 200 tests must complete in <100ms (<1ms each)" <| fun _ ->
       let tests =

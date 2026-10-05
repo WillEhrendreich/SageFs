@@ -1381,7 +1381,9 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
 ]
 
 [<Tests>]
-let cycleBenchmarkTests = testList "[Benchmark] cycle Core Benchmark" [
+// `testSequenced`: both cases force collections (`PerfBudget.minMs`), which in the parallel pool stop every other
+// case, and are measured against a budget; a sequenced case runs after the pool, alone.
+let cycleBenchmarkTests = testSequenced <| testList "[Benchmark] cycle Core Benchmark" [
   test "200-test cycle core completes under 5ms at its best" {
     let makeTestCase i =
       { Id = TestId.create (sprintf "Module.Tests.test%d" i) TestFramework.Expecto

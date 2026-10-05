@@ -301,7 +301,8 @@ let snapshotDashboardTests = testList "Snapshot dashboard helpers" [
     msg |> Expect.equal "should have warmup msg" (Some "2/4 Loading assemblies")
   }
 
-  test "snapshot read is non-blocking (performance)" {
+  // `testSequenced`: it forces collections (`PerfBudget.minMs`), which in the parallel pool stop every other case.
+  testSequenced <| test "snapshot read is non-blocking (performance)" {
     let idS1 = testSessionId "aa000033"
     let s1 = mkManagedSession idS1 SessionStatus.Ready
     let state = ManagerState.empty |> ManagerState.addSession idS1 s1

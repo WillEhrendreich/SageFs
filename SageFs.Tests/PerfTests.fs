@@ -40,7 +40,9 @@ let private steadyBatch state =
 
 [<Tests>]
 let perfTests =
-  testList "Perf budgets (local)" [
+  // `testSequenced`: `PerfBudget.minMs` forces a collection before every batch, which in the parallel pool is a
+  // stop-the-world pause for every other case. A sequenced case runs after the pool, alone.
+  testSequenced <| testList "Perf budgets (local)" [
     // Guards the roast's #1 performance finding: recordEval used to rebuild the
     // whole binding scope on every eval — regex per binding, per retained cell —
     // an O(n^2) hot path on the "sub-500ms feedback on every save" promise. Two
