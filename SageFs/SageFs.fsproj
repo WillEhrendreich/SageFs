@@ -105,6 +105,7 @@
         <Compile Include="SourceStateProbe.fs" />
         <Compile Include="DashboardTypes.fs" />
         <Compile Include="DashboardConnection.fs" />
+        <Compile Include="DockPanes.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="CohortInspector.fs" />
         <Compile Include="SettingsPanel.fs" />
