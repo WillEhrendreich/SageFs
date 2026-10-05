@@ -442,6 +442,7 @@
         <Compile Include="BindingTweakTests.fs" />
         <Compile Include="BindingTweakRowsTests.fs" />
         <Compile Include="LiveBindingsTweakServiceTests.fs" />
+        <Compile Include="LiveBindingsTweakViewTests.fs" />
         <Compile Include="RetentionSimDstTests.fs" />
         <Compile Include="LiveStateEmitTests.fs" />
         <Compile Include="ValueReadsTests.fs" />
