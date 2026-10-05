@@ -44,7 +44,11 @@ module VscodeFixture =
   let mutable browser: IBrowser option = None
   let mutable codePid: int option = None
 
-  let cdpPort = 9222
+  /// The remote-debugging port of the VS Code this fixture launches: a port that is free when asked for, from this
+  /// tier's own slice of the pool, and the same for the whole run. A literal 9222 is the port a developer's own
+  /// Chrome or VS Code debugging session holds, and the journeys would drive that one instead.
+  let cdpPortChoice = lazy (fst (SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()))
+  let cdpPort () : int = cdpPortChoice.Value
   /// Stable per-machine profile under the OS temp dir (never a hardcoded
   /// C:\temp path). Deliberately NOT a fresh temp subdirectory per run: the
   /// profile's settings and its --extensions-dir installs (CI installs the
@@ -158,7 +162,7 @@ module VscodeFixture =
     let args =
       sprintf
         "--remote-debugging-port=%d --user-data-dir=\"%s\" %s--new-window%s \"%s\""
-        cdpPort userDataDir extDirFlag extFlag workspaceDir
+        (cdpPort ()) userDataDir extDirFlag extFlag workspaceDir
 
     let psi = ProcessStartInfo(codeExe (), args)
     psi.UseShellExecute <- true
@@ -172,7 +176,7 @@ module VscodeFixture =
     try
       let! resp =
         client.GetStringAsync(
-          sprintf "http://127.0.0.1:%d/json/version" cdpPort)
+          sprintf "http://127.0.0.1:%d/json/version" (cdpPort ()))
       return resp.Contains("webSocketDebuggerUrl")
     with _ -> return false
   }
@@ -181,7 +185,7 @@ module VscodeFixture =
   let waitForCdp (timeout: TimeSpan) = task {
     let! ready = waitUntil timeout cdpResponds
     if not ready then
-      failwithf "CDP port %d not available after %O" cdpPort timeout
+      failwithf "CDP port %d not available after %O" (cdpPort ()) timeout
   }
 
   /// Connect Playwright to the CDP endpoint, retrying through the race where
@@ -201,7 +205,7 @@ module VscodeFixture =
     let mutable attempt = 1
     while result.IsNone && attempt <= maxAttempts do
       try
-        let! b = playwright.Chromium.ConnectOverCDPAsync(sprintf "http://127.0.0.1:%d" cdpPort)
+        let! b = playwright.Chromium.ConnectOverCDPAsync(sprintf "http://127.0.0.1:%d" (cdpPort ()))
         result <- Some b
       with :? PlaywrightException as ex ->
         lastError <- Some ex

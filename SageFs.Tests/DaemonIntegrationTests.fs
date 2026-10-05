@@ -235,9 +235,12 @@ let daemonCliTests =
   Integration.hostList "Daemon CLI subcommands" [
 
     testCase "SageFs status returns 1 when no daemon running (real binary, real argv, real exit code)" <| fun _ ->
+      // A port that is free right now, from the tier's own slice: a literal here would be answered by whatever daemon
+      // another tier or another agent happens to run on it, and the case would see "daemon running".
+      let noDaemonPort, _ = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
       let psi = ProcessStartInfo()
       psi.FileName <- SageFsExe
-      psi.Arguments <- "status --mcp-port 39990"
+      psi.Arguments <- sprintf "status --mcp-port %d" noDaemonPort
       psi.UseShellExecute <- false
       psi.RedirectStandardOutput <- true
       psi.CreateNoWindow <- true
@@ -486,7 +489,7 @@ let daemonLifecycleTests =
         // Verify daemon process actually exited — event-driven, no sleep-poll.
         let exited =
           SageFs.Tests.TestInfrastructure.waitFor
-            5000
+            (TestTimeouts.asMs TestTimeouts.patience)
             (fun () -> try daemonProc.HasExited with _ -> true)
         exited |> Expect.isTrue "daemon process should have exited"
 
