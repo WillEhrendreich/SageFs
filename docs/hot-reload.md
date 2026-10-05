@@ -230,7 +230,53 @@ A save of added or re-signed code is **applied**, and it is **Patched** once the
 code that calls it has run. A save that only adds something nothing calls yet
 ends as "not confirmed: the new code has not run", which is true of it. A caller
 in **another file** keeps calling the old method until you save that file as
-well; the build would not pass until you do.
+well; the build would not pass until you do. The save says so while that is true
+(next section).
+
+### Callers in other files
+
+When a save re-signs a function or takes one out, SageFs reads the project's other
+files and looks for who still calls it. A caller it finds is on the old method until
+its own file is saved, so every reload report carries one of these, in `callers`:
+
+| `callers.state` | What it says |
+|---|---|
+| `CallersCurrent` | nothing is on an old method |
+| `CallersPending` | these declarations have callers in other files that still run the old method. Each names the declaration, whether it was re-signed or removed, and every caller's file, line and declaring function |
+| `CallersNotChecked` | the callers could not be listed (no project loaded, a file that would not read, a name no search can find), and it says which. The next action is yours: check them, or restart |
+| `CallersNotReported` | the worker said nothing about it. This is not the same as current |
+
+`message` and `suggestedAction` carry the same thing in words, so a client that only
+shows those still shows it. `suggestedAction` is "Save Pages.fs" while a patch has
+landed and a caller is waiting, since that is the next thing to do. A refusal or a
+compile failure keeps its own action, and the callers are in the message either way.
+
+The state clears when a save of the caller's file patches the function that holds the
+call, and it shows `CallersCurrent` on that save and every one after. Saving the
+caller with no edit does not clear it (nothing moved). A save that fails to compile
+does not clear it. A restart clears it all.
+
+How it finds callers: the compiler checks the whole project with the options the
+session loaded and says which uses resolve to the function that was re-signed, so a
+function that only shares its name is not a caller. A use the compiler errored on and
+could not place stays a caller, marked "matched by name". A removed function has
+nothing to resolve to, so it is matched by name too, and so is any answer when the
+compiler is not available or does not answer within `Timeouts.callerCheck` (30s, scaled
+for a slow machine). A name match can over-report. It does not under-report.
+
+A caller saved on its own, after the function it calls was re-signed in another file,
+has to compile against the new signature. The patch is compiled against the compiled
+module, which still has the old one, so that patch carries the re-signed function's
+new definition in the same submission. Without it the save failed to compile in the
+live session even though the build would have passed. Real app, both runtimes, in
+`HotReloadStateOutcomeTests` (`callers in other files`).
+
+What I did not do: patch the callers' on-disk text along with the re-signing save.
+Whether they compile against the new signature is only known by compiling, and a
+combined patch that fails would fail the re-signing save too. So it names them and
+stops, and it costs you one save. A caller whose call needs no edit (the new signature
+still takes the old call) stays pending after you save it, because nothing in its
+declaration changed. Restart to move it.
 
 ### What "patched" means
 
@@ -559,7 +605,9 @@ I'd rather you hear this from me than find it at 11pm.
   says `ClosureShapeChanged`. Rebuild through SageFs and it holds.
 - **A caller in another file keeps the old method after a signature change.**
   The saved callers move onto the new method; one you haven't saved yet still
-  calls the old one, until you save it.
+  calls the old one, until you save it. The report names who and where
+  ([Callers in other files](#callers-in-other-files)). A caller whose call needs no
+  edit stays pending after you save it, and a restart moves it.
 - **A generic function is patched in every body SageFs can find, and "found"
   means read from your code.** One `MakeGenericMethod` call anywhere in the
   assemblies that can name the function turns every generic edit in them into a
