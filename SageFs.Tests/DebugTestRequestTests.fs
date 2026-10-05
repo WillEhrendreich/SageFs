@@ -184,6 +184,13 @@ let tests =
         let spellings = results |> List.map (TestOutcome.describe >> (fun (outcome, _, _) -> TestOutcome.wire outcome))
         spellings |> List.distinct |> List.length |> Expect.equal "five results, five spellings" 5
 
+      testCase "WHY: a host lost with a reason that already ends in a full stop is told in sentences with no doubled full stop" <| fun _ ->
+        let crashed = HostCrash.describe { Exit = ExitedWith 134; Output = "" }
+        for reason in [ crashed; "the host ended"; "the host ended."; "Last output from the host:\nboom." ] do
+          let _, wire = toWire (DebugAnswer.Progress(DebugProgress.Ended(DebugEnd.HostLost reason)))
+          wire.Message.Contains ".." |> Expect.isFalse (sprintf "no doubled full stop for '%s': %s" reason wire.Message)
+          wire.Message |> Expect.stringContains "still says what to do" "Start debugging again"
+
       testCase "WHY: the HTTP status separates what the caller can fix from what is down" <| fun _ ->
         let code (answer: DebugAnswer) = toWire answer |> fst
         code (DebugAnswer.BadRequest "x") |> Expect.equal "bad request" 400
