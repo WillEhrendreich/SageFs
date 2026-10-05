@@ -62,6 +62,7 @@
              Exhaustive+Faults modes — see sagefs-learn-from-cscheck.md. -->
         <Compile Include="CohortSpec.fs" />
     <Compile Include="CohortVacancySpec.fs" />
+        <Compile Include="CohortVetoSpec.fs" />
         <!-- Eval-actor DST: fold the REAL SageFs.AppState.EvalActorDecision.decide
              (the eval actor mailbox's pure routing core) through a pure,
              clock-free reducer, replacing four slow FSI-warmup Integration

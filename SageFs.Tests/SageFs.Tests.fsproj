@@ -526,6 +526,7 @@
         <Compile Include="PeriodicManifestSaveDstTests.fs" />
         <Compile Include="CohortLandingSimTests.fs" />
         <Compile Include="CohortSpecTests.fs" />
+        <Compile Include="CohortVetoSpecTests.fs" />
         <Compile Include="EvalActorSimTests.fs" />
         <Compile Include="FileReloadRoutingSimTests.fs" />
         <Compile Include="WatcherLifecycleSimTests.fs" />
@@ -830,6 +831,8 @@
         <Compile Include="CohortLandingCacheOwnerTests.fs" />
         <Compile Include="CohortIntegrationHeadTests.fs" />
         <Compile Include="CohortVacancyTests.fs" />
+        <Compile Include="CohortVetoDelegationTests.fs" />
+        <Compile Include="CohortVetoDelegationToolTests.fs" />
         <Compile Include="CohortLandingGitAcceptanceTests.fs" />
         <Compile Include="CohortDogfoodIntegrationTests.fs" />
         <Compile Include="TrunkLandingOutcomeTests.fs" />
