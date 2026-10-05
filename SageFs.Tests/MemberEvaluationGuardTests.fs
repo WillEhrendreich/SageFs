@@ -174,7 +174,12 @@ let memberEvaluationGuardTests =
 /// state machine that waits for a release the test gives.
 [<Tests>]
 let realGuardsOnAbandonedThreadTests =
-  testList "real guards on a click whose thread is abandoned" [
+  // Sequenced: it uses the REAL patcher and asserts on process-wide patch state (`patchedCount`), and the guards only
+  // come off when the abandoned thread ends and the unpatch runs. Beside the rest of the default tier, which patches
+  // and unpatches constantly, it failed in the net10 gate at both 5 s and 20 s ("when the thread ended the guards
+  // came off") and passed alone 48 of 48, with and without tiered PGO. Expecto runs a sequenced list after the
+  // parallel pool, alone.
+  testSequenced <| testList "real guards on a click whose thread is abandoned" [
 
     testCase "WHY - the guards stay on while the abandoned thread runs, it is stopped the moment it enters guarded code, and they come off when it ends" <| fun _ ->
       let release = new ManualResetEventSlim(false)
