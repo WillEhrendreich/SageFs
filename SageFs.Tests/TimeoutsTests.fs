@@ -56,10 +56,11 @@ let timeoutsTests = testList "Timeouts" [
       |> Expect.isTrue "must be a positive span within the 10-minute cap"
   ]
 
-  // Sequenced group (not just testSequenced): SettingsTests' catalog suite also
-  // mutates these process-global timeouts, so the two lists must be mutually
-  // exclusive across the parallel run, not merely internally ordered.
-  testSequencedGroup "timeouts-global" <| testList "Thread-safe mutable timeouts" [
+  // SettingsTests' catalog suite also mutates these process-global timeouts, so the
+  // two lists must be exclusive of each other and of every parallel test that reads
+  // them: `testSequenced` runs after the parallel pool, alone, across files (a
+  // `testSequencedGroup` runs INSIDE the pool, see HarmonyCanaryTests).
+  testSequenced <| testList "Thread-safe mutable timeouts" [
     testCase "setPerTestTimeout rejects invalid value" <| fun _ ->
       let before = Timeouts.perTestDefault ()
       Timeouts.setPerTestTimeout PinnedDurations.perTestTimeoutBelowFloor

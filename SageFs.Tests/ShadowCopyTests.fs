@@ -61,10 +61,13 @@ let safeDelete dir =
 /// `pendingCleanups` is one process-wide bag and `cleanupAllPending` drains all of it,
 /// so a test that puts a dir in the bag and then asserts it is still there loses to any
 /// other test that drains it in between (the "still cannot be deleted stays pending"
-/// case failed that way under load). Every test that reads or drains the bag runs in
-/// this one exclusive group, so none of them can overlap another or a parallel test.
+/// case failed that way under load). Every test that reads or drains the bag is
+/// `testSequenced`, which runs after the whole parallel pool, alone, so none of them
+/// can overlap another or a parallel test. (It was a `testSequencedGroup`, which runs
+/// INSIDE the parallel pool and only excludes its own group: measured on Expecto
+/// 11.0.0, see HarmonyCanaryTests.)
 let private bagTestCase (name: string) (body: unit -> unit) =
-  testSequencedGroup "shadow-pending-bag" (testCase name body)
+  testSequenced (testCase name body)
 
 [<Tests>]
 let tests =

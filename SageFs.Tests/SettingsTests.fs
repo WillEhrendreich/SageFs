@@ -147,11 +147,12 @@ let storeTests =
 /// Live timeout pilot mutates a process-global (Timeouts) that other suites read.
 [<Tests>]
 let catalogTests =
-  // Same sequenced group as TimeoutsTests' "Thread-safe mutable timeouts": both
-  // mutate the process-global Timeouts.perTestDefault, so they must be mutually
-  // exclusive, not merely internally sequenced (testSequenced only orders within
-  // a list; a parallel list would still read a transiently-mutated global).
-  testSequencedGroup "timeouts-global" <| testList "Settings catalog" [
+  // This and TimeoutsTests' "Thread-safe mutable timeouts" both mutate the
+  // process-global Timeouts.perTestDefault, so they must be exclusive of each other
+  // AND of every parallel test that reads it. `testSequenced` runs after the parallel
+  // pool, alone; a `testSequencedGroup` ran INSIDE the pool and only excluded the
+  // other member of its group (measured on Expecto 11.0.0, see HarmonyCanaryTests).
+  testSequenced <| testList "Settings catalog" [
 
     testCase "WHY — editing the Live per-test timeout persists AND applies to the running Timeouts, because it revives the dead setTestTimeouts path" <| fun _ ->
       withTempDir (fun dir ->

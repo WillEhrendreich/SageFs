@@ -137,20 +137,24 @@ let integrationTests = testList "HarmonyCanary integration" [
       failwithf "expected CanaryError but got %A" other
 ]
 
-// Shared sequenced group with MethodPatcherTests and DevReloadCanaryTests:
 // integrationTests calls DevReloadHealthTracker.reset()/.transition/.current()
 // directly (process-global static state) AND applies real Harmony detours via
 // detourMethod, which itself transitions the same tracker (DevReload.fs).
-// Left unsequenced, its two DevReloadHealthTracker-touching cases race each
-// other under Expecto's parallel pool, and race the other "sagefs-harmony"
-// suites' detourMethod calls, for the shared static — an order-dependent
-// flake (a fresh default run can exit 2 on a spurious Degraded/BytesUnchanged
-// mismatch). A per-file `testSequenced` only orders within this file; the
-// named group serializes across all three files the way MethodPatcherTests
-// and DevReloadCanaryTests already do.
+// Left in the parallel pool, its DevReloadHealthTracker-touching cases race each
+// other and every other test whose detourMethod call (GuardCoexistence, the hot
+// reload suites) transitions the same static — an order-dependent flake (a run
+// can exit 2 on a spurious Degraded/BytesUnchanged mismatch).
+//
+// It is `testSequenced`, NOT `testSequencedGroup`. Measured on Expecto 11.0.0
+// (a spans experiment, not read from the docs): a plain `testSequenced` test
+// runs after the whole parallel pool has finished, alone, and so overlaps
+// neither a parallel test nor another sequenced list in any file; a
+// `testSequencedGroup` test runs INSIDE the parallel pool and is serialized only
+// against the same group's other tests. This file used a named group and so still
+// raced the parallel hot reload tests.
 [<Tests>]
 let allTests =
-  testSequencedGroup "sagefs-harmony" (testList "HarmonyCanary" [
+  testSequenced (testList "HarmonyCanary" [
     validateCanaryUnitTests
     integrationTests
   ])

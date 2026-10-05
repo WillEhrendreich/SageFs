@@ -26,11 +26,12 @@ type TestMethods() =
 
 [<Tests>]
 let tests =
-  // Shared sequenced group with DevReloadCanaryTests: this suite installs real
-  // (process-global) Harmony patches AND mutates shared static TestMethods
-  // state, so its own cases must run in order and never overlap another
-  // Harmony-patching suite.
-  testSequencedGroup "sagefs-harmony" <| testList "method patcher tests" [
+  // This suite installs real (process-global) Harmony patches AND mutates shared
+  // static TestMethods state, so its own cases must run in order and never overlap
+  // another Harmony-patching suite or a parallel test. `testSequenced` runs it after
+  // the parallel pool, alone; a `testSequencedGroup` would run it INSIDE the pool
+  // (see HarmonyCanaryTests for the measurement).
+  testSequenced <| testList "method patcher tests" [
     testCase "test method data"
     <| fun _ -> 
       let t = typeof<TestMethods>
