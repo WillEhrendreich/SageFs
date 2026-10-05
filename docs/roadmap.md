@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 14, Later 18, Exploring 17. Already built: 19.
+On the page today: Now 0, Next 13, Later 18, Exploring 17. Already built: 20.
 
 ## Next
 
@@ -26,10 +26,6 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 - **Level the REPL after a patch without losing it.** Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. I'd make the daemon re-fetch maps and discovery after any host swap and check the REPL is idle and empty first, then do it for you. ([decisions.md](decisions.md), [how-hot-reload-works.md](how-hot-reload-works.md))
 - **A knob for the value you are nudging.** `nudge_value` writes the file, but nothing in the dashboard or the editors lets you drag a number. I'd put a knob on a live binding in the dashboard, a scrub key in Neovim and Alt-drag in VS Code, and apply the drag to the running app before you save it. ([hot-reload.md](hot-reload.md))
 - **Callers in other files follow a signature change.** When a save re-signs a function, a caller in another file keeps calling the old method until you save that file too. The build wouldn't pass until you did, so the window is short, but the old behavior runs in it. A cross-file check of who calls what would close it. ([hot-reload.md](hot-reload.md), [decisions.md](decisions.md))
-
-### Agents and cohorts
-
-- **Veto and delegate in a cohort.** The conductor can't hand off its role and nobody can veto or withdraw a landing, because four commands exist in the core with no tool or button that issues them. I'll wire them or delete them, and wiring starts with deciding who is allowed to veto. ([mcp-tools.md](mcp-tools.md))
 
 ### Editors
 
@@ -160,6 +156,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - **A member's role says which tools it can call.** An Observer used to be able to call send_fsharp_code, because authority only gated the cohort's own tools. A member token now has one of four roles (Observer, Analysis, Verifier, Implementer), each a set of tool classes, and a call outside the role is refused with the role, the tool and what to do. `tools/list` shows a token only what it can call, and `SAGEFS_IDENTITY_POLICY=TokenRequired` makes a connection with no token read-only. Code: [`SageFs/McpCapability.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpCapability.fs)
 - **A member's id is no longer the bearer handle.** A member's id in `get_cohort_status`, the cohort frame and the ledger was the MCP session id, which is the credential a request is bound to, so anyone who read the status could act as the conductor. The id is a fingerprint of it now, and a test fails if any cohort output carries a handle. Code: [`SageFs.Core/MemberTable.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/MemberTable.fs)
 - **A claim path means one thing.** `src/Foo/../Bar/x.fs` did not overlap `src/Bar/x.fs`, so two members could hold the same file and a prefix check could be walked around. Claim paths are canonical at the boundary now, and a path that leaves the repo is refused. Code: [`SageFs.Core/Cohort.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Cohort.fs)
+- **Veto and delegate in a cohort.** The conductor can hand the seat to a present member with `delegate_conductor`. A seated Implementer, Verifier or the conductor can `veto_landing` with a reason, the conductor clears it with `resolve_veto`, and a landing's own requester can `withdraw_landing`. A veto on a landing that already landed is refused, not ignored, and `get_cohort_status` and the dashboard panel show who vetoed and why. A vacant seat still can't be filled from the tool surface. Code: [`SageFs/McpCohortTools.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpCohortTools.fs)
 - **A member token bound to one session.** A minted token now names the one session or checkout it may route to. A tool that takes a session id or a working directory is held to that on every call, a session list and the session resources are cut to it, and a refusal says which rule it hit and what to do. `mint_member` takes a `session_id`, and its `working_directory` has to be an absolute path. Code: [`SageFs.Core/Capability.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Capability.fs)
 
 ### Platform and install

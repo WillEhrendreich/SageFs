@@ -148,10 +148,10 @@ let items : Item list =
       [ "docs/mcp-tools.md" ]
       "`src/Foo/../Bar/x.fs` did not overlap `src/Bar/x.fs`, so two members could hold the same file and a prefix check could be walked around. Claim paths are canonical at the boundary now, and a path that leaves the repo is refused."
 
-    item "cohort-veto-and-delegation" "Veto and delegate in a cohort" Agents Next
-      NoLandmarkYet
+    item "cohort-veto-and-delegation" "Veto and delegate in a cohort" Agents Now
+      (landmark "SageFs/McpCohortTools.fs" "delegateConductor")
       [ "docs/mcp-tools.md" ]
-      "The conductor can't hand off its role and nobody can veto or withdraw a landing, because four commands exist in the core with no tool or button that issues them. I'll wire them or delete them, and wiring starts with deciding who is allowed to veto."
+      "The conductor can hand the seat to a present member with `delegate_conductor`. A seated Implementer, Verifier or the conductor can `veto_landing` with a reason, the conductor clears it with `resolve_veto`, and a landing's own requester can `withdraw_landing`. A veto on a landing that already landed is refused, not ignored, and `get_cohort_status` and the dashboard panel show who vetoed and why. A vacant seat still can't be filled from the tool surface."
 
     item "more-settings-editable" "More settings editable from the dashboard" Dashboard Next
       NoLandmarkYet
