@@ -6,6 +6,12 @@ on:
     branches:
     - master
   workflow_dispatch:
+    inputs:
+      bypass_tests:
+        description: "EMERGENCY RELEASE: skip the test tiers, the ratchets lane and the trust report (SAGEFS_EMERGENCY_BYPASS=1). Build, format, samples and packing still run, so release-assets is still really built. Use only when users need a working release now."
+        required: false
+        default: false
+        type: boolean
 
 # The ENTIRE build/test/integration/pack/release-bundle pipeline lives in
 # ci-pipeline.fsx as one typed F# Partas.Build pipeline (migrated from Fun.Build;
@@ -206,6 +212,8 @@ jobs:
       env:
         SOURCE_RUN_ID: ${{ github.run_id }}
         SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
+        # '1' only for an explicit emergency dispatch; every push and PR gets '0'.
+        SAGEFS_EMERGENCY_BYPASS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bypass_tests == 'true' && '1' || '0' }}
       run: dotnet fsi scripts/local-gate.fsx -- "$GITHUB_SHA"
 
     - name: Promote the gated release bundle

@@ -75,6 +75,16 @@ let hasTier (name: string) : bool =
 /// System.CommandLine), so the token is read off `fsi.CommandLineArgs` instead.
 let releaseRequested = hasTier "release"
 
+/// EMERGENCY RELEASE BYPASS, off unless explicitly set. When it is on, the two stages that
+/// run tests (`test tiers`) and judge them (`trust report`) are skipped entirely: the build,
+/// format, samples, VS Code stages and every pack stage still run, so what gets published is
+/// still really built and still checksummed. Nothing is silently green: both stages print a
+/// warning naming this variable, and `local-gate` records the pass with the same flag in it.
+let bypassTests = System.Environment.GetEnvironmentVariable "SAGEFS_EMERGENCY_BYPASS" = "1"
+
+let emergencyNotice =
+  "!! SAGEFS_EMERGENCY_BYPASS=1: the test tiers and the trust report were SKIPPED. Nothing was run."
+
 // Fun.Build.Github's `collapseGithubActionLogs` inlined, because Partas.Build does not
 // ship a Github module. Top-level stages only (ParentContext is ValueNone), so a group
 // never nests inside a sub-stage. Kept rather than dropped: without it every step's
@@ -1487,7 +1497,11 @@ let sagefsPipeline = pipeline "sagefs" {
   workingDir rootDir
   timeout 3600
   timeoutForStep 900
-  runBeforeEachStage (fun ctx -> if ValueOption.isNone ctx.ParentContext then printfn "::group::%s" ctx.Name)
+  runBeforeEachStage (fun ctx ->
+    if ValueOption.isNone ctx.ParentContext then printfn "::group::%s" ctx.Name
+    if bypassTests && ctx.Name = "test tiers" then
+      printfn "%s" emergencyNotice
+      eprintfn "%s" emergencyNotice)
   runAfterEachStage (fun ctx -> if ValueOption.isNone ctx.ParentContext then printfn "::endgroup::")
 
   stage "source ratchets" {
@@ -1581,6 +1595,8 @@ let sagefsPipeline = pipeline "sagefs" {
   }
 
   stage "ratchets" {
+    // Also a test run (`SageFs.Tests.dll --ratchets`), so skipped with the rest.
+    when' (not bypassTests)
     // Every ratchet before anything slow. A line budget, a blocking-call budget, a
     // literal count, a stale generated page or a CI-wiring check used to fail
     // twenty minutes into the gate; they are pure reads of the tree, so they run
@@ -1667,6 +1683,8 @@ let sagefsPipeline = pipeline "sagefs" {
   }
 
   stage "test tiers" {
+    // Skipped, loudly, under SAGEFS_EMERGENCY_BYPASS=1. Everything downstream still runs.
+    when' (not bypassTests)
     // EVERY test tier, each once, whatever happens to the others — scheduled by
     // runTiers (longest expected first; concurrently in private copy-on-write
     // clones when this machine supports it, else one at a time). Judged by the
@@ -1752,6 +1770,9 @@ let sagefsPipeline = pipeline "sagefs" {
   }
 
   stage "trust report" {
+    // Skipped with the tiers under SAGEFS_EMERGENCY_BYPASS=1: with nothing run there is no
+    // verdict to render, and leaving it in would only fail the run for a thing nobody did.
+    when' (not bypassTests)
     // ONE table for every tier this run invoked: registered vs ran vs result,
     // plus the verdict. Fails the pipeline if any tier is not Trusted —
     // failed, errored, ran nothing, ran a different count than it registered,
