@@ -368,18 +368,23 @@ module TestTimeouts =
 
   // Windows and deadlines a test hands to the code under test.
 
-  /// An inactivity window that a stream the test serves ends well inside.
-  let streamWindowCleanEnd = System.TimeSpan.FromMilliseconds 500.
+  /// An inactivity window that a stream the test serves ends well inside. The test never waits it out, so it is
+  /// as long as the ceiling on a real server: a starved turn on a loaded machine must not make it expire.
+  let streamWindowCleanEnd = secs 20.
 
   /// An inactivity window a stalled worker has to outlast so the proxy reports TimedOut.
   let streamWindowStalled = System.TimeSpan.FromMilliseconds 150.
 
   /// An inactivity window longer than the gap between lines of a slow, steady stream,
   /// shorter than the whole stream: it must be re-armed by every line, not run once.
-  let streamWindowSteady = System.TimeSpan.FromMilliseconds 350.
+  /// Two seconds, so a gap of 100 ms has to be stretched twentyfold by a starved turn before it
+  /// reaches the window (350 ms was a gap stretched 3.5 times, which a loaded machine does).
+  let streamWindowSteady = secs 2.
 
-  /// A read window that must NOT be what ends a cancelled run.
-  let streamWindowNeverWaitedOut = System.TimeSpan.FromSeconds 10.
+  /// A read window that must NOT be what ends a cancelled run. It is longer than `patience`, the
+  /// ceiling on the wait the test makes for the cancel to land, so a run that waited it out
+  /// would be caught by that ceiling first.
+  let streamWindowNeverWaitedOut = secs 60.
 
   /// An inactivity window that nothing in the test waits for.
   let inactivityWindowLong = System.TimeSpan.FromSeconds 30.
@@ -686,10 +691,13 @@ module TestTimeouts =
 
   /// A worker that is still busy: it sends nothing more for far longer than any wait the
   /// test makes, so only the proxy's own window or a cancel can end the read.
-  let workerSilentFor = secs 10.
-  /// The gap between lines of a slow, steady stream. Six of them run past `streamWindowSteady`
-  /// as a whole, while each gap stays well inside it.
+  let workerSilentFor = secs 60.
+  /// The gap between lines of a slow, steady stream. Each gap stays well inside `streamWindowSteady`,
+  /// and the lines go on until the stream has outlasted it as a whole (`steadyStreamLasts`).
   let streamLineGap = ms 100.
+  /// How long a slow, steady stream runs: a quarter past `streamWindowSteady`, so a window that was
+  /// armed once and never re-armed would have expired inside it.
+  let steadyStreamLasts = streamWindowSteady + streamWindowSteady / 4.
   /// An eval that outlasts the worker's one-second status threshold by a wide margin, even on a
   /// loaded runner.
   let evalOutlastingStatusProbe = secs 3.

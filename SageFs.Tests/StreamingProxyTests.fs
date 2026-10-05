@@ -183,7 +183,7 @@ let streamingProxyTests =
           let work =
             proxy [| sampleTestCase "a" |] 1 (fun _ -> ()) CancellationToken.None
             |> Async.StartAsTask
-          let! _ = Task.WhenAny(work, Task.Delay TestTimeouts.briefPatience) :> Task
+          let! _ = Task.WhenAny(work, Task.Delay TestTimeouts.patience) :> Task
           if not work.IsCompleted then
             failtest "proxy did not time out within the deadline"
           match work.Result with
@@ -220,7 +220,7 @@ let streamingProxyTests =
           let work = Async.StartAsTask(proxy [| sampleTestCase "a" |] 1 ignore run.Token)
           let! _ = started.Task
           run.Cancel()
-          let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.cancelPatience)
+          let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.patience)
           obj.ReferenceEquals(winner, work)
           |> Expect.isTrue "a cancelled run stops reading within the ceiling, not after the 10s read timeout"
           let! outcome = work
@@ -252,7 +252,7 @@ let streamingProxyTests =
           let proxy = streamingTestProxy TestTimeouts.streamWindowNeverWaitedOut url
           run.Cancel()
           let work = Async.StartAsTask(proxy [| sampleTestCase "a" |] 1 ignore run.Token)
-          let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.cancelPatience)
+          let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.patience)
           obj.ReferenceEquals(winner, work)
           |> Expect.isTrue "a run cancelled before it starts still resolves within the ceiling"
           let! outcome = work
@@ -266,14 +266,19 @@ let streamingProxyTests =
         let url, listener =
           serveOnce (fun stream ->
             async {
-              for _ in 1 .. 6 do
+              // The stream runs until it has outlasted the window as a whole (a stopwatch, not a line count, so a
+              // slow turn of the loop cannot shorten what the stream has to prove), with a gap between lines that is
+              // a small part of the window.
+              let watch = Diagnostics.Stopwatch.StartNew()
+              while watch.Elapsed < TestTimeouts.steadyStreamLasts do
                 do! sendLine stream "data: {}\n\n"
                 do! Async.Sleep TestTimeouts.streamLineGap
               do! sendLine stream "event: done\n\n"
             })
         try
-          // 6 x 100ms = 600ms of streaming, well past a 350ms window that is
-          // re-armed on every line.
+          // The stream outlasts the window, and every gap inside it is far shorter: only a window that every line
+          // re-arms lets it through. The window is wide (`streamWindowSteady`) so that a starved turn of either
+          // side, which a loaded machine produces, does not by itself make a gap as long as the window.
           let proxy = streamingTestProxy TestTimeouts.streamWindowSteady url
           let! outcome = proxy [| sampleTestCase "a" |] 1 ignore CancellationToken.None |> Async.StartAsTask
           outcome |> Expect.equal "steady stream completes" StreamOutcome.Completed
@@ -304,7 +309,7 @@ let streamingProxyTests =
         let fired = TaskCompletionSource<bool>()
         let registration = window.Token.Register(fun () -> fired.TrySetResult true |> ignore)
         try
-          let! winner = Task.WhenAny(fired.Task :> Task, Task.Delay TestTimeouts.cancelPatience)
+          let! winner = Task.WhenAny(fired.Task :> Task, Task.Delay TestTimeouts.patience)
           obj.ReferenceEquals(winner, fired.Task)
           |> Expect.isTrue "the window expired within the ceiling"
           window.State |> Expect.equal "expired" WindowState.Expired
