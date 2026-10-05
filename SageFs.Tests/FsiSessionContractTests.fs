@@ -270,7 +270,9 @@ let contract (label: string) (create: unit -> Async<IFsiSession>) (notYet: Capab
           | AgentAnswered(TestDebug.DebugBegin.Unsupported(TestDebug.UnsupportedReason.HoldAlreadyOpen holder)) ->
             Expect.equal "the host holds one test at a time and names who has it" target.Ticket holder
           | other -> failtestf "expected the second hold to be refused, got %A" other
-          match! session.DebugContinue(target.Ticket, TestTimeouts.patienceInProcess) with
+          // The host waits the production grace for a debugger that is still attaching before it says none came, so the
+          // park has to outlast it.
+          match! session.DebugContinue(target.Ticket, SageFs.Timeouts.debugAttachGrace + TestTimeouts.patienceInProcess) with
           | AgentAnswered(TestDebug.DebugProgress.Ended TestDebug.DebugEnd.ReleasedWithoutDebugger) -> ()
           | other -> failtestf "no debugger is attached to the session's process, so the test must not run: got %A" other
         | other -> failtestf "expected the test to be held, got %A" other

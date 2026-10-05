@@ -16,11 +16,11 @@ module TestDebugSimInvariants =
 
   let private lastState (states: State list) = List.last states
 
-  let private startsOf (applied: Applied list) : (DebugTicket * HoldEvent) list =
+  let private startsOf (applied: Applied list) : (DebugTicket * Applied) list =
     applied
     |> List.choose (fun a ->
       match a.Effect with
-      | HoldEffect.StartTest(ticket, _) -> Some(ticket, a.Event)
+      | HoldEffect.StartTest(ticket, _) -> Some(ticket, a)
       | _ -> None)
 
   let private firstViolation (found: string option) : Outcome =
@@ -28,17 +28,18 @@ module TestDebugSimInvariants =
     | Some message -> Outcome.Violated message
     | None -> Outcome.Holds
 
-  /// test-runs-only-with-a-debugger: a test starts only on a release that found a debugger attached. Nothing runs for a
-  /// debugger that is not there.
+  /// test-runs-only-with-a-debugger: a test starts only when a debugger is attached at that moment, whether the release
+  /// found it there or it arrived while the host waited. Nothing runs for a debugger that is not there.
   let testRunsOnlyWithDebugger : Invariant =
     { Id = "test-runs-only-with-a-debugger"
-      Description = "A StartTest effect only ever follows a Release that saw a debugger attached."
+      Description = "A StartTest effect only ever happens while a debugger is attached, on a Release that saw it or on its arrival."
       Check = fun states ->
         startsOf (lastState states).Applied
-        |> List.tryPick (fun (ticket, event) ->
-          match event with
-          | HoldEvent.Release(_, DebuggerPresence.DebuggerAttached) -> None
-          | other -> Some(sprintf "test for %A started on %A, which did not see a debugger" ticket other))
+        |> List.tryPick (fun (ticket, a) ->
+          match a.Event, a.DebuggerThen with
+          | HoldEvent.Release(_, DebuggerPresence.DebuggerAttached), DebuggerPresence.DebuggerAttached -> None
+          | HoldEvent.DebuggerArrived _, DebuggerPresence.DebuggerAttached -> None
+          | other, _ -> Some(sprintf "test for %A started on %A with the debugger %A" ticket other a.DebuggerThen))
         |> firstViolation }
 
   /// a-ticket-runs-its-test-at-most-once: however many times the editor continues, the test starts once.
@@ -81,19 +82,21 @@ module TestDebugSimInvariants =
           | HoldEffect.RefuseOpen holder ->
             match a.Before = a.After, a.Before with
             | true, Hold.Holding(held, _)
+            | true, Hold.Awaiting(held, _)
             | true, Hold.Running held when held = holder -> None
             | _ -> Some(sprintf "a refused Begin changed the slot or named the wrong holder: %A -> %A (holder %A)" a.Before a.After holder)
           | _ -> None)
         |> firstViolation }
 
-  /// every-hold-settles: after the scenario's drain (every timer delivered, every test finished) no hold is left parked or
-  /// running. A hold that cannot end would pin a test, and a door the host opened, for ever.
+  /// every-hold-settles: after the scenario's drain (every timer delivered, every wait run out, every test finished) no
+  /// hold is left parked, waiting or running. A hold that cannot end would pin a test, and a door the host opened, for ever.
   let everyHoldSettles : Invariant =
     { Id = "every-hold-settles"
-      Description = "After the drain the slot is Idle or Ended, never Holding or Running."
+      Description = "After the drain the slot is Idle or Ended, never Holding, Awaiting or Running."
       Check = fun states ->
         match (lastState states).Hold with
         | Hold.Holding(ticket, _) -> Outcome.Violated(sprintf "%A is still held after every timer fired" ticket)
+        | Hold.Awaiting(ticket, _) -> Outcome.Violated(sprintf "%A is still waiting for a debugger after every wait ran out" ticket)
         | Hold.Running ticket -> Outcome.Violated(sprintf "%A is still running after every test finished" ticket)
         | Hold.Idle
         | Hold.Ended _ -> Outcome.Holds }
@@ -101,7 +104,7 @@ module TestDebugSimInvariants =
   /// a-dead-host-holds-nothing: once the host has ended, whatever it held is Ended, and nothing was started after.
   let deadHostHoldsNothing : Invariant =
     { Id = "a-dead-host-holds-nothing"
-      Description = "After HostEnding the slot is never Holding or Running, and no test starts afterwards."
+      Description = "After HostEnding the slot is never Holding, Awaiting or Running, and no test starts afterwards."
       Check = fun states ->
         let applied = (lastState states).Applied
         match applied |> List.tryFindIndex (fun a -> match a.Event with HoldEvent.HostEnding _ -> true | _ -> false) with
@@ -110,15 +113,60 @@ module TestDebugSimInvariants =
           let died = List.item index applied
           let afterwards = applied |> List.skip (index + 1)
           match died.After, startsOf afterwards with
-          | (Hold.Holding _ | Hold.Running _), _ -> Outcome.Violated(sprintf "the host ended but the slot is %A" died.After)
+          | (Hold.Holding _ | Hold.Awaiting _ | Hold.Running _), _ -> Outcome.Violated(sprintf "the host ended but the slot is %A" died.After)
           | _, (ticket, _) :: _ -> Outcome.Violated(sprintf "%A started after the host ended" ticket)
           | _ -> Outcome.Holds }
 
+  /// never-refuses-a-debugger-that-is-attached: when the wait runs out and the editor is told no debugger came, none was
+  /// attached at that moment. A debugger that attaches inside the wait runs the test.
+  let neverRefusesAnAttachedDebugger : Invariant =
+    { Id = "never-refuses-a-debugger-that-is-attached"
+      Description = "A hold is never ended as ReleasedWithoutDebugger while a debugger is attached."
+      Check = fun states ->
+        (lastState states).Applied
+        |> List.tryPick (fun a ->
+          match a.After, a.DebuggerThen with
+          | Hold.Ended(ticket, DebugEnd.ReleasedWithoutDebugger), DebuggerPresence.DebuggerAttached when a.Before <> a.After ->
+            Some(sprintf "%A was refused for having no debugger while one was attached (event %A)" ticket a.Event)
+          | _ -> None)
+        |> firstViolation }
+
+  /// a-refusal-comes-only-from-a-spent-wait: the editor is told no debugger came only when the wait for one ran out, never
+  /// the instant the test is released.
+  let refusalComesOnlyFromASpentWait : Invariant =
+    { Id = "a-refusal-comes-only-from-a-spent-wait"
+      Description = "A hold ends as ReleasedWithoutDebugger only on AttachWindowSpent."
+      Check = fun states ->
+        (lastState states).Applied
+        |> List.tryPick (fun a ->
+          match a.After, a.Event with
+          | Hold.Ended(_, DebugEnd.ReleasedWithoutDebugger), HoldEvent.AttachWindowSpent _ -> None
+          | Hold.Ended(ticket, DebugEnd.ReleasedWithoutDebugger), event when a.Before <> a.After ->
+            Some(sprintf "%A was refused on %A, not when its wait ran out" ticket event)
+          | _ -> None)
+        |> firstViolation }
+
+  /// never-waits-past-the-bound: a hold waits for a debugger for no more than the wait lasts, however the ticks fall.
+  let neverWaitsPastTheBound : Invariant =
+    { Id = "never-waits-past-the-bound"
+      Description = "No state has a hold still waiting for a debugger once its wait has lasted graceTicks ticks."
+      Check = fun states ->
+        states
+        |> List.tryPick (fun s ->
+          match s.Hold with
+          | Hold.Awaiting(ticket, _) ->
+            match s.Opened |> List.tryFind (fun (t, _) -> t = ticket) with
+            | Some(_, openedAt) when s.Now - openedAt >= graceTicks ->
+              Some(sprintf "%A has waited %d ticks, the wait lasts %d" ticket (s.Now - openedAt) graceTicks)
+            | _ -> None
+          | _ -> None)
+        |> firstViolation }
+
   /// answers-are-backed-by-what-happened: the editor is told a test ran under the debugger only if one did and finished,
-  /// that no debugger came only if the hold expired, and that the host was lost only if it ended.
+  /// that no debugger came only if the wait for one ran out, and that the host was lost only if it ended.
   let answersAreTruthful : Invariant =
     { Id = "answers-are-backed-by-what-happened"
-      Description = "Attached needs a finished run, NoDebuggerWithin needs an expiry, ReleasedWithoutDebugger needs a release that saw no debugger, HostLost needs a host that ended."
+      Description = "Attached needs a finished run, NoDebuggerWithin needs an expiry, ReleasedWithoutDebugger needs a wait that ran out, HostLost needs a host that ended."
       Check = fun states ->
         let applied = (lastState states).Applied
         let happened (matches: Applied -> bool) = applied |> List.exists matches
@@ -136,10 +184,10 @@ module TestDebugSimInvariants =
             | true -> None
             | false -> Some(sprintf "%A was told NoDebuggerWithin but its hold never expired" ticket)
           | Answer.Continued(ticket, DebugProgress.Ended DebugEnd.ReleasedWithoutDebugger) ->
-            let released = happened (fun a -> match a.Event with HoldEvent.Release(t, DebuggerPresence.NoDebugger) -> t = ticket | _ -> false)
-            match released with
+            let spent = happened (fun a -> match a.Event, a.Before with HoldEvent.AttachWindowSpent t, Hold.Awaiting(h, _) -> t = ticket && h = ticket | _ -> false)
+            match spent with
             | true -> None
-            | false -> Some(sprintf "%A was told ReleasedWithoutDebugger but no release saw an absent debugger" ticket)
+            | false -> Some(sprintf "%A was told ReleasedWithoutDebugger but its wait for a debugger never ran out" ticket)
           | Answer.Continued(ticket, DebugProgress.Ended(DebugEnd.HostLost _)) ->
             let ended = happened (fun a -> match a.Event with HoldEvent.HostEnding _ -> true | _ -> false)
             match ended with
@@ -155,6 +203,9 @@ module TestDebugSimInvariants =
       refusedBeginChangesNothing
       everyHoldSettles
       deadHostHoldsNothing
+      neverRefusesAnAttachedDebugger
+      refusalComesOnlyFromASpentWait
+      neverWaitsPastTheBound
       answersAreTruthful ]
 
   let violations (states: State list) : (string * string) list =

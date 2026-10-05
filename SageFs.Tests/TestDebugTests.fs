@@ -28,6 +28,10 @@ let private aTest = makeTest "suite/adds"
 let private bound = FixtureDurations.slowResult
 let private passed : TestResult = TestResult.Passed FixtureDurations.usualResult
 
+/// How long the shell is told to wait for a debugger that is mid-attach. The fake probe never reads a clock, so this is only
+/// what it is asked for.
+let private grace = TestTimeouts.patienceBrief
+
 let private ticketNamed (name: string) = DebugTicket name
 
 /// One application of `step` from a given slot.
@@ -49,6 +53,7 @@ let private genHold : Gen<Hold> =
       Gen.oneof
         [ Gen.constant Hold.Idle
           Gen.constant (Hold.Holding(ticket, aTest))
+          Gen.constant (Hold.Awaiting(ticket, aTest))
           Gen.constant (Hold.Running ticket)
           Gen.constant (Hold.Ended(ticket, DebugEnd.ReleasedWithoutDebugger))
           Gen.constant (Hold.Ended(ticket, DebugEnd.NoDebuggerWithin bound)) ]
@@ -63,6 +68,8 @@ let private genEvent : Gen<HoldEvent> =
       Gen.oneof
         [ Gen.constant (HoldEvent.Begin(ticket, aTest))
           Gen.constant (HoldEvent.Release(ticket, presence))
+          Gen.constant (HoldEvent.DebuggerArrived ticket)
+          Gen.constant (HoldEvent.AttachWindowSpent ticket)
           Gen.constant (HoldEvent.Expire ticket)
           Gen.constant (HoldEvent.Finished(ticket, result))
           Gen.constant (HoldEvent.HostEnding "the host ended") ]
@@ -70,13 +77,25 @@ let private genEvent : Gen<HoldEvent> =
 
 let private config = { FsCheckConfig.defaultConfig with maxTest = 400 }
 
-/// A probe that records what the shell asks of it and says when the door was closed again.
+/// A probe that records what the shell asks of it and says when the door was closed again. Whether a debugger is attached when
+/// the editor releases the test is `presence`; one that attaches while the host waits is `Arrive`, and the wait running out
+/// is `Spend`. Both are events the case raises, so no case waits on a clock.
 type private FakeProbe(presence: DebuggerPresence, access: AttachAccess) =
   let opened = ref 0
   let closed = ref 0
   let closedSignal = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+  let waits = ResizeArray<TimeSpan>()
+  let waiting = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+  let attach = TaskCompletionSource<DebuggerPresence>(TaskCreationOptions.RunContinuationsAsynchronously)
   member _.Probe : DebuggerProbe =
     { Presence = fun () -> presence
+      AwaitAttach =
+        fun span ->
+          async {
+            lock waits (fun () -> waits.Add span)
+            waiting.TrySetResult() |> ignore
+            return! attach.Task |> Async.AwaitTask
+          }
       OpenForAttach =
         fun () ->
           Interlocked.Increment(&opened.contents) |> ignore
@@ -88,6 +107,14 @@ type private FakeProbe(presence: DebuggerPresence, access: AttachAccess) =
   member _.Opened = Volatile.Read(&opened.contents)
   member _.Closed = Volatile.Read(&closed.contents)
   member _.DoorClosed : Task<unit> = closedSignal.Task
+  /// Every span the shell asked the probe to wait for a debugger.
+  member _.Waits : TimeSpan list = lock waits (fun () -> List.ofSeq waits)
+  /// Completes once the shell has started watching for a debugger.
+  member _.Watching : Task<unit> = waiting.Task
+  /// A debugger attaches while the host waits.
+  member _.Arrive() : unit = attach.TrySetResult DebuggerPresence.DebuggerAttached |> ignore
+  /// The wait for a debugger runs out.
+  member _.Spend() : unit = attach.TrySetResult DebuggerPresence.NoDebugger |> ignore
 
 /// A hold over a fake probe and a test runner the case controls: it counts runs and finishes when told to.
 let private mkHold (presence: DebuggerPresence) (holdFor: TimeSpan) =
@@ -99,7 +126,7 @@ let private mkHold (presence: DebuggerPresence) (holdFor: TimeSpan) =
       Interlocked.Increment(&runs.contents) |> ignore
       return! finish.Task |> Async.AwaitTask
     }
-  let hold = DebugHold(4242, probe.Probe, holdFor, runTest, (fun _ -> SymbolSupport.CompiledWithSymbols))
+  let hold = DebugHold(4242, probe.Probe, holdFor, grace, runTest, (fun _ -> SymbolSupport.CompiledWithSymbols))
   hold, probe, runs, finish
 
 let private held (answer: DebugBegin) : DebugTarget =
@@ -120,31 +147,33 @@ let tests =
       <| Prop.forAll (Arb.fromGen (Gen.zip genHold genEvent)) (fun (hold, event) ->
         let slotTicket =
           match hold with
-          | Hold.Holding(t, _) | Hold.Running t | Hold.Ended(t, _) -> Some t
+          | Hold.Holding(t, _) | Hold.Awaiting(t, _) | Hold.Running t | Hold.Ended(t, _) -> Some t
           | Hold.Idle -> None
         let eventTicket =
           match event with
-          | HoldEvent.Release(t, _) | HoldEvent.Expire t | HoldEvent.Finished(t, _) -> Some t
+          | HoldEvent.Release(t, _) | HoldEvent.DebuggerArrived t | HoldEvent.AttachWindowSpent t | HoldEvent.Expire t | HoldEvent.Finished(t, _) -> Some t
           | HoldEvent.Begin _ | HoldEvent.HostEnding _ -> None
         match event, slotTicket <> eventTicket with
-        | (HoldEvent.Release _ | HoldEvent.Expire _ | HoldEvent.Finished _), true ->
+        | (HoldEvent.Release _ | HoldEvent.DebuggerArrived _ | HoldEvent.AttachWindowSpent _ | HoldEvent.Expire _ | HoldEvent.Finished _), true ->
           stepFrom hold event = (hold, HoldEffect.NoEffect)
         | _ -> true)
 
-      testPropertyWithConfig config "WHY: a Begin is refused exactly when the slot is Holding or Running, and then nothing moves"
+      testPropertyWithConfig config "WHY: a Begin is refused exactly when the slot is Holding, Awaiting or Running, and then nothing moves"
       <| Prop.forAll (Arb.fromGen genHold) (fun hold ->
         let after, effect = stepFrom hold (HoldEvent.Begin(ticketNamed "new", aTest))
         match hold with
-        | Hold.Holding(holder, _) | Hold.Running holder -> after = hold && effect = HoldEffect.RefuseOpen holder
+        | Hold.Holding(holder, _) | Hold.Awaiting(holder, _) | Hold.Running holder -> after = hold && effect = HoldEffect.RefuseOpen holder
         | Hold.Idle | Hold.Ended _ -> after = Hold.Holding(ticketNamed "new", aTest) && effect = HoldEffect.ArmExpiry)
 
-      testPropertyWithConfig config "WHY: a test is started only by a Release with a debugger attached, and only for the held test"
+      testPropertyWithConfig config "WHY: a test is started only by a Release that saw a debugger or by a debugger arriving while the host waited, and only for the held test"
       <| Prop.forAll (Arb.fromGen (Gen.zip genHold genEvent)) (fun (hold, event) ->
         match stepFrom hold event with
         | _, HoldEffect.StartTest(ticket, test) ->
           match hold, event with
-          | Hold.Holding(held, heldTest), HoldEvent.Release(released, DebuggerPresence.DebuggerAttached) ->
+          | Hold.Holding(held, heldTest), HoldEvent.Release(released, DebuggerPresence.DebuggerAttached)
+          | Hold.Awaiting(held, heldTest), HoldEvent.Release(released, DebuggerPresence.DebuggerAttached) ->
             ticket = held && released = held && test = heldTest
+          | Hold.Awaiting(held, heldTest), HoldEvent.DebuggerArrived arrived -> ticket = held && arrived = held && test = heldTest
           | _ -> false
         | _ -> true)
 
@@ -166,12 +195,42 @@ let tests =
         let ended, _ = stepFrom running (HoldEvent.Finished(ticket, passed))
         ended |> Expect.equal "finish ends it" (Hold.Ended(ticket, DebugEnd.Attached passed))
 
-      testCase "WHY: a release with no debugger ends the hold without running the test" <| fun _ ->
+      testCase "WHY: a release with no debugger yet waits for one that is still attaching, and does not run the test" <| fun _ ->
         let ticket = ticketNamed "t"
         let held, _ = stepFrom Hold.Idle (HoldEvent.Begin(ticket, aTest))
-        let ended, effect = stepFrom held (HoldEvent.Release(ticket, DebuggerPresence.NoDebugger))
+        let waiting, effect = stepFrom held (HoldEvent.Release(ticket, DebuggerPresence.NoDebugger))
+        waiting |> Expect.equal "waiting for a debugger" (Hold.Awaiting(ticket, aTest))
+        effect |> Expect.equal "the shell is told to watch for one" (HoldEffect.AwaitAttach ticket)
+
+      testCase "WHY: a debugger that arrives while the host waits runs the test, once" <| fun _ ->
+        let ticket = ticketNamed "t"
+        let waiting = Hold.Awaiting(ticket, aTest)
+        let running, effect = stepFrom waiting (HoldEvent.DebuggerArrived ticket)
+        running |> Expect.equal "running" (Hold.Running ticket)
+        effect |> Expect.equal "the test starts" (HoldEffect.StartTest(ticket, aTest))
+        stepFrom running (HoldEvent.DebuggerArrived ticket)
+        |> Expect.equal "a second arrival changes nothing" (running, HoldEffect.NoEffect)
+
+      testCase "WHY: a wait that runs out without a debugger ends the hold without running the test" <| fun _ ->
+        let ticket = ticketNamed "t"
+        let ended, effect = stepFrom (Hold.Awaiting(ticket, aTest)) (HoldEvent.AttachWindowSpent ticket)
         ended |> Expect.equal "ended unattached" (Hold.Ended(ticket, DebugEnd.ReleasedWithoutDebugger))
         effect |> Expect.equal "nothing started" HoldEffect.NoEffect
+        stepFrom ended (HoldEvent.DebuggerArrived ticket)
+        |> Expect.equal "a debugger that arrives after the wait is too late" (ended, HoldEffect.NoEffect)
+
+      testCase "WHY: a second release while the host waits starts the test if the debugger is there now, and otherwise changes nothing" <| fun _ ->
+        let ticket = ticketNamed "t"
+        let waiting = Hold.Awaiting(ticket, aTest)
+        stepFrom waiting (HoldEvent.Release(ticket, DebuggerPresence.DebuggerAttached))
+        |> Expect.equal "runs" (Hold.Running ticket, HoldEffect.StartTest(ticket, aTest))
+        stepFrom waiting (HoldEvent.Release(ticket, DebuggerPresence.NoDebugger))
+        |> Expect.equal "still waiting, and not asked to watch twice" (waiting, HoldEffect.NoEffect)
+
+      testCase "WHY: the expiry of the hold does not end a wait for a debugger, because the wait has its own end" <| fun _ ->
+        let ticket = ticketNamed "t"
+        let waiting = Hold.Awaiting(ticket, aTest)
+        stepFrom waiting (HoldEvent.Expire ticket) |> Expect.equal "unchanged" (waiting, HoldEffect.NoEffect)
 
       testCase "WHY: the expiry carries the bound it enforced, and a later release cannot revive the hold" <| fun _ ->
         let ticket = ticketNamed "t"
@@ -181,10 +240,11 @@ let tests =
         stepFrom expired (HoldEvent.Release(ticket, DebuggerPresence.DebuggerAttached))
         |> Expect.equal "the late release changes nothing" (expired, HoldEffect.NoEffect)
 
-      testCase "WHY: the host ending turns a held or running test into HostLost, and an idle slot stays idle" <| fun _ ->
+      testCase "WHY: the host ending turns a held, waiting or running test into HostLost, and an idle slot stays idle" <| fun _ ->
         let ticket = ticketNamed "t"
         let lost = Hold.Ended(ticket, DebugEnd.HostLost "gone")
         stepFrom (Hold.Holding(ticket, aTest)) (HoldEvent.HostEnding "gone") |> fst |> Expect.equal "held" lost
+        stepFrom (Hold.Awaiting(ticket, aTest)) (HoldEvent.HostEnding "gone") |> fst |> Expect.equal "waiting for a debugger" lost
         stepFrom (Hold.Running ticket) (HoldEvent.HostEnding "gone") |> fst |> Expect.equal "running" lost
         stepFrom Hold.Idle (HoldEvent.HostEnding "gone") |> fst |> Expect.equal "idle" Hold.Idle
 
@@ -193,6 +253,9 @@ let tests =
         |> Expect.equal "someone else's hold" (DebugProgress.Ended DebugEnd.NoSuchHold)
         observe (ticketNamed "mine") Hold.Idle
         |> Expect.equal "nothing held" (DebugProgress.Ended DebugEnd.NoSuchHold)
+
+      testCase "WHY: a hold waiting for a debugger counts as still going, so the editor hears how it ended when the wait does" <| fun _ ->
+        observe (ticketNamed "mine") (Hold.Awaiting(ticketNamed "mine", aTest)) |> Expect.equal "still going" DebugProgress.StillRunning
     ]
 
     testList "Yama (can a debugger attach to this process)" [
@@ -269,13 +332,66 @@ let tests =
         probe.Closed |> Expect.equal "the door was closed again" 1
       }
 
-      testTask "WHY: a release with no debugger never runs the test" {
+      testTask "WHY: a release with no debugger waits for one, and when the wait runs out the test never runs and the door is closed" {
         let hold, probe, runs, _ = mkHold DebuggerPresence.NoDebugger TestTimeouts.patienceInProcess
         let target = hold.Begin aTest |> held
-        let! ended = continueFor hold target.Ticket TestTimeouts.patienceInProcess
+        let waiting = continueFor hold target.Ticket TestTimeouts.patienceInProcess
+        do! probe.Watching.WaitAsync TestTimeouts.patienceBrief
+        probe.Waits |> Expect.equal "the shell asked the probe to wait for the grace it was given" [ grace ]
+        probe.Closed |> Expect.equal "the door stays open while the host waits for a debugger" 0
+        probe.Spend()
+        let! ended = waiting
         ended |> Expect.equal "told why" (DebugProgress.Ended DebugEnd.ReleasedWithoutDebugger)
         runs.Value |> Expect.equal "the test did not run" 0
         probe.Closed |> Expect.equal "the door was closed" 1
+      }
+
+      testTask "WHY: a debugger that finishes attaching after the release runs the test, and the editor hears how it went" {
+        let hold, probe, runs, finish = mkHold DebuggerPresence.NoDebugger TestTimeouts.patienceInProcess
+        let target = hold.Begin aTest |> held
+        let waiting = continueFor hold target.Ticket TestTimeouts.patienceInProcess
+        do! probe.Watching.WaitAsync TestTimeouts.patienceBrief
+        runs.Value |> Expect.equal "nothing runs before the debugger is there" 0
+        probe.Arrive()
+        finish.SetResult passed
+        let! ended = waiting
+        ended |> Expect.equal "the run's result" (DebugProgress.Ended(DebugEnd.Attached passed))
+        runs.Value |> Expect.equal "the test ran once" 1
+        probe.Closed |> Expect.equal "the door was closed once the hold was over" 1
+      }
+
+      testTask "WHY: a host that ends while it waits for a debugger tells the waiting editor it was lost, and a debugger that arrives after does not run the test" {
+        let hold, probe, runs, _ = mkHold DebuggerPresence.NoDebugger TestTimeouts.patienceInProcess
+        let target = hold.Begin aTest |> held
+        let waiting = continueFor hold target.Ticket TestTimeouts.patienceInProcess
+        do! probe.Watching.WaitAsync TestTimeouts.patienceBrief
+        hold.HostEnding "the FSI host is shutting down"
+        let! ended = waiting
+        ended |> Expect.equal "told the host was lost" (DebugProgress.Ended(DebugEnd.HostLost "the FSI host is shutting down"))
+        probe.Arrive()
+        let! again = continueFor hold target.Ticket bound
+        again |> Expect.equal "still lost, and nothing ran" (DebugProgress.Ended(DebugEnd.HostLost "the FSI host is shutting down"))
+        runs.Value |> Expect.equal "the test did not run" 0
+        probe.Closed |> Expect.equal "the door was closed" 1
+      }
+
+      testTask "WHY: a probe that fails while the host waits ends the wait as no debugger, never a hold that waits for ever" {
+        let probe =
+          { (FakeProbe(DebuggerPresence.NoDebugger, AttachAccess.Open)).Probe with AwaitAttach = fun _ -> async { return failwith "the probe broke" } }
+        let hold = DebugHold(1, probe, TestTimeouts.patienceInProcess, grace, (fun _ -> async { return passed }), (fun _ -> SymbolSupport.CompiledWithSymbols))
+        let target = hold.Begin aTest |> held
+        let! ended = continueFor hold target.Ticket TestTimeouts.patienceInProcess
+        ended |> Expect.equal "no debugger came" (DebugProgress.Ended DebugEnd.ReleasedWithoutDebugger)
+      }
+
+      testTask "WHY: the real probe, in a process with no debugger, says none came only once the whole wait is spent" {
+        match System.Diagnostics.Debugger.IsAttached with
+        | true -> skiptest "a debugger is attached to the test process itself"
+        | false ->
+          let clock = System.Diagnostics.Stopwatch.StartNew()
+          let! presence = systemProbe.AwaitAttach TestTimeouts.settle |> Async.StartAsTask
+          presence |> Expect.equal "no debugger came" DebuggerPresence.NoDebugger
+          (clock.Elapsed >= TestTimeouts.settle) |> Expect.isTrue "it waited the whole span before saying so"
       }
 
       testTask "WHY: a hold nobody releases is dropped when the bound passes, the door is closed, and the test never runs" {
@@ -330,7 +446,7 @@ let tests =
       testTask "WHY: a test that throws ends the run as a failure the editor can read, never a hung hold" {
         let probe = FakeProbe(DebuggerPresence.DebuggerAttached, AttachAccess.Open)
         let hold =
-          DebugHold(1, probe.Probe, TestTimeouts.patienceInProcess, (fun _ -> async { return failwith "boom" }), (fun _ -> SymbolSupport.CompiledWithSymbols))
+          DebugHold(1, probe.Probe, TestTimeouts.patienceInProcess, grace, (fun _ -> async { return failwith "boom" }), (fun _ -> SymbolSupport.CompiledWithSymbols))
         let target = hold.Begin aTest |> held
         let! ended = continueFor hold target.Ticket TestTimeouts.patienceInProcess
         match ended with
@@ -341,7 +457,7 @@ let tests =
 
       testTask "WHY: a blocked attach is passed to the editor with the reason, so it can say what to change" {
         let probe = FakeProbe(DebuggerPresence.DebuggerAttached, AttachAccess.Blocked "ptrace_scope is 2")
-        let hold = DebugHold(1, probe.Probe, TestTimeouts.patienceInProcess, (fun _ -> async { return passed }), (fun _ -> SymbolSupport.CompiledWithSymbols))
+        let hold = DebugHold(1, probe.Probe, TestTimeouts.patienceInProcess, grace, (fun _ -> async { return passed }), (fun _ -> SymbolSupport.CompiledWithSymbols))
         (hold.Begin aTest |> held).Access |> Expect.equal "blocked with the reason" (AttachAccess.Blocked "ptrace_scope is 2")
       }
     ]
@@ -364,6 +480,8 @@ let tests =
         { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }
       let sources : AssemblySources = { Dynamic = (fun () -> [| evalAssembly |]); Loaded = (fun () -> [||]) }
       let newAgent () = Agent(emptyInit, sources, [ executor ])
+      /// An agent whose wait for a debugger is short, so a case that has no debugger does not wait out the real one.
+      let newAgentWaiting (wait: TimeSpan) = Agent(emptyInit, sources, [ executor ], wait)
       let afterEval =
         { EvaluatedCode = "let x = 1"; Detours = DetourPolicy.RegisterOnly; Discovery = DiscoveryPolicy.Forced; IsFileSave = false; Closures = [] }
 
@@ -388,8 +506,8 @@ let tests =
         | DebugBegin.Held target -> target.Symbols |> Expect.equal "compiled" SymbolSupport.CompiledWithSymbols
         | other -> failtestf "expected Held, got %A" other
 
-      testTask "WHY: with no debugger attached to this process a release never runs the test" {
-        let agent = newAgent ()
+      testTask "WHY: with no debugger attached to this process, and none arriving, a release never runs the test" {
+        let agent = newAgentWaiting TestTimeouts.settle
         agent.AfterEval afterEval |> ignore
         let target = agent.DebugBegin evalTest |> held
         let! ended = agent.DebugContinue(target.Ticket, TestTimeouts.patienceInProcess) |> Async.StartAsTask

@@ -53,7 +53,7 @@ let private fixedTable : (string * FixedBecause) list =
       "sessionWatcherSyncInterval"; "sessionStatusPoll"; "stdioBridgeProbeInterval"; "jupyterReceivePoll"
       "liveTestTickActive"; "liveTestTickIdle"; "dashboardPollInterval"; "sseEventInterval"; "workerReloadRelayRetry"
       "workerProxyFirstDelay"; "workerHealthProbeInterval"; "watchdogInterval"; "supervisorCheckInterval"
-      "ttlCheckFloor"; "ttlCheckCeiling"; "agentActivityCleanupInterval"; "cohortReaperInterval"
+      "ttlCheckFloor"; "ttlCheckCeiling"; "agentActivityCleanupInterval"; "cohortReaperInterval"; "debugAttachLook"
       "orphanTempDirSweepInterval"; "logFlushInterval"; "evalHeartbeatInterval"; "manifestSaveInterval"
       "compileTimerRedraw"; "stdioFlush"; "scheduledGraceDelay" ]
   @ all FixedBecause.Debounce
@@ -96,7 +96,7 @@ let private machineScaled : Set<string> =
         "gitWorktreeAdd"; "cohortIntegrationSettle"; "testRunAwaitSlack"; "leaseTtlSessionCreate"
         "leaseTtlTestSuite"; "frictionSlowFirstSuccess"; "compileQueueWait"; "compileBudget"; "reloadPlanningCheck"
         "appHostAppearGrace"; "appHostStart"; "appHostStop"; "appEntryFinishGrace"; "appRunnerShutdown"
-        "debugHold"; "restartStartupCrashWindow"; "watchdogGracePeriod"; "workerHealthProbeTimeout"
+        "debugHold"; "debugAttachGrace"; "restartStartupCrashWindow"; "watchdogGracePeriod"; "workerHealthProbeTimeout"
         "workerEndpointFetch"; "workerWarmupContextFetch"; "outputCommitWait"; "gracefulShutdownWatchdog"
         "shutdownManifestCommit"; "testCycleTimerStop"; "cacheSaveTimerStop"; "workerHttpServerStop"
         "startupDelay"; "stopSessionMailboxTimeout"; "supervisorWedgeAfter"
@@ -177,8 +177,8 @@ let tests =
         declared.[name].Contains source |> Expect.isTrue (sprintf "%s is declared from %s" name source)
 
     testCase "WHY — the number of waits for the machine only goes up when a table says so (a ratchet on the count, with the reason a wait is fixed in the table above)" <| fun _ ->
-      machineScaled |> Set.count |> Expect.equal "waits for the machine" 60
-      fixedTable |> List.length |> Expect.equal "fixed durations (97 + capabilityDefaultLifetime and capabilityMaxLifetime, which are presence: a run's token is trusted for a stated time)" 99
+      machineScaled |> Set.count |> Expect.equal "waits for the machine (60 + debugAttachGrace: a debugger process attaching to the host takes longer on a slower machine)" 61
+      fixedTable |> List.length |> Expect.equal "fixed durations (97 + capabilityDefaultLifetime and capabilityMaxLifetime, which are presence: a run's token is trusted for a stated time, + debugAttachLook, a poll: the runtime raises no attach event)" 100
 
     testCase "WHY — each machine constant in the running process equals its written value scaled for the process's tier, so the wiring is real and not only the text" <| fun _ ->
       let timeouts = typeof<ValidTimeout>.Assembly.GetType "SageFs.Timeouts"
