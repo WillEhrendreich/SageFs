@@ -173,7 +173,13 @@
              depend on nothing. -->
         <Compile Include="Features\MetadataDelta\RudeCause.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
+        <!-- Who is still on the OLD method after a save re-signed or removed a function: the closed state, its ledger and its wire.
+             Depends on nothing, and comes before ReloadPlanning, SessionReload and DevReload's report. -->
+        <Compile Include="Features\CallerState.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
+        <!-- After ReloadPlanning: finds the callers of a re-signed or removed declaration in the project's other files, by the
+             compiler's symbol resolution over the whole project or by name. -->
+        <Compile Include="Features\CallerCheck.fs" />
         <!-- Pure: when a patch is live (its new body has been seen running). After ReloadPlanning
              (it matches probes to the declarations the planner landed) and EntryProbes. -->
         <Compile Include="Features\PatchConfirmation.fs" />

@@ -531,7 +531,7 @@ let extractDecls (source: string) : Result<FileDecls, string> =
     | None, ParsedInput.SigFile _ -> Error "signature files are not reloaded"
   with ex -> Error (sprintf "the file could not be parsed: %s" ex.Message)
 
-let private normalize (text: string) =
+let normalize (text: string) =
   (sourceLines text |> Array.map _.TrimEnd() |> String.concat "\n").Trim()
 
 let private changeFor (decl: SourceDecl) =
@@ -828,7 +828,7 @@ let annotationOf (decl: SourceDecl) : string option =
 /// The container is part of the key: two nested modules in one file may each
 /// declare `render`, and pairing one against the other would diff two unrelated
 /// functions against each other.
-let private keyed (decls: SourceDecl list) =
+let keyed (decls: SourceDecl list) =
   decls
   |> List.mapFold (fun (seen: Map<DeclKind * string list * string, int>) d ->
     let n = seen |> Map.tryFind (d.Kind, d.Container, d.Name) |> Option.defaultValue 0
@@ -895,7 +895,7 @@ let private outcomeOf
 let baselineIsTrustworthy (assemblyWriteTimeUtc: DateTime) (sourceWriteTimeUtc: DateTime) : bool =
   sourceWriteTimeUtc <= assemblyWriteTimeUtc
 
-let private isIdentifier (name: string) =
+let isIdentifier (name: string) =
   System.Text.RegularExpressions.Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_']*$")
 
 /// Blanks out comments and string/char literals (replacing them with spaces, so
@@ -903,7 +903,7 @@ let private isIdentifier (name: string) =
 /// extraction can never mistake prose or literal data for a real reference.
 /// Handles `//` line comments, nested `(* *)` block comments, regular/verbatim/
 /// triple-quoted strings, and simple char literals.
-let private stripCommentsAndStrings (text: string) : string =
+let stripCommentsAndStrings (text: string) : string =
   let n = text.Length
   let buf = System.Text.StringBuilder(text)
   let blank i j = for k in i .. j - 1 do buf.[k] <- ' '
@@ -1146,12 +1146,28 @@ let private hiddenUsesViaIdentifiers (patches: SourceDecl list) (hidden: SourceD
 /// caches compiler internals (default reference sets, etc.) and is documented
 /// as safe under concurrent, repeated use, so there is no reason to pay its
 /// construction cost per save.
-let private checker = lazy FSharp.Compiler.CodeAnalysis.FSharpChecker.Create()
+let checker = lazy FSharp.Compiler.CodeAnalysis.FSharpChecker.Create()
 
 /// A counter folded into the synthetic file name/version of every check, so
 /// FSharpChecker's own internal (fileName, version) result cache can never
 /// serve a stale answer for a changed body under a reused name.
-let private checkCounter = ref 0
+let checkCounter = ref 0
+
+/// Runs a compiler call and gives up on it when `limit` passes: the call is cancelled and a `TimeoutException` is
+/// raised, so a stuck check delays whoever waits by that bound and no more.
+let withinBound (limit: TimeSpan) (call: Async<'a>) : Async<'a> =
+  async {
+    use bound = new System.Threading.CancellationTokenSource()
+    let work = Async.StartAsTask(call, cancellationToken = bound.Token)
+    let! winner =
+      System.Threading.Tasks.Task.WhenAny(work, System.Threading.Tasks.Task.Delay(limit, bound.Token))
+      |> Async.AwaitTask
+    let answered = obj.ReferenceEquals(winner, work)
+    bound.Cancel()
+    match answered with
+    | true -> return! Async.AwaitTask work
+    | false -> return raise (TimeoutException(sprintf "the compiler did not answer within %A" limit))
+  }
 
 /// Type-checks `source` — a real file's exact text, standalone (no project,
 /// no `#load`ed dependencies) — and returns every symbol use FCS found in it,
@@ -1165,19 +1181,7 @@ let private checkCounter = ref 0
 let private symbolUsesOfAsync (source: string) : Async<Result<FSharp.Compiler.CodeAnalysis.FSharpSymbolUse list, string>> =
   // Each compiler call is bounded by `reloadPlanningCheck`: one that has not answered by then is cancelled and throws,
   // and the caller falls back to the identifier-name reading, so a stuck check delays a reload by that bound and no more.
-  let withinCheckBound (call: Async<'a>) : Async<'a> =
-    async {
-      use bound = new System.Threading.CancellationTokenSource()
-      let work = Async.StartAsTask(call, cancellationToken = bound.Token)
-      let! winner =
-        System.Threading.Tasks.Task.WhenAny(work, System.Threading.Tasks.Task.Delay(SageFs.Timeouts.reloadPlanningCheck, bound.Token))
-        |> Async.AwaitTask
-      let answered = obj.ReferenceEquals(winner, work)
-      bound.Cancel()
-      match answered with
-      | true -> return! Async.AwaitTask work
-      | false -> return raise (TimeoutException(sprintf "the compiler did not answer within %A" SageFs.Timeouts.reloadPlanningCheck))
-    }
+  let withinCheckBound (call: Async<'a>) : Async<'a> = withinBound SageFs.Timeouts.reloadPlanningCheck call
   async {
     try
       let n = System.Threading.Interlocked.Increment checkCounter

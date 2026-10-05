@@ -93,6 +93,12 @@
         <Compile Include="PatchConfirmationSim.fs" />
         <Compile Include="PatchConfirmationInvariants.fs" />
         <Compile Include="PatchConfirmationGenerators.fs" />
+        <!-- Callers in other files DST: folds the real planner's re-sign/removal subjects, CallerCheck.decide over the callers'
+             text and the real CallerLedger through saves of a library and two caller files in every order; the truth is an
+             independent per-name generation fold. Twins drop the check, clear on any save and never clear. -->
+        <Compile Include="CallerPendingSim.fs" />
+        <Compile Include="CallerPendingInvariants.fs" />
+        <Compile Include="CallerPendingGenerators.fs" />
         <!-- Getter-guard DST: folds the real reachability walk, patch registry, stop cells and click
              lifecycle through the watchdog, an abandoned thread, shared helpers and a reload during a
              click; twins release at give-up, never retire a cell, unpatch without counting holders and

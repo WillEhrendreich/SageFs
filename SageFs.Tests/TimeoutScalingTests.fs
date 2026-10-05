@@ -94,7 +94,7 @@ let private machineScaled : Set<string> =
         "liveTestConfirmationDeadline"; "liveValueBindingBudget"; "memberEvaluationDeadline"
         "liveTestWatcherShutdown"; "rebuildReadyWait"; "buildCompletion"; "hostBuildRun"; "gitQuick"; "gitRebase"
         "gitWorktreeAdd"; "cohortIntegrationSettle"; "testRunAwaitSlack"; "leaseTtlSessionCreate"
-        "leaseTtlTestSuite"; "frictionSlowFirstSuccess"; "compileQueueWait"; "compileBudget"; "reloadPlanningCheck"
+        "leaseTtlTestSuite"; "frictionSlowFirstSuccess"; "compileQueueWait"; "compileBudget"; "reloadPlanningCheck"; "callerCheck"
         "appHostAppearGrace"; "appHostStart"; "appHostStop"; "appEntryFinishGrace"; "appRunnerShutdown"
         "debugHold"; "restartStartupCrashWindow"; "watchdogGracePeriod"; "workerHealthProbeTimeout"
         "workerEndpointFetch"; "workerWarmupContextFetch"; "outputCommitWait"; "gracefulShutdownWatchdog"

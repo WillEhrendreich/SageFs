@@ -80,6 +80,17 @@ let tests =
         isPending (finalState t) |> Expect.isTrue "the call is still on the old method"
         assertHolds t
 
+      testCase "twoCallersOneSaved: saving one caller leaves the other pending" <| fun _ ->
+        let t = run CallerPendingGenerators.twoCallersOneSaved
+        let last = List.last t.Snapshots
+        last.Listed |> Expect.equal "only C2 is left, on f1" (set [ CallerPendingSim.callerPath 2, "Sim.Lib.f1" ])
+        assertHolds t
+
+      testCase "brokenCallerSaveDoesNotLand: a caller saved with an edit that does not compile is still on the old method" <| fun _ ->
+        let t = run CallerPendingGenerators.brokenCallerSaveDoesNotLand
+        isPending (finalState t) |> Expect.isTrue "nothing landed"
+        assertHolds t
+
       testCase "restartClears: a restarted app has no old methods" <| fun _ ->
         let t = run CallerPendingGenerators.restartClears
         isPending (finalState t) |> Expect.isFalse "current"
@@ -92,7 +103,7 @@ let tests =
         violatedIds t |> Expect.contains "the silent window must be caught" "resigned-with-unsaved-caller-is-never-clean"
 
       testCase "REPRODUCED — the clears-on-any-save twin forgets a caller that has not landed" <| fun _ ->
-        let t = runClearsOnAnySave CallerPendingGenerators.callerSavedTwice
+        let t = runClearsOnAnySave CallerPendingGenerators.twoCallersOneSaved
         violatedIds t |> Expect.contains "clearing on the wrong file must be caught" "resigned-with-unsaved-caller-is-never-clean"
 
       testCase "REPRODUCED — the never-clears twin keeps reporting a caller that already landed" <| fun _ ->

@@ -516,6 +516,11 @@ module Timeouts =
   /// text may take, for each of its two steps (the script project options and
   /// the type check). No recorded reason for 10s.
   let reloadPlanningCheck = forMachine (TimeSpan.FromSeconds(10.0))
+  /// How long the whole-project compiler check that finds the callers of a re-signed or removed function may take
+  /// (`CallerCheck.callersAsync`). It checks every file of the project, not one, so it gets more than the single-file
+  /// check; a save that re-signs a function waits this long at most, and past it the callers are matched by name and the
+  /// report says the compiler timed out. No recorded reason for 30s.
+  let callerCheck = forMachine (TimeSpan.FromSeconds(30.0))
 
   // -- Running an app (run_app) --
   /// How long an app's entry point may run before it builds a host. If it has not by then,
