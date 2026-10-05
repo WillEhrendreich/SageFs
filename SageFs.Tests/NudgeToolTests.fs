@@ -139,6 +139,18 @@ let renderTests =
       let formula = field reply "items" |> fun e -> [ for item in e.EnumerateArray() -> item ] |> List.find (fun i -> text i "address" = NudgeAddress.format jumpVelocity)
       let mutable found = JsonElement()
       formula.TryGetProperty("value", &found) |> Expect.isFalse "no value on a formula"
+
+    testCase "WHY - every kind of literal has the JSON type its kind promises, and a real with no JSON number is null rather than a crash" <| fun _ ->
+      let kindOf (value: LiteralValue) = (McpNudge.valueJson value |> fun node -> if isNull node then JsonValueKind.Null else JsonDocument.Parse(node.ToJsonString()).RootElement.ValueKind)
+      kindOf (LiteralValue.Bool true) |> Expect.equal "a boolean" JsonValueKind.True
+      kindOf (LiteralValue.Bool false) |> Expect.equal "a boolean" JsonValueKind.False
+      kindOf (LiteralValue.Integer 7L) |> Expect.equal "an integer" JsonValueKind.Number
+      kindOf (LiteralValue.Real 1.5) |> Expect.equal "a real" JsonValueKind.Number
+      kindOf (LiteralValue.Real Double.PositiveInfinity) |> Expect.equal "no JSON number for infinity" JsonValueKind.Null
+      kindOf (LiteralValue.Real Double.NaN) |> Expect.equal "no JSON number for NaN" JsonValueKind.Null
+      kindOf (LiteralValue.Char 'x') |> Expect.equal "a character is one-character text" JsonValueKind.String
+      kindOf (LiteralValue.Text "t") |> Expect.equal "text" JsonValueKind.String
+      kindOf (LiteralValue.Case "Hard") |> Expect.equal "a case is its name" JsonValueKind.String
   ]
 
 [<Tests>]

@@ -8,6 +8,7 @@ open System.Text.Json.Nodes
 open System.Threading.Tasks
 open SageFs.McpTools
 open SageFs.Features.Tweak
+open SageFs.Features.Tweak.LiteralEdit
 open SageFs.Features.Tweak.Nudge
 
 /// The MCP side of `nudge_value`: which files the call's session owns, how a
@@ -44,12 +45,37 @@ module McpNudge =
       "fileHashAfter", text receipt.FileHashAfter
       "eventId", number receipt.EventId ]
 
+  /// A literal's value as the JSON type its kind is: a number, a boolean, or text. A real that is not a number
+  /// (a literal that overflows a double) has no JSON number, so it is null here and `text` is where to read it.
+  let valueJson (value: LiteralValue) : JsonNode =
+    match value with
+    | LiteralValue.Bool b -> JsonValue.Create b :> JsonNode
+    | LiteralValue.Integer i -> JsonValue.Create i :> JsonNode
+    | LiteralValue.Real r when Double.IsFinite r -> JsonValue.Create r :> JsonNode
+    | LiteralValue.Real _ -> null
+    | LiteralValue.Char c -> text (string c)
+    | LiteralValue.Text s
+    | LiteralValue.Case s -> text s
+
+  let spanFields (span: SourceSpan) : (string * JsonNode) list =
+    [ "line", number span.Line
+      "column", number span.Column
+      "endLine", number span.EndLine
+      "endColumn", number span.EndColumn ]
+
   let itemJson (item: InspectedItem) : JsonNode =
     let kind =
       match item.Kind with
-      | ItemKind.Knob value -> [ "kind", text "Knob"; "valueKind", text (LiteralKindName.toToken (LiteralKindName.ofValue value)) ]
+      | ItemKind.Knob value ->
+        [ "kind", text "Knob"
+          "valueKind", text (LiteralKindName.toToken (LiteralKindName.ofValue value))
+          "value", valueJson value ]
       | ItemKind.Formula -> [ "kind", text "Formula" ]
-    objectOf ([ "address", text (NudgeAddress.format item.Address); "text", text item.Text; "hash", text item.Hash ] @ kind)
+    objectOf (
+      [ "address", text (NudgeAddress.format item.Address); "text", text item.Text; "hash", text item.Hash ]
+      @ spanFields item.Span
+      @ kind
+    )
 
   let inspectionFields (inspection: Inspection) : (string * JsonNode) list =
     let listing =

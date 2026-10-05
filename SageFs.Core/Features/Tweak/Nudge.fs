@@ -400,10 +400,19 @@ type ItemKind =
   /// A formula or other expression, replaced whole by an `ExpressionText`.
   | Formula
 
+/// Where an expression sits in its file, as the parser says it: lines count from 1, columns from 0, and `EndColumn` is
+/// one past the last character. Every other position on the wire is the same.
+type SourceSpan =
+  { Line: int
+    Column: int
+    EndLine: int
+    EndColumn: int }
+
 type InspectedItem =
   { Address: TweakAddress
     Text: string
     Hash: string
+    Span: SourceSpan
     Kind: ItemKind }
 
 [<RequireQualifiedAccess>]
@@ -821,7 +830,12 @@ let inspect (path: string) (text: string) (log: EventLog) (target: InspectTarget
       match readLiteralText resolved.Text with
       | Ok(value, _) -> ItemKind.Knob value
       | Error _ -> ItemKind.Formula
-    { Address = resolved.Address; Text = resolved.Text; Hash = resolved.Hash; Kind = kind }
+    let span : SourceSpan =
+      { Line = resolved.Range.StartLine
+        Column = resolved.Range.StartColumn
+        EndLine = resolved.Range.EndLine
+        EndColumn = resolved.Range.EndColumn }
+    { Address = resolved.Address; Text = resolved.Text; Hash = resolved.Hash; Span = span; Kind = kind }
   let history = historyOf log
   let inspected (items: InspectedItem list) (listing: Listing) =
     Ok(
