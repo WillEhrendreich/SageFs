@@ -61,11 +61,15 @@ let tests =
           status |> Expect.equal (sprintf "create for %s" dir) 200
           let! ready, lastBody = waitForReadySession client dir TestTimeouts.loadedSessionsReady
           ready |> Expect.isTrue (sprintf "%s should reach Ready — last sessions body: %s (create body: %s)" dir lastBody body)
-          let! _ = postJson client "/exec" {| code = "let x = [ for i in 1 .. 200 -> i * i ];; printfn \"%d\" x.Length"; working_directory = dir |}
-          ()
+          let! evalStatus, evalBody = postJson client "/exec" {| code = "let x = [ for i in 1 .. 200 -> i * i ];; printfn \"%d\" x.Length"; working_directory = dir |}
+          // The guard against a vacuous pass is that each session really evaluated and printed, not that the daemon's
+          // working set went up: a gen2 GC or the OS trimming the working set under memory pressure can leave the
+          // peak reading at or below the baseline, and that failed the gate ("should have grown the RSS at all")
+          // on a loaded machine without the daemon leaking anything.
+          evalStatus |> Expect.equal (sprintf "eval in %s" dir) 200
+          (evalBody: string).Contains "200" |> Expect.isTrue (sprintf "the eval in %s printed its 200 items: %s" dir evalBody)
 
         let peakMB = rssMB proc
-        (peakMB > baselineMB) |> Expect.isTrue "four real sessions with real output should have grown the daemon's own RSS at all"
 
         // Stop all four — collect ids from /api/sessions first (create's own
         // response carries no clean sessionId field; see the existing
