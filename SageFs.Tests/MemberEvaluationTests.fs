@@ -58,11 +58,12 @@ let memberEvaluationTests =
   testList "evaluating one member" [
 
     testCase "WHY — a getter that returns is run and its value comes back" <| fun _ ->
-      let evaluator = create (limits 2) unfiltered
+      // It returns by itself, so the deadline is the event bound: 150 ms was lost to a loaded machine in the gate.
+      let evaluator = create { limits 2 with Deadline = TestTimeouts.patienceBrief } unfiltered
       evaluator.Run (property "Quick") (box (gadget ())) |> Expect.equal "the value" (Ok (box 5))
 
     testCase "WHY — a getter that throws comes back with its own message, not a wrapper's" <| fun _ ->
-      let evaluator = create (limits 2) unfiltered
+      let evaluator = create { limits 2 with Deadline = TestTimeouts.patienceBrief } unfiltered
       match evaluator.Run (property "Boom") (box (gadget ())) with
       | Error (MemberFailure.MemberThrew message) -> message |> Expect.equal "the message" "boom"
       | other -> failtestf "expected a throw, got %A" other

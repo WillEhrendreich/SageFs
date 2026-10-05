@@ -76,8 +76,18 @@ let private probe () = Probe(new ManualResetEventSlim(false), new ManualResetEve
 
 let private property (name: string) = typeof<Probe>.GetProperty name
 
+/// For a getter that ENDS ON ITS OWN (returns, throws, runs the stack out): the guard or the getter is what is under
+/// test, so the deadline is the event bound. The 150 ms hang deadline made these fail on a loaded machine, where the
+/// thread start, the patcher and the first JIT of the getter outlast it, and the click came back `MemberTimedOut`.
+let private returningLimits (maxAbandoned: int) =
+  { limits maxAbandoned with Deadline = TestTimeouts.patienceBrief }
+
 let private evaluate (guarding: Guarding) (name: string) (target: Probe) : MemberEvaluated =
   let evaluator = Evaluator(limits 4, unfiltered, guarding)
+  evaluator.RunGuarded (property name) (box target)
+
+let private evaluateReturning (guarding: Guarding) (name: string) (target: Probe) : MemberEvaluated =
+  let evaluator = Evaluator(returningLimits 4, unfiltered, guarding)
   evaluator.RunGuarded (property name) (box target)
 
 [<Tests>]
@@ -86,24 +96,24 @@ let memberEvaluationGuardTests =
 
     testCase "WHY - a getter that returns comes back with what was guarded, and the guards are let go once" <| fun _ ->
       let releases = Releases()
-      let evaluated = evaluate (preparing releases) "Quick" (probe ())
+      let evaluated = evaluateReturning (preparing releases) "Quick" (probe ())
       evaluated.Outcome |> Expect.equal "the value" (Ok (box 5))
       evaluated.Guards |> Expect.equal "what protected it, and no guard fired" { Coverage = coverage; Trip = GuardTrip.NotTripped }
       releases.Count |> Expect.equal "released once" 1
 
     testCase "WHY - the guards are let go when the getter threw" <| fun _ ->
       let releases = Releases()
-      let evaluated = evaluate (preparing releases) "Boom" (probe ())
+      let evaluated = evaluateReturning (preparing releases) "Boom" (probe ())
       evaluated.Outcome |> Expect.equal "the getter's own message" (Error (MemberFailure.MemberThrew "boom"))
       releases.Count |> Expect.equal "released once" 1
 
     testCase "WHY - with guards switched off the click runs as before and says it was not guarded" <| fun _ ->
-      let evaluated = evaluate GuardsOff "Quick" (probe ())
+      let evaluated = evaluateReturning GuardsOff "Quick" (probe ())
       evaluated.Outcome |> Expect.equal "the value" (Ok (box 5))
       evaluated.Guards |> Expect.equal "the row says why" { Coverage = GuardCoverage.NotGuarded NotGuardedReason.SwitchedOff; Trip = GuardTrip.NotTripped }
 
     testCase "WHY - a preparer that throws leaves the getter running, and the row says the guards could not be put on" <| fun _ ->
-      let evaluated = evaluate (GuardsOn (fun _ _ -> failwith "no patching here")) "Quick" (probe ())
+      let evaluated = evaluateReturning (GuardsOn (fun _ _ -> failwith "no patching here")) "Quick" (probe ())
       evaluated.Outcome |> Expect.equal "the getter still ran" (Ok (box 5))
       match evaluated.Guards.Coverage with
       | GuardCoverage.NotGuarded (NotGuardedReason.PreparationFailed detail) -> detail |> Expect.stringContains "with the reason" "no patching here"
@@ -124,7 +134,7 @@ let memberEvaluationGuardTests =
 
     testCase "WHY - a getter that ran the stack out comes back as a throw that says so, with the stack guard on the row" <| fun _ ->
       let releases = Releases()
-      let evaluated = evaluate (preparing releases) "Overflows" (probe ())
+      let evaluated = evaluateReturning (preparing releases) "Overflows" (probe ())
       match evaluated.Outcome with
       | Error (MemberFailure.MemberThrew message) -> message |> Expect.stringContains "says it was the stack" "stack"
       | other -> failtestf "expected a throw, got %A" other
@@ -201,9 +211,11 @@ let realGuardsOnAbandonedThreadTests =
       | Ok _ ->
         let release = new ManualResetEventSlim(false)
         let target = SageFs.Tests.GuardFixtures.FilteredSpinner(release)
+        // `Fine` returns by itself, so it gets the event bound; `Spin` ends only at the deadline, so it keeps the short one.
         let evaluator = Evaluator(limits 4, filtered SandboxPolicy.NoNetworkNoWritesNoSpawn, GuardsOn SageFs.Features.GuardPatcher.prepare)
+        let returningEvaluator = Evaluator(returningLimits 4, filtered SandboxPolicy.NoNetworkNoWritesNoSpawn, GuardsOn SageFs.Features.GuardPatcher.prepare)
         try
-          let fine = evaluator.RunGuarded (typeof<SageFs.Tests.GuardFixtures.FilteredSpinner>.GetProperty "Fine") (box target)
+          let fine = returningEvaluator.RunGuarded (typeof<SageFs.Tests.GuardFixtures.FilteredSpinner>.GetProperty "Fine") (box target)
           fine.Outcome |> Expect.equal "the guarded getter returned under the filter" (Ok (box 7))
           (SageFs.Features.GuardCoverage.guardedCount fine.Guards.Coverage, 0) |> Expect.isGreaterThan "and it was guarded"
           let spun = evaluator.RunGuarded (typeof<SageFs.Tests.GuardFixtures.FilteredSpinner>.GetProperty "Spin") (box target)
