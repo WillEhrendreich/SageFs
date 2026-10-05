@@ -66,6 +66,7 @@ let renderKeyboardHelp () =
     ]
   Elem.div [ Attr.id DomIds.KeyboardHelp; Attr.style "margin-top: 0.5rem;" ] [
     Elem.table [ Attr.style "font-size: 0.85rem; border-collapse: collapse;" ] [
+      shortcut EvaluatePopover.OpenKey "Open Evaluate (a quick check; Esc closes it)"
       shortcut "Alt+Enter" "Evaluate code"
       shortcut "Tab" "Insert 2 spaces (in editor)"
       shortcut "Ctrl+L" "Clear output"
