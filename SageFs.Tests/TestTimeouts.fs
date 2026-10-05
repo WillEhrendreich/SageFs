@@ -43,8 +43,11 @@ module TestTimeouts =
   /// has the runtime apply it (DeltaChild `bench`). The first pass has the JIT in it and a loaded runner is slower.
   let bigAssemblyDelta = secs 120.
   /// Ceiling on a wait that completes in the test's own process (a task settling, a file watcher
-  /// reporting, a long poll answering) but goes through the thread pool and can be starved.
-  let patienceInProcess = secs 10.
+  /// reporting, a long poll answering) but goes through the thread pool and can be starved. 30 s because the gate
+  /// runs beside other work on a shared machine (a load average of 40 to 70 was seen), where a starved pool made
+  /// 10 s lose a wait that was only slow: ThreadSandbox, the app-runner and orchestration waits, the batch flusher.
+  /// Every use is an event wait, so the long bound costs nothing when the event comes.
+  let patienceInProcess = secs 30.
   /// Ceiling on in-process work with no real I/O (an Elm loop reaching a model, a host stopping).
   /// It is the same 20 s as `patience`: a ceiling on an event costs a passing run nothing, and a
   /// starved thread pool on a loaded machine (a load average past 40 happens here) stretches a
