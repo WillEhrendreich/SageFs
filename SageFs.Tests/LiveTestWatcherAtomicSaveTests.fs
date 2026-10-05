@@ -36,13 +36,18 @@ let private watchAfter (save: string -> unit) = task {
     // ahead of watcher creation and be missed. (In production saves happen long
     // after a session is added, so this race never occurs there.)
     manager.WatchedDirectories |> ignore
-    do! Task.Delay TestTimeouts.threadStartSettle // small settle for the OS watcher to begin delivering events
-    save target
-    let! winner = Task.WhenAny(reloaded.Task :> Task, Task.Delay TestTimeouts.briefPatience)
-    return
+    // A fixed settle cannot say when the OS watcher starts delivering events, and a save that lands before it does
+    // is never reported. So the save is made again, once per `patienceTight`, until the watcher reports one or the
+    // ceiling passes: the case proves that a save of this SHAPE is reported, not that a particular instant is.
+    let started = Diagnostics.Stopwatch.StartNew()
+    let mutable outcome = NothingReported
+    while outcome = NothingReported && started.Elapsed < TestTimeouts.briefPatience do
+      save target
+      let! winner = Task.WhenAny(reloaded.Task :> Task, Task.Delay TestTimeouts.patienceTight)
       match obj.ReferenceEquals(winner, reloaded.Task) with
-      | true -> Reloaded reloaded.Task.Result
-      | false -> NothingReported
+      | true -> outcome <- Reloaded reloaded.Task.Result
+      | false -> ()
+    return outcome
   finally
     manager.RemoveDirectory(dir.FullName, sid)
     dir.Delete true

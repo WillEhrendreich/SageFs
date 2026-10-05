@@ -573,8 +573,12 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
       do! ctx.Response.WriteAsync("<html><body><h1>Test</h1></body></html>")
     })) |> ignore
     let cts = new CancellationTokenSource()
+    // The host says when it is serving: a fixed settle guessed at how long a cold start takes, and a start slower
+    // than the guess found no address to ask.
+    let started = TaskCompletionSource()
+    app.Lifetime.ApplicationStarted.Register(fun () -> started.TrySetResult() |> ignore) |> ignore
     let runTask = app.RunAsync(cts.Token)
-    do! Task.Delay(TestTimeouts.startSettle)
+    do! started.Task.WaitAsync TestTimeouts.patience
     let addresses =
       (app :> IHost).Services.GetRequiredService<IServer>()
       |> fun s -> s.Features.Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()
@@ -607,8 +611,12 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
       do! ctx.Response.WriteAsync("<html><body><h1>Test</h1></body></html>")
     })) |> ignore
     let cts = new CancellationTokenSource()
+    // The host says when it is serving: a fixed settle guessed at how long a cold start takes, and a start slower
+    // than the guess found no address to ask.
+    let started = TaskCompletionSource()
+    app.Lifetime.ApplicationStarted.Register(fun () -> started.TrySetResult() |> ignore) |> ignore
     let runTask = app.RunAsync(cts.Token)
-    do! Task.Delay(TestTimeouts.startSettle)
+    do! started.Task.WaitAsync TestTimeouts.patience
     let addresses =
       (app :> IHost).Services.GetRequiredService<IServer>()
       |> fun s -> s.Features.Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()

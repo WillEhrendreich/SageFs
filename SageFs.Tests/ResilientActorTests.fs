@@ -86,26 +86,27 @@ let resilientActorTests = testList "ResilientActor.wrapLoop" [
 
 [<Tests>]
 let safeFireAndForgetTests = testList "SafeFireAndForget.startTask" [
-  testAsync "successful work runs to completion" {
-    let mutable ran = false
+  testTask "successful work runs to completion" {
+    // The work says it ran, and the case awaits that: a fixed sleep guessed at how long a thread-pool turn takes.
+    let ran = System.Threading.Tasks.TaskCompletionSource<unit>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
     SafeFireAndForget.startTask nullLogger "test-task" (fun () ->
-      task { ran <- true } :> System.Threading.Tasks.Task)
-    do! Async.Sleep TestTimeouts.fireAndForgetSettle
-    ran |> Expect.isTrue "work should have run"
+      task { ran.TrySetResult () |> ignore } :> System.Threading.Tasks.Task)
+    let! winner = System.Threading.Tasks.Task.WhenAny(ran.Task :> System.Threading.Tasks.Task, System.Threading.Tasks.Task.Delay TestTimeouts.patience)
+    obj.ReferenceEquals(winner, ran.Task) |> Expect.isTrue "work should have run"
   }
 
-  testAsync "exceptions are caught not propagated" {
-    let mutable caught = false
+  testTask "exceptions are caught not propagated" {
+    let caught = System.Threading.Tasks.TaskCompletionSource<unit>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
     let capturingLogger =
       { new ILogger with
           member _.LogInfo _ = ()
           member _.LogDebug _ = ()
-          member _.LogWarning _ = caught <- true
+          member _.LogWarning _ = caught.TrySetResult () |> ignore
           member _.LogError _ = () }
     SafeFireAndForget.startTask capturingLogger "test-task" (fun () ->
       task { return failwith "boom" } :> System.Threading.Tasks.Task)
-    do! Async.Sleep TestTimeouts.fireAndForgetSettle
-    caught |> Expect.isTrue "exception should have been logged"
+    let! winner = System.Threading.Tasks.Task.WhenAny(caught.Task :> System.Threading.Tasks.Task, System.Threading.Tasks.Task.Delay TestTimeouts.patience)
+    obj.ReferenceEquals(winner, caught.Task) |> Expect.isTrue "exception should have been logged"
   }
 
   testAsync "cancellation is silent" {

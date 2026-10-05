@@ -164,15 +164,14 @@ let accumulatedDiagnosticsTests =
 
     testTask "DiagnosticsChanged event fires when diagnostics are updated" {
       let result = globalActorResult.Value
-      let mutable received = None
-      let sub = result.DiagnosticsChanged.Subscribe(fun store -> received <- Some store)
+      let fired = System.Threading.Tasks.TaskCompletionSource<DiagnosticsStore.T>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+      let sub = result.DiagnosticsChanged.Subscribe(fun store -> fired.TrySetResult store |> ignore)
       try
         let uniqueCode = sprintf "let eventTest_%d: int = \"wrong\"" (System.Random.Shared.Next())
         let! _diags = result.Actor.PostAndAsyncReply(fun rc -> GetDiagnostics(uniqueCode, rc))
-        // Give the event a moment to fire (it's synchronous in the actor loop, but subscription is async)
-        do! System.Threading.Tasks.Task.Delay(TestTimeouts.settle)
-        received
-        |> Option.isSome
+        // The event is awaited, not given a fixed moment: the actor may raise it after the reply lands.
+        let! winner = System.Threading.Tasks.Task.WhenAny(fired.Task :> System.Threading.Tasks.Task, System.Threading.Tasks.Task.Delay TestTimeouts.patience)
+        obj.ReferenceEquals(winner, fired.Task)
         |> Expect.isTrue "DiagnosticsChanged event should have fired"
       finally
         sub.Dispose()
