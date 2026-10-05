@@ -353,6 +353,15 @@ module OutputScroll =
     return dist
   }
 
+  /// Close the Evaluate popover the way a user does once the quick check is done (its button). The popover floats over the
+  /// page, at phone width over the output panel itself, so a journey that goes on to scroll the panel closes it first.
+  let closeEvaluate (page: IPage) = task {
+    let! isOpen = page.EvaluateAsync<bool>("() => document.querySelector('#evaluate-section').open")
+    if isOpen then do! page.Locator("[data-testid=evaluate-close]").ClickAsync()
+    let! _ = page.WaitForFunctionAsync("() => !document.querySelector('#evaluate-section').open")
+    ()
+  }
+
   /// Run one eval through the real Evaluate box. The code is built so its
   /// result text (`marker`) never appears in the echoed code line, so waiting
   /// for the marker waits for the RESULT, not the echo.
@@ -365,6 +374,7 @@ module OutputScroll =
       do! (DashboardDom.evalButton page).ClickAsync()
     })
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page panelSelector marker
+    do! closeEvaluate page
     // Let any scroll the morph kicked off finish before anyone measures.
     do! page.WaitForTimeoutAsync(600.0f)
   }
@@ -377,6 +387,7 @@ module OutputScroll =
       do! (DashboardDom.evalButton page).ClickAsync()
     })
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page panelSelector (sprintf "%s-120" prefix)
+    do! closeEvaluate page
     let! overflow =
       page.EvaluateAsync<float>(
         "() => { var el = document.querySelector('#output-panel'); return el.scrollHeight - el.clientHeight; }")
@@ -1102,7 +1113,7 @@ let tests =
     do! DashboardDom.openEvalArea page
     do! page.WaitForTimeoutAsync(500.0f)
     let helpWrapper = page.Locator("#keyboard-help-wrapper")
-    let helpBtn = page.Locator("#evaluate-section .panel-header-btn").First
+    let helpBtn = page.Locator("#evaluate-section [data-testid=keyboard-help-toggle]")
     // The wrapper's visibility is signal-driven (Ds.show "$helpVisible"), so it
     // survives the SSE morph. Assert the TOGGLE regardless of the default: one
     // click flips visibility, a second click flips it back.
@@ -1377,7 +1388,7 @@ let tests =
     do! page.WaitForTimeoutAsync(500.0f)
     do! DashboardDom.openEvalArea page
     let helpWrapper = page.Locator("#keyboard-help-wrapper")
-    let helpToggle = page.Locator("#evaluate-section .panel-header-btn").First
+    let helpToggle = page.Locator("#evaluate-section [data-testid=keyboard-help-toggle]")
     // Keyboard help starts hidden ($helpVisible=false) — open it so the
     // shortcuts table is in view before asserting its contents.
     let! helpVisible0 = helpWrapper.IsVisibleAsync()
@@ -1398,7 +1409,7 @@ let tests =
     // a blind whole-body retry isn't safe here since a click that DID land
     // toggles the $helpVisible signal, and retrying from scratch would
     // double-flip it.
-    let helpBtn = page.Locator("#evaluate-section .panel-header-btn").First
+    let helpBtn = page.Locator("#evaluate-section [data-testid=keyboard-help-toggle]")
     do! DashboardDom.openEvalArea page
     do! helpBtn.ClickAsync()
     do! helpWrapper.WaitForAsync(

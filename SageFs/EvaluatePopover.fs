@@ -54,6 +54,7 @@ let render (keyboardHelp: XmlNode) : XmlNode =
         Elem.button
           [ Attr.class' "session-btn"
             Attr.type' "button"
+            testid "keyboard-help-toggle"
             Attr.create "aria-label" "Toggle keyboard shortcuts help"
             Ds.onEvent ("click", "$helpVisible = !$helpVisible") ]
           [ Text.raw "⌨" ]
