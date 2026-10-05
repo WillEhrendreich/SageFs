@@ -103,10 +103,18 @@ let items : Item list =
       [ "docs/hot-reload.md"; "docs/mcp-tools.md" ]
       "The `nudge_value` tool lists the literals and expressions in a file the session owns, writes one of them back as just that range, journals the write before it lands, and undoes it exactly. A stale address is refused with what moved, and a write that does not type-check shows up in the reload verdict and rolls back. Agents and scripts can use it today."
 
-    item "live-tweak-knob" "A knob for the value you are nudging" HotReload Next
+    // Split in two, because one item was carrying three surfaces and a stage, and a landmark can only speak for one of
+    // them. The dashboard knob is in the tree; the editor controls and the pre-save apply are not, so they stay open
+    // and say so.
+    item "live-tweak-knob" "A knob for the value you are nudging" HotReload Now
+      (landmark "SageFs.Core/Features/Tweak/BindingTweak.fs" "stateAndControl")
+      [ "docs/hot-reload.md" ]
+      "The dashboard's Live Bindings pane has a knob on every value a project file holds. A row says where its value lives (`in source`, `REPL only`, `ambiguous` when two files declare the name, and the reasons a write cannot be offered), and the control follows what the file actually spells: a real gets a drag handle, step buttons and the arrow keys, a bool a switch, a string or a character a field, a formula (`gravity * 2.0`) an expression field, and a value made of parts becomes rows of its own. The step count is turned into the literal by the daemon, so `1.0` stays `1.0`, `0x1F` stays hex and units stay. Every write goes through the same nudge door the tool uses, with the hash the row last showed, its own undo and redo, and a refusal that says the rule and what to do. What it does not do yet: apply a value to the running app before you save it, and say when the app copied a value at startup."
+
+    item "live-tweak-in-the-editors" "A knob in the editors too" HotReload Next
       NoLandmarkYet
       [ "docs/hot-reload.md" ]
-      "`nudge_value` writes the file, but nothing in the dashboard or the editors lets you drag a number. I'd put a knob on a live binding in the dashboard, a scrub key in Neovim and Alt-drag in VS Code, and apply the drag to the running app before you save it."
+      "The dashboard has the knob now. Neovim has `:SageFsNudge`, which finds the value under the cursor by the range the daemon reports and bumps it, and VS Code has the lens. Neither lets you drag: a scrub key in Neovim and Alt-drag in VS Code, both writing through the nudge door so the same rules and the same undo apply."
 
     // These two live in the sagefs.nvim repo, so a landmark cannot resolve them here (it names a file in this
     // tree). What marks them is the doc below, which is in this tree and now describes what ships: `:SageFsDebugTest`
