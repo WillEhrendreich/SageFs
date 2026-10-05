@@ -168,10 +168,10 @@ let items : Item list =
       []
       "stdout and stderr from a running app get their own pane with follow, pause and search, so a chatty app stops burying your evals. The daemon already receives the app's output lines, and the pane is what's missing."
 
-    item "new-session-dialog" "A guided new-session dialog" Dashboard Next
-      NoLandmarkYet
+    item "new-session-dialog" "A guided new-session dialog" Dashboard Now
+      (landmark "SageFs/NewSessionDialog.fs" "NewSessionDialog")
       []
-      "A plus button on the Sessions list opens a dialog that finds projects, says in a line what each workflow means, and warns before you make a second session in the same directory. Today New Session is a collapsible panel."
+      "A plus button on the Sessions list opens a dialog that finds projects under a directory you can edit, says in a line what each workflow means, and warns before you make a second session in the same directory, naming the one that exists. A refusal from the daemon shows in the dialog with its next action, and Create closes it into a starting card at once. The no-session picker's Open Directory card still has its own form."
 
     item "publish-the-loop-timings" "Published numbers for the REPL loop" Docs Next
       NoLandmarkYet
