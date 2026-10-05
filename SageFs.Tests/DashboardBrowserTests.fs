@@ -1163,6 +1163,10 @@ let tests =
     do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
       do! textarea.FillAsync("""printfn "scroll-probe" """)
     })
+    // The Evaluate popover is a box fixed to the viewport that, at a narrow width, covers the sidebar header, so its
+    // Close button took the click meant for the expand toggle (the gate failed here, alone and under load). Close it
+    // for the sidebar work; the text stays in the bound `code` signal, and key `e` brings the popover back below.
+    do! page.Locator("[data-testid='evaluate-close']").ClickAsync()
     do! DashboardDom.ensureExpanded page
     do! page.SetViewportSizeAsync(1280, 300)
     let! scrolledTo =
@@ -1174,6 +1178,10 @@ let tests =
     // What the sidebar's panels measured before the eval, so a scroll shift can be attributed to the panel that resized.
     let! textBefore = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0]) + ' => ' + c.innerText.replace(/\\s+/g, ' ').slice(0, 400)).join(' || ')")
     let! sizesBefore = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0] || c.tagName) + ':' + Math.round(c.getBoundingClientRect().height)).join(' ')")
+    // Reopen the Evaluate popover before the observers go in: opening it changes an attribute under #main, which
+    // would count as a push and make "a morph reached #main" pass without one.
+    do! page.Keyboard.PressAsync("e")
+    do! textarea.WaitForAsync(LocatorWaitForOptions(State = WaitForSelectorState.Visible))
     // `__pushes` counts morph mutations anywhere under #main (proof a push
     // landed). `__classStripped` counts #main class mutations whose previous
     // value lacked `expanded` — i.e. the client-owned class was observed
