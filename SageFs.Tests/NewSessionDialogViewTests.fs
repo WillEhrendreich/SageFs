@@ -29,6 +29,10 @@ let twoCandidates : Found =
 
 let overlapping = overlapOf { Id = "abc123"; WorkingDirectory = "/work/repo"; Boundary = Boundary.Repository "/work/repo" } Relation.SameDirectory
 
+/// How Datastar spells a camelCase signal name in an attribute key: `newSessionDir` is `new-session-dir`.
+let kebab (name: string) : string =
+  Text.RegularExpressions.Regex.Replace(name, "(?<=[a-z0-9])([A-Z])", "-$1").ToLowerInvariant()
+
 let contains (needle: string) (message: string) (text: string) =
   text |> Expect.stringContains message needle
 
@@ -44,7 +48,7 @@ let view =
       h |> contains "<dialog" "a native dialog element"
       h |> contains (sprintf "id=\"%s\"" NewSessionNames.DialogId) "stable id so the morph keeps it"
       h |> contains "data-state=\"closed\"" "the state is on the page"
-      h |> excludes "new-session-create" "no controls while closed"
+      h |> excludes (sprintf "data-testid=\"%s\"" NewSessionNames.CreateTestId) "no controls while closed"
 
     testCase "WHY — the dialog is labelled by its own title and the open attribute survives the page morph" <| fun _ ->
       let h = html (NewSessionDialog.Choosing twoCandidates)
@@ -69,7 +73,7 @@ let view =
     testCase "WHY — every candidate is a labelled checkbox bound to the selection signal, never a click handler on a div" <| fun _ ->
       let h = html (NewSessionDialog.Choosing twoCandidates)
       h |> contains "type=\"checkbox\"" "a real checkbox"
-      h |> contains (sprintf "data-bind=\"%s\"" NewSessionNames.ProjectsSignal) "bound to the selection signal"
+      h |> contains (sprintf "data-bind:%s" (kebab NewSessionNames.ProjectsSignal)) "bound to the selection signal"
       h |> contains "value=\"App/App.fsproj\"" "carrying the path"
       h |> contains "<label" "the row is a label, so the whole row is the target"
 
@@ -90,7 +94,7 @@ let view =
       h |> contains "<legend" "named"
       for workflow in WorkflowChoice.all do
         h |> contains (sprintf "value=\"%s\"" (WorkflowChoice.key workflow)) "the workflow radio"
-        h |> contains (WorkflowChoice.oneLine workflow) "its one line of meaning"
+        h |> contains (SageFs.Server.DashboardFragments.htmlEscape (WorkflowChoice.oneLine workflow)) "its one line of meaning"
 
     testCase "WHY — a web project's hint is shown as a suggestion on the Hot Reload row, and selects nothing" <| fun _ ->
       let suggestion = { SuggestedWorkflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults; Reason = "Web project detected"; DetectedPackages = [ "Falco" ] }

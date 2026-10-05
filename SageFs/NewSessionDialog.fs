@@ -368,3 +368,64 @@ module NewSessionDialog =
     | _, Event.Submit request -> NewSessionDialog.Creating(request, foundOf state request.Directory)
     | _, Event.Dismiss -> NewSessionDialog.Closed
     | _, (Event.Found _ | Event.Missing _ | Event.Created | Event.Failed _) -> state
+
+/// The page's names for the dialog: DOM ids, test ids, signals and routes. Written once here so the markup, the
+/// handlers and the journeys can never spell one differently.
+module NewSessionNames =
+  // DOM ids
+  [<Literal>]
+  let RegionId = "sessions-region"
+  [<Literal>]
+  let DialogId = "new-session-dialog"
+  [<Literal>]
+  let TitleId = "new-session-title"
+  [<Literal>]
+  let StartingCardId = "new-session-starting"
+  [<Literal>]
+  let DirectoryInputId = "new-session-directory"
+  [<Literal>]
+  let OpenButtonId = "new-session-open"
+
+  // data-testid values
+  [<Literal>]
+  let DialogTestId = "new-session-dialog"
+  [<Literal>]
+  let OpenTestId = "new-session-open"
+  [<Literal>]
+  let CloseTestId = "new-session-close"
+  [<Literal>]
+  let CancelTestId = "new-session-cancel"
+  [<Literal>]
+  let CreateTestId = "new-session"
+  [<Literal>]
+  let WarningTestId = "new-session-warning"
+  [<Literal>]
+  let SwitchTestId = "new-session-switch"
+  [<Literal>]
+  let RefusalTestId = "new-session-refusal"
+  [<Literal>]
+  let CandidateTestId = "new-session-candidate"
+  [<Literal>]
+  let WorkflowTestId = "new-session-workflow"
+  [<Literal>]
+  let StatusTestId = "new-session-status"
+  [<Literal>]
+  let StartingTestId = "session-card-starting"
+
+  // browser signals (the open flag and the directory already exist as `Signals.NewSessionOpen`/`NewSessionDir`)
+  [<Literal>]
+  let TargetSignal = "newSessionTarget"
+  [<Literal>]
+  let ProjectsSignal = "newSessionProjects"
+  [<Literal>]
+  let WorkflowSignal = "newSessionWorkflow"
+
+  // routes
+  [<Literal>]
+  let OpenRoute = "/dashboard/new-session/open"
+  [<Literal>]
+  let DiscoverRoute = "/dashboard/new-session/discover"
+  [<Literal>]
+  let CreateRoute = "/dashboard/new-session/create"
+  [<Literal>]
+  let CloseRoute = "/dashboard/new-session/close"

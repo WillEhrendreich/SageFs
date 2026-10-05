@@ -634,6 +634,9 @@ module Timeouts =
 
   // -- Dashboard / UI --
   let dashboardPollInterval = TimeSpan.FromMilliseconds(100.0)
+  /// How long after the last keystroke in the new-session dialog's directory box the page asks the daemon for
+  /// directory suggestions: short enough to feel live, long enough that one word typed is one request.
+  let dashboardDirectorySuggestDebounce = TimeSpan.FromMilliseconds(250.0)
   let sseEventInterval = TimeSpan.FromSeconds(1.0)
   /// Server SSE heartbeat cadence: the stream loop patches a heartbeat signal at
   /// least this often (even on no-change ticks) so the client can prove liveness.
