@@ -94,6 +94,10 @@
         <Compile Include="CrossCheckoutOverlapTests.fs" />
         <Compile Include="AppRunTests.fs" />
         <Compile Include="ReloadPlanningTests.fs" />
+        <!-- A save that re-signs or removes a function leaves its callers in OTHER files on the old method: the named state
+             that says who, the check that finds them, and the DST over multi-file edit histories. -->
+        <Compile Include="CallerStateTests.fs" />
+        <Compile Include="CallerCheckTests.fs" />
         <Compile Include="LiveTestActivityTests.fs" />
         <Compile Include="AppRunnerTests.fs" />
         <Compile Include="AppRunOrchestrationTests.fs" />
@@ -219,6 +223,7 @@
         <Compile Include="PatchConfirmationTests.fs" />
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
+        <Compile Include="CallerPendingSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
         <Compile Include="ReadyWaitSimTests.fs" />
         <Compile Include="SourceStateProbeTests.fs" />
