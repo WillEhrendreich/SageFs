@@ -267,7 +267,7 @@ module Boundary =
     | Boundary.Plain _ -> None
 
 module Overlap =
-  let private comparison =
+  let comparison =
     match OperatingSystem.IsWindows() with
     | true -> StringComparison.OrdinalIgnoreCase
     | false -> StringComparison.Ordinal
@@ -281,7 +281,7 @@ module Overlap =
       try Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
       with :? ArgumentException | :? NotSupportedException | :? PathTooLongException -> directory
 
-  let private sameDirectory (a: string) (b: string) =
+  let sameDirectory (a: string) (b: string) =
     String.Equals(canonical a, canonical b, comparison)
 
   /// Which of `sessions` already work where a new one is about to be made. The same directory is named first,
@@ -341,7 +341,7 @@ module NewSessionDialog =
     | NewSessionDialog.Refused _ -> "refused"
 
   /// What the dialog last found, when it has anything. A state that never discovered has nothing to keep.
-  let private foundOf (state: NewSessionDialog) (directory: string) : Found =
+  let foundOf (state: NewSessionDialog) (directory: string) : Found =
     match state with
     | NewSessionDialog.Choosing found
     | NewSessionDialog.Warning(found, _, _)

@@ -15,7 +15,7 @@ open SageFs.WorkflowTypes
 open SageFs.Server.DashboardTypes
 open SageFs.Server.NewSessionDialog
 
-let private readProjectFile (path: string) : string =
+let readProjectFile (path: string) : string =
   try File.ReadAllText path
   with _ -> ""
 
@@ -27,7 +27,7 @@ let frameworksOf (projectXml: string) : Frameworks =
 
 /// The package names a project file asks for plus the markers its own XML carries (the Web SDK), which is
 /// what `WorkflowDetection.suggest` reads.
-let private packageNamesOf (projectXml: string) : string list =
+let packageNamesOf (projectXml: string) : string list =
   let declared =
     try
       XDocument.Parse(projectXml).Descendants(XName.Get "PackageReference")

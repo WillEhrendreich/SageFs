@@ -18,28 +18,28 @@ open SageFs.Server.NewSessionDiscovery
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
-let private repoA = { Id = "a1"; WorkingDirectory = "/work/repo"; Boundary = Boundary.Repository "/work/repo" }
-let private repoASub = { Id = "a2"; WorkingDirectory = "/work/repo/src/App"; Boundary = Boundary.Repository "/work/repo" }
-let private worktreeW = { Id = "w1"; WorkingDirectory = "/work/repo/.claude/worktrees/x"; Boundary = Boundary.Worktree("/work/repo/.claude/worktrees/x", "feature") }
-let private plainP = { Id = "p1"; WorkingDirectory = "/scratch/play"; Boundary = Boundary.Plain "/scratch/play" }
+let repoA = { Id = "a1"; WorkingDirectory = "/work/repo"; Boundary = Boundary.Repository "/work/repo" }
+let repoASub = { Id = "a2"; WorkingDirectory = "/work/repo/src/App"; Boundary = Boundary.Repository "/work/repo" }
+let worktreeW = { Id = "w1"; WorkingDirectory = "/work/repo/.claude/worktrees/x"; Boundary = Boundary.Worktree("/work/repo/.claude/worktrees/x", "feature") }
+let plainP = { Id = "p1"; WorkingDirectory = "/scratch/play"; Boundary = Boundary.Plain "/scratch/play" }
 
-let private candidate path kind frameworks : Candidate = { Path = path; Kind = kind; Frameworks = frameworks }
+let candidate path kind frameworks : Candidate = { Path = path; Kind = kind; Frameworks = frameworks }
 
-let private foundIn dir : Found =
+let foundIn dir : Found =
   { Directory = dir
     Candidates = [ candidate "App.fsproj" CandidateKind.Project (Frameworks.Declared [ "net10.0" ]) ]
     Hint = WorkflowHint.NoneSuggested }
 
-let private request dir target : Request =
+let request dir target : Request =
   { Directory = dir; Target = target; Workflow = SessionWorkflow.Interactive }
 
-let private overlapOf session relation : Overlap = { Session = session; Relation = relation }
+let overlapOf session relation : Overlap = { Session = session; Relation = relation }
 
 // ── Generators: every state and event the dialog can have ───────────────────
 
-let private genDir = Gen.elements [ "/work/repo"; "/work/other"; "/scratch/play"; "/tmp/x y" ]
+let genDir = Gen.elements [ "/work/repo"; "/work/other"; "/scratch/play"; "/tmp/x y" ]
 
-let private genRefusal : Gen<Refusal> =
+let genRefusal : Gen<Refusal> =
   Gen.oneof [
     Gen.constant Refusal.NoDirectory
     genDir |> Gen.map Refusal.DirectoryMissing
@@ -52,25 +52,25 @@ let private genRefusal : Gen<Refusal> =
       SageFsError.SessionCreationFailed "boom" ]
     |> Gen.map Refusal.Daemon ]
 
-let private genOverlap : Gen<Overlap> =
+let genOverlap : Gen<Overlap> =
   gen {
     let! session = Gen.elements [ repoA; repoASub; worktreeW; plainP ]
     let! relation = Gen.elements [ Relation.SameDirectory; Relation.SameRepository "/work/repo" ]
     return { Session = session; Relation = relation } }
 
-let private genFound : Gen<Found> = genDir |> Gen.map foundIn
+let genFound : Gen<Found> = genDir |> Gen.map foundIn
 
-let private genTarget : Gen<Target> =
+let genTarget : Gen<Target> =
   Gen.oneof [ Gen.constant Target.Bare; Gen.constant (Target.Load("App.fsproj", [ "Lib/Lib.fsproj" ])) ]
 
-let private genRequest : Gen<Request> =
+let genRequest : Gen<Request> =
   gen {
     let! dir = genDir
     let! target = genTarget
     let! workflow = Gen.elements WorkflowSwitch.options
     return { Directory = dir; Target = target; Workflow = workflow } }
 
-let private genState : Gen<NewSessionDialog> =
+let genState : Gen<NewSessionDialog> =
   Gen.oneof [
     Gen.constant NewSessionDialog.Closed
     genDir |> Gen.map NewSessionDialog.Discovering
@@ -89,7 +89,7 @@ let private genState : Gen<NewSessionDialog> =
       let! found = genFound
       return NewSessionDialog.Refused(reason, found) } ]
 
-let private genEvent : Gen<Event> =
+let genEvent : Gen<Event> =
   Gen.oneof [
     genDir |> Gen.map Event.Open
     gen {
@@ -105,11 +105,11 @@ let private genEvent : Gen<Event> =
     genRefusal |> Gen.map Event.Failed
     Gen.constant Event.Dismiss ]
 
-let private states = Arb.fromGen genState
-let private events = Arb.fromGen genEvent
-let private sequences = Arb.fromGen (Gen.listOf genEvent)
+let states = Arb.fromGen genState
+let events = Arb.fromGen genEvent
+let sequences = Arb.fromGen (Gen.listOf genEvent)
 
-let private isCreating state =
+let isCreating state =
   match state with
   | NewSessionDialog.Creating _ -> true
   | NewSessionDialog.Closed
@@ -345,7 +345,7 @@ let requests =
 
 // ── What the dialog says ────────────────────────────────────────────────────
 
-let private isSaying (message: string) (text: string) =
+let isSaying (message: string) (text: string) =
   (text.Trim().Length > 0) |> Expect.isTrue message
 
 [<Tests>]
@@ -403,7 +403,7 @@ let words =
 
 // ── Discovery: the one place that reads the disk ────────────────────────────
 
-let private withTempDir (body: string -> unit) =
+let withTempDir (body: string -> unit) =
   let dir = Path.Combine(Path.GetTempPath(), "nsd-discover-" + Guid.NewGuid().ToString("N"))
   Directory.CreateDirectory dir |> ignore
   try body dir
