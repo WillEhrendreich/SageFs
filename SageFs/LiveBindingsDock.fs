@@ -387,7 +387,11 @@ let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecaus
 /// when a session has bindings, or there is no session to pin on, only the one answer exists. `tweaks` is what the session's files
 /// say about each row (the persistence state and the knob): rows it has nothing for are drawn as they always were.
 let renderDockWith (tweaks: TweakView) (session: SessionInView) (sessionId: string) (source: BindingsSource) : XmlNode =
-  let facts : PaneFacts = { Session = session; Bindings = BindingsSource.presence source; Pin = Unpinned }
+  // `AppOutput` is NoAppOutput here on purpose: this function renders the LIVE BINDINGS pane and is
+  // handed nothing about the app's streams. The app-output pane's own fact arrives when the daemon
+  // starts holding its buffer (AppOutputPane.feedText on the 150ms flush); until then the dock's
+  // second pane has genuinely seen nothing, so saying so is the accurate answer rather than a placeholder.
+  let facts : PaneFacts = { Session = session; Bindings = BindingsSource.presence source; AppOutput = NoAppOutput; Pin = Unpinned }
   let shell (children: XmlNode list) = Elem.div [ Attr.id DockIds.Dock; Attr.class' "live-dock" ] children
   match PaneState.decide facts DockPane.LiveBindings with
   | PaneOpen because -> shell [ renderPaneWith tweaks sessionId source because ShownAlways ]
