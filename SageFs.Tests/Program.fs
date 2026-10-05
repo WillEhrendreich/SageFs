@@ -185,7 +185,10 @@ let main argv =
   // shard, every browser runner's daemon) at the same cache, so no shard pays
   // a cold host build. Concurrent readers are safe: FsiHostBuild.ensureBuilt
   // builds under a file lock and re-checks after waiting.
-  let ensureHostPrebuilt () =
+  // One host per SDK a case can ask for: the pinned one and every other installed SDK (`TierSchedule.hostPrebuildSdks`),
+  // built in parallel (each is its own cache key and its own build lock), so a net10 case finds its host built instead of
+  // paying a cold build inside the case. A cache hit costs well under a second.
+  let ensureHostPrebuilt () : Result<(string * SageFs.FsiHostBuild.HostBuild) list, string> =
     let sharedHostCache = Path.Combine(Path.GetTempPath(), "sagefs-fsihost-test-cache")
     match Environment.GetEnvironmentVariable SageFs.IsolatedFsiSession.HostCacheEnvironmentVariable with
     | null | "" -> Environment.SetEnvironmentVariable(SageFs.IsolatedFsiSession.HostCacheEnvironmentVariable, sharedHostCache)
@@ -193,15 +196,32 @@ let main argv =
     let cache = SageFs.IsolatedFsiSession.hostCacheRoot ()
     let dotnet = SageFs.IsolatedFsiSession.dotnetPath ()
     let repoRoot = RepoPaths.repoPathFull [||]
+    let installed = SageFs.FsiHostBuild.installedSdkVersions dotnet |> Result.defaultValue []
     SageFs.FsiHostBuild.resolveSdkVersion dotnet repoRoot
-    |> Result.bind (fun sdk -> SageFs.FsiHostBuild.ensureBuilt dotnet sdk cache)
+    |> Result.map (fun pinned -> SageFs.Build.TierSchedule.hostPrebuildSdks pinned installed)
     |> Result.mapError SageFs.FsiHostBuild.describeBuildError
+    |> Result.bind (fun sdks ->
+      let built =
+        sdks
+        |> Array.ofList
+        |> Array.Parallel.map (fun sdk ->
+          SageFs.FsiHostBuild.ensureBuilt dotnet sdk cache
+          |> Result.map (fun build -> sdk, build)
+          |> Result.mapError (fun e -> sprintf "SDK %s: %s" sdk (SageFs.FsiHostBuild.describeBuildError e)))
+        |> List.ofArray
+      match built |> List.choose (function Result.Error e -> Some e | Result.Ok _ -> None) with
+      | [] -> Result.Ok (built |> List.choose (function Result.Ok b -> Some b | Result.Error _ -> None))
+      | errors -> Result.Error (String.concat "; " errors))
 
   match argv |> Array.contains "--prebuild-host" with
   | true ->
     match ensureHostPrebuilt () with
-    | Result.Ok _ ->
-      printfn "FSI host prebuilt into %s" (SageFs.IsolatedFsiSession.hostCacheRoot ())
+    | Result.Ok builds ->
+      for sdk, build in builds do
+        match build with
+        | SageFs.FsiHostBuild.Built dll -> printfn "FSI host for SDK %s: built, %s" sdk dll
+        | SageFs.FsiHostBuild.Reused dll -> printfn "FSI host for SDK %s: cached, %s" sdk dll
+      printfn "FSI host prebuilt for %d SDK(s) into %s" builds.Length (SageFs.IsolatedFsiSession.hostCacheRoot ())
       Environment.Exit 0
       0
     | Result.Error reason ->

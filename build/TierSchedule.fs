@@ -173,6 +173,14 @@ let hostShardCount (machine: Machine) (suiteSeconds: Map<string, float>) : int =
     |> List.tryFind (fun n -> List.max (shardLoads n suiteSeconds suites) <= target)
     |> Option.defaultValue cap
 
+// ---- the FSI host prebuild --------------------------------------------------------------------------
+
+/// The SDK versions to build an FSI host for before the tiers start: the one the repo pins (what most cases resolve to)
+/// first, then every other installed SDK, each once. A case builds the host for the SDK its own project pins, and the host is
+/// keyed by that SDK (FCS differs between SDKs), so an SDK left out here is a cold host build inside a case.
+let hostPrebuildSdks (pinned: string) (installed: string list) : string list =
+  pinned :: installed |> List.distinct
+
 /// Whether the shards between them were handed every host case exactly once.
 type Coverage =
   | Covered

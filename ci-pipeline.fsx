@@ -1335,8 +1335,10 @@ let sampleJobSteps : BackgroundStep list =
   sampleProjects
   |> List.map (fun project -> { Argv = [ "dotnet"; "build"; project; "-c"; "Release"; "--nologo" ]; WorkingDir = rootDir; Env = [] })
 
-/// The FSI host every tier shares, built into the shared cache once. Cold it costs about 12 s and 24 CPU seconds
-/// (0.6 s warm), which used to sit between the last stage and the first tier.
+/// The FSI host every tier shares, built into the shared cache once, for EVERY installed SDK (`--prebuild-host`, in
+/// parallel): a case builds the host for the SDK its project pins, and a net10 case used to pay a cold build of its own
+/// (9 s, 20 CPU s). Cold, both hosts cost about 11 s of wall and 40 CPU seconds, and they overlap the ratchets; warm it is
+/// 0.7 s. It used to sit between the last stage and the first tier.
 let fsiHostJobSteps : BackgroundStep list =
   [ { Argv = [ "dotnet"; testDll; "--prebuild-host" ]; WorkingDir = rootDir; Env = [ "SAGEFS_HOST_CACHE_DIR", sharedHostCache ] } ]
 
