@@ -320,7 +320,8 @@ let controlTests =
       control "maxHealth" |> Expect.equal "int" (Control.IntegerStepper 100L)
       control "mask" |> Expect.equal "hex is an integer" (Control.IntegerStepper 31L)
       control "hard" |> Expect.equal "bool" (Control.Toggle true)
-      control "title" |> Expect.equal "string" (Control.LiteralField(LiteralKindName.Text, "\"Nudge\""))
+      // The field shows the VALUE the door reads back (a string without its quotes), not the spelling in the file.
+      control "title" |> Expect.equal "string" (Control.LiteralField(LiteralKindName.Text, "Nudge"))
       control "mode" |> Expect.equal "case" (Control.LiteralField(LiteralKindName.UnionCase, "Hard"))
       control "jump" |> Expect.equal "formula" (Control.ExpressionField "gravity * 2.0")
 

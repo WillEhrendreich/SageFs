@@ -107,6 +107,8 @@ let requestTests =
       (TweakRequest.rawOf (request (TweakVerb.SetLiteral "2"))).Seen |> Expect.equal "the hash the row showed" "h"
       (TweakRequest.rawOf (request TweakVerb.Undo)).Action |> Expect.equal "undo" "undo"
       (TweakRequest.rawOf (request TweakVerb.Redo)).Action |> Expect.equal "redo" "redo"
+      TweakVerb.ofToken "steps" "-3" |> Expect.equal "steps are a whole number the page counted" (Ok(TweakVerb.Steps -3))
+      TweakVerb.ofToken "steps" "three" |> Expect.isError "a count that is not a number is refused"
   ]
 
 [<Tests>]
@@ -186,6 +188,30 @@ let serviceTests =
           do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor latestPlace (RowKey.top "gravity") (TweakVerb.SetLiteral "12.0"))
         | other -> failtestf "gravity: %A" other
         File.ReadAllText sb.Tuning |> Expect.equal "from the true hash it lands" (edited.Replace("let gravity = 9.9", "let gravity = 12.0"))
+      }) }
+
+    testTask "steps are counted by the page and turned into the literal here: three steps up from 9.8 is 10.1, written in the file's own style" {
+      do! withSandbox (fun sb -> task {
+        let! rows = view sb [ "gravity", box 9.8 ]
+        let place = placeOf rows (RowKey.top "gravity")
+        do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor place (RowKey.top "gravity") (TweakVerb.Steps 3))
+        File.ReadAllText sb.Tuning |> Expect.equal "three tenths up" (tuningText.Replace("let gravity = 9.8", "let gravity = 10.1"))
+        let! again = view sb [ "gravity", box 10.1 ]
+        let health = RowKey.top "maxHealth"
+        let healthPlace = placeOf again health
+        do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor healthPlace health (TweakVerb.Steps -7))
+        File.ReadAllText sb.Tuning |> Expect.equal "an integer moves by whole units"
+          (tuningText.Replace("let gravity = 9.8", "let gravity = 10.1").Replace("let maxHealth = 100", "let maxHealth = 93"))
+      }) }
+
+    testTask "steps on a row that is not a number refuse with a reason and write nothing" {
+      do! withSandbox (fun sb -> task {
+        let! rows = view sb [ "jump", box 19.6 ]
+        let place = placeOf rows (RowKey.top "jump")
+        do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor place (RowKey.top "jump") (TweakVerb.Steps 2))
+        File.ReadAllText sb.Tuning |> Expect.equal "untouched" tuningText
+        let! after = view sb [ "jump", box 19.6 ]
+        PersistenceState.token (stateOf after (RowKey.top "jump")) |> Expect.equal "the row says it was refused" "Refused"
       }) }
 
     testTask "a formula is edited as an expression, and a record field as a literal, each only in its own range" {
