@@ -73,19 +73,22 @@ let discover (q: DashboardQueries) (infra: DashboardInfra) (clientId: string) (c
   transition infra clientId (NewSessionDialog.Event.Open directory) |> ignore
   let! sessions = q.GetAllSessions ()
   let outcome = NewSessionDiscovery.discover (NewSessionDiscovery.liveSessionsOf sessions) directory
-  let next = transition infra clientId (NewSessionDiscovery.eventOf directory outcome)
   let starting (found: NewSessionDialog.Found) = task {
     let kind, picked = NewSessionDialog.DefaultChoice.ofFound found
-    do! Response.ssePatchSignal ctx (SignalPath.sp NewSessionDialog.NewSessionNames.TargetSignal) (NewSessionDialog.TargetKind.key kind)
-    do! Response.ssePatchSignal ctx (SignalPath.sp NewSessionDialog.NewSessionNames.ProjectsSignal) picked
+    // One patch with the ticks as a real array: patching a single signal with a list reached the page as text.
+    let signals = Collections.Generic.Dictionary<string, obj>()
+    signals.[NewSessionDialog.NewSessionNames.TargetSignal] <- box (NewSessionDialog.TargetKind.key kind)
+    signals.[NewSessionDialog.NewSessionNames.ProjectsSignal] <- box (List.toArray (NewSessionDialog.DefaultChoice.aligned found picked))
+    do! Response.ssePatchSignals ctx signals
   }
-  match next with
-  | NewSessionDialog.NewSessionDialog.Choosing found
-  | NewSessionDialog.NewSessionDialog.Warning(found, _, _) -> do! starting found
-  | NewSessionDialog.NewSessionDialog.Closed
-  | NewSessionDialog.NewSessionDialog.Discovering _
-  | NewSessionDialog.NewSessionDialog.Creating _
-  | NewSessionDialog.NewSessionDialog.Refused _ -> ()
+  // The choices are set BEFORE the list is drawn, so the list never shows with the previous directory's ticks.
+  match outcome with
+  | Ok (found, _) -> do! starting found
+  | Error NewSessionDialog.Refusal.NoDirectory -> do! starting (NewSessionDialog.Found.nothing directory)
+  | Error (NewSessionDialog.Refusal.DirectoryMissing _)
+  | Error NewSessionDialog.Refusal.NothingPicked
+  | Error (NewSessionDialog.Refusal.Daemon _) -> ()
+  transition infra clientId (NewSessionDiscovery.eventOf directory outcome) |> ignore
 }
 
 let discoverHandler (q: DashboardQueries) (infra: DashboardInfra) : HttpHandler =
@@ -125,7 +128,7 @@ let createHandler (q: DashboardQueries) (infra: DashboardInfra) (actions: Dashbo
       let kind =
         NewSessionDialog.TargetKind.tryOfKey (readString doc NewSessionDialog.NewSessionNames.TargetSignal)
         |> Option.defaultValue NewSessionDialog.TargetKind.LoadProjects
-      let picked = readStrings doc NewSessionDialog.NewSessionNames.ProjectsSignal
+      let picked = NewSessionDialog.DefaultChoice.ticked (readStrings doc NewSessionDialog.NewSessionNames.ProjectsSignal)
       let workflowKey = readString doc NewSessionDialog.NewSessionNames.WorkflowSignal
       Response.sseStartResponse ctx |> ignore
       let reject (refusal: NewSessionDialog.Refusal) = task {

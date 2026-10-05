@@ -46,13 +46,18 @@ let onCloseExpr : string = sprintf "if(%s){%s}" (signalRef Signals.NewSessionOpe
 
 let loadKey : string = TargetKind.key TargetKind.LoadProjects
 
-/// Create is available when there is a directory and, if projects are to be loaded, at least one is ticked.
-let createDisabledExpr : string =
-  sprintf "!%s.trim() || (%s === '%s' && %s.length === 0)"
-    (signalRef Signals.NewSessionDir)
+/// True while projects are to be loaded and none is ticked: the one reason Create waits that the person can fix.
+/// The ticks are an array bound to the boxes by position (an entry per box, empty when not ticked), so "none
+/// ticked" is "no entry has anything in it", never "the array is empty".
+let pickNeededExpr : string =
+  sprintf "%s === '%s' && !%s.some(Boolean)"
     (signalRef NewSessionNames.TargetSignal)
     loadKey
     (signalRef NewSessionNames.ProjectsSignal)
+
+/// Create is available when there is a directory and, if projects are to be loaded, at least one is ticked.
+let createDisabledExpr : string =
+  sprintf "!%s.trim() || (%s)" (signalRef Signals.NewSessionDir) pickNeededExpr
 
 let workflowName (workflow: SessionWorkflow) : string = SessionWorkflow.label workflow
 
@@ -245,13 +250,6 @@ let workflowGroup (hint: WorkflowHint) : XmlNode =
           ]
         ])
   ]
-
-/// True while projects are to be loaded and none is ticked: the one reason Create waits that the person can fix.
-let pickNeededExpr : string =
-  sprintf "%s === '%s' && %s.length === 0"
-    (signalRef NewSessionNames.TargetSignal)
-    loadKey
-    (signalRef NewSessionNames.ProjectsSignal)
 
 let footer (createLabel: string) (disabledExpr: string) : XmlNode =
   Elem.div [ Attr.class' "nsd-foot" ] [

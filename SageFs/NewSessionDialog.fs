@@ -248,6 +248,20 @@ module DefaultChoice =
       | None, [ only ] -> TargetKind.LoadProjects, [ only.Path ]
       | None, _ -> TargetKind.LoadProjects, []
 
+  /// The ticks as the page holds them. Datastar binds an array signal to its checkboxes by POSITION: one entry
+  /// per box, the box's value when it is ticked and empty when it is not. So the array has one entry per
+  /// candidate, in the order they are drawn.
+  let aligned (found: Found) (picked: string list) : string list =
+    found.Candidates
+    |> List.map (fun candidate ->
+      match picked |> List.contains candidate.Path with
+      | true -> candidate.Path
+      | false -> "")
+
+  /// What the page sends back, as the ticked paths in the order of the boxes. An empty entry is an unticked box.
+  let ticked (entries: string list) : string list =
+    entries |> List.filter (fun entry -> not (String.IsNullOrEmpty entry))
+
 // ── The workflows, in plain words ────────────────────────────────────────
 
 module WorkflowChoice =

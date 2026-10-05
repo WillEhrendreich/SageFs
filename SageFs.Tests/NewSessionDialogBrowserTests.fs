@@ -149,8 +149,9 @@ let createBareSessionAt (daemon: Daemon) (directory: string) : Task<string> = ta
   match created with
   | Error why -> return Tests.failtestf "creating a bare session in %s was refused: %s" directory why
   | Ok _ ->
+    // A cold worker on a busy machine takes the harness's warmup budget, not a page's.
     let! ready =
-      waitUntil BrowserWaits.daemonWork (fun () -> task {
+      waitUntil (TestTimeouts.asMs SageFs.Timeouts.browserJourneyWarmup) (fun () -> task {
         try
           let! now = sessionsNow daemon
           return now |> List.exists (fun (_, status, dir) -> status = "Ready" && normalize dir = normalize directory)
@@ -262,6 +263,65 @@ let createJourney (daemon: Daemon) (seen: Seen) : Task<unit> = task {
   do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
   do! waitForState page "closed"
   assertNoErrors "create" seen
+}
+
+// ── what is ticked and which workflow is chosen reach the daemon ──
+
+/// What the daemon says about the one session it holds: (projects it was created with, workflow label).
+let onlySession (daemon: Daemon) : Task<(string list * string) option> = task {
+  use client = apiClient daemon
+  let! body = client.GetStringAsync "/api/sessions"
+  use doc = Text.Json.JsonDocument.Parse body
+  return
+    doc.RootElement.GetProperty("sessions").EnumerateArray()
+    |> Seq.tryHead
+    |> Option.map (fun s ->
+      [ for p in s.GetProperty("projects").EnumerateArray() -> p.GetString() ], s.GetProperty("workflowLabel").GetString())
+}
+
+let choicesJourney (daemon: Daemon) (seen: Seen) : Task<unit> = task {
+  let page = seen.Page
+  do! goToDashboard daemon page
+  do! openDialog page
+  do! lookIn page samplesDir
+
+  // Several projects and no solution: nothing is ticked for the person, and Create waits, saying why.
+  let ticker = (byTestId page NewSessionNames.CandidateTestId).Filter(LocatorFilterOptions(HasText = "SageFs.Samples.ConsoleTicker/SageFs.Samples.ConsoleTicker.fsproj"))
+  do! ticker.WaitForAsync(LocatorWaitForOptions(State = WaitForSelectorState.Visible, Timeout = float32 BrowserWaits.daemonWork))
+  let create = byTestId page NewSessionNames.CreateTestId
+  let! waiting = waitUntil BrowserWaits.pageRenders (fun () -> create.IsDisabledAsync())
+  waiting |> Expect.isTrue "Create waits while projects are to be loaded and none is ticked"
+  let! hint = (dialogOf page).InnerTextAsync()
+  hint.Contains "Tick a project, or choose Bare" |> Expect.isTrue "and the footer says what to do"
+
+  // Tick one project and choose Live Testing: Create is available and the hint goes.
+  do! ticker.Locator("input[type=checkbox]").CheckAsync()
+  do! (dialogOf page).Locator("input[type=radio][value=livetesting]").CheckAsync()
+  let! ready = create.IsEnabledAsync()
+  ready |> Expect.isTrue "Create is available once a project is ticked"
+  let! hintGone = (dialogOf page).GetByText("Tick a project, or choose Bare").IsVisibleAsync()
+  hintGone |> Expect.isFalse "the hint goes with the reason"
+  do! create.ClickAsync()
+  do! waitForOpen page false
+
+  // What was ticked and chosen is what the daemon made.
+  let! made =
+    waitUntil (TestTimeouts.asMs SageFs.Timeouts.browserJourneyWarmup) (fun () -> task {
+      try
+        let! now = onlySession daemon
+        return now.IsSome
+      with _ -> return false
+    })
+  made |> Expect.isTrue "the daemon created the session the dialog asked for"
+  let! session = onlySession daemon
+  match session with
+  | None -> Tests.failtest "the session vanished"
+  | Some (projects, workflow) ->
+    projects
+    |> List.map (fun p -> Path.GetFileName p)
+    |> Expect.equal "exactly the ticked project was loaded" [ "SageFs.Samples.ConsoleTicker.fsproj" ]
+    workflow |> Expect.equal "the chosen workflow is the one the session runs" "Live Testing"
+  assertNoErrors "choices" seen
 }
 
 // ── (2)(3)(4) a session is already there: the warning names it, a refusal is shown in the dialog, Esc and the
@@ -408,6 +468,10 @@ let tests =
 
     testTask "[Integration] New session dialog: it warns about an existing session by name, shows the daemon's refusal in place, and Esc and the close button return focus to the plus" {
       do! withDashboard Viewport.Wide guardsJourney }
+    |> Integration.register (Integration.Dedicated "--integration-browser")
+
+    testTask "[Integration] New session dialog: the project that is ticked and the workflow that is chosen are what the daemon creates, and Create waits, saying why, until a project is ticked" {
+      do! withDashboard Viewport.Wide choicesJourney }
     |> Integration.register (Integration.Dedicated "--integration-browser")
 
     testTask "[Integration] New session dialog: at 320 px the dialog stays inside the viewport with no horizontal overflow" {
