@@ -136,9 +136,9 @@ let items : Item list =
       "Debugging a failing test from the VS Code lens works for one test at a time. Still open is a full attach end to end in our own tests, and debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out."
 
     item "live-requests-not-dropped" "No live request dropped during a swap" LiveTesting Next
-      NoLandmarkYet
+      (landmark "SageFs/Mcp.fs" "requireToolFor")
       [ "docs/how-live-testing-works.md" ]
-      "A check that waits out the 30 second swap bound is dropped instead of retried, and running affected tests or discovery still drops a request that finds no worker. I want every one of those to wait for the replacement the way the type-check now does."
+      "A check that waited out the 30 second swap bound was dropped instead of retried, and running affected tests or discovery dropped a request that found no worker. The gate now parks on the manager's own AwaitReady for the bound a rebuild's own wait uses, then judges the state that wait released, so a code tool waits for the replacement instead of being refused the moment a swap begins."
 
     item "each-agent-its-own-member" "Each agent counts as its own member" Agents Next
       (landmark "SageFs.Core/Capability.fs" "CapabilityState")
@@ -186,9 +186,9 @@ let items : Item list =
       "A plus button on the Sessions list opens a dialog that finds projects under a directory you can edit, says in a line what each workflow means, and warns before you make a second session in the same directory, naming the one that exists. A refusal from the daemon shows in the dialog with its next action, and Create closes it into a starting card at once. The no-session picker's Open Directory card still has its own form."
 
     item "publish-the-loop-timings" "Published numbers for the REPL loop" Docs Next
-      NoLandmarkYet
-      []
-      "I timed an edit plus a check in a warm session against a build plus a filtered test on three projects, from a few hundred lines to a very large one. The session answered in a fraction of a second where the build took seconds, and you pay the warmup once. None of it is in the docs yet, and I want the table there with the machine and the load stated."
+      (landmark "docs/repl-loop-benchmarks.md" "The REPL loop, measured")
+      [ "docs/repl-loop-benchmarks.md" ]
+      "I timed an edit plus a check in a warm session against a build plus a filtered test on three projects, from 306 lines to 86,019. The check answered in 21 to 25 milliseconds on all three, because it does not care how big the project is, while the build took 2 to 52 seconds and cares a great deal. The table is in docs with the machine and the load averages it was measured under, and a snippet that cannot type-check returns its errors in 81 milliseconds, so the fast number is a real check rather than one that says fine."
 
     item "native-nuget-in-sessions" "Native NuGet packages load in sessions" Isolation Now
       (landmark "SageFs.Core/NativeResolution.fs" "NativeAssets")

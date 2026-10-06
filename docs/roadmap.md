@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 10, Later 18, Exploring 17. Already built: 24.
+On the page today: Now 0, Next 8, Later 18, Exploring 17. Already built: 26.
 
 ## Next
 
@@ -18,7 +18,6 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 ### Live testing
 
 - **Debug failing tests properly in VS Code.** Debugging a failing test from the VS Code lens works for one test at a time. Still open is a full attach end to end in our own tests, and debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out. ([LIVE_TESTING_GUIDE.md](LIVE_TESTING_GUIDE.md), [how-live-testing-works.md](how-live-testing-works.md))
-- **No live request dropped during a swap.** A check that waits out the 30 second swap bound is dropped instead of retried, and running affected tests or discovery still drops a request that finds no worker. I want every one of those to wait for the replacement the way the type-check now does. ([how-live-testing-works.md](how-live-testing-works.md))
 
 ### Hot reload
 
@@ -35,10 +34,6 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 - **More settings editable from the dashboard.** The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime. ([configuration.md](configuration.md))
 - **Dashboard panels that follow your context.** Live bindings become a real pane in REPL mode, and cohort shows only while one is running. A pane hidden for being irrelevant says why and can be pinned open.
-
-### Docs and onboarding
-
-- **Published numbers for the REPL loop.** I timed an edit plus a check in a warm session against a build plus a filtered test on three projects, from a few hundred lines to a very large one. The session answered in a fraction of a second where the build took seconds, and you pay the warmup once. None of it is in the docs yet, and I want the table there with the machine and the load stated.
 
 ## Later
 
@@ -128,6 +123,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - **A test receipt says what source it ran on.** If you edit a test file and don't rebuild, `run_tests` used to say "3 passed" with no warning. Now every receipt carries whether the source is in sync, stale (naming the files), being rebuilt, or unknown and why. A pass over stale source reads "passed, but on STALE source" and is never plain AllPassed. It's also on `get_session_status` and `list_sessions`, next to the REPL-behind state. Code: [`SageFs.Core/Features/SourceState.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/SourceState.fs)
 - **A pending test is skipped, not passed.** An Expecto `ptest` used to run its body and count as passed. It's now reported as skipped and never run, and a run with one is Incomplete, not AllPassed. If anything is focused with `ftest`, the unfocused tests are reported as skipped too, matching what Expecto itself does. Code: [`SageFs.Core/Features/LiveTestingExecutors.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/LiveTestingExecutors.fs)
 - **Edits during a worker swap are judged.** An edit typed while the confirming build replaces the worker used to be lost. A type-check or an eval now waits for a Ready worker and believes an answer only from the worker it asked. Code: [`SageFs/LiveCheckRelay.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/LiveCheckRelay.fs)
+- **No live request dropped during a swap.** A check that waited out the 30 second swap bound was dropped instead of retried, and running affected tests or discovery dropped a request that found no worker. The gate now parks on the manager's own AwaitReady for the bound a rebuild's own wait uses, then judges the state that wait released, so a code tool waits for the replacement instead of being refused the moment a swap begins. Code: [`SageFs/Mcp.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/Mcp.fs)
 
 ### Hot reload
 
@@ -167,6 +163,10 @@ _These were on this page and are in the code now. Whether a build has shipped is
 
 - **Slow machines get timeouts that fit them.** On an old quad core with a spinning disk a session never reached Ready, because the 30 second silence limit killed the worker mid-build and the retries repeated the same 30. SageFs now probes the machine, files it as Fast, Standard, Constrained or Minimal, and scales the waits that are for the machine. A start that runs out of patience retries with a longer one, and a give-up names the wait, the attempts and what to set. On that machine it now reaches Ready in about a minute cold and 17 seconds warm. Code: [`SageFs.Core/MachineTier.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/MachineTier.fs)
 - **SageFs tidies what agents leave behind.** Agents leave worktrees, branches and gate checkouts behind, and on my machine 65 old gate records alone came to 17.6 GB. A dashboard panel, two MCP tools and `sagefs hygiene` list the leftovers and tidy only the safe ones, after you confirm the exact plan you were shown. Code: [`SageFs.Core/WorkspaceHygiene.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/WorkspaceHygiene.fs)
+
+### Docs and onboarding
+
+- **Published numbers for the REPL loop.** I timed an edit plus a check in a warm session against a build plus a filtered test on three projects, from 306 lines to 86,019. The check answered in 21 to 25 milliseconds on all three, because it does not care how big the project is, while the build took 2 to 52 seconds and cares a great deal. The table is in docs with the machine and the load averages it was measured under, and a snippet that cannot type-check returns its errors in 81 milliseconds, so the fast number is a real check rather than one that says fine. Code: [`docs/repl-loop-benchmarks.md`](https://github.com/WillEhrendreich/SageFs/blob/master/docs/repl-loop-benchmarks.md)
 
 ---
 
