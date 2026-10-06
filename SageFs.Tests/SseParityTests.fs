@@ -214,16 +214,18 @@ let neovimDispatchDerived : Set<string> =
 /// an entry here is either true or the set does not match. The pin test
 /// below is what keeps it from growing by accident.
 let neovimKnownGaps : Set<string> =
-  // `eval_started` / `eval_heartbeat`: push-only eval decorations. The
-  // plugin drives its own eval lifecycle from the /exec response, so these
-  // cost nothing to ignore — but the daemon does send them, so they are
-  // declared rather than assumed away.
+  // `eval_started`: a push-only eval decoration. The plugin drives its own
+  // eval lifecycle from the /exec response, so this costs nothing to ignore
+  // — but the daemon does send it, so it is declared rather than assumed away.
+  // `eval_heartbeat` sat beside it until the plugin routed it and rendered the
+  // elapsed time under the output header; a handler landing is what shrinks
+  // this set, which is what the pin below is for.
   // `diagnosis_ready`: the diagnose() agent's report. The plugin surfaces
   // diagnosis through the /diagnostics HTTP route, not the push row.
   // `live_bindings`: the reflection-walked watch window. The plugin has no
   // bindings-view UI bound to it yet; it reads bindings from the
   // bindings_snapshot row instead.
-  Set.ofList [ "eval_started"; "eval_heartbeat"; "diagnosis_ready"; "live_bindings" ]
+  Set.ofList [ "eval_started"; "diagnosis_ready"; "live_bindings" ]
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -354,17 +356,18 @@ let sseParityTests = testList "SSE Parity" [
   test "every daemon event the plugin does not route is a NAMED gap, and the set is pinned" {
     // `neovimKnownGaps` is the plugin's honest, hand-written list of daemon
     // events it does not route. Each entry is a real gap, so the pin is
-    // "exactly these four": shrink it when a handler lands, and never grow it
+    // "exactly these three": shrink it when a handler lands, and never grow it
     // silently — a new unrouted daemon event must be a decision, not an
-    // accident.
+    // accident. (`eval_heartbeat` left this list when the plugin started
+    // routing it; that shrink is the pin doing its job.)
     neovimKnownGaps
     |> Expect.equal
          "a handler landed (delete it here) or a NEW daemon event went unrouted without anyone \
           deciding that was OK (a real gap, not a test to relax)"
-         (Set.ofList [ "eval_started"; "eval_heartbeat"; "diagnosis_ready"; "live_bindings" ])
+         (Set.ofList [ "eval_started"; "diagnosis_ready"; "live_bindings" ])
   }
 
-  test "the derived Neovim dispatch set covers every daemon event except the four named gaps" {
+  test "the derived Neovim dispatch set covers every daemon event except the three named gaps" {
     allDaemonSseEvents
     |> List.filter (neovimDispatchDerived.Contains >> not)
     |> Set.ofList

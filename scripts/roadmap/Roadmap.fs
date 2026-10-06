@@ -140,6 +140,10 @@ let private linkLabel (path: string) : string =
   let name = path.Substring(path.LastIndexOf '/' + 1)
   name
 
+/// An item that is NOT in the code yet. The empty box is the point: every bullet on this page
+/// starts `- **Title.**`, so without a box the only difference between done and not-done is which
+/// heading you happen to be reading under. GitHub renders the box as a real checkbox, and in raw
+/// text `[ ]` and `[x]` are still obvious.
 let private itemLine (item: Item) : string =
   let links =
     item.Links
@@ -149,10 +153,27 @@ let private itemLine (item: Item) : string =
     match item.Links with
     | [] -> ""
     | _ -> sprintf " (%s)" links
-  sprintf "- **%s.** %s%s" item.Title item.Summary tail
+  sprintf "- [ ] **%s.** %s%s" item.Title item.Summary tail
 
+/// Where the `Code:` link on a built item goes. A landmark inside this repo links to it; one that
+/// reaches a sibling checkout (`../sagefs.nvim/lua/...`) links THERE, because a `blob/master/../`
+/// URL is not a link at all. Sibling checkouts are named for the GitHub repo they clone.
+let private codeUrl (path: string) : string =
+  match path.StartsWith "../" with
+  | false -> sprintf "%s/blob/master/%s" repoUrl path
+  | true ->
+    let rest = path.Substring 3
+    match rest.IndexOf '/' with
+    | -1 -> sprintf "%s/blob/master" repoUrl
+    | i ->
+      let project = rest.Substring(0, i)
+      let file = rest.Substring(i + 1)
+      sprintf "https://github.com/WillEhrendreich/%s/blob/master/%s" project file
+
+/// An item that IS in the code, marked by its landmark. Filled box, so a reader can scan one
+/// column and see what is done without reading a word.
 let private builtLine (item: Item) (landmark: Landmark) : string =
-  sprintf "- **%s.** %s Code: [`%s`](%s/blob/master/%s)" item.Title item.Summary landmark.Path repoUrl landmark.Path
+  sprintf "- [x] **%s.** %s Code: [`%s`](%s)" item.Title item.Summary landmark.Path (codeUrl landmark.Path)
 
 let intro : string list =
   [ "# Roadmap"
@@ -197,7 +218,7 @@ let render (read: string -> FileState) (items: Item list) : string =
     match inHorizon with
     | [] -> ()
     | _ ->
-      line (sprintf "## %s" (horizonName horizon))
+      line (sprintf "## %s (%d)" (horizonName horizon) inHorizon.Length)
       line ""
       line (sprintf "_%s_" (horizonBlurb horizon))
       line ""
@@ -213,7 +234,7 @@ let render (read: string -> FileState) (items: Item list) : string =
   match builtItems with
   | [] -> ()
   | _ ->
-    line "## Built"
+    line (sprintf "## Built (%d)" (List.length builtItems))
     line ""
     line "_These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._"
     line ""

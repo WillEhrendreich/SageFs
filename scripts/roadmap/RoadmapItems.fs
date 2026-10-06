@@ -126,9 +126,9 @@ let items : Item list =
       "The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim side is done too, in the sagefs.nvim repo: `:SageFsDebugTest` puts a failing test on the board and wires nvim-dap to those routes, on `<leader>rtg` and `D` on a panel row. The release goes out on `configurationDone`, when the adapter has really attached, so a slow attach is the daemon's to wait out rather than a grace period on this side. Still open is a full attach inside our own tests."
 
     item "neovim-catches-up" "The Neovim plugin catches up with the daemon" Editors Next
-      NoLandmarkYet
+      (landmark "../sagefs.nvim/lua/sagefs/dashboard/state.lua" "handlers.eval_heartbeat")
       [ "docs/sse-events.md"; "docs/mcp-tools.md" ]
-      "The plugin shows hot reload's pending and never-entered states, the live-values pane with its Safe mode click, workflow switching and the session's own app state, and it names the session on every session-scoped call. It reads a tool's answer as its first text block, finds a nudged value by the range the daemon reports, sends the session's id with every nudge, shows a vetoed landing with who vetoed it and why, and lists the files a re-sign left on the old method with how sure each match is. Still to wire: the slow-eval heartbeat events."
+      "The plugin shows hot reload's pending and never-entered states, the live-values pane with its Safe mode click, workflow switching and the session's own app state, and it names the session on every session-scoped call. It reads a tool's answer as its first text block, finds a nudged value by the range the daemon reports, sends the session's id with every nudge, shows a vetoed landing with who vetoed it and why, and lists the files a re-sign left on the old method with how sure each match is. The slow-eval heartbeat is wired too: while an eval runs the output section ticks its elapsed time, a beat aimed at another file cannot corrupt it, and the line stops the moment eval_result lands."
 
     item "debug-failing-tests-in-vscode" "Debug failing tests properly in VS Code" LiveTesting Next
       NoLandmarkYet
