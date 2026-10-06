@@ -112,14 +112,15 @@ let items : Item list =
       "The dashboard's Live Bindings pane has a knob on every value a project file holds. A row says where its value lives (`in source`, `REPL only`, `ambiguous` when two files declare the name, and the reasons a write cannot be offered), and the control follows what the file actually spells: a real gets a drag handle, step buttons and the arrow keys, a bool a switch, a string or a character a field, a formula (`gravity * 2.0`) an expression field, and a value made of parts becomes rows of its own. The step count is turned into the literal by the daemon, so `1.0` stays `1.0`, `0x1F` stays hex and units stay. Every write goes through the same nudge door the tool uses, with the hash the row last showed, its own undo and redo, and a refusal that says the rule and what to do. What it does not do yet: apply a value to the running app before you save it, and say when the app copied a value at startup."
 
     item "live-tweak-in-the-editors" "A knob in the editors too" HotReload Next
-      NoLandmarkYet
+      (landmark "sagefs-vscode/src/NudgeKnob.fs" "let register")
       [ "docs/hot-reload.md" ]
-      "The dashboard has the knob now. Neovim has `:SageFsNudge`, which finds the value under the cursor by the range the daemon reports and bumps it, and VS Code has the lens. Neither lets you drag: a scrub key in Neovim and Alt-drag in VS Code, both writing through the nudge door so the same rules and the same undo apply."
+      "The dashboard has the knob, and now both editors do too. Neovim scrubs with Alt-k and Alt-j: each press runs the same inspect-locate-bump-set flow `:SageFsNudge` runs, so the rules and the undo are the daemon's, and a count multiplies the steps. VS Code scrubs by dragging across a number with the multi-cursor modifier held, because its API never reports that a modifier is down; what it reports is the second cursor an Alt+click adds. Both write through `nudge_value`, so the journal, the seen hash, the refusal and the type-check rollback all apply."
 
-    // These two live in the sagefs.nvim repo, so a landmark cannot resolve them here (it names a file in this
-    // tree). What marks them is the doc below, which is in this tree and now describes what ships: `:SageFsDebugTest`
-    // drives nvim-dap against the hold/release routes, and the plugin reads the daemon's wire. Kept open rather than
-    // marked on a claim, and moved to Built when a landmark can point at something real.
+    // Cross-repo landmarks DO resolve: a landmark may name `../sagefs.nvim/...`, and `codeUrl` in
+    // Roadmap.fs renders the link against that project's own repo rather than this one. So living in
+    // the plugin is no longer a reason to stay open, and the item below is no longer open for that
+    // reason. It stays open for the one its summary still names: a full attach inside our own tests,
+    // marked on that rather than on a claim.
     item "neovim-debug-a-failing-test" "Debug a failing test from Neovim" Editors Next
       NoLandmarkYet
       [ "docs/LIVE_TESTING_GUIDE.md" ]
