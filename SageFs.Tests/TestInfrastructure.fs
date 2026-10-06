@@ -32,13 +32,20 @@ module Snapshots =
       VerifyExpecto.Verifier.DerivePathInfo(fun _ _ typeName methodName ->
         VerifyTests.PathInfo(directory = directory, typeName = typeName, methodName = methodName)))
 
-  /// Idempotent: safe to call from every entry point.
+  /// Idempotent: safe to call from every entry point — and it has to be called from more than one.
   let configure () : unit = configured.Force()
 
   /// Verify `value` as a `<typeName>.<name>.verified.<extension>` snapshot.
   /// `typeName` is explicit because VerifyExpecto derives it from the CALLER's
   /// source file — which would be this file, not the snapshot test's.
   let verify (typeName: string) (name: string) (extension: string) (value: string) =
+    // Forced HERE as well as from Program.fs. `run_tests` loads the assembly and runs the tests
+    // without ever reaching the entry point, so a configure() that lives only there leaves Verify
+    // on its default path — directory = the SOURCE directory, no `snapshots/` — and every committed
+    // snapshot reads as `New:`, i.e. as though none existed. That is 20 false failures on
+    // DashboardSnapshotTests through the one tool agents are told to use instead of `dotnet test`,
+    // while the identical file passes on the CLI lane. Idempotent, so forcing it here costs nothing.
+    configured.Force()
     let settings = VerifyTests.VerifySettings()
     settings.UseTypeName typeName
     settings.DisableDiff()
