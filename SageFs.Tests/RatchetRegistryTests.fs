@@ -161,6 +161,7 @@ let private notRatchets : (string * string) list =
     "CohortPropertyTests.fs", "property tests of the cohort model; reads one fixture"
     "DashboardHealthVerdictRenderingTests.fs", "one string pin on a message, not a rule over the tree"
     "FirstRunLinuxTests.fs", "locates the repo from the binary and swaps the global Console.Out"
+    "FirstRunMacOSTests.fs", "locates the repo from the binary and swaps the global Console.Out"
     "FixtureBuildCache.fs", "a helper that digests a run dir and the repo's build props to key a fixture build and copies its outputs, not a test"
     "FsiNamingContractTests.fs", "pins a vendored compiler excerpt; a contract with FCS, not the tree"
     "HostManifestTests.fs", "needs the SageFs.Host build output beside the tests and passes vacuously without it"

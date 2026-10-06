@@ -55,9 +55,9 @@ other.
 Good for a throwaway session, bad if you want the REPL, the dashboard and the
 warm sessions to still be there tomorrow. To get a daemon that outlives the
 agent, start it yourself before the agent does: run `sagefs` in a terminal, or
-run it as a service (see "Run it as a service (Linux)" in the
-[README](../Readme.md)). `sagefs mcp` checks for a running daemon first, so
-it just bridges to yours and never becomes its owner.
+run it as a service (see "Run it as a service (Linux)" or "Run it as a
+service (macOS)" in the [README](../Readme.md)). `sagefs mcp` checks for a
+running daemon first, so it just bridges to yours and never becomes its owner.
 
 For clients that take raw JSON config:
 ```json

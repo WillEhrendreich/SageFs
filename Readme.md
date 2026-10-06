@@ -187,6 +187,23 @@ systemctl --user enable --now sagefs
 
 [`contrib/systemd/sagefs.service`](contrib/systemd/sagefs.service) is a user unit. It runs `~/.dotnet/tools/sagefs --supervised`, restarts it on failure, and starts it at login (`loginctl enable-linger $USER` if you want it at boot). `systemctl --user status sagefs` shows it, `journalctl --user -u sagefs` has its logs. The unit runs the daemon from `~/.local/state/sagefs`, which systemd creates (`StateDirectory=`), and not from your home directory: a request that names no directory falls back to the daemon's cwd, and SageFs refuses to watch a home directory, so a daemon started in `$HOME` would give you sessions with no hot reload and no live testing ([`FileWatcher.fs`](SageFs.Core/FileWatcher.fs), `classifyWatchRoot`). When an agent then runs `sagefs mcp`, it finds your daemon already up and just bridges to it, so nothing it does can take the daemon down.
 
+### Run it as a service (macOS)
+
+On a Mac, launchd does the babysitting. launchd expands no variables in a plist, `~` included, so the install fills in your home directory and your .NET folder as it copies the file. Run it from the repo root:
+
+```bash
+mkdir -p ~/Library/LaunchAgents ~/Library/Logs/sagefs "$HOME/Library/Application Support/sagefs-daemon"
+sed -e "s|@HOME@|$HOME|g" \
+    -e "s|@DOTNET_ROOT@|$(dirname "$(realpath "$(command -v dotnet)")")|g" \
+    contrib/launchd/io.github.willehrendreich.sagefs.plist \
+    > ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
+```
+
+[`contrib/launchd/io.github.willehrendreich.sagefs.plist`](contrib/launchd/io.github.willehrendreich.sagefs.plist) is a user agent, the macOS counterpart of the systemd unit. It runs `~/.dotnet/tools/sagefs --supervised`, starts it at login, and launchd restarts the supervisor if it crashes. `sagefs status` shows it, and its console output goes to `~/Library/Logs/sagefs/`. It sets `DOTNET_ROOT` to the folder that holds the real `dotnet` on your PATH, because launchd doesn't read your shell profile. If you move or upgrade .NET to a different folder, run the install again. The agent runs the daemon from `~/Library/Application Support/sagefs-daemon` for the same reason the Linux unit stays out of your home directory. launchd doesn't create a working directory, which is what the `mkdir` is for.
+
+The supervisor starts a new daemon whenever the old one is gone, so `sagefs stop` gets you a fresh one. To stop the service, run `launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs`. To restart it, say after `dotnet tool update --global SageFs`, run `launchctl kickstart -k gui/$(id -u)/io.github.willehrendreich.sagefs`.
+
 ### 4. Connect your editor
 
 **VS Code**: Install **SageFs** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) or [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs) (or the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases)), open an F# file, and press `Alt+Enter` on any expression. The result appears inline.
