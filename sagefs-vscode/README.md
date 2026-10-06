@@ -154,6 +154,11 @@ The tooltip has the daemon's message, the mechanism, and, when a patch left the 
 - **Hot Reload sidebar** — Tree view in the activity bar showing all project files with per-file and per-directory watch toggles
 - Toggle individual files, directories, or watch/unwatch everything at once
 
+#### Scrub a running value
+- **Value knob** — Hold the modifier your `editor.multiCursorModifier` names (Alt by default) and drag across a number to scrub it: one column of drag is one step, and whole numbers step by one while decimals step in their last place. The literal keeps the file's style, so hex stays hex.
+- The write goes through the daemon's `nudge_value` tool rather than the file, which is what gives it the dashboard knob's rules for free: the write is journaled, checked against the `seen` hash the inspect returned, refused with what moved if the source changed underneath, and rolled back if the new text does not type-check.
+- **The honest limit, because the gesture is a workaround.** VS Code's extension API never reports that a modifier is held — `TextEditorSelectionChangeEvent` carries no `modifiers`, and there are no editor mouse events at all. What the API does report is what an Alt+click *creates*: with `multiCursorModifier = "alt"` (the default) it adds a cursor, so a mouse-driven selection change carrying more than one selection is the only way that state arrives. Set `editor.multiCursorModifier` to something else and the knob does not engage, by design rather than by bug.
+
 ### Session Management
 - **Session Context sidebar** — Loaded assemblies, opened namespaces, failed opens, warmup details
 - **Sessions sidebar** — View all sessions with inline switch/stop/reset actions

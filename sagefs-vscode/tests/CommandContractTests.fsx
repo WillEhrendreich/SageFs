@@ -167,10 +167,22 @@ let private nonCommandIdentifiers = Set.union contributedColors contributedSetti
 /// into the form `contributes.keybindings` uses ("ctrl+enter").
 let private normalizeKey (s: string) = s.ToLowerInvariant().Replace("cmd+", "cmd+")
 
+/// Mouse gestures, not keystrokes. `Alt+click` and `Alt+drag` name pointing at something rather
+/// than pressing a key, and `contributes.keybindings` has no way to bind them, so demanding one
+/// would make the contract demand the impossible. Excluding ONLY these keeps the real property:
+/// every keyboard shortcut the prose teaches is one the keymap actually binds. The guard is the
+/// test that says an unbound key combo is still flagged.
+let private mouseActions =
+  set [ "click"; "drag"; "doubleclick"; "double-click"; "middleclick"; "rightclick"
+        "wheel"; "scroll"; "mouse" ]
+
 let private keystrokesIn (text: string) =
   Regex.Matches(text, @"\b(?:Ctrl|Cmd|Alt|Shift)(?:\+(?:Ctrl|Cmd|Alt|Shift))*\+[A-Za-z0-9\[\]]+")
   |> Seq.map (fun m -> m.Value)
   |> Set.ofSeq
+  |> Set.filter (fun keystroke ->
+      let pressed = keystroke.Substring(keystroke.LastIndexOf '+' + 1).ToLowerInvariant()
+      not (mouseActions.Contains pressed))
 
 /// VS Code writes a Mac binding as `cmd+...` in the `mac` slot. A prose
 /// "Cmd+Enter" is therefore satisfied by `cmd+enter` in any slot.
@@ -242,6 +254,20 @@ let tests =
         |> Array.sort
       offenders
       |> Expect.isEmpty (sprintf "source prose names unbound keystroke(s): %s" (String.concat ", " offenders))
+
+    testCase "WHY - a mouse gesture is not a keystroke, but an unbound KEY still is, so the gesture exemption cannot make this vacuous" <| fun _ ->
+      // The classifier excludes Alt+click / Alt+drag because no keybinding can bind a mouse
+      // gesture. An exclusion is only safe while it excludes exactly those, so both directions
+      // are pinned here: widen it far enough and this test fails rather than the contract going
+      // quiet.
+      keystrokesIn "hold Alt+click, then Alt+drag across the value"
+      |> Expect.isEmpty "a mouse gesture is not a keystroke"
+      keystrokesIn "press Ctrl+Alt+Q to frobnicate the widget"
+      |> Set.filter (isBound >> not)
+      |> Expect.equal "an unbound keyboard shortcut in prose is still an offender" (set [ "Ctrl+Alt+Q" ])
+      keystrokesIn "press Alt+Enter to evaluate"
+      |> Set.filter (isBound >> not)
+      |> Expect.isEmpty "a keyboard shortcut that IS bound stays clean"
 
     testCase "WHY - the eval keystroke is bound exactly as onboarding says, in both onboarding sources" <| fun _ ->
       // Pins the specific reconciliation: both sources must name the SAME key,

@@ -113,15 +113,26 @@ let httpGetRaw (url: string) (timeout: int) : JS.Promise<{| statusCode: int; bod
 [<Import("httpPost", "./http-helpers.js")>]
 let httpPostRaw (url: string) (body: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative
 
+/// POST with extra request headers, resolving with the RESPONSE headers too — the MCP
+/// streamable-HTTP handshake mints `Mcp-Session-Id` in the initialize response's headers, so a
+/// client that cannot read headers cannot hold an MCP session.
+[<Import("httpPostHeaders", "./http-helpers.js")>]
+let httpPostHeadersRaw (url: string) (body: string) (timeout: int) (headers: obj) : JS.Promise<{| statusCode: int; headers: obj; body: string |}> = jsNative
+
 type Client =
   { mutable mcpPort: int
     mutable dashboardPort: int
+    /// The id the daemon's MCP endpoint minted at `initialize`, held in memory like every MCP
+    /// client holds it. Cleared when the daemon no longer knows it (a restart), because the
+    /// protocol's only repair is a fresh `initialize` (docs/mcp-tools.md).
+    mutable mcpSessionId: string option
     log: string -> unit }
 
 let create (mcpPort: int) (dashboardPort: int) (log: string -> unit) =
   let configured = normalizeConfiguredPorts mcpPort dashboardPort
   { mcpPort = configured.McpPort
     dashboardPort = configured.DashboardPort
+    mcpSessionId = None
     log = log }
 
 let baseUrl (c: Client) = sprintf "http://localhost:%d" c.mcpPort
@@ -814,3 +825,246 @@ type ExportResult =
 
 let exportSessionAsFsx (sessionId: string) (c: Client) =
   getJson "exportSessionAsFsx" (sprintf "/api/sessions/%s/export-fsx" (JS.encodeURIComponent sessionId)) 15000 (fun p -> !!p : ExportResult) c
+
+// ── `nudge_value` through the daemon's MCP streamable-HTTP endpoint ───────
+//
+// The write path for the editor's value knob. Every write goes to the daemon's own
+// `nudge_value` tool (`SageFs/McpNudge.fs`) over the same MCP streamable-HTTP transport any
+// MCP client speaks — journals, the `seen` hash check, ownership and the type-check rollback
+// are the TOOL's rules, so this client deliberately has none of its own. The handshake is the
+// one `scripts/reconnect-mcp.fsx` proves against a live daemon: `initialize` on the root
+// endpoint, the minted `Mcp-Session-Id` taken from the response HEADERS, then `tools/call`.
+
+module NudgeKnobPure = SageFs.Vscode.NudgeKnobPure
+
+/// One `nudge_value` call as the tool takes it: the four actions' fields, plus how the call is
+/// routed (a session id wins over the working directory, as in every other tool).
+type NudgeCall =
+  { Action: string
+    File: string
+    Address: string
+    Seen: string
+    Literal: string
+    Expression: string
+    SessionId: string option
+    WorkingDirectory: string option }
+
+/// What `nudge_value`'s reply says, read from the JSON `SageFs/McpNudge.render` spells:
+/// an outcome token, that outcome's facts, and the notes.
+type NudgeReply =
+  | NudgeWritten of file: string * address: string * before: string * after: string * hashAfter: string * notes: string list
+  | NudgeInspected of file: string * knobs: NudgeKnobPure.Knob list * undoSteps: int * redoSteps: int
+  | NudgeUnchanged of address: string * text: string
+  | NudgeRefused of token: string * rule: string * nextAction: string
+  | NudgeOther of raw: string
+
+let private nudgeTimeoutMs = 20000
+
+let private truncated (s: string) =
+  if s.Length > 200 then s.Substring(0, 200) + "…" else s
+
+let private mcpHeaders (sessionId: string option) : obj =
+  match sessionId with
+  | Some id ->
+    createObj [ "Accept" ==> "application/json, text/event-stream"; "Mcp-Session-Id" ==> id ]
+  | None -> createObj [ "Accept" ==> "application/json, text/event-stream" ]
+
+let private mcpInitializeBody () =
+  jsonStringify (
+    createObj [
+      "jsonrpc" ==> "2.0"
+      "id" ==> 1
+      "method" ==> "initialize"
+      "params" ==> createObj [
+        "protocolVersion" ==> "2024-11-05"
+        "capabilities" ==> createObj []
+        "clientInfo" ==> createObj [ "name" ==> "sagefs-vscode"; "version" ==> "1" ]
+      ]
+    ])
+
+let mutable private mcpCallId = 1
+
+let private mcpToolsCallBody (name: string) (args: obj) =
+  mcpCallId <- mcpCallId + 1
+  jsonStringify (
+    createObj [
+      "jsonrpc" ==> "2.0"
+      "id" ==> mcpCallId
+      "method" ==> "tools/call"
+      "params" ==> createObj [ "name" ==> name; "arguments" ==> args ]
+    ])
+
+/// The JSON-RPC message out of a 200 body: a plain JSON object, or the SSE frame the
+/// streamable transport may answer with (`data: {...}`) — both are legal, so both are read.
+let private mcpMessageJson (body: string) : string option =
+  let trimmed = body.Trim()
+  if trimmed.StartsWith "{" then Some trimmed
+  else
+    trimmed.Split([| '\n' |])
+    |> Array.tryPick (fun line ->
+      let l = line.Trim()
+      if l.StartsWith "data:" then Some (l.Substring(5).Trim()) else None)
+
+/// `initialize`, taking the session id from the response HEADERS — nothing else mints one.
+let private mcpInitialize (c: Client) : JS.Promise<Result<string option, string>> =
+  promise {
+    try
+      let! resp = httpPostHeadersRaw (baseUrl c + "/") (mcpInitializeBody ()) nudgeTimeoutMs (mcpHeaders None)
+      match resp.statusCode with
+      | s when s >= 200 && s < 300 ->
+        c.mcpSessionId <- fieldString "mcp-session-id" resp.headers
+        return Ok c.mcpSessionId
+      | s -> return Error (sprintf "MCP initialize answered HTTP %d: %s" s (truncated resp.body))
+    with ex ->
+      return Error (sprintf "MCP initialize failed: %O" ex)
+  }
+
+/// One `tools/call`, healed once: the daemon holds MCP sessions in memory, so a restart turns a
+/// live id into a 404 and the protocol's entire repair is a fresh `initialize`
+/// (docs/mcp-tools.md, "404 Session not found").
+let rec private mcpToolCall (c: Client) (attempt: int) (name: string) (args: obj) : JS.Promise<Result<string, string>> =
+  promise {
+    match c.mcpSessionId with
+    | None ->
+      match! mcpInitialize c with
+      | Error err -> return Error err
+      | Ok _ when attempt < 2 -> return! mcpToolCall c (attempt + 1) name args
+      | Ok _ -> return Error "MCP initialize minted no session id"
+    | Some _ ->
+      try
+        let! resp = httpPostHeadersRaw (baseUrl c + "/") (mcpToolsCallBody name args) nudgeTimeoutMs (mcpHeaders c.mcpSessionId)
+        match resp.statusCode with
+        | s when s >= 200 && s < 300 ->
+          match mcpMessageJson resp.body with
+          | None -> return Error (sprintf "the daemon's answer was not a JSON-RPC message: %s" (truncated resp.body))
+          | Some message ->
+            let parsed = jsonParse message
+            match fieldObj "error" parsed with
+            | Some rpcError -> return Error (defaultArg (fieldString "message" rpcError) "the MCP call failed")
+            | None ->
+              match fieldObj "result" parsed with
+              | None -> return Error (sprintf "the daemon's answer had neither result nor error: %s" (truncated message))
+              | Some result ->
+                let toolText =
+                  fieldArray "content" result
+                  |> Option.bind Array.tryHead
+                  |> Option.bind (fieldString "text")
+                match toolText with
+                | Some text -> return Ok text
+                | None ->
+                  return Error (defaultArg (fieldString "message" result) "the daemon's answer carried no tool text")
+        | 404 when attempt < 2 ->
+          c.mcpSessionId <- None
+          return! mcpToolCall c (attempt + 1) name args
+        | s -> return Error (sprintf "tools/call answered HTTP %d: %s" s (truncated resp.body))
+      with ex ->
+        return Error (sprintf "tools/call failed: %O" ex)
+  }
+
+let private nudgeArgs (call: NudgeCall) : obj =
+  createObj [
+    "action" ==> call.Action
+    "file" ==> call.File
+    "address" ==> call.Address
+    "seen" ==> call.Seen
+    "literal" ==> call.Literal
+    "expression" ==> call.Expression
+    "working_directory" ==> (defaultArg call.WorkingDirectory "")
+    "session_id" ==> (defaultArg call.SessionId "")
+  ]
+
+/// The token list a reply carries (`FileNotWatched`, `TypeMismatch`, …).
+let private replyNotes (parsed: obj) : string list =
+  fieldArray "notes" parsed
+  |> Option.defaultValue [||]
+  |> Array.toList
+  |> List.choose tryCastString
+
+/// One inspect item — the door's `McpNudge.itemJson`: address, text, hash, span (lines from 1,
+/// columns from 0), and for a literal its kind with `value` typed by that kind (a JSON number,
+/// so no text parsing enters here). An Integer's value rides a JSON number, so beyond 2^53 it
+/// is as precise as JSON is; a real whose value is not finite arrives null and has no drag.
+let private parseKnob (file: string) (item: obj) : NudgeKnobPure.Knob option =
+  match fieldString "address" item, fieldString "text" item, fieldString "hash" item with
+  | Some address, Some text, Some hash ->
+    let line = defaultArg (fieldInt "line" item) 0
+    let startCol = defaultArg (fieldInt "column" item) 0
+    let endLine = defaultArg (fieldInt "endLine" item) line
+    let endCol = defaultArg (fieldInt "endColumn" item) startCol
+    let scrub =
+      match fieldString "kind" item, fieldString "valueKind" item with
+      | Some "Knob", Some "Integer" ->
+        fieldObj "value" item
+        |> Option.bind tryCastFloat
+        |> Option.map (fun v -> NudgeKnobPure.Scrub.Whole (int64 (System.Math.Round v)))
+        |> Option.defaultValue NudgeKnobPure.Scrub.NotANumber
+      | Some "Knob", Some "Real" ->
+        fieldObj "value" item
+        |> Option.bind tryCastFloat
+        |> Option.map (fun v -> NudgeKnobPure.Scrub.Fraction(v, NudgeKnobPure.decimalsOf text))
+        |> Option.defaultValue NudgeKnobPure.Scrub.NotANumber
+      | _ -> NudgeKnobPure.Scrub.NotANumber
+    let knob: NudgeKnobPure.Knob =
+      { File = file
+        Address = address
+        Hash = hash
+        Text = text
+        Line = line
+        StartCol = startCol
+        EndLine = endLine
+        EndCol = endCol
+        Scrub = scrub }
+    Some knob
+  | _ -> None
+
+/// Read `McpNudge.render`'s reply. A refusal comes back as data, not as an error: the tool
+/// answered, and what it said is which rule broke and what to do next.
+let parseNudgeReply (text: string) : Result<NudgeReply, string> =
+  try
+    let parsed = jsonParse text
+    match fieldString "outcome" parsed with
+    | Some "Written" | Some "Undone" | Some "Redone" ->
+      Ok (
+        NudgeWritten(
+          defaultArg (fieldString "file" parsed) "",
+          defaultArg (fieldString "address" parsed) "",
+          defaultArg (fieldString "before" parsed) "",
+          defaultArg (fieldString "after" parsed) "",
+          defaultArg (fieldString "hashAfter" parsed) "",
+          replyNotes parsed))
+    | Some "Inspected" ->
+      let file = defaultArg (fieldString "file" parsed) ""
+      let knobs =
+        fieldArray "items" parsed
+        |> Option.defaultValue [||]
+        |> Array.choose (parseKnob file)
+        |> Array.toList
+      Ok (
+        NudgeInspected(
+          file,
+          knobs,
+          defaultArg (fieldInt "undoSteps" parsed) 0,
+          defaultArg (fieldInt "redoSteps" parsed) 0))
+    | Some "Unchanged" ->
+      Ok (NudgeUnchanged(defaultArg (fieldString "address" parsed) "", defaultArg (fieldString "text" parsed) ""))
+    | Some "Refused" ->
+      Ok (
+        NudgeRefused(
+          defaultArg (fieldString "refusal" parsed) "",
+          defaultArg (fieldString "rule" parsed) "",
+          defaultArg (fieldString "nextAction" parsed) ""))
+    | Some _ -> Ok (NudgeOther text)
+    | None -> Error (sprintf "the nudge reply has no outcome: %s" (truncated text))
+  with ex ->
+    Error (sprintf "cannot read the nudge reply: %O" ex)
+
+/// One `nudge_value` call: the handshake (healed on a 404), then `tools/call` on the daemon's
+/// root endpoint, then the reply read. Refusals are `Ok` with what the door said — only a
+/// transport or protocol failure is `Error`.
+let nudgeValue (call: NudgeCall) (c: Client) : JS.Promise<Result<NudgeReply, string>> =
+  promise {
+    let! result = mcpToolCall c 0 "nudge_value" (nudgeArgs call)
+    match result with
+    | Error err -> return Error err
+    | Ok text -> return parseNudgeReply text
+  }

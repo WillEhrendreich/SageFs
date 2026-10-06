@@ -30,6 +30,7 @@ module Blocks = SageFs.Vscode.CodeBlocks
 module Discovery = SageFs.Vscode.DaemonDiscovery
 module BufferBridge = SageFs.Vscode.BufferBridge
 module DebugRects = SageFs.Vscode.DebugRects
+module NudgeKnob = SageFs.Vscode.NudgeKnob
 module SessionsTreePure = SageFs.Vscode.SessionsTreePure
 module StatusBarPure = SageFs.Vscode.StatusBarPure
 module WorkflowPickPure = SageFs.Vscode.WorkflowPickPure
@@ -3620,6 +3621,16 @@ let activate (context: ExtensionContext) =
       | _ -> ()
   context.subscriptions.Add (
     Window.onDidChangeTextEditorSelection (fun ed -> updateCellHighlightForEditor ed))
+  // The value knob's editing half (roadmap: "Alt-drag in VS Code … both writing through the
+  // nudge door"). The gesture is a selection event because that is the only mouse-shaped
+  // stream the extension API exposes; the write is `nudge_value set` through the same door the
+  // dashboard's knob uses, so its journals, hash checks and rollback apply unchanged. See
+  // NudgeKnob for the decode and its honest limits.
+  context.subscriptions.Add (
+    NudgeKnob.register
+      (fun () -> client)
+      (fun () -> activeSessionId, activeSessionWorkingDirectory)
+      (fun msg -> out.appendLine msg))
   context.subscriptions.Add (
     Window.onDidChangeActiveTextEditor (fun edOpt ->
       match edOpt with

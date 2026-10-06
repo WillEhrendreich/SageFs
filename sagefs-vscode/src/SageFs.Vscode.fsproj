@@ -27,6 +27,7 @@
     <Compile Include="WorkflowPickPure.fs" />
     <Compile Include="ErrorPresentationPure.fs" />
     <Compile Include="StatusBarPure.fs" />
+    <Compile Include="NudgeKnobPure.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsListener.fs" />
     <Compile Include="CodeBlocks.fs" />
@@ -45,6 +46,7 @@
     <Compile Include="InlineDecorations.fs" />
     <Compile Include="DebugRects.fs" />
     <Compile Include="TestDebugCommand.fs" />
+    <Compile Include="NudgeKnob.fs" />
     <Compile Include="Extension.fs" />
   </ItemGroup>
   <ItemGroup>

@@ -51,4 +51,40 @@ function httpPost(url, body, timeout) {
   });
 }
 
-module.exports = { httpGet, httpPost };
+/**
+ * POST with caller-supplied request headers, resolving with the RESPONSE headers as well as
+ * the body. The MCP streamable-HTTP handshake mints its `Mcp-Session-Id` in the initialize
+ * response's HEADERS, so a client that cannot read headers cannot hold an MCP session —
+ * this is the one helper that can.
+ * @param {string} url
+ * @param {string} body
+ * @param {number} timeout
+ * @param {Record<string, string>} headers
+ * @returns {Promise<{statusCode: number, headers: object, body: string}>}
+ */
+function httpPostHeaders(url, body, timeout, headers) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = http.request({
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: parsed.pathname + parsed.search,
+      method: 'POST',
+      headers: Object.assign(
+        { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        headers || {}
+      ),
+      timeout
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => resolve({ statusCode: res.statusCode || 0, headers: res.headers, body: data }));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+module.exports = { httpGet, httpPost, httpPostHeaders };
