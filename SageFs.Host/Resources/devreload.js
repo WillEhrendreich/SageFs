@@ -18,6 +18,9 @@
   let compilingTimer = null;
   let compilingLabel = '';
   let failureCount = 0;
+  const assetHashKey = '__sagefs_assetHash:{{SSE_URL}}';
+  let lastAssetHash = null;
+  try { lastAssetHash = sessionStorage.getItem(assetHashKey); } catch(e) {}
   const originalTitle = document.title;
   const editorUrlPattern = '{{EDITOR_URL_PATTERN}}';
   const autoReloadThresholdMs = {{AUTO_RELOAD_THRESHOLD_MS}};
@@ -228,6 +231,16 @@
             });
         };
         setTimeout(waitForApp, 500);
+      } else if (msg.type === 'assetsrebuilt') {
+        clearInterval(compilingTimer);
+        compilingStart = null;
+        failureCount = 0;
+        document.title = originalTitle;
+        if (msg.contentHash === lastAssetHash) { dismissPanel(); return; }
+        lastAssetHash = msg.contentHash;
+        try { sessionStorage.setItem(assetHashKey, lastAssetHash); } catch(e) {}
+        saveFormState();
+        safeReload();
       } else if (msg.type === 'pending') {
         // A patch is applied and its new code has not been seen running yet. The
         // change may well be live, and the refresh is usually what makes the new

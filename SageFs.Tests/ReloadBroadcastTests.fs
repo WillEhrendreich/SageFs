@@ -29,7 +29,8 @@ let private queueWaited = TestTimeouts.compilerQueueWaited
 let private evalBudget = TestTimeouts.reloadEvalBudget
 
 let private allOutcomes =
-  [ ReloadOutcome.Patched(1, 3)
+  [ ReloadOutcome.AssetsRebuilt("Client.fs", 2, "abc123")
+    ReloadOutcome.Patched(1, 3)
     ReloadOutcome.Patched(3, 3)
     ReloadOutcome.NoEffect(3, [ RestartReason.StartupComputedValue "routes" ])
     ReloadOutcome.NoEffect(448, [])
@@ -69,6 +70,39 @@ let private withClient (body: Channels.ChannelReader<DevReloadEvent> -> unit) =
 let reloadBroadcastTests =
   testSequenced
   <| testList "ReloadBroadcast — what the browser is told" [
+
+    test "rebuilt assets retain the output identity on the browser wire" {
+      let outcome = ReloadOutcome.AssetsRebuilt("Client\"View.fs", 2, "abc123")
+      let evt = Broadcast.eventOf outcome
+      match evt with
+      | DevReloadEvent.AssetsRebuilt(report, sourceFile, count, hash) ->
+        report.Outcome |> Expect.equal "distinct from a CLR patch" "AssetsRebuilt"
+        report.Patched |> Expect.equal "no methods were patched" 0
+        report.Considered |> Expect.equal "asset count is not a method count" 0
+        sourceFile |> Expect.equal "source file survives" "Client\"View.fs"
+        count |> Expect.equal "asset count survives" 2
+        hash |> Expect.equal "output hash survives" "abc123"
+      | other -> failtestf "expected AssetsRebuilt, got %A" other
+      evt |> DevReloadEvent.refreshes |> Expect.isTrue "the browser must fetch the changed files"
+      use payload = System.Text.Json.JsonDocument.Parse(DevReloadEvent.payloadJson evt)
+      let wire = payload.RootElement
+      wire.GetProperty("type").GetString() |> Expect.equal "distinct browser event" "assetsrebuilt"
+      wire.GetProperty("file").GetString() |> Expect.equal "JSON escapes the filename" "Client\"View.fs"
+      wire.GetProperty("assetCount").GetInt32() |> Expect.equal "separate asset count" 2
+      wire.GetProperty("contentHash").GetString() |> Expect.equal "browser deduplication key" "abc123"
+    }
+
+    test "a completed asset build emits one terminal event after compiling" {
+      withClient <| fun reader ->
+        broadcastCompiling (Some "Client.fs")
+        let outcome = ReloadOutcome.AssetsRebuilt("Client.fs", 1, "abc123")
+        Broadcast.broadcastOutcome outcome
+        drain reader
+        |> Expect.equal "there is no pending or patched confirmation"
+             [ DevReloadEvent.Compiling(Some "Client.fs"); Broadcast.eventOf outcome ]
+        LastReload.json ()
+        |> Expect.equal "polling retains the same completed asset build" (DevReloadEvent.payloadJson (Broadcast.eventOf outcome))
+    }
 
     // WHY — THE bug, as one executable assertion. Reintroduce the old
     // behaviour ("any method detoured ⇒ broadcast reload") anywhere between

@@ -188,6 +188,8 @@ type ReloadLine =
 /// What a reload verdict means for the one value that was written, in a few words.
 let reloadMeaning (case: ReloadCase) : string * Tone =
   match case with
+  | ReloadCase.AssetsRebuilt -> "the browser assets were rebuilt", Tone.Good
+  | ReloadCase.Unchanged -> "the saved output did not change", Tone.Quiet
   | ReloadCase.Patched -> "the app is running the new code", Tone.Good
   | ReloadCase.PatchPending -> "applied, and the new code has not run yet", Tone.Notice
   | ReloadCase.NeverEntered -> "applied, and the new code was never entered", Tone.Notice

@@ -191,6 +191,7 @@ module WorkerHttpTransport =
     let saveSource = WorkerRoute.Post "/save-source"
     let applySaves = WorkerRoute.Post "/apply-saves"
     let devReload = WorkerRoute.Get ("/__sagefs__/reload", GetAccess.CrossOriginStream)
+    let devReloadScript = WorkerRoute.Get ("/__sagefs__/devreload.js", GetAccess.ReadOnly)
     /// The last terminal `ReloadOutcome`, past the server boundary, for a
     /// client that cannot hold the `devReload` SSE stream open — a dashboard
     /// poll, a health check, an editor extension with no standing connection
@@ -213,7 +214,7 @@ module WorkerHttpTransport =
     Routes.runApp; Routes.stopApp; Routes.awaitAppChange
     Routes.debugTest; Routes.debugTestContinue
     Routes.saveSource; Routes.applySaves
-    Routes.devReload; Routes.hotReloadLastOutcome
+    Routes.devReload; Routes.devReloadScript; Routes.hotReloadLastOutcome
   ]
 
   /// Declared access of every GET route, matched the way ASP.NET routing
@@ -871,6 +872,12 @@ module WorkerHttpTransport =
       map Routes.hotReloadLastOutcome (Func<HttpContext, Task>(fun ctx -> task {
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsync(DevReload.LastReload.json ())
+      })) |> ignore
+
+      map Routes.devReloadScript (Func<HttpContext, Task>(fun ctx -> task {
+        ctx.Response.ContentType <- "text/javascript; charset=utf-8"
+        ctx.Response.Headers["Cache-Control"] <- "no-store"
+        do! ctx.Response.WriteAsync(DevReloadMiddleware.reloadJavaScript (WorkerRoute.path Routes.devReload))
       })) |> ignore
 
       // DevReload SSE endpoint — browsers connect here for hot-reload notifications.

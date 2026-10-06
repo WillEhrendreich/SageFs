@@ -1,0 +1,7 @@
+{
+  "project": "spa",
+  "outputDir": "../Host/wwwroot/assets",
+  "buildService": false,
+  "dts": false,
+  "sourceMap": false
+}

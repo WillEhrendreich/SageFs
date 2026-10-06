@@ -467,6 +467,7 @@
              their own project/file discovery walks. -->
         <Compile Include="SafeDirectoryWalk.fs" />
         <Compile Include="FileWatcher.fs" />
+        <Compile Include="BrowserAssets.fs" />
         <Compile Include="DaemonOwnership.fs" />
         <Compile Include="LiveTestWatcherCore.fs" />
         <!-- Pure eval-actor decision core (SessionActivity/SessionGeneration/

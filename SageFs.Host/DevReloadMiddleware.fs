@@ -45,6 +45,18 @@ let internal jsStringEscape (s: string) =
     .Replace("\n", "\\n")
     .Replace("<", "\\x3C")   // prevents </script> injection
 
+let reloadJavaScript (sseUrl: string) =
+  let cfg = DevReload.DevReloadConfig.defaults
+  devReloadJsTemplate
+    .Replace("{{SSE_URL}}", jsStringEscape sseUrl)
+    .Replace("{{RELOAD_GUARD_THRESHOLD}}", string cfg.ReloadGuardThreshold)
+    .Replace("{{RELOAD_RESET_WINDOW_MS}}", string cfg.ReloadCountResetWindowMs)
+    .Replace("{{SSE_TIMEOUT_MS}}", string cfg.SseConnectionTimeoutMs)
+    .Replace("{{COMPILE_TIMER_MS}}", string cfg.CompileTimerUpdateMs)
+    .Replace("{{AUTO_RELOAD_THRESHOLD_MS}}", string cfg.AutoReloadThresholdMs)
+    .Replace("{{LONG_COMPILE_WARNING_MS}}", string cfg.LongCompileWarningMs)
+    .Replace("{{EDITOR_URL_PATTERN}}", jsStringEscape (editorUrlPattern()))
+
 /// Generate the reload script. Port > 0 connects cross-origin to the worker's
 /// SSE endpoint; port 0 falls back to a same-origin relative path (for tests).
 ///
@@ -57,21 +69,11 @@ let internal jsStringEscape (s: string) =
 /// - Error overlay shows compilation errors *in the browser* — this is what makes
 ///   the DX tweet-worthy. Elm and Vite do this; FsiX does not.
 let reloadScript (workerPort: int) =
-  let cfg = DevReload.DevReloadConfig.defaults
   let sseUrl =
     match workerPort > 0 with
     | true -> sprintf "http://127.0.0.1:%d/__sagefs__/reload" workerPort
     | false -> "/__sagefs__/reload"
-  let js =
-    devReloadJsTemplate
-      .Replace("{{SSE_URL}}", sseUrl)
-      .Replace("{{RELOAD_GUARD_THRESHOLD}}", string cfg.ReloadGuardThreshold)
-      .Replace("{{RELOAD_RESET_WINDOW_MS}}", string cfg.ReloadCountResetWindowMs)
-      .Replace("{{SSE_TIMEOUT_MS}}", string cfg.SseConnectionTimeoutMs)
-      .Replace("{{COMPILE_TIMER_MS}}", string cfg.CompileTimerUpdateMs)
-      .Replace("{{AUTO_RELOAD_THRESHOLD_MS}}", string cfg.AutoReloadThresholdMs)
-      .Replace("{{LONG_COMPILE_WARNING_MS}}", string cfg.LongCompileWarningMs)
-      .Replace("{{EDITOR_URL_PATTERN}}", jsStringEscape (editorUrlPattern()))
+  let js = reloadJavaScript sseUrl
   sprintf """<script data-sagefs-injected="devreload">%s</script>""" js
 
 let private handledKey = "SageFs.DevReload.Handled"

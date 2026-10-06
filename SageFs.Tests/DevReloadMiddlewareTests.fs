@@ -119,6 +119,24 @@ let parseEncodingTests = testList "parseEncoding" [
 // ── Embedded JS Resource ────────────────────────────────────────────────
 
 let embeddedJsTests = testList "Embedded JS resource" [
+  test "reloadJavaScript renders raw JavaScript with an explicit SSE URL" {
+    let script = reloadJavaScript "/events/reload"
+    script |> Expect.stringStarts "raw JavaScript begins with the IIFE" "(function(){"
+    script |> Expect.stringContains "the explicit SSE URL reaches EventSource" "new EventSource('/events/reload')"
+    script.Contains("<script") |> Expect.isFalse "raw JavaScript has no HTML wrapper"
+    script.Contains("{{") |> Expect.isFalse "all template values are resolved"
+  }
+  test "reloadJavaScript escapes the explicit SSE URL" {
+    let script = reloadJavaScript "/events?name='</script>\\\r\n"
+    script |> Expect.stringContains "SSE URL remains one JavaScript string" "new EventSource('/events?name=\\'\\x3C/script>\\\\\\r\\n')"
+    script.Contains("</script>") |> Expect.isFalse "SSE URL cannot end an inline script"
+  }
+  test "reloadScript preserves its wrapper and port routing" {
+    for port, url in [ -1, "/__sagefs__/reload"; 0, "/__sagefs__/reload"; 5050, "http://127.0.0.1:5050/__sagefs__/reload" ] do
+      reloadScript port
+      |> Expect.equal (sprintf "port %d retains the inline script contract" port)
+        (sprintf "<script data-sagefs-injected=\"devreload\">%s</script>" (reloadJavaScript url))
+  }
   test "reloadScript contains EventSource with same-origin URL when port 0" {
     let script = reloadScript 0
     script |> Expect.stringContains "should have same-origin SSE URL" "new EventSource('/__sagefs__/reload')"

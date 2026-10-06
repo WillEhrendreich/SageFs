@@ -112,6 +112,44 @@ let private disposeServer (server: WorkerHttpTransport.HttpWorkerServer) =
 let workerHttpGuardHttpTests =
   testList "WorkerHttpGuard.http" [
 
+    testTask "GET devreload.js serves uncached same-origin JavaScript without executing a worker message" {
+      let executed = ref 0
+      let! server = startCountingServer executed
+      try
+        let! (response: HttpResponseMessage) = request server "GET" "/__sagefs__/devreload.js" None None None None
+        try
+          let! script = response.Content.ReadAsStringAsync()
+          status response |> Expect.equal "the script endpoint is available" 200
+          response.Content.Headers.ContentType.ToString()
+          |> Expect.equal "the browser receives JavaScript" "text/javascript; charset=utf-8"
+          headerValue response "Cache-Control" |> Expect.equal "the script cannot be cached" (Some "no-store")
+          script |> Expect.equal "the stream uses the page origin" (DevReloadMiddleware.reloadJavaScript "/__sagefs__/reload")
+          executed.Value |> Expect.equal "reading the script does not execute code" 0
+        finally
+          response.Dispose()
+      finally
+        disposeServer server
+    }
+
+    testTask "devreload.js rejects foreign origins and does not accept POST" {
+      let executed = ref 0
+      let! server = startCountingServer executed
+      try
+        let! (foreignResponse: HttpResponseMessage) = request server "GET" "/__sagefs__/devreload.js" None (Some "http://evil.example.com") (Some "cross-site") None
+        try
+          status foreignResponse |> Expect.equal "foreign pages cannot read the script" 403
+          let! (postResponse: HttpResponseMessage) = request server "POST" "/__sagefs__/devreload.js" None None None None
+          try
+            status postResponse |> Expect.equal "the script route accepts only GET" 405
+            executed.Value |> Expect.equal "neither request executes a worker message" 0
+          finally
+            postResponse.Dispose()
+        finally
+          foreignResponse.Dispose()
+      finally
+        disposeServer server
+    }
+
     testTask "POST /eval with cross-site remote browser headers is rejected 403 and does not execute" {
       let executed = ref 0
       let! server = startTestServer executed
@@ -296,6 +334,12 @@ let private guardRequest
 [<Tests>]
 let workerRouteTableTests =
   testList "WorkerHttpGuard.routeTable" [
+
+    testCase "the JavaScript endpoint is declared read-only" <| fun _ ->
+      WorkerHttpTransport.routes
+      |> List.tryFind (fun route -> WorkerHttpTransport.WorkerRoute.path route = "/__sagefs__/devreload.js")
+      |> Expect.equal "the script is a read-only GET, not a cross-origin stream"
+        (Some (WorkerHttpTransport.WorkerRoute.Get ("/__sagefs__/devreload.js", WorkerHttpTransport.GetAccess.ReadOnly)))
 
     testCase "every POST route in the table classifies as mutating (any casing)" <| fun _ ->
       let posts =

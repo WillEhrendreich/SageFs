@@ -20,7 +20,8 @@ let private kept : KeptValue = { Binding = "Counter.count"; KeptValue = "41"; Ne
 
 /// One real outcome of every case, with the reasons a worker would give.
 let private everyOutcome : (ReloadCase * Outcome) list =
-  [ ReloadCase.Patched, Outcome.Patched (3, 5)
+  [ ReloadCase.AssetsRebuilt, Outcome.AssetsRebuilt ("Client.fs", 2, "abc123")
+    ReloadCase.Patched, Outcome.Patched (3, 5)
     ReloadCase.PatchPending, Outcome.PatchPending (3, 5, [])
     ReloadCase.NeverEntered, Outcome.NeverEntered ("Ticker.renderLine", [], 2, 5, [])
     ReloadCase.Restarted, Outcome.Restarted [ RestartReason.NewDeclaration "Ticker.extra" ]
@@ -32,6 +33,21 @@ let private everyOutcome : (ReloadCase * Outcome) list =
 [<Tests>]
 let tests =
   testList "SessionReload" [
+    testCase "unchanged output reaches the session as a completed save without a refresh" <| fun _ ->
+      let evt = ReloadBroadcast.unchanged "Client.fs"
+      evt |> DevReload.DevReloadEvent.refreshes |> Expect.isFalse "unchanged bytes do not reload the browser"
+      let report = DevReload.DevReloadEvent.report evt
+      match SessionReload.ofPayloadJson (DevReload.DevReloadEvent.payloadJson evt) with
+      | Result.Ok(SessionReload.Finished facts) ->
+        ReloadCase.token facts.Case |> Expect.equal "unchanged is a distinct terminal verdict" "Unchanged"
+        facts.Patched |> Expect.equal "no methods changed" 0
+        facts.Considered |> Expect.equal "no definitions changed" 0
+        facts.Mechanism |> Expect.equal "no CLR patch" PatchMechanism.NoPatch
+        facts.Message |> Expect.equal "the worker message survives" report.Message
+        ReplFreshness.observe ReplFreshness.InSync (SessionReload.Finished facts)
+        |> Expect.equal "unchanged output leaves the REPL current" ReplFreshness.InSync
+      | other -> failtestf "unchanged must be a completed save, got %A" other
+
     testCase "WHY — every outcome a worker can produce reads back as the same case with the same facts" <| fun _ ->
       for expectedCase, outcome in everyOutcome do
         let event = ReloadBroadcast.eventOf outcome

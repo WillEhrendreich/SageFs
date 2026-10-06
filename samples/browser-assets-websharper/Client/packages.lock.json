@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "WebSharper": {
+        "type": "Direct",
+        "requested": "[10.1.6.676, )",
+        "resolved": "10.1.6.676",
+        "contentHash": "lcnL8IO26McTdbfeWU480xLiY8ZSx4Cv0YA50tcM9OJMH5GJYfHnT207dYvt0AADUEjD3WLN9nTQyHg06jThzQ==",
+        "dependencies": {
+          "FSharp.Core": "6.0.0"
+        }
+      },
+      "WebSharper.FSharp": {
+        "type": "Direct",
+        "requested": "[10.1.6.676, )",
+        "resolved": "10.1.6.676",
+        "contentHash": "9RlXG4KBxdlV99ZhqUbIamclUr6xtoGuVm5qmaSyDajw4tZX48B/v8m7hJFJ4bYgC5GIoKDJoVcJ0+W3FjZowA==",
+        "dependencies": {
+          "WebSharper": "[10.1.6.676]"
+        }
+      },
+      "FSharp.Core": {
+        "type": "Transitive",
+        "resolved": "6.0.0",
+        "contentHash": "fbv1UwJ2LXVcFCt+GGDPu0sIYA5C6gdDvAupDj3iLQF3clRkua/6J33f+FiGQa8P1tEa+zmz3wrjoTnXZ1UiYg=="
+      }
+    }
+  }
+}

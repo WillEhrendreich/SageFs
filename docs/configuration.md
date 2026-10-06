@@ -110,6 +110,14 @@ come from. The Source column links to the line, pinned to a commit.
 `SageFs.Tests/EnvVarDocTests.fs` fails if a variable is in `Timeouts.fs` and not
 on this page, or the other way round.
 
+### Browser asset prototype
+
+`SAGEFS_BROWSER_ASSET_BUILD_SECONDS` sets the time limit for a configured browser asset build. The default is 300 seconds.
+
+The limit applies to the build command, including any bundling and output writes. It does not include time in the build queue. At the limit, SageFs cancels the command and stops its process tree.
+
+See the [WebSharper sample](../samples/browser-assets-websharper/README.md) for the opt-in configuration and prototype limits.
+
 <!-- BEGIN GENERATED: timeouts (scripts/gen-configuration-doc.fsx) -->
 
 ### Build & Warmup

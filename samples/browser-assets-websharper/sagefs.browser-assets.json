@@ -1,0 +1,14 @@
+{
+  "build": {
+    "executable": "dotnet",
+    "arguments": ["build", "Client/BrowserAssets.Client.fsproj", "--no-restore", "--nologo"],
+    "workingDirectory": "."
+  },
+  "sourceRoots": ["Client"],
+  "assetRoots": [
+    {
+      "directory": "Host/wwwroot/assets",
+      "pattern": "*.js"
+    }
+  ]
+}

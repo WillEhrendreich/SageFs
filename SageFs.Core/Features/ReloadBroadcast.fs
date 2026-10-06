@@ -36,6 +36,7 @@ let private consideredFor (reasons: RestartReason list) = List.length reasons
 /// drift from the type. A stable token, unlike the prose beside it.
 let private caseName (outcome: ReloadOutcome) =
   match outcome with
+  | ReloadOutcome.AssetsRebuilt _ -> "AssetsRebuilt"
   | ReloadOutcome.Patched _ -> "Patched"
   | ReloadOutcome.Restarted _ -> "Restarted"
   | ReloadOutcome.NoEffect _ -> "NoEffect"
@@ -84,6 +85,7 @@ let private reasonsIn (outcome: ReloadOutcome) =
   | ReloadOutcome.NeverEntered _
   | ReloadOutcome.KeptLiveState _
   | ReloadOutcome.ByMetadataDelta _
+  | ReloadOutcome.AssetsRebuilt _
   | ReloadOutcome.CompileFailed _ -> []
 
 let private keptReport (k: KeptValue) : DevReload.KeptStateReport =
@@ -99,6 +101,7 @@ let private keptIn (outcome: ReloadOutcome) : DevReload.KeptStateReport list =
   | ReloadOutcome.NoEffect _
   | ReloadOutcome.Restarted _
   | ReloadOutcome.RestartRequired _
+  | ReloadOutcome.AssetsRebuilt _
   | ReloadOutcome.CompileFailed _ -> []
 
 /// Where callers in other files stand right now, read when a report is built. A worker sets it once, to a function over its
@@ -134,6 +137,7 @@ let reportWith (callers: CallerState.CallersState) (outcome: ReloadOutcome) : De
     | ReloadOutcome.NoEffect(considered, _) -> 0, considered
     | ReloadOutcome.Restarted reasons
     | ReloadOutcome.RestartRequired reasons -> 0, consideredFor reasons
+    | ReloadOutcome.AssetsRebuilt _ -> 0, 0
     | ReloadOutcome.CompileFailed _ -> 0, 0
     | ReloadOutcome.KeptLiveState(patched, considered, _, _) -> patched, considered
     // Applied is not live: a pending patch has had nothing confirmed yet.
@@ -165,6 +169,8 @@ let reportOf (outcome: ReloadOutcome) : DevReload.ReloadReport = reportWith (sta
 let eventWith (callers: CallerState.CallersState) (outcome: ReloadOutcome) : DevReload.DevReloadEvent =
   let report = reportWith callers outcome
   match outcome with
+  | ReloadOutcome.AssetsRebuilt(sourceFile, assetCount, contentHash) ->
+    DevReload.AssetsRebuilt(report, sourceFile, assetCount, contentHash)
   | ReloadOutcome.PatchPending _
   | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending _) -> DevReload.Applied report
   | ReloadOutcome.NeverEntered _
@@ -193,6 +199,8 @@ let broadcastEvent (evt: DevReload.DevReloadEvent) =
   match evt with
   | DevReload.Compiling fileName -> DevReload.broadcastCompiling fileName
   | DevReload.Applied report -> DevReload.broadcastApplied report
+  | DevReload.AssetsRebuilt(report, sourceFile, assetCount, contentHash) ->
+    DevReload.broadcastAssetsRebuilt report sourceFile assetCount contentHash
   | DevReload.Patched report -> DevReload.broadcastPatched report
   | DevReload.NeverEntered report -> DevReload.broadcastNeverEntered report
   | DevReload.Restarted report -> DevReload.broadcastRestarted report
@@ -244,6 +252,9 @@ let unchanged (fileName: string) : DevReload.DevReloadEvent =
     | CallerState.CallersState.CallersNotChecked _
     | CallerState.CallersState.CallersNotReported -> sprintf "%s saved — no declaration changed, so nothing moved." fileName
   notApplied "Unchanged" message ""
+
+let assetsUnchanged (fileName: string) : DevReload.DevReloadEvent =
+  notApplied "Unchanged" (sprintf "%s built successfully. Served browser assets are unchanged." fileName) ""
 
 /// A save that never reached the compiler because the previous save's compile
 /// still holds it.

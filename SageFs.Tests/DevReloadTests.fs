@@ -54,6 +54,8 @@ let private genDevReloadEvent =
     Gen.constant (Compiling None)
     Gen.elements [ "App.fs"; "Handlers.fs"; "Domain.fs"; "Views.fs" ]
     |> Gen.map (fun s -> Compiling (Some s))
+    Gen.elements [ "Client.fs"; "ClientView.fs" ]
+    |> Gen.map (fun source -> AssetsRebuilt({ ReloadReport.none with Outcome = "AssetsRebuilt"; Message = "Rebuilt 1 browser asset" }, source, 1, "abc123"))
     Gen.constant aReload
     Gen.constant (Applied { ReloadReport.none with Outcome = "PatchPending"; Considered = 1; Message = "Applied 1 of 1" })
     Gen.constant (NeverEntered { ReloadReport.none with Outcome = "NeverEntered"; Considered = 1; Message = "Not confirmed" })
@@ -67,6 +69,8 @@ let private genDevReloadEvent =
 let private broadcastAny (evt: DevReloadEvent) =
   match evt with
   | Compiling fileName -> broadcastCompiling fileName
+  | AssetsRebuilt(report, sourceFile, assetCount, contentHash) ->
+    DevReload.broadcastAssetsRebuilt report sourceFile assetCount contentHash
   | Applied report -> DevReload.broadcastApplied report
   | Patched report -> broadcastPatched report
   | NeverEntered report -> DevReload.broadcastNeverEntered report
@@ -135,10 +139,11 @@ let propertyTests = testSequenced <| testList "DevReload.Properties" [
     "DU exhaustiveness: every lifecycle case is accounted for (documentary)" <|
     // Documentary test — pattern matches without a wildcard, so a new case
     // fails to compile here and is noticed rather than silently unhandled.
-    // The lifecycle is: Compiling → one of the four terminal outcomes.
+    // The lifecycle is: Compiling → a terminal outcome.
     Prop.forAll (Arb.fromGen genDevReloadEvent) (fun evt ->
       match evt with
       | Compiling _ -> true
+      | AssetsRebuilt _ -> true
       | Applied _ -> true
       | Patched _ -> true
       | NeverEntered _ -> true
@@ -147,11 +152,12 @@ let propertyTests = testSequenced <| testList "DevReload.Properties" [
       | CompilationFailed _ -> true)
 
   testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
-    "only an event that changed the running process asks a page to refresh" <|
+    "only an event that can change browser content asks a page to refresh" <|
     Prop.forAll (Arb.fromGen genDevReloadEvent) (fun evt ->
       match evt with
       // A pending patch refreshes (the change may be live); the confirmation that
       // follows it does not refresh a second time.
+      | AssetsRebuilt _
       | Applied _
       | Restarted _ -> DevReloadEvent.refreshes evt
       | Compiling _

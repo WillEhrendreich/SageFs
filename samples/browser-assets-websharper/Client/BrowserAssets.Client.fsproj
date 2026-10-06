@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <Compile Include="Client.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="WebSharper" />
+    <PackageReference Include="WebSharper.FSharp" />
+  </ItemGroup>
+</Project>

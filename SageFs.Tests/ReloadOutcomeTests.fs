@@ -27,7 +27,8 @@ let private allReasons =
     RestartReason.UnverifiedCopy "Program.greeting" ]
 
 let private allOutcomes =
-  [ ReloadOutcome.Patched(1, 3)
+  [ ReloadOutcome.AssetsRebuilt("Client.fs", 2, "abc123")
+    ReloadOutcome.Patched(1, 3)
     ReloadOutcome.PatchPending(1, 3, [])
     ReloadOutcome.NeverEntered("Program.handle", [], 0, 3, [])
     ReloadOutcome.NoEffect(3, [ RestartReason.StartupComputedValue "routes" ])
@@ -39,6 +40,20 @@ let private allOutcomes =
 [<Tests>]
 let reloadOutcomeTests =
   testList "ReloadOutcome — what a save reports about the running app" [
+
+    test "rebuilt assets refresh the browser without claiming a process patch" {
+      let outcome = ReloadOutcome.AssetsRebuilt("Client.fs", 2, "abc123")
+      outcome |> shouldRefreshBrowser |> Expect.isTrue "new browser files must be fetched"
+      outcome |> processChanged |> Expect.isFalse "the CLR process did not change"
+      outcome |> mechanismOf |> Expect.equal "no CLR patch mechanism" PatchMechanism.NoPatch
+      outcome |> remedy |> Expect.isNone "the asset build completed"
+      outcome |> describe |> Expect.stringContains "reports the asset count" "2 browser asset(s)"
+      outcome |> describe |> Expect.stringContains "reports the source change" "Client.fs"
+      withExtraMisses [ RestartReason.NewDeclaration "newFunction" ] outcome
+      |> Expect.equal "CLR patch misses cannot relabel an asset build" outcome
+      withKept [ { Binding = "count"; KeptValue = "1"; NewInitializer = "0" } ] outcome
+      |> Expect.equal "CLR state cannot relabel an asset build" outcome
+    }
 
     // WHY — this is the bug, in one assertion. A save that patched nothing is
     // not a success with a zero in it; it is a different outcome, and the smart
