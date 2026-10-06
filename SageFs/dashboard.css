@@ -1376,6 +1376,18 @@ h2 {
   color: var(--bg-default);
 }
 
+/* The pane's own buttons, smaller than the toolbar squares on purpose: among 16px row text a 28px
+   button is the tallest thing in the row and sets its height — which is what kept a not-yet-read row at
+   30px and cost a row of visible values. They stay square, just sized for the row they sit in. */
+.live-pane-pin,
+.live-held-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+}
+
 .live-pane-pin {
   margin-left: auto;
 }
@@ -1471,19 +1483,32 @@ h2 {
   font-size: 0.7rem;
 }
 
+/* One value, one line — the shape a debugger's watch window has, and the reason a pane can show more
+   than four or five values at once. It used to wrap, so a single long preview (a path, a rendered
+   snippet) made one row forty pixels tall and the pane held four rows no matter how tall it was. */
 .live-binding-node {
   display: flex;
   align-items: baseline;
   gap: 0 0.5em;
   padding: 2px 0 2px 1.2em;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
 }
 
-.live-preview {
+/* Every cell in a row holds one line. The value clips rather than wraps: the text is still in the DOM
+   so it can be selected and copied, and `min-width: 0` is what lets a flex child shrink at all. This is
+   what makes the pane read like a watch window instead of a stack of paragraphs. */
+.live-binding-node > * {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.live-binding-node > .live-preview {
+  flex: 1 1 0;
   color: var(--fg-green);
   font-size: 0.7rem;
-  overflow-wrap: anywhere;
 }
 
 .live-closure-badge {
