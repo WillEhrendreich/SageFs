@@ -535,6 +535,12 @@ let private discoverWarmupReplayPlan
     for project in sln.Projects do
       ct.ThrowIfCancellationRequested()
 
+      // Name and path captured BEFORE the reflection: neither needs the assembly's dependency
+      // closure, but the reflection does, and when it throws the handler below must still be able
+      // to record the assembly. Otherwise SourceState sees "loaded no assembly named X" while the
+      // session's own REPL reports it loaded, and every run_tests receipt reads PassedOnUnknownSource.
+      let mutable recorded = ValueNone
+
       try
         match System.IO.File.Exists(project.TargetPath) with
         | false ->
@@ -543,6 +549,12 @@ let private discoverWarmupReplayPlan
           discoveryWarnings.Add(msg)
         | true ->
           let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
+          // Before the reflection, so the handler below can record the assembly if it throws.
+          let stableAssemblyPath =
+            stableAssemblyPaths
+            |> Map.tryFind project.ProjectFileName
+            |> Option.defaultValue project.TargetPath
+          recorded <- ValueSome(asm.GetName().Name, stableAssemblyPath)
           let types =
             try
               asm.GetTypes()
@@ -633,11 +645,6 @@ let private discoverWarmupReplayPlan
               | false -> ()
             | false -> ()
 
-          let stableAssemblyPath =
-            stableAssemblyPaths
-            |> Map.tryFind project.ProjectFileName
-            |> Option.defaultValue project.TargetPath
-
           loadedAssemblies.Add({
             Name = asm.GetName().Name
             Path = stableAssemblyPath
@@ -646,6 +653,12 @@ let private discoverWarmupReplayPlan
           } : LoadedAssembly)
       with ex ->
         logger.LogWarning (sprintf "Could not analyze %s: %s" project.TargetPath ex.Message)
+        // The scan failed but the assembly WAS loaded: record the two facts SourceState needs.
+        // Counts are 0 — from the scan that just failed — rather than a number a reader would trust.
+        match recorded with
+        | ValueSome (name, path) ->
+          loadedAssemblies.Add({ Name = name; Path = path; NamespaceCount = 0; ModuleCount = 0 } : LoadedAssembly)
+        | ValueNone -> ()
 
     reflectionAlc.Unload()
 
@@ -941,41 +954,18 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
         | None -> ()
     | true -> ()
 
-    // WHY — verify project references actually loaded into the AppDomain. FSI
-    // surfaces -r load failures only as init stderr warnings, which previously
-    // produced "Ready" sessions where every project open failed with 'not
-    // defined' while get_fsi_status claimed warmup was complete (friction
-    // report 2026-08). Because — a session with zero project assemblies is dead;
-    // reporting it Ready destroys agent trust in every downstream signal.
+    // Why this check exists, what Error means (the caller raises), and why it lives in its own file
+    // (AppState.fs is line-budgeted): AssemblyLoadVerification's module doc.
     let expectedAssemblies =
       sln.Projects
       |> List.map (fun p -> Path.GetFileNameWithoutExtension p.TargetPath)
       |> List.distinct
-    // The user's assemblies live in the session's process (the isolated host, normally), not necessarily in this one.
-    let loadedAssemblyNames =
-      match fsiSession.LoadedAssemblyNames() with
-      | HostAgent.AgentAnswered names -> names
-      | HostAgent.AgentUnavailable reason ->
-        let msg = sprintf "Warmup verification failed: the session could not report what it loaded: %s" reason
-        logger.LogError (sprintf "  ❌ %s" msg)
-        failwith msg
-    match WarmUp.classifyAssemblyLoad expectedAssemblies loadedAssemblyNames with
-    | WarmUp.AllExpectedLoaded -> ()
-    | WarmUp.PartiallyLoaded missing ->
-      logger.LogWarning
-        (sprintf "  ⚠️ Assembly verification: %d/%d project assemblies loaded; MISSING: %s — code touching these will fail with 'not defined'"
-          (expectedAssemblies.Length - missing.Length)
-          expectedAssemblies.Length
-          (String.concat ", " missing))
-    | WarmUp.NothingLoaded ->
-      let fsiErrors = fsiErrorWriter.ToString()
-      let msg =
-        sprintf "Warmup verification failed: NONE of %d project assemblies loaded into FSI (expected: %s).%s"
-          expectedAssemblies.Length
-          (String.concat ", " expectedAssemblies)
-          (match fsiErrors.Length > 0 with | true -> sprintf " FSI init errors: %s" fsiErrors | false -> "")
-      logger.LogError (sprintf "  ❌ %s" msg)
-      failwith msg
+
+    match
+      AssemblyLoadVerification.verify logger (fun () -> fsiErrorWriter.ToString()) expectedAssemblies (fsiSession.LoadedAssemblyNames())
+    with
+    | Ok () -> ()
+    | Error msg -> failwith msg
 
     // Surface discovery warnings (missing project DLLs, zero namespaces found
     // despite auto-open ON) through the same "Failed Opens" channel the

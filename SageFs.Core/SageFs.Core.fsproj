@@ -490,6 +490,10 @@
              a standalone, unit-testable file instead of ratcheting
              AppState.fs over its line budget. -->
         <Compile Include="OpenReplay.fs" />
+        <!-- The "did the session's project assemblies actually load" check, moved out of AppState.fs
+             for the reason given on the line below: one coherent block, its own testable file, and
+             the budget goes DOWN instead of up. -->
+        <Compile Include="AssemblyLoadVerification.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\EvaluableSubmission.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />
