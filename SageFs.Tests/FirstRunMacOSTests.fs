@@ -64,6 +64,23 @@ let private agent () : Map<string, PlistValue> =
     | other -> failwithf "the plist's one child is a dict, got %A" other
   | name, children -> failwithf "expected <plist> holding one <dict>, got <%s> with %d children" name children.Length
 
+/// The plist's leading XML comment, which repeats the README's install for someone reading the file on its own.
+let private headerComment () : string =
+  let settings = XmlReaderSettings(DtdProcessing = DtdProcessing.Ignore)
+  use reader = XmlReader.Create(plistPath, settings)
+  XDocument.Load(reader).Nodes()
+  |> Seq.tryPick (fun node ->
+    match node with
+    | :? XComment as comment -> Some comment.Value
+    | _ -> None)
+  |> Option.defaultWith (fun () -> failwith "the plist opens with a comment that says how to install it")
+
+/// Non-blank lines with their indentation dropped, so a block reads the same at any indent.
+let private trimmedLines (text: string) =
+  text.Split([| '\r'; '\n' |], StringSplitOptions.RemoveEmptyEntries)
+  |> Array.map (fun line -> line.Trim())
+  |> Array.filter (fun line -> line <> "")
+
 let private stringAt key (values: Map<string, PlistValue>) =
   match values |> Map.tryFind key with
   | Some(PString s) -> s
@@ -122,6 +139,18 @@ let tests =
         let readme = File.ReadAllText(Path.Combine(repoRoot, "Readme.md"))
         for placeholder in placeholders do
           readme |> Expect.stringContains (sprintf "the README's sed fills in %s" placeholder) (sprintf "s|%s|" placeholder)
+      }
+
+      test "the plist's comment carries the README's install block, line for line" {
+        // The other tests read the README's install. The copy in the plist's comment is the one a reader of
+        // the file follows, so it must not drift from the README's.
+        let readme = File.ReadAllText(Path.Combine(repoRoot, "Readme.md"))
+        let block = Regex.Match(readme, @"### Run it as a service \(macOS\)[\s\S]*?```bash\r?\n([\s\S]*?)```")
+        Expect.isTrue "the README's macOS section has a bash install block" block.Success
+        let install = trimmedLines block.Groups[1].Value |> String.concat "\n"
+        Expect.isNotEmpty "the install block has commands" install
+        headerComment () |> trimmedLines |> String.concat "\n"
+        |> Expect.stringContains "the plist's comment repeats the README's install exactly" install
       }
 
       test "ProgramArguments runs the installed tool with a flag the CLI help really lists" {

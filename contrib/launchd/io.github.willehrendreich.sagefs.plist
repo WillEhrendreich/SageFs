@@ -1,14 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  SageFs as a launchd user agent (macOS). Install it from the repo root:
+  SageFs as a launchd user agent (macOS). Install it from the repo root. This is
+  the same block as the README's, and a test keeps the two identical:
 
-    mkdir -p ~/Library/LaunchAgents ~/Library/Logs/sagefs "$HOME/Library/Application Support/sagefs-daemon"
-    sed -e "s|@HOME@|$HOME|g" \
-        -e "s|@DOTNET_ROOT@|$(dirname "$(realpath "$(command -v dotnet)")")|g" \
+    dotnet_root="$(dirname "$(realpath "$(command -v dotnet)")")"
+    if [ -x "$dotnet_root/dotnet" ]; then
+      launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs 2>/dev/null
+      mkdir -p ~/Library/LaunchAgents ~/Library/Logs/sagefs "$HOME/Library/Application Support/sagefs-daemon"
+      sed -e "s|@HOME@|$HOME|g" -e "s|@DOTNET_ROOT@|$dotnet_root|g" \
         contrib/launchd/io.github.willehrendreich.sagefs.plist \
         > ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
+    else
+      echo "No dotnet found through PATH, so nothing was installed. realpath needs macOS 12.3 or later." >&2
+    fi
 
   The daemon then outlives every agent, terminal and editor, and comes back at
   login.
@@ -18,8 +24,16 @@
   your home directory. @DOTNET_ROOT@ is the folder that holds the real dotnet
   executable, found through PATH with symlinks resolved. The tool's launcher
   finds the runtime through DOTNET_ROOT, and launchd does not read your shell
-  profile, so it is set here. If you move or upgrade .NET to a different folder,
-  run the install again.
+  profile, so it is set here. The install checks that folder really holds
+  dotnet before it writes anything: without dotnet on PATH, or on a macOS older
+  than 12.3 (which has no realpath), it would otherwise write a plist that
+  looks fine and cannot start.
+
+  If you move or upgrade .NET to a different folder, run the install again. It
+  unloads the old agent first, because launchd keeps a loaded agent's settings
+  until it is unloaded, and a second bootstrap fails while the first is loaded.
+  It unloads before it rewrites the plist: rewriting a loaded agent's plist and
+  then unloading it made the next bootstrap fail about one time in four.
 
   ProgramArguments assumes SageFs is installed as a global tool, which puts the
   executable at ~/.dotnet/tools/sagefs.

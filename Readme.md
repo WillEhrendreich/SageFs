@@ -192,15 +192,20 @@ systemctl --user enable --now sagefs
 On a Mac, launchd does the babysitting. launchd expands no variables in a plist, `~` included, so the install fills in your home directory and your .NET folder as it copies the file. Run it from the repo root:
 
 ```bash
-mkdir -p ~/Library/LaunchAgents ~/Library/Logs/sagefs "$HOME/Library/Application Support/sagefs-daemon"
-sed -e "s|@HOME@|$HOME|g" \
-    -e "s|@DOTNET_ROOT@|$(dirname "$(realpath "$(command -v dotnet)")")|g" \
+dotnet_root="$(dirname "$(realpath "$(command -v dotnet)")")"
+if [ -x "$dotnet_root/dotnet" ]; then
+  launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs 2>/dev/null
+  mkdir -p ~/Library/LaunchAgents ~/Library/Logs/sagefs "$HOME/Library/Application Support/sagefs-daemon"
+  sed -e "s|@HOME@|$HOME|g" -e "s|@DOTNET_ROOT@|$dotnet_root|g" \
     contrib/launchd/io.github.willehrendreich.sagefs.plist \
     > ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
+else
+  echo "No dotnet found through PATH, so nothing was installed. realpath needs macOS 12.3 or later." >&2
+fi
 ```
 
-[`contrib/launchd/io.github.willehrendreich.sagefs.plist`](contrib/launchd/io.github.willehrendreich.sagefs.plist) is a user agent, the macOS counterpart of the systemd unit. It runs `~/.dotnet/tools/sagefs --supervised`, starts it at login, and launchd restarts the supervisor if it crashes. `sagefs status` shows it, and its console output goes to `~/Library/Logs/sagefs/`. It sets `DOTNET_ROOT` to the folder that holds the real `dotnet` on your PATH, because launchd doesn't read your shell profile. If you move or upgrade .NET to a different folder, run the install again. The agent runs the daemon from `~/Library/Application Support/sagefs-daemon` for the same reason the Linux unit stays out of your home directory. launchd doesn't create a working directory, which is what the `mkdir` is for.
+[`contrib/launchd/io.github.willehrendreich.sagefs.plist`](contrib/launchd/io.github.willehrendreich.sagefs.plist) is a user agent, the macOS counterpart of the systemd unit. It runs `~/.dotnet/tools/sagefs --supervised`, starts it at login, and launchd restarts the supervisor if it crashes. `sagefs status` shows it, and its console output goes to `~/Library/Logs/sagefs/`. It sets `DOTNET_ROOT` to the folder that holds the real `dotnet` on your PATH, because launchd doesn't read your shell profile. If `dotnet` isn't on your PATH, or your macOS is older than 12.3 and has no `realpath`, the install stops and says so instead of writing a plist that can't start. If you move or upgrade .NET to a different folder, run the install again. It unloads the old agent before it writes the new plist, because launchd keeps a loaded agent's settings until it is unloaded. The agent runs the daemon from `~/Library/Application Support/sagefs-daemon` for the same reason the Linux unit stays out of your home directory. launchd doesn't create a working directory, which is what the `mkdir` is for.
 
 The supervisor starts a new daemon whenever the old one is gone, so `sagefs stop` gets you a fresh one. To stop the service, run `launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs`. To restart it, say after `dotnet tool update --global SageFs`, run `launchctl kickstart -k gui/$(id -u)/io.github.willehrendreich.sagefs`.
 
