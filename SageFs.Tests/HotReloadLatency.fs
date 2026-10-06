@@ -383,31 +383,33 @@ type private Answer = { SentAt: int64; At: int64 }
 /// The clock is the response, not the request: a poll that asks every `pollTight` still stamps the
 /// first answer that carried the new value at the time it arrived, so the interval limits how soon
 /// the answer is asked for and never how late it is stamped. A refused connection is the app being
-/// restarted, and is asked again.
-let private firstResponseSaying (http: HttpClient) (url: string) (expected: string) (ct: CancellationToken) : Task<Answer> =
+/// restarted, and is asked again. What the last response said is written into `lastBody` as the poll
+/// goes, so a failure raised from beside it (the reload feed ending the follow early) can quote the
+/// body the app last served.
+let private firstResponseSaying (lastBody: string ref) (http: HttpClient) (url: string) (expected: string) (ct: CancellationToken) : Task<Answer> =
   task {
     let mutable answer = Moment.NotObserved
     let mutable sentAt = 0L
-    let mutable lastBody = "(no response)"
+    lastBody.Value <- "(no response)"
     while answer = Moment.NotObserved do
       try
         sentAt <- Stopwatch.GetTimestamp()
         let! body = http.GetStringAsync(url, ct)
         let stamp = Stopwatch.GetTimestamp()
-        lastBody <- body.Trim()
-        match lastBody = expected with
+        lastBody.Value <- body.Trim()
+        match lastBody.Value = expected with
         | true -> answer <- Moment.Observed stamp
         | false -> ()
       with
       | :? HttpRequestException -> ()
       | :? OperationCanceledException when ct.IsCancellationRequested ->
-        failwithf "%s never said '%s'. The last answer was '%s'" url expected lastBody
+        failwithf "%s never said '%s'. The last answer was '%s'" url expected lastBody.Value
       | :? TaskCanceledException when not ct.IsCancellationRequested -> ()
       match answer with
       | Moment.NotObserved ->
         try
           do! Task.Delay(TestTimeouts.pollTight, ct)
-        with :? OperationCanceledException -> failwithf "%s never said '%s'. The last answer was '%s'" url expected lastBody
+        with :? OperationCanceledException -> failwithf "%s never said '%s'. The last answer was '%s'" url expected lastBody.Value
       | Moment.Observed _ -> ()
     return { SentAt = sentAt; At = (match answer with | Moment.Observed stamp -> stamp | Moment.NotObserved -> 0L) }
   }
@@ -417,7 +419,9 @@ let private firstResponseSaying (http: HttpClient) (url: string) (expected: stri
 type Following =
   /// A patch: until the verdict reaches `Patched`. A save that ends any other way is a failure here.
   | UntilPatched
-  /// A restart: until the app serves the new value. The frames the stream sent meanwhile are read for the stages.
+  /// A restart: until the app serves the new value. The frames the stream sent meanwhile are read for the
+  /// stages, beside the poll: a verdict the app cannot serve past ends the follow on the frame itself,
+  /// with the feed's words, instead of on the budget.
   | UntilServed
 
 /// One save: the file, the new text, the route that must serve it and what it must say.
@@ -442,15 +446,46 @@ let private writeFile (path: string) (content: string) : Task<unit> =
     | false -> failwithf "%s could not be written within %O" path TestTimeouts.fileLockRetryPatience
   }
 
+/// What one frame of the feed said about the save being followed, as a failure can print it: how far
+/// after the save the frame was read, and the frame itself. Frames the pump filters out say nothing.
+let private feedSaidOf (savedAt: int64) (frame: StampedFrame) : string =
+  let after = (LtStream.elapsed savedAt frame.At).TotalMilliseconds
+  let words =
+    match frame.Frame with
+    | ReloadFrame.Compiling file -> if String.IsNullOrEmpty file then "Compiling" else sprintf "Compiling %s" file
+    | ReloadFrame.Finished case -> sprintf "Finished %s" (SageFs.ReloadCase.token case)
+    | ReloadFrame.WorkerWarming -> "WorkerWarming"
+    | ReloadFrame.WorkerReady -> "WorkerReady"
+    | ReloadFrame.Unreadable detail -> sprintf "Unreadable %s" detail
+    | ReloadFrame.OtherSession | ReloadFrame.NotAReload -> ""
+  match words with
+  | "" -> ""
+  | text -> sprintf "%.0fms %s" after text
+
+/// A verdict the running app cannot serve past: with one of these on the feed the save will never reach
+/// the app (a failed compile and a save that changed nothing both leave it serving the old content), so
+/// the follow can fail on the frame instead of spending the whole budget to time out blind. Every other
+/// verdict still may reach it: a pending patch confirms, a restart warms up a new worker, `NeverEntered`
+/// named what has not run rather than refusing, and `RestartRequired` is what a restart follows on.
+let private cannotReachApp (case: SageFs.ReloadCase) : bool =
+  match case with
+  | SageFs.ReloadCase.CompileFailed | SageFs.ReloadCase.NoEffect -> true
+  | SageFs.ReloadCase.Patched | SageFs.ReloadCase.PatchPending | SageFs.ReloadCase.NeverEntered
+  | SageFs.ReloadCase.Restarted | SageFs.ReloadCase.RestartRequired | SageFs.ReloadCase.KeptLiveState -> false
+
 /// Make one save and follow it. The stamp before the write is the first byte of the save; every other
-/// moment is the arrival of something the daemon or the app sent.
+/// moment is the arrival of something the daemon or the app sent. An `UntilServed` follow reads the feed
+/// while it polls the app, so a verdict the app cannot serve past fails the follow on the frame with the
+/// feed's words beside it, and any failure says what the feed carried on its way out.
 let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Following) (budget: TimeSpan) (save: Save) : Task<SaveStamps> =
   task {
     drain feed
     use cts = new CancellationTokenSource(budget)
     let savedAt = Stopwatch.GetTimestamp()
     do! writeFile save.Path save.Content
-    let served = firstResponseSaying http save.Url save.Expected cts.Token
+    // What the poll last heard from the app, kept beside the follow so a failure either side raises can quote it.
+    let lastBody = ref "(no response)"
+    let served = firstResponseSaying lastBody http save.Url save.Expected cts.Token
     let mutable compilingAt = Moment.NotObserved
     let mutable appliedAt = Moment.NotObserved
     let mutable warmingAt = Moment.NotObserved
@@ -463,7 +498,14 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
     // verdict of the save before it (a `Patched` arriving after the drain) must not be read as this save's.
     let mutable ownCompileStarted = false
     let isOwnFile (file: string) = Path.GetFileName file = Path.GetFileName save.Path
+    // What the feed said about this save, in the order it said it, so a failure can name the verdicts it carried.
+    let said = ResizeArray<string>()
+    let remember (frame: StampedFrame) =
+      match feedSaidOf savedAt frame with
+      | "" -> ()
+      | words -> said.Add words
     let note (frame: StampedFrame) =
+      remember frame
       match frame.Frame, following with
       | ReloadFrame.Compiling file, _ ->
         match isOwnFile file, compilingAt with
@@ -490,14 +532,111 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
         | Moment.Observed _ -> ()
       | ReloadFrame.Unreadable detail, _ -> failwithf "the stream sent a frame that could not be read: %s" detail
       | (ReloadFrame.OtherSession | ReloadFrame.NotAReload), _ -> ()
+    // On a failure, what the reader had not taken is read for the message alone: the stamps are past mattering.
+    let noteForMessage () =
+      let mutable frame = Unchecked.defaultof<StampedFrame>
+      while feed.Frames.TryRead(&frame) do remember frame
+    let feedSaid () =
+      match said.Count with
+      | 0 -> "nothing"
+      | _ -> String.concat ", " said
+    // The failure every `UntilServed` exit shares: what was asked for, what the app last said, and what the
+    // feed carried while it was being asked. `reason` says which of the two gave up first.
+    let failFollow (reason: string) =
+      failwithf "%s never said '%s'. The last answer was '%s'. The reload feed said: %s. %s"
+        save.Url save.Expected lastBody.Value (feedSaid ()) reason
+    // What ended the feed itself, when the feed ended the follow before the budget could.
+    let mutable feedEnded : string option = None
     try
       match following with
       | Following.UntilPatched ->
         while confirmedAt = Moment.NotObserved do
           let! frame = feed.Frames.ReadAsync(cts.Token)
           note frame
-      | Following.UntilServed -> ()
-      let! answer = served
+      | Following.UntilServed ->
+        // The feed read beside the poll: frames keep stamping the stages as they arrive (each carries the
+        // moment the pump read it, so noting them early changes no stamp), and a verdict the app cannot
+        // serve past ends the follow on the frame instead of on the budget.
+        let reading =
+          task {
+            let mutable ending = None
+            let mutable openStream = true
+            while openStream && Option.isNone ending do
+              try
+                let! frame = feed.Frames.ReadAsync(cts.Token)
+                note frame
+                match frame.Frame with
+                | ReloadFrame.Finished case when cannotReachApp case -> ending <- Some (SageFs.ReloadCase.token case)
+                | _ -> ()
+              with :? ChannelClosedException ->
+                // The stream ended mid-save: nothing more will be said, and the poll may still succeed on
+                // its own — the drain that followed a success never threw at a closed channel either.
+                openStream <- false
+            return ending
+          }
+        let! first = Task.WhenAny(served :> Task, reading :> Task)
+        let pollEndedFirst = obj.ReferenceEquals(first, served)
+        // Whichever side ended first, the other stops with the token, and the reader's outcome is read once
+        // (a parked reader throws the token's cancellation here; one that had ended answers at once).
+        cts.Cancel()
+        let! readingOutcome =
+          task {
+            try
+              let! ending = reading
+              return Result.Ok ending
+            with ex ->
+              return Result.Error ex
+          }
+        // Stop the poller, take what the feed had queued, and fail with both sides' words.
+        let failWith (reason: string) =
+          task {
+            try
+              let! _ = served
+              ()
+            with _ -> ()
+            noteForMessage ()
+            failFollow reason
+          }
+        match readingOutcome with
+        | Result.Ok (Some token) ->
+          let why = sprintf "the reload ended as %s, so this save cannot reach the app" token
+          match pollEndedFirst with
+          // The poll's own failure (or a success the verdict cannot undo) leads; its message carries the verdict.
+          | true -> feedEnded <- Some why
+          | false -> do! failWith why
+        | Result.Ok None ->
+          feedEnded <- Some "the reload feed's stream closed before a verdict"
+        | Result.Error ex ->
+          match ex with
+          // The token stopped the reader (the budget, or the cancel just made): the poll's own outcome leads.
+          | :? OperationCanceledException -> ()
+          | _ ->
+            match pollEndedFirst, served.IsFaulted with
+            // An unreadable frame: the drain after a success failed on it before, and it fails the follow now.
+            | false, _ -> do! failWith ex.Message
+            | true, true -> feedEnded <- Some ex.Message
+            | true, false -> raise ex
+      let mutable answer = Unchecked.defaultof<Answer>
+      try
+        let! a = served
+        answer <- a
+      with ex ->
+        match following with
+        | Following.UntilPatched -> raise ex
+        | Following.UntilServed ->
+          noteForMessage ()
+          // No verdict ended the feed: say where it stopped, not only that the app was silent. `appliedAt`
+          // is this save's own verdict (the `note` predicate above), so it tells a feed that went quiet
+          // after this save's compile from one that carried a verdict the app never acted on.
+          let why =
+            match feedEnded with
+            | Some reason -> reason
+            | None ->
+              match appliedAt, ownCompileStarted with
+              | Moment.NotObserved, true -> sprintf "the feed started this save's compile and then carried no verdict for it within %O" budget
+              | Moment.NotObserved, false -> sprintf "the feed carried no verdict for this save within %O" budget
+              | Moment.Observed _, _ -> sprintf "the app did not serve it within %O" budget
+          failFollow why
       // What the stream sent while the app was being restarted has arrived by now: the stamps are kept as read.
       let mutable frame = Unchecked.defaultof<StampedFrame>
       while feed.Frames.TryRead(&frame) do note frame
@@ -804,7 +943,7 @@ let private measureRunAppSavesOn (seriesDaemon: SeriesDaemon) : Task<Sample list
             | None -> failwithf "run_app reported no url: %s" runBody
           do! awaitConnected feed
           use first = new CancellationTokenSource(TestTimeouts.appOutputAppears)
-          let! _ = firstResponseSaying http appUrl restartShipped first.Token
+          let! _ = firstResponseSaying (ref "(no response)") http appUrl restartShipped first.Token
           let stamps = ResizeArray<SaveStamps>()
           for i in 1 .. warmupEdits + samplesPerPath do
             let edited = sprintf "%s v%03d" restartShipped i
