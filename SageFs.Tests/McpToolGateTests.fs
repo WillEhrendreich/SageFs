@@ -322,6 +322,33 @@ let enforcementTests =
       | Ok _ -> failtest "send_fsharp_code must be rejected while warming up"
     }
 
+    // ── No live request dropped during a swap ────────────────────────────
+    // The session is starting, so its replacement worker is seconds away. The gate used to answer from
+    // that instant state alone, which refused a code tool the moment a swap began — "running affected
+    // tests or discovery still drops a request that finds no worker". It now parks on the manager's own
+    // AwaitReady, the same wait get_session_status gives, and admits on the other side.
+
+    testTask "a code tool is admitted mid-swap when the wait delivers Ready, instead of being dropped" {
+      let ctx0, wd = mkContextForSession WorkerProtocol.SessionStatus.Starting
+      let ops = { ctx0.SessionOps with AwaitReady = fun _ _ -> Task.FromResult(Result.Ok ()) }
+      let ctx = { ctx0 with SessionOps = ops }
+      let! result = SageFs.McpTools.enforceToolCallGate ctx "mcp" None (Some wd) "run_tests"
+      Expect.isOk "run_tests must wait for the replacement rather than be refused for the seconds it takes" result
+    }
+
+    testTask "the wait is actually made: a session that never becomes Ready still cannot run a code tool" {
+      // The negative control for the test above. Without it, a gate that admitted everything would pass
+      // "admitted mid-swap" while never waiting at all — the swap would be incidental rather than waited out.
+      let ctx0, wd = mkContextForSession WorkerProtocol.SessionStatus.Starting
+      let ops = { ctx0.SessionOps with AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "the replacement never came")) }
+      let ctx = { ctx0 with SessionOps = ops }
+      let! result = SageFs.McpTools.enforceToolCallGate ctx "mcp" None (Some wd) "send_fsharp_code"
+      match result with
+      | Error msg ->
+        Expect.stringContains "the refusal still names the tool" "send_fsharp_code" msg
+      | Ok _ -> failtest "a session that never reached Ready must not admit a code tool"
+    }
+
     testTask "send_fsharp_code allowed when session is Ready" {
       let! result = enforceWithSession WorkerProtocol.SessionStatus.Ready "send_fsharp_code"
       Expect.isOk "send_fsharp_code must pass in Ready" result

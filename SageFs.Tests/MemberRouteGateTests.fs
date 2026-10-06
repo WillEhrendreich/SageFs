@@ -22,6 +22,7 @@ open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.McpSessionRouting
 open SageFs.Capability
 open SageFs.Features
 open SageFs.McpTools

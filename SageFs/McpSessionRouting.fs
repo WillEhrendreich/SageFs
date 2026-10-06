@@ -160,3 +160,54 @@ module McpSessionRouting =
     match WorkerProtocol.SessionId.validate sid with
     | Ok id -> id
     | Error e -> failwithf "Invalid resolved session ID '%s': %s" sid e
+
+  /// Typed outcome of resolving which session a tool call should target.
+  /// Guidance text is a pure function of this union: a session that exists in
+  /// the registry is never reported as gone. `Gone` is produced only when the
+  /// session is genuinely absent (never created, or explicitly stopped).
+  ///
+  /// Moved here from Mcp.fs, with its two pure companions below, for the reason
+  /// this file's own header gives: no `McpContext`, no IO, and Mcp.fs sits at
+  /// its line budget where every line it does not carry is headroom for a fix.
+  type SessionResolution =
+    | Routable of sessionId: string
+    | WarmingUp of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
+    | Unroutable of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
+    | FaultedSession of sessionId: string * cause: FaultCause
+    | Gone of message: string
+
+  /// Pure classification: decide the resolution from registry knowledge.
+  /// INVARIANT: `Gone` is produced only when the session is absent from the
+  /// registry; an existing session is always Routable, WarmingUp, Unroutable,
+  /// or FaultedSession — never Gone.
+  let classifySessionAvailability
+    (info: WorkerProtocol.SessionInfo option)
+    (proxyAvailable: bool)
+    : SessionResolution =
+    match info with
+    | Some i when proxyAvailable -> Routable (WorkerProtocol.SessionId.value i.Id)
+    | Some i ->
+      match i.Status with
+      | WorkerProtocol.SessionLifecycleStatus.Starting _
+      | WorkerProtocol.SessionLifecycleStatus.Restarting _ ->
+        WarmingUp (WorkerProtocol.SessionId.value i.Id, i.Status)
+      | WorkerProtocol.SessionLifecycleStatus.Faulted _
+      | WorkerProtocol.SessionLifecycleStatus.Stopped ->
+        FaultedSession (WorkerProtocol.SessionId.value i.Id, FaultCause.ofStatus i.Status)
+      | _ ->
+        Unroutable (WorkerProtocol.SessionId.value i.Id, i.Status)
+    | None ->
+      Gone "Session is no longer running. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session to start a new one."
+
+  /// Pure guidance: the agent-facing message for a resolution.
+  /// INVARIANT: "create_session" and "no longer running" appear only in the
+  /// Gone case — an existing session is never presented as missing.
+  let formatSessionResolution = function
+    | Routable _ -> ""
+    | WarmingUp (sid, status) ->
+      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
+    | Unroutable (sid, status) ->
+      sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_session_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
+    | FaultedSession (sid, cause) ->
+      sprintf "Session '%s' is faulted. Why: %s\nRun reset_fsi_session or hard_reset_fsi_session to recover." sid (FaultCause.describe cause)
+    | Gone msg -> msg

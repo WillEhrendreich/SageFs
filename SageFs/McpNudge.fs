@@ -10,6 +10,7 @@ open SageFs.McpTools
 open SageFs.Features.Tweak
 open SageFs.Features.Tweak.LiteralEdit
 open SageFs.Features.Tweak.Nudge
+open SageFs.McpSessionRouting
 
 /// The MCP side of `nudge_value`: which files the call's session owns, how a
 /// result is told to the caller, and the production wiring of the nudge door

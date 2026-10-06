@@ -8,6 +8,7 @@ open Microsoft.Extensions.Logging
 open SageFs.AppState
 open SageFs.McpTools
 open SageFs.Utils
+open SageFs.McpSessionRouting
 open System.Text.Json
 open System.Text.Json.Nodes
 

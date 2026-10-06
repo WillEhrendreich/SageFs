@@ -2,6 +2,7 @@ namespace SageFs
 
 open System
 open System.Text.Json
+open SageFs.McpSessionRouting
 
 /// Bridges the `--jupyter` kernel process to a running SageFs daemon over
 /// HTTP — the exact `/exec` contract every other client (dashboard, VS Code,

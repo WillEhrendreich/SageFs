@@ -366,53 +366,6 @@ module McpTools =
     : Task<Result<WorkerProtocol.WorkerResponse, RouteError>> =
     routeToSessionWithin ctx System.Threading.CancellationToken.None sessionId msg
 
-  /// Typed outcome of resolving which session a tool call should target.
-  /// Guidance text is a pure function of this union: a session that exists in
-  /// the registry is never reported as gone. `Gone` is produced only when the
-  /// session is genuinely absent (never created, or explicitly stopped).
-  type SessionResolution =
-    | Routable of sessionId: string
-    | WarmingUp of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
-    | Unroutable of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
-    | FaultedSession of sessionId: string * cause: FaultCause
-    | Gone of message: string
-
-  /// Pure classification: decide the resolution from registry knowledge.
-  /// INVARIANT: `Gone` is produced only when the session is absent from the
-  /// registry; an existing session is always Routable, WarmingUp, Unroutable,
-  /// or FaultedSession — never Gone.
-  let classifySessionAvailability
-    (info: WorkerProtocol.SessionInfo option)
-    (proxyAvailable: bool)
-    : SessionResolution =
-    match info with
-    | Some i when proxyAvailable -> Routable (WorkerProtocol.SessionId.value i.Id)
-    | Some i ->
-      match i.Status with
-      | WorkerProtocol.SessionLifecycleStatus.Starting _
-      | WorkerProtocol.SessionLifecycleStatus.Restarting _ ->
-        WarmingUp (WorkerProtocol.SessionId.value i.Id, i.Status)
-      | WorkerProtocol.SessionLifecycleStatus.Faulted _
-      | WorkerProtocol.SessionLifecycleStatus.Stopped ->
-        FaultedSession (WorkerProtocol.SessionId.value i.Id, FaultCause.ofStatus i.Status)
-      | _ ->
-        Unroutable (WorkerProtocol.SessionId.value i.Id, i.Status)
-    | None ->
-      Gone "Session is no longer running. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session to start a new one."
-
-  /// Pure guidance: the agent-facing message for a resolution.
-  /// INVARIANT: "create_session" and "no longer running" appear only in the
-  /// Gone case — an existing session is never presented as missing.
-  let formatSessionResolution = function
-    | Routable _ -> ""
-    | WarmingUp (sid, status) ->
-      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
-    | Unroutable (sid, status) ->
-      sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_session_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
-    | FaultedSession (sid, cause) ->
-      sprintf "Session '%s' is faulted. Why: %s\nRun reset_fsi_session or hard_reset_fsi_session to recover." sid (FaultCause.describe cause)
-    | Gone msg -> msg
-
   /// Route to the active session or the specified session.
   /// When no agent mapping exists, resolves by the caller's working directory.
   /// Returns a typed SessionResolution — never a lying string.
@@ -724,23 +677,56 @@ module McpTools =
         return GateProbe.TimedOut bound
     }
 
-  /// Check tool availability against the session's live state.
-  let requireTool (ctx: McpContext) (sessionId: string) (toolName: string) (bound: TimeSpan) : Task<Result<unit, string>> =
+  /// Check tool availability against the session's live state. An unanswerable probe, or a state saying a
+  /// replacement is on its way, PARKS on the manager's AwaitReady (the wait get_session_status gives, for a
+  /// rebuild's own bound) before anything is refused — refusing drops a live request for a worker seconds away.
+  /// `AwaitReady` Ok IS Ready, so the post-wait state comes from that answer and is never re-probed: the worker's
+  /// status LAGS the manager's, and re-probing would refuse on the lag rather than the fact. One wait only, and one
+  /// that does not deliver reports the refusal or timeout the caller had without it, tool named exactly as before.
+  let private requireToolFor (ctx: McpContext) (sessionId: string) (toolName: string) (bound: TimeSpan) : Task<Result<unit, string>> =
     task {
       let! probe = probeSessionState ctx sessionId bound
-      return
-        match probe with
-        | GateProbe.Answered state ->
+      match probe with
+      | GateProbe.Answered state when state = SessionState.WarmingUp ->
+        match! ctx.SessionOps.AwaitReady (toSessionId sessionId) Timeouts.rebuildReadyWait with
+        | Result.Ok () ->
+          return
+            Affordances.checkToolAvailability SessionState.Ready toolName
+            |> Result.mapError SageFsError.describeForAgent
+        // The wait did not deliver Ready. Judge the state the probe already had, so a refusal still names the tool
+        // and the state exactly as it did before this wait existed — parking widens what a caller can DO, never
+        // narrows what it is TOLD.
+        | Result.Error _ ->
+          return
+            Affordances.checkToolAvailability state toolName
+            |> Result.mapError SageFsError.describeForAgent
+      | GateProbe.Answered state ->
+        return
           Affordances.checkToolAvailability state toolName
           |> Result.mapError SageFsError.describeForAgent
-        // The tools a crashed session still offers (a reset) pass; every other is refused with the crash, not with
-        // the generic wait-for-Ready advice, which would be false.
-        | GateProbe.HostCrashed crash ->
+      // The tools a crashed session still offers (a reset) pass; every other is refused with the crash, not with
+      // the generic wait-for-Ready advice, which would be false.
+      | GateProbe.HostCrashed crash ->
+        return
           Affordances.checkToolAvailability SessionState.Faulted toolName
           |> Result.mapError (fun _ -> SageFsError.describeForAgent (SageFsError.FsiHostCrashed crash))
-        | GateProbe.TimedOut waited ->
-          Error (SageFsError.describeForAgent (SageFsError.WorkerTimeout (sessionId, "status check", waited.TotalSeconds)))
+      | GateProbe.TimedOut waited ->
+        // No worker answered inside the bound — that is what a swap looks like from out here. Wait for the
+        // replacement rather than telling the caller its request ran out of time.
+        match! ctx.SessionOps.AwaitReady (toSessionId sessionId) Timeouts.rebuildReadyWait with
+        | Result.Ok () ->
+          return
+            Affordances.checkToolAvailability SessionState.Ready toolName
+            |> Result.mapError SageFsError.describeForAgent
+        // The wait itself failed: report the timeout this caller would have got before the wait existed, so the
+        // message names what actually ran out of time rather than a session error the caller cannot act on.
+        | Result.Error _ ->
+          return Error (SageFsError.describeForAgent (SageFsError.WorkerTimeout (sessionId, "status check", waited.TotalSeconds)))
     }
+
+  /// Check tool availability against the session's live state.
+  let requireTool (ctx: McpContext) (sessionId: string) (toolName: string) (bound: TimeSpan) : Task<Result<unit, string>> =
+    requireToolFor ctx sessionId toolName bound
 
   /// THE AUTHORITY GATE over the WHOLE tool surface, resolved against the caller's BOUND identity
   /// (`memberIdFor agent`, never a self-declared role argument) and the owner's published frame.
@@ -835,7 +821,20 @@ module McpTools =
           match resolution with
           // Worker-authoritative state for the routable session.
           | Routable sid -> requireTool ctx sid toolName probeBound
-          | WarmingUp (_, status) | Unroutable (_, status) ->
+          // Mid-swap, and the whole of "discovery still drops a request that finds no worker": the session exists,
+          // it is merely not serving yet. Wait for the replacement, then judge the state the wait released. If the
+          // wait does not deliver, fall through to routing's own verdict — widening what a caller can DO without
+          // changing what a refusal SAYS.
+          | WarmingUp (sid, status) ->
+            task {
+              match! ctx.SessionOps.AwaitReady (toSessionId sid) Timeouts.rebuildReadyWait with
+              | Result.Ok () -> return allowedIn SessionState.Ready
+              // The wait did not deliver Ready: fall back to the state routing already had, so the refusal
+              // still names the tool and the state exactly as it did before this wait existed.
+              | Result.Error _ ->
+                return allowedIn (WorkerProtocol.SessionLifecycleStatus.toSessionState status)
+            }
+          | Unroutable (_, status) ->
             Task.FromResult (allowedIn (WorkerProtocol.SessionLifecycleStatus.toSessionState status))
           | FaultedSession _ -> Task.FromResult (allowedIn SessionState.Faulted)
           // No session reachable: code tools are refused with the routing reason, not "wait for Ready".

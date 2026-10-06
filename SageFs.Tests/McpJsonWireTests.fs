@@ -13,6 +13,7 @@ open System.Text.Json
 open System.Text.Json.Nodes
 open System.Threading.Tasks
 open Expecto
+open SageFs.McpSessionRouting
 open Expecto.Flip
 open SageFs
 open SageFs.McpTools
