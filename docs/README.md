@@ -31,6 +31,7 @@ Everything else is reference material you can come back to when you need it.
 - **[SSE Events](sse-events.md)**: wire format for the events editors consume
 - **[Binary Format Spec](binary-format-spec.md)**: the `.sagefs` and `.sagetc` persistence formats
 - **[Binary Format Benchmarks](binary-format-benchmarks.md)**: serialization performance data
+- **[The REPL Loop, Measured](repl-loop-benchmarks.md)**: what a check in a warm session costs against a build plus filtered tests, across three projects
 - **[System Architecture](architecture.md)**: daemon, workers, dashboard, and the MCP surface
 - **[Configuration](configuration.md)**: every `SAGEFS_*` environment variable, with its default and what it is for
 - **[Troubleshooting](TROUBLESHOOTING.md)**: first-run issues, runtime problems, where the logs are, what Degraded means, platform fixes
