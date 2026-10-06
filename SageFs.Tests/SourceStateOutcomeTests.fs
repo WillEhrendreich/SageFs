@@ -149,9 +149,24 @@ let private rebuildRows (client: McpClient) (httpClient: Net.Http.HttpClient) : 
   task {
     let! reset = callText client "hard_reset_fsi_session" [ "rebuild", box true; "working_directory", box fixtureDir ]
     reset |> Expect.isNotEmpty "the reset answers"
-    let! during = sessionStatus client 0
-    during.GetProperty("sourceState").GetProperty("state").GetString()
-    |> Expect.equal (sprintf "while the rebuild runs the source is Rebuilding. Status: %s" (during.ToString())) "Rebuilding"
+    // The reset answers when the rebuild is REQUESTED; how fast the record appears behind that answer is the
+    // daemon's. Reading once here raced it under load — the gate's own failure read `Stale` while the rebuild
+    // had not registered yet — so wait for the state under test instead of assuming its first instant. The claim
+    // is "Rebuilding WHILE it runs", which is a state to observe, not a moment to hit; the build itself takes far
+    // longer than the read that follows, so the rows below still see it mid-flight.
+    let duringStatus = ref ""
+    let! rebuilding =
+      SageFs.Tests.TestInfrastructure.waitForAsync (int TestTimeouts.workerSessionReady.TotalMilliseconds) (fun () ->
+        task {
+          let! status = sessionStatus client 0
+          duringStatus.Value <- status.ToString()
+          match status.TryGetProperty "sourceState" with
+          | true, source when source.ValueKind = JsonValueKind.Object ->
+            return source.GetProperty("state").GetString() = "Rebuilding"
+          | _ -> return false
+        })
+    rebuilding
+    |> Expect.isTrue (sprintf "while the rebuild runs the source is Rebuilding. Last status: %s" duringStatus.Value)
     // A run asked for while the rebuild runs says so, however it passes: the old worker is still serving the old build.
     let! mid, midText = runTests client
     stateOf mid |> Expect.equal (sprintf "the receipt says Rebuilding. Text: %s" midText) "Rebuilding"

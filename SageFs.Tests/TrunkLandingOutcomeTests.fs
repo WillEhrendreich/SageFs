@@ -181,8 +181,15 @@ let private connect (port: int) : Task<McpClient> =
 let private callToolWithin (budget: TimeSpan) (client: McpClient) (name: string) (args: (string * obj) list) : Task<string> =
   task {
     use cts = new CancellationTokenSource(budget)
-    let! result = client.CallToolAsync(name, readOnlyDict args, null, null, cts.Token)
-    return textOf result
+    try
+      let! result = client.CallToolAsync(name, readOnlyDict args, null, null, cts.Token)
+      return textOf result
+    with
+    // Our own budget firing. The SDK's cancellation is a bare TaskCanceledException that names neither the tool
+    // nor the budget, and that is what stopped the v0.6.905 release gate with nothing to act on. Only a cancel
+    // THIS source caused is converted; anything else still propagates.
+    | :? OperationCanceledException when cts.IsCancellationRequested ->
+      return failtestf "tool '%s' did not answer within %.0fs (test budget)" name budget.TotalSeconds
   }
 
 let private callTool = callToolWithin TestTimeouts.toolCall
@@ -336,8 +343,11 @@ let private land (w: World) (agent: Agent) (relPath: string) (startPoint: string
     let branch = sprintf "%s-%s" agent.Name (Guid.NewGuid().ToString("N").Substring(0, 8))
     let! _ = git agent.Worktree [ "checkout"; "--quiet"; "-b"; branch; startPoint ]
     let! sha = editAndCommit agent.Worktree relPath edits message
+    // A landing belongs to the patient class by definition: it rebases onto the integration head, runs the
+    // affected tests, and only then applies — its duration is the gate's, not the caller's. On the short budget
+    // it died under load with a bare TaskCanceledException, which is what blocked the v0.6.905 release.
     let! queued =
-      callTool agent.Client "request_landing"
+      callToolPatient agent.Client "request_landing"
         [ "agentName", box agent.Name; "claims", box (sprintf "%s:%d" claimId fence); "commits", box sha; "statement", box message ]
     return landingIdOf queued
   }
