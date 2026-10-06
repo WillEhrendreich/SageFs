@@ -60,6 +60,8 @@ Only the client directory uses the asset build path. Host changes use the existi
 
 Use source roots only for browser code. Shared browser/server sources need a coordinated rebuild strategy and are outside this prototype.
 
+Use the optional `excludedSourceRoots` array for generated source directories inside a source root. Excluded files trigger neither a browser build nor CLR reload. Omitted or null exclusions preserve the default behavior.
+
 The prototype watches `.fs`, `.fsx`, and `.fsproj` files. After a `wsconfig.json`, package, or bundler configuration change, run the build manually.
 
 The configuration is read when the session starts. Restart the session after a configuration change.

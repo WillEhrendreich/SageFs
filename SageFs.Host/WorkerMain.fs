@@ -1806,7 +1806,7 @@ let run (sessionId: string) (port: int) = async {
             return! restartOrFallBack fileName first rest }
       /// The save pipeline for one change. The part that has to happen the moment the change arrives (counting it, and
       /// cancelling an older eval of the same file) happens when this is called; the returned async is the rest.
-      let beginClrChange (change: FileWatcher.FileChange) : Async<unit> =
+      let beginClrChange (change: FileWatcher.FileChange) (action: FileWatcher.FileChangeAction) : Async<unit> =
         let ext = IO.Path.GetExtension(change.FilePath)
         let kind = match change.Kind with
                    | FileWatcher.FileChangeKind.Changed -> "Modified"
@@ -1871,7 +1871,7 @@ let run (sessionId: string) (port: int) = async {
           try
             try
               ct.ThrowIfCancellationRequested()
-              match FileWatcher.fileChangeAction change with
+              match action with
               | FileWatcher.FileChangeAction.Reload filePath ->
                 match HotReloadState.isWatched filePath !result.HotReloadStateRef with
                 | false ->
@@ -2106,7 +2106,8 @@ let run (sessionId: string) (port: int) = async {
           run filePath |> Async.Ignore
         | BrowserAssetReload.SaveRoute.BrowserAssets _, None ->
           invalidOp "Browser asset route has no build runner."
-        | BrowserAssetReload.SaveRoute.Existing _, _ -> beginClrChange change
+        | BrowserAssetReload.SaveRoute.Existing FileWatcher.FileChangeAction.Ignore, _ -> async.Zero()
+        | BrowserAssetReload.SaveRoute.Existing action, _ -> beginClrChange change action
       // A save is one pipeline whoever hands it in. The watcher hands it saves it saw, and a landing hands it the files it moved.
       // A worker told to take its saves from landings only drops what the watcher saw: the daemon wrote those files itself and
       // is about to hand them over, and the pipeline would otherwise run the same save twice.

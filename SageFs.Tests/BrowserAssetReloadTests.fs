@@ -16,6 +16,14 @@ let configured () =
   | Ok config -> config
   | Error error -> failtestf "Fixture configuration failed: %A" error
 
+let configurationWithExclusions exclusions =
+  configuration.TrimEnd('}') + ",\"excludedSourceRoots\":" + exclusions + "}"
+
+let configuredWithExclusions exclusions =
+  match BrowserAssetReload.parseJson baseDirectory (configurationWithExclusions exclusions) with
+  | Ok config -> config
+  | Error error -> failtestf "Fixture exclusions failed: %A" error
+
 let change kind path : FileWatcher.FileChange =
   { FilePath = Path.Combine(baseDirectory, path)
     Kind = kind
@@ -34,6 +42,40 @@ let tests =
       |> Expect.isError "Malformed JSON must fail at the configuration boundary."
       BrowserAssetReload.parseJson baseDirectory "null"
       |> Expect.isError "Null is not an enabled pipeline."
+
+    testCase "legacy and null exclusion JSON preserve normal sources" <| fun () ->
+      for config in [ configured (); configuredWithExclusions "null"; configuredWithExclusions "[]" ] do
+        BrowserAssets.excludedSourceRoots config
+        |> Expect.isEmpty "Missing or null exclusions must default to an empty list."
+        let saved = change FileWatcher.FileChangeKind.Changed "Client/Client.fs"
+        BrowserAssetReload.route (Some config) saved
+        |> Expect.equal "Legacy configuration must keep its browser source route."
+          (BrowserAssetReload.SaveRoute.BrowserAssets saved.FilePath)
+
+    testCase "excluded generated sources are ignored for each event kind" <| fun () ->
+      let config = Some (configuredWithExclusions "[\"Client/generated\"]")
+      for kind in [ FileWatcher.FileChangeKind.Changed; FileWatcher.FileChangeKind.Created; FileWatcher.FileChangeKind.Deleted; FileWatcher.FileChangeKind.Renamed ] do
+        for path in [ "Client/generated/Client.fs"; "Client/generated/deep/Client.fs"; "Client/generated/Client.fsproj" ] do
+          BrowserAssetReload.route config (change kind path)
+          |> Expect.equal "An excluded source must schedule neither an asset build nor a CLR reload."
+            (BrowserAssetReload.SaveRoute.Existing FileWatcher.FileChangeAction.Ignore)
+
+    testCase "exclusion boundaries preserve included sources and unrelated host routes" <| fun () ->
+      let config = Some (configuredWithExclusions "[\"Client/generated\",\"Host/generated\"]")
+      for path in [ "Client/Client.fs"; "Client/generated-other/Client.fs" ] do
+        let saved = change FileWatcher.FileChangeKind.Changed path
+        BrowserAssetReload.route config saved
+        |> Expect.equal "Exclusions apply to directory boundaries."
+          (BrowserAssetReload.SaveRoute.BrowserAssets saved.FilePath)
+      let host = change FileWatcher.FileChangeKind.Changed "Host/generated/Program.fs"
+      BrowserAssetReload.route config host
+      |> Expect.equal "An exclusion must not change files outside the configured browser source roots."
+        (BrowserAssetReload.SaveRoute.Existing (FileWatcher.FileChangeAction.Reload host.FilePath))
+
+    testCase "invalid exclusion paths are refused during JSON configuration loading" <| fun () ->
+      for exclusions in [ "[\"\"]"; "[null]"; "[\"Client/\\u0000generated\"]" ] do
+        BrowserAssetReload.parseJson baseDirectory (configurationWithExclusions exclusions)
+        |> Expect.isError "Invalid exclusion paths must fail before watchers start."
 
     testCase "client sources use the asset route for each file event kind" <| fun () ->
       let config = Some (configured ())

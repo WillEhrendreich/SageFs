@@ -17,6 +17,7 @@ let rawConfig : RawConfig =
         Arguments = [ "build"; "Client.fsproj" ]
         WorkingDirectory = "." }
     SourceRoots = [ "src" ]
+    ExcludedSourceRoots = None
     AssetRoots = [ { Directory = "wwwroot"; Pattern = "*.js" } ] }
 
 let config () =
@@ -83,6 +84,39 @@ let browserAssetsTests =
         matchesSource parsed (Path.Combine(Array.ofList (configRoot :: segments)))
         |> Expect.isFalse "A path outside the source boundary must not cause a build."
       sourceRoots parsed |> Expect.equal "Watchers need the parsed roots." [ Path.Combine(configRoot, "src") ]
+
+    testCase "configured exclusions reject generated sources without excluding boundary siblings" <| fun () ->
+      let raw = { rawConfig with ExcludedSourceRoots = Some [ "src/./generated/../generated" ] }
+      let parsed =
+        match parse configRoot raw with
+        | Ok config -> config
+        | Error errors -> failtestf "The exclusion configuration is invalid: %A" errors
+      excludedSourceRoots parsed
+      |> Expect.equal "Exclusion roots must be normalized at the input boundary." [ Path.Combine(configRoot, "src", "generated") ]
+      for relative in [ "src/generated/Client.fs"; "src/generated/deep/Client.fs" ] do
+        matchesSource parsed (Path.Combine(configRoot, relative))
+        |> Expect.isFalse "Generated source copies must not schedule an asset build."
+      for relative in [ "src/Client.fs"; "src/generated-other/Client.fs" ] do
+        matchesSource parsed (Path.Combine(configRoot, relative))
+        |> Expect.isTrue "An exclusion must not remove ordinary sources or boundary siblings."
+
+    testCase "missing and null exclusion lists preserve source matching" <| fun () ->
+      for exclusions in [ None; Some []; Some (Unchecked.defaultof<string list>) ] do
+        let raw = { rawConfig with ExcludedSourceRoots = exclusions }
+        match parse configRoot raw with
+        | Ok parsed ->
+          excludedSourceRoots parsed |> Expect.isEmpty "An omitted exclusion list must default to empty."
+          matchesSource parsed (Path.Combine(configRoot, "src", "Client.fs"))
+          |> Expect.isTrue "Existing configuration must continue to match its sources."
+        | Error errors -> failtestf "An optional exclusion list was refused: %A" errors
+
+    testCase "invalid exclusion paths fail before source routing" <| fun () ->
+      for path, expected in
+        [ "", ConfigError.Required "excludedSourceRoots"
+          null, ConfigError.Required "excludedSourceRoots"
+          "src/\000generated", ConfigError.InvalidPath ("excludedSourceRoots", "src/\000generated") ] do
+        parse configRoot { rawConfig with ExcludedSourceRoots = Some [ path ] }
+        |> Expect.equal "Each configured exclusion must be a valid path." (Error [ expected ])
 
     testCase "content hashing detects edits additions removals and renames" <| fun () ->
       let variants =

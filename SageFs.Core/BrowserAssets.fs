@@ -27,6 +27,7 @@ module BrowserAssets =
   type RawConfig = {
     Build: RawBuildCommand
     SourceRoots: string list
+    ExcludedSourceRoots: string list option
     AssetRoots: RawAssetRoot list
   }
 
@@ -51,6 +52,7 @@ module BrowserAssets =
   type Config = private {
     Command: BuildCommand
     Sources: string list
+    ExcludedSources: string list
     Assets: AssetRoot list
   }
 
@@ -125,6 +127,11 @@ module BrowserAssets =
         if isNull (box raw.SourceRoots) || List.isEmpty raw.SourceRoots then
           Error [ ConfigError.Required "sourceRoots" ]
         else raw.SourceRoots |> List.map (parsePath baseDirectory "sourceRoots") |> collectResults
+      let excludedRoots =
+        match raw.ExcludedSourceRoots with
+        | None -> Ok []
+        | Some paths when isNull (box paths) -> Ok []
+        | Some paths -> paths |> List.map (parsePath baseDirectory "excludedSourceRoots") |> collectResults
       let assets =
         if isNull (box raw.AssetRoots) || List.isEmpty raw.AssetRoots then
           Error [ ConfigError.Required "assetRoots" ]
@@ -138,18 +145,20 @@ module BrowserAssets =
               parsePath baseDirectory "assetRoots.directory" root.Directory
               |> Result.map (fun directory -> { Directory = directory; Pattern = root.Pattern }: AssetRoot))
           |> collectResults
-      match parsePath baseDirectory "build.workingDirectory" raw.Build.WorkingDirectory, roots, assets, invalidArguments with
-      | Ok workingDirectory, Ok sources, Ok assetRoots, [] ->
+      match parsePath baseDirectory "build.workingDirectory" raw.Build.WorkingDirectory, roots, excludedRoots, assets, invalidArguments with
+      | Ok workingDirectory, Ok sources, Ok excludedSources, Ok assetRoots, [] ->
         Ok {
           Command = { Executable = raw.Build.Executable; Arguments = raw.Build.Arguments; WorkingDirectory = workingDirectory }
           Sources = List.distinct sources
+          ExcludedSources = List.distinct excludedSources
           Assets = List.distinct assetRoots
         }
-      | workingDirectory, sources, assetRoots, arguments ->
+      | workingDirectory, sources, excludedSources, assetRoots, arguments ->
         let errors result = match result with Ok _ -> [] | Error reasons -> reasons
-        Error (errors workingDirectory @ errors sources @ errors assetRoots @ arguments)
+        Error (errors workingDirectory @ errors sources @ errors excludedSources @ errors assetRoots @ arguments)
 
   let sourceRoots config = config.Sources
+  let excludedSourceRoots config = config.ExcludedSources
   let buildCommand config = config.Command
   let commandExecutable (command: BuildCommand) = command.Executable
   let commandArguments (command: BuildCommand) = command.Arguments
@@ -158,6 +167,13 @@ module BrowserAssets =
   let containsPath root (path: string) =
     path.Equals(root, pathComparison)
     || path.StartsWith(Path.TrimEndingDirectorySeparator root + string Path.DirectorySeparatorChar, pathComparison)
+
+  let isExcludedSource config path =
+    match parsePath config.Command.WorkingDirectory "sourceFile" path with
+    | Error _ -> false
+    | Ok fullPath ->
+      config.Sources |> List.exists (fun root -> containsPath root fullPath)
+      && config.ExcludedSources |> List.exists (fun root -> containsPath root fullPath)
 
   let matchesSource config path =
     match parsePath config.Command.WorkingDirectory "sourceFile" path with
@@ -172,6 +188,7 @@ module BrowserAssets =
             segment.Equals("bin", pathComparison) || segment.Equals("obj", pathComparison))
         containsPath root fullPath && not generated)
       && not (config.Assets |> List.exists (fun root -> containsPath root.Directory fullPath))
+      && not (isExcludedSource config fullPath)
 
   let contentHash (content: byte array) =
     SHA256.HashData content |> Convert.ToHexString

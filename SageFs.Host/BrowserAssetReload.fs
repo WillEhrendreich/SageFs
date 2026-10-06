@@ -21,7 +21,7 @@ module ConfigLoadError =
     | ConfigLoadError.CannotRead(path, detail) -> sprintf "Cannot read %s: %s" path detail
 
 let parseJson baseDirectory text =
-  Json.deserialize<BrowserAssets.RawConfig> Json.camelCase text
+  Json.deserialize<BrowserAssets.RawConfig> (Json.omitNulls Json.camelCase) text
   |> Result.mapError ConfigLoadError.InvalidJson
   |> Result.bind (fun raw ->
     BrowserAssets.parse baseDirectory raw
@@ -44,6 +44,8 @@ type SaveRoute =
 
 let route config (change: FileWatcher.FileChange) =
   match config with
+  | Some config when BrowserAssets.isExcludedSource config change.FilePath ->
+    SaveRoute.Existing FileWatcher.FileChangeAction.Ignore
   | Some config when BrowserAssets.matchesSource config change.FilePath ->
     SaveRoute.BrowserAssets change.FilePath
   | Some _
