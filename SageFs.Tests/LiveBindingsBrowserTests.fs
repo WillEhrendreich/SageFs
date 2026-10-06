@@ -187,7 +187,11 @@ let tests =
     let buttons = page.Locator(sprintf "%s .live-held-row .live-held-btn" pane)
     do! PlaywrightExpect.waitForCount BrowserWaits.pageRenders buttons 1
     let! box = buttons.First.BoundingBoxAsync()
-    Expect.isTrue (abs (box.Width - 28.0f) < 1.0f && abs (box.Height - 28.0f) < 1.0f) (sprintf "the click button is the uniform 28x28 square, got %fx%f" box.Width box.Height)
+    // Size is owned by `SageFs/dashboard.css`, not by this test: `.session-btn` is the shared 28x28 uniform
+    // box, and `.live-held-btn` deliberately narrows it to 20x20 for the watch-window rows (one value, one line,
+    // so the rows stay dense). This assertion chased the shared value after the override landed and failed the
+    // browser tier on a design that is correct — assert the override, and read the CSS when it moves again.
+    Expect.isTrue (abs (box.Width - 20.0f) < 1.0f && abs (box.Height - 20.0f) < 1.0f) (sprintf "the click button is the live-held 20x20 square, got %fx%f" box.Width box.Height)
     for width in [ 1280; 600; 360 ] do
       do! page.SetViewportSizeAsync(width, 900)
       let! problems = layoutProblems page
