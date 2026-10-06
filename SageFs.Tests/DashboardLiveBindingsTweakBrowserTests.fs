@@ -84,13 +84,30 @@ let private waitJs (page: IPage) (what: string) (budgetMs: int) (script: string)
 /// A row's strip, by the row it belongs to.
 let private row (name: string) = sprintf "[data-testid=tweak-row][data-row='%s']" name
 
-let private waitState (page: IPage) (name: string) (state: string) =
-  waitJs page (sprintf "%s to be %s" name state) BrowserWaits.daemonWork
-    "([sel, state]) => { const e = document.querySelector(sel); return !!e && e.getAttribute('data-state') === state; }"
-    [| row name; state |]
-
 let private stateOf (page: IPage) (name: string) : Task<string> =
   page.EvaluateAsync<string>("sel => { const e = document.querySelector(sel); return e ? e.getAttribute('data-state') : ''; }", row name)
+
+/// Wait for a row's `data-state`. `stateOf` is defined above it because a let-bound function is not
+/// in scope for code textually above it, and this function reads it on the failure path.
+let private waitState (page: IPage) (name: string) (state: string) : Task<unit> = task {
+  try
+    do!
+      waitJs page (sprintf "%s to be %s" name state) BrowserWaits.daemonWork
+        "([sel, state]) => { const e = document.querySelector(sel); return !!e && e.getAttribute('data-state') === state; }"
+        [| row name; state |]
+  with ex ->
+    // The generic timeout says what was waited for and nothing about what was there instead, and
+    // that gap is the whole difference between "the click never landed", "it landed and the daemon
+    // answered something else", and "the row re-rendered under me". Read the row once and say what
+    // it actually showed: something the next reader can act on, not another opaque timeout.
+    let! observed =
+      task {
+        try
+          return! stateOf page name
+        with _ -> return "(the row could not be read)"
+      }
+    return Tests.failtestf "%s — the row showed '%s' instead" ex.Message observed
+}
 
 let private textIn (page: IPage) (selector: string) : Task<string> =
   page.EvaluateAsync<string>("sel => { const e = document.querySelector(sel); return e ? e.innerText : ''; }", selector)
