@@ -466,6 +466,97 @@ let destructiveTierTests =
       |> Expect.isTrue "a name SageFs never registered is left alone"
   ]
 
+// ── Group 5: what actually interrupts a person ────────────────────────────
+//
+// Two tiers on purpose. `destructiveTools` is what tools/list TELLS a client;
+// `confirmationLosses` is what SageFs itself will stop and ask about, and the
+// second is far narrower because every entry costs a human a click. These
+// tests pin both the shape of that narrowing and the exact tools that were
+// left out of it, since quietly putting `nudge_value` back would look green
+// and make the editor's scrub unusable.
+
+let confirmationTierTests =
+  testList "confirmation tier" [
+
+    testCase "WHY — a tool can only be confirmed if it is also destructive, so the two tiers never disagree about what is at stake"
+    <| fun _ ->
+      SageFs.Affordances.confirmationLosses
+      |> Map.toList
+      |> List.map fst
+      |> List.filter (fun tool -> not (Set.contains tool SageFs.Affordances.destructiveTools))
+      |> List.map SageFs.Affordances.ToolName.toString
+      |> Expect.equal "every confirm-tier tool is also in the destructive tier" []
+
+    testCase "WHY — the tier names only tools SageFs registers, so a rename cannot leave a prompt asking about something that does not exist"
+    <| fun _ ->
+      if not (isRegistered ()) then skiptest "SageFsTools type not found; reflection skipped"
+      let registered = registeredToolSet ()
+      SageFs.Affordances.confirmationLosses
+      |> Map.toList
+      |> List.map (fun (tool, _) -> SageFs.Affordances.ToolName.toString tool)
+      |> List.filter (fun name -> not (Set.contains name registered))
+      |> Expect.equal "every confirm-tier tool is a registered tool" []
+
+    testCase "WHY — the tools an editor scrubs and an orchestrator drives every run are left out, or a knob and a landing would each need a human click"
+    <| fun _ ->
+      let tier = SageFs.Affordances.confirmationLosses |> Map.toList |> List.map fst |> Set.ofList
+      [ "nudge_value"; "tidy_workspace"; "request_landing"; "mint_member"; "revoke_member"; "leave_cohort" ]
+      |> List.choose SageFs.Affordances.ToolName.tryParse
+      |> List.filter (fun tool -> Set.contains tool tier)
+      |> List.map SageFs.Affordances.ToolName.toString
+      |> Expect.equal "these must stay out of the confirm tier" []
+
+    testCase "WHY — every confirm-tier tool carries a reason, so a prompt can never decay into a bare allow-this"
+    <| fun _ ->
+      SageFs.Affordances.confirmationLosses
+      |> Map.toList
+      |> List.filter (fun (_, loss) -> loss.Trim().Length = 0)
+      |> Expect.isEmpty "every confirm-tier tool says what it takes away"
+
+    testCase "WHY — a prompt names the tool and what it costs, so the person decides on the loss and not on a string they have to decode"
+    <| fun _ ->
+      let loss = SageFs.Affordances.confirmationLosses |> Map.find SageFs.Affordances.ToolName.HardResetFsiSession
+      let text = SageFs.Server.McpServer.confirmationMessage "hard_reset_fsi_session" loss
+      text |> Expect.stringContains "names the tool" "hard_reset_fsi_session"
+      text |> Expect.stringContains "says what is lost" "REPL definitions"
+
+    testCase "WHY — an accepted prompt runs the call and a declined one does not, so the prompt cannot be decorative"
+    <| fun _ ->
+      let accepted = ModelContextProtocol.Protocol.ElicitResult(Action = "accept")
+      let declined = ModelContextProtocol.Protocol.ElicitResult(Action = "decline")
+      SageFs.Server.McpServer.confirmationVerdict "stop_session" accepted
+      |> Expect.isOk "an accepted confirmation lets the call run"
+      match SageFs.Server.McpServer.confirmationVerdict "stop_session" declined with
+      | Ok() -> failtest "a declined confirmation must refuse the call"
+      | Result.Error message -> message |> Expect.stringContains "the refusal names the tool" "stop_session"
+
+    testCase "WHY — an ordinary tool is never asked about, so the tools outside the tier are untouched by any prompt"
+    <| fun _ ->
+      let canAsk =
+        ModelContextProtocol.Protocol.ClientCapabilities(Elicitation = ModelContextProtocol.Protocol.ElicitationCapability())
+      [ "list_sessions"; "check_fsharp_code"; "frobnicate" ]
+      |> List.map (fun name -> SageFs.Server.McpServer.confirmationStep canAsk name)
+      |> List.distinct
+      |> Expect.equal "nothing outside the tier is ever asked about" [ SageFs.Server.McpServer.NotInTier ]
+
+    testCase "WHY — a confirm-tier tool IS asked about when the client can answer, so a bug that skips every prompt cannot pass as a quiet client"
+    <| fun _ ->
+      let canAsk =
+        ModelContextProtocol.Protocol.ClientCapabilities(Elicitation = ModelContextProtocol.Protocol.ElicitationCapability())
+      match SageFs.Server.McpServer.confirmationStep canAsk "hard_reset_fsi_session" with
+      | SageFs.Server.McpServer.NotInTier -> failtest "a confirm-tier tool must be treated as needing a prompt"
+      | SageFs.Server.McpServer.ClientCannotAsk -> failtest "this client can answer, so it must not be skipped"
+      | SageFs.Server.McpServer.Ask(tool, loss) ->
+        tool |> Expect.equal "the prompt names the tool" "hard_reset_fsi_session"
+        loss |> Expect.stringContains "and carries what is lost" "REPL definitions"
+
+    testCase "WHY — a tier tool on a client with nowhere to ask is skipped rather than refused, or every host without elicitation would lose its tools"
+    <| fun _ ->
+      let cannotAsk = ModelContextProtocol.Protocol.ClientCapabilities()
+      SageFs.Server.McpServer.confirmationStep cannotAsk "stop_session"
+      |> Expect.equal "an elicitation-less client skips the prompt" SageFs.Server.McpServer.ClientCannotAsk
+  ]
+
 [<Tests>]
 let mcpToolGateTests =
   testList "MCP tool gate" [
@@ -473,4 +564,5 @@ let mcpToolGateTests =
     gateDecisionTests
     enforcementTests
     destructiveTierTests
+    confirmationTierTests
   ]

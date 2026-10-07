@@ -1211,6 +1211,57 @@ let destructiveTools : Set<ToolName> =
       ToolName.MintMember
       ToolName.RevokeMember ]
 
+/// What each confirm-tier tool is about to take away, in the words the person
+/// who is asked gets to read.
+///
+/// A strict subset of `destructiveTools`, and a SECOND decision rather than a
+/// restatement of the first. `destructiveTools` is informational: it is
+/// published on `tools/list` so a client KNOWS what it is holding, and for that
+/// the answer should be wide, because a client deciding whether to prompt wants
+/// the full picture. This table is behavioral: asking here costs a human a
+/// click on every call, so the bar is narrower. A tool is in it when it throws
+/// away REPL or local state that cannot be got back from inside SageFs.
+///
+/// The tier is DERIVED from this table rather than listed beside it, on
+/// purpose: a tool cannot join the confirm tier without saying what it costs,
+/// so a prompt can never decay into a bare "allow this?".
+///
+/// Deliberately OUT, and the reasons are the design:
+///
+///   * `tidy_workspace` deletes, but it already demands `confirm=true` AND the
+///     plan id from `get_workspace_hygiene`. Asking again would confirm one
+///     action twice.
+///   * `nudge_value` is an interaction, not an event: the editor scrubs it with
+///     Alt-k or a drag handle, so a prompt per step would make the knob
+///     unusable. It journals and undoes itself besides.
+///   * `request_landing`, `veto_landing`, `resolve_veto`, `reassign_claim`,
+///     `set_integration_ref`, `mint_member` and `revoke_member` are the loop an
+///     unattended agent runs in, and the last six are conductor-only already.
+///     Prompting the conductor to confirm their own admin, or an orchestrator
+///     to confirm a mint it performs per run, would stall work that nobody is
+///     sitting there to click through.
+///   * `leave_cohort` is routine, and rejoining costs nothing.
+///
+/// IN, because the loss is permanent from the user's side: `stop_session`,
+/// `reset_fsi_session`, `hard_reset_fsi_session` and `switch_workflow` (the
+/// REPL's definitions), `manage_local_data` (the local stores) and `stop_app`
+/// (the running app's state).
+///
+/// No client is ever blocked for BEING a client: a host that never advertised
+/// elicitation support is skipped, and the four gates ahead of this one still
+/// decide everything they decided before. Declining, though, is a refusal.
+///
+/// `McpToolGateTests` holds these keys to `destructiveTools` and to the
+/// registered set.
+let confirmationLosses : Map<ToolName, string> =
+  Map.ofList
+    [ ToolName.StopSession, "the REPL definitions loaded in this session"
+      ToolName.ResetFsiSession, "the REPL definitions loaded in this session"
+      ToolName.HardResetFsiSession, "the REPL definitions loaded in this session, plus a rebuild of the project"
+      ToolName.SwitchWorkflow, "the REPL definitions loaded in this session, which resets when the workflow changes"
+      ToolName.ManageLocalData, "the local stores SageFs keeps on this machine"
+      ToolName.StopApp, "the running app's state, held in memory" ]
+
 module AuthorityRefusal =
   /// One sentence: what was refused and by what rule.
   let describe (refusal: AuthorityRefusal) : string =

@@ -32,6 +32,25 @@ every hand-typed list without a sound. The seventeen live in
 `Affordances.destructiveTools`, and a test holds them to the tools that are
 actually registered.
 
+Six of those seventeen go further and stop to ask you. A client that advertises
+MCP elicitation gets a prompt naming the tool and what it is about to take
+away, and a decline stops the call the same way a gate rejection does. The six
+are `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`,
+`switch_workflow`, `manage_local_data` and `stop_app`, because those take the
+REPL or your local state and cannot hand it back. The other eleven stay out on
+purpose: `tidy_workspace` already demands its plan id, `nudge_value` is scrubbed
+one step at a time from the editor, and the cohort verbs are the loop an
+unattended agent runs in, where nobody is sitting there to click.
+
+The part worth knowing: a client that never advertised elicitation is neither
+prompted nor refused. The prompt is skipped, and the four gates ahead of it
+still decide everything they decided before. The stdio bridge lands in exactly
+that case after it re-handshakes on a stale session id, because it announces
+empty capabilities, so confirmations stay off until that client initializes
+again. If you are not being asked, that is why. `SAGEFS_CONFIRM_ANSWER_SECONDS`
+raises the wait if you read slowly; running out refuses the call rather than
+letting it through.
+
 The full advertised set is 70 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those

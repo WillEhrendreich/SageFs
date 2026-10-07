@@ -301,6 +301,104 @@ let withEventEcho (events: string array) (result: CallToolResult) : CallToolResu
   | false -> ()
   result
 
+/// The sentence a person is asked to approve: what the call takes away, not the
+/// arguments. The arguments belong to the agent that asked, and this is a
+/// human's decision about consequences.
+let confirmationMessage (toolName: string) (loss: string) : string =
+  sprintf "%s will take away %s. Allow it?" toolName loss
+
+/// What an answer means, kept apart from the SDK's own type so both directions
+/// can be tested with no client attached. Accepted runs the call; every other
+/// answer refuses it, and the sentence says WHICH one happened rather than
+/// folding decline, cancel and silence into one vague failure.
+let confirmationVerdict (toolName: string) (answer: ElicitResult) : Result<unit, string> =
+  if answer.IsAccepted then
+    Ok()
+  else
+    match answer.Action with
+    | "decline" -> Result.Error(sprintf "%s was declined, so the call did not run." toolName)
+    | "cancel" -> Result.Error(sprintf "%s was cancelled before an answer came, so the call did not run." toolName)
+    | other ->
+      Result.Error(sprintf "%s was not confirmed (the client answered '%s'), so the call did not run." toolName other)
+
+/// What a call needs before its body may run, decided from the confirm tier
+/// and from what this client says it can do.
+///
+/// A DU and not a bool, because the three outcomes mean three different things
+/// and a test has to be able to tell them apart. `NotInTier` is "nobody is ever
+/// asked about this", `ClientCannotAsk` is "this one WOULD be asked about, but
+/// the host has nowhere to ask", and `Ask` is the prompt that is owed. Merging
+/// the first two would make a bug that skips every prompt look exactly like a
+/// host that merely cannot elicit, which is the one difference that matters.
+type ConfirmationStep =
+  /// Outside the confirm tier. Nothing is asked, ever.
+  | NotInTier
+  /// Inside the tier, but this client never advertised elicitation. Skipped
+  /// rather than refused: the four gates ahead already ran, and a host without
+  /// the capability did nothing wrong.
+  | ClientCannotAsk
+  /// Inside the tier, and this client can be asked. The prompt is owed.
+  | Ask of toolName: string * loss: string
+
+/// The pure half of the decision. It takes the capability rather than the
+/// server, so it can be exercised against a constructed `ClientCapabilities`
+/// with no live client anywhere near it.
+let confirmationStep (caps: ClientCapabilities) (toolName: string) : ConfirmationStep =
+  match SageFs.Affordances.ToolName.tryParse toolName with
+  | None -> NotInTier
+  | Some name ->
+    match SageFs.Affordances.confirmationLosses |> Map.tryFind name with
+    | None -> NotInTier
+    | Some loss ->
+      if isNull caps || isNull caps.Elicitation then ClientCannotAsk else Ask(toolName, loss)
+
+/// Ask the person at the client before a confirm-tier tool runs.
+///
+/// The three answers, and they must not be confused:
+///
+///   * `NotInTier` or `ClientCannotAsk` -> `Ok`, and nothing is asked. This is
+///     not "unguarded": the four gates ahead of this one already decided
+///     everything they decided before, and a host that cannot be asked is not
+///     a caller that did something wrong.
+///   * Accepted -> `Ok`, the body runs.
+///   * Declined, cancelled, no answer inside `Timeouts.confirmationAnswer`, or
+///     the request failing outright -> `Error`, and the call is refused.
+///
+/// The last group is deliberately ONE bucket. Every one of them means we do
+/// not hold an approval, and a prompt that could not be answered must never
+/// turn into permission. The bound exists because a tool that never answers is
+/// a bug rather than a wait: an agent must be refused, not parked forever.
+let confirmViaElicitation
+  (server: ModelContextProtocol.Server.McpServer)
+  (toolName: string)
+  (ct: CancellationToken)
+  : Task<Result<unit, string>> =
+  task {
+    match confirmationStep server.ClientCapabilities toolName with
+    | NotInTier
+    | ClientCannotAsk -> return Ok()
+    | Ask(asking, loss) ->
+      try
+        let schema = ElicitRequestParams.RequestSchema()
+        let flag = ElicitRequestParams.BooleanSchema()
+        flag.Description <- "Allow this call to run?"
+        schema.Properties <- dict [ "confirmed", flag ]
+        schema.Required <- ResizeArray<string>([ "confirmed" ])
+        let parameters = ElicitRequestParams(Message = confirmationMessage asking loss, RequestedSchema = schema)
+        use budget = CancellationTokenSource.CreateLinkedTokenSource(ct)
+        budget.CancelAfter(SageFs.Timeouts.confirmationAnswer)
+        let! answer = server.ElicitAsync(parameters, budget.Token).AsTask()
+        return confirmationVerdict asking answer
+      with
+      | :? OperationCanceledException ->
+        return
+          Result.Error(
+            sprintf "%s was not confirmed: no answer came within %O." asking SageFs.Timeouts.confirmationAnswer
+          )
+      | ex ->
+        return Result.Error(sprintf "%s was not confirmed: the confirmation could not be obtained (%s)." asking ex.Message)
+  }
+
 /// CallToolFilter that captures the McpServer and appends accumulated events
 /// to tool responses. This ensures the LLM sees events even if the client
 /// doesn't surface MCP notifications directly.
@@ -489,10 +587,18 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
               | Error gateError ->
                 return buildGateErrorResult requestName gateError
               | Ok admission ->
-                // The tool body reuses the session the gate resolved.
-                let! result =
-                  SageFs.McpTools.runAdmitted admission (fun () -> next.Invoke(ctx, ct).AsTask())
-                return appendEvents result
+                // Confirmation sits AFTER the four gates and BEFORE the body:
+                // a caller that would be refused anyway never gets to prompt a
+                // human about it, and a decline stops the body exactly the way
+                // a gate rejection does.
+                let! confirmation = confirmViaElicitation ctx.Server requestName ct
+                match confirmation with
+                | Result.Error confirmError -> return buildGateErrorResult requestName confirmError
+                | Ok () ->
+                  // The tool body reuses the session the gate resolved.
+                  let! result =
+                    SageFs.McpTools.runAdmitted admission (fun () -> next.Invoke(ctx, ct).AsTask())
+                  return appendEvents result
             | Ok _, true ->
               let! result = next.Invoke(ctx, ct).AsTask()
               return appendEvents result

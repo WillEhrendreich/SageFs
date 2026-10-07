@@ -152,6 +152,13 @@ module Timeouts =
   /// that takes this long means a hung or starved worker, and the caller should
   /// hear that now, not after workerHttpRequest's ten minutes.
   let gateStatusProbe = forMachine (TimeSpan.FromSeconds(5.0))
+  /// How long a confirmation prompt waits for the person at the client to answer
+  /// before the call is refused. This is a person reading a sentence, not a
+  /// process starting, so it is NOT scaled by machine tier; it takes an override
+  /// because a slow reader is exactly who would need to raise it. Running out is
+  /// refused rather than waved through, since a prompt that gave up and let the
+  /// call run would protect nobody, and the refusal says the answer never came.
+  let confirmationAnswer = envOrDefault "SAGEFS_CONFIRM_ANSWER_SECONDS" 60.0
   /// How long a nudge waits for another nudge to the same source file to finish. A nudge reads one file, appends
   /// one journal record and renames one file, which is milliseconds, so a wait this long means the holder is
   /// stuck. The caller is refused with `FileBusy` and told to retry, rather than parked behind it.
