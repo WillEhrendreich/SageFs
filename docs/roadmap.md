@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 6, Later 18, Exploring 17. Already built: 28.
+On the page today: Now 0, Next 6, Later 19, Exploring 20. Already built: 29.
 
 ## Next (6)
 
@@ -33,7 +33,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 - [ ] **More settings editable from the dashboard.** The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime. ([configuration.md](configuration.md))
 - [ ] **Dashboard panels that follow your context.** Live bindings become a real pane in REPL mode, and cohort shows only while one is running. A pane hidden for being irrelevant says why and can be pinned open.
 
-## Later (18)
+## Later (19)
 
 _I want it and I roughly know how. Months to a year, and the order will move._
 
@@ -59,6 +59,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 
 - [ ] **Watch your agents from your phone.** A second listener on your Tailscale address would serve the dashboard read-only to a phone with a short-lived token. A conductor could then approve or veto a landing from a link, but only once the minted handles above exist.
 - [ ] **Member tokens survive a daemon restart.** Tokens live in the daemon's memory, so a restart drops every one and the orchestrator mints new ones. Keeping their hashes would let a run survive a restart, but only in a store that is not the cohort ledger, and I'd rather see someone need it first. ([mcp-tools.md](mcp-tools.md))
+- [ ] **Ask you before a destructive tool runs.** The server could ask you itself, over MCP's own elicitation request, so a stop, a reset or a landing waits for a real yes instead of trusting every client to prompt on its own. It has to sit after the four gates already there rather than replace them, take the tier as a `Set<ToolName>` rather than one more string list, and say out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into. ([mcp-tools.md](mcp-tools.md))
 
 ### Dashboard
 
@@ -73,7 +74,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 - [ ] **A token for every daemon call.** The daemon binds loopback only and checks Origin so a web page can't drive it, but nothing authenticates a local caller. A minted token the daemon requires would, and it's the same handle agents need for their own identity. ([mcp-tools.md](mcp-tools.md))
 - [ ] **Admit heavy work by measured cost.** Heavy work already takes a lease, and the daemon sheds under memory pressure with a retry hint. It doesn't yet know what a rebuild of your project usually costs, so it reacts instead of predicting. I'd record peak memory and duration per kind of work and admit against the headroom.
 
-## Exploring (17)
+## Exploring (20)
 
 _An idea I'm turning over. No promise, and some of these will die._
 
@@ -103,6 +104,9 @@ _An idea I'm turning over. No promise, and some of these will die._
 - [ ] **A cohort across machines.** Once members are handles instead of sockets, one could join from another machine. The coordination core is already pure and message-passing, so it could cross a network.
 - [ ] **Ask the live codebase in F#.** A type provider over the repo and the cohort would make a misspelled symbol or test name a compile error at the agent's prompt, and active patterns could filter the cohort in code. This is research.
 - [ ] **A REPL guard for agents other than Claude.** The hook that sends an agent back to the REPL instead of running dotnet build is a Claude Code hook. Other agent tools have nothing like it yet. ([agents.md](agents.md))
+- [ ] **Check the scope before the write, not after.** A claim is policy today: it refuses another member's claim over the same file, but nothing stops a process writing outside the checkout, and the daemon says that about itself. The one component sitting between an agent and its own file tools could ask where a write is going before it happens, which is the difference between a claim and a boundary. ([agents.md](agents.md))
+- [ ] **Drive real coding agents as cohort members.** One process would hold the seat, mint a token per run and drive Claude, Copilot, OpenCode or Pi over the Agent Client Protocol as a member with its own claims and landings, answering that member's permission requests from the scope it holds. It has to join the cohort before it mints anything, because a fresh connection is Anonymous and the very first mint would be refused. ([agents.md](agents.md))
+- [ ] **Confirmation gates in every agent host.** Where a host can prompt before a tool call, a small plugin can hold the destructive list and ask there, which covers the clients a server-side prompt can never reach. It would be one shared policy compiled into four thin shells rather than four copies of the same list, and none of the four hosts has been run yet. ([agents.md](agents.md))
 
 ### Editors
 
@@ -112,7 +116,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub.
 
-## Built (28)
+## Built (29)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -152,6 +156,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - [x] **A claim path means one thing.** `src/Foo/../Bar/x.fs` did not overlap `src/Bar/x.fs`, so two members could hold the same file and a prefix check could be walked around. Claim paths are canonical at the boundary now, and a path that leaves the repo is refused. Code: [`SageFs.Core/Cohort.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Cohort.fs)
 - [x] **Veto and delegate in a cohort.** The conductor can hand the seat to a present member with `delegate_conductor`. A seated Implementer, Verifier or the conductor can `veto_landing` with a reason, the conductor clears it with `resolve_veto`, and a landing's own requester can `withdraw_landing`. A veto on a landing that already landed is refused, not ignored, and `get_cohort_status` and the dashboard panel show who vetoed and why. A vacant seat still can't be filled from the tool surface. Code: [`SageFs/McpCohortTools.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpCohortTools.fs)
 - [x] **A member token bound to one session.** A minted token now names the one session or checkout it may route to. A tool that takes a session id or a working directory is held to that on every call, a session list and the session resources are cut to it, and a refusal says which rule it hit and what to do. `mint_member` takes a `session_id`, and its `working_directory` has to be an absolute path. Code: [`SageFs.Core/Capability.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Capability.fs)
+- [x] **One typed list of what counts as destructive.** SageFs could say who may call a tool, but nothing said what calling it does to your work. There is now one `Set<ToolName>` on the same DU the authority gate reads, held to the registered tools by a test so a renamed tool cannot leave a stale name behind, and `tools/list` publishes it as MCP's own `destructiveHint`, so a client asks the server instead of keeping a copy of the list itself. Code: [`SageFs.Core/Affordances.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Affordances.fs)
 
 ### Editors
 

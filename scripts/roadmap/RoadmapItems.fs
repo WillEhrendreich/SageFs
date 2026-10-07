@@ -206,6 +206,11 @@ let items : Item list =
       [ "docs/mcp-tools.md" ]
       "A minted token now names the one session or checkout it may route to. A tool that takes a session id or a working directory is held to that on every call, a session list and the session resources are cut to it, and a refusal says which rule it hit and what to do. `mint_member` takes a `session_id`, and its `working_directory` has to be an absolute path."
 
+    item "one-typed-list-of-destructive-tools" "One typed list of what counts as destructive" Agents Next
+      (landmark "SageFs.Core/Affordances.fs" "destructiveTools")
+      [ "docs/mcp-tools.md" ]
+      "SageFs could say who may call a tool, but nothing said what calling it does to your work. There is now one `Set<ToolName>` on the same DU the authority gate reads, held to the registered tools by a test so a renamed tool cannot leave a stale name behind, and `tools/list` publishes it as MCP's own `destructiveHint`, so a client asks the server instead of keeping a copy of the list itself."
+
     // ---- Later: months to a year ----
 
     item "type-change-keeps-state" "Type changes keep your running state" HotReload Later
@@ -298,6 +303,11 @@ let items : Item list =
       [ "docs/mcp-tools.md" ]
       "Tokens live in the daemon's memory, so a restart drops every one and the orchestrator mints new ones. Keeping their hashes would let a run survive a restart, but only in a store that is not the cohort ledger, and I'd rather see someone need it first."
 
+    item "ask-before-a-destructive-tool-runs" "Ask you before a destructive tool runs" Agents Later
+      NoLandmarkYet
+      [ "docs/mcp-tools.md" ]
+      "The server could ask you itself, over MCP's own elicitation request, so a stop, a reset or a landing waits for a real yes instead of trusting every client to prompt on its own. It has to sit after the four gates already there rather than replace them, take the tier as a `Set<ToolName>` rather than one more string list, and say out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into."
+
     // ---- Exploring: ideas, no promise ----
 
     item "use-the-fsharp-compilers-deltas" "Use the F# compiler's own deltas" HotReload Exploring
@@ -383,4 +393,19 @@ let items : Item list =
     item "command-palette-and-one-timeline" "A command palette and one timeline" Dashboard Exploring
       NoLandmarkYet
       []
-      "Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub." ]
+      "Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub."
+
+    item "check-the-scope-before-the-write" "Check the scope before the write, not after" Agents Exploring
+      NoLandmarkYet
+      [ "docs/agents.md" ]
+      "A claim is policy today: it refuses another member's claim over the same file, but nothing stops a process writing outside the checkout, and the daemon says that about itself. The one component sitting between an agent and its own file tools could ask where a write is going before it happens, which is the difference between a claim and a boundary."
+
+    item "drive-real-agents-as-members" "Drive real coding agents as cohort members" Agents Exploring
+      NoLandmarkYet
+      [ "docs/agents.md" ]
+      "One process would hold the seat, mint a token per run and drive Claude, Copilot, OpenCode or Pi over the Agent Client Protocol as a member with its own claims and landings, answering that member's permission requests from the scope it holds. It has to join the cohort before it mints anything, because a fresh connection is Anonymous and the very first mint would be refused."
+
+    item "confirmation-gates-in-every-agent-host" "Confirmation gates in every agent host" Agents Exploring
+      NoLandmarkYet
+      [ "docs/agents.md" ]
+      "Where a host can prompt before a tool call, a small plugin can hold the destructive list and ask there, which covers the clients a server-side prompt can never reach. It would be one shared policy compiled into four thin shells rather than four copies of the same list, and none of the four hosts has been run yet." ]
