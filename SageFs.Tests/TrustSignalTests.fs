@@ -121,13 +121,17 @@ let ciWiringTests =
 
     // Exclusive admission is a claim about the machine, and the claim's REASON travels with
     // the declaration (TierPlan.Demand): the hold line and the failure report both say it.
-    // A tier that merely times out claims nothing, so it must stay declared with plain
-    // `testTier` — `--integration-hr` and `--integration-hr-restart` time out and are named
-    // here so they cannot quietly be promoted to exclusivity (that would serialize the gate
-    // for no claim) nor dropped (a timeout under load is not a machine claim either).
+    // Two claims qualify: a tier that MEASURES the product, and a tier that asserts wall clock
+    // against a real renderer. A tier that merely times out claims nothing and must stay declared
+    // with plain `testTier` — `--integration-hr-restart` is named below so it cannot quietly be
+    // promoted (that would serialize the gate for no claim) nor dropped (a timeout under load is
+    // not a machine claim either).
     testCase "the tiers that take the machine alone declare their reason, and only they" <| fun _ ->
+      // `\$?` because a sharded tier declares itself interpolated: `testTierExclusive $"--integration-lt
+      // --shard {k}/{ltShards} --summary"`. Without it the regex silently skips every interpolated
+      // declaration, and a tier would vanish from this list instead of being checked.
       let exclusive =
-        Regex.Matches(pipeline.Value, "testTierExclusive \"([^\"]+)\" \"([^\"]*)\" \"([^\"]*)\"")
+        Regex.Matches(pipeline.Value, "testTierExclusive \$?\"([^\"]+)\" \"([^\"]*)\" \"([^\"]*)\"")
         |> Seq.map (fun m -> m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value)
         |> List.ofSeq
       exclusive
@@ -135,7 +139,17 @@ let ciWiringTests =
       |> List.sort
       |> Expect.equal
            "the measurement and the rendering assertions are the only claims about the machine"
-           [ "--integration-browser --summary"; "--integration-hr-delta --summary" ]
+           [ "--integration-browser --summary"
+             "--integration-disconnect --summary"
+             "--integration-hr --summary"
+             "--integration-hr-delta --summary"
+             "--integration-lt --shard {k}/{ltShards} --summary" ]
+      // Every browser-bearing tier carries the rendering reason, not the measuring one: the class
+      // is what failed (four different cases across four runs), so the class is what is declared.
+      exclusive
+      |> List.filter (fun (args, _, _) -> args.Contains "--integration-browser" || args.Contains "--integration-hr " || args.Contains "--integration-lt" || args.Contains "--integration-disconnect")
+      |> List.iter (fun (args, hold, _) ->
+          hold |> Expect.equal (sprintf "%s asserts rendering, and says so" args) "asserting wall-clock rendering")
       for (args, hold, loadLead) in exclusive do
         hold |> Expect.isNotEmpty (sprintf "%s declares what its hold line says" args)
         loadLead |> Expect.isNotEmpty (sprintf "%s declares what its failure report says" args)
@@ -143,7 +157,7 @@ let ciWiringTests =
         Regex.Matches(pipeline.Value, "testTier \"([^\"]+)\"")
         |> Seq.map (fun m -> m.Groups[1].Value)
         |> Set.ofSeq
-      [ "--integration-hr --summary"; "--integration-hr-restart --summary" ]
+      [ "--integration-hr-restart --summary" ]
       |> List.filter (fun args -> not (plain.Contains args))
       |> Expect.isEmpty "a tier that only times out stays Ordinary: declared with plain testTier"
   ]

@@ -1768,22 +1768,25 @@ let sagefsPipeline = pipeline "sagefs" {
           :: [ for k in 1 .. hostShards -> testTier $"--integration-host --shard {k}/{hostShards} --summary" ]
         let ciOnly =
           [ testTier "--mutation-score"
-            // The browser journeys are wall-clock waits on a renderer: under a machine admitting up
-            // to 12 tiers they go red when the renderer is starved (three different cases across
-            // three runs, never reproducible standalone). The assertion is about rendering time, so
-            // the tier gets the machine alone — admission, never a longer timeout.
+            // Every tier that drives a real browser gets the machine alone. The assertion is wall
+            // clock against a renderer, and under a machine admitting up to 12 tiers Playwright's
+            // "visible, enabled and stable" stops being satisfiable when the renderer is starved —
+            // observed as four different cases across four runs (--integration-browser three times,
+            // --integration-disconnect once), never reproducible standalone. Membership follows
+            // TestInfrastructure's browser list, so this is the class and not one instance of it.
+            // Admission, never a longer timeout.
             testTierExclusive "--integration-browser --summary" "asserting wall-clock rendering" "while asserting wall-clock rendering"
-            // --integration-hr and --integration-hr-restart also time out under load, but a timeout
-            // is not a claim about the machine: they stay Ordinary and run concurrently.
-            testTier "--integration-hr --summary"
+            testTierExclusive "--integration-hr --summary" "asserting wall-clock rendering" "while asserting wall-clock rendering"
+            // --integration-hr-restart has no browser case, so it stays Ordinary and runs
+            // concurrently: a timeout there is not a claim about the machine.
             testTier "--integration-hr-restart --summary"
             // The measuring tier: it ASSERTS p50/p95, so it is declared exclusive and
             // runs exclusively — everything concurrent with it would be what it measured.
             testTierExclusive "--integration-hr-delta --summary" "measuring the product's latency" "measured"
             // The live-testing cases edit the sample in place, so a tier is a share of them on a copy of its own.
             for k in 1 .. ltShards do
-              testTier $"--integration-lt --shard {k}/{ltShards} --summary"
-            testTier "--integration-disconnect --summary" ]
+              testTierExclusive $"--integration-lt --shard {k}/{ltShards} --summary" "asserting wall-clock rendering" "while asserting wall-clock rendering"
+            testTierExclusive "--integration-disconnect --summary" "asserting wall-clock rendering" "while asserting wall-clock rendering" ]
         let browserTiers = ciOnly |> List.filter (fun t -> t.Name <> "--mutation-score")
         // Chromium is installed ONCE, before any browser tier starts (they run
         // concurrently). If it fails, those tiers are recorded as failed — never
