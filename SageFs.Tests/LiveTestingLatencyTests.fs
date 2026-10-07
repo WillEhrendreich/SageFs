@@ -107,11 +107,44 @@ let private saveToGreen () : Task<unit> =
             // Red first (not timed), then the fix save (timed).
             drain feed
             File.WriteAllText(helloPath (), original.Replace(greenAdd, redAdd))
-            let! _ = expectFrame feed (sprintf "save %d to red" i) (settledWith 1) TestTimeouts.liveTestingVerdictCeiling
+            let! _ =
+              task {
+                try
+                  return! expectFrame feed (sprintf "save %d to red" i) (settledWith 1) TestTimeouts.liveTestingVerdictCeiling
+                with ex ->
+                  // The mirror of the green guard below. A run that settles GREEN right after redAdd was
+                  // written is not a slow verdict — it is the previous save's settle, i.e. this file change
+                  // never reached the runner. Saying which line the file holds distinguishes those.
+                  let held =
+                    try
+                      let text = File.ReadAllText(helloPath())
+                      let red = text.Contains redAdd
+                      sprintf "%b, %s" red (if red then "holds redAdd" else "still holds greenAdd")
+                    with e -> sprintf "(the fixture could not be read: %s)" e.Message
+                  return Tests.failtestf "%s — the file on disk when it gave up: %s" ex.Message held
+              }
             drain feed
             let startedAt = Stopwatch.GetTimestamp()
             File.WriteAllText(helloPath (), original)
-            let! frame = expectFrame feed (sprintf "save %d to green" i) (settledWith 0) TestTimeouts.liveTestingVerdictCeiling
+            let! frame =
+              task {
+                try
+                  return! expectFrame feed (sprintf "save %d to green" i) (settledWith 0) TestTimeouts.liveTestingVerdictCeiling
+                with ex ->
+                  // The ceiling is written for "the daemon stopped answering", but the failing runs are
+                  // the opposite: the feed answers, settles, and reports the run still RED. Whether the
+                  // FILE holds the green line at that instant is the whole diagnosis — it separates "the
+                  // write never landed" from "the write landed and the run judged stale bytes". Read it
+                  // before raising, because after the fact the fixture has been cleaned up.
+                  let held =
+                    try
+                      let text = File.ReadAllText(helloPath())
+                      let green = text.Contains greenAdd
+                      sprintf "%b, %s%s" green (if green then "holds greenAdd" else "still holds redAdd")
+                        (match text.Length > 160 with | true -> sprintf " | %s" (text.Substring(0, 160).Replace("\n", " ")) | false -> "")
+                    with e -> sprintf "(the fixture could not be read: %s)" e.Message
+                  return Tests.failtestf "%s — the file on disk when it gave up: %s" ex.Message held
+              }
             match i > warmupEdits with
             | true -> samples.Add(elapsed startedAt frame.ReceivedAt)
             | false -> ()
