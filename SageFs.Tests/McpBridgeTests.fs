@@ -264,4 +264,62 @@ let tests =
         { Transport = TransportState.Ready None; Pending = [] } |> isConnected |> Expect.isTrue "Ready is connected"
         { Transport = TransportState.Closed; Pending = [] } |> isConnected |> Expect.isFalse "Closed is not connected"
     ]
+
+    testList "a re-handshake keeps what the client declared" [
+      testCase "WHY — an initialize hands back its params verbatim, because the daemon records the CLIENT's capabilities from them, and those decide whether it may ever be asked a question"
+      <| fun _ ->
+        let raw =
+          """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}},"clientInfo":{"name":"a-client","version":"1"}}}"""
+        match parseRpcMessage raw |> initializeParamsOf with
+        | None -> failtest "an initialize must yield its params"
+        | Some p ->
+          p |> Expect.stringContains "keeps the client's capabilities" "\"elicitation\""
+          p |> Expect.stringContains "keeps the client's protocol version" "2025-06-18"
+
+      testCase "WHY — only an initialize yields params, so a heal can never pick up a payload that was never a handshake"
+      <| fun _ ->
+        parseRpcMessage """{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{"cursor":"x"}}"""
+        |> initializeParamsOf
+        |> Expect.isNone "a tools/list is not a handshake"
+        parseRpcMessage """{"jsonrpc":"2.0","method":"notifications/initialized"}"""
+        |> initializeParamsOf
+        |> Expect.isNone "a notification is not a handshake"
+        parseRpcMessage """{"jsonrpc":"2.0","id":1,"method":"initialize"}"""
+        |> initializeParamsOf
+        |> Expect.isNone "an initialize with no params has nothing to preserve"
+
+      testCase "WHY — the re-handshake body carries the held params under the bridge's own id, so the daemon sees the real client again"
+      <| fun _ ->
+        let held =
+          Some """{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}},"clientInfo":{"name":"a-client","version":"1"}}"""
+        let body = reHandshakeBodyFor held
+        body |> Expect.stringContains "keeps the held capabilities" "\"elicitation\""
+        body |> Expect.stringContains "keeps the client's protocol version" "2025-06-18"
+        body |> Expect.stringContains "keeps the bridge's own id" "sagefs-mcp-bridge-rehandshake"
+        body |> Expect.stringContains "and is still an initialize" "\"method\":\"initialize\""
+
+      testCase "WHY — with nothing held the bridge still mints a session, with the empty capabilities it has always sent"
+      <| fun _ ->
+        let body = reHandshakeBodyFor None
+        body |> Expect.stringContains "still an initialize" "\"method\":\"initialize\""
+        body.Contains "\"elicitation\"" |> Expect.isFalse "nothing was declared, so nothing is claimed"
+
+      testCase "WHY — an initialize is remembered and nothing after it forgets, or the first ordinary message would strip the capabilities the heal needs"
+      <| fun _ ->
+        let init = parseRpcMessage """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"""
+        let afterInit = heldAfter None init
+        afterInit |> Expect.isSome "an initialize is what gets remembered"
+        let toolsList = parseRpcMessage """{"jsonrpc":"2.0","id":2,"method":"tools/list"}"""
+        let notification = parseRpcMessage """{"jsonrpc":"2.0","method":"notifications/initialized"}"""
+        heldAfter afterInit toolsList
+        |> Expect.equal "an ordinary message never forgets the declaration" afterInit
+        heldAfter afterInit notification
+        |> Expect.equal "nor does a notification" afterInit
+        // And a second handshake replaces the first rather than merging with it.
+        let second =
+          parseRpcMessage """{"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}}"""
+        match heldAfter afterInit second with
+        | None -> failtest "the second handshake must still be remembered"
+        | Some p -> p |> Expect.stringContains "a later handshake replaces the earlier one" "2024-11-05"
+    ]
   ]

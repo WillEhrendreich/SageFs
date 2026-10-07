@@ -72,6 +72,61 @@ module McpBridge =
     with ex ->
       RpcMessage.Unparseable(raw, ex.Message)
 
+  /// The `params` object an `initialize` declared, verbatim.
+  ///
+  /// The daemon reads a client's capabilities out of `initialize`, and they
+  /// decide what that session may ever be asked: MCP elicitation, and
+  /// anything else the server only does for a client that said it can take
+  /// it. When the bridge has to mint a fresh session because the id it holds
+  /// has gone stale, it must re-declare WHAT THE CLIENT declared, or the new
+  /// session quietly starts with fewer rights than the client actually has
+  /// and nobody is told anything changed.
+  ///
+  /// Nothing else in the protocol is a handshake, so nothing else yields
+  /// params: a later heal can never pick up a payload that was never one.
+  /// Unreadable input yields nothing rather than throwing, because the caller
+  /// falls back to claiming nothing, which is the safe direction to be wrong
+  /// in — a heal must never fail to mint a session over a capability we could
+  /// not read.
+  let initializeParamsOf (msg: RpcMessage) : string option =
+    match msg with
+    | RpcMessage.Request(_, "initialize", raw) ->
+      try
+        use doc = JsonDocument.Parse(raw)
+        match doc.RootElement.TryGetProperty("params") with
+        | true, p when p.ValueKind = JsonValueKind.Object -> Some(p.GetRawText())
+        | _ -> None
+      with _ -> None
+    | _ -> None
+
+  /// What is held AFTER seeing `msg`: an `initialize` replaces whatever was
+  /// held, and everything else leaves it alone.
+  ///
+  /// The second half is the half that matters. A bridge forwards hundreds of
+  /// messages between handshakes, and if any of them could clear the held
+  /// declaration then the first `tools/list` after a client connected would
+  /// quietly strip the capabilities the re-handshake needs — the very bug
+  /// this whole path exists to avoid, arriving by a route nobody wrote.
+  let heldAfter (held: string option) (msg: RpcMessage) : string option =
+    match initializeParamsOf msg with
+    | Some declared -> Some declared
+    | None -> held
+
+  /// The body the bridge posts to re-mint a session after the daemon no
+  /// longer knows the id we hold.
+  ///
+  /// Same shape it has always had, except `params` is the client's own when
+  /// we have seen one. With none held it falls back to the empty
+  /// capabilities it has always sent: a working handshake that claims
+  /// nothing, which is what a bridge that never saw a client should say.
+  let reHandshakeBodyFor (heldParams: string option) : string =
+    let paramsJson =
+      match heldParams with
+      | Some p -> p
+      | None ->
+        """{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sagefs-mcp-bridge","version":"1"}}"""
+    sprintf """{"jsonrpc":"2.0","id":"sagefs-mcp-bridge-rehandshake","method":"initialize","params":%s}""" paramsJson
+
   /// Where the bridge is in getting the daemon up and answering. One DU,
   /// not a bool "already started" flag next to an attempt counter that
   /// could drift out of sync with it — that drift is exactly how "started

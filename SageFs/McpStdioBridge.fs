@@ -442,14 +442,6 @@ let private postOnce
         return Written
   }
 
-/// The `initialize` this bridge sends ITSELF to re-mint a session id it lost.
-/// It is never written to stdout: the client already completed a handshake and
-/// must not be handed a second `initialize` result it did not ask for (it
-/// would see an unexpected message in its stream). The id is taken from the
-/// RESPONSE HEADER, which is where the client got its own.
-let private reHandshakeBody =
-  """{"jsonrpc":"2.0","id":"sagefs-mcp-bridge-rehandshake","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sagefs-mcp-bridge","version":"1"}}}"""
-
 /// POST one JSON-RPC message to the daemon's streamable-HTTP endpoint and
 /// write whatever it answers with to stdout — a single JSON object, or an
 /// SSE stream carrying one message or several before the daemon closes it.
@@ -486,6 +478,7 @@ let forward
   (stdout: StdoutWriter)
   (captureSessionId: string -> unit)
   (sessionId: string option)
+  (heldInitializeParams: string option)
   (msg: RpcMessage)
   : Task<Result<unit, ForwardError>> =
   task {
@@ -497,8 +490,13 @@ let forward
         match sessionId, isSessionInvalid statusCode body with
         | Some _, true ->
           // The held id is stale. Clear it, mint a replacement, and re-send.
+          // The handshake is the BRIDGE's own: it is never written to stdout,
+          // because the client already completed one and must not be handed a
+          // second `initialize` result it did not ask for. Its params are the
+          // client's, though, or the new session starts with fewer rights than
+          // the client declared and nothing says so.
           Log.warn "[mcp-stdio] daemon no longer knows session %A (it restarted); re-running the handshake and re-sending this request" sessionId
-          use content = new StringContent(reHandshakeBody, Encoding.UTF8, "application/json")
+          use content = new StringContent(reHandshakeBodyFor heldInitializeParams, Encoding.UTF8, "application/json")
           use req = new HttpRequestMessage(HttpMethod.Post, sprintf "http://localhost:%d/" port, Content = content)
           req.Headers.Accept.ParseAdd("application/json")
           req.Headers.Accept.ParseAdd("text/event-stream")
@@ -592,10 +590,23 @@ let runMcpStdio (mcpPort: int) : Task<int> =
     match Capability.CapabilityTransport.headerFromEnvironment Environment.GetEnvironmentVariable with
     | Some(name, value) -> client.DefaultRequestHeaders.Add(name, value)
     | None -> ()
+    // What the CLIENT declared in its own `initialize`. The bridge forwards
+    // that message once; every later heal re-declares it, because the daemon
+    // reads capabilities out of `initialize`, and a fresh session that omitted
+    // them would silently hold fewer rights than the client asked for while
+    // nothing said anything had changed. Held per bridge rather than at module
+    // scope: two bridges in one process, which is exactly what the tests run,
+    // must not share a declaration.
+    let heldInitializeParams = ref (None: string option)
     let io: Io =
       { Probe = fun () -> task { let! info = DaemonState.probeDaemonHttpAsync mcpPort in return info.IsSome }
         StartDaemon = fun () -> startDaemonProcess mcpPort
-        Forward = forward client mcpPort stdout
+        Forward =
+          fun captureSessionId sessionId msg ->
+            match initializeParamsOf msg with
+            | Some declared -> heldInitializeParams.Value <- Some declared
+            | None -> ()
+            forward client mcpPort stdout captureSessionId sessionId heldInitializeParams.Value msg
         OpenServerStream = openServerStream client mcpPort stdout
         TerminateSession = terminateSession client mcpPort
         PumpStdin = pumpStdin
