@@ -1167,6 +1167,50 @@ type AuthorityRefusal =
   /// THAT repository's cohort, which is what `nextAction` says.
   | NotSeated of tool: ToolName
 
+/// The tools that stop, reset, discard or land work you already have: the tier
+/// a client asks you about before it lets them through.
+///
+/// This is a DIFFERENT question from the role sets in `ToolRole`. Those say WHO
+/// may call a tool; this says WHAT calling it does to your work. They overlap
+/// only partly, and the overlap matters: eight of these seventeen are already
+/// `ToolRole.conductorOnlyTools` (`delegate_conductor`, `manage_local_data`,
+/// `mint_member`, `reassign_claim`, `resolve_veto`, `revoke_member`,
+/// `set_integration_ref`, `tidy_workspace`), so for a solo operator — who is
+/// always the conductor — a prompt on those sits on top of an authority
+/// restriction that already holds. The nine that are genuinely new are
+/// `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`,
+/// `switch_workflow`, `nudge_value`, `stop_app`, `leave_cohort`,
+/// `request_landing` and `veto_landing`.
+///
+/// What is deliberately NOT here, because the absence is a judgment and should
+/// read as one: `send_fsharp_code` runs arbitrary code as the daemon's OS user
+/// and would be the loudest prompt of all, but asking before every eval trains
+/// the person to click through, and this is an eval product. `run_app` is out
+/// for the same reason even though it drops REPL bindings.
+///
+/// Held to `[<McpServerTool>]` by `McpToolGateTests`, so a renamed tool cannot
+/// leave a stale name in here, and published on `tools/list` as MCP's own
+/// `destructiveHint`, which is what lets a client keep a list of its own.
+let destructiveTools : Set<ToolName> =
+  set
+    [ ToolName.StopSession
+      ToolName.ResetFsiSession
+      ToolName.HardResetFsiSession
+      ToolName.SwitchWorkflow
+      ToolName.NudgeValue
+      ToolName.TidyWorkspace
+      ToolName.ManageLocalData
+      ToolName.StopApp
+      ToolName.LeaveCohort
+      ToolName.ReassignClaim
+      ToolName.DelegateConductor
+      ToolName.RequestLanding
+      ToolName.VetoLanding
+      ToolName.ResolveVeto
+      ToolName.SetIntegrationRef
+      ToolName.MintMember
+      ToolName.RevokeMember ]
+
 module AuthorityRefusal =
   /// One sentence: what was refused and by what rule.
   let describe (refusal: AuthorityRefusal) : string =

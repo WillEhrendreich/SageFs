@@ -500,6 +500,20 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
             return buildErrorResult ex
         })))
 
+/// Publish the destructive tier on `tools/list`. MCP's own `destructiveHint` is
+/// the field a client reads to decide whether to ask first, so the tier has one
+/// home (`Affordances.destructiveTools`) and every host can read it from here
+/// instead of keeping a copy of its own. A name SageFs never registered is left
+/// alone, so a stale tier entry can never mark a tool that does not exist.
+let applyDestructiveHints (tools: IList<Tool>) =
+  for i in 0 .. tools.Count - 1 do
+    let tool = tools.[i]
+    match SageFs.Affordances.ToolName.tryParse tool.Name with
+    | Some name when Set.contains name SageFs.Affordances.destructiveTools ->
+      if isNull tool.Annotations then tool.Annotations <- ToolAnnotations()
+      tool.Annotations.DestructiveHint <- Nullable true
+    | _ -> ()
+
 /// ListToolsFilter: `tools/list` shows each caller only what it can call. A caller that presented
 /// a member token sees its role's tools; a caller with no token sees everything under
 /// `ConnectionsAllowed`, and under `TokenRequired` only status unless it is the conductor; a caller
@@ -530,6 +544,7 @@ let createToolListFilter (mcpCtx: McpContext) =
               |> Set.ofList
           for i in result.Tools.Count - 1 .. -1 .. 0 do
             if not (Set.contains result.Tools.[i].Name visible) then result.Tools.RemoveAt i
+          applyDestructiveHints result.Tools
           return result
         })))
 

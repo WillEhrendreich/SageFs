@@ -427,10 +427,50 @@ let enforcementTests =
     }
   ]
 
+// ── Group 4: the destructive tier, and what tools/list says about it ──────
+//
+// SageFs used to say nothing about which of its tools throw work away, so a
+// client that wanted to ask first had to keep a list of its own. Four of them
+// did, in one bundle, and the list had no tie to what is registered here: a
+// renamed tool would silently drop out of every copy. The tier lives in
+// `Affordances` on the same DU the authority gate reads, and `tools/list` is
+// where a client is told it.
+
+let destructiveTierTests =
+  testList "destructive tier" [
+
+    testCase "WHY — the tier names only tools SageFs registers, so a rename cannot leave a stale name gating nothing"
+    <| fun _ ->
+      if not (isRegistered ()) then skiptest "SageFsTools type not found; reflection skipped"
+      let registered = registeredToolSet ()
+      let stale =
+        SageFs.Affordances.destructiveTools
+        |> Set.map SageFs.Affordances.ToolName.toString
+        |> Set.filter (fun name -> not (Set.contains name registered))
+      stale |> Set.toList |> Expect.equal "every tier member is a registered tool" []
+
+    testCase "WHY — tools/list carries the standard destructive hint, so a client reads the tier from the server rather than keeping its own copy"
+    <| fun _ ->
+      let tierMember = ModelContextProtocol.Protocol.Tool(Name = "stop_session")
+      let ordinary = ModelContextProtocol.Protocol.Tool(Name = "list_sessions")
+      let stranger = ModelContextProtocol.Protocol.Tool(Name = "frobnicate")
+      let tools = System.Collections.Generic.List<_>([ tierMember; ordinary; stranger ])
+      SageFs.Server.McpServer.applyDestructiveHints tools
+      (isNull tierMember.Annotations)
+      |> Expect.isFalse "the tier member is annotated"
+      tierMember.Annotations.DestructiveHint
+      |> Expect.equal "the tier member reads as destructive" (System.Nullable true)
+      (isNull ordinary.Annotations)
+      |> Expect.isTrue "a tool outside the tier is left alone"
+      (isNull stranger.Annotations)
+      |> Expect.isTrue "a name SageFs never registered is left alone"
+  ]
+
 [<Tests>]
 let mcpToolGateTests =
   testList "MCP tool gate" [
     declarationCompletenessTests
     gateDecisionTests
     enforcementTests
+    destructiveTierTests
   ]

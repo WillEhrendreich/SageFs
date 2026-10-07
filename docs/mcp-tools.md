@@ -23,6 +23,15 @@ sees only the tools its role allows. And a daemon started with
 `SAGEFS_IDENTITY_POLICY=TokenRequired` shows a connection with no token only
 the status tools, unless that connection is the conductor.
 
+Every tool in the catalog also says what calling it does to your work.
+Seventeen of them stop, reset, discard or land something you already have, and
+each comes back with MCP's own `destructiveHint: true`, so a client that wants
+to ask before letting one through reads the list from the server instead of
+keeping a copy of its own. That copy is the trap: a renamed tool drops out of
+every hand-typed list without a sound. The seventeen live in
+`Affordances.destructiveTools`, and a test holds them to the tools that are
+actually registered.
+
 The full advertised set is 70 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those
