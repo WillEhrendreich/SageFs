@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  SageFs as a launchd user agent (macOS). Install it from the repo root. This is
+  the same block as the README's, and a test keeps the two identical:
+
+    dotnet_root="$(dirname "$(realpath "$(command -v dotnet)")")"
+    if [ -x "$dotnet_root/dotnet" ]; then
+      launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs 2>/dev/null
+      mkdir -p ~/Library/LaunchAgents ~/Library/Logs/sagefs "$HOME/Library/Application Support/sagefs-daemon"
+      sed -e "s|@HOME@|$HOME|g" -e "s|@DOTNET_ROOT@|$dotnet_root|g" \
+        contrib/launchd/io.github.willehrendreich.sagefs.plist \
+        > ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
+    else
+      echo "No dotnet found through PATH, so nothing was installed. realpath needs macOS 12.3 or later." >&2
+    fi
+
+  The daemon then outlives every agent, terminal and editor, and comes back at
+  login.
+
+  launchd expands no variables in a plist: not ~, not $HOME. So the file in the
+  repo holds two placeholders, and the sed line above fills them in. @HOME@ is
+  your home directory. @DOTNET_ROOT@ is the folder that holds the real dotnet
+  executable, found through PATH with symlinks resolved. The tool's launcher
+  finds the runtime through DOTNET_ROOT, and launchd does not read your shell
+  profile, so it is set here. The install checks that folder really holds
+  dotnet before it writes anything: without dotnet on PATH, or on a macOS older
+  than 12.3 (which has no realpath), it would otherwise write a plist that
+  looks fine and cannot start.
+
+  If you move or upgrade .NET to a different folder, run the install again. It
+  unloads the old agent first, because launchd keeps a loaded agent's settings
+  until it is unloaded, and a second bootstrap fails while the first is loaded.
+  It unloads before it rewrites the plist: rewriting a loaded agent's plist and
+  then unloading it made the next bootstrap fail about one time in four.
+
+  ProgramArguments assumes SageFs is installed as a global tool, which puts the
+  executable at ~/.dotnet/tools/sagefs.
+
+  The daemon's working directory is NOT your home directory. A request that
+  names no working directory (a session create, get_available_projects) falls
+  back to the daemon's own cwd, so a daemon started in $HOME hands $HOME out as
+  a session root. SageFs refuses to watch a home directory, so a session rooted
+  there gets no hot reload and no live testing. launchd does not create a
+  working directory, which is why the mkdir line above does. It is a sibling of
+  ~/Library/Application Support/SageFs, where the daemon writes its own log,
+  and not inside it, so the daemon never watches its own writes. Open your
+  sessions in a project directory.
+
+  Two layers restart it. The supervised flag runs a watchdog that starts a new
+  daemon whenever the daemon process is gone, whatever its exit code, so
+  `sagefs stop` gets you a fresh daemon. KeepAlive with SuccessfulExit false
+  restarts the watchdog itself if it crashes, the same as Restart=on-failure in
+  the systemd unit. A watchdog that gives up after repeated crashes exits 0, and
+  launchd leaves it down.
+
+  To stop it:   launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs
+  To restart:   launchctl kickstart -k gui/$(id -u)/io.github.willehrendreich.sagefs
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.github.willehrendreich.sagefs</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@HOME@/.dotnet/tools/sagefs</string>
+    <string>--supervised</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DOTNET_ROOT</key>
+    <string>@DOTNET_ROOT@</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>@HOME@/Library/Application Support/sagefs-daemon</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+
+  <key>StandardOutPath</key>
+  <string>@HOME@/Library/Logs/sagefs/sagefs.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/Library/Logs/sagefs/sagefs.err.log</string>
+</dict>
+</plist>

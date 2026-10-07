@@ -32,7 +32,7 @@ dotnet <main checkout>/SageFs/bin/Release/net11.0/SageFs.dll --no-resume     # t
 sagefs --no-resume                                                           # or the global tool
 ```
 
-`--no-resume` starts it without restoring earlier sessions (`SageFs/Program.fs`, `--no-resume`). The default port is 37749. To run it as a user service instead, see "Run it as a service" in the repo `Readme.md` and `contrib/systemd/sagefs.service`.
+`--no-resume` starts it without restoring earlier sessions (`SageFs/Program.fs`, `--no-resume`). The default port is 37749. To run it as a user service instead, see "Run it as a service" in the repo `Readme.md`, `contrib/systemd/sagefs.service` (Linux) and `contrib/launchd/io.github.willehrendreich.sagefs.plist` (macOS).
 
 Before each run the harness reads `/health` and `get_daemon_status`. The daemon must be healthy, `memoryPressure` must be `normal`, and the machine must have more than 8 GB available. It waits a bounded time and then refuses with exit 3. Those readings are of the whole machine, so other agents, other lemmings and an open editor all count against them.
 
