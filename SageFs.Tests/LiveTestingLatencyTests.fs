@@ -125,6 +125,7 @@ let private saveToGreen () : Task<unit> =
               }
             drain feed
             let startedAt = Stopwatch.GetTimestamp()
+            let wroteGreenAt = DateTimeOffset.UtcNow
             File.WriteAllText(helloPath (), original)
             let! frame =
               task {
@@ -134,14 +135,22 @@ let private saveToGreen () : Task<unit> =
                   // The ceiling is written for "the daemon stopped answering", but the failing runs are
                   // the opposite: the feed answers, settles, and reports the run still RED. Whether the
                   // FILE holds the green line at that instant is the whole diagnosis — it separates "the
-                  // write never landed" from "the write landed and the run judged stale bytes". Read it
-                  // before raising, because after the fact the fixture has been cleaned up.
+                  // write never landed" from "the write landed and the run judged stale bytes".
+                  //
+                  // The TIMING separates those two further: if the file's mtime is AFTER the moment this
+                  // test wrote green, something else wrote it back, which names an external writer instead
+                  // of a missed event. Read before raising — the fixture is cleaned up afterwards.
                   let held =
                     try
-                      let text = File.ReadAllText(helloPath())
+                      let path = helloPath ()
+                      let text = File.ReadAllText path
+                      let mtime = File.GetLastWriteTimeUtc path
                       let green = text.Contains greenAdd
-                      sprintf "%b, %s%s" green (if green then "holds greenAdd" else "still holds redAdd")
-                        (match text.Length > 160 with | true -> sprintf " | %s" (text.Substring(0, 160).Replace("\n", " ")) | false -> "")
+                      let afterMine = mtime > wroteGreenAt.UtcDateTime
+                      sprintf "%b, %s | mtime %s vs my green write %s → %s"
+                        green (if green then "holds greenAdd" else "still holds redAdd")
+                        (mtime.ToString "HH:mm:ss.fff") (wroteGreenAt.UtcDateTime.ToString "HH:mm:ss.fff")
+                        (if afterMine then "SOMETHING WROTE AFTER ME" else "mine is the last write")
                     with e -> sprintf "(the fixture could not be read: %s)" e.Message
                   return Tests.failtestf "%s — the file on disk when it gave up: %s" ex.Message held
               }
