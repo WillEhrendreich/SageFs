@@ -304,9 +304,9 @@ let items : Item list =
       "Tokens live in the daemon's memory, so a restart drops every one and the orchestrator mints new ones. Keeping their hashes would let a run survive a restart, but only in a store that is not the cohort ledger, and I'd rather see someone need it first."
 
     item "ask-before-a-destructive-tool-runs" "Ask you before a destructive tool runs" Agents Later
-      NoLandmarkYet
+      (landmark "SageFs/McpServer.fs" "confirmationStep")
       [ "docs/mcp-tools.md" ]
-      "The server could ask you itself, over MCP's own elicitation request, so a stop, a reset or a landing waits for a real yes instead of trusting every client to prompt on its own. It has to sit after the four gates already there rather than replace them, take the tier as a `Set<ToolName>` rather than one more string list, and say out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into."
+      "The server asks you itself now, over MCP's own elicitation request: a confirm-tier tool stops after the four gates already there and before its body, names what it is about to take away, and a decline refuses the call the way a gate rejection does. The tier sits on the same `ToolName` the authority gate reads rather than in another string list, and it says out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into."
 
     // ---- Exploring: ideas, no promise ----
 
