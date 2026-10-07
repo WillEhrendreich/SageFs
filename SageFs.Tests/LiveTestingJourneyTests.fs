@@ -275,7 +275,11 @@ let private scopeKeepsTestsOutOfAutomaticRuns () : Task<unit> =
 
 [<Tests>]
 let journeyTests =
-  testList "Live-testing journeys" [
+  // Sequenced for the same reason as Live-testing latency: one --integration-lt runner, one daemon,
+  // one session, one Hello.fs — and the latency cases writing to it run beside these. An edit these
+  // tests put down is overwritten by a neighbouring case before its own summary is read, which is
+  // why "an edit typed while the confirming build ... is judged" could see no broken text at all.
+  testSequenced <| testList "Live-testing journeys" [
     Integration.dedicatedCaseTask "--integration-lt" "LT coverage: each line lists exactly the tests that cover it" perTestCoverageGate
     Integration.dedicatedCaseTask "--integration-lt" "LT coverage: an edit to a line only one test runs selects only that test" lineEditSelectsOnlyItsTest
     Integration.dedicatedCaseTask "--integration-lt" "LT provenance: an evaluated verdict is confirmed by a real build" evaluatedThenVerifiedByBuild

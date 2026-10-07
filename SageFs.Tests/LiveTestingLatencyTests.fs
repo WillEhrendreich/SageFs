@@ -154,7 +154,14 @@ let private saveToGreen () : Task<unit> =
 
 [<Tests>]
 let latencyTests =
-  testList "Live-testing latency" [
+  // Sequenced on purpose. Both cases share the ONE daemon, session and Hello.fs that the
+  // --integration-lt runner starts, and Expecto runs a list's cases in parallel by default. Run that
+  // way, the keystroke case flips red/green through its VIRTUAL BUFFER on every iteration, so its
+  // settles interleave with save-to-green's wait: save-to-green then observes the PREVIOUS save's
+  // verdict while `File.ReadAllText` at give-up already shows the right line. That single confusion
+  // produced every symptom of the lt tier's flake — green waits seeing Failed:1, red waits seeing
+  // "All 11 passed", no overflow frame, and a failure that survived exclusive admission at load 1.7.
+  testSequenced <| testList "Live-testing latency" [
     Integration.dedicatedCaseTask
       "--integration-lt"
       "LT latency: keystroke to the verdict on the edited function's test, p50 and p95 over many edits"
