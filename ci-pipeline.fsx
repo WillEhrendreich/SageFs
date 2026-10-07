@@ -278,12 +278,15 @@ let testTier (args: string) = TierPlan.tier args
 /// Directory.Build.props' SageFsTargetFrameworks.
 let testTierOn (framework: TierPlan.Framework) (args: string) = TierPlan.tierOn framework args
 
-/// Declare a tier whose job is to MEASURE latency: it asserts p50/p95 against a
-/// product bound (`--integration-hr-delta` vs
-/// `TestTimeouts.hotReloadDeltaServedP95Bound`), so TierPlan.decide gives it the
-/// machine alone — nothing starts beside it and it waits for the drain — and its
-/// failures print the load average they were measured under.
-let testTierMeasuringLatency (args: string) = TierPlan.tierMeasuringLatency args
+/// Declare a tier that needs the machine to itself (`TierPlan.Demand.Exclusive`): TierPlan.decide
+/// gives it the machine alone — nothing starts beside it and it waits for the drain — and its
+/// failures print the load average under its own words. The reason comes in the two sentences
+/// that say it: `hold` subjects the hold line ("<hold> needs the machine to itself ..."),
+/// `loadLead` leads the failure report ("FAILURE <loadLead> at load average N.N"). ARGV FIRST:
+/// TestInfrastructure's tier parsers anchor on the first quoted string after the step name, so
+/// the argv stays the first quoted string here exactly as in a plain testTier step.
+let testTierExclusive (args: string) (hold: string) (loadLead: string) =
+  TierPlan.tierExclusive hold loadLead args
 
 /// Per-tier scratch, OUTSIDE the checkout: inside a tier's mount namespace the
 /// checkout path shows that tier's clone, so anything the parent must read back
@@ -491,8 +494,8 @@ type FirstFailure = { Tier: string; Case: string; Report: string list }
 let firstFailure : FirstFailure option ref = ref None
 let failureGate = obj ()
 let cancelRequested = ref false
-/// Tiers that failed after the first one, named but not reported in full — with the lines a measuring
-/// tier needs added beside its name (the load average it was measured under).
+/// Tiers that failed after the first one, named but not reported in full — with the lines an
+/// Exclusive tier needs added beside its name (the load it failed under, in its own words).
 let alsoFailed = Collections.Generic.List<string * string * string list>()
 /// Kill-everything functions of the tiers running right now.
 let runningKillers = Collections.Concurrent.ConcurrentDictionary<string, unit -> unit>()
@@ -513,9 +516,13 @@ let cancelAll (because: string) =
     try kv.Value () with _ -> ()
 
 /// The 1-minute load average, read at THIS moment (/proc/loadavg's first field), as one decimal.
-/// A tier that measures latency prints it with every red it reports: `p95 11922.7ms` under a load average
-/// of 41.2 is contention, and `p95 1773.8ms` under a calm machine is the product — the number alone says
-/// neither. Unreadable is "unknown", never a made-up zero.
+/// An Exclusive tier prints it with every red it reports: `p95 11922.7ms` under a load average
+/// of 41.2 is contention, and `p95 1773.8ms` under a calm machine is the product — the number
+/// alone says neither. The line is PHRASED FOR THE TIER'S OWN REASON (TierPlan.Demand): a
+/// measuring tier says `measured at load average 41.2`, a tier asserting wall-clock rendering
+/// says what it was doing — it is not a measurement and must never claim to have measured one.
+/// An Ordinary tier reports no load at all: it failed as one of many. Unreadable is "unknown",
+/// never a made-up zero.
 let loadAverage1Minute () =
   try
     let avg = (File.ReadAllText "/proc/loadavg").Split(' ', StringSplitOptions.RemoveEmptyEntries)[0]
@@ -528,13 +535,16 @@ let loadAverage1Minute () =
 /// it and carries on. Later failures are named in one line each.
 let reportFailure (tier: TierPlan.Tier) (failure: FailureReport.Failure) =
   let reproduce = FailureReport.reproduceCommand (TierPlan.dllOf tier.Framework) tier.Args failure.Name
-  // When the tier's job is to MEASURE, its failure carries the machine load it was measured under, so a red
-  // percentile is distinguishable from contention the assertion never meant to claim anything about.
-  let measuredUnder =
-    match tier.MeasuresLatency with
-    | false -> []
-    | true -> [ sprintf "%smeasured at load average %s" FailureReport.linePrefix (loadAverage1Minute ()) ]
-  let lines = FailureReport.render tier.Name rootDir reproduce FailureReport.NotRecorded failure @ measuredUnder
+  // An Exclusive tier's failure carries the machine load it failed under, in ITS OWN words (the
+  // tier declared them with its Demand): a measuring tier's red is "measured at load average
+  // N.N", an assertion's says what it was asserting when it went red — so contention stops
+  // reading as a regression, and a claim that measures nothing never says "measured". An
+  // Ordinary tier failed as one of many and the machine's load is not its condition: nothing.
+  let loadNote =
+    match TierPlan.Demand.failureCondition (loadAverage1Minute ()) tier.Demand with
+    | None -> []
+    | Some condition -> [ FailureReport.linePrefix + condition ]
+  let lines = FailureReport.render tier.Name rootDir reproduce FailureReport.NotRecorded failure @ loadNote
   let isFirst =
     lock failureGate (fun () ->
       match firstFailure.Value with
@@ -542,7 +552,7 @@ let reportFailure (tier: TierPlan.Tier) (failure: FailureReport.Failure) =
         firstFailure.Value <- Some { Tier = tier.Name; Case = failure.Name; Report = lines }
         true
       | Some _ ->
-        alsoFailed.Add((tier.Name, failure.Name, measuredUnder))
+        alsoFailed.Add((tier.Name, failure.Name, loadNote))
         false)
   match isFirst with
   | true ->
@@ -555,7 +565,7 @@ let reportFailure (tier: TierPlan.Tier) (failure: FailureReport.Failure) =
       Threading.Tasks.Task.Run(fun () -> cancelAll (sprintf "%s failed in %s" failure.Name tier.Name)) |> ignore
   | false ->
     printfn "%salso failed, tier %s: %s" FailureReport.linePrefix tier.Name failure.Name
-    for l in measuredUnder do printfn "%s" l
+    for l in loadNote do printfn "%s" l
 
 /// Run one tier (in its own clone when isolated) and record its outcome.
 /// `slotIndex` is which of the `slots` concurrently-running workers is
@@ -840,7 +850,8 @@ let runTiers (tiers: TierPlan.Tier list) =
             })
         lock gate (fun () -> tasks.Add tierTask)
       | TierPlan.Held reason, _, _ ->
-        let kind = (match reason with TierPlan.AtProcessCap _ -> "cap" | TierPlan.Settling _ -> "settling" | TierPlan.CpuBusy _ -> "cpu" | TierPlan.MemoryShort _ -> "memory" | TierPlan.MeasurementNeedsTheMachine _ -> "measurement")
+        // The reason joins the kind: two different holds are two different statements, each said once.
+        let kind = (match reason with TierPlan.AtProcessCap _ -> "cap" | TierPlan.Settling _ -> "settling" | TierPlan.CpuBusy _ -> "cpu" | TierPlan.MemoryShort _ -> "memory" | TierPlan.ExclusiveNeedsTheMachine (hold, _) -> "exclusive: " + hold)
         // Said once per kind, not once per look: a wait of minutes is one line, not a hundred. The settle between two
         // starts is routine and not worth a line.
         if lastHeld.Value <> kind && kind <> "settling" then
@@ -1757,12 +1768,18 @@ let sagefsPipeline = pipeline "sagefs" {
           :: [ for k in 1 .. hostShards -> testTier $"--integration-host --shard {k}/{hostShards} --summary" ]
         let ciOnly =
           [ testTier "--mutation-score"
-            testTier "--integration-browser --summary"
+            // The browser journeys are wall-clock waits on a renderer: under a machine admitting up
+            // to 12 tiers they go red when the renderer is starved (three different cases across
+            // three runs, never reproducible standalone). The assertion is about rendering time, so
+            // the tier gets the machine alone — admission, never a longer timeout.
+            testTierExclusive "--integration-browser --summary" "asserting wall-clock rendering" "while asserting wall-clock rendering"
+            // --integration-hr and --integration-hr-restart also time out under load, but a timeout
+            // is not a claim about the machine: they stay Ordinary and run concurrently.
             testTier "--integration-hr --summary"
             testTier "--integration-hr-restart --summary"
-            // The measuring tier: it ASSERTS p50/p95, so it is declared measuring and
+            // The measuring tier: it ASSERTS p50/p95, so it is declared exclusive and
             // runs exclusively — everything concurrent with it would be what it measured.
-            testTierMeasuringLatency "--integration-hr-delta --summary"
+            testTierExclusive "--integration-hr-delta --summary" "measuring the product's latency" "measured"
             // The live-testing cases edit the sample in place, so a tier is a share of them on a copy of its own.
             for k in 1 .. ltShards do
               testTier $"--integration-lt --shard {k}/{ltShards} --summary"
@@ -1833,7 +1850,7 @@ let sagefsPipeline = pipeline "sagefs" {
         | Some failure ->
           let extra =
             alsoFailed
-            |> Seq.map (fun (tier, case, measuredUnder) -> sprintf "%salso failed, tier %s: %s" FailureReport.linePrefix tier case :: measuredUnder)
+            |> Seq.map (fun (tier, case, loadNote) -> sprintf "%salso failed, tier %s: %s" FailureReport.linePrefix tier case :: loadNote)
             |> Seq.collect id
             |> List.ofSeq
           let all = failure.Report @ extra

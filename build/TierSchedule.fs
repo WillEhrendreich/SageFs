@@ -46,7 +46,7 @@ let peakBytesOf (history: History) (name: string) : int64 =
   | _ -> Admission.unknownPeakBytes
 
 let candidateOf (history: History) (tier: Tier) : Candidate =
-  { Label = tier.Name; PeakBytes = peakBytesOf history tier.Name; MeasuresLatency = tier.MeasuresLatency }
+  { Label = tier.Name; PeakBytes = peakBytesOf history tier.Name; Demand = tier.Demand }
 
 // ---- per-case seconds -------------------------------------------------------------------------------
 

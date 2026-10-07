@@ -889,25 +889,26 @@ module TrustSignal =
       exitCode
 
   /// The argument strings of every `testTier "<args>"` / `testTierOn <fw> "<args>"` /
-  /// `testTierMeasuringLatency "<args>"` / `testTierAfter [..] "<args>"` step in
+  /// `testTierExclusive "<args>" <reason>` / `testTierAfter [..] "<args>"` step in
   /// ci-pipeline.fsx text. ONE parser, shared by TrustSignalTests and the
   /// Definition-of-Done probe, so "does CI invoke this runner" cannot mean two
-  /// different things in two places.
+  /// different things in two places. Every step keeps its argv as the FIRST quoted
+  /// string, which is what the pattern anchors on.
   let pipelineTierArgs (pipelineText: string) : string list =
     System.Text.RegularExpressions.Regex.Matches(
-      pipelineText, "testTier(?:MeasuringLatency|On\\s+\\S+|After\\s*\\[[^\\]]*\\])?\\s*\\$?\"([^\"]+)\"")
+      pipelineText, "testTier(?:Exclusive|On\\s+\\S+|After\\s*\\[[^\\]]*\\])?\\s*\\$?\"([^\"]+)\"")
     |> Seq.map (fun m -> m.Groups[1].Value)
     |> List.ofSeq
 
-  /// Every `testTier "<args>"` (primary framework), `testTierMeasuringLatency "<args>"`
-  /// (also the primary framework — measuring is not a framework) and `testTierOn
+  /// Every `testTier "<args>"` (primary framework), `testTierExclusive "<args>" <reason>`
+  /// (also the primary framework — exclusivity is not a framework) and `testTierOn
   /// TierPlan.<Case> "<args>"` step in ci-pipeline.fsx text, with the framework
   /// it runs on. A `testTierOn` naming a case that does not exist is skipped
   /// here and fails the pipeline's own compile.
   let pipelineFrameworkTiers (pipelineText: string) : (SageFs.Build.TierPlan.Framework * string) list =
     let matches =
       System.Text.RegularExpressions.Regex.Matches(
-        pipelineText, "testTier(?:MeasuringLatency)?(On\\s+(?:TierPlan\\.)?(\\w+))?\\s*\\$?\"([^\"]+)\"")
+        pipelineText, "testTier(?:Exclusive)?(On\\s+(?:TierPlan\\.)?(\\w+))?\\s*\\$?\"([^\"]+)\"")
     [ for m in matches do
         match m.Groups[1].Success with
         | false -> yield SageFs.Build.TierPlan.Framework.primary, m.Groups[3].Value

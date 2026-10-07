@@ -118,6 +118,34 @@ let ciWiringTests =
       Regex.Matches(pipeline.Value, "run \\$\"dotnet \\{testDll\\}")
       |> Seq.length
       |> Expect.equal "a raw `run $\"dotnet {testDll} ...\"` bypasses the trust ledger and stops the pipeline on red" 0
+
+    // Exclusive admission is a claim about the machine, and the claim's REASON travels with
+    // the declaration (TierPlan.Demand): the hold line and the failure report both say it.
+    // A tier that merely times out claims nothing, so it must stay declared with plain
+    // `testTier` — `--integration-hr` and `--integration-hr-restart` time out and are named
+    // here so they cannot quietly be promoted to exclusivity (that would serialize the gate
+    // for no claim) nor dropped (a timeout under load is not a machine claim either).
+    testCase "the tiers that take the machine alone declare their reason, and only they" <| fun _ ->
+      let exclusive =
+        Regex.Matches(pipeline.Value, "testTierExclusive \"([^\"]+)\" \"([^\"]*)\" \"([^\"]*)\"")
+        |> Seq.map (fun m -> m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value)
+        |> List.ofSeq
+      exclusive
+      |> List.map (fun (args, _, _) -> args)
+      |> List.sort
+      |> Expect.equal
+           "the measurement and the rendering assertions are the only claims about the machine"
+           [ "--integration-browser --summary"; "--integration-hr-delta --summary" ]
+      for (args, hold, loadLead) in exclusive do
+        hold |> Expect.isNotEmpty (sprintf "%s declares what its hold line says" args)
+        loadLead |> Expect.isNotEmpty (sprintf "%s declares what its failure report says" args)
+      let plain =
+        Regex.Matches(pipeline.Value, "testTier \"([^\"]+)\"")
+        |> Seq.map (fun m -> m.Groups[1].Value)
+        |> Set.ofSeq
+      [ "--integration-hr --summary"; "--integration-hr-restart --summary" ]
+      |> List.filter (fun args -> not (plain.Contains args))
+      |> Expect.isEmpty "a tier that only times out stays Ordinary: declared with plain testTier"
   ]
 
 /// The default suite has to run on every framework the tool ships for. It ran

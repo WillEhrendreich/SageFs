@@ -12,18 +12,34 @@ let private gib (n: int) = int64 n * Admission.bytesPerGiB
 
 let private limits = Admission.standard 4
 
-let private head = { Label = "--integration-host[1/5]"; PeakBytes = gib 2; MeasuresLatency = false }
+let private head = { Label = "--integration-host[1/5]"; PeakBytes = gib 2; Demand = Ordinary }
 
 let private calm = { Pressure = Measured 5.0; Memory = AvailableBytes (gib 40) }
 
 let private running (label: string) (startedAt: float) =
-  { Unit = { Label = label; PeakBytes = gib 2; MeasuresLatency = false }; StartedAt = startedAt }
+  { Unit = { Label = label; PeakBytes = gib 2; Demand = Ordinary }; StartedAt = startedAt }
+
+/// The two reasons the pipeline declares, verbatim (ci-pipeline.fsx's `testTierExclusive`
+/// steps): the measurement's, and the browser tier's rendering assertions'. Each reason is a
+/// `Demand`'s two sentences — what the hold line says, and what the failure report says.
+let private measuringHold = "measuring the product's latency"
+let private measuringLoadLead = "measured"
+let private browserHold = "asserting wall-clock rendering"
+let private browserLoadLead = "while asserting wall-clock rendering"
+
+/// A unit that needs the machine to itself, for `hold`'s reason (`Demand.Exclusive`).
+let private exclusiveUnit (hold: string) (loadLead: string) (label: string) =
+  { Unit = { Label = label; PeakBytes = gib 2; Demand = Exclusive (hold, loadLead) }; StartedAt = 0.0 }
 
 /// A unit whose job is to MEASURE latency (it asserts p50/p95): `decide` gives it the machine alone.
-let private measuringUnit (label: string) =
-  { Unit = { Label = label; PeakBytes = gib 2; MeasuresLatency = true }; StartedAt = 0.0 }
+let private measuringUnit (label: string) = exclusiveUnit measuringHold measuringLoadLead label
 
-let private measuringHead = { Label = "--integration-hr-delta"; PeakBytes = gib 2; MeasuresLatency = true }
+let private measuringHead =
+  { Label = "--integration-hr-delta"; PeakBytes = gib 2; Demand = Exclusive (measuringHold, measuringLoadLead) }
+
+/// The second tier that takes the machine alone: the browser tier's wall-clock rendering assertions.
+let private browserHead =
+  { Label = "--integration-browser"; PeakBytes = gib 2; Demand = Exclusive (browserHold, browserLoadLead) }
 
 let private afterRamp = Admission.rampSeconds * 2.0
 
@@ -100,33 +116,70 @@ let tests =
       decide (Fixed 2) tight 0.0 (scheduleWith [ running "u1" 0.0; running "u2" 0.0 ] (AdmittedAt 0.0)) head
       |> Expect.equal "the count is" (Wait (AtProcessCap 2))
 
-    // ── exclusivity: a tier that ASSERTS latency measures the machine, so it gets the machine alone ──
-    testCase "WHY — a measuring head waits while anything else runs: its p95 would measure the queue it shares, not the product" <| fun _ ->
+    // ── exclusivity: a tier whose result is a claim about the machine gets the machine alone ──
+    testCase "WHY — an exclusive head waits while anything else runs: its claim would measure the queue it shares, not the product" <| fun _ ->
       match decide (ByPressure limits) calm afterRamp (scheduleWith [ running "u1" 0.0 ] (AdmittedAt 0.0)) measuringHead with
-      | Wait (MeasurementNeedsTheMachine waitingFor) ->
+      | Wait (ExclusiveNeedsTheMachine (hold, waitingFor)) ->
+        hold |> Expect.equal "the hold line says the head's own reason" measuringHold
         waitingFor |> Expect.stringContains "waits on the unit that runs" "u1"
-      | other -> failtestf "a measurement never starts beside a running unit, got %A" other
+      | other -> failtestf "an exclusive head never starts beside a running unit, got %A" other
 
-    testCase "WHY — nothing starts while a measuring unit runs, whatever the policy says" <| fun _ ->
+    testCase "WHY — nothing starts while an exclusive unit runs, whatever the policy says" <| fun _ ->
       let schedule = scheduleWith [ measuringUnit "--integration-hr-delta" ] (AdmittedAt 0.0)
       match decide (ByPressure limits) calm afterRamp schedule head with
-      | Wait (MeasurementNeedsTheMachine waitingFor) ->
-        waitingFor |> Expect.stringContains "names the measurement it waits for" "--integration-hr-delta"
-      | other -> failtestf "expected MeasurementNeedsTheMachine, got %A" other
+      | Wait (ExclusiveNeedsTheMachine (hold, waitingFor)) ->
+        hold |> Expect.equal "the hold line says the running unit's reason" measuringHold
+        waitingFor |> Expect.stringContains "names the machine it waits for" "--integration-hr-delta"
+      | other -> failtestf "expected ExclusiveNeedsTheMachine, got %A" other
       match decide (Fixed 4) calm afterRamp schedule head with
-      | Wait (MeasurementNeedsTheMachine _) -> ()
+      | Wait (ExclusiveNeedsTheMachine _) -> ()
       | other -> failtestf "exclusivity holds under a fixed count too, got %A" other
 
-    testCase "WHY — non-measuring tiers still admit concurrently exactly as before: the normal path is untouched" <| fun _ ->
+    testCase "WHY — ordinary tiers still admit concurrently exactly as before: the normal path is untouched" <| fun _ ->
       let peers = [ running "u1" 0.0; running "u2" 0.0 ]
       decide (ByPressure limits) calm afterRamp (scheduleWith peers (AdmittedAt 0.0)) head
       |> Expect.equal "two peers and a calm machine admit the next tier, as always" (Admit Fits)
       decide (Fixed 4) calm afterRamp (scheduleWith peers (AdmittedAt 0.0)) head
       |> Expect.equal "under a fixed count too" (Admit Fits)
 
-    testCase "WHY — an idle machine admits a measuring tier: it waits for company to leave, not for quiet" <| fun _ ->
+    testCase "WHY — an idle machine admits an exclusive tier: it waits for company to leave, not for quiet" <| fun _ ->
       decide (ByPressure limits) calm afterRamp (scheduleWith [] NeverAdmitted) measuringHead
       |> Expect.equal "nothing runs, so the measurement starts" (Admit Fits)
+
+    // The SECOND reason: a rendering assertion is not a measurement, and the rule does not
+    // care which it is — one exclusivity rule, the reason only naming it.
+    testCase "WHY — nothing starts beside a tier asserting wall-clock rendering either: one rule, whatever the reason" <| fun _ ->
+      let schedule = scheduleWith [ exclusiveUnit browserHold browserLoadLead "--integration-browser" ] (AdmittedAt 0.0)
+      match decide (ByPressure limits) calm afterRamp schedule head with
+      | Wait (ExclusiveNeedsTheMachine (hold, waitingFor)) ->
+        hold |> Expect.equal "the hold line says why the machine is held" browserHold
+        waitingFor |> Expect.stringContains "names the machine it waits for" "--integration-browser"
+      | other -> failtestf "a rendering assertion gets the machine alone too, got %A" other
+      match decide (Fixed 4) calm afterRamp schedule head with
+      | Wait (ExclusiveNeedsTheMachine _) -> ()
+      | other -> failtestf "the second reason holds under a fixed count too, got %A" other
+
+    testCase "WHY — an exclusive head waiting on ordinary tiers says ITS reason, so a reader knows what the hold is for" <| fun _ ->
+      let peers = [ running "u1" 0.0; running "u2" 0.0 ]
+      match decide (ByPressure limits) calm afterRamp (scheduleWith peers (AdmittedAt 0.0)) browserHead with
+      | Wait (ExclusiveNeedsTheMachine (hold, waitingFor)) ->
+        hold |> Expect.equal "the head's own reason, never the running units'" browserHold
+        waitingFor |> Expect.stringContains "waits for the first running tier" "u1"
+        waitingFor |> Expect.stringContains "and for the second" "u2"
+      | other -> failtestf "the assertion waits for the drain, got %A" other
+
+    // The failure report: the load rides every Exclusive tier's red, phrased for its own
+    // reason — the measurement keeps "measured at load average N.N", and a tier that is not
+    // measuring never says "measured".
+    testCase "WHY — an exclusive tier's failure carries the load in its own words; an ordinary tier carries nothing" <| fun _ ->
+      Demand.failureCondition "41.2" (Exclusive (measuringHold, measuringLoadLead))
+      |> Expect.equal "the measurement keeps its line" (Some "measured at load average 41.2")
+      Demand.failureCondition "41.2" (Exclusive (browserHold, browserLoadLead))
+      |> Expect.equal "the assertion says what it was doing, not that it measured" (Some "while asserting wall-clock rendering at load average 41.2")
+      Demand.failureCondition "unknown" (Exclusive (measuringHold, measuringLoadLead))
+      |> Expect.equal "an unreadable load is 'unknown', never a made-up zero" (Some "measured at load average unknown")
+      Demand.failureCondition "41.2" Ordinary
+      |> Expect.isNone "an ordinary tier failed as one of many: the machine's load is not its condition"
 
     testCase "WHY — with nothing of ours running, a unit that waited out the patience starts anyway, so a neighbour cannot starve the gate" <| fun _ ->
       let starved = { calm with Memory = AvailableBytes 0L }
@@ -144,8 +197,8 @@ let tests =
       | other -> failtestf "expected MemoryShort, got %A" other
 
     testCase "WHY — advance looks at the head of the line only, so the order the caller chose is the order units start in" <| fun _ ->
-      let big = { Label = "big"; PeakBytes = gib 30; MeasuresLatency = false }
-      let small = { Label = "small"; PeakBytes = gib 1; MeasuresLatency = false }
+      let big = { Label = "big"; PeakBytes = gib 30; Demand = Ordinary }
+      let small = { Label = "small"; PeakBytes = gib 1; Demand = Ordinary }
       let tight = { calm with Memory = AvailableBytes (gib 20) }
       let schedule = { startSchedule 0.0 [ big; small ] with Running = [ running "u1" 0.0 ]; LastAdmit = AdmittedAt 0.0 }
       match advance (ByPressure limits) tight afterRamp schedule with

@@ -92,7 +92,7 @@ module TierSched =
   let private unitsOf (rng: Random) : SimUnit list =
     let count = 5 + rng.Next 9
     [ for i in 1 .. count ->
-        { Candidate = { Label = sprintf "tier-%d" i; PeakBytes = gib (1 + rng.Next 4); MeasuresLatency = false }
+        { Candidate = { Label = sprintf "tier-%d" i; PeakBytes = gib (1 + rng.Next 4); Demand = Ordinary }
           Lasts = float (20 + rng.Next 400)
           End = (match rng.Next 8 with 0 -> UnitEnd.Dies | _ -> UnitEnd.Completes) } ]
     // longest first: the order the real pipeline gives (orderByCriticalPath)
@@ -125,7 +125,7 @@ module TierSched =
     { Seed = -1
       Units =
         [ for i in 1 .. 4 ->
-            { Candidate = { Label = sprintf "tier-%d" i; PeakBytes = gib 2; MeasuresLatency = false }; Lasts = 90.0; End = UnitEnd.Completes } ]
+            { Candidate = { Label = sprintf "tier-%d" i; PeakBytes = gib 2; Demand = Ordinary }; Lasts = 90.0; End = UnitEnd.Completes } ]
       Neighbours = [ hog ]
       Feed = Readable }
 

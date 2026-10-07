@@ -47,11 +47,41 @@ module Framework =
         ofTfm (sprintf "net%s" (version.Substring "Version=v".Length))
       | _ -> Result.Error (sprintf "not a .NET target framework name: %s" name)
 
-/// One invocation of the test assembly (`dotnet <dll> <Args>`), on one framework.
-/// `MeasuresLatency` marks a tier whose JOB is to measure: it asserts percentiles
-/// (p50/p95) about the machine, so it must run alone — anything concurrent with it
-/// is what it ends up measuring. A tier that only times out does not measure.
-type Tier = { Name: string; Args: string; Framework: Framework; MeasuresLatency: bool }
+/// What a tier DEMANDS of the machine it runs on. One concept, carrying its reason: two
+/// booleans for one idea (measuring? asserting?) would be two rules in `decide` and two
+/// vocabulary items everywhere; this is ONE rule, and the reason is the only thing that varies.
+type Demand =
+  /// One of many: the normal path. `decide`'s cap/settle/CPU/memory rules run for it exactly
+  /// as they always did, and its failure report adds nothing about the machine.
+  | Ordinary
+  /// The machine to itself — nothing starts beside it, and it waits for the rest to drain.
+  /// The reason, in the words of each sentence that says it:
+  ///   * `hold` subjects the hold line: "<hold> needs the machine to itself (waiting for <x>)";
+  ///   * `loadLead` leads the failure report's condition line:
+  ///     "FAILURE <loadLead> at load average <n>".
+  /// Two phrasings of one reason, because the two sentences are not the same sentence: the
+  /// hold line is present tense about the wait, the failure report is past tense about the
+  /// conditions a red happened under.
+  | Exclusive of hold: string * loadLead: string
+
+module Demand =
+  /// The condition line an Exclusive tier's failure report carries — the load the red happened
+  /// under, in the tier's OWN words: "measured at load average 41.2" for a tier whose job is to
+  /// measure, "while asserting wall-clock rendering at load average 41.2" for one that asserts
+  /// wall-clock behaviour (it is not a measurement and must never say "measured"). An Ordinary
+  /// tier is None: it failed as one of many, and the machine's load is not its condition.
+  /// `loadAverage` is the caller's reading — "unknown" when /proc/loadavg cannot be read,
+  /// never a made-up zero.
+  let failureCondition (loadAverage: string) (demand: Demand) : string option =
+    match demand with
+    | Ordinary -> None
+    | Exclusive (_, loadLead) -> Some (sprintf "%s at load average %s" loadLead loadAverage)
+
+/// One invocation of the test assembly (`dotnet <dll> <Args>`), on one framework. `Demand` is
+/// what the tier needs of the machine while it runs: `Ordinary` (the normal path) or
+/// `Exclusive` with the reason it takes the machine alone. A tier that only times out is
+/// Ordinary — a timeout is not a claim about the machine.
+type Tier = { Name: string; Args: string; Framework: Framework; Demand: Demand }
 
 /// One slice of a sharded tier: shard `Index` (1-based) of `Count`.
 type Shard = { Index: int; Count: int }
@@ -119,17 +149,17 @@ let qualify (framework: Framework) (name: string) =
 
 /// A tier running `args` on `framework`.
 let tierOn (framework: Framework) (args: string) =
-  { Name = qualify framework (nameOfArgs args); Args = args; Framework = framework; MeasuresLatency = false }
+  { Name = qualify framework (nameOfArgs args); Args = args; Framework = framework; Demand = Ordinary }
 
 /// A tier on the primary framework.
 let tier (args: string) = tierOn Framework.primary args
 
-/// A tier that MEASURES latency (it asserts p50/p95 against a bound): `decide` gives
-/// it the machine alone — nothing starts beside it, and it starts only when nothing runs.
-let tierMeasuringLatency (args: string) = { tier args with MeasuresLatency = true }
-
-/// A measuring tier on another framework than the primary one.
-let tierOnMeasuringLatency (framework: Framework) (args: string) = { tierOn framework args with MeasuresLatency = true }
+/// A tier that needs the machine to itself (`Demand.Exclusive`): `decide` gives it the machine
+/// alone — nothing starts beside it, and it starts only when nothing runs — and both sentences
+/// that explain why carry the tier's own words: `hold` for the hold line, `loadLead` for the
+/// failure report's condition line.
+let tierExclusive (hold: string) (loadLead: string) (args: string) =
+  { tier args with Demand = Exclusive (hold, loadLead) }
 
 /// Where a framework's test assembly is built, relative to the checkout.
 let testBinDirOf (framework: Framework) =
@@ -357,8 +387,8 @@ type Reading = { Pressure: CpuPressure; Memory: MemoryReading }
 type MachinePort = { Read: unit -> Reading }
 
 /// A unit waiting to start. `PeakBytes` is what it used the last time it ran (or `Admission.unknownPeakBytes`),
-/// `MeasuresLatency` whether its job is to measure the machine (it runs exclusively).
-type Candidate = { Label: string; PeakBytes: int64; MeasuresLatency: bool }
+/// `Demand` what it needs of the machine while it runs (the tier's own, propagated by `TierSchedule.candidateOf`).
+type Candidate = { Label: string; PeakBytes: int64; Demand: Demand }
 
 /// A unit that started at `StartedAt` (seconds on whatever clock the caller keeps).
 type RunningUnit = { Unit: Candidate; StartedAt: float }
@@ -437,8 +467,9 @@ type WaitReason =
   | Settling of remainingSeconds: float
   | CpuBusy of percent: float * bound: float
   | MemoryShort of neededBytes: int64 * availableBytes: int64
-  /// A latency measurement needs the machine to itself: `waitingFor` names what must end first.
-  | MeasurementNeedsTheMachine of waitingFor: string
+  /// A tier that needs the machine to itself is holding it: `hold` is that tier's own reason (the
+  /// head's, or the running unit's — whichever cannot proceed), `waitingFor` names what must end first.
+  | ExclusiveNeedsTheMachine of hold: string * waitingFor: string
 
 type Decision =
   | Admit of AdmitBasis
@@ -452,7 +483,7 @@ module WaitReason =
     | Settling remaining -> sprintf "the last start is still settling (%.1fs)" remaining
     | CpuBusy (percent, bound) -> sprintf "cpu pressure %.1f%% is at or over %.0f%%" percent bound
     | MemoryShort (needed, available) -> sprintf "needs %.1f GiB free, %.1f GiB available" (gib needed) (gib available)
-    | MeasurementNeedsTheMachine waitingFor -> sprintf "a latency measurement needs the machine to itself (waiting for %s)" waitingFor
+    | ExclusiveNeedsTheMachine (hold, waitingFor) -> sprintf "%s needs the machine to itself (waiting for %s)" hold waitingFor
 
 /// When the last unit started. A case of its own, so "never" is not a number that happens to be zero.
 type LastAdmit =
@@ -481,22 +512,30 @@ let unramped (limits: Limits) (now: float) (running: RunningUnit list) : int64 =
     let left = max 0.0 (1.0 - (now - r.StartedAt) / limits.RampSeconds)
     int64 (float r.Unit.PeakBytes * left))
 
-/// Whether `head` may start now. Order of the rules: EXCLUSIVITY first — a tier that asserts p50/p95 measures
-/// the machine it runs on, so nothing starts beside a measurement and a measurement waits for everything to
-/// drain (a bound like `TestTimeouts.hotReloadDeltaServedP95Bound` must measure the product, never the queue
-/// of tiers it shares slots with) — then cap, then (with a readable machine) settle, CPU, memory.
+/// Whether `head` may start now. Order of the rules: EXCLUSIVITY first — ONE rule for every
+/// `Exclusive` tier, whatever its reason: nothing starts beside an Exclusive unit (anything
+/// concurrent is what its claim about the machine would be measuring or timing out against —
+/// a bound like `TestTimeouts.hotReloadDeltaServedP95Bound` must measure the product, never the
+/// queue of tiers it shares slots with; a wall-clock rendering wait must see a renderer nobody
+/// else is starving), and an Exclusive head waits for a drain. Below it the policy match is
+/// untouched: an `Ordinary` tier admits exactly as it always did — cap, then (with a readable
+/// machine) settle, CPU, memory.
 let decide (policy: Policy) (reading: Reading) (now: float) (schedule: Schedule) (head: Candidate) : Decision =
   let running = schedule.Running.Length
-  match schedule.Running |> List.tryFind (fun r -> r.Unit.MeasuresLatency) with
-  | Some measuring ->
-    // Nothing runs beside a measurement: any concurrent tier is what its p95 would end up measuring.
-    Wait (MeasurementNeedsTheMachine (sprintf "%s to finish measuring" measuring.Unit.Label))
+  match
+    schedule.Running
+    |> List.tryPick (fun r -> match r.Unit.Demand with | Exclusive (hold, _) -> Some (r.Unit.Label, hold) | Ordinary -> None)
+  with
+  | Some (label, hold) ->
+    // Nothing runs beside an Exclusive unit: a concurrent tier is exactly the contention its claim excludes.
+    Wait (ExclusiveNeedsTheMachine (hold, sprintf "%s to finish" label))
   | None ->
-    match head.MeasuresLatency, schedule.Running with
-    | true, _ :: _ ->
+    match head.Demand with
+    | Exclusive (hold, _) when not (List.isEmpty schedule.Running) ->
+      // The head needs the machine alone and it is not alone: wait for everything to drain.
       let others = schedule.Running |> List.map (fun r -> r.Unit.Label) |> String.concat ", "
-      Wait (MeasurementNeedsTheMachine (sprintf "%s to finish" others))
-    | _, _ ->
+      Wait (ExclusiveNeedsTheMachine (hold, sprintf "%s to finish" others))
+    | _ ->
       match policy with
       | Fixed concurrency ->
         match running >= concurrency with
