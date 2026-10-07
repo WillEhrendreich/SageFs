@@ -10,7 +10,7 @@ open SageFs.Build.TierSchedule
 /// What the pipeline learns from a run and spends on the next one: the order units start in, the partition of the
 /// host suites, the check that every host case was handed to some shard, and the table that shows the critical path.
 
-let private tierNamed (name: string) = { Name = name; Args = name; Framework = Framework.primary }
+let private tierNamed (name: string) = { Name = name; Args = name; Framework = Framework.primary; MeasuresLatency = false }
 
 let private cost (cpu: float) (peakGiB: int) : TierCost.Cost =
   let noSystemTime = 0.0

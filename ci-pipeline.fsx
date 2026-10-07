@@ -278,6 +278,13 @@ let testTier (args: string) = TierPlan.tier args
 /// Directory.Build.props' SageFsTargetFrameworks.
 let testTierOn (framework: TierPlan.Framework) (args: string) = TierPlan.tierOn framework args
 
+/// Declare a tier whose job is to MEASURE latency: it asserts p50/p95 against a
+/// product bound (`--integration-hr-delta` vs
+/// `TestTimeouts.hotReloadDeltaServedP95Bound`), so TierPlan.decide gives it the
+/// machine alone — nothing starts beside it and it waits for the drain — and its
+/// failures print the load average they were measured under.
+let testTierMeasuringLatency (args: string) = TierPlan.tierMeasuringLatency args
+
 /// Per-tier scratch, OUTSIDE the checkout: inside a tier's mount namespace the
 /// checkout path shows that tier's clone, so anything the parent must read back
 /// (ledger rows, logs) has to live elsewhere.
@@ -484,8 +491,9 @@ type FirstFailure = { Tier: string; Case: string; Report: string list }
 let firstFailure : FirstFailure option ref = ref None
 let failureGate = obj ()
 let cancelRequested = ref false
-/// Tiers that failed after the first one, named but not reported in full.
-let alsoFailed = Collections.Generic.List<string * string>()
+/// Tiers that failed after the first one, named but not reported in full — with the lines a measuring
+/// tier needs added beside its name (the load average it was measured under).
+let alsoFailed = Collections.Generic.List<string * string * string list>()
 /// Kill-everything functions of the tiers running right now.
 let runningKillers = Collections.Concurrent.ConcurrentDictionary<string, unit -> unit>()
 /// Tiers stopped (or never started) because of the first failure, with the reason.
@@ -504,11 +512,29 @@ let cancelAll (because: string) =
     cancelledByFailFast[kv.Key] <- because
     try kv.Value () with _ -> ()
 
+/// The 1-minute load average, read at THIS moment (/proc/loadavg's first field), as one decimal.
+/// A tier that measures latency prints it with every red it reports: `p95 11922.7ms` under a load average
+/// of 41.2 is contention, and `p95 1773.8ms` under a calm machine is the product — the number alone says
+/// neither. Unreadable is "unknown", never a made-up zero.
+let loadAverage1Minute () =
+  try
+    let avg = (File.ReadAllText "/proc/loadavg").Split(' ', StringSplitOptions.RemoveEmptyEntries)[0]
+    match Double.TryParse(avg, Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture) with
+    | true, value -> value.ToString("0.0", Globalization.CultureInfo.InvariantCulture)
+    | false, _ -> "unknown"
+  with _ -> "unknown"
+
 /// A tier ended its first failing case. Fail fast prints the report now and stops everything; keep going prints
 /// it and carries on. Later failures are named in one line each.
 let reportFailure (tier: TierPlan.Tier) (failure: FailureReport.Failure) =
   let reproduce = FailureReport.reproduceCommand (TierPlan.dllOf tier.Framework) tier.Args failure.Name
-  let lines = FailureReport.render tier.Name rootDir reproduce FailureReport.NotRecorded failure
+  // When the tier's job is to MEASURE, its failure carries the machine load it was measured under, so a red
+  // percentile is distinguishable from contention the assertion never meant to claim anything about.
+  let measuredUnder =
+    match tier.MeasuresLatency with
+    | false -> []
+    | true -> [ sprintf "%smeasured at load average %s" FailureReport.linePrefix (loadAverage1Minute ()) ]
+  let lines = FailureReport.render tier.Name rootDir reproduce FailureReport.NotRecorded failure @ measuredUnder
   let isFirst =
     lock failureGate (fun () ->
       match firstFailure.Value with
@@ -516,7 +542,7 @@ let reportFailure (tier: TierPlan.Tier) (failure: FailureReport.Failure) =
         firstFailure.Value <- Some { Tier = tier.Name; Case = failure.Name; Report = lines }
         true
       | Some _ ->
-        alsoFailed.Add((tier.Name, failure.Name))
+        alsoFailed.Add((tier.Name, failure.Name, measuredUnder))
         false)
   match isFirst with
   | true ->
@@ -527,7 +553,9 @@ let reportFailure (tier: TierPlan.Tier) (failure: FailureReport.Failure) =
       printfn "%scancelling every other tier (pass --keep-going to see all failures)" FailureReport.linePrefix
       // Off the reader thread that found it: killing a tier ends its own reader.
       Threading.Tasks.Task.Run(fun () -> cancelAll (sprintf "%s failed in %s" failure.Name tier.Name)) |> ignore
-  | false -> printfn "%salso failed, tier %s: %s" FailureReport.linePrefix tier.Name failure.Name
+  | false ->
+    printfn "%salso failed, tier %s: %s" FailureReport.linePrefix tier.Name failure.Name
+    for l in measuredUnder do printfn "%s" l
 
 /// Run one tier (in its own clone when isolated) and record its outcome.
 /// `slotIndex` is which of the `slots` concurrently-running workers is
@@ -812,7 +840,7 @@ let runTiers (tiers: TierPlan.Tier list) =
             })
         lock gate (fun () -> tasks.Add tierTask)
       | TierPlan.Held reason, _, _ ->
-        let kind = (match reason with TierPlan.AtProcessCap _ -> "cap" | TierPlan.Settling _ -> "settling" | TierPlan.CpuBusy _ -> "cpu" | TierPlan.MemoryShort _ -> "memory")
+        let kind = (match reason with TierPlan.AtProcessCap _ -> "cap" | TierPlan.Settling _ -> "settling" | TierPlan.CpuBusy _ -> "cpu" | TierPlan.MemoryShort _ -> "memory" | TierPlan.MeasurementNeedsTheMachine _ -> "measurement")
         // Said once per kind, not once per look: a wait of minutes is one line, not a hundred. The settle between two
         // starts is routine and not worth a line.
         if lastHeld.Value <> kind && kind <> "settling" then
@@ -1732,7 +1760,9 @@ let sagefsPipeline = pipeline "sagefs" {
             testTier "--integration-browser --summary"
             testTier "--integration-hr --summary"
             testTier "--integration-hr-restart --summary"
-            testTier "--integration-hr-delta --summary"
+            // The measuring tier: it ASSERTS p50/p95, so it is declared measuring and
+            // runs exclusively — everything concurrent with it would be what it measured.
+            testTierMeasuringLatency "--integration-hr-delta --summary"
             // The live-testing cases edit the sample in place, so a tier is a share of them on a copy of its own.
             for k in 1 .. ltShards do
               testTier $"--integration-lt --shard {k}/{ltShards} --summary"
@@ -1802,7 +1832,10 @@ let sagefsPipeline = pipeline "sagefs" {
         | None -> ()
         | Some failure ->
           let extra =
-            alsoFailed |> Seq.map (fun (tier, case) -> sprintf "%salso failed, tier %s: %s" FailureReport.linePrefix tier case) |> List.ofSeq
+            alsoFailed
+            |> Seq.map (fun (tier, case, measuredUnder) -> sprintf "%salso failed, tier %s: %s" FailureReport.linePrefix tier case :: measuredUnder)
+            |> Seq.collect id
+            |> List.ofSeq
           let all = failure.Report @ extra
           File.WriteAllText(failureReportFile, String.concat "\n" all + "\n")
           printfn "%s" (String.concat "\n" all)

@@ -12,12 +12,18 @@ let private gib (n: int) = int64 n * Admission.bytesPerGiB
 
 let private limits = Admission.standard 4
 
-let private head = { Label = "--integration-host[1/5]"; PeakBytes = gib 2 }
+let private head = { Label = "--integration-host[1/5]"; PeakBytes = gib 2; MeasuresLatency = false }
 
 let private calm = { Pressure = Measured 5.0; Memory = AvailableBytes (gib 40) }
 
 let private running (label: string) (startedAt: float) =
-  { Unit = { Label = label; PeakBytes = gib 2 }; StartedAt = startedAt }
+  { Unit = { Label = label; PeakBytes = gib 2; MeasuresLatency = false }; StartedAt = startedAt }
+
+/// A unit whose job is to MEASURE latency (it asserts p50/p95): `decide` gives it the machine alone.
+let private measuringUnit (label: string) =
+  { Unit = { Label = label; PeakBytes = gib 2; MeasuresLatency = true }; StartedAt = 0.0 }
+
+let private measuringHead = { Label = "--integration-hr-delta"; PeakBytes = gib 2; MeasuresLatency = true }
 
 let private afterRamp = Admission.rampSeconds * 2.0
 
@@ -94,6 +100,34 @@ let tests =
       decide (Fixed 2) tight 0.0 (scheduleWith [ running "u1" 0.0; running "u2" 0.0 ] (AdmittedAt 0.0)) head
       |> Expect.equal "the count is" (Wait (AtProcessCap 2))
 
+    // ── exclusivity: a tier that ASSERTS latency measures the machine, so it gets the machine alone ──
+    testCase "WHY — a measuring head waits while anything else runs: its p95 would measure the queue it shares, not the product" <| fun _ ->
+      match decide (ByPressure limits) calm afterRamp (scheduleWith [ running "u1" 0.0 ] (AdmittedAt 0.0)) measuringHead with
+      | Wait (MeasurementNeedsTheMachine waitingFor) ->
+        waitingFor |> Expect.stringContains "waits on the unit that runs" "u1"
+      | other -> failtestf "a measurement never starts beside a running unit, got %A" other
+
+    testCase "WHY — nothing starts while a measuring unit runs, whatever the policy says" <| fun _ ->
+      let schedule = scheduleWith [ measuringUnit "--integration-hr-delta" ] (AdmittedAt 0.0)
+      match decide (ByPressure limits) calm afterRamp schedule head with
+      | Wait (MeasurementNeedsTheMachine waitingFor) ->
+        waitingFor |> Expect.stringContains "names the measurement it waits for" "--integration-hr-delta"
+      | other -> failtestf "expected MeasurementNeedsTheMachine, got %A" other
+      match decide (Fixed 4) calm afterRamp schedule head with
+      | Wait (MeasurementNeedsTheMachine _) -> ()
+      | other -> failtestf "exclusivity holds under a fixed count too, got %A" other
+
+    testCase "WHY — non-measuring tiers still admit concurrently exactly as before: the normal path is untouched" <| fun _ ->
+      let peers = [ running "u1" 0.0; running "u2" 0.0 ]
+      decide (ByPressure limits) calm afterRamp (scheduleWith peers (AdmittedAt 0.0)) head
+      |> Expect.equal "two peers and a calm machine admit the next tier, as always" (Admit Fits)
+      decide (Fixed 4) calm afterRamp (scheduleWith peers (AdmittedAt 0.0)) head
+      |> Expect.equal "under a fixed count too" (Admit Fits)
+
+    testCase "WHY — an idle machine admits a measuring tier: it waits for company to leave, not for quiet" <| fun _ ->
+      decide (ByPressure limits) calm afterRamp (scheduleWith [] NeverAdmitted) measuringHead
+      |> Expect.equal "nothing runs, so the measurement starts" (Admit Fits)
+
     testCase "WHY — with nothing of ours running, a unit that waited out the patience starts anyway, so a neighbour cannot starve the gate" <| fun _ ->
       let starved = { calm with Memory = AvailableBytes 0L }
       let schedule = scheduleWith [] NeverAdmitted
@@ -110,8 +144,8 @@ let tests =
       | other -> failtestf "expected MemoryShort, got %A" other
 
     testCase "WHY — advance looks at the head of the line only, so the order the caller chose is the order units start in" <| fun _ ->
-      let big = { Label = "big"; PeakBytes = gib 30 }
-      let small = { Label = "small"; PeakBytes = gib 1 }
+      let big = { Label = "big"; PeakBytes = gib 30; MeasuresLatency = false }
+      let small = { Label = "small"; PeakBytes = gib 1; MeasuresLatency = false }
       let tight = { calm with Memory = AvailableBytes (gib 20) }
       let schedule = { startSchedule 0.0 [ big; small ] with Running = [ running "u1" 0.0 ]; LastAdmit = AdmittedAt 0.0 }
       match advance (ByPressure limits) tight afterRamp schedule with

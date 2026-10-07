@@ -48,7 +48,10 @@ module Framework =
       | _ -> Result.Error (sprintf "not a .NET target framework name: %s" name)
 
 /// One invocation of the test assembly (`dotnet <dll> <Args>`), on one framework.
-type Tier = { Name: string; Args: string; Framework: Framework }
+/// `MeasuresLatency` marks a tier whose JOB is to measure: it asserts percentiles
+/// (p50/p95) about the machine, so it must run alone — anything concurrent with it
+/// is what it ends up measuring. A tier that only times out does not measure.
+type Tier = { Name: string; Args: string; Framework: Framework; MeasuresLatency: bool }
 
 /// One slice of a sharded tier: shard `Index` (1-based) of `Count`.
 type Shard = { Index: int; Count: int }
@@ -116,10 +119,17 @@ let qualify (framework: Framework) (name: string) =
 
 /// A tier running `args` on `framework`.
 let tierOn (framework: Framework) (args: string) =
-  { Name = qualify framework (nameOfArgs args); Args = args; Framework = framework }
+  { Name = qualify framework (nameOfArgs args); Args = args; Framework = framework; MeasuresLatency = false }
 
 /// A tier on the primary framework.
 let tier (args: string) = tierOn Framework.primary args
+
+/// A tier that MEASURES latency (it asserts p50/p95 against a bound): `decide` gives
+/// it the machine alone — nothing starts beside it, and it starts only when nothing runs.
+let tierMeasuringLatency (args: string) = { tier args with MeasuresLatency = true }
+
+/// A measuring tier on another framework than the primary one.
+let tierOnMeasuringLatency (framework: Framework) (args: string) = { tierOn framework args with MeasuresLatency = true }
 
 /// Where a framework's test assembly is built, relative to the checkout.
 let testBinDirOf (framework: Framework) =
@@ -346,8 +356,9 @@ type Reading = { Pressure: CpuPressure; Memory: MemoryReading }
 /// Where a snapshot comes from. A port: the pipeline's adapter reads /proc, the simulation's is a fake machine.
 type MachinePort = { Read: unit -> Reading }
 
-/// A unit waiting to start. `PeakBytes` is what it used the last time it ran (or `Admission.unknownPeakBytes`).
-type Candidate = { Label: string; PeakBytes: int64 }
+/// A unit waiting to start. `PeakBytes` is what it used the last time it ran (or `Admission.unknownPeakBytes`),
+/// `MeasuresLatency` whether its job is to measure the machine (it runs exclusively).
+type Candidate = { Label: string; PeakBytes: int64; MeasuresLatency: bool }
 
 /// A unit that started at `StartedAt` (seconds on whatever clock the caller keeps).
 type RunningUnit = { Unit: Candidate; StartedAt: float }
@@ -426,6 +437,8 @@ type WaitReason =
   | Settling of remainingSeconds: float
   | CpuBusy of percent: float * bound: float
   | MemoryShort of neededBytes: int64 * availableBytes: int64
+  /// A latency measurement needs the machine to itself: `waitingFor` names what must end first.
+  | MeasurementNeedsTheMachine of waitingFor: string
 
 type Decision =
   | Admit of AdmitBasis
@@ -439,6 +452,7 @@ module WaitReason =
     | Settling remaining -> sprintf "the last start is still settling (%.1fs)" remaining
     | CpuBusy (percent, bound) -> sprintf "cpu pressure %.1f%% is at or over %.0f%%" percent bound
     | MemoryShort (needed, available) -> sprintf "needs %.1f GiB free, %.1f GiB available" (gib needed) (gib available)
+    | MeasurementNeedsTheMachine waitingFor -> sprintf "a latency measurement needs the machine to itself (waiting for %s)" waitingFor
 
 /// When the last unit started. A case of its own, so "never" is not a number that happens to be zero.
 type LastAdmit =
@@ -467,47 +481,60 @@ let unramped (limits: Limits) (now: float) (running: RunningUnit list) : int64 =
     let left = max 0.0 (1.0 - (now - r.StartedAt) / limits.RampSeconds)
     int64 (float r.Unit.PeakBytes * left))
 
-/// Whether `head` may start now. Order of the rules: cap, then (with a readable machine) settle, CPU, memory.
+/// Whether `head` may start now. Order of the rules: EXCLUSIVITY first — a tier that asserts p50/p95 measures
+/// the machine it runs on, so nothing starts beside a measurement and a measurement waits for everything to
+/// drain (a bound like `TestTimeouts.hotReloadDeltaServedP95Bound` must measure the product, never the queue
+/// of tiers it shares slots with) — then cap, then (with a readable machine) settle, CPU, memory.
 let decide (policy: Policy) (reading: Reading) (now: float) (schedule: Schedule) (head: Candidate) : Decision =
   let running = schedule.Running.Length
-  match policy with
-  | Fixed concurrency ->
-    match running >= concurrency with
-    | true -> Wait (AtProcessCap concurrency)
-    | false -> Admit Fits
-  | ByPressure limits ->
-    let sinceLast =
-      match schedule.LastAdmit with
-      | NeverAdmitted -> infinity
-      | AdmittedAt at -> now - at
-    // A reading that is missing costs the scheduler its right to the full cap: it runs the static fallback.
-    let cap =
-      match reading.Pressure, reading.Memory with
-      | Measured _, AvailableBytes _ -> limits.MaxTierProcesses
-      | NotMeasured _, _
-      | _, Unreadable _ -> min limits.MaxTierProcesses limits.FallbackConcurrency
-    match running >= cap with
-    | true -> Wait (AtProcessCap cap)
-    | false ->
-      match running > 0 && sinceLast < limits.SettleSeconds with
-      | true -> Wait (Settling (limits.SettleSeconds - sinceLast))
-      | false ->
-        let busy =
-          match reading.Pressure with
-          | Measured percent when running >= limits.PressureFloorUnits && percent >= limits.CpuPressureBound -> Some percent
-          | Measured _
-          | NotMeasured _ -> None
-        match busy, reading.Memory with
-        | Some percent, _ -> Wait (CpuBusy (percent, limits.CpuPressureBound))
-        | None, Unreadable _ -> Admit Fits
-        | None, AvailableBytes available ->
-          let needed = limits.MemoryReserveBytes + head.PeakBytes + unramped limits now schedule.Running
-          match available >= needed with
-          | true -> Admit Fits
+  match schedule.Running |> List.tryFind (fun r -> r.Unit.MeasuresLatency) with
+  | Some measuring ->
+    // Nothing runs beside a measurement: any concurrent tier is what its p95 would end up measuring.
+    Wait (MeasurementNeedsTheMachine (sprintf "%s to finish measuring" measuring.Unit.Label))
+  | None ->
+    match head.MeasuresLatency, schedule.Running with
+    | true, _ :: _ ->
+      let others = schedule.Running |> List.map (fun r -> r.Unit.Label) |> String.concat ", "
+      Wait (MeasurementNeedsTheMachine (sprintf "%s to finish" others))
+    | _, _ ->
+      match policy with
+      | Fixed concurrency ->
+        match running >= concurrency with
+        | true -> Wait (AtProcessCap concurrency)
+        | false -> Admit Fits
+      | ByPressure limits ->
+        let sinceLast =
+          match schedule.LastAdmit with
+          | NeverAdmitted -> infinity
+          | AdmittedAt at -> now - at
+        // A reading that is missing costs the scheduler its right to the full cap: it runs the static fallback.
+        let cap =
+          match reading.Pressure, reading.Memory with
+          | Measured _, AvailableBytes _ -> limits.MaxTierProcesses
+          | NotMeasured _, _
+          | _, Unreadable _ -> min limits.MaxTierProcesses limits.FallbackConcurrency
+        match running >= cap with
+        | true -> Wait (AtProcessCap cap)
+        | false ->
+          match running > 0 && sinceLast < limits.SettleSeconds with
+          | true -> Wait (Settling (limits.SettleSeconds - sinceLast))
           | false ->
-            match running = 0 && now - schedule.HeadSince >= limits.PatienceSeconds with
-            | true -> Admit StarvationGuard
-            | false -> Wait (MemoryShort (needed, available))
+            let busy =
+              match reading.Pressure with
+              | Measured percent when running >= limits.PressureFloorUnits && percent >= limits.CpuPressureBound -> Some percent
+              | Measured _
+              | NotMeasured _ -> None
+            match busy, reading.Memory with
+            | Some percent, _ -> Wait (CpuBusy (percent, limits.CpuPressureBound))
+            | None, Unreadable _ -> Admit Fits
+            | None, AvailableBytes available ->
+              let needed = limits.MemoryReserveBytes + head.PeakBytes + unramped limits now schedule.Running
+              match available >= needed with
+              | true -> Admit Fits
+              | false ->
+                match running = 0 && now - schedule.HeadSince >= limits.PatienceSeconds with
+                | true -> Admit StarvationGuard
+                | false -> Wait (MemoryShort (needed, available))
 
 /// What one look at the head of the line came to.
 type Advance =
