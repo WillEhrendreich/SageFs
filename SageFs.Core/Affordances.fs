@@ -1167,26 +1167,35 @@ type AuthorityRefusal =
   /// THAT repository's cohort, which is what `nextAction` says.
   | NotSeated of tool: ToolName
 
-/// The tools that stop, reset, discard or land work you already have: the tier
-/// a client asks you about before it lets them through.
+/// The tools that stop, reset, discard or land work you already have: what
+/// `tools/list` TELLS a client about a tool, and the pool the confirm tier
+/// below draws from.
 ///
 /// This is a DIFFERENT question from the role sets in `ToolRole`. Those say WHO
 /// may call a tool; this says WHAT calling it does to your work. They overlap
-/// only partly, and the overlap matters: eight of these seventeen are already
+/// only partly, and the overlap matters: eight of these eighteen are already
 /// `ToolRole.conductorOnlyTools` (`delegate_conductor`, `manage_local_data`,
 /// `mint_member`, `reassign_claim`, `resolve_veto`, `revoke_member`,
-/// `set_integration_ref`, `tidy_workspace`), so for a solo operator — who is
-/// always the conductor — a prompt on those sits on top of an authority
-/// restriction that already holds. The nine that are genuinely new are
+/// `set_integration_ref`, `tidy_workspace`), so for a solo operator, who is
+/// always the conductor, a prompt on those sits on top of an authority
+/// restriction that already holds. The ten that are genuinely new are
 /// `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`,
-/// `switch_workflow`, `nudge_value`, `stop_app`, `leave_cohort`,
+/// `switch_workflow`, `nudge_value`, `stop_app`, `run_app`, `leave_cohort`,
 /// `request_landing` and `veto_landing`.
 ///
 /// What is deliberately NOT here, because the absence is a judgment and should
 /// read as one: `send_fsharp_code` runs arbitrary code as the daemon's OS user
 /// and would be the loudest prompt of all, but asking before every eval trains
-/// the person to click through, and this is an eval product. `run_app` is out
-/// for the same reason even though it drops REPL bindings.
+/// the person to click through, and this is an eval product.
+///
+/// `run_app` got here by audit rather than by Muse's list. All seventy
+/// descriptions were read for language about losing, clearing or resetting
+/// state, and `run_app` was the one gap: its own description says a run
+/// "restarts an Interactive session into the Hot Reload workflow first, so REPL
+/// bindings are lost", which is the same consequence `switch_workflow` was
+/// already here for. The near miss that stays out is `reset_hot_reload_state`,
+/// because its default is to LIST the kept state and only a later argument
+/// resets it.
 ///
 /// Held to `[<McpServerTool>]` by `McpToolGateTests`, so a renamed tool cannot
 /// leave a stale name in here, and published on `tools/list` as MCP's own
@@ -1201,6 +1210,7 @@ let destructiveTools : Set<ToolName> =
       ToolName.TidyWorkspace
       ToolName.ManageLocalData
       ToolName.StopApp
+      ToolName.RunApp
       ToolName.LeaveCohort
       ToolName.ReassignClaim
       ToolName.DelegateConductor
@@ -1241,6 +1251,12 @@ let destructiveTools : Set<ToolName> =
 ///     to confirm a mint it performs per run, would stall work that nobody is
 ///     sitting there to click through.
 ///   * `leave_cohort` is routine, and rejoining costs nothing.
+///   * `run_app` IS in the destructive tier, since its own description says a
+///     run restarts the session and REPL bindings are lost, but it is not
+///     confirmed. Running the app is what the caller asked for, the loss is
+///     already written on the tool for anyone who reads it, and prompting on
+///     the one command a person reaches for most is how a prompt gets clicked
+///     without being read.
 ///
 /// IN, because the loss is permanent from the user's side: `stop_session`,
 /// `reset_fsi_session`, `hard_reset_fsi_session` and `switch_workflow` (the

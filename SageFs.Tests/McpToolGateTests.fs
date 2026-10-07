@@ -449,6 +449,21 @@ let destructiveTierTests =
         |> Set.filter (fun name -> not (Set.contains name registered))
       stale |> Set.toList |> Expect.equal "every tier member is a registered tool" []
 
+    testCase "WHY — every tool whose own description says REPL bindings are lost is in the tier, so the tier matches what the tool docs promise"
+    <| fun _ ->
+      let losesTheRepl =
+        set
+          [ SageFs.Affordances.ToolName.RunApp
+            SageFs.Affordances.ToolName.SwitchWorkflow
+            SageFs.Affordances.ToolName.StopSession
+            SageFs.Affordances.ToolName.ResetFsiSession
+            SageFs.Affordances.ToolName.HardResetFsiSession ]
+      losesTheRepl
+      |> Set.filter (fun tool -> not (Set.contains tool SageFs.Affordances.destructiveTools))
+      |> Set.toList
+      |> List.map SageFs.Affordances.ToolName.toString
+      |> Expect.equal "every REPL-losing tool is in the destructive tier" []
+
     testCase "WHY — tools/list carries the standard destructive hint, so a client reads the tier from the server rather than keeping its own copy"
     <| fun _ ->
       let tierMember = ModelContextProtocol.Protocol.Tool(Name = "stop_session")

@@ -24,23 +24,25 @@ sees only the tools its role allows. And a daemon started with
 the status tools, unless that connection is the conductor.
 
 Every tool in the catalog also says what calling it does to your work.
-Seventeen of them stop, reset, discard or land something you already have, and
+Eighteen of them stop, reset, discard or land something you already have, and
 each comes back with MCP's own `destructiveHint: true`, so a client that wants
 to ask before letting one through reads the list from the server instead of
 keeping a copy of its own. That copy is the trap: a renamed tool drops out of
-every hand-typed list without a sound. The seventeen live in
+every hand-typed list without a sound. The eighteen live in
 `Affordances.destructiveTools`, and a test holds them to the tools that are
 actually registered.
 
-Six of those seventeen go further and stop to ask you. A client that advertises
+Six of those eighteen go further and stop to ask you. A client that advertises
 MCP elicitation gets a prompt naming the tool and what it is about to take
 away, and a decline stops the call the same way a gate rejection does. The six
 are `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`,
 `switch_workflow`, `manage_local_data` and `stop_app`, because those take the
-REPL or your local state and cannot hand it back. The other eleven stay out on
+REPL or your local state and cannot hand it back. The other twelve stay out on
 purpose: `tidy_workspace` already demands its plan id, `nudge_value` is scrubbed
-one step at a time from the editor, and the cohort verbs are the loop an
-unattended agent runs in, where nobody is sitting there to click.
+one step at a time from the editor, the cohort verbs are the loop an
+unattended agent runs in where nobody is sitting there to click, and `run_app`
+is listed as destructive but not asked about, because running the app is what
+you asked for and the REPL loss is written on the tool itself.
 
 The part worth knowing: a client that never advertised elicitation is neither
 prompted nor refused. The prompt is skipped, and the four gates ahead of it
