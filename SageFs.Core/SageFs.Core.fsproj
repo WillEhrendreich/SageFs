@@ -177,6 +177,11 @@
              Depends on nothing, and comes before ReloadPlanning, SessionReload and DevReload's report. -->
         <Compile Include="Features\CallerState.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
+        <!-- After ReloadPlanning: the eval write-back DECISION, pure — given the eval text, the optional file path,
+             the optional block start line and the file's current source, either the splice target (the declaration
+             the eval redefines, its range, the replacement text) or a NotPersisted reason. No IO: the door that
+             journals and renames is SageFs/EvalWriteBackWire.fs. -->
+        <Compile Include="Features\Tweak\EvalWriteBack.fs" />
         <!-- After ReloadPlanning: finds the callers of a re-signed or removed declaration in the project's other files, by the
              compiler's symbol resolution over the whole project or by name. -->
         <Compile Include="Features\CallerCheck.fs" />

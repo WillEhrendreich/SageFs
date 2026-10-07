@@ -12,6 +12,9 @@ open SageFs.McpSessionRouting
 open System.Text.Json
 open System.Text.Json.Nodes
 
+/// The eval write-back decision and its verdict type, abbreviated where this file speaks it.
+module EvalWriteBack = SageFs.Features.Tweak.EvalWriteBack
+
 /// Emoji per tool category — printed once as a header, not per-line
 /// Echo MCP tool results to the SageFs console for visibility
 
@@ -591,6 +594,16 @@ let withReplFreshness (freshness: SageFs.ReplFreshness) (structuredJson: string)
     root.ToJsonString()
   | _ -> structuredJson
 
+/// A structured result with the eval write-back verdict added as a field — the exact line the text
+/// block carries ("written back to <file>:<line>" / "not persisted: <reason>"), said as data so a
+/// client branches on it instead of parsing prose, the same rule replFreshness is a field by.
+let withWriteBack (writeBack: EvalWriteBack.WriteBack) (structuredJson: string) : string =
+  match System.Text.Json.Nodes.JsonNode.Parse structuredJson with
+  | :? System.Text.Json.Nodes.JsonObject as root ->
+    root["writeBack"] <- System.Text.Json.Nodes.JsonValue.Create(EvalWriteBack.WriteBack.describe writeBack)
+    root.ToJsonString()
+  | _ -> structuredJson
+
 /// The MCP result for `run_tests`: the receipt's plain-language text in the text block and
 /// the receipt as data in StructuredContent, so an agent branches on a token, never on prose.
 /// A refusal or an unattributable request is an error result; an in-flight or finished run is not.
@@ -795,14 +808,18 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
             match fp with
             | Some _ -> SageFs.TopLevelDeclaration.NoDeclaration
             | None -> SageFs.EvalPreflight.topLevelDeclaration code
-          let! text, _outcome, diags, errOpt, freshness =
+          let! text, _outcome, diags, errOpt, freshness, writeBack =
             match declaration with
             | SageFs.TopLevelDeclaration.NoDeclaration ->
               evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt
             | found ->
               let hint = SageFs.EvalPreflight.hint found
               let err = SageFs.SageFsError.EvalFailed hint
-              Task.FromResult (sprintf "Error: %s" hint, InfraFailure err, [], Some err, SageFs.ReplFreshness.InSync)
+              // Nothing was evaluated, so nothing was written back — and the tool result still says
+              // which of the two outcomes it is, per the write-back contract: written back, or not
+              // persisted with the reason.
+              let verdict = EvalWriteBack.WriteBack.NotPersisted "the code was not evaluated (a file-opening declaration was refused first), so nothing was written back"
+              Task.FromResult (sprintf "Error: %s\n%s" hint (EvalWriteBack.WriteBack.describe verdict), InfraFailure err, [], Some err, SageFs.ReplFreshness.InSync, verdict)
           // Outbound size cap (roast-7 §13) applies to the text agents
           // actually read; the same bounded text feeds the JSON `result`
           // field so the two never disagree about what was returned.
@@ -820,7 +837,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
             | None ->
               SageFs.McpAdapter.formatEvalStructuredSuccess boundedText diags
           // Said as a field too, so a client branches on it and does not parse the warning out of the text.
-          let structuredJson = withReplFreshness freshness structuredJson
+          let structuredJson = withReplFreshness freshness structuredJson |> withWriteBack writeBack
           try
             use doc = System.Text.Json.JsonDocument.Parse(structuredJson)
             result.StructuredContent <- System.Nullable(doc.RootElement.Clone())
@@ -2262,7 +2279,7 @@ WORKFLOW: Use 'list' to review snippets, 'export' for a full dump, 'promote' to 
         action: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: manage_scratch_pad called, action={Action}", action)
-        manageScratchPad ctx action None None |> withEcho ctx "manage_scratch_pad"
+        SageFs.McpScratchPadViews.manageScratchPad ctx action None None |> withEcho ctx "manage_scratch_pad"
 
     [<McpServerTool>]
     [<Description("""Get a diff between recent eval outputs — before vs after comparison.

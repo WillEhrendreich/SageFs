@@ -958,7 +958,10 @@ type FileLocks() =
   let keyOf (path: string) = if OperatingSystem.IsWindows() then path.ToLowerInvariant() else path
 
   /// The work runs on the thread pool, so a caller holding the lock never blocks the caller that asked.
-  member _.WithLock(path: string, wait: TimeSpan, work: unit -> Result<Ran, NudgeRefusal>) : Task<Result<Ran, NudgeRefusal>> =
+  /// Generic in the result so every door that writes this file through the lock — nudge_value, the
+  /// live-bindings writer, the eval write-back — shares ONE lock per file without pretending its
+  /// result is a `Ran`; the lock is what serializes read/journal/rename, not what the work answers.
+  member _.WithLock<'T>(path: string, wait: TimeSpan, work: unit -> Result<'T, NudgeRefusal>) : Task<Result<'T, NudgeRefusal>> =
     task {
       let gate = gates.GetOrAdd(keyOf path, fun _ -> new Threading.SemaphoreSlim(1, 1))
       let! entered = gate.WaitAsync wait

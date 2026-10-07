@@ -146,6 +146,10 @@
         <!-- RouteGate before Mcp.fs: the gate step that holds a member token to the session or checkout it is
              bound to, and the confinement of the session registry underneath every tool body. -->
         <Compile Include="RouteGate.fs" />
+        <!-- EvalWriteBackWire before Mcp.fs: the eval hook in Mcp.fs calls `persist`, and the shared
+             per-file lock / journal location it and McpNudge both write through has to exist before
+             either. McpNudge (after Mcp.fs, because it needs McpContext) re-exports its bindings. -->
+        <Compile Include="EvalWriteBackWire.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpHygiene.fs" />
         <Compile Include="McpNudge.fs" />
@@ -164,6 +168,8 @@
         <Compile Include="McpCohortTools.fs" />
         <Compile Include="McpCohortIntegration.fs" />
         <Compile Include="McpCapability.fs" />
+        <!-- The scratch-pad tool's body, out of Mcp.fs (the accretion hub whose line budget only goes down). -->
+        <Compile Include="McpScratchPadViews.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />
         <Compile Include="AgentGuidance.fs" />

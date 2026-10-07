@@ -128,37 +128,11 @@ module McpNudge =
 
   /// What a worker's `GET /hotreload` says, as the files a session owns: every project file it lists,
   /// and the ones it marks watched. `session` and `workingDirectory` are the call's own.
+  /// The rule itself lives in `EvalWriteBackWire` — the eval write-back answers it the same way,
+  /// from a file that must compile before `Mcp.fs` — and is re-exported here for this door's
+  /// callers and tests, one implementation, never a drift between the two doors.
   let ownedFilesFromJson (session: string) (workingDirectory: string) (hotReloadJson: string) : Result<OwnedFiles, NudgeRefusal> =
-    let unknown reason = Error(NudgeRefusal.ProjectFilesUnknown reason)
-    let entryOf (file: JsonElement) : (string * bool) option =
-      match file.ValueKind with
-      | JsonValueKind.Object ->
-        match file.TryGetProperty "path", file.TryGetProperty "watched" with
-        | (true, path), (true, watched) when path.ValueKind = JsonValueKind.String ->
-          Some(Path.GetFullPath(path.GetString(), workingDirectory), watched.ValueKind = JsonValueKind.True)
-        | _ -> None
-      | _ -> None
-    let ownedOf (files: JsonElement) : Result<OwnedFiles, NudgeRefusal> =
-      let entries = [ for file in files.EnumerateArray() -> entryOf file ]
-      match entries |> List.forall Option.isSome with
-      | false -> unknown "the worker's file list has an entry without a path and a watched flag"
-      | true ->
-        let known = entries |> List.choose id
-        Ok
-          { Session = session
-            WorkingDirectory = workingDirectory
-            Paths = known |> List.map fst |> Set.ofList
-            Watched = known |> List.filter snd |> List.map fst |> Set.ofList }
-    try
-      use doc = JsonDocument.Parse hotReloadJson
-      let root = doc.RootElement
-      match root.ValueKind with
-      | JsonValueKind.Object ->
-        match root.TryGetProperty "files" with
-        | true, files when files.ValueKind = JsonValueKind.Array -> ownedOf files
-        | _ -> unknown "the worker's answer has no list of files"
-      | _ -> unknown "the worker's answer is not an object"
-    with :? JsonException as ex -> unknown ex.Message
+    EvalWriteBackWire.ownedFilesFromJson session workingDirectory hotReloadJson
 
   let client = new HttpClient(Timeout = Timeouts.workerHttpRead)
 
@@ -189,17 +163,16 @@ module McpNudge =
       | other -> return Error(NudgeRefusal.NoSessionToAct(formatSessionResolution other))
     }
 
-  /// Where the daemon keeps nudge journals.
-  let defaultTweaksDir () : string = Path.Combine(DaemonState.SageFsDir, "tweaks")
+  /// Where the daemon keeps nudge journals — and where the eval write-back journals too: one
+  /// history per file, so one `undo` walks every write that touched it.
+  let defaultTweaksDir () : string = EvalWriteBackWire.defaultTweaksDir ()
 
-  /// One lock per file, shared by every call the daemon serves.
-  let locks = FileLocks()
+  /// One lock per file, shared by every call the daemon serves — including the eval write-back,
+  /// which must not interleave its read/journal/rename with a nudge to the same file.
+  let locks = EvalWriteBackWire.locks
 
   /// The real disk and a real clock, with each file's journal under `tweaksDir`.
-  let productionPorts (tweaksDir: string) : Ports =
-    { Files = NudgeFs.steps
-      Now = fun () -> DateTime.UtcNow.Ticks
-      JournalPathOf = fun file -> NudgeFs.journalPathFor tweaksDir (Ownership.sessionOf file) (Ownership.pathOf file) }
+  let productionPorts (tweaksDir: string) : Ports = EvalWriteBackWire.productionPorts tweaksDir
 
   /// `nudge_value` with journals under `tweaksDir`: resolve the session, then `nudgeWith`
   /// the real disk and the daemon's shared locks.

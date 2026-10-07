@@ -22,6 +22,8 @@ open SageFs.McpAnalysisViews
 module McpTools =
 
   open System.Threading
+  /// The pure eval write-back decision and its verdict type, abbreviated where this file speaks it.
+  module EvalWriteBack = SageFs.Features.Tweak.EvalWriteBack
 
   type McpContext = {
     /// SQLite-backed friction store for durable telemetry persistence.
@@ -1093,12 +1095,13 @@ module McpTools =
   }
 
   /// Evaluate F# code. Returns (formatted output, outcome, diagnostics with
-  /// spans, the last classified `SageFsError` if any statement failed) —
+  /// spans, the last classified `SageFsError` if any statement failed,
+  /// the write-back verdict) —
   /// `Evaluated failed` when the code ran (a compile/runtime failure still
   /// counts as ran: /exec keeps its truthful-200 contract), `InfraFailure
   /// err` when it never ran because the session/worker was unreachable. The
   /// distinction comes from the typed worker outcome, never string
-  /// sniffing. The last two elements let `send_fsharp_code` return
+  /// sniffing. The diagnostics and the error let `send_fsharp_code` return
   /// structured content (roast-7 §2) without re-deriving it from `output`.
   /// Most callers use `sendFSharpCode` (string-only view).
   let evalFSharpCodeWithOutcome
@@ -1106,7 +1109,7 @@ module McpTools =
       (sessionId: string option) (workingDirectory: string option)
       (filePath: string option) (evalMode: string option) (blockStartLine: int option)
       (intent: string option)
-      : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option * ReplFreshness> =
+      : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option * ReplFreshness * EvalWriteBack.WriteBack> =
     task {
       // The session the gate already resolved for this very call, if any.
       let! resolution = resolveAdmitted ctx "send_fsharp_code" agentName sessionId workingDirectory
@@ -1194,14 +1197,31 @@ module McpTools =
               let advisories = SessionOperations.FileOverlapAdvisory.compute (resolvedKey agentName) [fp] presences
               SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
             | None -> finalOutput
+          // Eval write-back (roadmap "A REPL eval changes the running app", the write-to-source
+          // slice): a successful eval that named its file and block is spliced back into that file
+          // through the tweak door's per-file lock and its journal-before-rename, so the existing
+          // watcher -> plan -> build -> delta pipeline delivers it — no new delivery path. Decided
+          // here, before the freshness lines, so the verdict reads with the eval's own output; a
+          // failed eval writes nothing and says why.
+          let! writeBack =
+            match outcome with
+            | Evaluated false -> EvalWriteBackWire.persist (fun () -> ctx.SessionOps.GetSessionInfo (toSessionId sid)) sid filePath blockStartLine code
+            | Evaluated true -> Task.FromResult(EvalWriteBack.WriteBack.NotPersisted "the eval failed, so nothing was written back")
+            | InfraFailure _ -> Task.FromResult(EvalWriteBack.WriteBack.NotPersisted "the eval never ran (SageFs could not reach the session), so nothing was written back")
+          // The verdict joins the text an agent reads; JSON output stays JSON (structuredContent
+          // carries the same line as a field), exactly as the freshness banner is handled below.
+          let enrichedOutput =
+            match format with
+            | Text -> enrichedOutput + Environment.NewLine + EvalWriteBack.WriteBack.describe writeBack
+            | Json -> enrichedOutput
           // Said after the result when the REPL runs the build from before a patch the app took. JSON is data and keeps its shape.
           let! freshness = SessionStatusPayload.replFreshnessOf ctx.SessionOps sid
           let shown = match format with Text -> ReplFreshness.annotate freshness enrichedOutput | Json -> enrichedOutput
-          return (shown, outcome, allDiags, lastError, freshness)
+          return (shown, outcome, allDiags, lastError, freshness, writeBack)
         }
       | other ->
         let err = SageFsError.SessionNotRoutable (formatSessionResolution other)
-        return (sprintf "Error: %s" (formatSessionResolution other), InfraFailure err, [], Some err, ReplFreshness.InSync)
+        return (sprintf "Error: %s" (formatSessionResolution other), InfraFailure err, [], Some err, ReplFreshness.InSync, EvalWriteBack.WriteBack.NotPersisted "the eval never ran (the session did not resolve), so nothing was written back")
     }
 
   /// String-only view of evalFSharpCodeWithOutcome — keeps existing callers.
@@ -1212,7 +1232,7 @@ module McpTools =
       (intent: string option)
       : Task<string> =
     task {
-      let! output, _, _, _, _ = evalFSharpCodeWithOutcome ctx agentName code format sessionId workingDirectory filePath evalMode blockStartLine intent
+      let! output, _, _, _, _, _ = evalFSharpCodeWithOutcome ctx agentName code format sessionId workingDirectory filePath evalMode blockStartLine intent
       return output
     }
 
@@ -3067,66 +3087,6 @@ module McpTools =
                     | Features.EvalTimeline.Cancelled -> "○"
                   sprintf "  [%d] %s %dms" e.CellId icon e.DurationMs) ]
             |> String.concat "\n"
-    }
-
-  /// MCP Tool: Manage scratch pad (ephemeral code snippets)
-  let manageScratchPad (ctx: McpContext) (action: string) (code: string option) (snippetId: int option) : Task<string> =
-    task {
-      match featureStateForCaller ctx with
-      | None -> return "Feature state not available — no active session."
-      | Some state ->
-        match action.ToLowerInvariant() with
-        | "list" ->
-          let pad = Features.ScratchPad.create "session"
-          let pad =
-            state.EvalHistory
-            |> List.rev
-            |> List.fold (fun p e -> Features.ScratchPad.addSnippet e.Code p) pad
-          let snippets = Features.ScratchPad.snippets pad
-          match snippets with
-          | [] -> return "Scratch pad is empty."
-          | _ ->
-            return
-              snippets
-              |> List.map (fun s ->
-                let status =
-                  match s.Result with
-                  | None -> "pending"
-                  | Some (Ok v) -> sprintf "ok: %s" (v |> fun x -> match x.Length > 40 with | true -> x.[..37] + "..." | false -> x)
-                  | Some (Error e) -> sprintf "err: %s" (e |> fun x -> match x.Length > 40 with | true -> x.[..37] + "..." | false -> x)
-                sprintf "  [%d] %s | %s"
-                  s.Id
-                  (s.Code |> fun c -> match c.Length > 50 with | true -> c.[..47] + "..." | false -> c)
-                  status)
-              |> fun lines ->
-                sprintf "Scratch pad (%d snippets):\n%s" snippets.Length (String.concat "\n" lines)
-        | "export" ->
-          let pad = Features.ScratchPad.create "session"
-          let pad =
-            state.EvalHistory
-            |> List.rev
-            |> List.fold (fun p e ->
-              let p = Features.ScratchPad.addSnippet e.Code p
-              let lastId = p.NextId - 1
-              Features.ScratchPad.recordResult lastId (Ok e.Result) p) pad
-          return Features.ScratchPad.exportFsx pad
-        | "promote" ->
-          let pad = Features.ScratchPad.create "session"
-          let pad =
-            state.EvalHistory
-            |> List.rev
-            |> List.fold (fun p e ->
-              let p = Features.ScratchPad.addSnippet e.Code p
-              let lastId = p.NextId - 1
-              Features.ScratchPad.recordResult lastId (Ok e.Result) p) pad
-          let successful = Features.ScratchPad.promoteSuccessful pad
-          match successful with
-          | [] -> return "No successful snippets to promote."
-          | _ ->
-            return
-              sprintf "Promoted %d successful snippets:\n%s"
-                successful.Length (String.concat "\n;;\n" successful)
-        | _ -> return "Unknown action. Use 'list', 'export', or 'promote'."
     }
 
   /// MCP Tool: Get eval diff (before/after output comparison)
