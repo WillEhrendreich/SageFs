@@ -70,8 +70,7 @@ let private expectNoErrors (errors: Collections.Generic.List<string>) (when': st
 
 let private shot (page: IPage) (name: string) = task {
   let path = Path.Combine(PlaywrightFixture.screenshotDir, sprintf "tweak-%s.png" name)
-  let! _ = page.ScreenshotAsync(PageScreenshotOptions(Path = path, FullPage = false))
-  eprintfn "screenshot: %s" path
+  do! PlaywrightFixture.takeScreenshot page false path
 }
 
 let private waitJs (page: IPage) (what: string) (budgetMs: int) (script: string) (arg: obj) : Task<unit> = task {
@@ -313,9 +312,19 @@ let journey () : Task<unit> = task {
     let! shown = slider.EvaluateAsync<string>("(el, name) => el.getAttribute(name)", handler)
     let edited = expected.Replace("let gravity = 10.7", "let gravity = 7.7")
     File.WriteAllText(tuning, edited)
-    // The page is showing the file as it was, which is exactly what a stale row is: put back the hash it showed, whatever has
-    // been drawn since, and click.
-    let! _ = slider.EvaluateAsync("(el, [name, value]) => el.setAttribute(name, value)", [| box handler; box shown |])
+    let waitForTheEditsRepaint () =
+      waitJs page "the row repainted for the edit" BrowserWaits.daemonWork
+        "sel => { const e = document.querySelector(sel); return !!e && e.getAttribute('data-state') === 'DiffersFromFile' && /7\\.7/.test(e.innerText); }"
+        (box (row "gravity"))
+    let forgeTheOldHash () =
+      slider.EvaluateAsync("(el, [name, value]) => el.setAttribute(name, value)", [| box handler; box shown |])
+    // The edit makes the row repaint (it now differs from the file), and that repaint writes the handler again with the file's
+    // new hash. Forging before it lands gets the forged hash overwritten, and the click is then a legitimate write: the row
+    // reads DiffersFromFile and nothing is stale. That is a race the machine's load decides, and it failed the release gate. So
+    // wait for the repaint, which is also the last one: the page then shows the file as it is, nothing else changes, and nothing
+    // more is pushed. Then put back the hash the row showed before the edit, which is exactly what a stale row is, and click.
+    do! waitForTheEditsRepaint ()
+    let! _ = forgeTheOldHash ()
     do! page.Locator(sprintf "%s [data-testid=tweak-step-up]" (row "gravity")).ClickAsync()
     do! waitState page "gravity" "StaleAddress"
     File.ReadAllText tuning |> Expect.equal "a stale click wrote nothing: the file is what the person left" edited

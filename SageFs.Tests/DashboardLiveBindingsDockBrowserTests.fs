@@ -41,8 +41,7 @@ let private expectNoErrors (errors: Collections.Generic.List<string>) (when': st
 
 let private shot (page: IPage) (name: string) = task {
   let path = Path.Combine(PlaywrightFixture.screenshotDir, sprintf "dock-%s.png" name)
-  let! _ = page.ScreenshotAsync(PageScreenshotOptions(Path = path, FullPage = false))
-  eprintfn "screenshot: %s" path
+  do! PlaywrightFixture.takeScreenshot page false path
 }
 
 /// Wait until `script` (a JS predicate over `arg`) is true in the page, or say what was being waited for.

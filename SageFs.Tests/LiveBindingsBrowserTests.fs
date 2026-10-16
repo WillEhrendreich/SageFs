@@ -39,8 +39,7 @@ let private expectNoErrors (errors: Collections.Generic.List<string>) (what: str
 
 let private shot (page: IPage) (name: string) = task {
   let path = Path.Combine(PlaywrightFixture.screenshotDir, sprintf "live-bindings-%s.png" name)
-  let! _ = page.ScreenshotAsync(PageScreenshotOptions(Path = path, FullPage = true))
-  eprintfn "screenshot: %s" path
+  do! PlaywrightFixture.takeScreenshot page true path
 }
 
 /// Evaluate code the way a user does, through the Evaluate area, and wait until the output panel shows `marker`.

@@ -97,8 +97,7 @@ let withDashboard (viewport: Viewport) (journey: Daemon -> Seen -> Task<unit>) :
 
 let shot (page: IPage) (name: string) : Task<unit> = task {
   let path = Path.Combine(PlaywrightFixture.screenshotDir, sprintf "new-session-%s.png" name)
-  let! _ = page.ScreenshotAsync(PageScreenshotOptions(Path = path))
-  ()
+  do! PlaywrightFixture.takeScreenshot page false path
 }
 
 let goToDashboard (daemon: Daemon) (page: IPage) : Task<unit> = task {

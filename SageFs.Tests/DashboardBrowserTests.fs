@@ -138,6 +138,27 @@ module PlaywrightFixture =
     IO.Directory.CreateDirectory dir |> ignore
     dir
 
+  /// Save a screenshot for a person to look at. `capture` writes the picture to the path it is given. A screenshot is
+  /// evidence and not an assertion: under load Chromium has answered `Page.captureScreenshot: Unable to capture
+  /// screenshot`, which failed a journey whose every assertion held. So a picture that cannot be taken is reported on
+  /// stderr and the journey carries on; whatever it was about to prove is still proven by its assertions.
+  let saveScreenshot (capture: string -> Task<unit>) (path: string) : Task<unit> = task {
+    try
+      do! capture path
+      eprintfn "screenshot: %s" path
+    with ex ->
+      eprintfn "screenshot skipped, the browser could not take it (%s): %s" path ex.Message
+  }
+
+  /// A screenshot of the page, saved at `path`, whole page or just what is in view.
+  let takeScreenshot (page: IPage) (fullPage: bool) (path: string) : Task<unit> =
+    saveScreenshot
+      (fun target -> task {
+        let! _ = page.ScreenshotAsync(PageScreenshotOptions(Path = target, FullPage = fullPage))
+        return ()
+      })
+      path
+
   /// Launch a fresh browser (per journey). A shared browser degrades over
   /// many journeys: SSE connections from closed contexts accumulate and later
   /// journeys' eval-result morphs stop arriving. A fresh browser per journey
@@ -1741,8 +1762,7 @@ let tests =
   playwrightTest "optional panels show only when they're relevant" (fun page -> task {
     let shot (name: string) = task {
       let path = IO.Path.Combine(PlaywrightFixture.screenshotDir, sprintf "panels-%s.png" name)
-      let! _ = page.ScreenshotAsync(PageScreenshotOptions(Path = path, FullPage = true))
-      eprintfn "screenshot: %s" path
+      do! PlaywrightFixture.takeScreenshot page true path
     }
     let count (selector: string) expected ms = PlaywrightExpect.waitForCount ms (page.Locator(selector)) expected
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
