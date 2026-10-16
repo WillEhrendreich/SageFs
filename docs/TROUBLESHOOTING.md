@@ -284,7 +284,8 @@ before it; and a hot-reload compile held the compiler past
   A daemon started with your home directory as its working directory hits this
   for every request that names no directory, so start it from a project or a
   neutral directory. The systemd unit in `contrib/systemd` runs it from
-  `~/.local/state/sagefs` for that reason
+  `~/.local/state/sagefs`, and the launchd agent in `contrib/launchd` runs it
+  from `~/Library/Application Support/sagefs-daemon`, for that reason
 
 ### Live testing not running
 

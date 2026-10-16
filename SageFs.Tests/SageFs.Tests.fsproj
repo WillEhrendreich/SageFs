@@ -378,6 +378,7 @@
          <Compile Include="SageFsErrorJsonShapeTests.fs" />
          <Compile Include="WatchdogRunnerSeedTests.fs" />
          <Compile Include="FirstRunLinuxTests.fs" />
+         <Compile Include="FirstRunMacOSTests.fs" />
          <Compile Include="McpStdioBridgeOwnershipTests.fs" />
          <Compile Include="TestRunReceiptTests.fs" />
          <Compile Include="SourceStateTests.fs" />
