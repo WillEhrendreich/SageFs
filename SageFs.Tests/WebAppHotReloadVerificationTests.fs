@@ -423,9 +423,70 @@ module ShapeMatrix =
 /// session, watch the actual source file, request the route (value A), edit
 /// the function body on disk to value B, observe Compiling -> Reload through
 /// the real worker path, then request the SAME running process and require B.
+/// GET the fixture's HTML page the way a browser asks for it, and require what DevReload puts into it: the reload
+/// script, pointed at the worker's own reload stream, and a header that keeps the browser from caching the page.
+let private expectReloadScript (port: int) (baseUrl: string) (hostLog: StringBuilder) : Task<unit> =
+  task {
+    use client = new HttpClient()
+    client.Timeout <- TestTimeouts.requestPatience
+    use request = new HttpRequestMessage(HttpMethod.Get, sprintf "http://127.0.0.1:%d/page" port)
+    request.Headers.Accept.ParseAdd "text/html"
+    use! response = client.SendAsync request
+    let! body = response.Content.ReadAsStringAsync()
+    let context = sprintf "\nBody: %s\nHost log:\n%s" body (hostLogText hostLog)
+    body |> Expect.stringContains ("the page carries SageFs's reload script" + context) "data-sagefs-injected=\"devreload\""
+    body
+    |> Expect.stringContains
+      ("the script connects to the worker's reload stream" + context)
+      (sprintf "http://127.0.0.1:%d/__sagefs__/reload" (Uri(baseUrl).Port))
+    string response.Headers.CacheControl |> Expect.equal ("an injected page is never cached" + context) "no-store"
+  }
+
 [<Tests>]
 let webAppHotReloadVerificationTests =
   testList "WebApp hot-reload verification" [
+
+    // The app runs in the isolated FSI host, not the worker, so the WebApplication.RunAsync patch that injects the
+    // script has to be in the host. Started from an eval after the session is Ready.
+    Integration.hostCaseTask "a page the app serves carries the browser reload script, pointed at the worker's stream" <| fun () -> task {
+      do! buildFixtureAsSageFsDoes ()
+      let sessionId = sprintf "webapp-devreload-%s" (Guid.NewGuid().ToString("N"))
+      let hostLog = StringBuilder()
+      let! (proc: Process), baseUrl, proxy = spawnHost sessionId hostLog
+      try
+        do! waitReady proxy hostLog
+        let port = freePort ()
+        let! _ = evalOk proxy (sprintf "let appTask = WebAppFixture.App.run %d" port)
+        do! expectReloadScript port baseUrl hostLog
+      finally
+        try proc.Kill(entireProcessTree = true) with _ -> ()
+        try proc.Dispose() with _ -> ()
+    }
+
+    // The same, for an app that `.SageFs/init.fsx` starts: that runs while the session is still starting, before the
+    // worker's HTTP server has bound its port, so the patch and the port both have to be in place before init.fsx runs.
+    Integration.hostCaseTask "a page served by an app that init.fsx starts carries the browser reload script" <| fun () -> task {
+      do! buildFixtureAsSageFsDoes ()
+      let port = freePort ()
+      let sageFsDir = Path.Combine(fixtureDir (), ".SageFs")
+      let initScript = Path.Combine(sageFsDir, "init.fsx")
+      Expect.isFalse "the fixture has no init.fsx of its own for this case to overwrite" (File.Exists initScript)
+      Directory.CreateDirectory sageFsDir |> ignore
+      File.WriteAllText(initScript, sprintf "let appTask = WebAppFixture.App.run %d\n" port)
+      let sessionId = sprintf "webapp-devreload-init-%s" (Guid.NewGuid().ToString("N"))
+      let hostLog = StringBuilder()
+      try
+        let! (proc: Process), baseUrl, proxy = spawnHost sessionId hostLog
+        try
+          do! waitReady proxy hostLog
+          do! expectReloadScript port baseUrl hostLog
+        finally
+          try proc.Kill(entireProcessTree = true) with _ -> ()
+          try proc.Dispose() with _ -> ()
+      finally
+        // Only the file this case wrote: SageFs keeps its own state (the warm-up cache) in the same folder.
+        try File.Delete initScript with _ -> ()
+    }
 
     Integration.hostCaseTask "real file save hot-reloads a running module-declared app (save-driven, no restart)" <| fun () -> task {
       let fDir = fixtureDir ()

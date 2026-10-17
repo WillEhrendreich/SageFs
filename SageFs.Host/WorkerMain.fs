@@ -557,16 +557,29 @@ let escalationOf
       declined |> List.map (fun d -> Features.ReloadOutcome.RestartReason.MutableModuleState d.Binding)
     BindingEscalation.ExtraReasons(fromNeither @ fromDeclined)
 
+/// The worker's HTTP port, known before anything that needs it starts, and held until the HTTP server binds it.
+type private PortReservation = { Port: int; Release: unit -> unit }
+
+/// The daemon asks for port 0 (OS-assigned), and the HTTP server only binds after the session is created. By then the
+/// FSI host has already run `.SageFs/init.fsx`, which may have started the user's web app, and that app's pages need
+/// the port for their reload script. So the worker takes a port from the OS first and holds it with a listening socket
+/// until just before the server binds it. A page served in between gets a script whose connection waits and retries.
+/// A port the caller chose is used as it is.
+let private reservePort (requested: int) : PortReservation =
+  match requested with
+  | 0 ->
+    let listener = new Net.Sockets.TcpListener(Net.IPAddress.Loopback, 0)
+    listener.Start()
+    { Port = (listener.LocalEndpoint :?> Net.IPEndPoint).Port
+      Release = fun () -> listener.Stop() }
+  | chosen -> { Port = chosen; Release = ignore }
+
 /// Run the worker process: create actor, start HTTP server, handle messages.
-let run (sessionId: string) (port: int) = async {
+let run (sessionId: string) (requestedPort: int) = async {
   enableStdoutAutoFlush ()
+  let reservation = reservePort requestedPort
+  let port = reservation.Port
   let workerConfig = Args.WorkerConfig.fromEnvironment sessionId port
-  // Tell DevReload Harmony patches which port to inject into user scripts.
-  // Set BEFORE warmup/init: init scripts may start the user's WebApplication,
-  // and the Harmony RunAsync prefix consults workerPort — if it's still 0 the
-  // middleware injection is skipped. The host binds exactly to `port`, so it's
-  // known before the server even starts.
-  DevReloadInjector.setWorkerPort port
   let loadConfig = Args.ProjectLoadConfig.fromWorkerConfig workerConfig
 
   // The worker process bundles SageFs's OWN dependency versions (e.g. Falco
@@ -691,24 +704,16 @@ let run (sessionId: string) (port: int) = async {
     AutoOpenNamespaces = workerConfig.AutoOpenNamespaces
     OnEvent = onEvent
     Workflow = workerConfig.Workflow
+    // The web DevReload middleware (the WebApplication.Run/RunAsync Harmony patch) is installed by the agent, in the
+    // process that runs the user's app: the isolated FSI host. Chesterton's fence: it used to be installed HERE, after
+    // createActor, which patched this process (where no user app runs) and only after `.SageFs/init.fsx` had already
+    // started the app. The page's script connects back to this port for the reload stream.
+    ReloadPort = Some port
   }
 
   let! result =
     ActorCreation.createActor actorArgs |> Async.AwaitTask
   let actor = result.Actor
-
-  // Install the web DevReload middleware (the WebApplication.Run/RunAsync Harmony
-  // patch) only for a hot-reload session on a WEB project. Console and game
-  // hot-reload use the separate FSI method-detour engine and need no web patch —
-  // so the reload strategy, derived from the workflow AND the project kind,
-  // decides. Interactive never reloads at all.
-  let projectKind =
-    result.ProjectRoles
-    |> List.collect (fun p -> p.PackageRefs)
-    |> WorkflowTypes.ProjectKind.classify
-  let reloadStrategy = WorkflowTypes.SessionWorkflow.reloadStrategy workerConfig.Workflow projectKind
-  if WorkflowTypes.ReloadStrategy.installsWebDevReload reloadStrategy then
-    DevReloadInjector.install()
 
   // The agent lives where the user's code lives (this process, or the isolated FSI host). It scans what that process has
   // loaded for tests, and it runs them: interactively defined tests first, then the project's.
@@ -2282,7 +2287,7 @@ let run (sessionId: string) (port: int) = async {
     Log.debug "Worker %s has no daemon PID — parent-death watchdog disabled" sessionId
 
   try
-    // Start HTTP server on requested port (0 = OS-assigned)
+    // Start the HTTP server on the port reserved at startup (see reservePort)
     // Collect all .fs/.fsx files from project directories for hot-reload UI
     let projectFiles =
       result.ProjectDirectories
@@ -2308,6 +2313,7 @@ let run (sessionId: string) (port: int) = async {
       Log.info "Hot reload: watching %d project files (SAGEFS_HOT_RELOAD=all)" projectFiles.Length
     | _ ->
       Log.info "Hot reload: off by default (0 files watched)"
+    reservation.Release()
     let! server =
       WorkerHttpTransport.startServerWithShutdown
         (fun () -> try cts.Cancel() with :? ObjectDisposedException -> ())
@@ -2316,10 +2322,6 @@ let run (sessionId: string) (port: int) = async {
     // Print actual port to stdout so daemon can discover it
     printfn "WORKER_PORT=%s" server.BaseUrl
     Console.Out.Flush()
-
-    // Tell DevReload Harmony patches which port to inject into user scripts
-    let uri = Uri(server.BaseUrl)
-    DevReloadInjector.setWorkerPort uri.Port
 
     // Block until cancellation
     let tcs = Threading.Tasks.TaskCompletionSource<unit>()

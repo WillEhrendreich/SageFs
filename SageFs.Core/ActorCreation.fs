@@ -60,6 +60,9 @@ type ActorArgs = {
   /// Where the sessions' FSI lives. Production reads it from the environment (isolated by default); the test constructor
   /// pins the in-process reference implementation.
   FsiKind: SessionKinds.FsiSessionKind
+  /// The worker's HTTP port, which serves the browser reload stream. A web app's pages get a script that connects
+  /// to it, so without one (outside a worker) no page is given the script.
+  ReloadPort: int option
 }
   with
     /// Backward-compatible accessor.
@@ -173,8 +176,14 @@ let createActorImmediate a =
             |> Option.defaultValue "Unknown"
           { Tracing.NamedMiddleware.Name = name; Middleware = mw })
       Tracing.buildTracedPipeline named "CoreEval" evalFn
+  let webDevReload =
+    let kind =
+      SageFs.ProjectLoading.classifiedProjectsOf sln
+      |> List.collect (fun p -> p.PackageRefs)
+      |> WorkflowTypes.ProjectKind.classify
+    SessionAgent.webDevReloadFor a.Workflow kind a.ReloadPort
   let appActor, diagnosticsChanged, cancelEval, getSessionState, getSessionStatus, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent =
-    mkAppStateActor a.FsiKind a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent tracedBuild sln
+    mkAppStateActor a.FsiKind a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled webDevReload a.OnEvent tracedBuild sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
   { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = SageFs.ProjectLoading.classifiedProjectsOf sln |> SageFs.ProjectLoading.withConcerns hostPrep.Concerns; CheckOptions = originalSln.FsProjects }
@@ -203,4 +212,5 @@ let mkCommonActorArgs logger useAsp (onEvent: Features.Events.SageFsEvent -> uni
   OnEvent = onEvent
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
   FsiKind = SessionKinds.InProcess
+  ReloadPort = None
 }

@@ -39,6 +39,8 @@ type WorkflowGenerators =
     Arb.fromGen genSessionWorkflow
   static member BrowserRefreshConfig () =
     Arb.fromGen genBrowserRefreshConfig
+  static member ProjectKind () =
+    Arb.fromGen (Gen.oneof [ genBrowserRefreshConfig |> Gen.map ProjectKind.Web; Gen.constant ProjectKind.Console; Gen.constant ProjectKind.NativeGui ])
 
 let private workflowConfig = {
   propConfig with
@@ -313,4 +315,26 @@ let devReloadGateTests =
     testCase "no reload installs nothing" <| fun _ ->
       ReloadStrategy.installsWebDevReload ReloadStrategy.NoReload
       |> Expect.isFalse "interactive skips"
+
+    // The isolated FSI host runs the user's app, so it is the one that installs the patch, and the worker tells it to
+    // through AgentInit. The host may only be told to when the gate above says so, and with a port the page's script
+    // can actually reach.
+    testPropertyWithConfig workflowConfig
+      "the host is told to inject only for a hot-reload session that is not a native GUI, and only with a real port" <|
+      fun (workflow: SessionWorkflow) (kind: ProjectKind) (port: int option) ->
+        let expected =
+          match workflow, kind, port with
+          | SessionWorkflow.HotReload _, (ProjectKind.Web _ | ProjectKind.Console), Some p when p > 0 ->
+            SageFs.HostAgent.WebDevReload.Inject p
+          | _ -> SageFs.HostAgent.WebDevReload.Off
+        SageFs.SessionAgent.webDevReloadFor workflow kind port = expected
+
+    testCase "a hot-reload web session with a worker port injects, pointed at that port" <| fun _ ->
+      SageFs.SessionAgent.webDevReloadFor (SessionWorkflow.HotReload BrowserRefreshConfig.defaults) (ProjectKind.Web BrowserRefreshConfig.defaults) (Some 41234)
+      |> Expect.equal "injects with the worker's port" (SageFs.HostAgent.WebDevReload.Inject 41234)
+
+    testCase "without a port there is nowhere to point a page at, so nothing is injected" <| fun _ ->
+      for port in [ None; Some 0 ] do
+        SageFs.SessionAgent.webDevReloadFor (SessionWorkflow.HotReload BrowserRefreshConfig.defaults) (ProjectKind.Web BrowserRefreshConfig.defaults) port
+        |> Expect.equal (sprintf "no injection for port %A" port) SageFs.HostAgent.WebDevReload.Off
   ]

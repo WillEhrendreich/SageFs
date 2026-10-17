@@ -186,7 +186,7 @@ let private applySave
   let init: AgentInit =
     { Projects = [ fixtureAssembly ]
       ResolveFrom = []
-      ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }
+      ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads; WebDevReload = SageFs.HostAgent.WebDevReload.Off }
   let agent = Agent(init, sources)
   agent.Started.AssemblyLoadErrors |> Expect.isEmpty "the fixture assembly loads"
   dynamic <- [| saveOf typeName methodName |]

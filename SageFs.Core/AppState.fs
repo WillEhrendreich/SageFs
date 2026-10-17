@@ -714,7 +714,7 @@ let private evalAsChoice (session: FsiSession.IFsiSession) (code: string) (ct: C
 /// Creates a fresh FSI session with warm-up: loads startup files and opens namespaces.
 /// The CancellationToken is passed through to FSI EvalInteraction calls so that
 /// warm-up can be cancelled if it takes too long (e.g. a stuck module initializer).
-let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (originalSln: Solution) (sln: Solution) (autoOpenNamespaces: bool) (hotReload: bool) (ct: CancellationToken) (onProgress: (int * int * string) -> unit) =
+let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (originalSln: Solution) (sln: Solution) (autoOpenNamespaces: bool) (hotReload: bool) (webDevReload: HostAgent.WebDevReload) (ct: CancellationToken) (onProgress: (int * int * string) -> unit) =
   async {
     let warmupStartedAt = System.DateTimeOffset.UtcNow
     let sw = System.Diagnostics.Stopwatch.StartNew()
@@ -748,7 +748,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
           match fsiInitErrors.Length > 0 with
           | true -> logger.LogWarning (sprintf "  FSI init warnings: %s" fsiInitErrors)
           | false -> ()
-          return (new FsiSession.InProcessFsiSession(raw, SessionAgent.agentInitOf sln hotReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) :> FsiSession.IFsiSession)
+          return (new FsiSession.InProcessFsiSession(raw, SessionAgent.agentInitOf sln hotReload webDevReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) :> FsiSession.IFsiSession)
         }
       | SessionKinds.Isolated ->
         async {
@@ -763,7 +763,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
             logger.LogError (sprintf "  ❌ The session was refused: %s" message)
             failwith message
           let projects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
-          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects planning.Plan.Overrides (SessionAgent.agentInitOf sln hotReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) with
+          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects planning.Plan.Overrides (SessionAgent.agentInitOf sln hotReload webDevReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) with
           | Ok session -> return session
           | Error reason ->
             let message = IsolatedFsiSession.describeStartError reason
@@ -1033,7 +1033,7 @@ let private observeEvalLatencyToHealthWatch (elapsedMs: float) : unit =
 let observeEvalLatency (observe: float -> unit) (elapsedMs: float) : unit =
   observe elapsedMs
 
-let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
+let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (webDevReload: HostAgent.WebDevReload) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
   let emit evt = try onEvent evt with ex -> logger.LogWarning (sprintf "Event emission failed: %s" ex.Message)
 
@@ -1447,6 +1447,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                 resetSolution
                 autoOpenNamespaces
                 hotReload
+                webDevReload
                 softResetCts.Token
                 onProgress
             softResetCts.Dispose()
@@ -1642,6 +1643,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                       newSln
                       autoOpenNamespaces
                       hotReload
+                      webDevReload
                       warmupCts.Token
                       onProgress
                   return Ok session
@@ -1752,6 +1754,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               sln
               autoOpenNamespaces
               hotReload
+              webDevReload
               initCts.Token
               onProgress
           initCts.Dispose()

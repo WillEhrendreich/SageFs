@@ -65,13 +65,28 @@ type Discovery =
   { Tests: TestCase array
     Providers: ProviderDescription list }
 
+/// Whether the process that runs the user's web app puts SageFs's browser reload into that app's pages.
+///
+/// The Harmony patch on `WebApplication.Run`/`RunAsync` has to be in the process where the app calls them. For an
+/// isolated session that is the FSI host, not the worker, so the worker says so here and the host installs it when its
+/// agent starts, which is before `base.fsx` and `.SageFs/init.fsx` run.
+[<RequireQualifiedAccess>]
+type WebDevReload =
+  /// Not a hot-reload session for a web project, or no reload stream to point a page at.
+  | Off
+  /// Inject the reload script into the app's HTML. The script connects to the worker's HTTP port, which serves the
+  /// reload stream (`/__sagefs__/reload`).
+  | Inject of workerPort: int
+
 /// What the agent starts from: the project outputs to load, and further files whose directories resolve dependencies.
 type AgentInit =
   { Projects: string list
     ResolveFrom: string list
     /// Hot reload watches where the app's module values go, so a redefined
     /// value can be patched only when nothing kept a copy (rule 2).
-    ValueReads: ValueReadWatch }
+    ValueReads: ValueReadWatch
+    /// Only the isolated FSI host reads this (`Program.fs`). The agent itself is the same with or without it.
+    WebDevReload: WebDevReload }
 
 /// The outcome of starting an agent: which projects could not be loaded, and why.
 type AgentStarted =

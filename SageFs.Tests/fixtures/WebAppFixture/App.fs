@@ -18,6 +18,10 @@ module App =
       ctx.Response.ContentType <- "text/plain"
       ctx.Response.WriteAsync(sprintf "<h1>%s</h1>" (Greeting.greeting ())))
     ) |> ignore
+    // A real HTML page: SageFs puts its browser reload script into text/html responses only.
+    app.MapGet("/page", Func<_, _>(fun (ctx: HttpContext) ->
+      ctx.Response.ContentType <- "text/html; charset=utf-8"
+      ctx.Response.WriteAsync(sprintf "<html><body><h1>%s</h1></body></html>" (Greeting.greeting ())))) |> ignore
     // The shape matrix. The handler table is read ONCE, here, at startup — the
     // Falco/Giraffe/Saturn/Oxpecker shape — so each route serves whatever
     // closure it captured, never a fresh lookup. Saving Shapes.fs must change

@@ -92,9 +92,18 @@ let reflectionSettingsAt (paths: ConfigPaths) : ReflectionReadSettings =
 let reflectionSettingsFor (workingDir: string) : ReflectionReadSettings =
   reflectionSettingsAt { GlobalDir = DaemonState.SageFsDir; Repo = RepoRootAt workingDir }
 
+/// Whether the session's agent injects the browser reload into the app's pages. The same decision the worker makes for
+/// its reload strategy (the workflow and the kind of project), plus somewhere for the page's script to connect:
+/// `reloadPort` is the worker's HTTP port, and a session outside a worker has none.
+let webDevReloadFor (workflow: WorkflowTypes.SessionWorkflow) (kind: WorkflowTypes.ProjectKind) (reloadPort: int option) : HostAgent.WebDevReload =
+  let strategy = WorkflowTypes.SessionWorkflow.reloadStrategy workflow kind
+  match WorkflowTypes.ReloadStrategy.installsWebDevReload strategy, reloadPort with
+  | true, Some port when port > 0 -> HostAgent.WebDevReload.Inject port
+  | _ -> HostAgent.WebDevReload.Off
+
 /// What the session's agent starts from, derived from the solution: every project's output is loaded, and dependencies
 /// resolve from the projects' outputs, their package directories and the reference assemblies FSI was given.
-let agentInitOf (sln: Solution) (hotReload: bool) (reflection: ReflectionReadSettings) : HostAgent.AgentInit =
+let agentInitOf (sln: Solution) (hotReload: bool) (webDevReload: HostAgent.WebDevReload) (reflection: ReflectionReadSettings) : HostAgent.AgentInit =
   let referenced (options: string list) =
     options
     |> List.filter (fun s -> s.StartsWith("-r:", System.StringComparison.Ordinal) && s.EndsWith(".dll", System.StringComparison.Ordinal))
@@ -107,7 +116,8 @@ let agentInitOf (sln: Solution) (hotReload: bool) (reflection: ReflectionReadSet
     ValueReads =
       match hotReload with
       | true -> SageFs.Middleware.ValueReadTracking.ValueReadWatch.WatchValueReads reflection
-      | false -> SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }
+      | false -> SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads
+    WebDevReload = webDevReload }
 
 /// Reaches the agent of whichever session is active now, without a round-trip through the eval actor. A session that is
 /// not active has no agent, and says so.

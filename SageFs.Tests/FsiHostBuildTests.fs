@@ -81,10 +81,11 @@ let tests =
           for name, content in found do
             Expect.isFalse (sprintf "%s is empty" name) (String.IsNullOrWhiteSpace content)
 
-      TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "the host's source list is exactly the compile list of FsiHost.fsproj, in order" <| fun _ ->
+      TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "the host's source list is exactly the compile and embedded-resource list of FsiHost.fsproj, in order" <| fun _ ->
         let project = System.Xml.Linq.XDocument.Load(Path.Combine(repoRoot, "SageFs.FsiHost", "FsiHost.fsproj"))
         let compiled =
-          project.Descendants(System.Xml.Linq.XName.Get "Compile")
+          project.Descendants()
+          |> Seq.filter (fun element -> element.Name.LocalName = "Compile" || element.Name.LocalName = "EmbeddedResource")
           |> Seq.map (fun element -> element.Attribute(System.Xml.Linq.XName.Get "Include").Value)
           |> Seq.toList
         hostSourceNames
