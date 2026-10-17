@@ -110,12 +110,73 @@ type CommandClass =
 
 type Decision =
   | Allow
+  /// Let it run, and put the REPL reminder in front of the agent as `additionalContext`.
+  /// Only `SAGEFS_REPL_GUARD=advise` produces this.
+  | AllowWithAdvice of reminder: string
   | Deny of reason: string
 
 [<Literal>]
 let FinalGateVariable = "SAGEFS_FINAL_GATE"
 
 let private finalGateAssignment = FinalGateVariable + "=1"
+
+/// How the guard treats a command it would deny on "use the REPL" grounds.
+type GuardMode =
+  /// Deny it. The default.
+  | Enforcing
+  /// Let it run and remind the agent. For a repository where the REPL is a recommendation.
+  | Advising
+
+module GuardMode =
+  /// The environment variable that picks the mode.
+  [<Literal>]
+  let Variable = "SAGEFS_REPL_GUARD"
+
+  let toToken =
+    function
+    | Enforcing -> "enforce"
+    | Advising -> "advise"
+
+  let all = [ Enforcing; Advising ]
+
+  let tryParse (token: string) =
+    all |> List.tryFind (fun m -> System.String.Equals(toToken m, token.Trim(), System.StringComparison.OrdinalIgnoreCase))
+
+/// Command patterns a repository says always pass. A pattern is the words of a
+/// dotnet command; it matches a command whose words START with them, whole words only.
+/// Each pattern is stored as its words.
+type Allowlist = { Patterns: string list list }
+
+module Allowlist =
+  let none = { Patterns = [] }
+
+/// What the guard found at `<git root>/.SageFs/repl-guard.json`.
+type RepoConfig =
+  | NoRepoConfig
+  | RepoConfigLoaded of Allowlist
+  /// The file is there and the guard could not use it. `Problem` says what is wrong with it.
+  | RepoConfigMalformed of path: string * problem: string
+
+/// Where the repository's config lives, relative to its git root.
+[<Literal>]
+let ConfigDirectory = ".SageFs"
+
+[<Literal>]
+let ConfigFileName = "repl-guard.json"
+
+/// Everything the guard was told about how strict to be, in one place.
+/// `Problems` are things wrong with that configuration; the guard keeps going on the
+/// stricter reading and puts these in the message it prints.
+type Policy = { Mode: GuardMode; Allow: Allowlist; Problems: string list }
+
+module Policy =
+  let strict = { Mode = Enforcing; Allow = Allowlist.none; Problems = [] }
+
+  /// STUB (red): the real one reads the mode and the config.
+  let build (_rawMode: string) (_config: RepoConfig) : Policy = strict
+
+/// STUB (red): the real one parses the repository's file.
+let parseConfig (_json: string) : Result<Allowlist, string> = Ok Allowlist.none
 
 /// Split a command into pipeline segments of words. Quotes group words and are
 /// stripped, and separators inside quotes don't split. This is a small shell
@@ -295,6 +356,18 @@ let decide (command: string) (ctx: Context) : Decision =
 /// lease before it can be allowed through.
 let needsContext (command: string) =
   match classify command with
+  | SlowLoop _
+  | DeclaredFinalGate _ -> true
+  | NoSlowLoop -> false
+
+/// STUB (red): the real one honours the allowlist.
+let classifyWith (_allow: Allowlist) (command: string) : CommandClass = classify command
+
+/// STUB (red): the real one honours the mode, the allowlist and the config problems.
+let decideWith (_policy: Policy) (command: string) (ctx: Context) : Decision = decide command ctx
+
+let needsContextWith (allow: Allowlist) (command: string) =
+  match classifyWith allow command with
   | SlowLoop _
   | DeclaredFinalGate _ -> true
   | NoSlowLoop -> false

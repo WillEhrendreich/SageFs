@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <Compile Include="ReplGuard.fs" />
+    <Compile Include="Verdict.fs" />
     <Compile Include="Hook.fs" />
   </ItemGroup>
 
