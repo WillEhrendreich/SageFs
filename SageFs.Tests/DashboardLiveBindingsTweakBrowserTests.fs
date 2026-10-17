@@ -318,32 +318,58 @@ let journey () : Task<unit> = task {
         (box (row "gravity"))
     let forgeTheOldHash () =
       slider.EvaluateAsync("(el, [name, value]) => el.setAttribute(name, value)", [| box handler; box shown |])
-    // The edit makes the row repaint (it now differs from the file), and that repaint writes the handler again with the file's
-    // new hash. Forging before it lands gets the forged hash overwritten, and the click is then a legitimate write: the row
-    // reads DiffersFromFile and nothing is stale. That is a race the machine's load decides, and it failed the release gate. So
-    // wait for that repaint, then put back the hash the row showed before the edit, which is exactly what a stale row is, and
-    // click. This narrows the window and does not close it: the dashboard pushes the whole shell, so any other change on the page
-    // (memory, an eval count) re-morphs this row's handler too. If the case fails again, the message below says which of the
-    // three things happened, and that is what should decide the next change.
-    // What the page sends is recorded so that a failure here says which of the three things happened: the forged hash was
-    // gone by the click, the click sent nothing, or it sent the forged hash and the daemon answered something else.
+    // A stale click is the row's handler carrying the hash from before the file changed. The handler is an attribute in the
+    // page, and the dashboard pushes the whole shell about once a second (a ticking uptime label keeps the push from being
+    // skipped as unchanged), so every push rewrites it with the file's current hash. Forge the old hash and click inside
+    // that window and the click is stale. Lose the race and the forged hash is gone: the click is a legitimate write and
+    // the row reads DiffersFromFile. Load decides who wins, and it failed the release gate, so the attempt is repeated, the
+    // way `throughPanelReset` repeats a step against the same push. Each attempt starts from the same place (the file holds
+    // the edit, and the row has repainted to say so), so a lost one leaves nothing behind for the next.
+    // What the page sends is recorded so that a failure says what happened: the forged hash was gone by the click, the click
+    // sent nothing, or it sent the forged hash and the daemon answered something else.
     let posts = Collections.Generic.List<string>()
     page.Request.Add(fun request ->
       if request.Method = "POST" then
         let body = match request.PostData with | null -> "" | text -> text
         posts.Add(sprintf "%s %s" request.Url (body.Substring(0, min 700 body.Length))))
-    do! waitForTheEditsRepaint ()
-    let! _ = forgeTheOldHash ()
-    let! forgedAtTheClick = slider.EvaluateAsync<string>("(el, name) => el.getAttribute(name)", handler)
-    do! page.Locator(sprintf "%s [data-testid=tweak-step-up]" (row "gravity")).ClickAsync()
-    try
-      do! waitState page "gravity" "StaleAddress"
-    with ex ->
-      let! handlerNow = slider.EvaluateAsync<string>("(el, name) => el.getAttribute(name)", handler)
-      let fileNow = File.ReadAllText tuning
-      Tests.failtestf
-        "%s | forged hash held right before the click: %b | and after it: %b | the file still holds the edit: %b | POSTs the page sent: %s"
-        ex.Message (forgedAtTheClick = shown) (handlerNow = shown) (fileNow = edited) (String.concat " || " posts)
+    let staleClickAttempts = 5
+    let rowIsStale () =
+      task {
+        try
+          let! _ =
+            page.WaitForFunctionAsync(
+              "([sel, state]) => { const e = document.querySelector(sel); return !!e && e.getAttribute('data-state') === state; }",
+              [| row "gravity"; "StaleAddress" |],
+              PageWaitForFunctionOptions(Timeout = float32 BrowserWaits.panelUpdates))
+          return true
+        with _ -> return false
+      }
+    let lostAttempts = Collections.Generic.List<string>()
+    let rec staleClick (attempt: int) : Task<unit> =
+      task {
+        File.WriteAllText(tuning, edited)
+        do! waitForTheEditsRepaint ()
+        let! _ = forgeTheOldHash ()
+        let! forgedAtTheClick = slider.EvaluateAsync<string>("(el, name) => el.getAttribute(name)", handler)
+        do! page.Locator(sprintf "%s [data-testid=tweak-step-up]" (row "gravity")).ClickAsync()
+        let! stale = rowIsStale ()
+        match stale with
+        | true -> ()
+        | false ->
+          let! handlerNow = slider.EvaluateAsync<string>("(el, name) => el.getAttribute(name)", handler)
+          let! stateNow = stateOf page "gravity"
+          lostAttempts.Add(
+            sprintf
+              "attempt %d: row showed '%s' | forged hash held right before the click: %b and after it: %b | the file still holds the edit: %b"
+              attempt stateNow (forgedAtTheClick = shown) (handlerNow = shown) (File.ReadAllText tuning = edited))
+          match attempt < staleClickAttempts with
+          | true -> do! staleClick (attempt + 1)
+          | false ->
+            Tests.failtestf
+              "a stale click never read StaleAddress in %d attempts: %s | POSTs the page sent: %s"
+              staleClickAttempts (String.concat " ;; " lostAttempts) (String.concat " || " posts)
+      }
+    do! staleClick 1
     File.ReadAllText tuning |> Expect.equal "a stale click wrote nothing: the file is what the person left" edited
     let! staleText = textIn page (row "gravity")
     staleText |> Expect.stringContains "what the row showed" "10.7"

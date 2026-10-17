@@ -183,6 +183,9 @@ let private journey () : Task<unit> = task {
     write (Path.Combine(keep, "ok")) "ok"
     Directory.SetLastWriteTimeUtc(keep, DateTime.UtcNow - TimeSpan.FromHours(float i))
   let daemon = startDaemon sb
+  // Any way the journey ends short of its last line, the daemon's own log is printed: a wait that gives up (a scan still
+  // reading "Scanning...") says what the page showed and nothing about what the daemon was doing.
+  let mutable reachedTheEnd = false
   try
     let! up = healthy daemon
     match up with
@@ -282,7 +285,9 @@ let private journey () : Task<unit> = task {
 
     // 7. Through all of it, not one console or page error.
     Expect.isEmpty (List.ofSeq errors) (sprintf "zero console and page errors across the journey, got: %s" (String.concat " | " errors))
+    reachedTheEnd <- true
   finally
+    if not reachedTheEnd then dumpLogs daemon
     killDaemon daemon
 }
 
