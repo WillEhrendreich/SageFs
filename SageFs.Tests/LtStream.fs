@@ -221,6 +221,27 @@ let describeHistory (feed: SseFeed) : string =
     flush ()
     String.Join("\n", lines)
 
+/// The last lines of the newest worker log under the daemon's data dir. The worker is where an eval is applied and a
+/// test is run, so a verdict that judges old code is explained there and not in the daemon's own log.
+let private workerLogTail (dir: string) : string =
+  try
+    let workers = Path.Combine(dir, "workers")
+    match Directory.Exists workers with
+    | false -> sprintf "(no %s)" workers
+    | true ->
+      let newest =
+        Directory.GetFiles(workers, "*.log")
+        |> Array.sortByDescending (fun p -> File.GetLastWriteTimeUtc p)
+        |> Array.tryHead
+      match newest with
+      | None -> sprintf "(no worker log in %s)" workers
+      | Some path ->
+        use stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)
+        use reader = new StreamReader(stream)
+        let lines = reader.ReadToEnd().Split('\n')
+        sprintf "--- worker log %s: last 200 lines ---\n%s" (Path.GetFileName path) (String.Join("\n", lines |> Array.skip (max 0 (lines.Length - 200))))
+  with ex -> sprintf "(could not read the worker log: %s)" ex.Message
+
 /// The newest daemon log's last lines and every line the build confirmation wrote, when the runner told us where the
 /// daemon's data dir is. Empty when it did not.
 let private daemonLogTail () : string =
@@ -240,7 +261,7 @@ let private daemonLogTail () : string =
         let lines = reader.ReadToEnd().Split('\n')
         let confirm = lines |> Array.filter (fun l -> l.Contains "[confirm]")
         let tail = lines |> Array.skip (max 0 (lines.Length - 60))
-        sprintf "--- %s: every [confirm] line ---\n%s\n--- last 60 lines ---\n%s" (Path.GetFileName path) (String.Join("\n", confirm)) (String.Join("\n", tail))
+        sprintf "--- %s: every [confirm] line ---\n%s\n--- last 60 lines ---\n%s\n%s" (Path.GetFileName path) (String.Join("\n", confirm)) (String.Join("\n", tail)) (workerLogTail dir)
     with ex -> sprintf "(could not read the daemon log: %s)" ex.Message
 
 /// What the daemon's status says now, for the end of a timeout: the counts, whether a confirmation is in flight and how
