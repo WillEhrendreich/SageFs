@@ -176,9 +176,11 @@ let createActorImmediate a =
             |> Option.defaultValue "Unknown"
           { Tracing.NamedMiddleware.Name = name; Middleware = mw })
       Tracing.buildTracedPipeline named "CoreEval" evalFn
+  // Classifying reads every .fsproj, so it is done once for the reload decision and the session's ProjectRoles.
+  let classified = SageFs.ProjectLoading.classifiedProjectsOf sln
   let webDevReload =
     let kind =
-      SageFs.ProjectLoading.classifiedProjectsOf sln
+      classified
       |> List.collect (fun p -> p.PackageRefs)
       |> WorkflowTypes.ProjectKind.classify
     SessionAgent.webDevReloadFor a.Workflow kind a.ReloadPort
@@ -186,7 +188,7 @@ let createActorImmediate a =
     mkAppStateActor a.FsiKind a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled webDevReload a.OnEvent tracedBuild sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = SageFs.ProjectLoading.classifiedProjectsOf sln |> SageFs.ProjectLoading.withConcerns hostPrep.Concerns; CheckOptions = originalSln.FsProjects }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = classified |> SageFs.ProjectLoading.withConcerns hostPrep.Concerns; CheckOptions = originalSln.FsProjects }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

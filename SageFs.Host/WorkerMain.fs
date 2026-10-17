@@ -563,7 +563,8 @@ type private PortReservation = { Port: int; Release: unit -> unit }
 /// The daemon asks for port 0 (OS-assigned), and the HTTP server only binds after the session is created. By then the
 /// FSI host has already run `.SageFs/init.fsx`, which may have started the user's web app, and that app's pages need
 /// the port for their reload script. So the worker takes a port from the OS first and holds it with a listening socket
-/// until just before the server binds it. A page served in between gets a script whose connection waits and retries.
+/// until the server, built and ready, is about to bind it (`startServerWithShutdown`'s `beforeListen`). A page served in
+/// between gets a script whose connection waits and retries.
 /// A port the caller chose is used as it is.
 let private reservePort (requested: int) : PortReservation =
   match requested with
@@ -2313,10 +2314,10 @@ let run (sessionId: string) (requestedPort: int) = async {
       Log.info "Hot reload: watching %d project files (SAGEFS_HOT_RELOAD=all)" projectFiles.Length
     | _ ->
       Log.info "Hot reload: off by default (0 files watched)"
-    reservation.Release()
     let! server =
       WorkerHttpTransport.startServerWithShutdown
         (fun () -> try cts.Cancel() with :? ObjectDisposedException -> ())
+        reservation.Release
         readyHandler result.HotReloadStateRef keptStateAccess projectFiles result.GetWarmupContext getRunTest result.Agent.TakeCoverage port
       |> Async.AwaitTask
     // Print actual port to stdout so daemon can discover it
