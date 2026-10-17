@@ -133,6 +133,7 @@
         <EmbeddedResource Include="Middleware\ValueReads.fs" LogicalName="FsiHost/ValueReads.fs" />
         <EmbeddedResource Include="Middleware\GenericReload.fs" LogicalName="FsiHost/GenericReload.fs" />
         <EmbeddedResource Include="Middleware\ValueReadTracking.fs" LogicalName="FsiHost/ValueReadTracking.fs" />
+        <EmbeddedResource Include="Middleware\QualifiedNameMatch.fs" LogicalName="FsiHost/QualifiedNameMatch.fs" />
         <EmbeddedResource Include="Middleware\HotReloadCore.fs" LogicalName="FsiHost/HotReloadCore.fs" />
         <EmbeddedResource Include="HostAgent.fs" LogicalName="FsiHost/HostAgent.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/FsiProtocol.fs" LogicalName="FsiHost/FsiProtocol.fs" />
@@ -457,6 +458,7 @@
         <!-- Tells clients `pending` now and what the host saw later; broadcasts through ReloadBroadcast. -->
         <Compile Include="Features\PatchAnnouncer.fs" />
         <Compile Include="Middleware\ValueReadTracking.fs" />
+        <Compile Include="Middleware\QualifiedNameMatch.fs" />
         <Compile Include="Middleware\HotReloadCore.fs" />
         <Compile Include="HostAgent.fs" />
         <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />

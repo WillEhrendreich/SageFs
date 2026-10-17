@@ -6,6 +6,7 @@ open Expecto.Flip
 open SageFs.Features.RestartScope
 open SageFs.Middleware.HotReloading
 open SageFs.Middleware.HotReloadCore
+open SageFs.Middleware.QualifiedNameMatch
 open SageFs.Features.ReloadOutcome
 open SageFs.Features.ReloadPlanning
 
@@ -88,6 +89,64 @@ let detourPlanTests =
           s.KnownBefore
           |> List.filter (fun k -> k.FullName = d.FullName)
           |> List.forall (fun old -> isPair old d s.Plan)))
+  ]
+
+let private named (fullName: string) (name: string) (index: int) : Method =
+  { MethodInfo = (overloads name).[index]; FullName = fullName }
+
+let private pairedByName (older: Method list) (fresh: Method) =
+  let compatible (old: Method) (candidate: Method) = endsAtSegment old.FullName candidate.FullName
+  planDetours (newGiven older) compatible (older @ [ fresh ]) (byName older)
+  |> separateAmbiguous (fun m -> m.FullName) (fun m -> m.MethodInfo)
+
+[<Tests>]
+let qualifiedNameMatchTests =
+  testList "qualified name match" [
+    testCase "WHY — endsAtSegment — a name that only ends in the same letters is not the same function because MyUtil.helper is not Util.helper" <| fun _ ->
+      endsAtSegment "MyUtil.helper" "Util.helper"
+      |> Expect.isFalse "MyUtil.helper does not end at a segment boundary of Util.helper"
+
+    testCase "WHY — endsAtSegment — a namespace-less FSI copy still pairs with its compiled copy because the compiled name just carries more leading segments" <| fun _ ->
+      endsAtSegment "App.Util.helper" "Util.helper"
+      |> Expect.isTrue "App.Util.helper ends with .Util.helper"
+      endsAtSegment "Util.helper" "Util.helper"
+      |> Expect.isTrue "equal names match"
+
+    testProperty "WHY — endsAtSegment — a match is always equal or ends with a dot and the shorter name" <| fun (a: string) (b: string) ->
+      match isNull a || isNull b with
+      | true -> true
+      | false -> not (endsAtSegment a b) || a = b || a.EndsWith("." + b, StringComparison.Ordinal)
+
+    testProperty "WHY — endsAtSegment — a name with leading segments always matches its own tail" <| fun (prefix: string) (tail: string) ->
+      match isNull prefix || isNull tail with
+      | true -> true
+      | false -> endsAtSegment (prefix + "." + tail) tail
+
+    testCase "WHY — separateAmbiguous — two different modules both ending in Util.helper are refused by name and not paired because re-pointing both would move a function the user did not edit" <| fun _ ->
+      let a = named "A.Util.helper" "Abs" 0
+      let b = named "B.Util.helper" "Abs" 1
+      let fresh = named "Util.helper" "Abs" 2
+      let paired, ambiguities = pairedByName [ a; b ] fresh
+      paired |> Expect.isEmpty "no pair is planned"
+      ambiguities
+      |> Expect.equal "the refusal names the new definition and both candidates"
+        [ { NewName = "Util.helper"; OlderNames = [ "A.Util.helper"; "B.Util.helper" ] } ]
+
+    testCase "WHY — separateAmbiguous — a compiled copy and an earlier FSI copy of one function are one function, not an ambiguity" <| fun _ ->
+      let compiled = named "App.Util.helper" "Abs" 0
+      let earlier = named "Util.helper" "Abs" 1
+      let fresh = named "Util.helper" "Abs" 2
+      let paired, ambiguities = pairedByName [ compiled; earlier ] fresh
+      ambiguities |> Expect.isEmpty "nothing is ambiguous"
+      paired |> List.map (fun (o, _) -> token o) |> List.sort
+      |> Expect.equal "both older copies move onto the new one" ([ token compiled; token earlier ] |> List.sort)
+
+    testCase "WHY — separateAmbiguous — a longer name that only shares letters is not a candidate at all" <| fun _ ->
+      let lookalike = named "MyUtil.helper" "Abs" 0
+      let fresh = named "Util.helper" "Abs" 1
+      let paired, ambiguities = pairedByName [ lookalike ] fresh
+      paired |> Expect.isEmpty "MyUtil.helper is not re-pointed"
+      ambiguities |> Expect.isEmpty "and it is not an ambiguity either"
   ]
 
 /// A compiled method in the two-segment namespace SageFs.Tests.
