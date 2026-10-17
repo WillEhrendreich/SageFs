@@ -97,6 +97,10 @@ module SessionManager =
     | WorkerExited of SessionId * workerPid: int * exitCode: int
     | WorkerReady of SessionId * workerPid: int * baseUrl: string * SessionProxy
     | WorkerTestDiscovery of SessionId * TestDiscoveryReport
+    /// Ask the session's Ready worker for its tests and maps again, without the watchdog. Answered once the asks are sent.
+    | RefetchLiveTestingState of SessionId * AsyncReplyChannel<Result<unit, WorkerPostReady.RefetchRefusal>>
+    /// A refetch's answer, tagged with the worker asked; dropped unless that worker still serves.
+    | LiveTestingStateRefetched of SessionId * askedWorkerPid: int * WorkerPostReady.RefetchedState
     | WorkerSpawnFailed of SessionId * workerPid: int * string
     /// A worker went silent for longer than its attempt was given. Not a crash: the manager decides, by
     /// `StartEscalation`, whether to start it again with MORE patience or to give up and say what it waited for.
@@ -279,9 +283,6 @@ module SessionManager =
     fun _msg -> async {
       return WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed "Session is still starting up")
     }
-
-  /// Production's real `WorkerHealthProbe.run` probe (see WorkerPostReady).
-  let probeWorkerHealthOnce = WorkerPostReady.probeWorkerHealthOnce
 
   let startWorkerProcess = WorkerSpawn.startWorkerProcess
 
@@ -591,19 +592,26 @@ module SessionManager =
       // worker whose transport was just installed (see WorkerPostReady).
       let postReady (id: SessionId) (workerPid: int) (proxy: SessionProxy) =
         WorkerPostReady.launch
-          { Label = SessionId.value id
-            Proxy = proxy
-            Cancel = ct
-            Outcomes =
+          { Outcomes =
               { OnReady = fun projects -> inbox.Post(SessionCommand.WorkerReportedReady(id, workerPid, projects))
                 OnFaulted = fun reason -> inbox.Post(SessionCommand.WorkerReportedFaulted(id, workerPid, reason))
                 OnTimedOut =
                   fun reason ->
                     inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionLifecycleStatus.Faulted (FaultReason.report reason)))
                     onSessionFaulted id reason }
-            OnDiscoveryResponse = fun resp -> inbox.Post(SessionCommand.WorkerTestDiscovery(id, TestDiscoveryReport.ofResponse resp))
-            OnDiscoveryFailed = fun msg -> inbox.Post(SessionCommand.WorkerTestDiscovery(id, TestDiscoveryReport.DiscoveryFailed msg))
-            PublishInstrumentationMaps = onInstrumentationMaps id }
+            Fetches =
+              { Label = SessionId.value id
+                Proxy = proxy
+                Cancel = ct
+                OnDiscoveryResponse = fun resp -> inbox.Post(SessionCommand.WorkerTestDiscovery(id, TestDiscoveryReport.ofResponse resp))
+                OnDiscoveryFailed = fun msg -> inbox.Post(SessionCommand.WorkerTestDiscovery(id, TestDiscoveryReport.DiscoveryFailed msg))
+                PublishInstrumentationMaps = onInstrumentationMaps id } }
+
+      // The same two fetches, on demand and without the watchdog. Answers come back through the mailbox tagged with
+      // the pid asked, so one that outlives its worker is dropped there.
+      let refetch (id: SessionId) (workerPid: int) (proxy: SessionProxy) =
+        WorkerPostReady.launchFetches
+          (WorkerPostReady.Fetches.answeringWith (SessionId.value id) proxy ct (fun answer -> inbox.Post(SessionCommand.LiveTestingStateRefetched(id, workerPid, answer))))
 
       // Answer callers parked by AwaitReady once their session is Ready or can
       // no longer become Ready — whichever step caused it.
@@ -963,6 +971,27 @@ module SessionManager =
         | SessionCommand.WorkerTestDiscovery(id, report) ->
           onTestDiscovery id report
           return state
+        | SessionCommand.RefetchLiveTestingState(id, reply) ->
+          match ManagerState.tryGetSession id state with
+          | None -> reply.Reply(Error WorkerPostReady.RefetchRefusal.NoSuchSession)
+          | Some session ->
+            match WorkerPostReady.RefetchGate.decide session.Info.Status (ManagerState.tryGetPendingSwap id state |> WorkerReadyCommit.ParkedSwap.ofOption) with
+            | Ok handle ->
+              refetch id handle.Pid session.Proxy
+              reply.Reply(Ok ())
+            | Error refusal ->
+              Log.warn "[SessionManager] Not refetching live-testing state for session %s: %s" (SessionId.value id) (WorkerPostReady.RefetchRefusal.describe refusal)
+              reply.Reply(Error refusal)
+          return state
+        | SessionCommand.LiveTestingStateRefetched(id, askedWorkerPid, fetched) ->
+          let serving = ManagerState.tryGetSession id state |> Option.map (fun s -> s.Info.Status, ManagerState.tryGetPendingSwap id state |> WorkerReadyCommit.ParkedSwap.ofOption)
+          match WorkerPostReady.RefetchGate.judgeReply askedWorkerPid serving, fetched with
+          | WorkerPostReady.ReplyFate.Current, WorkerPostReady.RefetchedState.Discovery response -> onTestDiscovery id (TestDiscoveryReport.ofResponse response)
+          | WorkerPostReady.ReplyFate.Current, WorkerPostReady.RefetchedState.DiscoveryFailed reason -> onTestDiscovery id (TestDiscoveryReport.DiscoveryFailed reason)
+          | WorkerPostReady.ReplyFate.Current, WorkerPostReady.RefetchedState.InstrumentationMaps maps -> onInstrumentationMaps id maps
+          | WorkerPostReady.ReplyFate.Stale, _ ->
+            Log.warn "[SessionManager] Dropping a refetched answer from worker pid %d for session %s: it is no longer the session's serving worker" askedWorkerPid (SessionId.value id)
+          return state
 
         | SessionCommand.WorkerSpawnFailed(id, workerPid, msg) ->
           match ManagerState.tryGetSession id state with
@@ -1321,46 +1350,14 @@ module SessionManager =
                   Info = { session.Info with Status = SessionLifecycleStatus.Ready handle; ProjectRoles = roles } }
             let newState = ManagerState.addSession id updated state
             onSessionProgressChanged ()
-            // Roast-6 #3: start the per-worker health-probe loop now that the
-            // worker is confirmed Ready (session.Proxy is installed and
-            // answering). `shouldContinue` reads the wait-free published
-            // snapshot — the same CQRS discipline every other read in this
-            // module uses, never the mailbox — so the loop notices for
-            // itself once this pid stops being the session's current worker
-            // (a normal restart, hard reset, or stop) and simply exits: it
-            // never restarts a worker it no longer owns.
-            let probeProxy = session.Proxy
-            let probeShouldContinue () =
-              match Map.tryFind id snapshotRef.Value.Sessions with
-              | Some info -> SessionLifecycleStatus.workerPid info.Status = Some workerPid
-              | None -> false
-            let onHealthRestart () =
-              match probeShouldContinue () with
-              | false -> ()
-              | true ->
-                Log.warn "[SessionManager] Worker pid %d for session %s missed %d consecutive health checks — restarting" workerPid (SessionId.value id) WorkerHealthProbe.defaultThreshold
-                killWorkerPids [ workerPid ]
-                // Mirrors NotifyWorkerDied (DaemonMode.fs): posting pid=-1
-                // always falls into WorkerExited's "handle as real exit"
-                // branch regardless of the session's CURRENT recorded pid,
-                // and poisons Status to Restarting(Some -1) — so the
-                // worker's own genuine Process.Exited event (which
-                // killWorkerPids above will trigger, carrying the REAL pid)
-                // is then recognized as stale by the pid-mismatch guard and
-                // ignored, closing the same double-restart race
-                // NotifyWorkerDied already closes.
-                inbox.Post(SessionCommand.WorkerExited(id, -1, -1))
-            Async.Start(
-              WorkerHealthProbe.run
-                (fun () -> probeWorkerHealthOnce WorkerHealthProbe.defaultProbeTimeoutMs probeProxy)
-                WorkerHealthProbe.defaultThreshold
-                WorkerHealthProbe.defaultProbeIntervalMs
-                probeShouldContinue
-                (WorkerHealthProbe.syncRegistry
-                  (fun () -> Map.tryFind id snapshotRef.Value.Sessions |> Option.map (fun info -> info.Status))
-                  (fun status -> inbox.Post(SessionCommand.UpdateSessionStatus(id, status))))
-                onHealthRestart,
-              ct)
+            WorkerPostReady.startHealthProbe
+              (SessionId.value id)
+              workerPid
+              session.Proxy
+              (fun () -> Map.tryFind id snapshotRef.Value.Sessions |> Option.map (fun info -> info.Status))
+              (fun status -> inbox.Post(SessionCommand.UpdateSessionStatus(id, status)))
+              (fun () -> inbox.Post(SessionCommand.WorkerExited(id, -1, -1)))
+              ct
             return newState
         // The app's single owner: every Run, Stop and run step is decided here,
         // against the state and generation this mailbox holds (AppRun.AppSlot).
@@ -1497,6 +1494,8 @@ module SessionManager =
             tryReply reply ()
           | SessionCommand.AwaitReady(_, reply) ->
             tryReply reply (Error (SageFsError.Unexpected ex))
+          | SessionCommand.RefetchLiveTestingState(_, reply) ->
+            tryReply reply (Error (WorkerPostReady.RefetchRefusal.WorkerNotReady (SessionLifecycleStatus.Faulted (FaultReason.report ex.Message))))
           | SessionCommand.ClaimRun(_, _, reply) ->
             tryReply reply (Error (SageFsError.Unexpected ex))
           | SessionCommand.ClaimStop(_, reply) ->
@@ -1523,6 +1522,7 @@ module SessionManager =
           | SessionCommand.WorkerExited _
           | SessionCommand.WorkerReady _
           | SessionCommand.WorkerTestDiscovery _
+          | SessionCommand.LiveTestingStateRefetched _
           | SessionCommand.WorkerSpawnFailed _
           | SessionCommand.WorkerStartTimedOut _
           | SessionCommand.ScheduleRestart _
