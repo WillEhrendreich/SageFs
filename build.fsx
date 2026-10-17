@@ -85,7 +85,9 @@ else
 printfn "=== Pack MCP SDK ==="
 for sub in [ "ModelContextProtocol.Core"; "ModelContextProtocol"; "ModelContextProtocol.AspNetCore" ] do
   let proj = Path.Combine(mcpSdkDir, "src", sub)
-  run "dotnet" (sprintf "pack \"%s\" -o \"%s\" -c Release /p:SignAssembly=false" proj mcpNupkgDir) rootDir
+  // NuGetAudit off, as ci-pipeline.fsx does: the fork treats warnings as errors and audit reports advisories against its own
+  // dependencies as warnings, so on a clean clone this pack would stop before a single project was built.
+  run "dotnet" (sprintf "pack \"%s\" -o \"%s\" -c Release /p:SignAssembly=false /p:NuGetAudit=false" proj mcpNupkgDir) rootDir
   printfn "  Packed %s" sub
 
 // --- Step 3: Build ---

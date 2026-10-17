@@ -1150,6 +1150,33 @@ let integrationSampleBuildCoverage =
   ]
   |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
 
+/// `dotnet fsi build.fsx` is the contributor's way to build everything from a clean clone, and it packs the forked MCP SDK
+/// first. That fork treats warnings as errors, and NuGet audit raises advisories against the fork's own dependencies as
+/// warnings, so without the switch CI already uses the pack stops on a fresh machine before a single project is built.
+/// Found by a contributor on their first clone.
+[<Tests>]
+let buildScriptPacksTheForkLikeCi =
+  let buildScriptPackLines : string list =
+    let path = System.IO.Path.Combine(repoRoot, "build.fsx")
+    match System.IO.File.Exists path with
+    | false -> []
+    | true ->
+      System.IO.File.ReadAllLines path
+      |> Array.filter (fun line -> line.Contains "\"pack " && line.Contains "mcpNupkgDir")
+      |> Array.toList
+
+  testList "Architecture — build.fsx packs the MCP SDK fork the way CI does" [
+    testCase "WHY — the premise: build.fsx has MCP SDK pack lines to check at all, so the next test cannot pass by finding none" <| fun _ ->
+      buildScriptPackLines |> Expect.isNonEmpty "build.fsx packs the MCP SDK fork into mcpNupkgDir"
+
+    testCase "WHY — every MCP SDK pack in build.fsx turns NuGet audit off, as ci-pipeline.fsx does, or a clean clone stops on the fork's advisories" <| fun _ ->
+      for line in buildScriptPackLines do
+        line.Contains "NuGetAudit=false"
+        |> Expect.isTrue
+          (sprintf "build.fsx packs the MCP SDK fork without -p:NuGetAudit=false (ci-pipeline.fsx and the Copilot setup both pass it), so on a clean clone the fork's warnings-as-errors build stops on a NuGet advisory: %s" (line.Trim()))
+  ]
+  |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
+
 /// A test that spawns its own daemon must reserve the port pair through
 /// `TestInfrastructure.TestPorts`, not by binding port 0 and adding one.
 ///
