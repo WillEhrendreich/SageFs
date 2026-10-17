@@ -41,6 +41,12 @@ type Splice =
 let noFilePathReason =
   "the call supplied no file_path, so there is no file this eval could be written back to — pass file_path, the source file the code came from"
 
+/// Why the eval is not persisted when its text is already, exactly, the declaration in the file:
+/// there is nothing to write, and writing anyway would journal a no-op, bump the file's mtime
+/// (waking the worker's file watcher) and spend the journal's budget.
+let unchangedReason =
+  "the eval's text is the declaration already in the file, so the file is unchanged and nothing was written"
+
 /// Why the eval is not persisted when the call named a file but no line.
 let noBlockStartLineReason =
   "the call supplied no block_start_line, so the eval cannot be located in the file — pass block_start_line, the 1-based line where the block starts"
@@ -52,6 +58,12 @@ let private submission (code: string) : string =
   match trimmed.EndsWith(";;", StringComparison.Ordinal) with
   | true -> trimmed.Substring(0, trimmed.Length - 2).TrimEnd()
   | false -> trimmed
+
+/// Whether two pieces of source are the same text: line endings are bytes the file keeps, not
+/// something an eval changes, so CRLF, CR and LF compare equal.
+let sameText(a: string) (b: string) : bool =
+  let lf (s: string) = s.Replace("\r\n", "\n").Replace('\r', '\n')
+  String.Equals(lf a, lf b, StringComparison.Ordinal)
 
 /// The char offset each line starts at, 1-based, plus one slot holding the source length so "the
 /// end of line n" is always `starts.[n]`. The same rule the tweak engine's offsets use, so CRLF,
@@ -155,6 +167,7 @@ let decide
                       decl.Name
                       evalDecl.Name
                   )
+                | _ when sameText decl.Text text -> refuse unchangedReason
                 | _ ->
                   // The names match: this IS the thing the eval redefined. What is left is what
                   // the undo journal can ADDRESS — a value or function binding, whose right-hand

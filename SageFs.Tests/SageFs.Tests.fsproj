@@ -39,6 +39,7 @@
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpToolExecutionTests.fs" />
         <Compile Include="ReplFreshnessSurfaceTests.fs" />
+        <Compile Include="EvalWriteBackSurfaceTests.fs" />
         <Compile Include="SourceStateSurfaceTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="ManualProjectParseTests.fs" />
