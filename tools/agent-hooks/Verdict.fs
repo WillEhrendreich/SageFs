@@ -24,7 +24,7 @@ type World =
     /// Ask for a lease for a declared final gate; `None` when it could not be asked.
     Lease: SlowVerb -> LeaseProbe option }
 
-let private str (el: JsonElement) (name: string) =
+let str (el: JsonElement) (name: string) =
   match el.TryGetProperty name with
   | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
   | _ -> ""
@@ -78,7 +78,7 @@ let readRepoConfig (cwd: string) : RepoConfig =
         | Error problem -> RepoConfigMalformed(path, problem)
       with e -> RepoConfigMalformed(path, sprintf "it could not be read: %s" e.Message)
 
-let private denyJson (reason: string) =
+let denyJson (reason: string) =
   JsonSerializer.Serialize
     {| hookSpecificOutput =
          {| hookEventName = "PreToolUse"
@@ -87,7 +87,7 @@ let private denyJson (reason: string) =
 
 /// No `permissionDecision` on purpose: saying "allow" would skip the user's own permission prompts. This only
 /// adds context and leaves the normal flow alone.
-let private adviceJson (reminder: string) =
+let adviceJson (reminder: string) =
   JsonSerializer.Serialize
     {| hookSpecificOutput =
          {| hookEventName = "PreToolUse"

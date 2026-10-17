@@ -172,11 +172,26 @@ type Policy = { Mode: GuardMode; Allow: Allowlist; Problems: string list }
 module Policy =
   let strict = { Mode = Enforcing; Allow = Allowlist.none; Problems = [] }
 
-  /// STUB (red): the real one reads the mode and the config.
-  let build (_rawMode: string) (_config: RepoConfig) : Policy = strict
-
-/// STUB (red): the real one parses the repository's file.
-let parseConfig (_json: string) : Result<Allowlist, string> = Ok Allowlist.none
+  /// The policy for the mode the environment asked for (`rawMode`, "" when unset) and what the repository's
+  /// config file turned out to be. Anything it cannot use falls back to the stricter reading and is
+  /// recorded in `Problems`, so the message can say what is wrong.
+  let build (rawMode: string) (config: RepoConfig) : Policy =
+    let mode, modeProblems =
+      match System.String.IsNullOrWhiteSpace rawMode with
+      | true -> Enforcing, []
+      | false ->
+        match GuardMode.tryParse rawMode with
+        | Some m -> m, []
+        | None ->
+          let known = GuardMode.all |> List.map GuardMode.toToken |> String.concat ", "
+          Enforcing, [ sprintf "%s=%s is not a mode (%s), so the guard is enforcing." GuardMode.Variable rawMode known ]
+    let allow, configProblems =
+      match config with
+      | NoRepoConfig -> Allowlist.none, []
+      | RepoConfigLoaded allow -> allow, []
+      | RepoConfigMalformed(path, problem) ->
+        Allowlist.none, [ sprintf "%s could not be used, so its allowlist is ignored and the strict rules apply: %s" path problem ]
+    { Mode = mode; Allow = allow; Problems = modeProblems @ configProblems }
 
 /// Split a command into pipeline segments of words. Quotes group words and are
 /// stripped, and separators inside quotes don't split. This is a small shell
@@ -255,37 +270,84 @@ let private isPrefixWord (word: string) =
   || word.StartsWith "-"
   || (word.Length > 0 && System.Char.IsDigit word[0])
 
-/// The slow verb a single segment runs, and whether that segment declared
-/// the final gate in its prefix.
-let private classifySegment (words: string list) : (SlowVerb * bool) option =
+/// What one segment of a command is, as far as the guard cares.
+type SegmentKind =
+  | NotSlow
+  /// A slow-loop verb the repository's allowlist says always passes.
+  | Listed
+  /// A slow-loop verb. `Declared` is true when it said it is the final gate, or is a Release build.
+  | Slow of SlowVerb * declared: bool
+
+/// Whether `words` begin with all of `pattern`'s words, word for word. A longer word is a different word.
+let startsWith (pattern: string list) (words: string list) =
+  words.Length >= pattern.Length && List.forall2 (=) pattern (List.truncate pattern.Length words)
+
+let isRelease (value: string) =
+  System.String.Equals(value.Trim(), "Release", System.StringComparison.OrdinalIgnoreCase)
+
+let configurationPrefixes = [ "-c:"; "-c="; "--configuration:"; "--configuration=" ]
+
+/// Whether the last `-c` / `--configuration` among a build's arguments asks for Release. Arguments after a
+/// bare `--` belong to the program being run, not to dotnet.
+let asksForRelease (args: string list) : bool =
+  let rec go release args =
+    match args with
+    | []
+    | "--" :: _ -> release
+    | ("-c" | "--configuration") :: value :: rest -> go (isRelease value) rest
+    | word :: rest ->
+      match configurationPrefixes |> List.tryFind (fun p -> word.StartsWith(p, System.StringComparison.Ordinal)) with
+      | Some prefix -> go (isRelease (word.Substring prefix.Length)) rest
+      | None -> go release rest
+  go false args
+
+/// The dotnet command in a segment, from the dotnet word on (its path normalized to `dotnet`), and whether the
+/// prefix in front of it declared the final gate.
+let dotnetCommand (words: string list) : (string list * bool) option =
   let prefix = words |> List.takeWhile (fun w -> not (isDotnet w) && isPrefixWord w)
   match List.skip prefix.Length words with
-  | dotnet :: verb :: _ when isDotnet dotnet ->
-    SlowVerb.tryParse verb
-    |> Option.map (fun v -> v, prefix |> List.contains finalGateAssignment)
+  | dotnet :: rest when isDotnet dotnet -> Some("dotnet" :: rest, prefix |> List.contains finalGateAssignment)
   | _ -> None
+
+let kindOf (allow: Allowlist) (words: string list) : SegmentKind =
+  match dotnetCommand words with
+  | Some(command, declared) ->
+    match command with
+    | _ :: verbWord :: args ->
+      match SlowVerb.tryParse verbWord with
+      | None -> NotSlow
+      | Some verb ->
+        match allow.Patterns |> List.exists (fun pattern -> startsWith pattern command) with
+        | true -> Listed
+        | false -> Slow(verb, declared || (verb = Build && asksForRelease args))
+    | _ -> NotSlow
+  | None -> NotSlow
 
 let private isFinalGateExport (words: string list) =
   match words with
   | "export" :: rest -> rest |> List.contains finalGateAssignment
   | _ -> false
 
-/// The first slow-loop dotnet call in the command, if any. An earlier
-/// `export SAGEFS_FINAL_GATE=1` segment counts as a declaration for every
-/// segment after it.
-let classify (command: string) : CommandClass =
+/// The first slow-loop dotnet call in the command, if any, leaving out the ones `allow` lists. An earlier
+/// `export SAGEFS_FINAL_GATE=1` segment counts as a declaration for every segment after it. A Release build
+/// counts as declared: it checks things the REPL cannot, so sending it back costs a retry and nothing else.
+let classifyWith (allow: Allowlist) (command: string) : CommandClass =
   let rec go exported segs =
     match segs with
     | [] -> NoSlowLoop
     | seg :: rest ->
-      match classifySegment seg with
-      | Some (verb, declared) when declared || exported ->
+      match kindOf allow seg with
+      | Slow(verb, declared) when declared || exported ->
         match go exported rest with
         | SlowLoop v -> SlowLoop v
         | _ -> DeclaredFinalGate verb
-      | Some (verb, _) -> SlowLoop verb
-      | None -> go (exported || isFinalGateExport seg) rest
+      | Slow(verb, _) -> SlowLoop verb
+      | Listed
+      | NotSlow -> go (exported || isFinalGateExport seg) rest
   go false (segments command)
+
+/// `classifyWith` with no allowlist.
+let classify (command: string) : CommandClass = classifyWith Allowlist.none command
 
 /// The deny reason for an UNDECLARED slow verb: BROKEN is never the issue
 /// here — this is "use the REPL," the loop in two lines, then the way out.
@@ -318,6 +380,22 @@ let busyDenyReason (verb: SlowVerb) (leaseProbe: LeaseProbe) =
     "This is a WAIT, not a bug to route around: sleep the named time and rerun the identical command. Shelling out anyway spends the exact memory SageFs is trying to reclaim, invisibly to it — that is how five agents starved one daemon in one night."
   ]
 
+/// The reminder for an UNDECLARED slow verb when the mode is advise: the same loop as `denyReason`, but the
+/// command was allowed to run, and the escape hatch is not mentioned because nothing needs escaping.
+let adviceReason (verb: SlowVerb) =
+  let v = SlowVerb.toToken verb
+  String.concat "\n" [
+    sprintf "SageFs is running with a Ready session here, so `dotnet %s` is off the inner loop. %s=%s is set, so it was allowed to run." v GuardMode.Variable (GuardMode.toToken Advising)
+    "Loop: send_fsharp_code for RED then GREEN, persist to the .fs file, hard_reset_fsi_session rebuild=true, re-verify in the session, commit."
+    "dotnet build/test/run/fsi is for the final gate, run once when you're done, and for the one build before create_session (a worktree gets its own session)."
+  ]
+
+/// Puts what is wrong with the configuration under a message, so the caller can see why the guard is stricter than they set it.
+let withProblems (problems: string list) (message: string) =
+  match problems with
+  | [] -> message
+  | _ -> String.concat "\n" (message :: problems)
+
 /// The guard's whole decision.
 ///   - An UNDECLARED slow verb, in an F# workspace, with SageFs answering
 ///     AND a Ready session whose working directory covers this cwd, is
@@ -332,42 +410,87 @@ let busyDenyReason (verb: SlowVerb) (leaseProbe: LeaseProbe) =
 ///     `LeaseMustWait` denies it as BUSY, with the reason and the wait.
 /// With no daemon there is no REPL to go back to and no pool to ask, so
 /// everything passes either way.
-let decide (command: string) (ctx: Context) : Decision =
-  match classify command with
+///   - The `policy` bends this three ways: its allowlist leaves commands out before any of the above, advise
+///     mode turns the "use the REPL" deny into an allow that carries the reminder (the BUSY deny stays a
+///     deny, it is about memory and not about a preference), and its `Problems` ride along under any message.
+let decideWith (policy: Policy) (command: string) (ctx: Context) : Decision =
+  match classifyWith policy.Allow command with
   | NoSlowLoop -> Allow
   | SlowLoop verb ->
     match ctx.Project, ctx.Daemon, ctx.Session with
-    | FSharpWorkspace, DaemonAnswering, Some ReadySessionCoversCwd -> Deny(denyReason verb)
+    | FSharpWorkspace, DaemonAnswering, Some ReadySessionCoversCwd ->
+      match policy.Mode with
+      | Enforcing -> Deny(withProblems policy.Problems (denyReason verb))
+      | Advising -> AllowWithAdvice(withProblems policy.Problems (adviceReason verb))
     | FSharpWorkspace, DaemonAnswering, (Some NoReadySessionCoversCwd | None)
     | NotFSharpWorkspace, _, _
     | _, DaemonNotAnswering, _ -> Allow
   | DeclaredFinalGate verb ->
     match ctx.Project, ctx.Daemon, ctx.Lease with
     | FSharpWorkspace, DaemonAnswering, Some(LeaseRefused _ as probe)
-    | FSharpWorkspace, DaemonAnswering, Some(LeaseMustWait _ as probe) -> Deny(busyDenyReason verb probe)
+    | FSharpWorkspace, DaemonAnswering, Some(LeaseMustWait _ as probe) ->
+      Deny(withProblems policy.Problems (busyDenyReason verb probe))
     | FSharpWorkspace, DaemonAnswering, Some LeaseGranted
     | FSharpWorkspace, DaemonAnswering, None
     | NotFSharpWorkspace, _, _
     | _, DaemonNotAnswering, _ -> Allow
 
-/// Whether the hook needs to look at the disk and the network at all. The
-/// script checks this first so non-dotnet commands never pay for a probe.
-/// A declared final gate now needs context too — it still has to ask for a
-/// lease before it can be allowed through.
-let needsContext (command: string) =
-  match classify command with
-  | SlowLoop _
-  | DeclaredFinalGate _ -> true
-  | NoSlowLoop -> false
+/// `decideWith` with the default policy: enforcing, nothing allowlisted.
+let decide (command: string) (ctx: Context) : Decision = decideWith Policy.strict command ctx
 
-/// STUB (red): the real one honours the allowlist.
-let classifyWith (_allow: Allowlist) (command: string) : CommandClass = classify command
-
-/// STUB (red): the real one honours the mode, the allowlist and the config problems.
-let decideWith (_policy: Policy) (command: string) (ctx: Context) : Decision = decide command ctx
-
+/// Whether the hook needs to look at the disk and the network at all, once `allow` has left its commands out.
+/// The program checks this first so non-dotnet commands never pay for a probe.
+/// A declared final gate needs context too, it still has to ask for a lease before it can be allowed through.
 let needsContextWith (allow: Allowlist) (command: string) =
   match classifyWith allow command with
   | SlowLoop _
   | DeclaredFinalGate _ -> true
   | NoSlowLoop -> false
+
+/// `needsContextWith` with no allowlist.
+let needsContext (command: string) = needsContextWith Allowlist.none command
+
+/// One allowlist entry as its words. It has to be a single plain dotnet command: no quotes, pipes, semicolons,
+/// `&&` or subshells, because the guard matches it against one command at a time and a pattern that could never
+/// match one would just be a silent no-op.
+let parsePattern (pattern: string) : Result<string list, string> =
+  let wordsOf = pattern.Split([| ' '; '\t' |], System.StringSplitOptions.RemoveEmptyEntries) |> List.ofArray
+  match wordsOf with
+  | [] -> Error "an entry in \"allow\" is empty"
+  | first :: _ when first <> "dotnet" -> Error(sprintf "the pattern \"%s\" must start with dotnet" pattern)
+  | _ when segments pattern <> [ wordsOf ] ->
+    Error(sprintf "the pattern \"%s\" must be one command: no quotes, pipes, semicolons, && or subshells" pattern)
+  | _ -> Ok wordsOf
+
+/// The text of `<git root>/.SageFs/repl-guard.json`. The one key is `allow`, an array of dotnet command
+/// patterns. Anything else is an Error that says what, so a typo is never a silently empty allowlist.
+let parseConfig (json: string) : Result<Allowlist, string> =
+  try
+    use doc = System.Text.Json.JsonDocument.Parse json
+    let root = doc.RootElement
+    match root.ValueKind with
+    | System.Text.Json.JsonValueKind.Object ->
+      let props = root.EnumerateObject() |> List.ofSeq
+      match props |> List.tryFind (fun p -> p.Name <> "allow") with
+      | Some stray -> Error(sprintf "the key \"%s\" is not known; the only key is \"allow\"" stray.Name)
+      | None ->
+        match props |> List.tryFind (fun p -> p.Name = "allow") with
+        | None -> Ok Allowlist.none
+        | Some allow when allow.Value.ValueKind <> System.Text.Json.JsonValueKind.Array ->
+          Error "\"allow\" must be an array of strings"
+        | Some allow ->
+          allow.Value.EnumerateArray()
+          |> List.ofSeq
+          |> List.fold
+            (fun acc entry ->
+              match acc with
+              | Error _ -> acc
+              | Ok patterns ->
+                match entry.ValueKind with
+                | System.Text.Json.JsonValueKind.String ->
+                  parsePattern (entry.GetString()) |> Result.map (fun words -> patterns @ [ words ])
+                | _ -> Error "every entry in \"allow\" must be a string")
+            (Ok [])
+          |> Result.map (fun patterns -> { Patterns = patterns })
+    | _ -> Error "the top level must be an object like { \"allow\": [ \"dotnet build Foo.fsproj\" ] }"
+  with :? System.Text.Json.JsonException as e -> Error(sprintf "it is not valid JSON: %s" e.Message)
