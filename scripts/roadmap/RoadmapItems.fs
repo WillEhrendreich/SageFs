@@ -44,7 +44,7 @@ let items : Item list =
     item "cohort-export-for-play" "Keep a cohort run and play it back" Agents Now
       (landmark "SageFs/CohortExportCommand.fs" "CohortExportCommand")
       [ "docs/progress.md"; "Readme.md" ]
-      "`sagefs cohort-export` writes a cohort's ledger from the local database to a file, with no daemon running, and `sagefs play` reads that file back. A finished cohort's rows get pruned after a while, so the export is the only way to keep a run. Playing back a repository-scoped ledger shows an empty cohort right now (the replay starts from the wrong scope), and that one is being fixed."
+      "`sagefs cohort-export` writes a cohort's ledger from the local database to a file, with no daemon running, and `sagefs play` reads that file back. A finished cohort's rows get pruned after a while, so the export is the only way to keep a run. A file that mixes cohorts from different repositories is refused, with the scopes listed."
 
     item "slow-machines-get-fitting-timeouts" "Slow machines get timeouts that fit them" Platform Now
       (landmark "SageFs.Core/MachineTier.fs" "MachineTier")
