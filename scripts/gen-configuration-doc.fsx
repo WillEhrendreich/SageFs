@@ -73,6 +73,7 @@ let lines = File.ReadAllLines timeoutsPath
 type Unit' =
   | Seconds
   | Minutes
+  | Hours
   | Days
   | Count
 
@@ -89,7 +90,7 @@ type Row =
 
 let sectionRx = Regex(@"^  // -- (.+) --\s*$")
 let docRx = Regex(@"^\s*///\s?(.*)$")
-let envRx = Regex(@"(envOrDefaultMachineMinutes|envOrDefaultMachine|envOrDefaultMinutes|envOrDefault)\s+""(SAGEFS_[A-Z0-9_]+)""\s+(.+?)\s*$")
+let envRx = Regex(@"(envOrDefaultHoursOrOff|envOrDefaultMachineMinutes|envOrDefaultMachine|envOrDefaultMinutes|envOrDefault)\s+""(SAGEFS_[A-Z0-9_]+)""\s+(.+?)\s*$")
 let letRx = Regex(@"^\s*let\s+(?:mutable\s+)?(?:private\s+)?(\w+)\b")
 
 /// Numeric literals the defaults are written as, plus the two shapes this file
@@ -157,8 +158,10 @@ let timeoutRows =
         // The value is either on the `let` line or on the line after a bare `let x =`.
         let letIndex = if letRx.IsMatch line then i else i - 1
         let name = letRx.Match(lines.[letIndex]).Groups.[1].Value
-        let isMinutes = env.Groups.[1].Value.EndsWith "Minutes"
-        let unit', seconds = (if isMinutes then Minutes else Seconds), resolveDefault env.Groups.[3].Value
+        let reader = env.Groups.[1].Value
+        let unit' = if reader.EndsWith "Minutes" then Minutes elif reader = "envOrDefaultHoursOrOff" then Hours else Seconds
+        // `Default` is in the row's own unit, so a number of hours is not turned into seconds.
+        let seconds = resolveDefault env.Groups.[3].Value
         yield
           { Var = env.Groups.[2].Value
             Name = name
@@ -246,6 +249,7 @@ let unitName (r: Row) =
   match r.Unit with
   | Seconds -> "seconds"
   | Minutes -> "minutes"
+  | Hours -> "hours"
   | Days -> "days"
   | Count -> (if r.Var.EndsWith "ROWS" then "rows" else "versions")
 
