@@ -279,6 +279,26 @@ type Locations =
     TempDir: string
     Processes: ProcessScope }
 
+/// A path with every symlink in it followed, the way the OS spells it and the way git prints it (`git worktree list`
+/// prints real paths, so a Mac's `/var/folders/...` comes back as `/private/var/folders/...`). A path that does not
+/// exist keeps its spelling past the last link it passes through; one that cannot be resolved (a link loop) or that
+/// resolving would only respell (`HygieneFs` speaks `/`-rooted paths, so a Windows drive path comes back lexically
+/// normalised and no more) is returned as the caller gave it.
+let canonicalPath (path: string) : string =
+  match HygieneFs.resolvePath path with
+  | Result.Ok real when real <> Guard.normalize path -> real
+  | _ -> path
+
+/// The locations with each path in its one canonical spelling, so a target the scan names compares equal to the path
+/// a caller holds however the caller spelled it, and the managed roots contain what git prints.
+let canonicalLocations (loc: Locations) : Locations =
+  { loc with
+      Repo = canonicalPath loc.Repo
+      GateDir = canonicalPath loc.GateDir
+      DataDir = canonicalPath loc.DataDir
+      HostCacheDir = canonicalPath loc.HostCacheDir
+      TempDir = canonicalPath loc.TempDir }
+
 /// The names that make a branch an agent's: the prefix the harness gives a worktree's branch.
 let agentBranchPrefixes : string list = [ "worktree-agent-" ]
 
@@ -286,7 +306,8 @@ let agentBranchPrefixes : string list = [ "worktree-agent-" ]
 let baseBranchCandidates : string list = [ "master"; "main" ]
 
 /// Which of the roots a directory leftover can live under.
-let rootsOf (loc: Locations) : Roots =
+let rootsOf (spelled: Locations) : Roots =
+  let loc = canonicalLocations spelled
   { Entries =
       [ RootKind.AgentWorktrees, Path.Combine(loc.Repo, ".claude", "worktrees")
         RootKind.GateState, loc.GateDir
@@ -307,6 +328,18 @@ type Scan =
     Live: LiveFacts
     /// Whether a process is alive, by pid and (when known) start time.
     IsAlive: int -> int64 option -> bool }
+
+/// The scan with every path a caller handed it in its canonical spelling: the locations, and the working directories
+/// the daemon's sessions run in (a session opened through a link still counts as using the worktree it is in).
+/// Every entry point that gathers goes through this, so a caller cannot reach a different spelling by building the
+/// scan itself. A process's working directory is the kernel's own, already real.
+let canonicalScan (scan: Scan) : Scan =
+  { scan with
+      Loc = canonicalLocations scan.Loc
+      Live =
+        { scan.Live with
+            Sessions = scan.Live.Sessions |> List.map (fun (id, wd) -> id, canonicalPath wd)
+            Owners = scan.Live.Owners |> List.map (fun (wd, owner, presence) -> canonicalPath wd, owner, presence) } }
 
 // ─── Sizes and times ───────────────────────────────────────────────────
 
@@ -827,7 +860,7 @@ let candidatesOf (scan: Scan) (wanted: LeftoverKind -> bool) : Task<Candidate li
   }
 
 /// Every candidate leftover of every kind.
-let candidates (scan: Scan) : Task<Candidate list> = candidatesOf scan (fun _ -> true)
+let candidates (scan: Scan) : Task<Candidate list> = candidatesOf (canonicalScan scan) (fun _ -> true)
 
 /// The kinds a target could be, from where it lives, so looking at one target again does not scan the machine.
 let kindsOfTarget (loc: Locations) (target: Target) : LeftoverKind list =
@@ -865,8 +898,9 @@ let classifyAll (scan: Scan) (chosen: Candidate list) : Task<Leftover list> =
   }
 
 /// Classify every candidate. `only` restricts the work to one target.
-let gather (scan: Scan) (only: Target option) : Task<Leftover list> =
+let gather (spelled: Scan) (only: Target option) : Task<Leftover list> =
   task {
+    let scan = canonicalScan spelled
     let wanted =
       match only with
       | None -> (fun _ -> true)
@@ -881,8 +915,9 @@ let gather (scan: Scan) (only: Target option) : Task<Leftover list> =
   }
 
 /// Classify every candidate of the given kinds.
-let gatherKinds (scan: Scan) (kinds: LeftoverKind list) : Task<Leftover list> =
+let gatherKinds (spelled: Scan) (kinds: LeftoverKind list) : Task<Leftover list> =
   task {
+    let scan = canonicalScan spelled
     let! found = candidatesOf scan (fun kind -> List.contains kind kinds)
     return! classifyAll scan found
   }

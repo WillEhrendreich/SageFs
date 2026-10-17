@@ -15,7 +15,9 @@ open SageFs.Tests.HygieneSandbox
 
 /// A real directory and a symlink to it, the shape a Mac's temp dir has. Disposing removes both.
 type LinkedParent() =
-  let outer = Directory.CreateTempSubdirectory("sagefs-hygiene-link-").FullName
+  // The temp dir may itself sit behind a link (a Mac's does), so `real` is only real once `outer` is. The link under
+  // test is the one made below, and `real` is the directory it points at by construction.
+  let outer = canonicalPath (Directory.CreateTempSubdirectory("sagefs-hygiene-link-").FullName)
   let real = Path.Combine(outer, "real")
   let link = Path.Combine(outer, "link")
   do

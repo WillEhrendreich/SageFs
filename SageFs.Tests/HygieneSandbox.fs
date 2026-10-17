@@ -34,11 +34,11 @@ let write (path: string) (text: string) =
   File.WriteAllText(path, text)
 
 /// A repository on master with a tracked lock file and a worktree area, in a fresh temp dir. Disposing removes it all.
-/// The sandbox lives in a fresh directory under `parent`, spelled exactly as given: a parent that is a symlink keeps
-/// the sandbox's own paths under the link's spelling, which is what a Mac's `/var/folders` (a link to
-/// `/private/var/folders`) does to every temp dir.
+/// The sandbox lives in a fresh directory under `parent`. Its `Root` is canonical, made so once here: a parent that is
+/// a symlink (a Mac's `/var/folders` is a link to `/private/var/folders`) would otherwise leave every path a test
+/// builds in a spelling git never prints, and no scan could ever name them.
 type Sandbox(parent: string) =
-  let root = Directory.CreateDirectory(Path.Combine(parent, "sagefs-hygiene-test-" + Path.GetRandomFileName())).FullName
+  let root = canonicalPath (Directory.CreateDirectory(Path.Combine(parent, "sagefs-hygiene-test-" + Path.GetRandomFileName())).FullName)
   let repo = Path.Combine(root, "repo")
   let locations : Locations =
     { Repo = repo

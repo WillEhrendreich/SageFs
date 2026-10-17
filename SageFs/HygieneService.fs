@@ -125,13 +125,16 @@ let processScope () : ProcessScope =
   | "" -> ProcessScope.WholeMachine
   | _ -> ProcessScope.DescendantsOf Environment.ProcessId
 
+/// The places hygiene looks, each in its canonical spelling (symlinks followed), so the dashboard, the MCP tools and
+/// the CLI name a path the way git and the OS do whatever spelling the caller passed.
 let locationsFor (repo: string) : Locations =
-  { Repo = repo
-    GateDir = gateDir ()
-    DataDir = DaemonState.SageFsDir
-    HostCacheDir = IsolatedFsiSession.hostCacheRoot ()
-    TempDir = Path.GetTempPath().TrimEnd('/', '\\')
-    Processes = processScope () }
+  canonicalLocations
+    { Repo = repo
+      GateDir = gateDir ()
+      DataDir = DaemonState.SageFsDir
+      HostCacheDir = IsolatedFsiSession.hostCacheRoot ()
+      TempDir = Path.GetTempPath().TrimEnd('/', '\\')
+      Processes = processScope () }
 
 // ─── What the daemon knows ──────────────────────────────────────────────
 
@@ -170,7 +173,7 @@ let takeFrom (scan: Scan) : Task<Snapshot> =
     let! leftovers = gather scan None
     let plan = Planner.plan leftovers
     return
-      { Repo = scan.Loc.Repo
+      { Repo = canonicalPath scan.Loc.Repo
         TakenAt = DateTime.UtcNow
         Leftovers = leftovers
         Plan = plan
