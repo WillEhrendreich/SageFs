@@ -183,30 +183,41 @@ let extractNvimHandledActions (source: string) : Set<string> =
     |> Seq.map (fun m -> m.Groups.[1].Value)
   Seq.append defs custom |> Set.ofSeq
 
+/// A file of the sagefs.nvim checkout. Read only when a test asks for it, so a missing checkout fails the tests that
+/// need it, saying how to fix it, and does not stop the whole assembly from being discovered. Read at module
+/// initialisation it did the second: a fresh clone with no plugin next to it ran no test at all, and nothing said why.
+let private readPluginFile (path: string) : string =
+  match File.Exists path with
+  | true -> File.ReadAllText path
+  | false ->
+    failwithf
+      "sagefs.nvim is not checked out where these tests look (%s is missing). Clone WillEhrendreich/sagefs.nvim next to this repo, or set SAGEFS_NVIM_DIR to its folder."
+      path
+
 /// What the plugin's EVENT_CATALOG really contains, read from its own source.
-let neovimCatalogDerived : Set<string> =
-  nvimEventsPath |> File.ReadAllText |> extractNvimEventCatalogNames
+let neovimCatalogDerived : Lazy<Set<string>> =
+  lazy (nvimEventsPath |> readPluginFile |> extractNvimEventCatalogNames)
 
-let private neovimSseSource = File.ReadAllText nvimSsePath
+let private neovimSseSource : Lazy<string> = lazy (readPluginFile nvimSsePath)
 
-let private neovimInitSource : string =
-  Path.Combine(nvimRepoDir, "lua", "sagefs", "init.lua")
-  |> File.ReadAllText
+let private neovimInitSource : Lazy<string> =
+  lazy (Path.Combine(nvimRepoDir, "lua", "sagefs", "init.lua") |> readPluginFile)
 
 /// The daemon `event:` names the plugin actually ROUTES to a handler. The
 /// honest "handled" set: a wire name counts only when sse.lua maps it onto an
 /// action AND init.lua registers a handler under that action.
-let neovimDispatchDerived : Set<string> =
-  let registered = neovimInitSource |> extractNvimHandledActions
-  neovimSseSource
-  |> extractNvimDispatchMap
-  |> Map.toList
-  |> List.choose (fun (wire, action) ->
-    if registered.Contains action && Regex.IsMatch(wire, "^[a-z][a-z0-9_]*$") then
-      Some wire
-    else
-      None)
-  |> Set.ofList
+let neovimDispatchDerived : Lazy<Set<string>> =
+  lazy
+    (let registered = neovimInitSource.Value |> extractNvimHandledActions
+     neovimSseSource.Value
+     |> extractNvimDispatchMap
+     |> Map.toList
+     |> List.choose (fun (wire, action) ->
+       if registered.Contains action && Regex.IsMatch(wire, "^[a-z][a-z0-9_]*$") then
+         Some wire
+       else
+         None)
+     |> Set.ofList)
 
 /// The daemon's SSE events that sagefs.nvim does NOT route to a handler — a
 /// real gap in the plugin, named with a reason each. Measured, not asserted:
@@ -279,12 +290,12 @@ let sseParityTests = testList "SSE Parity" [
   }
 
   test "the Neovim extractors actually parsed real rows out of the plugin (sanity: a broken extractor must not silently pass)" {
-    (neovimCatalogDerived.Count, 20)
+    (neovimCatalogDerived.Value.Count, 20)
     |> Expect.isGreaterThan
          "extractNvimEventCatalogNames found suspiciously few event names — either events.lua's \
           EVENT_CATALOG shape changed (update the regex) or the sibling checkout moved; either way \
           this must be investigated, not ignored."
-    (neovimDispatchDerived.Count, 10)
+    (neovimDispatchDerived.Value.Count, 10)
     |> Expect.isGreaterThan
          "extractNvimDispatchActions ∩ extractNvimHandledActions found suspiciously few names — \
           sse.lua's type_to_action or init.lua's SSE_HANDLER_DEFS shape changed."
@@ -293,7 +304,7 @@ let sseParityTests = testList "SSE Parity" [
   testList "Neovim handles every daemon SSE event (derived from the real sagefs.nvim source), or the gap is explicitly tracked" [
     for eventType in allDaemonSseEvents do
       test (sprintf "Neovim handles '%s', or it is a named gap in neovimKnownGaps" eventType) {
-        (neovimDispatchDerived.Contains(eventType) || neovimKnownGaps.Contains(eventType))
+        (neovimDispatchDerived.Value.Contains(eventType) || neovimKnownGaps.Contains(eventType))
         |> Expect.isTrue
              (sprintf
                "Event '%s' is emitted by the daemon but sagefs.nvim routes it nowhere: sse.lua's \
@@ -369,7 +380,7 @@ let sseParityTests = testList "SSE Parity" [
 
   test "the derived Neovim dispatch set covers every daemon event except the three named gaps" {
     allDaemonSseEvents
-    |> List.filter (neovimDispatchDerived.Contains >> not)
+    |> List.filter (neovimDispatchDerived.Value.Contains >> not)
     |> Set.ofList
     |> Expect.equal
          "these daemon events are emitted but the plugin routes none of them"
@@ -390,7 +401,7 @@ let sseParityTests = testList "SSE Parity" [
       (fun e ->
         let valid = Regex.IsMatch(e, "^[a-z][a-z0-9_]*$")
         valid |> Expect.isTrue (sprintf "Neovim event '%s' should be lowercase_snake_case" e))
-      (Set.union neovimCatalogDerived neovimDispatchDerived)
+      (Set.union neovimCatalogDerived.Value neovimDispatchDerived.Value)
   }
 
   test "adding new daemon event requires updating this test (self-documenting)" {
