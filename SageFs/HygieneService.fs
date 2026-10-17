@@ -95,8 +95,9 @@ module OwnerLedger =
 
 // ─── Where things are ───────────────────────────────────────────────────
 
-/// The repository a working directory belongs to: the main checkout, also from inside one of its worktrees.
-let mainRepoOf (dir: string) : string option =
+/// The main checkout a working directory belongs to, from inside it or one of its worktrees, with the path as the
+/// filesystem walk or the worktree's `.git` file spelled it.
+let private mainRepoAsFound (dir: string) : string option =
   match Checkout.classify dir with
   | Checkout.Checkout.MainCheckout root -> Some root
   | Checkout.Checkout.Worktree(root, _) ->
@@ -109,6 +110,12 @@ let mainRepoOf (dir: string) : string option =
       | i -> Some(adminDir.Replace('\\', '/').Substring(0, i))
     with _ -> Some root
   | Checkout.Checkout.NotAGitCheckout -> None
+
+/// The repository a working directory belongs to: the main checkout, also from inside one of its worktrees. The path
+/// is canonical (symlinks followed), whatever spelling `dir` came in. This is the one place that decides it, and it is
+/// the key of every cache entry, so a scan stored by one caller is the one every other caller reads back.
+let mainRepoOf (dir: string) : string option =
+  mainRepoAsFound dir |> Option.map canonicalPath
 
 /// The gate's state dir, as `scripts/local-gate.fsx` names it.
 let gateDir () : string =
@@ -261,7 +268,9 @@ module Cache =
   ///
   /// `live` is awaited, never waited on: a caller whose live facts come from a Task passes it here, and the scan starts
   /// once they arrive.
-  let refreshAsyncWithin (bound: TimeSpan) (loc: Locations) (live: unit -> Task<LiveFacts>) : Task<Snapshot> =
+  let refreshAsyncWithin (bound: TimeSpan) (spelled: Locations) (live: unit -> Task<LiveFacts>) : Task<Snapshot> =
+    // Keyed by the canonical repo, the key `viewFor` reads under, whatever spelling the caller built its locations in.
+    let loc = canonicalLocations spelled
     // The entry is in the table before the scan starts, so a scan that finishes at once cannot remove it first.
     let mine = TaskCompletionSource<Snapshot>(TaskCreationOptions.RunContinuationsAsynchronously)
     let current = inFlight.GetOrAdd(loc.Repo, mine.Task)
@@ -365,8 +374,9 @@ type TidyOutcome =
 
 /// Run the Safe steps of the plan that exists now, if it is the plan the caller was shown. Each step looks at its
 /// target again first. The cache is refreshed after.
-let tidy (loc: Locations) (live: unit -> LiveFacts) (shown: PlanId) : Task<TidyOutcome> =
+let tidy (spelled: Locations) (live: unit -> LiveFacts) (shown: PlanId) : Task<TidyOutcome> =
   task {
+    let loc = canonicalLocations spelled
     let scan = realScan loc (live ())
     let! leftovers = gather scan None
     let plan = Planner.plan leftovers
