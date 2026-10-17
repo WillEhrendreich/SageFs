@@ -167,18 +167,130 @@ module WorkerPostReady =
         return WorkerHealthProbe.ProbeOutcome.Missed
     }
 
-  /// Everything a just-ready worker needs started.
-  type Launch =
+  /// Roast-6 #3: start the per-worker health-probe loop once a worker is confirmed Ready (its proxy is
+  /// installed and answering). `currentStatus` reads the wait-free published snapshot, the same CQRS
+  /// discipline every other read in the SessionManager uses, never the mailbox, so the loop notices for
+  /// itself once this pid stops being the session's current worker (a normal restart, hard reset, or
+  /// stop) and simply exits: it never restarts a worker it no longer owns. `postWorkerDied` is how a
+  /// confirmed-dead worker is reported to the mailbox.
+  let startHealthProbe
+    (label: string)
+    (workerPid: int)
+    (proxy: SessionProxy)
+    (currentStatus: unit -> SessionLifecycleStatus option)
+    (postStatus: SessionLifecycleStatus -> unit)
+    (postWorkerDied: unit -> unit)
+    (ct: CancellationToken)
+    : unit =
+    let shouldContinue () =
+      match currentStatus () with
+      | Some status -> SessionLifecycleStatus.workerPid status = Some workerPid
+      | None -> false
+    let onHealthRestart () =
+      match shouldContinue () with
+      | false -> ()
+      | true ->
+        Log.warn "[SessionManager] Worker pid %d for session %s missed %d consecutive health checks — restarting" workerPid label WorkerHealthProbe.defaultThreshold
+        WorkerSpawn.killWorkerPids [ workerPid ]
+        // Mirrors NotifyWorkerDied (DaemonMode.fs): posting pid=-1 always falls into WorkerExited's
+        // "handle as real exit" branch regardless of the session's CURRENT recorded pid, and poisons
+        // Status to Restarting(Some -1) — so the worker's own genuine Process.Exited event (which the
+        // kill above will trigger, carrying the REAL pid) is then recognized as stale by the
+        // pid-mismatch guard and ignored, closing the same double-restart race NotifyWorkerDied
+        // already closes.
+        postWorkerDied ()
+    Async.Start(
+      WorkerHealthProbe.run
+        (fun () -> probeWorkerHealthOnce WorkerHealthProbe.defaultProbeTimeoutMs proxy)
+        WorkerHealthProbe.defaultThreshold
+        WorkerHealthProbe.defaultProbeIntervalMs
+        shouldContinue
+        (WorkerHealthProbe.syncRegistry currentStatus postStatus)
+        onHealthRestart,
+      ct)
+
+  /// The two fetches that say what a worker's code looks like to the daemon: its tests and its
+  /// instrumentation maps. A worker answers them for the copy it instrumented, so a new copy
+  /// means new probe numbering and the daemon has to ask again.
+  type Fetches =
     { Label: string
       Proxy: SessionProxy
       Cancel: CancellationToken
-      Outcomes: WatchdogOutcomes
       OnDiscoveryResponse: WorkerResponse -> unit
       OnDiscoveryFailed: string -> unit
       PublishInstrumentationMaps: Features.LiveTesting.InstrumentationMap array -> unit }
 
-  /// Start the three fetches. None of them is awaited.
+  /// Everything a just-ready worker needs started.
+  type Launch =
+    { Outcomes: WatchdogOutcomes
+      Fetches: Fetches }
+
+  /// One half of a refetch, as the worker answered it. A failed discovery is the thrown failure's text.
+  [<RequireQualifiedAccess>]
+  type RefetchedState =
+    | Discovery of WorkerResponse
+    | DiscoveryFailed of reason: string
+    | InstrumentationMaps of Features.LiveTesting.InstrumentationMap array
+
+  module Fetches =
+    /// The two fetches with every answer handed to `answered` as it arrives, for a caller that has to
+    /// check the answer is still wanted before it uses it.
+    let answeringWith (label: string) (proxy: SessionProxy) (ct: CancellationToken) (answered: RefetchedState -> unit) : Fetches =
+      { Label = label
+        Proxy = proxy
+        Cancel = ct
+        OnDiscoveryResponse = fun resp -> answered (RefetchedState.Discovery resp)
+        OnDiscoveryFailed = fun reason -> answered (RefetchedState.DiscoveryFailed reason)
+        PublishInstrumentationMaps = fun maps -> answered (RefetchedState.InstrumentationMaps maps) }
+
+  /// Start the discovery and the maps fetch, without the ready watchdog. Neither is awaited.
+  let launchFetches (f: Fetches) : unit =
+    Async.Start(fetchInitialDiscovery f.Label f.Proxy f.OnDiscoveryResponse f.OnDiscoveryFailed, f.Cancel)
+    Async.Start(fetchInstrumentationMaps f.Label f.Proxy f.PublishInstrumentationMaps, f.Cancel)
+
+  /// Start the watchdog and both fetches. None of them is awaited.
   let launch (l: Launch) : unit =
-    Async.Start(watchUntilReady l.Label l.Proxy l.Cancel l.Outcomes, l.Cancel)
-    Async.Start(fetchInitialDiscovery l.Label l.Proxy l.OnDiscoveryResponse l.OnDiscoveryFailed, l.Cancel)
-    Async.Start(fetchInstrumentationMaps l.Label l.Proxy l.PublishInstrumentationMaps, l.Cancel)
+    Async.Start(watchUntilReady l.Fetches.Label l.Fetches.Proxy l.Fetches.Cancel l.Outcomes, l.Fetches.Cancel)
+    launchFetches l.Fetches
+
+  /// Why the daemon will not fetch a session's live-testing state again right now. A refusal names
+  /// its reason, so a caller that asked is told rather than left to wonder whether anything ran.
+  [<RequireQualifiedAccess>]
+  type RefetchRefusal =
+    | NoSuchSession
+    /// A replacement worker is warming while the old one still serves: whichever answers, the other's
+    /// maps would be the ones the daemon keeps.
+    | SwapInProgress
+    | WorkerNotReady of status: SessionLifecycleStatus
+
+  module RefetchRefusal =
+    let describe (refusal: RefetchRefusal) : string =
+      match refusal with
+      | RefetchRefusal.NoSuchSession -> "no such session"
+      | RefetchRefusal.SwapInProgress -> "a replacement worker is starting and the session is not settled"
+      | RefetchRefusal.WorkerNotReady status -> sprintf "the session's worker is not Ready (%A)" status
+
+  /// Whether a refetch's answer still belongs to the worker now serving the session.
+  [<RequireQualifiedAccess>]
+  type ReplyFate =
+    | Current
+    | Stale
+
+  /// The one decision about refetching: only a settled session whose worker is Ready is asked, and an
+  /// answer is kept only while that same worker is still the one serving. Pure, so the mailbox only applies it.
+  module RefetchGate =
+    let decide (status: SessionLifecycleStatus) (swap: WorkerReadyCommit.ParkedSwap<'S>) : Result<WorkerHandle, RefetchRefusal> =
+      match swap, status with
+      | WorkerReadyCommit.ParkedSwap.Parked _, _ -> Error RefetchRefusal.SwapInProgress
+      | WorkerReadyCommit.ParkedSwap.NoSwap, SessionLifecycleStatus.Ready handle -> Ok handle
+      | WorkerReadyCommit.ParkedSwap.NoSwap, other -> Error(RefetchRefusal.WorkerNotReady other)
+
+    /// `None` is a session that is gone: nothing it was asked can still matter.
+    let judgeReply (askedWorkerPid: int) (session: (SessionLifecycleStatus * WorkerReadyCommit.ParkedSwap<'S>) option) : ReplyFate =
+      match session with
+      | Some(status, swap) ->
+        match decide status swap with
+        | Ok handle when handle.Pid = askedWorkerPid -> ReplyFate.Current
+        | Ok _
+        | Error _ -> ReplyFate.Stale
+      | None -> ReplyFate.Stale
