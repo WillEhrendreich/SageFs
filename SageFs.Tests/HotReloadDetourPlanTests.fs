@@ -372,7 +372,7 @@ let private confirmAllReached before patched reloaded =
   confirmPatchAsOutcome before patched reloaded reloaded
 
 let private beforeWith (names: string list) : FileDecls =
-  { ModulePath = [ "M" ]; Opens = []; Decls = names |> List.map fnDecl; RawSource = None }
+  { ModulePath = [ "M" ]; Opens = []; Decls = names |> List.map fnDecl; RawSource = None; QualifiedAccessModules = [] }
 
 [<Tests>]
 let confirmPatchOutcomeTests =

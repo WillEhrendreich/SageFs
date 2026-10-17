@@ -101,7 +101,7 @@ let tests =
             [ { FilePath = "/p/State.fs"; Decls = state; Functions = [ fn state "stamp" ] } ]
         with
         | Ok result -> result.Code
-        | Error(d, reason) -> failtestf "should emit: %s %A" d.Name reason
+        | Error refusal -> failtestf "should emit: %A" refusal
 
       testCase "WHY — both files' declarations are in ONE submission, definitions first so the caller resolves to them" <| fun _ ->
         let stampAt = emitted.IndexOf "let stamp (n: int) (suffix: string)"

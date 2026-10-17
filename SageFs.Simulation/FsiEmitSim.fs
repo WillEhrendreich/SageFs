@@ -214,7 +214,8 @@ module FsiEmitSim =
     { ModulePath = [ "M" ]
       Opens = []
       Decls = decls |> List.map (fun d -> sourceDecl d.Name)
-      RawSource = None }
+      RawSource = None
+      QualifiedAccessModules = [] }
 
   /// One scenario's trace: for each save, what the REAL decision reported and
   /// what the app actually does.
