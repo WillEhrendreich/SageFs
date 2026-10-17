@@ -97,20 +97,61 @@ let renderPlaySummary (entryCount: int) (head: LedgerHead<MemberId>) (frame: Coh
 
   sb.ToString()
 
+/// Why a play failed. A closed set, with ONE `describe`, so the CLI prints words and a test
+/// matches a case.
+[<RequireQualifiedAccess>]
+type PlayError =
+  | LedgerFileNotFound of path: string
+  /// The first line that did not parse, already worded by `CohortLedgerExport.fromJsonl`.
+  | LedgerMalformed of reason: string
+  /// The file holds rows from more than one cohort. Their sequence numbers are each cohort's own,
+  /// so folding them into one cohort would replay a state that never existed.
+  | MixedScopes of scopes: CohortScope list
+  | ReadFailed of path: string * reason: string
+
+let describe (error: PlayError) : string =
+  match error with
+  | PlayError.LedgerFileNotFound path -> sprintf "ledger file not found: %s" path
+  | PlayError.LedgerMalformed reason -> reason
+  | PlayError.MixedScopes scopes ->
+    let listed = scopes |> List.map (fun s -> sprintf "  %s" (Scope.label s)) |> String.concat "\n"
+    sprintf "the ledger holds %d cohorts, and play replays one cohort at a time. It holds:\n%s" scopes.Length listed
+  | PlayError.ReadFailed(path, reason) -> sprintf "failed to read %s: %s" path reason
+
+/// Which cohort a ledger file is. Every row names its cohort in its command, and replay must start
+/// from that cohort's own state: seeding every file at Machine refused a repository cohort's whole
+/// history and played it back empty. A ledger with no rows has nothing that says otherwise, so it is
+/// the machine-wide cohort (what an empty v1 ledger was).
+let scopeOfLedger (entries: LedgerEntry<MemberId> list) : Result<CohortScope, PlayError> =
+  let scopes =
+    entries
+    |> List.map (fun entry -> Cohort.scopeOf entry.Command)
+    |> List.distinctBy Scope.label
+    |> List.sortBy Scope.label
+  match scopes with
+  | [] -> Ok CohortScope.Machine
+  | [ only ] -> Ok only
+  | many -> Error(PlayError.MixedScopes many)
+
 /// Read `path`, parse it as a ledger JSONL, replay + project it, and render
-/// the summary. Fail-closed: a missing file, an unreadable file, or a
-/// malformed line all come back as `Error msg` — this function never throws.
-let runPlay (path: string) : Result<string, string> =
+/// the summary. Fail-closed: a missing file, an unreadable file, a malformed
+/// line or a mixed-scope ledger all come back as an `Error` — never a throw.
+let play (path: string) : Result<string, PlayError> =
   if not (File.Exists path) then
-    Error(sprintf "ledger file not found: %s" path)
+    Error(PlayError.LedgerFileNotFound path)
   else
     try
-      let jsonl = File.ReadAllText path
-      match CohortLedgerExport.fromJsonl jsonl with
-      | Error msg -> Error msg
+      match CohortLedgerExport.fromJsonl (File.ReadAllText path) with
+      | Error reason -> Error(PlayError.LedgerMalformed reason)
       | Ok entries ->
-        let head = Cohort.replayHead entries
-        let frame = Cohort.project head [||]
-        Ok(renderPlaySummary entries.Length head frame)
+        scopeOfLedger entries
+        |> Result.map (fun scope ->
+          let head = Cohort.replayHeadIn scope entries
+          let frame = Cohort.project head [||]
+          renderPlaySummary entries.Length head frame)
     with ex ->
-      Error(sprintf "failed to read %s: %s" path ex.Message)
+      Error(PlayError.ReadFailed(path, ex.Message))
+
+/// `play` with the error worded, for the CLI.
+let runPlay (path: string) : Result<string, string> =
+  play path |> Result.mapError describe

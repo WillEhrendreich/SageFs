@@ -124,10 +124,15 @@ let cohortExportCommandTests =
           match run (args dir [ Flag.text Flag.Scope; chosen ]) with
           | Error e -> failtestf "--scope %s failed: %s" chosen (describe e)
           | Ok _ ->
-            // Compared as rows, not through `runPlay`: play seeds its replay at the Machine scope, so a
-            // repository-scoped ledger replays empty there whatever the export wrote (reported, not hidden).
             importFromFile (outPath dir)
-            |> Expect.equal "exactly the chosen scope's rows, entropy and all, and none of the machine scope's" (Ok repoEntries))
+            |> Expect.equal "exactly the chosen scope's rows, entropy and all, and none of the machine scope's" (Ok repoEntries)
+            // And the file plays: a repository-scoped cohort is the default a daemon writes, so `play`
+            // must seed its replay at THAT scope, not at Machine, or the cohort comes back empty.
+            replayMatches (expectedSummary repo repoEntries) (outPath dir)
+            |> Expect.isOk "the repository-scoped file replays to the same cohort, member and claim included"
+            let summary = CohortPlay.runPlay (outPath dir) |> Result.defaultValue ""
+            summary |> Expect.stringContains "the member is named" "alice"
+            summary |> Expect.stringContains "the claim is held" "holder=alice  scope=file Bar.fs")
     }
 
     test "a scope the ledger does not hold is refused with the scopes it does hold" {
