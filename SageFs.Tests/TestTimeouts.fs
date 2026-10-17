@@ -972,6 +972,9 @@ module FixtureDurations =
 
   /// A daemon uptime no assertion depends on: a daemon that is not brand new.
   let uptimeUnread = mins 10.
+  /// How far a case moves the clock between two renders of an idle dashboard: past a minute, so a
+  /// label that counts whole minutes would change if the page still rendered the clock.
+  let idleClockStep = mins 2.
   /// An uptime the formatter prints in minutes only.
   let uptimeMinutesLabel = mins 45.
   /// An uptime the formatter prints as hours and minutes.
