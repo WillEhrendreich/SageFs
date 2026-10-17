@@ -606,6 +606,8 @@ Usage: sagefs [options]                Start daemon (bare by default)
        sagefs hygiene [--tidy]         Show what agents left behind (worktrees, gate checkouts, caches, temp dirs) as a dry-run plan; --tidy runs only the safe part
                                        (--repo PATH names a repository you are not standing in)
        sagefs play <ledger.jsonl>      Replay a portable cohort ledger file offline
+       sagefs cohort-export [--scope <path>] [--data-dir <dir>] <out.jsonl>
+                                       Write the daemon's cohort ledger to a file `play` can replay (offline, no daemon needed)
 
 Daemon options:
   --no-resume            Skip restoring previous sessions on startup
