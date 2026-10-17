@@ -1247,11 +1247,13 @@ let tryParseWarmupProgress (progress: string) =
   WarmupProgressLine.tryParsePayload progress
 
 /// Parse warmup progress string ("step/total msg") and dispatch to Elm.
-let handleWarmupProgress (dispatch: SageFsMsg -> unit) (_sid: string) (progress: string) =
-  match tryParseWarmupProgress progress with
-  | Some (step, total, msg) ->
-    dispatch (SageFsMsg.Event (TuiEvent.WarmupProgress (step, total, msg)))
-  | None -> ()
+let handleWarmupProgress (dispatch: SageFsMsg -> unit) (sid: string) (progress: string) =
+  match tryParseWarmupProgress progress, WorkerProtocol.SessionId.validate sid with
+  | Some (step, total, msg), Ok sessionId ->
+    dispatch (SageFsMsg.Event (TuiEvent.WarmupProgress (sessionId, step, total, msg)))
+  // A progress line with no valid session has nowhere to go: dropping it beats
+  // writing it into whichever session is on screen.
+  | _ -> ()
 
 /// Periodic cache + manifest save callback.
 /// Only writes when RunGeneration has advanced since last save.

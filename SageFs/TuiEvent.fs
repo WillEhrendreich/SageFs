@@ -306,7 +306,7 @@ type TuiEvent =
   | CompletionReady of items: CompletionItem list
   | DiagnosticsUpdated of sessionId: string * diagnostics: Features.Diagnostics.Diagnostic list
   // ── Warmup ──
-  | WarmupProgress of step: int * total: int * assemblyName: string
+  | WarmupProgress of sessionId: WorkerProtocol.SessionId * step: int * total: int * assemblyName: string
   | WarmupCompleted of duration: TimeSpan * failures: string list
   | WarmupContextUpdated of SessionContext
   // ── Live testing ──

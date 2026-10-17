@@ -533,6 +533,11 @@ module SageFsMsgQueueCoalescing =
       tryReplaceLast pending (function
         | SageFsMsg.Event (TuiEvent.WarmupContextUpdated _) -> Replace incoming
         | _ -> Continue)
+    | SageFsMsg.Event (TuiEvent.WarmupProgress (sessionId, _, _, _)) ->
+      tryReplaceLast pending (function
+        | SageFsMsg.Event (TuiEvent.WarmupProgress (existingSid, _, _, _)) when existingSid = sessionId -> Replace incoming
+        | SageFsMsg.Event (TuiEvent.WarmupCompleted _) -> Stop
+        | _ -> Continue)
     | SageFsMsg.Event (TuiEvent.TestResultsBatch (sessionId, results)) ->
       tryReplaceLast pending (function
         // Never absorb across sessions — each session's results merge into
@@ -1433,13 +1438,8 @@ module SageFsUpdate =
               SessionId = activeId }
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
-      | TuiEvent.WarmupProgress(step, total, msg) ->
-        let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map SessionId.value |> Option.defaultValue ""
-        let line = {
-          Kind = OutputKind.Info
-          Text = sprintf "⏳ [%d/%d] %s" step total msg
-          Timestamp = DateTime.UtcNow
-          SessionId = activeId }
+      | TuiEvent.WarmupProgress(sid, step, total, msg) ->
+        let line = { Kind = OutputKind.Info; Text = sprintf "⏳ [%d/%d] %s" step total msg; Timestamp = DateTime.UtcNow; SessionId = SessionId.value sid }
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
       | TuiEvent.WarmupCompleted (_, failures) ->

@@ -150,6 +150,7 @@
         <Compile Include="SessionDisplayTests.fs" />
         <Compile Include="SageFsEventTests.fs" />
         <Compile Include="SageFsAppTests.fs" />
+        <Compile Include="WarmupProgressAttributionTests.fs" />
         <Compile Include="SageFsUpdatePropertyTests.fs" />
         <Compile Include="SageFsEffectHandlerTests.fs" />
         <Compile Include="LiveTestingCoverageStreamTests.fs" />
