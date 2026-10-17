@@ -33,12 +33,13 @@ let private liveRefused = { live with Lease = Some(LeaseRefused "you already hol
 let private isDeny =
   function
   | Deny _ -> true
-  | Allow -> false
+  | Allow
+  | AllowWithAdvice _ -> false
 
 /// Plain argument words: no quotes, separators or spaces, so they never
 /// change how the command splits.
 let private argWord =
-  Gen.elements [ "-c"; "Release"; "--no-restore"; "SageFs.Tests"; "--project"; "X.fsproj"; "--filter"; "Foo"; "-v"; "q" ]
+  Gen.elements [ "-c"; "Debug"; "--no-restore"; "SageFs.Tests"; "--project"; "X.fsproj"; "--filter"; "Foo"; "-v"; "q" ]
 
 let private args = Gen.listOfLength 3 argWord |> Gen.map (String.concat " ")
 
@@ -104,7 +105,7 @@ let replGuardTests = testList "sagefs-repl-guard decision" [
   testCase "WHY — a slow verb after a cd or a wrapper is still caught" <| fun _ ->
     [ "cd SageFs.Tests && dotnet test"
       "timeout 600 dotnet run --project X.fsproj"
-      "env FOO=1 dotnet build -c Release"
+      "env FOO=1 dotnet build -c Debug"
       "ls; /usr/bin/dotnet fsi script.fsx"
       "dotnet pack -o nupkg && dotnet build" ]
     |> List.filter (fun c -> decide c live = Allow)
@@ -121,7 +122,8 @@ let replGuardTests = testList "sagefs-repl-guard decision" [
 
   testCase "WHY — the undeclared deny reason restates the loop and names the escape hatch" <| fun _ ->
     match decide "dotnet test" live with
-    | Allow -> failtest "dotnet test with SageFs up must be denied"
+    | Allow
+    | AllowWithAdvice _ -> failtest "dotnet test with SageFs up must be denied"
     | Deny reason ->
       [ "send_fsharp_code"; "hard_reset_fsi_session"; "rebuild=true"; "final gate"; "SAGEFS_FINAL_GATE=1 dotnet test" ]
       |> List.filter (fun needle -> not (reason.Contains needle))
@@ -129,7 +131,8 @@ let replGuardTests = testList "sagefs-repl-guard decision" [
 
   testCase "WHY — the busy deny reason says BUSY, names the wait, and never says to fall back to dotnet" <| fun _ ->
     match decide "SAGEFS_FINAL_GATE=1 dotnet build" liveMustWait with
-    | Allow -> failtest "a MustWait lease outcome must deny"
+    | Allow
+    | AllowWithAdvice _ -> failtest "a MustWait lease outcome must deny"
     | Deny reason ->
       reason |> Expect.stringContains "explicitly says BUSY, not BROKEN" "BUSY, not broken"
       reason |> Expect.stringContains "carries the wait" "wait 12"
@@ -137,7 +140,8 @@ let replGuardTests = testList "sagefs-repl-guard decision" [
 
   testCase "WHY — the busy deny reason for a Refused lease says so too" <| fun _ ->
     match decide "SAGEFS_FINAL_GATE=1 dotnet build" liveRefused with
-    | Allow -> failtest "a Refused lease outcome must deny"
+    | Allow
+    | AllowWithAdvice _ -> failtest "a Refused lease outcome must deny"
     | Deny reason -> reason |> Expect.stringContains "carries the refusal reason" "you already hold 1/1 leases"
 
   testCase "WHY — needsContext is true for a DECLARED final gate now too, since it still has to ask for a lease" <| fun _ ->

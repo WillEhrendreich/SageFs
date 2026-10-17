@@ -1,5 +1,5 @@
-/// The IO around ReplGuard.decide: stdin, the disk walk, the /health probe, the lease ask, the JSON out.
-/// The decision itself is ReplGuard.fs, the file SageFs.Tests compiles and tests.
+/// The IO around ReplGuard.decide: stdin, the project scan, the /health probe, the lease ask, stdout.
+/// The decision itself is ReplGuard.fs and the run around it is Verdict.fs, the files SageFs.Tests compiles and tests.
 ///
 /// This is a compiled program, not an .fsx, because a Claude Code PreToolUse hook runs before EVERY Bash call
 /// and `dotnet fsi` costs over a second of startup each time. Commands that never mention dotnet leave right
@@ -25,18 +25,6 @@ let private str (el: JsonElement) (name: string) =
   match el.TryGetProperty name with
   | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
   | _ -> ""
-
-/// The command and cwd out of the hook's stdin JSON; empty strings when it is not the shape we know.
-let private parseInput (input: string) : string * string =
-  try
-    use doc = JsonDocument.Parse input
-    let root = doc.RootElement
-    let cmd =
-      match root.TryGetProperty "tool_input" with
-      | true, ti when ti.ValueKind = JsonValueKind.Object -> str ti "command"
-      | _ -> ""
-    cmd, str root "cwd"
-  with _ -> "", ""
 
 let rec private hasProjectAtOrAbove (dir: DirectoryInfo) =
   match dir with
@@ -77,16 +65,16 @@ let private parseSessionSummaries (healthBody: string) : SessionSummary list =
 
 /// Probes `/health` once and reports both whether the daemon answered and what it said about its sessions:
 /// one HTTP call feeds both `DaemonProbe` and `SessionProbe`, instead of a second round trip to `/api/sessions`.
-let private healthProbe () : bool * SessionSummary list =
+let private healthProbe () : DaemonProbe * SessionSummary list =
   try
     use http = new HttpClient(Timeout = healthTimeout)
     use resp = http.GetAsync(sprintf "http://localhost:%d/health" (mcpPort ())).GetAwaiter().GetResult()
     match resp.IsSuccessStatusCode with
-    | false -> false, []
+    | false -> DaemonNotAnswering, []
     | true ->
       let body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-      true, parseSessionSummaries body
-  with _ -> false, []
+      DaemonAnswering, parseSessionSummaries body
+  with _ -> DaemonNotAnswering, []
 
 /// Ask the daemon for an expensive-work lease for THIS command's own final gate. Best-effort and fail-open:
 /// any transport or parse failure here reads as "could not ask" (`None`), never as a refusal.
@@ -122,33 +110,13 @@ let private leaseProbe (verb: SlowVerb) : LeaseProbe option =
       | _ -> None
   with _ -> None
 
-/// The hook's whole run, given the stdin text; the JSON to print when it denies, nothing when it allows.
-let verdict (input: string) : string option =
-  let command, cwd = parseInput input
-  match needsContext command with
-  | false -> None
-  | true ->
-    match projectScope cwd with
-    | NotFSharpWorkspace -> None
-    | FSharpWorkspace ->
-      match healthProbe () with
-      | false, _ -> None
-      | true, sessions ->
-        let session = Some(sessionProbe cwd sessions)
-        let lease =
-          match classify command with
-          | DeclaredFinalGate verb -> leaseProbe verb
-          | SlowLoop _
-          | NoSlowLoop -> None
-        match decide command { Project = FSharpWorkspace; Daemon = DaemonAnswering; Session = session; Lease = lease } with
-        | Allow -> None
-        | Deny reason ->
-          let out =
-            {| hookSpecificOutput =
-                 {| hookEventName = "PreToolUse"
-                    permissionDecision = "deny"
-                    permissionDecisionReason = reason |} |}
-          Some(JsonSerializer.Serialize out)
+/// The real machine, for `Verdict.verdict`.
+let private world : Verdict.World =
+  { GetEnv = fun name -> Environment.GetEnvironmentVariable name |> Option.ofObj |> Option.defaultValue ""
+    ReadRepoConfig = Verdict.readRepoConfig
+    ProjectScope = projectScope
+    Health = healthProbe
+    Lease = leaseProbe }
 
 /// stdin as text, read straight off the stream: the Console reader sets up encodings first, which is startup
 /// this hook pays on every Bash call.
@@ -163,5 +131,5 @@ let main _ =
   // Every command that never mentions dotnet is allowed here, before any JSON is parsed.
   match input.Contains("dotnet", StringComparison.Ordinal) with
   | false -> ()
-  | true -> verdict input |> Option.iter (fun json -> Console.Out.Write json)
+  | true -> Verdict.verdict world input |> Option.iter (fun json -> Console.Out.Write json)
   0

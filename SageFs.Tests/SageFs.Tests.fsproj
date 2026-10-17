@@ -818,7 +818,9 @@
         <Compile Include="GranularRestartSimTests.fs" />
         <Compile Include="RestartScopeTests.fs" />
         <Compile Include="../tools/agent-hooks/ReplGuard.fs" Link="AgentHooks/ReplGuard.fs" />
+        <Compile Include="../tools/agent-hooks/Verdict.fs" Link="AgentHooks/Verdict.fs" />
         <Compile Include="ReplGuardTests.fs" />
+        <Compile Include="ReplGuardConfigTests.fs" />
         <Compile Include="../scripts/ReleaseRules.fs" Link="Scripts/ReleaseRules.fs" />
         <Compile Include="ReleaseRulesTests.fs" />
         <Compile Include="ReleaseFreshTests.fs" />
