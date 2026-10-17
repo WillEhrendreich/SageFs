@@ -849,10 +849,13 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     effects |> Expect.isEmpty "no effects"
     newModel.Sessions.Sessions |> Expect.isEmpty "still empty"
 
-  testCase "WarmupProgress adds step/total info line" <| fun _ ->
-    let event = TuiEvent.WarmupProgress(2, 4, "Loading namespaces")
+  testCase "WarmupProgress adds step/total info line to the session it names" <| fun _ ->
+    let sid = testSessionId "aa000001"
+    let event = TuiEvent.WarmupProgress(sid, 2, 4, "Loading namespaces")
+    let baseModel = SageFsModel.initial()
+    let viewed = { baseModel with Sessions = { baseModel.Sessions with ActiveSessionId = ActiveSession.Viewing sid } }
     let newModel, effects =
-      SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
+      SageFsUpdate.update (SageFsMsg.Event event) viewed
     effects |> Expect.isEmpty "no effects"
     let out = activeOutput newModel
     out |> Expect.hasLength "1 output line" 1
