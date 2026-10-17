@@ -27,6 +27,13 @@ type WorkerStartupEvents =
 
 module WorkerStartup =
 
+  /// Where a line of the worker's stderr goes. Before the worker has reported its port a line is start-up output and
+  /// only goes to the tail kept to explain a failed start. After it, a line may also be a run_app'd app's output.
+  [<RequireQualifiedAccess>]
+  type private StderrDestination =
+    | TailOnly
+    | TailAndAppOutput
+
   /// Read the worker's stdout until WORKER_PORT is reported, and report what happened through `events`.
   /// Runs completely off the caller's loop: it never blocks a MailboxProcessor.
   ///
@@ -65,13 +72,24 @@ module WorkerStartup =
       // Bounded: the last StderrTail.capacity lines, for the life of the worker.
       // Read only when the worker exits or goes silent, to explain why.
       let stderrTail = StderrTail.create ()
+      let stderrDestination = ref StderrDestination.TailOnly
       try
+        // The ONE reader of the worker's stderr, for the life of the worker. A StreamReader is not safe to read from two
+        // threads: with a second reader started after the port line, lines went to one thread or the other, an exception
+        // in either ended it silently, and a pipe nobody drained filled and blocked the worker in write(2). The worker's own
+        // debug logging then stalled, and with it the thread that reads the FSI host's reply, so a live eval never finished.
         let stderrTask =
           WorkerSpawn.runOnDedicatedThread "sagefs-worker-stderr-reader" (fun () ->
             try
               let mutable line = proc.StandardError.ReadLine()
               while not (isNull line) do
                 stderrTail.Push line
+                (match System.Threading.Volatile.Read(&stderrDestination.contents) with
+                 | StderrDestination.TailAndAppOutput ->
+                   (match AppOutput.tryParse line with
+                    | Some (stream, payload) -> events.OnAppOutput stream payload
+                    | None -> ())
+                 | StderrDestination.TailOnly -> ())
                 line <- proc.StandardError.ReadLine()
             with _ -> ())
         let mutable found = None
@@ -118,30 +136,25 @@ module WorkerStartup =
           // post-startup stdout read below can't trip it and kill a live worker.
           cts.CancelAfter(System.Threading.Timeout.Infinite)
           ledger.Record StartStage.WorkerPort (DateTime.UtcNow - started)
+          // Before OnReady, so anything that reacts to readiness by making the app write sees its stderr forwarded.
+          System.Threading.Volatile.Write(&stderrDestination.contents, StderrDestination.TailAndAppOutput)
           events.OnReady workerPid baseUrl
-          // #82: keep reading stdout AND stderr past the port line, for a run_app'd app's
-          // APP_OUTPUT= / APP_ERROR= lines (to EOF; read errors/EOF swallowed, not a spawn fail).
-          // Two readers because there are two streams: a single reader on stdout would never see a line an app
-          // wrote only to Console.Error, which is most of what a stack trace is.
-          let readAppOutput (name: string) (reader: System.IO.StreamReader) =
-            WorkerSpawn.runOnDedicatedThread name (fun () ->
+          // #82: keep reading past the port line, for a run_app'd app's APP_OUTPUT= / APP_ERROR= lines (to EOF; read
+          // errors/EOF swallowed, not a spawn fail). One reader per stream: stdout is read here, stderr by the reader
+          // above, which carries on forwarding app lines now that the worker is ready. A single reader on stdout would
+          // never see a line an app wrote only to Console.Error, which is most of what a stack trace is.
+          let appOutTask =
+            WorkerSpawn.runOnDedicatedThread "sagefs-worker-stdout-reader" (fun () ->
               try
-                let mutable l = reader.ReadLine()
+                let mutable l = proc.StandardOutput.ReadLine()
                 while not (isNull l) do
                   (match AppOutput.tryParse l with
                    | Some (stream, payload) -> events.OnAppOutput stream payload
                    | None -> ())
-                  l <- reader.ReadLine()
+                  l <- proc.StandardOutput.ReadLine()
               with _ -> ())
-
-          let appOutTask =
-            readAppOutput "sagefs-worker-stdout-reader" proc.StandardOutput
-
-          let appErrTask =
-            readAppOutput "sagefs-worker-stderr-reader" proc.StandardError
           do! stderrTask |> Async.AwaitTask
           do! appOutTask |> Async.AwaitTask
-          do! appErrTask |> Async.AwaitTask
         | Some _ ->
           // Absolute-deadline branch above: found <- Some "" with a reason
           // parked in timeoutReason, distinct from "process exited" (which
