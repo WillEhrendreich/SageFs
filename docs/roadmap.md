@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 6, Later 18, Exploring 20. Already built: 30.
+On the page today: Now 0, Next 6, Later 18, Exploring 20. Already built: 31.
 
 ## Next (6)
 
@@ -68,7 +68,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 ### Platform and install
 
 - [ ] **Hot reload checked on Windows and macOS.** My CI is Linux only, so the hot reload detour has no test evidence on Windows, macOS or arm64, and the docs say so. I need machines to close that. ([how-hot-reload-works.md](how-hot-reload-works.md), [Readme.md](../Readme.md))
-- [ ] **Start on login for Windows and macOS.** Linux gets a systemd user unit that starts the daemon for you. Nothing starts it at login on Windows or macOS yet. ([progress.md](progress.md))
+- [ ] **Start on login for Windows.** Linux gets a systemd user unit and macOS a launchd agent, and each starts the daemon for you. Nothing starts it at login on Windows yet. ([progress.md](progress.md), [Readme.md](../Readme.md))
 - [ ] **The getter sandbox beyond Linux x86-64.** Clicking a getter in the live-bindings pane runs it under a syscall filter that stops network use and file writes, on Linux x86-64 only. Elsewhere the getter runs under its deadline alone, and the pane says so. ([decisions.md](decisions.md))
 - [ ] **A token for every daemon call.** The daemon binds loopback only and checks Origin so a web page can't drive it, but nothing authenticates a local caller. A minted token the daemon requires would, and it's the same handle agents need for their own identity. ([mcp-tools.md](mcp-tools.md))
 - [ ] **Admit heavy work by measured cost.** Heavy work already takes a lease, and the daemon sheds under memory pressure with a retry hint. It doesn't yet know what a rebuild of your project usually costs, so it reacts instead of predicting. I'd record peak memory and duration per kind of work and admit against the headroom.
@@ -115,7 +115,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub.
 
-## Built (30)
+## Built (31)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -171,6 +171,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 
 - [x] **Slow machines get timeouts that fit them.** On an old quad core with a spinning disk a session never reached Ready, because the 30 second silence limit killed the worker mid-build and the retries repeated the same 30. SageFs now probes the machine, files it as Fast, Standard, Constrained or Minimal, and scales the waits that are for the machine. A start that runs out of patience retries with a longer one, and a give-up names the wait, the attempts and what to set. On that machine it now reaches Ready in about a minute cold and 17 seconds warm. Code: [`SageFs.Core/MachineTier.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/MachineTier.fs)
 - [x] **SageFs tidies what agents leave behind.** Agents leave worktrees, branches and gate checkouts behind, and on my machine 65 old gate records alone came to 17.6 GB. A dashboard panel, two MCP tools and `sagefs hygiene` list the leftovers and tidy only the safe ones, after you confirm the exact plan you were shown. Code: [`SageFs.Core/WorkspaceHygiene.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/WorkspaceHygiene.fs)
+- [x] **The daemon starts at login on macOS.** A launchd user agent starts the daemon at login and restarts its supervisor after a crash, the same job the systemd unit does on Linux. The README install fills in your home directory and your .NET folder, because launchd expands no variables. tw0po1nt wrote it and tested it on macOS 27 on an Apple Silicon Mac. An Intel Mac and the Homebrew dotnet formula are untested. Code: [`contrib/launchd/io.github.willehrendreich.sagefs.plist`](https://github.com/WillEhrendreich/SageFs/blob/master/contrib/launchd/io.github.willehrendreich.sagefs.plist)
 
 ### Docs and onboarding
 

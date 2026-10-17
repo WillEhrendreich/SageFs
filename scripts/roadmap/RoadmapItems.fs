@@ -233,10 +233,15 @@ let items : Item list =
       [ "docs/how-hot-reload-works.md"; "Readme.md" ]
       "My CI is Linux only, so the hot reload detour has no test evidence on Windows, macOS or arm64, and the docs say so. I need machines to close that."
 
-    item "start-on-login-windows-macos" "Start on login for Windows and macOS" Platform Later
+    item "start-on-login-windows" "Start on login for Windows" Platform Later
       NoLandmarkYet
-      [ "docs/progress.md" ]
-      "Linux gets a systemd user unit that starts the daemon for you. Nothing starts it at login on Windows or macOS yet."
+      [ "docs/progress.md"; "Readme.md" ]
+      "Linux gets a systemd user unit and macOS a launchd agent, and each starts the daemon for you. Nothing starts it at login on Windows yet."
+
+    item "start-on-login-macos" "The daemon starts at login on macOS" Platform Later
+      (landmark "contrib/launchd/io.github.willehrendreich.sagefs.plist" "io.github.willehrendreich.sagefs")
+      [ "Readme.md" ]
+      "A launchd user agent starts the daemon at login and restarts its supervisor after a crash, the same job the systemd unit does on Linux. The README install fills in your home directory and your .NET folder, because launchd expands no variables. tw0po1nt wrote it and tested it on macOS 27 on an Apple Silicon Mac. An Intel Mac and the Homebrew dotnet formula are untested."
 
     item "getter-sandbox-beyond-linux" "The getter sandbox beyond Linux x86-64" Platform Later
       NoLandmarkYet
