@@ -23,6 +23,26 @@ module SageFs.Vscode.DebugRects
 // prove the math. `Extension.fs`'s activation gathers the live vscode/OS
 // inputs (real, not invented) and calls straight into `resolve` below.
 
+/// Whether the extension starts its loopback rect listener at all. The
+/// listener is a demo-profile tool, not a feature: it shells out to
+/// `xdotool` per request, so an ordinary user's VS Code must never open it.
+/// `decide` takes the raw `SAGEFS_DEBUG_RECTS_PORT` value (the demo actor
+/// always sets it) and there is no default port, so an unset, empty,
+/// non-numeric or out of range value is `Off`.
+[<RequireQualifiedAccess>]
+type ServerGate =
+  | Off
+  | Start of port: int
+
+module ServerGate =
+  let decide (raw: string option) : ServerGate =
+    match raw with
+    | None -> ServerGate.Off
+    | Some s ->
+      match System.Int32.TryParse s with
+      | true, p when p >= 1 && p <= 65535 -> ServerGate.Start p
+      | _ -> ServerGate.Off
+
 /// A screen rect in CSS/device pixels — same shape whichever source
 /// produced it (an OS window-geometry query, or one of this module's own
 /// carve-outs of that outer rect).

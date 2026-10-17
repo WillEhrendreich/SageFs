@@ -2389,6 +2389,9 @@ let private createHttpServer (handler: obj -> obj -> unit) : obj = jsNative
 [<Emit("$0.listen($1, $2)")>]
 let private httpListen (server: obj) (port: int) (host: string) : unit = jsNative
 
+[<Emit("$0.on('error', $1)")>]
+let private httpOnError (server: obj) (handler: obj -> unit) : unit = jsNative
+
 [<Emit("$0.url")>]
 let private reqUrl (req: obj) : string = jsNative
 
@@ -2507,17 +2510,9 @@ let private debugRectForAsync (targetStr: string) : JS.Promise<obj> =
 /// the demo cell's own private `--unshare-net` network namespace — never
 /// reachable from outside that cell, and never the daemon's own
 /// 37749/37750 ports. Port is `SAGEFS_DEBUG_RECTS_PORT` (set by
-/// `SageFs.Demos.Runtime.VsCode`'s cell env) or a fixed default so a
-/// manual/dev launch still works without the env var.
-let private startDebugRectsServer () =
-  let port =
-    match getEnvVar "SAGEFS_DEBUG_RECTS_PORT" with
-    | Some s ->
-      match System.Int32.TryParse s with
-      | true, v -> v
-      | _ -> 47751
-    | None -> 47751
-
+/// `SageFs.Demos.Runtime.VsCode`'s cell env); there is no default, see
+/// `startDebugRectsServer` below.
+let private listenDebugRects (port: int) =
   let parseTarget (url: string) : string option =
     match url.IndexOf '?' with
     | -1 -> None
@@ -2545,10 +2540,21 @@ let private startDebugRectsServer () =
 
   try
     let server = createHttpServer handler
+    // Node raises listen failures (a second window on the same port gives
+    // EADDRINUSE) as an 'error' EVENT, which is uncaught without a handler.
+    httpOnError server (fun err ->
+      logDebug (sprintf "sagefs.debug.rectFor loopback listener error on 127.0.0.1:%d: %s" port (string err)))
     httpListen server port "127.0.0.1"
     logDebug (sprintf "sagefs.debug.rectFor loopback listening on 127.0.0.1:%d" port)
   with ex ->
     logDebug (sprintf "sagefs.debug.rectFor loopback server failed to start: %s" (string ex))
+
+/// Starts the loopback listener only when the demo profile asked for one by
+/// setting SAGEFS_DEBUG_RECTS_PORT. An ordinary user's VS Code opens nothing.
+let private startDebugRectsServer () =
+  match DebugRects.ServerGate.decide (getEnvVar "SAGEFS_DEBUG_RECTS_PORT") with
+  | DebugRects.ServerGate.Off -> ()
+  | DebugRects.ServerGate.Start port -> listenDebugRects port
 
 let hijackIonideSendToFsi (subs: ResizeArray<Disposable>) =
   for cmd in [| "fsi.SendSelection"; "fsi.SendLine"; "fsi.SendFile" |] do

@@ -128,6 +128,25 @@ let tests =
     testCase "WHY - unknown named view - honest absence, never a fabricated rect" <| fun _ ->
       resolve window chromeFull None (RectTarget.View "hotReload")
       |> Expect.equal "unresolvable named view" None
+
+    // WHY — the loopback listener used to start in EVERY user's VS Code on a
+    // fixed default port. It now starts only when the demo profile sets
+    // SAGEFS_DEBUG_RECTS_PORT to a real port; everything else is Off.
+    testCase "WHY - server gate - the env var unset means no listener" <| fun _ ->
+      ServerGate.decide None |> Expect.equal "unset" ServerGate.Off
+
+    testCase "WHY - server gate - a valid port starts the listener on that port" <| fun _ ->
+      ServerGate.decide (Some "47751") |> Expect.equal "valid port" (ServerGate.Start 47751)
+
+    testCase "WHY - server gate - a value that is not a number means no listener" <| fun _ ->
+      ServerGate.decide (Some "junk") |> Expect.equal "junk" ServerGate.Off
+      ServerGate.decide (Some "") |> Expect.equal "empty" ServerGate.Off
+
+    testCase "WHY - server gate - an out of range port means no listener" <| fun _ ->
+      ServerGate.decide (Some "0") |> Expect.equal "zero" ServerGate.Off
+      ServerGate.decide (Some "-1") |> Expect.equal "negative" ServerGate.Off
+      ServerGate.decide (Some "65536") |> Expect.equal "above 65535" ServerGate.Off
+      ServerGate.decide (Some "65535") |> Expect.equal "top of range" (ServerGate.Start 65535)
   ]
 
 let _ = Expecto.Tests.runTestsWithCLIArgs [] [||] tests
