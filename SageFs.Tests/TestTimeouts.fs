@@ -1407,3 +1407,12 @@ module StartEscalationTimeouts =
 module NudgeTimeouts =
   /// A file-lock wait short enough that the test of a refused wait (`FileBusy`) ends quickly.
   let nudgeShortLockWait = System.TimeSpan.FromMilliseconds 150.
+
+/// The session reaper's tests. The bound is a made-up one, so a test never depends on a person's
+/// `SAGEFS_ABANDONED_SESSION_HOURS`, and the anchor is a fixed instant so every time decision is a pure function of it.
+module ReaperTimeouts =
+  /// The bound the reaper tests give the reaper: both the owner's absence and the session's idleness have to reach it.
+  let bound = System.TimeSpan.FromHours 12.
+
+  /// The instant every reaper test calls "now". Fixed, so a failing seed replays.
+  let now = System.DateTime(2026, 10, 17, 12, 0, 0, System.DateTimeKind.Utc)
