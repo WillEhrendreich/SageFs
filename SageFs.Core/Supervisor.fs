@@ -8,20 +8,36 @@ open System
 ///
 /// This module holds the PURE decision logic (port-handshake validation,
 /// host-exited-before-ready translation, restart decisions) separated from
-/// the actor loop so it is unit-testable without processes. The actor itself
-/// lives in the daemon (SessionManager wiring, Phase 1 step 6).
+/// the actor loop so it is unit-testable without processes. The port-handshake
+/// check is called by `WorkerStartup.await` on every WORKER_PORT= line the
+/// worker prints; the rest of the actor lives in the daemon (SessionManager).
 module Supervisor =
 
   /// The host's ready line prefix on stdout (unchanged from the worker era).
   let hostReadyLine = "WORKER_PORT="
 
-  /// Validate a host stdout line as the ready signal. Fail-closed: only a
+  /// Why a host stdout line was refused as the ready signal.
+  [<RequireQualifiedAccess>]
+  type HostReadyRejection =
+    /// The line does not start with the ready prefix.
+    | NotAReadyLine of prefix: string * line: string
+    /// The line is a ready line, but the URL it carries is not a loopback address.
+    | NotLoopback of url: string
+
+  /// The one place a rejection becomes text, so a new case cannot be left without a message.
+  let describeHostReadyRejection (rejection: HostReadyRejection) : string =
+    match rejection with
+    | HostReadyRejection.NotAReadyLine (prefix, line) ->
+      sprintf "host stdout line is not a ready signal (missing '%s'): %s" prefix line
+    | HostReadyRejection.NotLoopback url ->
+      sprintf "host ready URL must be loopback, got: %s" url
+
+  /// Classify a host stdout line as the ready signal. Fail-closed: only a
   /// loopback URL is acceptable; anything else (or a host that never printed
-  /// the line) is an Error.
-  let validateHostReadyLine (prefix: string) (line: string) : Result<string, string> =
-    match line.StartsWith prefix with
-    | false ->
-      Error(sprintf "host stdout line is not a ready signal (missing '%s'): %s" prefix line)
+  /// the line) is an Error naming why.
+  let classifyHostReadyLine (prefix: string) (line: string) : Result<string, HostReadyRejection> =
+    match line.StartsWith(prefix, StringComparison.Ordinal) with
+    | false -> Result.Error(HostReadyRejection.NotAReadyLine (prefix, line))
     | true ->
       let url = line.Substring prefix.Length
       let isLoopback =
@@ -31,9 +47,12 @@ module Supervisor =
           | true, uri ->
             uri.IsLoopback
       match isLoopback with
-      | true -> Ok url
-      | false ->
-        Error(sprintf "host ready URL must be loopback, got: %s" url)
+      | true -> Result.Ok url
+      | false -> Result.Error(HostReadyRejection.NotLoopback url)
+
+  /// `classifyHostReadyLine` with the reason as text, for callers that only report it.
+  let validateHostReadyLine (prefix: string) (line: string) : Result<string, string> =
+    classifyHostReadyLine prefix line |> Result.mapError describeHostReadyRejection
 
   /// The host exited before printing the ready line. Carries the exit code.
   type HostExitBeforeReady = HostExitBeforeReady of exitCode: int

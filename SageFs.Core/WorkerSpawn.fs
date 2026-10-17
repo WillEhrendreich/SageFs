@@ -103,8 +103,8 @@ module WorkerSpawn =
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
 
-    // The host's stdout carries the WORKER_PORT= ready line (validated by the
-    // supervisor); its stderr carries diagnostics (forwarded to the daemon log).
+    // The host's stdout carries the WORKER_PORT= ready line (checked to be a
+    // loopback URL by WorkerStartup.await); its stderr carries diagnostics (forwarded to the daemon log).
     // No OTel env vars — the host carries no OpenTelemetry (minimal closure).
 
     // Propagate session config as env vars so worker startup stays independent

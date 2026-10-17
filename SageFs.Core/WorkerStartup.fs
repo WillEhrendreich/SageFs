@@ -128,7 +128,14 @@ module WorkerStartup =
             | false ->
               match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
               | true ->
-                found <- Some (line.Substring("WORKER_PORT=".Length))
+                // The worker binds 127.0.0.1, so any other host is not a worker we started. Refused through the same
+                // path as an absolute-deadline stop: the worker is killed and the start fails, never reports ready.
+                let verdict = Supervisor.classifyHostReadyLine Supervisor.hostReadyLine line
+                match verdict with
+                | Result.Ok url -> found <- Some url
+                | Result.Error rejection ->
+                  timeoutReason <- Some (StderrTail.withTail stderrTail (Supervisor.describeHostReadyRejection rejection))
+                  found <- Some ""
               | false -> ()
         match found with
         | Some baseUrl when baseUrl.Length > 0 ->
