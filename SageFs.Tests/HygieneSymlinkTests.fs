@@ -67,6 +67,9 @@ type LinkedSandbox(parent: LinkedParent) =
   member _.RealRoot = realRoot
   /// The directory of a worktree the sandbox made, spelled as the OS would print it.
   member _.RealWorktree(worktree: string) : string = Path.Combine(realRoot, "repo", ".claude", "worktrees", worktree)
+  /// The repository and a worktree of it, spelled through the link, as a session's working directory would be.
+  member _.LinkRepo : string = Path.Combine(linkRoot, "repo")
+  member _.LinkWorktree(worktree: string) : string = Path.Combine(linkRoot, "repo", ".claude", "worktrees", worktree)
   member this.LocationsAsCallerSpelledThem : Locations = respellLocations sb.Root linkRoot sb.Locations
   member this.Scan() : Scan = { sb.Scan() with Loc = this.LocationsAsCallerSpelledThem }
   member this.Roots : Roots = rootsOf this.LocationsAsCallerSpelledThem
@@ -121,6 +124,24 @@ let symlinkTests =
       Directory.Exists(linked.RealWorktree "clean-merged") |> Expect.isFalse "the merged worktree is gone"
       Directory.Exists(linked.RealWorktree "unmerged") |> Expect.isTrue "the unmerged one is still there"
       Directory.Exists(linked.RealWorktree "dirty-real") |> Expect.isTrue "the one with real work is still there"
+    }
+
+    testTask "a scan made with the link's spelling is the one a panel asking from the link's spelling reads back" {
+      skipWhereLinksNeedPrivilege ()
+      use parent = new LinkedParent()
+      use linked = new LinkedSandbox(parent)
+      populate linked.Sandbox |> ignore
+      let! (snapshot: HygieneService.Snapshot) = HygieneService.Cache.refresh linked.LocationsAsCallerSpelledThem (fun () -> LiveFacts.none)
+      let realRepo = Path.Combine(linked.RealRoot, "repo")
+      snapshot.Repo |> Expect.equal "the snapshot names the repository the way the OS prints it" realRepo
+      for asked in [ linked.LinkRepo; linked.LinkWorktree "clean-merged" ] do
+        match HygieneService.viewFor asked with
+        | HygieneService.HygieneView.Scanned((shown: HygieneService.Snapshot), _) -> shown.Repo |> Expect.equal (sprintf "the view from %s is the scan" asked) realRepo
+        | HygieneService.HygieneView.NotScanned repo -> failtestf "from %s: NotScanned %s" asked repo
+        | HygieneService.HygieneView.Scanning repo -> failtestf "from %s: Scanning %s" asked repo
+        | HygieneService.HygieneView.Tidying repo -> failtestf "from %s: Tidying %s" asked repo
+        | HygieneService.HygieneView.ScanFailed(repo, why) -> failtestf "from %s: ScanFailed %s (%s)" asked repo why
+        | HygieneService.HygieneView.NoRepository -> failtestf "from %s: NoRepository" asked
     }
 
     testCase "a lookup that finds nothing names the path it was asked for and the targets it had" <| fun _ ->
