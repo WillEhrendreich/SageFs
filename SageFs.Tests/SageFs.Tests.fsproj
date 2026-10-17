@@ -233,6 +233,7 @@
         <Compile Include="FsiDiscoveryIdentitySimTests.fs" />
         <Compile Include="FsiEmitSimTests.fs" />
         <Compile Include="EntryProbeTests.fs" />
+        <Compile Include="ProbeRegistryCommitTests.fs" />
         <Compile Include="GenericReloadTests.fs" />
         <Compile Include="PatchConfirmationTests.fs" />
         <Compile Include="PatchAnnouncerTests.fs" />
