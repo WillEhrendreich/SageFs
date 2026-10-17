@@ -53,6 +53,23 @@ let tests =
       scanFailureOf sb.Repo |> Expect.stringContains "says the scan did not finish" "did not finish"
     }
 
+    testTask "a caller woken by the end of a scan never reads the panel as still scanning" {
+      // The scan leaves the in-flight table before anyone is told it is over. Told first, a caller that wakes and reads the
+      // panel races the scan's own cleanup and can read "Scanning" for a scan that has ended, and nothing else pushes the
+      // panel again. The failing path is used because it costs nothing, and it is repeated because the race is narrow.
+      use sb = new Sandbox()
+      let loc = HygieneService.locationsFor sb.Repo
+      let failsAtOnce () : Task<LiveFacts> = Task.FromException<LiveFacts>(InvalidOperationException "no live facts")
+      let stillScanning = ResizeArray<int>()
+      for round in 1 .. 400 do
+        let refresh = HygieneService.Cache.refreshAsyncWithin TestTimeouts.stalledWorkBound loc failsAtOnce
+        let! _ = Task.WhenAny(refresh :> Task, Task.Delay TestTimeouts.patience)
+        match HygieneService.viewFor sb.Repo with
+        | HygieneService.HygieneView.Scanning _ -> stillScanning.Add round
+        | _ -> ()
+      stillScanning.Count |> Expect.equal (sprintf "rounds that read Scanning after the scan ended: %A" (List.ofSeq stillScanning)) 0
+    }
+
     testTask "a scan whose live facts block their thread ends as a failed scan too" {
       use sb = new Sandbox()
       let loc = HygieneService.locationsFor sb.Repo

@@ -267,35 +267,41 @@ module Cache =
     | true ->
       Task.Run(fun () ->
         task {
-          try
-            try
-              // The scan runs on a thread of its own, so live facts that block their thread cannot hold this one, and the wait
-              // for it is bounded: a scan that never ends becomes a failed scan the panel can say so about and offer again.
-              let scan =
-                Task.Run<Snapshot>(fun () ->
-                  task {
-                    let! facts = live ()
-                    return! take loc facts
-                  })
-              // An abandoned scan may still fault later; its exception is seen here so it never surfaces as an unobserved one.
-              scan.ContinueWith((fun (t: Task<Snapshot>) -> t.Exception |> ignore), TaskContinuationOptions.OnlyOnFaulted) |> ignore
-              let! snapshot = scan.WaitAsync bound
-              put snapshot
-              failures.TryRemove loc.Repo |> ignore
-              mine.SetResult snapshot
-            with
-            | :? TimeoutException ->
-              let reason =
-                sprintf
-                  "The scan did not finish within %.0f seconds, so it was given up on. Scan again; if it stalls again, a git command or the process table is hanging on this machine."
-                  bound.TotalSeconds
-              failures.[loc.Repo] <- reason
-              mine.SetException(TimeoutException reason)
-            | ex ->
-              failures.[loc.Repo] <- ex.Message
-              mine.SetException ex
-          finally
-            inFlight.TryRemove(System.Collections.Generic.KeyValuePair(loc.Repo, mine.Task)) |> ignore
+          let! outcome =
+            task {
+              try
+                // The scan runs on a thread of its own, so live facts that block their thread cannot hold this one, and the wait
+                // for it is bounded: a scan that never ends becomes a failed scan the panel can say so about and offer again.
+                let scan =
+                  Task.Run<Snapshot>(fun () ->
+                    task {
+                      let! facts = live ()
+                      return! take loc facts
+                    })
+                // An abandoned scan may still fault later; its exception is seen here so it never surfaces as an unobserved one.
+                scan.ContinueWith((fun (t: Task<Snapshot>) -> t.Exception |> ignore), TaskContinuationOptions.OnlyOnFaulted) |> ignore
+                let! snapshot = scan.WaitAsync bound
+                put snapshot
+                failures.TryRemove loc.Repo |> ignore
+                return Result.Ok snapshot
+              with
+              | :? TimeoutException ->
+                let reason =
+                  sprintf
+                    "The scan did not finish within %.0f seconds, so it was given up on. Scan again; if it stalls again, a git command or the process table is hanging on this machine."
+                    bound.TotalSeconds
+                failures.[loc.Repo] <- reason
+                return Result.Error(TimeoutException reason :> exn)
+              | ex ->
+                failures.[loc.Repo] <- ex.Message
+                return Result.Error ex
+            }
+          // The scan leaves the table BEFORE anyone is told it is over. Told first, a caller that wakes on the result and reads the
+          // panel races this cleanup and can read "Scanning" for a scan that has ended, with nothing left to push the panel again.
+          inFlight.TryRemove(System.Collections.Generic.KeyValuePair(loc.Repo, mine.Task)) |> ignore
+          match outcome with
+          | Result.Ok snapshot -> mine.SetResult snapshot
+          | Result.Error ex -> mine.SetException ex
         } :> Task)
       |> ignore
       mine.Task
