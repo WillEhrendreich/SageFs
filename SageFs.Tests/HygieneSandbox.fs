@@ -34,8 +34,11 @@ let write (path: string) (text: string) =
   File.WriteAllText(path, text)
 
 /// A repository on master with a tracked lock file and a worktree area, in a fresh temp dir. Disposing removes it all.
-type Sandbox() =
-  let root = Directory.CreateTempSubdirectory("sagefs-hygiene-test-").FullName
+/// The sandbox lives in a fresh directory under `parent`, spelled exactly as given: a parent that is a symlink keeps
+/// the sandbox's own paths under the link's spelling, which is what a Mac's `/var/folders` (a link to
+/// `/private/var/folders`) does to every temp dir.
+type Sandbox(parent: string) =
+  let root = Directory.CreateDirectory(Path.Combine(parent, "sagefs-hygiene-test-" + Path.GetRandomFileName())).FullName
   let repo = Path.Combine(root, "repo")
   let locations : Locations =
     { Repo = repo
@@ -51,6 +54,9 @@ type Sandbox() =
     write (Path.Combine(repo, "src", "a.fs")) "module A"
     write (Path.Combine(repo, ".gitignore")) "bin/\nobj/\n.claude/\n"
     commitAll repo "init"
+
+  /// In the machine's temp dir, spelled however TMPDIR spells it.
+  new() = new Sandbox(Path.GetTempPath())
 
   member _.Root = root
   member _.Repo = repo
@@ -121,9 +127,11 @@ let populate (sb: Sandbox) : Map<string, string> =
       "unmerged", unmerged; "dirty-generated", generated; "dirty-real", real ]
 
 let standingOfPath (leftovers: Leftover list) (path: string) : Standing =
-  leftovers
-  |> List.find (fun l -> Leftover.target l = Target.Directory path)
-  |> fun l -> (Leftover.entry l).Standing
+  match leftovers |> List.tryFind (fun l -> Leftover.target l = Target.Directory path) with
+  | Some l -> (Leftover.entry l).Standing
+  | None ->
+    let had = leftovers |> List.map (fun l -> "  " + Target.describe (Leftover.target l))
+    failwithf "no leftover targets the directory %s. The scan returned %d target(s):\n%s" path leftovers.Length (String.Join("\n", had))
 
 let branchExists (sb: Sandbox) (name: string) : bool =
   match gitExit sb.Repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + name ] with
