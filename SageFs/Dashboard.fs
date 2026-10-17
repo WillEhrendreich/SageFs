@@ -1182,6 +1182,9 @@ let createStreamHandler
     // cadence, independent of render/state-change traffic — the whole point is
     // that it fires even on a tick the no-change guard suppresses.
     let mutable lastHeartbeatAt = DateTime.MinValue
+    // The telemetry value (MB) this connection last patched, by signal name: a value that has not moved
+    // is not sent again. See `sendTelemetryIfChanged`.
+    let lastTelemetry = Collections.Generic.Dictionary<string, int>()
     // Render-skip guard (roast-6 Finding #10): renderMainContent/renderNode
     // are the expensive part of a tick — a snapshot structurally identical
     // to the one this connection last rendered never reaches them at all.
@@ -1234,6 +1237,23 @@ let createStreamHandler
     /// loop iteration (busy or idle) so the cadence holds regardless of
     /// state-change traffic or the no-change render guard: a tick that
     /// renders nothing still proves the daemon is alive on the wire.
+    /// Patches the telemetry signals (`TelemetrySignals`: the daemon's and each worker's memory) whose value
+    /// moved since this connection last sent them. These numbers change with no change of state, so they
+    /// ride the heartbeat as signal patches instead of going into the HTML, where each one made the whole
+    /// `#main` push. The first call sends every value; a quiet one sends nothing.
+    let sendTelemetryIfChanged () = task {
+      let! sessions = q.GetAllSessions ()
+      let daemonRssBytes =
+        use proc = Diagnostics.Process.GetCurrentProcess()
+        proc.WorkingSet64
+      for sample in telemetryOf daemonRssBytes tryGetWorkerRssBytes sessions do
+        match lastTelemetry.TryGetValue sample.Signal with
+        | true, sent when sent = sample.Megabytes -> ()
+        | _ ->
+          lastTelemetry.[sample.Signal] <- sample.Megabytes
+          do! Response.ssePatchSignal ctx (SignalPath.sp sample.Signal) sample.Megabytes
+    }
+
     let sendHeartbeatIfDue () = task {
       let now = DateTime.UtcNow
       match now - lastHeartbeatAt >= Timeouts.dashboardHeartbeat with
@@ -1242,12 +1262,15 @@ let createStreamHandler
         lastHeartbeatAt <- now
         try
           do! Response.ssePatchSignal ctx (SignalPath.sp DashboardConnection.HeartbeatSignal) (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+          do! sendTelemetryIfChanged ()
         with
         | :? System.IO.IOException -> ()
         | :? ObjectDisposedException -> ()
         | :? OperationCanceledException -> ()
         | :? System.ArgumentOutOfRangeException -> ()
         | :? System.InvalidOperationException -> ()
+        // Telemetry is best-effort: a failed read of the session list must not end the stream's loop.
+        | ex -> Log.debug "[Dashboard SSE] heartbeat telemetry failed: %s" ex.Message
     }
 
     let pushState () = task {

@@ -133,11 +133,12 @@ let renderDaemonHealthTests =
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.stringContains "version in rendered output" "0.6.43"
 
-    testCase "renders memory in output" <| fun () ->
+    testCase "renders a memory slot the browser fills, not the number" <| fun () ->
       let snap = makeHealthSnapshot [] None unremarkableUptime 312
       let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
-      html |> Expect.stringContains "memory MB in rendered output" "312"
+      html |> Expect.stringContains "a Ds.text over the daemon memory signal" (sprintf "$%s" TelemetrySignals.DaemonMemoryMb)
+      html.Contains("312") |> Expect.isFalse "the MB itself is a signal patch, never in the HTML"
 
     testCase "renders uptime in output" <| fun () ->
       let snap = makeHealthSnapshot [] None FixtureDurations.uptimeHoursLabel 128

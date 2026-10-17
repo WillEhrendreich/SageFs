@@ -234,9 +234,12 @@ let private disclosureSummaryStyle =
 /// A `<details>` accordion whose open/closed state lives in a Datastar signal
 /// instead of the DOM `open` attribute.
 ///
-/// The SSE fallback re-renders `#main` on every tick (a ticking label defeats
-/// the no-change dedupe), and a morph replaces the element WITHOUT `open` —
-/// so a raw `<details>` snaps every open accordion shut about once a second.
+/// Any push of `#main` is a morph, and a morph replaces the element WITHOUT
+/// `open` — so a raw `<details>` snaps every open accordion shut whenever
+/// something real changes. (It used to be about once a second: a polling
+/// fallback, plus a ticking server-rendered uptime that defeated the
+/// no-change check. Both are gone — see `ElapsedClock` — but the morphs that
+/// real changes cause remain.)
 /// Signals live in Datastar's client-side store, not the DOM: binding `open`
 /// to `$signalName` means the surviving signal re-supplies `open` after every
 /// morph, and the `toggle` event keeps the signal in sync with what the user
@@ -613,9 +616,12 @@ let renderDaemonHealth (view: DaemonHealthView) =
         ElapsedClock.span (ElapsedClock.uptimeExpr startedAtMs)
         textEnc " · "
       | Since.Unknown -> ()
+      // The number is telemetry: it arrives as a signal patch on the heartbeat (TelemetrySignals), never in
+      // the HTML, so a change of memory alone cannot make the page push.
       Elem.span
-        [ Attr.create "aria-label" "Memory the SageFs daemon process itself is using (refreshes every few seconds)" ]
-        [ textEnc (sprintf "%dMB" view.MemoryMB) ]
+        [ Attr.create "aria-label" "Memory the SageFs daemon process itself is using (refreshes every few seconds)"
+          Ds.text (TelemetrySignals.textExpr TelemetrySignals.DaemonMemoryMb "") ]
+        []
     ]
     match sessionSummaryText view.SessionSummaries with
     | None -> ()
@@ -1802,13 +1808,15 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 // four numbers that decide cohort member count). Live from
                 // the worker's own pid; absent while starting/faulted/stopped
                 // or if the pid has already exited (never a fault).
+                // Whether there is a worker to measure is state (it renders); how many MB it holds is
+                // telemetry (it arrives as a signal patch, TelemetrySignals), so memory alone never pushes.
                 match s.WorkerRssBytes with
-                | Some bytes ->
+                | Some _ ->
                   Elem.span
                     [ Attr.class' "meta"; testid "session-rss"
-                      Attr.create "aria-label" "Memory this session's FSI worker process is using (resident set size)" ] [
-                    textEnc (sprintf "Memory: %dMB" (bytes / 1024L / 1024L))
-                  ]
+                      Attr.create "aria-label" "Memory this session's FSI worker process is using (resident set size)"
+                      Ds.text (TelemetrySignals.textExpr (TelemetrySignals.workerRssMb s.Id) "Memory: ") ]
+                    []
                 | None -> ()
                 match s.TestSummary with
                 | Some ts when ts.Total > 0 ->

@@ -766,6 +766,27 @@ module Since =
 
   let ofOffset (moment: DateTimeOffset) : Since = Since.At (moment.ToUnixTimeMilliseconds())
 
+/// Numbers that move with no change of state, so they never go inside the HTML.
+///
+/// The daemon's resident set moves on nearly every render (measured on an idle daemon: "181MB", "184MB",
+/// "186MB" on consecutive pushes, every one of them a full morph for a number nobody asked to be
+/// interrupted by). The HTML carries an empty element and a `Ds.text` expression over a signal named
+/// here; the server patches the signal on the heartbeat, and only when the value moved.
+module TelemetrySignals =
+  /// The daemon's own resident set, in MB.
+  let DaemonMemoryMb = "daemonMemoryMb"
+
+  /// A session's worker resident set, in MB. A session id is hex, so the name is a valid identifier
+  /// and `$workerRssMb_0a2b3c4d` reads in an expression.
+  let workerRssMb (id: WorkerProtocol.SessionId) : string = "workerRssMb_" + WorkerProtocol.SessionId.value id
+
+  /// "181MB" (with `prefix` before it), or nothing until the first sample has arrived.
+  let textExpr (signal: string) (prefix: string) : string =
+    sprintf "$%s ? '%s' + $%s + 'MB' : ''" signal prefix signal
+
+/// One telemetry value on its way to the browser: the signal to patch and its value in MB.
+type TelemetrySample = { Signal: string; Megabytes: int }
+
 /// Daemon health view model — pre-computed for rendering.
 type DaemonHealthView = {
   Version: string
@@ -1067,7 +1088,8 @@ type ParsedSession = {
   /// live from its pid (vision §3.4 "worker RSS" — the first of the four
   /// numbers that decide cohort member count). None when the session has no
   /// live worker pid (starting, faulted, stopped) or the pid's process has
-  /// already exited.
+  /// already exited. The card renders only WHETHER there is a number; the MB itself reaches the
+  /// browser as a signal patch (`TelemetrySignals`), so it never changes the HTML.
   WorkerRssBytes: int64 option
   /// The self-host staleness affordance line (F5b) for a session that adopted
   /// its own SageFs.Core build, when a newer build has since landed on disk;
@@ -1103,6 +1125,21 @@ let tryGetWorkerRssBytes (pid: int) : int64 option =
   | pid ->
     try Some (Diagnostics.Process.GetProcessById(pid).WorkingSet64)
     with _ -> None
+
+/// The telemetry the dashboard patches into the browser: the daemon's own resident set, and each live
+/// session's worker resident set. `rssOf` reads a pid's resident set (`tryGetWorkerRssBytes` in
+/// production); a session with no worker pid, or whose process is gone, has no sample.
+let telemetryOf
+  (daemonRssBytes: int64)
+  (rssOf: int -> int64 option)
+  (sessions: WorkerProtocol.SessionInfo list)
+  : TelemetrySample list =
+  let megabytes (bytes: int64) = int (bytes / 1024L / 1024L)
+  [ yield { Signal = TelemetrySignals.DaemonMemoryMb; Megabytes = megabytes daemonRssBytes }
+    for s in sessions do
+      match WorkerProtocol.SessionLifecycleStatus.workerPid s.Status |> Option.bind rssOf with
+      | Some bytes -> yield { Signal = TelemetrySignals.workerRssMb s.Id; Megabytes = megabytes bytes }
+      | None -> () ]
 
 /// One session's sidebar card, built from typed state only: the registry's
 /// SessionInfo (status, projects, directory, fault reason, app), the session's

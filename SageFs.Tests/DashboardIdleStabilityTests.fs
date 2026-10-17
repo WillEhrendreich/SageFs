@@ -113,6 +113,27 @@ let tests =
          html |> Expect.stringContains "counts from the last activity" (string lastActive)
        | _ -> failtest "a built card always knows both moments")
 
+    testCase "WHY — the memory the HTML no longer carries still reaches the browser, as one signal sample per live process" <| fun () ->
+      let session = SageFs.Tests.DashboardParsingTests.SidebarCards.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
+      let megabytes (mb: int) = int64 mb * 1024L * 1024L
+      let samples = telemetryOf (megabytes Idle.memoryEarlier) (fun _ -> Some (megabytes Idle.memoryLater)) [ session ]
+      samples
+      |> Expect.equal "the daemon's own, then the worker's, each in whole MB under its own signal"
+           [ { Signal = TelemetrySignals.DaemonMemoryMb; Megabytes = Idle.memoryEarlier }
+             { Signal = TelemetrySignals.workerRssMb session.Id; Megabytes = Idle.memoryLater } ]
+
+    testCase "WHY — a worker whose process is gone has no sample, so the card never shows a number for nothing" <| fun () ->
+      let session = SageFs.Tests.DashboardParsingTests.SidebarCards.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
+      telemetryOf 0L (fun _ -> None) [ session ]
+      |> List.map (fun sample -> sample.Signal)
+      |> Expect.equal "only the daemon's own" [ TelemetrySignals.DaemonMemoryMb ]
+
+    testCase "WHY — the memory slots read the signals the server patches, so the two cannot drift apart" <| fun () ->
+      let info = SageFs.Tests.DashboardParsingTests.SidebarCards.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
+      let card = { sessionCardOf SageFs.Tests.DashboardParsingTests.SidebarCards.now None 0 SessionHealth.Healthy info with WorkerRssBytes = Some 1L }
+      renderSessionsForSession "" [ card ] false |> renderNode
+      |> Expect.stringContains "the card's slot is bound to its session's signal" (sprintf "$%s" (TelemetrySignals.workerRssMb card.Id))
+
     testTask "WHY — the whole no-session shell is byte-identical a clock step later, because the stream sends a morph only when this string changes" {
       let shell sample = task {
         let! snap = buildNoSessionSnapshotWithSessions (Idle.queriesAt sample) (mkInfra ()) []
