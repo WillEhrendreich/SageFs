@@ -35,11 +35,11 @@ let killTree (proc: Process) : unit =
 
 /// The real git: argument list (never a shell string), both streams drained, bounded by `Timeouts.gitQuick`. It
 /// awaits the process and both reads, so the thread that asked is free while git works.
-let runGit : Git =
+let runGitWith (executable: string) (limit: TimeSpan) : Git =
   fun dir args ->
     task {
       try
-        let psi = ProcessStartInfo("git")
+        let psi = ProcessStartInfo(executable)
         psi.WorkingDirectory <- dir
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError <- true
@@ -48,11 +48,14 @@ let runGit : Git =
         use proc = Process.Start psi
         let out = proc.StandardOutput.ReadToEndAsync()
         let err = proc.StandardError.ReadToEndAsync()
-        use bound = new CancellationTokenSource(Timeouts.gitQuick)
+        use bound = new CancellationTokenSource(limit)
+        // The bound covers the process AND its output. A child git started and left running keeps the pipe open after git
+        // itself has exited, and waiting for the end of the output then waits for that child, however long it lives.
         let! exited =
           task {
             try
               do! proc.WaitForExitAsync bound.Token
+              let! _ = Task.WhenAll(out, err).WaitAsync bound.Token
               return true
             with :? OperationCanceledException -> return false
           }
@@ -68,6 +71,9 @@ let runGit : Git =
           | code -> return GitResult.Exit(code, errors.Trim())
       with ex -> return GitResult.Unavailable ex.Message
     }
+
+/// The real git, bounded by `Timeouts.gitQuick`.
+let runGit : Git = runGitWith "git" Timeouts.gitQuick
 
 // ─── Parsing what git prints ───────────────────────────────────────────
 

@@ -58,6 +58,10 @@ module TestTimeouts =
   /// reports it) waits for the event after each attempt before it acts again. Longer than the
   /// watcher's own debounce, so an attempt's event has time to arrive before the next attempt can reset it.
   let repeatActionEvery = secs 2.
+  /// The bound a case puts on a git call or a scan to watch it give up. Long enough that a healthy fake
+  /// finishes first and a slow start does not trip it, short enough that the case does not wait for the very
+  /// thing it proves is cut off. The fake it is paired with outlives it by a few seconds.
+  let stalledWorkBound = secs 2.
 
   // Settles: a short, fixed window where nothing can be awaited.
 

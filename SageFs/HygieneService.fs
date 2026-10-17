@@ -258,7 +258,7 @@ module Cache =
   ///
   /// `live` is awaited, never waited on: a caller whose live facts come from a Task passes it here, and the scan starts
   /// once they arrive.
-  let refreshAsync (loc: Locations) (live: unit -> Task<LiveFacts>) : Task<Snapshot> =
+  let refreshAsyncWithin (bound: TimeSpan) (loc: Locations) (live: unit -> Task<LiveFacts>) : Task<Snapshot> =
     // The entry is in the table before the scan starts, so a scan that finishes at once cannot remove it first.
     let mine = TaskCompletionSource<Snapshot>(TaskCreationOptions.RunContinuationsAsynchronously)
     let current = inFlight.GetOrAdd(loc.Repo, mine.Task)
@@ -269,12 +269,29 @@ module Cache =
         task {
           try
             try
-              let! facts = live ()
-              let! snapshot = take loc facts
+              // The scan runs on a thread of its own, so live facts that block their thread cannot hold this one, and the wait
+              // for it is bounded: a scan that never ends becomes a failed scan the panel can say so about and offer again.
+              let scan =
+                Task.Run<Snapshot>(fun () ->
+                  task {
+                    let! facts = live ()
+                    return! take loc facts
+                  })
+              // An abandoned scan may still fault later; its exception is seen here so it never surfaces as an unobserved one.
+              scan.ContinueWith((fun (t: Task<Snapshot>) -> t.Exception |> ignore), TaskContinuationOptions.OnlyOnFaulted) |> ignore
+              let! snapshot = scan.WaitAsync bound
               put snapshot
               failures.TryRemove loc.Repo |> ignore
               mine.SetResult snapshot
-            with ex ->
+            with
+            | :? TimeoutException ->
+              let reason =
+                sprintf
+                  "The scan did not finish within %.0f seconds, so it was given up on. Scan again; if it stalls again, a git command or the process table is hanging on this machine."
+                  bound.TotalSeconds
+              failures.[loc.Repo] <- reason
+              mine.SetException(TimeoutException reason)
+            | ex ->
               failures.[loc.Repo] <- ex.Message
               mine.SetException ex
           finally
@@ -282,6 +299,9 @@ module Cache =
         } :> Task)
       |> ignore
       mine.Task
+
+  let refreshAsync (loc: Locations) (live: unit -> Task<LiveFacts>) : Task<Snapshot> =
+    refreshAsyncWithin Timeouts.hygieneScan loc live
 
   /// `refreshAsync` for a caller that already has its live facts, or reads them without waiting.
   let refresh (loc: Locations) (live: unit -> LiveFacts) : Task<Snapshot> =

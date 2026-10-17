@@ -331,6 +331,10 @@ module Timeouts =
   // separate from `buildCompletion`: a different operation with a different cost.
   /// Plumbing commands (rev-parse, diff, update-ref, worktree remove).
   let gitQuick = envOrDefaultMachine "SAGEFS_GIT_QUICK_SECONDS" 30.0
+  /// How long a workspace hygiene scan may run before the panel calls it failed and offers "Scan again". A scan asks
+  /// git a few dozen questions, each bounded by `gitQuick`, so a healthy one is seconds; this is for the one that is
+  /// not, so the button never sits on "Scanning..." with nothing able to end it. Scaled for the machine like the waits around it.
+  let hygieneScan = forMachine (TimeSpan.FromMinutes(2.0))
   /// A rebase, which may run hooks and touch many commits.
   let gitRebase = envOrDefaultMachineMinutes "SAGEFS_GIT_REBASE_MINUTES" 5.0
   /// `git worktree add`, which checks out a whole tree.

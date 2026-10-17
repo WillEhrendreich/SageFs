@@ -87,6 +87,7 @@
         <Compile Include="RunnerDirsTests.fs" />
         <Compile Include="FixtureBuildCacheTests.fs" />
         <Compile Include="HygieneSurfaceTests.fs" />
+        <Compile Include="HygieneStallTests.fs" />
         <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
         <Compile Include="NativeAssetsTests.fs" />
