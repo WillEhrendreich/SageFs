@@ -11,7 +11,6 @@ module SageFs.Tests.FsiProtocolThroughputTests
 /// tiers in parallel at a load of 16 to 40) cannot fail it. The floors sit well under what an idle machine reaches
 /// and far over what the per-value reflection reaches.
 
-open System.Diagnostics
 open Expecto
 open Expecto.Flip
 open SageFs.HostAgent
@@ -28,10 +27,7 @@ let private redirectedMethods = 130
 
 let private affectedTests = 50
 
-/// Runs of the codec thrown away before timing, so the plans and the JIT are warm.
-let private warmUpRuns = 2
-
-/// Timed runs; the fastest counts.
+/// Timed runs; the fastest counts (`PerfBudget.minMs` also warms the code up first, so the plans and the JIT are ready).
 let private timedRuns = 7
 
 /// The size of the reply the production samples describe, in bytes: any measured reply must be in this band, so the
@@ -46,6 +42,8 @@ let private decodeFloorMBps = 8.0
 let private encodeFloorMBps = 18.0
 
 let private bytesPerMegabyte = 1048576.0
+
+let private millisecondsPerSecond = 1000.0
 
 let private mkTest (index: int) : TestCase =
   { Id = TestId.TestId(sprintf "%016x" (index * 7919))
@@ -97,21 +95,17 @@ let private lateSessionReply () : Response =
       AssemblyLoadErrors = [ AssemblyLoadError.FileNotFound("/x/y.dll", "missing") ] }
   AgentAfterEvalResult(1L, report)
 
-/// The fastest of `timedRuns` runs of `work`, in seconds, after `warmUpRuns` it does not count.
-let private fastestSeconds (work: unit -> unit) : float =
-  for _ in 1..warmUpRuns do
-    work ()
-  [ for _ in 1..timedRuns ->
-      let clock = Stopwatch.StartNew()
-      work ()
-      clock.Elapsed.TotalSeconds ]
-  |> List.min
+/// The fastest of `timedRuns` runs of `work`, in seconds. A loaded machine only ever adds time to a run, so the fastest
+/// is the closest to what the codec itself costs (see `PerfBudget.minMs`).
+let private fastestSeconds (work: unit -> unit) : float = PerfBudget.minMs timedRuns work / millisecondsPerSecond
 
 let private megabytesPerSecond (bytes: int) (seconds: float) = float bytes / bytesPerMegabyte / seconds
 
 [<Tests>]
 let tests =
-  testList "FsiProtocol throughput" [
+  // `testSequenced`: the cases are measured against a floor, and `PerfBudget.minMs` forces collections, which in the
+  // parallel pool stop every other case; a sequenced case runs after the pool, alone.
+  testSequenced <| testList "FsiProtocol throughput" [
     testCase "the measured reply is the size of a late session's, and reads back as itself" <| fun _ ->
       let reply = lateSessionReply ()
       let wire = encodeResponse reply
