@@ -89,6 +89,7 @@
         <Compile Include="HygieneSurfaceTests.fs" />
         <Compile Include="HygieneStallTests.fs" />
         <Compile Include="HygieneSymlinkTests.fs" />
+        <Compile Include="SessionReaperTests.fs" />
         <Compile Include="WorkerStartupReaderTests.fs" />
         <Compile Include="PluginCheckoutOptionalTests.fs" />
         <Compile Include="HygienePanelTests.fs" />
@@ -238,6 +239,7 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="CallerPendingSimTests.fs" />
+        <Compile Include="SessionReaperSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
         <Compile Include="ReadyWaitSimTests.fs" />
         <Compile Include="SourceStateProbeTests.fs" />

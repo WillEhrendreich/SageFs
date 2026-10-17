@@ -70,7 +70,8 @@ the tool.
   still prints `0 failed` and exits 0; only `ran=` proves coverage.
 - Acquire the matching lease before a build/test/app run you start (leases.md).
 - Clean up: `stop_session` on every session you created; kill only processes
-  you started, by exact PID.
+  you started, by exact PID. The daemon also stops an abandoned agent session
+  (connection gone, idle 12 hours); stop yours yourself.
 
 ## Orchestrator hygiene
 
