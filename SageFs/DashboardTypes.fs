@@ -751,11 +751,28 @@ module EvalStatsView =
       P50Ms = timelineStats.P50Ms
       P95Ms = timelineStats.P95Ms }
 
+/// A moment the page counts from. The server sends WHEN, and the browser works out how long ago, on its own
+/// clock; a server that rendered "5m" would render a different string a minute later for the same state.
+[<RequireQualifiedAccess>]
+type Since =
+  /// There is nothing to count from, so no elapsed time is shown at all.
+  | Unknown
+  /// Milliseconds since the Unix epoch, UTC.
+  | At of epochMs: int64
+
+module Since =
+  let ofUtc (moment: DateTime) : Since =
+    Since.At (DateTimeOffset(DateTime.SpecifyKind(moment, DateTimeKind.Utc)).ToUnixTimeMilliseconds())
+
+  let ofOffset (moment: DateTimeOffset) : Since = Since.At (moment.ToUnixTimeMilliseconds())
+
 /// Daemon health view model — pre-computed for rendering.
 type DaemonHealthView = {
   Version: string
   MemoryMB: int
-  UptimeLabel: string
+  /// When the daemon started: a constant for the life of the process, so the bar renders the same bytes
+  /// however long it has been up. The ticking "up 5m" is worked out in the browser.
+  StartedAt: Since
   OverallHealth: Features.OverallHealth
   SessionCount: int
   /// Per-session summaries for the health panel rows.
@@ -776,17 +793,18 @@ type DaemonHealthView = {
 }
 
 module DaemonHealthView =
-  /// Build a DaemonHealthView from a raw HealthSnapshot.
-  let fromSnapshot (snap: Features.HealthSnapshot) : DaemonHealthView =
+  /// Build a DaemonHealthView from a raw HealthSnapshot and the moment the daemon started. The start
+  /// comes from the caller, not from `snap.Uptime`: an uptime sampled now and subtracted from a clock
+  /// read a moment later gives a start that differs by a few milliseconds on every call.
+  let fromSnapshot (startedAt: DateTimeOffset) (snap: Features.HealthSnapshot) : DaemonHealthView =
     let overallHealth = Features.DaemonHealth.overallStatus snap
-    let uptimeLabel = Features.DaemonHealth.formatUptime snap.Uptime
     let (testsPassed, testsFailed) =
       match snap.LiveTestingSummary with
       | Some lt -> (Some lt.Passed, Some lt.Failed)
       | None -> (None, None)
     { Version = snap.Version
       MemoryMB = snap.MemoryMB
-      UptimeLabel = uptimeLabel
+      StartedAt = Since.ofOffset startedAt
       OverallHealth = overallHealth
       SessionCount = snap.SessionSummaries.Length
       SessionSummaries = snap.SessionSummaries
@@ -1027,9 +1045,12 @@ type ParsedSession = {
   StatusMessage: string option
   ProjectsText: string
   EvalCount: int
-  Uptime: string
+  /// When the session was created. A moment, never a "5m" label: the label is the browser's to
+  /// work out (`ElapsedClock`), so the card renders the same bytes however long it has been idle.
+  Uptime: Since
   WorkingDir: string
-  LastActivity: string
+  /// When the session last did anything. A real change of this value is a real change worth a push.
+  LastActivity: Since
   TestSummary: Features.LiveTesting.TestSummary option
   CoverageSummary: Features.LiveTesting.CoverageSummary option
   TestTreemapEntries: Features.LiveTesting.TestTreemapEntry array
@@ -1083,14 +1104,6 @@ let tryGetWorkerRssBytes (pid: int) : int64 option =
     try Some (Diagnostics.Process.GetProcessById(pid).WorkingSet64)
     with _ -> None
 
-/// A span of time in the sidebar's words: "just now", "5m", "2h", "3d".
-let spanLabel (span: TimeSpan) =
-  match span with
-  | s when s.TotalMinutes < 1.0 -> "just now"
-  | s when s.TotalHours < 1.0 -> sprintf "%dm" (int s.TotalMinutes)
-  | s when s.TotalDays < 1.0 -> sprintf "%dh" (int s.TotalHours)
-  | s -> sprintf "%dd" (int s.TotalDays)
-
 /// One session's sidebar card, built from typed state only: the registry's
 /// SessionInfo (status, projects, directory, fault reason, app), the session's
 /// warmup progress, and its eval count. The sidebar used to regex-parse these
@@ -1129,12 +1142,9 @@ let sessionCardOf
       | projects ->
         sprintf "(%s)" (projects |> List.map System.IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
     EvalCount = evalCount
-    Uptime = spanLabel (now - info.CreatedAt)
+    Uptime = Since.ofUtc info.CreatedAt
     WorkingDir = info.WorkingDirectory
-    LastActivity =
-      match spanLabel (now - info.LastActivity) with
-      | "just now" -> "just now"
-      | label -> label + " ago"
+    LastActivity = Since.ofUtc info.LastActivity
     TestSummary = None
     CoverageSummary = None
     TestTreemapEntries = [||]
@@ -1418,6 +1428,9 @@ type DashboardStreamCommand =
 type DashboardInfra = {
   Version: string
   McpPort: int
+  /// When this daemon process started. Fixed for the life of the process, so the page can count
+  /// "up 5m" in the browser from a value that never changes between two renders.
+  DaemonStartedAt: DateTimeOffset
   /// The daemon's single push-notification source. Non-optional: roast-6
   /// Phase 0 item 1 deletes the dashboard's 1s polling fallback (there was
   /// no scenario where a live daemon lacked this event; only a `None` value

@@ -162,10 +162,10 @@ let sidebarCardTests =
       c.Status |> Expect.equal "Starting = starting" SessionDisplayStatus.Starting
       c.StatusMessage |> Expect.equal "warmup progress is the message" (Some "[3/10] open System"))
 
-    testCase "uptime and last activity use the sidebar's words" (fun () ->
+    testCase "uptime and last activity are the moments, because the browser works out the words against its own clock" (fun () ->
       let c = SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
-      c.Uptime |> Expect.equal "up five minutes" "5m"
-      c.LastActivity |> Expect.equal "last active three minutes ago" "3m ago")
+      c.Uptime |> Expect.equal "created five minutes before the card was built" (Since.ofUtc (SidebarCards.now.AddMinutes -5.0))
+      c.LastActivity |> Expect.equal "last active three minutes before the card was built" (Since.ofUtc (SidebarCards.now.AddMinutes -3.0)))
   ]
 
 /// Tests for error formatting in eval handler (Bug #6)
@@ -351,9 +351,9 @@ let perSessionTestSummaryTests =
           StatusMessage = None
           ProjectsText = "(MyProj)"
           EvalCount = 5
-          Uptime = "2m"
+          Uptime = Since.At 0L
           WorkingDir = "/tmp"
-          LastActivity = "just now"
+          LastActivity = Since.At 0L
           TestSummary = Some summary
           CoverageSummary = None
           TestTreemapEntries = [||]; CoverageTreemap = None
@@ -377,9 +377,9 @@ let perSessionTestSummaryTests =
           StatusMessage = None
           ProjectsText = "(MyProj)"
           EvalCount = 5
-          Uptime = "2m"
+          Uptime = Since.At 0L
           WorkingDir = "/tmp"
-          LastActivity = "just now"
+          LastActivity = Since.At 0L
           TestSummary = None
           CoverageSummary = None
           TestTreemapEntries = [||]; CoverageTreemap = None
@@ -411,9 +411,9 @@ let perSessionCoverageTests =
           StatusMessage = None
           ProjectsText = "(MyProj)"
           EvalCount = 5
-          Uptime = "2m"
+          Uptime = Since.At 0L
           WorkingDir = "/tmp"
-          LastActivity = "just now"
+          LastActivity = Since.At 0L
           TestSummary = None
           CoverageSummary = Some summary
           TestTreemapEntries = [||]; CoverageTreemap = None
@@ -437,9 +437,9 @@ let perSessionCoverageTests =
           StatusMessage = None
           ProjectsText = "(MyProj)"
           EvalCount = 5
-          Uptime = "2m"
+          Uptime = Since.At 0L
           WorkingDir = "/tmp"
-          LastActivity = "just now"
+          LastActivity = Since.At 0L
           TestSummary = None
           CoverageSummary = None
           TestTreemapEntries = [||]; CoverageTreemap = None

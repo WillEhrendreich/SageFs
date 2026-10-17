@@ -11,7 +11,7 @@ let private mkCardSession (id: string) (projects: (string * ProjectLoading.Proje
   let sid = WorkerProtocol.SessionId.validate id |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
   { Id = sid; Status = SessionDisplayStatus.Running; StatusMessage = None
     ProjectsText = "(A.fsproj)"; EvalCount = 1
-    Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
+    Uptime = Since.At 0L; WorkingDir = "/a"; LastActivity = Since.At 0L
     TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
     BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
     ActiveProject = None

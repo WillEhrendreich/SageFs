@@ -98,9 +98,9 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         StatusMessage = None
         ProjectsText = "(MyProj.fsproj, Tests.fsproj)"
         EvalCount = 15
-        Uptime = "3m"
+        Uptime = Since.At 0L
         WorkingDir = @"C:\Code\MyProj"
-        LastActivity = "eval"
+        LastActivity = Since.At 0L
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
@@ -110,9 +110,9 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         StatusMessage = None
         ProjectsText = ""
         EvalCount = 0
-        Uptime = ""
+        Uptime = Since.Unknown
         WorkingDir = ""
-        LastActivity = ""
+        LastActivity = Since.Unknown
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
@@ -224,6 +224,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     {
       Version = "0.0.0"
       McpPort = 37749
+      DaemonStartedAt = DateTimeOffset.UnixEpoch
       // Non-optional (roast-6 Phase 0 item 1): these tests never exercise the
       // SSE stream, so a never-firing event is a faithful "no push happens" stand-in.
       StateChanged = (Event<SseEvent>()).Publish
@@ -424,9 +425,9 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         StatusMessage = None
         ProjectsText = "(MyProj.fsproj)"
         EvalCount = 42
-        Uptime = "15m"
+        Uptime = Since.At 0L
         WorkingDir = @"C:\Code\MyProj"
-        LastActivity = "eval"
+        LastActivity = Since.At 0L
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
@@ -598,7 +599,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     // carries a health node, so mkSnap's empty stub is replaced here.
     let health =
       renderDaemonHealth
-        { Version = "1.2.3"; MemoryMB = 0; UptimeLabel = "0s"
+        { Version = "1.2.3"; MemoryMB = 0; StartedAt = Since.Unknown
           OverallHealth = Features.OverallHealth.Healthy
           SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None; Anomalies = []; GcDumpNote = None }
     let html = renderMainContent { mkSnap "1.2.3" with DaemonHealth = health } |> renderNode
@@ -639,13 +640,13 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     let sessions = [
       { Id = sessionA; Status = SessionDisplayStatus.Running; StatusMessage = None
         ProjectsText = "(A.fsproj)"; EvalCount = 1
-        Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
+        Uptime = Since.At 0L; WorkingDir = "/a"; LastActivity = Since.At 0L
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
         ProjectsText = "(B.fsproj)"; EvalCount = 1
-        Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"
+        Uptime = Since.At 0L; WorkingDir = "/b"; LastActivity = Since.At 0L
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
@@ -1243,7 +1244,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
     // Version lives in the daemon health bar; a realistic snapshot carries one.
     let health =
       renderDaemonHealth
-        { Version = "1.2.3"; MemoryMB = 0; UptimeLabel = "0s"
+        { Version = "1.2.3"; MemoryMB = 0; StartedAt = Since.Unknown
           OverallHealth = Features.OverallHealth.Healthy
           SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None; Anomalies = []; GcDumpNote = None }
     let snap = { (mkSnap "1.2.3" "s1" "C:\\" "ready") with DaemonHealth = health }
@@ -1264,7 +1265,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
     let s : ParsedSession =
       { Id = sid; Status = SessionDisplayStatus.Running; StatusMessage = None
         ProjectsText = "(A.fsproj)"; EvalCount = 1
-        Uptime = "1m"; WorkingDir = @"C:\MyProject\Src"; LastActivity = "A"
+        Uptime = Since.At 0L; WorkingDir = @"C:\MyProject\Src"; LastActivity = Since.At 0L
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []

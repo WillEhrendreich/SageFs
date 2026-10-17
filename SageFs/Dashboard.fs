@@ -271,6 +271,9 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
                 Ds.signal (Signals.OutputFeedSession, ""); Ds.signal (Signals.OutputFeedEvals, 0); Ds.signal (Signals.OutputFeedRev, 0) ] []
       // What the page believes about the daemon, and the two banners that say it. See `DashboardConnection`.
       Elem.div (DashboardConnection.monitorAttributes ()) []
+      // The browser's own clock, which every "up 5m" / "last: 3m ago" label counts against. Out here
+      // so no morph of #main can reset it; the server renders only the moments (see `ElapsedClock`).
+      Elem.div ElapsedClock.attributes []
       DashboardConnection.hardBanner ()
       DashboardConnection.softBanner ()
       // The dock's own signals (filter, pins, the pane pin), declared once out here so no morph can reset them.
@@ -795,7 +798,7 @@ let buildDashboardSnapshotWithSessions
     let daemonHealthPanel =
       let processLivenessPanel =
         match daemonHealth with
-        | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
+        | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot infra.DaemonStartedAt snap)
         | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
       Elem.div [] [ processLivenessPanel; renderSessionHealthLine viewedHealth ]
     let failureNarrativesPanel =
@@ -1029,7 +1032,7 @@ let buildNoSessionSnapshotWithSessionsSorted
     let daemonHealth = q.GetDaemonHealth()
     let daemonHealthPanel =
       match daemonHealth with
-      | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
+      | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot infra.DaemonStartedAt snap)
       | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
     let failureNarrativesPanel =
       let pairs = q.GetFailureNarratives()

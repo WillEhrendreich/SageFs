@@ -4458,6 +4458,7 @@ let run
   let dashboardInfra : DashboardInfra = {
     Version = version
     McpPort = mcpPort
+    DaemonStartedAt = daemonStartTime
     StateChanged = stateChangedEvent.Publish
     ConnectionTracker = Some connectionTracker
     SessionThemes = sessionThemes

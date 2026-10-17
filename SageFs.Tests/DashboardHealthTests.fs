@@ -30,6 +30,11 @@ let private makeHealthSnapshot
     MemoryPressure = SageFs.MemoryPressure.Normal
     SupervisorHealth = SageFs.SupervisorHealth.Healthy }
 
+/// The moment every case's daemon started. Fixed, because the bar renders it and never the elapsed time.
+let private startedAt = DateTimeOffset.UnixEpoch
+
+let private viewOf (snap: HealthSnapshot) = DashboardTypes.DaemonHealthView.fromSnapshot startedAt snap
+
 let private defaultSnap () =
   makeHealthSnapshot [] None unremarkableUptime 128
 
@@ -46,34 +51,34 @@ let daemonHealthViewTests =
 
     testCase "fromSnapshot populates Version" <| fun () ->
       let snap = defaultSnap ()
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       view.Version |> Expect.equal "version round-trips" "0.6.43"
 
     testCase "fromSnapshot populates MemoryMB" <| fun () ->
       let snap = makeHealthSnapshot [] None unremarkableUptime 256
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       view.MemoryMB |> Expect.equal "memory MB round-trips" 256
 
-    testCase "fromSnapshot populates UptimeLabel" <| fun () ->
+    testCase "fromSnapshot carries the moment the daemon started, not an uptime label" <| fun () ->
       let snap = makeHealthSnapshot [] None FixtureDurations.uptimeHoursLabel 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
-      view.UptimeLabel |> Expect.isNotEmpty "uptime label is non-empty"
+      let view = viewOf snap
+      view.StartedAt |> Expect.equal "the start the caller gave, whatever the sampled uptime" (Since.ofOffset startedAt)
 
     testCase "fromSnapshot returns Healthy when sessions are ready" <| fun () ->
       let s = makeSession "abc" "MyProject.fsproj" SessionHealthStatus.Ready 10
       let snap = makeHealthSnapshot [s] None unremarkableUptime 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       view.OverallHealth |> Expect.equal "healthy with ready session" OverallHealth.Healthy
 
     testCase "fromSnapshot returns Degraded when session is faulted" <| fun () ->
       let s = makeSession "abc" "MyProject.fsproj" SessionHealthStatus.Faulted 0
       let snap = makeHealthSnapshot [s] None unremarkableUptime 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       view.OverallHealth |> Expect.equal "degraded with faulted session" OverallHealth.Degraded
 
     testCase "fromSnapshot returns Healthy when no sessions (idle)" <| fun () ->
       let snap = defaultSnap ()
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       view.OverallHealth |> Expect.equal "healthy when idle (no sessions)" OverallHealth.Healthy
 
     testCase "fromSnapshot populates SessionCount" <| fun () ->
@@ -81,36 +86,27 @@ let daemonHealthViewTests =
         [ makeSession "s1" "Proj1" SessionHealthStatus.Ready 5
           makeSession "s2" "Proj2" SessionHealthStatus.WarmingUp 0 ]
       let snap = makeHealthSnapshot sessions None unremarkableUptime 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       view.SessionCount |> Expect.equal "session count matches" 2
 
     testCase "fromSnapshot populates SessionSummaries" <| fun () ->
       let sessions = [ makeSession "s1" "Alpha.fsproj" SessionHealthStatus.Ready 3 ]
       let snap = makeHealthSnapshot sessions None unremarkableUptime 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       view.SessionSummaries |> Expect.hasCountOf "one summary" (fun _ -> true) 1u
 
     testCase "fromSnapshot populates TotalTestsPassed from live tests" <| fun () ->
       let lt : LiveTestHealthSummary =
         { TotalTests = 100; Passed = 95; Failed = 5; Running = 0 }
       let snap = makeHealthSnapshot [] (Some lt) unremarkableUptime 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       view.TestsPassed |> Expect.equal "tests passed from live test summary" (Some 95)
 
     testCase "fromSnapshot returns None for TestsPassed when no live test summary" <| fun () ->
       let snap = defaultSnap ()
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       view.TestsPassed |> Expect.equal "no tests when no summary" None
 
-    testCase "UptimeLabel is human-readable for minutes" <| fun () ->
-      let snap = makeHealthSnapshot [] None FixtureDurations.uptimeMinutesLabel 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
-      view.UptimeLabel |> Expect.stringContains "minutes label contains m" "m"
-
-    testCase "UptimeLabel is human-readable for hours" <| fun () ->
-      let snap = makeHealthSnapshot [] None FixtureDurations.uptimeHoursLabel 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
-      view.UptimeLabel |> Expect.stringContains "hours label contains h" "h"
   ]
 
 [<Tests>]
@@ -120,39 +116,39 @@ let renderDaemonHealthTests =
     testCase "renders healthy emoji for Healthy" <| fun () ->
       let s = makeSession "s1" "Proj.fsproj" SessionHealthStatus.Ready 10
       let snap = makeHealthSnapshot [s] None unremarkableUptime 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.stringContains "green circle for healthy" "🟢"
 
     testCase "renders degraded emoji for Degraded" <| fun () ->
       let s = makeSession "s1" "Proj.fsproj" SessionHealthStatus.Faulted 0
       let snap = makeHealthSnapshot [s] None unremarkableUptime 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.stringContains "yellow circle for degraded" "🟡"
 
     testCase "renders version in output" <| fun () ->
       let snap = defaultSnap ()
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.stringContains "version in rendered output" "0.6.43"
 
     testCase "renders memory in output" <| fun () ->
       let snap = makeHealthSnapshot [] None unremarkableUptime 312
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.stringContains "memory MB in rendered output" "312"
 
     testCase "renders uptime in output" <| fun () ->
       let snap = makeHealthSnapshot [] None FixtureDurations.uptimeHoursLabel 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.isNotEmpty "renders uptime info"
 
     testCase "renders session project name" <| fun () ->
       let s = makeSession "s1" "MyAwesomeProject" SessionHealthStatus.Ready 7
       let snap = makeHealthSnapshot [s] None unremarkableUptime 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.stringContains "project name in output" "MyAwesomeProject"
 
@@ -160,20 +156,20 @@ let renderDaemonHealthTests =
       let lt : LiveTestHealthSummary =
         { TotalTests = 50; Passed = 48; Failed = 2; Running = 0 }
       let snap = makeHealthSnapshot [] (Some lt) unremarkableUptime 128
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       let containsTestCount = html.Contains("48")
       containsTestCount |> Expect.isFalse "health row should not contain test counts"
 
     testCase "renders daemon-health element id" <| fun () ->
       let snap = defaultSnap ()
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.stringContains "has daemon-health id" DomIds.DaemonHealth
 
     testCase "renders gracefully with zero sessions" <| fun () ->
       let snap = defaultSnap ()
-      let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
+      let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.isNotEmpty "renders without crashing when no sessions"
   ]

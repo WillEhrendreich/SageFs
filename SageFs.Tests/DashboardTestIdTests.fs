@@ -24,9 +24,9 @@ let private mkSession (id: string) (app: SageFs.AppRun.AppRunState) (projectRole
     StatusMessage = None
     ProjectsText = "(MyApp.fsproj)"
     EvalCount = 1
-    Uptime = "1m"
+    Uptime = Since.At 0L
     WorkingDir = "/work"
-    LastActivity = "eval"
+    LastActivity = Since.At 0L
     TestSummary = None
     CoverageSummary = None
     TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
