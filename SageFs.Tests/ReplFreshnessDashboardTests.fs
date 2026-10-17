@@ -26,9 +26,9 @@ let private cardWith (id: string) (freshness: ReplFreshness) (source: CardSource
     StatusMessage = None
     ProjectsText = "(RunAppDeltaFixture.fsproj)"
     EvalCount = 3
-    Uptime = "4m"
+    Uptime = Since.At 0L
     WorkingDir = "/home/will/Work/SageFs/SageFs.Tests/fixtures/RunAppDeltaFixture/.runs/net10.0-6b66e55132574d57ac62"
-    LastActivity = "just now"
+    LastActivity = Since.At 0L
     TestSummary = None
     CoverageSummary = None
     TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""

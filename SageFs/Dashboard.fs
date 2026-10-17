@@ -271,6 +271,9 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
                 Ds.signal (Signals.OutputFeedSession, ""); Ds.signal (Signals.OutputFeedEvals, 0); Ds.signal (Signals.OutputFeedRev, 0) ] []
       // What the page believes about the daemon, and the two banners that say it. See `DashboardConnection`.
       Elem.div (DashboardConnection.monitorAttributes ()) []
+      // The browser's own clock, which every "up 5m" / "last: 3m ago" label counts against. Out here
+      // so no morph of #main can reset it; the server renders only the moments (see `ElapsedClock`).
+      Elem.div ElapsedClock.attributes []
       DashboardConnection.hardBanner ()
       DashboardConnection.softBanner ()
       // The dock's own signals (filter, pins, the pane pin), declared once out here so no morph can reset them.
@@ -795,7 +798,7 @@ let buildDashboardSnapshotWithSessions
     let daemonHealthPanel =
       let processLivenessPanel =
         match daemonHealth with
-        | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
+        | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot infra.DaemonStartedAt snap)
         | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
       Elem.div [] [ processLivenessPanel; renderSessionHealthLine viewedHealth ]
     let failureNarrativesPanel =
@@ -1029,7 +1032,7 @@ let buildNoSessionSnapshotWithSessionsSorted
     let daemonHealth = q.GetDaemonHealth()
     let daemonHealthPanel =
       match daemonHealth with
-      | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
+      | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot infra.DaemonStartedAt snap)
       | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
     let failureNarrativesPanel =
       let pairs = q.GetFailureNarratives()
@@ -1179,6 +1182,9 @@ let createStreamHandler
     // cadence, independent of render/state-change traffic — the whole point is
     // that it fires even on a tick the no-change guard suppresses.
     let mutable lastHeartbeatAt = DateTime.MinValue
+    // The telemetry value (MB) this connection last patched, by signal name: a value that has not moved
+    // is not sent again. See `sendTelemetryIfChanged`.
+    let lastTelemetry = Collections.Generic.Dictionary<string, int>()
     // Render-skip guard (roast-6 Finding #10): renderMainContent/renderNode
     // are the expensive part of a tick — a snapshot structurally identical
     // to the one this connection last rendered never reaches them at all.
@@ -1231,6 +1237,23 @@ let createStreamHandler
     /// loop iteration (busy or idle) so the cadence holds regardless of
     /// state-change traffic or the no-change render guard: a tick that
     /// renders nothing still proves the daemon is alive on the wire.
+    /// Patches the telemetry signals (`TelemetrySignals`: the daemon's and each worker's memory) whose value
+    /// moved since this connection last sent them. These numbers change with no change of state, so they
+    /// ride the heartbeat as signal patches instead of going into the HTML, where each one made the whole
+    /// `#main` push. The first call sends every value; a quiet one sends nothing.
+    let sendTelemetryIfChanged () = task {
+      let! sessions = q.GetAllSessions ()
+      let daemonRssBytes =
+        use proc = Diagnostics.Process.GetCurrentProcess()
+        proc.WorkingSet64
+      for sample in telemetryOf daemonRssBytes tryGetWorkerRssBytes sessions do
+        match lastTelemetry.TryGetValue sample.Signal with
+        | true, sent when sent = sample.Megabytes -> ()
+        | _ ->
+          lastTelemetry.[sample.Signal] <- sample.Megabytes
+          do! Response.ssePatchSignal ctx (SignalPath.sp sample.Signal) sample.Megabytes
+    }
+
     let sendHeartbeatIfDue () = task {
       let now = DateTime.UtcNow
       match now - lastHeartbeatAt >= Timeouts.dashboardHeartbeat with
@@ -1239,12 +1262,15 @@ let createStreamHandler
         lastHeartbeatAt <- now
         try
           do! Response.ssePatchSignal ctx (SignalPath.sp DashboardConnection.HeartbeatSignal) (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+          do! sendTelemetryIfChanged ()
         with
         | :? System.IO.IOException -> ()
         | :? ObjectDisposedException -> ()
         | :? OperationCanceledException -> ()
         | :? System.ArgumentOutOfRangeException -> ()
         | :? System.InvalidOperationException -> ()
+        // Telemetry is best-effort: a failed read of the session list must not end the stream's loop.
+        | ex -> Log.debug "[Dashboard SSE] heartbeat telemetry failed: %s" ex.Message
     }
 
     let pushState () = task {

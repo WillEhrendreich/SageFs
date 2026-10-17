@@ -751,11 +751,49 @@ module EvalStatsView =
       P50Ms = timelineStats.P50Ms
       P95Ms = timelineStats.P95Ms }
 
+/// A moment the page counts from. The server sends WHEN, and the browser works out how long ago, on its own
+/// clock; a server that rendered "5m" would render a different string a minute later for the same state.
+[<RequireQualifiedAccess>]
+type Since =
+  /// There is nothing to count from, so no elapsed time is shown at all.
+  | Unknown
+  /// Milliseconds since the Unix epoch, UTC.
+  | At of epochMs: int64
+
+module Since =
+  let ofUtc (moment: DateTime) : Since =
+    Since.At (DateTimeOffset(DateTime.SpecifyKind(moment, DateTimeKind.Utc)).ToUnixTimeMilliseconds())
+
+  let ofOffset (moment: DateTimeOffset) : Since = Since.At (moment.ToUnixTimeMilliseconds())
+
+/// Numbers that move with no change of state, so they never go inside the HTML.
+///
+/// The daemon's resident set moves on nearly every render (measured on an idle daemon: "181MB", "184MB",
+/// "186MB" on consecutive pushes, every one of them a full morph for a number nobody asked to be
+/// interrupted by). The HTML carries an empty element and a `Ds.text` expression over a signal named
+/// here; the server patches the signal on the heartbeat, and only when the value moved.
+module TelemetrySignals =
+  /// The daemon's own resident set, in MB.
+  let DaemonMemoryMb = "daemonMemoryMb"
+
+  /// A session's worker resident set, in MB. A session id is hex, so the name is a valid identifier
+  /// and `$workerRssMb_0a2b3c4d` reads in an expression.
+  let workerRssMb (id: WorkerProtocol.SessionId) : string = "workerRssMb_" + WorkerProtocol.SessionId.value id
+
+  /// "181MB" (with `prefix` before it), or nothing until the first sample has arrived.
+  let textExpr (signal: string) (prefix: string) : string =
+    sprintf "$%s ? '%s' + $%s + 'MB' : ''" signal prefix signal
+
+/// One telemetry value on its way to the browser: the signal to patch and its value in MB.
+type TelemetrySample = { Signal: string; Megabytes: int }
+
 /// Daemon health view model — pre-computed for rendering.
 type DaemonHealthView = {
   Version: string
   MemoryMB: int
-  UptimeLabel: string
+  /// When the daemon started: a constant for the life of the process, so the bar renders the same bytes
+  /// however long it has been up. The ticking "up 5m" is worked out in the browser.
+  StartedAt: Since
   OverallHealth: Features.OverallHealth
   SessionCount: int
   /// Per-session summaries for the health panel rows.
@@ -776,17 +814,18 @@ type DaemonHealthView = {
 }
 
 module DaemonHealthView =
-  /// Build a DaemonHealthView from a raw HealthSnapshot.
-  let fromSnapshot (snap: Features.HealthSnapshot) : DaemonHealthView =
+  /// Build a DaemonHealthView from a raw HealthSnapshot and the moment the daemon started. The start
+  /// comes from the caller, not from `snap.Uptime`: an uptime sampled now and subtracted from a clock
+  /// read a moment later gives a start that differs by a few milliseconds on every call.
+  let fromSnapshot (startedAt: DateTimeOffset) (snap: Features.HealthSnapshot) : DaemonHealthView =
     let overallHealth = Features.DaemonHealth.overallStatus snap
-    let uptimeLabel = Features.DaemonHealth.formatUptime snap.Uptime
     let (testsPassed, testsFailed) =
       match snap.LiveTestingSummary with
       | Some lt -> (Some lt.Passed, Some lt.Failed)
       | None -> (None, None)
     { Version = snap.Version
       MemoryMB = snap.MemoryMB
-      UptimeLabel = uptimeLabel
+      StartedAt = Since.ofOffset startedAt
       OverallHealth = overallHealth
       SessionCount = snap.SessionSummaries.Length
       SessionSummaries = snap.SessionSummaries
@@ -1027,9 +1066,12 @@ type ParsedSession = {
   StatusMessage: string option
   ProjectsText: string
   EvalCount: int
-  Uptime: string
+  /// When the session was created. A moment, never a "5m" label: the label is the browser's to
+  /// work out (`ElapsedClock`), so the card renders the same bytes however long it has been idle.
+  Uptime: Since
   WorkingDir: string
-  LastActivity: string
+  /// When the session last did anything. A real change of this value is a real change worth a push.
+  LastActivity: Since
   TestSummary: Features.LiveTesting.TestSummary option
   CoverageSummary: Features.LiveTesting.CoverageSummary option
   TestTreemapEntries: Features.LiveTesting.TestTreemapEntry array
@@ -1046,7 +1088,8 @@ type ParsedSession = {
   /// live from its pid (vision §3.4 "worker RSS" — the first of the four
   /// numbers that decide cohort member count). None when the session has no
   /// live worker pid (starting, faulted, stopped) or the pid's process has
-  /// already exited.
+  /// already exited. The card renders only WHETHER there is a number; the MB itself reaches the
+  /// browser as a signal patch (`TelemetrySignals`), so it never changes the HTML.
   WorkerRssBytes: int64 option
   /// The self-host staleness affordance line (F5b) for a session that adopted
   /// its own SageFs.Core build, when a newer build has since landed on disk;
@@ -1083,13 +1126,20 @@ let tryGetWorkerRssBytes (pid: int) : int64 option =
     try Some (Diagnostics.Process.GetProcessById(pid).WorkingSet64)
     with _ -> None
 
-/// A span of time in the sidebar's words: "just now", "5m", "2h", "3d".
-let spanLabel (span: TimeSpan) =
-  match span with
-  | s when s.TotalMinutes < 1.0 -> "just now"
-  | s when s.TotalHours < 1.0 -> sprintf "%dm" (int s.TotalMinutes)
-  | s when s.TotalDays < 1.0 -> sprintf "%dh" (int s.TotalHours)
-  | s -> sprintf "%dd" (int s.TotalDays)
+/// The telemetry the dashboard patches into the browser: the daemon's own resident set, and each live
+/// session's worker resident set. `rssOf` reads a pid's resident set (`tryGetWorkerRssBytes` in
+/// production); a session with no worker pid, or whose process is gone, has no sample.
+let telemetryOf
+  (daemonRssBytes: int64)
+  (rssOf: int -> int64 option)
+  (sessions: WorkerProtocol.SessionInfo list)
+  : TelemetrySample list =
+  let megabytes (bytes: int64) = int (bytes / 1024L / 1024L)
+  [ yield { Signal = TelemetrySignals.DaemonMemoryMb; Megabytes = megabytes daemonRssBytes }
+    for s in sessions do
+      match WorkerProtocol.SessionLifecycleStatus.workerPid s.Status |> Option.bind rssOf with
+      | Some bytes -> yield { Signal = TelemetrySignals.workerRssMb s.Id; Megabytes = megabytes bytes }
+      | None -> () ]
 
 /// One session's sidebar card, built from typed state only: the registry's
 /// SessionInfo (status, projects, directory, fault reason, app), the session's
@@ -1129,12 +1179,9 @@ let sessionCardOf
       | projects ->
         sprintf "(%s)" (projects |> List.map System.IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
     EvalCount = evalCount
-    Uptime = spanLabel (now - info.CreatedAt)
+    Uptime = Since.ofUtc info.CreatedAt
     WorkingDir = info.WorkingDirectory
-    LastActivity =
-      match spanLabel (now - info.LastActivity) with
-      | "just now" -> "just now"
-      | label -> label + " ago"
+    LastActivity = Since.ofUtc info.LastActivity
     TestSummary = None
     CoverageSummary = None
     TestTreemapEntries = [||]
@@ -1418,6 +1465,9 @@ type DashboardStreamCommand =
 type DashboardInfra = {
   Version: string
   McpPort: int
+  /// When this daemon process started. Fixed for the life of the process, so the page can count
+  /// "up 5m" in the browser from a value that never changes between two renders.
+  DaemonStartedAt: DateTimeOffset
   /// The daemon's single push-notification source. Non-optional: roast-6
   /// Phase 0 item 1 deletes the dashboard's 1s polling fallback (there was
   /// no scenario where a live daemon lacked this event; only a `None` value

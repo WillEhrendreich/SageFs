@@ -234,9 +234,12 @@ let private disclosureSummaryStyle =
 /// A `<details>` accordion whose open/closed state lives in a Datastar signal
 /// instead of the DOM `open` attribute.
 ///
-/// The SSE fallback re-renders `#main` on every tick (a ticking label defeats
-/// the no-change dedupe), and a morph replaces the element WITHOUT `open` —
-/// so a raw `<details>` snaps every open accordion shut about once a second.
+/// Any push of `#main` is a morph, and a morph replaces the element WITHOUT
+/// `open` — so a raw `<details>` snaps every open accordion shut whenever
+/// something real changes. (It used to be about once a second: a polling
+/// fallback, plus a ticking server-rendered uptime that defeated the
+/// no-change check. Both are gone — see `ElapsedClock` — but the morphs that
+/// real changes cause remain.)
 /// Signals live in Datastar's client-side store, not the DOM: binding `open`
 /// to `$signalName` means the surviving signal re-supplies `open` after every
 /// morph, and the `toggle` event keeps the signal in sync with what the user
@@ -512,6 +515,60 @@ let renderSessionHealthLine (health: SessionHealth) =
         Attr.create "aria-label" (attrEnc line) ]
       [ textEnc line ]
 
+/// How long ago something happened is the browser's to count, not the server's.
+///
+/// The stream sends a push only when the full-shell HTML differs from the last one it sent. A label the
+/// server worked out ("up 5m", "last: 3m ago") is different HTML a minute later for the very same state, so
+/// an event that changed nothing a person can see still morphed the whole `#main`. Here the server renders
+/// a constant moment (`Since`) and a `Ds.text` expression that turns it into words against the browser's
+/// own `Date.now()`, so the HTML is a function of real state and the label still ticks.
+///
+/// The labels are the ones the server used to print: `DaemonHealth.formatUptime` for the daemon
+/// ("2h 5m"), and the sidebar's "just now", "5m", "2h", "3d" for sessions.
+module ElapsedClock =
+  /// The browser's own "now" in epoch milliseconds, 0 until the first tick. A label reads 0 as "not yet
+  /// counted" and shows nothing, instead of a wrong "up 20000d".
+  let NowSignal = "clockNow"
+
+  /// The signal and the tick that advances it. Goes out in the page shell, never inside `#main`: a morph
+  /// of `#main` must not be able to reset the clock. Minute labels need no finer tick than the heartbeat.
+  let attributes : XmlAttribute list =
+    [ Ds.signal (NowSignal, 0L)
+      Ds.onInterval (sprintf "$%s = Date.now()" NowSignal, int Timeouts.dashboardHeartbeat.TotalMilliseconds, true) ]
+
+  /// Whole seconds from `epochMs` to the browser's now, never below 0 (a browser clock behind the server's).
+  let private elapsedSeconds (epochMs: int64) : string =
+    sprintf "Math.max(0, ($%s - %d) / 1000)" NowSignal epochMs
+
+  /// `expr` over elapsed seconds, or nothing until the clock has ticked.
+  let private whenCounted (labelOfSeconds: string) (epochMs: int64) : string =
+    sprintf "$%s ? (%s)(%s) : ''" NowSignal labelOfSeconds (elapsedSeconds epochMs)
+
+  /// The daemon's "2d 3h" / "2h 5m" / "5m" (`DaemonHealth.formatUptime`).
+  let private uptimeLabel =
+    "s => s >= 86400 ? Math.floor(s / 86400) + 'd ' + Math.floor(s % 86400 / 3600) + 'h' : s >= 3600 ? Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm' : Math.floor(s / 60) + 'm'"
+
+  /// The sidebar's "just now" / "5m" / "2h" / "3d".
+  let private spanLabel =
+    "s => s < 60 ? 'just now' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'"
+
+  /// "just now", or the span followed by "ago".
+  let private agoLabel =
+    sprintf "s => (l => l === 'just now' ? l : l + ' ago')((%s)(s))" spanLabel
+
+  /// The expression whose value is the daemon uptime text, from the moment the daemon started.
+  let uptimeExpr (startedAtMs: int64) : string = whenCounted uptimeLabel startedAtMs
+
+  /// The expression whose value is a session's age text ("5m"), from the moment it was created.
+  let spanExpr (sinceMs: int64) : string = whenCounted spanLabel sinceMs
+
+  /// The expression whose value is "3m ago" / "just now", from the moment something last happened.
+  let agoExpr (sinceMs: int64) : string = whenCounted agoLabel sinceMs
+
+  /// An empty span the browser fills with `expr`'s value. The server renders no text of its own in it.
+  let span (expr: string) : XmlNode =
+    Elem.span [ Ds.text expr ] []
+
 /// Render daemon health as an HTML panel — shows status, uptime, memory, sessions, and tests.
 let renderDaemonHealth (view: DaemonHealthView) =
   let emoji = Features.DaemonHealth.healthEmoji view.OverallHealth
@@ -551,10 +608,20 @@ let renderDaemonHealth (view: DaemonHealthView) =
         match view.SessionSummaries with
         | [] -> emoji
         | _ -> sprintf "%s %s" emoji label
-      textEnc (sprintf "%s · SageFs %s · up %s · " statusText view.Version view.UptimeLabel)
+      textEnc (sprintf "%s · SageFs %s · " statusText view.Version)
+      // The uptime ticks in the browser (ElapsedClock); the server renders only the moment it started.
+      match view.StartedAt with
+      | Since.At startedAtMs ->
+        textEnc "up "
+        ElapsedClock.span (ElapsedClock.uptimeExpr startedAtMs)
+        textEnc " · "
+      | Since.Unknown -> ()
+      // The number is telemetry: it arrives as a signal patch on the heartbeat (TelemetrySignals), never in
+      // the HTML, so a change of memory alone cannot make the page push.
       Elem.span
-        [ Attr.create "aria-label" "Memory the SageFs daemon process itself is using (refreshes every few seconds)" ]
-        [ textEnc (sprintf "%dMB" view.MemoryMB) ]
+        [ Attr.create "aria-label" "Memory the SageFs daemon process itself is using (refreshes every few seconds)"
+          Ds.text (TelemetrySignals.textExpr TelemetrySignals.DaemonMemoryMb "") ]
+        []
     ]
     match sessionSummaryText view.SessionSummaries with
     | None -> ()
@@ -1172,14 +1239,9 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
           | true -> renderPreviousSessionSortSelect sortOrder
           | false -> ()
           yield! ordered |> List.map (fun s ->
-            let age =
-              let span = DateTime.UtcNow - s.LastSeen
-              match span.TotalDays >= 1.0 with
-              | true -> sprintf "%.0fd ago" span.TotalDays
-              | false ->
-                match span.TotalHours >= 1.0 with
-                | true -> sprintf "%.0fh ago" span.TotalHours
-                | false -> sprintf "%.0fm ago" span.TotalMinutes
+            // How long ago the session was seen is the browser's to count (ElapsedClock): a render that read
+            // the clock here made the same list of sessions a different string a minute later. The row's
+            // accessible name carries the headline and id only; the age is the visible text beneath it.
             // Headline is the work being resumed (project or directory name),
             // not the session's bookkeeping id — the id stays visible (it is
             // how the user correlates with logs and the API) but no longer
@@ -1190,8 +1252,8 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
             let headline = previousSessionHeadline s
             Elem.button
               [ Attr.class' "picker-session-row"
-                Attr.create "aria-label" (attrEnc (sprintf "Resume session: %s (id %s, %s)" headline s.Id age))
-                Attr.create "title" (attrEnc (sprintf "Resume session: %s (id %s, %s)" headline s.Id age))
+                Attr.create "aria-label" (attrEnc (sprintf "Resume session: %s (id %s)" headline s.Id))
+                Attr.create "title" (attrEnc (sprintf "Resume session: %s (id %s)" headline s.Id))
                 Ds.onClick (Ds.post (sprintf "/dashboard/session/resume/%s" s.Id)) ]
               [ Elem.div [ Attr.style "flex: 1; min-width: 0; text-align: left;" ] [
                   Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem;" ] [
@@ -1216,7 +1278,10 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
                   // Bookkeeping — still visible (log/API correlation), no
                   // longer the row's headline.
                   Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 2px; font-size: 0.7rem;" ] [
-                    textEnc (sprintf "%s · %s" s.Id age)
+                    textEnc (sprintf "%s · " s.Id)
+                    match Since.ofUtc s.LastSeen with
+                    | Since.At lastSeenMs -> ElapsedClock.span (ElapsedClock.agoExpr lastSeenMs)
+                    | Since.Unknown -> ()
                   ]
                 ]
                 Elem.span [ Attr.style "color: var(--fg-blue); font-size: 0.85rem;" ] [ Text.raw "▶" ]
@@ -1645,12 +1710,13 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                         match badge.IntentLabel.Length > 0 with
                         | true -> sprintf "%s (%s)" badge.Name badge.IntentLabel
                         | false -> badge.Name) ])
-                match s.Uptime.Length > 0 with
-                | true ->
+                match s.Uptime with
+                | Since.At createdAtMs ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
-                    textEnc (sprintf "⏱ %s" s.Uptime)
+                    textEnc "⏱ "
+                    ElapsedClock.span (ElapsedClock.spanExpr createdAtMs)
                   ]
-                | false -> ()
+                | Since.Unknown -> ()
               ]
               // Transient status message (warmup, discovery, etc.) on its own
               // line so it never cramps the badges row
@@ -1742,13 +1808,15 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 // four numbers that decide cohort member count). Live from
                 // the worker's own pid; absent while starting/faulted/stopped
                 // or if the pid has already exited (never a fault).
+                // Whether there is a worker to measure is state (it renders); how many MB it holds is
+                // telemetry (it arrives as a signal patch, TelemetrySignals), so memory alone never pushes.
                 match s.WorkerRssBytes with
-                | Some bytes ->
+                | Some _ ->
                   Elem.span
                     [ Attr.class' "meta"; testid "session-rss"
-                      Attr.create "aria-label" "Memory this session's FSI worker process is using (resident set size)" ] [
-                    textEnc (sprintf "Memory: %dMB" (bytes / 1024L / 1024L))
-                  ]
+                      Attr.create "aria-label" "Memory this session's FSI worker process is using (resident set size)"
+                      Ds.text (TelemetrySignals.textExpr (TelemetrySignals.workerRssMb s.Id) "Memory: ") ]
+                    []
                 | None -> ()
                 match s.TestSummary with
                 | Some ts when ts.Total > 0 ->
@@ -1792,12 +1860,13 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       [ textEnc pct ]
                   ]
                 | _ -> ()
-                match s.LastActivity.Length > 0 with
-                | true ->
+                match s.LastActivity with
+                | Since.At lastActiveAtMs ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
-                    textEnc (sprintf "last: %s" s.LastActivity)
+                    textEnc "last: "
+                    ElapsedClock.span (ElapsedClock.agoExpr lastActiveAtMs)
                   ]
-                | false -> ()
+                | Since.Unknown -> ()
                 match s.App with
                 | AppRun.AppRunState.NotRunning -> ()
                 | app ->

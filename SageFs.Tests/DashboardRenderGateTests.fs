@@ -71,6 +71,7 @@ let mkQueries (getAllSessionsCount: int ref) (sessions: WorkerProtocol.SessionIn
 let mkInfra () : DashboardInfra =
   { Version = "0.0.0"
     McpPort = 37749
+    DaemonStartedAt = DateTimeOffset.UnixEpoch
     // Non-optional (roast-6 Phase 0 item 1): these tests never exercise the
     // SSE stream, so a never-firing event is a faithful "no push happens" stand-in.
     StateChanged = (Event<SseEvent>()).Publish
