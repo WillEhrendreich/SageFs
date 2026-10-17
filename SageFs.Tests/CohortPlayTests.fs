@@ -115,6 +115,60 @@ let cohortPlayTests =
       }
     ]
 
+    testList "which cohort a file is" [
+      let repo = CohortScope.Repository "/repo/a"
+      let carol = MemberId.Minted "carol"
+
+      /// One real row for `repo`, produced by `decide` so its events are the reducer's own.
+      let repoEntry : LedgerEntry<MemberId> =
+        let command = CohortCommand.Join(carol, JoinableRole.Implementer, None, repo)
+        match decide clock0 [||] (CohortState.forScope repo) command with
+        | Ok(_, events, _) ->
+          { Seq = LanguagePrimitives.Int64WithMeasure<ledgerSeq> 0L; Clock = clock0; Entropy = [||]; Command = command; Events = events }
+        | Error e -> failwithf "repoEntry: refused: %A" e
+
+      let withFile (entries: LedgerEntry<MemberId> list) (body: string -> unit) =
+        let path = Path.Combine(Path.GetTempPath(), "sagefs-play-scope-" + string (System.Guid.NewGuid()) + ".ledger.jsonl")
+        File.WriteAllText(path, toJsonl entries)
+        try body path finally File.Delete path
+
+      test "a file whose rows belong to a repository cohort replays that cohort, not an empty machine one" {
+        withFile [ repoEntry ] (fun path ->
+          match runPlay path with
+          | Error e -> failtest (sprintf "expected Ok, got Error %s" e)
+          | Ok summary -> summary |> Expect.stringContains "carol is in the replayed cohort" "carol  role=Implementer")
+      }
+
+      test "a file mixing two cohorts is refused with both scopes listed, never replayed as one" {
+        withFile (buildLedger () @ [ repoEntry ]) (fun path ->
+          match runPlay path with
+          | Ok summary -> failtest (sprintf "expected Error for a mixed-scope ledger, got Ok %s" summary)
+          | Error message ->
+            message |> Expect.stringContains "lists the machine scope" (Scope.label CohortScope.Machine)
+            message |> Expect.stringContains "lists the repository scope" (Scope.label repo))
+      }
+
+      test "the typed error carries the scopes, sorted by label, and describe words it" {
+        withFile (buildLedger () @ [ repoEntry ]) (fun path ->
+          match play path with
+          | Ok summary -> failtest (sprintf "expected MixedScopes, got Ok %s" summary)
+          | Error(PlayError.MixedScopes scopes as e) ->
+            scopes |> Expect.equal "both cohorts, machine first" [ CohortScope.Machine; repo ]
+            describe e |> Expect.stringContains "says how many" "2 cohorts"
+          | Error other -> failtestf "expected MixedScopes, got %A" other)
+      }
+
+      test "a missing file is LedgerFileNotFound with the path" {
+        let missing = Path.Combine(Path.GetTempPath(), "sagefs-play-typed-missing-" + string (System.Guid.NewGuid()) + ".ledger.jsonl")
+        play missing |> Expect.equal "typed, with the path" (Error(PlayError.LedgerFileNotFound missing))
+      }
+
+      test "an empty ledger is the machine cohort, and one scope is that scope" {
+        scopeOfLedger [] |> Expect.equal "nothing says otherwise" (Ok CohortScope.Machine)
+        scopeOfLedger [ repoEntry ] |> Expect.equal "the rows' own scope" (Ok repo)
+      }
+    ]
+
     testList "fail-closed on bad input — never throws" [
       test "runPlay on a missing file returns a clean Error" {
         let missing = Path.Combine(Path.GetTempPath(), "sagefs-play-does-not-exist-" + string (System.Guid.NewGuid()) + ".ledger.jsonl")

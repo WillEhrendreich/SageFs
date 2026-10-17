@@ -93,36 +93,41 @@ type LedgerRead =
   | Absent of lookedAt: string
   | Present of ledgerPath: string * port: LedgerPort<MemberId>
 
+/// Whether the parser has read the one positional argument yet.
+[<RequireQualifiedAccess>]
+type OutputSeen =
+  | NotYet
+  | At of path: string
+
 let parseArgs (args: string list) : Result<ExportArgs, ExportError> =
-  let flagOf (text: string) : Flag option = Flag.all |> List.tryFind (fun f -> Flag.text f = text)
-  let rec go (scope: ScopeRequest option) (dataDir: DataDirRequest option) (output: string option) (rest: string list) =
+  // The accumulators are the request DUs themselves: `OnlyScope` and `DaemonDefault` ARE the
+  // "not given" states, so there is no separate flag for "was it set", and `OutputSeen` says
+  // whether the one positional has been read.
+  let flagOf (text: string) : Flag list = Flag.all |> List.filter (fun f -> Flag.text f = text)
+  let rec go (scope: ScopeRequest) (dataDir: DataDirRequest) (output: OutputSeen) (rest: string list) =
     match rest with
     | [] ->
       match output with
-      | None -> Error(ExportError.Usage UsageProblem.MissingOutputPath)
-      | Some path ->
-        Ok
-          { Scope = scope |> Option.defaultValue ScopeRequest.OnlyScope
-            DataDir = dataDir |> Option.defaultValue DataDirRequest.DaemonDefault
-            OutputPath = path }
+      | OutputSeen.NotYet -> Error(ExportError.Usage UsageProblem.MissingOutputPath)
+      | OutputSeen.At path -> Ok { Scope = scope; DataDir = dataDir; OutputPath = path }
     | head :: tail ->
       match flagOf head, tail with
-      | Some flag, [] -> Error(ExportError.Usage(UsageProblem.FlagWithoutValue flag))
-      | Some Flag.Scope, value :: more ->
+      | [ flag ], [] -> Error(ExportError.Usage(UsageProblem.FlagWithoutValue flag))
+      | [ Flag.Scope ], value :: more ->
         match scope with
-        | Some _ -> Error(ExportError.Usage(UsageProblem.FlagRepeated Flag.Scope))
-        | None -> go (Some(ScopeRequest.Requested value)) dataDir output more
-      | Some Flag.DataDir, value :: more ->
+        | ScopeRequest.Requested _ -> Error(ExportError.Usage(UsageProblem.FlagRepeated Flag.Scope))
+        | ScopeRequest.OnlyScope -> go (ScopeRequest.Requested value) dataDir output more
+      | [ Flag.DataDir ], value :: more ->
         match dataDir with
-        | Some _ -> Error(ExportError.Usage(UsageProblem.FlagRepeated Flag.DataDir))
-        | None -> go scope (Some(DataDirRequest.Explicit value)) output more
-      | None, _ when head.StartsWith("--", System.StringComparison.Ordinal) ->
+        | DataDirRequest.Explicit _ -> Error(ExportError.Usage(UsageProblem.FlagRepeated Flag.DataDir))
+        | DataDirRequest.DaemonDefault -> go scope (DataDirRequest.Explicit value) output more
+      | _, _ when head.StartsWith("--", System.StringComparison.Ordinal) ->
         Error(ExportError.Usage(UsageProblem.UnknownFlag head))
-      | None, _ ->
+      | _, _ ->
         match output with
-        | Some _ -> Error(ExportError.Usage(UsageProblem.ExtraArgument head))
-        | None -> go scope dataDir (Some head) tail
-  go None None None args
+        | OutputSeen.At _ -> Error(ExportError.Usage(UsageProblem.ExtraArgument head))
+        | OutputSeen.NotYet -> go scope dataDir (OutputSeen.At head) tail
+  go ScopeRequest.OnlyScope DataDirRequest.DaemonDefault OutputSeen.NotYet args
 
 /// Does `text` name `scope`? A scope is named by its label (`machine`, `repo:<root>`,
 /// `named:<key>`) or, for a repository or named scope, by the bare root path or key.
