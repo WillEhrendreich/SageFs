@@ -427,6 +427,7 @@
         <Compile Include="FeatureParityTests.fs" />
         <Compile Include="SseParityTests.fs" />
         <Compile Include="RepoPathsSiblingTests.fs" />
+        <Compile Include="ParityClaimsTests.fs" />
         <Compile Include="RunSourceWireTests.fs" />
         <Compile Include="LayoutAndInputTests.fs" />
         <Compile Include="PureModulesComprehensiveTests.fs" />
