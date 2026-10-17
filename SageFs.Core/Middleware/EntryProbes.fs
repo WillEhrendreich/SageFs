@@ -58,7 +58,10 @@ type EntryReading = { Sightings: ProbeSighting list }
 type ProbeRegistry(delay: TimeSpan -> Task) =
   let gate = obj ()
   let statuses = Dictionary<int64, ProbeStatus>()
-  let declarations = Dictionary<int64, string>()
+  /// The probes of each function that had not been sighted when last looked at, oldest first. A probe that has
+  /// been entered or superseded never changes again, so `Commit` drops it from here and never reads it twice:
+  /// its cost is the function's own unsighted probes, not every probe the session ever allocated.
+  let unsighted = Dictionary<string, List<int64>>()
   let waiters = List<int64 list * TaskCompletionSource<unit>>()
   let mutable nextId = 0L
 
@@ -93,17 +96,27 @@ type ProbeRegistry(delay: TimeSpan -> Task) =
     lock gate (fun () ->
       nextId <- nextId + 1L
       statuses.[nextId] <- ProbeStatus.NotEntered
-      declarations.[nextId] <- declaration
+      match unsighted.TryGetValue declaration with
+      | true, ids -> ids.Add nextId
+      | false, _ -> unsighted.[declaration] <- List<int64>([ nextId ])
       { Id = nextId; Declaration = declaration })
 
   /// The patch `probe` belongs to landed. Any earlier probe of the same
   /// function that never ran is superseded: the function's body is this one now.
   member _.Commit(probe: EntryProbe) : unit =
     lock gate (fun () ->
-      for KeyValue(id, status) in Seq.toArray statuses do
-        match id < probe.Id && status = ProbeStatus.NotEntered && declarations.[id] = probe.Declaration with
-        | true -> statuses.[id] <- ProbeStatus.Superseded
-        | false -> ()
+      match unsighted.TryGetValue probe.Declaration with
+      | true, ids ->
+        let remaining = List<int64>()
+        for id in ids do
+          match statuses.[id] with
+          | ProbeStatus.NotEntered when id < probe.Id -> statuses.[id] <- ProbeStatus.Superseded
+          | ProbeStatus.NotEntered -> remaining.Add id
+          // Sighted already: nothing a later commit could change.
+          | ProbeStatus.Entered
+          | ProbeStatus.Superseded -> ()
+        unsighted.[probe.Declaration] <- remaining
+      | false, _ -> ()
       wakeReady ())
 
   /// The new body ran. Entering twice changes nothing, and a superseded probe stays superseded.

@@ -219,9 +219,10 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
     | _ -> { ClosureReport.empty with Refusals = closureWork.Refusals }
   let detourReport =
     { namedReport with
-        Redirected = namedReport.Redirected @ closures.Landed
-        ReachedRunningProcess = namedReport.ReachedRunningProcess @ closures.Landed
-        RedirectedFromCompiled = namedReport.RedirectedFromCompiled @ closures.Landed
+        // A declaration is named once: a function and its closures are one declaration to everything downstream.
+        Redirected = (namedReport.Redirected @ closures.Landed) |> List.distinct
+        ReachedRunningProcess = (namedReport.ReachedRunningProcess @ closures.Landed) |> List.distinct
+        RedirectedFromCompiled = (namedReport.RedirectedFromCompiled @ closures.Landed) |> List.distinct
         Probes = namedReport.Probes @ closures.Probes
         Refusals = namedReport.Refusals @ closures.Refusals
         Failures = namedReport.Failures @ closures.Failures }

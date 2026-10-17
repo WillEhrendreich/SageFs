@@ -90,6 +90,8 @@
         <Compile Include="HygieneStallTests.fs" />
         <Compile Include="HygieneSymlinkTests.fs" />
         <Compile Include="SessionReaperTests.fs" />
+        <Compile Include="HotReloadCopiesTests.fs" />
+        <Compile Include="DetourEntryPointTests.fs" />
         <Compile Include="WorkerStartupReaderTests.fs" />
         <Compile Include="PluginCheckoutOptionalTests.fs" />
         <Compile Include="HygienePanelTests.fs" />
@@ -235,6 +237,7 @@
         <Compile Include="FsiDiscoveryIdentitySimTests.fs" />
         <Compile Include="FsiEmitSimTests.fs" />
         <Compile Include="EntryProbeTests.fs" />
+        <Compile Include="ProbeRegistryCommitTests.fs" />
         <Compile Include="GenericReloadTests.fs" />
         <Compile Include="PatchConfirmationTests.fs" />
         <Compile Include="PatchAnnouncerTests.fs" />
