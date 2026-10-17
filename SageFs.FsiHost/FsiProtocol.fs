@@ -224,18 +224,26 @@ let describeError (error: ProtocolError) : string =
 
 // ---- generic codec -------------------------------------------------------------------------
 
-/// Builds an F# list of a runtime-known element type from boxed items. Reached through a generic class behind
-/// an interface (not a reflected method name), so there is no lookup-by-string to go stale.
-type private IListBuilder =
-  abstract Make: obj list -> obj
+/// Builds an F# list or an array of a runtime-known element type from boxed items. Reached through a generic class
+/// behind an interface (not a reflected method name), so there is no lookup-by-string to go stale. One instance per
+/// element type, made once when the type's plan is made.
+type private ICollectionBuilder =
+  abstract MakeList: ResizeArray<obj> -> obj
+  abstract MakeArray: ResizeArray<obj> -> obj
 
-type private ListBuilderOf<'T>() =
-  interface IListBuilder with
-    member _.Make(items: obj list) : obj = items |> List.map (fun item -> item :?> 'T) |> box
+type private CollectionBuilderOf<'T>() =
+  interface ICollectionBuilder with
+    member _.MakeList(items: ResizeArray<obj>) : obj =
+      let mutable list: 'T list = []
+      for index = items.Count - 1 downto 0 do
+        list <- (items.[index] :?> 'T) :: list
+      box list
 
-let private makeList (elementType: Type) (items: obj list) : obj =
-  let builderType = typedefof<ListBuilderOf<_>>.MakeGenericType elementType
-  (Activator.CreateInstance builderType :?> IListBuilder).Make items
+    member _.MakeArray(items: ResizeArray<obj>) : obj =
+      let array: 'T[] = Array.zeroCreate items.Count
+      for index = 0 to items.Count - 1 do
+        array.[index] <- items.[index] :?> 'T
+      box array
 
 let private isFSharpList (t: Type) = t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<list<_>>
 
@@ -262,162 +270,360 @@ let checkSupported () : Result<unit, ProtocolError> =
   [ typeof<Request>; typeof<Response> ]
   |> List.fold (fun acc t -> acc |> Result.bind (fun () -> isSupported Set.empty t)) (Result.Ok())
 
-let rec private writeValue (writer: Utf8JsonWriter) (t: Type) (value: obj) : unit =
-  if t = typeof<string> then writer.WriteStringValue(value :?> string)
-  elif t = typeof<int> then writer.WriteNumberValue(value :?> int)
-  elif t = typeof<int64> then writer.WriteNumberValue(value :?> int64)
-  elif t = typeof<bool> then writer.WriteBooleanValue(value :?> bool)
-  // The round-trip ("O") format keeps every tick and the offset.
-  elif t = typeof<DateTimeOffset> then
-    writer.WriteStringValue((value :?> DateTimeOffset).ToString("O", System.Globalization.CultureInfo.InvariantCulture))
-  // A TimeSpan travels as its tick count: exact, and independent of culture.
-  elif t = typeof<TimeSpan> then writer.WriteNumberValue((value :?> TimeSpan).Ticks)
+// ---- the plan for a type: worked out ONCE, then read and written through ---------------------
+//
+// Reflection answers (is this a record? which fields? which union case has this name? how do I build one?) are the
+// same for every value of a type, and a live-testing reply carries hundreds of thousands of values. So each type is
+// examined exactly once into a `Plan`, cached by type, and every later value is read or written through the plan:
+// no `FSharpType.*` lookup, no `UnionCaseInfo.Name`, no `GetFields()`, no `MakeGenericType` per value.
+
+/// What the codec does for one type. The case order is the order the old per-value checks ran in, so a type is
+/// the same kind of thing as before.
+type private Plan =
+  | Text
+  | Int
+  | Long
+  | Flag
+  /// A DateTimeOffset, on the wire as its round-trip ("O") text.
+  | Moment
+  /// A TimeSpan, on the wire as its tick count.
+  | Duration
+  | ListOf of element: PlanSlot * builder: ICollectionBuilder
+  | ArrayOf of element: PlanSlot * builder: ICollectionBuilder
+  | RecordOf of RecordPlan
+  | UnionOf of UnionPlan
+  /// A type the codec cannot carry (`checkSupported` names it). Reached only if a value of it is met.
+  | Unrepresentable of Type
+
+/// A plan that may not be finished yet: a recursive type (a node with child nodes) points back at its own slot, which
+/// is filled in when the type's plan is complete. Every slot is complete before any plan is published.
+and private PlanSlot() =
+  member val Plan: Plan = Text with get, set
+
+/// One field of a record or union case: its name in every form the codec needs it, and the plan of its type.
+and private FieldPlan =
+  { FieldName: string
+    /// The name as UTF-8, for looking the property up in a parsed document without re-encoding it each time.
+    FieldUtf8: byte[]
+    /// The name already escaped for the writer.
+    FieldEncoded: JsonEncodedText
+    FieldSlot: PlanSlot }
+
+and private RecordPlan =
+  { RecordFields: FieldPlan[]
+    ReadFields: obj -> obj[]
+    MakeRecord: obj[] -> obj }
+
+and private CasePlan =
+  { CaseName: string
+    CaseEncoded: JsonEncodedText
+    CaseFields: FieldPlan[]
+    ReadCaseFields: obj -> obj[]
+    MakeCase: obj[] -> obj }
+
+and private UnionPlan =
+  { UnionTypeName: string
+    /// The case a value is, by its tag.
+    TagOf: obj -> int
+    /// Indexed by tag.
+    CasesByTag: CasePlan[]
+    CasesByName: System.Collections.Generic.Dictionary<string, CasePlan> }
+
+let private planCache = System.Collections.Concurrent.ConcurrentDictionary<Type, PlanSlot>()
+let private planBuildLock = obj ()
+
+let private caseProperty = JsonEncodedText.Encode "case"
+let private fieldsProperty = JsonEncodedText.Encode "fields"
+let private caseUtf8 = Encoding.UTF8.GetBytes "case"
+let private fieldsUtf8 = Encoding.UTF8.GetBytes "fields"
+let private noValues: obj[] = [||]
+
+let private collectionBuilderFor (elementType: Type) : ICollectionBuilder =
+  Activator.CreateInstance(typedefof<CollectionBuilderOf<_>>.MakeGenericType elementType) :?> ICollectionBuilder
+
+let rec private slotWithin (building: System.Collections.Generic.Dictionary<Type, PlanSlot>) (t: Type) : PlanSlot =
+  match planCache.TryGetValue t with
+  | true, finished -> finished
+  | false, _ ->
+    match building.TryGetValue t with
+    | true, unfinished -> unfinished
+    | false, _ ->
+      let slot = PlanSlot()
+      building.[t] <- slot
+      slot.Plan <- planOf building t
+      slot
+
+and private fieldPlan (building: System.Collections.Generic.Dictionary<Type, PlanSlot>) (field: System.Reflection.PropertyInfo) : FieldPlan =
+  { FieldName = field.Name
+    FieldUtf8 = Encoding.UTF8.GetBytes field.Name
+    FieldEncoded = JsonEncodedText.Encode field.Name
+    FieldSlot = slotWithin building field.PropertyType }
+
+and private planOf (building: System.Collections.Generic.Dictionary<Type, PlanSlot>) (t: Type) : Plan =
+  if t = typeof<string> then Text
+  elif t = typeof<int> then Int
+  elif t = typeof<int64> then Long
+  elif t = typeof<bool> then Flag
+  elif t = typeof<DateTimeOffset> then Moment
+  elif t = typeof<TimeSpan> then Duration
   elif isFSharpList t then
     let elementType = t.GetGenericArguments().[0]
-    writer.WriteStartArray()
-    for item in (value :?> System.Collections.IEnumerable) do
-      writeValue writer elementType item
-    writer.WriteEndArray()
+    ListOf(slotWithin building elementType, collectionBuilderFor elementType)
   elif t.IsArray && t.GetArrayRank() = 1 then
     let elementType = t.GetElementType()
+    ArrayOf(slotWithin building elementType, collectionBuilderFor elementType)
+  elif FSharpType.IsRecord t then
+    RecordOf
+      { RecordFields = FSharpType.GetRecordFields t |> Array.map (fieldPlan building)
+        ReadFields = FSharpValue.PreComputeRecordReader t
+        MakeRecord = FSharpValue.PreComputeRecordConstructor t }
+  elif FSharpType.IsUnion t then
+    let cases =
+      FSharpType.GetUnionCases t
+      |> Array.sortBy (fun case -> case.Tag)
+      |> Array.map (fun case ->
+        let fields = case.GetFields()
+        { CaseName = case.Name
+          CaseEncoded = JsonEncodedText.Encode case.Name
+          CaseFields = fields |> Array.map (fieldPlan building)
+          ReadCaseFields =
+            (match fields.Length with
+             | 0 -> fun _ -> noValues
+             | _ -> FSharpValue.PreComputeUnionReader case)
+          MakeCase = FSharpValue.PreComputeUnionConstructor case })
+    let byName = System.Collections.Generic.Dictionary<string, CasePlan>(StringComparer.Ordinal)
+    // The first case of a name wins, as the old linear search did (case names are unique, so this only states it).
+    for case in cases do
+      byName.TryAdd(case.CaseName, case) |> ignore
+    UnionOf
+      { UnionTypeName = t.Name
+        TagOf = FSharpValue.PreComputeUnionTagReader t
+        CasesByTag = cases
+        CasesByName = byName }
+  else
+    Unrepresentable t
+
+/// The finished plan of a type. A plan, once published, is never changed, so readers need no lock; building is
+/// serialized so two threads never build (or half-publish) the same recursive type.
+let private slotFor (t: Type) : PlanSlot =
+  match planCache.TryGetValue t with
+  | true, slot -> slot
+  | false, _ ->
+    lock planBuildLock (fun () ->
+      let building = System.Collections.Generic.Dictionary<Type, PlanSlot>()
+      let slot = slotWithin building t
+      for entry in building do
+        planCache.[entry.Key] <- entry.Value
+      slot)
+
+let rec private writePlan (writer: Utf8JsonWriter) (plan: Plan) (value: obj) : unit =
+  match plan with
+  | Text -> writer.WriteStringValue(value :?> string)
+  | Int -> writer.WriteNumberValue(value :?> int)
+  | Long -> writer.WriteNumberValue(value :?> int64)
+  | Flag -> writer.WriteBooleanValue(value :?> bool)
+  // The round-trip ("O") format keeps every tick and the offset.
+  | Moment ->
+    writer.WriteStringValue((value :?> DateTimeOffset).ToString("O", System.Globalization.CultureInfo.InvariantCulture))
+  // A TimeSpan travels as its tick count: exact, and independent of culture.
+  | Duration -> writer.WriteNumberValue((value :?> TimeSpan).Ticks)
+  | ListOf(element, _)
+  | ArrayOf(element, _) ->
+    let elementPlan = element.Plan
     writer.WriteStartArray()
     for item in (value :?> System.Collections.IEnumerable) do
-      writeValue writer elementType item
+      writePlan writer elementPlan item
     writer.WriteEndArray()
-  elif FSharpType.IsRecord t then
+  | RecordOf record ->
+    let values = record.ReadFields value
     writer.WriteStartObject()
-    for field in FSharpType.GetRecordFields t do
-      writer.WritePropertyName field.Name
-      writeValue writer field.PropertyType (field.GetValue value)
+    for index in 0 .. record.RecordFields.Length - 1 do
+      let field = record.RecordFields.[index]
+      writer.WritePropertyName field.FieldEncoded
+      writePlan writer field.FieldSlot.Plan values.[index]
     writer.WriteEndObject()
-  elif FSharpType.IsUnion t then
-    let case, values = FSharpValue.GetUnionFields(value, t)
+  | UnionOf union ->
+    let case = union.CasesByTag.[union.TagOf value]
     writer.WriteStartObject()
-    writer.WriteString("case", case.Name)
-    let fields = case.GetFields()
-    if fields.Length > 0 then
-      writer.WritePropertyName "fields"
+    writer.WriteString(caseProperty, case.CaseEncoded)
+    if case.CaseFields.Length > 0 then
+      let values = case.ReadCaseFields value
+      writer.WritePropertyName fieldsProperty
       writer.WriteStartObject()
-      for index in 0 .. fields.Length - 1 do
-        writer.WritePropertyName fields.[index].Name
-        writeValue writer fields.[index].PropertyType values.[index]
+      for index in 0 .. case.CaseFields.Length - 1 do
+        let field = case.CaseFields.[index]
+        writer.WritePropertyName field.FieldEncoded
+        writePlan writer field.FieldSlot.Plan values.[index]
       writer.WriteEndObject()
     writer.WriteEndObject()
-  else
+  | Unrepresentable t ->
     invalidOp (sprintf "protocol type %s is not representable on the wire" t.FullName)
 
 let private encode<'T> (value: 'T) : string =
-  use stream = new MemoryStream()
-  use writer = new Utf8JsonWriter(stream)
-  writeValue writer typeof<'T> (box value)
+  let buffer = System.Buffers.ArrayBufferWriter<byte>()
+  use writer = new Utf8JsonWriter(buffer)
+  writePlan writer (slotFor typeof<'T>).Plan (box value)
   writer.Flush()
-  Encoding.UTF8.GetString(stream.ToArray())
+  Encoding.UTF8.GetString buffer.WrittenSpan
 
-let private bind (f: 'a -> Result<'b, ProtocolError>) (r: Result<'a, ProtocolError>) = Result.bind f r
+/// Where a read records why it stopped. The first error is the only one: once it is set the readers return at once, so
+/// the error reported is the first one in document order, as it was when every step returned a Result. A value read
+/// after the error is set is never used. One per decoded message.
+type private ReadOutcome() =
+  member val Verdict: Result<unit, ProtocolError> = Result.Ok() with get, set
 
-/// Read every element of `items` with `read`, stopping at the first Error.
-let private readAll (read: 'a -> Result<obj, ProtocolError>) (items: 'a seq) : Result<obj list, ProtocolError> =
-  items
-  |> Seq.fold
-       (fun acc item ->
-         acc |> bind (fun parsed -> read item |> Result.map (fun value -> value :: parsed)))
-       (Result.Ok [])
-  |> Result.map List.rev
+/// What a stopped read returns in place of a value. Nothing reads it: the caller sees the stopped outcome first.
+let private nothing: obj = Unchecked.defaultof<obj>
 
-let private objectProperty (element: JsonElement) (name: string) : Result<JsonElement, ProtocolError> =
+let private stop (outcome: ReadOutcome) (error: ProtocolError) : obj =
+  outcome.Verdict <- Result.Error error
+  nothing
+
+let private wrongShape (outcome: ReadOutcome) (element: JsonElement) (expected: string) : obj =
+  stop outcome (WrongShape(expected, string element.ValueKind))
+
+/// Whether a read has stopped. The readers ask it between steps.
+let inline private hasStopped (outcome: ReadOutcome) =
+  match outcome.Verdict with
+  | Result.Error _ -> true
+  | Result.Ok _ -> false
+
+/// The named property of an object, or a stopped read (and a default element) saying why.
+let private propertyOf (outcome: ReadOutcome) (element: JsonElement) (utf8Name: byte[]) (name: string) : JsonElement =
   match element.ValueKind with
   | JsonValueKind.Object ->
-    match element.TryGetProperty name with
-    | true, value -> Result.Ok value
-    | false, _ -> Result.Error(MissingField name)
-  | kind -> Result.Error(WrongShape("an object", string kind))
+    let mutable value = Unchecked.defaultof<JsonElement>
+    match element.TryGetProperty(ReadOnlySpan<byte>(utf8Name), &value) with
+    | true -> value
+    | false ->
+      stop outcome (MissingField name) |> ignore
+      value
+  | kind ->
+    stop outcome (WrongShape("an object", string kind)) |> ignore
+    Unchecked.defaultof<JsonElement>
 
-let rec private readValue (t: Type) (element: JsonElement) : Result<obj, ProtocolError> =
-  let wrong (expected: string) = Result.Error(WrongShape(expected, string element.ValueKind))
-  if t = typeof<string> then
+let rec private readPlan (outcome: ReadOutcome) (plan: Plan) (element: JsonElement) : obj =
+  match plan with
+  | Text ->
     match element.ValueKind with
     | JsonValueKind.String ->
       match element.GetString() with
-      | null -> wrong "a string"
-      | text -> Result.Ok(box text)
-    | _ -> wrong "a string"
-  elif t = typeof<int> then
+      | null -> wrongShape outcome element "a string"
+      | text -> box text
+    | _ -> wrongShape outcome element "a string"
+  | Int ->
     match element.ValueKind with
     | JsonValueKind.Number ->
       match element.TryGetInt32() with
-      | true, n -> Result.Ok(box n)
-      | false, _ -> wrong "an int"
-    | _ -> wrong "an int"
-  elif t = typeof<int64> then
+      | true, n -> box n
+      | false, _ -> wrongShape outcome element "an int"
+    | _ -> wrongShape outcome element "an int"
+  | Long ->
     match element.ValueKind with
     | JsonValueKind.Number ->
       match element.TryGetInt64() with
-      | true, n -> Result.Ok(box n)
-      | false, _ -> wrong "an int64"
-    | _ -> wrong "an int64"
-  elif t = typeof<bool> then
+      | true, n -> box n
+      | false, _ -> wrongShape outcome element "an int64"
+    | _ -> wrongShape outcome element "an int64"
+  | Flag ->
     match element.ValueKind with
-    | JsonValueKind.True -> Result.Ok(box true)
-    | JsonValueKind.False -> Result.Ok(box false)
-    | _ -> wrong "a bool"
-  elif t = typeof<DateTimeOffset> then
+    | JsonValueKind.True -> box true
+    | JsonValueKind.False -> box false
+    | _ -> wrongShape outcome element "a bool"
+  | Moment ->
     match element.ValueKind with
     | JsonValueKind.String ->
       match element.TryGetDateTimeOffset() with
-      | true, moment -> Result.Ok(box moment)
-      | false, _ -> wrong "an ISO 8601 date-time"
-    | _ -> wrong "an ISO 8601 date-time"
-  elif t = typeof<TimeSpan> then
+      | true, moment -> box moment
+      | false, _ -> wrongShape outcome element "an ISO 8601 date-time"
+    | _ -> wrongShape outcome element "an ISO 8601 date-time"
+  | Duration ->
     match element.ValueKind with
     | JsonValueKind.Number ->
       match element.TryGetInt64() with
-      | true, ticks -> Result.Ok(box (TimeSpan.FromTicks ticks))
-      | false, _ -> wrong "a tick count"
-    | _ -> wrong "a tick count"
-  elif isFSharpList t then
+      | true, ticks -> box (TimeSpan.FromTicks ticks)
+      | false, _ -> wrongShape outcome element "a tick count"
+    | _ -> wrongShape outcome element "a tick count"
+  | ListOf(elementSlot, builder) ->
     match element.ValueKind with
     | JsonValueKind.Array ->
-      let elementType = t.GetGenericArguments().[0]
-      element.EnumerateArray()
-      |> readAll (readValue elementType)
-      |> Result.map (makeList elementType)
-    | _ -> wrong "an array"
-  elif t.IsArray && t.GetArrayRank() = 1 then
+      let items = readItems outcome elementSlot element
+      match hasStopped outcome with
+      | true -> nothing
+      | false -> builder.MakeList items
+    | _ -> wrongShape outcome element "an array"
+  | ArrayOf(elementSlot, builder) ->
     match element.ValueKind with
     | JsonValueKind.Array ->
-      let elementType = t.GetElementType()
-      element.EnumerateArray()
-      |> readAll (readValue elementType)
-      |> Result.map (fun items ->
-        let array = Array.CreateInstance(elementType, List.length items)
-        items |> List.iteri (fun index item -> array.SetValue(item, index))
-        box array)
-    | _ -> wrong "an array"
-  elif FSharpType.IsRecord t then
-    let fields = FSharpType.GetRecordFields t
-    fields
-    |> readAll (fun field -> objectProperty element field.Name |> bind (readValue field.PropertyType))
-    |> Result.map (fun values -> FSharpValue.MakeRecord(t, List.toArray values))
-  elif FSharpType.IsUnion t then
-    objectProperty element "case" |> bind (readValue typeof<string>) |> bind (fun caseName ->
-      match FSharpType.GetUnionCases t |> Array.tryFind (fun case -> case.Name = string caseName) with
-      | None -> Result.Error(UnknownCase(t.Name, string caseName))
-      | Some case ->
-        let fields = case.GetFields()
-        match fields.Length with
-        | 0 -> Result.Ok(FSharpValue.MakeUnion(case, [||]))
-        | _ ->
-          objectProperty element "fields" |> bind (fun fieldsElement ->
-            fields
-            |> readAll (fun field -> objectProperty fieldsElement field.Name |> bind (readValue field.PropertyType))
-            |> Result.map (fun values -> FSharpValue.MakeUnion(case, List.toArray values))))
-  else
-    Result.Error(NotRepresentable(string t))
+      let items = readItems outcome elementSlot element
+      match hasStopped outcome with
+      | true -> nothing
+      | false -> builder.MakeArray items
+    | _ -> wrongShape outcome element "an array"
+  | RecordOf record ->
+    let values = readFields outcome record.RecordFields element
+    match hasStopped outcome with
+    | true -> nothing
+    | false -> record.MakeRecord values
+  | UnionOf union ->
+    let caseElement = propertyOf outcome element caseUtf8 "case"
+    match hasStopped outcome with
+    | true -> nothing
+    | false ->
+      match caseElement.ValueKind with
+      | JsonValueKind.String ->
+        match caseElement.GetString() with
+        | null -> wrongShape outcome caseElement "a string"
+        | caseName ->
+          match union.CasesByName.TryGetValue caseName with
+          | false, _ -> stop outcome (UnknownCase(union.UnionTypeName, caseName))
+          | true, case ->
+            match case.CaseFields.Length with
+            | 0 -> case.MakeCase noValues
+            | _ ->
+              let fieldsElement = propertyOf outcome element fieldsUtf8 "fields"
+              match hasStopped outcome with
+              | true -> nothing
+              | false ->
+                let values = readFields outcome case.CaseFields fieldsElement
+                match hasStopped outcome with
+                | true -> nothing
+                | false -> case.MakeCase values
+      | _ -> wrongShape outcome caseElement "a string"
+  | Unrepresentable t -> stop outcome (NotRepresentable(string t))
+
+/// The elements of a JSON array, read in order into one list of boxed items. If one cannot be read the outcome says
+/// which, and the items so far are not to be used. The element plan is looked up once per array.
+and private readItems (outcome: ReadOutcome) (elementSlot: PlanSlot) (array: JsonElement) : ResizeArray<obj> =
+  let elementPlan = elementSlot.Plan
+  let items = ResizeArray<obj>(array.GetArrayLength())
+  let mutable enumerator = array.EnumerateArray().GetEnumerator()
+  while not (hasStopped outcome) && enumerator.MoveNext() do
+    let item = readPlan outcome elementPlan enumerator.Current
+    if not (hasStopped outcome) then
+      items.Add item
+  items
+
+/// Each field of `fields`, read from `parent` in order, into one array; stops at the first field that cannot be read.
+and private readFields (outcome: ReadOutcome) (fields: FieldPlan[]) (parent: JsonElement) : obj[] =
+  let values: obj[] = Array.zeroCreate fields.Length
+  let mutable index = 0
+  while index < fields.Length && not (hasStopped outcome) do
+    let field = fields.[index]
+    let child = propertyOf outcome parent field.FieldUtf8 field.FieldName
+    if not (hasStopped outcome) then
+      values.[index] <- readPlan outcome field.FieldSlot.Plan child
+    index <- index + 1
+  values
 
 let private decode<'T> (line: string) : Result<'T, ProtocolError> =
   try
     use document = JsonDocument.Parse line
-    readValue typeof<'T> document.RootElement |> Result.map (fun value -> value :?> 'T)
+    let outcome = ReadOutcome()
+    let value = readPlan outcome (slotFor typeof<'T>).Plan document.RootElement
+    match outcome.Verdict with
+    | Result.Ok _ -> Result.Ok(value :?> 'T)
+    | Result.Error error -> Result.Error error
   with :? JsonException as ex ->
     Result.Error(NotJson ex.Message)
 

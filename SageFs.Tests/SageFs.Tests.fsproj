@@ -296,6 +296,8 @@
         <Compile Include="ReferenceFrameworkTests.fs" />
         <Compile Include="RuntimeCompatTests.fs" />
         <Compile Include="FsiProtocolTests.fs" />
+        <Compile Include="FsiProtocolWireGoldenTests.fs" />
+        <Compile Include="FsiProtocolThroughputTests.fs" />
         <Compile Include="FsiHostBuildTests.fs" />
         <Compile Include="FsiHostSdkRootTests.fs" />
         <Compile Include="FsiHostClientTests.fs" />
