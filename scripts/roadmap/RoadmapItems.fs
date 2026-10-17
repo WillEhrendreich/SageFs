@@ -36,6 +36,16 @@ let items : Item list =
       [ "docs/how-hot-reload-works.md"; "docs/mcp-tools.md" ]
       "When agents land work in the shared trunk, the app running in the trunk session picks it up live with its state kept. `get_cohort_status` and the dashboard show each landing's result per file, including the mechanism, and a landing that needs a restart says why. A landing that fails verification never reaches the app."
 
+    item "daemon-stops-sessions-an-agent-forgot" "The daemon stops a session an agent forgot" Agents Now
+      (landmark "SageFs.Core/SessionReaper.fs" "SessionReaper")
+      [ "docs/configuration.md" ]
+      "An agent makes a session, wanders off, and the worker sits there for days. Now the daemon stops it once the connection that made it has been gone and the session has been idle for 12 hours, and says why. A session you made from the dashboard, the CLI or an editor is never stopped this way. `SAGEFS_ABANDONED_SESSION_HOURS` sets the time, and 0 turns it off."
+
+    item "cohort-export-for-play" "Keep a cohort run and play it back" Agents Now
+      (landmark "SageFs/CohortExportCommand.fs" "CohortExportCommand")
+      [ "docs/progress.md"; "Readme.md" ]
+      "`sagefs cohort-export` writes a cohort's ledger from the local database to a file, with no daemon running, and `sagefs play` reads that file back. A finished cohort's rows get pruned after a while, so the export is the only way to keep a run. Playing back a repository-scoped ledger shows an empty cohort right now (the replay starts from the wrong scope), and that one is being fixed."
+
     item "slow-machines-get-fitting-timeouts" "Slow machines get timeouts that fit them" Platform Now
       (landmark "SageFs.Core/MachineTier.fs" "MachineTier")
       [ "docs/TROUBLESHOOTING.md"; "docs/configuration.md" ]
@@ -91,7 +101,7 @@ let items : Item list =
     item "repl-eval-reaches-the-running-app" "A REPL eval changes the running app" HotReload Next
       NoLandmarkYet
       [ "docs/how-hot-reload-works.md" ]
-      "An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. The other grafts FSI's own IL into a delta, and in a spike that worked and was served in milliseconds, but it isn't wired through a real worker and it has sharp edges. I'm building the write-to-source route first because it also keeps your change, then the faster one behind a flag."
+      "An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes. Nobody has driven it end to end against a running run_app app yet, so I can't tell you how long an eval takes to be served. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built."
 
     item "level-the-repl-without-losing-it" "Level the REPL after a patch without losing it" HotReload Next
       NoLandmarkYet
@@ -231,7 +241,7 @@ let items : Item list =
     item "hot-reload-on-windows-and-macos" "Hot reload checked on Windows and macOS" Platform Later
       NoLandmarkYet
       [ "docs/how-hot-reload-works.md"; "Readme.md" ]
-      "My CI is Linux only, so the hot reload detour has no test evidence on Windows, macOS or arm64, and the docs say so. I need machines to close that."
+      "My CI is Linux only, so the hot reload detour has no passing evidence on Windows, macOS or arm64, and the docs say so. The one data point so far is bad: on an Apple Silicon Mac the five real-detour tests for generic functions fail, and I don't know why (issue #149). Until someone with a Mac captures the failures, hot reload on macOS is unproven."
 
     item "start-on-login-windows" "Start on login for Windows" Platform Later
       NoLandmarkYet

@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 6, Later 18, Exploring 20. Already built: 31.
+On the page today: Now 0, Next 6, Later 18, Exploring 20. Already built: 33.
 
 ## Next (6)
 
@@ -21,7 +21,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Hot reload
 
-- [ ] **A REPL eval changes the running app.** An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. The other grafts FSI's own IL into a delta, and in a spike that worked and was served in milliseconds, but it isn't wired through a real worker and it has sharp edges. I'm building the write-to-source route first because it also keeps your change, then the faster one behind a flag. ([how-hot-reload-works.md](how-hot-reload-works.md))
+- [ ] **A REPL eval changes the running app.** An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes. Nobody has driven it end to end against a running run_app app yet, so I can't tell you how long an eval takes to be served. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built. ([how-hot-reload-works.md](how-hot-reload-works.md))
 - [ ] **Level the REPL after a patch without losing it.** Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. I'd make the daemon re-fetch maps and discovery after any host swap and check the REPL is idle and empty first, then do it for you. ([decisions.md](decisions.md), [how-hot-reload-works.md](how-hot-reload-works.md))
 
 ### Editors
@@ -67,7 +67,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 
 ### Platform and install
 
-- [ ] **Hot reload checked on Windows and macOS.** My CI is Linux only, so the hot reload detour has no test evidence on Windows, macOS or arm64, and the docs say so. I need machines to close that. ([how-hot-reload-works.md](how-hot-reload-works.md), [Readme.md](../Readme.md))
+- [ ] **Hot reload checked on Windows and macOS.** My CI is Linux only, so the hot reload detour has no passing evidence on Windows, macOS or arm64, and the docs say so. The one data point so far is bad: on an Apple Silicon Mac the five real-detour tests for generic functions fail, and I don't know why (issue #149). Until someone with a Mac captures the failures, hot reload on macOS is unproven. ([how-hot-reload-works.md](how-hot-reload-works.md), [Readme.md](../Readme.md))
 - [ ] **Start on login for Windows.** Linux gets a systemd user unit and macOS a launchd agent, and each starts the daemon for you. Nothing starts it at login on Windows yet. ([progress.md](progress.md), [Readme.md](../Readme.md))
 - [ ] **The getter sandbox beyond Linux x86-64.** Clicking a getter in the live-bindings pane runs it under a syscall filter that stops network use and file writes, on Linux x86-64 only. Elsewhere the getter runs under its deadline alone, and the pane says so. ([decisions.md](decisions.md))
 - [ ] **A token for every daemon call.** The daemon binds loopback only and checks Origin so a web page can't drive it, but nothing authenticates a local caller. A minted token the daemon requires would, and it's the same handle agents need for their own identity. ([mcp-tools.md](mcp-tools.md))
@@ -115,7 +115,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub.
 
-## Built (31)
+## Built (33)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -149,6 +149,8 @@ _These were on this page and are in the code now. Whether a build has shipped is
 ### Agents and cohorts
 
 - [x] **An agent's landed work reaches your running app.** When agents land work in the shared trunk, the app running in the trunk session picks it up live with its state kept. `get_cohort_status` and the dashboard show each landing's result per file, including the mechanism, and a landing that needs a restart says why. A landing that fails verification never reaches the app. Code: [`SageFs.Core/Features/TrunkFollow.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/TrunkFollow.fs)
+- [x] **The daemon stops a session an agent forgot.** An agent makes a session, wanders off, and the worker sits there for days. Now the daemon stops it once the connection that made it has been gone and the session has been idle for 12 hours, and says why. A session you made from the dashboard, the CLI or an editor is never stopped this way. `SAGEFS_ABANDONED_SESSION_HOURS` sets the time, and 0 turns it off. Code: [`SageFs.Core/SessionReaper.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SessionReaper.fs)
+- [x] **Keep a cohort run and play it back.** `sagefs cohort-export` writes a cohort's ledger from the local database to a file, with no daemon running, and `sagefs play` reads that file back. A finished cohort's rows get pruned after a while, so the export is the only way to keep a run. Playing back a repository-scoped ledger shows an empty cohort right now (the replay starts from the wrong scope), and that one is being fixed. Code: [`SageFs/CohortExportCommand.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/CohortExportCommand.fs)
 - [x] **Each agent counts as its own member.** Sub-agents of one Claude Code session share one MCP connection, so SageFs saw them as a single member and the build and test leases collided. The conductor now mints a token per run with `mint_member`, each token is its own member with its own claims and leases, and a token outranks the connection it arrives on. A platform sets it in a header or in MCP `_meta`, never as a tool argument. Tokens live in memory, so a daemon restart means minting new ones. Code: [`SageFs.Core/Capability.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Capability.fs)
 - [x] **A member's role says which tools it can call.** An Observer used to be able to call send_fsharp_code, because authority only gated the cohort's own tools. A member token now has one of four roles (Observer, Analysis, Verifier, Implementer), each a set of tool classes, and a call outside the role is refused with the role, the tool and what to do. `tools/list` shows a token only what it can call, and `SAGEFS_IDENTITY_POLICY=TokenRequired` makes a connection with no token read-only. Code: [`SageFs/McpCapability.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpCapability.fs)
 - [x] **A member's id is no longer the bearer handle.** A member's id in `get_cohort_status`, the cohort frame and the ledger was the MCP session id, which is the credential a request is bound to, so anyone who read the status could act as the conductor. The id is a fingerprint of it now, and a test fails if any cohort output carries a handle. Code: [`SageFs.Core/MemberTable.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/MemberTable.fs)
