@@ -112,6 +112,7 @@ type CliCommand =
   | Daemon of args: string array
   | Jupyter of connectionFile: string
   | Play of ledgerPath: string
+  | CohortExport of args: string list
   | Mcp of args: string array
 
 module CliCommand =
@@ -132,6 +133,7 @@ module CliCommand =
       Hygiene (hasFlag "--tidy", repo)
     | _ when args.Length > 0 && args.[0] = "play" && args.Length > 1 -> Play args.[1]
     | _ when args.Length > 0 && args.[0] = "play" -> ShowHelp
+    | _ when args.Length > 0 && args.[0] = CohortExportCommand.commandName -> CohortExport (List.ofArray args.[1..])
     | _ when args.Length > 0 && args.[0] = "mcp" -> Mcp args
     | _ when args.Length > 0 && args.[0] = "tui" -> DeprecatedClient "tui"
     | _ when args.Length > 0 && args.[0] = "gui" -> DeprecatedClient "gui"
@@ -571,6 +573,7 @@ let main args =
     printfn "       SageFs sweep [--kill]           Reap daemons whose owner process is gone"
     printfn "       SageFs hygiene [--tidy]         Show what agents left behind (worktrees, gate checkouts, caches, temp dirs) as a dry-run plan; --tidy runs only the safe part"
     printfn "       SageFs play <ledger.jsonl>      Replay a portable cohort ledger file offline"
+    printfn "       SageFs %s <out.jsonl>   Write the cohort ledger to a file play can replay (%s <path>, %s <dir>)" CohortExportCommand.commandName (CohortExportCommand.Flag.text CohortExportCommand.Flag.Scope) (CohortExportCommand.Flag.text CohortExportCommand.Flag.DataDir)
     printfn ""
     printfn "Options:"
     printfn "  --version, -v          Show version information"
@@ -674,6 +677,15 @@ let main args =
       0
     | Error message ->
       eprintfn "sagefs play: %s" message
+      1
+
+  | CohortExport exportArgs ->
+    match CohortExportCommand.run exportArgs with
+    | Ok summary ->
+      printfn "%s" summary
+      0
+    | Error error ->
+      eprintfn "sagefs %s: %s" CohortExportCommand.commandName (CohortExportCommand.describe error)
       1
 
   | DeprecatedClient name ->
