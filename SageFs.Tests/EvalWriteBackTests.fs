@@ -102,6 +102,23 @@ let tests =
       let splice = spliced (decide "let add a b = a + b + 1;;" (Some "Demo.fs") (Some 3) demo)
       splice.Replacement |> Expect.equal "no ;; in the file" "let add a b = a + b + 1"
 
+    testCase "an eval whose text equals the declaration already in the file is NotPersisted with an 'unchanged' reason and nothing is journaled" <| fun _ ->
+      // decide answering Error is what keeps the writer out: persist returns the verdict before it
+      // takes the file's lock, so no journal record is appended and the file is not renamed over.
+      decide "let add a b = a + b" (Some "Demo.fs") (Some 3) demo
+      |> refused
+      |> Expect.stringContains "says nothing changed" "unchanged"
+      decide "let add a b = a + b;;" (Some "Demo.fs") (Some 3) demo
+      |> refused
+      |> Expect.stringContains "the interactive terminator does not make it a change" "unchanged"
+      decide "let add a b =\n  a + b" (Some "Demo.fs") (Some 3) "module Demo\r\n\r\nlet add a b =\r\n  a + b\r\n"
+      |> refused
+      |> Expect.stringContains "the file's line endings do not make it a change" "unchanged"
+
+    testCase "an eval that differs from the declaration in the file is still spliced" <| fun _ ->
+      spliced (decide "let add a b = a + b + 1" (Some "Demo.fs") (Some 3) demo)
+      |> fun splice -> splice.Replacement |> Expect.equal "the changed text is the replacement" "let add a b = a + b + 1"
+
     testCase "the verdict has the exact words a caller reads for both outcomes" <| fun _ ->
       WriteBack.describe (WriteBack.NotPersisted "no file_path")
       |> Expect.equal "the refusal line" "not persisted: no file_path"

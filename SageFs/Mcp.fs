@@ -1223,12 +1223,12 @@ module McpTools =
             | Evaluated false -> EvalWriteBackWire.persist (fun () -> ctx.SessionOps.GetSessionInfo (toSessionId sid)) sid filePath blockStartLine code
             | Evaluated true -> Task.FromResult(EvalWriteBack.WriteBack.NotPersisted "the eval failed, so nothing was written back")
             | InfraFailure _ -> Task.FromResult(EvalWriteBack.WriteBack.NotPersisted "the eval never ran (SageFs could not reach the session), so nothing was written back")
-          // The verdict joins the text an agent reads; JSON output stays JSON (structuredContent
-          // carries the same line as a field), exactly as the freshness banner is handled below.
+          // The verdict joins the text only when the call named a file_path, i.e. asked for a write; a plain eval's text is its own output. JSON stays JSON
+          // (structuredContent carries the verdict as a field either way), exactly as the freshness banner is handled below.
           let enrichedOutput =
-            match format with
-            | Text -> enrichedOutput + Environment.NewLine + EvalWriteBack.WriteBack.describe writeBack
-            | Json -> enrichedOutput
+            match format, filePath with
+            | Text, Some _ -> enrichedOutput + Environment.NewLine + EvalWriteBack.WriteBack.describe writeBack
+            | _ -> enrichedOutput
           // Said after the result when the REPL runs the build from before a patch the app took. JSON is data and keeps its shape.
           let! freshness = SessionStatusPayload.replFreshnessOf ctx.SessionOps sid
           let shown = match format with Text -> ReplFreshness.annotate freshness enrichedOutput | Json -> enrichedOutput
