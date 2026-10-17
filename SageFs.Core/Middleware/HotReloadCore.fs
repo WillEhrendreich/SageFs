@@ -1459,7 +1459,7 @@ let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newM
     && existingMethod.MethodInfo.IsStatic = newMethod.MethodInfo.IsStatic
     && getParams existingMethod = getParams newMethod
     && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
-    && existingMethod.FullName.EndsWith(newMethod.FullName, StringComparison.Ordinal)
+    && QualifiedNameMatch.endsAtSegment existingMethod.FullName newMethod.FullName
     // The new member is handed an object of the OLD type, so it is only the same member when the two types
     // are laid out alike. When they are not, the save is refused by name (`refusals` in `handleNewAsmFromRepl`).
     && (existingMethod.MethodInfo.IsStatic
@@ -1531,7 +1531,7 @@ let planGenericWork (logger: ILogger) (isFileSave: bool) (st: State) (fresh: Met
       |> List.filter (fun old ->
         old.MethodInfo <> newest.MethodInfo
         && GenericReload.sameShape old.MethodInfo newest.MethodInfo
-        && old.FullName.EndsWith(newest.FullName, StringComparison.Ordinal))
+        && QualifiedNameMatch.endsAtSegment old.FullName newest.FullName)
       |> List.distinctBy _.MethodInfo
       |> List.map (fun old -> old, newest))
   match pairs with
@@ -1600,12 +1600,13 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
     // reference types from older FSI compilation units that were redefined.
     // This MUST be gated behind hotReloadEnabled. Without this gate, every normal
     // REPL eval (define type in block 1, use it in block 2) triggers the exception.
-    let detourPlan =
+    let detourPlan, ambiguousPairings =
       match hotReloadEnabled with
       | false ->
         { Functions = []
           MutableBindings = []
-          Declined = [] }
+          Declined = [] },
+        []
       | true ->
         let existingPairs =
           planDetours (fun m -> not (known.Contains m.MethodInfo)) (compatibleForDetour logger) newMethods st.Methods
@@ -1635,9 +1636,13 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
               | false -> None
             | _ -> None)
 
-        (existingPairs @ appHoldsPairs)
-        |> List.distinctBy (fun (older, newer) -> older.MethodInfo, newer.MethodInfo)
-        |> planDetourUnits (settableBindingsOf st.Methods)
+        // Two different modules that both end in the new definition's name cannot be told apart by name:
+        // neither is re-pointed, and both are named in the report.
+        let safePairs, ambiguous =
+          (existingPairs @ appHoldsPairs)
+          |> List.distinctBy (fun (older, newer) -> older.MethodInfo, newer.MethodInfo)
+          |> QualifiedNameMatch.separateAmbiguous (fun m -> m.FullName) (fun m -> m.MethodInfo)
+        planDetourUnits (settableBindingsOf st.Methods) safePairs, ambiguous
 
     // Apply Harmony detours — already gated by an empty plan when disabled. Only
     // the detours that ACTUALLY landed are reported: a method that threw on the
@@ -1683,9 +1688,11 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
         |> List.distinct
 
     let report =
-      match refusals with
-      | [] -> applyDetourPlan logger st.AppHolds detourPlan genericWork.Units
-      | _ -> DetourReport.empty
+      let applied =
+        match refusals with
+        | [] -> applyDetourPlan logger st.AppHolds detourPlan genericWork.Units
+        | _ -> DetourReport.empty
+      { applied with Failures = applied.Failures @ (ambiguousPairings |> List.map QualifiedNameMatch.Ambiguity.describe) }
 
     // A file-save (`isFileSave`) is an ATTEMPT to reach whatever the app
     // already holds — it must never redefine what "held" means, or a failed

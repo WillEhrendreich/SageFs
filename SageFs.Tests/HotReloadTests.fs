@@ -464,57 +464,13 @@ let hotReloadCompilationContextTests =
 let exactMethodMatchingTests =
   testList "exact method matching" [
     test "getUser does not match getUsers (suffix mismatch)" {
-      let fsiFull = "getUser"
-      let projectFull = "MyApp.Server.getUsers"
-      projectFull.EndsWith(fsiFull, StringComparison.Ordinal)
+      SageFs.Middleware.QualifiedNameMatch.endsAtSegment "MyApp.Server.getUsers" "getUser"
       |> Flip.Expect.isFalse "getUser should NOT match getUsers suffix"
     }
 
     test "handler matches Module.handler (exact suffix)" {
-      let fsiFull = "handler"
-      let projectFull = "MyApp.Server.Module.handler"
-      projectFull.EndsWith(fsiFull, StringComparison.Ordinal)
+      SageFs.Middleware.QualifiedNameMatch.endsAtSegment "MyApp.Server.Module.handler" "handler"
       |> Flip.Expect.isTrue "handler should match as exact suffix"
-    }
-
-    test "Module.handler matches with module prefix scoring" {
-      let fsiName = "handler"
-      let projectFull = "MyApp.Server.Routes.handler"
-      let lastOpenModules = ["Routes"]
-      let moduleScore =
-        lastOpenModules
-        |> Seq.map (fun o ->
-          match projectFull.EndsWith(o + "." + fsiName, StringComparison.Ordinal) with
-          | true -> 2
-          | false -> 0)
-        |> Seq.tryHead
-        |> Option.defaultValue 0
-      let noModuleScore =
-        match projectFull.EndsWith(fsiName, StringComparison.Ordinal) with
-        | true -> 1
-        | false -> 0
-      let score = max moduleScore noModuleScore
-      score |> Flip.Expect.equal "module-qualified match should score 2" 2
-    }
-
-    test "unrelated method scores 0" {
-      let fsiName = "handler"
-      let projectFull = "MyApp.Server.Routes.unrelatedFunction"
-      let lastOpenModules = ["Routes"]
-      let moduleScore =
-        lastOpenModules
-        |> Seq.map (fun o ->
-          match projectFull.EndsWith(o + "." + fsiName, StringComparison.Ordinal) with
-          | true -> 2
-          | false -> 0)
-        |> Seq.tryHead
-        |> Option.defaultValue 0
-      let noModuleScore =
-        match projectFull.EndsWith(fsiName, StringComparison.Ordinal) with
-        | true -> 1
-        | false -> 0
-      let score = max moduleScore noModuleScore
-      score |> Flip.Expect.equal "unrelated method should score 0" 0
     }
   ]
 
@@ -663,27 +619,18 @@ let moduleScoringMaxTests =
 
 let endswithPrefilterTests =
   testList "EndsWith pre-filter consistency" [
-    test "EndsWith rejects substring-only match" {
-      // "UserHandler.getUsers" contains "getUser" but does not EndsWith "getUser"
-      let fullName = "UserHandler.getUsers"
-      let candidate = "getUser"
-      fullName.Contains(candidate)
-      |> Flip.Expect.isTrue "Contains would match (loose)"
-      fullName.EndsWith(candidate, StringComparison.Ordinal)
-      |> Flip.Expect.isFalse "EndsWith correctly rejects (strict)"
+    test "a name that only contains the candidate does not match" {
+      SageFs.Middleware.QualifiedNameMatch.endsAtSegment "UserHandler.getUsers" "getUser"
+      |> Flip.Expect.isFalse "getUsers is not getUser"
     }
 
-    test "EndsWith accepts exact suffix match" {
-      let fullName = "MyApp.Handlers.processOrder"
-      let candidate = "processOrder"
-      fullName.EndsWith(candidate, StringComparison.Ordinal)
+    test "a name that ends in the candidate after a dot matches" {
+      SageFs.Middleware.QualifiedNameMatch.endsAtSegment "MyApp.Handlers.processOrder" "processOrder"
       |> Flip.Expect.isTrue "should accept exact suffix"
     }
 
-    test "EndsWith accepts qualified suffix" {
-      let fullName = "MyApp.Handlers.processOrder"
-      let candidate = "Handlers.processOrder"
-      fullName.EndsWith(candidate, StringComparison.Ordinal)
+    test "a qualified suffix matches at a segment boundary" {
+      SageFs.Middleware.QualifiedNameMatch.endsAtSegment "MyApp.Handlers.processOrder" "Handlers.processOrder"
       |> Flip.Expect.isTrue "should accept qualified suffix"
     }
   ]

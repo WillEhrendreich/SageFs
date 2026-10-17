@@ -48,6 +48,7 @@ let hostSourceNames =
     "ValueReads.fs"
     "GenericReload.fs"
     "ValueReadTracking.fs"
+    "QualifiedNameMatch.fs"
     "HotReloadCore.fs"
     "HostAgent.fs"
     "FsiProtocol.fs"
