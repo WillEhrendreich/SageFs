@@ -269,6 +269,23 @@ type DetourApplied =
   /// The detour did not happen and the old code is still live.
   | Failed of reason: string
 
+/// The detour library's own entry point for re-pointing one method onto another (`PatchTools.DetourMethod` of the
+/// merged Harmony assembly), reached by reflection because it is not public.
+module HarmonyDetour =
+  let lookupCount : int64 array = [| 0L |]
+
+  /// How many times the entry point has been looked up by reflection in this process.
+  let lookups () : int64 = Threading.Interlocked.Read(&lookupCount.[0])
+
+  /// Scans the merged assembly's types for the entry point.
+  let find () : MethodInfo =
+    Threading.Interlocked.Increment(&lookupCount.[0]) |> ignore
+    typeof<Harmony>.Assembly
+    |> _.GetTypes()
+    |> Array.find (fun t -> t.Name = "PatchTools")
+    |> fun x -> x.GetDeclaredMethods()
+    |> Seq.find (fun n -> n.Name = "DetourMethod")
+
 /// What the canary could say about a detour that landed. It travels with the verdict so a caller that re-points many
 /// copies in one eval can count them in ONE summary line, instead of the detour writing a line per copy.
 [<RequireQualifiedAccess>]
@@ -299,13 +316,7 @@ let detourMethodObserved (logger: ILogger) (method: MethodBase) (replacement: Me
     // Snapshot pre-detour observable state for canary validation
     let preSnapshot = snapshotMethodState method
 
-    typeof<Harmony>.Assembly
-    |> _.GetTypes()
-    |> Array.find (fun t -> t.Name = "PatchTools")
-    |> fun x -> x.GetDeclaredMethods()
-    |> Seq.find (fun n -> n.Name = "DetourMethod")
-    |> fun x -> x.Invoke(null, [| method; replacement |])
-    |> ignore
+    HarmonyDetour.find().Invoke(null, [| method; replacement |]) |> ignore
 
     // Post-patch canary: verify the detour actually took effect
     match preSnapshot with

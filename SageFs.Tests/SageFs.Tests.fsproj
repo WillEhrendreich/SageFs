@@ -89,6 +89,7 @@
         <Compile Include="HygieneSurfaceTests.fs" />
         <Compile Include="HygieneStallTests.fs" />
         <Compile Include="HotReloadCopiesTests.fs" />
+        <Compile Include="DetourEntryPointTests.fs" />
         <Compile Include="WorkerStartupReaderTests.fs" />
         <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
