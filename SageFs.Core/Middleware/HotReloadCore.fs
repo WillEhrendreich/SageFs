@@ -286,6 +286,10 @@ module HarmonyDetour =
     |> fun x -> x.GetDeclaredMethods()
     |> Seq.find (fun n -> n.Name = "DetourMethod")
 
+  /// The entry point, found once: the scan reads every type of the merged Harmony assembly, and a detour is made
+  /// for every earlier copy of every function an eval changes. `NativeDetours` remembers its lookup the same way.
+  let entry : Lazy<MethodInfo> = lazy (find ())
+
 /// What the canary could say about a detour that landed. It travels with the verdict so a caller that re-points many
 /// copies in one eval can count them in ONE summary line, instead of the detour writing a line per copy.
 [<RequireQualifiedAccess>]
@@ -316,7 +320,7 @@ let detourMethodObserved (logger: ILogger) (method: MethodBase) (replacement: Me
     // Snapshot pre-detour observable state for canary validation
     let preSnapshot = snapshotMethodState method
 
-    HarmonyDetour.find().Invoke(null, [| method; replacement |]) |> ignore
+    HarmonyDetour.entry.Value.Invoke(null, [| method; replacement |]) |> ignore
 
     // Post-patch canary: verify the detour actually took effect
     match preSnapshot with
