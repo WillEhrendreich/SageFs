@@ -1,0 +1,110 @@
+request	null	Error WrongShape ("an object", "Null") | expected an object but found Null
+request	123	Error WrongShape ("an object", "Number") | expected an object but found Number
+request	"str"	Error WrongShape ("an object", "String") | expected an object but found String
+request	[1,2,3]	Error WrongShape ("an object", "Array") | expected an object but found Array
+request	{}	Error MissingField "case" | missing field 'case'
+request	true	Error WrongShape ("an object", "True") | expected an object but found True
+request		Error NotJson
+request	   	Error NotJson
+request	{nope	Error NotJson
+request	{"case":	Error NotJson
+request	{"case":42}	Error WrongShape ("a string", "Number") | expected a string but found Number
+request	{"case":null}	Error WrongShape ("a string", "Null") | expected a string but found Null
+request	{"case":["Eval"]}	Error WrongShape ("a string", "Array") | expected a string but found Array
+request	{"case":"eval"}	Error UnknownCase ("Request", "eval") | unknown case 'eval' of Request
+request	{"case":"dance"}	Error UnknownCase ("Request", "dance") | unknown case 'dance' of Request
+request	{"case":""}	Error UnknownCase ("Request", "") | unknown case '' of Request
+request	{"Case":"Interrupt"}	Error MissingField "case" | missing field 'case'
+request	{"case":"Interrupt"}	Ok Interrupt
+request	{"case":"Shutdown"}	Ok Shutdown
+request	{"case":"Shutdown","fields":5}	Ok Shutdown
+request	{"case":"Shutdown","other":[1,{"a":null}]}	Ok Shutdown
+request	{"c\u0061se":"Interrupt"}	Ok Interrupt
+request	{"case":"Interr\u0075pt"}	Ok Interrupt
+request	{"case":"Eval","case":"Shutdown"}	Ok Shutdown
+request	{"case":"Shutdown","case":"Eval"}	Error MissingField "fields" | missing field 'fields'
+request	{"case":"Eval","fields":{"id":1,"id":2,"code":"a","code":"b"}}	Ok Eval (2L, "b")
+request	{"case":"Eval"}	Error MissingField "fields" | missing field 'fields'
+request	{"case":"Eval","fields":null}	Error WrongShape ("an object", "Null") | expected an object but found Null
+request	{"case":"Eval","fields":5}	Error WrongShape ("an object", "Number") | expected an object but found Number
+request	{"case":"Eval","fields":[1,"a"]}	Error WrongShape ("an object", "Array") | expected an object but found Array
+request	{"case":"Eval","fields":{}}	Error MissingField "id" | missing field 'id'
+request	{"case":"Eval","fields":{"id":1}}	Error MissingField "code" | missing field 'code'
+request	{"case":"Eval","fields":{"code":"a"}}	Error MissingField "id" | missing field 'id'
+request	{"case":"Eval","fields":{"id":"x","code":1}}	Error WrongShape ("an int64", "String") | expected an int64 but found String
+request	{"case":"Eval","fields":{"id":1,"code":1}}	Error WrongShape ("a string", "Number") | expected a string but found Number
+request	{"case":"Eval","fields":{"id":1,"code":null}}	Error WrongShape ("a string", "Null") | expected a string but found Null
+request	{"case":"Eval","fields":{"id":1,"code":"a"}}	Ok Eval (1L, "a")
+request	{"case":"Eval","fields":{"id":1,"code":"a","extra":true}}	Ok Eval (1L, "a")
+request	{"case":"Eval","fields":{"id":-9223372036854775808,"code":"a"}}	Ok Eval (-9223372036854775808L, "a")
+request	{"case":"Eval","fields":{"id":9223372036854775808,"code":"a"}}	Error WrongShape ("an int64", "Number") | expected an int64 but found Number
+request	{"case":"Eval","fields":{"id":1.5,"code":"a"}}	Error WrongShape ("an int64", "Number") | expected an int64 but found Number
+request	{"case":"Eval","fields":{"id":1e3,"code":"a"}}	Error WrongShape ("an int64", "Number") | expected an int64 but found Number
+request	{"case":"Eval","fields":{"id":1.0,"code":"a"}}	Error WrongShape ("an int64", "Number") | expected an int64 but found Number
+request	{"case":"Eval","fields":{"id":-0,"code":"a"}}	Ok Eval (0L, "a")
+request	{"case":"Eval","fields":{"id":"1","code":"a"}}	Error WrongShape ("an int64", "String") | expected an int64 but found String
+request	{"case":"Eval","fields":{"id":true,"code":"a"}}	Error WrongShape ("an int64", "True") | expected an int64 but found True
+request	{"case":"Complete","fields":{"id":1,"text":"a","caret":2147483647}}	Ok Complete (1L, "a", 2147483647)
+request	{"case":"Complete","fields":{"id":1,"text":"a","caret":2147483648}}	Error WrongShape ("an int", "Number") | expected an int but found Number
+request	{"case":"Complete","fields":{"id":1,"text":"a","caret":-2147483648}}	Ok Complete (1L, "a", -2147483648)
+request	{"case":"Complete","fields":{"id":1,"text":"a","caret":1.5}}	Error WrongShape ("an int", "Number") | expected an int but found Number
+request	{"case":"Complete","fields":{"id":1,"text":"a","caret":"2"}}	Error WrongShape ("an int", "String") | expected an int but found String
+request	{"case":"EvaluateMember","fields":{"id":1,"binding":"b","path":["x","y"]}}	Ok EvaluateMember (1L, "b", ["x"; "y"])
+request	{"case":"EvaluateMember","fields":{"id":1,"binding":"b","path":[]}}	Ok EvaluateMember (1L, "b", [])
+request	{"case":"EvaluateMember","fields":{"id":1,"binding":"b","path":"x"}}	Error WrongShape ("an array", "String") | expected an array but found String
+request	{"case":"EvaluateMember","fields":{"id":1,"binding":"b","path":["x",2,3]}}	Error WrongShape ("a string", "Number") | expected a string but found Number
+request	{"case":"EvaluateMember","fields":{"id":1,"binding":"b","path":null}}	Error WrongShape ("an array", "Null") | expected an array but found Null
+request	{"case":"EvaluateMember","fields":{"id":1,"binding":"b","path":{}}}	Error WrongShape ("an array", "Object") | expected an array but found Object
+request	{"case":"EvaluateMember","fields":{"id":1,"binding":5,"path":[7]}}	Error WrongShape ("a string", "Number") | expected a string but found Number
+request	{"case":"AgentAwaitEntries","fields":{"id":1,"probes":[1,2,3],"bound":600000000}}	Ok AgentAwaitEntries (1L, [1L; 2L; 3L], 00:01:00)
+request	{"case":"AgentAwaitEntries","fields":{"id":1,"probes":[1,"2"],"bound":600000000}}	Error WrongShape ("an int64", "String") | expected an int64 but found String
+request	{"case":"AgentAwaitEntries","fields":{"id":1,"probes":[],"bound":"x"}}	Error WrongShape ("a tick count", "String") | expected a tick count but found String
+request	{"case":"AgentAwaitEntries","fields":{"id":1,"probes":[],"bound":1.5}}	Error WrongShape ("a tick count", "Number") | expected a tick count but found Number
+request	{"case":"AgentAwaitEntries","fields":{"id":1,"probes":[],"bound":-1}}	Ok AgentAwaitEntries (1L, [], -00:00:00.0000001)
+request	{"case":"AgentAwaitEntries","fields":{"id":1,"probes":[],"bound":null}}	Error WrongShape ("a tick count", "Null") | expected a tick count but found Null
+request	{"case":"SetWalkMode","fields":{"id":1,"mode":{"case":"Safe"}}}	Ok SetWalkMode (1L, Safe)
+request	{"case":"SetWalkMode","fields":{"id":1,"mode":{"case":"Nope"}}}	Error UnknownCase ("WalkMode", "Nope") | unknown case 'Nope' of WalkMode
+request	{"case":"SetWalkMode","fields":{"id":1,"mode":"Safe"}}	Error WrongShape ("an object", "String") | expected an object but found String
+request	{"case":"SetWalkMode","fields":{"id":1,"mode":{}}}	Error MissingField "case" | missing field 'case'
+request	{"case":"SetWalkMode","fields":{"id":1}}	Error MissingField "mode" | missing field 'mode'
+response	null	Error WrongShape ("an object", "Null") | expected an object but found Null
+response	{}	Error MissingField "case" | missing field 'case'
+response	[]	Error WrongShape ("an object", "Array") | expected an object but found Array
+response	{nope	Error NotJson
+response	{"case":"Ready","fields":{"runtime":"r","fsharpCore":"f"}}	Ok Ready ("r", "f")
+response	{"case":"Ready","fields":{"runtime":"r"}}	Error MissingField "fsharpCore" | missing field 'fsharpCore'
+response	{"case":"Ready","fields":{"runtime":1,"fsharpCore":"f"}}	Error WrongShape ("a string", "Number") | expected a string but found Number
+response	{"case":"Output","fields":{"stream":{"case":"StdOut"},"text":"hi"}}	Ok Output (StdOut, "hi")
+response	{"case":"Output","fields":{"stream":{"case":"StdErr"},"text":"hi"}}	Ok Output (StdErr, "hi")
+response	{"case":"Output","fields":{"stream":{"case":"StdAll"},"text":"hi"}}	Error UnknownCase ("OutputStream", "StdAll") | unknown case 'StdAll' of OutputStream
+response	{"case":"Output","fields":{"stream":"StdOut","text":"hi"}}	Error WrongShape ("an object", "String") | expected an object but found String
+response	{"case":"CompletionsResult","fields":{"id":1,"items":[]}}	Ok CompletionsResult (1L, [])
+response	{"case":"CompletionsResult","fields":{"id":1,"items":[{"DisplayText":"a","ReplacementText":"b","Glyph":"c"}]}}	Ok CompletionsResult (1L, [{ DisplayText = "a"                           ReplacementText = "b"                           Glyph = "c" }])
+response	{"case":"CompletionsResult","fields":{"id":1,"items":[{"DisplayText":"a","ReplacementText":"b","Glyph":"c"},{"DisplayText":"a","ReplacementText":"b"}]}}	Error MissingField "Glyph" | missing field 'Glyph'
+response	{"case":"CompletionsResult","fields":{"id":1,"items":[{"DisplayText":"a","ReplacementText":"b","Glyph":"c"},{"DisplayText":1,"ReplacementText":2}]}}	Error WrongShape ("a string", "Number") | expected a string but found Number
+response	{"case":"CompletionsResult","fields":{"id":1,"items":[null]}}	Error WrongShape ("an object", "Null") | expected an object but found Null
+response	{"case":"CompletionsResult","fields":{"id":1,"items":[[]]}}	Error WrongShape ("an object", "Array") | expected an object but found Array
+response	{"case":"CompletionsResult","fields":{"id":1,"items":{}}}	Error WrongShape ("an array", "Object") | expected an array but found Object
+response	{"case":"CompletionsResult","fields":{"id":1,"items":"x"}}	Error WrongShape ("an array", "String") | expected an array but found String
+response	{"case":"CompletionsResult","fields":{"id":1,"items":[{"DisplayText":"a","ReplacementText":"b","Glyph":"c","More":1}]}}	Ok CompletionsResult (1L, [{ DisplayText = "a"                           ReplacementText = "b"                           Glyph = "c" }])
+response	{"case":"CheckResult","fields":{"id":1,"diagnostics":[{"Severity":{"case":"DiagError"},"ErrorNumber":1,"Subcategory":"s","Message":"m","StartLine":1,"StartColumn":2,"EndLine":3,"EndColumn":4}]}}	Ok CheckResult (1L, [{ Severity = DiagError                     ErrorNumber = 1                     Subcategory = "s"                     Message = "m"                     StartLine = 1                     StartColumn = 2                     EndLine = 3                     EndColumn = 4 }])
+response	{"case":"CheckResult","fields":{"id":1,"diagnostics":[{"Severity":{"case":"DiagBoom"},"ErrorNumber":1,"Subcategory":"s","Message":"m","StartLine":1,"StartColumn":2,"EndLine":3,"EndColumn":4}]}}	Error UnknownCase ("DiagnosticSeverity", "DiagBoom") | unknown case 'DiagBoom' of DiagnosticSeverity
+response	{"case":"CheckResult","fields":{"id":1,"diagnostics":[{"Severity":{"case":"DiagInfo"},"ErrorNumber":"1","Subcategory":"s","Message":"m","StartLine":1,"StartColumn":2,"EndLine":3,"EndColumn":4}]}}	Error WrongShape ("an int", "String") | expected an int but found String
+response	{"case":"CheckResult","fields":{"id":1,"diagnostics":[{"Severity":{"case":"DiagInfo"},"ErrorNumber":1,"Subcategory":"s","Message":"m","StartLine":1,"StartColumn":2,"EndLine":3}]}}	Error MissingField "EndColumn" | missing field 'EndColumn'
+response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{"message":"bad"}},"diagnostics":[]}}	Ok EvalResult (1L, EvalFailed "bad", [])
+response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed"},"diagnostics":[]}}	Error MissingField "fields" | missing field 'fields'
+response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{}},"diagnostics":[]}}	Error MissingField "message" | missing field 'message'
+response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalSucceeded"},"diagnostics":[]}}	Ok EvalResult (1L, EvalSucceeded, [])
+response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalInterrupted","fields":3},"diagnostics":[]}}	Ok EvalResult (1L, EvalInterrupted, [])
+response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{"message":"bad"}}}}	Error MissingField "diagnostics" | missing field 'diagnostics'
+response	{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasBool","fields":{"value":true}}}}	Ok FlagResult (1L, FlagWasBool true)
+response	{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasBool","fields":{"value":"true"}}}}	Error WrongShape ("a bool", "String") | expected a bool but found String
+response	{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasBool","fields":{"value":1}}}}	Error WrongShape ("a bool", "Number") | expected a bool but found Number
+response	{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasBool","fields":{"value":null}}}}	Error WrongShape ("a bool", "Null") | expected a bool but found Null
+response	{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasUnbound"}}}	Ok FlagResult (1L, FlagWasUnbound)
+response	{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasNotBool","fields":{"typeName":"T"}}}}	Ok FlagResult (1L, FlagWasNotBool "T")
+response	{"case":"AgentRefused","fields":{"id":1,"reason":"nope"}}	Ok AgentRefused (1L, "nope")
+response	{"case":"AgentRefused","fields":{"id":1,"reason":null}}	Error WrongShape ("a string", "Null") | expected a string but found Null
+response	{"case":"AgentLoadedAssembliesResult","fields":{"id":1,"names":["a","b"]}}	Ok AgentLoadedAssembliesResult (1L, ["a"; "b"])
+response	{"case":"AgentLoadedAssembliesResult","fields":{"id":1,"names":["a",null]}}	Error WrongShape ("a string", "Null") | expected a string but found Null
+response	{"case":"AgentLoadedAssembliesResult","fields":{"id":1,"names":["a",{"x":1}]}}	Error WrongShape ("a string", "Object") | expected a string but found Object
