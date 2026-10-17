@@ -58,9 +58,9 @@ let private info (sid: string) (lastActive: DateTime) (status: WorkerProtocol.Se
     ActiveProject = None
     ProjectRoles = []
     App = AppRun.AppRunState.NotRunning
-    Rebuild = WorkerProtocol.LastRebuild.NeverRebuilt
-    Reload = WorkerProtocol.SessionReload.NoReloadYet
-    Freshness = WorkerProtocol.ReplFreshness.InSync }
+    Rebuild = LastRebuild.NeverRebuilt
+    Reload = SessionReload.NoReloadYet
+    Freshness = ReplFreshness.InSync }
 
 let private ready : WorkerProtocol.SessionLifecycleStatus = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 100; Port = None }
 

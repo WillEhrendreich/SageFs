@@ -237,6 +237,7 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="CallerPendingSimTests.fs" />
+        <Compile Include="SessionReaperSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
         <Compile Include="ReadyWaitSimTests.fs" />
         <Compile Include="SourceStateProbeTests.fs" />

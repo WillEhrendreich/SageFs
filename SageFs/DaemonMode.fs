@@ -3663,6 +3663,48 @@ let run
   // One-shot timer pattern (same as cache save) to prevent reentrancy.
   let activityCleanupIntervalMs = int Timeouts.agentActivityCleanupInterval.TotalMilliseconds
   let mutable activityCleanupTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+
+  // Session reaper (SessionReaper.fs): on the same minute tick, stop a session an agent made once its connection has been
+  // gone and the session idle for Timeouts.abandonedSessionBound. It stops through the same path the dashboard's Stop button
+  // and stop_session use (sessionOps.StopSession: graceful worker shutdown, manifest MarkStopped), never by killing a process.
+  // The sweep guards itself against overlap, so a slow stop cannot be started twice by the next tick. Touching the reaper
+  // here, before the first tick, is what starts its clock.
+  let sessionReaper = McpTools.sessionReaper
+  let reapAbandonedSessions () : System.Threading.Tasks.Task<unit> =
+    task {
+      try
+        match sessionReaper.Bound with
+        | SessionReaper.Bound.Disabled -> ()
+        | SessionReaper.Bound.After _ ->
+          let! sessions = sessionOps.GetAllSessions()
+          let stop (sid: string) =
+            task {
+              let! result = sessionOps.StopSession sid
+              elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+              McpTools.releaseSessionOwner sid
+              return result
+            }
+          let! outcome =
+            sessionReaper.SweepAsync(DateTime.UtcNow, McpTools.reaperMakers (), McpTools.reaperIsConnected activityTracker, stop, sessions)
+          match outcome with
+          | SessionReaper.SweepOutcome.AlreadySweeping -> ()
+          | SessionReaper.SweepOutcome.Swept attempts ->
+            for attempt in attempts do
+              match attempt.Outcome with
+              | Result.Ok _ ->
+                log.LogWarning(
+                  "Session reaper: stopped session {SessionId} made by agent {Agent}: owner gone {OwnerGone}, idle {Idle}, bound {Bound} ({Why})",
+                  attempt.Session.SessionId, attempt.Session.AgentName,
+                  SessionReaper.describeSpan attempt.Session.Why.OwnerGoneFor, SessionReaper.describeSpan attempt.Session.Why.IdleFor,
+                  SessionReaper.describeSpan attempt.Session.Why.Bound, SessionReaper.ReapWhy.describe attempt.Session.Why)
+              | Result.Error err ->
+                log.LogWarning(
+                  "Session reaper: could not stop abandoned session {SessionId} made by agent {Agent}, will try again: {Error}",
+                  attempt.Session.SessionId, attempt.Session.AgentName, SageFsError.describe err)
+      with ex ->
+        log.LogWarning("Session reaper sweep threw unexpectedly: {Error}", ex.Message)
+    }
+
   let activityCleanupCallback _ =
     try
       let outcome = AgentActivityTracker.cleanup activityTracker Timeouts.agentPresenceEviction DateTime.UtcNow
@@ -3670,6 +3712,7 @@ let run
       | SessionOperations.OccupancyCleanupOutcome.EvictedStale agents ->
         log.LogInformation("Agent cleanup: evicted stale agents: {Agents}", String.concat ", " agents)
       | _ -> ()
+      reapAbandonedSessions () |> ignore
     finally
       if not (isNull activityCleanupTimerRef) then
         try activityCleanupTimerRef.Change(activityCleanupIntervalMs, System.Threading.Timeout.Infinite) |> ignore

@@ -42,6 +42,18 @@ module Timeouts =
       | true, v when v > 0.0 -> TimeSpan.FromMinutes(v)
       | _ -> TimeSpan.FromMinutes(defaultMinutes)
 
+  /// Hours, where `0` is a real answer and means "off". A value that is not a number, or is negative, is ignored and the
+  /// default is used, as for the other variables. Zero comes back as `TimeSpan.Zero`; the caller turns that into
+  /// `SessionReaper.Bound.Disabled` at once, so no zero span travels through the domain.
+  let private envOrDefaultHoursOrOff (varName: string) (defaultHours: float) =
+    match Environment.GetEnvironmentVariable(varName) with
+    | null | "" -> TimeSpan.FromHours(defaultHours)
+    | value ->
+      match Double.TryParse(value) with
+      | true, v when v = 0.0 -> TimeSpan.Zero
+      | true, v when v > 0.0 -> TimeSpan.FromHours(v)
+      | _ -> TimeSpan.FromHours(defaultHours)
+
   // -- Scaling by the machine --
   // A duration is one of two kinds, and which one is written where it is declared.
   //   * A WAIT FOR THE MACHINE (a start, a build, a warm-up, a ready state, a restart, an exit, a probe
@@ -778,6 +790,12 @@ module Timeouts =
   /// Env-overridable so an integration test can prove the boundary without
   /// waiting ten real minutes for it.
   let idleSessionThreshold = envOrDefaultMinutes "SAGEFS_IDLE_SESSION_THRESHOLD_MINUTES" 10.0
+  /// How long the connection that made an agent's session has to be gone, AND how long the session has to be idle, before
+  /// the daemon stops it (`SessionReaper`). Both have to reach it. A session with no owner record, made from the dashboard,
+  /// the CLI or an editor, is never stopped this way. Counted from no earlier than the daemon's own start, so a restart
+  /// delays a stop and never brings one forward. Twelve hours is a night: an agent that comes back the next morning finds
+  /// its session. Zero turns the reaper off.
+  let abandonedSessionBound = envOrDefaultHoursOrOff "SAGEFS_ABANDONED_SESSION_HOURS" 12.0
   /// Maximum time to poll a worker waiting for Ready status after spawn/restart.
   /// If exceeded, the session is faulted to prevent infinite WarmingUp states.
   let warmupReadyPollMax = envOrDefaultMachine "SAGEFS_WARMUP_READY_POLL_SECONDS" 120.0

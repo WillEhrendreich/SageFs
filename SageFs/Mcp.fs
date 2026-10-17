@@ -255,6 +255,21 @@ module McpTools =
     AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sessionId) staleAgentTimeout DateTime.UtcNow
     |> List.map (fun p -> ({ AgentName = p.AgentName; Role = p.Role } : SessionOperations.SessionOccupancy))
 
+  /// The daemon's session reaper (`SessionReaper`): the one `list_sessions` reads and the daemon's housekeeping tick sweeps with.
+  /// Its clock starts when the daemon first touches it, which is no earlier than the daemon's start, so a restart can only
+  /// delay a stop. Zero `SAGEFS_ABANDONED_SESSION_HOURS` turns it off.
+  let sessionReaper : SessionReaper.Reaper =
+    SessionReaper.Reaper(DateTime.UtcNow, SessionReaper.Bound.ofTimeSpan Timeouts.abandonedSessionBound)
+
+  /// The owner ledger as the reaper reads it: who made each session, by connection.
+  let reaperMakers () : SessionReaper.Maker list =
+    HygieneService.OwnerLedger.read DaemonState.SageFsDir
+    |> List.map (fun r -> ({ SessionId = r.SessionId; AgentName = r.AgentName; ConnectionId = r.ConnectionId } : SessionReaper.Maker))
+
+  /// Whether a connection is still around: the same question hygiene asks, of the same tracker.
+  let reaperIsConnected (tracker: AgentActivityTracker.Tracker) (connectionId: string) : bool =
+    AgentActivityTracker.getPresence tracker connectionId |> Option.isSome
+
   /// Per-session compilation context state (evaluated modules, file cache).
   let compilationStates =
     Collections.Concurrent.ConcurrentDictionary<string, Middleware.CompilationContext.CompilationState>()
@@ -2302,7 +2317,17 @@ module McpTools =
         |> Map.ofList
       // Each session's source line is read off the disk and the worker's own warmup report, all sessions at once.
       let! sources = SourceStateProbe.readAll (warmupOf ctx) sessions
-      return SourceStateProbe.formatSessionList System.DateTime.UtcNow (Some occupancyMap) sources sessions
+      // What the daemon's reaper makes of each agent-made session, so a person sees what would be stopped before it is.
+      let now = System.DateTime.UtcNow
+      let owners =
+        sessionReaper.Assess(now, reaperMakers (), reaperIsConnected ctx.ActivityTracker, sessions)
+        |> List.map (fun a -> a.SessionId, SessionReaper.Assessment.listLine a)
+        |> Map.ofList
+      let listed = SourceStateProbe.formatSessionListWithOwners now (Some occupancyMap) sources owners sessions
+      // Sessions the reaper stopped, newest first, so a session that vanished is explained where a person looks.
+      match sessionReaper.Reaped with
+      | [] -> return listed
+      | reaped -> return listed + "\n\n" + (reaped |> List.map SessionReaper.ReapedSession.describe |> String.concat "\n")
     }
 
   /// Stop a session by ID.

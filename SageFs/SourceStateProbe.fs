@@ -166,10 +166,11 @@ let loadedDefinitionOf (artifact: string) (source: SourceState) : Features.Verif
 
 /// `list_sessions`' text: each session as `SessionOperations.formatSessionInfo` says it, with its source line under it. A
 /// session the sources map has no reading for says it was not read, never that it is in sync.
-let formatSessionList
+let formatSessionListWithOwners
   (now: DateTime)
   (occupancy: Map<string, SessionOperations.SessionOccupancy list> option)
   (sources: Map<string, SourceState>)
+  (owners: Map<string, string>)
   (sessions: WorkerProtocol.SessionInfo list)
   : string =
   match sessions with
@@ -180,6 +181,22 @@ let formatSessionList
       let sid = WorkerProtocol.SessionId.value info.Id
       let occ = occupancy |> Option.map (fun m -> m |> Map.tryFind sid |> Option.defaultValue [])
       let source = sources |> Map.tryFind sid |> Option.defaultValue (SourceState.Unknown UnknownReason.NotAssessed)
-      sprintf "%s\n  %s" (SessionOperations.formatSessionInfo now occ info) (SourceState.listLine source))
+      // A session an agent made says whether its owner is still here, above the source line (which stays last). A session
+      // a person made has no owner line.
+      let ownerLine =
+        match owners |> Map.tryFind sid with
+        | Some line when line <> "" -> sprintf "\n  %s" line
+        | Some _
+        | None -> ""
+      sprintf "%s%s\n  %s" (SessionOperations.formatSessionInfo now occ info) ownerLine (SourceState.listLine source))
     |> String.concat "\n\n"
     |> sprintf "%d active session(s):\n\n%s" sessions.Length
+
+/// `formatSessionListWithOwners` for a caller that has no owner lines to show.
+let formatSessionList
+  (now: DateTime)
+  (occupancy: Map<string, SessionOperations.SessionOccupancy list> option)
+  (sources: Map<string, SourceState>)
+  (sessions: WorkerProtocol.SessionInfo list)
+  : string =
+  formatSessionListWithOwners now occupancy sources Map.empty sessions

@@ -99,6 +99,12 @@
         <Compile Include="CallerPendingSim.fs" />
         <Compile Include="CallerPendingInvariants.fs" />
         <Compile Include="CallerPendingGenerators.fs" />
+        <!-- Session reaper DST: folds the real Reaper.SweepAsync over real SessionInfo values through arrivals, departures,
+             use, daemon restarts and sweeps; the truth is an independent fold of who was seen when. Twins forget the
+             restart, ignore presence and treat a person's session as an agent's. -->
+        <Compile Include="SessionReaperSim.fs" />
+        <Compile Include="SessionReaperInvariants.fs" />
+        <Compile Include="SessionReaperGenerators.fs" />
         <!-- Getter-guard DST: folds the real reachability walk, patch registry, stop cells and click
              lifecycle through the watchdog, an abandoned thread, shared helpers and a reload during a
              click; twins release at give-up, never retire a cell, unpatch without counting holders and

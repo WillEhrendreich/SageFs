@@ -435,6 +435,9 @@
         <Compile Include="SessionManager.fs" />
         <Compile Include="SessionOperations.fs" />
         <Compile Include="AgentActivityTracker.fs" />
+        <!-- The daemon stops an agent's session once its connection has been gone and it has been idle for the bound.
+             Pure decision plus the reaper's memory; the daemon's timer and the stop path are wired in DaemonMode.fs. -->
+        <Compile Include="SessionReaper.fs" />
         <!-- Before DaemonState.fs on purpose: the data directory has to be found without running its static
              initialiser, which reads Timeouts (see the file). -->
         <Compile Include="DataDirChoice.fs" />
