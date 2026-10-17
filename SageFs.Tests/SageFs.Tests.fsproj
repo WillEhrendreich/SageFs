@@ -349,6 +349,8 @@
          <Compile Include="DomainModelVizTests.fs" />
          <Compile Include="ExpectoModuleBindingFixture.fs" />
           <Compile Include="LiveTestingExecutorTests.fs" />
+          <Compile Include="FsiRedefinedTestFixtures.fs" />
+          <Compile Include="RedefinedTestDiscoveryTests.fs" />
          <Compile Include="ExpectoPendingFixtureModule.fs" />
          <Compile Include="ExpectoPendingTests.fs" />
          <Compile Include="ExpectoDispositionTests.fs" />

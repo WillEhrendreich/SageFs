@@ -875,6 +875,15 @@ module TestOrchestrator =
     RunTest: TestCase -> Async<TestResult>
   }
 
+  /// One test per id: of the tests that share an id, the last one found. A test evaluated again in an FSI session lands in a new
+  /// `FSI_NNNN` container and the session's assembly keeps every container, so a scan finds the same test once per evaluation,
+  /// each with the id its name gives it. The runner already resolves an id to the last copy (the map below is built last
+  /// wins) and the daemon merges by id, so the earlier copies say nothing, but they were sent across the process boundary on
+  /// every evaluation: after 35 saves, 385 entries for 11 tests, 89% of the reply. Keeping the last keeps the list in step
+  /// with what the runner runs.
+  let distinctKeepingLast (tests: TestCase list) : TestCase list =
+    tests |> List.rev |> List.distinctBy (fun test -> test.Id) |> List.rev
+
   let discoverAll
     (executors: TestExecutor list)
     (asm: Assembly)
@@ -926,7 +935,7 @@ module TestOrchestrator =
       |> List.map (fun (fw, dr) -> fw, dr.RunTest)
       |> Map.ofList
 
-    { Tests = allTests
+    { Tests = distinctKeepingLast allTests
       RunTest = fun testCase ->
         match Map.tryFind testCase.Framework customRunMap with
         | Some runTest -> runTest testCase
