@@ -127,6 +127,23 @@ let tests =
         finally Directory.Delete(repo, true)
       }
 
+      testAsync "a git answer far larger than the pipe buffer still comes back whole, so both streams are drained while git runs" {
+        let repo = Directory.CreateTempSubdirectory("cohortgit-bigout-").FullName
+        try
+          do! initRepo repo
+          let fileCount = 3000
+          // 3000 paths of ~200 characters: ~600 KB of `git ls-files` output against a 64 KB pipe.
+          for i in 1 .. fileCount do
+            File.WriteAllText(Path.Combine(repo, sprintf "%05d-%s.fs" i (String('a', 190))), "")
+          let! _ = git repo [ "add"; "." ]
+          let! _ = git repo [ "commit"; "--quiet"; "-m"; "many files" ]
+          let! result = CohortGit.trackedFsFiles repo
+          match result with
+          | Ok files -> files |> List.length |> Expect.equal "every tracked path comes back" fileCount
+          | Error e -> failtestf "expected Ok, got Error %s" e
+        finally Directory.Delete(repo, true)
+      }
+
       testAsync "rebase of a non-conflicting commit onto an advanced main returns Ok and leaves the worktree clean" {
         let repo = Directory.CreateTempSubdirectory("cohortgit-rebase-ok-").FullName
         try

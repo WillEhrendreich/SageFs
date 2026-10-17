@@ -69,12 +69,17 @@ let private runGitExitCode (repoDir: string) (timeout: TimeSpan) (args: string l
         psi.ArgumentList.Add a
       use proc = new Process(StartInfo = psi)
       proc.Start() |> ignore
-      // Drain both streams on background threads, exactly as
-      // SessionManager.runBuildAsync does for `dotnet build` — a git process
-      // whose stdout/stderr pipe fills without a reader would otherwise
-      // deadlock against this process waiting on it.
-      let stdoutTask = Task.Run(fun () -> proc.StandardOutput.ReadToEnd())
-      let stderrTask = Task.Run(fun () -> proc.StandardError.ReadToEnd())
+      // Drain both streams, or a git process whose stdout/stderr pipe fills
+      // would deadlock against this process waiting on it. Each drain gets its
+      // own dedicated thread, never a Task.Run: a blocking read parked on a
+      // pool thread is what locked the daemon up on 2026-09-22 (see
+      // WorkerSpawn.runOnDedicatedThread). BlockingReaderRatchetTests counts it.
+      let stdoutText = ref ""
+      let stderrText = ref ""
+      let stdoutTask =
+        SageFs.WorkerSpawn.runOnDedicatedThread "cohort-git-stdout" (fun () -> stdoutText.Value <- proc.StandardOutput.ReadToEnd())
+      let stderrTask =
+        SageFs.WorkerSpawn.runOnDedicatedThread "cohort-git-stderr" (fun () -> stderrText.Value <- proc.StandardError.ReadToEnd())
       let tcs = TaskCompletionSource<bool>()
       proc.EnableRaisingEvents <- true
       proc.Exited.Add(fun _ -> tcs.TrySetResult true |> ignore)
@@ -90,7 +95,7 @@ let private runGitExitCode (repoDir: string) (timeout: TimeSpan) (args: string l
         return -1, "", sprintf "git %s timed out after %A in %s" argsText timeout repoDir
       | false ->
         let! _ = Task.WhenAll(stdoutTask, stderrTask) |> Async.AwaitTask
-        return proc.ExitCode, stdoutTask.Result, stderrTask.Result
+        return proc.ExitCode, stdoutText.Value, stderrText.Value
     with ex ->
       return -1, "", sprintf "failed to run git %s in %s: %s" argsText repoDir ex.Message
   }

@@ -280,6 +280,13 @@ let fileSize : (string * int) list =
     // handler carries out is StartTimeoutDecision.fs.
     "SageFs.Core/SessionManager.fs", 1599 ]
 
+/// Product code that parks a thread-pool thread on a child process's stdout or stderr for the life of the process:
+/// a `Task.Run` (or `Task.Factory.StartNew`) whose body reads a Process stream line by line or to the end. The
+/// 2026-09-22 daemon lockup was this pattern, two pool threads pinned per live session. A reader like that belongs on
+/// `WorkerSpawn.runOnDedicatedThread`. A file that is not listed has a budget of zero.
+let blockingReaders : (string * int) list =
+  [ "SageFs.Core/FsiHostClient.fs", 2 ]
+
 let lineCount (repoRoot: string) (rel: string) : int =
   File.ReadAllLines(Path.Combine(repoRoot, rel)).Length
 
