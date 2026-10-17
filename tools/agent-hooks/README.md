@@ -25,8 +25,9 @@ be a session at all, so it passes too (issue #144). A session that exists
 for `cwd` but isn't Ready yet (starting, faulted, ...) doesn't count either.
 
 Always allowed: `dotnet pack`, `dotnet tool ...`, `dotnet --version`,
-`dotnet --list-sdks`, `dotnet restore`, and anything else that isn't one of the
-four verbs.
+`dotnet --list-sdks`, `dotnet restore`, `dotnet build -c Release` (see
+"Release builds pass"), anything the repository lists in
+`.SageFs/repl-guard.json`, and anything else that isn't one of the four verbs.
 
 ### The escape hatch
 
@@ -62,6 +63,73 @@ minutes for a build/test run) to expire it. See `skills/sagefs/leases.md`'s
 "Before anything expensive: ask" section for the full lease contract, and
 `skills/sagefs/troubleshooting.md`'s "Busy versus broken" for why this
 distinction is the whole point.
+
+### Release builds pass
+
+`dotnet build -c Release` (or `--configuration Release`, `--configuration=Release`, `-c:Release`) is
+treated as a declared final gate, so it does not need `SAGEFS_FINAL_GATE=1`. A Release build checks
+things the REPL cannot, so denying it only costs a retry. It still asks the daemon for a lease like any
+final gate, so a busy daemon can still say wait. If a command has several `-c` options, the last one
+counts, and anything after a bare `--` is ignored.
+
+Only `build` gets this. `dotnet test -c Release` and `dotnet run -c Release` run code the REPL can run,
+so they are still denied.
+
+### A per-repository allowlist
+
+Some repositories have their own build CLI, for example `dotnet run --project Build.fsproj -- <command>`,
+and the hook cannot tell that from any other `dotnet run`. List it in `.SageFs/repl-guard.json` at the
+root of the git checkout and commit the file:
+
+```json
+{
+  "allow": [
+    "dotnet run --project Build.fsproj --"
+  ]
+}
+```
+
+How it matches, so you can predict it:
+
+- A pattern is the words of a dotnet command. It matches a command whose words **start with** them, whole
+  words only. `dotnet run --project Build.fsproj` matches `dotnet run --project Build.fsproj -- test`
+  and does not match `dotnet run --project Build.fsproj.bak`. There is no regex and no glob.
+- Each command in a chain is checked on its own. `dotnet run --project Build.fsproj -- x && dotnet test`
+  allows the first and still denies the second. An `env` or `timeout` in front does not matter.
+- A listed command skips the lease check too. You said it always passes.
+- A pattern has to be one plain dotnet command and start with `dotnet`. No quotes, pipes, `;` or `&&`.
+
+The checkout root is the nearest directory at or above the `cwd` Claude Code sends the hook that has a
+`.git` (a directory, or the file a worktree has). The hook's own working directory is not used. With no
+`.git` above you, the file is not read.
+
+If the file is wrong (not JSON, an unknown key, a bad pattern), the hook ignores all of it, stays strict,
+and the deny message names the file and what is wrong. A typo in a key like `allows` is an error and not
+an empty list. If the command would have passed anyway, you hear nothing.
+
+What is rough: the patterns are word prefixes, so you list each spelling of a command you use
+(`Build.fsproj` and `./Build.fsproj` are different words). Nothing checks that the file is
+committed.
+
+### Advise mode
+
+Some repositories treat the REPL as a recommendation, not a rule. Set `SAGEFS_REPL_GUARD=advise` and the
+hook lets the command run and hands the agent the same reminder as `additionalContext` instead of a deny.
+`enforce` is the default. Any other value enforces, and the deny says so.
+
+```json
+{ "env": { "SAGEFS_REPL_GUARD": "advise" } }
+```
+
+That goes in `.claude/settings.json` (or `settings.local.json`) next to the hook entry, or export it in
+your shell before you start Claude Code.
+
+Advise only changes the "use the REPL" deny. A busy daemon still says wait, because that is about memory
+and not about a preference. The hook does not set a permission decision, so your normal permission prompts
+for the command still apply. The reminder only appears where a deny would have: with SageFs up and a Ready
+session for the directory.
+
+What is rough: it is one switch for the whole session, not a key in the repository's JSON file.
 
 ### Install
 
@@ -99,14 +167,20 @@ works.
 
 ### How it's built
 
-- `ReplGuard.fs` is the decision: command plus context in, `Allow` or
-  `Deny reason` out. It's pure, and SageFs.Tests compiles the same file and tests
-  it (`ReplGuardTests.fs`). `sessionProbe`/`directoryContains` in there are the
-  "is there a Ready REPL for this cwd" check, also unit-tested directly.
-- `Hook.fs` is the IO around it: reads the hook JSON from stdin, walks up for a
-  project file, probes `/health` once (for both daemon-liveness and its
-  `sessionStates`), and writes the deny JSON.
-- `SageFs.AgentHooks.fsproj` compiles the two into the `sagefs-repl-guard`
+- `ReplGuard.fs` is the decision: command plus context in, `Allow`,
+  `AllowWithAdvice reminder` or `Deny reason` out. It's pure, and SageFs.Tests
+  compiles the same file and tests it (`ReplGuardTests.fs`,
+  `ReplGuardConfigTests.fs`). `sessionProbe`/`directoryContains` in there are the
+  "is there a Ready REPL for this cwd" check, also unit-tested directly. The
+  allowlist, the Release rule and the mode live here too.
+- `Verdict.fs` is the whole run minus the machine: stdin JSON in, JSON out. The
+  environment, the repo config on disk, the project scan, the daemon and the lease
+  come in as a `World`, so the tests run the real code with a fake daemon and a
+  temp git checkout. It also finds the git root and reads the config file.
+- `Hook.fs` is the compiled program's `main` and the real probes: reads stdin,
+  walks up for a project file, probes `/health` once (for both daemon-liveness and
+  its `sessionStates`), asks for the lease.
+- `SageFs.AgentHooks.fsproj` compiles the three into the `sagefs-repl-guard`
   program, and `publish.fsx` publishes it. It is a compiled program rather than
   an `.fsx` because a hook runs before every Bash call and `dotnet fsi` costs
   about 1.3 seconds of startup each time. Measured on the dev machine

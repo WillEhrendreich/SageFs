@@ -149,7 +149,13 @@ pull it back, from least to most enforced:
   while SageFs is running, and tells the agent why. The final gate goes through
   with `SAGEFS_FINAL_GATE=1` in front of the command. Packaging and tool
   commands are never blocked, and neither is anything when SageFs isn't
-  running.
+  running. `dotnet build -c Release` is never blocked either, because a
+  Release build checks things the REPL can't. A repository with its own build
+  CLI (say `dotnet run --project Build.fsproj -- <command>`) lists it in
+  `.SageFs/repl-guard.json`. If the REPL is a recommendation in your repository
+  and not a rule, set `SAGEFS_REPL_GUARD=advise`: the command runs and the
+  agent gets the reminder instead of a refusal. Details are in the
+  [hook's README](../tools/agent-hooks/README.md).
 
 ## 5. When the REPL really is broken
 
