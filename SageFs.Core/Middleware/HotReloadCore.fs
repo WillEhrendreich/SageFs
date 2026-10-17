@@ -269,7 +269,24 @@ type DetourApplied =
   /// The detour did not happen and the old code is still live.
   | Failed of reason: string
 
-let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase) : DetourApplied =
+/// What the canary could say about a detour that landed. It travels with the verdict so a caller that re-points many
+/// copies in one eval can count them in ONE summary line, instead of the detour writing a line per copy.
+[<RequireQualifiedAccess>]
+type CanaryEvidence =
+  /// The native code bytes changed: the entry point now jumps.
+  | Confirmed
+  /// The bytes before the detour could not be read, so nothing was compared.
+  | SnapshotUnavailable
+  /// The bytes after the detour could not be read.
+  | ValidationFailed of reason: string
+  /// The detour did not land cleanly (ineffective, superseded or failed). Its own warning or debug line names the
+  /// method and the reason, so the canary has nothing to add.
+  | SpokenFor
+
+/// The detour itself, quiet about the routine case: a detour that landed writes nothing, and says in the evidence
+/// how sure the canary is. Every outcome that is not a clean redirect still writes its own line naming the method
+/// and the reason. `detourMethod` is this plus the per-detour line, for callers that re-point one body at a time.
+let detourMethodObserved (logger: ILogger) (method: MethodBase) (replacement: MethodBase) : DetourApplied * CanaryEvidence =
   try
     // Chesterton's fence: rule 2's value-read watches are Harmony patches, and
     // a later Harmony unpatch on this method would rewrite its entry and put
@@ -294,9 +311,7 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     match preSnapshot with
     | Some (jitAddr, preBytes) ->
       match validateDetourCanary jitAddr preBytes with
-      | DetourConfirmed ->
-        logger.LogDebug (sprintf "Canary confirmed: detour for %s is active" method.Name)
-        DetourApplied.Redirected
+      | DetourConfirmed -> DetourApplied.Redirected, CanaryEvidence.Confirmed
       | BytesUnchanged ->
         let msg =
           sprintf "Canary warning: native code unchanged after detour for %s — patch may be ineffective"
@@ -304,13 +319,9 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
         logger.LogWarning msg
         DevReloadHealthTracker.transition
           (DevReloadHealth.Degraded (sprintf "Canary: bytes unchanged for %s" method.Name))
-        DetourApplied.Ineffective (sprintf "native code unchanged after the detour for %s" method.Name)
-      | CanaryError ex ->
-        logger.LogWarning (sprintf "Canary validation error for %s: %s" method.Name ex.Message)
-        DetourApplied.Redirected
-    | None ->
-      logger.LogDebug (sprintf "Canary skipped: could not snapshot pre-detour bytes for %s" method.Name)
-      DetourApplied.Redirected
+        DetourApplied.Ineffective (sprintf "native code unchanged after the detour for %s" method.Name), CanaryEvidence.SpokenFor
+      | CanaryError ex -> DetourApplied.Redirected, CanaryEvidence.ValidationFailed ex.Message
+    | None -> DetourApplied.Redirected, CanaryEvidence.SnapshotUnavailable
   with
   | :? TargetInvocationException as ex when
     (ex.InnerException :? PlatformNotSupportedException) ->
@@ -318,24 +329,36 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     let msg = sprintf "Hot-reload detour failed: PlatformNotSupportedException for %s. MonoMod may not support this runtime." method.Name
     logger.LogWarning msg
     DevReloadHealthTracker.transition (DevReloadHealth.Degraded "MonoMod PlatformNotSupportedException")
-    DetourApplied.Failed (sprintf "MonoMod cannot patch %s on this runtime" method.Name)
+    DetourApplied.Failed (sprintf "MonoMod cannot patch %s on this runtime" method.Name), CanaryEvidence.SpokenFor
   | :? TargetInvocationException as ex when
     (ex.InnerException :? TypeLoadException) ->
     // FSI compilation units can become unloadable when types are redefined across
     // eval boundaries (FSI_0020 etc). This is benign — the new definition supersedes
     // the old one, so the detour is unnecessary. Log and continue.
     logger.LogDebug (sprintf "Hot-reload detour skipped (stale FSI type): %s — %s" method.Name ex.InnerException.Message)
-    DetourApplied.Superseded (sprintf "stale FSI type for %s" method.Name)
+    DetourApplied.Superseded (sprintf "stale FSI type for %s" method.Name), CanaryEvidence.SpokenFor
   | :? TargetInvocationException as ex when
     (ex.InnerException :? TypeInitializationException) ->
     logger.LogDebug (sprintf "Hot-reload detour skipped (type init failure): %s — %s" method.Name ex.InnerException.Message)
-    DetourApplied.Superseded (sprintf "type initializer for %s already failed" method.Name)
+    DetourApplied.Superseded (sprintf "type initializer for %s already failed" method.Name), CanaryEvidence.SpokenFor
   | ex ->
     // Chesterton's fence, inverted: there was NO catch-all here, so an unexpected
     // failure propagated out of the per-method loop and took the whole eval's
     // remaining detours with it — leaving the app half-reloaded with no report.
     logger.LogWarning (sprintf "Hot-reload detour failed for %s: %s" method.Name ex.Message)
-    DetourApplied.Failed (sprintf "%s: %s" method.Name ex.Message)
+    DetourApplied.Failed (sprintf "%s: %s" method.Name ex.Message), CanaryEvidence.SpokenFor
+
+/// One body re-pointed, with the line a single detour writes about the canary. For callers that re-point one body at
+/// a time (a closure, one generic body); a caller that re-points every copy of a function uses
+/// `detourMethodObserved` and says it once for all of them.
+let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase) : DetourApplied =
+  let applied, evidence = detourMethodObserved logger method replacement
+  match evidence with
+  | CanaryEvidence.Confirmed -> logger.LogDebug (sprintf "Canary confirmed: detour for %s is active" method.Name)
+  | CanaryEvidence.SnapshotUnavailable -> logger.LogDebug (sprintf "Canary skipped: could not snapshot pre-detour bytes for %s" method.Name)
+  | CanaryEvidence.ValidationFailed reason -> logger.LogWarning (sprintf "Canary validation error for %s: %s" method.Name reason)
+  | CanaryEvidence.SpokenFor -> ()
+  applied
 
 /// Where a detour that landed points, for the guards: the NEW method's IL is what runs once the old entry jumps (the
 /// stub in between only records that it was entered and calls it). A detour that did not land says nothing, so the
@@ -685,7 +708,8 @@ let classifyBindingApplication (binding: string) (applied: DetourApplied list) :
   | reason :: _, false -> BindingOutcome.NeitherLegRedirected(binding, reason)
   | reason :: _, true -> BindingOutcome.Torn(binding, reason)
 
-let private applyBindingDetour (logger: ILogger) (unit: AccessorPairDetour) : BindingOutcome =
+/// What a mutable binding's pair came to, and what each leg's detour said, for the eval's one summary line.
+let private applyBindingDetour (logger: ILogger) (unit: AccessorPairDetour) : BindingOutcome * (DetourApplied * CanaryEvidence) list =
   let preflightFailures =
     unit.Legs
     |> List.collect (fun (older, newer) -> [ preflight older; preflight newer ])
@@ -694,15 +718,15 @@ let private applyBindingDetour (logger: ILogger) (unit: AccessorPairDetour) : Bi
       | Ok() -> None)
 
   match preflightFailures with
-  | reason :: _ -> BindingOutcome.NeitherLegRedirected(unit.Binding, reason)
+  | reason :: _ -> BindingOutcome.NeitherLegRedirected(unit.Binding, reason), []
   | [] ->
-    unit.Legs
-    |> List.map (fun (older, newer) ->
-      logger.LogDebug("Updating accessor " + older.FullName)
-      let applied = detourMethod logger older.MethodInfo newer.MethodInfo
-      recordDetourBody older newer applied
-      applied)
-    |> classifyBindingApplication unit.Binding
+    let legs =
+      unit.Legs
+      |> List.map (fun (older, newer) ->
+        let applied, evidence = detourMethodObserved logger older.MethodInfo newer.MethodInfo
+        recordDetourBody older newer applied
+        applied, evidence)
+    legs |> List.map fst |> classifyBindingApplication unit.Binding, legs
 
 /// The probe for one new body, and what a detour should point at in place of
 /// it: a stub that records an entry and then calls the body. When no stub can be
@@ -840,7 +864,60 @@ let private applyGenericDetour (logger: ILogger) (detour: GenericDetour) : Entry
       logger.LogWarning(sprintf "Hot-reload shared generic detour failed for %s: %s" older.Name ex.Message)
       probe, DetourApplied.Failed(sprintf "%s: %s" older.Name ex.Message)
 
+/// What one eval's detours came to, counted by copy. A session that has run N evals holds N copies of a function it
+/// keeps redefining, and every one is re-pointed, so these grow with the session; what is written about them must
+/// not, which is why they are counted here and said once.
+type DetourTally = {
+  /// The distinct functions (and accessors) re-pointed or attempted.
+  DistinctMethods: int
+  /// Every older copy a detour was attempted on.
+  Copies: int
+  RedirectedCopies: int
+  IneffectiveCopies: int
+  SupersededCopies: int
+  FailedCopies: int
+  /// Redirected copies the canary could not vouch for either way.
+  UnconfirmedCopies: int
+}
+
+module DetourTally =
+  let empty : DetourTally =
+    { DistinctMethods = 0; Copies = 0; RedirectedCopies = 0; IneffectiveCopies = 0; SupersededCopies = 0; FailedCopies = 0; UnconfirmedCopies = 0 }
+
+  /// Counts what each detour said, by the name of the method it re-pointed.
+  let ofResults (results: (string * DetourApplied * CanaryEvidence) list) : DetourTally =
+    let count (pick: DetourApplied -> bool) = results |> List.filter (fun (_, applied, _) -> pick applied) |> List.length
+    { DistinctMethods = results |> List.map (fun (name, _, _) -> name) |> List.distinct |> List.length
+      Copies = List.length results
+      RedirectedCopies = count (function DetourApplied.Redirected -> true | _ -> false)
+      IneffectiveCopies = count (function DetourApplied.Ineffective _ -> true | _ -> false)
+      SupersededCopies = count (function DetourApplied.Superseded _ -> true | _ -> false)
+      FailedCopies = count (function DetourApplied.Failed _ -> true | _ -> false)
+      UnconfirmedCopies =
+        results
+        |> List.filter (fun (_, applied, evidence) ->
+          match applied, evidence with
+          | DetourApplied.Redirected, CanaryEvidence.SnapshotUnavailable
+          | DetourApplied.Redirected, CanaryEvidence.ValidationFailed _ -> true
+          | _ -> false)
+        |> List.length }
+
+  /// The one line an eval writes about its detours. The copies that did not redirect cleanly are named, with their
+  /// reasons, by the lines their own detours wrote.
+  let describe (tally: DetourTally) (elapsedMilliseconds: int64) : string =
+    sprintf
+      "Hot reload re-pointed %d methods (%d copies) in %d ms: %d redirected, %d ineffective, %d superseded, %d failed, %d redirected without a canary reading"
+      tally.DistinctMethods
+      tally.Copies
+      elapsedMilliseconds
+      tally.RedirectedCopies
+      tally.IneffectiveCopies
+      tally.SupersededCopies
+      tally.FailedCopies
+      tally.UnconfirmedCopies
+
 let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan: DetourPlan) (generics: GenericUnit list) : DetourReport =
+  let started = Diagnostics.Stopwatch.GetTimestamp()
   // One stub per new body, shared by every older copy that is pointed at it.
   let targets = Collections.Generic.Dictionary<MethodInfo, EntryProbe * MethodBase>()
   let targetFor (newer: Method) : EntryProbe * MethodBase =
@@ -850,14 +927,16 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
       let made = probeTarget logger newer
       targets.[newer.MethodInfo] <- made
       made
-  let plainResults =
+  // Every older copy is re-pointed, however many there are, and none of them writes a line of its own unless it
+  // did not redirect cleanly: the eval says what it did once, at the end.
+  let plainObserved =
     plan.Functions
     |> List.map (fun (older, newer) ->
-      logger.LogDebug("Updating method " + older.FullName)
       let _, target = targetFor newer
-      let applied = detourMethod logger older.MethodInfo target
+      let applied, evidence = detourMethodObserved logger older.MethodInfo target
       recordDetourBody older newer applied
-      older, applied)
+      older, applied, evidence)
+  let plainResults = plainObserved |> List.map (fun (older, applied, _) -> older, applied)
   // A generic function is one result for the function, however many bodies it took: it landed only if
   // every body did, because a function that is new in some instantiations and old in others is the one
   // thing a patch must never be.
@@ -934,6 +1013,9 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
       | DetourApplied.Ineffective _
       | DetourApplied.Superseded _ -> Some older.FullName
       | DetourApplied.Failed _ -> None)
+    // A function is named once however many earlier copies were re-pointed: the session's age must not be in the
+    // report, which crosses the process boundary on every eval. First-seen order.
+    |> List.distinct
 
   /// Re-pointed, and proven by the canary not to have changed the running code.
   /// Carried separately from `Failures` so a caller can name the DECLARATION
@@ -944,6 +1026,7 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
       match applied with
       | DetourApplied.Ineffective _ -> Some older.FullName
       | _ -> None)
+    |> List.distinct
 
   /// Every candidate name for which a COMPILED copy was among the older methods
   /// considered. When this does NOT contain a name, there is no compiled copy to
@@ -983,6 +1066,7 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
         | true -> None
         | false -> Some older.FullName
       | _ -> None)
+    |> List.distinct
 
   let functionFailures =
     functionResults
@@ -991,7 +1075,8 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
       | DetourApplied.Failed reason -> Some reason
       | _ -> None)
 
-  let outcomes = plan.MutableBindings |> List.map (applyBindingDetour logger)
+  let bindingResults = plan.MutableBindings |> List.map (applyBindingDetour logger)
+  let outcomes = bindingResults |> List.map fst
 
   let redirectedBindings =
     List.zip plan.MutableBindings outcomes
@@ -1056,7 +1141,24 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
       | _ -> None)
     |> List.distinct
 
-  { Redirected = redirectedFunctions @ redirectedBindings
+  // The one line this eval writes about its detours, however many earlier copies it re-pointed. A generic function
+  // is one result for the function; its bodies wrote their own lines.
+  let tally =
+    DetourTally.ofResults (
+      (plainObserved |> List.map (fun (older, applied, evidence) -> older.FullName, applied, evidence))
+      @ (genericResults |> List.map (fun (older, applied) -> older.FullName, applied, CanaryEvidence.SpokenFor))
+      @ (List.zip plan.MutableBindings bindingResults
+         |> List.collect (fun (unit, (_, legs)) ->
+           // A binding that failed its preflight touched no leg, so it has no detours to count.
+           match legs with
+           | [] -> []
+           | _ -> List.zip unit.Legs legs |> List.map (fun ((older, _), (applied, evidence)) -> older.FullName, applied, evidence)))
+    )
+  match tally.Copies with
+  | 0 -> ()
+  | _ -> logger.LogDebug(DetourTally.describe tally (int64 (Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds)))
+
+  { Redirected = (redirectedFunctions @ redirectedBindings) |> List.distinct
     ReachedRunningProcess = reachedRunningProcess
     Ineffective = ineffectiveFunctions
     RedirectedFromCompiled = redirectedFromCompiled
