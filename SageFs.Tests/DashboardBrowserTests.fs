@@ -302,21 +302,25 @@ module DashboardDom =
       do! summary.ClickAsync()
   }
 
-  /// Retry a `(reopen-panel, body)` pair when `body` fails — a `<details>`
-  /// accordion's open/closed state lives only in the browser (the server
-  /// never renders `open`), and the dashboard's periodic 1-second SSE
-  /// fallback push (Dashboard.fs's `Timeouts.sseEventInterval`) renders a
-  /// ticking uptime label into #main that almost never byte-matches the
-  /// previous push — so the no-change dedupe rarely suppresses it, and the
-  /// resulting full-#main morph snaps every accordion back to its
-  /// server-rendered (always closed) default. On a loaded/cold machine, any
-  /// two steps here that span more than ~1s can race that reset: a
-  /// Playwright actionability timeout ("element is not visible") on a
-  /// locator inside the panel, or an `IsVisibleAsync` snapshot that reads
-  /// false because the panel just snapped shut. Reopening and retrying the
-  /// whole step converges quickly since each attempt only needs to win a
-  /// short window before the next tick; a genuine product failure keeps
-  /// failing every attempt and still surfaces once `attemptsLeft` reaches 0.
+  /// Retry a `(reopen-panel, body)` pair when `body` fails, reopening the
+  /// panel first each time.
+  ///
+  /// What this once guarded against is gone. The dashboard used to push its
+  /// whole `#main` about once a second (a polling fallback, plus a ticking
+  /// uptime label that defeated the no-change check), and every morph snapped
+  /// a `<details>` shut. The polling fallback was deleted in b9ff8883, the
+  /// server no longer renders any clock text (`ElapsedClock`: the browser
+  /// counts the time), an idle dashboard sends no morph at all, and each
+  /// accordion's open state is a Datastar signal (`signalDetails`) that
+  /// survives the morphs that do happen.
+  ///
+  /// It is kept because a real change of state (a session appearing, an eval
+  /// finishing) is still a morph, and a step that spans one on a loaded
+  /// machine can still find its panel closed. It has not been proven
+  /// unnecessary: removing it needs repeated runs of every journey that
+  /// uses it (about 25 call sites across five files), not one. A genuine
+  /// product failure keeps failing every attempt and still surfaces once
+  /// `attemptsLeft` reaches 0.
   let rec throughPanelReset (reopen: unit -> Task<unit>) (attemptsLeft: int) (body: unit -> Task<unit>) : Task<unit> = task {
     do! reopen ()
     try
@@ -1128,16 +1132,17 @@ let tests =
   })
 
   playwrightTest "accordion open state survives the periodic SSE morph" (fun page -> task {
-    // Root cause (commit cdeb7567): the SSE fallback re-renders #main about
-    // once a second because a ticking uptime/relative-time label defeats the
-    // no-change dedupe, and a plain <details> loses its DOM-only `open`
-    // attribute on that morph. The fix makes `open` a Datastar signal
-    // (signalDetails in DashboardFragments.fs) instead of DOM-only state, so
+    // A plain <details> loses its DOM-only `open` attribute on any morph of
+    // #main. `open` is a Datastar signal (signalDetails in
+    // DashboardFragments.fs, commit cdeb7567) instead of DOM-only state, so
     // Datastar re-applies it from the surviving signal after every morph.
     // This test proves that DIRECTLY — no DashboardDom.throughPanelReset
     // reopen-retry helper — by opening the accordion once and asserting it
-    // is still open after outlasting at least two 1-second SSE-fallback
-    // ticks (Timeouts.sseEventInterval).
+    // is still open after a pause that outlasts the old 1-second push cadence.
+    // (That cadence is gone: the polling fallback was deleted in b9ff8883 and
+    // the server renders no clock text any more — ElapsedClock — so on an
+    // idle dashboard no morph arrives at all. The signal is what keeps the
+    // panel open on the morphs that real changes do cause.)
     do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
     do! DashboardDom.openEvalArea page
     let isOpen () =
@@ -1388,11 +1393,11 @@ let tests =
 
   playwrightTest "keyboard help shows shortcuts" (fun page -> task {
     // Help toggle lives inside the collapsed Evaluate accordion — open it.
-    // The accordion carries no server-tracked open state, so the periodic 1s
-    // SSE fallback push (see DashboardDom.throughPanelReset) can re-collapse
-    // it at any point; re-confirm it is open immediately before each step
-    // that depends on it rather than trusting a single open call up front
-    // (the 500ms settle below is exactly the kind of gap that race needs).
+    // A morph from a real change of state can still re-collapse the accordion
+    // between steps (see DashboardDom.throughPanelReset); re-confirm it is open
+    // immediately before each step that depends on it rather than trusting a
+    // single open call up front (the 500ms settle below is the kind of gap
+    // that needs).
     do! DashboardDom.openEvalArea page
     do! page.WaitForTimeoutAsync(500.0f)
     do! DashboardDom.openEvalArea page
@@ -1543,6 +1548,18 @@ let tests =
       text <> null
       && System.Text.RegularExpressions.Regex.IsMatch(text, @"v?\d+\.\d+\.\d+"))
       "daemon health shows a version number"
+  })
+
+  playwrightTest "page structure: the daemon health bar counts its uptime in the browser" (fun page -> task {
+    // The server renders the moment the daemon started and a Ds.text expression (ElapsedClock), never the
+    // elapsed time, so an idle dashboard has nothing to push. The label is the browser's own work: it must
+    // appear, in the daemon's words ("5m", "2h 5m", "2d 3h"), once the clock has ticked.
+    let! _ =
+      page.WaitForFunctionAsync(
+        "() => /\\bup (\\d+d \\d+h|\\d+h \\d+m|\\d+m) /.test(document.querySelector('#daemon-health').textContent)")
+    let! text = page.Locator("#daemon-health").TextContentAsync()
+    Expect.isTrue (System.Text.RegularExpressions.Regex.IsMatch(text, @"\bup (\d+d \d+h|\d+h \d+m|\d+m) "))
+      "the health bar reads 'up <duration>' once the browser's clock has ticked"
   })
 
   playwrightTest "page structure: output section and panel render" (fun page -> task {

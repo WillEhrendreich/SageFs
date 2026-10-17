@@ -319,9 +319,10 @@ let journey () : Task<unit> = task {
     let forgeTheOldHash () =
       slider.EvaluateAsync("(el, [name, value]) => el.setAttribute(name, value)", [| box handler; box shown |])
     // A stale click is the row's handler carrying the hash from before the file changed. The handler is an attribute in the
-    // page, and the dashboard pushes the whole shell about once a second (a ticking uptime label keeps the push from being
-    // skipped as unchanged), so every push rewrites it with the file's current hash. Forge the old hash and click inside
-    // that window and the click is stale. Lose the race and the forged hash is gone: the click is a legitimate write and
+    // page, and every push of the shell rewrites it with the file's current hash. The dashboard no longer pushes on a
+    // clock (an idle shell is the same bytes, so nothing is sent), but it still pushes whenever something real changes,
+    // and any such push rewrites the forged hash. Whether a real change lands inside this window has not been measured,
+    // which is why the repeat below stays. Forge the old hash and click before a push lands and the click is stale. Lose the race and the forged hash is gone: the click is a legitimate write and
     // the row reads DiffersFromFile. Load decides who wins, and it failed the release gate, so the attempt is repeated, the
     // way `throughPanelReset` repeats a step against the same push. Each attempt starts from the same place (the file holds
     // the edit, and the row has repainted to say so), so a lost one leaves nothing behind for the next.
