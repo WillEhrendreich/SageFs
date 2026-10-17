@@ -1974,7 +1974,7 @@ module McpTools =
     compilationStates.TryRemove(sid) |> ignore
     typeIdentityDiagnostics.TryRemove(sid) |> ignore
     notifyElm ctx (
-      TuiEvent.WarmupProgress (1, 4, "Building project..."))
+      TuiEvent.WarmupProgress (toSessionId sid, 1, 4, "Building project..."))
     rebuildsRequested[sid] <- DateTime.UtcNow
     task {
       let! threw =
