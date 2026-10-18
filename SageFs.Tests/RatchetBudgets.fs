@@ -285,7 +285,7 @@ let fileSize : (string * int) list =
 /// 2026-09-22 daemon lockup was this pattern, two pool threads pinned per live session. A reader like that belongs on
 /// `WorkerSpawn.runOnDedicatedThread`. A file that is not listed has a budget of zero.
 let blockingReaders : (string * int) list =
-  [ "SageFs.Core/FsiHostClient.fs", 2 ]
+  [ "SageFs.Core/FsiHostClient.fs", 0 ]
 
 let lineCount (repoRoot: string) (rel: string) : int =
   File.ReadAllLines(Path.Combine(repoRoot, rel)).Length

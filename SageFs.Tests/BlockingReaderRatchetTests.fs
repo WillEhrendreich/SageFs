@@ -11,8 +11,17 @@
 /// (`RatchetBudgets.blockingReaders`), the budgets only go DOWN, a file that is not listed has a budget of zero,
 /// and a budget above the file's real count is stale.
 ///
-/// Honest limits: a reader that reaches a stream through an alias bound OUTSIDE the `Task.Run` body, or through a
-/// named function the body calls, is not seen. No thread-pool occupancy is measured here.
+/// A `Task.Run` can also name the reader instead of spelling it out: `Task.Run readLoop`, `Task.Run(readLoop)`,
+/// `Task.Run(fun () -> readLoop ())`, `Task.Factory.StartNew(readLoop, ...)`. FsiHostClient's reply loop was exactly
+/// that, a named function blocked in `reader.ReadLine()` on the TCP stream for the life of the host, and the first
+/// version of this scan walked past it. So when the spawned name is defined in the SAME file and that definition's
+/// body blocks in a `.ReadLine(` / `.ReadToEnd(` / `.Read(` (or waits on a `ReadLineAsync` with `.Result` / `.Wait` /
+/// `.GetAwaiter`), the spawn counts.
+///
+/// Honest limits: a reader that reaches a stream through an alias bound OUTSIDE the `Task.Run` body, a name defined
+/// in another file, a name that is a local shadowing a reader of the same name elsewhere in the file, or a spawn that
+/// calls the reader as the second statement of a lambda is not seen. An awaited `ReadLineAsync` does not pin a
+/// thread, so it is not counted. No thread-pool occupancy is measured here.
 module SageFs.Tests.BlockingReaderRatchetTests
 
 open System.IO
@@ -65,14 +74,37 @@ let private bodyAfter (text: string) (matchEnd: int) : string =
   | true -> parenthesized text i
   | false -> indented text matchEnd
 
-/// How many `Task.Run` bodies in `text` read a Process stream.
+/// The function a spawn names instead of spelling out: `readLoop` in ` readLoop |> ignore`, `(readLoop)` and
+/// `(fun () -> readLoop ())`. A body that starts with anything else (`<| fun`, `let`, a lambda that does work)
+/// yields a word that has no definition in the file, which `namedReader` then finds nothing for.
+let private namedTarget =
+  Regex(@"^\s*\(?\s*(?:fun\s*(?:\(\s*\)|_)\s*->\s*)?([A-Za-z_][A-Za-z0-9_']*)", RegexOptions.Compiled)
+
+/// A read that blocks its thread: `.ReadLine(`, `.ReadToEnd(`, `.Read(`, or a `...Async(...)` read waited on in place.
+let private blockingRead =
+  Regex(@"\.Read(Line|ToEnd|Block)?\s*\(|\.Read(Line|ToEnd|Block)?Async\s*\([^\n]*?\)\s*(\.Result\b|\.Wait\s*\(|\.GetAwaiter)", RegexOptions.Compiled)
+
+/// The text of every `let [rec] name` definition in `code`: the rest of its line and the lines indented under it.
+let private definitionBodies (code: string) (name: string) : string list =
+  Regex.Matches(code, @"^[ ]*let\s+(?:rec\s+|inline\s+)*" + Regex.Escape name + @"\b", RegexOptions.Multiline)
+  |> Seq.cast<Match>
+  |> Seq.map (fun definition -> indented code (definition.Index + definition.Length))
+  |> List.ofSeq
+
+/// The spawn's body names a function that this file defines, and the definition blocks in a read.
+let private namedReader (code: string) (body: string) : bool =
+  match namedTarget.Match body with
+  | m when m.Success -> definitionBodies code m.Groups[1].Value |> List.exists blockingRead.IsMatch
+  | _ -> false
+
+/// How many `Task.Run` bodies in `text` read a Process stream, spelled out or through a function the file defines.
 let countReaders (text: string) : int =
   let code = withoutComments text
   spawnPattern.Matches code
   |> Seq.cast<Match>
   |> Seq.filter (fun m ->
     let body = bodyAfter code (m.Index + m.Length)
-    streamPattern.IsMatch body && readPattern.IsMatch body)
+    (streamPattern.IsMatch body && readPattern.IsMatch body) || namedReader code body)
   |> Seq.length
 
 /// What each file may still do. Ratchet down, never up.
@@ -147,6 +179,30 @@ let tests =
           "Task.Run, no stream", "let t = Task.Run(fun () -> File.ReadAllText path)"
           "stream, no Task.Run", "let! text = proc.StandardOutput.ReadToEndAsync() |> Async.AwaitTask"
           "Task.Run beside a stream read", "let t = Task.Run(fun () -> compute ())\nlet s = proc.StandardOutput.ReadToEnd()" ]
+      let wrong = innocent |> List.filter (fun (_, text) -> countReaders text <> 0) |> List.map fst
+      wrong |> Expect.isEmpty "none of these counts"
+
+    testCase "WHY — the scan sees a Task.Run of a NAMED function whose body blocks in a read, because FsiHostClient's reply loop pinned a pool thread per host and the body-only scan walked past it" <| fun _ ->
+      let shapes =
+        [ "pipe form named", "let readLoop () =\n  let mutable line = reader.ReadLine()\n  while not (isNull line) do\n    line <- reader.ReadLine()\n\ndo Task.Run readLoop |> ignore\n"
+          "lambda calls named", "let readLoop () =\n  reader.ReadToEnd() |> ignore\n\nlet t = Task.Run(fun () -> readLoop ())\n"
+          "paren named", "let pump () =\n  let n = stream.Read(buffer, 0, buffer.Length)\n  ()\n\nlet t = Task.Run(pump)\n"
+          "StartNew named", "let readLoop () =\n  reader.ReadLine() |> ignore\n\nlet t = Task.Factory.StartNew(readLoop, TaskCreationOptions.LongRunning)\n"
+          "blocking async read", "let drain () =\n  let mutable line = reader.ReadLineAsync().Result\n  ()\n\nlet t = Task.Run drain\n"
+          "rec, in a type", "type S(reader: StreamReader) =\n  let rec readLoop () =\n    match reader.ReadLine() with\n    | null -> ()\n    | _ -> readLoop ()\n\n  do Task.Run readLoop |> ignore\n" ]
+      let missed = shapes |> List.filter (fun (_, text) -> countReaders text <> 1) |> List.map fst
+      missed |> Expect.isEmpty "every named-function shape counts as exactly one blocking reader"
+
+    testCase "WHY — the scan leaves a named function alone unless it is spawned on the pool AND blocks in a read, so moving a reader to a dedicated thread is what takes it off the count" <| fun _ ->
+      let innocent =
+        [ "named on a dedicated thread", "let readLoop () =\n  reader.ReadLine() |> ignore\n\nWorkerSpawn.runOnDedicatedThread \"reply\" readLoop |> ignore\n"
+          "named function does not read", "let tick () =\n  counter <- counter + 1\n\nlet t = Task.Run tick\n"
+          "unrelated name beside a reader", "let readLoop () =\n  reader.ReadLine() |> ignore\n\nlet compute () = 42\nlet t = Task.Run(fun () -> compute ())\n"
+          "name with no definition here", "let t = Task.Run(fun () -> elsewhere ())\n"
+          "reader only named in a comment", "let tick () = ()\n// readLoop () = reader.ReadLine()\nlet t = Task.Run tick\n"
+          "similar name", "let readLoopFast () =\n  reader.ReadLine() |> ignore\n\nlet readLoop () = 1\nlet t = Task.Run readLoop\n"
+          "File.ReadAllText", "let load () =\n  File.ReadAllText path |> ignore\n\nlet t = Task.Run load\n"
+          "awaited async read", "let pump () =\n  task { let! line = reader.ReadLineAsync() in return line }\n\nlet t = Task.Run pump\n" ]
       let wrong = innocent |> List.filter (fun (_, text) -> countReaders text <> 0) |> List.map fst
       wrong |> Expect.isEmpty "none of these counts"
   ]

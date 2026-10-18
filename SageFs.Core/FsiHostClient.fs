@@ -195,7 +195,9 @@ type FsiHostSession
     // Give the process a moment to report its exit code, then fail everything still waiting.
     markEnded (settleEnd ())
 
-  do Task.Run readLoop |> ignore
+  // The loop blocks in `reader.ReadLine()` for the life of the host, and `settleEnd` then waits on the process.
+  // On the thread pool that pins one worker per live host; a dedicated thread costs the pool nothing.
+  do WorkerSpawn.runOnDedicatedThread "fsihost-reply" readLoop |> ignore
 
   let send (request: Request) : bool =
     lock sendLock (fun () ->
@@ -544,8 +546,10 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
       return Error(CouldNotStartProcess(command, detail))
     | Ok proc ->
       let port = TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously)
+      // Both pumps block in ReadLine until the host closes its streams, so they live on dedicated threads:
+      // on the thread pool they would pin two workers for as long as the host runs.
       let _stdoutPump =
-        Task.Run(fun () ->
+        WorkerSpawn.runOnDedicatedThread "fsihost-stdout" (fun () ->
           let mutable line = proc.StandardOutput.ReadLine()
           while not (isNull line) do
             if line.StartsWith portPrefix then port.TrySetResult(int (line.Substring portPrefix.Length)) |> ignore
@@ -553,7 +557,7 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
             line <- proc.StandardOutput.ReadLine()
           port.TrySetResult -1 |> ignore)
       let stderrPump =
-        Task.Run(fun () ->
+        WorkerSpawn.runOnDedicatedThread "fsihost-stderr" (fun () ->
           let mutable line = proc.StandardError.ReadLine()
           while not (isNull line) do
             log line
