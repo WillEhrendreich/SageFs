@@ -301,6 +301,7 @@
         <Compile Include="BuildPreflightBoundaryTests.fs" />
         <Compile Include="ProjectLoadProgressTests.fs" />
         <Compile Include="ReferenceFrameworkTests.fs" />
+        <Compile Include="FrameworkPickerTests.fs" />
         <Compile Include="RuntimeCompatTests.fs" />
         <Compile Include="FsiProtocolTests.fs" />
         <Compile Include="FsiProtocolWireGoldenTests.fs" />
