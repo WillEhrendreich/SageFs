@@ -164,8 +164,8 @@ let diagnosticsPanelSnapshotTests =
 
     test "DashboardSnapshot has DiagnosticsPanel field" {
       let snap : DashboardSnapshot = {
-        Version = "0.6.48"; SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
-        WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+        Version = "0.6.48"; SessionId = "test-id"; WorkingDir = @"C:\Code"
+        WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
         EvalStats = FixtureStats.noEvals
         DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
         DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []
@@ -192,8 +192,8 @@ let diagnosticsPanelSnapshotTests =
 
     test "renderMainContent includes diagnostics-panel id" {
       let snap : DashboardSnapshot = {
-        Version = "0.6.48"; SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
-        WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+        Version = "0.6.48"; SessionId = "test-id"; WorkingDir = @"C:\Code"
+        WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
         EvalStats = FixtureStats.noEvals
         DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
         DiagnosticsPanel = renderCurrentDiagnostics []; FilmstripPanel = Elem.div [] []

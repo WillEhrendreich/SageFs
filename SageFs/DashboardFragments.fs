@@ -48,6 +48,16 @@ let htmlEscape (s: string) : string =
 /// literal, which DashboardEscapingTests enforces structurally.
 let textEnc (s: string) : XmlNode = Text.raw (htmlEscape s)
 
+/// The device's width at its natural scale. Without a viewport meta a phone lays a page out at about 980 px and shrinks it,
+/// so the stylesheet's width media queries never match on the device they were written for.
+let viewportContent = "width=device-width, initial-scale=1"
+
+/// What opens every dashboard page's head: the charset first (inside the bytes a browser sniffs), then the viewport.
+/// Shared by the dashboard shell and the settings page so neither can forget one.
+let pageHeadMetas : XmlNode list =
+  [ Elem.meta [ Attr.charset "utf-8" ]
+    Elem.meta [ Attr.name "viewport"; Attr.content viewportContent ] ]
+
 /// Encode a runtime string for use as an attribute VALUE. Falco.Markup emits
 /// attribute values verbatim inside double quotes, so a `"` in a working
 /// directory, title, or path would otherwise break out of the attribute.
@@ -57,6 +67,29 @@ let attrEnc (s: string) : string = htmlEscape s
 /// from the fixed kebab-case vocabulary the demos tooling mirrors — never a
 /// computed string — so a renamed control breaks a contract test, not a demo.
 let testid (name: string) = Attr.create "data-testid" name
+
+/// What the main area says about a session that faulted: why, and what to do about it. The reason and the way out used to
+/// be on a sidebar card only, so the place the person was reading said just "Faulted". Nothing for any other session.
+/// It is an alert: a session can fault while the person is looking elsewhere on the page.
+let renderSessionFaultNotice (view: SessionInView) : XmlNode =
+  match view with
+  | SessionInView.InPlay(_, SessionDisplayStatus.Faulted reason) ->
+    Elem.div
+      [ Attr.class' "session-fault-notice"
+        testid "session-fault-notice"
+        Attr.create "role" "alert" ]
+      [ Elem.div [ Attr.class' "session-fault-title" ] [ Text.raw "This session faulted." ]
+        Elem.div [ Attr.class' "session-fault-reason" ] [ textEnc reason ]
+        Elem.div
+          [ Attr.class' "session-fault-remedy" ]
+          [ Text.raw "Stop it with ■ on its card in the sidebar, then start a new session with +." ] ]
+  | SessionInView.InPlay(_, SessionDisplayStatus.Running)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Starting)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Restarting)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Lost)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Stopped)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Idle)
+  | SessionInView.NoSessionInPlay -> Text.raw ""
 
 let renderKeyboardHelp () =
   let shortcut key desc =
@@ -2223,8 +2256,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         [ textEnc label ]
     | None ->
       Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] []
-  // `expanded` is client state; without preserveAttr the morph strips it, collapsing the sidebar and clamping its scrollTop.
-  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId); Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard); Ds.preserveAttr "class" ] [
+  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId) ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
     // App header — tabline style like sagetech.dev
@@ -2236,8 +2268,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       // Status tabs — center
       Elem.div [ Attr.class' "tabline-menu"; Attr.style "display:flex;align-items:center;height:100%;flex:1;min-width:0;" ] [
         Elem.div [ Attr.id DomIds.SessionStatus; Attr.class' "tabline-status"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);font-size:12px;white-space:nowrap;flex-shrink:0;" ] [
-          Elem.span [ Attr.class' (sprintf "status %s" (DashboardConnectionState.statusBadgeCssClass snap.ConnectionState)); Attr.style "border-radius:0;" ] [
-            textEnc (DashboardConnectionState.statusBadgeLabel snap.SessionState snap.ConnectionState) ]
+          Elem.span [ Attr.class' (sprintf "status %s" (SessionInView.badgeCssClass snap.InView)); Attr.style "border-radius:0;" ] [
+            textEnc (SessionInView.badgeLabel snap.InView) ]
         ]
         // min-width:0 + overflow:hidden + text-overflow:ellipsis let this
         // shrink instead of overflowing onto the right-side theme picker at
@@ -2259,7 +2291,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         // by leaving the id off this wrapper; renderEvalStats owns it.
         Elem.div
           [ Attr.class' "tabline-info"
-            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;min-width:0;overflow:hidden;flex-shrink:1;" ] [ renderEvalStats snap.EvalStats ]
+            // nowrap: the bar is one row high, and "0 evals" wrapping onto a second line at phone width spilled out of it and was clipped.
+            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;min-width:0;overflow:hidden;flex-shrink:1;white-space:nowrap;" ] [ renderEvalStats snap.EvalStats ]
       ]
       // Right side — expand toggle, theme picker
       Elem.div [ Attr.class' "tabline-right"; Attr.style "display:flex;align-items:center;height:100%;margin-left:auto;" ] [
@@ -2288,20 +2321,22 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         ]
       ]
     | _ -> ()
-    // Expanded-only panels: alarm, failure narratives, diagnostics.
+    // Alarm, failure narratives, diagnostics: always on the page. Whether each is relevant is the
+    // domain's call (each renders nothing when it has nothing to say), never a mode switch the user
+    // has to find first.
     // The eval filmstrip ("N evals" per-cell history) was removed — it pushed
     // the whole UI down to show raw eval code+timing that the top eval-stats
     // and the Output panel already cover, and cost an O(n) rev per SSE push.
-    Elem.div [ Attr.class' "expanded-only" ] [
-      snap.AlarmPanel
-      snap.FailureNarrativesPanel
-      snap.DiagnosticsPanel
-    ]
+    snap.AlarmPanel
+    snap.FailureNarrativesPanel
+    snap.DiagnosticsPanel
     // Main app layout: output+eval on left, sidebar on right
     Elem.div [ Attr.class' "app-layout" ] [
       Elem.div [ Attr.class' "main-area" ] [
         // Session picker — shown when no sessions exist, hidden otherwise
         snap.SessionPicker
+        // A session that faulted says why and what to do here, where the person is reading, not only on its sidebar card.
+        renderSessionFaultNotice snap.InView
         Elem.div [ Attr.id DomIds.EditorArea ] [
           Elem.div [ Attr.id DomIds.OutputSection; Attr.class' "output-area" ] [
             Elem.div [ Attr.class' "output-header" ] [
@@ -2376,15 +2411,6 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
               Attr.create "title" "New session"
               Ds.onClick (sprintf "$%s = true; %s" Signals.NewSessionOpen (Ds.post NewSessionDialog.NewSessionNames.DiscoverRoute)) ]
             [ Text.raw "+" ]
-          // Show/hide the extra per-session panels (Hot Reload, Live Testing,
-          // Bindings, Context) — belongs with the sessions, not by app settings.
-          Elem.button
-            [ Attr.class' "sidebar-header-btn"
-              Attr.id "expand-toggle-btn"
-              Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.ExpandedDashboard Signals.ExpandedDashboard)
-              Ds.text (sprintf "$%s ? '⊖' : '⊕'" Signals.ExpandedDashboard)
-              Ds.attr' ("aria-label", sprintf "$%s ? 'Hide extra session panels' : 'Show extra session panels (Hot Reload, Live Testing, Bindings, Context)'" Signals.ExpandedDashboard) ]
-            []
           Elem.button
             [ Attr.class' "sidebar-header-btn"
               Attr.id "sidebar-toggle-btn"
@@ -2398,15 +2424,14 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           Elem.div [ Attr.class' "panel" ] [
             snap.SessionsPanel
           ]
-          // Dynamic sidebar panels — expanded-only (hot reload, live testing, session context). The bindings are in the dock.
-          Elem.div [ Attr.class' "expanded-only" ] [
-            snap.HotReloadPanel
-            snap.LiveTestingPanel
-            snap.SessionContextPanel
-            snap.FrictionPanel
-            snap.CohortPanel
-            snap.HygienePanel
-          ]
+          // Dynamic sidebar panels (hot reload, live testing, session context). PanelVisibility.decide has
+          // already dropped the ones that are not relevant. The bindings are in the dock.
+          snap.HotReloadPanel
+          snap.LiveTestingPanel
+          snap.SessionContextPanel
+          snap.FrictionPanel
+          snap.CohortPanel
+          snap.HygienePanel
         ]
       ]
     ]

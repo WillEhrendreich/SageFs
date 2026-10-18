@@ -353,8 +353,9 @@ let keyboardHandlerScript () =
 /// the picker). There is NO session query parameter anywhere — the dashboard
 /// is driven entirely by the `viewingSessionId` signal synced with the backend.
 let renderShell (version: string) (clientId: string) (initialSessionId: string) (defaultWorkingDir: string) (initialContent: XmlNode) =
-  Elem.html [] [
+  Elem.html [ Attr.lang "en" ] [
     Elem.head [] [
+      yield! pageHeadMetas
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
       // Inline 🧙 favicon (base64 SVG data URI) — matches the header glyph and
       // makes no external request, so the browser tab stops 404-ing on
@@ -375,7 +376,7 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
     // (measured: rootDiv read 198px while the dock still resolved min(30vh, 18rem)). Body is the
     // common ancestor of both.
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true"; Ds.attr' ("style", sprintf "'--dock-max-height:' + $%s" Signals.DockHeight) ] [
-      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.onInit (sprintf "try{var v=localStorage.getItem('sagefs.dockHeight');if(v)$%s=v}catch(e){}" Signals.DockHeight); Ds.signal (Signals.DockHeight, "min(30vh, 18rem)"); Ds.signal (Signals.DockResizing, false); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (NewSessionDialog.NewSessionNames.TargetSignal, NewSessionDialog.TargetKind.key NewSessionDialog.TargetKind.LoadProjects); Ds.signal (NewSessionDialog.NewSessionNames.ProjectsSignal, Array.empty<string>); Ds.signal (NewSessionDialog.NewSessionNames.WorkflowSignal, NewSessionDialog.WorkflowChoice.key NewSessionDialog.WorkflowChoice.defaultChoice);Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.HygienePanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
+      Elem.div [ Ds.onInit (DashboardConnection.streamGet (sprintf "/dashboard/stream/%s" clientId)); Ds.onInit (sprintf "try{var v=localStorage.getItem('sagefs.dockHeight');if(v)$%s=v}catch(e){}" Signals.DockHeight); Ds.signal (Signals.DockHeight, "min(30vh, 18rem)"); Ds.signal (Signals.DockResizing, false); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (NewSessionDialog.NewSessionNames.TargetSignal, NewSessionDialog.TargetKind.key NewSessionDialog.TargetKind.LoadProjects); Ds.signal (NewSessionDialog.NewSessionNames.ProjectsSignal, Array.empty<string>); Ds.signal (NewSessionDialog.NewSessionNames.WorkflowSignal, NewSessionDialog.WorkflowChoice.key NewSessionDialog.WorkflowChoice.defaultChoice);Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.HygienePanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
                 // Chat-style output following (see `OutputFollow`). The browser's
                 // own state lives here, outside #main, so no morph resets it;
                 // the server's feed signals are seeded here too and then
@@ -383,7 +384,7 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
                 Ds.signal (Signals.OutputPinned, true); Ds.signal (Signals.OutputSeenEvals, 0); Ds.signal (Signals.OutputFollowSession, ""); Ds.signal (Signals.OutputScrollTop, 0); Ds.signal (Signals.OutputScrollHeight, 0);
                 Ds.signal (Signals.OutputFeedSession, ""); Ds.signal (Signals.OutputFeedEvals, 0); Ds.signal (Signals.OutputFeedRev, 0) ] []
       // What the page believes about the daemon, and the two banners that say it. See `DashboardConnection`.
-      Elem.div (DashboardConnection.monitorAttributes ()) []
+      Elem.div (DashboardConnection.monitorAttributes version) []
       // The browser's own clock, which every "up 5m" / "last: 3m ago" label counts against. Out here
       // so no morph of #main can reset it; the server renders only the moments (see `ElapsedClock`).
       Elem.div ElapsedClock.attributes []
@@ -1211,10 +1212,18 @@ let buildDashboardSnapshotWithSessions
         renderCohortLanesPanel (infra.ReadCohortLedger ())
         renderTrunkPanel (infra.ReadTrunk ())
       ]
+    // What the header says about the viewed session: the card's own display status (its colour, and the reason when it
+    // faulted) beside the daemon's coarse state words. A session the list does not hold falls back to the state alone.
+    let inView =
+      let display =
+        sessions
+        |> List.tryFind (fun s -> s.Id = sessionId)
+        |> Option.map (SessionDisplay.displayStatus DateTime.UtcNow)
+        |> Option.defaultValue (SessionDisplayStatus.ofSessionState state)
+      SessionInView.InPlay(state, display)
     let snap : DashboardSnapshot = {
               Version = infra.Version
-              ConnectionState = DashboardConnectionState.Connected
-              SessionState = stateStr
+              InView = inView
               SessionId = sid
               WorkingDir = workingDir
               WarmupProgress = warmupProgress
@@ -1331,8 +1340,7 @@ let buildNoSessionSnapshotWithSessionsSorted
     let evalToPixelP50Ms, evalToPixelP99Ms = evalToPixelPercentiles ()
     let snap : DashboardSnapshot = {
       Version = infra.Version
-      ConnectionState = DashboardConnectionState.Connected
-      SessionState = "No session"
+      InView = SessionInView.NoSessionInPlay
       SessionId = ""
       WorkingDir = ""
       WarmupProgress = ""
@@ -1541,6 +1549,8 @@ let createStreamHandler
         lastHeartbeatAt <- now
         try
           do! Response.ssePatchSignal ctx (SignalPath.sp DashboardConnection.HeartbeatSignal) (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+          // Which build is talking: a tab served by another build reloads onto this one (`DashboardConnection.versionChangeEffectExpr`).
+          do! Response.ssePatchSignal ctx (SignalPath.sp DashboardConnection.DaemonVersionSignal) infra.Version
           do! sendTelemetryIfChanged ()
         with
         | :? System.IO.IOException -> ()

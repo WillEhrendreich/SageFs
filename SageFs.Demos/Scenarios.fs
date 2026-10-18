@@ -356,7 +356,7 @@ let ltDashboard: Scenario =
     Sample = Sample.FromCSharp
     Layout = LayoutTemplate.DashboardOnly
     Steps =
-      [ { Caption = Caption.mk "1/5 · Open a real test project"
+      [ { Caption = Caption.mk "1/4 · Open a real test project"
           Action =
             Action.TypeThenClick(
               Target.DashboardCssSelector newSessionDirSelector,
@@ -366,51 +366,20 @@ let ltDashboard: Scenario =
             )
           Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned")
           Dwell = Dwell.short }
-        { Caption = Caption.mk "2/5 · It warms up and goes green"
+        { Caption = Caption.mk "2/4 · It warms up and goes green"
           Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
           Dwell = Dwell.medium }
-        // The Live Testing panel (like Hot Reload/Bindings/Session Context)
-        // is NOT on the page by default: `DashboardFragments.fs` wraps
-        // `snap.LiveTestingPanel` in an `expanded-only` div that only shows
-        // once the sidebar's own "⊕" expand-toggle button (`#expand-toggle-
-        // btn`, `Signals.ExpandedDashboard` defaults `false`) has been
-        // clicked. Confirmed directly: a real recording's own still frame at
-        // this step's failure showed a completely bare page (Output +
-        // collapsed Evaluate only) with no Live Testing panel anywhere, and
-        // the click itself failed with "no bounding box" — a genuinely
-        // different, NEWER gap than the discovery-backend blocker this
-        // scenario's own doc comment above describes (that comment predates
-        // this sidebar panel, which did not exist when it was written).
-        //
-        // This is its OWN step, not bundled into the enable-click's step
-        // like `sessionsDashboard`'s reset fix: unlike a raw `<details>`
-        // (which snaps shut on the next server morph unless re-opened every
-        // step), `#main`'s `expanded` class is explicitly morph-protected
-        // (`Ds.preserveAttr "class"`, `DashboardFragments.fs`) — it is safe
-        // to expand it once and let a LATER step's fresh rect-resolution
-        // click the now-visible toggle, rather than chaining both clicks
-        // into one step with no settle between them. Confirmed directly this
-        // matters: bundling the expand-click and the enable-click into ONE
-        // atomic step (no settle between them) reliably hovered the correct
-        // "Enable" button — an accurate native tooltip proved the coordinates
-        // were right — but the click itself never registered (the button
-        // never left "Enable"/never showed a loading state) for the entire
-        // 300s window, extracted and diffed frame-by-frame from the raw
-        // segment. A settle between the panel's reveal and the click removes
-        // that race.
-        { Caption = Caption.mk "3/5 · Open the extra session panels"
-          Action = Action.Click(Target.DashboardCssSelector "#expand-toggle-btn")
-          Expect = Expectation.PageTextContains(liveTestingPanelSelector, "Live Testing:")
-          Dwell = Dwell.medium }
-        { Caption = Caption.mk "4/5 · Turn live testing on"
+        // The Live Testing panel is on the page as soon as the domain says it is relevant
+        // (`PanelVisibility.decide`); there is no ⊕ step to reveal it any more.
+        { Caption = Caption.mk "3/4 · Turn live testing on"
           Action = Action.Click(Target.DashboardElement DashboardId.LiveTestingToggle)
           Expect = Expectation.PageTextContains(liveTestingPanelSelector, "Live Testing: ON")
           Dwell = Dwell.medium }
         // No click — just watch the same live session actually discover and
         // run the project's real Expecto tests (§9's "Await" pattern: a step
         // with no click/type action still waits out its own expectation).
-        { Caption = Caption.mk "5/5 · SageFs runs the real tests — they pass"
+        { Caption = Caption.mk "4/4 · SageFs runs the real tests — they pass"
           Action = Action.Await Signal.testRunCompleted
           Expect = Expectation.PageTextContains(liveTestingPanelSelector, "✓")
           Dwell = Dwell.long } ]

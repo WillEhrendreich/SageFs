@@ -46,9 +46,9 @@ let private longResultText : string =
 let private snapshot (output: XmlNode) : DashboardSnapshot =
   let empty = Elem.div [] []
   { DashboardSnapshot.Version = "0.0.0"
-    SessionState = "ready"; SessionId = "s1"; WorkingDir = "/work"
+    SessionId = "s1"; WorkingDir = "/work"
     WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
-    ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+    ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
     HotReloadPanel = empty; SessionContextPanel = empty
     OutputPanel = output
     SessionsPanel = empty; SessionPicker = empty

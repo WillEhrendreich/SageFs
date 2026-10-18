@@ -248,23 +248,6 @@ module DashboardDom =
     if not reached then failwithf "the page never switched to viewing session %s within %dms" sessionId budgetMs
   }
 
-  /// Enable "expanded" dashboard mode. The extra session panels — Hot Reload,
-  /// Live Testing, Bindings, Session Context, Friction — live inside
-  /// `.expanded-only` wrappers (display:none in the default
-  /// minimal mode) and are revealed only when #main gains the `expanded` class
-  /// (the `expandedDashboard` signal). Journeys that touch those panels must
-  /// turn expanded mode on first. Idempotent — a no-op when already expanded.
-  let ensureExpanded (page: IPage) = task {
-    let! isExpanded =
-      page.EvaluateAsync<bool>(
-        "() => { var m = document.querySelector('#main'); return m ? m.classList.contains('expanded') : false; }")
-    if not isExpanded then
-      do! page.Locator("#expand-toggle-btn").First.ClickAsync()
-      // Wait until #main actually carries the expanded class before returning.
-      do! page.Locator("#main.expanded").First.WaitForAsync(
-        LocatorWaitForOptions(State = WaitForSelectorState.Attached, Timeout = float32 BrowserWaits.pageProbe))
-  }
-
   /// Open the Evaluate accordion (#evaluate-section is a <details
   /// class="eval-area"> collapsed by default). No-op when already open.
   let openEvalArea (page: IPage) = task {
@@ -292,8 +275,6 @@ module DashboardDom =
   /// default). No-op when already open — safe to call repeatedly from
   /// `throughPanelReset`.
   let openFrictionPanel (page: IPage) = task {
-    // The Friction panel lives in an `.expanded-only` wrapper — reveal it first.
-    do! ensureExpanded page
     let! isOpen =
       page.EvaluateAsync<bool>(
         "() => { var el = document.querySelector('#friction-panel'); return el ? el.open : false; }")
@@ -1180,11 +1161,11 @@ let tests =
   })
 
   playwrightTest "sidebar scroll position survives an SSE morph" (fun page -> task {
-    // Root cause: the server renders #main without the client-driven
-    // `expanded` class, so every morph strips it, the sidebar's tall
-    // `.expanded-only` panels collapse for a frame, and the browser clamps
-    // .sidebar-inner's scrollTop to the collapsed maximum — the user's scroll
-    // position snaps back near the top. Fix: `data-preserve-attr="class"`.
+    // The sidebar's own class is client-driven (`collapsed`), so a morph that
+    // stripped it would collapse the tall panels for a frame and the browser
+    // would clamp .sidebar-inner's scrollTop to the collapsed maximum — the
+    // user's scroll position would snap back near the top. Fix:
+    // `data-preserve-attr="class"` on the sidebar.
     do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     let textarea = DashboardDom.textarea page
     // Stage the eval first, at the normal viewport, so submitting it later is
@@ -1194,17 +1175,16 @@ let tests =
       do! textarea.FillAsync("""printfn "scroll-probe" """)
     })
     // The Evaluate popover is a box fixed to the viewport that, at a narrow width, covers the sidebar header, so its
-    // Close button took the click meant for the expand toggle (the gate failed here, alone and under load). Close it
+    // Close button took the click meant for the sidebar header (the gate failed here, alone and under load). Close it
     // for the sidebar work; the text stays in the bound `code` signal, and key `e` brings the popover back below.
     do! page.Locator("[data-testid='evaluate-close']").ClickAsync()
-    do! DashboardDom.ensureExpanded page
     do! page.SetViewportSizeAsync(1280, 300)
     let! scrolledTo =
       page.EvaluateAsync<float>(
         "() => { var el = document.querySelector('.sidebar-inner'); el.scrollTop = el.scrollHeight - el.clientHeight; return el.scrollTop; }")
     // Guard against a vacuous pass: the collapsed sidebar can only scroll a
     // few dozen px, so a target well above that distinguishes a reset.
-    Expect.isTrue (scrolledTo > 100.0) (sprintf "expanded sidebar must overflow enough to detect a reset (scrolled to %f)" scrolledTo)
+    Expect.isTrue (scrolledTo > 100.0) (sprintf "the sidebar must overflow enough to detect a reset (scrolled to %f)" scrolledTo)
     // What the sidebar's panels measured before the eval, so a scroll shift can be attributed to the panel that resized.
     let! textBefore = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0]) + ' => ' + c.innerText.replace(/\\s+/g, ' ').slice(0, 400)).join(' || ')")
     let! sizesBefore = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0] || c.tagName) + ':' + Math.round(c.getBoundingClientRect().height)).join(' ')")
@@ -1212,20 +1192,13 @@ let tests =
     // would count as a push and make "a morph reached #main" pass without one.
     do! page.Keyboard.PressAsync("e")
     do! textarea.WaitForAsync(LocatorWaitForOptions(State = WaitForSelectorState.Visible))
-    // `__pushes` counts morph mutations anywhere under #main (proof a push
-    // landed). `__classStripped` counts #main class mutations whose previous
-    // value lacked `expanded` — i.e. the client-owned class was observed
-    // absent and then re-added. That is the mechanism behind the scroll reset,
-    // detected on every push regardless of whether a layout flush happened to
-    // land in the gap (which depends on how heavy the sidebar is).
+    // `__pushes` counts morph mutations anywhere under #main (proof a push landed).
     let! _ =
       page.EvaluateAsync<int>(
         """() => {
-          window.__pushes = 0; window.__classStripped = 0;
+          window.__pushes = 0;
           var main = document.querySelector('#main');
           new MutationObserver(() => { window.__pushes++; }).observe(main, { attributes: true, childList: true, subtree: true, characterData: true });
-          new MutationObserver(recs => { recs.forEach(r => { if (!(r.oldValue || '').includes('expanded')) window.__classStripped++; }); })
-            .observe(main, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
           return 0;
         }""")
     do! textarea.PressAsync("Alt+Enter")
@@ -1233,26 +1206,21 @@ let tests =
     do! page.WaitForTimeoutAsync(1500.0f)
     let! pushes = page.EvaluateAsync<int>("() => window.__pushes")
     Expect.isTrue (pushes > 0) "at least one SSE morph reached #main while the sidebar was scrolled"
-    let! stripped = page.EvaluateAsync<int>("() => window.__classStripped")
-    Expect.equal stripped 0 "the SSE morph must never strip and re-add the client-owned `expanded` class on #main"
     let! after = page.EvaluateAsync<float>("() => document.querySelector('.sidebar-inner').scrollTop")
     // NOT an exact-position assertion, and NOT `maxAfter`-relative either: the eval this
-    // test performs creates live bindings, which grows `.expanded-only` (measured on CI:
+    // test performs creates live bindings, which grows the sidebar panels (measured on CI:
     // 469 -> 526px), and the browser's scroll anchoring resolves that growth to a
     // DIFFERENT final scrollTop per renderer — 594 -> 651 measured locally, 594 -> 514
     // measured on the CI runner, for the identical content change. A bound built from
     // `maxAfter` co-varies with that same growth/anchoring, so it can silently pass on a
     // renderer where anchoring lands low. The bug this test exists to catch is a full
-    // RESET, not a smaller anchoring offset: the client-owned `expanded` class gets
-    // stripped, `.expanded-only` collapses to near nothing, and the browser clamps
-    // scrollTop to the tiny COLLAPSED maximum — "a few dozen px", the same ceiling the
-    // `scrolledTo > 100.0` guard above already uses to define that collapsed state. A
-    // fixed floor of 200px sits comfortably above that collapse ceiling and comfortably
-    // below every anchoring outcome observed so far (514-651 locally and on CI), so it
-    // still fails for the actual defect (collapse-then-clamp) while tolerating
-    // environment-sensitive anchoring jitter that is not the defect. `__classStripped = 0`
-    // above is the crisp, direct check for the mechanism itself; this is the
-    // belt-and-suspenders "and we did not end up back near the top" check.
+    // RESET, not a smaller anchoring offset: the sidebar collapses to near nothing and
+    // the browser clamps scrollTop to the tiny COLLAPSED maximum — "a few dozen px", the
+    // same ceiling the `scrolledTo > 100.0` guard above already uses to define that
+    // collapsed state. A fixed floor of 200px sits comfortably above that collapse
+    // ceiling and comfortably below every anchoring outcome observed so far (514-651
+    // locally and on CI), so it still fails for the actual defect (collapse-then-clamp)
+    // while tolerating environment-sensitive anchoring jitter that is not the defect.
     let floor = 200.0
     let! textAfter = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0]) + ' => ' + c.innerText.replace(/\\s+/g, ' ').slice(0, 400)).join(' || ')")
     let! sizesAfter = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0] || c.tagName) + ':' + Math.round(c.getBoundingClientRect().height)).join(' ')")
@@ -1271,8 +1239,7 @@ let tests =
   })
 
   playwrightTest "diagnostics panel has diagnostics-panel class" (fun page -> task {
-    // Diagnostics panel is in expanded-only mode (hidden by default in minimal mode).
-    // Check the class via JS evaluation rather than visibility.
+    // A healthy session renders the panel empty, so check the class via JS evaluation rather than visibility.
     let! cls = page.EvaluateAsync<string>(
       "() => { var el = document.querySelector('#diagnostics-panel'); return el ? el.className : ''; }")
     Expect.isTrue (cls.Contains("diagnostics-panel")) "diagnostics-panel class"
@@ -1472,8 +1439,7 @@ let tests =
   })
 
   playwrightTest "diagnostics panel renders empty state" (fun page -> task {
-    // Diagnostics panel is in the expanded-only sidebar section; a healthy
-    // session has no diagnostics to show.
+    // A healthy session has no diagnostics to show.
     do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
     let! panelExists = page.EvaluateAsync<bool>(
       "() => { var el = document.querySelector('#diagnostics-panel'); return el !== null && el !== undefined; }")
@@ -1658,7 +1624,6 @@ let tests =
     // The friction panel isn't in the default layout; this tab asks for it.
     let! _ = page.GotoAsync(sprintf "%s/dashboard?panels=friction" PlaywrightFixture.dashboardUrl)
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-    do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
     do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 1
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
@@ -1686,7 +1651,6 @@ let tests =
 
   playwrightTest "live testing panel appears when it's turned on and goes when it's turned off" (fun page -> task {
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-    do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#live-testing-panel")
     // Off: the panel isn't there at all.
     do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 0
@@ -1713,7 +1677,6 @@ let tests =
     // The friction panel isn't in the default layout; this tab asks for it.
     let! _ = page.GotoAsync(sprintf "%s/dashboard?panels=friction" PlaywrightFixture.dashboardUrl)
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-    do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
     do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 1
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
@@ -1742,8 +1705,6 @@ let tests =
 
     // A fresh page load rebuilds the panel from the store (cold GET render).
     let! _ = page.ReloadAsync()
-    // The reload reset expanded mode too — re-enable so the panel is visible.
-    do! DashboardDom.ensureExpanded page
     do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 1
     do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates (page.Locator("#friction-panel summary")) "1 feedback"
     // The reload reset the <details> to closed — open it for role queries.
@@ -1764,7 +1725,6 @@ let tests =
     // The friction panel isn't in the default layout; this tab asks for it.
     let! _ = page.GotoAsync(sprintf "%s/dashboard?panels=friction" PlaywrightFixture.dashboardUrl)
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-    do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
     do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 1
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
@@ -1807,8 +1767,7 @@ let tests =
     }
     let count (selector: string) expected ms = PlaywrightExpect.waitForCount ms (page.Locator(selector)) expected
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-    do! DashboardDom.ensureExpanded page
-    // 1. A REPL session: none of them, even with the extra panels expanded.
+    // 1. A REPL session: none of them.
     for selector in [ "#hot-reload-panel"; "#cohort-panel"; "#cohort-lanes"; "#friction-panel"; "#live-testing-panel" ] do
       do! count selector 0 BrowserWaits.panelUpdates
     do! shot "1-repl"
@@ -1872,7 +1831,6 @@ let tests =
     do! switchViaDropdown "hotreload"
     do! count "#hot-reload-panel" 1 BrowserWaits.hotReloadBuild
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.hotReloadBuild page "#session-status" "Ready"
-    do! DashboardDom.ensureExpanded page
     do! shot "3-hot-reload"
     for selector in [ "#cohort-panel"; "#cohort-lanes"; "#friction-panel" ] do
       do! count selector 0 BrowserWaits.pageProbe

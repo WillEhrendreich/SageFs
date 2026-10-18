@@ -198,8 +198,9 @@ module SettingsPanel =
   /// self-hosted, pinned Datastar bundle so the Phase-B2 edit controls work,
   /// and the shared dashboard stylesheet.
   let renderPage (rows: SettingRow list) : XmlNode =
-    Elem.html [] [
+    Elem.html [ Attr.lang "en" ] [
       Elem.head [] [
+        yield! DashboardFragments.pageHeadMetas
         Elem.title [] [ Text.raw "SageFs Settings" ]
         Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
         Elem.script [ Attr.type' "module"; Attr.src "/dashboard/datastar.js" ] []

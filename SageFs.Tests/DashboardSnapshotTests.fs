@@ -579,9 +579,9 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
   // These tests verify the morphed content includes key interactive elements.
   let mkSnap version = {
     DashboardSnapshot.Version = version
-    SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
+    SessionId = "test-id"; WorkingDir = @"C:\Code"
     WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
-    ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+    ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
     HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
     OutputPanel = Elem.div [] []
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -753,36 +753,31 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     (tag.Contains("display:none")) |> Expect.isTrue "banner still has a static display:none default pre-hydration"
   }
 
-  // ── Minimal mode (Task 1) ──────────────────────────────────────
-  test "renderShell has expandedDashboard signal" {
-    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
-    // Datastar renders signal names as kebab-case in attributes (expandedDashboard → expanded-dashboard)
-    html |> Expect.stringContains "shell has expanded-dashboard signal attribute" "expanded-dashboard"
+  // ── No second gate (R-CLIENTS-1) ───────────────────────────────
+  // PanelVisibility.decide is the only thing that decides whether a panel is on
+  // the page. A panel it calls Shown, and an alarm, must never sit behind a mode
+  // switch the user has to find: no CSS rule hides them, no wrapper carries the
+  // class that rule used, and no toggle or signal exists to flip it.
+  test "WHY — no CSS rule hides a panel the domain decided to show, because a second gate buried the alarm and the hot reload and live testing panels behind a glyph" {
+    Dashboard.dashboardCss.Contains "expanded-only"
+    |> Expect.isFalse "the stylesheet has no .expanded-only rule"
+    (renderMainContent (mkSnap "0.0.0") |> renderNode).Contains "expanded-only"
+    |> Expect.isFalse "no wrapper in the main content carries the retired class"
   }
 
-  test "renderMainContent has expanded-only sections" {
-    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    html |> Expect.stringContains "main content has expanded-only class" "expanded-only"
-  }
-
-  test "renderMainContent has expand toggle button" {
-    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    html |> Expect.stringContains "has expand toggle onclick" "expandedDashboard = !$expandedDashboard"
-  }
-
-  test "renderMainContent has the expand toggle on the Sessions panel (not by app settings)" {
-    // The 'more session info' toggle moved from the app-header (by settings) to
-    // the Sessions panel header; it keeps the stable id so it stays targetable.
-    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    html |> Expect.stringContains "expand toggle present by id" "id=\"expand-toggle-btn\""
-    html |> Expect.stringContains "expand toggle toggles the expandedDashboard signal" "expandedDashboard"
+  test "WHY — the shell has no expandedDashboard signal and the sessions header has no show-more toggle, because there is nothing left for them to reveal" {
+    let shell = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
+    shell.Contains "expanded-dashboard" |> Expect.isFalse "the shell seeds no expanded-dashboard signal"
+    let main = renderMainContent (mkSnap "0.0.0") |> renderNode
+    main.Contains "id=\"expand-toggle-btn\"" |> Expect.isFalse "the sessions header has no expand toggle button"
+    main.Contains "expandedDashboard" |> Expect.isFalse "nothing in the main content reads the retired signal"
   }
 
   // Scroll-reset bug: every SSE push morphs a server-rendered element that has
   // no client-driven class into the DOM, so the morph strips the class Datastar
-  // added (`#main.expanded`), the tall `.expanded-only` panels collapse, and the
-  // browser clamps the sidebar's scrollTop before Datastar re-adds the class.
-  // `data-preserve-attr="class"` tells the morph to leave that attribute alone.
+  // added to it, and the sidebar collapses for a frame while the browser clamps
+  // its scrollTop. `data-preserve-attr="class"` tells the morph to leave that
+  // attribute alone.
   test "clientClassElementsMissingPreserve has teeth: flags a data-class element without preserve-attr, accepts one with it" {
     clientClassElementsMissingPreserve """<div id="a" data-class:on="$x"></div>"""
     |> Expect.hasLength "a bare data-class element is flagged" 1
@@ -1164,9 +1159,9 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
   test "renderMainContent includes key DOM IDs" {
     let snap = {
       DashboardSnapshot.Version = "0.0.0"
-      SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
+      SessionId = "test-id"; WorkingDir = @"C:\Code"
       WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
-      ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+      ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1207,9 +1202,9 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
   test "morph target: renderMainContent wraps in div#main" {
     let snap = {
       DashboardSnapshot.Version = "0.0.0"
-      SessionState = "ready"; SessionId = "t"; WorkingDir = "C:\\"
+      SessionId = "t"; WorkingDir = "C:\\"
       WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
-      ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+      ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1227,11 +1222,11 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
 
 let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis 3.1)" [
 
-  let mkSnap version sessionId workingDir state =
+  let mkSnap version sessionId workingDir (view: SessionInView) =
     { DashboardSnapshot.Version = version
-      SessionState = state; SessionId = sessionId; WorkingDir = workingDir
+      SessionId = sessionId; WorkingDir = workingDir
       WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.sevenEvals
-      ThemeName = "monokai"; ConnectionLabel = Some "🌐 2 🤖 1"; ConnectionState = DashboardConnectionState.Connected
+      ThemeName = "monokai"; ConnectionLabel = Some "🌐 2 🤖 1"; InView = view
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1249,13 +1244,13 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
         { Version = "1.2.3"; MemoryMB = 0; StartedAt = Since.Unknown
           OverallHealth = Features.OverallHealth.Healthy
           SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None; Anomalies = []; GcDumpNote = None }
-    let snap = { (mkSnap "1.2.3" "s1" "C:\\" "ready") with DaemonHealth = health }
+    let snap = { (mkSnap "1.2.3" "s1" "C:\\" FixtureViews.running) with DaemonHealth = health }
     let html = renderMainContent snap |> renderNode
     html |> Expect.stringContains "version should appear" "1.2.3"
   }
 
   test "SessionId appears in rendered output" {
-    let html = mkSnap "0.0.0" "my-session-42" "C:\\" "ready" |> renderMainContent |> renderNode
+    let html = mkSnap "0.0.0" "my-session-42" "C:\\" FixtureViews.running |> renderMainContent |> renderNode
     html |> Expect.stringContains "sessionId should appear" "my-session-42"
   }
 
@@ -1277,36 +1272,39 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
     html |> Expect.stringContains "working dir should appear on the card" @"C:\MyProject\Src"
   }
 
-  test "SessionState appears in rendered output" {
-    let html = mkSnap "0.0.0" "s1" "C:\\" "faulted" |> renderMainContent |> renderNode
-    html |> Expect.stringContains "session state should appear" "faulted"
+  test "the session's state appears in rendered output, and a faulted session says why" {
+    let view = SessionInView.InPlay(SessionState.Faulted, SessionDisplayStatus.Faulted "the project did not build")
+    let html = mkSnap "0.0.0" "s1" "C:\\" view |> renderMainContent |> renderNode
+    html |> Expect.stringContains "the badge says Faulted" "Faulted"
+    html |> Expect.stringContains "the badge is red, not green" "status status-faulted"
+    html |> Expect.stringContains "the main area says why" "the project did not build"
   }
 
   test "EvalStats count appears in rendered output" {
-    let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    let html = mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running |> renderMainContent |> renderNode
     html |> Expect.stringContains "eval count should appear" "7 evals"
   }
 
   test "EvalStats avg appears in rendered output" {
-    let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    let html = mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running |> renderMainContent |> renderNode
     html |> Expect.stringContains "avg ms should appear" "42"
   }
 
   test "ConnectionLabel appears in rendered output" {
-    let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    let html = mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running |> renderMainContent |> renderNode
     html |> Expect.stringContains "connection label should appear" "🌐 2"
   }
 
   test "ThemeName appears in theme picker" {
     let snap =
-      { (mkSnap "0.0.0" "s1" "C:\\" "ready") with
+      { (mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running) with
           ThemePicker = Elem.div [] [ Text.raw "Theme: monokai" ] }
     let html = renderMainContent snap |> renderNode
     html |> Expect.stringContains "theme name should appear" "monokai"
   }
 
   test "rendered output always wraps in div#main" {
-    let snap = mkSnap "0.0.0" "s1" "C:\\" "ready"
+    let snap = mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running
     let html = renderMainContent snap |> renderNode
     (html.StartsWith "<div id=\"main\"") |> Expect.isTrue "must start with div#main"
     (html.EndsWith "</div>") |> Expect.isTrue "must end with closing div"

@@ -136,8 +136,8 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
   testCase "WHY — the statusline renders p50/p99 when present — the RED test §10 item 1 names explicitly ('the statusline shows p50/p99')" <| fun _ ->
     let snap =
       { Version = "0.0.0"
-        ConnectionState = DashboardConnectionState.Connected
-        SessionState = "ready"; SessionId = "test-id"; WorkingDir = "/w"
+        InView = FixtureViews.running
+        SessionId = "test-id"; WorkingDir = "/w"
         WarmupProgress = ""; WorkflowLabel = "REPL"
         EvalStats = FixtureStats.threeQuickEvals
         AlarmPanel = Elem.div [] []; DaemonHealth = Elem.div [] []
@@ -158,8 +158,8 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
   testCase "WHY — the statusline renders nothing latency-shaped before any eval has completed the chain — an absent measurement must not masquerade as a fabricated 0ms" <| fun _ ->
     let snap =
       { Version = "0.0.0"
-        ConnectionState = DashboardConnectionState.Connected
-        SessionState = "ready"; SessionId = "test-id"; WorkingDir = "/w"
+        InView = FixtureViews.running
+        SessionId = "test-id"; WorkingDir = "/w"
         WarmupProgress = ""; WorkflowLabel = "REPL"
         EvalStats = FixtureStats.noEvals
         AlarmPanel = Elem.div [] []; DaemonHealth = Elem.div [] []

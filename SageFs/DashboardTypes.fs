@@ -315,7 +315,6 @@ module Signals =
   let [<Literal>] WorkflowTarget = "workflowTarget"
   let [<Literal>] CursorPos = "cursorPos"
   let [<Literal>] TestFilter = "testFilter"
-  let [<Literal>] ExpandedDashboard = "expandedDashboard"
   let [<Literal>] BindingsPanelOpen = "bindingsPanelOpen"
   let [<Literal>] FrictionDrawerOpen = "frictionDrawerOpen"
   // Accordion open/closed state — one signal per static <details> panel, so
@@ -1011,43 +1010,30 @@ type AgentBadge = {
 /// session (roast-4 #6).
 /// Distinct from SessionState (daemon lifecycle) and WorkerProtocol.SessionStatus (wire protocol).
 
-/// Type-safe daemon connection state for the dashboard.
-/// Illegal states unrepresentable: the browser CANNOT show "Ready" or "No session"
-/// when the daemon is disconnected — the DU cases enforce this at the type level.
+/// The session the dashboard is showing, or the fact that no session is in play. The header badge and the main area
+/// match on this instead of on a state string and an empty session id.
 [<RequireQualifiedAccess>]
-type DashboardConnectionState =
-  /// SSE stream is alive and the daemon is reachable.
-  | Connected
-  /// SSE stream failed or was never established — the daemon may not be running.
-  | Disconnected
+type SessionInView =
+  /// Nothing is viewed: the dashboard shows the session picker inside the full shell.
+  | NoSessionInPlay
+  /// A session is viewed. `state` is the daemon's coarse state (the badge's words, which clients wait on, such as
+  /// "Ready"); `display` is the same status the session's card shows, with the fault's reason when it has one (the
+  /// badge's colour, and what the main area says when the session faulted).
+  | InPlay of state: SessionState * display: SessionDisplayStatus
 
-module DashboardConnectionState =
-  /// Convert to the Datastar signal string value.
-  let signalValue = function
-    | DashboardConnectionState.Connected -> "true"
-    | DashboardConnectionState.Disconnected -> "false"
+module SessionInView =
+  /// The CSS class for the header status badge. It is the card's class for the same status, so the badge cannot say
+  /// green over a session whose card says faulted. Green is for a running session only.
+  let badgeCssClass (view: SessionInView) : string =
+    match view with
+    | SessionInView.NoSessionInPlay -> "status-idle"
+    | SessionInView.InPlay(_, display) -> SessionDisplayStatus.cssClass display
 
-  /// The CSS class for the status badge based on connection state.
-  let statusBadgeCssClass = function
-    | DashboardConnectionState.Connected -> "status-ready"
-    | DashboardConnectionState.Disconnected -> "status-disconnected"
-
-  /// The text shown in the status badge.
-  let statusBadgeLabel (sessionState: string) = function
-    | DashboardConnectionState.Connected -> sessionState
-    | DashboardConnectionState.Disconnected -> "Disconnected"
-
-  /// The text shown in the statusline info area.
-  let statuslineLabel (workingDir: string) (version: string) = function
-    | DashboardConnectionState.Connected ->
-      sprintf "\"%s\" — SageFs v%s — ready" workingDir version
-    | DashboardConnectionState.Disconnected ->
-      sprintf "\"%s\" — SageFs v%s — daemon not running" workingDir version
-
-  /// The text shown in the command line area.
-  let cmdlineLabel = function
-    | DashboardConnectionState.Connected -> "SageFs -- ready"
-    | DashboardConnectionState.Disconnected -> "SageFs -- daemon not running"
+  /// The words in the header status badge: the daemon's own state words, which clients wait on ("Ready").
+  let badgeLabel (view: SessionInView) : string =
+    match view with
+    | SessionInView.NoSessionInPlay -> "No session"
+    | SessionInView.InPlay(state, _) -> SessionState.label state
 
 /// What a sidebar card knows about whether the files on disk are ahead of the build its session runs (`SourceState`).
 /// Reading it takes the worker's own warmup report (a worker round trip), which the push loop pays only for the session
@@ -1517,11 +1503,12 @@ type DashboardInfra = {
 /// Constructed once per push, then passed to renderMainContent for atomic morph.
 type DashboardSnapshot = {
   Version: string
-  /// Type-safe daemon connection state — renderer derives badge class, statusline,
-  /// and cmdline text from this DU case. When Disconnected, the UI MUST NOT show
-  /// "Ready" or "No session" — enforced by DashboardConnectionState module functions.
-  ConnectionState: DashboardConnectionState
-  SessionState: string
+  /// The session in view, or that none is in play. The header badge (class and words) and the main area's fault notice
+  /// are derived from this case by `SessionInView`, so no renderer re-decides it from a state string. Whether the page
+  /// is connected to the daemon is the browser's to know, in its own signals (`DashboardConnection`); the server never
+  /// built anything but "connected", which is why this used to be green whatever the session was doing.
+  InView: SessionInView
+  /// The id of the session in view, "" when `InView` is `NoSessionInPlay`.
   SessionId: string
   WorkingDir: string
   WarmupProgress: string
