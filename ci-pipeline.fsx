@@ -1925,11 +1925,103 @@ let sagefsPipeline = pipeline "sagefs" {
     // "disable") to that exact SDK, so `dotnet` resolution can't accidentally
     // fall through to the other one. A single run under whichever SDK happens
     // to be ambient would only ever prove ONE of the two payloads works.
+    //
+    // `--version` alone left the failure class that actually shipped broken
+    // before (missing SageFs.Host.dll, the tool exe dropped, the net11-only
+    // layout of #131): installs fine, `--version` works, a session cannot start.
+    // So each install is ALSO driven by scripts/smoke-test.fsx: a daemon from
+    // THAT install, a real session on the C# sample, completions, live-testing
+    // discovery and run, mark-all-stale (decisions: scripts/SmokeRules.fs). It
+    // is a stage and not a ledgered tier: the trust ledger's rows come from the
+    // Expecto process, and the trust report is judged before the nupkg this
+    // installs exists. PackagedToolSmokeWiringTests keeps it from going dark.
+    // Each run gets its own free port pair and data dir (never the owner's
+    // daemon), the runs are sequential (they share the sample's build output),
+    // and a red run leaves its diagnostics under the gate's logs directory.
     when' releaseRequested
-    timeoutForStep 300
+    timeoutForStep 1500
     run (fun _ ->
       async {
         let sdks = [ "10.0.401", "net10.0"; "11.0.100-rc.1.26425.128", "net11.0" ]
+        let smokeScript = Path.Combine(rootDir, "scripts", "smoke-test.fsx")
+        // The script's own defaults (15 s to a healthy daemon, 45 s to a Ready session) are for a quiet machine;
+        // the gate's tail can still be a loaded one (a session went Ready in 31 s at load 80), and a slow
+        // machine is not a broken install.
+        let smokeDaemonSeconds = 60
+        let smokeWarmupSeconds = 150
+        // The smoke serves MCP on a port and the dashboard on the next one, so
+        // the PAIR must be free. Probed on every interface, the way a daemon binds.
+        let freePortPair () =
+          let isFree (port: int) =
+            try
+              let listener = Net.Sockets.TcpListener(Net.IPAddress.Any, port)
+              listener.Start()
+              listener.Stop()
+              true
+            with _ -> false
+          let rec pick (attempt: int) =
+            let probe = Net.Sockets.TcpListener(Net.IPAddress.Loopback, 0)
+            probe.Start()
+            let port = (probe.LocalEndpoint :?> Net.IPEndPoint).Port
+            probe.Stop()
+            match isFree port && isFree (port + 1), attempt with
+            | true, _ -> port
+            | false, attempt when attempt < 50 -> pick (attempt + 1)
+            | false, _ -> failwith "no free pair of adjacent ports after 50 tries"
+          pick 0
+        // A tool built for net10 hosts net10 projects under SDK 10, and a net11 one hosts net11 projects under
+        // SDK 11 (a net10 tool refuses a project whose SDK is 11: "newer than SageFs's own runtime"). So each leg
+        // gets a COPY of the C# sample inside its pinned-SDK working dir, retargeted to the leg's framework.
+        // The copy is still under the repo, so the central package versions apply; it carries no lock file.
+        let sampleFor (workDir: string) (tfm: string) : Result<string, string> =
+          let source = Path.Combine(rootDir, "samples", "from-csharp", "SageFs.Samples.FromCSharp")
+          let target = Path.Combine(workDir, "sample")
+          Directory.CreateDirectory target |> ignore
+          for file in Directory.GetFiles source |> Array.filter (fun f -> Path.GetFileName f <> "packages.lock.json") do
+            File.Copy(file, Path.Combine(target, Path.GetFileName file), true)
+          let project = Path.Combine(target, "SageFs.Samples.FromCSharp.fsproj")
+          let original = File.ReadAllText project
+          let sampleFramework = "<TargetFramework>net11.0</TargetFramework>"
+          match original.Contains sampleFramework with
+          | false -> Error $"the C# sample no longer declares {sampleFramework}, so the smoke cannot retarget it; update ci-pipeline.fsx: {project}"
+          | true ->
+            File.WriteAllText(
+              project,
+              original.Replace(
+                sampleFramework,
+                $"<TargetFramework>{tfm}</TargetFramework><RestorePackagesWithLockFile>false</RestorePackagesWithLockFile><RestoreLockedMode>false</RestoreLockedMode>"))
+            Ok project
+        let sessionSmoke (workDir: string) (toolPath: string) (tfm: string) : Async<Result<unit, string>> =
+          async {
+            match File.Exists smokeScript, sampleFor workDir tfm with
+            | false, _ -> return Error $"the session smoke script is missing, so nothing proved a session starts: {smokeScript}"
+            | _, Error why -> return Error why
+            | true, Ok sampleProject ->
+              let port = freePortPair ()
+              let diagnostics = Path.Combine(Path.GetDirectoryName durationsFile, "logs", $"smoke-{tfm}")
+              if Directory.Exists diagnostics then Directory.Delete(diagnostics, true)
+              let dataDir = Path.Combine(workDir, "data")
+              Directory.CreateDirectory dataDir |> ignore
+              let smokeLog = Path.Combine(workDir, "smoke-session.log")
+              // The script runs the `sagefs` it finds on PATH: put THIS install first.
+              let path = toolPath + string Path.PathSeparator + Environment.GetEnvironmentVariable "PATH"
+              let! smokeExit =
+                execToLog (TimeSpan.FromMinutes 8.0) workDir [ "PATH", path; "SAGEFS_DATA_DIR", dataDir ] smokeLog
+                  [ "dotnet"; "fsi"; smokeScript; "--"; "--sample"; sampleProject; "--port"; string port
+                    "--daemon-timeout"; string smokeDaemonSeconds; "--session-warmup"; string smokeWarmupSeconds
+                    "--diagnostics-dir"; diagnostics ]
+              let evidence () =
+                let lines = File.ReadAllLines smokeLog
+                lines |> Array.skip (max 0 (lines.Length - 40)) |> Array.iter (printfn "  smoke %s: %s" tfm)
+              match smokeExit with
+              | 0 when File.ReadAllText(smokeLog).Contains "RESULT: PASS" -> return Ok()
+              | 0 ->
+                evidence ()
+                return Error $"the session smoke under the {tfm} install exited 0 without its PASS line, so it did not run its checks; see {smokeLog}"
+              | code ->
+                evidence ()
+                return Error $"the session smoke under the {tfm} install exited {code}; see {smokeLog} and the diagnostics in {diagnostics}"
+          }
         let smokeOneSdk (sdkVersion: string, tfm: string) =
           async {
             let workDir = Path.Combine(rootDir, $".smoke-{tfm}")
@@ -1958,7 +2050,13 @@ let sagefsPipeline = pipeline "sagefs" {
               match versionExit with
               | 0 ->
                 printfn "OK: SageFs installs and runs under .NET SDK %s (%s build)" sdkVersion tfm
-                return Ok()
+                // The session smoke on top: --version does not start a session.
+                let sw = Diagnostics.Stopwatch.StartNew()
+                let! smoked = sessionSmoke workDir toolPath tfm
+                match smoked with
+                | Ok () -> printfn "OK: the %s install starts a daemon and a session and answers (%.0fs)" tfm sw.Elapsed.TotalSeconds
+                | Error _ -> ()
+                return smoked
               | code -> return Error $"'sagefs --version' under SDK {sdkVersion} (expected {tfm} build) exited {code}; see {log}"
             | code -> return Error $"tool install under SDK {sdkVersion} (expected {tfm} build) exited {code}; see {log}"
           }

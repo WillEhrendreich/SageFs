@@ -310,7 +310,7 @@ let flag (b: bool) : JsonNode = JsonValue.Create b :> JsonNode
 
 let prerequisites () : unit =
   section "1. Prerequisites"
-  match run "dotnet" [ "--version" ] repoRoot probeTimeout with
+  match run "dotnet" [ "--version" ] sampleProjectDir probeTimeout with
   | 0, version -> record Dotnet (dotnetVerdict version)
   | _ -> record Dotnet (Fail "'dotnet' not found in PATH")
   match run "sagefs" [ "--version" ] repoRoot probeTimeout with
@@ -348,7 +348,9 @@ let daemonStartup () : unit =
   // Build the sample project so its DLL exists for session warmup. CI may only build Release; the session
   // loader defaults to Debug output.
   say ConsoleColor.DarkGray (sprintf "  Building sample project (%s)..." samplePath)
-  match run "dotnet" [ "build"; samplePath; "--nologo"; "--verbosity"; "quiet" ] repoRoot buildTimeout with
+  // From the sample's own directory, so the SDK its global.json pins (if any) is the one that builds it, the way a
+  // user's build would resolve it. The pipeline's per-SDK legs pin a sample copy to each SDK.
+  match run "dotnet" [ "build"; samplePath; "--nologo"; "--verbosity"; "quiet" ] sampleProjectDir buildTimeout with
   | 0, _ -> ()
   | code, output ->
     record DaemonStart (Fail(sprintf "Sample project build failed (exit %d)" code))
