@@ -1022,11 +1022,18 @@ type SessionInView =
   | InPlay of state: SessionState * display: SessionDisplayStatus
 
 module SessionInView =
-  /// The CSS class for the header status badge.
-  let badgeCssClass (_: SessionInView) : string = "status-ready"
+  /// The CSS class for the header status badge. It is the card's class for the same status, so the badge cannot say
+  /// green over a session whose card says faulted. Green is for a running session only.
+  let badgeCssClass (view: SessionInView) : string =
+    match view with
+    | SessionInView.NoSessionInPlay -> "status-idle"
+    | SessionInView.InPlay(_, display) -> SessionDisplayStatus.cssClass display
 
-  /// The words in the header status badge.
-  let badgeLabel (_: SessionInView) : string = ""
+  /// The words in the header status badge: the daemon's own state words, which clients wait on ("Ready").
+  let badgeLabel (view: SessionInView) : string =
+    match view with
+    | SessionInView.NoSessionInPlay -> "No session"
+    | SessionInView.InPlay(state, _) -> SessionState.label state
 
 /// Type-safe daemon connection state for the dashboard.
 /// Illegal states unrepresentable: the browser CANNOT show "Ready" or "No session"

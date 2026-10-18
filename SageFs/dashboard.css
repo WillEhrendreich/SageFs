@@ -2449,6 +2449,21 @@ body[data-connected="false"] .statusline-info {
   opacity: 0.8;
 }
 
+/* ── Faulted session notice ───────────────────────────────────── */
+/* A session that faulted says why, and what to do about it, in the main area, where the person is reading. */
+.session-fault-notice {
+  margin: 0.5rem 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg-panel);
+  border-left: 4px solid var(--fg-red);
+  color: var(--fg-default);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.session-fault-title { font-weight: 700; color: var(--fg-red); }
+.session-fault-reason { margin-top: 0.25rem; }
+.session-fault-remedy { margin-top: 0.25rem; color: var(--fg-dim); }
+
 /* ── Reduced motion ───────────────────────────────────────────── */
 /* A person who asks their system for less motion gets none: the connection pulse repeats for as long as the daemon is
    away, and smooth scrolling moves the page under them. This is not `animation: none`: the tooltip fade-in ends on

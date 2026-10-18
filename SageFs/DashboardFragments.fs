@@ -52,9 +52,6 @@ let textEnc (s: string) : XmlNode = Text.raw (htmlEscape s)
 /// so the stylesheet's width media queries never match on the device they were written for.
 let viewportContent = "width=device-width, initial-scale=1"
 
-/// What the main area says about a session that faulted: why, and what to do. Nothing for any other session.
-let renderSessionFaultNotice (_: SessionInView) : XmlNode = Text.raw ""
-
 /// What opens every dashboard page's head: the charset first (inside the bytes a browser sniffs), then the viewport.
 /// Shared by the dashboard shell and the settings page so neither can forget one.
 let pageHeadMetas : XmlNode list =
@@ -70,6 +67,29 @@ let attrEnc (s: string) : string = htmlEscape s
 /// from the fixed kebab-case vocabulary the demos tooling mirrors — never a
 /// computed string — so a renamed control breaks a contract test, not a demo.
 let testid (name: string) = Attr.create "data-testid" name
+
+/// What the main area says about a session that faulted: why, and what to do about it. The reason and the way out used to
+/// be on a sidebar card only, so the place the person was reading said just "Faulted". Nothing for any other session.
+/// It is an alert: a session can fault while the person is looking elsewhere on the page.
+let renderSessionFaultNotice (view: SessionInView) : XmlNode =
+  match view with
+  | SessionInView.InPlay(_, SessionDisplayStatus.Faulted reason) ->
+    Elem.div
+      [ Attr.class' "session-fault-notice"
+        testid "session-fault-notice"
+        Attr.create "role" "alert" ]
+      [ Elem.div [ Attr.class' "session-fault-title" ] [ Text.raw "This session faulted." ]
+        Elem.div [ Attr.class' "session-fault-reason" ] [ textEnc reason ]
+        Elem.div
+          [ Attr.class' "session-fault-remedy" ]
+          [ Text.raw "Stop it with ■ on its card in the sidebar, then start a new session with +." ] ]
+  | SessionInView.InPlay(_, SessionDisplayStatus.Running)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Starting)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Restarting)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Lost)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Stopped)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Idle)
+  | SessionInView.NoSessionInPlay -> Text.raw ""
 
 let renderKeyboardHelp () =
   let shortcut key desc =
