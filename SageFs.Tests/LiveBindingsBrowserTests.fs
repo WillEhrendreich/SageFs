@@ -52,10 +52,9 @@ let private evalCode (page: IPage) (code: string) (marker: string) = task {
   do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" marker
 }
 
-/// The page, once the stream is live and the extra panels are showing.
+/// The page, once the stream is live.
 let private ready (page: IPage) = task {
   do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
-  do! DashboardDom.ensureExpanded page
 }
 
 let private paneText (page: IPage) = page.Locator(pane).InnerTextAsync()

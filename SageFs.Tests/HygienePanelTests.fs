@@ -114,7 +114,7 @@ let panelTests =
       let text = html (scanned [ hostile ])
       text |> doesNotContain "no raw script tag" "<script>alert(1)</script>"
 
-    testCase "the full shell carries the panel inside #main in the sidebar's expanded-only block, and the shell's chrome is still all there" <| fun _ ->
+    testCase "the full shell carries the panel inside #main in the sidebar, and the shell's chrome is still all there" <| fun _ ->
       let snap : DashboardSnapshot =
         { DashboardSnapshot.Version = "0.0.0"
           SessionState = "ready"; SessionId = "0a2b3c4d"; WorkingDir = "/work"
@@ -142,5 +142,5 @@ let panelTests =
       text |> contains "has the hygiene panel" (sprintf "id=\"%s\"" DomIds.HygienePanel)
       text |> contains "keeps the sessions panel" "sessions-marker"
       (text.IndexOf "cohort-marker" < text.IndexOf DomIds.HygienePanel) |> Expect.isTrue "comes after the cohort panel"
-      (text.IndexOf "expanded-only" < text.IndexOf DomIds.HygienePanel) |> Expect.isTrue "inside the expanded-only block"
+      (text.IndexOf DomIds.Sidebar < text.IndexOf DomIds.HygienePanel) |> Expect.isTrue "inside the sidebar"
   ]

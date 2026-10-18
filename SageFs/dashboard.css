@@ -2320,20 +2320,7 @@ h2 {
   overflow: hidden;
 }
 
-/* ── Minimal Mode (expandedDashboard signal) ──────────────────── */
-
-/* Expanded-only panels are hidden by default (minimal mode) */
-.expanded-only {
-  display: none;
-}
-
-/* When #main has .expanded class (signal true), show expanded-only panels */
-#main.expanded .expanded-only {
-  display: block;
-}
-
-/* Expand/collapse toggle for extra panels (Hot Reload, Live Testing, etc.)
-   — lives in the tabline right side, not floating. */
+/* Settings link in the tabline right side, not floating. */
 .expand-toggle-btn {
   height: 100%;
   padding: 0 12px;

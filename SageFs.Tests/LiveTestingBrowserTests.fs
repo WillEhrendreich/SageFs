@@ -92,11 +92,6 @@ let tests =
 
     ltPlaywrightTest "enable discovers and runs the sample's tests through the panel" (fun page -> task {
       do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-      // #live-testing-panel lives inside an `.expanded-only` wrapper, which is
-      // display:none until #main gains the `expanded` class. Without this the
-      // panel is never visible and every assertion below fails on a dashboard
-      // that is working correctly. Idempotent.
-      do! DashboardDom.ensureExpanded page
       do! ensureLiveTestingOn page
       // Discovery + baseline run: the panel header carries "N✓" for passed.
       let panel = page.Locator("#live-testing-panel")
@@ -112,11 +107,6 @@ let tests =
 
     ltPlaywrightTest "editing a source file reruns tests and surfaces the failure live" (fun page -> task {
       do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-      // #live-testing-panel lives inside an `.expanded-only` wrapper, which is
-      // display:none until #main gains the `expanded` class. Without this the
-      // panel is never visible and every assertion below fails on a dashboard
-      // that is working correctly. Idempotent.
-      do! DashboardDom.ensureExpanded page
       do! ensureLiveTestingOn page
       let panel = page.Locator("#live-testing-panel")
       do! PlaywrightExpect.waitForText BrowserWaits.liveTestsReport panel "11✓"

@@ -315,7 +315,6 @@ module Signals =
   let [<Literal>] WorkflowTarget = "workflowTarget"
   let [<Literal>] CursorPos = "cursorPos"
   let [<Literal>] TestFilter = "testFilter"
-  let [<Literal>] ExpandedDashboard = "expandedDashboard"
   let [<Literal>] BindingsPanelOpen = "bindingsPanelOpen"
   let [<Literal>] FrictionDrawerOpen = "frictionDrawerOpen"
   // Accordion open/closed state — one signal per static <details> panel, so

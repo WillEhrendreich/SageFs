@@ -200,11 +200,6 @@ let tests =
 
     hrPlaywrightTest "watch all arms the file watcher and the panel reflects it" (fun page -> task {
       do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-      // #hot-reload-panel lives inside an `.expanded-only` wrapper, which is
-      // display:none until #main gains the `expanded` class. Without this the
-      // panel is never visible and every assertion below fails on a dashboard
-      // that is working correctly. Idempotent.
-      do! DashboardDom.ensureExpanded page
       let panel = page.Locator("#hot-reload-panel")
       do! PlaywrightExpect.isVisibleAsync panel "hot reload panel visible"
       do! PlaywrightExpect.waitForText BrowserWaits.pageRenders panel "Hot Reload: OFF"
@@ -221,11 +216,6 @@ let tests =
 
     hrPlaywrightTest "saving a watched file hot-reloads the running app (value A -> value B)" (fun page -> task {
       do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-      // #hot-reload-panel lives inside an `.expanded-only` wrapper, which is
-      // display:none until #main gains the `expanded` class. Without this the
-      // panel is never visible and every assertion below fails on a dashboard
-      // that is working correctly. Idempotent.
-      do! DashboardDom.ensureExpanded page
       // Establish value A from the running app.
       let! bodyA = waitForAppBody HrEnv.appUrl.Value "hello from sagefs" BrowserWaits.appAnswers
       Expect.isTrue (bodyA.Contains("hello from sagefs")) "app should serve value A before the edit"
@@ -282,11 +272,6 @@ let tests =
 
     hrPlaywrightTest "compile-error save keeps last valid behavior and repair hot-reloads it" (fun page -> task {
       do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-      // #hot-reload-panel lives inside an `.expanded-only` wrapper, which is
-      // display:none until #main gains the `expanded` class. Without this the
-      // panel is never visible and every assertion below fails on a dashboard
-      // that is working correctly. Idempotent.
-      do! DashboardDom.ensureExpanded page
       let panel = page.Locator("#hot-reload-panel")
       do! PlaywrightExpect.isVisibleAsync panel "hot reload panel visible"
       let watchAll =
@@ -323,7 +308,6 @@ let tests =
     // the SAME running app. Last in the list: it leaves the counter at 101.
     hrPlaywrightTest "an edited initializer keeps the live counter, and Reset in the panel runs the new one" (fun page -> task {
       do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
-      do! DashboardDom.ensureExpanded page
       let panel = page.Locator("#hot-reload-panel")
       do! PlaywrightExpect.isVisibleAsync panel "hot reload panel visible"
       do! (watchAllButton panel).ClickAsync()

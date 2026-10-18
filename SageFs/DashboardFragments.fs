@@ -2222,8 +2222,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         [ textEnc label ]
     | None ->
       Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] []
-  // `expanded` is client state; without preserveAttr the morph strips it, collapsing the sidebar and clamping its scrollTop.
-  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId); Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard); Ds.preserveAttr "class" ] [
+  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId) ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
     // App header — tabline style like sagetech.dev
@@ -2287,15 +2286,15 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         ]
       ]
     | _ -> ()
-    // Expanded-only panels: alarm, failure narratives, diagnostics.
+    // Alarm, failure narratives, diagnostics: always on the page. Whether each is relevant is the
+    // domain's call (each renders nothing when it has nothing to say), never a mode switch the user
+    // has to find first.
     // The eval filmstrip ("N evals" per-cell history) was removed — it pushed
     // the whole UI down to show raw eval code+timing that the top eval-stats
     // and the Output panel already cover, and cost an O(n) rev per SSE push.
-    Elem.div [ Attr.class' "expanded-only" ] [
-      snap.AlarmPanel
-      snap.FailureNarrativesPanel
-      snap.DiagnosticsPanel
-    ]
+    snap.AlarmPanel
+    snap.FailureNarrativesPanel
+    snap.DiagnosticsPanel
     // Main app layout: output+eval on left, sidebar on right
     Elem.div [ Attr.class' "app-layout" ] [
       Elem.div [ Attr.class' "main-area" ] [
@@ -2375,15 +2374,6 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
               Attr.create "title" "New session"
               Ds.onClick (sprintf "$%s = true; %s" Signals.NewSessionOpen (Ds.post NewSessionDialog.NewSessionNames.DiscoverRoute)) ]
             [ Text.raw "+" ]
-          // Show/hide the extra per-session panels (Hot Reload, Live Testing,
-          // Bindings, Context) — belongs with the sessions, not by app settings.
-          Elem.button
-            [ Attr.class' "sidebar-header-btn"
-              Attr.id "expand-toggle-btn"
-              Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.ExpandedDashboard Signals.ExpandedDashboard)
-              Ds.text (sprintf "$%s ? '⊖' : '⊕'" Signals.ExpandedDashboard)
-              Ds.attr' ("aria-label", sprintf "$%s ? 'Hide extra session panels' : 'Show extra session panels (Hot Reload, Live Testing, Bindings, Context)'" Signals.ExpandedDashboard) ]
-            []
           Elem.button
             [ Attr.class' "sidebar-header-btn"
               Attr.id "sidebar-toggle-btn"
@@ -2397,15 +2387,14 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           Elem.div [ Attr.class' "panel" ] [
             snap.SessionsPanel
           ]
-          // Dynamic sidebar panels — expanded-only (hot reload, live testing, session context). The bindings are in the dock.
-          Elem.div [ Attr.class' "expanded-only" ] [
-            snap.HotReloadPanel
-            snap.LiveTestingPanel
-            snap.SessionContextPanel
-            snap.FrictionPanel
-            snap.CohortPanel
-            snap.HygienePanel
-          ]
+          // Dynamic sidebar panels (hot reload, live testing, session context). PanelVisibility.decide has
+          // already dropped the ones that are not relevant. The bindings are in the dock.
+          snap.HotReloadPanel
+          snap.LiveTestingPanel
+          snap.SessionContextPanel
+          snap.FrictionPanel
+          snap.CohortPanel
+          snap.HygienePanel
         ]
       ]
     ]

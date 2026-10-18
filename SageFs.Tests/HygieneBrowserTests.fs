@@ -141,10 +141,9 @@ let private stateLine (page: IPage) = page.Locator "#hygiene-state"
 let private scanButton (page: IPage) = page.Locator "#hygiene-scan"
 let private tidyButton (page: IPage) = page.Locator "#hygiene-tidy"
 
-/// The panel lives in the expanded-only sidebar block and is a `<details>`: reveal it and open it. The 1 s fallback push
+/// The panel is a `<details>` in the sidebar: open it. The 1 s fallback push
 /// can snap an accordion shut, so callers wrap a step in `throughPanelReset`.
 let private openPanel (page: IPage) : Task<unit> = task {
-  do! DashboardDom.ensureExpanded page
   let! isOpen = page.EvaluateAsync<bool>("() => { var el = document.querySelector('#hygiene-panel'); return el ? el.open : false; }")
   match isOpen with
   | true -> ()
