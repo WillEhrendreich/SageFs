@@ -288,3 +288,37 @@ let descriptionPropertyTests =
       |> Expect.equal
         "every [<Description>]-attributed SageFsTools member must carry [<McpServerTool>] or be a known-retired legacy member" []
   ]
+
+/// A tool that can change a file on disk says so where an agent reads about it. `send_fsharp_code` spliced the
+/// declaration it redefined back into the file once `file_path` and `block_start_line` were both given, and its
+/// description called those two arguments "module detection" and nothing else.
+[<Tests>]
+let evalWriteBackDescriptionTests =
+  let sendMethod = typeof<SageFsTools>.GetMethod "send_fsharp_code"
+  let descriptionOfMember (m: MemberInfo) = (m.GetCustomAttribute<DescriptionAttribute>()).Description
+  let parameterDescription name =
+    sendMethod.GetParameters()
+    |> Array.find (fun p -> p.Name = name)
+    |> fun p -> (p.GetCustomAttribute<DescriptionAttribute>()).Description
+  let docsRow =
+    let docs = File.ReadAllText(Path.Combine(RepoPaths.requireRepoRoot (), "docs", "mcp-tools.md"))
+    docs.Split('\n') |> Array.find (fun l -> l.StartsWith "| `send_fsharp_code` |")
+
+  testList "send_fsharp_code says it can write to a file" [
+
+    testCase "the tool description has a section on writing to the source file" <| fun _ ->
+      let description = descriptionOfMember sendMethod
+      description |> Expect.stringContains "it says the eval can change a file" "written back"
+      description |> Expect.stringContains "it says how to get the write undone" "nudge_value"
+      description |> Expect.stringContains "it says what the result carries" "not persisted"
+
+    testCase "file_path says it asks for a write, not only module context" <| fun _ ->
+      parameterDescription "file_path" |> Expect.stringContains "file_path names the write" "write"
+
+    testCase "block_start_line says it locates the declaration that is replaced" <| fun _ ->
+      parameterDescription "block_start_line" |> Expect.stringContains "block_start_line names the write" "write"
+
+    testCase "docs/mcp-tools.md says the same in the send_fsharp_code row" <| fun _ ->
+      docsRow |> Expect.stringContains "the row says the eval can write" "written back"
+      docsRow |> Expect.stringContains "the row says how to undo it" "nudge_value"
+  ]

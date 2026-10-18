@@ -212,7 +212,7 @@ columns from 0 (counted in characters, not bytes), and `endColumn` is one past t
 
 | Tool | What it does |
 |:---|:---|
-| `send_fsharp_code` | Evaluate F# code in the session. Each `;;` is a transaction boundary: a failure discards that one statement and keeps everything before it. |
+| `send_fsharp_code` | Evaluate F# code in the session. Each `;;` is a transaction boundary: a failure discards that one statement and keeps everything before it. It can also change a file. Pass both `file_path` and `block_start_line`, and a successful eval of one `let` value or function that redefines the declaration at that line is written back: that one declaration in the file is replaced with the code you sent, so `run_app` and the next build see it. It writes only to a source file of a project the session owns, only when the code differs from what the file has, and never for a type, a nested module, a bare expression, several declarations or a failed eval. The write is journaled like a `nudge_value` write, so `nudge_value` with `action=undo` and the same `file` puts the old text back. A call that passed `file_path` ends its text with `written back to <file>:<line>` or `not persisted: <reason>`, and the structured result carries it as `writeBack`. An eval with no `file_path` touches no file. |
 | `check_fsharp_code` | Type-check a snippet without running it, in the current FSI context. Earlier `send_fsharp_code` definitions are in scope, but namespaces still need an explicit `open`. A "not defined" error here almost always just means you forgot the `open`, nothing more sinister. |
 | `cancel_eval` | Cancel a running evaluation. |
 | `get_daemon_status` | Daemon version, health, memory, process telemetry, and session counts, including with no active session. |

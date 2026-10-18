@@ -32,6 +32,9 @@ first-minute checklist, the loop, the rules that bite before a first edit, and
 a few lines for an agent that spawns other agents (see
 [section 6](#6-after-a-day-of-sub-agents)).
 The other files in the folder are read only when their trigger comes up:
+- `design.md`: before designing a type, signature or module
+- `testing-standards.md`: before writing the tests for a change
+- `dst-capabilities.md`: before writing a simulation or mutation test
 - `sessions.md`: choosing a session, checking the daemon version
 - `loop.md`: why the REPL is the loop, and which tool answers what
 - `editing.md`: proving a change before writing it, and the `#load` trap
@@ -43,12 +46,14 @@ The other files in the folder are read only when their trigger comes up:
 
 **Claude Code:**
 ```bash
-mkdir -p ~/.claude/skills/sagefs
-for f in SKILL sessions loop editing testing leases troubleshooting claude-code agents; do
-  curl -fsSL "https://raw.githubusercontent.com/WillEhrendreich/SageFs/master/skills/sagefs/$f.md" \
-    -o ~/.claude/skills/sagefs/$f.md
-done
+tmp="$(mktemp -d)"
+git clone --depth 1 --filter=blob:none --sparse https://github.com/WillEhrendreich/SageFs.git "$tmp/SageFs"
+git -C "$tmp/SageFs" sparse-checkout set skills/sagefs
+mkdir -p ~/.claude/skills
+cp -r "$tmp/SageFs/skills/sagefs" ~/.claude/skills/
+rm -rf "$tmp"
 ```
+That copies the whole folder, so a file added to it later comes along on the next copy.
 For one repo only, put the folder in that repo's `.claude/skills/sagefs/`
 instead.
 

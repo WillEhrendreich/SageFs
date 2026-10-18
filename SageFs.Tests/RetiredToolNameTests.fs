@@ -62,7 +62,11 @@ let private liveSurfaces : (string * string) list =
     "SageFs.Core/Features/ToolAnswer.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs.Core", "Features", "ToolAnswer.fs")) ]
   @ skillSurfaces
   @ [ "docs/agents.md", File.ReadAllText(Path.Combine(repoRoot, "docs", "agents.md"))
-      "docs/mcp-tools.md", File.ReadAllText(Path.Combine(repoRoot, "docs", "mcp-tools.md")) ]
+      "docs/mcp-tools.md", File.ReadAllText(Path.Combine(repoRoot, "docs", "mcp-tools.md"))
+      // The first page a new user reads names tools too. It was out of the scan until the sagefs.nvim README, which
+      // is a copy of the same tool list, turned up advertising eleven retired ones.
+      "Readme.md", File.ReadAllText(Path.Combine(repoRoot, "Readme.md"))
+      "sagefs-vscode/README.md", File.ReadAllText(Path.Combine(repoRoot, "sagefs-vscode", "README.md")) ]
 
 /// Strip `//` and `(* *)` comments so an internal note that mentions a retired
 /// name does not masquerade as agent-facing guidance. String literals are kept

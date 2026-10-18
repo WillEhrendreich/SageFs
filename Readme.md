@@ -52,7 +52,7 @@ I'm not going to pretend all of that is finished. [Live testing](docs/live-testi
 
 **How's it different from Ionide?** Ionide gives you the editor smarts (IntelliSense, diagnostics, project support) through the F# Compiler Service, and it's great. SageFs adds live *execution*: eval any expression and see the result inline, continuous test feedback on every save (or keystroke, if you want it), and hot reload that patches your running app. Use both together: Ionide for editing, SageFs for running. They get along fine.
 
-My CI runs on Linux only, so nothing automated covers Windows or macOS. The tool is a .NET global tool and the package is built to install on both, but treat them as untested here and tell me what breaks. SageFs itself installs with the .NET 10 SDK or the .NET 11 SDK. Your *projects* aren't stuck on that version though. Each session's host gets built with whichever SDK `dotnet` picks in your project's folder, and runs on that SDK's runtime. So a `global.json` pin is honored, and without one you get the newest SDK you have installed. If you want a project on .NET 10 while an 11 preview is also installed, pin it with `global.json`.
+My CI runs on Linux only, so nothing automated covers Windows or macOS. The tool is a .NET global tool and the package is built to install on both. Windows is untested here, so tell me what breaks. macOS has one known failure: someone ran the suite on an Apple Silicon Mac and five of the hot reload detour tests fail there (`GenericReloadTests`, "the real detours"). I don't know why yet, and nobody has tried an Intel Mac. Until that's sorted, treat hot reload on macOS as unproven ([#149](https://github.com/WillEhrendreich/SageFs/issues/149)). SageFs itself installs with the .NET 10 SDK or the .NET 11 SDK. Your *projects* aren't stuck on that version though. Each session's host gets built with whichever SDK `dotnet` picks in your project's folder, and runs on that SDK's runtime. So a `global.json` pin is honored, and without one you get the newest SDK you have installed. If you want a project on .NET 10 while an 11 preview is also installed, pin it with `global.json`.
 
 This started as an experiment in how far agentic development could go, and it's grown into the tool I use every day. It's moving fast, it's got rough edges, and you WILL find things you wish worked differently. That's exactly the feedback I want. Feel free to submit issues or PRs, and if you really need to get ahold of me, Discord is the most reliable way, same name there too.
 
@@ -292,7 +292,7 @@ Live testing is *also* a per-session toggle that works in any of the three workf
 
 Use your editor's command to switch workflows:
 
-- **Neovim**: not from the editor yet. `:SageFsWorkflow` takes no argument and shows the current workflow only. Use the dashboard or MCP.
+- **Neovim**: `:SageFsWorkflow [name]` with `interactive`, `livetesting` or `hotreload`. With no name it opens a picker. It restarts the same session id in place, like VS Code and the dashboard.
 - **VS Code**: Command Palette → `SageFs: Switch Workflow`. This hits `POST /api/sessions/{sid}/workflow` directly, which restarts the same session id in place.
 - **MCP**: `switch_workflow` with `target` = `repl` | `livetesting` | `live` (⚠️ `live` means Hot Reload, not live testing; the alias predates the third workflow). This one creates a *new* session in the target workflow and stops the old one.
 - **Web dashboard**: a real dropdown next to your session, not a read-only badge. Pick a workflow and it switches, restarting the same session id in place, same as VS Code.
@@ -369,7 +369,7 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | **Coverage gutters** | ✅ | ✅ | — | — |
 | **Failure narratives** | ✅ | ✅ | ✅ | ✅ |
 | **Test source-jump** | ✅ | ✅ | — | — |
-| **Debug a failing test** | ✅ | — | — | — |
+| **Debug a failing test** | ✅ | ✅ | — | — |
 | Test panel | ✅ | ✅ | ✅ | ✅ |
 | Test policy controls | ✅ | ✅ | ✅ | — |
 | Type explorer | ✅ | ✅ | — | — |
@@ -542,7 +542,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 - `scripts/`, repo helper scripts and smoke/integration utilities
 - `ci-pipeline.fsx`, CI is one Partas.Build pipeline; the GitHub workflows just invoke it
 
-`SageFs.slnx` covers the core tool, retained legacy projects, tests, and samples. The VS Code integration lives alongside it in `sagefs-vscode/` because it uses its own packaging toolchain and release flow.
+`SageFs.slnx` has `SageFs.Core`, `SageFs.Simulation`, `SageFs`, `SageFs.Host`, `SageFs.Tests` and the samples. It has no legacy projects: the deprecated `SageFs.Gui/` and `sagefs-vs/` are in no solution, and `SageFs.FsiHost/` is built per session by the tool, not by the solution. The VS Code integration lives alongside it in `sagefs-vscode/` because it uses its own packaging toolchain and release flow.
 
 The Neovim plugin isn't in this repo. It lives in the separate [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) repository.
 
@@ -651,7 +651,7 @@ The `DirectoryConfig` record has seven fields ([`SageFs.Core/DirectoryConfigType
 
 Built-in ways to create or edit the auto-open setting:
 
-- **Dashboard**: enter a working directory, then click **Disable Warmup Auto-Open**
+- **Dashboard**: the small circle icon on a session card (green `◎` is on, red `◌` is off). Click it to flip the setting for that session's directory; the tooltip says which way it will go.
 - **VS Code**: run **SageFs: Configure Warmup Auto-Open**
 - **Neovim**: run `:SageFsConfig`
 

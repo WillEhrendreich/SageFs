@@ -159,7 +159,7 @@ The CLR forces this; SageFs didn't choose it. If FSI changes how it emits assemb
 
 | Client | Command |
 |:---|:---|
-| **Neovim** | Not from the editor yet. `:SageFsWorkflow` takes no argument and shows the current workflow only (read from [`commands.lua`](https://github.com/WillEhrendreich/sagefs.nvim/blob/master/lua/sagefs/commands.lua) on 2026-10-01). Use the dashboard dropdown or the MCP tool |
+| **Neovim** | `:SageFsWorkflow [name]` with `interactive`, `livetesting` or `hotreload`; no name opens a picker. It posts to `/api/sessions/{sid}/workflow`, so the same session id restarts in place and its REPL bindings are not kept (read from [`commands.lua`](https://github.com/WillEhrendreich/sagefs.nvim/blob/master/lua/sagefs/commands.lua), checked 2026-10-18) |
 | **VS Code** | Command Palette → `SageFs: Switch Workflow` (picker offers all three workflows and marks which one you're in) |
 | **Web dashboard** | The workflow dropdown next to the session (`#workflow-switcher`). Picking one restarts the same session id into it, spawn-first. |
 | **MCP tool** | `switch_workflow(target='repl' \| 'livetesting' \| 'live')` |
@@ -274,7 +274,7 @@ Save the file → Harmony re-points the method → SSE pushes to the browser →
 
 ### Scenario 3: "I started in REPL mode but now I want browser hot reload"
 
-Switch with **SageFs: Switch Workflow** in VS Code, the workflow dropdown in the web dashboard, or `switch_workflow(target='live')` over MCP. In Neovim use the dashboard or MCP, since `:SageFsWorkflow` only shows the current workflow.
+Switch with **SageFs: Switch Workflow** in VS Code, the workflow dropdown in the web dashboard, or `switch_workflow(target='live')` over MCP. In Neovim run `:SageFsWorkflow hotreload`.
 
 Your REPL definitions are gone, but your `.fs` files reload automatically. The new Hot Reload session picks up right where your persisted code left off.
 
@@ -293,7 +293,7 @@ expression-only ([`SageFs.Core/WorkflowErrorContext.fs`](../SageFs.Core/Workflow
 
 The hint is built from the closed set of clients that can switch (`SwitchSurface` in
 `WorkflowErrorContext.fs`): the MCP tool, the dashboard's workflow dropdown and VS Code.
-Neovim is left out on purpose, because `:SageFsWorkflow` only shows the current workflow.
+Neovim is not in that set yet, although `:SageFsWorkflow [name]` switches a session there now. The set was written when the command only showed the current workflow, and it has not been widened, so the hint does not name Neovim.
 
 ---
 

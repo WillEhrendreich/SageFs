@@ -70,9 +70,9 @@ authoritative list of what is and isn't an MCP tool.
 Hot reload watches `.fs` files, emits the functions that changed, and uses Harmony to re-point those methods in
 the already-running process, including apps whose route table was built once at startup (the
 `module App.Program` + `let routes = [...]` pattern). Browser auto-refresh works. An app you start with `run_app`
-runs in the worker, out of the reload agent's reach. In v0.6.875 a save to one restarts it. On master (merged
-after v0.6.875, so not in a release yet) the save is patched into the running process as a metadata delta
-instead, and generic functions patch in every instantiation. [Hot Reload](hot-reload.md) says which is which.
+runs in the worker, out of the reload agent's reach. In v0.6.875 a save to one restarts it. From v0.6.882
+(merged on 2026-10-01 after v0.6.875, tagged on 2026-10-02) the save is patched into the running process as a
+metadata delta instead, and generic functions patch in every instantiation. [Hot Reload](hot-reload.md) says which is which.
 
 Because it re-points **methods**, a handler that is *called* per request reloads, and a handler whose output
 was *computed once* at startup cannot. Prefer `let getHome (ctx: HttpContext) = ...` over
@@ -111,7 +111,7 @@ pinned by an executable test; this page deliberately doesn't duplicate it.
 | Hard reset | Command palette | `:SageFsHardReset` |
 | Switch project | Command palette | `:SageFsSwitchProject` |
 | Enable / disable live testing | Command palette | `:SageFsEnableTesting` / `:SageFsDisableTesting` |
-| Switch workflow | Command palette | None yet. `:SageFsWorkflow` shows the current workflow and does not switch it; use the dashboard dropdown or `switch_workflow` |
+| Switch workflow | Command palette | `:SageFsWorkflow [name]` (`interactive`, `livetesting`, `hotreload`; no name opens a picker) |
 | Open dashboard | Command palette | `:SageFsDashboard` |
 
 > The Neovim column is a copy of the plugin's own keymaps, which live in the separate [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim#keymaps) repository. That README is authoritative, and nothing in this repo verifies it. This table used to list `<leader>se` / `<leader>sf` / `<leader>sc`, which the plugin doesn't bind: it puts everything under `<leader>r` precisely because LazyVim reserves `<leader>s` for Search. It also listed `:SageFsResetSession` and `:SageFsToggleLiveTesting`, neither of which exists. Both were my mistakes, now fixed.
@@ -119,6 +119,6 @@ pinned by an executable test; this page deliberately doesn't duplicate it.
 ## MCP
 
 MCP gives programmatic access for session-aware F# evaluation, test discovery and execution, failure
-explanation, targeted verification, and diagnostics. The daemon advertises all 66 tools regardless of session
+explanation, targeted verification, and diagnostics. The daemon advertises every tool regardless of session
 state (a member token is shown only what its role allows); calling one that doesn't apply yet is rejected with a structured error instead of the tool being hidden.
 Call `get_session_status` to see which tools currently apply.

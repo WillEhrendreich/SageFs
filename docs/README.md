@@ -4,7 +4,7 @@ Here's where everything lives. If you're just trying to get running, start at th
 Everything else is reference material you can come back to when you need it.
 
 ## Start here
-- **[What SageFs has become](progress.md)**: what you had, what you have now, and why it matters, stretch by stretch since February, each change linked to its code. The newest window is 2026-10-01 and says which entries are in a release and which are only merged
+- **[What SageFs has become](progress.md)**: what you had, what you have now, and why it matters, stretch by stretch since February, each change linked to its code. The newest window is 2026-10-01, and a note at the top of the page says which release carries it and what the latest release is
 - **[Roadmap](roadmap.md)**: what I'm building now, what's next, and the ideas further out. An item moves to Built on its own when its code lands
 - **[Get Started](../Readme.md#get-started)**: install, check your environment, start the daemon, connect an editor
 - **[Using SageFs with AI agents](agents.md)**: install the SageFs skill, so your agent uses the REPL instead of rebuilding, and pull it back when it drifts
