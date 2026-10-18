@@ -1,4 +1,4 @@
-/// The comparison pages say where Microsoft's tools are ahead of SageFs, and two things about those pages must not
+/// The comparison pages say where Microsoft's tools are ahead of SageFs, and three things about the pages must not
 /// drift.
 ///
 /// First, every row under a "Where Visual Studio is still ahead" or "Where Microsoft is still ahead" line says what
@@ -20,6 +20,9 @@
 /// where SseParityTests looks (`SAGEFS_NVIM_DIR`, else next to the main checkout). When the checkout is not there the
 /// test is skipped and the skip says why, and the pure matcher is still proved against sample sentences in the same
 /// list, so a missing checkout can never turn the matcher off without a word.
+///
+/// Third, no reader page says its work is "not in a release yet" (the sentence is true until the next tag and false
+/// after it), and every Status line in the progress diary names the release tag it is in.
 module SageFs.Tests.ParityClaimsTests
 
 open System
@@ -164,6 +167,16 @@ let neovimEmptyCells (topic: Regex) (lines: string[]) : (int * string) list =
           match column >= 0 && column < cells.Length && cells.Length > 0 && topic.IsMatch cells.[0] with
           | true when emptyCell cells.[column] -> yield i + 1, line
           | _ -> () ]
+
+/// Phrasings that say work is merged but not shipped. Each is true on the day it is written and false the day the next
+/// release is tagged, which is how a page told readers for sixteen days that work from 2026-10-01 was not installable.
+let notInReleaseClaims : Regex list =
+  [ @"(?i)\bnot in a release\b"
+    @"(?i)\bin a release yet\b"
+    @"(?i)\bmerged and unreleased\b"
+    @"(?i)\bis unreleased\b"
+    @"(?i)(can't|cannot|can not) install it from nuget" ]
+  |> List.map Regex
 
 let debugTopic = Regex(@"(?i)debug", RegexOptions.Compiled)
 let workflowTopic = Regex(@"(?i)switch(ing)?\s+(a\s+)?workflow", RegexOptions.Compiled)
@@ -331,6 +344,57 @@ let tests =
       |> List.filter (fun page -> not (File.Exists(pagePath page)))
       |> List.map pageName
       |> Expect.equal "every page in the claim list is a real file" []
+
+    testCase "no reader page says its work is not in a release, because the sentence goes stale the day a release ships" <| fun _ ->
+      let docsDir = Path.Combine(repoRoot, "docs")
+      let pages =
+        [ yield [ "Readme.md" ]
+          for file in Directory.EnumerateFiles(docsDir, "*.md") do
+            let name = Path.GetFileName file
+            // roadmap.md and configuration.md are written by scripts, and progress.md is the diary: its Status lines
+            // are held by the next test instead.
+            match name with
+            | "roadmap.md" | "configuration.md" | "progress.md" | "FEATURES_SURVEY.md" -> ()
+            | _ -> yield [ "docs"; name ] ]
+      let claims =
+        pages
+        |> List.collect (fun page ->
+          File.ReadAllLines(pagePath page)
+          |> Array.toList
+          |> List.mapi (fun i line -> i + 1, line)
+          |> List.collect (fun (n, line) ->
+            notInReleaseClaims
+            |> List.filter (fun p -> p.IsMatch line)
+            |> List.map (fun _ -> sprintf "%s:%d: %s" (pageName page) n (line.Substring(0, min 100 line.Length)))))
+      claims
+      |> Expect.equal "name the release that has the work (`git tag --contains <commit>`), or say nothing about releases; these say it is not in one" []
+
+    testCase "every Status line in the progress diary says which release it is in, or that it is not in one on the day written" <| fun _ ->
+      let statusLines =
+        File.ReadAllLines(pagePath [ "docs"; "progress.md" ])
+        |> Array.toList
+        |> List.mapi (fun i line -> i + 1, line)
+        |> List.filter (fun (_, line) -> line.StartsWith "Status:")
+      (List.length statusLines >= 10) |> Expect.isTrue "the diary has Status lines to check"
+      statusLines
+      |> List.filter (fun (_, line) -> not (Regex.IsMatch(line, @"v0\.6\.\d+")))
+      |> List.map (fun (n, line) -> sprintf "docs/progress.md:%d: %s" n line)
+      |> Expect.equal "each Status line names a release tag" []
+
+    testCase "the release-claim matcher flags the stale sentences and leaves the dated ones alone" <| fun _ ->
+      let flagged =
+        [ "Status: merged on 2026-10-01 after v0.6.875, not in a release."
+          "That fix merged on 2026-10-01, so it is on master and not in a release yet."
+          "none of it is in a release yet."
+          "You can't install it from NuGet yet." ]
+      for s in flagged do
+        notInReleaseClaims |> List.exists (fun p -> p.IsMatch s) |> Expect.isTrue (sprintf "flagged: %s" s)
+      let fine =
+        [ "Status: merged on 2026-10-01 after v0.6.875, released in v0.6.882 (tagged 2026-10-02)."
+          "It is in v0.6.882 and every release since."
+          "The release notes list the commits behind each version." ]
+      for s in fine do
+        notInReleaseClaims |> List.exists (fun p -> p.IsMatch s) |> Expect.isFalse (sprintf "left alone: %s" s)
   ]
 
 do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant tests |> ignore

@@ -70,9 +70,9 @@ authoritative list of what is and isn't an MCP tool.
 Hot reload watches `.fs` files, emits the functions that changed, and uses Harmony to re-point those methods in
 the already-running process, including apps whose route table was built once at startup (the
 `module App.Program` + `let routes = [...]` pattern). Browser auto-refresh works. An app you start with `run_app`
-runs in the worker, out of the reload agent's reach. In v0.6.875 a save to one restarts it. On master (merged
-after v0.6.875, so not in a release yet) the save is patched into the running process as a metadata delta
-instead, and generic functions patch in every instantiation. [Hot Reload](hot-reload.md) says which is which.
+runs in the worker, out of the reload agent's reach. In v0.6.875 a save to one restarts it. From v0.6.882
+(merged on 2026-10-01 after v0.6.875, tagged on 2026-10-02) the save is patched into the running process as a
+metadata delta instead, and generic functions patch in every instantiation. [Hot Reload](hot-reload.md) says which is which.
 
 Because it re-points **methods**, a handler that is *called* per request reloads, and a handler whose output
 was *computed once* at startup cannot. Prefer `let getHome (ctx: HttpContext) = ...` over

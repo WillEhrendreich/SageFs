@@ -60,11 +60,11 @@ has the mechanism, the measurements and what it can't take.
 | `run_app`, metadata-delta route on | the worker | patched in place by a metadata delta, same process id | stays where it is |
 | `run_app`, route off | the worker | SageFs restarts it with your change and says why | reset by the restart |
 
-This route merged on 2026-10-01, after v0.6.875 was tagged, so it is on master and
-not in a release yet. In v0.6.875 a `run_app` save does what the bottom row says. The
-same goes for generics: patching a generic function in every instantiation is also
-merged and unreleased, and in v0.6.875 a save to one restarts the app and names
-`GenericFunction`.
+This route merged on 2026-10-01, after v0.6.875 was tagged, and it is in v0.6.882
+(tagged 2026-10-02) and every release since. In v0.6.875 a `run_app` save does what
+the bottom row says. The same goes for generics: patching a generic function in every
+instantiation is also in v0.6.882, and in v0.6.875 a save to one restarts the app and
+names `GenericFunction`.
 
 The route is on by default. Set `SAGEFS_METADATA_DELTA=off` in the daemon's
 environment and a `run_app` save restarts the app as it did before this route
@@ -208,8 +208,8 @@ on .NET 11).
 | a **generic method** of a class, instance or static | reloads | parity `genericInstanceMethod`, `genericStaticMethod` |
 | a member of a **generic type**: an instance member, a static one, or a generic method of it | reloads. Each object keeps its own type argument, and the objects built before the save run the new body | parity `genericTypeInstance`, `genericTypeStatic`, `genericMethodOnType` |
 
-The generic rows merged on 2026-10-01 after v0.6.875 was tagged. They are on master
-and not in a release yet. In v0.6.875 a save to a generic function restarts the app.
+The generic rows merged on 2026-10-01 after v0.6.875 was tagged. They are in v0.6.882
+and every release since. In v0.6.875 a save to a generic function restarts the app.
 
 The planner only takes an edit as "just the lambdas" when nothing outside a
 lambda changed (it cuts every lambda out of both versions and compares what is
