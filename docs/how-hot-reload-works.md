@@ -240,7 +240,7 @@ Where Microsoft is still ahead, and what I plan about each. Plan, written 2026-1
 - The mechanism, and the first-party surface in Visual Studio, C# Dev Kit and `dotnet watch`, with browser refresh, Razor and Blazor on top. Nothing to close there. The browser surface beyond what DevReload does is on my list as "later".
 - Starting your app any way you like. An app started with `run_app` is patched by a metadata delta when the route is on, and restarts when it is off. An edit a delta can't carry restarts either way.
 - No JIT tax from me turning tiering off.
-- Windows and macOS, since my CI is Linux only ([`main.yml`](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/.github/workflows/main.yml#L24-L30)). I need machines to close that one.
+- Windows and macOS, since my CI is Linux only ([`main.yml`](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/.github/workflows/main.yml#L24-L30)). I need machines to close that one. On an Apple Silicon Mac five of the real detour tests fail and I don't know why yet, so hot reload there is unproven ([#149](https://github.com/WillEhrendreich/SageFs/issues/149)).
 - Latency. Measured now, on one machine and one small app, and Microsoft documents no figure to compare it with (see "How long a save takes" below). Most of a patched save is the file watcher's 200 ms debounce, which I think is longer than it needs to be. I haven't changed it.
 
 Where it's level on the rows above, I mean the edit and its condition, not the mechanism or the polish.
