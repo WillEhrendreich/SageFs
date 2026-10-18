@@ -424,6 +424,7 @@
         <Compile Include="ReadyWait.fs" />
         <Compile Include="ProjectResolution.fs" />
         <Compile Include="WorkerSpawn.fs" />
+        <Compile Include="WorkerStop.fs" />
         <Compile Include="WorkerStartup.fs" />
         <!-- The WorkerReady decision and what starts after it, split out of
              SessionManager.fs's WorkerReady arm. -->

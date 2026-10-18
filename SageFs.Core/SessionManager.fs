@@ -340,12 +340,12 @@ module SessionManager =
         | true -> ()
       with ex ->
         Log.warn "[SessionManager] Graceful shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        let procAlive = try proc.HasExited with _ -> true |> not
-        match procAlive with
-        | true ->
+        let forceKill = WorkerStop.needsForceKill (fun () -> proc.HasExited)
+        match forceKill with
+        | WorkerStop.ForceKill ->
           try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill failed: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
           try proc.WaitForExit(int Timeouts.processKillVerify.TotalMilliseconds) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        | false -> ()
+        | WorkerStop.AlreadyExited -> ()
       try proc.EnableRaisingEvents <- false with _ -> ()
       try proc.Dispose() with _ -> ()
   }

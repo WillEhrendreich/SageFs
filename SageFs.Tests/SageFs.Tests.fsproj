@@ -782,6 +782,7 @@
         <Compile Include="CohortPropertyTests.fs" />
         <Compile Include="EvalLatencyTraceTests.fs" />
         <Compile Include="SessionManagerBuildSemaphoreTests.fs" />
+        <Compile Include="WorkerForceKillTests.fs" />
         <Compile Include="CohortTestProjectionTests.fs" />
         <Compile Include="CohortMatrixRenderTests.fs" />
         <Compile Include="CohortTerritoryTests.fs" />
