@@ -414,7 +414,10 @@ let private awaitSessionReady (client: McpClient) (session: string) (notWorker: 
     let pid = ref 0L
     do!
       waitFor TestTimeouts.workerSessionReady (fun () -> sprintf "session %s to be Ready (not worker %A). Last status: %s" session notWorker last.Value) (fun () -> task {
-        let! text = callTool client "get_session_status" [ "session_id", box session; "wait_seconds", box (int TestTimeouts.readyBudget.TotalSeconds) ]
+        // The tool is asked to wait up to the ready budget, so the call's own budget has to be longer than that wait. At
+        // `callTool`'s 30 s the case failed on a busy box ("did not answer within 30s") for a session that was merely
+        // not Ready yet, in the 2026-10-18 local gate.
+        let! text = callToolPatient client "get_session_status" [ "session_id", box session; "wait_seconds", box (int TestTimeouts.readyBudget.TotalSeconds) ]
         last.Value <- text
         use doc = JsonDocument.Parse text
         let root = doc.RootElement
