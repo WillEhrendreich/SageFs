@@ -677,6 +677,7 @@
         <Compile Include="FailureReportTests.fs" />
         <Compile Include="TestPortsTests.fs" />
         <Compile Include="TrustSignalTests.fs" />
+        <Compile Include="PackagedToolSmokeWiringTests.fs" />
         <Compile Include="DefinitionOfDoneTests.fs" />
         <Compile Include="TestStatusVocabularyTests.fs" />
         <Compile Include="HotReloadVisibilityTests.fs" />

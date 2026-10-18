@@ -320,6 +320,8 @@ died before reporting (`NoReport`). `TrustSignalTests` fails the fast suite if a
 registered tier is not invoked by `ci-pipeline.fsx`, or if a test run there
 bypasses the ledgered `testTier` step. Read the table, not a stage colour.
 
+The packed tool is smoked too, past `--version`: the `packaged tool smoke` stage (the `release` leg) installs the nupkg it packed under each SDK and runs `scripts/smoke-test.fsx` against that install (its own daemon on a free port pair, a session on the C# sample, completions, live testing), and any red step fails the pipeline. It is a stage and not a ledgered tier because the ledger's rows come from the Expecto process and the trust report is judged before the nupkg exists; `PackagedToolSmokeWiringTests` fails the fast suite if the stage stops invoking the script.
+
 The default suite runs on every framework the tool ships for, because the net10
 tool asset is the one most users install and a bug that exists on .NET 10 only
 (a raw F# union reaching System.Text.Json, which .NET 11 writes and .NET 10
