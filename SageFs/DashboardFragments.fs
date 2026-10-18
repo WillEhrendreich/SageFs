@@ -52,6 +52,9 @@ let textEnc (s: string) : XmlNode = Text.raw (htmlEscape s)
 /// so the stylesheet's width media queries never match on the device they were written for.
 let viewportContent = "width=device-width, initial-scale=1"
 
+/// What the main area says about a session that faulted: why, and what to do. Nothing for any other session.
+let renderSessionFaultNotice (_: SessionInView) : XmlNode = Text.raw ""
+
 /// What opens every dashboard page's head: the charset first (inside the bytes a browser sniffs), then the viewport.
 /// Shared by the dashboard shell and the settings page so neither can forget one.
 let pageHeadMetas : XmlNode list =

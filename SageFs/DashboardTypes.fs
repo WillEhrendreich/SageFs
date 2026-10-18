@@ -1010,6 +1010,24 @@ type AgentBadge = {
 /// session (roast-4 #6).
 /// Distinct from SessionState (daemon lifecycle) and WorkerProtocol.SessionStatus (wire protocol).
 
+/// The session the dashboard is showing, or the fact that no session is in play. The header badge and the main area
+/// match on this instead of on a state string and an empty session id.
+[<RequireQualifiedAccess>]
+type SessionInView =
+  /// Nothing is viewed: the dashboard shows the session picker inside the full shell.
+  | NoSessionInPlay
+  /// A session is viewed. `state` is the daemon's coarse state (the badge's words, which clients wait on, such as
+  /// "Ready"); `display` is the same status the session's card shows, with the fault's reason when it has one (the
+  /// badge's colour, and what the main area says when the session faulted).
+  | InPlay of state: SessionState * display: SessionDisplayStatus
+
+module SessionInView =
+  /// The CSS class for the header status badge.
+  let badgeCssClass (_: SessionInView) : string = "status-ready"
+
+  /// The words in the header status badge.
+  let badgeLabel (_: SessionInView) : string = ""
+
 /// Type-safe daemon connection state for the dashboard.
 /// Illegal states unrepresentable: the browser CANNOT show "Ready" or "No session"
 /// when the daemon is disconnected — the DU cases enforce this at the type level.

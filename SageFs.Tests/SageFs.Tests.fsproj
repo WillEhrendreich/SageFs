@@ -173,6 +173,7 @@
         <Compile Include="DashboardStreamResilienceTests.fs" />
         <Compile Include="DashboardHeadTests.fs" />
         <Compile Include="DashboardAccessibilityTests.fs" />
+        <Compile Include="DashboardHeaderBadgeTests.fs" />
         <Compile Include="DashboardDiscoverUxTests.fs" />
         <Compile Include="NewSessionDialogTests.fs" />
         <Compile Include="NewSessionDialogViewTests.fs" />
