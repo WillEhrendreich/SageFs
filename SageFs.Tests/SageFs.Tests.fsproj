@@ -342,6 +342,7 @@
          <Compile Include="LiveTestingDecisionPropertyTests.fs" />
          <Compile Include="LiveTestingOrchestrationScenarioTests.fs" />
          <Compile Include="LiveTestingAfterTypeCheckScenarioTests.fs" />
+         <Compile Include="LiveTestingUnresolvedSelectionTests.fs" />
          <Compile Include="LiveTestingEvalDecisionTests.fs" />
          <Compile Include="LiveTestingGoldenFixtureTests.fs" />
          <Compile Include="LiveTestingCycleTests.fs" />
