@@ -753,36 +753,31 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     (tag.Contains("display:none")) |> Expect.isTrue "banner still has a static display:none default pre-hydration"
   }
 
-  // ── Minimal mode (Task 1) ──────────────────────────────────────
-  test "renderShell has expandedDashboard signal" {
-    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
-    // Datastar renders signal names as kebab-case in attributes (expandedDashboard → expanded-dashboard)
-    html |> Expect.stringContains "shell has expanded-dashboard signal attribute" "expanded-dashboard"
+  // ── No second gate (R-CLIENTS-1) ───────────────────────────────
+  // PanelVisibility.decide is the only thing that decides whether a panel is on
+  // the page. A panel it calls Shown, and an alarm, must never sit behind a mode
+  // switch the user has to find: no CSS rule hides them, no wrapper carries the
+  // class that rule used, and no toggle or signal exists to flip it.
+  test "WHY — no CSS rule hides a panel the domain decided to show, because a second gate buried the alarm and the hot reload and live testing panels behind a glyph" {
+    Dashboard.dashboardCss.Contains "expanded-only"
+    |> Expect.isFalse "the stylesheet has no .expanded-only rule"
+    (renderMainContent (mkSnap "0.0.0") |> renderNode).Contains "expanded-only"
+    |> Expect.isFalse "no wrapper in the main content carries the retired class"
   }
 
-  test "renderMainContent has expanded-only sections" {
-    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    html |> Expect.stringContains "main content has expanded-only class" "expanded-only"
-  }
-
-  test "renderMainContent has expand toggle button" {
-    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    html |> Expect.stringContains "has expand toggle onclick" "expandedDashboard = !$expandedDashboard"
-  }
-
-  test "renderMainContent has the expand toggle on the Sessions panel (not by app settings)" {
-    // The 'more session info' toggle moved from the app-header (by settings) to
-    // the Sessions panel header; it keeps the stable id so it stays targetable.
-    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    html |> Expect.stringContains "expand toggle present by id" "id=\"expand-toggle-btn\""
-    html |> Expect.stringContains "expand toggle toggles the expandedDashboard signal" "expandedDashboard"
+  test "WHY — the shell has no expandedDashboard signal and the sessions header has no show-more toggle, because there is nothing left for them to reveal" {
+    let shell = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
+    shell.Contains "expanded-dashboard" |> Expect.isFalse "the shell seeds no expanded-dashboard signal"
+    let main = renderMainContent (mkSnap "0.0.0") |> renderNode
+    main.Contains "id=\"expand-toggle-btn\"" |> Expect.isFalse "the sessions header has no expand toggle button"
+    main.Contains "expandedDashboard" |> Expect.isFalse "nothing in the main content reads the retired signal"
   }
 
   // Scroll-reset bug: every SSE push morphs a server-rendered element that has
   // no client-driven class into the DOM, so the morph strips the class Datastar
-  // added (`#main.expanded`), the tall `.expanded-only` panels collapse, and the
-  // browser clamps the sidebar's scrollTop before Datastar re-adds the class.
-  // `data-preserve-attr="class"` tells the morph to leave that attribute alone.
+  // added to it, and the sidebar collapses for a frame while the browser clamps
+  // its scrollTop. `data-preserve-attr="class"` tells the morph to leave that
+  // attribute alone.
   test "clientClassElementsMissingPreserve has teeth: flags a data-class element without preserve-attr, accepts one with it" {
     clientClassElementsMissingPreserve """<div id="a" data-class:on="$x"></div>"""
     |> Expect.hasLength "a bare data-class element is flagged" 1
