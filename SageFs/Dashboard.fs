@@ -524,6 +524,116 @@ let resolveViewingSession
     |> Option.filter (fun sessionId -> sessions |> List.exists (fun session -> session.Id = sessionId))
   requested
 
+/// How a dashboard action went, in the three tones the viewer is told in.
+[<RequireQualifiedAccess>]
+type ActionOutcome =
+  /// Under way, or nothing to do.
+  | Info of string
+  | Success of string
+  | Failure of string
+
+/// Where a session action says how it went.
+///
+/// Those actions used to write to `#eval-result`, which sits inside the
+/// Evaluate popover, a `<details>` that is closed until the viewer presses λ or
+/// `e`. A Run App that failed to build, a Purge that errored, a project switch
+/// that could not load: nothing on screen changed and nothing was said.
+///
+/// The notice is appended to `<body>`. That is outside every `<details>`, and
+/// outside `#main`, which the stream re-renders and would wipe it. Each new
+/// notice removes the one before it, and it has a dismiss button.
+module ActionResult =
+  /// Where the notice is attached. A Datastar selector, not an id.
+  let [<Literal>] Selector = "body"
+  let [<Literal>] CssClass = "action-result"
+
+  let private replacePrevious =
+    sprintf "document.querySelectorAll('.%s').forEach(function(n){if(n!==el)n.remove()})" CssClass
+
+  let private dismiss = sprintf "el.closest('.%s').remove()" CssClass
+
+  let private placement =
+    "position:fixed;bottom:2.25rem;right:1rem;max-width:min(42rem,calc(100vw - 2rem));z-index:200;"
+    + "display:flex;gap:0.5rem;align-items:flex-start;padding:0.4rem 0.6rem;"
+    + "background:var(--bg-default);border:1px solid var(--border-normal);box-shadow:0 2px 8px rgba(0,0,0,0.35);"
+
+  let render (outcome: ActionOutcome) : XmlNode =
+    let role, tone, text =
+      match outcome with
+      | ActionOutcome.Info t -> "status", "output-info", t
+      | ActionOutcome.Success t -> "status", "output-result", t
+      | ActionOutcome.Failure t -> "alert", "output-error", t
+    Elem.div
+      [ Attr.class' CssClass
+        Attr.style placement
+        Attr.create "role" role
+        testid "action-result"
+        Ds.onInit replacePrevious ]
+      [ Elem.pre
+          [ Attr.class' (sprintf "output-line %s" tone)
+            Attr.style "margin:0;white-space:pre-wrap;flex:1;" ]
+          [ textEnc text ]
+        Elem.button
+          [ Attr.class' "session-btn"
+            Attr.style "width:auto;padding:0 6px;"
+            Attr.create "aria-label" "Dismiss this message"
+            Attr.create "title" "Dismiss"
+            Ds.onClick dismiss ]
+          [ Text.raw "×" ] ]
+
+  /// Say how an action went, in a place the viewer can see.
+  let patch (ctx: HttpContext) (outcome: ActionOutcome) : Threading.Tasks.Task =
+    Falco.Datastar.Response.sseStringElementsOptions
+      ctx
+      { StarFederation.Datastar.FSharp.PatchElementsOptions.Defaults with
+          Selector = ValueSome Selector
+          PatchMode = StarFederation.Datastar.FSharp.ElementPatchMode.Append }
+      (renderNode (render outcome))
+
+/// How many render pushes in a row have failed on one dashboard connection.
+[<RequireQualifiedAccess>]
+type PushStreak =
+  | Healthy
+  | Failing of count: int * lastReason: string
+
+/// What a push result asks the stream to do about it.
+[<RequireQualifiedAccess>]
+type PushEffect =
+  | NoEffect
+  /// The first failure of a streak: log it at Warn, once.
+  | LogStreakStart of reason: string
+  /// The second in a row: the page says it failed to render.
+  | ShowNotice of reason: string
+  /// The first push that worked after a notice was shown: say it is back.
+  | ClearNotice
+
+/// A failing `pushState` used to be logged at Debug and dropped while the
+/// heartbeat kept the page "connected": the content froze with no banner and
+/// nothing in a default log. One failure is a blip and is only logged; the
+/// second in a row means the page is stale, and says so.
+module PushStreak =
+  /// Failures in a row before the page is told.
+  let [<Literal>] NoticeAfter = 2
+
+  let healthy : PushStreak = PushStreak.Healthy
+
+  let failed (streak: PushStreak) (reason: string) : PushStreak * PushEffect =
+    match streak with
+    | PushStreak.Healthy -> PushStreak.Failing (1, reason), PushEffect.LogStreakStart reason
+    | PushStreak.Failing (count, _) ->
+      let next = count + 1
+      match next with
+      | NoticeAfter -> PushStreak.Failing (next, reason), PushEffect.ShowNotice reason
+      | _ -> PushStreak.Failing (next, reason), PushEffect.NoEffect
+
+  let succeeded (streak: PushStreak) : PushStreak * PushEffect =
+    match streak with
+    | PushStreak.Healthy -> PushStreak.Healthy, PushEffect.NoEffect
+    | PushStreak.Failing (count, _) when count >= NoticeAfter -> PushStreak.Healthy, PushEffect.ClearNotice
+    | PushStreak.Failing _ -> PushStreak.Healthy, PushEffect.NoEffect
+
+  let noticeText (reason: string) : string = sprintf "dashboard failed to render: %s" reason
+
 /// What a dashboard stream should view on its next push. A session can die
 /// outside this page's own teardown path — an MCP stop, a worker crash,
 /// another client — so every push reconciles against the sessions that exist.
@@ -1576,6 +1686,8 @@ let createStreamHandler
     // the old connection's cleanup can run after it: removing by id alone would
     // delete the newer connection's channel and leave it unable to receive pushes.
     let ownChannel = ref (Unchecked.defaultof<MailboxProcessor<DashboardStreamCommand>>)
+    // Consecutive failing pushes on THIS connection (see `PushStreak`).
+    let pushStreak = ref PushStreak.healthy
     try
       // Push initial state (catch all exceptions — don't let a transient failure kill the stream)
       try
@@ -1616,15 +1728,32 @@ let createStreamHandler
           | BurstCohortViewingSeq.NoChange -> ()
           if burst.WorkerInvalidated then
             lastWorkerFetch <- DateTime.MinValue
+          // The page says so when it keeps failing to render: the heartbeat
+          // below keeps it "connected" whatever the pushes do.
+          let say (outcome: ActionOutcome) = async {
+            try do! ActionResult.patch ctx outcome |> Async.AwaitTask
+            with _ -> ()
+          }
+          let record (apply: PushStreak -> PushStreak * PushEffect) = async {
+            let next, effect = apply pushStreak.Value
+            pushStreak.Value <- next
+            match effect with
+            | PushEffect.NoEffect -> ()
+            | PushEffect.LogStreakStart reason ->
+              Log.warn "[Dashboard SSE] pushState failed (later failures in this streak are not logged): %s" reason
+            | PushEffect.ShowNotice reason -> do! say (ActionOutcome.Failure (PushStreak.noticeText reason))
+            | PushEffect.ClearNotice -> do! say (ActionOutcome.Success "Dashboard rendering recovered.")
+          }
           try
             do! pushState () |> Async.AwaitTask
+            do! record PushStreak.succeeded
           with
           | :? System.IO.IOException -> ()
           | :? ObjectDisposedException -> ()
           | :? OperationCanceledException -> ()
           | :? System.ArgumentOutOfRangeException -> ()
           | :? System.InvalidOperationException -> ()
-          | ex -> Log.debug "[Dashboard SSE] pushState failed: %s" ex.Message
+          | ex -> do! record (fun streak -> PushStreak.failed streak ex.Message)
         }
         let rec loop () = async {
           // Disconnect-indicator heartbeat: checked on every iteration
@@ -2110,72 +2239,6 @@ let routeValue (key: string) (ctx: HttpContext) : string =
   match ctx.Request.RouteValues.TryGetValue key with
   | true, (:? string as value) -> value
   | _ -> ""
-
-/// How a dashboard action went, in the three tones the viewer is told in.
-[<RequireQualifiedAccess>]
-type ActionOutcome =
-  /// Under way, or nothing to do.
-  | Info of string
-  | Success of string
-  | Failure of string
-
-/// Where a session action says how it went.
-///
-/// Those actions used to write to `#eval-result`, which sits inside the
-/// Evaluate popover, a `<details>` that is closed until the viewer presses λ or
-/// `e`. A Run App that failed to build, a Purge that errored, a project switch
-/// that could not load: nothing on screen changed and nothing was said.
-///
-/// The notice is appended to `<body>`. That is outside every `<details>`, and
-/// outside `#main`, which the stream re-renders and would wipe it. Each new
-/// notice removes the one before it, and it has a dismiss button.
-module ActionResult =
-  /// Where the notice is attached. A Datastar selector, not an id.
-  let [<Literal>] Selector = "body"
-  let [<Literal>] CssClass = "action-result"
-
-  let private replacePrevious =
-    sprintf "document.querySelectorAll('.%s').forEach(function(n){if(n!==el)n.remove()})" CssClass
-
-  let private dismiss = sprintf "el.closest('.%s').remove()" CssClass
-
-  let private placement =
-    "position:fixed;bottom:2.25rem;right:1rem;max-width:min(42rem,calc(100vw - 2rem));z-index:200;"
-    + "display:flex;gap:0.5rem;align-items:flex-start;padding:0.4rem 0.6rem;"
-    + "background:var(--bg-default);border:1px solid var(--border-normal);box-shadow:0 2px 8px rgba(0,0,0,0.35);"
-
-  let render (outcome: ActionOutcome) : XmlNode =
-    let role, tone, text =
-      match outcome with
-      | ActionOutcome.Info t -> "status", "output-info", t
-      | ActionOutcome.Success t -> "status", "output-result", t
-      | ActionOutcome.Failure t -> "alert", "output-error", t
-    Elem.div
-      [ Attr.class' CssClass
-        Attr.style placement
-        Attr.create "role" role
-        testid "action-result"
-        Ds.onInit replacePrevious ]
-      [ Elem.pre
-          [ Attr.class' (sprintf "output-line %s" tone)
-            Attr.style "margin:0;white-space:pre-wrap;flex:1;" ]
-          [ textEnc text ]
-        Elem.button
-          [ Attr.class' "session-btn"
-            Attr.style "width:auto;padding:0 6px;"
-            Attr.create "aria-label" "Dismiss this message"
-            Attr.create "title" "Dismiss"
-            Ds.onClick dismiss ]
-          [ Text.raw "×" ] ]
-
-  /// Say how an action went, in a place the viewer can see.
-  let patch (ctx: HttpContext) (outcome: ActionOutcome) : Threading.Tasks.Task =
-    Falco.Datastar.Response.sseStringElementsOptions
-      ctx
-      { StarFederation.Datastar.FSharp.PatchElementsOptions.Defaults with
-          Selector = ValueSome Selector
-          PatchMode = StarFederation.Datastar.FSharp.ElementPatchMode.Append }
-      (renderNode (render outcome))
 
 /// What "stop all the others" has to tell the viewer: how many stopped, and
 /// for each that did not, which and why. It used to count the others it
