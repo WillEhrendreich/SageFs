@@ -144,10 +144,10 @@ let evalStatsDuplicateIdRegressionTests =
     testCase "renderMainContent emits exactly one element carrying the eval-stats id" (fun () ->
       let snap =
         { DashboardSnapshot.Version = "0.0.0"
-          SessionState = "ready"; SessionId = "t"; WorkingDir = "/w"
+          SessionId = "t"; WorkingDir = "/w"
           WarmupProgress = ""; WorkflowLabel = "Interactive"
           EvalStats = FixtureStats.threeQuickEvals
-          ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+          ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
           HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
           OutputPanel = Elem.div [] []
           SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -177,10 +177,10 @@ let workflowBadgeTests =
     testCase "WorkflowLabel appears in the rendered tabline when a session is in play" (fun () ->
       let snap =
         { DashboardSnapshot.Version = "0.0.0"
-          SessionState = "ready"; SessionId = "t"; WorkingDir = "/w"
+          SessionId = "t"; WorkingDir = "/w"
           WarmupProgress = ""; WorkflowLabel = "LiveTesting"
           EvalStats = FixtureStats.noEvals
-          ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+          ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
           HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
           OutputPanel = Elem.div [] []
           SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []

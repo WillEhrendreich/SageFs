@@ -117,10 +117,10 @@ let panelTests =
     testCase "the full shell carries the panel inside #main in the sidebar, and the shell's chrome is still all there" <| fun _ ->
       let snap : DashboardSnapshot =
         { DashboardSnapshot.Version = "0.0.0"
-          SessionState = "ready"; SessionId = "0a2b3c4d"; WorkingDir = "/work"
+          SessionId = "0a2b3c4d"; WorkingDir = "/work"
           WarmupProgress = ""; WorkflowLabel = "REPL"
           EvalStats = FixtureStats.noEvals
-          ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+          ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
           HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
           OutputPanel = renderOutputForSession "0a2b3c4d" 0 [] "No output yet"
           SessionsPanel = Elem.div [ Attr.id "sessions-marker" ] []; SessionPicker = Elem.div [] []

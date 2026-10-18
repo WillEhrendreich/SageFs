@@ -1285,6 +1285,16 @@ module FixtureStats =
   let phaseTimingBriefTotal : SageFs.WarmUp.WarmupPhaseTiming =
     { phaseTimingNotRun with TotalMs = 5L }
 
+/// The session in view that a rendering case puts in a snapshot because the type needs one, when the case is not about
+/// the session's state.
+module FixtureViews =
+  /// A session that is ready and running.
+  let running : SageFs.Server.DashboardTypes.SessionInView =
+    SageFs.Server.DashboardTypes.SessionInView.InPlay(SageFs.SessionState.Ready, SageFs.SessionDisplayStatus.Running)
+  /// No session in play.
+  let none : SageFs.Server.DashboardTypes.SessionInView =
+    SageFs.Server.DashboardTypes.SessionInView.NoSessionInPlay
+
 /// Waits a browser journey gives the page, in the whole milliseconds Playwright and the journey
 /// helpers take. Each wait ends the moment the page shows what it waits for, so a long one costs a
 /// passing run nothing and only a failing one pays it.

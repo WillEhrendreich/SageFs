@@ -56,9 +56,9 @@ let private snapshot : DashboardSnapshot =
   let empty = Elem.div [] []
   let viewing = List.head sessionIds
   { DashboardSnapshot.Version = "0.0.0"
-    SessionState = "ready"; SessionId = viewing; WorkingDir = longDirectory
+    SessionId = viewing; WorkingDir = longDirectory
     WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
-    ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+    ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
     HotReloadPanel = empty; SessionContextPanel = empty
     OutputPanel = renderOutputForSession viewing 1 [ { Timestamp = None; Kind = ResultLine; Text = "val it: int = 42" } ] "no output"
     SessionsPanel = renderSessionsForSession viewing (sessionIds |> List.map card) false

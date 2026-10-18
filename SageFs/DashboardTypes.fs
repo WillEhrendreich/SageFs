@@ -1035,44 +1035,6 @@ module SessionInView =
     | SessionInView.NoSessionInPlay -> "No session"
     | SessionInView.InPlay(state, _) -> SessionState.label state
 
-/// Type-safe daemon connection state for the dashboard.
-/// Illegal states unrepresentable: the browser CANNOT show "Ready" or "No session"
-/// when the daemon is disconnected — the DU cases enforce this at the type level.
-[<RequireQualifiedAccess>]
-type DashboardConnectionState =
-  /// SSE stream is alive and the daemon is reachable.
-  | Connected
-  /// SSE stream failed or was never established — the daemon may not be running.
-  | Disconnected
-
-module DashboardConnectionState =
-  /// Convert to the Datastar signal string value.
-  let signalValue = function
-    | DashboardConnectionState.Connected -> "true"
-    | DashboardConnectionState.Disconnected -> "false"
-
-  /// The CSS class for the status badge based on connection state.
-  let statusBadgeCssClass = function
-    | DashboardConnectionState.Connected -> "status-ready"
-    | DashboardConnectionState.Disconnected -> "status-disconnected"
-
-  /// The text shown in the status badge.
-  let statusBadgeLabel (sessionState: string) = function
-    | DashboardConnectionState.Connected -> sessionState
-    | DashboardConnectionState.Disconnected -> "Disconnected"
-
-  /// The text shown in the statusline info area.
-  let statuslineLabel (workingDir: string) (version: string) = function
-    | DashboardConnectionState.Connected ->
-      sprintf "\"%s\" — SageFs v%s — ready" workingDir version
-    | DashboardConnectionState.Disconnected ->
-      sprintf "\"%s\" — SageFs v%s — daemon not running" workingDir version
-
-  /// The text shown in the command line area.
-  let cmdlineLabel = function
-    | DashboardConnectionState.Connected -> "SageFs -- ready"
-    | DashboardConnectionState.Disconnected -> "SageFs -- daemon not running"
-
 /// What a sidebar card knows about whether the files on disk are ahead of the build its session runs (`SourceState`).
 /// Reading it takes the worker's own warmup report (a worker round trip), which the push loop pays only for the session
 /// being viewed. A card for any other session says so rather than guessing: it is not a card whose build is current.
@@ -1541,11 +1503,12 @@ type DashboardInfra = {
 /// Constructed once per push, then passed to renderMainContent for atomic morph.
 type DashboardSnapshot = {
   Version: string
-  /// Type-safe daemon connection state — renderer derives badge class, statusline,
-  /// and cmdline text from this DU case. When Disconnected, the UI MUST NOT show
-  /// "Ready" or "No session" — enforced by DashboardConnectionState module functions.
-  ConnectionState: DashboardConnectionState
-  SessionState: string
+  /// The session in view, or that none is in play. The header badge (class and words) and the main area's fault notice
+  /// are derived from this case by `SessionInView`, so no renderer re-decides it from a state string. Whether the page
+  /// is connected to the daemon is the browser's to know, in its own signals (`DashboardConnection`); the server never
+  /// built anything but "connected", which is why this used to be green whatever the session was doing.
+  InView: SessionInView
+  /// The id of the session in view, "" when `InView` is `NoSessionInPlay`.
   SessionId: string
   WorkingDir: string
   WarmupProgress: string

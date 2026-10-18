@@ -27,6 +27,28 @@ let private classByStatus : (string * SessionInView * string) list =
 
 let private render (node: XmlNode) : string = renderNode node
 
+/// A whole snapshot whose only interesting part is the session in view.
+let private snapshotOf (view: SessionInView) : DashboardSnapshot =
+  let empty = Elem.div [] []
+  { DashboardSnapshot.Version = "0.0.0"
+    InView = view; SessionId = (match view with SessionInView.NoSessionInPlay -> "" | SessionInView.InPlay _ -> "0a2b3c4d")
+    WorkingDir = "/work"; WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
+    ThemeName = "default"; ConnectionLabel = None
+    HotReloadPanel = empty; SessionContextPanel = empty; OutputPanel = empty
+    SessionsPanel = empty; SessionPicker = empty; ThemePicker = empty; ThemeVars = empty
+    BindingsPanel = empty; DaemonHealth = empty; FailureNarrativesPanel = empty; DiagnosticsPanel = empty
+    FilmstripPanel = empty; AlarmPanel = empty; LiveTestingPanel = empty; FrictionPanel = empty
+    CohortPanel = empty; HygienePanel = empty
+    ActiveProject = None; ProjectRoles = []
+    App = AppRun.AppRunState.NotRunning
+    EvalToPixelP50Ms = None; EvalToPixelP99Ms = None }
+
+/// The header's status badge as the page draws it: its element, from the tag to the closing span.
+let private headerBadge (html: string) : string =
+  let anchor = html.IndexOf "id=\"session-status\""
+  let start = html.IndexOf("<span", anchor)
+  html.Substring(start, html.IndexOf("</span>", start) - start)
+
 [<Tests>]
 let tests =
   testList "Dashboard header badge and fault notice" [
@@ -69,6 +91,30 @@ let tests =
         renderSessionFaultNotice (inPlay SessionState.Faulted (SessionDisplayStatus.Faulted "<script>alert(1)</script>"))
         |> render
       html.Contains "<script>" |> Expect.isFalse "no raw script tag reaches the page"
+
+    testCase "WHY — the page draws the header badge and the fault notice from the snapshot's session in view, in every state of the matrix" <| fun _ ->
+      let faulted = inPlay SessionState.Faulted (SessionDisplayStatus.Faulted "the project did not build")
+      let page (view: SessionInView) = renderMainContent (snapshotOf view) |> render
+      let badge (view: SessionInView) = page view |> headerBadge
+
+      badge faulted |> Expect.stringContains "a faulted session's badge is red" "status status-faulted"
+      badge faulted |> Expect.stringContains "and says Faulted" ">Faulted"
+      page faulted |> Expect.stringContains "and the main area says why" "the project did not build"
+      page faulted |> Expect.stringContains "and what to do" "session-fault-remedy"
+
+      badge (inPlay SessionState.WarmingUp SessionDisplayStatus.Starting)
+      |> Expect.stringContains "a warming session's badge is the warming colour" "status status-warming"
+      (page (inPlay SessionState.WarmingUp SessionDisplayStatus.Starting)).Contains "session-fault-notice"
+      |> Expect.isFalse "a warming session has no fault notice"
+
+      badge FixtureViews.running |> Expect.stringContains "a running session's badge is green" "status status-ready"
+      badge FixtureViews.running |> Expect.stringContains "and says Ready" ">Ready"
+
+      badge SessionInView.NoSessionInPlay |> Expect.stringContains "no session in play says so" ">No session"
+      badge SessionInView.NoSessionInPlay |> Expect.stringContains "and is not green" "status status-idle"
+      let landing = page SessionInView.NoSessionInPlay
+      landing |> Expect.stringContains "the shell is whole with no session: the header is there" "app-header"
+      landing |> Expect.stringContains "and so is the sidebar" "id=\"sidebar\""
 
     testCase "a session that is not faulted gets no notice, and neither does no session at all" <| fun _ ->
       for view in

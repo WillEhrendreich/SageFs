@@ -989,10 +989,18 @@ let buildDashboardSnapshotWithSessions
         renderCohortLanesPanel (infra.ReadCohortLedger ())
         renderTrunkPanel (infra.ReadTrunk ())
       ]
+    // What the header says about the viewed session: the card's own display status (its colour, and the reason when it
+    // faulted) beside the daemon's coarse state words. A session the list does not hold falls back to the state alone.
+    let inView =
+      let display =
+        sessions
+        |> List.tryFind (fun s -> s.Id = sessionId)
+        |> Option.map (SessionDisplay.displayStatus DateTime.UtcNow)
+        |> Option.defaultValue (SessionDisplayStatus.ofSessionState state)
+      SessionInView.InPlay(state, display)
     let snap : DashboardSnapshot = {
               Version = infra.Version
-              ConnectionState = DashboardConnectionState.Connected
-              SessionState = stateStr
+              InView = inView
               SessionId = sid
               WorkingDir = workingDir
               WarmupProgress = warmupProgress
@@ -1109,8 +1117,7 @@ let buildNoSessionSnapshotWithSessionsSorted
     let evalToPixelP50Ms, evalToPixelP99Ms = evalToPixelPercentiles ()
     let snap : DashboardSnapshot = {
       Version = infra.Version
-      ConnectionState = DashboardConnectionState.Connected
-      SessionState = "No session"
+      InView = SessionInView.NoSessionInPlay
       SessionId = ""
       WorkingDir = ""
       WarmupProgress = ""

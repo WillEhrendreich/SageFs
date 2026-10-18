@@ -34,10 +34,10 @@ let private mkSession (id: string) (app: SageFs.AppRun.AppRunState) (projectRole
 
 let private mkSnap () : DashboardSnapshot =
   { DashboardSnapshot.Version = "0.0.0"
-    SessionState = "ready"; SessionId = "0a2b3c4d"; WorkingDir = "/work"
+    SessionId = "0a2b3c4d"; WorkingDir = "/work"
     WarmupProgress = ""; WorkflowLabel = "REPL"
     EvalStats = FixtureStats.noEvals
-    ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+    ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
     HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
     OutputPanel = renderOutputForSession "0a2b3c4d" 0 [] "No output yet"
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []

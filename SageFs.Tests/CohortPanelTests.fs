@@ -180,8 +180,8 @@ let cohortPanelTests =
       let cohortPanel = renderCohortPanel frame
       let snap : DashboardTypes.DashboardSnapshot =
         { DashboardTypes.DashboardSnapshot.Version = "0.0.0"
-          ConnectionState = DashboardTypes.DashboardConnectionState.Connected
-          SessionState = "No session"; SessionId = ""; WorkingDir = ""
+          InView = FixtureViews.none
+          SessionId = ""; WorkingDir = ""
           WarmupProgress = ""; WorkflowLabel = "Interactive"
           EvalStats = FixtureStats.noEvals
           AlarmPanel = Elem.div [] []; DaemonHealth = Elem.div [] []

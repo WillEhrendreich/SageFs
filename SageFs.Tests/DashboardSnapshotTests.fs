@@ -579,9 +579,9 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
   // These tests verify the morphed content includes key interactive elements.
   let mkSnap version = {
     DashboardSnapshot.Version = version
-    SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
+    SessionId = "test-id"; WorkingDir = @"C:\Code"
     WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
-    ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+    ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
     HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
     OutputPanel = Elem.div [] []
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1157,9 +1157,9 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
   test "renderMainContent includes key DOM IDs" {
     let snap = {
       DashboardSnapshot.Version = "0.0.0"
-      SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
+      SessionId = "test-id"; WorkingDir = @"C:\Code"
       WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
-      ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+      ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1200,9 +1200,9 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
   test "morph target: renderMainContent wraps in div#main" {
     let snap = {
       DashboardSnapshot.Version = "0.0.0"
-      SessionState = "ready"; SessionId = "t"; WorkingDir = "C:\\"
+      SessionId = "t"; WorkingDir = "C:\\"
       WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
-      ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
+      ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1220,11 +1220,11 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
 
 let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis 3.1)" [
 
-  let mkSnap version sessionId workingDir state =
+  let mkSnap version sessionId workingDir (view: SessionInView) =
     { DashboardSnapshot.Version = version
-      SessionState = state; SessionId = sessionId; WorkingDir = workingDir
+      SessionId = sessionId; WorkingDir = workingDir
       WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.sevenEvals
-      ThemeName = "monokai"; ConnectionLabel = Some "🌐 2 🤖 1"; ConnectionState = DashboardConnectionState.Connected
+      ThemeName = "monokai"; ConnectionLabel = Some "🌐 2 🤖 1"; InView = view
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1242,13 +1242,13 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
         { Version = "1.2.3"; MemoryMB = 0; StartedAt = Since.Unknown
           OverallHealth = Features.OverallHealth.Healthy
           SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None; Anomalies = []; GcDumpNote = None }
-    let snap = { (mkSnap "1.2.3" "s1" "C:\\" "ready") with DaemonHealth = health }
+    let snap = { (mkSnap "1.2.3" "s1" "C:\\" FixtureViews.running) with DaemonHealth = health }
     let html = renderMainContent snap |> renderNode
     html |> Expect.stringContains "version should appear" "1.2.3"
   }
 
   test "SessionId appears in rendered output" {
-    let html = mkSnap "0.0.0" "my-session-42" "C:\\" "ready" |> renderMainContent |> renderNode
+    let html = mkSnap "0.0.0" "my-session-42" "C:\\" FixtureViews.running |> renderMainContent |> renderNode
     html |> Expect.stringContains "sessionId should appear" "my-session-42"
   }
 
@@ -1270,36 +1270,39 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
     html |> Expect.stringContains "working dir should appear on the card" @"C:\MyProject\Src"
   }
 
-  test "SessionState appears in rendered output" {
-    let html = mkSnap "0.0.0" "s1" "C:\\" "faulted" |> renderMainContent |> renderNode
-    html |> Expect.stringContains "session state should appear" "faulted"
+  test "the session's state appears in rendered output, and a faulted session says why" {
+    let view = SessionInView.InPlay(SessionState.Faulted, SessionDisplayStatus.Faulted "the project did not build")
+    let html = mkSnap "0.0.0" "s1" "C:\\" view |> renderMainContent |> renderNode
+    html |> Expect.stringContains "the badge says Faulted" "Faulted"
+    html |> Expect.stringContains "the badge is red, not green" "status status-faulted"
+    html |> Expect.stringContains "the main area says why" "the project did not build"
   }
 
   test "EvalStats count appears in rendered output" {
-    let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    let html = mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running |> renderMainContent |> renderNode
     html |> Expect.stringContains "eval count should appear" "7 evals"
   }
 
   test "EvalStats avg appears in rendered output" {
-    let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    let html = mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running |> renderMainContent |> renderNode
     html |> Expect.stringContains "avg ms should appear" "42"
   }
 
   test "ConnectionLabel appears in rendered output" {
-    let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    let html = mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running |> renderMainContent |> renderNode
     html |> Expect.stringContains "connection label should appear" "🌐 2"
   }
 
   test "ThemeName appears in theme picker" {
     let snap =
-      { (mkSnap "0.0.0" "s1" "C:\\" "ready") with
+      { (mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running) with
           ThemePicker = Elem.div [] [ Text.raw "Theme: monokai" ] }
     let html = renderMainContent snap |> renderNode
     html |> Expect.stringContains "theme name should appear" "monokai"
   }
 
   test "rendered output always wraps in div#main" {
-    let snap = mkSnap "0.0.0" "s1" "C:\\" "ready"
+    let snap = mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running
     let html = renderMainContent snap |> renderNode
     (html.StartsWith "<div id=\"main\"") |> Expect.isTrue "must start with div#main"
     (html.EndsWith "</div>") |> Expect.isTrue "must end with closing div"

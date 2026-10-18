@@ -58,8 +58,8 @@ let private isShown facts panel =
 /// same markup the dashboard sends.
 let private snapshotWith (activity: Features.LiveTestActivity.LiveTestActivity) (ledger: LedgerEntry<MemberId> list) : DashboardSnapshot =
   { Version = "0.0.0"
-    ConnectionState = DashboardConnectionState.Connected
-    SessionState = "Ready"; SessionId = "abcd1234"; WorkingDir = ""
+    InView = FixtureViews.running
+    SessionId = "abcd1234"; WorkingDir = ""
     WarmupProgress = ""; WorkflowLabel = "Interactive"
     EvalStats = FixtureStats.noEvals
     AlarmPanel = Elem.div [] []; DaemonHealth = Elem.div [] []

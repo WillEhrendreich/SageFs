@@ -2267,8 +2267,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       // Status tabs — center
       Elem.div [ Attr.class' "tabline-menu"; Attr.style "display:flex;align-items:center;height:100%;flex:1;min-width:0;" ] [
         Elem.div [ Attr.id DomIds.SessionStatus; Attr.class' "tabline-status"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);font-size:12px;white-space:nowrap;flex-shrink:0;" ] [
-          Elem.span [ Attr.class' (sprintf "status %s" (DashboardConnectionState.statusBadgeCssClass snap.ConnectionState)); Attr.style "border-radius:0;" ] [
-            textEnc (DashboardConnectionState.statusBadgeLabel snap.SessionState snap.ConnectionState) ]
+          Elem.span [ Attr.class' (sprintf "status %s" (SessionInView.badgeCssClass snap.InView)); Attr.style "border-radius:0;" ] [
+            textEnc (SessionInView.badgeLabel snap.InView) ]
         ]
         // min-width:0 + overflow:hidden + text-overflow:ellipsis let this
         // shrink instead of overflowing onto the right-side theme picker at
@@ -2334,6 +2334,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       Elem.div [ Attr.class' "main-area" ] [
         // Session picker — shown when no sessions exist, hidden otherwise
         snap.SessionPicker
+        // A session that faulted says why and what to do here, where the person is reading, not only on its sidebar card.
+        renderSessionFaultNotice snap.InView
         Elem.div [ Attr.id DomIds.EditorArea ] [
           Elem.div [ Attr.id DomIds.OutputSection; Attr.class' "output-area" ] [
             Elem.div [ Attr.class' "output-header" ] [
