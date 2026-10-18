@@ -186,6 +186,7 @@
         <Compile Include="DashboardTeardownViewTests.fs" />
         <Compile Include="DashboardSessionIdRouteTests.fs" />
         <Compile Include="DashboardActionResultTests.fs" />
+        <Compile Include="DashboardKeyBindingTests.fs" />
         <Compile Include="WorkerReloadRelayTests.fs" />
         <Compile Include="DashboardRenderGateTests.fs" />
         <Compile Include="DashboardIdleStabilityTests.fs" />

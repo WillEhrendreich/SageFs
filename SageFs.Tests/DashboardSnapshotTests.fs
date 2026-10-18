@@ -846,14 +846,16 @@ let zeroJsBadgeTests = testList "Zero-JS badge" [
       (fetchCount <= postCount + 1) |> Expect.isTrue "fetch calls should be POST-only (command dispatch), not GET (data retrieval)"
   }
 
-  test "total inline JS payload is under 5KB" {
+  test "total inline JS payload is under 6KB" {
+    // 5KB until the session keys stopped being unsafe: ignoring selects, acting on the
+    // viewed session and asking before a stop is about 0.7KB of the keyboard script.
     let html = renderShell "1.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     let scriptPattern = System.Text.RegularExpressions.Regex("<script[^>]*>([\\s\\S]*?)</script>")
     let scriptBlocks = scriptPattern.Matches(html)
     let totalBytes =
       [ for m in scriptBlocks -> m.Groups.[1].Value ]
       |> List.sumBy (fun s -> System.Text.Encoding.UTF8.GetByteCount(s))
-    (totalBytes, 5120) |> Expect.isLessThan (sprintf "inline JS should be <5KB, was %d bytes" totalBytes)
+    (totalBytes, 6144) |> Expect.isLessThan (sprintf "inline JS should be <6KB, was %d bytes" totalBytes)
   }
 
   test "no application-level JS event handlers in HTML attributes" {

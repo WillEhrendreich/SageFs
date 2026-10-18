@@ -182,33 +182,146 @@ let evaluatePopoverFocusScript () =
     }, true);
   """ DomIds.EvaluateSection DomIds.EvalTextarea) ]
 
+/// Every key the dashboard binds, as data: the script below is built from it
+/// and the help table is meant to be read from it.
+///
+/// `x`, `Delete` and `X` used to stop sessions with no confirmation, on a
+/// daemon-wide selection the page never draws, and they fired from a
+/// `<select>`'s type-ahead as well. They now act on the session THIS tab
+/// views, ask first, and are ignored in anything the viewer types or chooses in.
+module KeyBindings =
+  [<RequireQualifiedAccess>]
+  type Confirmation =
+    | NoPrompt
+    /// Asked with the browser's confirm(); `{sid}` is the session in view.
+    | AskFirst of prompt: string
+
+  [<RequireQualifiedAccess>]
+  type Effect =
+    /// Moves the daemon-wide session cursor (every client shares it).
+    | MoveSelection of editorAction: string
+    | SelectCurrent
+    | SelectIndex
+    | NewSession
+    /// Stops the session this tab is viewing, through that card's own Stop button.
+    | StopViewing
+    /// Stops every session but the one this tab is viewing.
+    | StopOthers
+    /// Handled by another script on the page; listed so the help is complete.
+    | ClientOnly
+
+  type Binding =
+    { /// The `KeyboardEvent.key` values (or, for ClientOnly, the chord) it answers to.
+      Keys: string list
+      /// How it is written in the help table.
+      Shown: string
+      Help: string
+      Effect: Effect
+      Confirm: Confirmation }
+
+  /// A keystroke aimed at one of these is the viewer typing or choosing, never a command.
+  let textEntryTags = [ "input"; "textarea"; "select" ]
+
+  let private binding keys shown help effect confirm =
+    { Keys = keys; Shown = shown; Help = help; Effect = effect; Confirm = confirm }
+
+  let all : Binding list =
+    [ binding [ "j"; "ArrowDown" ] "j / Down" "Move the session cursor down (shared by every client)" (Effect.MoveSelection "sessionNavDown") Confirmation.NoPrompt
+      binding [ "k"; "ArrowUp" ] "k / Up" "Move the session cursor up (shared by every client)" (Effect.MoveSelection "sessionNavUp") Confirmation.NoPrompt
+      binding [ "Enter" ] "Enter" "Select the session under the cursor" Effect.SelectCurrent Confirmation.NoPrompt
+      binding [ "1"; "2"; "3"; "4"; "5"; "6"; "7"; "8"; "9" ] "1 to 9" "Put the session cursor on that session" Effect.SelectIndex Confirmation.NoPrompt
+      binding [ "n" ] "n" "Create a session" Effect.NewSession Confirmation.NoPrompt
+      binding [ "x"; "Delete" ] "x / Delete" "Stop the session this tab is viewing (asks first)" Effect.StopViewing
+        (Confirmation.AskFirst "Stop session {sid}? Its REPL bindings are lost.")
+      binding [ "X" ] "X" "Stop every session except the one this tab is viewing (asks first)" Effect.StopOthers
+        (Confirmation.AskFirst "Stop every session except {sid}? Their REPL bindings are lost.")
+      binding [ EvaluatePopover.OpenKey ] EvaluatePopover.OpenKey "Open Evaluate (a quick check; Esc closes it)" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Escape" ] "Esc" "Close the Evaluate popover" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Alt+Enter" ] "Alt+Enter" "Evaluate code" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Tab" ] "Tab" "Insert 2 spaces (in the editor)" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Ctrl+L" ] "Ctrl+L" "Clear output" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Ctrl+Tab" ] "Ctrl+Tab" "Cycle to the next session (Shift reverses)" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Ctrl+="; "Ctrl+-" ] "Ctrl+= / Ctrl+-" "Larger / smaller text" Effect.ClientOnly Confirmation.NoPrompt ]
+
+  /// The card of the session this tab is viewing, and the buttons on the page
+  /// that stop sessions (the page's own, so the click takes the same path).
+  let viewingCardSelector = "[data-testid=\"session-card\"][aria-current=\"true\"]"
+  let stopButtonSelector = "button[aria-label^=\"Stop —\"]"
+  let stopOthersButtonSelector = "button[aria-label^=\"Stop Others\"]"
+
+  let jsString (s: string) : string =
+    "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""
+
+  let textEntryTagsJson : string =
+    textEntryTags |> List.map jsString |> String.concat "," |> sprintf "[%s]"
+
+  /// `{"j":["m","sessionNavDown",""], ...}`: key to (kind, argument, prompt).
+  let tableJson : string =
+    all
+    |> List.collect (fun b ->
+      let prompt =
+        match b.Confirm with
+        | Confirmation.NoPrompt -> ""
+        | Confirmation.AskFirst p -> p
+      let kind, arg =
+        match b.Effect with
+        | Effect.MoveSelection action -> "m", action
+        | Effect.SelectCurrent -> "s", ""
+        | Effect.SelectIndex -> "i", ""
+        | Effect.NewSession -> "n", ""
+        | Effect.StopViewing -> "x", ""
+        | Effect.StopOthers -> "o", ""
+        | Effect.ClientOnly -> "", ""
+      match kind with
+      | "" -> []
+      | _ -> b.Keys |> List.map (fun key -> sprintf "%s:[%s,%s,%s]" (jsString key) (jsString kind) (jsString arg) (jsString prompt)))
+    |> String.concat ","
+    |> sprintf "{%s}"
+
 /// Keyboard shortcuts, font-size adjustment, session navigation, sidebar resize.
+///
+/// How the handler reads (the script carries no comments: every inline byte
+/// is counted against the shell's JS budget):
+/// - `typing` is the viewer typing or choosing in an element (see
+///   `KeyBindings.textEntryTags`), so the keystroke is theirs, not a command.
+///   Keys with Ctrl, Alt or Meta held are never session commands either.
+/// - Escape closes the Evaluate popover; the box's own handler claims an
+///   Escape that only dismisses its completion list.
+/// - Key `e` opens the Evaluate popover, which takes focus when it opens.
+/// - Enter on a focused button, link or summary is that control's own
+///   activation (the unseen-eval pill, every panel button), never session select.
+/// - Stopping acts on the session THIS tab views and asks first; it clicks that
+///   card's own Stop button (or the Stop Others button), so it takes the same
+///   path as a click.
 let keyboardHandlerScript () =
   Elem.script [] [ Text.raw (sprintf """
     (function() {
       function d(a,v){var b=v?{action:a,value:v}:{action:a};fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});}
+      var BINDINGS=%s,TEXT=%s,CARD=%s,STOP=%s,OTHERS=%s;
+      function typing(t){return !!t&&(TEXT.indexOf((t.tagName||'').toLowerCase())>=0||t.isContentEditable===true);}
       var sizes=[10,12,14,16,18,20,24],idx=2;
       document.addEventListener('keydown',function(e){
         if(e.ctrlKey&&(e.key==='='||e.key==='+')){e.preventDefault();idx=Math.min(sizes.length-1,idx+1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
         if(e.ctrlKey&&e.key==='-'){e.preventDefault();idx=Math.max(0,idx-1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
         if(e.ctrlKey&&e.key==='Tab'){e.preventDefault();d(e.shiftKey?'sessionCyclePrev':'sessionCycleNext');return;}
-        // Escape closes the Evaluate popover. The box's own handler claims an Escape that only dismisses its completion list.
         if(e.key==='Escape'){var pop=document.getElementById('%s');if(pop&&pop.open){pop.open=false;return;}}
+        if(typing(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;
         var tag=(e.target.tagName||'').toLowerCase();
-        if(tag!=='input'&&tag!=='textarea'){
-          var a=null,v=null;
-          // Key e opens the Evaluate popover, which takes focus when it opens.
-          if(e.key==='%s'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){var ev=document.getElementById('%s');if(ev){e.preventDefault();ev.open=true;return;}}
-          if(e.key==='j'||e.key==='ArrowDown'){a='sessionNavDown';}
-          if(e.key==='k'||e.key==='ArrowUp'){a='sessionNavUp';}
-          // Enter on a focused button/link/summary/select is that control's own activation (the unseen-eval pill, every panel button), never session select.
-          if(e.key==='Enter'&&tag!=='button'&&tag!=='a'&&tag!=='summary'&&tag!=='select'){a='sessionSelect';}
-          if(e.key==='x'||e.key==='Delete'){a='sessionDelete';}
-          if(e.key==='X'){a='sessionStopOthers';}
-          if(e.key==='n'){e.preventDefault();fetch('/dashboard/session/create',{method:'POST'});return;}
-          if(e.key>='1'&&e.key<='9'){a='sessionSetIndex';v=String(parseInt(e.key)-1);}
-          if(a){e.preventDefault();d(a,v);}
-        }
+        if(e.key==='%s'){var ev=document.getElementById('%s');if(ev){e.preventDefault();ev.open=true;return;}}
+        var b=Object.prototype.hasOwnProperty.call(BINDINGS,e.key)?BINDINGS[e.key]:null;
+        if(!b)return;
+        var k=b[0];
+        if(k==='s'&&(tag==='button'||tag==='a'||tag==='summary'))return;
+        e.preventDefault();
+        if(k==='m'){d(b[1]);return;}
+        if(k==='s'){d('sessionSelect');return;}
+        if(k==='i'){d('sessionSetIndex',String(parseInt(e.key)-1));return;}
+        if(k==='n'){fetch('/dashboard/session/create',{method:'POST'});return;}
+        var card=document.querySelector(CARD),sid=card?card.getAttribute('data-session-id'):'';
+        if(!sid)return;
+        if(!confirm(b[2].replace('{sid}',sid)))return;
+        var btn=k==='x'?card.querySelector(STOP):document.querySelector(OTHERS);
+        if(btn)btn.click();
       });
       var h=document.getElementById('%s'),s=document.getElementById('%s');
       if(h&&s){
@@ -229,7 +342,7 @@ let keyboardHandlerScript () =
         });
       }
     })();
-  """ DomIds.EvaluateSection EvaluatePopover.OpenKey DomIds.EvaluateSection DomIds.SidebarResize DomIds.Sidebar) ]
+  """ KeyBindings.tableJson KeyBindings.textEntryTagsJson (KeyBindings.jsString KeyBindings.viewingCardSelector) (KeyBindings.jsString KeyBindings.stopButtonSelector) (KeyBindings.jsString KeyBindings.stopOthersButtonSelector) DomIds.EvaluateSection EvaluatePopover.OpenKey DomIds.EvaluateSection DomIds.SidebarResize DomIds.Sidebar) ]
 
 /// Render the dashboard HTML shell with pre-rendered initial content.
 /// Providing initialContent eliminates the loading-screen flash — the browser

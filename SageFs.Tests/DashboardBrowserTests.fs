@@ -904,6 +904,26 @@ module private NoSessionLanding =
       })
       Expect.isTrue reachedTarget2 (sprintf "[state 5] clicking the sidebar row switched into session %s's view" target2)
 
+      // --- Keys: a keystroke aimed at a <select> is never a command, and the
+      // stop key asks before it stops anything. (`x` in a select's
+      // type-ahead used to stop the session with no question.) ---
+      let dialogs = System.Collections.Concurrent.ConcurrentQueue<string>()
+      page.Dialog.Add(fun d ->
+        dialogs.Enqueue d.Message
+        d.DismissAsync() |> ignore)
+      do! page.Locator("#theme-picker").FocusAsync()
+      do! page.Keyboard.PressAsync("x")
+      do! Task.Delay TestTimeouts.pollSlow
+      Expect.isEmpty (List.ofSeq dialogs) "[keys] x typed into a <select> asked nothing"
+      let! viewingAfterSelectKey = viewingSessionId page
+      Expect.equal viewingAfterSelectKey target2 "[keys] x typed into a <select> left the viewer where they were"
+      let! _ = page.EvaluateAsync<string>("() => { if (document.activeElement) document.activeElement.blur(); return ''; }")
+      do! page.Keyboard.PressAsync("x")
+      let! asked = waitUntil BrowserWaits.panelUpdates (fun () -> task { return dialogs.Count = 1 })
+      Expect.isTrue asked "[keys] x on the page asks before stopping the viewed session"
+      Expect.stringContains (List.ofSeq dialogs |> List.head) target2 "[keys] the question names the session in view"
+      do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates (page.Locator("[data-testid='session-card']")) 2
+
       // --- Stop journey, part 1: stop the currently-viewed session while
       // one other remains -> auto-advance to it (no picker). ---
       let stopBtn (sid: string) = (rowLocator sid).GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "unload the session"))
