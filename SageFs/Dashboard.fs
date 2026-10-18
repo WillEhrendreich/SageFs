@@ -1998,6 +1998,90 @@ let routeValue (key: string) (ctx: HttpContext) : string =
   | true, (:? string as value) -> value
   | _ -> ""
 
+/// How a dashboard action went, in the three tones the viewer is told in.
+[<RequireQualifiedAccess>]
+type ActionOutcome =
+  /// Under way, or nothing to do.
+  | Info of string
+  | Success of string
+  | Failure of string
+
+/// Where a session action says how it went.
+///
+/// Those actions used to write to `#eval-result`, which sits inside the
+/// Evaluate popover, a `<details>` that is closed until the viewer presses λ or
+/// `e`. A Run App that failed to build, a Purge that errored, a project switch
+/// that could not load: nothing on screen changed and nothing was said.
+///
+/// The notice is appended to `<body>`. That is outside every `<details>`, and
+/// outside `#main`, which the stream re-renders and would wipe it. Each new
+/// notice removes the one before it, and it has a dismiss button.
+module ActionResult =
+  /// Where the notice is attached. A Datastar selector, not an id.
+  let [<Literal>] Selector = "body"
+  let [<Literal>] CssClass = "action-result"
+
+  let private replacePrevious =
+    sprintf "document.querySelectorAll('.%s').forEach(function(n){if(n!==el)n.remove()})" CssClass
+
+  let private dismiss = sprintf "el.closest('.%s').remove()" CssClass
+
+  let private placement =
+    "position:fixed;bottom:2.25rem;right:1rem;max-width:min(42rem,calc(100vw - 2rem));z-index:200;"
+    + "display:flex;gap:0.5rem;align-items:flex-start;padding:0.4rem 0.6rem;"
+    + "background:var(--bg-default);border:1px solid var(--border-normal);box-shadow:0 2px 8px rgba(0,0,0,0.35);"
+
+  let render (outcome: ActionOutcome) : XmlNode =
+    let role, tone, text =
+      match outcome with
+      | ActionOutcome.Info t -> "status", "output-info", t
+      | ActionOutcome.Success t -> "status", "output-result", t
+      | ActionOutcome.Failure t -> "alert", "output-error", t
+    Elem.div
+      [ Attr.class' CssClass
+        Attr.style placement
+        Attr.create "role" role
+        testid "action-result"
+        Ds.onInit replacePrevious ]
+      [ Elem.pre
+          [ Attr.class' (sprintf "output-line %s" tone)
+            Attr.style "margin:0;white-space:pre-wrap;flex:1;" ]
+          [ textEnc text ]
+        Elem.button
+          [ Attr.class' "session-btn"
+            Attr.style "width:auto;padding:0 6px;"
+            Attr.create "aria-label" "Dismiss this message"
+            Attr.create "title" "Dismiss"
+            Ds.onClick dismiss ]
+          [ Text.raw "×" ] ]
+
+  /// Say how an action went, in a place the viewer can see.
+  let patch (ctx: HttpContext) (outcome: ActionOutcome) : Threading.Tasks.Task =
+    Falco.Datastar.Response.sseStringElementsOptions
+      ctx
+      { StarFederation.Datastar.FSharp.PatchElementsOptions.Defaults with
+          Selector = ValueSome Selector
+          PatchMode = StarFederation.Datastar.FSharp.ElementPatchMode.Append }
+      (renderNode (render outcome))
+
+/// What "stop all the others" has to tell the viewer: how many stopped, and
+/// for each that did not, which and why. It used to count the others it
+/// ASKED to stop, whether or not the stop worked.
+module StopOthersReport =
+  let summarize (results: (WorkerProtocol.SessionId * Result<string, string>) list) : ActionOutcome =
+    let failed =
+      results
+      |> List.choose (fun (id, outcome) ->
+        match outcome with
+        | Error reason -> Some (sprintf "%s (%s)" (WorkerProtocol.SessionId.value id) reason)
+        | Ok _ -> None)
+    let total = List.length results
+    let stopped = total - List.length failed
+    match total, failed with
+    | 0, _ -> ActionOutcome.Info "No other sessions to stop."
+    | _, [] -> ActionOutcome.Success (sprintf "Stopped %d other session(s)." stopped)
+    | _ -> ActionOutcome.Failure (sprintf "Stopped %d of %d other session(s). Could not stop: %s" stopped total (String.concat "; " failed))
+
 /// A route's `{id}` that is not a session id: which parameter, what arrived,
 /// and what would have been accepted.
 type MalformedSessionId = { Field: string; Received: string; Expected: string }
@@ -2290,17 +2374,11 @@ let createSessionActionHandler
           do! showSession kept
         | ViewAfterTeardown.StayOn kept -> do! refreshSessionsPanel (WorkerProtocol.SessionId.value kept)
         | ViewAfterTeardown.StayOnPicker -> do! refreshSessionsPanel ""
-      let msg, cssClass =
-        match result with
-        | Ok m -> m, "output-line output-info"
-        | Error e -> e, "output-line output-error"
-      let resultHtml =
-        Elem.div [ Attr.id DomIds.EvalResult ] [
-          Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            textEnc msg
-          ]
-        ]
-      do! ssePatchNode ctx resultHtml
+      // Said where the viewer can see it: the Evaluate popover that
+      // `#eval-result` lives in is closed unless they opened it.
+      match result with
+      | Ok message -> do! ActionResult.patch ctx (ActionOutcome.Success message)
+      | Error reason -> do! ActionResult.patch ctx (ActionOutcome.Failure reason)
     with
     | :? System.IO.IOException -> ()
     | :? System.ObjectDisposedException -> ()
@@ -2683,12 +2761,7 @@ let createCreateSessionHandler
               // session selection — no URL query parameter).
               retargetStream infra channelClientId (Some newSessionId)
               do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
-              do! ssePatchNode ctx (
-                Elem.div [ Attr.id DomIds.EvalResult ] [
-                  Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
-                    textEnc (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId))
-                  ]
-                ])
+              do! ActionResult.patch ctx (ActionOutcome.Success (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId)))
               // Clear the Discover slot only on SUCCESS — clearing it
               // unconditionally used to wipe out the Error branch's own
               // message the instant it was patched into the same slot.
@@ -3330,14 +3403,9 @@ let createEndpoints
       match result with
       | Ok sessionId ->
         a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-        do! ssePatchNode ctx (
-          Elem.div [ Attr.id DomIds.EvalResult ] [
-            Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              textEnc (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value sessionId))
-            ]
-          ])
+        do! ActionResult.patch ctx (ActionOutcome.Success (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value sessionId)))
       | Error err ->
-        do! ssePatchNode ctx (evalResultError err)
+        do! ActionResult.patch ctx (ActionOutcome.Failure err)
     })
     // Resume previous session (re-creates in same working dir)
     yield mapPostRaw "/dashboard/session/resume/{id}"
@@ -3357,7 +3425,7 @@ let createEndpoints
           match SessionProjectTarget.tryCreateMany prev.Projects with
           | Error reason ->
             Log.warn "[Dashboard] Could not reopen previous session for %s: %s" prev.WorkingDir reason
-            do! ssePatchNode ctx (evalResultError (sprintf "Could not reopen previous session: %s" reason))
+            do! ActionResult.patch ctx (ActionOutcome.Failure (sprintf "Could not reopen previous session: %s" reason))
           | Ok targets ->
             let! result = DashboardActions.createInteractive a targets prev.WorkingDir
             match result with
@@ -3367,17 +3435,12 @@ let createEndpoints
               // this page's SSE stream to it (signal-driven; no URL query param).
               retargetStream infra channelClientId (Some newSessionId)
               do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
-              do! ssePatchNode ctx (
-                Elem.div [ Attr.id DomIds.EvalResult ] [
-                  Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                    textEnc (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value newSessionId))
-                  ]
-                ])
+              do! ActionResult.patch ctx (ActionOutcome.Success (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value newSessionId)))
             | Error err ->
-              do! ssePatchNode ctx (evalResultError err)
+              do! ActionResult.patch ctx (ActionOutcome.Failure err)
         | None ->
           Response.sseStartResponse ctx |> ignore
-          do! ssePatchNode ctx (evalResultError (sprintf "Previous session '%s' not found" sessionId))
+          do! ActionResult.patch ctx (ActionOutcome.Failure (sprintf "Previous session '%s' not found" sessionId))
       })
     // TUI client API
     yield get "/api/state" (createApiStateHandler q infra)
@@ -3427,39 +3490,35 @@ let createEndpoints
           | true, v -> string v
           | _ -> ""
         routeValue "id" ctx, project)
-      (fun (sid, project) -> fun ctx -> task {
-        Response.sseStartResponse ctx |> ignore
-        let say (text: string) =
-          ssePatchNode ctx (
-            Elem.div [ Attr.id DomIds.EvalResult ] [
-              Elem.pre
-                [ Attr.class' "output-line output-result"
-                  Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ]
-                [ textEnc text ] ])
-        match WorkerProtocol.SessionId.validate sid with
-        | Error _ -> do! say (sprintf "Not a session id: %s" sid)
-        | Ok sessionId ->
+      (fun (sid, project) ->
+        SessionIdRoute.handle (fun sessionId -> fun ctx -> task {
+          Response.sseStartResponse ctx |> ignore
+          let say (outcome: ActionOutcome) = ActionResult.patch ctx outcome
           let! sessions = q.GetAllSessions ()
           match sessions |> List.tryFind (fun s -> s.Id = sessionId) with
-          | None -> do! say (sprintf "Session '%s' is no longer running." sid)
+          | None -> do! say (ActionOutcome.Failure (sprintf "Session '%s' is no longer running." sid))
           | Some existing ->
             let dir = existing.WorkingDirectory
             // Same containment discipline as every other session-create path: a
             // project must resolve inside the session's own directory.
             match DashboardTypes.resolveSessionProjects dir project with
-            | Error err -> do! say (SageFsError.describe err)
+            | Error err -> do! say (ActionOutcome.Failure (SageFsError.describe err))
             | Ok resolved ->
-              let targets = SessionProjectTarget.tryCreateMany resolved |> Result.defaultValue [ SessionProjectTarget.Bare ]
-              do! say (sprintf "Loading %s… (the previous session's REPL bindings are discarded)" project)
-              let! created = DashboardActions.createInteractive a targets dir
-              match created with
-              | Error err -> do! say (sprintf "Could not load %s: %s" project err)
-              | Ok newId ->
-                let! _ = a.StopSession sessionId
-                let! _ = a.SwitchSession newId
-                a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-                do! say (sprintf "Session '%s' loaded %s." (WorkerProtocol.SessionId.value newId) project)
-      })
+              match SessionProjectTarget.tryCreateMany resolved with
+              | Error reason ->
+                // Never load a bare REPL in place of the project that was asked for.
+                do! say (ActionOutcome.Failure (sprintf "Could not load %s: %s" project reason))
+              | Ok targets ->
+                do! say (ActionOutcome.Info (sprintf "Loading %s… (the previous session's REPL bindings are discarded)" project))
+                let! created = DashboardActions.createInteractive a targets dir
+                match created with
+                | Error err -> do! say (ActionOutcome.Failure (sprintf "Could not load %s: %s" project err))
+                | Ok newId ->
+                  let! _ = a.StopSession sessionId
+                  let! _ = a.SwitchSession newId
+                  a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+                  do! say (ActionOutcome.Success (sprintf "Session '%s' loaded %s." (WorkerProtocol.SessionId.value newId) project))
+        }) sid)
     yield mapPostRaw "/dashboard/session/stop/{id}"
       (routeValue "id")
       (SessionIdRoute.handle (createSessionActionHandler q infra a.StopSession true))
@@ -3474,28 +3533,22 @@ let createEndpoints
         match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
         | true, prop -> prop.GetString()
         | _ -> ""
-      let keepId =
-        match String.IsNullOrEmpty viewingId with
-        | false ->
-          match WorkerProtocol.SessionId.validate viewingId with
-          | Ok sid -> sid
-          | Error _ -> sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
-        | true -> sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
-      let others =
-        sessions
-        |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Id <> keepId)
-      for s in others do
-        let! _ = a.StopSession s.Id
-        ()
-      a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
       Response.sseStartResponse ctx |> ignore
-      let resultHtml =
-        Elem.div [ Attr.id DomIds.EvalResult ] [
-          Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            textEnc (sprintf "Stopped %d other session(s)" others.Length)
-          ]
-        ]
-      do! ssePatchNode ctx resultHtml
+      match WorkerProtocol.SessionId.validate viewingId with
+      | Error _ ->
+        // Without a session in view there is nothing to keep, and guessing one
+        // (the first in the list) would stop the session the viewer wanted.
+        do! ActionResult.patch ctx (ActionOutcome.Failure "Stop others needs a session in view to keep. Open one first; nothing was stopped.")
+      | Ok keepId ->
+        let others =
+          sessions
+          |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Id <> keepId)
+        let results = ResizeArray<WorkerProtocol.SessionId * Result<string, string>>()
+        for s in others do
+          let! stopped = a.StopSession s.Id
+          results.Add((s.Id, stopped))
+        a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+        do! ActionResult.patch ctx (StopOthersReport.summarize (List.ofSeq results))
     })
     yield mapPostRaw "/dashboard/session/dispose/{id}"
       (routeValue "id")

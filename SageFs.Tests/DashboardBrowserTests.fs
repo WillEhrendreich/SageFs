@@ -914,6 +914,10 @@ module private NoSessionLanding =
         return sid = target1
       })
       Expect.isTrue autoAdvanced (sprintf "[stop 1/2] stopping the viewed session auto-advanced to the remaining session %s" target1)
+      // The stop's outcome is said where the viewer can see it, not in the
+      // Evaluate popover, which is closed unless they opened it.
+      do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator("[data-testid='action-result']")) 1
+      do! PlaywrightExpect.isVisibleAsync (page.Locator("[data-testid='action-result']")) "[stop 1/2] the stop's outcome is visible"
       do! PlaywrightExpect.isHiddenAsync picker "[stop 1/2] session picker stays hidden — one session remains"
       do! assertPermanentChrome page "stop 1/2: one session remains after auto-advance"
 
