@@ -67,6 +67,24 @@ let PausedSignal = "dsPaused"
 [<Literal>]
 let ProbeFailsSignal = "dsProbeFails"
 
+/// The daemon build this page was served by. Seeded by the shell and never patched.
+[<Literal>]
+let ShellVersionSignal = "dsShellVersion"
+
+/// The daemon build that sent the latest heartbeat. Patched with every heartbeat.
+[<Literal>]
+let DaemonVersionSignal = "dsDaemonVersion"
+
+/// Where a tab remembers the build it already reloaded for.
+[<Literal>]
+let ReloadedForKey = "sagefs.reloadedFor"
+
+/// How many times Datastar retries the stream before it stops. Datastar's own default.
+let streamRetryMaxCount = 10
+
+/// The effect that reloads the page when the daemon's build is not the shell's.
+let versionChangeEffectExpr () = ""
+
 /// The route the page asks "are you there?". The dashboard is served by the daemon, so any HTTP answer is
 /// proof of life, whatever its status.
 let probeRoute = "/api/daemon-info"

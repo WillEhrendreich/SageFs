@@ -170,6 +170,7 @@
         <Compile Include="CellGridTests.fs" />
         <Compile Include="ScreenTests.fs" />
         <Compile Include="DashboardSnapshotTests.fs" />
+        <Compile Include="DashboardStreamResilienceTests.fs" />
         <Compile Include="DashboardDiscoverUxTests.fs" />
         <Compile Include="NewSessionDialogTests.fs" />
         <Compile Include="NewSessionDialogViewTests.fs" />
@@ -203,7 +204,7 @@
         <Compile Include="BrowserScreenshotTests.fs" />
         <Compile Include="LiveBindingsBrowserTests.fs" />
         <Compile Include="OutputPanelLayoutBrowserTests.fs" />
-        <Compile Include="DashboardSessionSwitchOutputBrowserTests.fs" />
+        <Compile Include="DashboardStreamResilienceBrowserTests.fs" />        <Compile Include="DashboardSessionSwitchOutputBrowserTests.fs" />
         <Compile Include="DashboardLiveBindingsDockBrowserTests.fs" />
         <Compile Include="NewSessionDialogBrowserTests.fs" />
         <!-- The live-bindings knob: a step writes a file through the nudge door, and the file's bytes are the proof. -->
