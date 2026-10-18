@@ -24,7 +24,13 @@ loop explicitly:
 6. `hard_reset_fsi_session` with `rebuild=true`
 7. re-verify, then commit
 8. `dotnet` only as the final gate, run in the BACKGROUND — do not block on it
-9. report REPL friction instead of silently falling back
+9. if the REPL will not load a session, say so in the report with the exact error. In
+   the SageFs repo itself that is a bug in the thing being worked on: fix it or file
+   it with the paths it names before going on, do not build around it. Anywhere else
+   report it and use `dotnet` for that one step only. Never write "use the REPL where
+   it works, otherwise fall back" into a brief: it is a permission slip and agents
+   take it. Ask for the actual `send_fsharp_code` submissions in the report as the
+   evidence the loop was used; "I used dotnet build" is not that evidence
 10. edit with exact editor calls, never `sed`/python/bulk regex; prove the
     change in the REPL before persisting it
 11. finish by removing nothing you do not own, and report your worktree path

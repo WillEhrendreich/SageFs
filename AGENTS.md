@@ -131,6 +131,12 @@ Working on SageFs itself has two extra catches:
   bug and report the paths it names. SageFs.Core, SageFs.Host and SageFs
   multi-target net10.0;net11.0, and 0.6.782 resolved those references wrong,
   so a session on SageFs.Tests faulted even when everything was built.
+  **In this repo that bug is yours to fix, not to route around.** On 2026-10-18
+  about twenty agents hit it in fresh worktrees (#153), took the `dotnet build`
+  escape hatch, and reported it, each correctly by the letter of the skill, and
+  the hatch quietly became the normal path. So if a session on this repo will
+  not load, stop and fix the cause (or file it with the exact paths) before you
+  carry on with the task; do not build around it.
 - **The daemon runs the build you are working against, always.** A lagging daemon costs signal: sessions
   refuse on a version mismatch, `hard_reset_fsi_session rebuild=true` fails on bugs already fixed, and a
   merged fix that is not running looks broken. Run `dotnet fsi scripts/install-local.fsx -- --status` at the start of

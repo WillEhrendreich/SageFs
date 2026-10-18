@@ -161,7 +161,13 @@ that happens:
 3. If it still fights you, use `dotnet` for **that one step only** — after
    taking a lease for it if SageFs is up (see leases.md) — and say so in your
    report with the error from step 1. That report is how SageFs gets fixed.
-   Silent fallbacks are how it stays broken.
+   Silent fallbacks are how it stays broken. **In the SageFs repo itself this
+   is different:** a session that will not load there (for example "Not all DLLs
+   are found" in a fresh worktree) is a defect in the code you are working on,
+   so fix it or file it with the exact paths before you carry on, instead of
+   routing around it. On 2026-10-18 about twenty agents did route around exactly
+   that, and each one's fallback was "correct" by this section; the escape hatch
+   had quietly become the normal path.
 4. **Never spin up your own daemon to get around a busy one.** A second
    daemon spends the same machine memory the first one is trying to protect,
    completely outside anyone's accounting. Only spawn a second daemon when
