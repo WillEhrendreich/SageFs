@@ -23,9 +23,12 @@ type private StartOutcome =
 let private firstOutcome (printed: string) : Task<StartOutcome> =
   task {
     let script = Path.Combine(Path.GetTempPath(), sprintf "fake-port-worker-%s.sh" (Guid.NewGuid().ToString "N"))
-    File.WriteAllText(script, sprintf "#!/bin/sh\necho %s\nsleep %d\n" printed (int TestTimeouts.readyBudget.TotalSeconds))
-    File.SetUnixFileMode(script, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
-    let psi = ProcessStartInfo(script)
+    File.WriteAllText(script, sprintf "echo %s\nsleep %d\n" printed (int TestTimeouts.readyBudget.TotalSeconds))
+    // Run it THROUGH /bin/sh rather than exec'ing the file. Executing a file this test just wrote races with every other
+    // test in the parallel suite that forks: a child can inherit the still-open write handle and the exec then fails with
+    // ETXTBSY ("Text file busy"), which errored this case in 10 ms in the first full run of the merged tree.
+    let psi = ProcessStartInfo("/bin/sh")
+    psi.ArgumentList.Add script
     psi.UseShellExecute <- false
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
