@@ -182,4 +182,57 @@ let multiTargetReferenceOutcomeTests =
         | false -> Http.killDaemon daemon
         try Directory.Delete(root, true) with _ -> ()
     }
+
+    testTask "WHY: a session ON the multi-targeted library, with only its net11.0 build on disk, reaches Ready and runs that build (issue 153)" {
+      let root = Directory.CreateTempSubdirectory("sagefs-multitfm-root-").FullName
+      let mutable daemon : Process = null
+      let mutable client : HttpClient = null
+      try
+        let appProjectPath = writeFixture root
+        let libDir = Path.Combine(root, "Lib")
+        let libProjectPath = Path.Combine(libDir, "Lib.fsproj")
+        ignore appProjectPath
+        // What an agent in a fresh worktree has after building a net11.0 consumer:
+        // the library's net11.0 output and nothing else. Ionide loads the library
+        // at its FIRST framework, net10.0, which was never built.
+        Http.runProcessExpectSuccess "dotnet" libDir [ "build"; libProjectPath; "--nologo"; "-v:q"; "-f"; "net11.0" ]
+        File.Exists(Path.Combine(libDir, "bin", "Debug", "net11.0", "Lib.dll"))
+        |> Expect.isTrue "the net11.0 build exists"
+        Directory.Exists(Path.Combine(libDir, "bin", "Debug", "net10.0"))
+        |> Expect.isFalse "no net10.0 folder exists, which is the one SageFs used to require"
+
+        let port = Http.reserveLoopbackPort ()
+        let! proc, http = Http.startDaemonWithArgs port libDir [ "--no-resume" ]
+        daemon <- proc
+        client <- http
+
+        let! createStatus, createBody = Http.createSession http libProjectPath libDir
+        createStatus |> Expect.equal (sprintf "session create is accepted (%s)" createBody) 200
+
+        let! settled = waitForSettled http libDir TestTimeouts.multiTargetSettle
+        match settled with
+        | Settled.Ready -> ()
+        | Settled.Faulted body ->
+          failtestf "the session faulted instead of reaching Ready (issue 153, 'Not all DLLs are found'). Sessions: %s" body
+        | Settled.TimedOut body ->
+          failtestf "the session neither reached Ready nor faulted within the budget. Sessions: %s" body
+
+        let! execStatus, execBody =
+          Http.postJson http "/exec" {| code = "Lib.Marker.greet \"repl\";;"; working_directory = libDir |}
+        execStatus |> Expect.equal (sprintf "/exec reaches the session (%s)" execBody) 200
+        let succeeded, result = execOutcome execBody
+        succeeded |> Expect.isTrue (sprintf "the library's own code evaluates (%s)" execBody)
+        result
+        |> Expect.stringContains
+             "the session loaded the only build that exists, net11.0"
+             "hello repl from lib-net11.0"
+      finally
+        match isNull client with
+        | true -> ()
+        | false -> client.Dispose()
+        match isNull daemon with
+        | true -> ()
+        | false -> Http.killDaemon daemon
+        try Directory.Delete(root, true) with _ -> ()
+    }
   ]

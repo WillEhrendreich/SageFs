@@ -407,6 +407,182 @@ let resolveFreshestConfigOutput (dllPath: string) : string option =
   try chooseFreshestConfigOutputWith File.Exists File.GetLastWriteTimeUtc dllPath
   with _ -> None
 
+/// Which framework folder of a multi-targeted project a session loads, for the
+/// projects the user asked for (issue #153).
+///
+/// Ionide loads a project that declares `<TargetFrameworks>net10.0;net11.0</TargetFrameworks>`
+/// at the FIRST framework. SageFs.Core is that shape, and so is every project in the
+/// shipped tool closure. After `dotnet build SageFs.Tests` only net11.0 output exists,
+/// so a session on SageFs.Core looked in `bin/<config>/net10.0` and faulted with "Not
+/// all DLLs are found" on a project that was built. That is the one thing that kept
+/// agents out of the REPL on this repo, and they fell back to 8 to 15 minute builds.
+///
+/// The rule: from the frameworks the project declares, take the best one this host can
+/// load (never newer than the host) that has a build on disk. Prefer the host's own
+/// framework, then the highest older one. Fail only when none has a build, and then
+/// say every folder that was checked, which frameworks would be accepted, and the
+/// command that builds one. Everything here is pure: existence and write times are
+/// passed in.
+module FrameworkPicker =
+
+  let netPrefix = "net"
+  let netStandardPrefix = "netstandard"
+  /// What the build hint tells you to build. A session accepts either configuration.
+  let recommendedConfiguration = "Release"
+
+  /// A target framework moniker as far as loading is concerned. A platform suffix
+  /// (`net10.0-windows`), .NET Framework (`net48`) and `netcoreapp` are
+  /// `Unrecognised`: this host cannot say they load, so they are never chosen.
+  [<RequireQualifiedAccess>]
+  type Moniker =
+    | Net of major: int * minor: int
+    | NetStandard of major: int * minor: int
+    | Unrecognised of string
+
+  [<RequireQualifiedAccess>]
+  module Moniker =
+    let parse (raw: string) : Moniker =
+      let trimmed = raw.Trim()
+      let versionAfter (prefix: string) =
+        match trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) with
+        | false -> None
+        | true ->
+          match Version.TryParse(trimmed.Substring prefix.Length) with
+          | true, v -> Some (v.Major, v.Minor)
+          | false, _ -> None
+      match versionAfter netStandardPrefix with
+      | Some (major, minor) -> Moniker.NetStandard (major, minor)
+      | None ->
+        match versionAfter netPrefix with
+        | Some (major, minor) when major >= 5 -> Moniker.Net (major, minor)
+        | _ -> Moniker.Unrecognised trimmed
+
+  /// The declared frameworks a host of this major version can load, best first:
+  /// `net` at or below the host, highest first (so the host's own framework leads),
+  /// then `netstandard`, highest first. A newer framework is dropped, since it cannot
+  /// load, and so is anything unrecognised.
+  let preference (hostMajor: int) (declared: string list) : string list =
+    let rank (raw: string) =
+      match Moniker.parse raw with
+      | Moniker.Net (major, minor) when major <= hostMajor -> Some (0, -major, -minor)
+      | Moniker.NetStandard (major, minor) -> Some (1, -major, -minor)
+      | Moniker.Net _
+      | Moniker.Unrecognised _ -> None
+    declared
+    |> List.distinct
+    |> List.choose (fun raw -> rank raw |> Option.map (fun r -> r, raw))
+    |> List.sortBy fst
+    |> List.map snd
+
+  [<RequireQualifiedAccess>]
+  type Pick =
+    /// The framework to load and the freshest build output of it.
+    | Chosen of tfm: string * dllPath: string
+    /// Frameworks this host can load exist, but none has a build. Every output path
+    /// that was checked, and the frameworks that would be accepted, best first.
+    | NoneBuilt of lookedIn: string list * wouldAccept: string list
+    /// The project declares frameworks, and this host can load none of them.
+    | NoLoadableFramework of declared: string list * hostMajor: int
+
+  /// Where the same project's output for `tfm` would be, in both configurations,
+  /// derived from the TargetPath Ionide reported for `evaluatedAt`. A layout with no
+  /// framework folder (Arcade's flat artifacts/bin) can only be translated to the
+  /// framework it was evaluated at, so any other framework has no known output.
+  let outputsFor (targetPath: string) (evaluatedAt: string) (tfm: string) : string list =
+    let dir = Path.GetDirectoryName targetPath
+    let isEvaluatedFramework = String.Equals(tfm, evaluatedAt, StringComparison.OrdinalIgnoreCase)
+    match String.Equals(Path.GetFileName dir, evaluatedAt, StringComparison.OrdinalIgnoreCase) with
+    | true ->
+      let there = Path.Combine(Path.GetDirectoryName dir, tfm, Path.GetFileName targetPath)
+      there :: (siblingConfigPath there |> Option.toList)
+    | false ->
+      match isEvaluatedFramework with
+      | true -> targetPath :: (siblingConfigPath targetPath |> Option.toList)
+      | false -> []
+
+  /// The decision. The first framework in `preference` with any output wins, and
+  /// within it the freshest output across configurations, so a stale Debug build
+  /// never shadows a fresh Release one.
+  let choose
+      (hostMajor: int)
+      (declared: string list)
+      (outputsOf: string -> string list)
+      (exists: string -> bool)
+      (writeTimeUtc: string -> DateTime) : Pick =
+    match preference hostMajor declared with
+    | [] -> Pick.NoLoadableFramework (declared, hostMajor)
+    | accepted ->
+      let built =
+        accepted
+        |> List.tryPick (fun tfm ->
+          match outputsOf tfm |> List.filter exists with
+          | [] -> None
+          | present -> Some (tfm, present |> List.maxBy writeTimeUtc))
+      match built with
+      | Some (tfm, dll) -> Pick.Chosen (tfm, dll)
+      | None -> Pick.NoneBuilt (accepted |> List.collect outputsOf, accepted)
+
+  /// One message per outcome. `NoneBuilt` names every folder checked, the frameworks
+  /// it would accept in order, and the exact command that builds the first of them.
+  let describe (projectFile: string) (pick: Pick) : string =
+    let projectName = Path.GetFileName projectFile
+    match pick with
+    | Pick.Chosen (tfm, dll) ->
+      sprintf "%s loads from its %s build: %s" projectName tfm dll
+    | Pick.NoLoadableFramework (declared, hostMajor) ->
+      sprintf
+        "%s targets %s, and none of those can load into this .NET %d host (a framework newer than the host, or one this host cannot recognise, is not loadable)."
+        projectName (String.concat ", " declared) hostMajor
+    | Pick.NoneBuilt (lookedIn, wouldAccept) ->
+      let folders =
+        lookedIn
+        |> List.map Path.GetDirectoryName
+        |> List.distinct
+        |> List.map (sprintf "      %s")
+        |> String.concat "\n"
+      let preferred = List.head wouldAccept
+      sprintf
+        "%s has no build output for any framework this host can load. Looked in these framework folders:\n%s\nIt would accept %s (in that order). Build one with: dotnet build %s -c %s -f %s"
+        projectName folders (String.concat ", then " wouldAccept) projectFile recommendedConfiguration preferred
+
+  /// A project the user asked for, as Ionide loaded it.
+  type Root = {
+    ProjectFile: string
+    EvaluatedAt: string
+    TargetPath: string
+    Declared: string list
+  }
+
+  /// The roots Ionide loaded at the wrong framework, with the framework to reload
+  /// each at. A project that declares fewer than two frameworks has nothing to
+  /// choose between, and one with no build for any acceptable framework is left
+  /// alone so the missing-DLL message can say where it looked.
+  let reloads
+      (hostMajor: int)
+      (exists: string -> bool)
+      (writeTimeUtc: string -> DateTime)
+      (roots: Root list) : (string * string) list =
+    roots
+    |> List.choose (fun root ->
+      match List.distinct root.Declared with
+      | []
+      | [ _ ] -> None
+      | declared ->
+        match choose hostMajor declared (outputsFor root.TargetPath root.EvaluatedAt) exists writeTimeUtc with
+        | Pick.Chosen (tfm, _) when not (String.Equals(tfm, root.EvaluatedAt, StringComparison.OrdinalIgnoreCase)) ->
+          Some (root.ProjectFile, tfm)
+        | Pick.Chosen _
+        | Pick.NoneBuilt _
+        | Pick.NoLoadableFramework _ -> None)
+
+  /// The frameworks an evaluated project declares in `<TargetFrameworks>`, empty for
+  /// a single-framework project (MSBuild only has the plural property when it is set).
+  let declaredFrameworksOf (po: ProjectOptions) : string list =
+    po.AllProperties.TryFind "TargetFrameworks"
+    |> Option.defaultValue Set.empty
+    |> Seq.collect (fun value -> value.Split(';', StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries))
+    |> Seq.toList
+
 /// Which target framework each referenced project has to be loaded at.
 ///
 /// Ionide loads every project in the closure on its own, and for a project with
@@ -812,7 +988,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
         | None -> [] // unreachable in practice: loadedProjects is non-empty only when Init.init ran
         | Some toolsPath ->
           logger.LogInfo (
-            sprintf "  Reloading %s at %s (the TFM the referencing project builds it at)"
+            sprintf "  Reloading %s at %s (the framework that has a build, or that the referencing project builds it at)"
               (paths |> List.map Path.GetFileName |> String.concat ", ") tfm)
           try
             (WorkspaceLoader.Create(toolsPath, [ ("TargetFramework", tfm) ])).LoadProjects paths
@@ -820,8 +996,36 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
           with ex ->
             logger.LogWarning (sprintf "  Reloading at %s failed: %s" tfm ex.Message)
             []
+      // Then the projects the user asked for. Ionide loaded a multi-targeted one at
+      // its first framework, and nothing references it to say otherwise, so it gets
+      // the best framework this host can load that has a build (FrameworkPicker).
+      let atRootFrameworks =
+        let rootFiles =
+          loadedProjects
+          |> List.map ReferenceFrameworks.ofProjectOptions
+          |> ReferenceFrameworks.roots
+          |> List.map _.ProjectFile
+          |> Set.ofList
+        let roots : FrameworkPicker.Root list =
+          loadedProjects
+          |> List.filter (fun po -> rootFiles.Contains (Path.GetFullPath po.ProjectFileName))
+          |> List.map (fun po ->
+            { ProjectFile = Path.GetFullPath po.ProjectFileName
+              EvaluatedAt = po.TargetFramework
+              TargetPath = po.TargetPath
+              Declared = FrameworkPicker.declaredFrameworksOf po })
+        let wanted = FrameworkPicker.reloads hostMajor File.Exists File.GetLastWriteTimeUtc roots
+        let reloaded =
+          wanted
+          |> List.groupBy snd
+          |> List.collect (fun (tfm, group) -> reloadAt tfm (group |> List.map fst))
+          |> List.map (fun po -> Path.GetFullPath po.ProjectFileName, po)
+          |> Map.ofList
+        loadedProjects
+        |> List.map (fun po ->
+          reloaded.TryFind (Path.GetFullPath po.ProjectFileName) |> Option.defaultValue po)
       let atConsumerFrameworks =
-        ReferenceFrameworks.settle ReferenceFrameworks.ofProjectOptions reloadAt loadedProjects
+        ReferenceFrameworks.settle ReferenceFrameworks.ofProjectOptions reloadAt atRootFrameworks
       let loadedProjects' =
         atConsumerFrameworks
         |> Seq.map (fun po ->
@@ -1183,13 +1387,27 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
       orderedProjects
       |> List.map (fun po -> po.TargetPath, MissingDllSource.ProjectOutput (po.ProjectFileName, po.TargetFramework))
       |> Map.ofList
-    missing
-    |> List.map (fun dll ->
-      { Dll = dll
-        LookedIn = dll :: (siblingConfigPath dll |> Option.toList)
-        Source = producedBy.TryFind dll |> Option.defaultValue MissingDllSource.Reference })
-    |> describeMissingDlls
-    |> failwith
+    let message =
+      missing
+      |> List.map (fun dll ->
+        { Dll = dll
+          LookedIn = dll :: (siblingConfigPath dll |> Option.toList)
+          Source = producedBy.TryFind dll |> Option.defaultValue MissingDllSource.Reference })
+      |> describeMissingDlls
+    // A multi-targeted project with no build for any framework this host can load:
+    // say every framework folder checked, which would be accepted, and the build command.
+    let frameworkAdvice =
+      orderedProjects
+      |> List.filter (fun po -> List.contains po.TargetPath missing)
+      |> List.choose (fun po ->
+        match FrameworkPicker.declaredFrameworksOf po with
+        | []
+        | [ _ ] -> None
+        | declared ->
+          match FrameworkPicker.choose Environment.Version.Major declared (FrameworkPicker.outputsFor po.TargetPath po.TargetFramework) File.Exists File.GetLastWriteTimeUtc with
+          | FrameworkPicker.Pick.Chosen _ -> None
+          | unbuilt -> Some (FrameworkPicker.describe po.ProjectFileName unbuilt))
+    failwith (String.concat "\n" (message :: frameworkAdvice))
   // Flags from project OtherOptions that FSI should inherit for source-level
   // compatibility (e.g. --checknulls+ from <Nullable>enable</Nullable>).
   // We explicitly exclude --warnaserror (too strict for REPL) and --optimize
