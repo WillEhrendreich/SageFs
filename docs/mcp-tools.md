@@ -53,6 +53,18 @@ again. If you are not being asked, that is why. `SAGEFS_CONFIRM_ANSWER_SECONDS`
 raises the wait if you read slowly; running out refuses the call rather than
 letting it through.
 
+A refusal says plainly that nothing was done and the session is still running.
+A client that advertises elicitation but cannot answer (a headless agent, or a
+UI whose prompt never takes an answer) waits the full 60 seconds and then
+gets "needs a person to confirm it, and no answer came within 00:01:00", with
+the way out spelled out. There is no setting that turns the prompt off, so a
+caller with nobody to answer uses the daemon's HTTP API on the same port, which
+does not ask: `POST /api/sessions/stop` with `{"sessionId": "<id>"}` for
+`stop_session`, `POST /reset` and `POST /hard-reset` for the two resets,
+`POST /api/sessions/<id>/workflow`, `POST /api/sessions/<id>/stop-app` and
+`POST /api/local-data/clear?store=<store>` for the rest. (`sagefs stop` stops
+the whole daemon, not one session.)
+
 The full advertised set is 70 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those

@@ -62,6 +62,9 @@ module TestTimeouts =
   /// finishes first and a slow start does not trip it, short enough that the case does not wait for the very
   /// thing it proves is cut off. The fake it is paired with outlives it by a few seconds.
   let stalledWorkBound = secs 2.
+  /// The wait a confirmation test gives a client that never answers. It has to EXPIRE for the case to pass, so it
+  /// is short; the production wait is `SageFs.Timeouts.confirmationAnswer`, a person reading a sentence.
+  let confirmationBudget = ms 150.
 
   // Settles: a short, fixed window where nothing can be awaited.
 
