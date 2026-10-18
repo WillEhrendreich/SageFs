@@ -292,7 +292,7 @@ Live testing is *also* a per-session toggle that works in any of the three workf
 
 Use your editor's command to switch workflows:
 
-- **Neovim**: not from the editor yet. `:SageFsWorkflow` takes no argument and shows the current workflow only. Use the dashboard or MCP.
+- **Neovim**: `:SageFsWorkflow [name]` with `interactive`, `livetesting` or `hotreload`. With no name it opens a picker. It restarts the same session id in place, like VS Code and the dashboard.
 - **VS Code**: Command Palette → `SageFs: Switch Workflow`. This hits `POST /api/sessions/{sid}/workflow` directly, which restarts the same session id in place.
 - **MCP**: `switch_workflow` with `target` = `repl` | `livetesting` | `live` (⚠️ `live` means Hot Reload, not live testing; the alias predates the third workflow). This one creates a *new* session in the target workflow and stops the old one.
 - **Web dashboard**: a real dropdown next to your session, not a read-only badge. Pick a workflow and it switches, restarting the same session id in place, same as VS Code.
@@ -369,7 +369,7 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | **Coverage gutters** | ✅ | ✅ | — | — |
 | **Failure narratives** | ✅ | ✅ | ✅ | ✅ |
 | **Test source-jump** | ✅ | ✅ | — | — |
-| **Debug a failing test** | ✅ | — | — | — |
+| **Debug a failing test** | ✅ | ✅ | — | — |
 | Test panel | ✅ | ✅ | ✅ | ✅ |
 | Test policy controls | ✅ | ✅ | ✅ | — |
 | Type explorer | ✅ | ✅ | — | — |
