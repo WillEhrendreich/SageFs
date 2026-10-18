@@ -931,6 +931,15 @@ module DetourTally =
       tally.FailedCopies
       tally.UnconfirmedCopies
 
+  /// Writes the eval's one line, if it attempted any detour. A Debug line when every copy was confirmed. A Warning
+  /// when the canary could not vouch for a copy: the plain-function path no longer writes a line per such copy, so
+  /// this is the only place a user at default log levels hears that a detour could not be verified.
+  let write (logger: ILogger) (tally: DetourTally) (elapsedMilliseconds: int64) : unit =
+    match tally.Copies, tally.UnconfirmedCopies with
+    | 0, _ -> ()
+    | _, 0 -> logger.LogDebug (describe tally elapsedMilliseconds)
+    | _ -> logger.LogWarning (describe tally elapsedMilliseconds)
+
 let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan: DetourPlan) (generics: GenericUnit list) : DetourReport =
   let started = Diagnostics.Stopwatch.GetTimestamp()
   // One stub per new body, shared by every older copy that is pointed at it.
@@ -1169,9 +1178,7 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
            | [] -> []
            | _ -> List.zip unit.Legs legs |> List.map (fun ((older, _), (applied, evidence)) -> older.FullName, applied, evidence)))
     )
-  match tally.Copies with
-  | 0 -> ()
-  | _ -> logger.LogDebug(DetourTally.describe tally (int64 (Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds)))
+  DetourTally.write logger tally (int64 (Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds))
 
   { Redirected = (redirectedFunctions @ redirectedBindings) |> List.distinct
     ReachedRunningProcess = reachedRunningProcess

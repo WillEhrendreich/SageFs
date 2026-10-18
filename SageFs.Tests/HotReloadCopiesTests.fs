@@ -59,6 +59,37 @@ let private apply (copies: int) : DetourReport * string list =
   let report = applyDetourPlan (logger :> SageFs.Utils.ILogger) Map.empty (planOf copies) []
   report, logger.Calls
 
+/// How loudly a line was written.
+[<RequireQualifiedAccess>]
+type LogLevel =
+  | Info
+  | Debug
+  | Warning
+  | Error
+
+/// A logger that keeps every call with the level it was written at.
+type LeveledLogger() =
+  let calls = Collections.Generic.List<LogLevel * string>()
+  member _.Calls = lock calls (fun () -> List.ofSeq calls)
+  interface SageFs.Utils.ILogger with
+    member _.LogInfo m = lock calls (fun () -> calls.Add (LogLevel.Info, m))
+    member _.LogDebug m = lock calls (fun () -> calls.Add (LogLevel.Debug, m))
+    member _.LogWarning m = lock calls (fun () -> calls.Add (LogLevel.Warning, m))
+    member _.LogError m = lock calls (fun () -> calls.Add (LogLevel.Error, m))
+
+/// What an eval's summary line writes, and at which level, for a tally of `confirmed` copies the canary vouched for
+/// and `unconfirmed` it could not read.
+let summaryCalls (confirmed: int) (unconfirmed: int) : (LogLevel * string) list =
+  let logger = LeveledLogger()
+  let tally =
+    { DetourTally.empty with
+        Copies = confirmed + unconfirmed
+        DistinctMethods = 1
+        RedirectedCopies = confirmed + unconfirmed
+        UnconfirmedCopies = unconfirmed }
+  DetourTally.write (logger :> SageFs.Utils.ILogger) tally 3L
+  logger.Calls
+
 let private sessionLengths = [ 1; 5; 40 ]
 
 [<Tests>]
@@ -103,4 +134,28 @@ let copiesTests =
       olders
       |> List.map (fun older -> (List.head older).Invoke(null, [||]))
       |> Expect.equal "every old copy now answers as the newest" (List.replicate 5 (box 6))
+  ]
+
+[<Tests>]
+let summaryLevelTests =
+  testList "HotReloadCore writes its one summary line at the level the canary's confidence earns" [
+    testCase "WHY — an eval whose copies were all confirmed writes its summary at Debug, because a clean reload is not news" <| fun _ ->
+      summaryCalls 3 0
+      |> List.map fst
+      |> Expect.equal "one Debug line and nothing louder" [ LogLevel.Debug ]
+
+    testCase "WHY — an eval with copies the canary could not read writes its summary at Warning, because at default levels it would otherwise say nothing about detours it cannot verify" <| fun _ ->
+      summaryCalls 2 1
+      |> Expect.all "the summary is a Warning" (fun (level, _) -> level = LogLevel.Warning)
+      summaryCalls 2 1
+      |> List.length
+      |> Expect.equal "exactly one summary line per eval" 1
+
+    testCase "WHY — the Warning summary names the copies without a canary reading, because that count is the reason for the warning" <| fun _ ->
+      summaryCalls 0 4
+      |> List.map snd
+      |> Expect.all "it carries the unconfirmed count" (fun line -> line.Contains "4 redirected without a canary reading")
+
+    testCase "WHY — an eval that attempted no detour writes nothing" <| fun _ ->
+      summaryCalls 0 0 |> Expect.isEmpty "no copies, no line"
   ]
