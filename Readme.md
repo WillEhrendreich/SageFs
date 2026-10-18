@@ -173,7 +173,7 @@ SageFs runs in the foreground, streaming daemon logs to that terminal. It's not 
 
 > No project? Just run `sagefs` with no arguments. The daemon starts bare and waits for clients. Your editor will create sessions on demand.
 
-SageFs writes `<project>/.SageFs/warmup-replay-cache.json` the first time it warms a project up, and a `.gitignore` right beside it. That cache is machine-generated and ignores itself, so your `git status` stays clean. `config.fsx` and `init.fsx` in the same folder are yours. Those two you commit.
+SageFs writes `<project>/.SageFs/warmup-replay-cache.json` the first time it warms a project up, and a `.gitignore` right beside it. That cache is machine-generated, and the `.gitignore` ignores both the cache and itself, so your `git status` stays clean. If that folder already has a `.gitignore`, SageFs adds the cache to it and leaves the rest of the file alone. `config.fsx` and `init.fsx` are yours. Those two you commit.
 
 ### Run it as a service (Linux)
 

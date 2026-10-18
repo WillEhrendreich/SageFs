@@ -70,6 +70,22 @@ let tests =
         let lines = ignoredLines ignore'
         lines |> Expect.contains "their line survives" "local-notes.txt"
         lines |> Expect.contains "and the cache is ignored" cacheFileName
+        List.contains ".gitignore" lines |> Expect.isFalse "their .gitignore is not told to ignore itself"
+
+    testCase "WHY — a .gitignore SageFs creates ignores itself too, because an untracked .gitignore shows in git status just as the cache would" <| fun _ ->
+      withProjectDir <| fun dir ->
+        let sageFsDir = saveUnder dir
+        ignoredLines (Path.Combine(sageFsDir, ".gitignore"))
+        |> Expect.contains "the generated .gitignore lists itself" ".gitignore"
+
+    testCase "WHY — warming up a project leaves a real repository's git status clean, as the README says" <| fun _ ->
+      withProjectDir <| fun dir ->
+        HygieneSandbox.git dir [ "init"; "-b"; "master" ] |> ignore
+        HygieneSandbox.write (Path.Combine(dir, "Dev", "Dev.fsproj")) "<Project />"
+        HygieneSandbox.commitAll dir "init"
+        saveUnder (Path.Combine(dir, "Dev")) |> ignore
+        HygieneSandbox.git dir [ "status"; "--porcelain"; "--untracked-files=all" ]
+        |> Expect.equal "nothing untracked after the cache is written" ""
 
     testCase "WHY — a .gitignore that already ignores the cache is left byte for byte alone" <| fun _ ->
       withProjectDir <| fun dir ->

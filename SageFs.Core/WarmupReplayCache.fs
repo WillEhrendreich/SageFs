@@ -273,25 +273,27 @@ module internal WarmupReplayCache =
   /// `.SageFs` folder that also holds files the user writes and commits (`config.fsx`,
   /// `init.fsx`). It ignores ITSELF in a `.gitignore` beside it, for the generated file
   /// only, so a new user's first `git status` does not show it as untracked. A
-  /// `.gitignore` already there keeps its own lines and gains the entry; one that
-  /// already has it is left alone.
+  /// `.gitignore` SageFs creates lists itself too, since an untracked `.gitignore` shows in
+  /// `git status` just as the cache would. A `.gitignore` already there is the user's: it
+  /// keeps its own lines and gains only the cache entry, and one that already has it is
+  /// left alone.
   let private ignoreGeneratedFile (directory: string) (fileName: string) =
     let ignorePath = Path.Combine(directory, ".gitignore")
-    let existing =
-      match File.Exists ignorePath with
-      | true -> File.ReadAllText ignorePath
-      | false -> ""
-    let alreadyIgnored =
-      existing.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
-      |> Array.exists (fun line -> line.Trim() = fileName)
-    match alreadyIgnored with
-    | true -> ()
-    | false ->
-      let separator =
-        match existing.Length = 0 || existing.EndsWith "\n" with
-        | true -> ""
-        | false -> "\n"
-      File.WriteAllText(ignorePath, existing + separator + fileName + "\n")
+    match File.Exists ignorePath with
+    | false -> File.WriteAllText(ignorePath, ".gitignore\n" + fileName + "\n")
+    | true ->
+      let existing = File.ReadAllText ignorePath
+      let alreadyIgnored =
+        existing.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+        |> Array.exists (fun line -> line.Trim() = fileName)
+      match alreadyIgnored with
+      | true -> ()
+      | false ->
+        let separator =
+          match existing.Length = 0 || existing.EndsWith "\n" with
+          | true -> ""
+          | false -> "\n"
+        File.WriteAllText(ignorePath, existing + separator + fileName + "\n")
 
   let save (path: string) (plan: ReplayPlan) =
     let directory = Path.GetDirectoryName path
