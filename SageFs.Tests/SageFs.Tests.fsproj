@@ -182,6 +182,7 @@
         <Compile Include="WorkerReloadRelayTests.fs" />
         <Compile Include="DashboardRenderGateTests.fs" />
         <Compile Include="DashboardIdleStabilityTests.fs" />
+        <Compile Include="DashboardTelemetrySendTests.fs" />
         <Compile Include="DashboardTestStatusGridTests.fs" />
         <Compile Include="DashboardLandingTests.fs" />
         <Compile Include="DashboardHealthVerdictRenderingTests.fs" />
