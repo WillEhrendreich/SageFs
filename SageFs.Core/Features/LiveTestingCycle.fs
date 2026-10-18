@@ -87,7 +87,14 @@ module TestCycleEffects =
     | false ->
       let changedSymbols = symbols.Changed
       let cause = TestCycleOrchestrator.causeFromTrigger changedFilePath trigger
-      let symbolAffected = TestDependencyGraph.findAffected changedSymbols depGraph
+      // The dependency graph names a test by an id it makes up from the symbols of the file it
+      // type-checked (`buildFromSymbolUses` reads every definition under a `.Tests.` namespace as a
+      // test), and discovery gives the real tests their own ids. A name no discovered test carries
+      // selects nothing, so it must not count as a hit: counted, it passed for "something was found",
+      // skipped the floor below, and left the edit unjudged while the status stayed green.
+      let discoveredIds = state.DiscoveredTests |> Array.map (fun tc -> tc.Id) |> Set.ofArray
+      let discoveredOnly (ids: TestId array) = ids |> Array.filter discoveredIds.Contains
+      let symbolAffected = TestDependencyGraph.findAffected changedSymbols depGraph |> discoveredOnly
       // Compute coverage-affected across all sessions' maps
       let hasMaps = not (Map.isEmpty instrumentationMaps)
       let hasBitmaps = not (Map.isEmpty state.TestCoverageBitmaps)
@@ -98,6 +105,7 @@ module TestCycleEffects =
           |> Map.toArray
           |> Array.collect (fun (_, maps) ->
             CoverageBitmap.findCoverageAffected changedFilePath maps state.TestCoverageBitmaps)
+          |> discoveredOnly
         | false -> [||]
       let symbolAffectedSet = Set.ofArray symbolAffected
       let nameDeltaAffected =
@@ -114,7 +122,7 @@ module TestCycleEffects =
           && List.isEmpty changedSymbols
           && not (List.isEmpty symbols.InFile)
         with
-        | true -> TestDependencyGraph.findAffected symbols.InFile depGraph
+        | true -> TestDependencyGraph.findAffected symbols.InFile depGraph |> discoveredOnly
         | false -> [||]
       let usedFileScope = not (Array.isEmpty fileScopeAffected)
       let affected =
