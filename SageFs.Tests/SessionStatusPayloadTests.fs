@@ -120,3 +120,27 @@ let targetWireTests =
       |> List.map (fun t -> match t.GetProperty("path").ValueKind with JsonValueKind.String -> t.GetProperty("path").GetString() | _ -> "")
       |> Expect.equal "the path for project and solution, none for bare" [ "/src/App/App.fsproj"; "/src/All.slnx"; "" ]
   ]
+
+[<Tests>]
+let replFreshnessLookupTests =
+  testList "SessionStatusPayload.replFreshnessOf" [
+
+    testCase "WHY — no session is Unknown, not InSync: there is nothing to read, and a level answer would be a guess" <| fun _ ->
+      SessionStatusPayload.replFreshnessOfSession None
+      |> Expect.equal "the session is gone" (ReplFreshness.Unknown FreshnessUnknown.SessionGone)
+
+    testTask "WHY — a registry lookup that throws is Unknown with the reason, because a dead registry is not evidence the REPL is level" {
+      let ops = { SessionManagementOps.stub with GetSessionInfo = fun _ -> failwith "registry exploded" }
+      let! freshness = SessionStatusPayload.replFreshnessOf ops "abc12345"
+      match freshness with
+      | ReplFreshness.Unknown (FreshnessUnknown.LookupFailed reason) ->
+        reason |> Expect.stringContains "the exception's words travel" "registry exploded"
+      | other -> failtestf "a failed lookup must be Unknown LookupFailed, got %A" other
+    }
+
+    testTask "WHY — a session the registry has never heard of is Unknown SessionGone through the async path too" {
+      let ops = { SessionManagementOps.stub with GetSessionInfo = fun _ -> System.Threading.Tasks.Task.FromResult None }
+      let! freshness = SessionStatusPayload.replFreshnessOf ops "abc12345"
+      freshness |> Expect.equal "gone" (ReplFreshness.Unknown FreshnessUnknown.SessionGone)
+    }
+  ]

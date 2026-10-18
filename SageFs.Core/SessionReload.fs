@@ -237,12 +237,40 @@ module SessionReload =
 /// a REPL call to a function the save changed runs the OLD body, and nothing in the result says so unless this does. It is a
 /// state the session carries, and it clears only when the FSI host is rebuilt or replaced.
 [<RequireQualifiedAccess>]
+type FreshnessUnknown =
+  /// The registry has no session by that id: it stopped, or it never existed.
+  | SessionGone
+  /// The registry was asked and the question failed (the exception's message).
+  | LookupFailed of reason: string
+  /// The answer was produced without looking: the call that made it never reached the registry.
+  | NotRead
+
+[<RequireQualifiedAccess>]
 type ReplFreshness =
   /// The REPL and live tests run what the app runs.
   | InSync
   /// The app was patched in place `savesSince` times since the FSI host was built, naming what changed (each once, in the order
   /// it was first saved).
   | BehindApp of savesSince: int * declarations: string list
+  /// Nobody could say. This is not `InSync`: a failed lookup, a session that is gone and a call that never looked all used to
+  /// answer "level", which is the one answer this state must not guess.
+  | Unknown of why: FreshnessUnknown
+
+[<RequireQualifiedAccess>]
+module FreshnessUnknown =
+  /// The case as a wire token, one exhaustive spelling.
+  let kind (why: FreshnessUnknown) : string =
+    match why with
+    | FreshnessUnknown.SessionGone -> "SessionGone"
+    | FreshnessUnknown.LookupFailed _ -> "LookupFailed"
+    | FreshnessUnknown.NotRead -> "NotRead"
+
+  /// Why it could not be read, for a sentence to carry.
+  let detail (why: FreshnessUnknown) : string =
+    match why with
+    | FreshnessUnknown.SessionGone -> "the session is no longer registered"
+    | FreshnessUnknown.LookupFailed reason -> sprintf "looking the session up failed (%s)" reason
+    | FreshnessUnknown.NotRead -> "this answer was produced without looking it up"
 
 [<RequireQualifiedAccess>]
 module ReplFreshness =
@@ -259,9 +287,10 @@ module ReplFreshness =
     | SessionReload.Finished facts when facts.Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta ->
       let merged (known: string list) = List.distinct (known @ facts.Declarations)
       match facts.Case, freshness with
-      | ReloadCase.PatchPending, ReplFreshness.InSync -> ReplFreshness.BehindApp (1, merged [])
+      // A save the worker reported is a fact about the build, so it settles a state that was Unknown the same way it moves InSync.
+      | ReloadCase.PatchPending, (ReplFreshness.InSync | ReplFreshness.Unknown _) -> ReplFreshness.BehindApp (1, merged [])
       | ReloadCase.PatchPending, ReplFreshness.BehindApp (saves, known) -> ReplFreshness.BehindApp (saves + 1, merged known)
-      | (ReloadCase.Patched | ReloadCase.NeverEntered | ReloadCase.KeptLiveState), ReplFreshness.InSync ->
+      | (ReloadCase.Patched | ReloadCase.NeverEntered | ReloadCase.KeptLiveState), (ReplFreshness.InSync | ReplFreshness.Unknown _) ->
         ReplFreshness.BehindApp (1, merged [])
       | (ReloadCase.Patched | ReloadCase.NeverEntered | ReloadCase.KeptLiveState), ReplFreshness.BehindApp (saves, known) ->
         ReplFreshness.BehindApp (saves, merged known)
@@ -282,6 +311,8 @@ module ReplFreshness =
   let describe (freshness: ReplFreshness) : string =
     match freshness with
     | ReplFreshness.InSync -> "The REPL and live tests run the same build as the app."
+    | ReplFreshness.Unknown why ->
+      sprintf "Whether the REPL runs the same build as the app could not be read: %s. Do not take the REPL for level." (FreshnessUnknown.detail why)
     | ReplFreshness.BehindApp (saves, declarations) ->
       let named =
         match declarations with
@@ -297,7 +328,8 @@ module ReplFreshness =
   let banner (freshness: ReplFreshness) : string =
     match freshness with
     | ReplFreshness.InSync -> ""
-    | ReplFreshness.BehindApp _ -> sprintf "WARNING: %s" (describe freshness)
+    | ReplFreshness.BehindApp _
+    | ReplFreshness.Unknown _ -> sprintf "WARNING: %s" (describe freshness)
 
   /// A tool's result, with the warning after it when the REPL is behind. The result stays first and whole.
   let annotate (freshness: ReplFreshness) (text: string) : string =
@@ -309,6 +341,11 @@ module ReplFreshness =
   let toWire (freshness: ReplFreshness) : obj =
     match freshness with
     | ReplFreshness.InSync -> box {| state = "InSync" |}
+    | ReplFreshness.Unknown why ->
+      box
+        {| state = "Unknown"
+           reason = {| kind = FreshnessUnknown.kind why; detail = FreshnessUnknown.detail why |}
+           message = describe freshness |}
     | ReplFreshness.BehindApp (saves, declarations) ->
       box
         {| state = "BehindApp"

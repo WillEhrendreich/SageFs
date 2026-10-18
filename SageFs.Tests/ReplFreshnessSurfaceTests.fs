@@ -100,4 +100,26 @@ let tests =
       let! text = tools.list_sessions()
       warningWords text
     }
+
+    testTask "WHY - an eval the preflight refused never ran, so its structured result says the freshness was NOT READ, not that the REPL is level" {
+      let tools = SageFsTools(ctxWith ReplFreshness.InSync, NullLogger<SageFsTools>.Instance)
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) = tools.send_fsharp_code("test", "namespace Probe.Ns\n\ntype T = A | B", "", "", "", 0, "")
+      let freshness = result.StructuredContent.Value.GetProperty("replFreshness")
+      freshness.GetProperty("state").GetString() |> Expect.equal "unknown, not InSync" "Unknown"
+      freshness.GetProperty("reason").GetProperty("kind").GetString() |> Expect.equal "because nothing was read" "NotRead"
+    }
+
+    testTask "WHY - get_session_status carries Unknown as a field with its reason when the session's freshness could not be read" {
+      let tools = SageFsTools(ctxWith (ReplFreshness.Unknown (FreshnessUnknown.LookupFailed "registry timed out")), NullLogger<SageFsTools>.Instance)
+      let! (text: string) = tools.get_session_status("", "", 0)
+      let freshness = (JsonDocument.Parse text).RootElement.GetProperty("replFreshness")
+      freshness.GetProperty("state").GetString() |> Expect.equal "unknown" "Unknown"
+      freshness.GetProperty("reason").GetProperty("detail").GetString() |> Expect.stringContains "with the reason" "registry timed out"
+    }
+
+    testTask "WHY - list_sessions warns that the freshness could not be read, never a silent level" {
+      let tools = SageFsTools(ctxWith (ReplFreshness.Unknown FreshnessUnknown.SessionGone), NullLogger<SageFsTools>.Instance)
+      let! text = tools.list_sessions()
+      text |> Expect.stringContains "it says it could not be read" "could not be read"
+    }
   ]

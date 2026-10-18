@@ -117,20 +117,21 @@ module SessionStatusPayload =
     | Some session -> session.Reload
     | None -> SessionReload.NoReloadYet
 
-  /// Whether the REPL runs the app's build, off the session (no session, nothing to be behind).
+  /// Whether the REPL runs the app's build, off the session. No session is not "level": there is nothing to read, and the answer
+  /// says so (`Unknown SessionGone`).
   let replFreshnessOfSession (info: WorkerProtocol.SessionInfo option) : ReplFreshness =
     match info with
     | Some session -> session.Freshness
-    | None -> ReplFreshness.InSync
+    | None -> ReplFreshness.Unknown FreshnessUnknown.SessionGone
 
   /// Whether the REPL of this session runs the build the app runs, read off the registry's own record so every surface agrees. A
-  /// session the registry cannot answer for is level: there is nothing it is known to be behind.
+  /// session the registry cannot answer for is `Unknown`, with why: a lookup that failed is not evidence the REPL is level.
   let replFreshnessOf (ops: SessionManagementOps) (sid: string) : System.Threading.Tasks.Task<ReplFreshness> =
     task {
       try
         let! info = ops.GetSessionInfo (McpSessionRouting.toSessionId sid)
         return replFreshnessOfSession info
-      with _ -> return ReplFreshness.InSync
+      with ex -> return ReplFreshness.Unknown (FreshnessUnknown.LookupFailed ex.Message)
     }
 
   /// How `lastRestart` appears in EVERY status shape (routable, warming,

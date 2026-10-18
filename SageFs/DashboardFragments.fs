@@ -1746,7 +1746,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               // line in the card's single column, always visible, never behind a hover: a REPL that lies silently is the failure.
               match s.Freshness with
               | ReplFreshness.InSync -> ()
-              | ReplFreshness.BehindApp _ ->
+              | ReplFreshness.BehindApp _
+              | ReplFreshness.Unknown _ ->
                 Elem.div
                   [ Attr.class' "session-card-freshness"
                     testid "session-card-freshness"

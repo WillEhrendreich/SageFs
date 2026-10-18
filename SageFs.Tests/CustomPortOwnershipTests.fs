@@ -3,6 +3,7 @@ module SageFs.Tests.CustomPortOwnershipTests
 open System
 open Expecto
 open Expecto.Flip
+open SageFs
 
 // A daemon on a non-default port is, by construction, somebody's temporary
 // daemon — a test, an agent, a demo. The user's own long-lived daemon always
@@ -18,17 +19,20 @@ let private customPort = 47001
 /// A ttl that satisfies the gate. The decision looks at whether a ttl is present, not how long it is.
 let private anyTtl = FixtureDurations.ttlLong
 
+/// An owner that satisfies the gate. The decision looks at whether an owner is present, not who it is.
+let private anyOwner : DaemonOwnership.DaemonOwner = { Pid = 12345; Fence = DaemonOwnership.OwnerFence.Unfenced }
+
 [<Tests>]
 let customPortOwnershipTests =
   testList "Program.decideCustomPortOwnership" [
 
     test "the default port is always allowed, with no owner and no ttl" {
-      Program.decideCustomPortOwnership defaultPort defaultPort None None
+      Program.decideCustomPortOwnership defaultPort defaultPort DaemonOwnership.Ownership.Unowned
       |> Expect.equal "default port needs nothing" Program.CustomPortOwnershipDecision.Allowed
     }
 
     test "WHY — decideCustomPortOwnership — a custom port with neither --owner-pid nor --ttl is refused because an unowned custom-port daemon is exactly the kind that outlives its spawner" {
-      match Program.decideCustomPortOwnership defaultPort customPort None None with
+      match Program.decideCustomPortOwnership defaultPort customPort DaemonOwnership.Ownership.Unowned with
       | Program.CustomPortOwnershipDecision.Refused message ->
         message |> Expect.stringContains "names --owner-pid" "--owner-pid"
         message |> Expect.stringContains "names --ttl" "--ttl"
@@ -38,17 +42,17 @@ let customPortOwnershipTests =
     }
 
     test "a custom port with --owner-pid is allowed" {
-      Program.decideCustomPortOwnership defaultPort customPort (Some 12345) None
+      Program.decideCustomPortOwnership defaultPort customPort (DaemonOwnership.Ownership.OwnedByPid anyOwner)
       |> Expect.equal "owner-pid is enough" Program.CustomPortOwnershipDecision.Allowed
     }
 
     test "a custom port with --ttl is allowed" {
-      Program.decideCustomPortOwnership defaultPort customPort None (Some anyTtl)
+      Program.decideCustomPortOwnership defaultPort customPort (DaemonOwnership.Ownership.ExpiresAfter (anyTtl, DaemonOwnership.TtlSource.Explicit))
       |> Expect.equal "a ttl is enough" Program.CustomPortOwnershipDecision.Allowed
     }
 
     test "a custom port with both is allowed" {
-      Program.decideCustomPortOwnership defaultPort customPort (Some 12345) (Some anyTtl)
+      Program.decideCustomPortOwnership defaultPort customPort (DaemonOwnership.Ownership.OwnedAndExpiring (anyOwner, anyTtl))
       |> Expect.equal "either is enough, both is fine" Program.CustomPortOwnershipDecision.Allowed
     }
   ]

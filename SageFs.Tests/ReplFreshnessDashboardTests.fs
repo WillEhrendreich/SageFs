@@ -66,6 +66,12 @@ let renderTests =
       html |> Expect.stringContains "it says what to do" "hard_reset_fsi_session"
       html |> Expect.stringContains "it names what changed" "RunAppDeltaFixture.Handlers.describe"
 
+    testCase "WHY - a session whose freshness could not be read says so on its card, in words, and never looks level" <| fun _ ->
+      let html = htmlOf [ card "0a2b3c4d" (ReplFreshness.Unknown (FreshnessUnknown.LookupFailed "registry timed out")) ]
+      html |> Expect.stringContains "the same line, with its test id" "data-testid=\"session-card-freshness\""
+      html |> Expect.stringContains "it says it could not be read" "could not be read"
+      html |> Expect.stringContains "and why" "registry timed out"
+
     testCase "WHY - a level session has no banner, so the card is as quiet as it was" <| fun _ ->
       let html = htmlOf [ card "0a2b3c4d" ReplFreshness.InSync ]
       html.Contains "session-card-freshness" |> Expect.isFalse "nothing to say"

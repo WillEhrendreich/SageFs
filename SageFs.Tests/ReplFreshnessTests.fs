@@ -135,6 +135,43 @@ let tests =
       [ for d in root.GetProperty("declarations").EnumerateArray() -> d.GetString() ] |> Expect.equal "the declarations" [ "A.f"; "B.g" ]
       root.GetProperty("message").GetString() |> Expect.stringContains "and what to do about it" "hard_reset_fsi_session"
 
+    testCase "WHY - a freshness nobody could read is never worded as level: it warns, says it could not be read, and says why" <| fun _ ->
+      for why, reasonWords in
+        [ FreshnessUnknown.SessionGone, "no longer registered"
+          FreshnessUnknown.LookupFailed "registry timed out", "registry timed out"
+          FreshnessUnknown.NotRead, "without looking" ] do
+        let unknown = ReplFreshness.Unknown why
+        let banner = ReplFreshness.banner unknown
+        banner |> Expect.stringStarts "it is a warning" "WARNING"
+        banner |> Expect.stringContains "it says it could not be read" "could not be read"
+        banner |> Expect.stringContains "and why" reasonWords
+        ReplFreshness.describe unknown
+        |> Expect.notEqual "never the in-sync sentence" (ReplFreshness.describe ReplFreshness.InSync)
+        ReplFreshness.annotate unknown "Result: 1"
+        |> Expect.stringStarts "the result stays first and whole" "Result: 1"
+
+    testCase "WHY - the wire says Unknown with a kind and a detail, so a client branches on a field and never reads silence as level" <| fun _ ->
+      for why, kind in
+        [ FreshnessUnknown.SessionGone, "SessionGone"
+          FreshnessUnknown.LookupFailed "boom", "LookupFailed"
+          FreshnessUnknown.NotRead, "NotRead" ] do
+        use doc = JsonDocument.Parse(JsonSerializer.Serialize(ReplFreshness.toWire (ReplFreshness.Unknown why)))
+        let root = doc.RootElement
+        root.GetProperty("state").GetString() |> Expect.equal "the state" "Unknown"
+        root.GetProperty("reason").GetProperty("kind").GetString() |> Expect.equal "the kind" kind
+        root.GetProperty("reason").GetProperty("detail").GetString() |> Expect.isNotEmpty "the detail"
+        root.GetProperty("message").GetString() |> Expect.stringContains "and the sentence" "could not be read"
+
+    testCase "WHY - a failed lookup carries its reason onto the wire, so the reader can tell a dead registry from a gone session" <| fun _ ->
+      use doc = JsonDocument.Parse(JsonSerializer.Serialize(ReplFreshness.toWire (ReplFreshness.Unknown (FreshnessUnknown.LookupFailed "registry timed out"))))
+      doc.RootElement.GetProperty("reason").GetProperty("detail").GetString() |> Expect.stringContains "the exception's words" "registry timed out"
+
+    testCase "WHY - a save the worker reports settles an Unknown state: the build is known to be behind, whatever could not be read before" <| fun _ ->
+      ReplFreshness.observe (ReplFreshness.Unknown FreshnessUnknown.NotRead) (deltaPatched [ "A.f" ])
+      |> Expect.equal "behind" (ReplFreshness.BehindApp (1, [ "A.f" ]))
+      ReplFreshness.observe (ReplFreshness.Unknown FreshnessUnknown.NotRead) (finished ReloadCase.Restarted PatchMechanism.NoPatch [])
+      |> Expect.equal "a report that changes nothing leaves it Unknown" (ReplFreshness.Unknown FreshnessUnknown.NotRead)
+
     testCase "WHY - the declarations a worker names travel on its reload payload" <| fun _ ->
       let payload = """{"type":"pending","outcome":"PatchPending","mechanism":"metadata-delta","declarations":["Handlers.describe","Handlers.makeHeld"]}"""
       match SessionReload.ofPayloadJson payload with

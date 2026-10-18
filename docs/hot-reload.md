@@ -648,7 +648,8 @@ I'd rather you hear this from me than find it at 11pm.
   last build, so a REPL call to a function you just saved runs the old body. I
   measured it: the app served `closure:B` and the REPL answered `closure:A`. That is
   not left as a note. The session carries it as `replFreshness` (`InSync` or
-  `BehindApp`, with the number of saves and what was patched), and it is a field in
+  `BehindApp`, with the number of saves and what was patched, or `Unknown` with
+  the reason when it could not be read), and it is a field in
   `get_session_status` and `list_sessions`, a warning line after the result of every
   `send_fsharp_code`, `check_fsharp_code` and `run_tests`, and a line on the
   dashboard's session card. It clears when the worker is replaced. What brings it

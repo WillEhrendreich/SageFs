@@ -2124,7 +2124,7 @@ let run
   (bindHost: SageFs.SageFsConfig.LoopbackHost)
   (mcpPort: int)
   (flags: Args.DaemonFlags)
-  (ownership: DaemonOwnership.EffectiveOwnership)
+  (ownership: DaemonOwnership.Ownership)
   = task {
   let startupSw = System.Diagnostics.Stopwatch.StartNew()
   let daemonStartTime = System.DateTimeOffset.UtcNow
@@ -2168,10 +2168,12 @@ let run
   // exits when that process is gone — fenced on (pid, startTime) when
   // --owner-start was also given, so a recycled pid can never keep this
   // daemon alive forever. Same mechanism as the worker watchdog, one layer up.
-  match ownership.OwnerPid with
-  | Some ownerPid ->
-    let owner : OwnerMonitor.Owner = { Pid = ownerPid; StartTimeTicks = ownership.OwnerStartTicks }
-    log.LogInformation("Daemon monitoring owner PID {OwnerPid} (fenced={Fenced})", ownerPid, Option.isSome ownership.OwnerStartTicks)
+  let daemonOwner = DaemonOwnership.Ownership.owner ownership
+  match daemonOwner with
+  | Some daemonOwner ->
+    let fenceTicks = DaemonOwnership.OwnerFence.toTicks daemonOwner.Fence
+    let owner : OwnerMonitor.Owner = { Pid = daemonOwner.Pid; StartTimeTicks = fenceTicks }
+    log.LogInformation("Daemon monitoring owner PID {OwnerPid} (fenced={Fenced})", daemonOwner.Pid, Option.isSome fenceTicks)
     Async.Start(
       OwnerMonitor.run OwnerMonitor.getProcessById owner cts (fun msg -> log.LogWarning("{Message}", msg)),
       cts.Token)
@@ -4001,7 +4003,7 @@ let run
   let mutable ttlConsecutiveFailures = 0
   let mutable ttlTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let ttlTimer : System.Threading.Timer option =
-    match ownership.Ttl with
+    match DaemonOwnership.Ownership.ttl ownership with
     | None -> None
     | Some ttl ->
       let ttlCheckIntervalMs =
@@ -4661,8 +4663,8 @@ let run
   let daemonInfoFile : DaemonOwnership.DaemonInfoFile =
     { Pid = Environment.ProcessId
       StartTime = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()
-      OwnerPid = ownership.OwnerPid
-      OwnerStart = ownership.OwnerStartTicks
+      OwnerPid = daemonOwner |> Option.map (fun o -> o.Pid)
+      OwnerStart = daemonOwner |> Option.bind (fun o -> DaemonOwnership.OwnerFence.toTicks o.Fence)
       McpPort = mcpPort
       DashboardPort = dashboardPort
       DataDir = DaemonState.SageFsDir }

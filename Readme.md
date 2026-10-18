@@ -619,6 +619,8 @@ Daemon options:
                          test or demo spawns. (--owner-start TICKS closes the pid-reuse race.)
   --ttl DURATION         Self-terminate after DURATION (e.g. 30m, 1h, 90s) with no
                          live sessions and no MCP/SSE clients.
+                         A value that is not valid (--ttl 30min) stops the daemon at
+                         start with exit code 2; it never starts unowned.
 ```
 
 The daemon starts bare and waits for clients to create or connect to sessions.
