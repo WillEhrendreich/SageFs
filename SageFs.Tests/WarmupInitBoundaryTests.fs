@@ -2,9 +2,12 @@ module SageFs.Tests.WarmupInitBoundaryTests
 
 open System
 open System.IO
+open System.Threading
 open Expecto
 open Expecto.Flip
+open FSharp.Compiler.Interactive.Shell
 open SageFs
+open SageFs.FsiSession
 
 let private warmupStartedAt =
   DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
@@ -65,6 +68,7 @@ let warmupInitBoundaryTests =
 
       let outcome =
         StartupProfile.applyIfPresent
+          @"C:\Code\Repos\SageFs\definitely-not-a-real-startup-profile-dir"
           [ @"C:\Code\Repos\SageFs\definitely-not-a-real-startup-profile-dir" ]
           evalCalls.Add
           logCalls.Add
@@ -89,6 +93,7 @@ let warmupInitBoundaryTests =
 
         let outcome =
           StartupProfile.applyIfPresent
+            workingDir
             [ workingDir ]
             (fun _ -> failwith "boom")
             ignore
@@ -113,11 +118,16 @@ let warmupInitBoundaryTests =
       |> Expect.equal "loaded startup profiles should still expose their path" (Some path)
   ]
 
-let private writeInit (dir: string) (fileName: string) =
+/// The two startup script files a folder can hold.
+type private InitFile =
+  | InitFsx
+  | SageFsrc
+
+let private writeInit (dir: string) (file: InitFile) =
   let path =
-    match fileName with
-    | "init.fsx" -> Path.Combine(dir, ".SageFs", "init.fsx")
-    | other -> Path.Combine(dir, other)
+    match file with
+    | InitFsx -> Path.Combine(dir, ".SageFs", "init.fsx")
+    | SageFsrc -> Path.Combine(dir, ".SageFsrc")
   Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
   File.WriteAllText(path, "()")
   path
@@ -126,55 +136,87 @@ let private writeInit (dir: string) (fileName: string) =
 let private siteAndProject (site: string) =
   let project = Path.Combine(site, "Dev")
   Directory.CreateDirectory project |> ignore
-  project, StartupProfile.searchDirectories site (Some project)
+  project, StartupProfile.searchDirectories (Some project) site
+
+let private newInProcess () : IFsiSession =
+  let session =
+    FsiEvaluationSession.Create(
+      FsiEvaluationSession.GetDefaultConfiguration(),
+      [| "fsi"; "--noninteractive"; "--nologo"; "--readline-" |],
+      new StreamReader(Stream.Null),
+      TextWriter.Null,
+      TextWriter.Null,
+      collectible = true
+    )
+  new InProcessFsiSession(session, { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads; WebDevReload = SageFs.HostAgent.WebDevReload.Off }) :> IFsiSession
 
 [<Tests>]
 let startupProfileLocationTests =
   testList "Where the startup profile is read from" [
-    testCase "WHY — a session's init.fsx is read from its working directory, where its config.fsx is, not only from the project folder the worker moves into" <| fun _ ->
+    testCase "WHY — an init.fsx kept in the project folder still runs when the working directory has one too, so a monorepo root's init.fsx cannot silently replace each project's own" <| fun _ ->
+      withTempDir <| fun site ->
+        let project, dirs = siteAndProject site
+        let expected = writeInit project InitFsx
+        writeInit site InitFsx |> ignore
+        let evaluated = ResizeArray<string>()
+        StartupProfile.applyIfPresent project dirs evaluated.Add ignore
+        |> Expect.equal "the project folder's script loads" (StartupProfile.Loaded expected)
+        evaluated |> Seq.length |> Expect.equal "one script is evaluated" 1
+
+    testCase "WHY — a session's init.fsx is read from its working directory, where its config.fsx is, when the project folder has none" <| fun _ ->
       withTempDir <| fun site ->
         let _, dirs = siteAndProject site
-        let expected = writeInit site "init.fsx"
+        let expected = writeInit site InitFsx
         StartupProfile.discoverInitScript dirs
         |> Expect.equal "site/.SageFs/init.fsx is found" (Some expected)
 
-    testCase "WHY — an init.fsx kept in the project folder still loads, because that was the only place looked before" <| fun _ ->
+    testCase "WHY — the folder decides before the file name, so the project's .SageFsrc beats the working directory's init.fsx" <| fun _ ->
       withTempDir <| fun site ->
         let project, dirs = siteAndProject site
-        let expected = writeInit project "init.fsx"
+        let expected = writeInit project SageFsrc
+        writeInit site InitFsx |> ignore
         StartupProfile.discoverInitScript dirs
-        |> Expect.equal "site/Dev/.SageFs/init.fsx is found" (Some expected)
+        |> Expect.equal "site/Dev/.SageFsrc is found" (Some expected)
 
-    testCase "WHY — when both folders have one, the working directory's wins and only it runs" <| fun _ ->
+    testCase "WHY — a project-folder script is evaluated exactly as written, because FSI already resolves its relative paths there" <| fun _ ->
       withTempDir <| fun site ->
-        let project, dirs = siteAndProject site
-        let expected = writeInit site "init.fsx"
-        writeInit project "init.fsx" |> ignore
-        let evaluated = ResizeArray<string>()
-        StartupProfile.applyIfPresent dirs evaluated.Add ignore
-        |> Expect.equal "the working directory's script loads" (StartupProfile.Loaded expected)
-        evaluated |> Seq.length |> Expect.equal "one script is evaluated" 1
+        let project, _ = siteAndProject site
+        let script : StartupProfile.InitScript = { Folder = project; Path = Path.Combine(project, ".SageFs", "init.fsx") }
+        StartupProfile.source project script "let x = 1"
+        |> Expect.equal "no line directive" "let x = 1"
 
-    testCase "WHY — the folder decides before the file name, so the working directory's .SageFsrc beats the project's init.fsx" <| fun _ ->
+    testCase "WHY — a working-directory script's relative #load finds files in that folder, though FSI started in the project folder" <| fun _ ->
       withTempDir <| fun site ->
-        let project, dirs = siteAndProject site
-        let expected = writeInit site ".SageFsrc"
-        writeInit project "init.fsx" |> ignore
-        StartupProfile.discoverInitScript dirs
-        |> Expect.equal "site/.SageFsrc is found" (Some expected)
+        File.WriteAllText(Path.Combine(site, "lib.fsx"), "let answer = 42")
+        let contents =
+          String.concat "\n" [
+            "#load \"lib.fsx\""
+            "if Lib.answer <> 42 then failwith \"the wrong lib.fsx loaded\"" ]
+        Directory.CreateDirectory(Path.Combine(site, ".SageFs")) |> ignore
+        File.WriteAllText(Path.Combine(site, ".SageFs", "init.fsx"), contents)
+        // FSI resolves relative paths against the folder it was started in: the test process's.
+        let fsiBaseDir = Environment.CurrentDirectory
+        let session = newInProcess ()
+        try
+          let eval code = SageFs.FsiSession.evalOrThrow session code CancellationToken.None
+          (fun () -> eval contents)
+          |> Expect.throws "the same text evaluated as written looks for lib.fsx in FSI's own folder"
+          StartupProfile.applyIfPresent fsiBaseDir [ site ] eval ignore
+          |> Expect.equal "the script loads with its own folder's lib.fsx" (StartupProfile.Loaded (Path.Combine(site, ".SageFs", "init.fsx")))
+        finally
+          session.Dispose()
 
     testCase "a bare session, or one whose project sits in its working directory, searches that one folder" <| fun _ ->
-      StartupProfile.searchDirectories "/work/site" None
+      StartupProfile.searchDirectories None "/work/site"
       |> Expect.equal "no project" [ "/work/site" ]
-      StartupProfile.searchDirectories "/work/site" (Some "/work/site")
+      StartupProfile.searchDirectories (Some "/work/site") "/work/site"
       |> Expect.equal "project in the working directory" [ "/work/site" ]
 
-    testProperty "the working directory is always searched first, and the project folder after it only when it differs" <| fun (sessionDir: string) (projectDir: string option) ->
-      let dirs = StartupProfile.searchDirectories sessionDir projectDir
-      List.head dirs = sessionDir
-      && dirs = List.distinct dirs
+    testProperty "the project folder is searched first, and the working directory after it only when it differs" <| fun (projectDir: string option) (sessionDir: string) ->
+      let dirs = StartupProfile.searchDirectories projectDir sessionDir
+      dirs = List.distinct dirs
       && (match projectDir with
-          | Some dir when dir <> sessionDir -> dirs = [ sessionDir; dir ]
-          | Some _
+          | Some dir when dir <> sessionDir -> dirs = [ dir; sessionDir ]
+          | Some dir -> dirs = [ dir ]
           | None -> dirs = [ sessionDir ])
   ]
