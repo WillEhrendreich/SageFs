@@ -590,6 +590,57 @@ module SnapshotRenderGuard =
     | _ ->
       Decision.Render { LastRendered = Some candidate; Version = SnapshotVersion.next memory.Version }
 
+/// How a batch of telemetry writes ended, with the value each signal last LANDED at on this connection.
+[<RequireQualifiedAccess>]
+type TelemetrySendResult =
+  /// Every due sample was written.
+  | Sent of lastSent: Map<string, int>
+  /// A write threw. The samples before it landed and are recorded; it and the ones after it are not, so the next
+  /// heartbeat tries them again.
+  | WriteFailed of lastSent: Map<string, int> * error: exn
+
+/// Whether this connection has already said that its telemetry is failing. A failing patch repeats on every
+/// heartbeat, so it is said once per connection.
+[<RequireQualifiedAccess>]
+type TelemetryFailureLog =
+  | NotYetSaid
+  | AlreadySaid
+
+/// Which telemetry samples a connection still has to send, and the order that keeps its record honest: a value is
+/// remembered only after the write that carried it returned.
+module TelemetrySend =
+  /// The samples whose value differs from what this connection last landed (or that it never sent).
+  let unsent (lastSent: Map<string, int>) (samples: TelemetrySample list) : TelemetrySample list =
+    samples
+    |> List.filter (fun sample ->
+      match Map.tryFind sample.Signal lastSent with
+      | Some sent -> sent <> sample.Megabytes
+      | None -> true)
+
+  /// Writes each due sample in turn and records it only once its write returned. The first write that throws ends
+  /// the batch and is handed back, so the caller can report it; nothing after it is marked sent.
+  let sendUnsent
+    (write: TelemetrySample -> System.Threading.Tasks.Task)
+    (lastSent: Map<string, int>)
+    (samples: TelemetrySample list)
+    : System.Threading.Tasks.Task<TelemetrySendResult> =
+    task {
+      let mutable landed = lastSent
+      let mutable failure : exn voption = ValueNone
+      for sample in unsent lastSent samples do
+        match failure with
+        | ValueSome _ -> ()
+        | ValueNone ->
+          try
+            do! write sample
+            landed <- Map.add sample.Signal sample.Megabytes landed
+          with ex -> failure <- ValueSome ex
+      return
+        match failure with
+        | ValueSome error -> TelemetrySendResult.WriteFailed (landed, error)
+        | ValueNone -> TelemetrySendResult.Sent landed
+    }
+
 /// Read the page client id from a signals JSON body; empty when absent.
 let private clientIdFromSignals (doc: System.Text.Json.JsonDocument) =
   match doc.RootElement.TryGetProperty(Signals.ClientId) with
@@ -1184,7 +1235,8 @@ let createStreamHandler
     let mutable lastHeartbeatAt = DateTime.MinValue
     // The telemetry value (MB) this connection last patched, by signal name: a value that has not moved
     // is not sent again. See `sendTelemetryIfChanged`.
-    let lastTelemetry = Collections.Generic.Dictionary<string, int>()
+    let mutable lastTelemetry : Map<string, int> = Map.empty
+    let mutable telemetryFailureLog = TelemetryFailureLog.NotYetSaid
     // Render-skip guard (roast-6 Finding #10): renderMainContent/renderNode
     // are the expensive part of a tick — a snapshot structurally identical
     // to the one this connection last rendered never reaches them at all.
@@ -1246,12 +1298,16 @@ let createStreamHandler
       let daemonRssBytes =
         use proc = Diagnostics.Process.GetCurrentProcess()
         proc.WorkingSet64
-      for sample in telemetryOf daemonRssBytes tryGetWorkerRssBytes sessions do
-        match lastTelemetry.TryGetValue sample.Signal with
-        | true, sent when sent = sample.Megabytes -> ()
-        | _ ->
-          lastTelemetry.[sample.Signal] <- sample.Megabytes
-          do! Response.ssePatchSignal ctx (SignalPath.sp sample.Signal) sample.Megabytes
+      let write (sample: TelemetrySample) : System.Threading.Tasks.Task =
+        Response.ssePatchSignal ctx (SignalPath.sp sample.Signal) sample.Megabytes
+      // A value is remembered only after its patch was written, so a patch that failed is tried again.
+      let! result = TelemetrySend.sendUnsent write lastTelemetry (telemetryOf daemonRssBytes tryGetWorkerRssBytes sessions)
+      match result with
+      | TelemetrySendResult.Sent landed -> lastTelemetry <- landed
+      | TelemetrySendResult.WriteFailed (landed, error) ->
+        lastTelemetry <- landed
+        // Hand the failure to the heartbeat's handler, which knows a closed connection from a real fault.
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw()
     }
 
     let sendHeartbeatIfDue () = task {
@@ -1270,7 +1326,14 @@ let createStreamHandler
         | :? System.ArgumentOutOfRangeException -> ()
         | :? System.InvalidOperationException -> ()
         // Telemetry is best-effort: a failed read of the session list must not end the stream's loop.
-        | ex -> Log.debug "[Dashboard SSE] heartbeat telemetry failed: %s" ex.Message
+        // A fault that is not a closed connection leaves the memory readout blank, so it is said at Warn, once per
+        // connection: it would repeat on every heartbeat.
+        | ex ->
+          match telemetryFailureLog with
+          | TelemetryFailureLog.AlreadySaid -> ()
+          | TelemetryFailureLog.NotYetSaid ->
+            telemetryFailureLog <- TelemetryFailureLog.AlreadySaid
+            Log.warn "[Dashboard SSE] heartbeat telemetry failed, the memory readout may be blank on this connection: %s" ex.Message
     }
 
     let pushState () = task {
