@@ -84,25 +84,35 @@ module WorkerPostReady =
       let bounds : WarmupSupervision.Bounds =
         { Absolute = Timeouts.warmupAbsoluteMax
           Inactivity = Timeouts.warmupInactivityLimit }
-      while not finished && not ct.IsCancellationRequested do
-        do! Async.Sleep readyPollIntervalMs
-        let now = DateTime.UtcNow
-        let! observation = observe label proxy lastStatusMessage
-        match observation with
-        | WarmupSupervision.PollObservation.Progressed -> lastActivityAt <- now
-        | _ -> ()
-        match WarmupSupervision.decidePoll bounds (now - started) (now - lastActivityAt) observation with
-        | WarmupSupervision.PollDecision.MarkReady projects ->
-          outcomes.OnReady projects
-          finished <- true
-        | WarmupSupervision.PollDecision.MarkFaulted reason ->
-          outcomes.OnFaulted reason
-          finished <- true
-        | WarmupSupervision.PollDecision.TimedOut reason ->
-          Log.warn "[SessionManager] %s (session %s)" reason label
-          outcomes.OnTimedOut reason
-          finished <- true
-        | WarmupSupervision.PollDecision.KeepPolling -> ()
+      // Nothing awaits this loop (`launch` starts it and walks away), so an exception that escaped it would end it with
+      // no outcome at all and leave the session waiting for an answer that cannot come. Whatever goes wrong inside
+      // becomes the timed-out outcome, with the exception's text. A cancelled loop reports nothing, as before.
+      try
+        while not finished && not ct.IsCancellationRequested do
+          do! Async.Sleep readyPollIntervalMs
+          let now = DateTime.UtcNow
+          let! observation = observe label proxy lastStatusMessage
+          match observation with
+          | WarmupSupervision.PollObservation.Progressed -> lastActivityAt <- now
+          | _ -> ()
+          match WarmupSupervision.decidePoll bounds (now - started) (now - lastActivityAt) observation with
+          | WarmupSupervision.PollDecision.MarkReady projects ->
+            finished <- true
+            outcomes.OnReady projects
+          | WarmupSupervision.PollDecision.MarkFaulted reason ->
+            finished <- true
+            outcomes.OnFaulted reason
+          | WarmupSupervision.PollDecision.TimedOut reason ->
+            Log.warn "[SessionManager] %s (session %s)" reason label
+            finished <- true
+            outcomes.OnTimedOut reason
+          | WarmupSupervision.PollDecision.KeepPolling -> ()
+      with ex when not ct.IsCancellationRequested ->
+        Log.warn "[SessionManager] Ready watchdog for %s failed: %s (%s)\n%s" label ex.Message (ex.GetType().Name) (stackOf ex)
+        try
+          outcomes.OnTimedOut (sprintf "The ready watchdog failed unexpectedly: %s (%s)" ex.Message (ex.GetType().Name))
+        with ex2 ->
+          Log.warn "[SessionManager] Ready watchdog for %s could not report its own failure: %s" label ex2.Message
     }
 
   /// Ask the worker for its tests. The response is handed over as-is; a thrown

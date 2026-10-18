@@ -90,6 +90,7 @@
         <Compile Include="HygieneStallTests.fs" />
         <Compile Include="WorkerStartupReaderTests.fs" />
         <Compile Include="WorkerStartupPortValidationTests.fs" />
+        <Compile Include="WorkerPostReadyGuardTests.fs" />
         <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
         <Compile Include="NativeAssetsTests.fs" />
