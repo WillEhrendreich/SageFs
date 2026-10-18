@@ -1733,9 +1733,15 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               logger.LogInfo project.ProjectFileName
           | true -> ()
 
-          match sln.Projects |> List.tryHead with
-          | Some primaryProject ->
-            let projectDir = System.IO.Path.GetDirectoryName(primaryProject.ProjectFileName)
+          // The worker starts in the session's working directory. The startup profile is
+          // looked for there first, so remember it before moving into the project's folder.
+          let sessionDir = System.Environment.CurrentDirectory
+          let primaryProjectDir =
+            sln.Projects
+            |> List.tryHead
+            |> Option.map (fun p -> System.IO.Path.GetDirectoryName p.ProjectFileName)
+          match primaryProjectDir with
+          | Some projectDir ->
             logger.LogInfo $"Setting working directory to: %s{projectDir}"
             System.Environment.CurrentDirectory <- projectDir
           | None -> ()
@@ -1771,7 +1777,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           
           // Evaluate startup profile if found
           let startupProfileResult =
-            let workingDir = System.Environment.CurrentDirectory
+            let searchDirs = StartupProfile.searchDirectories sessionDir primaryProjectDir
             // Registers with the file-watcher's own agent so AppHolds learns
             // what a #load'ed app calls (evalFn used to skip middleware).
             let evalFn code =
@@ -1781,7 +1787,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                 { EvaluatedCode = code; Detours = detours; Discovery = HostAgent.DiscoveryPolicy.WhenChanged; IsFileSave = false; Closures = [] }
               |> ignore
             let logFn msg = logger.LogInfo msg
-            let outcome = StartupProfile.applyIfPresent workingDir evalFn logFn
+            let outcome = StartupProfile.applyIfPresent searchDirs evalFn logFn
 
             match outcome with
             | StartupProfile.Failed (_, message) ->
