@@ -751,6 +751,10 @@ let auditCleanup () =
           | true -> printfn "cleanup: LEFTOVER %s still has processes in %s.scope; `systemctl --user kill -s KILL %s.scope`" kv.Key unitName unitName
   }
 
+/// The tiers that took a record this run, by tier name. Declared before `runTiers` because the host listing there has to
+/// know about reused host shards: they are not run, but the coverage check still has to count them.
+let reusedTiers = Collections.Concurrent.ConcurrentDictionary<string, PassRecord>()
+
 /// Run every tier, `slots` at a time, longest-expected first, then merge the
 /// per-tier ledger rows into the one ledger the trust report reads.
 let runTiers (tiers: TierPlan.Tier list) =
@@ -785,8 +789,14 @@ let runTiers (tiers: TierPlan.Tier list) =
     // How many cases every host suite registers, so the trust report can check the shards were handed all of them.
     // Listing executes nothing (Expecto's --list-tests), costs one process start, and a failure is a red row, not a skip.
     // It runs beside the first units (a task, awaited when the tiers are done), so it is never on the critical path.
+    // A host shard reused from a pass record is not in `tiers` (it will not run) but is still a shard of the host tier, so
+    // the listing starts for it too: without it a pass where all five host shards were reused left the coverage row at
+    // "the host tier was not listed" and the gate red for a tier that had not changed.
+    let hostTierPlanned =
+      (tiers |> List.exists (fun t -> t.Args.StartsWith "--integration-host"))
+      || (reusedTiers.Keys |> Seq.exists (fun name -> name.StartsWith "--integration-host"))
     let listing =
-      match tiers |> List.exists (fun t -> t.Args.StartsWith "--integration-host") with
+      match hostTierPlanned with
       | false -> Threading.Tasks.Task.CompletedTask
       | true ->
         let listLog = Path.Combine(tierWork, "host-list.log")
@@ -1007,9 +1017,6 @@ let passStore =
   match Environment.GetEnvironmentVariable "SAGEFS_TIER_PASSES" with
   | null | "" -> Store.Disabled
   | directory -> Store.At directory
-
-/// The tiers that took a record this run, by tier name.
-let reusedTiers = Collections.Concurrent.ConcurrentDictionary<string, PassRecord>()
 
 /// The inputs each tier was judged on, by tier name: what a green run records.
 let passInputsByTier = Collections.Concurrent.ConcurrentDictionary<string, PassInputs>()
