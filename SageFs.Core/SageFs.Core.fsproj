@@ -135,6 +135,9 @@
         <EmbeddedResource Include="Middleware\ValueReadTracking.fs" LogicalName="FsiHost/ValueReadTracking.fs" />
         <EmbeddedResource Include="Middleware\QualifiedNameMatch.fs" LogicalName="FsiHost/QualifiedNameMatch.fs" />
         <EmbeddedResource Include="Middleware\HotReloadCore.fs" LogicalName="FsiHost/HotReloadCore.fs" />
+        <EmbeddedResource Include="../SageFs.Host/DevReloadMiddleware.fs" LogicalName="FsiHost/DevReloadMiddleware.fs" />
+        <EmbeddedResource Include="../SageFs.Host/DevReloadInjector.fs" LogicalName="FsiHost/DevReloadInjector.fs" />
+        <EmbeddedResource Include="../SageFs.Host/Resources/devreload.js" LogicalName="FsiHost/devreload.js" />
         <EmbeddedResource Include="HostAgent.fs" LogicalName="FsiHost/HostAgent.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/FsiProtocol.fs" LogicalName="FsiHost/FsiProtocol.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/FcsQueries.fs" LogicalName="FsiHost/FcsQueries.fs" />

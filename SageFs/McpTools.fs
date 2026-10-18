@@ -1256,15 +1256,15 @@ process-wide kill switch for hot reload.""")>]
             | SageFs.DevReload.Degraded r -> sprintf "Degraded: %s" r
             | SageFs.DevReload.Disabled -> "Disabled"
         // Hot reload cannot be retrofitted onto a running Interactive session.
-        // Live mode installs the DevReload Harmony patches at worker startup AND
+        // Live mode installs the DevReload Harmony patches when the FSI host starts AND
         // starts FSI with `--multiemit-` (see SessionWorkflow.fsiArgs) — that
         // flag is what lets Harmony detour re-eval'd methods, and it can only be
         // set when the session (its FSI process) is created. So the honest answer
         // depends on the session's actual workflow: a Live session already has
         // hot reload; an Interactive session must switch to Live (which recreates
         // the FSI process) to get it. The old reflection-into-the-daemon approach
-        // could never work — DevReloadInjector lives in the worker process, not
-        // the daemon — and reported a misleading "architecture is broken" error.
+        // could never work — DevReloadInjector lives in the session's FSI host
+        // process, not the daemon — and reported a misleading "architecture is broken" error.
         logger.LogDebug("MCP-TOOL: enable_hot_reload called")
         withSessionReply ctx wd (fun sidStr -> task {
             let sid = match SageFs.WorkerProtocol.SessionId.validate sidStr with
@@ -1318,7 +1318,7 @@ var, this is per-session and reversible. The env var, if set, takes precedence."
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: disable_hot_reload called")
         // The per-session runtime toggle (DevReloadInjector.disableForSession)
-        // lives in the worker process, which the daemon can't reach directly —
+        // lives in the session's FSI host process, which the daemon can't reach directly —
         // the old reflection-into-the-daemon call silently found nothing and
         // reported disabled=true anyway. Answer honestly by the session's real
         // workflow instead of claiming a no-op succeeded.

@@ -223,6 +223,7 @@ let httpRoundTripTests =
       let! (server: WorkerHttpTransport.HttpWorkerServer) =
         WorkerHttpTransport.startServerWithShutdown
           (fun () -> callbackCalled.Value <- true)
+          ignore
           testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl

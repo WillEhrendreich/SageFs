@@ -330,8 +330,11 @@ module WorkerHttpTransport =
 
   /// Start a Kestrel HTTP server dispatching to the given handler.
   /// Pass port=0 for OS-assigned dynamic port.
+  /// `beforeListen` runs after the app is built and its routes are mapped, right before Kestrel binds `port`. The worker
+  /// frees the port it reserved there, so the time in which another process could take that port is only the bind.
   let startServerWithShutdown
     (onShutdown: unit -> unit)
+    (beforeListen: unit -> unit)
     (handler: WorkerMessage -> Async<WorkerResponse>)
     (hotReloadStateRef: HotReloadState.T ref)
     (keptState: Features.KeptState.Access)
@@ -952,6 +955,7 @@ module WorkerHttpTransport =
         | :? InvalidOperationException as ex -> Log.debug "[SSE] Client %s invalid op: %s" id ex.Message
       })) |> ignore
 
+      beforeListen ()
       do! app.StartAsync()
 
       let server = app.Services.GetRequiredService<IServer>()
@@ -971,7 +975,7 @@ module WorkerHttpTransport =
     (takeCoverage: unit -> HostAgent.AgentReply<HostAgent.CoverageReading>)
     (port: int)
     : Task<HttpWorkerServer> =
-    startServerWithShutdown (fun () -> ()) handler hotReloadStateRef keptState projectFiles getWarmupContext getRunTest takeCoverage port
+    startServerWithShutdown (fun () -> ()) ignore handler hotReloadStateRef keptState projectFiles getWarmupContext getRunTest takeCoverage port
 
   /// Create a SessionProxy backed by HTTP to the given base URL.
   /// Delegates to HttpWorkerClient in SageFs.Core.

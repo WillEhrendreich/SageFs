@@ -74,6 +74,12 @@
     <Compile Include="ValueReadTracking.fs" />
     <Compile Include="QualifiedNameMatch.fs" />
     <Compile Include="HotReloadCore.fs" />
+    <!-- The web DevReload middleware and its WebApplication.Run/RunAsync patch. The user's app runs in THIS process, so the
+         patch has to be here: Program.fs installs it when the agent starts, if AgentInit.WebDevReload says to. -->
+    <Compile Include="DevReloadMiddleware.fs" />
+    <Compile Include="DevReloadInjector.fs" />
+    <!-- The page script the middleware injects, read from this assembly's resources. -->
+    <EmbeddedResource Include="devreload.js" />
     <Compile Include="HostAgent.fs" />
     <Compile Include="FsiProtocol.fs" />
     <Compile Include="FcsQueries.fs" />

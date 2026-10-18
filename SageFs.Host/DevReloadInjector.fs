@@ -7,13 +7,12 @@ open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Http
 open System.Threading
 open SageFs.Utils
-open SageFs.Middleware.HotReloading
 open SageFs.Middleware.HotReloadCore
 
-/// Worker HTTP port — set after the worker server starts.
+/// The worker's HTTP port, which serves the reload stream the injected script connects to. 0 until it is set.
 let mutable private workerPort = 0
 
-/// Called by WorkerMain after the HTTP server starts.
+/// Called by the isolated FSI host when its agent starts (AgentInit.WebDevReload), before install().
 let setWorkerPort port = workerPort <- port
 
 /// Read the currently configured worker port. Returns 0 if not yet set.

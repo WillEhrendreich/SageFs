@@ -477,7 +477,7 @@ let tests =
           { Description = { Name = TestFramework.Expecto; AssemblyMarker = marker }
             Discover = fun _ -> ({ Tests = [ evalTest ]; RunTest = (fun _ -> async { return passed }) } : DiscoveryResult) }
       let emptyInit : AgentInit =
-        { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }
+        { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads; WebDevReload = SageFs.HostAgent.WebDevReload.Off }
       let sources : AssemblySources = { Dynamic = (fun () -> [| evalAssembly |]); Loaded = (fun () -> [||]) }
       let newAgent () = Agent(emptyInit, sources, [ executor ])
       /// An agent whose wait for a debugger is short, so a case that has no debugger does not wait out the real one.

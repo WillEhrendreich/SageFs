@@ -299,6 +299,16 @@ let private run (fsiArgs: string list) : int =
             try
               let agent = HostAgent.Agent(init, HostAgent.currentProcess (fun () -> session.DynamicAssemblies))
               Volatile.Write(&agentState.contents, AgentRunning agent)
+              // The user's web app runs in this process, so the WebApplication.Run/RunAsync patch goes here. The agent
+              // starts before base.fsx and .SageFs/init.fsx, so an app that init.fsx starts is patched too.
+              match init.WebDevReload with
+              | HostAgent.WebDevReload.Inject workerPort ->
+                // A browser reload that cannot be installed must not cost the session its agent: say so and go on.
+                try
+                  SageFs.DevReloadInjector.setWorkerPort workerPort
+                  SageFs.DevReloadInjector.install ()
+                with ex -> SageFs.Utils.Log.warn "[DevReload] could not install the web reload patch: %s: %s" (ex.GetType().Name) ex.Message
+              | HostAgent.WebDevReload.Off -> ()
               send (AgentStartResult(id, agent.Started))
             with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
         | RunAgentAfterEval(id, request) -> withAgent id (fun agent -> send (AgentAfterEvalResult(id, agent.AfterEval request)))
