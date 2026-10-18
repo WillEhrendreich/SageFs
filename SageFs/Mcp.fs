@@ -1236,7 +1236,7 @@ module McpTools =
         }
       | other ->
         let err = SageFsError.SessionNotRoutable (formatSessionResolution other)
-        return (sprintf "Error: %s" (formatSessionResolution other), InfraFailure err, [], Some err, ReplFreshness.InSync, EvalWriteBack.WriteBack.NotPersisted "the eval never ran (the session did not resolve), so nothing was written back")
+        return (sprintf "Error: %s" (formatSessionResolution other), InfraFailure err, [], Some err, ReplFreshness.Unknown FreshnessUnknown.NotRead, EvalWriteBack.WriteBack.NotPersisted "the eval never ran (the session did not resolve), so nothing was written back")
     }
 
   /// String-only view of evalFSharpCodeWithOutcome — keeps existing callers.

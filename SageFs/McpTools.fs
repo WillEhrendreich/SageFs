@@ -819,7 +819,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
               // which of the two outcomes it is, per the write-back contract: written back, or not
               // persisted with the reason.
               let verdict = EvalWriteBack.WriteBack.NotPersisted "the code was not evaluated (a file-opening declaration was refused first), so nothing was written back"
-              Task.FromResult (sprintf "Error: %s\n%s" hint (EvalWriteBack.WriteBack.describe verdict), InfraFailure err, [], Some err, SageFs.ReplFreshness.InSync, verdict)
+              Task.FromResult (sprintf "Error: %s\n%s" hint (EvalWriteBack.WriteBack.describe verdict), InfraFailure err, [], Some err, SageFs.ReplFreshness.Unknown SageFs.FreshnessUnknown.NotRead, verdict)
           // Outbound size cap (roast-7 §13) applies to the text agents
           // actually read; the same bounded text feeds the JSON `result`
           // field so the two never disagree about what was returned.
@@ -2351,7 +2351,7 @@ If the run is still going when wait_seconds ends, the result carries a receipt_i
                 | false, _ -> Error (sprintf "receipt_id '%s' is not a receipt_id from an earlier run_tests call." raw)
         match continuation with
         | Error message ->
-            withEchoRunTests ctx SageFs.ReplFreshness.InSync (Task.FromResult (SageFs.McpRunTests.RunTestsOutcome.NotRoutable (message, None)))
+            withEchoRunTests ctx (SageFs.ReplFreshness.Unknown SageFs.FreshnessUnknown.NotRead) (Task.FromResult (SageFs.McpRunTests.RunTestsOutcome.NotRoutable (message, None)))
         | Ok continueWith ->
             let request : SageFs.McpRunTests.RunTestsRequest =
                 { SessionId = opt session_id
@@ -2366,7 +2366,7 @@ If the run is still going when wait_seconds ends, the result carries a receipt_i
                 let! freshness =
                     match resolution with
                     | Routable sid -> SageFs.SessionStatusPayload.replFreshnessOf ctx.SessionOps sid
-                    | _ -> Task.FromResult SageFs.ReplFreshness.InSync
+                    | _ -> Task.FromResult (SageFs.ReplFreshness.Unknown SageFs.FreshnessUnknown.NotRead)
                 return! withEchoRunTests ctx freshness (SageFs.McpRunTests.runTests ctx "mcp" request)
             }
 
