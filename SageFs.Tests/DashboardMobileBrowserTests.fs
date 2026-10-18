@@ -32,14 +32,21 @@ let private sessionIds = [ "0a2b3c4d"; "0a2b3c4e"; "0a2b3c4f" ]
 let private longProjects =
   "(SageFs.Tests.Integration.WithAVeryLongProjectName.fsproj, SageFs.Core.fsproj, SageFs.Host.fsproj)"
 
-let private longDirectory =
-  "/home/will/Work/SageFs/.claude/worktrees/agent-a31b473c9dfa3ec9b/a/directory/that/goes/on/and/on/and/on"
+/// A directory whose path is far longer than the screen. It exists, because a card that names a directory that is not
+/// there makes the dashboard log a discovery failure for it. Made when the first case asks, not when the suite starts.
+let private longDirectory : Lazy<string> =
+  lazy (
+    let path =
+      IO.Path.Combine(
+        IO.Path.GetTempPath(), "sagefs-mobile-journey", "a", "directory", "that", "goes", "on", "and", "on", "and", "on", "and", "on")
+    IO.Directory.CreateDirectory path |> ignore
+    path)
 
 let private card (id: string) : ParsedSession =
   let sid = WorkerProtocol.SessionId.validate id |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
   { Id = sid; Status = SessionDisplayStatus.Running; StatusMessage = None
     ProjectsText = longProjects; EvalCount = 12
-    Uptime = Since.At 0L; WorkingDir = longDirectory; LastActivity = Since.At 0L
+    Uptime = Since.At 0L; WorkingDir = longDirectory.Value; LastActivity = Since.At 0L
     TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
     BindingEntries = [||]
     AgentBadges =
@@ -52,11 +59,11 @@ let private card (id: string) : ParsedSession =
     WorkerRssBytes = None; SelfHostStaleness = None; Source = CardSource.NotReadOnThisCard
     Freshness = ReplFreshness.InSync; Health = SessionHealth.Healthy }
 
-let private snapshot : DashboardSnapshot =
+let private snapshot () : DashboardSnapshot =
   let empty = Elem.div [] []
   let viewing = List.head sessionIds
   { DashboardSnapshot.Version = "0.0.0"
-    SessionId = viewing; WorkingDir = longDirectory
+    SessionId = viewing; WorkingDir = longDirectory.Value
     WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
     ThemeName = "default"; ConnectionLabel = None; InView = FixtureViews.running
     HotReloadPanel = empty; SessionContextPanel = empty
@@ -71,8 +78,8 @@ let private snapshot : DashboardSnapshot =
     App = AppRun.AppRunState.NotRunning
     EvalToPixelP50Ms = None; EvalToPixelP99Ms = None }
 
-let private shellHtml : string =
-  Dashboard.renderShell "0.0.0" "client-1" (List.head sessionIds) "/work" (renderMainContent snapshot) |> renderNode
+let private shellHtml : Lazy<string> =
+  lazy (Dashboard.renderShell "0.0.0" "client-1" (List.head sessionIds) "/work" (renderMainContent (snapshot ())) |> renderNode)
 
 /// Serve the dashboard from memory. The stream is answered with an empty event stream, so nothing is ever pushed.
 let private serve (page: IPage) = task {
@@ -81,7 +88,7 @@ let private serve (page: IPage) = task {
       let fulfil (contentType: string) (body: string) =
         route.FulfillAsync(RouteFulfillOptions(Status = 200, ContentType = contentType, Body = body))
       match Uri(route.Request.Url).AbsolutePath with
-      | "/dashboard" -> do! fulfil "text/html; charset=utf-8" shellHtml
+      | "/dashboard" -> do! fulfil "text/html; charset=utf-8" shellHtml.Value
       | "/dashboard/dashboard.css" -> do! fulfil "text/css; charset=utf-8" Dashboard.dashboardCss
       | "/dashboard/datastar.js" -> do! fulfil "application/javascript; charset=utf-8" Dashboard.datastarBundle
       | path when path.StartsWith "/dashboard/stream/" -> do! fulfil "text/event-stream" ""
