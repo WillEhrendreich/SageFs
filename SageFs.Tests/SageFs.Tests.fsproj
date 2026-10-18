@@ -183,6 +183,11 @@
         <Compile Include="DashboardEscapingTests.fs" />
         <Compile Include="SessionCardActionsTests.fs" />
         <Compile Include="DashboardViewingTests.fs" />
+        <Compile Include="DashboardTeardownViewTests.fs" />
+        <Compile Include="DashboardSessionIdRouteTests.fs" />
+        <Compile Include="DashboardActionResultTests.fs" />
+        <Compile Include="DashboardKeyBindingTests.fs" />
+        <Compile Include="DashboardPushStreakTests.fs" />
         <Compile Include="WorkerReloadRelayTests.fs" />
         <Compile Include="DashboardRenderGateTests.fs" />
         <Compile Include="DashboardIdleStabilityTests.fs" />

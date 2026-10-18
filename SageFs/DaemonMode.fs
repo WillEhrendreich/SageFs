@@ -4486,7 +4486,11 @@ let run
       let! result = sessionOps.CreateSession targets workingDir workflow
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
       return result
-        |> Result.map (fun sidStr -> WorkerProtocol.SessionId.validate sidStr |> Result.defaultValue (WorkerProtocol.SessionId.newId ()))
+        |> Result.bind (fun sidStr ->
+          // A session that was just created has an id the registry minted; one
+          // that does not parse is a defect to report, never one to cover with a fresh id.
+          WorkerProtocol.SessionId.validate sidStr
+          |> Result.mapError (fun reason -> SageFsError.SessionCreationFailed (sprintf "the session was created, but its id could not be read: %s" reason)))
     }
     ShutdownCallback = Some (fun () -> cts.Cancel())
     RunApp = fun sid request -> task {

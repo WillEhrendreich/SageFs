@@ -182,33 +182,146 @@ let evaluatePopoverFocusScript () =
     }, true);
   """ DomIds.EvaluateSection DomIds.EvalTextarea) ]
 
+/// Every key the dashboard binds, as data: the script below is built from it
+/// and the help table is meant to be read from it.
+///
+/// `x`, `Delete` and `X` used to stop sessions with no confirmation, on a
+/// daemon-wide selection the page never draws, and they fired from a
+/// `<select>`'s type-ahead as well. They now act on the session THIS tab
+/// views, ask first, and are ignored in anything the viewer types or chooses in.
+module KeyBindings =
+  [<RequireQualifiedAccess>]
+  type Confirmation =
+    | NoPrompt
+    /// Asked with the browser's confirm(); `{sid}` is the session in view.
+    | AskFirst of prompt: string
+
+  [<RequireQualifiedAccess>]
+  type Effect =
+    /// Moves the daemon-wide session cursor (every client shares it).
+    | MoveSelection of editorAction: string
+    | SelectCurrent
+    | SelectIndex
+    | NewSession
+    /// Stops the session this tab is viewing, through that card's own Stop button.
+    | StopViewing
+    /// Stops every session but the one this tab is viewing.
+    | StopOthers
+    /// Handled by another script on the page; listed so the help is complete.
+    | ClientOnly
+
+  type Binding =
+    { /// The `KeyboardEvent.key` values (or, for ClientOnly, the chord) it answers to.
+      Keys: string list
+      /// How it is written in the help table.
+      Shown: string
+      Help: string
+      Effect: Effect
+      Confirm: Confirmation }
+
+  /// A keystroke aimed at one of these is the viewer typing or choosing, never a command.
+  let textEntryTags = [ "input"; "textarea"; "select" ]
+
+  let private binding keys shown help effect confirm =
+    { Keys = keys; Shown = shown; Help = help; Effect = effect; Confirm = confirm }
+
+  let all : Binding list =
+    [ binding [ "j"; "ArrowDown" ] "j / Down" "Move the session cursor down (shared by every client)" (Effect.MoveSelection "sessionNavDown") Confirmation.NoPrompt
+      binding [ "k"; "ArrowUp" ] "k / Up" "Move the session cursor up (shared by every client)" (Effect.MoveSelection "sessionNavUp") Confirmation.NoPrompt
+      binding [ "Enter" ] "Enter" "Select the session under the cursor" Effect.SelectCurrent Confirmation.NoPrompt
+      binding [ "1"; "2"; "3"; "4"; "5"; "6"; "7"; "8"; "9" ] "1 to 9" "Put the session cursor on that session" Effect.SelectIndex Confirmation.NoPrompt
+      binding [ "n" ] "n" "Create a session" Effect.NewSession Confirmation.NoPrompt
+      binding [ "x"; "Delete" ] "x / Delete" "Stop the session this tab is viewing (asks first)" Effect.StopViewing
+        (Confirmation.AskFirst "Stop session {sid}? Its REPL bindings are lost.")
+      binding [ "X" ] "X" "Stop every session except the one this tab is viewing (asks first)" Effect.StopOthers
+        (Confirmation.AskFirst "Stop every session except {sid}? Their REPL bindings are lost.")
+      binding [ EvaluatePopover.OpenKey ] EvaluatePopover.OpenKey "Open Evaluate (a quick check; Esc closes it)" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Escape" ] "Esc" "Close the Evaluate popover" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Alt+Enter" ] "Alt+Enter" "Evaluate code" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Tab" ] "Tab" "Insert 2 spaces (in the editor)" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Ctrl+L" ] "Ctrl+L" "Clear output" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Ctrl+Tab" ] "Ctrl+Tab" "Cycle to the next session (Shift reverses)" Effect.ClientOnly Confirmation.NoPrompt
+      binding [ "Ctrl+="; "Ctrl+-" ] "Ctrl+= / Ctrl+-" "Larger / smaller text" Effect.ClientOnly Confirmation.NoPrompt ]
+
+  /// The card of the session this tab is viewing, and the buttons on the page
+  /// that stop sessions (the page's own, so the click takes the same path).
+  let viewingCardSelector = "[data-testid=\"session-card\"][aria-current=\"true\"]"
+  let stopButtonSelector = "button[aria-label^=\"Stop —\"]"
+  let stopOthersButtonSelector = "button[aria-label^=\"Stop Others\"]"
+
+  let jsString (s: string) : string =
+    "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""
+
+  let textEntryTagsJson : string =
+    textEntryTags |> List.map jsString |> String.concat "," |> sprintf "[%s]"
+
+  /// `{"j":["m","sessionNavDown",""], ...}`: key to (kind, argument, prompt).
+  let tableJson : string =
+    all
+    |> List.collect (fun b ->
+      let prompt =
+        match b.Confirm with
+        | Confirmation.NoPrompt -> ""
+        | Confirmation.AskFirst p -> p
+      let kind, arg =
+        match b.Effect with
+        | Effect.MoveSelection action -> "m", action
+        | Effect.SelectCurrent -> "s", ""
+        | Effect.SelectIndex -> "i", ""
+        | Effect.NewSession -> "n", ""
+        | Effect.StopViewing -> "x", ""
+        | Effect.StopOthers -> "o", ""
+        | Effect.ClientOnly -> "", ""
+      match kind with
+      | "" -> []
+      | _ -> b.Keys |> List.map (fun key -> sprintf "%s:[%s,%s,%s]" (jsString key) (jsString kind) (jsString arg) (jsString prompt)))
+    |> String.concat ","
+    |> sprintf "{%s}"
+
 /// Keyboard shortcuts, font-size adjustment, session navigation, sidebar resize.
+///
+/// How the handler reads (the script carries no comments: every inline byte
+/// is counted against the shell's JS budget):
+/// - `typing` is the viewer typing or choosing in an element (see
+///   `KeyBindings.textEntryTags`), so the keystroke is theirs, not a command.
+///   Keys with Ctrl, Alt or Meta held are never session commands either.
+/// - Escape closes the Evaluate popover; the box's own handler claims an
+///   Escape that only dismisses its completion list.
+/// - Key `e` opens the Evaluate popover, which takes focus when it opens.
+/// - Enter on a focused button, link or summary is that control's own
+///   activation (the unseen-eval pill, every panel button), never session select.
+/// - Stopping acts on the session THIS tab views and asks first; it clicks that
+///   card's own Stop button (or the Stop Others button), so it takes the same
+///   path as a click.
 let keyboardHandlerScript () =
   Elem.script [] [ Text.raw (sprintf """
     (function() {
       function d(a,v){var b=v?{action:a,value:v}:{action:a};fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});}
+      var BINDINGS=%s,TEXT=%s,CARD=%s,STOP=%s,OTHERS=%s;
+      function typing(t){return !!t&&(TEXT.indexOf((t.tagName||'').toLowerCase())>=0||t.isContentEditable===true);}
       var sizes=[10,12,14,16,18,20,24],idx=2;
       document.addEventListener('keydown',function(e){
         if(e.ctrlKey&&(e.key==='='||e.key==='+')){e.preventDefault();idx=Math.min(sizes.length-1,idx+1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
         if(e.ctrlKey&&e.key==='-'){e.preventDefault();idx=Math.max(0,idx-1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
         if(e.ctrlKey&&e.key==='Tab'){e.preventDefault();d(e.shiftKey?'sessionCyclePrev':'sessionCycleNext');return;}
-        // Escape closes the Evaluate popover. The box's own handler claims an Escape that only dismisses its completion list.
         if(e.key==='Escape'){var pop=document.getElementById('%s');if(pop&&pop.open){pop.open=false;return;}}
+        if(typing(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;
         var tag=(e.target.tagName||'').toLowerCase();
-        if(tag!=='input'&&tag!=='textarea'){
-          var a=null,v=null;
-          // Key e opens the Evaluate popover, which takes focus when it opens.
-          if(e.key==='%s'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){var ev=document.getElementById('%s');if(ev){e.preventDefault();ev.open=true;return;}}
-          if(e.key==='j'||e.key==='ArrowDown'){a='sessionNavDown';}
-          if(e.key==='k'||e.key==='ArrowUp'){a='sessionNavUp';}
-          // Enter on a focused button/link/summary/select is that control's own activation (the unseen-eval pill, every panel button), never session select.
-          if(e.key==='Enter'&&tag!=='button'&&tag!=='a'&&tag!=='summary'&&tag!=='select'){a='sessionSelect';}
-          if(e.key==='x'||e.key==='Delete'){a='sessionDelete';}
-          if(e.key==='X'){a='sessionStopOthers';}
-          if(e.key==='n'){e.preventDefault();fetch('/dashboard/session/create',{method:'POST'});return;}
-          if(e.key>='1'&&e.key<='9'){a='sessionSetIndex';v=String(parseInt(e.key)-1);}
-          if(a){e.preventDefault();d(a,v);}
-        }
+        if(e.key==='%s'){var ev=document.getElementById('%s');if(ev){e.preventDefault();ev.open=true;return;}}
+        var b=Object.prototype.hasOwnProperty.call(BINDINGS,e.key)?BINDINGS[e.key]:null;
+        if(!b)return;
+        var k=b[0];
+        if(k==='s'&&(tag==='button'||tag==='a'||tag==='summary'))return;
+        e.preventDefault();
+        if(k==='m'){d(b[1]);return;}
+        if(k==='s'){d('sessionSelect');return;}
+        if(k==='i'){d('sessionSetIndex',String(parseInt(e.key)-1));return;}
+        if(k==='n'){fetch('/dashboard/session/create',{method:'POST'});return;}
+        var card=document.querySelector(CARD),sid=card?card.getAttribute('data-session-id'):'';
+        if(!sid)return;
+        if(!confirm(b[2].replace('{sid}',sid)))return;
+        var btn=k==='x'?card.querySelector(STOP):document.querySelector(OTHERS);
+        if(btn)btn.click();
       });
       var h=document.getElementById('%s'),s=document.getElementById('%s');
       if(h&&s){
@@ -229,7 +342,7 @@ let keyboardHandlerScript () =
         });
       }
     })();
-  """ DomIds.EvaluateSection EvaluatePopover.OpenKey DomIds.EvaluateSection DomIds.SidebarResize DomIds.Sidebar) ]
+  """ KeyBindings.tableJson KeyBindings.textEntryTagsJson (KeyBindings.jsString KeyBindings.viewingCardSelector) (KeyBindings.jsString KeyBindings.stopButtonSelector) (KeyBindings.jsString KeyBindings.stopOthersButtonSelector) DomIds.EvaluateSection EvaluatePopover.OpenKey DomIds.EvaluateSection DomIds.SidebarResize DomIds.Sidebar) ]
 
 /// Render the dashboard HTML shell with pre-rendered initial content.
 /// Providing initialContent eliminates the loading-screen flash — the browser
@@ -410,6 +523,116 @@ let resolveViewingSession
     |> Option.bind (WorkerProtocol.SessionId.validate >> Result.toOption)
     |> Option.filter (fun sessionId -> sessions |> List.exists (fun session -> session.Id = sessionId))
   requested
+
+/// How a dashboard action went, in the three tones the viewer is told in.
+[<RequireQualifiedAccess>]
+type ActionOutcome =
+  /// Under way, or nothing to do.
+  | Info of string
+  | Success of string
+  | Failure of string
+
+/// Where a session action says how it went.
+///
+/// Those actions used to write to `#eval-result`, which sits inside the
+/// Evaluate popover, a `<details>` that is closed until the viewer presses λ or
+/// `e`. A Run App that failed to build, a Purge that errored, a project switch
+/// that could not load: nothing on screen changed and nothing was said.
+///
+/// The notice is appended to `<body>`. That is outside every `<details>`, and
+/// outside `#main`, which the stream re-renders and would wipe it. Each new
+/// notice removes the one before it, and it has a dismiss button.
+module ActionResult =
+  /// Where the notice is attached. A Datastar selector, not an id.
+  let [<Literal>] Selector = "body"
+  let [<Literal>] CssClass = "action-result"
+
+  let private replacePrevious =
+    sprintf "document.querySelectorAll('.%s').forEach(function(n){if(n!==el)n.remove()})" CssClass
+
+  let private dismiss = sprintf "el.closest('.%s').remove()" CssClass
+
+  let private placement =
+    "position:fixed;bottom:2.25rem;right:1rem;max-width:min(42rem,calc(100vw - 2rem));z-index:200;"
+    + "display:flex;gap:0.5rem;align-items:flex-start;padding:0.4rem 0.6rem;"
+    + "background:var(--bg-default);border:1px solid var(--border-normal);box-shadow:0 2px 8px rgba(0,0,0,0.35);"
+
+  let render (outcome: ActionOutcome) : XmlNode =
+    let role, tone, text =
+      match outcome with
+      | ActionOutcome.Info t -> "status", "output-info", t
+      | ActionOutcome.Success t -> "status", "output-result", t
+      | ActionOutcome.Failure t -> "alert", "output-error", t
+    Elem.div
+      [ Attr.class' CssClass
+        Attr.style placement
+        Attr.create "role" role
+        testid "action-result"
+        Ds.onInit replacePrevious ]
+      [ Elem.pre
+          [ Attr.class' (sprintf "output-line %s" tone)
+            Attr.style "margin:0;white-space:pre-wrap;flex:1;" ]
+          [ textEnc text ]
+        Elem.button
+          [ Attr.class' "session-btn"
+            Attr.style "width:auto;padding:0 6px;"
+            Attr.create "aria-label" "Dismiss this message"
+            Attr.create "title" "Dismiss"
+            Ds.onClick dismiss ]
+          [ Text.raw "×" ] ]
+
+  /// Say how an action went, in a place the viewer can see.
+  let patch (ctx: HttpContext) (outcome: ActionOutcome) : Threading.Tasks.Task =
+    Falco.Datastar.Response.sseStringElementsOptions
+      ctx
+      { StarFederation.Datastar.FSharp.PatchElementsOptions.Defaults with
+          Selector = ValueSome Selector
+          PatchMode = StarFederation.Datastar.FSharp.ElementPatchMode.Append }
+      (renderNode (render outcome))
+
+/// How many render pushes in a row have failed on one dashboard connection.
+[<RequireQualifiedAccess>]
+type PushStreak =
+  | Healthy
+  | Failing of count: int * lastReason: string
+
+/// What a push result asks the stream to do about it.
+[<RequireQualifiedAccess>]
+type PushEffect =
+  | NoEffect
+  /// The first failure of a streak: log it at Warn, once.
+  | LogStreakStart of reason: string
+  /// The second in a row: the page says it failed to render.
+  | ShowNotice of reason: string
+  /// The first push that worked after a notice was shown: say it is back.
+  | ClearNotice
+
+/// A failing `pushState` used to be logged at Debug and dropped while the
+/// heartbeat kept the page "connected": the content froze with no banner and
+/// nothing in a default log. One failure is a blip and is only logged; the
+/// second in a row means the page is stale, and says so.
+module PushStreak =
+  /// Failures in a row before the page is told.
+  let [<Literal>] NoticeAfter = 2
+
+  let healthy : PushStreak = PushStreak.Healthy
+
+  let failed (streak: PushStreak) (reason: string) : PushStreak * PushEffect =
+    match streak with
+    | PushStreak.Healthy -> PushStreak.Failing (1, reason), PushEffect.LogStreakStart reason
+    | PushStreak.Failing (count, _) ->
+      let next = count + 1
+      match next with
+      | NoticeAfter -> PushStreak.Failing (next, reason), PushEffect.ShowNotice reason
+      | _ -> PushStreak.Failing (next, reason), PushEffect.NoEffect
+
+  let succeeded (streak: PushStreak) : PushStreak * PushEffect =
+    match streak with
+    | PushStreak.Healthy -> PushStreak.Healthy, PushEffect.NoEffect
+    | PushStreak.Failing (count, _) when count >= NoticeAfter -> PushStreak.Healthy, PushEffect.ClearNotice
+    | PushStreak.Failing _ -> PushStreak.Healthy, PushEffect.NoEffect
+
+  let noticeText (reason: string) : string = sprintf "dashboard failed to render: %s" reason
 
 /// What a dashboard stream should view on its next push. A session can die
 /// outside this page's own teardown path — an MCP stop, a worker crash,
@@ -1463,6 +1686,8 @@ let createStreamHandler
     // the old connection's cleanup can run after it: removing by id alone would
     // delete the newer connection's channel and leave it unable to receive pushes.
     let ownChannel = ref (Unchecked.defaultof<MailboxProcessor<DashboardStreamCommand>>)
+    // Consecutive failing pushes on THIS connection (see `PushStreak`).
+    let pushStreak = ref PushStreak.healthy
     try
       // Push initial state (catch all exceptions — don't let a transient failure kill the stream)
       try
@@ -1503,15 +1728,32 @@ let createStreamHandler
           | BurstCohortViewingSeq.NoChange -> ()
           if burst.WorkerInvalidated then
             lastWorkerFetch <- DateTime.MinValue
+          // The page says so when it keeps failing to render: the heartbeat
+          // below keeps it "connected" whatever the pushes do.
+          let say (outcome: ActionOutcome) = async {
+            try do! ActionResult.patch ctx outcome |> Async.AwaitTask
+            with _ -> ()
+          }
+          let record (apply: PushStreak -> PushStreak * PushEffect) = async {
+            let next, effect = apply pushStreak.Value
+            pushStreak.Value <- next
+            match effect with
+            | PushEffect.NoEffect -> ()
+            | PushEffect.LogStreakStart reason ->
+              Log.warn "[Dashboard SSE] pushState failed (later failures in this streak are not logged): %s" reason
+            | PushEffect.ShowNotice reason -> do! say (ActionOutcome.Failure (PushStreak.noticeText reason))
+            | PushEffect.ClearNotice -> do! say (ActionOutcome.Success "Dashboard rendering recovered.")
+          }
           try
             do! pushState () |> Async.AwaitTask
+            do! record PushStreak.succeeded
           with
           | :? System.IO.IOException -> ()
           | :? ObjectDisposedException -> ()
           | :? OperationCanceledException -> ()
           | :? System.ArgumentOutOfRangeException -> ()
           | :? System.InvalidOperationException -> ()
-          | ex -> Log.debug "[Dashboard SSE] pushState failed: %s" ex.Message
+          | ex -> do! record (fun streak -> PushStreak.failed streak ex.Message)
         }
         let rec loop () = async {
           // Disconnect-indicator heartbeat: checked on every iteration
@@ -1998,6 +2240,56 @@ let routeValue (key: string) (ctx: HttpContext) : string =
   | true, (:? string as value) -> value
   | _ -> ""
 
+/// What "stop all the others" has to tell the viewer: how many stopped, and
+/// for each that did not, which and why. It used to count the others it
+/// ASKED to stop, whether or not the stop worked.
+module StopOthersReport =
+  let summarize (results: (WorkerProtocol.SessionId * Result<string, string>) list) : ActionOutcome =
+    let failed =
+      results
+      |> List.choose (fun (id, outcome) ->
+        match outcome with
+        | Error reason -> Some (sprintf "%s (%s)" (WorkerProtocol.SessionId.value id) reason)
+        | Ok _ -> None)
+    let total = List.length results
+    let stopped = total - List.length failed
+    match total, failed with
+    | 0, _ -> ActionOutcome.Info "No other sessions to stop."
+    | _, [] -> ActionOutcome.Success (sprintf "Stopped %d other session(s)." stopped)
+    | _ -> ActionOutcome.Failure (sprintf "Stopped %d of %d other session(s). Could not stop: %s" stopped total (String.concat "; " failed))
+
+/// A route's `{id}` that is not a session id: which parameter, what arrived,
+/// and what would have been accepted.
+type MalformedSessionId = { Field: string; Received: string; Expected: string }
+
+/// The `{id}` of a mutating session route. A malformed one is a 400 that names
+/// the field. It used to be swapped for a fresh random id, so the action ran
+/// against a session that cannot exist and the caller was never told.
+module SessionIdRoute =
+  let [<Literal>] Field = "id"
+  let [<Literal>] Expected = "8 lowercase hex digits, for example 0a1b2c3d"
+
+  let parse (raw: string) : Result<WorkerProtocol.SessionId, MalformedSessionId> =
+    WorkerProtocol.SessionId.validate raw
+    |> Result.mapError (fun _ -> { Field = Field; Received = raw; Expected = Expected })
+
+  let describe (malformed: MalformedSessionId) : string =
+    sprintf "Bad request: route parameter '%s' must be %s; received '%s'." malformed.Field malformed.Expected malformed.Received
+
+  let refuse (malformed: MalformedSessionId) : HttpHandler =
+    fun ctx -> task {
+      ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
+      ctx.Response.ContentType <- "text/plain; charset=utf-8"
+      do! ctx.Response.WriteAsync(describe malformed)
+    }
+
+  /// Run `onValid` for a well-formed id, refuse everything else.
+  let handle (onValid: WorkerProtocol.SessionId -> HttpHandler) : string -> HttpHandler =
+    fun raw ->
+      match parse raw with
+      | Ok sessionId -> onValid sessionId
+      | Error malformed -> refuse malformed
+
 /// A page's client id: 8 hex digits, minted once when the page is served.
 ///
 /// It is a hex string, so about 1.3% of them are digits around a single `e`
@@ -2108,6 +2400,65 @@ let createSettingsClearHandler : string -> HttpHandler =
     | :? System.ObjectDisposedException -> ()
   }
 
+/// Whether the stop / dispose / purge the handler asked for took effect.
+[<RequireQualifiedAccess>]
+type TeardownOutcome =
+  | TornDown
+  | TeardownFailed
+
+/// Where a tab's view goes once a teardown has run. The view only ever moves
+/// when the session being viewed is the one torn down: closing a background
+/// card must not change what the viewer is reading.
+[<RequireQualifiedAccess>]
+type ViewAfterTeardown =
+  /// Keep viewing this session; the teardown was about another one (or failed).
+  | StayOn of WorkerProtocol.SessionId
+  /// The tab was on the session picker (no session in play) and stays there.
+  | StayOnPicker
+  /// The viewed session was torn down; view this one instead.
+  | MoveTo of WorkerProtocol.SessionId
+  /// The viewed session was torn down and nothing else is left.
+  | NoSessionLeft
+
+module ViewAfterTeardown =
+  /// The session after the torn-down one in the sidebar's order, wrapping to
+  /// the first when it was the last. The order is read from `before` (the
+  /// registry as it stood when the stop was asked for), because `after` may
+  /// already have dropped the torn-down session and with it its position.
+  let nextAfter
+    (torn: WorkerProtocol.SessionId)
+    (before: WorkerProtocol.SessionId list)
+    (after: WorkerProtocol.SessionId list)
+    : ViewAfterTeardown =
+    match after |> List.filter (fun id -> id <> torn) with
+    | [] -> ViewAfterTeardown.NoSessionLeft
+    | remaining ->
+      let following =
+        match List.tryFindIndex ((=) torn) before with
+        | Some idx -> List.skip (idx + 1) before @ List.take idx before
+        | None -> before
+      match following |> List.tryFind (fun id -> List.contains id remaining) with
+      | Some next -> ViewAfterTeardown.MoveTo next
+      | None -> ViewAfterTeardown.MoveTo (List.head remaining)
+
+  /// `viewing` is this tab's viewingSessionId signal as sent ("" on the picker);
+  /// `before` and `after` are the registry in sidebar order when the stop was
+  /// asked for and when it finished.
+  let decide
+    (outcome: TeardownOutcome)
+    (torn: WorkerProtocol.SessionId)
+    (viewing: string)
+    (before: WorkerProtocol.SessionId list)
+    (after: WorkerProtocol.SessionId list)
+    : ViewAfterTeardown =
+    match WorkerProtocol.SessionId.validate viewing with
+    | Error _ -> ViewAfterTeardown.StayOnPicker
+    | Ok viewed when viewed <> torn -> ViewAfterTeardown.StayOn viewed
+    | Ok viewed ->
+      match outcome with
+      | TeardownOutcome.TeardownFailed -> ViewAfterTeardown.StayOn viewed
+      | TeardownOutcome.TornDown -> nextAfter torn before after
+
 let createSessionActionHandler
   (q: DashboardQueries)
   (infra: DashboardInfra)
@@ -2130,6 +2481,10 @@ let createSessionActionHandler
         }
       Response.sseStartResponse ctx |> ignore
       let isViewingStopped = viewingId = sid
+      // The sidebar's order as it stands before the stop: where the next
+      // session is found if the viewed one goes.
+      let! sessionsBefore = q.GetAllSessions ()
+      let listedBefore = sessionsBefore |> List.map (fun s -> s.Id)
       // Immediate feedback: swap the card for the "Stopping…" message.
       if teardown then
         do! ssePatchNode ctx (renderStoppingCard sessionId)
@@ -2142,35 +2497,12 @@ let createSessionActionHandler
           do! ssePatchNode ctx clearedOutput
           do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.EvalResult ] [])
       let! result = action sessionId
-      // After a successful teardown, select the next session (or show the picker).
-      let! nextId =
-        match teardown && Result.isOk result with
-        | false -> task { return None }
-        | true ->
-          task {
-            let! sessions = q.GetAllSessions ()
-            let remainingIds =
-              sessions
-              |> List.map (fun s -> s.Id)
-              |> List.filter (fun id -> id <> sessionId)
-            // The sidebar lists sessions in registry order — "next in list" is
-            // the session after the torn-down one in that same order.
-            let orderedIds = sessions |> List.map (fun s -> s.Id)
-            let orderedRemaining = remainingIds
-            match orderedRemaining with
-            | [] -> return None
-            | ids ->
-              match List.tryFindIndex ((=) sessionId) orderedIds with
-              | Some idx when idx < List.length ids -> return Some ids.[idx]
-              | _ -> return Some (List.head ids)
-          }
-      match nextId with
-      | Some nextSession ->
-        // Auto-switch: display + select the next session.
-        retargetStream infra channelClientId (Some nextSession)
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value nextSession)
-        // Sync the output, sessions panel, and statusline to the auto-selected next session.
-        match q.GetElmRegionsForSession nextSession with
+      // Make this tab view `target`: retarget its stream, carry the new viewing
+      // id, and sync the output, sessions panel and statusline to it.
+      let showSession (target: WorkerProtocol.SessionId) = task {
+        retargetStream infra channelClientId (Some target)
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value target)
+        match q.GetElmRegionsForSession target with
         | Some regions ->
           match regions |> List.tryFind (fun r -> r.Id = "output") with
           | Some outputRegion ->
@@ -2178,57 +2510,51 @@ let createSessionActionHandler
           | None -> ()
         | None -> ()
         let! cards = buildSessionCards q
-        do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value nextSession) cards (q.IsCreatingSession ()))
-        let stateLabel = q.GetSessionState nextSession |> SessionState.label
+        do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value target) cards (q.IsCreatingSession ()))
+        let stateLabel = q.GetSessionState target |> SessionState.label
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.SessionStatus ] [
             Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ textEnc stateLabel ]
           ])
-        let switchedDir = q.GetSessionWorkingDir nextSession
-        do! ssePatchNode ctx (renderStatuslineLeft stateLabel switchedDir)
-      | None when teardown && Result.isOk result ->
-        // No sessions remain — show the session picker (with Resume Previous),
-        // honoring this same connection's earlier sort choice if it made one.
-        retargetStream infra channelClientId None
-        let! previous = q.GetPreviousSessions ()
-        let previousSort = previousSessionSortByClient.Find(channelClientId, PreviousSessionSort.Recent)
-        do! ssePatchNode ctx (renderSessionPickerSorted previousSort previous)
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
-      | None ->
-        // Switch path (or failed teardown): eval form targets the requested session.
-        retargetStream infra channelClientId (Some sessionId)
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value sessionId)
-        // Immediately sync the output, sessions panel, and statusline to the
-        // newly-selected session so the display matches the sidebar highlight.
-        match q.GetElmRegionsForSession sessionId with
-        | Some regions ->
-          match regions |> List.tryFind (fun r -> r.Id = "output") with
-          | Some outputRegion ->
-            do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content) "No output yet")
-          | None -> ()
-        | None -> ()
+        do! ssePatchNode ctx (renderStatuslineLeft stateLabel (q.GetSessionWorkingDir target))
+      }
+      // The viewer's view is left alone: only the sessions panel needs to
+      // stop listing (or start flagging) the card the action touched.
+      let refreshSessionsPanel (viewing: string) = task {
         let! cards = buildSessionCards q
-        do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards (q.IsCreatingSession ()))
-        // Patch the tabline status with the switched-to session's state.
-        let stateLabel = q.GetSessionState sessionId |> SessionState.label
-        do! ssePatchNode ctx (
-          Elem.div [ Attr.id DomIds.SessionStatus ] [
-            Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ textEnc stateLabel ]
-          ])
-        // Patch the statusline with the switched-to session's working dir + state.
-        let switchedDir = q.GetSessionWorkingDir sessionId
-        do! ssePatchNode ctx (renderStatuslineLeft stateLabel switchedDir)
-      let msg, cssClass =
-        match result with
-        | Ok m -> m, "output-line output-info"
-        | Error e -> e, "output-line output-error"
-      let resultHtml =
-        Elem.div [ Attr.id DomIds.EvalResult ] [
-          Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            textEnc msg
-          ]
-        ]
-      do! ssePatchNode ctx resultHtml
+        do! ssePatchNode ctx (renderSessionsForSession viewing cards (q.IsCreatingSession ()))
+      }
+      match teardown with
+      | false ->
+        // Switch / run-app / stop-app: the eval form targets the requested session.
+        do! showSession sessionId
+      | true ->
+        let! after = q.GetAllSessions ()
+        let outcome =
+          match Result.isOk result with
+          | true -> TeardownOutcome.TornDown
+          | false -> TeardownOutcome.TeardownFailed
+        match ViewAfterTeardown.decide outcome sessionId viewingId listedBefore (after |> List.map (fun s -> s.Id)) with
+        | ViewAfterTeardown.MoveTo next -> do! showSession next
+        | ViewAfterTeardown.NoSessionLeft ->
+          // No sessions remain — show the session picker (with Resume Previous),
+          // honoring this same connection's earlier sort choice if it made one.
+          retargetStream infra channelClientId None
+          let! previous = q.GetPreviousSessions ()
+          let previousSort = previousSessionSortByClient.Find(channelClientId, PreviousSessionSort.Recent)
+          do! ssePatchNode ctx (renderSessionPickerSorted previousSort previous)
+          do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
+        | ViewAfterTeardown.StayOn kept when kept = sessionId ->
+          // The viewed session's own teardown failed: its output was cleared
+          // above, so bring it back.
+          do! showSession kept
+        | ViewAfterTeardown.StayOn kept -> do! refreshSessionsPanel (WorkerProtocol.SessionId.value kept)
+        | ViewAfterTeardown.StayOnPicker -> do! refreshSessionsPanel ""
+      // Said where the viewer can see it: the Evaluate popover that
+      // `#eval-result` lives in is closed unless they opened it.
+      match result with
+      | Ok message -> do! ActionResult.patch ctx (ActionOutcome.Success message)
+      | Error reason -> do! ActionResult.patch ctx (ActionOutcome.Failure reason)
     with
     | :? System.IO.IOException -> ()
     | :? System.ObjectDisposedException -> ()
@@ -2611,12 +2937,7 @@ let createCreateSessionHandler
               // session selection — no URL query parameter).
               retargetStream infra channelClientId (Some newSessionId)
               do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
-              do! ssePatchNode ctx (
-                Elem.div [ Attr.id DomIds.EvalResult ] [
-                  Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
-                    textEnc (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId))
-                  ]
-                ])
+              do! ActionResult.patch ctx (ActionOutcome.Success (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId)))
               // Clear the Discover slot only on SUCCESS — clearing it
               // unconditionally used to wipe out the Error branch's own
               // message the instant it was patched into the same slot.
@@ -2708,7 +3029,7 @@ let createToggleWarmupAutoOpenHandler
   }
 
 /// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
-let createApiStateHandler
+let createApiStateStream
   (q: DashboardQueries)
   (infra: DashboardInfra)
   : HttpHandler =
@@ -2831,6 +3152,25 @@ let createApiStateHandler
       infra.ConnectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
   }
 
+
+/// The TUI stream, with an explicit `?sessionId=` that is not a session id
+/// refused as a 400 before the stream opens (it used to be read as a random id,
+/// so the client got a stream of an empty session).
+let createApiStateHandler
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  : HttpHandler =
+  fun ctx ->
+    let explicitSid =
+      match ctx.Request.Query.TryGetValue("sessionId") with
+      | true, v when v.Count > 0 -> v.[0]
+      | _ -> ""
+    match String.IsNullOrEmpty explicitSid with
+    | true -> createApiStateStream q infra ctx
+    | false ->
+      match SessionIdRoute.parse explicitSid with
+      | Ok _ -> createApiStateStream q infra ctx
+      | Error malformed -> SessionIdRoute.refuse { malformed with Field = "sessionId" } ctx
 
 /// POST /api/dispatch — accept EditorAction JSON and dispatch to Elm runtime.
 let createApiDispatchHandler
@@ -3239,14 +3579,9 @@ let createEndpoints
       match result with
       | Ok sessionId ->
         a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-        do! ssePatchNode ctx (
-          Elem.div [ Attr.id DomIds.EvalResult ] [
-            Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              textEnc (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value sessionId))
-            ]
-          ])
+        do! ActionResult.patch ctx (ActionOutcome.Success (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value sessionId)))
       | Error err ->
-        do! ssePatchNode ctx (evalResultError err)
+        do! ActionResult.patch ctx (ActionOutcome.Failure err)
     })
     // Resume previous session (re-creates in same working dir)
     yield mapPostRaw "/dashboard/session/resume/{id}"
@@ -3266,7 +3601,7 @@ let createEndpoints
           match SessionProjectTarget.tryCreateMany prev.Projects with
           | Error reason ->
             Log.warn "[Dashboard] Could not reopen previous session for %s: %s" prev.WorkingDir reason
-            do! ssePatchNode ctx (evalResultError (sprintf "Could not reopen previous session: %s" reason))
+            do! ActionResult.patch ctx (ActionOutcome.Failure (sprintf "Could not reopen previous session: %s" reason))
           | Ok targets ->
             let! result = DashboardActions.createInteractive a targets prev.WorkingDir
             match result with
@@ -3276,17 +3611,12 @@ let createEndpoints
               // this page's SSE stream to it (signal-driven; no URL query param).
               retargetStream infra channelClientId (Some newSessionId)
               do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
-              do! ssePatchNode ctx (
-                Elem.div [ Attr.id DomIds.EvalResult ] [
-                  Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                    textEnc (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value newSessionId))
-                  ]
-                ])
+              do! ActionResult.patch ctx (ActionOutcome.Success (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value newSessionId)))
             | Error err ->
-              do! ssePatchNode ctx (evalResultError err)
+              do! ActionResult.patch ctx (ActionOutcome.Failure err)
         | None ->
           Response.sseStartResponse ctx |> ignore
-          do! ssePatchNode ctx (evalResultError (sprintf "Previous session '%s' not found" sessionId))
+          do! ActionResult.patch ctx (ActionOutcome.Failure (sprintf "Previous session '%s' not found" sessionId))
       })
     // TUI client API
     yield get "/api/state" (createApiStateHandler q infra)
@@ -3319,7 +3649,7 @@ let createEndpoints
     yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)
     yield mapPostRaw "/dashboard/session/switch/{id}"
       (routeValue "id")
-      (fun sid -> createSessionActionHandler q infra a.SwitchSession false (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.SwitchSession false))
     // Load a different project into a session. There is no in-place "swap the
     // project" in the worker — the project set is fixed when FSI starts — so this
     // is honestly a recreate: new session on the chosen project, then stop the old
@@ -3336,42 +3666,38 @@ let createEndpoints
           | true, v -> string v
           | _ -> ""
         routeValue "id" ctx, project)
-      (fun (sid, project) -> fun ctx -> task {
-        Response.sseStartResponse ctx |> ignore
-        let say (text: string) =
-          ssePatchNode ctx (
-            Elem.div [ Attr.id DomIds.EvalResult ] [
-              Elem.pre
-                [ Attr.class' "output-line output-result"
-                  Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ]
-                [ textEnc text ] ])
-        match WorkerProtocol.SessionId.validate sid with
-        | Error _ -> do! say (sprintf "Not a session id: %s" sid)
-        | Ok sessionId ->
+      (fun (sid, project) ->
+        SessionIdRoute.handle (fun sessionId -> fun ctx -> task {
+          Response.sseStartResponse ctx |> ignore
+          let say (outcome: ActionOutcome) = ActionResult.patch ctx outcome
           let! sessions = q.GetAllSessions ()
           match sessions |> List.tryFind (fun s -> s.Id = sessionId) with
-          | None -> do! say (sprintf "Session '%s' is no longer running." sid)
+          | None -> do! say (ActionOutcome.Failure (sprintf "Session '%s' is no longer running." sid))
           | Some existing ->
             let dir = existing.WorkingDirectory
             // Same containment discipline as every other session-create path: a
             // project must resolve inside the session's own directory.
             match DashboardTypes.resolveSessionProjects dir project with
-            | Error err -> do! say (SageFsError.describe err)
+            | Error err -> do! say (ActionOutcome.Failure (SageFsError.describe err))
             | Ok resolved ->
-              let targets = SessionProjectTarget.tryCreateMany resolved |> Result.defaultValue [ SessionProjectTarget.Bare ]
-              do! say (sprintf "Loading %s… (the previous session's REPL bindings are discarded)" project)
-              let! created = DashboardActions.createInteractive a targets dir
-              match created with
-              | Error err -> do! say (sprintf "Could not load %s: %s" project err)
-              | Ok newId ->
-                let! _ = a.StopSession sessionId
-                let! _ = a.SwitchSession newId
-                a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-                do! say (sprintf "Session '%s' loaded %s." (WorkerProtocol.SessionId.value newId) project)
-      })
+              match SessionProjectTarget.tryCreateMany resolved with
+              | Error reason ->
+                // Never load a bare REPL in place of the project that was asked for.
+                do! say (ActionOutcome.Failure (sprintf "Could not load %s: %s" project reason))
+              | Ok targets ->
+                do! say (ActionOutcome.Info (sprintf "Loading %s… (the previous session's REPL bindings are discarded)" project))
+                let! created = DashboardActions.createInteractive a targets dir
+                match created with
+                | Error err -> do! say (ActionOutcome.Failure (sprintf "Could not load %s: %s" project err))
+                | Ok newId ->
+                  let! _ = a.StopSession sessionId
+                  let! _ = a.SwitchSession newId
+                  a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+                  do! say (ActionOutcome.Success (sprintf "Session '%s' loaded %s." (WorkerProtocol.SessionId.value newId) project))
+        }) sid)
     yield mapPostRaw "/dashboard/session/stop/{id}"
       (routeValue "id")
-      (fun sid -> createSessionActionHandler q infra a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopSession true))
     yield post "/dashboard/session/stop-others" (fun ctx -> task {
       let! sessions = q.GetAllSessions ()
       // "Others" = everyone except the session THIS client is viewing.
@@ -3383,55 +3709,44 @@ let createEndpoints
         match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
         | true, prop -> prop.GetString()
         | _ -> ""
-      let keepId =
-        match String.IsNullOrEmpty viewingId with
-        | false ->
-          match WorkerProtocol.SessionId.validate viewingId with
-          | Ok sid -> sid
-          | Error _ -> sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
-        | true -> sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
-      let others =
-        sessions
-        |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Id <> keepId)
-      for s in others do
-        let! _ = a.StopSession s.Id
-        ()
-      a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
       Response.sseStartResponse ctx |> ignore
-      let resultHtml =
-        Elem.div [ Attr.id DomIds.EvalResult ] [
-          Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            textEnc (sprintf "Stopped %d other session(s)" others.Length)
-          ]
-        ]
-      do! ssePatchNode ctx resultHtml
+      match WorkerProtocol.SessionId.validate viewingId with
+      | Error _ ->
+        // Without a session in view there is nothing to keep, and guessing one
+        // (the first in the list) would stop the session the viewer wanted.
+        do! ActionResult.patch ctx (ActionOutcome.Failure "Stop others needs a session in view to keep. Open one first; nothing was stopped.")
+      | Ok keepId ->
+        let others =
+          sessions
+          |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Id <> keepId)
+        let results = ResizeArray<WorkerProtocol.SessionId * Result<string, string>>()
+        for s in others do
+          let! stopped = a.StopSession s.Id
+          results.Add((s.Id, stopped))
+        a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+        do! ActionResult.patch ctx (StopOthersReport.summarize (List.ofSeq results))
     })
     yield mapPostRaw "/dashboard/session/dispose/{id}"
       (routeValue "id")
       // Dispose == stop: the per-session .sagefs replay binary is gone, so
       // there is no separate "clear saved memory" step anymore (see the
       // event-sourcing story — the .sagefm manifest is the only durable state).
-      (fun sid -> createSessionActionHandler q infra a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopSession true))
     yield mapPostRaw "/dashboard/session/purge/{id}"
       (routeValue "id")
-      (fun sid -> createSessionActionHandler q infra a.PurgeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.PurgeSession true))
     // Run App / Stop App: the session's executable project — the only one (or
     // the active one), or a named one when the session has several.
     yield mapPostRaw "/dashboard/run-app/{id}"
       (routeValue "id")
-      (fun sid ->
-        let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-        createSessionActionHandler q infra (fun s -> a.RunApp s AppRun.RunRequest.DefaultTarget) false sessionId)
+      (SessionIdRoute.handle (createSessionActionHandler q infra (fun s -> a.RunApp s AppRun.RunRequest.DefaultTarget) false))
     yield mapPostRaw "/dashboard/run-app/{id}/{project}"
       (fun ctx -> routeValue "id" ctx, routeValue "project" ctx)
       (fun (sid, project) ->
-        let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-        createSessionActionHandler q infra (fun s -> a.RunApp s (AppRun.RunRequest.Named project)) false sessionId)
+        SessionIdRoute.handle (createSessionActionHandler q infra (fun s -> a.RunApp s (AppRun.RunRequest.Named project)) false) sid)
     yield mapPostRaw "/dashboard/stop-app/{id}"
       (routeValue "id")
-      (fun sid ->
-        let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-        createSessionActionHandler q infra a.StopApp false sessionId)
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopApp false))
     // Daemon info endpoint for client discovery (replaces daemon.json)
     yield get "/api/daemon-info" (fun ctx -> task {
       let startedAt =
