@@ -54,6 +54,26 @@ let private literalsInProductSource : Set<string> =
               | false -> for m in quotedVariable.Matches line do yield m.Groups.[1].Value ]
   |> Set.ofList
 
+/// Every `SAGEFS_*` name the product reads straight from the environment, `GetEnvironmentVariable "SAGEFS_X"`, outside
+/// Timeouts.fs's own readers. The page says it lists every variable, so each of these has to be on it.
+let private readDirectly : Set<string> =
+  let call = Regex("GetEnvironmentVariable\\s*\\(?\\s*\"(SAGEFS_[A-Z0-9_]+)\"", RegexOptions.Compiled)
+  [ for project in [ "SageFs"; "SageFs.Core"; "SageFs.Host"; "tools" ] do
+      let dir = Path.Combine(repoRoot, project)
+      match Directory.Exists dir with
+      | false -> ()
+      | true ->
+        for file in Directory.EnumerateFiles(dir, "*.fs", SearchOption.AllDirectories) do
+          let relative = Path.GetRelativePath(repoRoot, file).Replace('\\', '/')
+          match relative.Contains "/obj/" || relative.Contains "/bin/" with
+          | true -> ()
+          | false ->
+            for line in File.ReadAllLines file do
+              match isComment line with
+              | true -> ()
+              | false -> for m in call.Matches line do yield m.Groups.[1].Value ]
+  |> Set.ofList
+
 /// `"VAR" <number>` on a Timeouts.fs line: the plain numeric default the code spells out next to the name.
 let private numericDefaultsInSource : Map<string, float> =
   let pattern = Regex("\"(SAGEFS_[A-Z0-9_]+)\"\\s+([0-9_.]+)\\s*$", RegexOptions.Compiled)
@@ -108,6 +128,11 @@ let tests =
     testCase "WHY — every variable Timeouts.fs reads is on the configuration page, so an operator can find the one that is hanging their warmup" <| fun _ ->
       let missing = Set.difference declaredInTimeouts namedInDoc |> Set.toList
       missing |> Expect.isEmpty "each variable in Timeouts.fs is named on docs/configuration.md (run scripts/gen-configuration-doc.fsx)"
+
+    testCase "WHY — every variable the product reads straight from the environment is on the page, because the page says it lists every one" <| fun _ ->
+      readDirectly |> Set.isEmpty |> Expect.isFalse "the product source yields direct environment reads"
+      let missing = Set.difference readDirectly namedInDoc |> Set.toList
+      missing |> Expect.isEmpty "each SAGEFS_ variable read with GetEnvironmentVariable is named on docs/configuration.md (add it to the hand-written table)"
 
     testCase "WHY — every variable the configuration page names is one the product reads, so a renamed or deleted variable does not stay documented" <| fun _ ->
       let unknown = Set.difference namedInDoc literalsInProductSource |> Set.toList
