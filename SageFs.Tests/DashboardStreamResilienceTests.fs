@@ -53,6 +53,8 @@ let tests =
       expr |> Expect.stringContains "and the key is the one named value" ReloadedForKey
 
     testCase "the effect rides the monitor element with the other connection signals" <| fun _ ->
-      let rendered = Elem.div (monitorAttributes ()) [] |> renderNode |> System.Net.WebUtility.HtmlDecode
+      let rendered = Elem.div (monitorAttributes "1.2.3") [] |> renderNode |> System.Net.WebUtility.HtmlDecode
       rendered |> Expect.stringContains "the effect is installed" "location.reload()"
+      // An element carries one data-effect: a second would be dropped by the HTML parser, silently.
+      (rendered.Split("data-effect=").Length - 1) |> Expect.equal "exactly one effect attribute" 1
   ]

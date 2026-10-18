@@ -79,11 +79,26 @@ let DaemonVersionSignal = "dsDaemonVersion"
 [<Literal>]
 let ReloadedForKey = "sagefs.reloadedFor"
 
-/// How many times Datastar retries the stream before it stops. Datastar's own default.
-let streamRetryMaxCount = 10
+/// How many times Datastar retries the stream before it stops. Datastar's default is 10, which at its 1 s doubling
+/// delay and 30 s ceiling gave up after about 181 s: a laptop that slept, or a daemon upgrade that took four minutes,
+/// left the tab frozen under a banner that said it was reconnecting. A dashboard has nothing better to do than keep
+/// asking, so it never gives up.
+let streamRetryMaxCount = Int32.MaxValue
 
-/// The effect that reloads the page when the daemon's build is not the shell's.
-let versionChangeEffectExpr () = ""
+/// The page's live stream: a typed `@get` whose only departure from Datastar's defaults is that it retries without end.
+let streamGet (route: string) : string =
+  Ds.get (route, { RequestOptions.Defaults with RetryMaxCount = streamRetryMaxCount })
+
+/// Reloads the page once when the daemon that is sending heartbeats is not the build that served the shell. An open
+/// tab otherwise keeps the old shell, scripts and signal set after every install while morphs from the new daemon arrive
+/// into it. The tab remembers the build it reloaded for, so a shell and a daemon that never agree (a shell served from
+/// a cache, say) cost one reload and not a loop.
+let versionChangeEffectExpr () =
+  sprintf
+    "$%s !== $%s && sessionStorage.getItem('%s') !== $%s && (sessionStorage.setItem('%s', $%s), location.reload())"
+    DaemonVersionSignal ShellVersionSignal
+    ReloadedForKey DaemonVersionSignal
+    ReloadedForKey DaemonVersionSignal
 
 /// The route the page asks "are you there?". The dashboard is served by the daemon, so any HTTP answer is
 /// proof of life, whatever its status.
@@ -139,15 +154,22 @@ let connectionCheckExpr () =
 /// when the page loads, and a first check that finds `LastTickSignal` at 0 reads as "my timer was paused" and
 /// gives the stream a fresh window, so the very first check never reads as late. A seed from the clock here
 /// would also make the shell's snapshot differ on every render.
-let monitorAttributes () : XmlAttribute list =
+///
+/// `version` is the daemon build that is serving this shell. It seeds both version signals: the shell's own, which
+/// nothing patches, and the daemon's, which every heartbeat patches, so the two differ only once the daemon is another
+/// build.
+let monitorAttributes (version: string) : XmlAttribute list =
   [ Ds.signal (HeartbeatSignal, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+    Ds.signal (ShellVersionSignal, version)
+    Ds.signal (DaemonVersionSignal, version)
     Ds.signal (LastSeenSignal, 0L)
     Ds.signal (LastBeatSignal, 0L)
     Ds.signal (LastTickSignal, 0L)
     Ds.signal (LateSignal, false)
     Ds.signal (ProbeFailsSignal, 0)
     Ds.signal (PausedSignal, false)
-    Ds.effect (heartbeatArrivalEffectExpr ())
+    // One effect attribute (an element carries one); Datastar runs its top-level statements in order.
+    Ds.effect (sprintf "%s; %s" (heartbeatArrivalEffectExpr ()) (versionChangeEffectExpr ()))
     Ds.onInterval (connectionCheckExpr (), int (ms Timeouts.dashboardHeartbeat)) ]
 
 /// The daemon cannot be reached: nothing is listening, or it has stopped answering for several tries in a row.
