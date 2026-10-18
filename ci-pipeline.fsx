@@ -1534,7 +1534,11 @@ let sagefsPipeline = pipeline "sagefs" {
      leg: samples + the real-daemon integration-host suites. Identical locally \
      and in GitHub Actions."
   workingDir rootDir
-  timeout 3600
+  // 90 minutes, not 60. On a shared box (load average 20 to 35) the test tiers alone took 54 minutes on
+  // 2026-10-18 and the whole gate 58, so two local gate runs in a row were cancelled at 60m14s and 60m16s
+  // (exit 130) while the last live-testing shards were starting, with every finished tier green. Each tier has
+  // its own ceiling (TierPlan.tierTimeoutCeilingSeconds), so this only bounds the pipeline as a whole.
+  timeout 5400
   timeoutForStep 900
   runBeforeEachStage (fun ctx ->
     if ValueOption.isNone ctx.ParentContext then printfn "::group::%s" ctx.Name
