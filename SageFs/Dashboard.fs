@@ -2108,6 +2108,65 @@ let createSettingsClearHandler : string -> HttpHandler =
     | :? System.ObjectDisposedException -> ()
   }
 
+/// Whether the stop / dispose / purge the handler asked for took effect.
+[<RequireQualifiedAccess>]
+type TeardownOutcome =
+  | TornDown
+  | TeardownFailed
+
+/// Where a tab's view goes once a teardown has run. The view only ever moves
+/// when the session being viewed is the one torn down: closing a background
+/// card must not change what the viewer is reading.
+[<RequireQualifiedAccess>]
+type ViewAfterTeardown =
+  /// Keep viewing this session; the teardown was about another one (or failed).
+  | StayOn of WorkerProtocol.SessionId
+  /// The tab was on the session picker (no session in play) and stays there.
+  | StayOnPicker
+  /// The viewed session was torn down; view this one instead.
+  | MoveTo of WorkerProtocol.SessionId
+  /// The viewed session was torn down and nothing else is left.
+  | NoSessionLeft
+
+module ViewAfterTeardown =
+  /// The session after the torn-down one in the sidebar's order, wrapping to
+  /// the first when it was the last. The order is read from `before` (the
+  /// registry as it stood when the stop was asked for), because `after` may
+  /// already have dropped the torn-down session and with it its position.
+  let nextAfter
+    (torn: WorkerProtocol.SessionId)
+    (before: WorkerProtocol.SessionId list)
+    (after: WorkerProtocol.SessionId list)
+    : ViewAfterTeardown =
+    match after |> List.filter (fun id -> id <> torn) with
+    | [] -> ViewAfterTeardown.NoSessionLeft
+    | remaining ->
+      let following =
+        match List.tryFindIndex ((=) torn) before with
+        | Some idx -> List.skip (idx + 1) before @ List.take idx before
+        | None -> before
+      match following |> List.tryFind (fun id -> List.contains id remaining) with
+      | Some next -> ViewAfterTeardown.MoveTo next
+      | None -> ViewAfterTeardown.MoveTo (List.head remaining)
+
+  /// `viewing` is this tab's viewingSessionId signal as sent ("" on the picker);
+  /// `before` and `after` are the registry in sidebar order when the stop was
+  /// asked for and when it finished.
+  let decide
+    (outcome: TeardownOutcome)
+    (torn: WorkerProtocol.SessionId)
+    (viewing: string)
+    (before: WorkerProtocol.SessionId list)
+    (after: WorkerProtocol.SessionId list)
+    : ViewAfterTeardown =
+    match WorkerProtocol.SessionId.validate viewing with
+    | Error _ -> ViewAfterTeardown.StayOnPicker
+    | Ok viewed when viewed <> torn -> ViewAfterTeardown.StayOn viewed
+    | Ok viewed ->
+      match outcome with
+      | TeardownOutcome.TeardownFailed -> ViewAfterTeardown.StayOn viewed
+      | TeardownOutcome.TornDown -> nextAfter torn before after
+
 let createSessionActionHandler
   (q: DashboardQueries)
   (infra: DashboardInfra)
@@ -2130,6 +2189,10 @@ let createSessionActionHandler
         }
       Response.sseStartResponse ctx |> ignore
       let isViewingStopped = viewingId = sid
+      // The sidebar's order as it stands before the stop: where the next
+      // session is found if the viewed one goes.
+      let! sessionsBefore = q.GetAllSessions ()
+      let listedBefore = sessionsBefore |> List.map (fun s -> s.Id)
       // Immediate feedback: swap the card for the "Stopping…" message.
       if teardown then
         do! ssePatchNode ctx (renderStoppingCard sessionId)
@@ -2142,35 +2205,12 @@ let createSessionActionHandler
           do! ssePatchNode ctx clearedOutput
           do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.EvalResult ] [])
       let! result = action sessionId
-      // After a successful teardown, select the next session (or show the picker).
-      let! nextId =
-        match teardown && Result.isOk result with
-        | false -> task { return None }
-        | true ->
-          task {
-            let! sessions = q.GetAllSessions ()
-            let remainingIds =
-              sessions
-              |> List.map (fun s -> s.Id)
-              |> List.filter (fun id -> id <> sessionId)
-            // The sidebar lists sessions in registry order — "next in list" is
-            // the session after the torn-down one in that same order.
-            let orderedIds = sessions |> List.map (fun s -> s.Id)
-            let orderedRemaining = remainingIds
-            match orderedRemaining with
-            | [] -> return None
-            | ids ->
-              match List.tryFindIndex ((=) sessionId) orderedIds with
-              | Some idx when idx < List.length ids -> return Some ids.[idx]
-              | _ -> return Some (List.head ids)
-          }
-      match nextId with
-      | Some nextSession ->
-        // Auto-switch: display + select the next session.
-        retargetStream infra channelClientId (Some nextSession)
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value nextSession)
-        // Sync the output, sessions panel, and statusline to the auto-selected next session.
-        match q.GetElmRegionsForSession nextSession with
+      // Make this tab view `target`: retarget its stream, carry the new viewing
+      // id, and sync the output, sessions panel and statusline to it.
+      let showSession (target: WorkerProtocol.SessionId) = task {
+        retargetStream infra channelClientId (Some target)
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value target)
+        match q.GetElmRegionsForSession target with
         | Some regions ->
           match regions |> List.tryFind (fun r -> r.Id = "output") with
           | Some outputRegion ->
@@ -2178,46 +2218,46 @@ let createSessionActionHandler
           | None -> ()
         | None -> ()
         let! cards = buildSessionCards q
-        do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value nextSession) cards (q.IsCreatingSession ()))
-        let stateLabel = q.GetSessionState nextSession |> SessionState.label
+        do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value target) cards (q.IsCreatingSession ()))
+        let stateLabel = q.GetSessionState target |> SessionState.label
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.SessionStatus ] [
             Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ textEnc stateLabel ]
           ])
-        let switchedDir = q.GetSessionWorkingDir nextSession
-        do! ssePatchNode ctx (renderStatuslineLeft stateLabel switchedDir)
-      | None when teardown && Result.isOk result ->
-        // No sessions remain — show the session picker (with Resume Previous),
-        // honoring this same connection's earlier sort choice if it made one.
-        retargetStream infra channelClientId None
-        let! previous = q.GetPreviousSessions ()
-        let previousSort = previousSessionSortByClient.Find(channelClientId, PreviousSessionSort.Recent)
-        do! ssePatchNode ctx (renderSessionPickerSorted previousSort previous)
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
-      | None ->
-        // Switch path (or failed teardown): eval form targets the requested session.
-        retargetStream infra channelClientId (Some sessionId)
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value sessionId)
-        // Immediately sync the output, sessions panel, and statusline to the
-        // newly-selected session so the display matches the sidebar highlight.
-        match q.GetElmRegionsForSession sessionId with
-        | Some regions ->
-          match regions |> List.tryFind (fun r -> r.Id = "output") with
-          | Some outputRegion ->
-            do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content) "No output yet")
-          | None -> ()
-        | None -> ()
+        do! ssePatchNode ctx (renderStatuslineLeft stateLabel (q.GetSessionWorkingDir target))
+      }
+      // The viewer's view is left alone: only the sessions panel needs to
+      // stop listing (or start flagging) the card the action touched.
+      let refreshSessionsPanel (viewing: string) = task {
         let! cards = buildSessionCards q
-        do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards (q.IsCreatingSession ()))
-        // Patch the tabline status with the switched-to session's state.
-        let stateLabel = q.GetSessionState sessionId |> SessionState.label
-        do! ssePatchNode ctx (
-          Elem.div [ Attr.id DomIds.SessionStatus ] [
-            Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ textEnc stateLabel ]
-          ])
-        // Patch the statusline with the switched-to session's working dir + state.
-        let switchedDir = q.GetSessionWorkingDir sessionId
-        do! ssePatchNode ctx (renderStatuslineLeft stateLabel switchedDir)
+        do! ssePatchNode ctx (renderSessionsForSession viewing cards (q.IsCreatingSession ()))
+      }
+      match teardown with
+      | false ->
+        // Switch / run-app / stop-app: the eval form targets the requested session.
+        do! showSession sessionId
+      | true ->
+        let! after = q.GetAllSessions ()
+        let outcome =
+          match Result.isOk result with
+          | true -> TeardownOutcome.TornDown
+          | false -> TeardownOutcome.TeardownFailed
+        match ViewAfterTeardown.decide outcome sessionId viewingId listedBefore (after |> List.map (fun s -> s.Id)) with
+        | ViewAfterTeardown.MoveTo next -> do! showSession next
+        | ViewAfterTeardown.NoSessionLeft ->
+          // No sessions remain — show the session picker (with Resume Previous),
+          // honoring this same connection's earlier sort choice if it made one.
+          retargetStream infra channelClientId None
+          let! previous = q.GetPreviousSessions ()
+          let previousSort = previousSessionSortByClient.Find(channelClientId, PreviousSessionSort.Recent)
+          do! ssePatchNode ctx (renderSessionPickerSorted previousSort previous)
+          do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
+        | ViewAfterTeardown.StayOn kept when kept = sessionId ->
+          // The viewed session's own teardown failed: its output was cleared
+          // above, so bring it back.
+          do! showSession kept
+        | ViewAfterTeardown.StayOn kept -> do! refreshSessionsPanel (WorkerProtocol.SessionId.value kept)
+        | ViewAfterTeardown.StayOnPicker -> do! refreshSessionsPanel ""
       let msg, cssClass =
         match result with
         | Ok m -> m, "output-line output-info"
