@@ -143,6 +143,40 @@ let nameListsTests =
       let docs = File.ReadAllText(Path.Combine(repoRoot, "docs", "mcp-tools.md"))
       docs |> Expect.stringContains "the advertised count" (sprintf "The full advertised set is %d tools" registered.Length)
 
+    testCase "WHY — every page that says how many tools there are says the registered count, so a hand-typed number cannot go stale" <| fun _ ->
+      // "70 tools", "66-tool catalog": a number written next to the word "tool" in the pages a reader trusts. The
+      // count is the registered set's, read by reflection; a page that carries a different one is wrong, and a page
+      // that wants no number at all can simply not write one.
+      let pages =
+        [ [ "Readme.md" ]
+          [ "docs"; "architecture-decisions.md" ]
+          [ "docs"; "FEATURE_MATRIX.md" ]
+          [ "docs"; "mcp-tools.md" ]
+          [ "docs"; "agents.md" ]
+          [ "docs"; "architecture.md" ] ]
+      let counted = Regex(@"\b(\d+)[ -]tools?\b", RegexOptions.IgnoreCase)
+      let wrong =
+        pages
+        |> List.collect (fun page ->
+          File.ReadAllLines(Path.Combine(repoRoot :: page |> Array.ofList))
+          |> Array.toList
+          |> List.mapi (fun i line ->
+            counted.Matches line
+            |> Seq.filter (fun m -> int m.Groups.[1].Value <> registered.Length)
+            |> Seq.map (fun m -> sprintf "%s:%d says %s, the registered set has %d" (String.Join("/", page)) (i + 1) m.Value registered.Length)
+            |> Seq.toList)
+          |> List.concat)
+      wrong |> Expect.isEmpty "a page states a tool count that is not the registered one"
+
+    testCase "WHY — the decision records say how many cases SageFsError has only when that is the count of the type" <| fun _ ->
+      let cases = FSharpType.GetUnionCases(typeof<SageFsError>).Length
+      let adr = File.ReadAllText(Path.Combine(repoRoot, "docs", "architecture-decisions.md"))
+      Regex.Matches(adr, @"SageFsError`?\s+has\s+(\d+)\b")
+      |> Seq.map (fun m -> int m.Groups.[1].Value)
+      |> Seq.filter (fun said -> said <> cases)
+      |> Seq.toList
+      |> Expect.isEmpty (sprintf "the page states a SageFsError case count that is not %d" cases)
+
     testCase "WHY — no registered tool's description names a retired tool, so the surface never points an agent at one" <| fun _ ->
       registered
       |> List.collect (fun tool ->
