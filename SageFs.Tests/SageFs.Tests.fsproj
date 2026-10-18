@@ -95,6 +95,8 @@
         <Compile Include="DetourEntryPointTests.fs" />
         <Compile Include="WorkerStartupReaderTests.fs" />
         <Compile Include="PluginCheckoutOptionalTests.fs" />
+        <Compile Include="WorkerStartupPortValidationTests.fs" />
+        <Compile Include="WorkerPostReadyGuardTests.fs" />
         <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
         <Compile Include="NativeAssetsTests.fs" />
