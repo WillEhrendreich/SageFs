@@ -71,7 +71,8 @@ let handlers : (string * (unit -> string)) list =
     "lambda", fun () -> lambdaHandler ""
     "member", fun () -> Renderer.Render()
     "eager", eagerHandler
-    "mutable", fun () -> mutableField ]
+    "mutable", fun () -> mutableField
+    "qualified", fun () -> Qualified.handler "" ]
 
 let lookup (name: string) : unit -> string =
   match handlers |> List.tryFind (fun (n, _) -> n = name) with

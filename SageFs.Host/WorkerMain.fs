@@ -911,6 +911,9 @@ let run (sessionId: string) (port: int) = async {
   // The source each running app's DLL was built from, advanced after every
   // applied patch: what a save is compared with to decide patch vs restart.
   let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
+  // The `[<RequireQualifiedAccess>]` modules of each file as the loaded DLL was built, NOT advanced by a save: a
+  // baseline takes on the edit's attributes after a patch, and the compiled module keeps the attribute it was built with.
+  let compiledQualifiedAccess = System.Collections.Concurrent.ConcurrentDictionary<string, string list list>()
   // Who is still on the OLD method after a save re-signed or removed a function (`CallerState`). One ledger for this
   // worker, because one worker is one process with one set of old methods. Every report the worker broadcasts carries its
   // state (`ReloadBroadcast.standingCallers`), so a save's pending event and the confirmation after it say the same thing.
@@ -1233,7 +1236,18 @@ let run (sessionId: string) (port: int) = async {
             |> DevReload.DevReloadDiagnostic.addSourceContext)
           |> Array.toList
         Features.ReloadBroadcast.broadcastCompileFailure summary diagnostics
-        Log.warn "Reload failed for %s: %s\n%s" fileName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        // The exception FSI raises for a compile error says only "Operation could not be completed due to earlier
+        // error". The error itself is in the diagnostics, so the log carries them too, or the browser overlay would be
+        // the only place a failed save says why.
+        let diagnosticLines =
+          diagnostics
+          |> List.map (fun d -> sprintf "  %s(%d,%d): %s: %s" d.File d.Line d.Column d.Severity d.Message)
+          |> String.concat "\n"
+        Log.warn "Reload failed for %s: %s\n%s\n%s" fileName ex.Message diagnosticLines (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      let compiledQualifiedAccessOf (filePath: string) =
+        match compiledQualifiedAccess.TryGetValue(IO.Path.GetFullPath filePath) with
+        | true, modules -> modules
+        | _ -> []
       let routeFor (filePath: string) =
         Features.ReloadPlanning.routeFor
           (fun path ->
@@ -1484,10 +1498,34 @@ let run (sessionId: string) (port: int) = async {
                 match reloadBaselines.TryGetValue edit.File with
                 | true, declaring ->
                   Features.CallerCheck.definitionOf declaring edit
-                  |> Option.map (fun d -> { Middleware.CompilationContext.PatchUnit.FilePath = edit.File; Decls = declaring; Functions = [ d ] })
+                  |> Option.map (fun d ->
+                    { Middleware.CompilationContext.PatchUnit.FilePath = edit.File
+                      Decls = Features.ReloadPlanning.againstRunningModules (compiledQualifiedAccessOf edit.File) declaring declaring
+                      Functions = [ d ] })
                 | _ -> None)
-            match Middleware.CompilationContext.emitPatchWithDefinitions filePath current functions carried definitions with
-            | Error (unreachable, reason) ->
+            let againstRunning =
+              Features.ReloadPlanning.againstRunningModules (compiledQualifiedAccessOf filePath) baseline current
+            match Middleware.CompilationContext.emitPatchWithDefinitions filePath againstRunning functions carried definitions with
+            | Error (Middleware.CompilationContext.PatchRefusal.QualifiedAccess modulePath) ->
+              let change = Features.ReloadPlanning.ReloadChange.RequiresQualifiedAccess (String.concat "." modulePath)
+              let placement =
+                match AppRunner.state appRunner with
+                | AppRun.AppRunState.Running _ -> Features.ReloadPlanning.AppPlacement.InWorkerProcess
+                | _ -> Features.ReloadPlanning.AppPlacement.InAgentProcess
+              match Features.ReloadPlanning.qualifiedAccessRoute placement current with
+              | Features.ReloadPlanning.QualifiedAccessRoute.RestartApp ->
+                return! restartOrFallBack fileName change []
+              | Features.ReloadPlanning.QualifiedAccessRoute.LeaveStateUntouched ->
+                let outcome = Features.ReloadOutcome.ReloadOutcome.RestartRequired (Features.ReloadPlanning.ReloadChange.restartReasons change [])
+                Features.ReloadBroadcast.broadcastOutcome outcome
+                Log.info "Hot reload: %s — %s (live state left untouched)" fileName (Features.ReloadOutcome.ReloadOutcome.describe outcome)
+                return SaveHandling.Reported
+              | Features.ReloadPlanning.QualifiedAccessRoute.ReevaluateWholeFile ->
+                // No carried reasons: they would make the outcome a restart however the re-evaluation went, and this
+                // one can land. `confirmWholeFileLanding` decides from what reached the running app.
+                Log.info "Hot reload: %s — %s; the whole file is re-evaluated instead" fileName (Features.ReloadPlanning.ReloadChange.describe change)
+                return SaveHandling.FallBackWholeFile []
+            | Error (Middleware.CompilationContext.PatchRefusal.CannotCarry (unreachable, reason)) ->
               Log.info "Hot reload: %s can't carry '%s' into the patch: %s" fileName unreachable.Name (Features.LiveStateEmit.LiveStateError.describe reason)
               let user = functions |> List.tryHead |> Option.map _.Name |> Option.defaultValue fileName
               return! restartOrFallBack fileName (Features.ReloadPlanning.ReloadChange.UsesNonPublicMember (user, unreachable.Name)) []
@@ -2107,7 +2145,9 @@ let run (sessionId: string) (port: int) = async {
         Log.warn "Hot reload: %s was modified after the build — it will be fully re-evaluated (not diff-patched) on its next save. → Rebuild the project so saves can be patched into the running process." source
       | true ->
         match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText source) with
-        | Ok decls -> reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
+        | Ok decls ->
+          reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
+          compiledQualifiedAccess.TryAdd(IO.Path.GetFullPath source, decls.QualifiedAccessModules) |> ignore
         | Error reason -> Log.warn "Hot reload: %s cannot be patched in place (%s)" source reason
     Log.debug "Hot reload: baselined %d source file(s) in %s" sources.Length projectDir
 

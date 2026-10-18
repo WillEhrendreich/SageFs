@@ -199,7 +199,7 @@ let private applySave
   report.DetourReport.Redirected |> Expect.isNonEmpty "the detour landed, which is what makes this case look like a success"
   report.DetourReport.ReachedRunningProcess |> Expect.isNonEmpty "the app holds the compiled copy that was re-pointed"
   let decl = declOf methodName
-  let before = { ModulePath = modulePath; Opens = []; Decls = [ decl ]; RawSource = None }
+  let before = { ModulePath = modulePath; Opens = []; Decls = [ decl ]; RawSource = None; QualifiedAccessModules = [] }
   let landed, planned =
     confirmPatchLanding before [ decl ] report.DetourReport.Redirected report.DetourReport.ReachedRunningProcess
   { Agent = agent; Report = report; Landed = landed; Planned = planned }

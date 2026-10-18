@@ -74,6 +74,12 @@ type FileDecls = {
   /// every `SourceDecl`'s StartLine/EndLine already describe positions
   /// within this same text.
   RawSource: string option
+  /// The modules marked `[<RequireQualifiedAccess>]`, each as its full path from the file's root
+  /// (`ModulePath @ container`). A patch binds to the compiled module with `open global.<path>`, and F# refuses that
+  /// open for these (FS0892, an error `#nowarn` cannot silence), so a patch into one cannot be written
+  /// (`CompilationContext.PatchRefusal.QualifiedAccess`). Read from the BASELINE this is the compiled module's
+  /// attribute, even when the edit has since taken the attribute off.
+  QualifiedAccessModules: string list list
 }
 
 [<RequireQualifiedAccess>]
@@ -97,6 +103,10 @@ type ReloadChange =
   /// re-point, which is a different thing from one that changed.
   | DeclarationAdded of name: string
   | UsesNonPublicMember of fn: string * memberName: string
+  /// A function in a `[<RequireQualifiedAccess>]` module changed. The patch has to `open` the compiled module to bind
+  /// to its types and the rest of its members, and F# refuses that open. Known before anything is compiled, from the
+  /// baseline (`FileDecls.QualifiedAccessModules`).
+  | RequiresQualifiedAccess of moduleName: string
   /// A redefined value the running app kept a copy of (rule 2). Found from the
   /// running app's own evidence, never from the source diff.
   | ValueCopied of name: string * holder: string
@@ -180,6 +190,8 @@ module ReloadChange =
     | ReloadChange.DeclarationAdded name -> sprintf "%s was added" name
     | ReloadChange.UsesNonPublicMember (fn, memberName) ->
       sprintf "%s uses %s, which is not public, so it cannot be patched in place" fn memberName
+    | ReloadChange.RequiresQualifiedAccess moduleName ->
+      sprintf "module %s is [<RequireQualifiedAccess>], so a patch cannot open it to bind to the running code" moduleName
     | ReloadChange.ValueCopied (name, holder) -> sprintf "the running app kept a copy of %s: %s" name holder
     | ReloadChange.ValueUntraceable (name, why) -> sprintf "%s changed and SageFs can't check where its copies went: %s" name why
     | ReloadChange.MutableBindingTorn binding ->
@@ -235,6 +247,10 @@ module ReloadChange =
     // re-emitting the member alongside the patch) — unimplemented, not physics.
     | ReloadChange.UsesNonPublicMember (fn, memberName) ->
       RestartReason.NotYetSupported (sprintf "'%s', because it uses the non-public '%s'" fn memberName)
+    // Unimplemented rather than impossible: `open type` on each of the module's types and a forwarding stand-in for
+    // each sibling (the `LiveStateEmit.carriedStandIn` shape) would bind the patch without the open.
+    | ReloadChange.RequiresQualifiedAccess moduleName ->
+      RestartReason.NotYetSupported (sprintf "a function in the [<RequireQualifiedAccess>] module '%s'" moduleName)
     | ReloadChange.ValueCopied (name, holder) -> RestartReason.ValueCopiedByApp (name, holder)
     | ReloadChange.ValueUntraceable (name, why) -> RestartReason.ValueUntraceable (name, why)
     // A tear is a mutable-binding coherence failure, not a capability gap —
@@ -324,13 +340,16 @@ let rec private patName (lines: string array) (pat: SynPat) =
   | SynPat.Attrib(pat = inner) -> patName lines inner
   | other -> rangeText lines other.Range
 
-let private isEntryPoint (attributes: SynAttributes) =
+/// An attribute however it is spelled: with or without the `Attribute` suffix, qualified or not.
+let private hasAttribute (name: string) (attributes: SynAttributes) =
   attributes
   |> List.collect _.Attributes
   |> List.exists (fun a ->
     match a.TypeName.LongIdent |> List.tryLast with
-    | Some id -> id.idText = "EntryPoint" || id.idText = "EntryPointAttribute"
+    | Some id -> id.idText = name || id.idText = name + "Attribute"
     | None -> false)
+
+let private isEntryPoint (attributes: SynAttributes) = hasAttribute "EntryPoint" attributes
 
 let rec private patAccess (pat: SynPat) : SynAccess option =
   match pat with
@@ -510,6 +529,19 @@ let private declsOf (lines: string array) (decls: SynModuleDecl list) : string l
   let opens, found, _ = declsIn lines [] 0 decls
   opens, found
 
+/// The nested modules under `path` marked `[<RequireQualifiedAccess>]`, by the same names `declsIn` gives containers.
+let rec private qualifiedAccessIn (path: string list) (decls: SynModuleDecl list) : string list list =
+  decls
+  |> List.collect (function
+    | SynModuleDecl.NestedModule(moduleInfo = SynComponentInfo(attributes = attributes; longId = ids); decls = inner) ->
+      let nested = path @ [ identText ids ]
+      let here =
+        match hasAttribute "RequireQualifiedAccess" attributes with
+        | true -> [ nested ]
+        | false -> []
+      here @ qualifiedAccessIn nested inner
+    | _ -> [])
+
 let extractDecls (source: string) : Result<FileDecls, string> =
   try
     let input, diagnostics = Fantomas.FCS.Parse.parseFile false (SourceText.ofString source) []
@@ -520,13 +552,22 @@ let extractDecls (source: string) : Result<FileDecls, string> =
     | None, ParsedInput.ImplFile(ParsedImplFileInput(contents = contents)) ->
       let lines = sourceLines source
       match contents with
-      | [ SynModuleOrNamespace(longId = ids; kind = kind; decls = decls) ] ->
+      | [ SynModuleOrNamespace(longId = ids; kind = kind; decls = decls; attribs = attribs) ] ->
         let modulePath =
           match kind with
           | SynModuleOrNamespaceKind.AnonModule -> []
           | _ -> ids |> List.map _.idText
         let opens, found = declsOf lines decls
-        Ok { ModulePath = modulePath; Opens = opens; Decls = found; RawSource = Some source }
+        let fileModule =
+          match kind, hasAttribute "RequireQualifiedAccess" attribs with
+          | SynModuleOrNamespaceKind.NamedModule, true -> [ modulePath ]
+          | _ -> []
+        Ok
+          { ModulePath = modulePath
+            Opens = opens
+            Decls = found
+            RawSource = Some source
+            QualifiedAccessModules = fileModule @ qualifiedAccessIn modulePath decls }
       | _ -> Error "the file declares several namespaces or modules at the top level"
     | None, ParsedInput.SigFile _ -> Error "signature files are not reloaded"
   with ex -> Error (sprintf "the file could not be parsed: %s" ex.Message)
@@ -1587,6 +1628,35 @@ module AppPlacement =
     | AppPlacement.InWorkerProcess, ReloadPlan.PatchKeepingState (functions, _, _) -> restartFor functions plan
     | AppPlacement.InWorkerProcess, ReloadPlan.RestartRequired _
     | AppPlacement.InAgentProcess, _ -> plan
+
+/// The edited file as a patch has to see it: its declarations, with the `[<RequireQualifiedAccess>]` modules of the
+/// code the patch is compiled AGAINST. That is the build the session loaded (`compiled`) and whatever the last reload
+/// put in its place (`baseline`), never the edit: taking the attribute off in the editor does not take it off the
+/// running module.
+let againstRunningModules (compiled: string list list) (baseline: FileDecls) (current: FileDecls) : FileDecls =
+  { current with QualifiedAccessModules = compiled @ baseline.QualifiedAccessModules |> List.distinct }
+
+/// Where a save goes when its patch cannot be written because the module it changed is `[<RequireQualifiedAccess>]`
+/// (`ReloadChange.RequiresQualifiedAccess`).
+[<RequireQualifiedAccess>]
+type QualifiedAccessRoute =
+  /// SageFs started the app with run_app, so it restarts it and names why.
+  | RestartApp
+  /// Re-evaluating the whole file would re-declare its `let mutable`s and replace their live values with the
+  /// initializers. Nothing is evaluated, the app keeps its state, and the restart it needs is reported.
+  | LeaveStateUntouched
+  /// Re-evaluate the whole file, which compiles without the open. It re-declares the file's types, so a function that
+  /// mentions one cannot pair with its compiled method, and only what `confirmWholeFileLanding` sees reach the running
+  /// app counts as patched. A function whose signature uses no type of its own file is patched.
+  | ReevaluateWholeFile
+
+let qualifiedAccessRoute (placement: AppPlacement) (current: FileDecls) : QualifiedAccessRoute =
+  match placement with
+  | AppPlacement.InWorkerProcess -> QualifiedAccessRoute.RestartApp
+  | AppPlacement.InAgentProcess ->
+    match current.Decls |> List.exists (fun d -> d.Kind = DeclKind.MutableValueDecl) with
+    | true -> QualifiedAccessRoute.LeaveStateUntouched
+    | false -> QualifiedAccessRoute.ReevaluateWholeFile
 
 /// How a saved source file reaches the process that is running the user's code.
 [<RequireQualifiedAccess>]

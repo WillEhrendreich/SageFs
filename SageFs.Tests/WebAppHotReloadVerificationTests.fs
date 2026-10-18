@@ -348,6 +348,9 @@ module ShapeMatrix =
   type Cell = {
     /// The route segment: GET /shape/<Name>.
     Name: string
+    /// The fixture file the edit is saved to. A shape that belongs to a whole module (an attribute on it) needs a
+    /// file of its own.
+    File: string
     /// What the cell drives, in one line, for the failure message.
     Why: string
     /// Unique source text to replace, and its replacement.
@@ -358,30 +361,35 @@ module ShapeMatrix =
 
   let cells : Cell list = [
     { Name = "localType"
+      File = "Shapes.fs"
       Why = "a module-level FUNCTION whose parameter type is declared in the SAME file — the shape that broke Falco/Giraffe/Saturn/Oxpecker route tables, because a whole-file re-evaluation re-declares that type and the detour matcher then rejects the pair on parameter types"
       Find = "let localTypeHandler (reply: Reply) : string = \"A\" + reply.Body"
       Replace = "let localTypeHandler (reply: Reply) : string = \"B\" + reply.Body"
       Expected = Reloads }
 
     { Name = "plain"
+      File = "Shapes.fs"
       Why = "a module-level FUNCTION with a BCL-only signature, captured by value into the table at startup"
       Find = "let plainHandler (who: string) : string = \"A\" + who"
       Replace = "let plainHandler (who: string) : string = \"B\" + who"
       Expected = Reloads }
 
     { Name = "tiny"
+      File = "Shapes.fs"
       Why = "a FUNCTION small enough for the JIT to want to inline into its caller, with NO [<MethodImpl(NoInlining)>] — a real user never writes that attribute, so hot reload has to hold without it"
       Find = "let tinyHandler () : string = \"A\""
       Replace = "let tinyHandler () : string = \"B\""
       Expected = Reloads }
 
     { Name = "member"
+      File = "Shapes.fs"
       Why = "a static TYPE MEMBER rather than a module-level function"
       Find = "  static member Render() : string = \"A\""
       Replace = "  static member Render() : string = \"B\""
       Expected = Reloads }
 
     { Name = "lambda"
+      File = "Shapes.fs"
       Why = "a VALUE binding holding a lambda (`let h : HttpHandler = fun ctx -> ...`)"
       Find = "let lambdaHandler : string -> string = fun who -> \"A\" + who"
       Replace = "let lambdaHandler : string -> string = fun who -> \"B\" + who"
@@ -397,6 +405,7 @@ module ShapeMatrix =
       Expected = Reloads }
 
     { Name = "eager"
+      File = "Shapes.fs"
       Why = "a handler whose output is computed ONCE at module initialisation and closed over — `let getHome : HttpHandler = Response.ofHtml (pageLayout [])` in Falco terms"
       Find = "let private computeEager () = \"A\""
       Replace = "let private computeEager () = \"B\""
@@ -405,6 +414,7 @@ module ShapeMatrix =
           "nothing is called at request time, so there is no method entry point to re-point: the value was baked into the captured closure at startup" }
 
     { Name = "mutable"
+      File = "Shapes.fs"
       Why = "a MUTABLE module-level field read by the handler, whose INITIALIZER is edited"
       Find = "let mutable mutableField = \"A\""
       Replace = "let mutable mutableField = \"B\""
@@ -415,6 +425,13 @@ module ShapeMatrix =
       Expected =
         KeepsLiveValue
           "the field is live data the app is holding, so the edited initializer waits for a reset instead of replacing it" }
+
+    { Name = "qualified"
+      File = "Qualified.fs"
+      Why = "a FUNCTION in a `[<RequireQualifiedAccess>]` module. A patch binds to the compiled module with `open global.<module>`, which F# refuses for such a module (FS0892), so on 0.6.908 this save came back CompileFailed. The patch is now refused before it is written and the file, which holds no live state, is re-evaluated whole"
+      Find = "let handler (who: string) : string = \"A\" + who"
+      Replace = "let handler (who: string) : string = \"B\" + who"
+      Expected = Reloads }
   ]
 
 /// The fixture's App.fs is the file we edit on disk. This test is the plan's
@@ -608,16 +625,29 @@ let webAppHotReloadVerificationTests =
     Integration.hostCaseTask "hot-reload shape matrix: a startup-captured handler table, one cell per F# binding shape" <| fun () -> task {
       do! buildFixtureAsSageFsDoes ()
       let fDir = fixtureDir ()
-      let shapesSource = Path.Combine(fDir, "Shapes.fs")
-      Expect.isTrue "fixture Shapes.fs should exist" (File.Exists shapesSource)
-      let original = File.ReadAllText shapesSource
+      let sourceOf (cell: ShapeMatrix.Cell) = Path.Combine(fDir, cell.File)
+      // Every file a cell edits, as it was, so each can be put back.
+      let originals =
+        ShapeMatrix.cells
+        |> List.map sourceOf
+        |> List.distinct
+        |> List.map (fun path ->
+          Expect.isTrue (sprintf "fixture %s should exist" (Path.GetFileName path)) (File.Exists path)
+          path, File.ReadAllText path)
+      let restoreAll () =
+        task {
+          for path, text in originals do
+            if File.ReadAllText path <> text then
+              do! writeFixtureFile path text
+        }
       // Every cell's edit must be unique text, so a cell can never silently
       // rewrite another cell's source and report the wrong verdict.
       for cell in ShapeMatrix.cells do
+        let original = originals |> List.find (fun (path, _) -> path = sourceOf cell) |> snd
         let occurrences =
           original.Split([| cell.Find |], StringSplitOptions.None).Length - 1
         Expect.equal
-          (sprintf "%s: its edit anchor must appear exactly once in Shapes.fs" cell.Name)
+          (sprintf "%s: its edit anchor must appear exactly once in %s" cell.Name cell.File)
           1 occurrences
 
       let sessionId = sprintf "shape-matrix-%s" (Guid.NewGuid().ToString("N"))
@@ -646,10 +676,11 @@ let webAppHotReloadVerificationTests =
 
         try
           for cell in ShapeMatrix.cells do
-            let before = File.ReadAllText shapesSource
+            let source = sourceOf cell
+            let before = File.ReadAllText source
             use! sseReader = openSseStream baseUrl
             do! waitOutDoubleCompileGuard ()
-            do! writeFixtureFile shapesSource (before.Replace(cell.Find, cell.Replace))
+            do! writeFixtureFile source (before.Replace(cell.Find, cell.Replace))
             // Every save must close the Compiling -> terminal contract: a cell
             // that cannot be patched still has to answer, and the answer it
             // gives is `noeffect`/`restarted`, not `reload`/`failed`. Waiting
@@ -747,10 +778,10 @@ let webAppHotReloadVerificationTests =
                 "A" served
               verdict
               |> Expect.stringContains (sprintf "%s: the save has to say what it kept" cell.Name) "\"outcome\":\"KeptLiveState\""
-          do! writeFixtureFile shapesSource original
+          do! restoreAll ()
         with ex ->
           // Always restore the fixture so later runs start from the original (a `finally` cannot await).
-          do! writeFixtureFile shapesSource original
+          do! restoreAll ()
           rethrow ex
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()

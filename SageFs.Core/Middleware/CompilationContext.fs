@@ -606,6 +606,26 @@ type PatchUnit = {
   Functions: SageFs.Features.ReloadPlanning.SourceDecl list
 }
 
+/// Why a patch cannot be written. Each is known before anything is compiled, and each is a restart that names it.
+[<RequireQualifiedAccess>]
+type PatchRefusal =
+  /// A carried `let mutable` the patch cannot give a stand-in (`LiveStateEmit.carriedStandIn`).
+  | CannotCarry of decl: SageFs.Features.ReloadPlanning.SourceDecl * reason: SageFs.Features.LiveStateEmit.LiveStateError
+  /// The compiled module a declaration lives in is `[<RequireQualifiedAccess>]`. `renderPatch` binds a patch to the
+  /// compiled module with `open global.<path>`, and F# refuses to open such a module (FS0892, an error, so `#nowarn`
+  /// cannot silence it). Writing the patch anyway is how a save used to fail as a compile error on a line the user
+  /// never wrote.
+  | QualifiedAccess of modulePath: string list
+
+/// The first compiled module `renderPatch` would `open global.` that F# will not let it open. A container is opened
+/// exactly when the patch writes a declaration into it, and each unit's attributes are its own file's.
+let private unopenableModule (units: (PatchUnit * SageFs.Features.ReloadPlanning.SourceDecl list) list) : string list option =
+  units
+  |> List.tryPick (fun (u, decls) ->
+    decls
+    |> List.map (fun d -> u.Decls.ModulePath @ d.Container)
+    |> List.tryFind (fun modulePath -> List.contains modulePath u.Decls.QualifiedAccessModules))
+
 /// Writes the patch text: the module paths of the files the patch has declarations from, then per container its opens,
 /// `open global.<compiled module>`, the stand-ins for carried state, and the
 /// re-emitted declarations. `standIns` pairs a carried declaration with its
@@ -704,14 +724,20 @@ let emitStableIdentity
 /// `definitions` are declarations of other files that the functions call and that a save re-signed: a patch is compiled
 /// against the COMPILED module, so without the new definition in the same submission the call binds to the old signature
 /// and does not compile. They are written first.
+///
+/// `Error` when the patch cannot be written at all (`PatchRefusal`), never a text that is known not to compile.
 let emitPatchWithDefinitions
     (filePath: string)
     (decls: SageFs.Features.ReloadPlanning.FileDecls)
     (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
     (carried: SageFs.Features.ReloadPlanning.SourceDecl list)
     (definitions: PatchUnit list)
-    : Result<PreprocessResult, SageFs.Features.ReloadPlanning.SourceDecl * SageFs.Features.LiveStateEmit.LiveStateError> =
+    : Result<PreprocessResult, PatchRefusal> =
   let pad depth = String.replicate depth "  "
+  let primary = { FilePath = filePath; Decls = decls; Functions = functions }
+  match unopenableModule ((primary, functions @ carried) :: (definitions |> List.map (fun u -> u, u.Functions))) with
+  | Some modulePath -> Error (PatchRefusal.QualifiedAccess modulePath)
+  | None ->
   carried
   |> List.fold
        (fun acc d ->
@@ -719,9 +745,9 @@ let emitPatchWithDefinitions
          |> Result.bind (fun done' ->
            SageFs.Features.LiveStateEmit.carriedStandIn (pad (decls.ModulePath.Length + d.Container.Length)) (decls.ModulePath @ d.Container) d
            |> Result.map (fun lines -> done' @ [ d, lines ])
-           |> Result.mapError (fun reason -> d, reason)))
+           |> Result.mapError (fun reason -> PatchRefusal.CannotCarry (d, reason))))
        (Ok [])
-  |> Result.map (fun standIns -> renderPatch { FilePath = filePath; Decls = decls; Functions = functions } standIns definitions)
+  |> Result.map (fun standIns -> renderPatch primary standIns definitions)
 
 /// `emitPatchWithDefinitions` with nothing to define.
 let emitPatchCarrying
@@ -729,5 +755,5 @@ let emitPatchCarrying
     (decls: SageFs.Features.ReloadPlanning.FileDecls)
     (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
     (carried: SageFs.Features.ReloadPlanning.SourceDecl list)
-    : Result<PreprocessResult, SageFs.Features.ReloadPlanning.SourceDecl * SageFs.Features.LiveStateEmit.LiveStateError> =
+    : Result<PreprocessResult, PatchRefusal> =
   emitPatchWithDefinitions filePath decls functions carried []

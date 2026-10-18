@@ -479,7 +479,7 @@ let private genDeclNamed (name: string) =
 // not parsed by extractDecls, so there is no real text for the FCS-exact path
 // to check — planReload falls back to the identifier-set heuristic for them,
 // which is exactly what these generated-declaration-set laws exercise.
-let private fileOf (decls: SourceDecl list) = { ModulePath = [ "Demo"; "App" ]; Opens = [ "System" ]; Decls = decls; RawSource = None }
+let private fileOf (decls: SourceDecl list) = { ModulePath = [ "Demo"; "App" ]; Opens = [ "System" ]; Decls = decls; RawSource = None; QualifiedAccessModules = [] }
 
 /// Every declaration has its own name.
 let private genUniqueFile =
