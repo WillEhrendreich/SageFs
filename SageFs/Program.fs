@@ -168,17 +168,36 @@ let unimplementedFlagRejection (args: string array) : (Args.UnimplementedFlag * 
 /// `--owner-pid`/`--owner-start`/`--ttl` off the raw args, applying the
 /// nested-checkout default (a daemon started inside another checkout, with
 /// neither flag, defaults to a 30-minute TTL rather than running forever
-/// unowned) and logging loudly when that default kicks in.
-let resolveOwnership (args: string array) (cwd: string) : DaemonOwnership.EffectiveOwnership =
-  let parsed = DaemonOwnership.OwnershipArgs.parse (Array.toList args)
-  let nested = DaemonOwnership.isNestedCheckout SageFs.FileWatcher.hasCheckoutMarker cwd
-  let effective = DaemonOwnership.applyNestedCheckoutDefault nested parsed
-  match effective.DefaultedTtl with
-  | true ->
-    eprintfn "sagefs: started inside a nested checkout (%s) with no --owner-pid or --ttl — defaulting to --ttl %s so it self-terminates if abandoned"
-      cwd (string DaemonOwnership.defaultTtlForNestedCheckout)
-  | false -> ()
-  effective
+/// unowned) and logging loudly when that default kicks in. A flag that is
+/// present and wrong is an `Error`, so the daemon is refused at start rather
+/// than running unowned.
+let resolveOwnership
+  (args: string array)
+  (cwd: string)
+  : Result<DaemonOwnership.Ownership, DaemonOwnership.OwnershipArgError list> =
+  DaemonOwnership.Ownership.parse (Array.toList args)
+  |> Result.map (fun parsed ->
+    let nested = DaemonOwnership.isNestedCheckout SageFs.FileWatcher.hasCheckoutMarker cwd
+    let effective = DaemonOwnership.applyNestedCheckoutDefault nested parsed
+    match effective with
+    | DaemonOwnership.Ownership.ExpiresAfter (ttl, DaemonOwnership.TtlSource.NestedCheckoutDefault) ->
+      eprintfn "sagefs: started inside a nested checkout (%s) with no --owner-pid or --ttl — defaulting to --ttl %s so it self-terminates if abandoned"
+        cwd (string ttl)
+    | DaemonOwnership.Ownership.Unowned
+    | DaemonOwnership.Ownership.OwnedByPid _
+    | DaemonOwnership.Ownership.ExpiresAfter (_, DaemonOwnership.TtlSource.Explicit)
+    | DaemonOwnership.Ownership.OwnedAndExpiring _ -> ()
+    effective)
+
+/// What `sagefs` says when an ownership flag is wrong, one line per problem. The daemon is not
+/// started: these flags exist to stop leaked daemons.
+let describeOwnershipRefusal (errors: DaemonOwnership.OwnershipArgError list) : string =
+  errors
+  |> List.map (fun error -> "sagefs: " + DaemonOwnership.OwnershipArgError.describe error)
+  |> String.concat Environment.NewLine
+
+/// The exit code for a daemon that was refused at start, before it bound anything.
+let startupRefusedExitCode = 2
 
 /// Whether starting a daemon on `mcpPort` is allowed given the ownership
 /// flags it was given. Refused, not allowed.
@@ -198,15 +217,16 @@ type CustomPortOwnershipDecision =
 let decideCustomPortOwnership
   (defaultMcpPort: int)
   (mcpPort: int)
-  (ownerPid: int option)
-  (ttl: TimeSpan option)
+  (ownership: DaemonOwnership.Ownership)
   : CustomPortOwnershipDecision =
-  match mcpPort = defaultMcpPort, ownerPid, ttl with
-  | true, _, _ -> CustomPortOwnershipDecision.Allowed
-  | false, None, None ->
+  match mcpPort = defaultMcpPort, ownership with
+  | true, _ -> CustomPortOwnershipDecision.Allowed
+  | false, DaemonOwnership.Ownership.Unowned ->
     CustomPortOwnershipDecision.Refused
       (sprintf "sagefs: --mcp-port %d needs --owner-pid <pid> or --ttl <duration> — a daemon on a non-default port is somebody's temporary daemon, and it has to say who owns it or when to give up." mcpPort)
-  | false, _, _ -> CustomPortOwnershipDecision.Allowed
+  | false, DaemonOwnership.Ownership.OwnedByPid _
+  | false, DaemonOwnership.Ownership.ExpiresAfter _
+  | false, DaemonOwnership.Ownership.OwnedAndExpiring _ -> CustomPortOwnershipDecision.Allowed
 
 /// The one place the process entry point waits for the work its command started to end. `main` has nothing else to
 /// do, and nothing else waits on the pool, so holding its thread cannot starve a handler.
@@ -220,15 +240,19 @@ let runDaemon (args: string array) =
   match SageFsConfig.BindHost with
   | Error message ->
     eprintfn "%s" message
-    2
+    startupRefusedExitCode
   | Ok bindHost ->
   let mcpPort = parseMcpPort args
   let flags = Args.DaemonFlags.parse (Array.toList args)
-  let ownership = resolveOwnership args Environment.CurrentDirectory
-  match decideCustomPortOwnership SageFsConfig.McpPortFromEnv mcpPort ownership.OwnerPid ownership.Ttl with
+  match resolveOwnership args Environment.CurrentDirectory with
+  | Error errors ->
+    eprintfn "%s" (describeOwnershipRefusal errors)
+    startupRefusedExitCode
+  | Ok ownership ->
+  match decideCustomPortOwnership SageFsConfig.McpPortFromEnv mcpPort ownership with
   | CustomPortOwnershipDecision.Refused message ->
     eprintfn "%s" message
-    2
+    startupRefusedExitCode
   | CustomPortOwnershipDecision.Allowed ->
   let isSupervised = args |> Array.exists (fun a -> a = "--supervised")
   match isSupervised with
@@ -589,6 +613,8 @@ let main args =
     printfn "                         --owner-pid to close the pid-reuse race."
     printfn "  --ttl DURATION         Self-terminate after DURATION (e.g. 30m, 1h, 90s) with no"
     printfn "                         live sessions and no MCP/SSE clients."
+    printfn "                         A value that is not valid (--ttl 30min) stops the daemon at"
+    printfn "                         start with exit code 2; it never starts unowned."
     printfn ""
     printfn "  A small number of legacy or not-yet-wired flags are still recognized but"
     printfn "  are refused with an explanation instead of being silently accepted — pass"
