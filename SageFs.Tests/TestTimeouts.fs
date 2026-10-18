@@ -617,7 +617,13 @@ module TestTimeouts =
   let sessionBackAfterRestart = System.TimeSpan.FromSeconds 90.
 
   /// A session reaching Ready when the create also builds the project cold (restore and compile).
-  let sessionReadyColdBuild = System.TimeSpan.FromSeconds 240.
+  /// 240 s was enough for one shard alone and not for five at once: in the 2026-10-18 local gate the Dogfood REPL
+  /// session (a cold build of the whole SageFs.Tests project plus an isolated host start) hit it in two gate runs in
+  /// a row, in the same shard, with the machine tier probe reading "2.1 times the reference". The daemon itself was
+  /// up in about 2 s each time and the three cases passed alone in about 2 minutes, so the wait was a slow build,
+  /// not a hang. The product bound on a session start is `SageFs.Timeouts.warmupReadyPollMax`; this only has to
+  /// outlast a cold build on a busy box.
+  let sessionReadyColdBuild = System.TimeSpan.FromSeconds 600.
 
   /// A multi-target sample reaching Ready or Faulted after create, built cold for each target.
   let multiTargetSettle = System.TimeSpan.FromSeconds 180.
