@@ -22,6 +22,7 @@ module SageFs.Tests.SelfHostCoreOutcomeTests
 open System
 open System.IO
 open System.Text.Json
+open System.Text.RegularExpressions
 open System.Threading
 open System.Threading.Tasks
 open Expecto
@@ -74,6 +75,18 @@ let private copyFixture (copy: Copy) : string =
     copyTree (Path.Combine(repoRoot, "SageFs.Core")) core
     // Core embeds the FSI host's sources by relative path, so they sit beside it as in the repo.
     copyTree (Path.Combine(repoRoot, "SageFs.FsiHost")) (Path.Combine(target, "SageFs.FsiHost"))
+    // ...and the host files it embeds for the same reason (the browser reload sources). The list is read from the
+    // real project, not written here, so a file Core starts to reach for under SageFs.Host is copied without this
+    // test being edited: the first time Core reached into SageFs.Host, this gate went red for a missing fixture file.
+    let hostFilesCoreEmbeds =
+      Regex.Matches(File.ReadAllText(Path.Combine(repoRoot, "SageFs.Core", "SageFs.Core.fsproj")), "Include=\"\\.\\./SageFs\\.Host/([^\"]+)\"")
+      |> Seq.map (fun m -> m.Groups.[1].Value)
+      |> Seq.distinct
+      |> Seq.toList
+    for relative in hostFilesCoreEmbeds do
+      let destination = Path.Combine(target, "SageFs.Host", relative)
+      Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
+      File.Copy(Path.Combine(repoRoot, "SageFs.Host", relative), destination)
     // ...and so do the native parser libraries it copies to its output.
     copyTree (Path.Combine(repoRoot, "runtimes")) (Path.Combine(target, "runtimes"))
     File.Copy(Path.Combine(fixtureSource, "FixtureOnly.fs"), Path.Combine(core, "FixtureOnly.fs"))
