@@ -758,6 +758,13 @@ ERROR HANDLING (CRITICAL):
 - NEVER use '#r' for assemblies loaded via '--proj'. Call get_session_status to see which assembly names are already loaded. Using '#r' on a loaded assembly creates a duplicate .NET load context causing TypeLoadException on ALL subsequent evals — this is not a session bug, it is your '#r' directive that must be removed.
 - RUNTIME FileNotFoundException for Microsoft.AspNetCore.* or other shared-framework assemblies means FSI cannot execute them (installed ref packs are metadata-only; framework version mismatches surface as manifest errors). This is an environment limit, not a code bug — run that scenario externally instead (dotnet test / dotnet run) and bring results back into the REPL.
 
+WRITING TO YOUR SOURCE FILE:
+- An eval changes the session. It can also change a file. When you pass BOTH file_path and block_start_line and the eval succeeds, SageFs replaces one declaration in that file with the code you sent, so run_app and the next build see it.
+- It writes only when all of these hold: the file is a source file of a project this session owns (a regular file, not a symlink); the code is exactly one declaration, a let value or a let function (mutable and entry point included); the declaration in the file that contains block_start_line has the same name as the one you sent; the code differs from what is already in the file; and the file did not change between the eval and the write.
+- It does not write for a type, a nested module, an open, a bare expression, several declarations in one call, an eval that failed, or a call that left out file_path or block_start_line. An eval with no file_path is a plain eval and touches no file.
+- The write replaces only that declaration. It goes through the same journal as nudge_value, so nudge_value with action=undo and the same file puts the old text back.
+- A call that passed file_path ends its text with one line, either 'written back to <file>:<line>' or 'not persisted: <reason>', and the structured result carries the same line as writeBack. Read it, it says whether your file changed.
+
 RETURN VALUE:
 - On success: the printed output of the evaluated code (stdout, printfn output, or the auto-printed value).
 - On failure: the F# compiler diagnostic message with file/line info pointing to the error.
@@ -771,13 +778,13 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Absolute path to the source file this code came from. Enables module context detection — SageFs wraps the code in the correct module/namespace for FSI evaluation.")>]
+        [<Description("Absolute path to the source file this code came from. Gives module context, so SageFs wraps the code in the correct module/namespace for FSI evaluation. It also asks for a write: with block_start_line set, a successful eval that redefines one declaration in this file replaces that declaration in the file. See WRITING TO YOUR SOURCE FILE in the tool description.")>]
         [<Optional; DefaultParameterValue("")>]
         file_path: string,
         [<Description("How the code is being evaluated: 'file' for whole-file send, 'block' for a selected region. When omitted, auto-detected from code content.")>]
         [<Optional; DefaultParameterValue("")>]
         eval_mode: string,
-        [<Description("1-based line number where the selected block starts in the source file. Helps resolve which module the block belongs to in multi-module files. Omit or pass 0 when unknown.")>]
+        [<Description("1-based line number where the selected block starts in the source file. Helps resolve which module the block belongs to in multi-module files. It also picks the declaration in file_path that a write replaces: the one that contains this line. Without it (omit it or pass 0) nothing is written to the file.")>]
         [<Optional; DefaultParameterValue(0)>]
         block_start_line: int,
         [<Description("Optional description of what this code is for (e.g. 'refactoring warmup pipeline', 'writing property tests'). Shown in the dashboard so humans and other agents can see what you're working on. Preserved across calls until overwritten by a new non-empty value.")>]
