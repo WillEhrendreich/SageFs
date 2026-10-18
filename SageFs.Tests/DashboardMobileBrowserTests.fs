@@ -169,6 +169,24 @@ let tests =
     }
     |> Integration.register (Integration.Dedicated "--integration-browser")
 
+    testTask "[Integration] Mobile: the header's cells keep their text on one line inside the bar, not wrapped out of it" {
+      do! onAPhone (fun page -> task {
+        // The bar is one row high (--tabline-h). A cell whose text wraps to a second line spills out of the bar and is
+        // clipped, so "0 evals" read as a cut-off "0" over "evals".
+        let! clipped =
+          page.EvaluateAsync<string>(
+            """() => {
+              var bar = document.querySelector('.app-header');
+              return Array.from(bar.querySelectorAll('*'))
+                .filter(el => el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0 && getComputedStyle(el).overflowY !== 'visible')
+                .map(el => el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0] + ' "' + el.innerText.replace(/\s+/g, ' ').slice(0, 24) + '" ' + el.scrollHeight + ' tall in ' + el.clientHeight)
+                .join(' | ');
+            }""")
+        Expect.equal (sprintf "no header cell is taller than the bar it sits in: %s" clipped) "" clipped
+      })
+    }
+    |> Integration.register (Integration.Dedicated "--integration-browser")
+
     testTask "[Integration] Mobile: session cards stack without overlapping each other, and none is wider than its column" {
       do! onAPhone (fun page -> task {
         let! report =

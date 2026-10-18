@@ -48,6 +48,16 @@ let htmlEscape (s: string) : string =
 /// literal, which DashboardEscapingTests enforces structurally.
 let textEnc (s: string) : XmlNode = Text.raw (htmlEscape s)
 
+/// The device's width at its natural scale. Without a viewport meta a phone lays a page out at about 980 px and shrinks it,
+/// so the stylesheet's width media queries never match on the device they were written for.
+let viewportContent = "width=device-width, initial-scale=1"
+
+/// What opens every dashboard page's head: the charset first (inside the bytes a browser sniffs), then the viewport.
+/// Shared by the dashboard shell and the settings page so neither can forget one.
+let pageHeadMetas : XmlNode list =
+  [ Elem.meta [ Attr.charset "utf-8" ]
+    Elem.meta [ Attr.name "viewport"; Attr.content viewportContent ] ]
+
 /// Encode a runtime string for use as an attribute VALUE. Falco.Markup emits
 /// attribute values verbatim inside double quotes, so a `"` in a working
 /// directory, title, or path would otherwise break out of the attribute.
@@ -2257,7 +2267,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         // by leaving the id off this wrapper; renderEvalStats owns it.
         Elem.div
           [ Attr.class' "tabline-info"
-            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;min-width:0;overflow:hidden;flex-shrink:1;" ] [ renderEvalStats snap.EvalStats ]
+            // nowrap: the bar is one row high, and "0 evals" wrapping onto a second line at phone width spilled out of it and was clipped.
+            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;min-width:0;overflow:hidden;flex-shrink:1;white-space:nowrap;" ] [ renderEvalStats snap.EvalStats ]
       ]
       // Right side — expand toggle, theme picker
       Elem.div [ Attr.class' "tabline-right"; Attr.style "display:flex;align-items:center;height:100%;margin-left:auto;" ] [

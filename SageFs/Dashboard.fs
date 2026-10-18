@@ -240,8 +240,9 @@ let keyboardHandlerScript () =
 /// the picker). There is NO session query parameter anywhere — the dashboard
 /// is driven entirely by the `viewingSessionId` signal synced with the backend.
 let renderShell (version: string) (clientId: string) (initialSessionId: string) (defaultWorkingDir: string) (initialContent: XmlNode) =
-  Elem.html [] [
+  Elem.html [ Attr.lang "en" ] [
     Elem.head [] [
+      yield! pageHeadMetas
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
       // Inline 🧙 favicon (base64 SVG data URI) — matches the header glyph and
       // makes no external request, so the browser tab stops 404-ing on
