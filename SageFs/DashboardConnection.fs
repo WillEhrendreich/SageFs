@@ -177,6 +177,8 @@ let hardBanner () : XmlNode =
   Elem.div
     [ Attr.id DomIds.ServerStatus
       Attr.class' "conn-banner conn-disconnected"
+      // Assertive: the daemon went away, and a screen reader is otherwise never told.
+      Attr.create "role" "alert"
       Attr.style "display:none"
       Ds.show (sprintf "!$%s" Signals.Connected) ]
     [ Text.raw "❌ Daemon not running — start SageFs to continue" ]
@@ -186,6 +188,8 @@ let softBanner () : XmlNode =
   Elem.div
     [ Attr.id DomIds.ServerStale
       Attr.class' "conn-banner conn-reconnecting"
+      // Polite: updates are paused but the daemon answers, which is worth saying and not worth interrupting for.
+      Attr.create "role" "status"
       Attr.style "display:none"
       Ds.show (sprintf "$%s && $%s" LateSignal Signals.Connected) ]
     [ Text.raw "⏳ Live updates paused — the daemon answers, this page is reconnecting" ]

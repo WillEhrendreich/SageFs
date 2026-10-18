@@ -16,7 +16,9 @@
   --bg-status: #1f1f28;
   --bg-focus: #363646;
   --fg-default: #dcd7ba;
-  --fg-dim: #727169;
+  /* Every secondary line is set in this at 0.65 to 0.75 rem, so it needs AA (4.5:1) on all three surfaces it sits on:
+     page #1f1f28 6.45, panel #2a2a37 5.58, selection #363646 4.67. The old #727169 was 3.33, 2.88 and 2.41. */
+  --fg-dim: #a4a39a;
   --fg-green: #98bb6c;
   --fg-red: #ff5d62;
   --fg-yellow: #e6c384;
@@ -2445,4 +2447,22 @@ body[data-connected="false"] .statusline-info {
   font-size: 0.72rem;
   color: var(--fg-dim);
   opacity: 0.8;
+}
+
+/* ── Reduced motion ───────────────────────────────────────────── */
+/* A person who asks their system for less motion gets none: the connection pulse repeats for as long as the daemon is
+   away, and smooth scrolling moves the page under them. This is not `animation: none`: the tooltip fade-in ends on
+   `forwards` at opacity 1, so removing the animation would leave every tooltip invisible. One tick, one iteration,
+   no wait, lands every animation on its end state at once. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
 }
