@@ -199,7 +199,11 @@ let diagnosticsRoot =
   | false -> Path.GetFullPath(Path.Combine(repoRoot, options.DiagnosticsDir))
 let daemonStdoutPath = Path.Combine(diagnosticsRoot, "daemon-stdout.log")
 let daemonStderrPath = Path.Combine(diagnosticsRoot, "daemon-stderr.log")
-let daemonArguments = [ "--mcp-port"; string options.Port; "--no-resume" ]
+/// How long the throwaway daemon lives if this script dies before it can stop it. A daemon on a non-default port has to
+/// name its owner or its end (`--owner-pid` or `--ttl`) or it refuses to start, which is how this script failed to start
+/// anything at all until the first time it was run on a non-default port.
+let daemonTtl = "20m"
+let daemonArguments = [ "--mcp-port"; string options.Port; "--no-resume"; "--ttl"; daemonTtl ]
 
 // What the run has seen, kept for the diagnostics.
 let startupHealthPolls = JsonArray()
