@@ -184,6 +184,7 @@
         <Compile Include="SessionCardActionsTests.fs" />
         <Compile Include="DashboardViewingTests.fs" />
         <Compile Include="DashboardTeardownViewTests.fs" />
+        <Compile Include="DashboardSessionIdRouteTests.fs" />
         <Compile Include="WorkerReloadRelayTests.fs" />
         <Compile Include="DashboardRenderGateTests.fs" />
         <Compile Include="DashboardIdleStabilityTests.fs" />

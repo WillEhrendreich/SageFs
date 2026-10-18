@@ -1998,6 +1998,38 @@ let routeValue (key: string) (ctx: HttpContext) : string =
   | true, (:? string as value) -> value
   | _ -> ""
 
+/// A route's `{id}` that is not a session id: which parameter, what arrived,
+/// and what would have been accepted.
+type MalformedSessionId = { Field: string; Received: string; Expected: string }
+
+/// The `{id}` of a mutating session route. A malformed one is a 400 that names
+/// the field. It used to be swapped for a fresh random id, so the action ran
+/// against a session that cannot exist and the caller was never told.
+module SessionIdRoute =
+  let [<Literal>] Field = "id"
+  let [<Literal>] Expected = "8 lowercase hex digits, for example 0a1b2c3d"
+
+  let parse (raw: string) : Result<WorkerProtocol.SessionId, MalformedSessionId> =
+    WorkerProtocol.SessionId.validate raw
+    |> Result.mapError (fun _ -> { Field = Field; Received = raw; Expected = Expected })
+
+  let describe (malformed: MalformedSessionId) : string =
+    sprintf "Bad request: route parameter '%s' must be %s; received '%s'." malformed.Field malformed.Expected malformed.Received
+
+  let refuse (malformed: MalformedSessionId) : HttpHandler =
+    fun ctx -> task {
+      ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
+      ctx.Response.ContentType <- "text/plain; charset=utf-8"
+      do! ctx.Response.WriteAsync(describe malformed)
+    }
+
+  /// Run `onValid` for a well-formed id, refuse everything else.
+  let handle (onValid: WorkerProtocol.SessionId -> HttpHandler) : string -> HttpHandler =
+    fun raw ->
+      match parse raw with
+      | Ok sessionId -> onValid sessionId
+      | Error malformed -> refuse malformed
+
 /// A page's client id: 8 hex digits, minted once when the page is served.
 ///
 /// It is a hex string, so about 1.3% of them are digits around a single `e`
@@ -2748,7 +2780,7 @@ let createToggleWarmupAutoOpenHandler
   }
 
 /// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
-let createApiStateHandler
+let createApiStateStream
   (q: DashboardQueries)
   (infra: DashboardInfra)
   : HttpHandler =
@@ -2871,6 +2903,25 @@ let createApiStateHandler
       infra.ConnectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
   }
 
+
+/// The TUI stream, with an explicit `?sessionId=` that is not a session id
+/// refused as a 400 before the stream opens (it used to be read as a random id,
+/// so the client got a stream of an empty session).
+let createApiStateHandler
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  : HttpHandler =
+  fun ctx ->
+    let explicitSid =
+      match ctx.Request.Query.TryGetValue("sessionId") with
+      | true, v when v.Count > 0 -> v.[0]
+      | _ -> ""
+    match String.IsNullOrEmpty explicitSid with
+    | true -> createApiStateStream q infra ctx
+    | false ->
+      match SessionIdRoute.parse explicitSid with
+      | Ok _ -> createApiStateStream q infra ctx
+      | Error malformed -> SessionIdRoute.refuse { malformed with Field = "sessionId" } ctx
 
 /// POST /api/dispatch — accept EditorAction JSON and dispatch to Elm runtime.
 let createApiDispatchHandler
@@ -3359,7 +3410,7 @@ let createEndpoints
     yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)
     yield mapPostRaw "/dashboard/session/switch/{id}"
       (routeValue "id")
-      (fun sid -> createSessionActionHandler q infra a.SwitchSession false (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.SwitchSession false))
     // Load a different project into a session. There is no in-place "swap the
     // project" in the worker — the project set is fixed when FSI starts — so this
     // is honestly a recreate: new session on the chosen project, then stop the old
@@ -3411,7 +3462,7 @@ let createEndpoints
       })
     yield mapPostRaw "/dashboard/session/stop/{id}"
       (routeValue "id")
-      (fun sid -> createSessionActionHandler q infra a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopSession true))
     yield post "/dashboard/session/stop-others" (fun ctx -> task {
       let! sessions = q.GetAllSessions ()
       // "Others" = everyone except the session THIS client is viewing.
@@ -3451,27 +3502,22 @@ let createEndpoints
       // Dispose == stop: the per-session .sagefs replay binary is gone, so
       // there is no separate "clear saved memory" step anymore (see the
       // event-sourcing story — the .sagefm manifest is the only durable state).
-      (fun sid -> createSessionActionHandler q infra a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopSession true))
     yield mapPostRaw "/dashboard/session/purge/{id}"
       (routeValue "id")
-      (fun sid -> createSessionActionHandler q infra a.PurgeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.PurgeSession true))
     // Run App / Stop App: the session's executable project — the only one (or
     // the active one), or a named one when the session has several.
     yield mapPostRaw "/dashboard/run-app/{id}"
       (routeValue "id")
-      (fun sid ->
-        let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-        createSessionActionHandler q infra (fun s -> a.RunApp s AppRun.RunRequest.DefaultTarget) false sessionId)
+      (SessionIdRoute.handle (createSessionActionHandler q infra (fun s -> a.RunApp s AppRun.RunRequest.DefaultTarget) false))
     yield mapPostRaw "/dashboard/run-app/{id}/{project}"
       (fun ctx -> routeValue "id" ctx, routeValue "project" ctx)
       (fun (sid, project) ->
-        let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-        createSessionActionHandler q infra (fun s -> a.RunApp s (AppRun.RunRequest.Named project)) false sessionId)
+        SessionIdRoute.handle (createSessionActionHandler q infra (fun s -> a.RunApp s (AppRun.RunRequest.Named project)) false) sid)
     yield mapPostRaw "/dashboard/stop-app/{id}"
       (routeValue "id")
-      (fun sid ->
-        let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-        createSessionActionHandler q infra a.StopApp false sessionId)
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopApp false))
     // Daemon info endpoint for client discovery (replaces daemon.json)
     yield get "/api/daemon-info" (fun ctx -> task {
       let startedAt =
