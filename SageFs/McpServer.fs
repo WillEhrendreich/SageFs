@@ -307,19 +307,87 @@ let withEventEcho (events: string array) (result: CallToolResult) : CallToolResu
 let confirmationMessage (toolName: string) (loss: string) : string =
   sprintf "%s will take away %s. Allow it?" toolName loss
 
+/// Why a confirmation did not happen. Every case means the same thing for the call (it did not run, so NOTHING was
+/// done and the session is still running) and a different thing for the caller, who needs to know whether a person
+/// said no, whether nobody was there to say anything, or whether the question never got out. They are cases and
+/// not one string built in a catch, so a test can tell silence from a decline without parsing a sentence.
+type ConfirmationRefusal =
+  /// A person was asked and said no.
+  | Declined
+  /// The prompt was dismissed before an answer came.
+  | Cancelled
+  /// The client answered with an action SageFs does not know. Kept, so the sentence can say what it was.
+  | AnsweredOther of answer: string
+  /// The client advertised elicitation, was asked, and nothing came back inside the budget. A headless agent, or a
+  /// UI whose prompt never takes an answer, lands here.
+  | NoAnswerInTime of waited: TimeSpan
+  /// The question could not be put at all (the transport failed, the client refused the request).
+  | CouldNotBeAsked of reason: string
+
+module ConfirmationRefusal =
+  /// The daemon route that does the same job as a confirm-tier tool WITHOUT asking anyone. These are the real
+  /// alternatives for a caller that has no human to answer: the routes sit on the MCP port and skip the tool
+  /// filter that prompts. A tool outside the tier has none, because it is never asked about.
+  let unattendedRoute (toolName: string) : string =
+    match SageFs.Affordances.ToolName.tryParse toolName with
+    | Some SageFs.Affordances.ToolName.StopSession -> "POST /api/sessions/stop with {\"sessionId\": \"<id>\"}"
+    | Some SageFs.Affordances.ToolName.ResetFsiSession -> "POST /reset with {\"sessionId\": \"<id>\"}"
+    | Some SageFs.Affordances.ToolName.HardResetFsiSession ->
+      "POST /hard-reset with {\"sessionId\": \"<id>\", \"rebuild\": true}"
+    | Some SageFs.Affordances.ToolName.SwitchWorkflow ->
+      "POST /api/sessions/<id>/workflow with the target workflow in the body"
+    | Some SageFs.Affordances.ToolName.StopApp -> "POST /api/sessions/<id>/stop-app"
+    | Some SageFs.Affordances.ToolName.ManageLocalData -> "POST /api/local-data/clear?store=<store>"
+    | _ -> "the daemon's HTTP API, which does not ask"
+
+  /// What was done, said first and the same for every case: the call did not run. The old text said "not
+  /// confirmed", which reads as a stop that failed; the session was in fact still running.
+  let nothingDone (toolName: string) : string =
+    sprintf "Nothing was done: %s did not run, and the session is still running." toolName
+
+  /// The way out for a caller with no person to answer. There is no switch for the prompt, so it says so rather
+  /// than leaving the caller to look for one; the routes are on the daemon's MCP port.
+  let wayOut (toolName: string) : string =
+    sprintf
+      "If no person can answer this prompt, there is no setting that turns it off. The daemon's HTTP API on the same port does the same job without asking: %s."
+      (unattendedRoute toolName)
+
+  /// The one sentence a caller reads, for each case. Exhaustive: a new refusal cannot be added without writing
+  /// what the caller is told.
+  let describe (toolName: string) (refusal: ConfirmationRefusal) : string =
+    match refusal with
+    | Declined -> sprintf "%s was declined, so the call did not run. %s" toolName (nothingDone toolName)
+    | Cancelled ->
+      sprintf "%s was cancelled before an answer came, so the call did not run. %s" toolName (nothingDone toolName)
+    | AnsweredOther other ->
+      sprintf
+        "%s was not confirmed (the client answered '%s'), so the call did not run. %s"
+        toolName other (nothingDone toolName)
+    | NoAnswerInTime waited ->
+      sprintf
+        "%s needs a person to confirm it, and no answer came within %O. %s %s"
+        toolName waited (nothingDone toolName) (wayOut toolName)
+    | CouldNotBeAsked reason ->
+      sprintf
+        "%s needs a person to confirm it, and the confirmation could not be asked for (%s). %s %s"
+        toolName reason (nothingDone toolName) (wayOut toolName)
+
 /// What an answer means, kept apart from the SDK's own type so both directions
 /// can be tested with no client attached. Accepted runs the call; every other
-/// answer refuses it, and the sentence says WHICH one happened rather than
+/// answer refuses it, and the case says WHICH one happened rather than
 /// folding decline, cancel and silence into one vague failure.
-let confirmationVerdict (toolName: string) (answer: ElicitResult) : Result<unit, string> =
+let answerVerdict (answer: ElicitResult) : Result<unit, ConfirmationRefusal> =
   if answer.IsAccepted then
     Ok()
   else
     match answer.Action with
-    | "decline" -> Result.Error(sprintf "%s was declined, so the call did not run." toolName)
-    | "cancel" -> Result.Error(sprintf "%s was cancelled before an answer came, so the call did not run." toolName)
-    | other ->
-      Result.Error(sprintf "%s was not confirmed (the client answered '%s'), so the call did not run." toolName other)
+    | "decline" -> Result.Error Declined
+    | "cancel" -> Result.Error Cancelled
+    | other -> Result.Error(AnsweredOther other)
+
+/// The same verdict as the sentence a caller reads.
+let confirmationVerdict (toolName: string) (answer: ElicitResult) : Result<unit, string> =
+  answerVerdict answer |> Result.mapError (ConfirmationRefusal.describe toolName)
 
 /// What a call needs before its body may run, decided from the confirm tier
 /// and from what this client says it can do.
@@ -352,7 +420,7 @@ let confirmationStep (caps: ClientCapabilities) (toolName: string) : Confirmatio
     | Some loss ->
       if isNull caps || isNull caps.Elicitation then ClientCannotAsk else Ask(toolName, loss)
 
-/// Ask the person at the client before a confirm-tier tool runs.
+/// Ask the person at the client before a confirm-tier tool runs, as a typed outcome.
 ///
 /// The three answers, and they must not be confused:
 ///
@@ -361,20 +429,25 @@ let confirmationStep (caps: ClientCapabilities) (toolName: string) : Confirmatio
 ///     everything they decided before, and a host that cannot be asked is not
 ///     a caller that did something wrong.
 ///   * Accepted -> `Ok`, the body runs.
-///   * Declined, cancelled, no answer inside `Timeouts.confirmationAnswer`, or
-///     the request failing outright -> `Error`, and the call is refused.
+///   * Declined, cancelled, no answer inside `budget`, or the request failing
+///     outright -> `Error` with the `ConfirmationRefusal` that says which, and
+///     the call is refused.
 ///
-/// The last group is deliberately ONE bucket. Every one of them means we do
-/// not hold an approval, and a prompt that could not be answered must never
-/// turn into permission. The bound exists because a tool that never answers is
-/// a bug rather than a wait: an agent must be refused, not parked forever.
-let confirmViaElicitation
-  (server: ModelContextProtocol.Server.McpServer)
+/// Every refusal means we do not hold an approval, and a prompt that could not
+/// be answered must never turn into permission. The bound exists because a tool
+/// that never answers is a bug rather than a wait: an agent must be refused, not
+/// parked forever. `ask` is the one call that reaches a person, so a test can
+/// stand a fake in for the client and pass a short `budget`. The caller's own
+/// cancellation is NOT a refusal: it propagates as the cancellation it is.
+let confirmWithin
+  (budget: TimeSpan)
+  (caps: ClientCapabilities)
+  (ask: ElicitRequestParams -> CancellationToken -> Task<ElicitResult>)
   (toolName: string)
   (ct: CancellationToken)
-  : Task<Result<unit, string>> =
+  : Task<Result<unit, ConfirmationRefusal>> =
   task {
-    match confirmationStep server.ClientCapabilities toolName with
+    match confirmationStep caps toolName with
     | NotInTier
     | ClientCannotAsk -> return Ok()
     | Ask(asking, loss) ->
@@ -385,19 +458,37 @@ let confirmViaElicitation
         schema.Properties <- dict [ "confirmed", flag ]
         schema.Required <- ResizeArray<string>([ "confirmed" ])
         let parameters = ElicitRequestParams(Message = confirmationMessage asking loss, RequestedSchema = schema)
-        use budget = CancellationTokenSource.CreateLinkedTokenSource(ct)
-        budget.CancelAfter(SageFs.Timeouts.confirmationAnswer)
-        let! answer = server.ElicitAsync(parameters, budget.Token).AsTask()
-        return confirmationVerdict asking answer
+        use window = CancellationTokenSource.CreateLinkedTokenSource(ct)
+        window.CancelAfter(budget)
+        let! answer = ask parameters window.Token
+        return answerVerdict answer
       with
-      | :? OperationCanceledException ->
-        return
-          Result.Error(
-            sprintf "%s was not confirmed: no answer came within %O." asking SageFs.Timeouts.confirmationAnswer
-          )
-      | ex ->
-        return Result.Error(sprintf "%s was not confirmed: the confirmation could not be obtained (%s)." asking ex.Message)
+      | :? OperationCanceledException when not ct.IsCancellationRequested ->
+        return Result.Error(NoAnswerInTime budget)
+      | ex when not (ex :? OperationCanceledException) -> return Result.Error(CouldNotBeAsked ex.Message)
   }
+
+/// `confirmWithin` against a live client, waiting as long as `budget` allows.
+let confirmViaElicitationWithin
+  (budget: TimeSpan)
+  (server: ModelContextProtocol.Server.McpServer)
+  (toolName: string)
+  (ct: CancellationToken)
+  : Task<Result<unit, string>> =
+  task {
+    let ask (parameters: ElicitRequestParams) (token: CancellationToken) =
+      server.ElicitAsync(parameters, token).AsTask()
+    let! outcome = confirmWithin budget server.ClientCapabilities ask toolName ct
+    return outcome |> Result.mapError (ConfirmationRefusal.describe toolName)
+  }
+
+/// The default: wait `Timeouts.confirmationAnswer`, a person reading a sentence.
+let confirmViaElicitation
+  (server: ModelContextProtocol.Server.McpServer)
+  (toolName: string)
+  (ct: CancellationToken)
+  : Task<Result<unit, string>> =
+  confirmViaElicitationWithin SageFs.Timeouts.confirmationAnswer server toolName ct
 
 /// CallToolFilter that captures the McpServer and appends accumulated events
 /// to tool responses. This ensures the LLM sees events even if the client
