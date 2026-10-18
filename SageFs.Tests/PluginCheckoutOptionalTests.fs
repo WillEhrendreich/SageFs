@@ -45,7 +45,7 @@ let private runWithoutPlugin (arguments: string list) : Task<int * string> =
     try
       let output = proc.StandardOutput.ReadToEndAsync()
       let errors = proc.StandardError.ReadToEndAsync()
-      use bound = new CancellationTokenSource(TestTimeouts.childExit)
+      use bound = new CancellationTokenSource(TestTimeouts.childTestDiscovery)
       do! proc.WaitForExitAsync bound.Token
       let! text = output
       let! errorText = errors

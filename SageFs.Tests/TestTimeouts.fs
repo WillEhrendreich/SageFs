@@ -778,6 +778,11 @@ module TestTimeouts =
   /// A helper or a killed process tree that takes real work to finish or tear down: a daemon with
   /// its workers, a hot reload app host, a git checkout.
   let childExitSlow = secs 30.
+  /// The whole test assembly started as a child process only to list its tests (`--list-tests`): it loads
+  /// every test module before it can say anything, which is real work, not a helper's. About 11 s by hand at a
+  /// load average of 38, and above the 20 s `childExit` in the 2026-10-18 local gate, where two cases errored with
+  /// a cancelled wait while the box also ran four other shards. The wait ends when the child does.
+  let childTestDiscovery = secs 120.
   /// Let the async readers on a process's output drain after it exited, so the log is complete.
   let readerFlush = secs 1.
 
