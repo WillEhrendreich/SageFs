@@ -385,6 +385,11 @@ dotnet test            # Run tests (CI only — prefer SageFs REPL locally)
 dotnet pack SageFs -o nupkg  # Package the CLI tool
 ```
 
+The release gate runs detached, so a shell list shows only the command and the output is in
+files. `dotnet fsi scripts/gate-tail.fsx -- --status` prints each tier, running or finished,
+with its size and its last line; with no arguments it follows every tier live; a tier name
+follows one. It only reads, so Ctrl-C ends the viewer and never the gate.
+
 ## Multi-agent / worktree sessions
 
 - **Sessions are checkout-aware.** A session's working directory is classified against the filesystem (`SageFs.Checkout.classify`, no `git` subprocess): a plain repository, a git **worktree** (its own root and branch — worktrees have a `.git` FILE, not a directory, pointing at the main checkout's `.git/worktrees/<name>` admin dir), or not a git checkout at all. `list_sessions` and the dashboard show a worktree session's branch.
