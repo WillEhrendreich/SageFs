@@ -606,6 +606,7 @@
         <Compile Include="SessionBindingIsolationOutcomeTests.fs" />
         <Compile Include="MultiClientOutcomeTests.fs" />
         <Compile Include="DaemonResumeOutcomeTests.fs" />
+        <Compile Include="HardKillOutcomeTests.fs" />
         <Compile Include="MultiTargetReferenceOutcomeTests.fs" />
         <Compile Include="DstSeedCorpusTests.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />

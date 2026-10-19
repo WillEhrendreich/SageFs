@@ -79,9 +79,12 @@ let run
       state <- recordStart pid DateTime.UtcNow state
     | Action.RestartDaemon delay ->
       Log.warn "[watchdog] Daemon crashed. Restarting in %gs..." delay.TotalSeconds
-      do! Threading.Tasks.Task.Delay(delay, ct)
-      let pid = startDaemon ()
-      state <- recordStart pid DateTime.UtcNow state
+      // The owner dying cancels `ct` while this waits: that ends the watchdog, it is not a crash of the watchdog.
+      try
+        do! Threading.Tasks.Task.Delay(delay, ct)
+        let pid = startDaemon ()
+        state <- recordStart pid DateTime.UtcNow state
+      with :? OperationCanceledException -> ()
     | Action.Wait -> ()
     | Action.GiveUp reason ->
       Log.error "[watchdog] Giving up: %s" reason

@@ -134,6 +134,12 @@ module Ownership =
     | Ownership.Unowned
     | Ownership.ExpiresAfter _ -> None
 
+  /// The owner as the owner monitor takes it: the pid, fenced by the start time when one was given. For the edge that
+  /// starts a monitor: the daemon's own, and the watchdog's above it.
+  let monitoredOwner (ownership: Ownership) : OwnerMonitor.Owner option =
+    owner ownership
+    |> Option.map (fun o -> { OwnerMonitor.Owner.Pid = o.Pid; StartTimeTicks = OwnerFence.toTicks o.Fence })
+
   /// The idle limit, for the edge that starts the idle timer.
   let ttl (ownership: Ownership) : TimeSpan option =
     match ownership with

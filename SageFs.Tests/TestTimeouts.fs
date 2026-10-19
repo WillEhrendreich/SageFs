@@ -778,6 +778,27 @@ module TestTimeouts =
   /// A helper or a killed process tree that takes real work to finish or tear down: a daemon with
   /// its workers, a hot reload app host, a git checkout.
   let childExitSlow = secs 30.
+  /// A hard-killed daemon's workers and FSI hosts being gone. Nothing tells them: each notices on its own, the
+  /// worker by its owner monitor's next poll (`monitorNotice`), then tears down (`childExitSlow`), and the FSI
+  /// host follows when the worker's pipe closes. The wait ends when the last one is gone, so a passing run never
+  /// reaches the ceiling.
+  let orphanReap = monitorNotice + childExitSlow
+  /// A daemon exiting because the process that owns it (`--owner-pid`) is gone: the daemon's own owner monitor
+  /// notices on its next poll, then the daemon stops its workers and exits.
+  let ownerDeathDaemonExit = monitorNotice + childExitSlow
+  /// The idle limit a test puts in an ownership value it only passes through a pure function. Nothing waits on it.
+  let ownershipIdleLimit = System.TimeSpan.FromMinutes 10.
+  /// How long a test waits for a process it has frozen to exit. It is meant to EXPIRE (a frozen process cannot exit), so
+  /// a long one only slows the test; a healthy FSI host sees its worker's pipe close at once.
+  let survivorWindow = secs 5.
+  /// A supervised daemon killed hard coming back under its supervisor. The watchdog does not act inside its grace
+  /// period after a start, then checks on its interval, waits out the restart backoff, and the new daemon has to
+  /// start and answer. The wait ends when the new daemon answers.
+  let supervisedRestart =
+    SageFs.Timeouts.watchdogGracePeriod
+    + SageFs.Timeouts.watchdogInterval + SageFs.Timeouts.watchdogInterval
+    + SageFs.Timeouts.restartMaxBackoff
+    + daemonFirstOutput
   /// The whole test assembly started as a child process only to list its tests (`--list-tests`): it loads
   /// every test module before it can say anything, which is real work, not a helper's. About 11 s by hand at a
   /// load average of 38, and above the 20 s `childExit` in the 2026-10-18 local gate, where two cases errored with
