@@ -27,6 +27,10 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 /// The two run_app series each get a daemon of their own (the daemon reads the route when it starts a worker),
 /// and a series whose samples did not take the route it is named for fails (`Sample.checkRoute`).
 ///
+/// A fifth measurement is not a series but a curve: the patched save, taken many times on one fresh session and read as
+/// three windows (`LatencyStats.curveOf`), to see whether a save gets slower as the session ages. It has a tier of its
+/// own, `--integration-hr-growth`, and fails when the last window's median is over `growthBoundRatio` times the first's.
+///
 /// The first half of this file is the pure part (reading a frame, turning stamps into stages), and it
 /// runs in the default tier. The second half needs the daemon and runs under `--integration-hr`.
 
@@ -260,6 +264,16 @@ let tierTests =
       registeredCaseNames "--integration-hr"
       |> List.filter (fun name -> name.Contains "run_app")
       |> Expect.isEmpty "a series measured in its own tier does not also run behind the journeys"
+
+    testCase "the growth series is dispatched, holds exactly its own case, and is not behind the journeys" <| fun _ ->
+      Integration.dispatchedEntryPoints
+      |> Expect.contains "Program.fs dispatches the growth tier" Integration.hrGrowthEntryPoint
+      match registeredCaseNames Integration.hrGrowthEntryPoint with
+      | [ only ] -> only |> Expect.stringContains "the growth tier measures the age of the session" "ages"
+      | other -> failtestf "the growth tier should hold one case, it holds %A" other
+      registeredCaseNames "--integration-hr"
+      |> List.filter (fun name -> name.Contains "ages")
+      |> Expect.isEmpty "a long series behind the journeys would set the wall of the hr tier, on a session they had already aged"
   ]
 
 /// Report one series the way the LT tier does, then judge it against its bound.
@@ -315,10 +329,74 @@ let deltaLatencyCase =
         reportAndGate Series.DeltaSaveToServed samples TestTimeouts.hotReloadDeltaServedP95Bound
       })
 
-/// Every series. The HR runner runs only `patchedLatencyCase` from here; the other two have tiers of their own.
+/// Say a line where the log and a person both see it.
+let private emit (line: string) : unit =
+  eprintfn "%s" line
+  printfn "%s" line
+
+/// The plan the growth tier runs: the full series, or the shorter one `growthSavesVariable` asks for (a smoke run
+/// of the same code path, which proves the harness and the arithmetic without taking the time of the series).
+let private growthPlanFromEnvironment () : GrowthPlan =
+  match Environment.GetEnvironmentVariable growthSavesVariable with
+  | null | "" -> GrowthPlan.full
+  | text ->
+    match GrowthPlan.ofText text with
+    | Ok plan -> plan
+    | Result.Error refusal -> failtestf "%s=%s is not a growth series: %A" growthSavesVariable text refusal
+
+/// Print one series' whole curve (the pile, the three medians, every save in order, and the stages of the first
+/// and the last window so growth can be traced to the stage that carries it) and say why it is refused, if it is.
+/// Returns the reasons instead of failing, so both series are printed before either one fails the case.
+let private reportCurve (plan: GrowthPlan) (series: Series) (samples: Sample list) : string list =
+  let name = Series.name series
+  match Sample.series series samples with
+  | Result.Error refusal -> [ sprintf "%s: the saves could not be read as a series (%A)" name refusal ]
+  | Ok times ->
+    emit (timesLine name times)
+    match summarize times with
+    | Ok pile -> emit (reportLine name (machine ()) pile)
+    | Result.Error refusal -> emit (sprintf "%s: nothing to summarise (%A)" name refusal)
+    match curveOf plan.Window times with
+    | Result.Error refusal -> [ sprintf "%s: the curve could not be read (%A)" name refusal ]
+    | Ok curve ->
+      emit (curveLine name curve)
+      emit (sprintf "EARLY %s" (Sample.stageLine series (List.truncate plan.Window samples)))
+      emit (sprintf "LATE %s" (Sample.stageLine series (List.skip (List.length samples - plan.Window) samples)))
+      match growthGate growthBoundRatio curve with
+      | GrowthVerdict.Flat _ as flat ->
+        emit (sprintf "%s: %s" name (describeGrowth flat))
+        []
+      | GrowthVerdict.Growing _ as growing -> [ sprintf "%s: %s" name (describeGrowth growing) ]
+
+/// PERF-1: does a patched save get slower as the session ages? Every eval in a HotReload session lands in one
+/// growing FSI assembly, and the claim is that each save walks all of it and re-points every older copy of a
+/// function, so the cost follows the number of saves already made. The patched series above takes 20 saves on a
+/// session the journeys have used, and the Readme's figure is saves 3 to 22 of a fresh one, so neither can show it.
+/// This takes `GrowthPlan.full` saves on a fresh session, in order, and fails when the median of the last window
+/// is more than `growthBoundRatio` times the median of the first. Both the save-to-served and the
+/// save-to-confirmed clocks are judged: the second also pays for the probes the patched code runs.
+let growthCase =
+  Integration.dedicatedCaseTask
+    Integration.hrGrowthEntryPoint
+    "HR growth: a patched save does not get slower as the session ages, the last window of saves against the first"
+    (fun () ->
+      task {
+        let plan = growthPlanFromEnvironment ()
+        emit (sprintf "GROWTH plan saves=%d window=%d warmup=%d bound=%gx" plan.Saves plan.Window warmupEdits growthBoundRatio)
+        let! samples = measurePatchedSavesOf plan.Saves
+        let reasons =
+          [ Series.PatchSaveToServed; Series.PatchSaveToConfirmed ]
+          |> List.collect (fun series -> reportCurve plan series samples)
+        match reasons with
+        | [] -> ()
+        | refused -> failtest (String.concat "; " refused)
+      })
+
+/// Every series. The HR runner runs only `patchedLatencyCase` from here; the other two have tiers of their own,
+/// and so does the growth series.
 [<Tests>]
 let latencyTests =
-  testList "Hot-reload latency" [ patchedLatencyCase; restartLatencyCase; deltaLatencyCase ]
+  testList "Hot-reload latency" [ patchedLatencyCase; restartLatencyCase; deltaLatencyCase; growthCase ]
 
 /// What one run_app tier runs: its series, alone and in sequence with nothing, under the tier's own trust row. The
 /// tier needs no daemon, session or fixture from the runner: the series starts what it measures.

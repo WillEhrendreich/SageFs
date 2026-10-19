@@ -743,9 +743,10 @@ let private awaitConnected (feed: ReloadFeed) : Task<unit> =
     | false -> failwithf "the /events stream said nothing within %O" TestTimeouts.patience
   }
 
-/// Measure `samplesPerPath` saves after `warmupEdits` on the running net11 fixture app, each a patch
-/// the session applies in place. Starts from the app the runner started and leaves the files as found.
-let measurePatchedSaves () : Task<Sample list> =
+/// Measure `saves` saves after `warmupEdits` on the running net11 fixture app, each a patch the session
+/// applies in place, in the order they were made. Starts from the app the runner started and leaves the
+/// files as found.
+let measurePatchedSavesOf (saves: int) : Task<Sample list> =
   task {
     let env = HotReloadInlinedCalleeJourneyTests.Env.read
     let mcpPort = int (env HotReloadInlinedCalleeJourneyTests.Env.mcpPort)
@@ -799,7 +800,7 @@ let measurePatchedSaves () : Task<Sample list> =
         task {
           do! awaitConnected feed
           let stamps = ResizeArray<SaveStamps>()
-          for i in 1 .. warmupEdits + samplesPerPath do
+          for i in 1 .. warmupEdits + saves do
             let index = (i - 1) % targets.Length
             let target = targets.[index]
             let path, original = originals.[index]
@@ -816,6 +817,9 @@ let measurePatchedSaves () : Task<Sample list> =
           return samplesOf (List.ofSeq stamps)
         })
   }
+
+/// The patched series: `samplesPerPath` saves after `warmupEdits`.
+let measurePatchedSaves () : Task<Sample list> = measurePatchedSavesOf samplesPerPath
 
 // ---- the run_app paths: a restart and a delta -----------------------------------------------
 

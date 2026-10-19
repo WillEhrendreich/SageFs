@@ -1794,6 +1794,10 @@ let sagefsPipeline = pipeline "sagefs" {
             // The measuring tier: it ASSERTS p50/p95, so it is declared exclusive and
             // runs exclusively — everything concurrent with it would be what it measured.
             testTierExclusive "--integration-hr-delta --summary" "measuring the product's latency" "measured"
+            // The growth curve (PERF-1) also MEASURES, and it is the longest patched series there is: a long run of
+            // saves on one fresh session, read as three windows. It boots the HR runner's daemon and net11 fixture
+            // without the journeys, so it is a tier of its own and not a share of `--integration-hr`.
+            testTierExclusive "--integration-hr-growth --summary" "measuring the product's latency" "measured"
             // The live-testing cases edit the sample in place, so a tier is a share of them on a copy of its own.
             for k in 1 .. ltShards do
               testTierExclusive $"--integration-lt --shard {k}/{ltShards} --summary" "asserting wall-clock rendering" "while asserting wall-clock rendering"
