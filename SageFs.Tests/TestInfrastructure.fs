@@ -760,6 +760,9 @@ module TrustSignal =
       Failed: int
       Errored: int
       Ignored: int
+      /// The ignored cases by full name, so the report can name what was skipped. Empty when none were, and absent
+      /// from a row an older run wrote.
+      IgnoredNames: string array
       Verdict: string
       Detail: string
       ExitCode: int }
@@ -780,7 +783,24 @@ module TrustSignal =
       let line = System.Text.Json.JsonSerializer.Serialize row
       lock LedgerEnvironmentVariable (fun () -> System.IO.File.AppendAllText(path, line + "\n"))
 
-  let rowOf (tier: string) (registered: int) (tally: Tally) (verdict: Verdict) (exitCode: int) =
+  /// The sentence in the ledger's Detail column. `Tally.Ran` counts an ignored case as having run, so a clean tier with
+  /// ignored cases must not say "every registered test ran and passed": it says how many were skipped.
+  let detailOf (verdict: Verdict) (tally: Tally) : string =
+    match verdict, tally.Ignored with
+    | Trusted, ignored when ignored > 0 ->
+      sprintf "every registered test ran: %d passed, %d ignored (skipped, so not passed; named in the ignored section)" tally.Passed ignored
+    | _ -> Verdict.describe verdict
+
+  /// The full name of an ignored case, dot-joined the way Expecto prints a failure and `--filter` reads it.
+  let ignoredName (hierarchy: string list) : string = String.concat "." hierarchy
+
+  /// Why an ignored case skipped itself, in its own words.
+  let ignoredReason (summary: Expecto.Impl.TestSummary) : string =
+    match summary.result with
+    | Expecto.Impl.TestResult.Ignored reason -> reason
+    | other -> sprintf "%A" other
+
+  let rowOf (tier: string) (registered: int) (tally: Tally) (ignoredNames: string list) (verdict: Verdict) (exitCode: int) =
     { Tier = tier
       Registered = registered
       Ran = tally.Ran
@@ -788,8 +808,9 @@ module TrustSignal =
       Failed = tally.Failed
       Errored = tally.Errored
       Ignored = tally.Ignored
+      IgnoredNames = Array.ofList ignoredNames
       Verdict = Verdict.name verdict
-      Detail = Verdict.describe verdict
+      Detail = detailOf verdict tally
       ExitCode = exitCode }
 
   let registeredCount (tests: Expecto.Test) = tests |> Expecto.Test.toTestCodeList |> List.length
@@ -856,7 +877,18 @@ module TrustSignal =
       let registered = registeredCount tests
       let verdict = judge (scopeOf argv) registered tally
       let exitCode = Verdict.exitCode expectoExit verdict
-      report (rowOf tier registered tally verdict exitCode)
+      let ignoredNames =
+        match summary.Value with
+        | Some s -> s.ignored |> List.map (fun (flat, _) -> ignoredName flat.name)
+        | None -> []
+      report (rowOf tier registered tally ignoredNames verdict exitCode)
+      // Every skipped case, by name and with the reason it gave, in every log: a count says a test was skipped and
+      // not which, and some of these skip themselves exactly when they would fail.
+      match summary.Value with
+      | Some s when not s.ignored.IsEmpty ->
+        printfn "IGNORED in %s (%d):" tier s.ignored.Length
+        s.ignored |> List.iter (fun (flat, summary) -> printfn "  %s :: %s" (ignoredName flat.name) (ignoredReason summary))
+      | _ -> ()
       // Where this tier's time went, in every log, so the next speed-up is
       // chosen from data: the slowest single tests, and the heaviest top-level
       // lists (the unit a shard or a split would move).

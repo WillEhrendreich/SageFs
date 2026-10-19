@@ -17,6 +17,7 @@
         <Compile Include="../build/FailureReport.fs" Link="Build/FailureReport.fs" />
         <Compile Include="../build/FlakeClassification.fs" Link="Build/FlakeClassification.fs" />
         <Compile Include="../build/CaseHistory.fs" Link="Build/CaseHistory.fs" />
+        <Compile Include="../build/IgnoredBudget.fs" Link="Build/IgnoredBudget.fs" />
         <Compile Include="../build/TierSchedule.fs" Link="Build/TierSchedule.fs" />
         <Compile Include="../build/BuildStamps.fs" Link="Build/BuildStamps.fs" />
         <Compile Include="RunnerDirs.fs" />
@@ -692,6 +693,7 @@
         <Compile Include="FailureReportTests.fs" />
         <Compile Include="FlakeClassificationTests.fs" />
         <Compile Include="FlakeClassificationWiringTests.fs" />
+        <Compile Include="IgnoredBudgetTests.fs" />
         <Compile Include="TestPortsTests.fs" />
         <Compile Include="TrustSignalTests.fs" />
         <Compile Include="PackagedToolSmokeWiringTests.fs" />

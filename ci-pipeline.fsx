@@ -249,6 +249,8 @@ let writeReleaseManifest () =
 #load "build/FailureReport.fs"
 #load "build/FlakeClassification.fs"
 #load "build/CaseHistory.fs"
+#load "build/IgnoredBudget.fs"
+#load "SageFs.Tests/RatchetBudgets.fs"
 #load "build/TierSchedule.fs"
 #load "build/BuildStamps.fs"
 #load "build/PassRecord.fs"
@@ -1334,9 +1336,49 @@ let hostCoverageLines (lines: TrustLine list) : TrustLine list =
       | TierSchedule.CoverageGap (wanted, got) ->
         [ row true "CoverageGap" (string got) (sprintf "the host suites register %d cases and the %d shards registered %d between them: a suite was dropped or taken twice" wanted shards.Length got) ]
 
+/// The rows that say a tier ignored more tests than its budget, or fewer (`RatchetBudgets.ignoredPerTier`). A tier that
+/// ignored exactly its budget has no row. The ledger counts an ignored test as one that ran, so without this a test can be
+/// skipped for good and the table stays green; some of these skip themselves exactly when they would fail.
+let ignoredBudgetLines (lines: TrustLine list) : TrustLine list =
+  let rows =
+    lines
+    |> List.map (fun l ->
+      match Int32.TryParse l.Ignored with
+      | true, ignored -> ({ Tier = l.Tier; Ignored = ignored; Red = l.Red } : IgnoredBudget.TierRow)
+      // A row that counted nothing ("?" for a tier that never reported) is red and is not judged.
+      | false, _ -> ({ Tier = l.Tier; Ignored = 0; Red = true } : IgnoredBudget.TierRow))
+  [ for (tier, standing) in IgnoredBudget.judge SageFs.Tests.RatchetBudgets.ignoredPerTier rows do
+      if IgnoredBudget.fails standing then
+        yield
+          { Tier = sprintf "%s (ignored budget)" tier
+            Registered = "-"; Ran = "-"; Passed = "-"; Failed = "-"; Errored = "-"; Ignored = "-"
+            Verdict = IgnoredBudget.verdictName standing
+            Detail = IgnoredBudget.describe standing
+            Red = IgnoredBudget.fails standing } ]
+
+/// The section under the trust table that names every ignored case, read from the ledger rows (the last row of each tier,
+/// as the table reads them). Empty when nothing was ignored.
+let ignoredCasesSection () : string =
+  match File.Exists trustLedger with
+  | false -> ""
+  | true ->
+    File.ReadAllLines trustLedger
+    |> Array.filter (fun l -> l.Trim() <> "")
+    |> Array.map (fun l -> JsonDocument.Parse(l).RootElement.Clone())
+    |> Array.groupBy (fun r -> r.GetProperty("Tier").GetString())
+    |> Array.map (fun (tier, rows) ->
+      let last = Array.last rows
+      let names =
+        match last.TryGetProperty "IgnoredNames" with
+        | true, v when v.ValueKind = JsonValueKind.Array -> [ for n in v.EnumerateArray() -> n.GetString() ]
+        | _ -> []
+      ({ Tier = tier; Count = last.GetProperty("Ignored").GetInt32(); Names = names } : IgnoredBudget.IgnoredTier))
+    |> List.ofArray
+    |> IgnoredBudget.renderSection
+
 let trustLines () =
   let lines = tierTrustLines ()
-  lines @ hostCoverageLines lines
+  lines @ hostCoverageLines lines @ ignoredBudgetLines lines
 
 let renderTrustTable (lines: TrustLine list) =
   let header =
@@ -1969,7 +2011,7 @@ let sagefsPipeline = pipeline "sagefs" {
     run (fun _ ->
       async {
         let lines = trustLines ()
-        let table = renderTrustTable lines
+        let table = renderTrustTable lines + ignoredCasesSection ()
         printfn "%s" table
         // Kept beside the ledger so a local gate can record it with the pass.
         File.WriteAllText(Path.Combine(Path.GetDirectoryName trustLedger, "trust-report.md"), table + "\n")
