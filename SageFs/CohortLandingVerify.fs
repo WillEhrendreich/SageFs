@@ -129,9 +129,11 @@ let advance (tests: TestId list) (progress: RunProgress) (testState: LiveTestSta
       | _ -> progress
 
 /// Overall budget for a `runTestsInSession` call: the worker-side per-run
-/// cancellation budget (`Timeouts.globalTestRun`, tunable via
-/// `SAGEFS_TEST_RUN_TIMEOUT_MINUTES` — see `SageFs.Core/Timeouts.fs`) plus
-/// slack for daemon-side dispatch latency and result aggregation.
+/// cancellation budget (`Timeouts.globalTestRun`) plus slack for daemon-side
+/// dispatch latency and result aggregation (`Timeouts.testRunAwaitSlack`).
+/// There is no environment variable for the run budget: it starts at the
+/// machine-scaled default in `SageFs.Core/Timeouts.fs` and changes through the
+/// `livetest.globalTestRunTimeoutSeconds` setting (`SageFs.Core/SettingsCatalog.fs`).
 let awaitBudget () : TimeSpan =
   Timeouts.globalTestRun () + Timeouts.testRunAwaitSlack
 
