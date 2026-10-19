@@ -16,6 +16,8 @@ open SageFs
 open SageFs.SessionManager
 open SageFs.WorkerProtocol
 
+module OwnedChild = SageFs.Tests.SessionManagerRestartTombstoneTests.OwnedChild
+
 type private Harness =
   { Mailbox: MailboxProcessor<SessionCommand> }
 
@@ -127,11 +129,8 @@ let readyWaitManagerTests =
   testList "SessionManager AwaitReady across a rebuild" [
 
     testTask "WHY — a caller parked while the rebuild builds is not answered by the old worker's Ready, and is answered when the NEW worker is Ready" {
-      let others = Process.GetProcesses() |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
-      match others.Length with
-      | 0 -> skiptest "need a second live process to stand in for the replacement worker's pid"
-      | _ -> ()
-      let replacement = others[0]
+      use ownedReplacement = OwnedChild.start ()
+      let replacement = ownedReplacement.Process
       let gate, runtime = heldBuild ()
       // The replacement worker is a different process from the first.
       let spawned = ref 0

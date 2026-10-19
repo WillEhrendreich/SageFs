@@ -9,6 +9,8 @@ open SageFs.SessionManager
 open SageFs.SessionBuild
 open SageFs.WorkerProtocol
 
+module OwnedChild = SageFs.Tests.SessionManagerRestartTombstoneTests.OwnedChild
+
 
 /// Shared verb log so ordering tests can assert spawn-before-stop.
 type private Verb =
@@ -356,12 +358,8 @@ let sessionManagerSpawnFirstRestartTests =
         |> Expect.isTrue "session must stay registered through the swap"
 
     testCase "T6 — new-worker spawn failure during a swap reverts to the old worker" <| fun _ ->
-      let distinctProcesses =
-        Process.GetProcesses()
-        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
-      if distinctProcesses.Length = 0 then
-        skiptest "need a second live process to simulate distinct worker pids"
-      let otherProcess = distinctProcesses[0]
+      use owned = OwnedChild.start ()
+      let otherProcess = owned.Process
 
       let runtime =
         mkRuntime
@@ -399,12 +397,8 @@ let sessionManagerSpawnFirstRestartTests =
         |> Expect.equal "revert must not fire a fault callback" 0
 
     testCase "T7 — the new worker's ready commits the swap and retires the old worker" <| fun _ ->
-      let distinctProcesses =
-        Process.GetProcesses()
-        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
-      if distinctProcesses.Length = 0 then
-        skiptest "need a second live process to simulate distinct worker pids"
-      let otherProcess = distinctProcesses[0]
+      use owned = OwnedChild.start ()
+      let otherProcess = owned.Process
 
       let runtime =
         mkRuntime
@@ -442,12 +436,8 @@ let sessionManagerSpawnFirstRestartTests =
         |> Expect.equal "ready must retire the old worker (one stop after the two starts)" [ Verb.Start; Verb.Start; Verb.Stop ]
 
     testCase "T8 — the retired worker's stale WorkerReady during a swap must not commit the old pid" <| fun _ ->
-      let distinctProcesses =
-        Process.GetProcesses()
-        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
-      if distinctProcesses.Length = 0 then
-        skiptest "need a second live process to simulate distinct worker pids"
-      let otherProcess = distinctProcesses[0]
+      use owned = OwnedChild.start ()
+      let otherProcess = owned.Process
 
       let runtime =
         mkRuntime
@@ -522,13 +512,10 @@ let sessionManagerSpawnFirstRestartTests =
       // live OS processes to play worker0 (created), worker1 (first swap's
       // replacement / second swap's outgoing), and worker2 (second swap's
       // replacement).
-      let distinctProcesses =
-        Process.GetProcesses()
-        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
-      if distinctProcesses.Length < 2 then
-        skiptest "need three distinct live processes to simulate three worker generations"
-      let worker1Process = distinctProcesses.[0]
-      let worker2Process = distinctProcesses.[1]
+      use ownedWorker1 = OwnedChild.start ()
+      use ownedWorker2 = OwnedChild.start ()
+      let worker1Process = ownedWorker1.Process
+      let worker2Process = ownedWorker2.Process
 
       let runtime =
         mkRuntime
@@ -596,12 +583,8 @@ let sessionManagerSpawnFirstRestartTests =
         |> Expect.equal "each swap must retire its own outgoing worker — no worker retired twice, none skipped" [ worker0Pid; worker1Process.Id ]
 
     testCase "T10 — a replacement that reports an unusable transport is reaped and the old worker keeps serving" <| fun _ ->
-      let distinctProcesses =
-        Process.GetProcesses()
-        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
-      if distinctProcesses.Length = 0 then
-        skiptest "need a second live process to simulate distinct worker pids"
-      let otherProcess = distinctProcesses[0]
+      use owned = OwnedChild.start ()
+      let otherProcess = owned.Process
 
       let runtime =
         mkRuntime
@@ -647,12 +630,8 @@ let sessionManagerSpawnFirstRestartTests =
         |> Expect.equal "after the failed swap, stop reaps the serving worker once and nothing else" [ otherProcess.Id; oldPid ]
 
     testCase "T10b — after a failed swap the old worker's exit is a real crash, not an expected retirement" <| fun _ ->
-      let distinctProcesses =
-        Process.GetProcesses()
-        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
-      if distinctProcesses.Length = 0 then
-        skiptest "need a second live process to simulate distinct worker pids"
-      let otherProcess = distinctProcesses[0]
+      use owned = OwnedChild.start ()
+      let otherProcess = owned.Process
 
       let runtime =
         mkRuntime

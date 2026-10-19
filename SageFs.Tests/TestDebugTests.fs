@@ -137,6 +137,20 @@ let private held (answer: DebugBegin) : DebugTarget =
 let private continueFor (hold: DebugHold) (ticket: DebugTicket) (park: TimeSpan) : Task<DebugProgress> =
   hold.Continue(ticket, park) |> Async.StartAsTask
 
+/// The case is about a process with no debugger, and a debugger attached to the test process itself would make the real
+/// probe answer differently, so it is registered only for a process that has none. Under a debugger it does not exist;
+/// it is not skipped.
+let private noDebuggerCases : Test list =
+  match System.Diagnostics.Debugger.IsAttached with
+  | true -> []
+  | false ->
+    [ testTask "WHY: the real probe, in a process with no debugger, says none came only once the whole wait is spent" {
+        let clock = System.Diagnostics.Stopwatch.StartNew()
+        let! presence = systemProbe.AwaitAttach TestTimeouts.settle |> Async.StartAsTask
+        presence |> Expect.equal "no debugger came" DebuggerPresence.NoDebugger
+        (clock.Elapsed >= TestTimeouts.settle) |> Expect.isTrue "it waited the whole span before saying so"
+      } ]
+
 [<Tests>]
 let tests =
   testList "TestDebug" [
@@ -306,7 +320,7 @@ let tests =
         | AttachAccess.Open -> failtest "an unknown scope must not read as open"
     ]
 
-    testList "DebugHold (the shell)" [
+    testList "DebugHold (the shell)" (noDebuggerCases @ [
 
       testTask "WHY: begin names the process and the test, opens the door once, and the answer carries the bound" {
         let hold, probe, runs, _ = mkHold DebuggerPresence.DebuggerAttached TestTimeouts.patienceInProcess
@@ -384,16 +398,6 @@ let tests =
         ended |> Expect.equal "no debugger came" (DebugProgress.Ended DebugEnd.ReleasedWithoutDebugger)
       }
 
-      testTask "WHY: the real probe, in a process with no debugger, says none came only once the whole wait is spent" {
-        match System.Diagnostics.Debugger.IsAttached with
-        | true -> skiptest "a debugger is attached to the test process itself"
-        | false ->
-          let clock = System.Diagnostics.Stopwatch.StartNew()
-          let! presence = systemProbe.AwaitAttach TestTimeouts.settle |> Async.StartAsTask
-          presence |> Expect.equal "no debugger came" DebuggerPresence.NoDebugger
-          (clock.Elapsed >= TestTimeouts.settle) |> Expect.isTrue "it waited the whole span before saying so"
-      }
-
       testTask "WHY: a hold nobody releases is dropped when the bound passes, the door is closed, and the test never runs" {
         let hold, probe, runs, _ = mkHold DebuggerPresence.DebuggerAttached bound
         let target = hold.Begin aTest |> held
@@ -460,7 +464,7 @@ let tests =
         let hold = DebugHold(1, probe.Probe, TestTimeouts.patienceInProcess, grace, (fun _ -> async { return passed }), (fun _ -> SymbolSupport.CompiledWithSymbols))
         (hold.Begin aTest |> held).Access |> Expect.equal "blocked with the reason" (AttachAccess.Blocked "ptrace_scope is 2")
       }
-    ]
+    ])
 
     testList "Agent (which test has symbols)" [
 

@@ -64,13 +64,13 @@ let private runFakeWorker (script: string) (goFile: string) : Task<(AppOutput.St
       try proc.Dispose() with _ -> ()
   }
 
-[<Tests>]
-let tests =
-  testList "Worker startup: one reader per stream" [
-    testTask "every stderr line a worker writes after its port arrives, once and in order" {
-      match OperatingSystem.IsWindows() with
-      | true -> skiptest "the fake worker is a shell script"
-      | false ->
+/// The fake worker here is a shell script, so the case is registered only where a shell script runs. On Windows it does
+/// not exist; it is not skipped.
+let private shellScriptCases : Test list =
+  match OperatingSystem.IsWindows() with
+  | true -> []
+  | false ->
+    [ testTask "every stderr line a worker writes after its port arrives, once and in order" {
         let script = Path.Combine(Path.GetTempPath(), sprintf "fake-worker-%s.sh" (Guid.NewGuid().ToString "N"))
         File.WriteAllText(
           script,
@@ -90,5 +90,7 @@ let tests =
         finally
           try File.Delete script with _ -> ()
           try File.Delete goFile with _ -> ()
-    }
-  ]
+      } ]
+
+[<Tests>]
+let tests = testList "Worker startup: one reader per stream" shellScriptCases

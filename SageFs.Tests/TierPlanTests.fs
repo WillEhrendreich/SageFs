@@ -201,68 +201,94 @@ let planTests =
 
 /// The isolation itself, for real: a process run through isolatedArgv sees
 /// its clone at the checkout path, runs as this user (not root), and its
-/// writes land in the clone while the original stays untouched. Skips where
-/// the host forbids unprivileged user namespaces (e.g. a hardened CI image),
-/// which is exactly where the pipeline falls back to Shared.
-let isolationTests =
-  testList "TierPlan isolation" [
-    testCase "a tier's writes land in its own clone and its own /tmp, never in the shared ones" <| fun _ ->
-      if not (OperatingSystem.IsLinux()) then skiptest "user namespaces are Linux-only"
-      // NOT under /tmp: the private /tmp mount would hide a checkout that lives
-      // there (the pipeline refuses to isolate such a checkout for that reason).
-      let root = Path.Combine(AppContext.BaseDirectory, "tierplan-" + Guid.NewGuid().ToString("N"))
-      let checkout = Path.Combine(root, "checkout")
-      let clone = Path.Combine(root, "clone")
-      let privateTmp = Path.Combine(root, "tmp")
-      Directory.CreateDirectory checkout |> ignore
-      Directory.CreateDirectory clone |> ignore
-      Directory.CreateDirectory privateTmp |> ignore
-      // A rendezvous file in the REAL /tmp, standing in for /tmp/MSBuild<pid>.
-      let sharedMarker = sprintf "/tmp/tierplan-shared-%s" (Guid.NewGuid().ToString("N"))
-      File.WriteAllText(sharedMarker, "shared")
-      let insideName = sprintf "tierplan-inside-%s" (Guid.NewGuid().ToString("N"))
-      File.WriteAllText(Path.Combine(checkout, "fixture.txt"), "original")
-      // Trailing newline so `cat` and the `id -u` after it print separate lines.
-      File.WriteAllText(Path.Combine(clone, "fixture.txt"), "private\n")
+/// writes land in the clone while the original stays untouched. It is
+/// registered only where the host allows unprivileged user namespaces with a
+/// bind mount (probed the way the pipeline probes, but with the mount the tier
+/// needs), which is exactly where the pipeline isolates and does not fall back
+/// to Shared. Elsewhere it does not exist; it is not skipped.
+let private userNamespaceMountsWork () : bool =
+  match OperatingSystem.IsLinux() with
+  | false -> false
+  | true ->
+    let probeRoot = Path.Combine(AppContext.BaseDirectory, "tierplan-probe-" + Guid.NewGuid().ToString("N"))
+    let source = Path.Combine(probeRoot, "source")
+    let target = Path.Combine(probeRoot, "target")
+    try
       try
-        // Real uid/gid from /proc (no native-interop dependency needed).
-        let idOf (field: string) =
-          File.ReadAllLines "/proc/self/status"
-          |> Array.find (fun l -> l.StartsWith(field + ":"))
-          |> fun l -> int (l.Split([| '\t'; ' ' |], StringSplitOptions.RemoveEmptyEntries)[1])
-        let uid = idOf "Uid"
-        let gid = idOf "Gid"
-        let argv =
-          isolatedArgv uid gid checkout clone privateTmp
-            (sprintf "sh -c 'cat fixture.txt; id -u; echo written > fixture.txt; test -e %s && echo SEES-SHARED-TMP || echo private-tmp; echo t > /tmp/%s'" sharedMarker insideName)
-        let psi = Diagnostics.ProcessStartInfo(List.head argv)
-        List.tail argv |> List.iter psi.ArgumentList.Add
+        Directory.CreateDirectory source |> ignore
+        Directory.CreateDirectory target |> ignore
+        let psi = Diagnostics.ProcessStartInfo("unshare")
+        for arg in [ "--user"; "--map-root-user"; "--mount"; "--"; "mount"; "--bind"; source; target ] do
+          psi.ArgumentList.Add arg
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError <- true
         use p = Diagnostics.Process.Start psi
-        let out = p.StandardOutput.ReadToEnd()
-        let err = p.StandardError.ReadToEnd()
-        p.WaitForExit()
-        if p.ExitCode <> 0 && (err.Contains "Operation not permitted" || err.Contains "superuser") then
-          skiptest (sprintf "unprivileged user namespaces are unavailable here: %s" (err.Trim()))
-        p.ExitCode |> Expect.equal (sprintf "isolated command should succeed (stderr: %s)" err) 0
-        let lines = out.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-        lines[0] |> Expect.equal "the tier sees its clone at the checkout path" "private"
-        lines[1] |> Expect.equal "the tier runs as the calling user, not root" (string uid)
-        File.ReadAllText(Path.Combine(checkout, "fixture.txt"))
-        |> Expect.equal "the shared checkout is untouched" "original"
-        File.ReadAllText(Path.Combine(clone, "fixture.txt")).Trim()
-        |> Expect.equal "the write landed in the tier's own clone" "written"
-        lines[2]
-        |> Expect.equal "the tier cannot see the shared /tmp (MSBuild node pipes live there)" "private-tmp"
-        File.Exists(Path.Combine(privateTmp, insideName))
-        |> Expect.isTrue "the tier's /tmp writes land in its private tmp"
-        File.Exists("/tmp/" + insideName)
-        |> Expect.isFalse "and never in the shared /tmp"
-      finally
-        try Directory.Delete(root, true) with _ -> ()
-        try File.Delete sharedMarker with _ -> ()
-  ]
+        p.StandardOutput.ReadToEnd() |> ignore
+        p.StandardError.ReadToEnd() |> ignore
+        p.WaitForExit(TestTimeouts.asMs TestTimeouts.childExit) && p.ExitCode = 0
+      with _ -> false
+    finally
+      try Directory.Delete(probeRoot, true) with _ -> ()
+
+let private isolationCases : Test list =
+  match userNamespaceMountsWork () with
+  | false -> []
+  | true ->
+    [ testCase "a tier's writes land in its own clone and its own /tmp, never in the shared ones" <| fun _ ->
+        // NOT under /tmp: the private /tmp mount would hide a checkout that lives
+        // there (the pipeline refuses to isolate such a checkout for that reason).
+        let root = Path.Combine(AppContext.BaseDirectory, "tierplan-" + Guid.NewGuid().ToString("N"))
+        let checkout = Path.Combine(root, "checkout")
+        let clone = Path.Combine(root, "clone")
+        let privateTmp = Path.Combine(root, "tmp")
+        Directory.CreateDirectory checkout |> ignore
+        Directory.CreateDirectory clone |> ignore
+        Directory.CreateDirectory privateTmp |> ignore
+        // A rendezvous file in the REAL /tmp, standing in for /tmp/MSBuild<pid>.
+        let sharedMarker = sprintf "/tmp/tierplan-shared-%s" (Guid.NewGuid().ToString("N"))
+        File.WriteAllText(sharedMarker, "shared")
+        let insideName = sprintf "tierplan-inside-%s" (Guid.NewGuid().ToString("N"))
+        File.WriteAllText(Path.Combine(checkout, "fixture.txt"), "original")
+        // Trailing newline so `cat` and the `id -u` after it print separate lines.
+        File.WriteAllText(Path.Combine(clone, "fixture.txt"), "private\n")
+        try
+          // Real uid/gid from /proc (no native-interop dependency needed).
+          let idOf (field: string) =
+            File.ReadAllLines "/proc/self/status"
+            |> Array.find (fun l -> l.StartsWith(field + ":"))
+            |> fun l -> int (l.Split([| '\t'; ' ' |], StringSplitOptions.RemoveEmptyEntries)[1])
+          let uid = idOf "Uid"
+          let gid = idOf "Gid"
+          let argv =
+            isolatedArgv uid gid checkout clone privateTmp
+              (sprintf "sh -c 'cat fixture.txt; id -u; echo written > fixture.txt; test -e %s && echo SEES-SHARED-TMP || echo private-tmp; echo t > /tmp/%s'" sharedMarker insideName)
+          let psi = Diagnostics.ProcessStartInfo(List.head argv)
+          List.tail argv |> List.iter psi.ArgumentList.Add
+          psi.RedirectStandardOutput <- true
+          psi.RedirectStandardError <- true
+          use p = Diagnostics.Process.Start psi
+          let out = p.StandardOutput.ReadToEnd()
+          let err = p.StandardError.ReadToEnd()
+          p.WaitForExit()
+          p.ExitCode |> Expect.equal (sprintf "isolated command should succeed (stderr: %s)" err) 0
+          let lines = out.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+          lines[0] |> Expect.equal "the tier sees its clone at the checkout path" "private"
+          lines[1] |> Expect.equal "the tier runs as the calling user, not root" (string uid)
+          File.ReadAllText(Path.Combine(checkout, "fixture.txt"))
+          |> Expect.equal "the shared checkout is untouched" "original"
+          File.ReadAllText(Path.Combine(clone, "fixture.txt")).Trim()
+          |> Expect.equal "the write landed in the tier's own clone" "written"
+          lines[2]
+          |> Expect.equal "the tier cannot see the shared /tmp (MSBuild node pipes live there)" "private-tmp"
+          File.Exists(Path.Combine(privateTmp, insideName))
+          |> Expect.isTrue "the tier's /tmp writes land in its private tmp"
+          File.Exists("/tmp/" + insideName)
+          |> Expect.isFalse "and never in the shared /tmp"
+        finally
+          try Directory.Delete(root, true) with _ -> ()
+          try File.Delete sharedMarker with _ -> () ]
+
+let isolationTests = testList "TierPlan isolation" isolationCases
 
 [<Tests>]
 let tests = testList "TierPlan suite" [ planTests; isolationTests ]

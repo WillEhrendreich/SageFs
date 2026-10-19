@@ -210,14 +210,13 @@ let private shortBudget =
 let private killQuietly (child: Process) : unit =
   try child.Kill(true) with _ -> ()
 
-[<Tests>]
-let realAwait =
-  testList "awaitWorkerPort against a real child process" [
-
-    testTask "WHY — a worker that goes silent past its allowance is reported as a START TIMEOUT carrying the budget it was given, not as a spawn failure the restart policy would retry identically" {
-      match OperatingSystem.IsWindows() with
-      | true -> skiptest "needs a POSIX `sleep`"
-      | false ->
+/// The children here are POSIX `sleep` and `sh`, so these cases are registered only where those exist. On Windows they do
+/// not exist; they are not skipped.
+let private posixChildCases : Test list =
+  match OperatingSystem.IsWindows() with
+  | true -> []
+  | false ->
+    [ testTask "WHY — a worker that goes silent past its allowance is reported as a START TIMEOUT carrying the budget it was given, not as a spawn failure the restart policy would retry identically" {
         let child = startSilentChild ()
         let cancellation = new CancellationTokenSource()
         try
@@ -236,12 +235,9 @@ let realAwait =
         finally
           cancellation.Dispose()
           killQuietly child
-    }
+      }
 
-    testTask "WHY — a worker that reports its port is recorded in the start ledger, so the next daemon already knows how long a start takes here" {
-      match OperatingSystem.IsWindows() with
-      | true -> skiptest "needs a POSIX `sh`"
-      | false ->
+      testTask "WHY — a worker that reports its port is recorded in the start ledger, so the next daemon already knows how long a start takes here" {
         let dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sagefs-await-" + Guid.NewGuid().ToString("N"))
         let child = startPortChild ()
         let cancellation = new CancellationTokenSource()
@@ -259,5 +255,8 @@ let realAwait =
           cancellation.Dispose()
           killQuietly child
           try System.IO.Directory.Delete(dir, true) with _ -> ()
-    }
-  ]
+      } ]
+
+[<Tests>]
+let realAwait =
+  testList "awaitWorkerPort against a real child process" posixChildCases

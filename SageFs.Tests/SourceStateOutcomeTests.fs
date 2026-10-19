@@ -39,6 +39,22 @@ let private fixtureProject = Path.Combine(fixtureDir, "SourceStateFixture.fsproj
 let private domainPath = Path.Combine(fixtureDir, "Domain.fs")
 let private testsPath = Path.Combine(fixtureDir, "DomainTests.fs")
 let private subDir = Path.Combine(fixtureDir, "Sub")
+/// Where the sub directory waits while a plain file stands in its place.
+let private subDirAside = subDir + ".aside"
+
+/// Put a plain file where the sub directory is, so the source behind it cannot be reached by any user on any OS.
+/// (A directory's execute bit would not stop a privileged process, and exists only on Unix.)
+let private replaceSubDirWithFile () : unit =
+  Directory.Move(subDir, subDirAside)
+  File.WriteAllText(subDir, "a file where the directory was")
+
+/// Undo `replaceSubDirWithFile`, whatever state the run left it in.
+let private restoreSubDir () : unit =
+  match File.Exists subDir, Directory.Exists subDirAside with
+  | true, true ->
+    File.Delete subDir
+    Directory.Move(subDirAside, subDir)
+  | _ -> ()
 
 /// The tool's own answer: the first text block (the daemon may append a second one about session events).
 let private textOf (result: CallToolResult) : string =
@@ -196,10 +212,10 @@ let private rebuildRows (client: McpClient) (httpClient: Net.Http.HttpClient) : 
     verdictOf rebuilt |> Expect.equal "and the pass is a plain AllPassed again" "AllPassed"
   }
 
-/// A source that cannot be read.
+/// A source that cannot be read: its directory is a plain file, so nobody can walk the path.
 let private unreadableRows (client: McpClient) : Task<unit> =
   task {
-    File.SetUnixFileMode(subDir, UnixFileMode.None)
+    replaceSubDirWithFile ()
     let! blind, blindText = runTests client
     stateOf blind |> Expect.equal (sprintf "a file that cannot be read is Unknown. Text: %s" blindText) "Unknown"
     verdictOf blind |> Expect.equal "never a quiet pass" "PassedOnUnknownSource"
@@ -243,8 +259,8 @@ let private runOutcomeGate () : Task<unit> =
           match t.IsFaulted with
           | true -> Error (t.Exception :> exn)
           | false -> Ok ())
-    // Put the fixture back as it was, and give the directory its permissions back, whatever happened.
-    try File.SetUnixFileMode(subDir, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute) with _ -> ()
+    // Put the fixture back as it was, and give the directory back, whatever happened.
+    try restoreSubDir () with _ -> ()
     for path, text in originals do
       try File.WriteAllText(path, text, Http.utf8NoBom) with _ -> ()
     try (client :> IAsyncDisposable).DisposeAsync() |> ignore with _ -> ()
@@ -261,8 +277,6 @@ let sourceStateOutcomeTests =
   testSequencedGroup LiveTestingWorkerSuites.groupName <|
     Integration.hostList "source state outcome gates" [
       testTask "WHY — a receipt over files edited after the build is never AllPassed, and says which files; a rebuild says Rebuilding then InSync; a file that cannot be read says Unknown and why" {
-        match OperatingSystem.IsWindows() with
-        | true -> skiptest "the unreadable-source row takes the execute bit off a directory, a Unix permission"
-        | false -> do! runOutcomeGate ()
+        do! runOutcomeGate ()
       }
     ]

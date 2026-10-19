@@ -25,13 +25,13 @@ let private endsWithin (refresh: Task<HygieneService.Snapshot>) : Task<unit> =
     ()
   }
 
-[<Tests>]
-let tests =
-  testList "Workspace hygiene: a scan that cannot finish says so" [
-    testTask "a git that exits but leaves a child holding its output is cut off at the bound" {
-      match OperatingSystem.IsWindows() with
-      | true -> skiptest "the fake git is a shell script"
-      | false ->
+/// The fake git here is a shell script, so the case is registered only where a shell script runs. On Windows it does
+/// not exist; it is not skipped.
+let private shellScriptCases : Test list =
+  match OperatingSystem.IsWindows() with
+  | true -> []
+  | false ->
+    [ testTask "a git that exits but leaves a child holding its output is cut off at the bound" {
         use sb = new Sandbox()
         let script = Path.Combine(sb.Root, "fake-git")
         // It prints, backgrounds a sleeper that inherits the output pipe, and exits at once. Git itself is gone and the pipe is not.
@@ -45,8 +45,11 @@ let tests =
         match result with
         | GitResult.Unavailable detail -> detail |> Expect.stringContains "says it ran out of time" "timed out"
         | other -> failtestf "git whose output stayed open should be reported unavailable, got %A" other
-    }
+      } ]
 
+[<Tests>]
+let tests =
+  testList "Workspace hygiene: a scan that cannot finish says so" (shellScriptCases @ [
     testTask "a scan whose live facts never arrive ends as a failed scan that says so" {
       use sb = new Sandbox()
       let loc = HygieneService.locationsFor sb.Repo
@@ -88,4 +91,4 @@ let tests =
         release.Set()
         release.Dispose()
     }
-  ]
+  ])
