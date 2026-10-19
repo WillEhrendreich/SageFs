@@ -135,7 +135,7 @@ let fileSize : (string * int) list =
     // remains is a one-line field, a forwarding call, and the comments saying WHY each site
     // passes the directory it does — including the one that reads no directory at all,
     // because `commitCohort`'s command already carries its scope.
-    "SageFs/Mcp.fs", 3273
+    "SageFs/Mcp.fs", 3274 // one line for the hatch section of get_daemon_status (#160); still below the 3289 it held before today's merges
     // 850 -> 830: ratcheted DOWN (never up) after moving the
     // session-path-containment validator (resolveRealSessionPath/
     // isUncPath/validateSessionCreateRequest) out into its own
