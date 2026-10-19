@@ -269,29 +269,42 @@ module internal WarmupReplayCache =
     | Result.Ok plan -> Some plan
     | Result.Error _ -> None
 
+  /// Where a save writes the cache before moving it into place.
+  let private tempFileName (path: string) = path + ".tmp"
+
   /// The cache is machine-generated and full of this machine's absolute paths, in a
   /// `.SageFs` folder that also holds files the user writes and commits (`config.fsx`,
-  /// `init.fsx`). It ignores ITSELF in a `.gitignore` beside it, for the generated file
-  /// only, so a new user's first `git status` does not show it as untracked. A
-  /// `.gitignore` already there keeps its own lines and gains the entry; one that
-  /// already has it is left alone.
+  /// `init.fsx`). It ignores ITSELF in a `.gitignore` beside it, listing only the files
+  /// SageFs generates there, so a new user's first `git status` does not show it as
+  /// untracked: the cache, the temp file a save leaves if it is killed before the move,
+  /// and the generated `.gitignore` itself, since an untracked `.gitignore` shows in
+  /// `git status` just as the cache would. A `.gitignore` already there is the user's: it
+  /// keeps its own lines and gains only the generated files' entries, and one that already
+  /// lists the cache is left alone. The exception is a `.gitignore` holding exactly what an
+  /// earlier SageFs generated (the cache entry alone, without itself): that one is ours,
+  /// and is rewritten so it stops showing as untracked.
   let private ignoreGeneratedFile (directory: string) (fileName: string) =
     let ignorePath = Path.Combine(directory, ".gitignore")
-    let existing =
-      match File.Exists ignorePath with
-      | true -> File.ReadAllText ignorePath
-      | false -> ""
-    let alreadyIgnored =
-      existing.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
-      |> Array.exists (fun line -> line.Trim() = fileName)
-    match alreadyIgnored with
-    | true -> ()
-    | false ->
-      let separator =
-        match existing.Length = 0 || existing.EndsWith "\n" with
-        | true -> ""
-        | false -> "\n"
-      File.WriteAllText(ignorePath, existing + separator + fileName + "\n")
+    let asLines (lines: string list) = lines |> List.map (fun line -> line + "\n") |> String.concat ""
+    let entries = [ fileName; tempFileName fileName ]
+    let generated = asLines (".gitignore" :: entries)
+    let earlierGenerated = asLines [ fileName ]
+    match File.Exists ignorePath with
+    | false -> File.WriteAllText(ignorePath, generated)
+    | true ->
+      let existing = File.ReadAllText ignorePath
+      let alreadyIgnored =
+        existing.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+        |> Array.exists (fun line -> line.Trim() = fileName)
+      match existing = earlierGenerated, alreadyIgnored with
+      | true, _ -> File.WriteAllText(ignorePath, generated)
+      | false, true -> ()
+      | false, false ->
+        let separator =
+          match existing.Length = 0 || existing.EndsWith "\n" with
+          | true -> ""
+          | false -> "\n"
+        File.WriteAllText(ignorePath, existing + separator + asLines entries)
 
   let save (path: string) (plan: ReplayPlan) =
     let directory = Path.GetDirectoryName path
@@ -310,7 +323,7 @@ module internal WarmupReplayCache =
     // rest of the persistence layer: a crash or a concurrent read never sees a
     // half-written cache. Worst case is a clean miss that triggers rediscovery.
     let json = Json.serialize profile plan
-    let tmp = path + ".tmp"
+    let tmp = tempFileName path
     File.WriteAllText(tmp, json)
     File.Move(tmp, path, true)
 

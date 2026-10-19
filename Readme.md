@@ -173,7 +173,7 @@ SageFs runs in the foreground, streaming daemon logs to that terminal. It's not 
 
 > No project? Just run `sagefs` with no arguments. The daemon starts bare and waits for clients. Your editor will create sessions on demand.
 
-SageFs writes `<project>/.SageFs/warmup-replay-cache.json` the first time it warms a project up, and a `.gitignore` right beside it. That cache is machine-generated and ignores itself, so your `git status` stays clean. `config.fsx` and `init.fsx` in the same folder are yours. Those two you commit.
+SageFs writes `<project>/.SageFs/warmup-replay-cache.json` the first time it warms a project up, and a `.gitignore` right beside it. That cache is machine-generated, and the `.gitignore` ignores the cache, its temp file and itself, so your `git status` stays clean. If that folder already has a `.gitignore`, SageFs adds the cache to it and leaves the rest of the file alone. The exception is one that holds exactly what earlier versions of SageFs wrote (the cache entry alone): SageFs rewrites that file so it ignores itself too. `config.fsx` and `init.fsx` are yours. Those two you commit.
 
 ### Run it as a service (Linux)
 
@@ -665,7 +665,7 @@ If `.SageFs/config.fsx` doesn't exist, these affordances create it with:
 
 If the config already exists, SageFs opens or points you at the file instead of overwriting your existing settings.
 
-**Startup profile**: not the `InitScript` field above, and not global. At the end of a session's warmup, SageFs looks for `.SageFs/init.fsx` or `.SageFsrc` **in that session's own working directory** and evaluates it if found ([`SageFs.Core/StartupProfile.fs`](SageFs.Core/StartupProfile.fs)). There is no `~/.SageFs/init.fsx` home-directory startup profile; no code path looks there.
+**Startup profile**: not the `InitScript` field above, and not global. At the end of a session's warmup, SageFs looks for `.SageFs/init.fsx` or `.SageFsrc` in the folder of the first project the session loads, then **in that session's own working directory**, the folder its `.SageFs/config.fsx` is read from. It evaluates the first one it finds ([`SageFs.Core/StartupProfile.fs`](SageFs.Core/StartupProfile.fs)). So a session opened in `site/` with `Dev/Dev.fsproj` reads `site/Dev/.SageFs/init.fsx` if it exists, and `site/.SageFs/init.fsx` if not. Only one script runs. Relative `#load` and `#r` paths in it resolve against the project's folder (`site/Dev/`). A script found in the working directory can also use paths relative to that folder (`site/`); FSI tries the project's folder first. There is no `~/.SageFs/init.fsx` home-directory startup profile; no code path looks there.
 
 **Precedence:** Inside the dashboard's Create-session flow only: an explicit project list you type wins, then `.SageFs/config.fsx`'s `Load`, then auto-discovery from the working directory. MCP and the HTTP API (VS Code, Neovim) don't read the config file on session creation at all, so there's no precedence to speak of there. Whatever project list the client sends is used as-is.
 

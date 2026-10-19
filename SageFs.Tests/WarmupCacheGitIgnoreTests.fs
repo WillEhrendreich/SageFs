@@ -3,7 +3,9 @@
 /// folder that also holds files the user writes and commits (`config.fsx`,
 /// `init.fsx`). A new user saw an unexplained untracked file in their own project in
 /// a trial and could easily have committed it. The cache writes its own .gitignore
-/// next to it, for the generated file only, and never disturbs one already there.
+/// next to it, listing only what SageFs generates there (the cache, its temp file and
+/// that .gitignore itself). One already there keeps its own lines, unless it holds
+/// exactly what an earlier SageFs generated.
 module SageFs.Tests.WarmupCacheGitIgnoreTests
 
 open System
@@ -70,6 +72,44 @@ let tests =
         let lines = ignoredLines ignore'
         lines |> Expect.contains "their line survives" "local-notes.txt"
         lines |> Expect.contains "and the cache is ignored" cacheFileName
+        List.contains ".gitignore" lines |> Expect.isFalse "their .gitignore is not told to ignore itself"
+
+    testCase "WHY — a .gitignore SageFs creates ignores itself too, because an untracked .gitignore shows in git status just as the cache would" <| fun _ ->
+      withProjectDir <| fun dir ->
+        let sageFsDir = saveUnder dir
+        ignoredLines (Path.Combine(sageFsDir, ".gitignore"))
+        |> Expect.contains "the generated .gitignore lists itself" ".gitignore"
+
+    testCase "WHY — warming up a project leaves a real repository's git status clean, as the README says" <| fun _ ->
+      withProjectDir <| fun dir ->
+        HygieneSandbox.git dir [ "init"; "-b"; "master" ] |> ignore
+        HygieneSandbox.write (Path.Combine(dir, "Dev", "Dev.fsproj")) "<Project />"
+        HygieneSandbox.commitAll dir "init"
+        saveUnder (Path.Combine(dir, "Dev")) |> ignore
+        HygieneSandbox.git dir [ "status"; "--porcelain"; "--untracked-files=all" ]
+        |> Expect.equal "nothing untracked after the cache is written" ""
+
+    testCase "WHY — a .gitignore an earlier SageFs generated is upgraded to ignore itself, so a project already hit by issue #162 goes clean on its next warmup" <| fun _ ->
+      withProjectDir <| fun dir ->
+        HygieneSandbox.git dir [ "init"; "-b"; "master" ] |> ignore
+        HygieneSandbox.write (Path.Combine(dir, "Dev", "Dev.fsproj")) "<Project />"
+        HygieneSandbox.commitAll dir "init"
+        HygieneSandbox.write (Path.Combine(dir, "Dev", ".SageFs", ".gitignore")) $"{cacheFileName}\n"
+        let sageFsDir = saveUnder (Path.Combine(dir, "Dev"))
+        ignoredLines (Path.Combine(sageFsDir, ".gitignore"))
+        |> Expect.contains "the upgraded .gitignore lists itself" ".gitignore"
+        HygieneSandbox.git dir [ "status"; "--porcelain"; "--untracked-files=all" ]
+        |> Expect.equal "nothing untracked after the cache is written" ""
+
+    testCase "WHY — the temp file a killed save leaves behind is ignored too, so a crash does not dirty git status" <| fun _ ->
+      withProjectDir <| fun dir ->
+        HygieneSandbox.git dir [ "init"; "-b"; "master" ] |> ignore
+        HygieneSandbox.write (Path.Combine(dir, "Dev", "Dev.fsproj")) "<Project />"
+        HygieneSandbox.commitAll dir "init"
+        let sageFsDir = saveUnder (Path.Combine(dir, "Dev"))
+        File.WriteAllText(Path.Combine(sageFsDir, cacheFileName + ".tmp"), "{")
+        HygieneSandbox.git dir [ "status"; "--porcelain"; "--untracked-files=all" ]
+        |> Expect.equal "the leftover temp file is not untracked" ""
 
     testCase "WHY — a .gitignore that already ignores the cache is left byte for byte alone" <| fun _ ->
       withProjectDir <| fun dir ->
