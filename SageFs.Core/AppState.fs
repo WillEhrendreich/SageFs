@@ -18,60 +18,60 @@ type FilePath = string
 
 open System.Text
 
+/// Records session output during an eval and passes it on with CRLF endings. Output arrives on whatever thread wrote
+/// it (the host's reply loop, the app's request threads) while the eval thread starts and stops the recording, and
+/// `StringBuilder.ToString` racing `Append` throws `ArgumentOutOfRangeException (Parameter 'chunkLength')`. So every
+/// member takes `gate`, which also covers `lastCharWasCR`.
 type TextWriterRecorder(writerToRecord: TextWriter) =
   inherit TextWriter()
 
+  let gate = obj ()
   let mutable recording: StringBuilder option = None
   let mutable lastCharWasCR = false
+  // Both helpers run with `gate` held.
+  let record (append: StringBuilder -> unit) = Option.iter append recording
+  let crlf (s: string) = s.Replace("\r\n", "\n").Replace("\n", "\r\n")
 
   override _.Encoding = writerToRecord.Encoding
 
   override _.Write(value: char) =
-    match recording with
-    | None -> ()
-    | Some recorder -> recorder.Append value |> ignore
-
-    match value with
-    | '\n' ->
-      match lastCharWasCR with
-      | false -> writerToRecord.Write '\r'
-      | true -> ()
-      writerToRecord.Write '\n'
-      lastCharWasCR <- false
-    | _ ->
-      lastCharWasCR <- (value = '\r')
-      writerToRecord.Write value
+    lock gate (fun () ->
+      record (fun recorder -> recorder.Append value |> ignore)
+      match value with
+      | '\n' ->
+        match lastCharWasCR with
+        | false -> writerToRecord.Write '\r'
+        | true -> ()
+        writerToRecord.Write '\n'
+        lastCharWasCR <- false
+      | _ ->
+        lastCharWasCR <- (value = '\r')
+        writerToRecord.Write value)
 
   override _.Write(value: string) =
-    match recording with
-    | None -> ()
-    | Some recorder -> recorder.Append value |> ignore
-
-    let normalized = value.Replace("\r\n", "\n").Replace("\n", "\r\n")
-    writerToRecord.Write normalized
+    lock gate (fun () ->
+      record (fun recorder -> recorder.Append value |> ignore)
+      writerToRecord.Write(crlf value))
 
   override _.Write(bufferArr: char[], index: int, count: int) =
-    match recording with
-    | None -> ()
-    | Some recorder -> recorder.Append(bufferArr, index, count) |> ignore
-
-    let s = new string(bufferArr, index, count)
-    let normalized = s.Replace("\r\n", "\n").Replace("\n", "\r\n")
-    writerToRecord.Write normalized
+    lock gate (fun () ->
+      record (fun recorder -> recorder.Append(bufferArr, index, count) |> ignore)
+      writerToRecord.Write(crlf (new string(bufferArr, index, count))))
 
   member _.Enable() = () // No longer needed but kept for compatibility
 
   member _.StartRecording() =
-    recording <- Some <| new StringBuilder()
+    lock gate (fun () -> recording <- Some <| new StringBuilder())
 
   member _.StopRecording() =
-    match recording with
-    | None -> ""
-    | Some recorder ->
-      recording <- None
-      recorder.ToString()
+    lock gate (fun () ->
+      match recording with
+      | None -> ""
+      | Some recorder ->
+        recording <- None
+        recorder.ToString())
 
-  override _.Flush() = writerToRecord.Flush()
+  override _.Flush() = lock gate (fun () -> writerToRecord.Flush())
 
 type StartupConfig = {
   CommandLineArgs: string[]
