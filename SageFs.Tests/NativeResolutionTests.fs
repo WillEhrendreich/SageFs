@@ -1,5 +1,6 @@
 module SageFs.Tests.NativeResolutionTests
 
+open System
 open System.IO
 open System.Runtime.InteropServices
 open Expecto
@@ -75,35 +76,64 @@ let tests = testList "NativeResolution" [
     NativeResolution.candidatePaths [ "/proj/out" ] [ "linux-x64" ] false false ""
     |> Expect.isEmpty "blank name is a no-op, not a crash"
 
-  // Integration: the resolver, given the ACTUAL built RaylibHello output dir,
-  // must surface an on-disk candidate — proving the fix resolves the real
-  // libraylib.so that the default probe missed. Skips cleanly if the sample
-  // has not been built (e.g. a partial CI matrix), so the suite stays green.
-  testCase "WHY — resolver finds the real libraylib.so in the built sample output" <| fun () ->
+  // Integration: the resolver, given an output dir laid out the way a build of
+  // RaylibHello lays it out, must surface an on-disk candidate — proving the fix
+  // resolves the real libraylib.so that the default probe missed. The test makes
+  // that output dir itself: a build copies the Raylib-cs package's own
+  // `runtimes/<rid>/native/` under the output, so the test copies the same files
+  // from the restored package (restoring the sample first if the package is not
+  // in the NuGet cache), at the version the repo pins. It needs no earlier build.
+  testCase "WHY — resolver finds the real libraylib.so in an output laid out the way the sample's build lays it out" <| fun () ->
     // Derive repo root from the runtime repo-root probe (no hardcoded paths).
     let repoRoot =
       RepoPaths.repoPathFull [||]
-    let sampleBin =
-      Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.RaylibHello", "bin")
-    // Only meaningful when the sample was built WITH its native lib for this
-    // RID (some configs/matrix legs may not deposit it); skip otherwise so the
-    // suite stays green rather than asserting against something not on disk.
-    let anyNativeBuilt =
-      Directory.Exists sampleBin
-      && (Directory.EnumerateFiles(sampleBin, "*raylib*", SearchOption.AllDirectories) |> Seq.isEmpty |> not)
-    match anyNativeBuilt with
-    | false -> skiptest "RaylibHello native lib not built for this RID"
-    | true ->
-      // Pass every build-output dir as a root; the resolver must surface the
-      // native lib from whichever config actually deposited it.
-      let outDirs =
-        Directory.EnumerateDirectories sampleBin
-        |> Seq.collect Directory.EnumerateDirectories
-        |> Seq.toList
-      let rids = NativeResolution.currentRids ()
-      let isWindows = RuntimeInformation.IsOSPlatform OSPlatform.Windows
-      let isOsx = RuntimeInformation.IsOSPlatform OSPlatform.OSX
-      NativeResolution.candidatePaths outDirs rids isWindows isOsx "raylib"
-      |> List.exists File.Exists
-      |> Expect.isTrue "a native candidate must exist on disk under a built output dir"
+    let version =
+      System.Xml.Linq.XDocument.Load(Path.Combine(repoRoot, "Directory.Packages.props")).Descendants()
+      |> Seq.filter (fun e -> e.Name.LocalName = "PackageVersion" && (string (e.Attribute "Include")).Contains "Raylib-cs")
+      |> Seq.map (fun e -> e.Attribute("Version").Value)
+      |> Seq.tryHead
+      |> Option.defaultWith (fun () -> failtest "Directory.Packages.props pins no Raylib-cs version")
+    let nugetRoot =
+      match Environment.GetEnvironmentVariable "NUGET_PACKAGES" with
+      | null | "" -> Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, ".nuget", "packages")
+      | configured -> configured
+    let package = Path.Combine(nugetRoot, "raylib-cs", version)
+    let sample = Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.RaylibHello", "SageFs.Samples.RaylibHello.fsproj")
+    match Directory.Exists package with
+    | true -> ()
+    | false ->
+      let psi = Diagnostics.ProcessStartInfo("dotnet")
+      for arg in [ "restore"; sample; "--nologo"; "-v:q" ] do psi.ArgumentList.Add arg
+      psi.RedirectStandardOutput <- true
+      psi.RedirectStandardError <- true
+      use restore = Diagnostics.Process.Start psi
+      let output = restore.StandardOutput.ReadToEndAsync()
+      let errors = restore.StandardError.ReadToEndAsync()
+      restore.WaitForExit(TestTimeouts.asMs TestTimeouts.sessionReadyColdBuild) |> Expect.isTrue "the sample's restore finishes"
+      restore.ExitCode |> Expect.equal (sprintf "restoring the sample succeeds. Output: %s %s" output.Result errors.Result) 0
+    Directory.Exists package |> Expect.isTrue (sprintf "the Raylib-cs %s package is restored at %s" version package)
+    let rids = NativeResolution.currentRids ()
+    let isWindows = RuntimeInformation.IsOSPlatform OSPlatform.Windows
+    let isOsx = RuntimeInformation.IsOSPlatform OSPlatform.OSX
+    let outDir = Path.Combine(Path.GetTempPath(), "sagefs-raylib-out-" + Guid.NewGuid().ToString "N")
+    try
+      Directory.CreateDirectory outDir |> ignore
+      let shipped =
+        rids |> List.tryFind (fun rid -> Directory.Exists(Path.Combine(package, "runtimes", rid, "native")))
+      let found () =
+        NativeResolution.candidatePaths [ outDir ] rids isWindows isOsx "raylib"
+        |> List.exists File.Exists
+      match shipped with
+      | Some rid ->
+        let nativeOut = Path.Combine(outDir, "runtimes", rid, "native")
+        Directory.CreateDirectory nativeOut |> ignore
+        for file in Directory.EnumerateFiles(Path.Combine(package, "runtimes", rid, "native")) do
+          File.Copy(file, Path.Combine(nativeOut, Path.GetFileName file))
+        found () |> Expect.isTrue "a native candidate must exist on disk under the output dir"
+      | None ->
+        // The package ships no native library for this machine's runtime identifiers, so there is nothing for the
+        // resolver to surface, and it must say so by finding nothing rather than inventing a path.
+        found () |> Expect.isFalse (sprintf "the package ships no native library for %A, so the resolver finds none" rids)
+    finally
+      try Directory.Delete(outDir, true) with _ -> ()
 ]
