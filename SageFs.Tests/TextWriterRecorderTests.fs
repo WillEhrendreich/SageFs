@@ -19,7 +19,7 @@ let private writerThreads = 3
 
 /// How many start/stop pairs the eval thread makes. The unfixed recorder threw on roughly one pair in forty
 /// with three writers (about 5,000 faults in 200,000 pairs); this is far past the point where it always does.
-let private recordingRounds = 60_000
+let private recordingRounds = 60000
 
 /// How long the eval thread stays between start and stop, in spin iterations. An eval takes time while the host's
 /// output arrives; with no gap at all the writers rarely land inside the window and the race hides.
