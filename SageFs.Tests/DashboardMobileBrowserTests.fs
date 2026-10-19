@@ -57,7 +57,8 @@ let private card (id: string) : ParsedSession =
     ProjectRoles = []
     App = AppRun.AppRunState.NotRunning
     WorkerRssBytes = None; SelfHostStaleness = None; Source = CardSource.NotReadOnThisCard
-    Freshness = ReplFreshness.InSync; Health = SessionHealth.Healthy }
+    Freshness = ReplFreshness.InSync; Health = SessionHealth.Healthy
+    Teardown = SageFs.Server.TeardownRegistry.TeardownState.NotTearingDown }
 
 let private snapshot () : DashboardSnapshot =
   let empty = Elem.div [] []

@@ -104,7 +104,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy
+        Teardown = SageFs.Server.TeardownRegistry.TeardownState.NotTearingDown }
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Stopped
         StatusMessage = None
@@ -116,7 +117,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy
+        Teardown = SageFs.Server.TeardownRegistry.TeardownState.NotTearingDown }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
@@ -235,6 +237,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       SystemAlarmBuffer = ref []
       TriggerStateChange = fun () -> ()
       ConnectionChannels = System.Collections.Concurrent.ConcurrentDictionary<string, MailboxProcessor<DashboardStreamCommand>>()
+      Teardowns = SageFs.Server.TeardownRegistry.Registry()
       ActivityTracker = None
       LiveBindingsAdaptive = None
       ReadCohortFrame = fun () -> SageFs.Cohort.project (SageFs.Cohort.replayHead []) [||]
@@ -431,7 +434,8 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy
+        Teardown = SageFs.Server.TeardownRegistry.TeardownState.NotTearingDown }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
@@ -643,13 +647,15 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         Uptime = Since.At 0L; WorkingDir = "/a"; LastActivity = Since.At 0L
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy
+        Teardown = SageFs.Server.TeardownRegistry.TeardownState.NotTearingDown }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
         ProjectsText = "(B.fsproj)"; EvalCount = 1
         Uptime = Since.At 0L; WorkingDir = "/b"; LastActivity = Since.At 0L
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy
+        Teardown = SageFs.Server.TeardownRegistry.TeardownState.NotTearingDown }
     ]
     let snap =
       { mkSnap "0.0.0" with
@@ -1267,7 +1273,8 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []
         App = AppRun.AppRunState.NotRunning
-        WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+        WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy
+        Teardown = SageFs.Server.TeardownRegistry.TeardownState.NotTearingDown }
     let html = renderSessionsForSession "0a2b3c4e" [ s ] false |> renderNode
     html |> Expect.stringContains "working dir should appear on the card" @"C:\MyProject\Src"
   }

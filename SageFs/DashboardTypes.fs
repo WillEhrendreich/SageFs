@@ -11,6 +11,7 @@ open SageFs.Utils
 open SageFs.Affordances
 open SageFs.ProjectLoading
 open SageFs.Features.LiveTesting
+open SageFs.Server.TeardownRegistry
 open Falco.Markup
 open Falco.Datastar
 open StarFederation.Datastar.FSharp
@@ -1099,6 +1100,9 @@ type ParsedSession = {
   /// Whether the files on disk are ahead of the build the session runs. A different fact from `Freshness` (that one is the
   /// REPL being behind the APP), with a line and a word of its own.
   Source: CardSource
+  /// Whether the daemon is taking this session down right now. The daemon's fact (`TeardownRegistry`), folded in
+  /// by `buildSessionCardsFrom`, so the POST that asked for the stop and every stream push draw the same card.
+  Teardown: TeardownState
 }
 
 /// Best-effort live RSS of a worker process, by pid. Never throws: a pid
@@ -1187,6 +1191,8 @@ let sessionCardOf
     Health = health
     // Read by buildSessionCardsFrom for the viewed session, whose warmup report is already in hand.
     Source = CardSource.NotReadOnThisCard
+    // Folded in by buildSessionCardsFrom from the daemon's registry; the base card is not being torn down.
+    Teardown = TeardownState.NotTearingDown
     Freshness = info.Freshness }
 
 /// Every session the sidebar lists — all but Stopped — in registry order (the
@@ -1478,6 +1484,9 @@ type DashboardInfra = {
   /// handlers retarget the owning stream when the viewing-session signal
   /// changes (signal-driven session selection; no URL query parameter).
   ConnectionChannels: Collections.Concurrent.ConcurrentDictionary<string, MailboxProcessor<DashboardStreamCommand>>
+  /// The teardowns in flight (stop, dispose, purge). Written by the teardown handler around the action, read by
+  /// every render of the sidebar, so "Stopping..." is the daemon's state and not a patch a push can overwrite.
+  Teardowns: TeardownRegistry.Registry
   /// Wait-free read of the daemon's single implicit cohort frame
   /// (cohort-integration-plan.md Slice 4, D4) — dereferences
   /// `CohortOwner.Handle.ReadFrame`'s published pointer directly, no
