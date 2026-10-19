@@ -177,6 +177,19 @@ let genDelegatingIntent =
 /// generated history spends its steps on the commands under test and not on getting anyone into the cohort.
 let seating = [ IJoin(1, JoinableRole.Implementer); IJoin(2, JoinableRole.Implementer); IJoin(3, JoinableRole.Verifier); IJoin(4, JoinableRole.Observer) ]
 
+/// The ONE history that hands an ORPHANED claim on, written out because a random corpus reaches
+/// it only by luck. `ReassignClaim` is accepted only for a claim whose holder has LEFT (that is
+/// what orphans it) and only for the conductor who is still here. Measured on this file's own
+/// corpus it went missing in 4 of 40 draws on net11, so the case the coverage claim in test 31
+/// rests on was a coin toss. A coverage claim made by luck is a flake wearing a green coat, so
+/// the path is in the corpus by construction instead: the next rare case gets a history here
+/// too, and the claim stops depending on the draw.
+let reassignHistory =
+  seating
+  @ [ IAcquire(3, 0)       // the holder takes a claim
+      IDepart 3            // the holder leaves, and the claim is orphaned
+      IReassign(1, 0, 2) ] // the conductor hands it to a member who is still here
+
 /// The ordinary intents, leaning hard on the landing pipeline: claims by the two implementers, landings requested by
 /// them, and the front landing pushed along. Seated first, as the delegating histories are. This is the history the
 /// properties that need a landing to HAPPEN (5, 6, 7, 13) run over; the plain `genIntent` histories reach a landing in
@@ -1083,8 +1096,17 @@ let cohortPropertyTests =
         let pipeline = Gen.sample 600 (Arb.toGen (PipelineGenerators.History())) |> Array.map (fun (PipelineHistory intents) -> run intents)
         let plain = Gen.sample 600 genIntents |> Array.map (fun intents -> run (seating @ intents))
         let delegating = Gen.sample 300 (Arb.toGen (DelegatingGenerators.History())) |> Array.map (fun (DelegatingHistory intents) -> run intents)
-        let histories = Array.concat [ pipeline; plain; delegating ]
+        // The deterministic history LAST, so the corpus is the generated one plus the one path a
+        // random draw cannot be relied on to reach (`reassignHistory`).
+        let histories = Array.concat [ pipeline; plain; delegating; [| run reassignHistory |] ]
         let accepted = histories |> Array.collect (fun h -> h.Steps |> List.map (fun s -> caseOf s.Command) |> Array.ofList) |> Set.ofArray
+        // The deterministic history earns its place or it is not there. If `decide` ever stops
+        // accepting this path, the corpus falls back on the draw and the claim below becomes a
+        // coin toss again, so this says so NOW, every run, instead of leaving it to a flake.
+        run reassignHistory
+        |> fun h -> h.Steps |> List.map (fun s -> caseOf s.Command)
+        |> List.contains "ReassignClaim"
+        |> Expect.isTrue "the deterministic history really reassigns a claim, so the coverage does not rest on the draw"
         Set.difference allCases accepted
         |> Set.toList
         |> Expect.equal "every CohortCommand case is accepted in some generated history; the ones listed never were" []
