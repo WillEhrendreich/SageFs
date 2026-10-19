@@ -1,11 +1,12 @@
 /// Phase 1 item 7 (sagefs-multiagent-vision.md §5.2, §7.1, §7.3, §10): the pure
-/// cohort core's seventeen model-based properties, run over generated command
-/// sequences (1-12), generated strategies on generated schedules (13-16), and a
-/// replayed regression corpus (17).
+/// cohort core's model-based properties (numbered 1 to 28 in the test names; 17 is
+/// the corpus replay and carries no number), run over generated command
+/// sequences, generated strategies on generated schedules, and a replayed
+/// regression corpus.
 ///
-/// Properties 8 and 9 are DEFERRED, not silently dropped — they need `cohortTools`
-/// and `Authority.tryPresent` (Phase 1 items 8 and 11, §8.1), which this island
-/// does not own; see the `Tests.skiptest` cases below for exactly why.
+/// Properties 8 and 9 run: `Affordances.cohortTools` landed (Phase 1 item 11), so
+/// they are the "cohort affordances" list at the bottom of this file, adapted to
+/// the cohort-tool scope that v1 gates (see the comment above that list).
 module SageFs.Tests.CohortPropertyTests
 
 open System
