@@ -370,7 +370,7 @@ SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy sou
 SageFs.Tests/      — Expecto test project
 sagefs-vscode/     — VS Code extension (Fable F#→JS)
 sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as legacy source
-docs/              — GitHub Pages site
+docs/              — Markdown docs, linked from Readme.md and shown on sagetech.dev/sagefs (that site is the SageTech repo; GitHub Pages is retired)
 ```
 
 The Neovim plugin lives in a separate repo, `WillEhrendreich/sagefs.nvim` (checked out at `~/Work/sagefs.nvim`), only so Neovim distribution works. It is a first-class part of SageFs: when a need shows up there, fix and improve it like any other project (busted spec first, verified in real Neovim against the daemon), push it once it is verified, and keep it from falling behind. Its version always equals the SageFs release: `scripts/ship.fsx` runs `scripts/sync-nvim-version.fsx` after each release push, which bumps, tests and pushes the plugin. The version is only a marker, because the plugin reaches users commit by commit. What decides compatibility is the daemon's `apiVersion` against the `api_range` in the plugin's `lua/sagefs/compat.lua`, and `scripts/ship.fsx` refuses to release (`scripts/sync-nvim-version.fsx -- --compat`) when the daemon speaks a version the plugin does not declare. A wire change lands in the plugin first.
