@@ -183,4 +183,87 @@ let cohortOwnerTests =
       ownerB.ReadFrame().TestIds
       |> Expect.equal "replay reconstructed alice's session binding, so her outcomes populate the frame" [| t1 |]
     }
+
+    // ── What the owner says about a ledger it could not replay cleanly ──────────────────────────
+    //
+    // `replayIn` used to skip any row `decide` now refuses and `startCore` said nothing about it, so a daemon could
+    // start from a state missing rows its ledger holds with no trace anywhere. Both cases below are rows written by
+    // an EARLIER build, which is the only way a ledger gets into this shape.
+
+    testTask "WHY — a ledger row decide now refuses is logged once at Warning with its sequence number and the refusal" {
+      let ledger = InMemory.create<MemberId> ()
+      let join = CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+      let joinEvents =
+        match decide epoch [||] (CohortState.empty ()) join with
+        | Ok(_, events, _) -> events
+        | Error refusal -> failtestf "setup: the join was refused: %A" refusal
+      ledger.Append { Seq = 0L<ledgerSeq>; Clock = epoch; Entropy = [||]; Command = join; Events = joinEvents }
+      // Releasing a claim that never existed: decide refuses it, as it would refuse any row it no longer accepts.
+      ledger.Append
+        { Seq = 1L<ledgerSeq>; Clock = epoch.AddMinutes 1.; Entropy = [||]
+          Command = CohortCommand.ReleaseClaim(alice, ClaimId "ghost", 0L<fence>, machine); Events = [] }
+      let warnings = System.Collections.Concurrent.ConcurrentQueue<string>()
+      let capturing =
+        { new SageFs.Utils.ILogger with
+            member _.LogInfo _ = ()
+            member _.LogDebug _ = ()
+            member _.LogWarning message = warnings.Enqueue message
+            member _.LogError _ = () }
+      use owner = CohortOwner.start capturing machine ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      owner.ReadFrame().MemberIds
+      |> Array.contains alice
+      |> Expect.isTrue "the owner still starts, from the rows that did apply"
+      let logged = warnings.ToArray()
+      logged |> Array.length |> Expect.equal "exactly one warning, for the one dropped row" 1
+      logged.[0] |> Expect.stringContains "it names the sequence number" "seq=1"
+      logged.[0] |> Expect.stringContains "it names the refusal" "UnknownClaim"
+    }
+
+    testTask "WHY — a ledger recorded under a different lease window is reported as one Warning, and the owner still starts" {
+      let ledger = InMemory.create<MemberId> ()
+      let join = CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+      let joinEvents =
+        match decide epoch [||] (CohortState.empty ()) join with
+        | Ok(_, events, _) -> events
+        | Error refusal -> failtestf "setup: the join was refused: %A" refusal
+      ledger.Append { Seq = 0L<ledgerSeq>; Clock = epoch; Entropy = [||]; Command = join; Events = joinEvents }
+      // Twenty minutes later alice is within today's 30 minute window. This row says she lapsed, which is what a
+      // 10 minute window would have recorded: the ledger holds no policy constants, only what decide returned.
+      let tickAt = epoch.AddMinutes 20.
+      ledger.Append
+        { Seq = 1L<ledgerSeq>; Clock = tickAt; Entropy = [||]; Command = CohortCommand.Tick machine
+          Events = [ CohortEvent.MemberDeparted(alice, tickAt) ] }
+      let warnings = System.Collections.Concurrent.ConcurrentQueue<string>()
+      let capturing =
+        { new SageFs.Utils.ILogger with
+            member _.LogInfo _ = ()
+            member _.LogDebug _ = ()
+            member _.LogWarning message = warnings.Enqueue message
+            member _.LogError _ = () }
+      use owner = CohortOwner.start capturing machine ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      owner.ReadFrame().MemberIds
+      |> Array.contains alice
+      |> Expect.isTrue "the owner starts from what decide says today, where alice has not lapsed"
+      let logged = warnings.ToArray()
+      logged |> Array.length |> Expect.equal "one warning, however many rows differ" 1
+      logged.[0] |> Expect.stringContains "it says the recorded events are no longer reproduced" "no longer reproduces"
+      logged.[0] |> Expect.stringContains "it names the first row" "seq 1 to 1"
+    }
+
+    testTask "an honest ledger replays in silence" {
+      let ledger = InMemory.create<MemberId> ()
+      let warnings = System.Collections.Concurrent.ConcurrentQueue<string>()
+      let capturing =
+        { new SageFs.Utils.ILogger with
+            member _.LogInfo _ = ()
+            member _.LogDebug _ = ()
+            member _.LogWarning message = warnings.Enqueue message
+            member _.LogError _ = () }
+      use first = CohortOwner.start capturing machine ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      let! _ = first.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
+      let! _ = first.Commit(CohortCommand.AcquireClaim(alice, ClaimScope.File "A.fs", "working on A", machine))
+      use second = CohortOwner.start capturing machine ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      second.ReadFrame() |> Expect.equal "the second owner holds what the first wrote" (first.ReadFrame())
+      warnings.ToArray() |> Expect.equal "nothing was dropped or diverged, so nothing was logged" [||]
+    }
   ]

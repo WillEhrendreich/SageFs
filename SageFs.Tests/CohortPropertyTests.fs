@@ -528,6 +528,47 @@ let cohortPropertyTests =
         Expect.isGreaterThan "a ledger without the entropy disagrees on some history" (noEntropy, 0)
       }
 
+      // A ledger this build wrote must replay without a single skipped row and without one event it cannot reproduce.
+      // This is what makes a row in `Dropped` or `Diverged` mean "the ledger is older than the code", not noise.
+      testPropertyWithConfig cohortConfig "7 (audit): replaying a ledger this build wrote drops no row and finds no event it cannot reproduce" <| fun (intents: Intent list) ->
+        let audit = replayAuditIn machine (toLedger intents)
+        audit.Dropped.IsEmpty && audit.Diverged.IsEmpty && audit.Head.State = replay (toLedger intents)
+
+      test "7 (audit): a row decide now refuses comes back in Dropped with its Seq and the refusal, and the state is what replayIn returns" {
+        let honest = toLedger [ IJoin(1, JoinableRole.Implementer) ]
+        let ghost = ClaimId "ghost"
+        let refused : LedgerEntry<Agent> =
+          { Seq = LanguagePrimitives.Int64WithMeasure 1L
+            Clock = epoch.AddMinutes 1.
+            Entropy = [||]
+            Command = CohortCommand.ReleaseClaim(agentOf 1, ghost, 0L<Measures.fence>, machine)
+            Events = [] }
+        let audit = replayAuditIn machine (honest @ [ refused ])
+        audit.Dropped
+        |> List.map (fun d -> int64 d.DroppedSeq, d.Refusal)
+        |> Expect.equal "the refused row is reported with its sequence number and the refusal" [ 1L, CohortError.UnknownClaim ghost ]
+        audit.Head.State |> Expect.equal "the dropped row changes nothing" (replayIn machine honest)
+        audit.Head.Seq |> Expect.equal "the head still names the last row read" refused.Seq
+      }
+
+      test "7 (audit): a row decide still accepts but answers with other events than were recorded comes back in Diverged" {
+        let honest = toLedger [ IJoin(1, JoinableRole.Implementer) ]
+        let tickAt = epoch.AddMinutes 20.
+        // 20 minutes of silence is inside today's 30 minute lease window, so decide returns no events for this Tick.
+        // The row records a departure, which is what a shorter window would have written.
+        let recorded : LedgerEntry<Agent> =
+          { Seq = LanguagePrimitives.Int64WithMeasure 1L
+            Clock = tickAt
+            Entropy = [||]
+            Command = CohortCommand.Tick machine
+            Events = [ CohortEvent.MemberDeparted(agentOf 1, tickAt) ] }
+        let audit = replayAuditIn machine (honest @ [ recorded ])
+        audit.Dropped |> Expect.isEmpty "the row still applies"
+        audit.Diverged
+        |> List.map (fun d -> int64 d.DivergedSeq, d.Recorded.Length, d.Replayed.Length)
+        |> Expect.equal "the row is reported with what was recorded and what replay produced" [ 1L, 1, 0 ]
+      }
+
       testPropertyWithConfig cohortConfig "13: landed order never precedes an earlier landing's request order" <| fun (intents: Intent list) ->
         landedOrderRespectsRequestOrder (run intents)
 

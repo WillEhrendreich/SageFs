@@ -493,6 +493,10 @@ module Cohort =
   /// any tool call and by `Evaluating`; the reaper is what makes silence cost
   /// something, so this is generous. `Clock` being a parameter means tests exert
   /// this via generated `DateTime` deltas, never a shortened constant.
+  ///
+  /// NOT RECORDED in the ledger (nor is `settledRetention`), yet `Tick` replays
+  /// differently under a different value. A change here is made visible on the
+  /// next start by `replayAuditIn`'s `Diverged` list, not stored.
   let leaseWindow = Timeouts.cohortLeaseWindow
 
   /// How long SETTLED history stays in `CohortState` before `Retention.sweep`
@@ -1885,26 +1889,74 @@ module Cohort =
     State: CohortState<'m>
   }
 
+  /// A recorded entry `decide` now REFUSES, so replay skipped it. Carries which row and why, because a skipped row
+  /// is state the live owner once held that this replay does not.
+  type DroppedEntry<'m> = {
+    DroppedSeq: int64<ledgerSeq>
+    DroppedCommand: CohortCommand<'m>
+    Refusal: CohortError<'m>
+  }
+
+  /// A recorded entry `decide` still accepts but now answers with DIFFERENT events than the ledger recorded. This is
+  /// how a change to a policy the ledger does not store shows up: `Tick` derives who has gone silent from
+  /// `leaseWindow` and what has aged out from `settledRetention`, so an old ledger replayed under a new constant
+  /// reaches a different state with no error anywhere. The recorded events are the witness.
+  type DivergedEntry<'m> = {
+    DivergedSeq: int64<ledgerSeq>
+    DivergedCommand: CohortCommand<'m>
+    Recorded: CohortEvent<'m> list
+    Replayed: CohortEvent<'m> list
+  }
+
+  /// What a replay produced AND what it had to skip or could not reproduce. `Head` is exactly what `replayHeadIn`
+  /// returns; `Dropped` and `Diverged` are both empty for a ledger this build wrote.
+  type ReplayAudit<'m when 'm: comparison> = {
+    Head: LedgerHead<'m>
+    Dropped: DroppedEntry<'m> list
+    Diverged: DivergedEntry<'m> list
+  }
+
   /// `CohortState` is never stored (§5.2) — this is the only way to get one.
   /// Folds `decide` over the recorded (Clock, Entropy, Command) triples; never
   /// runs git, never runs a test, never spawns a process. An entry whose command
   /// no longer applies cleanly (it should not happen against a ledger this
   /// module itself produced) leaves the fold's state unchanged rather than
-  /// throwing, so a corrupt tail cannot make replay itself unusable.
+  /// throwing, so a corrupt tail cannot make replay itself unusable — and is
+  /// RETURNED in `Dropped`, with its `Seq` and the refusal, so the caller can say so.
+  ///
+  /// `Diverged` is the policy witness. The ledger stores no policy constants
+  /// (`leaseWindow`, `settledRetention`), and adding them would change the
+  /// persisted schema; every entry already stores the events `decide` returned,
+  /// so a replay that no longer reproduces them has found the drift without a
+  /// schema change and without refusing the ledger.
   ///
   /// `scope` is the cohort the caller is reconstructing. It seeds the fold, so a
   /// ledger whose first entry is `OpenCohort scope` is idempotent against it and
   /// a ledger with NO `OpenCohort` (every v1 row — see `CohortLedgerExport` and
   /// `CohortLedgerSqlite`'s migration) replays to exactly that scope. `Machine` is
   /// the right seed for those rows and is why `CohortState.empty` is machine-wide.
+  let replayAuditIn (scope: CohortScope) (entries: LedgerEntry<'m> list) : ReplayAudit<'m> =
+    let state, dropped, diverged =
+      entries
+      |> List.fold
+        (fun (state, dropped, diverged) entry ->
+          match decide entry.Clock entry.Entropy state entry.Command with
+          | Ok(newState, events, _) ->
+            let diverged =
+              if events = entry.Events then
+                diverged
+              else
+                { DivergedSeq = entry.Seq; DivergedCommand = entry.Command; Recorded = entry.Events; Replayed = events } :: diverged
+            newState, dropped, diverged
+          | Error refusal ->
+            state, { DroppedSeq = entry.Seq; DroppedCommand = entry.Command; Refusal = refusal } :: dropped, diverged)
+        (CohortState.forScope scope, [], [])
+    let seq = entries |> List.tryLast |> Option.map (fun e -> e.Seq) |> Option.defaultValue 0L<ledgerSeq>
+    { Head = { Seq = seq; State = state }; Dropped = List.rev dropped; Diverged = List.rev diverged }
+
+  /// The state alone, for the callers that have no use for the audit.
   let replayIn (scope: CohortScope) (entries: LedgerEntry<'m> list) : CohortState<'m> =
-    entries
-    |> List.fold
-      (fun state entry ->
-        match decide entry.Clock entry.Entropy state entry.Command with
-        | Ok(newState, _, _) -> newState
-        | Error _ -> state)
-      (CohortState.forScope scope)
+    (replayAuditIn scope entries).Head.State
 
   /// The v1-shaped replay: reconstructs the machine-wide cohort. Exactly
   /// `replayIn CohortScope.Machine` — kept as its own name because every
@@ -1916,8 +1968,7 @@ module Cohort =
   /// `replay` plus the `Seq` it landed on — `project`'s other input. The scope is
   /// passed through to `replayIn` for the same reason `replay` seeds it.
   let replayHeadIn (scope: CohortScope) (entries: LedgerEntry<'m> list) : LedgerHead<'m> =
-    let seq = entries |> List.tryLast |> Option.map (fun e -> e.Seq) |> Option.defaultValue 0L<ledgerSeq>
-    { Seq = seq; State = replayIn scope entries }
+    (replayAuditIn scope entries).Head
 
   let replayHead (entries: LedgerEntry<'m> list) : LedgerHead<'m> = replayHeadIn CohortScope.Machine entries
 
