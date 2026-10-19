@@ -296,12 +296,12 @@ let blockingReaders : (string * int) list =
 let skipSites : (string * int) list =
   [ "SageFs.Tests/AppRunnerTests.fs", 0
     "SageFs.Tests/DashboardSnapshotTests.fs", 0
-    "SageFs.Tests/DevReloadCanaryTests.fs", 3
+    "SageFs.Tests/DevReloadCanaryTests.fs", 0
     "SageFs.Tests/ExpectoPendingTests.fs", 2
     "SageFs.Tests/FileWatcherTests.fs", 0
-    "SageFs.Tests/FsiSessionContractTests.fs", 1
+    "SageFs.Tests/FsiSessionContractTests.fs", 0
     "SageFs.Tests/HardKillOutcomeTests.fs", 0
-    "SageFs.Tests/HarmonyCanaryTests.fs", 5
+    "SageFs.Tests/HarmonyCanaryTests.fs", 0
     "SageFs.Tests/HostAgentTests.fs", 0
     "SageFs.Tests/HostManifestTests.fs", 0
     "SageFs.Tests/HotReloadStateOutcomeTests.fs", 0
@@ -327,8 +327,8 @@ let skipSites : (string * int) list =
     "SageFs.Tests/SyntaxHighlightTests.fs", 0
     "SageFs.Tests/TestDebugTests.fs", 0
     "SageFs.Tests/TierPlanTests.fs", 0
-    "SageFs.Tests/TrustSignalTests.fs", 1
-    "SageFs.Tests/VscodeCommandProofTests.fs", 1
+    "SageFs.Tests/TrustSignalTests.fs", 0
+    "SageFs.Tests/VscodeCommandProofTests.fs", 0
     "SageFs.Tests/WorkerStartupPortValidationTests.fs", 0
     "SageFs.Tests/WorkerStartupReaderTests.fs", 0
     "SageFs.Tests/WorkerStderrCaptureTests.fs", 0 ]
@@ -342,9 +342,9 @@ let skipSites : (string * int) list =
 /// Counts at the time of writing, from the last gate pass and a full default run: the cases are named in the trust
 /// report's "Ignored cases" section and in the `IGNORED in <tier>` block of every tier log.
 let ignoredPerTier : (string * int) list =
-  [ "default", 5
-    "default-net10", 6
-    "--integration-host", 5 ]
+  [ "default", 0
+    "default-net10", 0
+    "--integration-host", 0 ]
 
 let lineCount (repoRoot: string) (rel: string) : int =
   File.ReadAllLines(Path.Combine(repoRoot, rel)).Length
