@@ -26,18 +26,21 @@ let private allModelTools =
 /// Referenced via `typeof` (not a runtime assembly scan) so the type is always
 /// resolved and this contract can never silently skip on assembly load order —
 /// the earlier scan-and-skip let switch_workflow ship registered-but-ungated.
+/// An empty answer means the attribute lookup itself broke, and every contract below would then
+/// pass over nothing, so it fails the case loudly instead.
 let private registeredMcpToolNames () =
-  typeof<SageFs.Server.McpTools.SageFsTools>.GetMethods()
-  |> Array.filter (fun m ->
-    m.GetCustomAttributes(true)
-    |> Array.exists (fun attr -> attr.GetType().Name = "McpServerToolAttribute"))
-  |> Array.map (fun m -> m.Name)
+  let names =
+    typeof<SageFs.Server.McpTools.SageFsTools>.GetMethods()
+    |> Array.filter (fun m ->
+      m.GetCustomAttributes(true)
+      |> Array.exists (fun attr -> attr.GetType().Name = "McpServerToolAttribute"))
+    |> Array.map (fun m -> m.Name)
+  match Array.isEmpty names with
+  | true -> failtest "no [<McpServerTool>] method was found on SageFsTools, so the gate contract has nothing to check"
+  | false -> names
 
 let private registeredToolSet () =
   registeredMcpToolNames () |> Set.ofArray
-
-let private isRegistered () =
-  registeredMcpToolNames () |> Array.isEmpty |> not
 
 // ── Group 1: declaration completeness (structural honesty) ────────────
 
@@ -46,7 +49,6 @@ let declarationCompletenessTests =
 
     testCase "every registered McpServerTool is declared in the gate domain"
     <| fun _ ->
-      if not (isRegistered ()) then skiptest "SageFsTools type not found; reflection skipped"
       let registered = registeredToolSet ()
       let undeclared =
         registered
@@ -58,7 +60,6 @@ let declarationCompletenessTests =
 
     testCase "gate domain declares exactly the registered tool set (no strays)"
     <| fun _ ->
-      if not (isRegistered ()) then skiptest "SageFsTools type not found; reflection skipped"
       declaredGateTools
       |> Set.ofList
       |> Expect.equal
@@ -441,7 +442,6 @@ let destructiveTierTests =
 
     testCase "WHY — the tier names only tools SageFs registers, so a rename cannot leave a stale name gating nothing"
     <| fun _ ->
-      if not (isRegistered ()) then skiptest "SageFsTools type not found; reflection skipped"
       let registered = registeredToolSet ()
       let stale =
         SageFs.Affordances.destructiveTools
@@ -504,7 +504,6 @@ let confirmationTierTests =
 
     testCase "WHY — the tier names only tools SageFs registers, so a rename cannot leave a prompt asking about something that does not exist"
     <| fun _ ->
-      if not (isRegistered ()) then skiptest "SageFsTools type not found; reflection skipped"
       let registered = registeredToolSet ()
       SageFs.Affordances.confirmationLosses
       |> Map.toList

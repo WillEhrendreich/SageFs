@@ -35,13 +35,44 @@ let private unknownTest : TestCase =
 /// BCL-only-signature function (`plainHandler`), used as the "compiled
 /// project" a freshly-started session (no #load anywhere) has loaded. Picks
 /// whichever of Debug/Release is newest, mirroring `SageFsBinary.path`.
-let private webAppFixtureDll () =
+let private webAppFixtureRoot () =
   let root = DirectoryInfo(AppContext.BaseDirectory).Parent.Parent.Parent.Parent.FullName
+  Path.Combine(root, "SageFs.Tests", "fixtures", "WebAppFixture")
+
+let private findWebAppFixtureDll () =
   [ "Debug"; "Release" ]
-  |> List.map (fun cfg -> Path.Combine(root, "SageFs.Tests", "fixtures", "WebAppFixture", "bin", cfg, "net11.0", "WebAppFixture.dll"))
+  |> List.map (fun cfg -> Path.Combine(webAppFixtureRoot (), "bin", cfg, "net11.0", "WebAppFixture.dll"))
   |> List.filter File.Exists
   |> List.sortByDescending File.GetLastWriteTimeUtc
   |> List.tryHead
+
+/// Builds the fixture the way a session does (the product's own build command) when no build output
+/// exists yet. The net11 test build already builds it through a ProjectReference, so this runs only
+/// where that reference is absent (the net10 tier), and a build that fails fails the case with the
+/// build's own output rather than skipping it.
+let private buildWebAppFixture () : string =
+  let psi = Diagnostics.ProcessStartInfo("dotnet")
+  for a in SageFs.SessionBuild.buildArguments true (Path.Combine(webAppFixtureRoot (), "WebAppFixture.fsproj")) do
+    psi.ArgumentList.Add a
+  psi.WorkingDirectory <- webAppFixtureRoot ()
+  psi.UseShellExecute <- false
+  psi.RedirectStandardOutput <- true
+  psi.RedirectStandardError <- true
+  use p = Diagnostics.Process.Start psi
+  let stdout = p.StandardOutput.ReadToEndAsync()
+  let stderr = p.StandardError.ReadToEndAsync()
+  p.WaitForExit()
+  match findWebAppFixtureDll () with
+  | Some dll -> dll
+  | None ->
+    failtestf "WebAppFixture has no build output and building it failed (exit %d):\n%s\n%s" p.ExitCode stdout.Result stderr.Result
+
+let private webAppFixtureBuilt = lazy (
+  match findWebAppFixtureDll () with
+  | Some dll -> dll
+  | None -> buildWebAppFixture ())
+
+let private webAppFixtureDll () : string = webAppFixtureBuilt.Force()
 
 /// A dynamically-emitted "file save" re-eval, shaped exactly like FSI's own
 /// FLATTENED re-emit of a module file: the compiled type's namespace is
@@ -95,28 +126,26 @@ let tests =
       // app was already serving the new value — the dishonest-count failure
       // in the OTHER direction from the false-Patched bug.
       testCase "WHY — a compiled project's own methods are what the session holds at start, so a save that redirects one honestly reaches the running process" <| fun _ ->
-        match webAppFixtureDll () with
-        | None -> skiptest "WebAppFixture fixture is not built — run the fixture's own build first"
-        | Some dll ->
-          let mutable dynAsms: Assembly[] = [||]
-          let sources: AssemblySources = { Dynamic = (fun () -> dynAsms); Loaded = noAssemblies }
-          let agent = Agent({ Projects = [ dll ]; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads; WebDevReload = SageFs.HostAgent.WebDevReload.Off }, sources)
-          agent.Started.AssemblyLoadErrors
-          |> Expect.isEmpty "the fixture must load cleanly for this test to mean anything"
+        let dll = webAppFixtureDll ()
+        let mutable dynAsms: Assembly[] = [||]
+        let sources: AssemblySources = { Dynamic = (fun () -> dynAsms); Loaded = noAssemblies }
+        let agent = Agent({ Projects = [ dll ]; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads; WebDevReload = SageFs.HostAgent.WebDevReload.Off }, sources)
+        agent.Started.AssemblyLoadErrors
+        |> Expect.isEmpty "the fixture must load cleanly for this test to mean anything"
 
-          dynAsms <- [| flattenedPlainHandlerSave () |]
-          let report =
-            agent.AfterEval
-              { EvaluatedCode = "module Shapes =\n  let plainHandler (who: string) = \"B\" + who"
-                Detours = DetourPolicy.ApplyDetours
-                Discovery = DiscoveryPolicy.WhenChanged
-                IsFileSave = true; Closures = [] }
+        dynAsms <- [| flattenedPlainHandlerSave () |]
+        let report =
+          agent.AfterEval
+            { EvaluatedCode = "module Shapes =\n  let plainHandler (who: string) = \"B\" + who"
+              Detours = DetourPolicy.ApplyDetours
+              Discovery = DiscoveryPolicy.WhenChanged
+              IsFileSave = true; Closures = [] }
 
-          report.DetourReport.Redirected
-          |> Expect.isNonEmpty "the compiled plainHandler must actually be re-pointed"
-          report.DetourReport.ReachedRunningProcess
-          |> Expect.isNonEmpty
-            "the compiled copy IS what a freshly-started session holds — a save that redirects it must count as reaching the running process, not report NoEffect while the app already serves the new value"
+        report.DetourReport.Redirected
+        |> Expect.isNonEmpty "the compiled plainHandler must actually be re-pointed"
+        report.DetourReport.ReachedRunningProcess
+        |> Expect.isNonEmpty
+          "the compiled copy IS what a freshly-started session holds — a save that redirects it must count as reaching the running process, not report NoEffect while the app already serves the new value"
     ]
 
     testList "AfterEval" [
