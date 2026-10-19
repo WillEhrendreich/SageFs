@@ -62,6 +62,23 @@ let tests =
         remove dir
       finally Directory.Delete(temp, true)
 
+    testCase "WHY — a run that passed removes its dir, and a run that failed keeps it, worker log and fixture copy included" <| fun _ ->
+      let temp = Directory.CreateTempSubdirectory("sagefs-runnerdirs-test-").FullName
+      try
+        let passed = createIn temp Family.HotReloadRuns
+        let failed = createIn temp Family.HotReloadRuns
+        File.WriteAllText(Path.Combine(failed, "worker.log"), "the failure is in here")
+        finish passed RunEnd.Passed
+        finish failed RunEnd.Failed
+        Directory.Exists passed |> Expect.isFalse "a passing run leaves nothing behind"
+        File.ReadAllText(Path.Combine(failed, "worker.log")) |> Expect.equal "a failing run's evidence is still there" "the failure is in here"
+      finally Directory.Delete(temp, true)
+
+    testCase "a run ends as Passed only when its exit code is zero" <| fun _ ->
+      runEndOfExitCode 0 |> Expect.equal "zero" RunEnd.Passed
+      for code in [ 1; 2; 3; -1 ] do
+        runEndOfExitCode code |> Expect.equal (sprintf "exit %d" code) RunEnd.Failed
+
     testCase "every family has its own name, and each name starts with sagefs- so the path gate and the sweep both know it" <| fun _ ->
       let names = [ Family.BrowserRuns; Family.HotReloadRuns; Family.LiveTestingRuns; Family.TestDatabases; Family.TestScratch ] |> List.map familyName
       names |> List.distinct |> List.length |> Expect.equal "distinct" (List.length names)
