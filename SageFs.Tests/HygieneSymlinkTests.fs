@@ -51,11 +51,6 @@ let private confirm (plan: Plan) : Confirmation =
 
 let private noneAlive : int -> int64 option -> bool = fun _ _ -> false
 
-let private skipWhereLinksNeedPrivilege () : unit =
-  match OperatingSystem.IsWindows() with
-  | true -> skiptest "creating a symlink on Windows needs a privilege the CI runner may not hold"
-  | false -> ()
-
 /// The sandbox, made under a symlinked parent, with the locations a caller who holds the link's spelling would pass.
 /// `realRoot` is where the sandbox really is, spelled by the OS with no link in it.
 type LinkedSandbox(parent: LinkedParent) =
@@ -85,12 +80,10 @@ type LinkedSandbox(parent: LinkedParent) =
 let private targetsOf (leftovers: Leftover list) : string list =
   leftovers |> List.map (fun l -> Target.describe (Leftover.target l))
 
-[<Tests>]
-let symlinkTests =
-  testList "Workspace hygiene: a repository reached through a symlink" [
-
+/// These cases make a directory symlink, and creating one on Windows needs a privilege a runner may not hold, so they are
+/// registered only where a symlink can be made. On Windows they do not exist; they are not skipped.
+let private linkCases : Test list = [
     testTask "each worktree is found at the path the OS prints for it, with the standing its git state earns" {
-      skipWhereLinksNeedPrivilege ()
       use parent = new LinkedParent()
       use linked = new LinkedSandbox(parent)
       populate linked.Sandbox |> ignore
@@ -104,7 +97,6 @@ let symlinkTests =
     }
 
     testTask "no target the scan names goes through the link" {
-      skipWhereLinksNeedPrivilege ()
       use parent = new LinkedParent()
       use linked = new LinkedSandbox(parent)
       populate linked.Sandbox |> ignore
@@ -114,7 +106,6 @@ let symlinkTests =
     }
 
     testTask "tidy removes what is merged, because the path git prints is inside the root the caller named" {
-      skipWhereLinksNeedPrivilege ()
       use parent = new LinkedParent()
       use linked = new LinkedSandbox(parent)
       populate linked.Sandbox |> ignore
@@ -127,7 +118,6 @@ let symlinkTests =
     }
 
     testTask "a scan made with the link's spelling is the one a panel asking from the link's spelling reads back" {
-      skipWhereLinksNeedPrivilege ()
       use parent = new LinkedParent()
       use linked = new LinkedSandbox(parent)
       populate linked.Sandbox |> ignore
@@ -144,6 +134,12 @@ let symlinkTests =
         | HygieneService.HygieneView.NoRepository -> failtestf "from %s: NoRepository" asked
     }
 
+  ]
+
+[<Tests>]
+let symlinkTests =
+  let registered = match OperatingSystem.IsWindows() with | true -> [] | false -> linkCases
+  testList "Workspace hygiene: a repository reached through a symlink" (registered @ [
     testCase "a lookup that finds nothing names the path it was asked for and the targets it had" <| fun _ ->
       let had : Leftover list = []
       let message =
@@ -153,4 +149,4 @@ let symlinkTests =
         with ex -> ex.Message
       message |> Expect.stringContains "names the path asked for" "/no/such/dir"
       message |> Expect.stringContains "says how many targets it had" "0 target"
-  ]
+  ])

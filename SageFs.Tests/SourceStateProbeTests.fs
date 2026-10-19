@@ -68,9 +68,25 @@ let private withFixture (make: unit -> Fixture) (body: Fixture -> unit) : unit =
   let f = make ()
   try body f finally cleanUp f
 
+/// A directory's execute bit is a Unix permission, and a privileged process is not held back by it, so the case that
+/// takes it off is registered only where it can bite: a Unix box and a process that is not privileged. Elsewhere it does
+/// not exist; the walk-for-anyone case beside it covers the same Unknown row.
+let private executeBitCases : Test list =
+  match OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess with
+  | true -> []
+  | false ->
+    [ testCase "WHY — a source in a directory that cannot be entered is Unknown with the operating system's reason" <| fun _ ->
+        withFixture standard (fun f ->
+          File.SetUnixFileMode(Path.Combine(f.Dir, "sub"), UnixFileMode.None)
+          match probeIn f LastRebuild.NeverRebuilt (warmupFor f "Lib" -10) with
+          | SourceState.Unknown (UnknownReason.Unreadable (path, reason)) ->
+            path |> Expect.equal "the file behind the closed directory" f.B
+            reason |> Expect.isNotEmpty "says why"
+          | other -> failtestf "expected Unknown, got %A" other) ]
+
 [<Tests>]
 let probeTests =
-  testList "SourceStateProbe" [
+  testList "SourceStateProbe" (executeBitCases @ [
 
     testCase "WHY — files all older than the build, and the build older than the worker's load, are in sync, and the project file counts among what is checked" <| fun _ ->
       withFixture standard (fun f ->
@@ -111,15 +127,14 @@ let probeTests =
           reason |> Expect.isNotEmpty "says why"
         | other -> failtestf "expected Unknown, got %A" other)
 
-    testCase "WHY — a source in a directory that cannot be entered is Unknown with the operating system's reason" <| fun _ ->
-      match OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess with
-      | true -> skiptest "a directory's execute bit is a Unix permission, and a privileged process is not held back by it"
-      | false -> ()
+    testCase "WHY — a source whose directory is a plain file, so the path cannot be walked for anyone, is Unknown with the operating system's reason" <| fun _ ->
       withFixture standard (fun f ->
-        File.SetUnixFileMode(Path.Combine(f.Dir, "sub"), UnixFileMode.None)
+        let sub = Path.Combine(f.Dir, "sub")
+        Directory.Delete(sub, true)
+        File.WriteAllText(sub, "a file where the directory was")
         match probeIn f LastRebuild.NeverRebuilt (warmupFor f "Lib" -10) with
         | SourceState.Unknown (UnknownReason.Unreadable (path, reason)) ->
-          path |> Expect.equal "the file behind the closed directory" f.B
+          path |> Expect.equal "the file behind the path that cannot be walked" f.B
           reason |> Expect.isNotEmpty "says why"
         | other -> failtestf "expected Unknown, got %A" other)
 
@@ -181,7 +196,7 @@ let probeTests =
       finally
         cleanUp first
         cleanUp second
-  ]
+  ])
 
 [<Tests>]
 let adapterTests =

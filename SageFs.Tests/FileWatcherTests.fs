@@ -326,8 +326,32 @@ let excludedDirTests = testList "shouldPruneDir" [
       |> Flip.Expect.isTrue "bin itself is pruned regardless of depth, wherever it sits under the root"
   ]
 
+/// Making a directory symlink on Windows needs a privilege a runner may not hold, so the cycle case is registered only
+/// where a symlink can be made. On Windows it does not exist; it is not skipped. Where it exists, a symlink that cannot
+/// be made fails the case loudly.
+let private watchCycleCases : Test list =
+  match OperatingSystem.IsWindows() with
+  | true -> []
+  | false ->
+    [ testCase "WHY — watchableDirs — a symlink cycle terminates instead of recursing forever (the Wine z: incident, minimized)" <| fun () ->
+        let root = Directory.CreateTempSubdirectory("sagefs-watchtree-cycle-").FullName
+        try
+          let a = Path.Combine(root, "a")
+          Directory.CreateDirectory a |> ignore
+          Directory.CreateSymbolicLink(Path.Combine(a, "b"), a) |> ignore
+          let noMarker (_: string) = false
+          // The whole point: this call returns at all.
+          let found = watchableDirs root noMarker |> List.map Path.GetFullPath |> Set.ofList
+          found |> Flip.Expect.contains "the root is still watched" (Path.GetFullPath root)
+          found |> Flip.Expect.contains "a is still watched" (Path.GetFullPath a)
+          found
+          |> Set.exists (fun d -> d.Contains(Path.Combine("a", "b")))
+          |> Flip.Expect.isFalse "the symlink itself is never descended into"
+        finally
+          Directory.Delete(root, true) ]
+
 [<Tests>]
-let watchableDirsTests = testList "watchableDirs" [
+let watchableDirsTests = testList "watchableDirs" (watchCycleCases @ [
     testCase "walks source directories but prunes bin/obj/.git and nested checkouts" <| fun () ->
       let root = Directory.CreateTempSubdirectory("sagefs-watchtree-").FullName
       try
@@ -360,30 +384,7 @@ let watchableDirsTests = testList "watchableDirs" [
       finally
         Directory.Delete(root, true)
 
-    testCase "WHY — watchableDirs — a symlink cycle terminates instead of recursing forever (the Wine z: incident, minimized)" <| fun () ->
-      let root = Directory.CreateTempSubdirectory("sagefs-watchtree-cycle-").FullName
-      try
-        let a = Path.Combine(root, "a")
-        Directory.CreateDirectory a |> ignore
-        let canMakeSymlinks =
-          try
-            Directory.CreateSymbolicLink(Path.Combine(a, "b"), a) |> ignore
-            true
-          with _ -> false
-        match canMakeSymlinks with
-        | false -> skiptest "this environment cannot create directory symlinks"
-        | true ->
-          let noMarker (_: string) = false
-          // The whole point: this call returns at all.
-          let found = watchableDirs root noMarker |> List.map Path.GetFullPath |> Set.ofList
-          found |> Flip.Expect.contains "the root is still watched" (Path.GetFullPath root)
-          found |> Flip.Expect.contains "a is still watched" (Path.GetFullPath a)
-          found
-          |> Set.exists (fun d -> d.Contains(Path.Combine("a", "b")))
-          |> Flip.Expect.isFalse "the symlink itself is never descended into"
-      finally
-        Directory.Delete(root, true)
-  ]
+  ])
 
 // ── Truncation must be loud, not silent ─────────────────────────────────
 // The directory walk used to cap out at MaxWatchableEntries and just stop —
@@ -454,39 +455,42 @@ let watchableDirsCappedTests = testList "watchableDirsCapped" [
 // runtime behavior; it fails on the pre-fix per-directory design (fd count
 // scales with directory count) and passes on the current one recursive
 // watch (fd count stays flat).
+/// inotify accounting is a Linux fact (it is counted from /proc), so the case is registered only on Linux. Elsewhere it
+/// does not exist; it is not skipped.
+let private inotifyCases : Test list =
+  match OperatingSystem.IsLinux() with
+  | false -> []
+  | true ->
+    [ testCase "WHY — startPrunedWatcher — inotify instance cost does not scale with directory count, because a per-directory design exhausts the 1024-instance budget long before any watch-count limit" <| fun () ->
+        let root = Directory.CreateTempSubdirectory("sagefs-instancecost-").FullName
+        try
+          for i in 1 .. 500 do
+            Directory.CreateDirectory(Path.Combine(root, sprintf "d%04d" i)) |> ignore
+          let countInotifyFds () =
+            let pid = System.Diagnostics.Process.GetCurrentProcess().Id
+            let psi =
+              System.Diagnostics.ProcessStartInfo(
+                "bash", sprintf "-c \"ls -la /proc/%d/fd 2>/dev/null | grep -ci inotify\"" pid,
+                RedirectStandardOutput = true, UseShellExecute = false)
+            use p = System.Diagnostics.Process.Start psi
+            let out = p.StandardOutput.ReadToEnd()
+            p.WaitForExit()
+            match Int32.TryParse(out.Trim()) with
+            | true, n -> n
+            | false, _ -> -1
+          let before = countInotifyFds ()
+          use _watcher = startPrunedWatcher root [ ".fs"; ".fsx" ] 65536 (fun _ _ -> ()) (fun _ -> ())
+          let after = countInotifyFds ()
+          // <= 2 rather than an exact 1: other tests in this same process may
+          // hold their own watcher open concurrently (Expecto can parallelize
+          // test cases) — the property under test is "flat, not proportional
+          // to 500", not "exactly one fd system-wide at this instant".
+          (after - before, 2) |> Flip.Expect.isLessThanOrEqual "one recursive watch over 500 directories costs at most a couple of inotify instances, not 500"
+        finally
+          Directory.Delete(root, true) ]
+
 [<Tests>]
-let instanceCostTests = testList "startPrunedWatcher inotify cost" [
-    testCase "WHY — startPrunedWatcher — inotify instance cost does not scale with directory count, because a per-directory design exhausts the 1024-instance budget long before any watch-count limit" <| fun () ->
-      match System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux) with
-      | false -> skiptest "inotify accounting is Linux-specific"
-      | true ->
-      let root = Directory.CreateTempSubdirectory("sagefs-instancecost-").FullName
-      try
-        for i in 1 .. 500 do
-          Directory.CreateDirectory(Path.Combine(root, sprintf "d%04d" i)) |> ignore
-        let countInotifyFds () =
-          let pid = System.Diagnostics.Process.GetCurrentProcess().Id
-          let psi =
-            System.Diagnostics.ProcessStartInfo(
-              "bash", sprintf "-c \"ls -la /proc/%d/fd 2>/dev/null | grep -ci inotify\"" pid,
-              RedirectStandardOutput = true, UseShellExecute = false)
-          use p = System.Diagnostics.Process.Start psi
-          let out = p.StandardOutput.ReadToEnd()
-          p.WaitForExit()
-          match Int32.TryParse(out.Trim()) with
-          | true, n -> n
-          | false, _ -> -1
-        let before = countInotifyFds ()
-        use _watcher = startPrunedWatcher root [ ".fs"; ".fsx" ] 65536 (fun _ _ -> ()) (fun _ -> ())
-        let after = countInotifyFds ()
-        // <= 2 rather than an exact 1: other tests in this same process may
-        // hold their own watcher open concurrently (Expecto can parallelize
-        // test cases) — the property under test is "flat, not proportional
-        // to 500", not "exactly one fd system-wide at this instant".
-        (after - before, 2) |> Flip.Expect.isLessThanOrEqual "one recursive watch over 500 directories costs at most a couple of inotify instances, not 500"
-      finally
-        Directory.Delete(root, true)
-  ]
+let instanceCostTests = testList "startPrunedWatcher inotify cost" inotifyCases
 
 // ── Nested checkouts ────────────────────────────────────────────────────
 

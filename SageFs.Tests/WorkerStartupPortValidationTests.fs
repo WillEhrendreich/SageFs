@@ -57,13 +57,13 @@ let private firstOutcome (printed: string) : Task<StartOutcome> =
       try File.Delete script with _ -> ()
   }
 
-[<Tests>]
-let tests =
-  testList "Worker startup: the port line is validated" [
-    testTask "a port line naming a host other than loopback is a spawn failure, never ready" {
-      match OperatingSystem.IsWindows() with
-      | true -> skiptest "the fake worker is a shell script"
-      | false ->
+/// The fake worker here is a shell script, so these cases are registered only where a shell script runs. On Windows they
+/// do not exist; they are not skipped.
+let private shellScriptCases : Test list =
+  match OperatingSystem.IsWindows() with
+  | true -> []
+  | false ->
+    [ testTask "a port line naming a host other than loopback is a spawn failure, never ready" {
         let! outcome = firstOutcome "WORKER_PORT=http://evil.example.com:9999"
         match outcome with
         | StartOutcome.SpawnFailed reason ->
@@ -71,16 +71,15 @@ let tests =
           reason |> Expect.stringContains "and names the URL it refused" "evil.example.com"
         | StartOutcome.Ready url -> failtestf "a non-loopback port line was accepted as ready: %s" url
         | StartOutcome.NothingYet -> failtest "the start said nothing about a non-loopback port line"
-    }
+      }
 
-    testTask "a loopback port line is still ready" {
-      match OperatingSystem.IsWindows() with
-      | true -> skiptest "the fake worker is a shell script"
-      | false ->
+      testTask "a loopback port line is still ready" {
         let! outcome = firstOutcome "WORKER_PORT=http://127.0.0.1:54321"
         match outcome with
         | StartOutcome.Ready url -> url |> Expect.equal "the URL is handed over unchanged" "http://127.0.0.1:54321"
         | StartOutcome.SpawnFailed reason -> failtestf "a loopback port line was refused: %s" reason
         | StartOutcome.NothingYet -> failtest "the start said nothing about a loopback port line"
-    }
-  ]
+      } ]
+
+[<Tests>]
+let tests = testList "Worker startup: the port line is validated" shellScriptCases

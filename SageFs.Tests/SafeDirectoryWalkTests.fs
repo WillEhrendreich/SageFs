@@ -22,9 +22,36 @@ let private freshTempDir () =
 let private isFsproj (path: string) = path.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)
 let private noPrune (_: string) = false
 
+/// Making a directory symlink on Windows needs a privilege a runner may not hold, so the cycle case is registered only
+/// where a symlink can be made. On Windows it does not exist; it is not skipped. Where it exists, a symlink that cannot
+/// be made fails the case loudly.
+let private cycleCases : Test list =
+  match OperatingSystem.IsWindows() with
+  | true -> []
+  | false ->
+    [ testCase "WHY — walkFiles — a symlink cycle terminates instead of recursing forever (the Wine z: incident, minimized)" <| fun _ ->
+        let root = freshTempDir ()
+        try
+          let a = Path.Combine(root, "a")
+          Directory.CreateDirectory a |> ignore
+          Directory.CreateSymbolicLink(Path.Combine(a, "b"), a) |> ignore
+          File.WriteAllText(Path.Combine(a, "Project.fsproj"), "")
+
+          // The whole point: this call returns at all. A pre-fix walk built
+          // on `Directory.EnumerateFiles(_, _, AllDirectories)` would follow
+          // a/b -> a -> b -> a -> ... and never come back.
+          let result = SafeDirectoryWalk.walkFiles root isFsproj noPrune SafeDirectoryWalk.Bounds.standard
+
+          result.Files |> List.map Path.GetFileName
+          |> Expect.equal "the real project file is found exactly once, the cycle contributes nothing" [ "Project.fsproj" ]
+          result.Truncated
+          |> Expect.isFalse "the symlink is refused outright — this never needed to hit a bound to survive"
+        finally
+          Directory.Delete(root, true) ]
+
 [<Tests>]
 let tests =
-  testList "SafeDirectoryWalk" [
+  testList "SafeDirectoryWalk" (cycleCases @ [
 
     testCase "WHY — walkFiles — finds files matching the predicate under a plain tree" <| fun _ ->
       let root = freshTempDir ()
@@ -58,34 +85,6 @@ let tests =
       finally
         Directory.Delete(root, true)
 
-    testCase "WHY — walkFiles — a symlink cycle terminates instead of recursing forever (the Wine z: incident, minimized)" <| fun _ ->
-      let root = freshTempDir ()
-      try
-        let a = Path.Combine(root, "a")
-        Directory.CreateDirectory a |> ignore
-        let cycleLink = Path.Combine(a, "b")
-        let canMakeSymlinks =
-          try
-            Directory.CreateSymbolicLink(cycleLink, a) |> ignore
-            true
-          with _ -> false
-        match canMakeSymlinks with
-        | false -> skiptest "this environment cannot create directory symlinks"
-        | true ->
-          File.WriteAllText(Path.Combine(a, "Project.fsproj"), "")
-
-          // The whole point: this call returns at all. A pre-fix walk built
-          // on `Directory.EnumerateFiles(_, _, AllDirectories)` would follow
-          // a/b -> a -> b -> a -> ... and never come back.
-          let result = SafeDirectoryWalk.walkFiles root isFsproj noPrune SafeDirectoryWalk.Bounds.standard
-
-          result.Files |> List.map Path.GetFileName
-          |> Expect.equal "the real project file is found exactly once, the cycle contributes nothing" [ "Project.fsproj" ]
-          result.Truncated
-          |> Expect.isFalse "the symlink is refused outright — this never needed to hit a bound to survive"
-      finally
-        Directory.Delete(root, true)
-
     testCase "WHY — walkFiles — hits MaxEntries and says so, rather than silently returning a partial list as if it were complete" <| fun _ ->
       let root = freshTempDir ()
       try
@@ -116,4 +115,4 @@ let tests =
         result.Files |> Expect.isEmpty "the deeply nested project was never reached"
       finally
         Directory.Delete(root, true)
-  ]
+  ])

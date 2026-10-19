@@ -48,37 +48,34 @@ let private spawnFailureReason (proc: Process) : Task<string> =
     (StartEscalation.firstBudget StageHistory.NeverSeen Timeouts.warmupInactivityLimit Timeouts.warmupAbsoluteMax)
   reason.Task.WaitAsync TestTimeouts.processStartPatience
 
-let private requireUnix () =
+/// The fake worker here is a POSIX sh script, so these cases are registered only where one runs. On Windows they do not
+/// exist; they are not skipped.
+let private shellScriptCases : Test list =
   match OperatingSystem.IsWindows() with
-  | true -> skiptest "the fake worker is a POSIX sh script"
-  | false -> ()
+  | true -> []
+  | false ->
+    [ testTask "WHY — awaitWorkerPort — a worker that dies reports the END of its stderr, because the crash reason is the last thing it writes" {
+        let! (reason: string) = spawnFailureReason (crashingWorker 1000)
+        reason |> Expect.stringContains "newest line is in the reason" "stderr line 1000"
+        reason |> Expect.stringContains "the tail starts summaryLineCount lines back"
+          (sprintf "stderr line %d" (1000 - StderrTail.summaryLineCount + 1))
+        reason.Contains "stderr line 1\n"
+        |> Expect.isFalse "the oldest lines are not what is reported"
+      }
+
+      testTask "WHY — awaitWorkerPort — the reason carries at most summaryLineCount stderr lines, so a chatty worker cannot flood a status line" {
+        let! (reason: string) = spawnFailureReason (crashingWorker 1000)
+        let stderrLines =
+          reason.Split('\n')
+          |> Array.filter (fun l -> l.StartsWith("stderr line ", StringComparison.Ordinal))
+        stderrLines.Length |> Expect.equal "bounded" StderrTail.summaryLineCount
+      }
+
+      testTask "WHY — awaitWorkerPort — a worker that dies silent keeps the plain 'exited before reporting port' wording with no stderr section" {
+        let! (reason: string) = spawnFailureReason (crashingWorker 0)
+        reason |> Expect.equal "no stderr, no stderr section" "Worker process exited before reporting port"
+      } ]
 
 [<Tests>]
 let workerStderrCaptureTests =
-  testList "SessionManager worker stderr capture" [
-
-    testTask "WHY — awaitWorkerPort — a worker that dies reports the END of its stderr, because the crash reason is the last thing it writes" {
-      requireUnix ()
-      let! (reason: string) = spawnFailureReason (crashingWorker 1000)
-      reason |> Expect.stringContains "newest line is in the reason" "stderr line 1000"
-      reason |> Expect.stringContains "the tail starts summaryLineCount lines back"
-        (sprintf "stderr line %d" (1000 - StderrTail.summaryLineCount + 1))
-      reason.Contains "stderr line 1\n"
-      |> Expect.isFalse "the oldest lines are not what is reported"
-    }
-
-    testTask "WHY — awaitWorkerPort — the reason carries at most summaryLineCount stderr lines, so a chatty worker cannot flood a status line" {
-      requireUnix ()
-      let! (reason: string) = spawnFailureReason (crashingWorker 1000)
-      let stderrLines =
-        reason.Split('\n')
-        |> Array.filter (fun l -> l.StartsWith("stderr line ", StringComparison.Ordinal))
-      stderrLines.Length |> Expect.equal "bounded" StderrTail.summaryLineCount
-    }
-
-    testTask "WHY — awaitWorkerPort — a worker that dies silent keeps the plain 'exited before reporting port' wording with no stderr section" {
-      requireUnix ()
-      let! (reason: string) = spawnFailureReason (crashingWorker 0)
-      reason |> Expect.equal "no stderr, no stderr section" "Worker process exited before reporting port"
-    }
-  ]
+  testList "SessionManager worker stderr capture" shellScriptCases

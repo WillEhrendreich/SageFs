@@ -25,9 +25,24 @@ let address : TweakAddress = { ModulePath = [ "M" ]; BindingName = "x"; Path = [
 let saved (id: int) : LoggedEvent =
   { Id = id; At = int64 id; Event = TweakLogEvent.TweakSaved(address, "1", "2", contentHash "2", "file-hash") }
 
+/// File modes are a Unix idea, so the case that checks one survives the rename is registered only on Unix. On Windows it
+/// does not exist; it is not skipped.
+let private unixModeCases : Test list =
+  match OperatingSystem.IsWindows() with
+  | true -> []
+  | false ->
+    [ testCase "WHY - an atomic write keeps the file's permissions, so a nudge never loosens or locks a file" <| fun _ ->
+        withTempDir (fun dir ->
+          let path = Path.Combine(dir, "Tuning.fs")
+          File.WriteAllText(path, "module M\nlet x = 1\n")
+          let mode = UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.GroupRead
+          File.SetUnixFileMode(path, mode)
+          AtomicWrite.write steps path (utf8.GetBytes "module M\nlet x = 2\n") |> Expect.wantOk "writes"
+          File.GetUnixFileMode path |> Expect.equal "the mode survives the rename" mode) ]
+
 [<Tests>]
 let nudgeFsTests =
-  testList "NudgeFs" [
+  testList "NudgeFs" (unixModeCases @ [
 
     testCase "WHY - a clean atomic write replaces the file's bytes and leaves nothing else in the directory" <| fun _ ->
       withTempDir (fun dir ->
@@ -37,18 +52,6 @@ let nudgeFsTests =
         File.ReadAllText path |> Expect.equal "new text" "module M\nlet x = 2\n"
         Directory.GetFileSystemEntries dir |> Array.map Path.GetFileName |> Array.toList
         |> Expect.equal "no temp file is left" [ "Tuning.fs" ])
-
-    testCase "WHY - an atomic write keeps the file's permissions, so a nudge never loosens or locks a file" <| fun _ ->
-      match OperatingSystem.IsWindows() with
-      | true -> skiptest "Unix file modes only"
-      | false ->
-        withTempDir (fun dir ->
-          let path = Path.Combine(dir, "Tuning.fs")
-          File.WriteAllText(path, "module M\nlet x = 1\n")
-          let mode = UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.GroupRead
-          File.SetUnixFileMode(path, mode)
-          AtomicWrite.write steps path (utf8.GetBytes "module M\nlet x = 2\n") |> Expect.wantOk "writes"
-          File.GetUnixFileMode path |> Expect.equal "the mode survives the rename" mode)
 
     testCase "WHY - a failed write to a missing directory is an error, not an exception, and names the step" <| fun _ ->
       withTempDir (fun dir ->
@@ -120,4 +123,4 @@ let nudgeFsTests =
         journalPathFor tweaks "s1" "/repo/src/Tuning.fs" |> Expect.notEqual "per file" (journalPathFor tweaks "s1" "/repo/src/Other.fs")
         journalPathFor tweaks "s1" "/repo/src/Tuning.fs" |> Expect.notEqual "per session" (journalPathFor tweaks "s2" "/repo/src/Tuning.fs")
     ]
-  ]
+  ])
