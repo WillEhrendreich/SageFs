@@ -390,12 +390,20 @@ let startTicker (client: McpClient) : Task<unit> = task {
     doc.RootElement.GetProperty("State").GetString() |> Expect.equal "run_app reports the ticker Running" "Running"
 }
 
-/// Pending on a platform with no /proc, with the reason in the report instead of a quiet pass.
+/// The oracle is /proc, which only Linux has, so these cases are registered only there (`onlyOnLinux`): on another
+/// platform they do not exist, which is different from existing and skipping. If one is ever run elsewhere anyway,
+/// it fails and says why, rather than passing without having watched anything.
 let linuxOnly (body: unit -> Task<unit>) : Task<unit> = task {
   match OperatingSystem.IsLinux() with
   | true -> do! body ()
-  | false -> skiptest "the oracle is /proc, which this platform does not have"
+  | false -> failtest "this case watches /proc, which this platform does not have; it is registered on Linux only"
 }
+
+/// The cases themselves, on a platform that has the oracle; none elsewhere.
+let onlyOnLinux (cases: Test list) : Test list =
+  match OperatingSystem.IsLinux() with
+  | true -> cases
+  | false -> []
 
 /// What was alive below the daemon at the moment of the kill, printed so a CI log shows what the gate actually watched.
 let reportSnapshot (what: string) (owned: Owned list) (setApart: Owned list) (ports: int list) =
@@ -495,7 +503,7 @@ let monitoredOwnerTests =
 
 [<Tests>]
 let hardKillOutcomeTests =
-  Integration.hostList "Hard kill outcome" [
+  Integration.hostList "Hard kill outcome" <| onlyOnLinux [
 
     testTask "WHY — SIGKILLing the daemon leaves no worker, no FSI host and no listener behind, with a run_app app live in the worker" {
       do! linuxOnly (fun () ->

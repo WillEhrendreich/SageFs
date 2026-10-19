@@ -135,7 +135,7 @@ let fileSize : (string * int) list =
     // remains is a one-line field, a forwarding call, and the comments saying WHY each site
     // passes the directory it does — including the one that reads no directory at all,
     // because `commitCohort`'s command already carries its scope.
-    "SageFs/Mcp.fs", 3289
+    "SageFs/Mcp.fs", 3273
     // 850 -> 830: ratcheted DOWN (never up) after moving the
     // session-path-containment validator (resolveRealSessionPath/
     // isUncPath/validateSessionCreateRequest) out into its own
@@ -225,7 +225,7 @@ let fileSize : (string * int) list =
     // scope. Deliberate and reviewed; still below the 3079 this file stood at before the effect handler
     // moved out. Ratchet back DOWN when this file is split; never bump to paper over drift.
     "SageFs/SageFsApp.fs", 2509
-    "SageFs.Core/AppState.fs", 2000
+    "SageFs.Core/AppState.fs", 1999
     // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
     // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
     // reviewed feature, not silent accretion. Ratchet back DOWN when
@@ -294,44 +294,44 @@ let blockingReaders : (string * int) list =
 /// is meaningful, fails loudly when a prerequisite is missing, or is deleted. A file that is not listed has a budget of
 /// zero, and the numbers only go down (`--ratchets --tighten`). See SkipSitesRatchetTests.fs for what is counted.
 let skipSites : (string * int) list =
-  [ "SageFs.Tests/AppRunnerTests.fs", 5
-    "SageFs.Tests/DashboardSnapshotTests.fs", 2
+  [ "SageFs.Tests/AppRunnerTests.fs", 0
+    "SageFs.Tests/DashboardSnapshotTests.fs", 0
     "SageFs.Tests/DevReloadCanaryTests.fs", 3
     "SageFs.Tests/ExpectoPendingTests.fs", 2
-    "SageFs.Tests/FileWatcherTests.fs", 2
+    "SageFs.Tests/FileWatcherTests.fs", 0
     "SageFs.Tests/FsiSessionContractTests.fs", 1
-    "SageFs.Tests/HardKillOutcomeTests.fs", 1
+    "SageFs.Tests/HardKillOutcomeTests.fs", 0
     "SageFs.Tests/HarmonyCanaryTests.fs", 5
-    "SageFs.Tests/HostAgentTests.fs", 1
-    "SageFs.Tests/HostManifestTests.fs", 2
-    "SageFs.Tests/HotReloadStateOutcomeTests.fs", 1
-    "SageFs.Tests/HygieneStallTests.fs", 1
-    "SageFs.Tests/HygieneSymlinkTests.fs", 1
+    "SageFs.Tests/HostAgentTests.fs", 0
+    "SageFs.Tests/HostManifestTests.fs", 0
+    "SageFs.Tests/HotReloadStateOutcomeTests.fs", 0
+    "SageFs.Tests/HygieneStallTests.fs", 0
+    "SageFs.Tests/HygieneSymlinkTests.fs", 0
     "SageFs.Tests/IgnoredBudgetTests.fs", 2
-    "SageFs.Tests/LiveTestingExecutorTests.fs", 15
-    "SageFs.Tests/McpAffordanceHardeningTests.fs", 4
-    "SageFs.Tests/McpToolGateTests.fs", 4
-    "SageFs.Tests/MemberEvaluationGuardTests.fs", 1
-    "SageFs.Tests/MemberEvaluationTests.fs", 1
-    "SageFs.Tests/NativeResolutionTests.fs", 1
-    "SageFs.Tests/NudgeFsTests.fs", 1
-    "SageFs.Tests/ParityClaimsTests.fs", 2
-    "SageFs.Tests/ReadyWaitManagerTests.fs", 1
-    "SageFs.Tests/SafeDirectoryWalkTests.fs", 1
-    "SageFs.Tests/SessionManagerRestartTombstoneTests.fs", 1
-    "SageFs.Tests/SessionManagerSpawnFirstRestartTests.fs", 6
-    "SageFs.Tests/SessionManagerStartEscalationTests.fs", 2
-    "SageFs.Tests/ShadowCopyTests.fs", 1
-    "SageFs.Tests/SourceStateOutcomeTests.fs", 1
-    "SageFs.Tests/SourceStateProbeTests.fs", 1
-    "SageFs.Tests/SyntaxHighlightTests.fs", 1
-    "SageFs.Tests/TestDebugTests.fs", 1
-    "SageFs.Tests/TierPlanTests.fs", 2
+    "SageFs.Tests/LiveTestingExecutorTests.fs", 0
+    "SageFs.Tests/McpAffordanceHardeningTests.fs", 0
+    "SageFs.Tests/McpToolGateTests.fs", 0
+    "SageFs.Tests/MemberEvaluationGuardTests.fs", 0
+    "SageFs.Tests/MemberEvaluationTests.fs", 0
+    "SageFs.Tests/NativeResolutionTests.fs", 0
+    "SageFs.Tests/NudgeFsTests.fs", 0
+    "SageFs.Tests/ParityClaimsTests.fs", 0
+    "SageFs.Tests/ReadyWaitManagerTests.fs", 0
+    "SageFs.Tests/SafeDirectoryWalkTests.fs", 0
+    "SageFs.Tests/SessionManagerRestartTombstoneTests.fs", 0
+    "SageFs.Tests/SessionManagerSpawnFirstRestartTests.fs", 0
+    "SageFs.Tests/SessionManagerStartEscalationTests.fs", 0
+    "SageFs.Tests/ShadowCopyTests.fs", 0
+    "SageFs.Tests/SourceStateOutcomeTests.fs", 0
+    "SageFs.Tests/SourceStateProbeTests.fs", 0
+    "SageFs.Tests/SyntaxHighlightTests.fs", 0
+    "SageFs.Tests/TestDebugTests.fs", 0
+    "SageFs.Tests/TierPlanTests.fs", 0
     "SageFs.Tests/TrustSignalTests.fs", 1
     "SageFs.Tests/VscodeCommandProofTests.fs", 1
-    "SageFs.Tests/WorkerStartupPortValidationTests.fs", 2
-    "SageFs.Tests/WorkerStartupReaderTests.fs", 1
-    "SageFs.Tests/WorkerStderrCaptureTests.fs", 1 ]
+    "SageFs.Tests/WorkerStartupPortValidationTests.fs", 0
+    "SageFs.Tests/WorkerStartupReaderTests.fs", 0
+    "SageFs.Tests/WorkerStderrCaptureTests.fs", 0 ]
 
 /// How many tests each tier may leave IGNORED (`ptestCase`, `skiptest`), judged by the trust report over the ledger
 /// (build/IgnoredBudget.fs). The ledger counted an ignored test as one that ran and said "every registered test ran and
@@ -360,7 +360,7 @@ let lineCount (repoRoot: string) (rel: string) : int =
 let blockingCalls : (string * int) list =
   [ "Async.RunSynchronously", 3
     "Thread.Sleep", 22
-    ".Wait(", 17
+    ".Wait(", 16
     "GetAwaiter().GetResult()", 24 ]
 
 /// Every test source file except the two that name the patterns as string literals (which would count themselves)
