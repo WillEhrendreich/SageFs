@@ -298,9 +298,9 @@ let blockingReaders : (string * int) list =
 /// Counts at the time of writing, from the last gate pass and a full default run: the cases are named in the trust
 /// report's "Ignored cases" section and in the `IGNORED in <tier>` block of every tier log.
 let ignoredPerTier : (string * int) list =
-  [ "default", 6
+  [ "default", 5
     "default-net10", 6
-    "--integration-host", 6 ]
+    "--integration-host", 5 ]
 
 let lineCount (repoRoot: string) (rel: string) : int =
   File.ReadAllLines(Path.Combine(repoRoot, rel)).Length
