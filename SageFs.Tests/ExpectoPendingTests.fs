@@ -7,6 +7,10 @@
 /// Focus is the other half of the same rule. When anything is focused (`ftest`), Expecto runs
 /// only the focused tests and ignores the rest, so the executor reports those as skipped too.
 ///
+/// The pending and focused tests below are the SUBJECT, not part of this assembly's run. Each lives in a tree built inside
+/// a test body (or in ExpectoPendingFixtureModule, which no `[<Tests>]` registers) and is handed to the executor or to
+/// `evalTestsSilent`; Expecto's runner for this assembly never sees one, so none of them is counted as ignored there.
+///
 /// Every expectation here is Expecto's own. The oracle is `Expecto.Impl.evalTestsSilent`, the
 /// runner behind `runTests`, run on the same trees. Nothing below guesses what Expecto does.
 module SageFs.Tests.ExpectoPendingTests

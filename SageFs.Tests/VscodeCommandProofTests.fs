@@ -71,8 +71,8 @@ let private nodeExe () =
 // in sagefs-vscode) used to hit a bare Expecto.AssertException — "launcher.cjs
 // must exist — run npm run compile:test-electron" — which reads exactly like
 // a product failure. This suite now builds what it needs itself, and only
-// falls back to an explicit pending test (never an ambiguous error, never a
-// silent no-op pass) when the tooling to do that isn't even on PATH.
+// fails with an explicit message (never an ambiguous error, never a silent
+// no-op pass) when the tooling to do that isn't even on PATH.
 
 let private pathDirs () : string[] =
   Environment.GetEnvironmentVariable("PATH")
@@ -204,9 +204,9 @@ let private isStale (artifact: string) (sources: string list) : bool =
 
 /// Self-provisions the Fable build artifacts this proof suite needs. Only
 /// ever called from inside the test body (never at discovery/list-build
-/// time), and only reached when `nodeAvailable && npmAvailable` — see the
-/// pending fallback at the bottom of this file — so npm is known to be on
-/// PATH here.
+/// time), and only reached when `nodeAvailable && npmAvailable` — the proof
+/// fails before it otherwise, see the bottom of this file — so npm is known
+/// to be on PATH here.
 let private ensureFableArtifacts () : unit =
   match Directory.Exists(Path.Combine(vscodeExtensionDir, "node_modules")) with
   | true -> ()
@@ -447,11 +447,10 @@ let private proofTestName =
 
 /// Node and/or npm are what this suite uses to self-provision and run its
 /// own Fable build artifacts (see ensureFableArtifacts above); without them
-/// there is nothing this suite can do locally. Rather than an ambiguous
-/// error mid-run, a node-less environment gets a single clean pending test
-/// naming exactly what's missing and exactly what to run once it's fixed —
-/// so the REST of --integration-host stays green, while CI (which always
-/// installs Node) still runs this as a real gate.
+/// there is nothing this suite can do. Rather than an ambiguous error
+/// mid-run, the proof fails at its first line naming exactly what's missing
+/// and exactly what to run once it's fixed. A skipped proof would leave
+/// --integration-host green having proved nothing, so it does not skip.
 let private missingToolsReason =
   match nodeAvailable, npmAvailable with
   | true, true -> None
@@ -468,27 +467,29 @@ let private missingToolsReason =
 [<Tests>]
 let vscodeCommandProofTests =
   let proofTest =
-    match missingToolsReason with
-    | Some reason -> ptestCase (sprintf "%s [PENDING: %s]" proofTestName reason) ignore
-    | None ->
-      testTask proofTestName {
-        // Unlike the old CDP fixture (VscodeExtensionTests.VscodeFixture), this
-        // mechanism does not require a pre-existing local VS Code: if
-        // VSCODE_PATH names one it is reused (see codeExePath below), and
-        // otherwise @vscode/test-electron downloads and caches its own copy —
-        // proven working locally against a fresh download.
-        ensureFableArtifacts ()
+    testTask proofTestName {
+      // A host tier that cannot build or run this proof is red, never green: the reason names what is missing.
+      match missingToolsReason with
+      | Some reason -> failtest reason
+      | None -> ()
 
-        let fixture = startDaemonWithWebLiveSession ()
-        try
-          let! exitCode, output = runProofSuite fixture
-          match exitCode with
-          | 0 -> ()
-          | _ ->
-            failwithf
-              "VS Code command proof suite failed (exit %d):\n%s"
-              exitCode output
-        finally
-          stopFixture fixture
-      }
+      // Unlike the old CDP fixture (VscodeExtensionTests.VscodeFixture), this
+      // mechanism does not require a pre-existing local VS Code: if
+      // VSCODE_PATH names one it is reused (see codeExePath below), and
+      // otherwise @vscode/test-electron downloads and caches its own copy —
+      // proven working locally against a fresh download.
+      ensureFableArtifacts ()
+
+      let fixture = startDaemonWithWebLiveSession ()
+      try
+        let! exitCode, output = runProofSuite fixture
+        match exitCode with
+        | 0 -> ()
+        | _ ->
+          failwithf
+            "VS Code command proof suite failed (exit %d):\n%s"
+            exitCode output
+      finally
+        stopFixture fixture
+    }
   Integration.hostList "VS Code command proof" [ proofTest ]
