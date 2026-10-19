@@ -90,37 +90,53 @@ let pureProgressFoldTests =
       final.Completed |> Expect.equal "every Loaded update completes exactly one project" count
   ]
 
+/// What `loadSolution` does with the in-process MSBuild load in this test process: it tries it, or it
+/// skips it on purpose because the SDK global.json pins is a newer major than this runtime.
+type private InProcessLoad =
+  | Attempted
+  | SkippedForNewerSdk of sdkMajor: int
+
 /// Fed through the REAL Ionide loader (the smallest fixture project in the
-/// repo), not a fake notification stream — this is the proof `loadSolution`
+/// repo), not a fake notification stream. This is the proof `loadSolution`
 /// actually wires `ProjectLoadProgress` to its `onProgress` callback, not
-/// merely that the fold itself is correct.
+/// merely that the fold itself is correct. Under a .NET 10 test process the
+/// repo's global.json pins an 11.x SDK, so `loadSolution` skips the in-process
+/// load on purpose (shouldSkipInProcessLoad: a newer SDK's MSBuild cannot be
+/// hosted by an older runtime). That is not a failure, and the case asserts
+/// what happens instead: a manual parse of the same project, reported the same way.
 [<Tests>]
 let loadSolutionProgressTests =
   testList "loadSolution reports real progress through onProgress" [
     testCase "loading the TestWorkspace fixture reports at least one valid, in-range step"
     <| fun _ ->
       let repoRoot = RepoPaths.repoPathFull [||]
-      // Under a .NET 10 runtime, this repo's global.json (pinned to an 11.x SDK)
-      // makes loadSolution skip the in-process MSBuild load on purpose
-      // (shouldSkipInProcessLoad: a newer SDK's MSBuild cannot be hosted by an older
-      // runtime), so no project comes back from Ionide. Not a product failure: a
-      // net10 tool on a machine whose SDK is 10 takes the in-process path.
+      let hostMajor = System.Environment.Version.Major
       let pinnedSdkMajor =
         System.Text.RegularExpressions.Regex.Match(File.ReadAllText(Path.Combine(repoRoot, "global.json")), "\"version\"\\s*:\\s*\"([^\"]+)\"").Groups[1].Value
         |> sdkMajorOf
-      match pinnedSdkMajor with
-      | Some major when shouldSkipInProcessLoad System.Environment.Version.Major major ->
-        skiptest (sprintf "this test process runs on .NET %d and global.json pins SDK %d.x, so loadSolution deliberately skips the in-process MSBuild load; it runs on net11, and on a net10 machine whose SDK is 10" System.Environment.Version.Major major)
-      | _ -> ()
+      let expectedLoad =
+        match pinnedSdkMajor with
+        | Some major when shouldSkipInProcessLoad hostMajor major -> SkippedForNewerSdk major
+        | _ -> Attempted
       let fixture = Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "TestWorkspace", "TestWorkspace.fsproj")
       let reported = ResizeArray<int * int * string>()
       let config = { SageFs.Args.ProjectLoadConfig.empty with Targets = [ SageFs.SessionProjectTarget.Project fixture ]; WorkingDir = Path.GetDirectoryName fixture }
       let solution = loadSolution quietLogger config (fun step total message -> reported.Add(step, total, message))
-      solution.Projects |> Expect.isNonEmpty "the fixture project should actually load"
       reported |> Expect.isNonEmpty "loading a real project should report at least one step"
       for (step, total, _) in reported do
         Expect.isTrue "every reported step must be positive" (step > 0)
         Expect.isTrue "every reported step must fit inside its own total" (step <= total)
-      let lastStep, lastTotal, _ = reported.[reported.Count - 1]
+      let lastStep, lastTotal, lastMessage = reported.[reported.Count - 1]
       lastStep |> Expect.equal "the one fixture project is the last one reported" lastTotal
+      match expectedLoad with
+      | Attempted ->
+        solution.Projects |> Expect.isNonEmpty "the fixture project should actually load"
+      | SkippedForNewerSdk sdkMajor ->
+        solution.Projects |> Expect.isEmpty "the in-process load was skipped, so Ionide returned no project"
+        solution.Mode
+        |> Expect.equal "the skip is named, with the SDK and the runtime it was skipped for" (LoadMode.ManualFallback(FallbackCause.SkippedNewerSdk(sdkMajor, hostMajor)))
+        solution.FsProjects
+        |> List.map _.ProjectFileName
+        |> Expect.equal "the manual parse found the fixture project" [ Path.GetFullPath fixture ]
+        lastMessage |> Expect.stringContains "the progress line names the project being parsed" (Path.GetFileName fixture)
   ]
