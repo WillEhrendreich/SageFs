@@ -23,7 +23,12 @@ let private endMarker = "END"
 /// wait for them runs out).
 let private runFakeWorker (script: string) (goFile: string) : Task<(AppOutput.Stream * string) list> =
   task {
-    let psi = ProcessStartInfo(script, goFile)
+    // Run it THROUGH /bin/sh rather than exec'ing the file. Executing a file this test just wrote races with every other
+    // test in the parallel suite that forks: a child can inherit the still-open write handle and the exec then fails with
+    // ETXTBSY ("Text file busy"). The script's `$1` is still the go file.
+    let psi = ProcessStartInfo("/bin/sh")
+    psi.ArgumentList.Add script
+    psi.ArgumentList.Add goFile
     psi.UseShellExecute <- false
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
@@ -72,7 +77,6 @@ let tests =
           sprintf
             "#!/bin/sh\necho WORKER_PORT=http://localhost:1\nwhile [ ! -f \"$1\" ]; do sleep 0.02; done\ni=0\nwhile [ $i -lt %d ]; do echo \"APP_ERROR=line $i\" >&2; i=$((i+1)); done\necho APP_ERROR=%s >&2\necho APP_OUTPUT=%s\n"
             stderrLines endMarker endMarker)
-        File.SetUnixFileMode(script, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
         let goFile = script + ".go"
         try
           let! received = runFakeWorker script goFile

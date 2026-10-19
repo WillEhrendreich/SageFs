@@ -36,10 +36,12 @@ let tests =
         let script = Path.Combine(sb.Root, "fake-git")
         // It prints, backgrounds a sleeper that inherits the output pipe, and exits at once. Git itself is gone and the pipe is not.
         let outlives = int TestTimeouts.stalledWorkBound.TotalSeconds + 3
-        File.WriteAllText(script, sprintf "#!/bin/sh\nsleep %d &\necho done\nexit 0\n" outlives)
-        File.SetUnixFileMode(script, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
-        let git = runGitWith script TestTimeouts.stalledWorkBound
-        let! result = git sb.Root [ "status" ]
+        File.WriteAllText(script, sprintf "sleep %d &\necho done\nexit 0\n" outlives)
+        // The "git" is /bin/sh and the script is its argument, rather than exec'ing the file this test just wrote.
+        // Executing a just-written file races with every other test in the parallel suite that forks: a child can
+        // inherit the still-open write handle and the exec then fails with ETXTBSY ("Text file busy").
+        let git = runGitWith "/bin/sh" TestTimeouts.stalledWorkBound
+        let! result = git sb.Root [ script ]
         match result with
         | GitResult.Unavailable detail -> detail |> Expect.stringContains "says it ran out of time" "timed out"
         | other -> failtestf "git whose output stayed open should be reported unavailable, got %A" other
