@@ -128,7 +128,8 @@ module WorkerReaper =
 
   // -- The side thread --
 
-  let pidOf (proc: Process) : int = try proc.Id with _ -> -1
+  /// A handle that was never started or is already disposed throws InvalidOperationException; that is the "no pid" case.
+  let pidOf (proc: Process) : int = try proc.Id with :? System.InvalidOperationException -> -1
 
   let targetOf (proc: Process) (stop: Async<unit>) : Target = { Pid = pidOf proc; Process = proc; Stop = stop }
 
@@ -137,7 +138,10 @@ module WorkerReaper =
     try
       use found = Process.GetProcessById pid
       not found.HasExited
-    with _ -> false
+    with
+    | :? System.ArgumentException // no process has that pid
+    | :? System.InvalidOperationException // it exited between the lookup and the read
+    | :? System.ComponentModel.Win32Exception -> false // the OS would not tell us; a pid we cannot see is not one we can wait on
 
   let fateOf (pid: int) : Fate =
     match isRunning pid with

@@ -160,10 +160,17 @@ let private runToolOutcomeTail
         //    "DiagnosticBlindSpot","CoveragePercent":0,"TotalBranches":9,
         //    "BlindSpots":[...9 entries...],"CausalSymbols":[...,
         //    "SageFs.Tests.Fixtures.McpToolOutcome.Sample.subtract",...]}] ──
+        // The instrumentation maps arrive with the confirming build (it adopts a private
+        // Core copy and restarts the worker), so this waits on `buildConfirmation`, not on
+        // the read-cache lag. The 2026-10-19 gate gave up at 15 s while that build was still
+        // running, then parsed the tool's "no coverage yet" text as JSON and hid the cause.
+        let coverageIsReady (raw: string) =
+          try JsonDocument.Parse(raw).RootElement.GetArrayLength() > 0
+          with _ -> false
         let! coverageRaw =
-          pollToolUntil client "coverage_intel" [] TestTimeouts.toolCacheCatchUp (fun raw ->
-            try JsonDocument.Parse(raw: string).RootElement.GetArrayLength() > 0
-            with _ -> false)
+          pollToolUntil client "coverage_intel" [] TestTimeouts.buildConfirmation coverageIsReady
+        coverageIsReady coverageRaw
+        |> Expect.isTrue (sprintf "coverage_intel should answer with at least one report once the confirming build finishes. Last reply: %s" coverageRaw)
         let coverageDoc = JsonDocument.Parse(coverageRaw: string)
         let coverageReports = [ for e in coverageDoc.RootElement.EnumerateArray() -> e ]
         coverageReports

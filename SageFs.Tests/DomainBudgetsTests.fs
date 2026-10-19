@@ -350,7 +350,8 @@ let tests =
           match count > budget with
           | true -> Some (sprintf "%s has %d, budget %d" key count budget)
           | false -> None)
-      over |> Expect.isEmpty "every count is within its budget (model the case as a union that says why, never raise a number)"
+      over
+      |> Expect.isEmpty (sprintf "every count is within its budget (model the case as a union that says why, never raise a number). Over: %s" (String.concat "; " over))
 
     testCase "WHY: a budget above the real count is stale, so room that was already won back cannot be spent again" <| fun _ ->
       let stale =
@@ -360,7 +361,8 @@ let tests =
           match count < budget with
           | true -> Some (sprintf "%s has %d but its budget is %d: lower it with --ratchets --tighten" key count budget)
           | false -> None)
-      stale |> Expect.isEmpty "every budget equals the current count"
+      stale
+      |> Expect.isEmpty (sprintf "every budget equals the current count. Stale: %s" (String.concat "; " stale))
 
     scanShapeTests
     scanReachTests
