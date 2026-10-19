@@ -228,6 +228,34 @@ let behaviourTests =
   ]
 
 [<Tests>]
+let lastSessionTests =
+  testList "stopping the last session" [
+
+    testTask "WHY — the POST that stopped the last session also refreshes the sidebar, because the stopped card used to linger until the next stream push" {
+      let stopped = sid 1
+      let current = ref [ infoOf stopped ]
+      let queries =
+        { mkQueries (ref 0) [] with GetAllSessions = fun () -> Task.FromResult current.Value }
+      let stop (_: WorkerProtocol.SessionId) : Task<Result<string, string>> =
+        task {
+          current.Value <- []
+          return Result.Ok "stopped"
+        }
+      let out = new CaptureStream()
+      let body = sprintf "{\"%s\":\"%s\"}" Signals.ViewingSessionId (raw stopped)
+      do! createSessionActionHandler queries (mkInfra ()) stop (SessionActionKind.TearDown Teardown.Stopping) stopped (contextWith body out CancellationToken.None)
+      let text = out.Text
+      let pickerAt = text.IndexOf(sprintf "id=\"%s\"" DomIds.SessionPicker)
+      (pickerAt, -1) |> Expect.isGreaterThan "the picker was patched"
+      let panelAt = text.IndexOf(sprintf "id=\"%s\"" DomIds.SessionsPanel, pickerAt)
+      (panelAt, -1) |> Expect.isGreaterThan "a sessions panel patch follows the picker"
+      text.Substring panelAt |> Expect.stringContains "and it says nothing is left" "No active sessions"
+      (cardTags (text.Substring panelAt) stopped)
+      |> Expect.isEmpty "and it carries no card for the stopped session"
+    }
+  ]
+
+[<Tests>]
 let registryTests =
   let a = sid 1
   testList "the teardown registry" [

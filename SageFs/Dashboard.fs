@@ -2577,6 +2577,8 @@ let createSessionActionHandler
           let previousSort = previousSessionSortByClient.Find(channelClientId, PreviousSessionSort.Recent)
           do! ssePatchNode ctx (renderSessionPickerSorted previousSort previous)
           do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
+          // The sidebar too: the stopped session's card used to stay until the next stream push removed it.
+          do! refreshSessionsPanel ""
         | ViewAfterTeardown.StayOn kept when kept = sessionId ->
           // The viewed session's own teardown failed: its output was cleared
           // above, so bring it back.
