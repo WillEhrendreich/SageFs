@@ -127,15 +127,14 @@ let sessionManagerMailboxSupervisionTests =
 
     testTask "unexpected StopWorker exception does not kill the mailbox" {
       let stopFailure = ref false
+      // The throw is eager (when the stop is handed to the reaper, inside the handler): a throw INSIDE the stop's async
+      // happens on the reaper's thread and is covered by "a StopWorker that throws inside its async" below.
       let runtime =
         mkRuntime
           okStart
-          (fun () -> async {
-            if stopFailure.Value then
-              return failwith "stop worker boom"
-            else
-              return ()
-          })
+          (fun () ->
+            if stopFailure.Value then failwith "stop worker boom"
+            else async { return () })
           (fun () -> async { return Ok "build ok" })
 
       do! withHarness runtime.Runtime (fun harness -> task {
@@ -169,12 +168,9 @@ let sessionManagerMailboxSupervisionTests =
       let runtime =
         mkRuntime
           okStart
-          (fun () -> async {
-            if stopFailure.Value then
-              return failwith "stop worker boom"
-            else
-              return ()
-          })
+          (fun () ->
+            if stopFailure.Value then failwith "stop worker boom"
+            else async { return () })
           (fun () -> async { return Ok "build ok" })
 
       do! withHarness runtime.Runtime (fun harness -> task {
@@ -227,6 +223,10 @@ let sessionManagerMailboxSupervisionTests =
         match! postAndReply harness.Mailbox (fun reply -> SessionCommand.StopSession(info.Id, reply)) with
         | Ok () -> ()
         | Error err -> failtestf "stop failed: %s" (SageFsError.describe err)
+
+        // The workers leave on side threads, so wait until the manager has seen both go (their handle is this test process,
+        // which the fake does not stop, so they are reported as survivors: the wait is what matters here).
+        let! _ = postAndReply harness.Mailbox (fun reply -> SessionCommand.AwaitWorkersGone(info.Id, reply))
 
         stopCalls.Value
         |> Expect.equal "stop covers current and parked workers" 2

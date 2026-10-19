@@ -109,15 +109,17 @@ let sessionManagerSupervisorAlarmTests =
       let runtime = runtimeWith (fun () -> async { do! Async.AwaitTask gate.Task })
       do! withHarness runtime ignore (fun harness -> task {
         let! info = createSession harness
-        // The stop parks the loop on the gate. The caller is never answered.
-        harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.StopSession(info.Id, reply))
+        // StopAll still waits for every worker inside the loop (the daemon is shutting down), so it parks the loop on the
+        // gate. StopSession no longer does: it reaps aside (SessionManagerStopOffMailboxTests.fs). The caller is never answered.
+        ignore info
+        harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.StopAll reply)
         |> Async.StartAsTask
         |> ignore
 
         let! alarm = awaitAlarm harness
         match alarm with
         | SupervisorAlarm.Wedged(command, since) ->
-          command |> Expect.stringContains "the alarm names the stuck command" "StopSession"
+          command |> Expect.stringContains "the alarm names the stuck command" "StopAll"
           (since < DateTime.UtcNow) |> Expect.isTrue "it names when the command started"
         | other -> failtestf "expected Wedged, got %A" other
         harness.ReadSnapshot() |> isDegraded |> Expect.isTrue "daemon health says Degraded while the loop is wedged"

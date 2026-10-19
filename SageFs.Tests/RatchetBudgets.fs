@@ -278,7 +278,9 @@ let fileSize : (string * int) list =
     // 1676 -> 1599: awaitWorkerPort's reading and timing moved to WorkerStartup.fs (about 180 lines), net of
     // the start-timeout handler, the ledger in the runtime and the first attempt's budget. The decision the
     // handler carries out is StartTimeoutDecision.fs.
-    "SageFs.Core/SessionManager.fs", 1599 ]
+    // 1599 -> 1579: stopWorker moved to WorkerStop.stopProcess (about 40 lines), net of the reaper hand-off, the reaping
+    // book field and the two commands a stop needs now that it no longer waits for its worker inside the loop.
+    "SageFs.Core/SessionManager.fs", 1579 ]
 
 /// Product code that parks a thread-pool thread on a child process's stdout or stderr for the life of the process:
 /// a `Task.Run` (or `Task.Factory.StartNew`) whose body reads a Process stream line by line or to the end. The

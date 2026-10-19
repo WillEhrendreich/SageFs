@@ -69,12 +69,12 @@ type private Harness =
   { Mailbox: MailboxProcessor<SessionCommand>
     Gates: Gates }
 
-let private withHarness (run: Harness -> Task<unit>) : Task<unit> =
+let private withRuntime (runtimeOver: Gates -> SessionManagerRuntime) (run: Harness -> Task<unit>) : Task<unit> =
   task {
     use cancellation = new CancellationTokenSource()
     let gates = Gates()
     let mailbox, _ =
-      createWith (mkRuntime gates) cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ _ -> ())
+      createWith (runtimeOver gates) cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ _ -> ())
     let! failure =
       task {
         try
@@ -91,6 +91,17 @@ let private withHarness (run: Harness -> Task<unit>) : Task<unit> =
     | Some captured -> captured.Throw()
     | None -> ()
   }
+
+let private withHarness (run: Harness -> Task<unit>) : Task<unit> = withRuntime mkRuntime run
+
+/// A runtime over real child processes: `start` makes the worker's process, `stop` is what StopWorker does with it.
+let private runtimeOver (start: unit -> Process) (stop: ManagedSession -> Async<unit>) : Gates -> SessionManagerRuntime =
+  fun _ ->
+    { StartWorkerProcess = fun _ _ _ _ _ _ -> Ok ({ Process = start (); AdoptedCore = None } : SessionManager.SpawnedWorker)
+      AwaitWorkerPort = fun _ _ _ _ _ -> ()
+      Ledger = StartLedger.closed
+      StopWorker = stop
+      RunBuildAsync = fun _ _ -> async { return Ok "build ok" } }
 
 /// The reply if the mailbox gives one within the bound, None otherwise: "answered at once" versus "left pending".
 let private answeredWithin (mailbox: MailboxProcessor<SessionCommand>) (build: AsyncReplyChannel<'a> -> SessionCommand) : Task<'a option> =
@@ -276,5 +287,100 @@ let sessionManagerStopOffMailboxTests =
     testTask "WHY — seeded histories of stops, lists, gets, creates, restarts and releases hold the invariants on the real mailbox" {
       for seed in 1 .. 40 do
         do! judge (StopOffLoopGenerators.fromSeed seed)
+    }
+  ]
+
+let private awaitGone (harness: Harness) (id: SessionId) : Task<WorkerReaper.Settled> =
+  harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.AwaitWorkersGone(id, r)) |> Async.StartAsTask
+
+/// Kill and reap a real child the test started, whatever state the scenario left it in.
+let private disposeChild (child: Process) : unit =
+  try child.Kill(entireProcessTree = true) with _ -> ()
+  try child.WaitForExit() with _ -> ()
+  try child.Dispose() with _ -> ()
+
+let private stopsStarted (what: string) (task': Task<Result<unit, SageFsError>>) : Task<unit> =
+  task {
+    let! done' = Task.WhenAny(task' :> Task, Task.Delay TestTimeouts.patienceInProcess)
+    Expect.isTrue what (obj.ReferenceEquals(done', task'))
+    match! task' with
+    | Ok () -> ()
+    | Error err -> failtestf "%s: %s" what (SageFsError.describe err)
+  }
+
+[<Tests>]
+let workerReapingTests =
+  testList "SessionManager reaps a stopped worker" [
+
+    testTask "WHY — a stopped worker is tracked until it is gone: AwaitWorkersGone waits for it, then says AllGone" {
+      let child = ShutdownLifecycleTests.spawnLongRunning "reap-tracked"
+      let leave = TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+      // The stop waits for the test to let the worker go, then really kills the child, as stopWorker does.
+      let stop (session: ManagedSession) = async {
+        do! Async.AwaitTask leave.Task
+        session.Process.Kill(entireProcessTree = true)
+        session.Process.WaitForExit()
+      }
+      try
+        do! withRuntime (runtimeOver (fun () -> child) stop) (fun harness -> task {
+          let! info = createIn (dirFor 1) harness
+          let stopped = harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.StopSession(info.Id, r)) |> Async.StartAsTask
+          do! stopsStarted "the stop is answered while the worker is still running" stopped
+          child.HasExited |> Expect.isFalse "the worker is still running when the stop is answered"
+          let gone = awaitGone harness info.Id
+          let! early = Task.WhenAny(gone :> Task, Task.Delay TestTimeouts.settle)
+          Expect.isFalse "a caller waiting for the worker is not answered while it runs" (obj.ReferenceEquals(early, gone))
+          leave.SetResult()
+          let! settled = gone
+          settled |> Expect.equal "once the worker left, the wait says all gone" WorkerReaper.Settled.AllGone
+          child.HasExited |> Expect.isTrue "the process is gone"
+        })
+      finally
+        disposeChild child
+    }
+
+    testTask "WHY — a stop that throws inside its async still gets the worker killed by the force-kill decision (issue 154)" {
+      let child = ShutdownLifecycleTests.spawnLongRunning "reap-throws"
+      try
+        do! withRuntime (runtimeOver (fun () -> child) (fun _ -> async { return failwith "stop worker boom" })) (fun harness -> task {
+          let! info = createIn (dirFor 1) harness
+          let! stopped = answeredWithin harness.Mailbox (fun r -> SessionCommand.StopSession(info.Id, r))
+          match stopped with
+          | Some (Ok ()) -> ()
+          | other -> failtestf "the stop should be answered Ok, not failed (the reap happens aside), got %A" other
+          let! settled = awaitGone harness info.Id
+          settled |> Expect.equal "the worker was killed even though its stop threw" WorkerReaper.Settled.AllGone
+          child.HasExited |> Expect.isTrue "the process is gone"
+          let! alive = answeredWithin harness.Mailbox (fun r -> SessionCommand.ListSessions r)
+          alive |> Expect.isSome "the mailbox is still serving"
+        })
+      finally
+        disposeChild child
+    }
+
+    testTask "WHY — a worker that outlives its stop stays in the reaping set, named, instead of vanishing from the books" {
+      let child = ShutdownLifecycleTests.spawnLongRunning "reap-survivor"
+      try
+        do! withRuntime (runtimeOver (fun () -> child) (fun _ -> async { return () })) (fun harness -> task {
+          let! info = createIn (dirFor 1) harness
+          let! stopped = answeredWithin harness.Mailbox (fun r -> SessionCommand.StopSession(info.Id, r))
+          match stopped with
+          | Some (Ok ()) -> ()
+          | other -> failtestf "the stop should be answered Ok, got %A" other
+          let! settled = awaitGone harness info.Id
+          settled |> Expect.equal "the survivor is named by pid" (WorkerReaper.Settled.Survivors [ child.Id ])
+          let! again = awaitGone harness info.Id
+          again |> Expect.equal "and it is still named on the next ask" (WorkerReaper.Settled.Survivors [ child.Id ])
+        })
+      finally
+        disposeChild child
+    }
+
+    testTask "WHY — a session that was never stopped has no worker to wait for, so the wait answers at once" {
+      do! withHarness (fun harness -> task {
+        let! info = createIn (dirFor 1) harness
+        let! settled = answeredWithin harness.Mailbox (fun r -> SessionCommand.AwaitWorkersGone(info.Id, r))
+        settled |> Expect.equal "nothing is exiting" (Some WorkerReaper.Settled.AllGone)
+      })
     }
   ]

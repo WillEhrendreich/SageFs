@@ -433,6 +433,9 @@
         <!-- The WorkerReady decision and what starts after it, split out of
              SessionManager.fs's WorkerReady arm. -->
         <Compile Include="WorkerReadyCommit.fs" />
+        <!-- A stopped session's workers leave on a side thread and are tracked until they are gone, so a stop never holds
+             the session manager's mailbox (roast R-SERVER-3). -->
+        <Compile Include="WorkerReaper.fs" />
         <Compile Include="WorkerPostReady.fs" />
         <!-- Tells somebody when the session manager's own loop is wedged,
              restarted or failing a command. -->

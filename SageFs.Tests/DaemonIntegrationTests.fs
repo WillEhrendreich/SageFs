@@ -518,6 +518,11 @@ let cleanupSession
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.StopSession(sessionId, reply))
         |> Async.StartAsTask
+      // A stop is answered at once now; leave no worker behind a failed test.
+      let! _ =
+        mgr.PostAndAsyncReply(fun reply ->
+          SageFs.SessionManager.SessionCommand.AwaitWorkersGone(sessionId, reply))
+        |> Async.StartAsTask
       ()
     with _ -> ()
   }

@@ -103,6 +103,9 @@ let private stopOnProcessExit (session: Lazy<Task<Result<MailboxProcessor<SageFs
       | Error _ -> ()
       | Ok(mgr, sessionId, _) ->
         (Async.StartAsTask(mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.StopSession(sessionId, reply)))).Result
+        |> ignore
+        // A stop is answered at once now; the worker leaves on a side thread that dies with this process, so wait for it.
+        (Async.StartAsTask(mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.AwaitWorkersGone(sessionId, reply)))).Result
         |> ignore)
 
 let private sharedSession = lazy (bootSession testsProject testsDir "SageFs.Tests")
