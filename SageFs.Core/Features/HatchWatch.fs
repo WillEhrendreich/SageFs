@@ -22,11 +22,13 @@ module HatchLedger =
     { Since = since; Counts = Map.empty; Last = HatchSeen.NeverSeen }
 
   /// One more use of the hatch, at `now`.
-  let record (now: DateTimeOffset) (hatch: HatchUse) (ledger: HatchLedger) : HatchLedger =
-    ledger
-
   let count (hatch: HatchUse) (ledger: HatchLedger) : int =
     ledger.Counts |> Map.tryFind hatch |> Option.defaultValue 0
+
+  let record (now: DateTimeOffset) (hatch: HatchUse) (ledger: HatchLedger) : HatchLedger =
+    { ledger with
+        Counts = ledger.Counts |> Map.add hatch (count hatch ledger + 1)
+        Last = HatchSeen.LastSeenAt now }
 
   /// Every kind of use with its count, zeros included, in `HatchUse.all` order, so the wire shape does not depend on
   /// what happened to be seen.
@@ -35,6 +37,23 @@ module HatchLedger =
 
   let total (ledger: HatchLedger) : int =
     ledger.Counts |> Map.fold (fun sum _ n -> sum + n) 0
+
+/// The `hatch` section of `get_daemon_status`: when counting began, how many uses, when the last one was, and a row
+/// for every kind. The keys are written in `SageFs.Json`'s order, which is alphabetical.
+module HatchWire =
+  let section (ledger: HatchLedger) =
+    {| since = ledger.Since
+       total = HatchLedger.total ledger
+       lastRecordedAt =
+         match ledger.Last with
+         | HatchSeen.NeverSeen -> box null
+         | HatchSeen.LastSeenAt at -> box at
+       uses =
+         HatchLedger.rows ledger
+         |> List.map (fun (hatch, count) ->
+           let declaration, repl = HatchUse.toTokens hatch
+           {| declaration = declaration; repl = repl; count = count |})
+         |> List.toArray |}
 
 /// The one live `HatchLedger` for this daemon run: the stateful shell the HTTP route writes through and
 /// `get_daemon_status` reads, the same split as `LeaseWatch` and its pure `ExpensiveWorkLease`.

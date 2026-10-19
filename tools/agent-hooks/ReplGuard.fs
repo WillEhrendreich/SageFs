@@ -488,8 +488,31 @@ type HatchReport =
   | Counted of SageFs.HatchUse
   | NotCounted
 
+/// What the REPL for the command's directory was doing, as the wire names it.
+let replAtTheTime (probe: SessionProbe) : SageFs.ReplAtTheTime =
+  match probe with
+  | ReadySessionCoversCwd -> SageFs.ReplAtTheTime.Ready
+  | FaultedSessionCoversCwd _ -> SageFs.ReplAtTheTime.Faulted
+  | NoReadySessionCoversCwd -> SageFs.ReplAtTheTime.NotReady
+
+/// The use of the hatch a command amounts to, if the guard let it run: a slow dotnet verb, in an F# workspace, with
+/// the daemon answering and the session probed, that `decideWith` did not deny and the allowlist did not leave out.
+/// A denied command did not run, so it is not a use. A session that was never probed cannot be classed, so it is not
+/// reported either.
 let hatchReportWith (policy: Policy) (command: string) (ctx: Context) : HatchReport =
-  NotCounted
+  match decideWith policy command ctx with
+  | Deny _ -> NotCounted
+  | Allow
+  | AllowWithAdvice _ ->
+    match ctx.Project, ctx.Daemon, ctx.Session with
+    | FSharpWorkspace, DaemonAnswering, Some probe ->
+      match classifyWith policy.Allow command with
+      | NoSlowLoop -> NotCounted
+      | SlowLoop _ -> Counted { Declaration = SageFs.GateDeclaration.UndeclaredGate; Repl = replAtTheTime probe }
+      | DeclaredFinalGate _ -> Counted { Declaration = SageFs.GateDeclaration.DeclaredGate; Repl = replAtTheTime probe }
+    | FSharpWorkspace, DaemonAnswering, None
+    | NotFSharpWorkspace, _, _
+    | _, DaemonNotAnswering, _ -> NotCounted
 
 /// Whether the hook needs to look at the disk and the network at all, once `allow` has left its commands out.
 /// The program checks this first so non-dotnet commands never pay for a probe.

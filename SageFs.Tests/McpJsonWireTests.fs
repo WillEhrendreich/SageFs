@@ -160,7 +160,7 @@ let tests =
       hatch["uses"].AsArray().Count |> Expect.equal "every kind is listed, zeros included" 6
     }
 
-    testCase "WHY — the hatch section writes when counting began, the total, when the last use was, and every kind in order" <| fun _ ->
+    testCase "WHY — the hatch section writes when counting began, the total, when the last use was, and every kind in HatchUse.all order" <| fun _ ->
       let since = DateTimeOffset(2026, 10, 19, 9, 0, 0, TimeSpan.Zero)
       let seen = DateTimeOffset(2026, 10, 19, 9, 5, 0, TimeSpan.Zero)
       let declaredFaulted = { Declaration = GateDeclaration.DeclaredGate; Repl = ReplAtTheTime.Faulted }
@@ -170,15 +170,15 @@ let tests =
         |> SageFs.Features.HatchLedger.record seen undeclaredFaulted
         |> SageFs.Features.HatchLedger.record seen undeclaredFaulted
         |> SageFs.Features.HatchLedger.record seen declaredFaulted
-      Json.serialize Json.standard (hatchSection ledger)
+      Json.serialize Json.standard (SageFs.Features.HatchWire.section ledger)
       |> Expect.equal "the hatch section"
-           """{"since":"2026-10-19T09:00:00+00:00","total":3,"lastRecordedAt":"2026-10-19T09:05:00+00:00","uses":[{"declaration":"declared","repl":"ready","count":0},{"declaration":"declared","repl":"faulted","count":1},{"declaration":"declared","repl":"not_ready","count":0},{"declaration":"undeclared","repl":"ready","count":0},{"declaration":"undeclared","repl":"faulted","count":2},{"declaration":"undeclared","repl":"not_ready","count":0}]}"""
+           """{"lastRecordedAt":"2026-10-19T09:05:00+00:00","since":"2026-10-19T09:00:00+00:00","total":3,"uses":[{"count":0,"declaration":"declared","repl":"ready"},{"count":1,"declaration":"declared","repl":"faulted"},{"count":0,"declaration":"declared","repl":"not_ready"},{"count":0,"declaration":"undeclared","repl":"ready"},{"count":2,"declaration":"undeclared","repl":"faulted"},{"count":0,"declaration":"undeclared","repl":"not_ready"}]}"""
 
     testCase "WHY — a ledger that has seen nothing writes lastRecordedAt as null, not a made-up time" <| fun _ ->
       let since = DateTimeOffset(2026, 10, 19, 9, 0, 0, TimeSpan.Zero)
-      Json.serialize Json.standard (hatchSection (SageFs.Features.HatchLedger.empty since))
+      Json.serialize Json.standard (SageFs.Features.HatchWire.section (SageFs.Features.HatchLedger.empty since))
       |> Expect.equal "never seen"
-           """{"since":"2026-10-19T09:00:00+00:00","total":0,"lastRecordedAt":null,"uses":[{"declaration":"declared","repl":"ready","count":0},{"declaration":"declared","repl":"faulted","count":0},{"declaration":"declared","repl":"not_ready","count":0},{"declaration":"undeclared","repl":"ready","count":0},{"declaration":"undeclared","repl":"faulted","count":0},{"declaration":"undeclared","repl":"not_ready","count":0}]}"""
+           """{"lastRecordedAt":null,"since":"2026-10-19T09:00:00+00:00","total":0,"uses":[{"count":0,"declaration":"declared","repl":"ready"},{"count":0,"declaration":"declared","repl":"faulted"},{"count":0,"declaration":"declared","repl":"not_ready"},{"count":0,"declaration":"undeclared","repl":"ready"},{"count":0,"declaration":"undeclared","repl":"faulted"},{"count":0,"declaration":"undeclared","repl":"not_ready"}]}"""
 
     testCase "WHY — a lease decision writes kind and decision, then its detail, and names who holds it" <| fun _ ->
       let agent = "mcp-json-wire-holder"

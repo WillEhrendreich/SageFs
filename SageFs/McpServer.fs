@@ -3248,7 +3248,18 @@ let validateSessionCreateRequest = SageFs.SessionPathValidation.validateSessionC
 let mapHatchRoutes (record: SageFs.HatchUse -> unit) (app: WebApplication) =
   app.MapPost("/api/hatch/record", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      do! jsonResponse ctx 200 {| success = true |}
+      use! doc = readJsonBody ctx
+      let tokenOf (name: string) =
+        let mutable v = Unchecked.defaultof<System.Text.Json.JsonElement>
+        match doc.RootElement.TryGetProperty(name, &v) && v.ValueKind = System.Text.Json.JsonValueKind.String with
+        | true -> v.GetString()
+        | false -> ""
+      match SageFs.HatchUse.tryParse (tokenOf "declaration") (tokenOf "repl") with
+      | Ok hatch ->
+        record hatch
+        do! jsonResponse ctx 200 {| success = true |}
+      | Error refusal ->
+        do! jsonResponse ctx 400 {| success = false; error = SageFs.HatchRefusal.describe refusal |}
     } :> Task
   ) |> ignore
 

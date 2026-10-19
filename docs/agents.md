@@ -159,7 +159,11 @@ pull it back, from least to most enforced:
   CLI (say `dotnet run --project Build.fsproj -- <command>`) lists it in
   `.SageFs/repl-guard.json`. If the REPL is a recommendation in your repository
   and not a rule, set `SAGEFS_REPL_GUARD=advise`: the command runs and the
-  agent gets the reminder instead of a refusal. Details are in the
+  agent gets the reminder instead of a refusal. When the directory's session
+  is Faulted there is no REPL to go back to, so the build runs and the agent
+  is handed the session's own fault reason. The hook also reports each
+  `dotnet build`, `test`, `run` or `fsi` it lets through to the daemon, and
+  `get_daemon_status` shows the count under `hatch`. Details are in the
   [hook's README](../tools/agent-hooks/README.md).
 
 ## 5. When the REPL really is broken

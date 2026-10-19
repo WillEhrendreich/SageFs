@@ -231,11 +231,12 @@ let replGuardTests = testList "sagefs-repl-guard decision" [
     |> List.map (sessionProbe "/repo")
     |> Expect.equal "both orders" [ ReadySessionCoversCwd; ReadySessionCoversCwd ]
 
-  testCase "WHY — sessionProbe: of several Faulted sessions the nearest to cwd speaks, because it is the one the agent is standing in" <| fun _ ->
-    sessionProbe "/repo/worktree/src"
-      [ faulted "/repo" "the outer one"
-        faulted "/repo/worktree" "the inner one" ]
-    |> Expect.equal "the deeper working directory wins" (FaultedSessionCoversCwd "the inner one")
+  testCase "WHY — sessionProbe: of several Faulted sessions the nearest to cwd speaks, whichever order they arrive in, because it is the one the agent is standing in" <| fun _ ->
+    let outer = faulted "/repo" "the outer one"
+    let inner = faulted "/repo/worktree" "the inner one"
+    [ [ outer; inner ]; [ inner; outer ] ]
+    |> List.map (sessionProbe "/repo/worktree/src")
+    |> Expect.equal "the deeper working directory wins in both orders" (List.replicate 2 (FaultedSessionCoversCwd "the inner one"))
 
   testCase "WHY — sessionProbe: a Faulted session whose wire reason is blank still says something, never an empty string" <| fun _ ->
     match sessionProbe "/repo" [ faulted "/repo" "  " ] with
