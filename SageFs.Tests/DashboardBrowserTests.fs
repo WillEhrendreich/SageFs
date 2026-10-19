@@ -310,6 +310,40 @@ module DashboardDom =
       do! throughPanelReset reopen (attemptsLeft - 1) body
   }
 
+/// What one session card said over time. A stop's "Stopping session id:..." card is a transient: the stop can finish in
+/// less than one poll of the page, so a journey that polls for it cannot tell "never shown" from "shown and already
+/// gone". The observer is installed BEFORE the click and records every distinct text the card carries, so the journey
+/// waits on the OUTCOME (the card gone, the picker back) and then asks what the card said on the way.
+module CardWatch =
+  /// Start recording the texts of `#session-card-<sessionId>`. Call before the click that changes it.
+  let install (page: IPage) (sessionId: string) = task {
+    let! _ =
+      page.EvaluateAsync<string>(
+        """(sid) => {
+          var key = '__cardTexts_' + sid;
+          window[key] = [];
+          var record = function () {
+            var el = document.getElementById('session-card-' + sid);
+            var text = el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+            var seen = window[key];
+            if (text !== '' && seen[seen.length - 1] !== text) seen.push(text);
+          };
+          new MutationObserver(record).observe(document.documentElement,
+            { subtree: true, childList: true, characterData: true, attributes: true });
+          record();
+          return '';
+        }""",
+        sessionId)
+    ()
+  }
+
+  /// Every distinct text the card carried since `install`, in the order the page showed them.
+  let seen (page: IPage) (sessionId: string) : Task<string list> = task {
+    let! texts =
+      page.EvaluateAsync<string[]>("(sid) => window['__cardTexts_' + sid] || []", sessionId)
+    return List.ofArray texts
+  }
+
 /// Chat-style scrolling of the output panel. The panel follows new output
 /// while you're at the bottom, holds still once you scroll up to read, and
 /// counts the evals you haven't seen in a pill over the bottom of the panel.
@@ -908,13 +942,19 @@ module private NoSessionLanding =
       // --- Stop journey, part 1: stop the currently-viewed session while
       // one other remains -> auto-advance to it (no picker). ---
       let stopBtn (sid: string) = (rowLocator sid).GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "unload the session"))
+      do! CardWatch.install page target2
       do! (stopBtn target2).ClickAsync()
-      do! PlaywrightExpect.waitForSelectorText BrowserWaits.panelUpdates page (sprintf "#session-card-%s" target2) (sprintf "Stopping session id:%s" target2)
       let! autoAdvanced = waitUntil BrowserWaits.daemonWork (fun () -> task {
         let! sid = viewingSessionId page
         return sid = target1
       })
       Expect.isTrue autoAdvanced (sprintf "[stop 1/2] stopping the viewed session auto-advanced to the remaining session %s" target1)
+      // The card said "Stopping" on the way, whatever the poll interval: the observer saw it.
+      let! stoppedCardSaid = CardWatch.seen page target2
+      Expect.isTrue
+        (stoppedCardSaid |> List.exists (fun text -> text.Contains(sprintf "Stopping session id:%s" target2)))
+        (sprintf "[stop 1/2] the stopped session's card showed 'Stopping session id:%s'; it said: %A" target2 stoppedCardSaid)
+      do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator(sprintf "#session-card-%s" target2)) 0
       // The stop's outcome is said where the viewer can see it, not in the
       // Evaluate popover, which is closed unless they opened it.
       do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator("[data-testid='action-result']")) 1
@@ -925,12 +965,18 @@ module private NoSessionLanding =
       // --- Stop journey, part 2: stop the LAST remaining session -> falls
       // back to the picker, and the rest of the chrome must still render —
       // the exact transition that shipped broken as 0.6.470/0.6.471. ---
+      do! CardWatch.install page target1
       do! (stopBtn target1).ClickAsync()
-      do! PlaywrightExpect.waitForSelectorText BrowserWaits.panelUpdates page (sprintf "#session-card-%s" target1) (sprintf "Stopping session id:%s" target1)
       let! pickerBack = waitUntil BrowserWaits.daemonWork (fun () -> task {
         return! picker.IsVisibleAsync()
       })
       Expect.isTrue pickerBack "[stop 2/2] session picker re-appears once the last session is stopped"
+      let! lastCardSaid = CardWatch.seen page target1
+      Expect.isTrue
+        (lastCardSaid |> List.exists (fun text -> text.Contains(sprintf "Stopping session id:%s" target1)))
+        (sprintf "[stop 2/2] the last session's card showed 'Stopping session id:%s'; it said: %A" target1 lastCardSaid)
+      // The sidebar does not keep the stopped session's card once nothing is left.
+      do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator(sprintf "#session-card-%s" target1)) 0
       // The picker is shown by a client signal and the id is carried by the morph that follows: wait for the morph,
       // do not read the attribute in the gap between them (under load the gate saw that gap).
       let! viewingCleared = waitUntil BrowserWaits.daemonWork (fun () -> task {
