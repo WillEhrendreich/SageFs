@@ -16,8 +16,6 @@ module WorkflowErrorContext =
 
   /// The places a user can switch a session's workflow from today. A closed set, so the hint below is built from
   /// it and cannot name a client that cannot switch, or leave one out.
-  /// Neovim is not here: `:SageFsWorkflow` (sagefs.nvim, `lua/sagefs/commands.lua`) takes no argument and only
-  /// shows the current workflow.
   [<RequireQualifiedAccess>]
   type SwitchSurface =
     /// `switch_workflow`, which creates a new session in the target workflow and stops the old one.
@@ -27,9 +25,13 @@ module WorkflowErrorContext =
     | WebDashboard
     /// `SageFs: Switch Workflow`, which posts `/api/sessions/{sid}/workflow` directly.
     | VsCode
+    /// `:SageFsWorkflow [name]` (sagefs.nvim, `lua/sagefs/commands.lua`), which posts
+    /// `/api/sessions/{sid}/workflow`; with no name it opens a picker.
+    | Neovim
 
   module SwitchSurface =
-    let all : SwitchSurface list = [ SwitchSurface.McpTool; SwitchSurface.WebDashboard; SwitchSurface.VsCode ]
+    let all : SwitchSurface list =
+      [ SwitchSurface.McpTool; SwitchSurface.WebDashboard; SwitchSurface.VsCode; SwitchSurface.Neovim ]
 
     /// How the hint says to use it.
     let describe (surface: SwitchSurface) : string =
@@ -37,6 +39,7 @@ module WorkflowErrorContext =
       | SwitchSurface.McpTool -> "the switch_workflow MCP tool"
       | SwitchSurface.WebDashboard -> "the workflow dropdown in the web dashboard"
       | SwitchSurface.VsCode -> "'SageFs: Switch Workflow' in VS Code"
+      | SwitchSurface.Neovim -> "':SageFsWorkflow' in Neovim"
 
   /// Detect whether an error is a type redefinition error.
   /// These only become workflow-relevant in HotReload (single-assembly) mode.
@@ -62,9 +65,8 @@ module WorkflowErrorContext =
       // said "Live mode", which is the old name; the workflow is HotReload, and
       // "live" is an alias trap that means Hot Reload rather than live testing.
       // Only the clients that can actually perform the switch are named, and they come
-      // from `SwitchSurface.all`: the MCP tool, the dashboard's workflow dropdown and
-      // VS Code. Neovim's :SageFsWorkflow is status-only, so promising it would be a
-      // remedy the user cannot follow.
+      // from `SwitchSurface.all`: the MCP tool, the dashboard's workflow dropdown,
+      // VS Code and Neovim's :SageFsWorkflow.
       let surfaces = SwitchSurface.all |> List.map SwitchSurface.describe
       let switchWith =
         match List.rev surfaces with
