@@ -336,13 +336,21 @@ let private exactEveryReadPatches (runtime: HostRuntime) =
     })
   }
 
+/// How many times the keep-tiering case calls `reflectDrop` before it stops waiting for the runtime to recompile the
+/// watched entry points. Each call is `reflectReadsPerCall` reflective reads and one reflection report (which exercises
+/// every entry point's canary), so this is far past the runtime's call-count threshold for tiering up.
+let private hammerCalls = 80
+
+/// The reflective reads one `reflectDrop` call makes (the fixture's loop).
+let private reflectReadsPerCall = 2000
+
 /// keep-tiering for real: no manual Unpatch and no fake ledger event, just a
 /// real worker, real Harmony and tiered compilation left on. reflectDrop does
 /// 2000 reflective reads a call (thrown away, so probe-callers rewires
 /// nothing). In the REPL the CoreLib entry watch lost its patch somewhere
 /// around 12,000 calls, so this hammers it and waits for the report to say so.
 let private keepTieringLapsesAndFailsClosed (runtime: HostRuntime) =
-  testTask (sprintf "[%s] rule 2, keep-tiering: a real tiering lapse fails closed instead of saying Patched" (HostRuntime.moniker runtime)) {
+  testTask (sprintf "[%s] rule 2, keep-tiering: a lapse of the watch fails closed instead of saying Patched, and a watch that never lapsed still patches" (HostRuntime.moniker runtime)) {
     let keepTiering (runDir: string) =
       SageFs.SettingsStore.setKey
         (SageFs.SettingsStore.repoPath runDir)
@@ -362,7 +370,7 @@ let private keepTieringLapsesAndFailsClosed (runtime: HostRuntime) =
         | other -> failtestf "keep-tiering must start out watching like tiering-off does, or already have lapsed; got %A\nHost log:\n%s" other (RunningApp.log app)
         let mutable lapsed = false
         let mutable calls = 0
-        while not lapsed && calls < 80 do
+        while not lapsed && calls < hammerCalls do
           let! _ = get app "reflectDrop"
           calls <- calls + 1
           let! (report: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
@@ -371,11 +379,21 @@ let private keepTieringLapsesAndFailsClosed (runtime: HostRuntime) =
           | _ -> ()
         match lapsed with
         | false ->
-          // When the runtime recompiles a method is up to its background
-          // compiler, and some runs never get there. That says nothing about
-          // the fail-closed contract, and the forced lapse in
-          // ReflectionReadTrackingTests covers it every run, so this skips.
-          skiptest (sprintf "%d calls to reflectDrop (%d reads) never lapsed the watch with tiering kept on. The runtime didn't recompile the entry points this run.\nHost log:\n%s" calls (calls * 2000) (RunningApp.log app))
+          // The runtime recompiles a method when its background compiler gets to it, and on net10.0 it never did in any run
+          // measured (600 calls, 1.2 million reads, 47 s: the watch stayed on; the likely reason is that MonoMod re-applies a
+          // detour when a method is JIT-compiled again, which this test does not depend on). A watch that never lapsed saw every read, so the contract on this side is the
+          // reverse of the lapse: the thrown-away reads are named, and the edit is a patch. The forced lapse in
+          // ReflectionReadTrackingTests covers the fail-closed side on every run, whatever the runtime does here.
+          let! (final: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
+          final.Watch
+          |> Expect.equal (sprintf "%d calls to reflectDrop (%d reads) did not lapse the watch, so it is still on.\nHost log:\n%s" calls (calls * reflectReadsPerCall) (RunningApp.log app)) SageFs.Middleware.ValueReads.ReflectionWatchStatus.Watching
+          let! verdict = HotReloadStateHarness.saveWithinBudget SageFs.Tests.TestTimeouts.heavyVerdictBudget app "let reflected = \"mirror\"" "let reflected = \"glass\""
+          str (json verdict) "outcome"
+          |> Expect.equal (sprintf "the watch saw every read and each one was thrown away, so this is a patch, applied and not yet seen running.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "PatchPending"
+          let! served = settle app "reflectPeek" "glass"
+          served |> Expect.equal "and reflection reads the new value" "glass"
+          let! confirmedVerdict = confirmed app
+          str (json confirmedVerdict) "outcome" |> Expect.equal (sprintf "the reflective read ran the patched getter.\nVerdict: %s\nHost log:\n%s" confirmedVerdict (RunningApp.log app)) "Patched"
         | true ->
           // 160,000 stack walks just ran, so give the verdict more room than a
           // quiet app needs.

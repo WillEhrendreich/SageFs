@@ -177,7 +177,7 @@ let allTests =
 
     // ── Property tests: parameterized cross-submission ────────
     Integration.hostList "properties" [
-      ptestPropertyWithConfig propCfg
+      testPropertyWithConfig propCfg
         "record with N fields (1-8) survives cross-submission"
       <| fun (fieldCount: PositiveInt) -> task {
         let n = min fieldCount.Get 8

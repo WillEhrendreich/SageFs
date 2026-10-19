@@ -323,39 +323,89 @@ let private repoRoot = RepoPaths.repoPathFull [||]
 /// The exact sample the reported bug used, and the one the website's own
 /// demo documents. Its build output holds the real Falco/Falco.Markup/
 /// Falco.Datastar NuGet dependencies this fix must make resolvable.
-let private webappDatastarSampleBinDir =
-  let projectDir = Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.WebappDatastar")
-  // Whatever configuration built this test binary built the sample too
-  // (project reference of SageFs.Tests' own dependency chain isn't direct,
-  // but CI/local dev builds both) — probe both, prefer Debug.
-  [ "Debug"; "Release" ]
-  |> List.map (fun cfg -> Path.Combine(projectDir, "bin", cfg, "net10.0"))
-  |> List.tryFind (fun dir -> File.Exists(Path.Combine(dir, "SageFs.Samples.WebappDatastar.dll")))
+let private sampleProjectDir = Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.WebappDatastar")
+
+let private sampleFsproj = Path.Combine(sampleProjectDir, "SageFs.Samples.WebappDatastar.fsproj")
+
+let private sampleEntryAssembly = "SageFs.Samples.WebappDatastar.dll"
+
+/// The framework this test process runs on. The sample takes the repo's default framework and the harness below is
+/// built for the same one, so a case never loads an assembly built for a newer runtime than the one it runs on (the
+/// lookup used to name net10.0 only, which the sample has not been built for since the repo moved to net11.0).
+let private runtimeMoniker = sprintf "net%d.0" Environment.Version.Major
+
+let private killTree (p: Process) =
+  try p.Kill true with _ -> ()
+
+/// `dotnet` in the repo root (its global.json SDK pin), with both streams drained while it runs. A command that does not
+/// finish in `patience` is killed and reported as an Error, never left to hang the case.
+let private runDotnet (args: string list) (patience: TimeSpan) : Task<Result<int * string * string, string>> = task {
+  let psi = ProcessStartInfo(
+    FileName = "dotnet",
+    WorkingDirectory = repoRoot,
+    RedirectStandardOutput = true,
+    RedirectStandardError = true,
+    UseShellExecute = false,
+    CreateNoWindow = true)
+  for a in args do psi.ArgumentList.Add a
+  use p = Process.Start psi
+  let stdout = p.StandardOutput.ReadToEndAsync()
+  let stderr = p.StandardError.ReadToEndAsync()
+  use cts = new CancellationTokenSource(patience)
+  try
+    do! p.WaitForExitAsync cts.Token
+    let! out = stdout
+    let! err = stderr
+    return Ok (p.ExitCode, out, err)
+  with :? OperationCanceledException ->
+    killTree p
+    return Error (sprintf "'dotnet %s' did not finish within %O" (String.concat " " args) patience)
+}
+
+/// Where the sample's build output is for this runtime, built first when nothing is there yet: a case states what it
+/// needs and gets it, instead of skipping when a neighbouring stage has not produced it. Shared by the cases below, so
+/// the build runs at most once per process. A build that fails fails every case that needs it, with the build's output.
+let private webappDatastarSampleBinDir : Lazy<Task<string>> =
+  lazy (
+    task {
+      let built () =
+        [ "Release"; "Debug" ]
+        |> List.map (fun cfg -> Path.Combine(sampleProjectDir, "bin", cfg, runtimeMoniker))
+        |> List.tryFind (fun dir -> File.Exists(Path.Combine(dir, sampleEntryAssembly)))
+      match built () with
+      | Some dir -> return dir
+      | None ->
+        match! runDotnet [ "build"; sampleFsproj; "-c"; "Release"; "-f"; runtimeMoniker; "--nologo" ] TestTimeouts.workerSessionReady with
+        | Error msg -> return failwith msg
+        | Ok (exitCode, out, err) when exitCode <> 0 ->
+          return failwithf "the WebappDatastar sample did not build for %s (exit=%d):\n%s\n%s" runtimeMoniker exitCode out err
+        | Ok _ ->
+          match built () with
+          | Some dir -> return dir
+          | None -> return failwithf "the sample built, but no %s landed under %s" sampleEntryAssembly (Path.Combine(sampleProjectDir, "bin")) })
 
 [<Tests>]
 let managedDependencyResolutionIntegrationTests =
   Integration.hostList "AppRunner.ManagedDependencyResolution (real sample)" [
 
-    testCase "WHY — the shadow dir alone lacks Falco.dll (the bug's precondition)" <| fun _ ->
-      match webappDatastarSampleBinDir with
-      | None -> skiptest "WebappDatastar sample not built for this config"
-      | Some sampleBinDir ->
-        let shadowDir = SageFs.ShadowCopy.createShadowDir ()
-        try
-          let originalDll = Path.Combine(sampleBinDir, "SageFs.Samples.WebappDatastar.dll")
-          let shadowDll = SageFs.ShadowCopy.shadowCopyFile shadowDir originalDll
-          Path.GetDirectoryName shadowDll
-          |> fun shadowedDir -> File.Exists(Path.Combine(shadowedDir, "Falco.dll"))
-          |> Expect.isFalse "the shadow dir must contain ONLY the entry assembly — this is exactly why Assembly.LoadFrom alone fails"
-        finally
-          SageFs.ShadowCopy.cleanupShadowDir shadowDir
+    testTask "WHY — the shadow dir alone lacks Falco.dll (the bug's precondition)" {
+      let! sampleBinDir = webappDatastarSampleBinDir.Value
+      let shadowDir = SageFs.ShadowCopy.createShadowDir ()
+      try
+        let originalDll = Path.Combine(sampleBinDir, sampleEntryAssembly)
+        let shadowDll = SageFs.ShadowCopy.shadowCopyFile shadowDir originalDll
+        Path.GetDirectoryName shadowDll
+        |> fun shadowedDir -> File.Exists(Path.Combine(shadowedDir, "Falco.dll"))
+        |> Expect.isFalse "the shadow dir must contain ONLY the entry assembly — this is exactly why Assembly.LoadFrom alone fails"
+      finally
+        SageFs.ShadowCopy.cleanupShadowDir shadowDir
+    }
 
-    testCase "the original build output DOES have Falco.dll beside the entry assembly" <| fun _ ->
-      match webappDatastarSampleBinDir with
-      | None -> skiptest "WebappDatastar sample not built for this config"
-      | Some sampleBinDir ->
-        File.Exists(Path.Combine(sampleBinDir, "Falco.dll"))
-        |> Expect.isTrue "the fix's whole premise: dotnet build already copied every dependency here"
+    testTask "the original build output DOES have Falco.dll beside the entry assembly" {
+      let! sampleBinDir = webappDatastarSampleBinDir.Value
+      File.Exists(Path.Combine(sampleBinDir, "Falco.dll"))
+      |> Expect.isTrue "the fix's whole premise: dotnet build already copied every dependency here"
+    }
 
     // The real end-to-end proof, in a CLEAN child process: SageFs.Tests
     // itself references Falco (FalcoTests.fs, DashboardBrowserTests.fs), so
@@ -373,39 +423,35 @@ let managedDependencyResolutionIntegrationTests =
     // Runs as a tiny compiled harness built via `<ProjectReference>` to the
     // REAL SageFs.Core.fsproj/SageFs.Host.fsproj — never `dotnet fsi`: this
     // repo pins FSharp.Core to a specific preview build
-    // (Directory.Packages.props) independent of its net10.0 TargetFramework,
+    // (Directory.Packages.props) independent of its TargetFramework,
     // and plain `dotnet fsi`'s own bundled FSharp.Core (whichever SDK it
     // resolves) never matches that exact identity, so `#r`-ing SageFs.Core.dll
     // into fsi throws its own unrelated FileLoadException before the test
     // logic even runs (confirmed empirically). A ProjectReference build
     // resolves the correct version transitively via central package
     // management, exactly like the real `SageFs.Host.exe` does.
-    testCase "WHY — resolveProjectAssembly makes Falco resolvable in a clean process that never referenced it, via the REAL shipped code" <| fun _ ->
-      match webappDatastarSampleBinDir with
-      | None -> skiptest "WebappDatastar sample not built for this config"
-      | Some sampleBinDir ->
-        let coreFsproj = Path.Combine(repoRoot, "SageFs.Core", "SageFs.Core.fsproj")
-        let hostFsproj = Path.Combine(repoRoot, "SageFs.Host", "SageFs.Host.fsproj")
-        // The harness lives OUTSIDE the repo's directory tree, so it does not
-        // inherit Directory.Packages.props' central FSharp.Core pin — its own
-        // implicit F#-SDK FSharp.Core reference then "wins" as the primary
-        // reference over the transitive want from SageFs.Core -> FCS (NU1605
-        // package downgrade, confirmed empirically), and the harness runs
-        // with the WRONG FSharp.Core physically present. Pin it explicitly to
-        // the exact version this repo builds SageFs.Core/SageFs.Host against.
-        let fsharpCoreVersion =
-          let packagesProps = Path.Combine(repoRoot, "Directory.Packages.props")
-          match File.Exists packagesProps with
-          | false -> None
-          | true ->
-            let m = Text.RegularExpressions.Regex.Match(File.ReadAllText packagesProps, "\"FSharp\\.Core\"\\s+Version=\"([^\"]+)\"")
-            match m.Success with
-            | true -> Some m.Groups.[1].Value
-            | false -> None
-        match File.Exists coreFsproj, File.Exists hostFsproj, fsharpCoreVersion with
-        | false, _, _ | _, false, _ -> skiptest "SageFs.Core.fsproj/SageFs.Host.fsproj not found"
-        | _, _, None -> skiptest "could not read the repo's pinned FSharp.Core version from Directory.Packages.props"
-        | true, true, Some fsharpCoreVersion ->
+    testTask "WHY — resolveProjectAssembly makes Falco resolvable in a clean process that never referenced it, via the REAL shipped code" {
+      let! sampleBinDir = webappDatastarSampleBinDir.Value
+      let coreFsproj = Path.Combine(repoRoot, "SageFs.Core", "SageFs.Core.fsproj")
+      let hostFsproj = Path.Combine(repoRoot, "SageFs.Host", "SageFs.Host.fsproj")
+      // The harness lives OUTSIDE the repo's directory tree, so it does not
+      // inherit Directory.Packages.props' central FSharp.Core pin — its own
+      // implicit F#-SDK FSharp.Core reference then "wins" as the primary
+      // reference over the transitive want from SageFs.Core -> FCS (NU1605
+      // package downgrade, confirmed empirically), and the harness runs
+      // with the WRONG FSharp.Core physically present. Pin it explicitly to
+      // the exact version this repo builds SageFs.Core/SageFs.Host against.
+      let pinnedFSharpCore =
+        let m =
+          Text.RegularExpressions.Regex.Match(
+            File.ReadAllText(Path.Combine(repoRoot, "Directory.Packages.props")),
+            "\"FSharp\\.Core\"\\s+Version=\"([^\"]+)\"")
+        match m.Success with
+        | true -> Result.Ok m.Groups.[1].Value
+        | false -> Result.Error "Directory.Packages.props has no FSharp.Core version for the harness to pin"
+      match pinnedFSharpCore with
+      | Result.Error why -> failtest why
+      | Result.Ok fsharpCoreVersion ->
           let harnessDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-apprunner-harness-%s" (Guid.NewGuid().ToString("N").[..7]))
           Directory.CreateDirectory harnessDir |> ignore
           try
@@ -422,8 +468,8 @@ let managedDependencyResolutionIntegrationTests =
               // the version explicitly. Disabling it leaves exactly one
               // real candidate.
               sprintf
-                "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net10.0</TargetFramework>\n    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>\n  </PropertyGroup>\n  <ItemGroup>\n    <Compile Include=\"Program.fs\" />\n  </ItemGroup>\n  <ItemGroup>\n    <PackageReference Include=\"FSharp.Core\" Version=\"%s\" />\n  </ItemGroup>\n  <ItemGroup>\n    <ProjectReference Include=\"%s\" />\n    <ProjectReference Include=\"%s\" />\n  </ItemGroup>\n</Project>\n"
-                fsharpCoreVersion coreFsproj hostFsproj
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>%s</TargetFramework>\n    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>\n  </PropertyGroup>\n  <ItemGroup>\n    <Compile Include=\"Program.fs\" />\n  </ItemGroup>\n  <ItemGroup>\n    <PackageReference Include=\"FSharp.Core\" Version=\"%s\" />\n  </ItemGroup>\n  <ItemGroup>\n    <ProjectReference Include=\"%s\" />\n    <ProjectReference Include=\"%s\" />\n  </ItemGroup>\n</Project>\n"
+                runtimeMoniker fsharpCoreVersion coreFsproj hostFsproj
             let harnessProgramContent =
               String.concat "\n" [
                 "open System.IO"
@@ -453,37 +499,22 @@ let managedDependencyResolutionIntegrationTests =
               ]
             File.WriteAllText(harnessFsproj, harnessFsprojContent)
             File.WriteAllText(Path.Combine(harnessDir, "Program.fs"), harnessProgramContent)
-            let runDotnet (args: string list) (timeoutSec: float) =
-              let psi = ProcessStartInfo(
-                FileName = "dotnet",
-                WorkingDirectory = repoRoot,   // the repo's global.json SDK pin
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true)
-              for a in args do psi.ArgumentList.Add a
-              use p = Process.Start psi
-              let stdout = p.StandardOutput.ReadToEndAsync()
-              let stderr = p.StandardError.ReadToEndAsync()
-              let finished = p.WaitForExitAsync().Wait(TimeSpan.FromSeconds timeoutSec)
-              match finished with
-              | false ->
-                (try p.Kill(true) with _ -> ())
-                Error (sprintf "'dotnet %s' did not finish within %.0fs" (String.concat " " args) timeoutSec)
-              | true -> Ok (p.ExitCode, stdout.Result, stderr.Result)
-            match runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] 180.0 with
+            let! built = runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
+            match built with
             | Error msg -> failtest msg
             | Ok (buildExit, buildOut, buildErr) when buildExit <> 0 ->
               failtestf "harness build failed (exit=%d):\n%s\n%s" buildExit buildOut buildErr
             | Ok _ ->
-              let harnessDll = Path.Combine(harnessDir, "bin", "Debug", "net10.0", "Harness.dll")
-              match runDotnet [ "exec"; harnessDll; sampleBinDir ] 30.0 with
+              let harnessDll = Path.Combine(harnessDir, "bin", "Debug", runtimeMoniker, "Harness.dll")
+              let! ran = runDotnet [ "exec"; harnessDll; sampleBinDir ] TestTimeouts.patienceInProcess
+              match ran with
               | Error msg -> failtest msg
               | Ok (_, out, err) ->
                 out
                 |> Expect.stringContains (sprintf "expected the fix to resolve Falco in a clean process (stderr=%s)" err) "RESOLVED_FALCO:"
           finally
             try Directory.Delete(harnessDir, true) with _ -> ()
+    }
   ]
 
 [<Tests>]
