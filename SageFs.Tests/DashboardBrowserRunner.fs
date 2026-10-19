@@ -455,9 +455,12 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
 
   let exitWith (code: int) =
     stopDaemon ()
-    try Directory.Delete(fixtureDir, true) with _ -> ()
-    try Directory.Delete(net10FixtureDir, true) with _ -> ()
-    SageFs.Tests.RunnerDirs.remove dataDir
+    // A passing run takes its dirs away. A failing one keeps all three: the daemon's data dir holds the worker log, and the
+    // fixture copies hold the files the failing save was made in. That is the evidence for why it failed.
+    let runEnd = SageFs.Tests.RunnerDirs.runEndOfExitCode code
+    SageFs.Tests.RunnerDirs.finish fixtureDir runEnd
+    SageFs.Tests.RunnerDirs.finish net10FixtureDir runEnd
+    SageFs.Tests.RunnerDirs.finish dataDir runEnd
     code
 
   /// Create a HotReload session on a prepared fixture copy, wait until THAT
