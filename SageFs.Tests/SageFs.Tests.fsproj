@@ -262,6 +262,7 @@
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="CallerPendingSimTests.fs" />
         <Compile Include="SessionReaperSimTests.fs" />
+        <Compile Include="StopOffLoopSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
         <Compile Include="ReadyWaitSimTests.fs" />
         <Compile Include="SourceStateProbeTests.fs" />
@@ -444,6 +445,7 @@
          <Compile Include="ToolNameReferenceTests.fs" />
          <Compile Include="CreateSessionDedupeTests.fs" />
          <Compile Include="SessionManagerMailboxSupervisionTests.fs" />
+         <Compile Include="SessionManagerStopOffMailboxTests.fs" />
          <Compile Include="SessionActivityTouchTests.fs" />
          <Compile Include="AutoCompletionAndEventsTests.fs" />
          <Compile Include="DrawAndRectPrimitivesTests.fs" />
