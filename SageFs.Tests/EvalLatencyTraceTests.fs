@@ -175,17 +175,4 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
         EvalToPixelP99Ms = None }
     let html = renderMainContent snap |> renderNode
     (html.Contains "px p50") |> Expect.isFalse "no latency stat rendered when nothing has completed the chain yet"
-
-  // ── §10 Phase 0 item 1's other named budgets: `decide`+`project` for ten
-  // members/7,000 tests under 1ms p99, and the claim-probe under 10us. Those
-  // types (`Cohort.decide`, `Cohort.project`, claims) are Phase 1 (§10 item
-  // 7+) — they do not exist in this codebase yet. Pending placeholders keep
-  // the budget visible in the suite (per §10's own instruction to gate only
-  // "the parts that do" exist) without fabricating a benchmark against code
-  // that isn't written.
-  ptestCase "PENDING (Phase 1, §5.2/§7.1) — Cohort.decide + project for 10 members and 7,000 tests must stay under 1ms p99" <| fun _ ->
-    failtest "Cohort.decide/project do not exist yet (vision §10 Phase 1 item 7)"
-
-  ptestCase "PENDING (Phase 1, §5.1) — the save-observed claim probe must stay under 10us" <| fun _ ->
-    failtest "Claims v1 do not exist yet (vision §10 Phase 1 item 9)"
 ]
