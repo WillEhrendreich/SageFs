@@ -265,6 +265,15 @@ let runDaemon (args: string array) =
     Console.CancelKeyPress.Add(fun e ->
       e.Cancel <- true
       cts.Cancel())
+    // The daemon below the watchdog has the same owner and exits when it dies. The watchdog has to end with it: left
+    // running it sees a daemon that "crashed" and starts another for an owner that is gone, again and again (seven
+    // restarts in seven minutes when measured), and nothing on the machine says whose they are.
+    match DaemonOwnership.Ownership.monitoredOwner ownership with
+    | Some owner ->
+      Async.Start(
+        OwnerMonitor.run OwnerMonitor.getProcessById owner cts (fun message -> eprintfn "[watchdog] %s" message),
+        cts.Token)
+    | None -> ()
     // `main` is the process entry point: it has to wait for the daemon to end, and nothing else is waiting on the pool.
     WatchdogRunner.run
       SageFs.Watchdog.defaultConfig
