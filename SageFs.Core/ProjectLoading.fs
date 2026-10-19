@@ -1026,12 +1026,26 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
           reloaded.TryFind (Path.GetFullPath po.ProjectFileName) |> Option.defaultValue po)
       let atConsumerFrameworks =
         ReferenceFrameworks.settle ReferenceFrameworks.ofProjectOptions reloadAt atRootFrameworks
+      // A package that ships a reference assembly is run from its runtime asset (see PackageRuntimeAssets):
+      // FSI runs what `-r:` names, and the runtime refuses to execute a reference assembly.
+      let runningRuntimeAssets (po: ProjectOptions) =
+        let runtime = PackageRuntimeAssets.runtimeAssetsOf po.AllItems
+        for reference in po.PackageReferences do
+          match PackageRuntimeAssets.runAs runtime reference with
+          | PackageRuntimeAssets.RuntimeFile path ->
+            logger.LogInfo (
+              sprintf "  %s %s ships a reference assembly; the session runs %s instead of %s"
+                reference.Name reference.Version path reference.FullPath)
+          | PackageRuntimeAssets.SameFile
+          | PackageRuntimeAssets.NoRuntimeAsset -> ()
+        PackageRuntimeAssets.withRuntimeAssets po
       let loadedProjects' =
         atConsumerFrameworks
         |> Seq.map (fun po ->
           match resolveFreshestConfigOutput po.TargetPath with
           | Some fresh -> { po with TargetPath = fresh }
           | None -> po)
+        |> Seq.map runningRuntimeAssets
         |> Seq.toList
       let fcsProjectOptions = List.ofSeq <| FCS.mapManyOptions loadedProjects'
       {
