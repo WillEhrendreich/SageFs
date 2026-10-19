@@ -616,10 +616,9 @@ let createSessionOpsWithRecovery
       task {
         // Bounded — see Timeouts.stopSessionMailboxTimeout: "a stop always
         // completes" must be true of stop_session itself, not just of the
-        // mailbox command it sends. A stale/never-answered reply channel
-        // (a future regression, not a known path today) fails loud and
-        // fast here instead of hanging until the MCP client's own external
-        // timeout does.
+        // mailbox command it sends. The mailbox answers a stop at once (the
+        // worker leaves on a side thread, WorkerReaper), so this bound is only
+        // ever spent when the loop itself is stuck, and the message says that.
         try
           let! result =
             sessionManager.PostAndAsyncReply(
@@ -631,17 +630,12 @@ let createSessionOpsWithRecovery
             let! committed = manifestOwner.Commit (Features.DaemonManifest.ManifestMutation.MarkStopped (sessionId, DateTimeOffset.UtcNow))
             return
               match committed with
-              | Ok _ -> Result.Ok (sprintf "Session '%s' stopped." sessionId)
+              | Ok _ -> Result.Ok (WorkerReaper.stoppedMessage sessionId)
               | Error err -> Result.Error (SageFsError.SessionStopFailed (sessionId, Features.ManifestOwner.CommitError.describe err))
           | Error err -> return Result.Error err
         with :? System.TimeoutException ->
           return
-            Result.Error (
-              SageFsError.SessionStopFailed (
-                sessionId,
-                sprintf
-                  "The session supervisor did not respond within %.0fs. The daemon's session mailbox may be stuck — check the daemon log. (SAGEFS_STOP_SESSION_TIMEOUT_SECONDS to adjust)"
-                  Timeouts.stopSessionMailboxTimeout.TotalSeconds))
+            Result.Error (SageFsError.SessionStopFailed (sessionId, WorkerReaper.mailboxStuckMessage Timeouts.stopSessionMailboxTimeout))
       }
     PurgeSession = fun sessionId ->
       task {
@@ -659,10 +653,24 @@ let createSessionOpsWithRecovery
           | Error err ->
             Log.warn "[DaemonMode] Purge session %s (remove manifest entry): %s" sessionId (Features.ManifestOwner.CommitError.describe err)
         | Error _ -> ()
-        return
-          result
-          |> Result.map (fun () ->
-            sprintf "Session '%s' purged — manifest entry removed." sessionId)
+        match result with
+        | Error err -> return Result.Error err
+        | Ok () ->
+          // Purge is the escape hatch for corrupted state, so it reports what became of the worker rather than assuming it:
+          // the stop was answered at once (the registry no longer lists the session), and the worker leaves on a side thread.
+          // Wait for that here, bounded, and say whether it is gone.
+          let! settled =
+            task {
+              try
+                return!
+                  sessionManager.PostAndAsyncReply(
+                    (fun reply -> SessionManager.SessionCommand.AwaitWorkersGone(toSessionId sessionId, reply)),
+                    timeout = int Timeouts.stopSessionMailboxTimeout.TotalMilliseconds)
+                  |> Async.StartAsTask
+              with :? System.TimeoutException ->
+                return WorkerReaper.Settled.Unknown (sprintf "it had not left within %.0fs and keeps leaving in the background" Timeouts.stopSessionMailboxTimeout.TotalSeconds)
+            }
+          return Result.Ok (WorkerReaper.purgedMessage sessionId settled)
       }
     RestartSession = fun sessionId plan ->
       task {

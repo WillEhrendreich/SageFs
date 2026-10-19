@@ -105,6 +105,13 @@
         <Compile Include="SessionReaperSim.fs" />
         <Compile Include="SessionReaperInvariants.fs" />
         <Compile Include="SessionReaperGenerators.fs" />
+        <!-- Stop-off-the-loop DST (roast R-SERVER-3): a seeded scenario of list, get, create, restart and stop operations
+             with the instant each stopped worker finally leaves. The model's loop either reaps aside (the spec) or
+             awaits the stop inside the loop (the twin, the old handler); the same Trace and invariants also judge the
+             REAL SessionManager mailbox (SageFs.Tests/SessionManagerStopOffMailboxTests.fs). -->
+        <Compile Include="StopOffLoopSim.fs" />
+        <Compile Include="StopOffLoopInvariants.fs" />
+        <Compile Include="StopOffLoopGenerators.fs" />
         <!-- Getter-guard DST: folds the real reachability walk, patch registry, stop cells and click
              lifecycle through the watchdog, an abandoned thread, shared helpers and a reload during a
              click; twins release at give-up, never retire a cell, unpatch without counting holders and

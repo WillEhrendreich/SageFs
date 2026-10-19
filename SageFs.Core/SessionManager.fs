@@ -73,9 +73,14 @@ module SessionManager =
         autoOpenNamespaces: bool *
         workflow: WorkflowTypes.SessionWorkflow *
         AsyncReplyChannel<Result<SessionInfo, SageFsError>>
+    /// Answered at once: the session leaves the registry and its workers leave on a side thread (WorkerReaper).
     | StopSession of
         SessionId *
         AsyncReplyChannel<Result<unit, SageFsError>>
+    /// Internal: a stopped session's worker has been seen leaving, or outliving its kill.
+    | WorkerReaped of SessionId * workerPid: int * WorkerReaper.Fate
+    /// Answered when none of the session's stopped workers is still exiting (at once if none ever was).
+    | AwaitWorkersGone of SessionId * AsyncReplyChannel<WorkerReaper.Settled>
     | RestartSession of
         SessionId *
         plan: RestartPlan *
@@ -152,6 +157,9 @@ module SessionManager =
     PendingSwap: Map<SessionId, ManagedSession>
     /// Callers waiting for a session to become Ready, settled after every step.
     ReadyWaiters: Map<SessionId, AsyncReplyChannel<Result<unit, SageFsError>> list>
+    /// Stopped sessions whose workers are still leaving. Not in `Sessions` (a stopped session is not listed); a pid stays
+    /// here until its process is seen gone.
+    Reaping: WorkerReaper.Book<AsyncReplyChannel<WorkerReaper.Settled>>
   }
 
   module ManagerState =
@@ -162,6 +170,7 @@ module SessionManager =
       RebuildsInFlight = Map.empty
       PendingSwap = Map.empty
       ReadyWaiters = Map.empty
+      Reaping = WorkerReaper.empty
     }
 
     let addSession id session state =
@@ -307,49 +316,8 @@ module SessionManager =
         OnStartTimedOut = fun workerPid timeout tail -> inbox.Post(SessionCommand.WorkerStartTimedOut(sessionId, workerPid, timeout, tail))
         OnAppOutput = fun stream line -> inbox.Post(SessionCommand.WorkerAppOutput(sessionId, stream, line)) }
 
-  /// Stop a worker gracefully: send Shutdown with a bounded wait, then kill the
-  /// whole process tree. The bounded wait is essential — HttpWorkerClient.httpProxy
-  /// has no request timeout, so a hung worker would otherwise block daemon shutdown
-  /// forever (StopAll times out and the daemon exits, orphaning workers — issue #126).
-  /// Kill uses entireProcessTree so any child processes (dotnet restore, compiler
-  /// server) spawned by the worker die with it instead of lingering on Windows.
-  let stopWorker (session: ManagedSession) = async {
-    let proc = session.Process
-    let hasExited = try proc.HasExited with _ -> true
-    match hasExited with
-    | true ->
-      try proc.EnableRaisingEvents <- false with _ -> ()
-      try proc.Dispose() with _ -> ()
-    | false ->
-      try
-        let shutdownTask =
-          session.Proxy WorkerMessage.Shutdown
-          |> Async.StartAsTask
-        let! completed =
-          System.Threading.Tasks.Task.WhenAny(
-            [| shutdownTask :> System.Threading.Tasks.Task
-               System.Threading.Tasks.Task.Delay(Timeouts.workerShutdownDelay) |])
-          |> Async.AwaitTask
-        if obj.ReferenceEquals(completed, shutdownTask) then
-          let! _ = shutdownTask |> Async.AwaitTask
-          ()
-        let exited = proc.WaitForExit(int Timeouts.processNormalExit.TotalMilliseconds)
-        match exited with
-        | false ->
-          try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-          try proc.WaitForExit(int Timeouts.processKillVerify.TotalMilliseconds) |> ignore with ex -> Log.warn "[SessionManager] WaitForExit after kill: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        | true -> ()
-      with ex ->
-        Log.warn "[SessionManager] Graceful shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        let forceKill = WorkerStop.needsForceKill (fun () -> proc.HasExited)
-        match forceKill with
-        | WorkerStop.ForceKill ->
-          try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill failed: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-          try proc.WaitForExit(int Timeouts.processKillVerify.TotalMilliseconds) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        | WorkerStop.AlreadyExited -> ()
-      try proc.EnableRaisingEvents <- false with _ -> ()
-      try proc.Dispose() with _ -> ()
-  }
+  /// Stop a worker: Shutdown with a bounded wait, then kill the process tree (see WorkerStop.stopProcess).
+  let stopWorker (session: ManagedSession) = WorkerStop.stopProcess session.Process session.Proxy
 
   let killWorkerPids = WorkerSpawn.killWorkerPids
 
@@ -588,6 +556,13 @@ module SessionManager =
           Instrumentation.succeedSpan span
           newState, Ok ()
 
+      // Hand `workers` to the reaper (a dedicated thread each) and note their pids in the book. Nothing here waits for a
+      // worker: the loop returns as soon as the threads are started, and each worker's fate comes back as WorkerReaped.
+      let reapAside (id: SessionId) (workers: ManagedSession list) (state: ManagerState) : ManagerState =
+        let targets = workers |> List.map (fun w -> WorkerReaper.targetOf w.Process (runtime.StopWorker w))
+        WorkerReaper.reapOnDedicatedThreads id (fun pid fate -> inbox.Post(SessionCommand.WorkerReaped(id, pid, fate))) targets
+        { state with Reaping = WorkerReaper.start id (targets |> List.map (fun t -> t.Pid)) state.Reaping }
+
       // Start the ready-poll watchdog and the two post-ready fetches for a
       // worker whose transport was just installed (see WorkerPostReady).
       let postReady (id: SessionId) (workerPid: int) (proxy: SessionProxy) =
@@ -746,28 +721,30 @@ module SessionManager =
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.stop" [("session.id", box id)]
           match ManagerState.tryGetSession id state with
           | Some session ->
-            try
-              let workersToStop =
-                session :: (ManagerState.tryGetPendingSwap id state |> Option.toList)
-              do! workersToStop |> List.map runtime.StopWorker |> Async.Parallel |> Async.Ignore
-              let newState = ManagerState.removeSession id state
-              reply.Reply(Ok ())
-              Instrumentation.sessionsStopped.Add(1L)
-              Instrumentation.activeSessions.Add(-1L)
-              Instrumentation.succeedSpan span
-              return newState
-            with ex ->
-              // Fail-closed: an unexpected stop-worker exception must not kill
-              // the mailbox. Reply the error to the caller and keep the session
-              // registered so the operator can retry / hard-reset it.
-              Log.warn "[SessionManager] StopWorker threw for session %s: %s\n%s" (SessionId.value id) ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
-              reply.Reply(Error (SageFsError.SessionStopFailed (SessionId.value id, ex.Message)))
-              Instrumentation.failSpan span ex.Message
-              return state
+            // "Stopped" is the registry no longer listing the session, and that is what the caller is told. "Worker gone"
+            // is the book no longer holding its pid. The workers (the current one and a parked replacement) leave on side
+            // threads, so a 5 s stop never holds this loop; a caller that needs them gone parks on AwaitWorkersGone.
+            let workers = session :: (ManagerState.tryGetPendingSwap id state |> Option.toList)
+            let newState = reapAside id workers (ManagerState.removeSession id state)
+            reply.Reply(Ok ())
+            Instrumentation.sessionsStopped.Add(1L)
+            Instrumentation.activeSessions.Add(-1L)
+            Instrumentation.succeedSpan span
+            return newState
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
             Instrumentation.failSpan span (sprintf "Session %s not found" (SessionId.value id))
             return state
+
+        | SessionCommand.WorkerReaped(id, workerPid, fate) ->
+          let reaping, answers = WorkerReaper.finish id workerPid fate state.Reaping
+          WorkerReaper.answerAll answers
+          return { state with Reaping = reaping }
+
+        | SessionCommand.AwaitWorkersGone(id, reply) ->
+          let reaping, standing = WorkerReaper.await id reply state.Reaping
+          WorkerReaper.answerIfSettled reply standing
+          return { state with Reaping = reaping }
 
         | SessionCommand.RestartSession(id, plan, reply) ->
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.restart"
@@ -824,7 +801,7 @@ module SessionManager =
               match isNull span with
               | false -> span.SetTag("restart.decision", "cold_restart") |> ignore
               | true -> ()
-              do! runtime.StopWorker session
+              // The old worker leaves on a side thread while the build runs: nothing here waits for it.
               // INVARIANT (registry preservation): a session undergoing a hard reset
               // stays registered for the whole restart, marked `Restarting`, so no
               // reader can observe a missing session mid-restart — that previously
@@ -838,7 +815,7 @@ module SessionManager =
                       Info = { session.Info with Status = SessionLifecycleStatus.Restarting PreviousWorker.ColdStart }
                       Proxy = pendingProxy
                       WorkerBaseUrl = "" }
-                let afterMark = ManagerState.addSession id restarting state
+                let afterMark = ManagerState.addSession id restarting (reapAside id [ session ] state)
                 { afterMark with
                     WarmupProgress = Map.remove id afterMark.WarmupProgress }
               Instrumentation.succeedSpan span
@@ -1476,6 +1453,8 @@ module SessionManager =
           match cmd with
           | SessionCommand.StopSession(id, reply) ->
             tryReply reply (Error (SageFsError.SessionStopFailed (SessionId.value id, ex.Message)))
+          | SessionCommand.AwaitWorkersGone(_, reply) ->
+            tryReply reply (WorkerReaper.Settled.Unknown ex.Message)
           | SessionCommand.RestartSession(id, _, reply) ->
             tryReply reply (Error (SageFsError.HardResetFailed (sprintf "Hard reset failed: %s" ex.Message)))
           | SessionCommand.CreateSession(_, _, _, _, reply) ->
@@ -1519,6 +1498,7 @@ module SessionManager =
             tryReply reply (Error (SageFsError.HardResetFailed (sprintf "Workflow switch failed: %s" ex.Message)))
           // Every command below carries no reply channel to guard.
           | SessionCommand.TouchSession _
+          | SessionCommand.WorkerReaped _
           | SessionCommand.WorkerExited _
           | SessionCommand.WorkerReady _
           | SessionCommand.WorkerTestDiscovery _
