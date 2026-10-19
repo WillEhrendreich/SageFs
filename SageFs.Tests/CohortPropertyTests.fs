@@ -478,6 +478,118 @@ let private departureOrphansAllHeldClaimsImmediately (h: Harness) =
         heldBefore = orphanedThisStep
       | _ -> true))
 
+// ── Property 11: a landing verified against H1 never lands when the head is H2 <> H1 ──
+//
+// The state is REACHED through `decide` (join, set the head to H1, claim, request the landing, rebase, affected, tests),
+// then the conductor moves the head to H2, then the landing is fast-forwarded. It used to be a record literal with
+// "H1-" and "H2-" prefixed onto the two generated strings, so the heads could never be equal: the half of the
+// property that says a landing LANDS when the head did not move was dead, and a `decide` that never landed anything
+// passed it. Equal heads are now generated half the time.
+
+/// What a fast-forward after the head moved did. A case per outcome, so a landing that did something else is not
+/// confused with either of the two the property is about.
+type FastForwardReached =
+  | SetupRefused of why: string
+  | Landed of integrationCommit: string
+  | HeadMoved of verified: string * now: string
+  | SomethingElse of what: string
+
+type DecideFn =
+  DateTime
+    -> byte[]
+    -> CohortState<Agent>
+    -> CohortCommand<Agent>
+    -> Result<CohortState<Agent> * CohortEvent<Agent> list * CohortEffect<Agent> list, CohortError<Agent>>
+
+/// The head the landing was verified against, and the head at fast-forward time.
+type HeadPair = HeadPair of verifiedAgainst: string * atFastForward: string
+
+let fastForwardAfterHeadMoved (decideFn: DecideFn) (scope: ClaimScope) (HeadPair(h1, h2)) : FastForwardReached =
+  let conductor = agentOf 1
+  let step (state: Result<CohortState<Agent>, string>, n: int) (cmd: CohortCommand<Agent>) =
+    match state with
+    | Result.Error _ -> state, n
+    | Ok st ->
+      match decideFn epoch (BitConverter.GetBytes n) st cmd with
+      | Ok(next, _, _) -> Ok next, n + 1
+      | Error refusal -> Result.Error(sprintf "%A was refused: %A" cmd refusal), n + 1
+  let after (build: CohortState<Agent> -> CohortCommand<Agent>) (state: Result<CohortState<Agent>, string>, n: int) =
+    match state with
+    | Result.Error _ -> state, n
+    | Ok st -> step (state, n) (build st)
+  let claimOf (st: CohortState<Agent>) = st.Claims |> Map.toList |> List.head
+  let landingOf (st: CohortState<Agent>) = st.Landings |> Map.toList |> List.head |> fst
+  let verified =
+    (Ok(CohortState.empty ()), 0)
+    |> fun s -> step s (CohortCommand.Join(conductor, JoinableRole.Implementer, None, machine))
+    |> fun s -> step s (CohortCommand.SetIntegrationHead(conductor, h1, machine))
+    |> fun s -> step s (CohortCommand.AcquireClaim(conductor, scope, "purpose", machine))
+    |> after (fun st ->
+      let cid, claim = claimOf st
+      CohortCommand.RequestLanding(conductor, [ cid, claim.Fence ], [ "c1" ], "statement", machine))
+    |> after (fun st -> CohortCommand.RebaseCompleted(landingOf st, Ok "rebased-sha", machine))
+    |> after (fun st -> CohortCommand.AffectedComputed(landingOf st, [], machine))
+    |> after (fun st -> CohortCommand.TestsCompleted(landingOf st, [], machine))
+    |> fun s -> step s (CohortCommand.SetIntegrationHead(conductor, h2, machine))
+  match fst verified with
+  | Result.Error why -> SetupRefused why
+  | Ok st ->
+    let lid = landingOf st
+    match decideFn epoch [| 99uy |] st (CohortCommand.FastForwardCompleted(lid, "landed-sha", machine)) with
+    | Error refusal -> SomethingElse(sprintf "the fast-forward was refused: %A" refusal)
+    | Ok(next, events, _) ->
+      match next.Landings.[lid].State with
+      | LandingState.Landed sha when events |> List.exists (function CohortEvent.LandingLanded _ -> true | _ -> false) -> Landed sha
+      | LandingState.Blocked(LandingBlocker.HeadMoved(f, t), _) -> HeadMoved(f, t)
+      | other -> SomethingElse(sprintf "%A" other)
+
+/// What a fast-forward after the head moved MUST do: land when the heads agree, block naming both when they do not.
+let fastForwardDidTheRightThing (HeadPair(h1, h2)) (reached: FastForwardReached) : bool =
+  if h1 = h2 then
+    (match reached with Landed "landed-sha" -> true | _ -> false)
+  else
+    (match reached with HeadMoved(f, t) -> f = h1 && t = h2 | _ -> false)
+
+let genHead =
+  Gen.choose (0, 6)
+  |> Gen.bind (fun n -> Gen.listOfLength n (Gen.elements [ 'a' .. 'f' ]))
+  |> Gen.map (fun cs -> "head-" + String(Array.ofList cs))
+
+/// Equal heads about half the time, so neither branch of the property is a rarity.
+type HeadGenerators =
+  static member Pair() =
+    Gen.oneof [
+      genHead |> Gen.map (fun h -> HeadPair(h, h))
+      Gen.zip genHead genHead |> Gen.where (fun (a, b) -> a <> b) |> Gen.map HeadPair
+    ]
+    |> Arb.fromGen
+
+  static member Scope() = Gen.elements (List.ofArray scopePool) |> Arb.fromGen
+
+let headConfig ={ cohortConfig with arbitrary = [ typeof<HeadGenerators> ] }
+
+/// Two ways `decide` could be wrong that the property must notice. `neverLands` reports HeadMoved where the real one
+/// lands, with the payload the blocked path would carry; `ignoresTheHead` lands whatever the head is.
+let neverLands : DecideFn =
+  fun clock entropy state cmd ->
+    match cmd, decide clock entropy state cmd with
+    | CohortCommand.FastForwardCompleted(lid, _, _), Ok(next, events, effects) ->
+      match next.Landings.[lid].State, state.Landings.[lid].State with
+      | LandingState.Landed _, LandingState.Verifying(verified, _, _, _) ->
+        let blocked = { next.Landings.[lid] with State = LandingState.Blocked(LandingBlocker.HeadMoved(verified, state.IntegrationHead), NextAction.RebaseAndResubmit) }
+        Ok({ next with Landings = Map.add lid blocked next.Landings }, [ CohortEvent.LandingStateChanged(lid, blocked.State) ], effects)
+      | _ -> Ok(next, events, effects)
+    | _, result -> result
+
+let ignoresTheHead : DecideFn =
+  fun clock entropy state cmd ->
+    match cmd with
+    | CohortCommand.FastForwardCompleted(lid, _, _) ->
+      match state.Landings.[lid].State with
+      | LandingState.Verifying(verified, _, _, _) -> decide clock entropy { state with IntegrationHead = verified } cmd
+      | _ -> decide clock entropy state cmd
+    | _ -> decide clock entropy state cmd
+
 [<Tests>]
 let cohortPropertyTests =
   testList "Cohort properties (Phase 1 item 7, §7.3)" [
@@ -592,34 +704,21 @@ let cohortPropertyTests =
           | _ -> false
         | _ -> false
 
-      testPropertyWithConfig cohortConfig "11: a landing verified against H1 never lands when the head is H2 <> H1" <| fun (h1: string) (h2: string) ->
-        let requester = agentOf 1
-        let h1' = "H1-" + h1
-        let h2' = "H2-" + h2
-        match Purpose.tryCreate "purpose", Statement.tryCreate "statement" with
-        | Ok purpose, Ok statement ->
-          let claim = { Id = ClaimId "c-0"; Fence = 1L<Measures.fence>; Scope = ClaimScope.File "X.fs"; Purpose = purpose; Since = epoch; State = ClaimState.Held requester }
-          let req =
-            { Id = LandingId "l-0"; Requester = requester; Claims = [ (claim.Id, claim.Fence) ]; Commits = [ "c1" ]
-              BaseAtQueue = h1'; Statement = statement; State = LandingState.Verifying(h1', "rebased-" + h1', 1, 0)
-              FastForwardAttempts = 0; Settlement = LandingSettlement.Unsettled }
-          let state =
-            { CohortState.empty () with
-                IntegrationHead = h2'
-                Members = Map.ofList [ requester, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None } ]
-                Claims = Map.ofList [ claim.Id, claim ]
-                Landings = Map.ofList [ req.Id, req ]
-                Queue = [ req.Id ] }
-          match decide epoch [||] state (CohortCommand.FastForwardCompleted(req.Id, "landed-sha", machine)) with
-          | Ok(newState, events, _) when h1' = h2' ->
-            (match newState.Landings.[req.Id].State with LandingState.Landed sha -> sha = "landed-sha" | _ -> false)
-            && events |> List.exists (function CohortEvent.LandingLanded _ -> true | _ -> false)
-          | Ok(newState, _, _) ->
-            match newState.Landings.[req.Id].State with
-            | LandingState.Blocked(LandingBlocker.HeadMoved(f, t), _) -> f = h1' && t = h2'
-            | _ -> false
-          | Error _ -> false
-        | _ -> false
+      testPropertyWithConfig headConfig "11: a landing verified against H1 lands when the head is still H1 and is blocked HeadMoved(H1, H2) when it is H2 <> H1" <| fun (scope: ClaimScope) (pair: HeadPair) ->
+        fastForwardAfterHeadMoved decide scope pair |> fastForwardDidTheRightThing pair
+
+      // The teeth. Property 11 is only worth having if it fails for a `decide` that is wrong in either direction, and
+      // if both of its branches are reached: the earlier version could never reach the equal-heads branch at all.
+      testCase "11 (teeth): the property reaches both branches, and fails a decide that never lands and one that ignores the head" <| fun _ ->
+        let pairs = Gen.sample 400 (Arb.toGen (HeadGenerators.Pair()))
+        let satisfying (decideFn: DecideFn) =
+          pairs |> Array.filter (fun pair -> fastForwardAfterHeadMoved decideFn scopePool.[0] pair |> fastForwardDidTheRightThing pair) |> Array.length
+        let equalHeads = pairs |> Array.filter (fun (HeadPair(a, b)) -> a = b) |> Array.length
+        Expect.isGreaterThan "the equal-heads branch is reached" (equalHeads, 100)
+        Expect.isLessThan "the different-heads branch is reached" (equalHeads, pairs.Length - 100)
+        satisfying decide |> Expect.equal "the real decide satisfies every pair" pairs.Length
+        Expect.isLessThan "a decide that never lands fails the equal-heads pairs" (satisfying neverLands, pairs.Length - 100)
+        Expect.isLessThan "a decide that ignores the head fails the different-heads pairs" (satisfying ignoresTheHead, pairs.Length - 100)
 
       testPropertyWithConfig cohortConfig "12: a departed member's stale-fence command never changes the claim it no longer holds" <| fun (scopeIdx: int) ->
         let a = agentOf 1
