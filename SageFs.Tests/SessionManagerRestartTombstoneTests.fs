@@ -8,6 +8,37 @@ open SageFs
 open SageFs.SessionManager
 open SageFs.WorkerProtocol
 
+/// A live process the test starts itself and reaps itself, so a case that needs a worker pid
+/// that is not the test process's own never depends on what else runs on the machine.
+/// `cat` (`findstr` on Windows) blocks reading its redirected stdin, so it stays alive until
+/// the case ends: `use owned = OwnedChild.start ()` kills and reaps it at the end of the scope.
+module OwnedChild =
+  type T =
+    { Process: Process }
+    member this.Reap() : unit =
+      try this.Process.Kill(true) with _ -> ()
+      this.Process.WaitForExit(TestTimeouts.asMs TestTimeouts.childExit) |> ignore
+      this.Process.Dispose()
+    interface System.IDisposable with
+      member this.Dispose() = this.Reap()
+    // Both are implemented so `use` works in a `task` block as well as in a plain test body.
+    interface System.IAsyncDisposable with
+      member this.DisposeAsync() =
+        this.Reap()
+        System.Threading.Tasks.ValueTask()
+
+  let private blocksOnStdin () : string * string =
+    match System.OperatingSystem.IsWindows() with
+    | true -> "findstr", "x"
+    | false -> "cat", ""
+
+  let start () : T =
+    let program, arguments = blocksOnStdin ()
+    let psi = ProcessStartInfo(program, arguments)
+    psi.UseShellExecute <- false
+    psi.RedirectStandardInput <- true
+    { Process = Process.Start psi }
+
 type private Harness = {
   Mailbox: MailboxProcessor<SessionCommand>
   ReadSnapshot: unit -> QuerySnapshot
@@ -281,12 +312,8 @@ let sessionManagerRestartTombstoneTests =
       // WorkerSpawnFailed with the OLD pid. The handler must compare the
       // message pid against the session's current worker pid and ignore the
       // stale failure — otherwise the fresh worker is tombstoned to Faulted.
-      let distinctProcesses =
-        Process.GetProcesses()
-        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
-      if distinctProcesses.Length = 0 then
-        skiptest "need a second live process to simulate distinct worker pids"
-      let oldPidProcess = distinctProcesses[0]
+      use owned = OwnedChild.start ()
+      let oldPidProcess = owned.Process
 
       let runtime =
         mkRuntime
