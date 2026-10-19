@@ -418,8 +418,13 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
 /// to compute that ONE card's real `SessionHealth` verdict for free. Every
 /// other card classifies with `warmup = None` rather than pay a worker HTTP
 /// round trip per session per push — see `liveSessionCards`'s doc comment.
+///
+/// `teardowns` is what the daemon is taking down at this moment (`TeardownRegistry`). Each listed session in it
+/// gets a card that says so, so the POST that asked for a stop and every stream push after it draw the same card.
+/// A session in `teardowns` that the list no longer carries has nothing to draw and is left out.
 let buildSessionCardsFrom
   (q: DashboardQueries)
+  (teardowns: Map<WorkerProtocol.SessionId, TeardownRegistry.Teardown>)
   (viewedContext: (WorkerProtocol.SessionId * WarmupContext option) option)
   (sessions: WorkerProtocol.SessionInfo list)
   : ParsedSession list =
@@ -440,6 +445,7 @@ let buildSessionCardsFrom
   liveSessionCards DateTime.UtcNow q.GetStatusMsg (q.GetSessionEvalCounts ()) warmupContextFor sessions
   |> List.map (fun card ->
     { card with
+        Teardown = TeardownRegistry.TeardownState.ofLookup teardowns card.Id
         Source = sourceFor card
         TestSummary = q.GetSessionTestSummary card.Id
         CoverageSummary = q.GetSessionCoverageSummary card.Id
@@ -454,14 +460,15 @@ let buildSessionCardsFrom
 /// session list in hand — fetches once, then delegates to `buildSessionCardsFrom`.
 /// No viewed session is known here, so every card classifies conservatively
 /// (`warmup = None`).
-let buildSessionCards (q: DashboardQueries) : System.Threading.Tasks.Task<ParsedSession list> =
+let buildSessionCards (q: DashboardQueries) (infra: DashboardInfra) : System.Threading.Tasks.Task<ParsedSession list> =
   task {
     let! sessions = q.GetAllSessions ()
-    return buildSessionCardsFrom q None sessions
+    return buildSessionCardsFrom q (infra.Teardowns.Current ()) None sessions
   }
 
 let private buildOutputPanelsFrom
   (q: DashboardQueries)
+  (infra: DashboardInfra)
   (sessions: WorkerProtocol.SessionInfo list)
   (sessionId: WorkerProtocol.SessionId)
   (sessionState: string)
@@ -470,7 +477,7 @@ let private buildOutputPanelsFrom
   : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode> =
   task {
     let! previous = q.GetPreviousSessions ()
-    let cards = buildSessionCardsFrom q (Some (sessionId, wCtx)) sessions
+    let cards = buildSessionCardsFrom q (infra.Teardowns.Current ()) (Some (sessionId, wCtx)) sessions
     let creating = q.IsCreatingSession ()
     let sessionsPanel = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards creating
     let sessionPicker =
@@ -1169,7 +1176,7 @@ let buildDashboardSnapshotWithSessions
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let warmupProgress = q.GetWarmupProgress sessionId
-    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanelsFrom q sessions sessionId stateStr warmupProgress wCtx
+    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanelsFrom q infra sessions sessionId stateStr warmupProgress wCtx
     // Friction review panel — local store only. Built server-side so the
     // client never assembles raw telemetry. The read is synchronous SQLite;
     // an SSE stream reuses its last-built panel within the worker-data TTL
@@ -1311,7 +1318,7 @@ let buildNoSessionSnapshotWithSessionsSorted
     // The same typed cards the session view lists (Stopped filtered out).
     // No session is in play here, so there is nothing to classify — every
     // card is best-effort (warmup = None), same as buildSessionCards.
-    let liveRows = buildSessionCardsFrom q None sessions
+    let liveRows = buildSessionCardsFrom q (infra.Teardowns.Current ()) None sessions
     let daemonHealth = q.GetDaemonHealth()
     let daemonHealthPanel =
       match daemonHealth with
@@ -2180,7 +2187,7 @@ let createWorkflowSwitchHandler
         // Immediate feedback: swap the picker for a "switching…" status
         // BEFORE awaiting the restart (which can take seconds — a rebuild if
         // the worker needs one) — the teardown path's own best pattern
-        // (renderStoppingCard, roast UX-8), applied here.
+        // (renderTeardownCard, roast UX-8), applied here.
         do! ssePatchNode ctx (renderWorkflowSwitcherPending targetLabel)
         let! result = switchWorkflow sessionId target
         match result with
@@ -2469,11 +2476,19 @@ module ViewAfterTeardown =
       | TeardownOutcome.TeardownFailed -> ViewAfterTeardown.StayOn viewed
       | TeardownOutcome.TornDown -> nextAfter torn before after
 
+/// What a session action does to the session it names.
+[<RequireQualifiedAccess>]
+type SessionActionKind =
+  /// Switch, run-app, stop-app: the session stays, and the eval form targets it afterwards.
+  | Show
+  /// Stop, dispose or purge: the session goes away, and says which way while it does.
+  | TearDown of TeardownRegistry.Teardown
+
 let createSessionActionHandler
   (q: DashboardQueries)
   (infra: DashboardInfra)
   (action: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
-  (teardown: bool)
+  (kind: SessionActionKind)
   : WorkerProtocol.SessionId -> HttpHandler =
   fun sessionId ctx -> task {
     try
@@ -2495,18 +2510,26 @@ let createSessionActionHandler
       // session is found if the viewed one goes.
       let! sessionsBefore = q.GetAllSessions ()
       let listedBefore = sessionsBefore |> List.map (fun s -> s.Id)
-      // Immediate feedback: swap the card for the "Stopping…" message.
-      if teardown then
-        do! ssePatchNode ctx (renderStoppingCard sessionId)
-        if isViewingStopped then
-          // Clear the output display + eval result of the session being unloaded.
-          let clearedOutput =
-            Elem.div [ Attr.id DomIds.OutputPanel ] [
-              Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [ Text.raw "No output yet" ]
-            ]
-          do! ssePatchNode ctx clearedOutput
-          do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.EvalResult ] [])
-      let! result = action sessionId
+      let! result =
+        match kind with
+        | SessionActionKind.Show -> action sessionId
+        | SessionActionKind.TearDown teardown ->
+          // The teardown is registered BEFORE anything is written and cleared after the action is done, however it
+          // ends, so every stream push in between draws the same Stopping card this POST is about to patch.
+          TeardownRegistry.during infra.Teardowns infra.TriggerStateChange sessionId teardown (fun () ->
+            task {
+              // Immediate feedback: swap the card for the "Stopping…" message.
+              do! ssePatchNode ctx (renderTeardownCard teardown sessionId)
+              if isViewingStopped then
+                // Clear the output display + eval result of the session being unloaded.
+                let clearedOutput =
+                  Elem.div [ Attr.id DomIds.OutputPanel ] [
+                    Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [ Text.raw "No output yet" ]
+                  ]
+                do! ssePatchNode ctx clearedOutput
+                do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.EvalResult ] [])
+              return! action sessionId
+            })
       // Make this tab view `target`: retarget its stream, carry the new viewing
       // id, and sync the output, sessions panel and statusline to it.
       let showSession (target: WorkerProtocol.SessionId) = task {
@@ -2519,7 +2542,7 @@ let createSessionActionHandler
             do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content) "No output yet")
           | None -> ()
         | None -> ()
-        let! cards = buildSessionCards q
+        let! cards = buildSessionCards q infra
         do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value target) cards (q.IsCreatingSession ()))
         let stateLabel = q.GetSessionState target |> SessionState.label
         do! ssePatchNode ctx (
@@ -2531,14 +2554,14 @@ let createSessionActionHandler
       // The viewer's view is left alone: only the sessions panel needs to
       // stop listing (or start flagging) the card the action touched.
       let refreshSessionsPanel (viewing: string) = task {
-        let! cards = buildSessionCards q
+        let! cards = buildSessionCards q infra
         do! ssePatchNode ctx (renderSessionsForSession viewing cards (q.IsCreatingSession ()))
       }
-      match teardown with
-      | false ->
+      match kind with
+      | SessionActionKind.Show ->
         // Switch / run-app / stop-app: the eval form targets the requested session.
         do! showSession sessionId
-      | true ->
+      | SessionActionKind.TearDown _ ->
         let! after = q.GetAllSessions ()
         let outcome =
           match Result.isOk result with
@@ -2934,7 +2957,7 @@ let createCreateSessionHandler
             // 15-30s warmup resolves — mirrors the teardown path's
             // immediate "⏳ Stopping…" card swap (roast UX-8: session
             // create showed nothing until warmup finished).
-            let! preCards = buildSessionCards q
+            let! preCards = buildSessionCards q infra
             do! ssePatchNode ctx (renderSessionsForSession "" preCards true)
             do! ssePatchNode ctx (sessionCreateResultInfo (sprintf "Creating session in %s… (warmup can take up to 30s)" dir))
             let! result = createSession targets dir
@@ -3659,7 +3682,7 @@ let createEndpoints
     yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)
     yield mapPostRaw "/dashboard/session/switch/{id}"
       (routeValue "id")
-      (SessionIdRoute.handle (createSessionActionHandler q infra a.SwitchSession false))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.SwitchSession SessionActionKind.Show))
     // Load a different project into a session. There is no in-place "swap the
     // project" in the worker — the project set is fixed when FSI starts — so this
     // is honestly a recreate: new session on the chosen project, then stop the old
@@ -3707,7 +3730,7 @@ let createEndpoints
         }) sid)
     yield mapPostRaw "/dashboard/session/stop/{id}"
       (routeValue "id")
-      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopSession true))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopSession (SessionActionKind.TearDown TeardownRegistry.Teardown.Stopping)))
     yield post "/dashboard/session/stop-others" (fun ctx -> task {
       let! sessions = q.GetAllSessions ()
       // "Others" = everyone except the session THIS client is viewing.
@@ -3741,22 +3764,22 @@ let createEndpoints
       // Dispose == stop: the per-session .sagefs replay binary is gone, so
       // there is no separate "clear saved memory" step anymore (see the
       // event-sourcing story — the .sagefm manifest is the only durable state).
-      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopSession true))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopSession (SessionActionKind.TearDown TeardownRegistry.Teardown.Stopping)))
     yield mapPostRaw "/dashboard/session/purge/{id}"
       (routeValue "id")
-      (SessionIdRoute.handle (createSessionActionHandler q infra a.PurgeSession true))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.PurgeSession (SessionActionKind.TearDown TeardownRegistry.Teardown.Purging)))
     // Run App / Stop App: the session's executable project — the only one (or
     // the active one), or a named one when the session has several.
     yield mapPostRaw "/dashboard/run-app/{id}"
       (routeValue "id")
-      (SessionIdRoute.handle (createSessionActionHandler q infra (fun s -> a.RunApp s AppRun.RunRequest.DefaultTarget) false))
+      (SessionIdRoute.handle (createSessionActionHandler q infra (fun s -> a.RunApp s AppRun.RunRequest.DefaultTarget) SessionActionKind.Show))
     yield mapPostRaw "/dashboard/run-app/{id}/{project}"
       (fun ctx -> routeValue "id" ctx, routeValue "project" ctx)
       (fun (sid, project) ->
-        SessionIdRoute.handle (createSessionActionHandler q infra (fun s -> a.RunApp s (AppRun.RunRequest.Named project)) false) sid)
+        SessionIdRoute.handle (createSessionActionHandler q infra (fun s -> a.RunApp s (AppRun.RunRequest.Named project)) SessionActionKind.Show) sid)
     yield mapPostRaw "/dashboard/stop-app/{id}"
       (routeValue "id")
-      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopApp false))
+      (SessionIdRoute.handle (createSessionActionHandler q infra a.StopApp SessionActionKind.Show))
     // Daemon info endpoint for client discovery (replaces daemon.json)
     yield get "/api/daemon-info" (fun ctx -> task {
       let startedAt =

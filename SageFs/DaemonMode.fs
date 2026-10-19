@@ -4532,6 +4532,8 @@ let run
     ActivityTracker = Some activityTracker
     LiveBindingsAdaptive = Some liveBindingsAdaptive
     ConnectionChannels = System.Collections.Concurrent.ConcurrentDictionary<string, MailboxProcessor<DashboardStreamCommand>>()
+    // One registry for the daemon: every dashboard tab's teardown handler writes it and every render of the sidebar reads it.
+    Teardowns = SageFs.Server.TeardownRegistry.Registry()
     // Wait-free (D4): dereferences CohortOwner's published frame pointer
     // directly — no mailbox round-trip, no IO.
     ReadCohortFrame = cohortOwner.ReadFrame

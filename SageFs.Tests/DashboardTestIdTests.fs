@@ -30,7 +30,8 @@ let private mkSession (id: string) (app: SageFs.AppRun.AppRunState) (projectRole
     TestSummary = None
     CoverageSummary = None
     TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-    ActiveProject = None; ProjectRoles = projectRoles; App = app; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+    ActiveProject = None; ProjectRoles = projectRoles; App = app; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy
+    Teardown = SageFs.Server.TeardownRegistry.TeardownState.NotTearingDown }
 
 let private mkSnap () : DashboardSnapshot =
   { DashboardSnapshot.Version = "0.0.0"
@@ -80,7 +81,7 @@ let dashboardTestIdTests = testList "Dashboard data-testid hooks" [
 
   testCase "WHY — the stopping-card placeholder also carries data-testid=\"session-card\" because it morphs into the same DOM id a demo may still be targeting mid-teardown" <| fun _ ->
     let sid = WorkerProtocol.SessionId.validate "0a2b3c4d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-    let html = renderStoppingCard sid |> renderNode
+    let html = renderTeardownCard SageFs.Server.TeardownRegistry.Teardown.Stopping sid |> renderNode
     html |> Expect.stringContains "session-card testid present on stopping card" "data-testid=\"session-card\""
 
   testCase "WHY — the no-session picker's fastest path carries data-testid=\"quick-start\" so a demo can start from a clean slate reliably" <| fun _ ->

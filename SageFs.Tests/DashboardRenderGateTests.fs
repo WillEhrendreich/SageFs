@@ -82,6 +82,7 @@ let mkInfra () : DashboardInfra =
     SystemAlarmBuffer = ref []
     TriggerStateChange = fun () -> ()
     ConnectionChannels = System.Collections.Concurrent.ConcurrentDictionary<string, MailboxProcessor<DashboardStreamCommand>>()
+    Teardowns = SageFs.Server.TeardownRegistry.Registry()
     ActivityTracker = None
     LiveBindingsAdaptive = None
     ReadCohortFrame = fun () -> SageFs.Cohort.project (SageFs.Cohort.replayHead []) [||]
@@ -109,7 +110,7 @@ let tests = testList "Dashboard render gate — no redundant GetAllSessions per 
   testTask "WHY — buildSessionCardsFrom takes the session list directly and never calls GetAllSessions" {
     let counter = ref 0
     let queries = mkQueries counter []
-    buildSessionCardsFrom queries None [] |> ignore
+    buildSessionCardsFrom queries Map.empty None [] |> ignore
     counter.Value |> Expect.equal "must not fetch sessions — they were passed in" 0
   }
 

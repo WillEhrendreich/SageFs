@@ -13,6 +13,7 @@ open SageFs.WarmUp
 open SageFs.Affordances
 open SageFs.ErrorMessages
 open SageFs.Server.DashboardTypes
+open SageFs.Server.TeardownRegistry
 
 /// Use renderNode + sseStringElements instead of sseHtmlElements
 /// (which prepends DOCTYPE to every fragment, causing Datastar to choke).
@@ -206,7 +207,7 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
           [ textEnc lbl ]))
 
 /// The transient control shown the instant a switch is requested — the
-/// teardown path's `renderStoppingCard` pattern (roast UX-8: "swap the card
+/// teardown path's `renderTeardownCard` pattern (roast UX-8: "swap the card
 /// for a status message BEFORE awaiting") applied to the workflow switcher:
 /// this is pushed before the restart is awaited, not after it resolves.
 let renderWorkflowSwitcherPending (targetLabel: string) : XmlNode =
@@ -1629,10 +1630,12 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
     ]
 
 /// Render the "⏳ Stopping session id:[id]..." card that replaces a session's
-/// display card while it unloads/disposes itself.
+/// display card while it unloads/disposes/purges itself.
 /// Shares the session-card-<id> DOM id with the card in renderSessions so
-/// Datastar morphs the card in place.
-let renderStoppingCard (sessionId: WorkerProtocol.SessionId) =
+/// Datastar morphs the card in place. The stop POST patches this card at once and the sidebar draws the
+/// same card for every session the daemon has registered as going down (`ParsedSession.Teardown`), so a
+/// stream push computed around the click cannot put the live buttons back.
+let renderTeardownCard (teardown: Teardown) (sessionId: WorkerProtocol.SessionId) =
   let sid = WorkerProtocol.SessionId.value sessionId
   Elem.div
     [ Attr.id (sprintf "session-card-%s" sid)
@@ -1641,7 +1644,7 @@ let renderStoppingCard (sessionId: WorkerProtocol.SessionId) =
       Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal);" ]
     [ Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc sid ]
       Elem.span [ Attr.class' "meta"; Attr.style "margin-left: 0.5rem;" ] [
-        textEnc (sprintf "⏳ Stopping session id:%s..." sid)
+        textEnc (sprintf "⏳ %s session id:%s..." (Teardown.describe teardown) sid)
       ] ]
 
 /// Render sessions as an HTML fragment with action buttons.
@@ -1660,7 +1663,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
         Elem.div [ Attr.class' "sessions-empty-hint" ] [ Text.raw "Start one with Quick Start, or open a directory." ]
       ]
     | false ->
-      yield! sessions |> List.mapi (fun i (s: ParsedSession) ->
+      let ordinaryCard (i: int) (s: ParsedSession) =
         let statusClass = SessionDisplayStatus.cssClass s.Status
         let sid = WorkerProtocol.SessionId.value s.Id
         let isViewing = sid = viewingSessionId
@@ -2125,7 +2128,12 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   renderCoverageTreemap sid s.CoverageTreemap ]
             // (Bound-values explorer removed from the session card — bindings
             // are not a per-card concern; they live in the Bindings panel.)
-          ])
+          ]
+      // A session the daemon is taking down shows the same Stopping card to every render, never the live one.
+      yield! sessions |> List.mapi (fun i (s: ParsedSession) ->
+        match s.Teardown with
+        | TeardownState.TearingDown teardown -> renderTeardownCard teardown s.Id
+        | TeardownState.NotTearingDown -> ordinaryCard i s)
     // A positional legend ("⇄ switch · ■ stop · ⌫ dispose · ✖ purge") went
     // stale the moment a new button (◎/◌ auto-open) was added first in the
     // row without updating it — the FIRST glyph and its labeled meaning had

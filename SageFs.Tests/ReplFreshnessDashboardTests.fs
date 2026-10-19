@@ -35,6 +35,7 @@ let private cardWith (id: string) (freshness: ReplFreshness) (source: CardSource
     ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning; WorkerRssBytes = None
     SelfHostStaleness = None; Health = SessionHealth.Healthy
     Source = source
+    Teardown = SageFs.Server.TeardownRegistry.TeardownState.NotTearingDown
     Freshness = freshness }
 
 let private card (id: string) (freshness: ReplFreshness) : ParsedSession = cardWith id freshness CardSource.NotReadOnThisCard

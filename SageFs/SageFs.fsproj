@@ -107,6 +107,8 @@
              problem rather than missing code (F# builds top-to-bottom). The file is pure — it opens
              only System — so it has no ordering requirement of its own to respect here. -->
         <Compile Include="AppOutputPane.fs" />
+        <!-- Before DashboardTypes: a sidebar card carries the teardown its session is in, and the infra record holds the registry. -->
+        <Compile Include="TeardownRegistry.fs" />
         <Compile Include="DashboardTypes.fs" />
         <Compile Include="DashboardConnection.fs" />
         <Compile Include="DockPanes.fs" />
