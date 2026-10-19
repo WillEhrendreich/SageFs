@@ -22,12 +22,32 @@ type World =
     /// Whether the daemon answered /health, and what it said about its sessions.
     Health: unit -> DaemonProbe * SessionSummary list
     /// Ask for a lease for a declared final gate; `None` when it could not be asked.
-    Lease: SlowVerb -> LeaseProbe option }
+    Lease: SlowVerb -> LeaseProbe option
+    /// Tell the daemon one use of the escape hatch happened. Best-effort: it can fail and nothing depends on it.
+    ReportHatch: SageFs.HatchUse -> unit }
 
 let str (el: JsonElement) (name: string) =
   match el.TryGetProperty name with
   | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
   | _ -> ""
+
+/// `GET /health`'s own `sessionStates` array already carries every session's `workingDirectory`, lifecycle
+/// `status` and, when it is faulted, `faultReason`; this parses those into `SessionSummary`s for `sessionProbe`,
+/// best-effort: a shape it does not recognise yields `[]`, never an exception, so a daemon that answered health at
+/// all is never mistaken for a parse failure.
+let parseSessionSummaries (healthBody: string) : SessionSummary list =
+  try
+    use doc = JsonDocument.Parse healthBody
+    match doc.RootElement.TryGetProperty "sessionStates" with
+    | true, states when states.ValueKind = JsonValueKind.Array ->
+      states.EnumerateArray()
+      |> Seq.map (fun s ->
+        { WorkingDirectory = str s "workingDirectory"
+          Status = str s "status"
+          FaultReason = str s "faultReason" })
+      |> List.ofSeq
+    | _ -> []
+  with _ -> []
 
 /// The command and cwd out of the hook's stdin JSON; empty strings when it is not the shape we know.
 let parseInput (input: string) : string * string =
@@ -117,6 +137,9 @@ let verdict (world: World) (input: string) : string option =
             | SlowLoop _
             | NoSlowLoop -> None
           let ctx = { Project = FSharpWorkspace; Daemon = DaemonAnswering; Session = session; Lease = lease }
+          match hatchReportWith policy command ctx with
+          | Counted hatch -> world.ReportHatch hatch
+          | NotCounted -> ()
           match decideWith policy command ctx with
           | Allow -> None
           | AllowWithAdvice reminder -> Some(adviceJson reminder)

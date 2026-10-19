@@ -421,6 +421,10 @@
              (session create/warmup, rebuild, full build, test run, run app). -->
         <Compile Include="ExpensiveWorkLease.fs" />
         <Compile Include="Features\LeaseWatch.fs" />
+        <!-- A dotnet build/test/run/fsi that ran while the daemon was up, as the sagefs-repl-guard hook reports it.
+             HatchUse.fs depends on nothing past FSharp.Core because the hook (tools/agent-hooks) compiles the same file. -->
+        <Compile Include="HatchUse.fs" />
+        <Compile Include="Features\HatchWatch.fs" />
         <Compile Include="ProcessEnvironment.fs" />
         <Compile Include="SessionBuild.fs" />
         <!-- What a caller waiting on a session is told, and when. After WorkerProtocol and RebuildOutcome; the session

@@ -1409,6 +1409,7 @@ module McpTools =
                     queueDepth = leases.QueueDepth
                     active = leases.Active
                     queue = leases.Queue |}
+        hatch = SageFs.Features.HatchWire.section (SageFs.Features.HatchWatch.snapshot ())
         anomalies = anomalyRows
         available = SageFs.Affordances.availableTools SageFs.SessionState.Uninitialized
       |}

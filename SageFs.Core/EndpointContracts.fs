@@ -62,6 +62,11 @@ module EndpointContracts =
     Endpoint.create POST "/api/lease/release" "Leases" "Give a lease back"
   ]
 
+  /// The escape hatch's count: the agent hook reports each dotnet build, test, run or fsi it let through, and get_daemon_status reads the count.
+  let hatchEndpoints = [
+    Endpoint.create POST "/api/hatch/record" "Hatch" "Count one use of the dotnet escape hatch, as the agent hook reports it"
+  ]
+
   /// The daemon's own client API, kept for the retained legacy TUI source.
   let clientStateEndpoints = [
     Endpoint.create GET "/api/state" "ClientState" "Read the daemon's model for a client"
@@ -122,6 +127,7 @@ module EndpointContracts =
     coreEndpoints
     @ sessionEndpoints
     @ leaseEndpoints
+    @ hatchEndpoints
     @ clientStateEndpoints
     @ liveTestingEndpoints
     @ diagnosticEndpoints

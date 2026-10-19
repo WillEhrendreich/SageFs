@@ -873,6 +873,8 @@
         <Compile Include="../tools/agent-hooks/Verdict.fs" Link="AgentHooks/Verdict.fs" />
         <Compile Include="ReplGuardTests.fs" />
         <Compile Include="ReplGuardConfigTests.fs" />
+        <Compile Include="HatchWatchTests.fs" />
+        <Compile Include="HatchRouteHttpTests.fs" />
         <Compile Include="../scripts/ReleaseRules.fs" Link="Scripts/ReleaseRules.fs" />
         <Compile Include="ReleaseRulesTests.fs" />
         <Compile Include="ReleaseFreshTests.fs" />

@@ -21,6 +21,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The daemon counts what this hook reports, so both compile the same closed type. It needs nothing past FSharp.Core. -->
+    <Compile Include="../../SageFs.Core/HatchUse.fs" Link="HatchUse.fs" />
     <Compile Include="ReplGuard.fs" />
     <Compile Include="Verdict.fs" />
     <Compile Include="Hook.fs" />
