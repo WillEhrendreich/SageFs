@@ -127,6 +127,7 @@ let start (watched: WatchedDecl list) (outcome: ReloadOutcome) : Begun =
   | ReloadOutcome.Restarted _
   | ReloadOutcome.RestartRequired _
   | ReloadOutcome.CompileFailed _
+  | ReloadOutcome.EvalFailed _
   | ReloadOutcome.KeptLiveState _
   | ReloadOutcome.NeverEntered _ -> Begun.NothingToWatch outcome
 

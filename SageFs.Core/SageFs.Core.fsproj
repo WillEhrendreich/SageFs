@@ -458,6 +458,8 @@
         <!-- Needs both ReloadOutcome/ReloadPlanning (above) and DevReload, so it lands here rather than beside
              the other Features/ files. Deliberately NOT embedded into the isolated FSI host: DevReload.fs is,
              and keeping that closure free of the planner is why the translation lives in its own module. -->
+        <!-- Pure: names what stopped a save's evaluation (needs SageFsError and the Diagnostics types). -->
+        <Compile Include="Features\EvalFailure.fs" />
         <Compile Include="Features\ReloadBroadcast.fs" />
         <!-- Tells clients `pending` now and what the host saw later; broadcasts through ReloadBroadcast. -->
         <Compile Include="Features\PatchAnnouncer.fs" />

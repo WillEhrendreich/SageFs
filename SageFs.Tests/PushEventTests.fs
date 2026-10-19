@@ -98,7 +98,8 @@ let pushEventFormatForLlmTests = testList "PushEvent.formatForLlm" [
     say SageFs.ReloadCase.KeptLiveState 0 |> Expect.stringContains "a kept value alone changed nothing" "⚠️"
     say SageFs.ReloadCase.NoEffect 0 |> Expect.stringContains "nothing changed in the running process" "⚠️"
     say SageFs.ReloadCase.RestartRequired 0 |> Expect.stringContains "the app has to be restarted" "⚠️"
-    say SageFs.ReloadCase.CompileFailed 0 |> Expect.stringContains "the file did not compile" "🔴")
+    say SageFs.ReloadCase.CompileFailed 0 |> Expect.stringContains "the file did not compile" "🔴"
+    say SageFs.ReloadCase.EvalFailed 0 |> Expect.stringContains "the evaluation failed" "🔴")
   testCase "only the latest reload verdict is kept, because an older save's verdict is superseded" (fun () ->
     PushEvent.mergeStrategy (PushEvent.ReloadReported sampleReload)
     |> Expect.equal "replaces" MergeStrategy.Replace)

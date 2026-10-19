@@ -1241,7 +1241,15 @@ let run (sessionId: string) (requestedPort: int) = async {
                SourceContextStartLine = None } : DevReload.DevReloadDiagnostic)
             |> DevReload.DevReloadDiagnostic.addSourceContext)
           |> Array.toList
-        Features.ReloadBroadcast.broadcastCompileFailure summary diagnostics
+        // Only a blocking compiler diagnostic is a compile failure. Everything else that ends an eval in Error (a fault in
+        // SageFs's own eval path, an interrupt, a reset, a dead host, code that threw) is reported as what it is, with its
+        // own words and remedy, instead of telling the user to fix a compile error that does not exist.
+        let cause = Features.EvalFailure.classify response.Diagnostics ex
+        match cause with
+        | Features.ReloadOutcome.EvalFailureCause.CompileDiagnostics _ ->
+          Features.ReloadBroadcast.broadcastCompileFailure summary diagnostics
+        | Features.ReloadOutcome.EvalFailureCause.NotACompileError _ ->
+          Features.ReloadBroadcast.broadcastOutcome (Features.ReloadOutcome.ReloadOutcome.ofEvalFailure cause)
         // The exception FSI raises for a compile error says only "Operation could not be completed due to earlier
         // error". The error itself is in the diagnostics, so the log carries them too, or the browser overlay would be
         // the only place a failed save says why.
@@ -2112,7 +2120,8 @@ let run (sessionId: string) (requestedPort: int) = async {
               // throws, we must still close the Compiling→terminal lifecycle.
               // Without this catch-all, an unhandled exception leaves the
               // browser stuck on "⟳ Recompiling..." with no recovery path.
-              Features.ReloadBroadcast.broadcastCompileFailure (sprintf "Internal error: %s" ex.Message) []
+              Features.ReloadBroadcast.broadcastOutcome
+                (Features.ReloadOutcome.ReloadOutcome.EvalFailed(Features.ReloadOutcome.EvalFault.InternalFault(ex.GetType().Name, ex.Message)))
               Log.error "File watcher async failed: %s" (ex.ToString())
           finally
             compilationLock.Release() |> ignore

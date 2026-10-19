@@ -723,3 +723,12 @@ module SageFsError =
 type SageFsErrorException(error: SageFsError) =
   inherit System.Exception(SageFsError.describe error)
   member _.Error = error
+
+/// An exception that escaped SageFs's own eval path (the middleware chain), as opposed to a failure FSI reported
+/// about the user's code. It carries the original exception's type and message as data, so a reader that has to
+/// say what failed (the hot-reload feed) classifies on this type and never on the words "internal error". On
+/// the wire it is still the `EvalFailed "internal error: ..."` it always was.
+type EvalInternalFaultException(exceptionType: string, message: string) =
+  inherit SageFsErrorException(SageFsError.EvalFailed(sprintf "internal error: %s" message))
+  member _.ExceptionType = exceptionType
+  member _.FaultMessage = message

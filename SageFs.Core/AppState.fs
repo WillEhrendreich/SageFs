@@ -284,7 +284,7 @@ let wrapErrorMiddleware next (request, st) =
     let structuredError =
       match e with
       | :? SageFsErrorException -> e
-      | _ -> SageFsErrorException(SageFsError.EvalFailed (sprintf "internal error: %s" e.Message)) :> exn
+      | _ -> EvalInternalFaultException(e.GetType().Name, e.Message) :> exn
     let errResponse = {
       EvaluationResult = Error structuredError
       Diagnostics = [||]

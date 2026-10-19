@@ -195,6 +195,7 @@ let reloadMeaning (case: ReloadCase) : string * Tone =
   | ReloadCase.NoEffect -> "nothing in the running process changed", Tone.Quiet
   | ReloadCase.RestartRequired -> "the app needs a restart to take it", Tone.Bad
   | ReloadCase.CompileFailed -> "the file did not compile, and the app kept its last code", Tone.Bad
+  | ReloadCase.EvalFailed -> "the save did not finish evaluating, and the app kept its last code", Tone.Bad
   | ReloadCase.KeptLiveState -> "a live value was kept instead of reset", Tone.Notice
 
 /// What the app did with the row's write, in words. A verdict names its case and, when a patch named them, the declarations; the

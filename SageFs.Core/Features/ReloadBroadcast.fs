@@ -41,6 +41,7 @@ let private caseName (outcome: ReloadOutcome) =
   | ReloadOutcome.NoEffect _ -> "NoEffect"
   | ReloadOutcome.RestartRequired _ -> "RestartRequired"
   | ReloadOutcome.CompileFailed _ -> "CompileFailed"
+  | ReloadOutcome.EvalFailed _ -> "EvalFailed"
   | ReloadOutcome.KeptLiveState _ -> "KeptLiveState"
   | ReloadOutcome.PatchPending _ -> "PatchPending"
   | ReloadOutcome.NeverEntered _ -> "NeverEntered"
@@ -74,11 +75,18 @@ let private refusalOf (reason: RestartReason) : DevReload.ReloadRefusal =
     Message = RestartReason.describe reason
     SuggestedAction = RestartReason.remedy reason }
 
-let private reasonsIn (outcome: ReloadOutcome) =
+/// An evaluation fault as the one refusal that explains the save: its token, what happened and what to do.
+let private faultRefusal (fault: EvalFault) : DevReload.ReloadRefusal =
+  { Case = EvalFault.caseName fault
+    Message = EvalFault.describe fault
+    SuggestedAction = EvalFault.remedy fault }
+
+let private refusalsIn (outcome: ReloadOutcome) : DevReload.ReloadRefusal list =
   match outcome with
   | ReloadOutcome.NoEffect(_, reasons)
   | ReloadOutcome.Restarted reasons
-  | ReloadOutcome.RestartRequired reasons -> reasons
+  | ReloadOutcome.RestartRequired reasons -> reasons |> List.map refusalOf
+  | ReloadOutcome.EvalFailed fault -> [ faultRefusal fault ]
   | ReloadOutcome.Patched _
   | ReloadOutcome.PatchPending _
   | ReloadOutcome.NeverEntered _
@@ -99,7 +107,8 @@ let private keptIn (outcome: ReloadOutcome) : DevReload.KeptStateReport list =
   | ReloadOutcome.NoEffect _
   | ReloadOutcome.Restarted _
   | ReloadOutcome.RestartRequired _
-  | ReloadOutcome.CompileFailed _ -> []
+  | ReloadOutcome.CompileFailed _
+  | ReloadOutcome.EvalFailed _ -> []
 
 /// Where callers in other files stand right now, read when a report is built. A worker sets it once, to a function over its
 /// own ledger (`CallerLedger`), because one worker is one process with one set of old methods; the default says nothing is
@@ -134,7 +143,8 @@ let reportWith (callers: CallerState.CallersState) (outcome: ReloadOutcome) : De
     | ReloadOutcome.NoEffect(considered, _) -> 0, considered
     | ReloadOutcome.Restarted reasons
     | ReloadOutcome.RestartRequired reasons -> 0, consideredFor reasons
-    | ReloadOutcome.CompileFailed _ -> 0, 0
+    | ReloadOutcome.CompileFailed _
+    | ReloadOutcome.EvalFailed _ -> 0, 0
     | ReloadOutcome.KeptLiveState(patched, considered, _, _) -> patched, considered
     // Applied is not live: a pending patch has had nothing confirmed yet.
     | ReloadOutcome.PatchPending(_, considered, _) -> 0, considered
@@ -148,7 +158,7 @@ let reportWith (callers: CallerState.CallersState) (outcome: ReloadOutcome) : De
     Considered = considered
     Message = messageWithCallers callers (Outcome.describeForUser outcome)
     SuggestedAction = actionWithCallers callers (Outcome.processChanged outcome) (Outcome.remedy outcome |> Option.defaultValue "")
-    Reasons = reasonsIn outcome |> List.map refusalOf
+    Reasons = refusalsIn outcome
     Kept = keptIn outcome
     Declarations =
       match outcome with
@@ -178,6 +188,9 @@ let eventWith (callers: CallerState.CallersState) (outcome: ReloadOutcome) : Dev
   // attached by the caller that HAS them (`broadcastEvalFailure` in the worker);
   // an outcome carries only the summary.
   | ReloadOutcome.CompileFailed summary -> DevReload.CompilationFailed(summary, report, [])
+  // The same terminal event a failed compile uses, so every client that shows a failed save keeps showing one. Only the
+  // report's outcome token and words differ, and a client that does not know the token still has the message.
+  | ReloadOutcome.EvalFailed fault -> DevReload.CompilationFailed(EvalFault.describe fault, report, [])
   // A kept value alone changes nothing the page would fetch, so it closes the
   // overlay without a refresh. With a patch alongside it, the patch refreshes.
   | ReloadOutcome.KeptLiveState(patched, _, _, _) when patched > 0 -> DevReload.Patched report

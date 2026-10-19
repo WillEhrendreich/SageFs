@@ -211,7 +211,7 @@ type KeptStateReport = {
 /// reconstruct the wording.
 type ReloadReport = {
   /// The `ReloadOutcome` case name: Patched | PatchPending | NeverEntered |
-  /// Restarted | NoEffect | RestartRequired | CompileFailed | KeptLiveState.
+  /// Restarted | NoEffect | RestartRequired | CompileFailed | EvalFailed | KeptLiveState.
   Outcome: string
   /// How a patch reached the process: `detour`, or `metadata-delta`. Empty when the outcome is not a patch. The wire
   /// only carries it when it is not empty, so a payload for a restart is what it always was.

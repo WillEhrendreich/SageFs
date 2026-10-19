@@ -34,7 +34,8 @@ let private allOutcomes =
     ReloadOutcome.NoEffect(3, [])
     ReloadOutcome.Restarted [ RestartReason.SignatureChanged "Program.handle" ]
     ReloadOutcome.RestartRequired [ RestartReason.MutableModuleState "counter" ]
-    ReloadOutcome.CompileFailed "FS0039: not defined" ]
+    ReloadOutcome.CompileFailed "FS0039: not defined"
+    ReloadOutcome.EvalFailed(EvalFault.Interrupted) ]
 
 [<Tests>]
 let reloadOutcomeTests =

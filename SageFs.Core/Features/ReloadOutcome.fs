@@ -278,6 +278,65 @@ type MetadataDeltaOutcome =
   /// The bound passed and these changed methods' new bodies have not run (`first` and `rest`); `entered` have.
   | NeverEntered of first: string * rest: string list * entered: int * considered: int
 
+/// Why a save's evaluation did not finish when the compiler had no complaint about the user's code. Each case is a
+/// different thing for the user to do, which is why "CompileFailed" for all of them was a lie: "fix the compile error"
+/// is the wrong advice for a fault in SageFs itself, an interrupt, or a host that died.
+[<RequireQualifiedAccess>]
+type EvalFault =
+  /// SageFs's own eval path threw (the middleware chain), carrying the exception's type and message. Not the user's code.
+  | InternalFault of exceptionType: string * message: string
+  /// The evaluation threw, or the host reported a failure with no compiler diagnostic. The type and message say what.
+  | EvalThrew of exceptionType: string * message: string
+  /// The evaluation was interrupted before it finished.
+  | Interrupted
+  /// A reset replaced the session while the save was evaluating, so its result was discarded.
+  | RefusedByReset
+  /// The session would not take the evaluation (faulted, resetting, a cancelled eval not yet confirmed stopped).
+  | RefusedBySession of reason: string
+  /// The isolated FSI host process died while the save was evaluating; `description` is how it ended.
+  | HostCrashed of description: string
+
+/// What stopped an evaluation: the compiler's own diagnostics, or one of the faults that are not a compile error.
+/// Two cases and not seven, so a compile failure has exactly one spelling.
+[<RequireQualifiedAccess>]
+type EvalFailureCause =
+  | CompileDiagnostics of summary: string
+  | NotACompileError of fault: EvalFault
+
+module EvalFault =
+
+  /// A stable token, taken from the case, that a client can branch on. Sent as the one `Reasons` entry's `Case`.
+  let caseName (fault: EvalFault) : string =
+    match fault with
+    | EvalFault.InternalFault _ -> "InternalFault"
+    | EvalFault.EvalThrew _ -> "EvalThrew"
+    | EvalFault.Interrupted -> "Interrupted"
+    | EvalFault.RefusedByReset -> "RefusedByReset"
+    | EvalFault.RefusedBySession _ -> "RefusedBySession"
+    | EvalFault.HostCrashed _ -> "HostCrashed"
+
+  /// What happened, with no call to action.
+  let describe (fault: EvalFault) : string =
+    match fault with
+    | EvalFault.InternalFault(exceptionType, message) ->
+      sprintf "SageFs hit an internal error while applying the save (%s: %s)" exceptionType message
+    | EvalFault.EvalThrew(exceptionType, message) -> sprintf "applying the save threw %s: %s" exceptionType message
+    | EvalFault.Interrupted -> "the evaluation was interrupted before it finished"
+    | EvalFault.RefusedByReset -> "the session was reset while the save was being applied, so its result was discarded"
+    | EvalFault.RefusedBySession reason -> sprintf "the session would not take the save: %s" reason
+    | EvalFault.HostCrashed description -> sprintf "the FSI host stopped while applying the save: %s" description
+
+  /// What to do next. None of these is "fix the compile error", because none of them is one.
+  let remedy (fault: EvalFault) : string =
+    match fault with
+    | EvalFault.InternalFault _ ->
+      "This is a fault in SageFs, not in your code. Save again. If it repeats, report it with report_friction and attach the worker log."
+    | EvalFault.EvalThrew _ -> "The evaluation threw instead of failing to compile. Read the exception, fix the code and save again."
+    | EvalFault.Interrupted -> "Save again once nothing else is interrupting the session. The app kept its last code."
+    | EvalFault.RefusedByReset -> "Save again: the fresh session has not seen this change."
+    | EvalFault.RefusedBySession _ -> "Wait for the session to be ready, or run hard_reset_fsi_session, then save again."
+    | EvalFault.HostCrashed _ -> "Run hard_reset_fsi_session to start a new FSI host, then save again."
+
 /// Construct through `ofPatchCounts` rather than directly, so `Patched(0, n)` —
 /// "succeeded, changed nothing", the exact lie this type exists to prevent — is
 /// unrepresentable.
@@ -301,6 +360,10 @@ type ReloadOutcome =
   /// The file did not compile. The running app is untouched and still serving
   /// the last code that did compile — which is a feature, and worth saying.
   | CompileFailed of summary: string
+  /// The save's evaluation did not finish and the compiler had no complaint about the user's code: SageFs faulted, the
+  /// eval was interrupted or superseded, the host died, or the new code threw. The running app is untouched. Built
+  /// through `ReloadOutcome.ofEvalFailure`, so a compile diagnostic can only ever be `CompileFailed`.
+  | EvalFailed of fault: EvalFault
   /// You edited the initializer of live state, and the app KEPT the live value
   /// instead of throwing it away. Anything else the save changed was patched
   /// as usual (`patched` of `considered`, which counts the kept bindings too).
@@ -358,7 +421,15 @@ module ReloadOutcome =
     | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered(_, _, entered, _)) -> entered > 0
     | ReloadOutcome.NoEffect _
     | ReloadOutcome.RestartRequired _
-    | ReloadOutcome.CompileFailed _ -> false
+    | ReloadOutcome.CompileFailed _
+    | ReloadOutcome.EvalFailed _ -> false
+
+  /// The outcome of a failed evaluation. The only way to build `CompileFailed` or `EvalFailed` from a cause, so a
+  /// compile failure keeps its one spelling and a fault never borrows it.
+  let ofEvalFailure (cause: EvalFailureCause) : ReloadOutcome =
+    match cause with
+    | EvalFailureCause.CompileDiagnostics summary -> ReloadOutcome.CompileFailed summary
+    | EvalFailureCause.NotACompileError fault -> ReloadOutcome.EvalFailed fault
 
   /// How the outcome reached the process. Read by the report, so a client never infers it from the words.
   let mechanismOf =
@@ -371,7 +442,8 @@ module ReloadOutcome =
     | ReloadOutcome.NoEffect _
     | ReloadOutcome.Restarted _
     | ReloadOutcome.RestartRequired _
-    | ReloadOutcome.CompileFailed _ -> PatchMechanism.NoPatch
+    | ReloadOutcome.CompileFailed _
+    | ReloadOutcome.EvalFailed _ -> PatchMechanism.NoPatch
 
   /// A browser reload is honest only when the bytes it will fetch may be new.
   /// Telling a page to refresh into identical code is the failure users read as
@@ -393,7 +465,8 @@ module ReloadOutcome =
     | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered _)
     | ReloadOutcome.NoEffect _
     | ReloadOutcome.RestartRequired _
-    | ReloadOutcome.CompileFailed _ -> false
+    | ReloadOutcome.CompileFailed _
+    | ReloadOutcome.EvalFailed _ -> false
 
   /// One line, always carrying the count when there was one — the
   /// "Reloaded 1 of 448 libraries" discipline, so a no-op is visible.
@@ -421,6 +494,8 @@ module ReloadOutcome =
       sprintf "Restart needed: %s" why
     | ReloadOutcome.CompileFailed summary ->
       sprintf "Not applied — the file did not compile, so the app is still serving the last good code: %s" summary
+    | ReloadOutcome.EvalFailed fault ->
+      sprintf "Not applied — the save did not finish evaluating, so the app is still serving the last good code: %s" (EvalFault.describe fault)
     | ReloadOutcome.KeptLiveState(patched, considered, first, rest) ->
       let kept =
         first :: rest
@@ -482,6 +557,7 @@ module ReloadOutcome =
       | [] -> Some "Restart the app to pick this change up."
       | r :: _ -> Some(RestartReason.remedy r)
     | ReloadOutcome.CompileFailed _ -> Some "Fix the compile error; the app reloads automatically once it builds."
+    | ReloadOutcome.EvalFailed fault -> Some(EvalFault.remedy fault)
     | ReloadOutcome.KeptLiveState _ ->
       Some "To run the new initializer, reset it from the Hot Reload panel on the dashboard or with the reset_hot_reload_state MCP tool. Otherwise there's nothing to do, the app kept going."
     | ReloadOutcome.PatchPending _ ->
@@ -519,7 +595,8 @@ module ReloadOutcome =
       | ReloadOutcome.Restarted _
       | ReloadOutcome.KeptLiveState _
       | ReloadOutcome.ByMetadataDelta _
-      | ReloadOutcome.CompileFailed _ -> outcome
+      | ReloadOutcome.CompileFailed _
+      | ReloadOutcome.EvalFailed _ -> outcome
 
   /// Folds the bindings a save KEPT into what its patch did. Only outcomes
   /// where the process is still the one running can keep anything: a patch
@@ -541,6 +618,7 @@ module ReloadOutcome =
     | _ :: _, ReloadOutcome.Restarted _
     | _ :: _, ReloadOutcome.RestartRequired _
     | _ :: _, ReloadOutcome.CompileFailed _
+    | _ :: _, ReloadOutcome.EvalFailed _
     // A delta patches methods and the objects keep their fields, so it has no bindings to keep.
     | _ :: _, ReloadOutcome.ByMetadataDelta _
     | _ :: _, ReloadOutcome.KeptLiveState _ -> outcome

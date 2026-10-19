@@ -187,7 +187,7 @@ module PushEvent =
         | SageFs.ReloadCase.PatchPending -> "⏳"
         | SageFs.ReloadCase.NeverEntered -> "⚠️"
         | SageFs.ReloadCase.KeptLiveState | SageFs.ReloadCase.NoEffect | SageFs.ReloadCase.RestartRequired -> "⚠️"
-        | SageFs.ReloadCase.CompileFailed -> "🔴"
+        | SageFs.ReloadCase.CompileFailed | SageFs.ReloadCase.EvalFailed -> "🔴"
       sprintf "%s hot reload: %s" icon facts.Message
 
 type AccumulatedEvent = {
