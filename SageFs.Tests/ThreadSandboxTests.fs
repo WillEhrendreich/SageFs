@@ -244,14 +244,30 @@ let private verdictIs (policy: SandboxPolicy) (nr: int) (args: uint64 list) =
 let private isLinuxX64 =
   OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture = Architecture.X64
 
-let private requireLinuxX64 () =
-  match isLinuxX64 with
-  | true -> ()
-  | false -> skiptest "the seccomp filter is verified on Linux x86-64 only"
-
 /// Runs the sandbox on a pool thread with the suite's ceiling, so a stuck thread fails the test instead of the run.
 let private runSandboxed (policy: SandboxPolicy) (work: unit -> 'T) : Task<SandboxOutcome<'T>> =
   Task.Run(fun () -> ThreadSandbox.run policy work).WaitAsync(TestTimeouts.patienceInProcess)
+
+/// What every real-filter case asserts on a host where no filter can be installed (not Linux x86-64):
+/// the sandbox says so and the work does not run, so containment is never claimed there.
+let private expectNoContainmentHere () : Task<unit> =
+  task {
+    let ran = ResizeArray<string>()
+    let! outcome = runSandboxed NoNetwork (fun () -> ran.Add "ran"; 1)
+    match outcome with
+    | Unavailable _ -> ()
+    | other -> failtestf "expected Unavailable on a host without the filter, got %A" other
+    ran |> Expect.isEmpty "the work never ran"
+  }
+
+/// A case that installs a real seccomp filter. It runs `body` where the filter is verified (Linux x86-64) and
+/// asserts the fail-closed answer everywhere else, so no host skips it.
+let private realFilterCase (name: string) (body: unit -> Task<unit>) : Test =
+  testTask name {
+    match isLinuxX64 with
+    | true -> do! body ()
+    | false -> do! expectNoContainmentHere ()
+  }
 
 let private withLoopbackListener (body: int -> Task) : Task =
   task {
@@ -457,21 +473,34 @@ let sandboxOutcomeTests =
       SandboxUnavailable.describe (InstallFailed ("seccomp", 22)) |> Expect.stringContains "carries the step" "seccomp"
       SandboxUnavailable.describe (UnverifiedArchitecture "Arm64") |> Expect.stringContains "carries the architecture" "Arm64"
 
-    testCase "WHY — off Linux, run is Unavailable NotLinux and the work does not run" <| fun _ ->
-      match OperatingSystem.IsLinux() with
-      | true -> skiptest "this machine is Linux"
-      | false ->
-        let ran = ResizeArray<string>()
-        ThreadSandbox.run NoNetwork (fun () -> ran.Add "ran"; 1) |> Expect.equal "NotLinux" (Unavailable NotLinux)
+    testCase "WHY — an installer that reports NotLinux makes the outcome Unavailable NotLinux and the work does not run" <| fun _ ->
+      let ran = ResizeArray<string>()
+      let outcome = ThreadSandbox.runWithInstaller (fun () -> Error NotLinux) (fun () -> ran.Add "ran"; 1)
+      outcome |> Expect.equal "NotLinux" (Unavailable NotLinux)
+      ran |> Expect.isEmpty "the work never ran"
+
+    testCase "WHY — the platform check names the reason on this host: NotLinux off Linux, and never NotLinux on it" <| fun _ ->
+      match OperatingSystem.IsLinux(), ThreadSandbox.availability () with
+      | false, Error NotLinux -> ()
+      | true, Error NotLinux -> failtest "this is Linux, so availability must not say NotLinux"
+      | false, other -> failtestf "off Linux, expected Error NotLinux, got %A" other
+      | true, _ -> ()
+
+    testCase "WHY — run answers what availability answers when no filter can be installed here, and the work does not run" <| fun _ ->
+      let ran = ResizeArray<string>()
+      let outcome = ThreadSandbox.run NoNetwork (fun () -> ran.Add "ran"; 1)
+      match ThreadSandbox.availability () with
+      | Error reason ->
+        outcome |> Expect.equal "the same reason availability gave" (Unavailable reason)
         ran |> Expect.isEmpty "the work never ran"
+      | Ok _ -> outcome |> Expect.equal "the filter installed and the work ran" (Completed 1)
   ]
 
 [<Tests>]
 let realThreadTests =
   testList "ThreadSandbox.run (real seccomp filter, Linux x86-64)" [
 
-    testTask "WHY — a connect on the filtered thread fails with Permission denied while another thread reaches the same listener before and after" {
-      requireLinuxX64 ()
+    realFilterCase "WHY — a connect on the filtered thread fails with Permission denied while another thread reaches the same listener before and after" <| fun () -> task {
       do!
         withLoopbackListener (fun port ->
           task {
@@ -487,8 +516,7 @@ let realThreadTests =
           })
     }
 
-    testTask "WHY — the filtered thread still allocates, collects garbage, makes threads and JITs fresh code, so the runtime keeps working under the filter" {
-      requireLinuxX64 ()
+    realFilterCase "WHY — the filtered thread still allocates, collects garbage, makes threads and JITs fresh code, so the runtime keeps working under the filter" <| fun () -> task {
       let! outcome =
         runSandboxed NoNetworkNoWritesNoSpawn (fun () ->
           let sum = Seq.sum (seq { for i in 1 .. summedUpTo -> i })
@@ -509,8 +537,7 @@ let realThreadTests =
       | other -> failtestf "expected Completed, got %A" other
     }
 
-    testTask "WHY — creating a file is refused under NoNetworkNoWritesNoSpawn while reading one still works" {
-      requireLinuxX64 ()
+    realFilterCase "WHY — creating a file is refused under NoNetworkNoWritesNoSpawn while reading one still works" <| fun () -> task {
       do!
         withTempDir (fun dir ->
           task {
@@ -535,8 +562,7 @@ let realThreadTests =
           })
     }
 
-    testTask "WHY — mkdir, delete, rename and truncate are refused too" {
-      requireLinuxX64 ()
+    realFilterCase "WHY — mkdir, delete, rename and truncate are refused too" <| fun () -> task {
       do!
         withTempDir (fun dir ->
           task {
@@ -559,8 +585,7 @@ let realThreadTests =
           })
     }
 
-    testTask "WHY — NoNetwork alone still lets the work write a file, so the two policies behave as different tiers" {
-      requireLinuxX64 ()
+    realFilterCase "WHY — NoNetwork alone still lets the work write a file, so the two policies behave as different tiers" <| fun () -> task {
       do!
         withTempDir (fun dir ->
           task {
@@ -571,8 +596,7 @@ let realThreadTests =
           })
     }
 
-    testTask "WHY — starting a process is refused on the filtered thread and works on a normal one" {
-      requireLinuxX64 ()
+    realFilterCase "WHY — starting a process is refused on the filtered thread and works on a normal one" <| fun () -> task {
       let start () =
         let info = Diagnostics.ProcessStartInfo(Environment.ProcessPath, "--version", RedirectStandardOutput = true)
         use p = Diagnostics.Process.Start info
@@ -587,8 +611,7 @@ let realThreadTests =
       | Choice2Of2 ex -> failtestf "the same spawn failed on an ordinary thread: %O" ex
     }
 
-    testTask "WHY — an unhandled exception inside the work comes back as Threw and the process carries on" {
-      requireLinuxX64 ()
+    realFilterCase "WHY — an unhandled exception inside the work comes back as Threw and the process carries on" <| fun () -> task {
       let! outcome = runSandboxed NoNetwork (fun () -> raise (InvalidOperationException "getter boom") : int)
       match outcome with
       | Threw (:? InvalidOperationException as ex) -> ex.Message |> Expect.equal "the message survives" "getter boom"
@@ -597,8 +620,7 @@ let realThreadTests =
       again |> Expect.equal "a second run after the failure still works" (Completed 7)
     }
 
-    testTask "WHY — the filter does not leak to the calling thread, a pool thread or a later run's thread" {
-      requireLinuxX64 ()
+    realFilterCase "WHY — the filter does not leak to the calling thread, a pool thread or a later run's thread" <| fun () -> task {
       do!
         withLoopbackListener (fun port ->
           task {
