@@ -289,6 +289,50 @@ let fileSize : (string * int) list =
 let blockingReaders : (string * int) list =
   [ "SageFs.Core/FsiHostClient.fs", 0 ]
 
+/// How many skips (`skiptest`, `ptestCase`, `ptestList` and the rest) each test file may still hold in code. A skipped
+/// case asserts nothing and reads as a pass, so the target is an empty table: a case runs, is registered only where it
+/// is meaningful, fails loudly when a prerequisite is missing, or is deleted. A file that is not listed has a budget of
+/// zero, and the numbers only go down (`--ratchets --tighten`). See SkipSitesRatchetTests.fs for what is counted.
+let skipSites : (string * int) list =
+  [ "SageFs.Tests/AppRunnerTests.fs", 5
+    "SageFs.Tests/DashboardSnapshotTests.fs", 2
+    "SageFs.Tests/DevReloadCanaryTests.fs", 3
+    "SageFs.Tests/ExpectoPendingTests.fs", 2
+    "SageFs.Tests/FileWatcherTests.fs", 2
+    "SageFs.Tests/FsiSessionContractTests.fs", 1
+    "SageFs.Tests/HardKillOutcomeTests.fs", 1
+    "SageFs.Tests/HarmonyCanaryTests.fs", 5
+    "SageFs.Tests/HostAgentTests.fs", 1
+    "SageFs.Tests/HostManifestTests.fs", 2
+    "SageFs.Tests/HotReloadStateOutcomeTests.fs", 1
+    "SageFs.Tests/HygieneStallTests.fs", 1
+    "SageFs.Tests/HygieneSymlinkTests.fs", 1
+    "SageFs.Tests/IgnoredBudgetTests.fs", 2
+    "SageFs.Tests/LiveTestingExecutorTests.fs", 15
+    "SageFs.Tests/McpAffordanceHardeningTests.fs", 4
+    "SageFs.Tests/McpToolGateTests.fs", 4
+    "SageFs.Tests/MemberEvaluationGuardTests.fs", 1
+    "SageFs.Tests/MemberEvaluationTests.fs", 1
+    "SageFs.Tests/NativeResolutionTests.fs", 1
+    "SageFs.Tests/NudgeFsTests.fs", 1
+    "SageFs.Tests/ParityClaimsTests.fs", 2
+    "SageFs.Tests/ReadyWaitManagerTests.fs", 1
+    "SageFs.Tests/SafeDirectoryWalkTests.fs", 1
+    "SageFs.Tests/SessionManagerRestartTombstoneTests.fs", 1
+    "SageFs.Tests/SessionManagerSpawnFirstRestartTests.fs", 6
+    "SageFs.Tests/SessionManagerStartEscalationTests.fs", 2
+    "SageFs.Tests/ShadowCopyTests.fs", 1
+    "SageFs.Tests/SourceStateOutcomeTests.fs", 1
+    "SageFs.Tests/SourceStateProbeTests.fs", 1
+    "SageFs.Tests/SyntaxHighlightTests.fs", 1
+    "SageFs.Tests/TestDebugTests.fs", 1
+    "SageFs.Tests/TierPlanTests.fs", 2
+    "SageFs.Tests/TrustSignalTests.fs", 1
+    "SageFs.Tests/VscodeCommandProofTests.fs", 1
+    "SageFs.Tests/WorkerStartupPortValidationTests.fs", 2
+    "SageFs.Tests/WorkerStartupReaderTests.fs", 1
+    "SageFs.Tests/WorkerStderrCaptureTests.fs", 1 ]
+
 /// How many tests each tier may leave IGNORED (`ptestCase`, `skiptest`), judged by the trust report over the ledger
 /// (build/IgnoredBudget.fs). The ledger counted an ignored test as one that ran and said "every registered test ran and
 /// passed" beside five or six of them, and some skip themselves exactly when they would fail, so a skip is how a red hides.
