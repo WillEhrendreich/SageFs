@@ -14,6 +14,7 @@ open Expecto
 open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
+open Microsoft.FSharp.Reflection
 open SageFs
 open SageFs.Cohort
 open SageFs.MemberTable
@@ -110,6 +111,14 @@ type Intent =
   | IDelegate of by: int * toAgent: int
   | IResolveVeto of by: int * landingIdx: int
   | IAdvance of FrontStep
+  /// `OpenCohort`: the cohort's own scope (an idempotent no-op that is still a ledger entry) or another one (refused).
+  | IOpen of scopeIdx: int
+  /// A `Join` addressed to a cohort that is not this one. `decide` refuses it before anything else, and the state
+  /// and the ledger must not move.
+  | IWrongScope of agent: int * scopeIdx: int
+  | IInconclusive of landingIdx: int
+  | IFastForwardFailed of landingIdx: int
+  | ISetHead of by: int * head: int
 
 let genFrontStep =
   Gen.frequency [
@@ -134,6 +143,11 @@ let private genIntent =
     2, Gen.map2 (fun a p -> IObserveSave(a, p)) (Gen.choose (1, 4)) (Gen.choose (0, 3))
     4, Gen.map2 (fun a c -> IRequestLanding(a, c)) (Gen.choose (1, 4)) (Gen.choose (0, 1000))
     7, Gen.map IAdvance genFrontStep
+    1, Gen.map IOpen (Gen.choose (0, 5))
+    1, Gen.map2 (fun a s -> IWrongScope(a, s)) (Gen.choose (1, 4)) (Gen.choose (0, 3))
+    1, Gen.map IInconclusive (Gen.choose (0, 10))
+    1, Gen.map IFastForwardFailed (Gen.choose (0, 10))
+    1, Gen.map2 (fun b h -> ISetHead(b, h)) (Gen.choose (1, 4)) (Gen.choose (0, 5))
     2, Gen.map IRebaseOk (Gen.choose (0, 10))
     1, Gen.map2 (fun l f -> IRebaseConflict(l, f)) (Gen.choose (0, 10)) (Gen.choose (0, 5))
     2, Gen.map2 (fun l t -> IAffected(l, t)) (Gen.choose (0, 10)) (Gen.choose (0, 5))
@@ -212,6 +226,10 @@ type Step = {
   StepEntropy: byte[]
 }
 
+/// Every command handed to `decide`, with what it said. `Steps` holds only the accepted ones; this is what lets a test
+/// ask whether a generator ever TRIED a command, and whether `decide` refused it for the reason it should.
+type Attempt = { Tried: CohortCommand<Agent>; Verdict: Result<unit, CohortError<Agent>> }
+
 type Harness = {
   Clock: DateTime
   NextEntropy: int
@@ -219,6 +237,7 @@ type Harness = {
   ClaimHistory: ClaimId list
   LandingHistory: LandingId list
   Steps: Step list
+  Attempts: Attempt list
 }
 
 let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
@@ -232,6 +251,10 @@ let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
 /// is a CLAIM scope and pools several on purpose — two axes, not one.
 let private machine = CohortScope.Machine
 
+/// Cohorts that are NOT the one every state in this file is opened as. A command addressed to one of these is refused
+/// `WrongCohortScope`, which is the guard the scope model rests on.
+let otherScopes = [| CohortScope.Named "elsewhere"; CohortScope.Repository "/repo-b" |]
+
 let private initHarness () : Harness = {
   Clock = epoch
   NextEntropy = 0
@@ -239,13 +262,14 @@ let private initHarness () : Harness = {
   ClaimHistory = []
   LandingHistory = []
   Steps = []
+  Attempts = []
 }
 
 let private applyCommand (h: Harness) (cmd: CohortCommand<Agent>) : Harness =
   let entropy = BitConverter.GetBytes h.NextEntropy
   let h1 = { h with NextEntropy = h.NextEntropy + 1 }
   match decide h1.Clock entropy h1.State cmd with
-  | Error _ -> h1
+  | Error refusal -> { h1 with Attempts = h1.Attempts @ [ { Tried = cmd; Verdict = Result.Error refusal } ] }
   | Ok(newState, events, _effects) ->
     let newClaims = newState.Claims |> Map.toList |> List.map fst |> List.filter (fun c -> not (List.contains c h1.ClaimHistory))
     let newLandings = newState.Landings |> Map.toList |> List.map fst |> List.filter (fun l -> not (List.contains l h1.LandingHistory))
@@ -253,7 +277,8 @@ let private applyCommand (h: Harness) (cmd: CohortCommand<Agent>) : Harness =
         State = newState
         ClaimHistory = h1.ClaimHistory @ newClaims
         LandingHistory = h1.LandingHistory @ newLandings
-        Steps = h1.Steps @ [ { Before = h1.State; After = newState; Command = cmd; Events = events; StepClock = h1.Clock; StepEntropy = entropy } ] }
+        Steps = h1.Steps @ [ { Before = h1.State; After = newState; Command = cmd; Events = events; StepClock = h1.Clock; StepEntropy = entropy } ]
+        Attempts = h1.Attempts @ [ { Tried = cmd; Verdict = Ok() } ] }
 
 let private testIdsOf (n: int) (prefix: string) = [ for i in 1 .. (abs n % 5) -> TestId(sprintf "%s%d" prefix i) ]
 
@@ -281,6 +306,11 @@ let resolveIntent<'m when 'm: comparison>
   let now cmd = Some(TimeSpan.Zero, cmd)
   let onLanding l build = pick landingPool l |> Option.map (fun lid -> TimeSpan.Zero, build lid)
   match intent with
+  | IOpen i -> now (CohortCommand.OpenCohort(if abs i % 3 = 0 then machine else otherScopes.[abs i % otherScopes.Length]))
+  | IWrongScope(a, i) -> now (CohortCommand.Join(who a, JoinableRole.Implementer, None, otherScopes.[abs i % otherScopes.Length]))
+  | IInconclusive l -> onLanding l (fun lid -> CohortCommand.VerificationInconclusive(lid, "session still warming", machine))
+  | IFastForwardFailed l -> onLanding l (fun lid -> CohortCommand.FastForwardFailed(lid, "ref moved under us", machine))
+  | ISetHead(by, h) -> now (CohortCommand.SetIntegrationHead(who by, sprintf "head-%d" (abs h % 3), machine))
   | IJoin(a, role) -> now (CohortCommand.Join(who a, role, None, machine))
   | IDepart a -> now (CohortCommand.Depart(who a, machine))
   | IRenewLease a -> now (CohortCommand.RenewLease(who a, machine))
@@ -708,6 +738,18 @@ type Reach = { LandedIn: int; TwoLandedIn: int; BlockedIn: int; VetoedIn: int }
 
 let raceConfig ={ cohortConfig with arbitrary = [ typeof<RaceGenerators> ] }
 
+/// Every checked-in cohort ledger, parsed: file name and entries. A file that does not parse fails the test that asks.
+let corpusLedgers () : (string * LedgerEntry<MemberId> list) list =
+  let corpusDir = System.IO.Path.Combine(repoRoot, "SageFs.Tests", "cohorts")
+  System.IO.Directory.CreateDirectory corpusDir |> ignore
+  System.IO.Directory.GetFiles(corpusDir, "*.ledger.jsonl")
+  |> Array.sort
+  |> Array.map (fun file ->
+    match SageFs.Features.CohortLedgerExport.fromJsonl (System.IO.File.ReadAllText file) with
+    | Error e -> failwithf "%s failed to parse: %s" file e
+    | Ok(entries: LedgerEntry<MemberId> list) -> System.IO.Path.GetFileName file, entries)
+  |> List.ofArray
+
 /// The claim `who` currently HOLDS, if any. A released or orphaned claim stays in the map until it is swept, so
 /// "the one claim" is not `Claims |> Map.toList |> List.head`.
 let heldClaimOf (who: Agent) (h: Harness) : (ClaimId * Claim<Agent>) option =
@@ -1030,6 +1072,26 @@ let cohortPropertyTests =
         history (queued @ [ CohortEvent.LandingLanded(LandingId "l-never-queued", "c") ])
         |> landedOrderRespectsRequestOrder
         |> Expect.isFalse "a landing that was never queued is refused, not dropped"
+
+      // `CohortCommand` has 21 cases and this suite's generator used to emit 17 of them; the four it did not
+      // (VerificationInconclusive, FastForwardFailed, SetIntegrationHead, OpenCohort) were never exercised by a
+      // property, and no test would have said so. Reflecting over the DU makes a new case fail here until a generator
+      // issues it, and "issues it" means `decide` ACCEPTED it, not that an intent was merely written.
+      testCase "31: every CohortCommand case is accepted by decide in some generated history, and a command for another cohort is refused WrongCohortScope" <| fun _ ->
+        let caseOf (cmd: CohortCommand<Agent>) = (fst (FSharpValue.GetUnionFields(cmd, typeof<CohortCommand<Agent>>))).Name
+        let allCases = FSharpType.GetUnionCases(typeof<CohortCommand<Agent>>) |> Array.map (fun c -> c.Name) |> Set.ofArray
+        let pipeline = Gen.sample 600 (Arb.toGen (PipelineGenerators.History())) |> Array.map (fun (PipelineHistory intents) -> run intents)
+        let plain = Gen.sample 600 genIntents |> Array.map (fun intents -> run (seating @ intents))
+        let delegating = Gen.sample 300 (Arb.toGen (DelegatingGenerators.History())) |> Array.map (fun (DelegatingHistory intents) -> run intents)
+        let histories = Array.concat [ pipeline; plain; delegating ]
+        let accepted = histories |> Array.collect (fun h -> h.Steps |> List.map (fun s -> caseOf s.Command) |> Array.ofList) |> Set.ofArray
+        Set.difference allCases accepted
+        |> Set.toList
+        |> Expect.equal "every CohortCommand case is accepted in some generated history; the ones listed never were" []
+        histories
+        |> Array.exists (fun h ->
+          h.Attempts |> List.exists (fun a -> match a.Verdict with Result.Error(CohortError.WrongCohortScope _) -> true | _ -> false))
+        |> Expect.isTrue "a command addressed to another cohort was generated and refused WrongCohortScope"
     ]
 
     testList "authority (Phase 1 item 8, §4.2)" [
@@ -1351,33 +1413,61 @@ let cohortPropertyTests =
         // events that were recorded alongside that command — proving a
         // checked-in ledger stays replayable across code changes, not merely
         // that its final state happens to match.
-        let corpusDir = System.IO.Path.Combine(repoRoot, "SageFs.Tests", "cohorts")
-        System.IO.Directory.CreateDirectory corpusDir |> ignore
-        let files = System.IO.Directory.GetFiles(corpusDir, "*.ledger.jsonl")
+        let ledgers = corpusLedgers ()
 
-        files.Length > 0
+        ledgers.Length > 0
         |> Expect.isTrue "at least one recorded ledger corpus file is checked in (item 18a's fixture)"
 
-        files
-        |> Array.iter (fun file ->
-          let jsonl = System.IO.File.ReadAllText file
-          match SageFs.Features.CohortLedgerExport.fromJsonl jsonl with
-          | Error e -> failtestf "%s failed to parse: %s" file e
-          | Ok(entries: LedgerEntry<MemberId> list) ->
-            entries
-            |> List.fold
-              (fun state (entry: LedgerEntry<MemberId>) ->
-                match decide entry.Clock entry.Entropy state entry.Command with
-                | Ok(newState, events, _effects) ->
-                  events
-                  |> Expect.equal
-                    (sprintf "%s seq %d replays to its recorded events" file (int64 entry.Seq))
-                    entry.Events
-                  newState
-                | Error e ->
-                  failtestf "%s seq %d: recorded command no longer applies cleanly: %A" file (int64 entry.Seq) e)
-              (CohortState.empty ())
-            |> ignore)
+        ledgers
+        |> List.iter (fun (file, entries) ->
+          entries
+          |> List.fold
+            (fun state (entry: LedgerEntry<MemberId>) ->
+              match decide entry.Clock entry.Entropy state entry.Command with
+              | Ok(newState, events, _effects) ->
+                events
+                |> Expect.equal
+                  (sprintf "%s seq %d replays to its recorded events" file (int64 entry.Seq))
+                  entry.Events
+                newState
+              | Error e ->
+                failtestf "%s seq %d: recorded command no longer applies cleanly: %A" file (int64 entry.Seq) e)
+            (CohortState.empty ())
+          |> ignore
+
+          // The same ledger through the audited replay: nothing dropped, and no event it cannot reproduce. A corpus
+          // ledger is the one place a change to `leaseWindow` or `settledRetention` must be noticed by name.
+          let audit = replayAuditIn CohortScope.Machine entries
+          audit.Dropped |> List.map (fun d -> int64 d.DroppedSeq) |> Expect.equal (sprintf "%s: no row is dropped" file) []
+          audit.Diverged |> List.map (fun d -> int64 d.DivergedSeq) |> Expect.equal (sprintf "%s: no row diverges" file) [])
+      }
+
+      // The corpus used to be four lines in one file and exercised 4 of the 21 `CohortCommand` cases. This fails the
+      // moment a case is added to the DU without a recorded ledger that issues it, so the corpus cannot quietly
+      // fall behind the type again. The ledgers are generated by folding commands through the real `decide`.
+      test "every CohortCommand case is issued by at least one recorded ledger" {
+        let caseOf (cmd: CohortCommand<MemberId>) = (fst (FSharpValue.GetUnionFields(cmd, typeof<CohortCommand<MemberId>>))).Name
+        let allCases = FSharpType.GetUnionCases(typeof<CohortCommand<MemberId>>) |> Array.map (fun c -> c.Name) |> Set.ofArray
+        let recorded =
+          corpusLedgers ()
+          |> List.collect (fun (_, entries) -> entries |> List.map (fun e -> caseOf e.Command))
+          |> Set.ofList
+        Set.difference allCases recorded
+        |> Set.toList
+        |> Expect.equal "every CohortCommand case appears in a corpus ledger; the ones listed do not" []
+      }
+
+      test "the corpus pins the policy constants: it records a lease lapse and a retention sweep" {
+        // `leaseWindow` and `settledRetention` are not stored in the ledger, so the events a `Tick` recorded are the
+        // only witness. If the corpus stopped containing a departure and a purge, changing either constant would
+        // pass this directory silently.
+        let events = corpusLedgers () |> List.collect (fun (_, entries) -> entries |> List.collect (fun e -> e.Events))
+        events
+        |> List.exists (function CohortEvent.MemberDeparted _ -> true | _ -> false)
+        |> Expect.isTrue "a recorded Tick departed a member whose lease lapsed"
+        events
+        |> List.exists (function CohortEvent.MemberPurged _ -> true | _ -> false)
+        |> Expect.isTrue "a recorded Tick purged settled history after the retention window"
       }
     ]
 
