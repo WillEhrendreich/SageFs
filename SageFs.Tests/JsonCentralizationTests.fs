@@ -1,9 +1,15 @@
-/// SageFs serializes and deserializes JSON in one place: `SageFs.Json` (SageFs.Core/Json.fs).
+/// SageFs serializes and deserializes typed values in one place: `SageFs.Json` (SageFs.Core/Json.fs).
 /// This pins where the rest of the code still does it itself. Each file has a budget, the
 /// number of `JsonSerializer.Serialize` / `Deserialize` calls and `JsonSerializerOptions(`
 /// constructions it still has, and the budgets only go DOWN: a file that migrates lowers its
 /// number, a file that is not listed has a budget of zero, and a file over its budget fails.
-/// When the table is empty there is one way to write JSON, and the test says so.
+///
+/// What it scans: those three shapes, in the `.fs` files of SageFs, SageFs.Core and SageFs.Host.
+/// What it does not: reading JSON by hand (`JsonDocument.Parse`, `TryGetProperty`, `GetProperty`,
+/// `JsonNode`/`JsonObject`), writing it by hand (`Utf8JsonWriter`, `sprintf` of a JSON object), the
+/// other projects, and the scripts. About 300 such sites are in the product (R-DOMAIN-8), and an empty
+/// table here does not say they are gone: it says no file calls `JsonSerializer` or builds
+/// `JsonSerializerOptions` itself.
 module SageFs.Tests.JsonCentralizationTests
 
 open System.IO

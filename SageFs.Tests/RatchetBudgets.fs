@@ -292,6 +292,12 @@ let lineCount (repoRoot: string) (rel: string) : int =
 
 /// Blocking calls in test bodies starve the thread pool and make the suite time out. These freeze the current debt
 /// at its present level: a new one fails, and converting a test to testTask/testAsync lowers a number.
+///
+/// What each number counts: the LINES of the `.fs` files under SageFs.Tests (not this file or
+/// ArchitectureTests.fs, which name the patterns) that contain the pattern text. So a comment that mentions
+/// `Thread.Sleep` costs budget, and a `.GetAwaiter()` on one line with `.GetResult()` on the next costs none.
+/// Not counted at all: `.Result`, `Task.WaitAll`/`WaitAny`, `SpinWait.SpinUntil`, and poll loops that sleep
+/// by another name.
 let blockingCalls : (string * int) list =
   [ "Async.RunSynchronously", 3
     "Thread.Sleep", 22
