@@ -53,12 +53,29 @@ module EndpointContracts =
     Endpoint.create POST "/api/sessions/{sid}/live-values/evaluate" "Sessions" "Run one not-evaluated getter of the live bindings under containment"
     Endpoint.create POST "/api/sessions/{sid}/live-values/mode" "Sessions" "Choose how much of a class the live bindings walk may run"
     Endpoint.create GET "/api/sessions/{sid}/live-values/mode" "Sessions" "Read the live bindings walk mode and the last click's containment"
+    Endpoint.create POST "/api/sessions/{sid}/workflow" "Sessions" "Switch a session's workflow by replacing its worker"
+  ]
+
+  /// The expensive-work lease: ask before spending memory on a build, a test run or an app, and give it back.
+  let leaseEndpoints = [
+    Endpoint.create POST "/api/lease/request" "Leases" "Ask for permission to run expensive work"
+    Endpoint.create POST "/api/lease/release" "Leases" "Give a lease back"
+  ]
+
+  /// The daemon's own client API, kept for the retained legacy TUI source.
+  let clientStateEndpoints = [
+    Endpoint.create GET "/api/state" "ClientState" "Read the daemon's model for a client"
+    Endpoint.create POST "/api/dispatch" "ClientState" "Dispatch a message into the daemon's update loop"
   ]
 
   let liveTestingEndpoints = [
     Endpoint.create POST "/api/live-testing/enable" "Testing" "Enable live testing"
     Endpoint.create POST "/api/live-testing/disable" "Testing" "Disable live testing"
     Endpoint.create POST "/api/live-testing/policy" "Testing" "Set testing policy"
+    Endpoint.create POST "/api/live-testing/pause" "Testing" "Pause automatic test runs for a session"
+    Endpoint.create POST "/api/live-testing/resume" "Testing" "Resume automatic test runs for a session"
+    Endpoint.create POST "/api/live-testing/scope" "Testing" "Narrow which tests automatic runs may touch"
+    Endpoint.create POST "/api/live-testing/mark-all-stale" "Testing" "Mark every test stale so the next run re-runs them"
     Endpoint.create POST "/api/live-testing/run" "Testing" "Run tests"
     Endpoint.create POST "/api/live-testing/debug" "Testing" "Hold one test for a debugger; answers the process to attach to"
     Endpoint.create POST "/api/live-testing/debug/continue" "Testing" "Release the held test once the debugger is attached, and wait for it to finish"
@@ -69,7 +86,11 @@ module EndpointContracts =
 
   let diagnosticEndpoints = [
     Endpoint.create GET "/diagnostics" "Diagnostics" "Get diagnostics"
+    Endpoint.create POST "/diagnostics" "Diagnostics" "Submit code for a type check; the diagnostics arrive on the stream"
     Endpoint.create GET "/api/status" "Diagnostics" "Get API status"
+    Endpoint.create GET "/api/system/status" "Diagnostics" "Daemon version, pid, uptime, whether it is supervised, and its ports"
+    Endpoint.create GET "/api/daemon-info" "Diagnostics" "Daemon identity for client discovery"
+    Endpoint.create POST "/api/shutdown" "Diagnostics" "Ask the daemon to shut down gracefully"
     Endpoint.create GET "/api/recent-events" "Diagnostics" "Get recent events"
     Endpoint.create POST "/api/cancel-eval" "Diagnostics" "Cancel current eval"
     Endpoint.create GET "/diag/threadpool" "Diagnostics" "Thread pool diagnostics"
@@ -82,6 +103,12 @@ module EndpointContracts =
     Endpoint.create POST "/api/sessions/{sid}/hotreload/toggle" "HotReload" "Toggle file watching"
     Endpoint.create POST "/api/sessions/{sid}/hotreload/watch-all" "HotReload" "Watch all files"
     Endpoint.create POST "/api/sessions/{sid}/hotreload/unwatch-all" "HotReload" "Unwatch all files"
+    Endpoint.create POST "/api/sessions/{sid}/hotreload/watch-project" "HotReload" "Watch one project's files"
+    Endpoint.create POST "/api/sessions/{sid}/hotreload/unwatch-project" "HotReload" "Unwatch one project's files"
+    Endpoint.create POST "/api/sessions/{sid}/hotreload/watch-directory" "HotReload" "Watch the files under a directory"
+    Endpoint.create POST "/api/sessions/{sid}/hotreload/unwatch-directory" "HotReload" "Unwatch the files under a directory"
+    Endpoint.create POST "/api/sessions/{sid}/hotreload/reset-state" "HotReload" "Run the new initializer of a value a save kept"
+    Endpoint.create POST "/api/sessions/{sid}/hotreload/reflection-mode" "HotReload" "Switch the running app's reflection read mode"
   ]
 
   let codeAnalysisEndpoints = [
@@ -94,6 +121,8 @@ module EndpointContracts =
   let all =
     coreEndpoints
     @ sessionEndpoints
+    @ leaseEndpoints
+    @ clientStateEndpoints
     @ liveTestingEndpoints
     @ diagnosticEndpoints
     @ hotReloadEndpoints

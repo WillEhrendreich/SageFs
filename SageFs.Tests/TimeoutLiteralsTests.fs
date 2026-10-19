@@ -6,7 +6,13 @@
 /// its kin, `WaitForExit n`, `CancelAfter n`, a `...Ms = n` or `timeout = n` binding, and a bare digit-group
 /// number written with underscore groups (a millisecond count wearing no unit). Each file has a budget,
 /// the budgets only go DOWN, a file that is not listed has a budget of zero, and a file under its
-/// budget is stale. When the table is empty there is nowhere a magic duration can hide.
+/// budget is stale.
+///
+/// What it scans: the `.fs` files of SageFs, SageFs.Core, SageFs.Host, SageFs.FsiHost, SageFs.Simulation and
+/// SageFs.Tests. What it does not: `scripts/` and `ci-pipeline.fsx` (tooling that runs outside the product and
+/// the tests), `sagefs-vscode`, and a wait spelled `WaitForTimeoutAsync(n)` or `Elapsed < n`, which the pattern
+/// above has no shape for. So an empty table means none of the forms listed above remains in those six
+/// projects, not that no magic duration exists anywhere in the repo.
 module SageFs.Tests.TimeoutLiteralsTests
 
 open System.IO
@@ -24,11 +30,26 @@ let private central = Set.ofList [ "SageFs.Core/Timeouts.fs"; "SageFs.Tests/Test
 
 /// What each file may still spell out itself. Ratchet down, never up.
 let private budgets : (string * int) list =
-  [ "SageFs.Core/WorkflowTypes.fs", 1 ]
+  [ "SageFs.Core/WorkflowTypes.fs", 1
+    "SageFs.Simulation/CohortSpec.fs", 1
+    "SageFs.Simulation/CohortVacancySpec.fs", 1
+    "SageFs.Simulation/CohortVetoSpec.fs", 1
+    "SageFs.Simulation/HygieneSim.fs", 2
+    "SageFs.Simulation/LeaseSim.fs", 1
+    "SageFs.Simulation/ManifestGenerators.fs", 2
+    "SageFs.Simulation/MemoryShedSim.fs", 4
+    "SageFs.Simulation/RetentionSim.fs", 2
+    "SageFs.Simulation/SeedCorpus.fs", 5
+    "SageFs.Simulation/StartEscalationGenerators.fs", 10
+    "SageFs.Simulation/StartLearningGenerators.fs", 4
+    "SageFs.Simulation/SupervisorWatchdogSim.fs", 2
+    "SageFs.Simulation/TierSched.fs", 2
+    "SageFs.Simulation/TweakSim.fs", 1
+    "SageFs.Simulation/WarmupGenerators.fs", 8 ]
 
 /// Every source file with its count of inline timeout literals, except the central module.
 let private actual : (string * int) list =
-  [ for project in [ "SageFs"; "SageFs.Core"; "SageFs.Host"; "SageFs.Tests" ] do
+  [ for project in [ "SageFs"; "SageFs.Core"; "SageFs.Host"; "SageFs.FsiHost"; "SageFs.Simulation"; "SageFs.Tests" ] do
       let dir = Path.Combine(repoRoot, project)
       match Directory.Exists dir with
       | false -> ()

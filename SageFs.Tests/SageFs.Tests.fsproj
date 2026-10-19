@@ -304,6 +304,7 @@
         <Compile Include="DevReloadTests.fs" />
         <Compile Include="DevReloadLastOutcomeTests.fs" />
         <Compile Include="WorkerHttpTransportTests.fs" />
+        <Compile Include="WorkerWireRoundTripTests.fs" />
         <Compile Include="WorkerHttpTransportLastOutcomeTests.fs" />
         <Compile Include="WorkerHttpGuardTests.fs" />
         <Compile Include="SessionIsolationTests.fs" />
@@ -429,6 +430,7 @@
          <Compile Include="JsonTests.fs" />
          <Compile Include="JsonCentralizationTests.fs" />
          <Compile Include="TimeoutLiteralsTests.fs" />
+         <Compile Include="DomainBudgetsTests.fs" />
          <Compile Include="ProductBlockingCallsTests.fs" />
          <Compile Include="EnvVarDocTests.fs" />
          <Compile Include="../scripts/roadmap/Roadmap.fs" Link="Roadmap/Roadmap.fs" />
