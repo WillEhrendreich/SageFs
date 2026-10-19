@@ -32,6 +32,8 @@
         <Compile Include="StableIdentityEvalTests.fs" />
         <Compile Include="SageFsConfigTests.fs" />
         <Compile Include="AppStateCustomTests.fs" />
+        <Compile Include="TextWriterRecorderTests.fs" />
+        <Compile Include="EvalFailureTests.fs" />
         <Compile Include="DaemonModeProxyTests.fs" />
         <Compile Include="FalcoTests.fs" />
         <Compile Include="PushEventTests.fs" />

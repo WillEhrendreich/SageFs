@@ -60,7 +60,44 @@ let pureTests =
       for case in SageFs.ReloadCase.all do
         frameOf "s1" (sprintf """{"state":"finished","outcome":"%s","patched":1,"considered":1,"message":"m","suggestedAction":""}""" (SageFs.ReloadCase.token case))
         |> ReloadFrame.ofData "s1"
-        |> Expect.equal (sprintf "finished as %s" (SageFs.ReloadCase.token case)) (ReloadFrame.Finished case)
+        |> Expect.equal (sprintf "finished as %s" (SageFs.ReloadCase.token case)) (ReloadFrame.Finished(case, "m"))
+
+    testCase "WHY — a finished frame keeps the worker's own summary, because the verdict token alone threw the evidence away" <| fun _ ->
+      let summary = "Not applied — the save did not finish evaluating: SageFs hit an internal error (ArgumentOutOfRangeException: chunkLength)"
+      frameOf "s1" (sprintf """{"state":"finished","outcome":"EvalFailed","patched":0,"considered":0,"message":"%s","suggestedAction":""}""" summary)
+      |> ReloadFrame.ofData "s1"
+      |> Expect.equal "the message rides with the verdict" (ReloadFrame.Finished(SageFs.ReloadCase.EvalFailed, summary))
+      frameOf "s1" """{"state":"finished","outcome":"Patched"}"""
+      |> ReloadFrame.ofData "s1"
+      |> Expect.equal "a frame with no message says so with an empty summary" (ReloadFrame.Finished(SageFs.ReloadCase.Patched, ""))
+
+    testCase "the words a failure prints for a frame carry the summary of a verdict" <| fun _ ->
+      ReloadFrame.describe (ReloadFrame.Finished(SageFs.ReloadCase.EvalFailed, "line one\nline two"))
+      |> Expect.equal "the verdict, then its summary on one line" "Finished EvalFailed: line one | line two"
+      ReloadFrame.describe (ReloadFrame.Finished(SageFs.ReloadCase.Patched, ""))
+      |> Expect.equal "no summary, no colon" "Finished Patched"
+
+    testCase "a failed evaluation can never reach the app, so the follow fails on the frame" <| fun _ ->
+      for case in [ SageFs.ReloadCase.CompileFailed; SageFs.ReloadCase.EvalFailed; SageFs.ReloadCase.NoEffect ] do
+        ReloadFrame.cannotReachApp case |> Expect.isTrue (SageFs.ReloadCase.token case)
+
+    testCase "WHY — a patched save that ended as another verdict names the verdict, its summary and every frame the feed carried" <| fun _ ->
+      SaveFailure.endedAs "/tmp/CalledCallee.fs" SageFs.ReloadCase.EvalFailed "SageFs hit an internal error" [ "12ms Compiling CalledCallee.fs"; "41ms Finished EvalFailed: SageFs hit an internal error" ]
+      |> fun text ->
+        text |> Expect.stringContains "the file" "/tmp/CalledCallee.fs"
+        text |> Expect.stringContains "the verdict" "EvalFailed"
+        text |> Expect.stringContains "the summary" "SageFs hit an internal error"
+        text |> Expect.stringContains "a frame" "12ms Compiling CalledCallee.fs"
+        text |> Expect.stringContains "what was wanted" "a patched save was wanted"
+
+    testCase "WHY — a patched save that never reaches Patched lists the frames it saw, or says it saw none" <| fun _ ->
+      SaveFailure.neverPatched "/tmp/Greeting.fs" TestTimeouts.saveVerdict [ "12ms Compiling Greeting.fs"; "9000ms Finished PatchPending" ]
+      |> fun text ->
+        text |> Expect.stringContains "the file" "/tmp/Greeting.fs"
+        text |> Expect.stringContains "the first frame" "12ms Compiling Greeting.fs"
+        text |> Expect.stringContains "the last frame" "9000ms Finished PatchPending"
+      SaveFailure.neverPatched "/tmp/Greeting.fs" TestTimeouts.saveVerdict []
+      |> Expect.stringContains "an empty feed is said, not hidden" "The reload feed said: nothing"
 
     testCase "a frame about another session is not this session's" <| fun _ ->
       frameOf "s2" """{"state":"compiling","file":""}"""

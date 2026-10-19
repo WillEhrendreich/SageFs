@@ -32,7 +32,9 @@ type ReloadFrame =
   | NotAReload
   /// The worker started compiling `file` (empty when the frame names none).
   | Compiling of file: string
-  | Finished of SageFs.ReloadCase
+  /// A save ended: the verdict, and the worker's own words for it (empty when the frame carried none). The words are
+  /// what says WHY a failed save failed; the token alone threw that away.
+  | Finished of case: SageFs.ReloadCase * summary: string
   /// The session's new worker began warming up: a restart has built and started it.
   | WorkerWarming
   /// The session's new worker is Ready.
@@ -77,12 +79,62 @@ module ReloadFrame =
             match reload.TryGetProperty "outcome" with
             | true, outcome when outcome.ValueKind = JsonValueKind.String ->
               match SageFs.ReloadCase.ofToken (outcome.GetString()) with
-              | Ok case -> ReloadFrame.Finished case
+              | Ok case ->
+                let summary =
+                  match reload.TryGetProperty "message" with
+                  | true, message when message.ValueKind = JsonValueKind.String -> message.GetString()
+                  | _ -> ""
+                ReloadFrame.Finished(case, summary)
               | Result.Error error -> ReloadFrame.Unreadable (SageFs.ReloadPayloadError.describe error)
             | _ -> ReloadFrame.Unreadable "a finished reload carries no outcome"
           | other -> ReloadFrame.Unreadable (sprintf "unknown reload state '%s'" other)
         | _ -> ReloadFrame.NotAReload
     with :? JsonException as ex -> ReloadFrame.Unreadable ex.Message
+
+  /// What one frame said, in a line a failure can print. Frames that say nothing about the save are empty. A verdict
+  /// carries its summary, so a failed save names why it failed.
+  let describe (frame: ReloadFrame) : string =
+    match frame with
+    | ReloadFrame.Compiling file -> if String.IsNullOrEmpty file then "Compiling" else sprintf "Compiling %s" file
+    | ReloadFrame.Finished(case, summary) ->
+      match summary.Trim() with
+      | "" -> sprintf "Finished %s" (SageFs.ReloadCase.token case)
+      | text -> sprintf "Finished %s: %s" (SageFs.ReloadCase.token case) (text.Replace("\r\n", "\n").Replace("\n", " | "))
+    | ReloadFrame.WorkerWarming -> "WorkerWarming"
+    | ReloadFrame.WorkerReady -> "WorkerReady"
+    | ReloadFrame.Unreadable detail -> sprintf "Unreadable %s" detail
+    | ReloadFrame.OtherSession | ReloadFrame.NotAReload -> ""
+
+  /// A verdict the running app cannot serve past: with one of these on the feed the save will never reach
+  /// the app (a failed compile, a failed evaluation and a save that changed nothing all leave it serving the old
+  /// content), so the follow can fail on the frame instead of spending the whole budget to time out blind. Every other
+  /// verdict still may reach it: a pending patch confirms, a restart warms up a new worker, `NeverEntered`
+  /// named what has not run rather than refusing, and `RestartRequired` is what a restart follows on.
+  let cannotReachApp (case: SageFs.ReloadCase) : bool =
+    match case with
+    | SageFs.ReloadCase.CompileFailed | SageFs.ReloadCase.EvalFailed | SageFs.ReloadCase.NoEffect -> true
+    | SageFs.ReloadCase.Patched | SageFs.ReloadCase.PatchPending | SageFs.ReloadCase.NeverEntered
+    | SageFs.ReloadCase.Restarted | SageFs.ReloadCase.RestartRequired | SageFs.ReloadCase.KeptLiveState -> false
+
+/// The words a followed save fails with. The feed's frames are always in them: a failure that says only "ended as
+/// CompileFailed" is how the 0.6.910 gate lost the reason a save failed, and nobody could tell a compile error from a
+/// fault in SageFs.
+module SaveFailure =
+
+  let private feedWords (said: string list) : string =
+    match said with
+    | [] -> "nothing"
+    | frames -> String.concat ", " frames
+
+  /// A save that was followed to a patch and ended as another verdict.
+  let endedAs (path: string) (case: SageFs.ReloadCase) (summary: string) (said: string list) : string =
+    let why = match summary.Trim() with | "" -> "" | text -> sprintf " (%s)" (text.Replace("\r\n", "\n").Replace("\n", " | "))
+    sprintf "the save of %s ended as %s%s, and a patched save was wanted. The reload feed said: %s"
+      path (SageFs.ReloadCase.token case) why (feedWords said)
+
+  /// A save that was followed to a patch and the feed gave out before one came.
+  let neverPatched (path: string) (budget: TimeSpan) (said: string list) : string =
+    sprintf "the save of %s did not reach Patched within %O. The reload feed said: %s" path budget (feedWords said)
 
 /// A moment a measurement may or may not have seen.
 [<RequireQualifiedAccess>]
@@ -450,28 +502,9 @@ let private writeFile (path: string) (content: string) : Task<unit> =
 /// after the save the frame was read, and the frame itself. Frames the pump filters out say nothing.
 let private feedSaidOf (savedAt: int64) (frame: StampedFrame) : string =
   let after = (LtStream.elapsed savedAt frame.At).TotalMilliseconds
-  let words =
-    match frame.Frame with
-    | ReloadFrame.Compiling file -> if String.IsNullOrEmpty file then "Compiling" else sprintf "Compiling %s" file
-    | ReloadFrame.Finished case -> sprintf "Finished %s" (SageFs.ReloadCase.token case)
-    | ReloadFrame.WorkerWarming -> "WorkerWarming"
-    | ReloadFrame.WorkerReady -> "WorkerReady"
-    | ReloadFrame.Unreadable detail -> sprintf "Unreadable %s" detail
-    | ReloadFrame.OtherSession | ReloadFrame.NotAReload -> ""
-  match words with
+  match ReloadFrame.describe frame.Frame with
   | "" -> ""
   | text -> sprintf "%.0fms %s" after text
-
-/// A verdict the running app cannot serve past: with one of these on the feed the save will never reach
-/// the app (a failed compile and a save that changed nothing both leave it serving the old content), so
-/// the follow can fail on the frame instead of spending the whole budget to time out blind. Every other
-/// verdict still may reach it: a pending patch confirms, a restart warms up a new worker, `NeverEntered`
-/// named what has not run rather than refusing, and `RestartRequired` is what a restart follows on.
-let private cannotReachApp (case: SageFs.ReloadCase) : bool =
-  match case with
-  | SageFs.ReloadCase.CompileFailed | SageFs.ReloadCase.NoEffect -> true
-  | SageFs.ReloadCase.Patched | SageFs.ReloadCase.PatchPending | SageFs.ReloadCase.NeverEntered
-  | SageFs.ReloadCase.Restarted | SageFs.ReloadCase.RestartRequired | SageFs.ReloadCase.KeptLiveState -> false
 
 /// Make one save and follow it. The stamp before the write is the first byte of the save; every other
 /// moment is the arrival of something the daemon or the app sent. An `UntilServed` follow reads the feed
@@ -514,11 +547,11 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
           ownCompileStarted <- true
         | _ -> ()
       | ReloadFrame.Finished _, Following.UntilPatched when not ownCompileStarted -> ()
-      | ReloadFrame.Finished SageFs.ReloadCase.PatchPending, Following.UntilPatched -> appliedAt <- Moment.Observed frame.At
-      | ReloadFrame.Finished SageFs.ReloadCase.Patched, Following.UntilPatched -> confirmedAt <- Moment.Observed frame.At
-      | ReloadFrame.Finished other, Following.UntilPatched ->
-        failwithf "the save of %s ended as %s, and a patched save was wanted" save.Path (SageFs.ReloadCase.token other)
-      | ReloadFrame.Finished case, Following.UntilServed ->
+      | ReloadFrame.Finished(SageFs.ReloadCase.PatchPending, _), Following.UntilPatched -> appliedAt <- Moment.Observed frame.At
+      | ReloadFrame.Finished(SageFs.ReloadCase.Patched, _), Following.UntilPatched -> confirmedAt <- Moment.Observed frame.At
+      | ReloadFrame.Finished(other, summary), Following.UntilPatched ->
+        failwith (SaveFailure.endedAs save.Path other summary (List.ofSeq said))
+      | ReloadFrame.Finished(case, _), Following.UntilServed ->
         match appliedAt, ownCompileStarted || case = SageFs.ReloadCase.Restarted with
         | Moment.NotObserved, true -> appliedAt <- Moment.Observed frame.At
         | _ -> ()
@@ -550,9 +583,17 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
     try
       match following with
       | Following.UntilPatched ->
-        while confirmedAt = Moment.NotObserved do
-          let! frame = feed.Frames.ReadAsync(cts.Token)
-          note frame
+        // The budget running out, or the stream closing, ends the read with no verdict. Say so with the frames the feed
+        // carried, instead of surfacing a bare "operation was canceled" that names nothing.
+        try
+          while confirmedAt = Moment.NotObserved do
+            let! frame = feed.Frames.ReadAsync(cts.Token)
+            note frame
+        with
+        | :? OperationCanceledException
+        | :? ChannelClosedException ->
+          noteForMessage ()
+          failwith (SaveFailure.neverPatched save.Path budget (List.ofSeq said))
       | Following.UntilServed ->
         // The feed read beside the poll: frames keep stamping the stages as they arrive (each carries the
         // moment the pump read it, so noting them early changes no stamp), and a verdict the app cannot
@@ -566,7 +607,7 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
                 let! frame = feed.Frames.ReadAsync(cts.Token)
                 note frame
                 match frame.Frame with
-                | ReloadFrame.Finished case when cannotReachApp case -> ending <- Some (SageFs.ReloadCase.token case)
+                | ReloadFrame.Finished(case, _) when ReloadFrame.cannotReachApp case -> ending <- Some (SageFs.ReloadCase.token case)
                 | _ -> ()
               with :? ChannelClosedException ->
                 // The stream ended mid-save: nothing more will be said, and the poll may still succeed on
@@ -825,7 +866,8 @@ let private restartShipped = "served from a run_app app"
 /// A daemon started for one series, on a port and a data directory of its own.
 type private SeriesDaemon =
   { McpPort: int
-    Stop: unit -> unit }
+    /// Stop the daemon. The data dir goes with a run that passed and stays with one that failed.
+    Stop: RunnerDirs.RunEnd -> unit }
 
 /// Start the daemon `series` is measured on: owned by this process (so a killed test run cannot orphan it),
 /// its logs drained to files, with the environment `Series.daemonEnvironment` names.
@@ -860,7 +902,7 @@ let private startSeriesDaemon (series: Series) : Task<SeriesDaemon> =
           writer.WriteLine line
           line <- reader.ReadLine())
     let drains = [ drainTo daemon.StandardOutput "daemon.stdout.log"; drainTo daemon.StandardError "daemon.stderr.log" ]
-    let stop () =
+    let stop (runEnd: RunnerDirs.RunEnd) =
       try
         match daemon.HasExited with
         | true -> ()
@@ -869,7 +911,7 @@ let private startSeriesDaemon (series: Series) : Task<SeriesDaemon> =
       try daemon.WaitForExit TestTimeouts.childExit |> ignore with _ -> ()
       try Task.WaitAll(Array.ofList drains, TestTimeouts.childExit) |> ignore with _ -> ()
       daemon.Dispose()
-      RunnerDirs.remove dataDir
+      RunnerDirs.finish dataDir runEnd
     use probe = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort), Timeout = TestTimeouts.httpProbe)
     let deadline = DateTime.UtcNow.Add SageFs.Timeouts.integrationDaemonReady
     let mutable healthy = false
@@ -881,7 +923,7 @@ let private startSeriesDaemon (series: Series) : Task<SeriesDaemon> =
     match healthy with
     | true -> return { McpPort = mcpPort; Stop = stop }
     | false ->
-      stop ()
+      stop RunnerDirs.RunEnd.Failed
       return failwithf "the daemon for %s never answered /health on port %d within %O" (Series.name series) mcpPort SageFs.Timeouts.integrationDaemonReady
   }
 
@@ -969,10 +1011,14 @@ let measureRunAppSaves (series: Series) : Task<Sample list> =
   | Series.RestartSaveToServed | Series.DeltaSaveToServed ->
     task {
       let! seriesDaemon = startSeriesDaemon series
+      // The daemon's data dir (its logs, the worker log) is kept unless the measurement came back: a failure leaves it.
+      let mutable runEnd = RunnerDirs.RunEnd.Failed
       try
-        return! measureRunAppSavesOn seriesDaemon
+        let! samples = measureRunAppSavesOn seriesDaemon
+        runEnd <- RunnerDirs.RunEnd.Passed
+        return samples
       finally
-        seriesDaemon.Stop()
+        seriesDaemon.Stop runEnd
     }
   | Series.PatchSaveToServed | Series.PatchSaveToConfirmed ->
     failwithf "%s is a patched save and is measured by measurePatchedSaves" (Series.name series)

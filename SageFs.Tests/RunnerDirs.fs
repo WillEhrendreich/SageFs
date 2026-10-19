@@ -61,6 +61,28 @@ let create (family: Family) : string = createIn (Path.GetTempPath()) family
 let remove (dir: string) : unit =
   try Directory.Delete(dir, true) with _ -> ()
 
+/// How a runner's run ended, as far as its leftovers go.
+[<RequireQualifiedAccess>]
+type RunEnd =
+  | Passed
+  | Failed
+
+/// A run ends as `Passed` only on exit code zero. Anything else, an errored or empty run included, is `Failed`, so a run
+/// that did not prove itself green keeps its evidence.
+let runEndOfExitCode (exitCode: int) : RunEnd =
+  match exitCode with
+  | 0 -> RunEnd.Passed
+  | _ -> RunEnd.Failed
+
+/// Take a run dir away on the way out, but only for a run that passed. A failed run keeps it (the worker log, the daemon
+/// log, the fixture copy the failing save was made in), because the dir is the only record of why it failed: the 0.6.910
+/// gate failure was unanswerable because the next run had already swept it. The dir keeps its owner marker, so the
+/// next runner's start sweeps it once this process is gone and it has aged out. Best effort, like `remove`.
+let finish (dir: string) (runEnd: RunEnd) : unit =
+  match runEnd with
+  | RunEnd.Passed -> remove dir
+  | RunEnd.Failed -> eprintfn "KEPT for diagnosis (the run failed): %s" dir
+
 /// One dir per test process for the scratch dirs unit tests make for themselves, removed when the process exits. A killed
 /// process leaves it for the next run's sweep. (Hundreds of loose `sagefs-*` dirs per run used to stay in /tmp.)
 let private scratchRoot : Lazy<string> =

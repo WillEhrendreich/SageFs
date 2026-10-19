@@ -27,6 +27,9 @@ type Outcome =
   | NoEffect
   | RestartRequired
   | CompileFailed
+  /// The save's evaluation did not finish and it was not a compile error (SageFs faulted, an interrupt, a reset,
+  /// a dead host, code that threw). The daemon's message names which.
+  | EvalFailed
   | KeptLiveState
   /// A token this client does not know. Named, never judged.
   | Unrecognised of token: string
@@ -41,6 +44,7 @@ module Outcome =
     | "NoEffect" -> Outcome.NoEffect
     | "RestartRequired" -> Outcome.RestartRequired
     | "CompileFailed" -> Outcome.CompileFailed
+    | "EvalFailed" -> Outcome.EvalFailed
     | "KeptLiveState" -> Outcome.KeptLiveState
     | other -> Outcome.Unrecognised other
 
@@ -198,6 +202,7 @@ let statusItem (report: Report) (freshness: Freshness) : StatusItem =
       | Outcome.NoEffect -> "$(circle-slash) Hot reload: no effect", StatusTone.Plain
       | Outcome.RestartRequired -> "$(error) Hot reload: restart required", StatusTone.Failing
       | Outcome.CompileFailed -> "$(error) Hot reload: compile failed", StatusTone.Failing
+      | Outcome.EvalFailed -> "$(error) Hot reload: evaluation failed", StatusTone.Failing
       | Outcome.KeptLiveState -> "$(check) Hot reload: kept live state", StatusTone.Plain
       | Outcome.Unrecognised token -> sprintf "$(question) Hot reload: %s" token, StatusTone.Plain
     StatusItem.Shown
@@ -286,6 +291,11 @@ let noticeFor (report: Report) (freshness: Freshness) : Notice =
       body
         Severity.Error
         [ sprintf "Hot reload: compile failed, and the app keeps serving the last code that compiled. %s" f.Message; remedy ]
+        [ NoticeAction.ShowOutput ]
+    | Outcome.EvalFailed ->
+      body
+        Severity.Error
+        [ sprintf "Hot reload: the save did not finish evaluating, and the app keeps serving the last code that worked. %s" f.Message; remedy ]
         [ NoticeAction.ShowOutput ]
     | Outcome.KeptLiveState -> body Severity.Info [ sprintf "Hot reload: %s" f.Message; remedy ] []
     | Outcome.Unrecognised token ->

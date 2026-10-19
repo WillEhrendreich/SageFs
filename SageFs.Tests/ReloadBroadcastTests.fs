@@ -35,7 +35,8 @@ let private allOutcomes =
     ReloadOutcome.NoEffect(448, [])
     ReloadOutcome.Restarted [ RestartReason.SignatureChanged "Program.handle" ]
     ReloadOutcome.RestartRequired [ RestartReason.MutableModuleState "counter" ]
-    ReloadOutcome.CompileFailed "FS0039: not defined" ]
+    ReloadOutcome.CompileFailed "FS0039: not defined"
+    ReloadOutcome.EvalFailed(EvalFault.RefusedByReset) ]
 
 let private allChanges =
   [ Planning.ReloadChange.TypeChanged "TodoItem"

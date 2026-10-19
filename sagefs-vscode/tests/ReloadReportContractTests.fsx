@@ -53,6 +53,7 @@ let tests =
           "NoEffect", Outcome.NoEffect
           "RestartRequired", Outcome.RestartRequired
           "CompileFailed", Outcome.CompileFailed
+          "EvalFailed", Outcome.EvalFailed
           "KeptLiveState", Outcome.KeptLiveState ] do
         Outcome.ofWire token |> Expect.equal token expected
       Outcome.ofWire "Teleported" |> Expect.equal "unknown" (Outcome.Unrecognised "Teleported")
@@ -114,6 +115,12 @@ let tests =
       (v "CompileFailed").Tone |> Expect.equal "failing" StatusTone.Failing
       (v "NoEffect").Text |> Expect.stringContains "no effect" "no effect"
 
+    testCase "WHY - an evaluation that failed without a compile error is not called a compile failure" <| fun _ ->
+      let view = statusItem (finished "EvalFailed" 0 0 "msg" "do this" "") Freshness.InSync |> shown
+      view.Text |> Expect.stringContains "says what it is" "evaluation failed"
+      view.Text.Contains "compile" |> Expect.isFalse "never the word compile"
+      view.Tone |> Expect.equal "failing" StatusTone.Failing
+
     testCase "WHY - a save being compiled shows the file, so a slow build is not mistaken for nothing happening" <| fun _ ->
       let view = statusItem (Report.Compiling "/w/src/Program.fs") Freshness.InSync |> shown
       view.Text |> Expect.stringContains "compiling" "compiling"
@@ -127,7 +134,7 @@ let tests =
       view.Tooltip |> Expect.stringContains "cost" "stops the running app"
 
     testCase "WHY - no codicon token in the tooltip, because VS Code prints it literally there" <| fun _ ->
-      for outcome in [ "Patched"; "PatchPending"; "NeverEntered"; "Restarted"; "NoEffect"; "RestartRequired"; "CompileFailed"; "KeptLiveState" ] do
+      for outcome in [ "Patched"; "PatchPending"; "NeverEntered"; "Restarted"; "NoEffect"; "RestartRequired"; "CompileFailed"; "EvalFailed"; "KeptLiveState" ] do
         (statusItem (finished outcome 1 1 "m" "a" "detour") behind |> shown).Tooltip
         |> fun t -> Expect.isFalse outcome (t.Contains "$(")
 
@@ -175,6 +182,14 @@ let tests =
       let n = noticeFor (finished "CompileFailed" 0 0 "Program.fs(7,3): error FS0001" "" "") Freshness.InSync |> notice
       n.Severity |> Expect.equal "error" Severity.Error
       n.Text |> Expect.stringContains "error text" "FS0001"
+      n.Actions |> Expect.contains "show output" NoticeAction.ShowOutput
+
+    testCase "WHY - a failed evaluation is an error that offers the Output, and never says to fix a compile error" <| fun _ ->
+      let n = noticeFor (finished "EvalFailed" 0 0 "SageFs hit an internal error." "Save again." "") Freshness.InSync |> notice
+      n.Severity |> Expect.equal "error" Severity.Error
+      n.Text |> Expect.stringContains "the daemon's words" "SageFs hit an internal error."
+      n.Text |> Expect.stringContains "remedy" "Save again."
+      n.Text.Contains "compile" |> Expect.isFalse "never the word compile"
       n.Actions |> Expect.contains "show output" NoticeAction.ShowOutput
 
     testCase "WHY - NoEffect and KeptLiveState are information, never alarms" <| fun _ ->

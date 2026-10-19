@@ -698,9 +698,13 @@ Trunk: checkout=/data/cohort-trunk landings (2):
   trunk l-9be1...: session c5121ff3: Alice.fs PatchPending by metadata-delta
 ```
 
-The case (`PatchPending`, `Patched`, `Restarted`, `RestartRequired`, `NoEffect`, `CompileFailed`) and the mechanism (`detour`,
-`metadata-delta`) are the ones `get_session_status` reports in `lastReload`. A patch is `PatchPending` until its new body has
+The case (`PatchPending`, `Patched`, `Restarted`, `RestartRequired`, `NoEffect`, `CompileFailed`, `EvalFailed`) and the mechanism
+(`detour`, `metadata-delta`) are the ones `get_session_status` reports in `lastReload`. A patch is `PatchPending` until its new body has
 run, and the line changes to `Patched` when the worker says it has seen that. A restart names its cause on the line.
+`CompileFailed` means the compiler reported an error in the file. `EvalFailed` means the save's evaluation did not finish and it was
+not a compile error: its one reason names the cause (`InternalFault`, `EvalThrew`, `Interrupted`, `RefusedByReset`,
+`RefusedBySession` or `HostCrashed`) and what to do about it. A client that does not know `EvalFailed` still gets the failure as
+a `failed` event with the message.
 `lastReload` also carries `callers`: when a save re-signs or removes a function, it lists, per declaration, the file, line
 and calling declaration of every caller in another file that still calls the old one (`CallersPending`), with the next
 action ("Save Pages.fs"); it reads `CallersCurrent` once those files have landed, and `CallersNotChecked` with the reason

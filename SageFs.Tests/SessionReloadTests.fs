@@ -27,6 +27,7 @@ let private everyOutcome : (ReloadCase * Outcome) list =
     ReloadCase.NoEffect, Outcome.NoEffect (4, [ RestartReason.SignatureChanged "Ticker.renderLine" ])
     ReloadCase.RestartRequired, Outcome.RestartRequired [ RestartReason.StartupComputedValue "Program.routes" ]
     ReloadCase.CompileFailed, Outcome.CompileFailed "Ticker.fs(12,3): error FS0039"
+    ReloadCase.EvalFailed, Outcome.EvalFailed (EvalFault.InternalFault ("ArgumentOutOfRangeException", "chunkLength"))
     ReloadCase.KeptLiveState, Outcome.KeptLiveState (1, 2, kept, []) ]
 
 [<Tests>]

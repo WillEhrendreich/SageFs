@@ -35,6 +35,9 @@ type ReloadCase =
   | RestartRequired
   /// The file did not compile; the app keeps serving the last code that did.
   | CompileFailed
+  /// The save's evaluation did not finish and it was not a compile error (SageFs faulted, the eval was interrupted or
+  /// superseded by a reset, the FSI host died, or the new code threw). The app keeps serving the last code that worked.
+  | EvalFailed
   /// A live value was kept instead of reset (with or without a patch alongside).
   | KeptLiveState
 
@@ -103,13 +106,14 @@ module ReloadCase =
     | ReloadCase.NoEffect -> "NoEffect"
     | ReloadCase.RestartRequired -> "RestartRequired"
     | ReloadCase.CompileFailed -> "CompileFailed"
+    | ReloadCase.EvalFailed -> "EvalFailed"
     | ReloadCase.KeptLiveState -> "KeptLiveState"
 
   /// Every case, so a parser and a test can walk them. The token function above
   /// is exhaustive, so a new case cannot be added without a token.
   let all : ReloadCase list =
     [ ReloadCase.Patched; ReloadCase.PatchPending; ReloadCase.NeverEntered; ReloadCase.Restarted; ReloadCase.NoEffect
-      ReloadCase.RestartRequired; ReloadCase.CompileFailed; ReloadCase.KeptLiveState ]
+      ReloadCase.RestartRequired; ReloadCase.CompileFailed; ReloadCase.EvalFailed; ReloadCase.KeptLiveState ]
 
   let ofToken (text: string) : Result<ReloadCase, ReloadPayloadError> =
     match all |> List.tryFind (fun case -> String.Equals(token case, text, StringComparison.Ordinal)) with
@@ -294,7 +298,7 @@ module ReplFreshness =
         ReplFreshness.BehindApp (1, merged [])
       | (ReloadCase.Patched | ReloadCase.NeverEntered | ReloadCase.KeptLiveState), ReplFreshness.BehindApp (saves, known) ->
         ReplFreshness.BehindApp (saves, merged known)
-      | (ReloadCase.Restarted | ReloadCase.NoEffect | ReloadCase.RestartRequired | ReloadCase.CompileFailed), _ -> freshness
+      | (ReloadCase.Restarted | ReloadCase.NoEffect | ReloadCase.RestartRequired | ReloadCase.CompileFailed | ReloadCase.EvalFailed), _ -> freshness
     | SessionReload.Finished _
     | SessionReload.Compiling _
     | SessionReload.NoReloadYet -> freshness
