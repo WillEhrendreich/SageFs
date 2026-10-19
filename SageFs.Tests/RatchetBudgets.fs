@@ -287,6 +287,19 @@ let fileSize : (string * int) list =
 let blockingReaders : (string * int) list =
   [ "SageFs.Core/FsiHostClient.fs", 0 ]
 
+/// How many tests each tier may leave IGNORED (`ptestCase`, `skiptest`), judged by the trust report over the ledger
+/// (build/IgnoredBudget.fs). The ledger counted an ignored test as one that ran and said "every registered test ran and
+/// passed" beside five or six of them, and some skip themselves exactly when they would fail, so a skip is how a red hides.
+/// A tier is keyed by its ledger name with a shard suffix removed (the five host shards are one tier, `--integration-host`),
+/// and a tier that is not listed has a budget of ZERO. More ignored than the budget fails the gate; fewer fails it too
+/// (the room was won back: lower the number with `--ratchets --tighten`, which reads the last passed gate's ledger).
+/// Counts at the time of writing, from the last gate pass and a full default run: the cases are named in the trust
+/// report's "Ignored cases" section and in the `IGNORED in <tier>` block of every tier log.
+let ignoredPerTier : (string * int) list =
+  [ "default", 6
+    "default-net10", 6
+    "--integration-host", 6 ]
+
 let lineCount (repoRoot: string) (rel: string) : int =
   File.ReadAllLines(Path.Combine(repoRoot, rel)).Length
 

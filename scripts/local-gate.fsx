@@ -416,6 +416,12 @@ let gate (sha: string) (force: bool) : int =
         let log = Path.Combine(logsRoot, short + ".log")
         // A report from an earlier run of this commit must never be mistaken for this run's.
         (try File.Delete(Path.Combine(logsRoot, short + ".failure.txt")) with _ -> ())
+        // The checkout is reused and `git clean` keeps ignored files, so the report of the PASS BEFORE is still in it. A pass
+        // that is cancelled before the pipeline's last stage writes none of its own, and the old one was printed as its first
+        // failure (2026-10-18). Remove it now, and below show a report only if this pass wrote it.
+        let reportFile = Path.Combine(wt, "test-results", "failure-report.txt")
+        (try File.Delete reportFile with _ -> ())
+        let passStartedAt = DateTimeOffset.Now
         printfn "=== local gate: %s ===" (mustGit wt [ "log"; "--oneline"; "-1" ])
         printfn "    log: %s" log
         let clock = Stopwatch.StartNew()
@@ -441,14 +447,17 @@ let gate (sha: string) (force: bool) : int =
           |> Array.iter (printfn "%s")
           // The first failure, whole: the case, its message, where in our code, the command that reruns it. The
           // pipeline writes it when it finds it; this is the last thing on screen, and it is kept beside the log.
-          let reportFile = Path.Combine(wt, "test-results", "failure-report.txt")
-          match File.Exists reportFile with
-          | true ->
-            let report = File.ReadAllText reportFile
-            File.WriteAllText(Path.Combine(logsRoot, short + ".failure.txt"), report)
-            printfn "%s" (report.TrimEnd())
-            printfn "log: %s" log
-          | false -> ()
+          let onDisk =
+            match File.Exists reportFile with
+            | true -> ReleaseRules.ReportWrittenAt(DateTimeOffset(File.GetLastWriteTimeUtc reportFile), File.ReadAllText reportFile)
+            | false -> ReleaseRules.NoReportFile
+          let choice = ReleaseRules.chooseFailureReport passStartedAt onDisk
+          match choice with
+          | ReleaseRules.ShowReport report -> File.WriteAllText(Path.Combine(logsRoot, short + ".failure.txt"), report)
+          | ReleaseRules.StaleReport _ | ReleaseRules.NoReport -> ()
+          for line in ReleaseRules.failureNotice failed choice do
+            printfn "%s" line
+          printfn "log: %s" log
           fail (PipelineFailed failed)
       finally
         releaseLease ()

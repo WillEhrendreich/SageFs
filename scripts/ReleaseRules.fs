@@ -268,3 +268,50 @@ let parseLeaseReply (body: string) : LeaseReply =
     | "wait" -> LeaseWait
     | _ -> LeaseOther
   with _ -> LeaseOther
+
+// ── the failure report of a pass ──────────────────────────────────────────────
+
+/// The failure report a pass leaves in the checkout (`test-results/failure-report.txt`), as the gate found it on disk.
+type ReportFile =
+  | NoReportFile
+  | ReportWrittenAt of writtenAt: DateTimeOffset * text: string
+
+/// Which report, if any, belongs to the pass that just ended.
+type ReportChoice =
+  | ShowReport of text: string
+  | StaleReport of writtenAt: DateTimeOffset
+  | NoReport
+
+/// The report to print for the pass that started at `passStartedAt`: one written during this pass, never one that was
+/// already in the checkout. The gate reuses one checkout per repository and `git clean` keeps ignored files, and the
+/// pipeline only writes the report in its last stage, so a pass that was cancelled before that stage (the time cap)
+/// left the PREVIOUS pass's report in place, and the ship printed it as this pass's first failure (2026-10-18).
+let chooseFailureReport (passStartedAt: DateTimeOffset) (file: ReportFile) : ReportChoice =
+  match file with
+  | NoReportFile -> NoReport
+  | ReportWrittenAt (writtenAt, text) ->
+    match writtenAt >= passStartedAt with
+    | true -> ShowReport text
+    | false -> StaleReport writtenAt
+
+/// Exit codes that mean the pass was stopped, not that a case failed: `timeout(1)` (124), SIGINT (130), SIGTERM (143).
+let cancelledExitCodes = [ 124; 130; 143 ]
+
+/// Whether a pass ended because something stopped it. Every tier that finished before then is still green.
+let endedByCancel (exitCode: int) : bool = List.contains exitCode cancelledExitCodes
+
+/// What the gate prints about a pass's failure after the pipeline's own output: the report when this pass wrote one,
+/// otherwise a plain statement that it wrote none, saying why that is not a mystery.
+let failureNotice (exitCode: int) (choice: ReportChoice) : string list =
+  match choice with
+  | ShowReport text -> [ text.TrimEnd() ]
+  | StaleReport writtenAt ->
+    let older =
+      sprintf "this pass wrote no failure report. An older one from %s was left in the checkout and is NOT shown: it describes another pass." (writtenAt.ToString "yyyy-MM-dd HH:mm:ss zzz")
+    match endedByCancel exitCode with
+    | true -> [ older; sprintf "exit %d means the pass was cancelled or timed out, not that a case failed. The tiers that finished before then are green; rerun to reuse them." exitCode ]
+    | false -> [ older; "read the pass's own `tier ... exit=` lines and its log." ]
+  | NoReport ->
+    match endedByCancel exitCode with
+    | true -> [ sprintf "exit %d means the pass was cancelled or timed out, not that a case failed. No failure report was written; the tiers that finished before then are green." exitCode ]
+    | false -> [ "no failure report was written by this pass; the log has the reason." ]

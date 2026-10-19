@@ -247,6 +247,10 @@ let writeReleaseManifest () =
 #load "build/TierPlan.fs"
 #load "build/TierCost.fs"
 #load "build/FailureReport.fs"
+#load "build/FlakeClassification.fs"
+#load "build/CaseHistory.fs"
+#load "build/IgnoredBudget.fs"
+#load "SageFs.Tests/RatchetBudgets.fs"
 #load "build/TierSchedule.fs"
 #load "build/BuildStamps.fs"
 #load "build/PassRecord.fs"
@@ -262,6 +266,10 @@ let testDll = TierPlan.dllOf TierPlan.Framework.primary
 let trustLedger = Path.Combine(rootDir, "test-results", "trust-ledger.jsonl")
 Directory.CreateDirectory(Path.GetDirectoryName trustLedger) |> ignore
 if File.Exists trustLedger then File.Delete trustLedger
+// The first-failure report is written by the trust report stage, the last one. A run that is cancelled before then must
+// not leave the report of the run before it for a reader to take as its own.
+let staleFailureReport = Path.Combine(Path.GetDirectoryName trustLedger, "failure-report.txt")
+if File.Exists staleFailureReport then File.Delete staleFailureReport
 
 /// (tier, args, did the tier's process exit 0) for every tier this pipeline ran.
 let invokedTiers = Collections.Generic.List<string * string * bool>()
@@ -489,9 +497,19 @@ let keepGoing =
       | _ -> false)
 
 /// The first failure of the run, with the lines that were printed for it.
-type FirstFailure = { Tier: string; Case: string; Report: string list }
+/// It keeps what `FailureReport.render` was given, so the final report can be rendered again once the case has a history
+/// and a verdict.
+type FirstFailure =
+  { Tier: string
+    Case: string
+    Report: string list
+    Failure: FailureReport.Failure
+    Reproduce: string
+    LoadNote: string list }
 
 let firstFailure : FirstFailure option ref = ref None
+/// Every failing case any tier reported, in the order they were found: what "classify failures" reruns alone.
+let failedCases = Collections.Generic.List<TierPlan.Tier * FailureReport.Failure * string>()
 let failureGate = obj ()
 let cancelRequested = ref false
 /// Tiers that failed after the first one, named but not reported in full — with the lines an
@@ -544,12 +562,17 @@ let reportFailure (tier: TierPlan.Tier) (failure: FailureReport.Failure) =
     match TierPlan.Demand.failureCondition (loadAverage1Minute ()) tier.Demand with
     | None -> []
     | Some condition -> [ FailureReport.linePrefix + condition ]
-  let lines = FailureReport.render tier.Name rootDir reproduce FailureReport.NotRecorded failure @ loadNote
+  let lines = FailureReport.render tier.Name rootDir reproduce FailureReport.Pending failure @ loadNote
+  lock failureGate (fun () ->
+    match failedCases.Exists(fun (t, f, _) -> t.Name = tier.Name && f.Name = failure.Name) with
+    | true -> ()
+    | false -> failedCases.Add((tier, failure, reproduce)))
   let isFirst =
     lock failureGate (fun () ->
       match firstFailure.Value with
       | None ->
-        firstFailure.Value <- Some { Tier = tier.Name; Case = failure.Name; Report = lines }
+        firstFailure.Value <-
+          Some { Tier = tier.Name; Case = failure.Name; Report = lines; Failure = failure; Reproduce = reproduce; LoadNote = loadNote }
         true
       | Some _ ->
         alsoFailed.Add((tier.Name, failure.Name, loadNote))
@@ -1134,6 +1157,98 @@ let takeRecordedPasses (tiers: TierPlan.Tier list) : TierPlan.Tier list =
           toRun.Add tier
       List.ofSeq toRun
 
+// ---- classifying a red ------------------------------------------------------------
+//
+// A red used to say WHICH case failed and nothing about what kind of red it was, so every one was investigated by
+// hand: on 2026-10-18 ten gate passes failed in ten different places and each failing case passed when run alone.
+// Now, once the tiers have ended, each failing case (the first `FlakeClassification.maxCasesClassified`) is rerun
+// ALONE `FlakeClassification.defaultReruns` times in this checkout, and gets a closed verdict (build/
+// FlakeClassification.fs): deterministic, flaky with its rate, or not reproduced. The verdict goes in the failure
+// block, the trust table and a per-case history file beside the pass records (build/CaseHistory.fs).
+//
+// It changes no outcome. A flaky or not-reproduced case still fails the pass: rerunning until green proves nothing, and
+// the verdict only says where the investigation starts. A rerun that ran nothing (`ran=0`) is an invalid rerun, so the
+// case is unclassified, never a pass.
+
+/// What each classified case turned out to be, by (tier, case).
+let caseVerdicts =
+  Collections.Concurrent.ConcurrentDictionary<string * string, Result<FlakeClassification.Verdict, FlakeClassification.Unclassifiable>>()
+
+/// What the history file said about each classified case before this pass added to it, by (tier, case).
+let caseHistoryText = Collections.Concurrent.ConcurrentDictionary<string * string, string>()
+
+/// The per-case history file, beside the pass records. Nowhere when the run keeps no pass records (CI).
+let caseHistoryFile : string option =
+  match passStore with
+  | Store.At directory -> Some(Path.Combine(directory, CaseHistory.fileName))
+  | Store.Disabled -> None
+
+/// How long one rerun of one case may take before it is called dead. The longest journeys take minutes.
+let caseRerunTimeout = TimeSpan.FromMinutes 15.0
+
+/// Run `reproduce` (the command that runs this one case and nothing else) once, in this checkout, with its own data and
+/// temp directories and no trust ledger of its own, and read what it came to.
+let rerunCaseOnce (tier: TierPlan.Tier) (reproduce: string) (caseNumber: int) (rerun: int) : Async<FlakeClassification.RerunOutcome> =
+  async {
+    let stem = sprintf "%s.rerun-%d-%d" (TierPlan.fileNameOf tier.Name) caseNumber rerun
+    let log = Path.Combine(tierWork, stem + ".log")
+    let dataDir = Path.Combine(tierWork, stem + ".data")
+    let tmpDir = Path.Combine(tierWork, stem + ".tmp")
+    for d in [ dataDir; tmpDir ] do
+      if Directory.Exists d then Directory.Delete(d, true)
+      Directory.CreateDirectory d |> ignore
+    let portLo, portHi = TierPlan.portRangeOf 1 0
+    let env =
+      [ "SAGEFS_DATA_DIR", dataDir
+        "TMPDIR", tmpDir
+        "SAGEFS_HOST_CACHE_DIR", sharedHostCache
+        "MSBUILDDISABLENODEREUSE", "1"
+        "SAGEFS_TEST_PORT_RANGE", sprintf "%d-%d" portLo portHi ]
+      @ tierRuntimeEnvironment
+    let! code = execToLog caseRerunTimeout rootDir env log [ "sh"; "-c"; reproduce ]
+    let outcome = FlakeClassification.outcomeOf code (File.ReadAllLines log |> List.ofArray)
+    for d in [ dataDir; tmpDir ] do
+      try Directory.Delete(d, true) with _ -> ()
+    return outcome
+  }
+
+/// Rerun every failing case this pass reported (up to the cap), record each verdict and add it to the history.
+let classifyFailures () : Async<unit> =
+  async {
+    let found = lock failureGate (fun () -> List.ofSeq failedCases)
+    let chosen = found |> List.truncate FlakeClassification.maxCasesClassified
+    match found.Length - chosen.Length with
+    | 0 -> ()
+    | left -> printfn "%sclassifying the first %d failing cases; %d more are named, not rerun" FailureReport.linePrefix chosen.Length left
+    let history = caseHistoryFile |> Option.map CaseHistory.read |> Option.defaultValue []
+    let commit =
+      match captureOf rootDir [ "git"; "rev-parse"; "HEAD" ] with
+      | Result.Ok sha -> sha.Trim()
+      | Result.Error _ -> "unknown"
+    for (number, (tier, failure, reproduce)) in List.indexed chosen do
+      printfn "%sclassifying %s (tier %s): rerunning it alone %d times" FailureReport.linePrefix failure.Name tier.Name FlakeClassification.defaultReruns
+      let outcomes = ResizeArray<FlakeClassification.RerunOutcome>()
+      for rerun in 1 .. FlakeClassification.defaultReruns do
+        let! outcome = rerunCaseOnce tier reproduce number rerun
+        outcomes.Add outcome
+      let result = FlakeClassification.classify (List.ofSeq outcomes)
+      caseVerdicts[(tier.Name, failure.Name)] <- result
+      caseHistoryText[(tier.Name, failure.Name)] <- CaseHistory.summarize history failure.Name
+      for line in FlakeClassification.reportLines result do
+        printfn "%s" line
+      match caseHistoryFile with
+      | None -> ()
+      | Some path ->
+        try CaseHistory.append path { Case = failure.Name; Tier = tier.Name; Commit = commit; At = isoNow (); Result = result }
+        with e -> printfn "%scould not append to %s: %s" FailureReport.linePrefix path e.Message
+  }
+
+/// The table detail with the verdicts of this tier's classified cases after it: `1 failed, 0 errored; rerun alone: flaky 1/3`.
+let withVerdicts (tier: string) (detail: string) : string =
+  match caseVerdicts |> Seq.filter (fun kv -> fst kv.Key = tier) |> Seq.map (fun kv -> FlakeClassification.shortName kv.Value) |> List.ofSeq with
+  | [] -> detail
+  | verdicts -> sprintf "%s; rerun alone: %s" detail (String.concat ", " verdicts)
+
 type TrustLine =
   { Tier: string
     Registered: string
@@ -1194,7 +1309,7 @@ let tierTrustLines () =
           Detail =
             match greenVerdict, stepOk with
             | true, false -> "reported green, but the process exited non-zero"
-            | _ -> str r "Detail"
+            | _ -> withVerdicts tier (str r "Detail")
           Red = not (greenVerdict && stepOk) } ]
 
 /// The one row that says the host shards between them ran every host case: the shards' registered counts must add up to
@@ -1221,9 +1336,49 @@ let hostCoverageLines (lines: TrustLine list) : TrustLine list =
       | TierSchedule.CoverageGap (wanted, got) ->
         [ row true "CoverageGap" (string got) (sprintf "the host suites register %d cases and the %d shards registered %d between them: a suite was dropped or taken twice" wanted shards.Length got) ]
 
+/// The rows that say a tier ignored more tests than its budget, or fewer (`RatchetBudgets.ignoredPerTier`). A tier that
+/// ignored exactly its budget has no row. The ledger counts an ignored test as one that ran, so without this a test can be
+/// skipped for good and the table stays green; some of these skip themselves exactly when they would fail.
+let ignoredBudgetLines (lines: TrustLine list) : TrustLine list =
+  let rows =
+    lines
+    |> List.map (fun l ->
+      match Int32.TryParse l.Ignored with
+      | true, ignored -> ({ Tier = l.Tier; Ignored = ignored; Red = l.Red } : IgnoredBudget.TierRow)
+      // A row that counted nothing ("?" for a tier that never reported) is red and is not judged.
+      | false, _ -> ({ Tier = l.Tier; Ignored = 0; Red = true } : IgnoredBudget.TierRow))
+  [ for (tier, standing) in IgnoredBudget.judge SageFs.Tests.RatchetBudgets.ignoredPerTier rows do
+      if IgnoredBudget.fails standing then
+        yield
+          { Tier = sprintf "%s (ignored budget)" tier
+            Registered = "-"; Ran = "-"; Passed = "-"; Failed = "-"; Errored = "-"; Ignored = "-"
+            Verdict = IgnoredBudget.verdictName standing
+            Detail = IgnoredBudget.describe standing
+            Red = IgnoredBudget.fails standing } ]
+
+/// The section under the trust table that names every ignored case, read from the ledger rows (the last row of each tier,
+/// as the table reads them). Empty when nothing was ignored.
+let ignoredCasesSection () : string =
+  match File.Exists trustLedger with
+  | false -> ""
+  | true ->
+    File.ReadAllLines trustLedger
+    |> Array.filter (fun l -> l.Trim() <> "")
+    |> Array.map (fun l -> JsonDocument.Parse(l).RootElement.Clone())
+    |> Array.groupBy (fun r -> r.GetProperty("Tier").GetString())
+    |> Array.map (fun (tier, rows) ->
+      let last = Array.last rows
+      let names =
+        match last.TryGetProperty "IgnoredNames" with
+        | true, v when v.ValueKind = JsonValueKind.Array -> [ for n in v.EnumerateArray() -> n.GetString() ]
+        | _ -> []
+      ({ Tier = tier; Count = last.GetProperty("Ignored").GetInt32(); Names = names } : IgnoredBudget.IgnoredTier))
+    |> List.ofArray
+    |> IgnoredBudget.renderSection
+
 let trustLines () =
   let lines = tierTrustLines ()
-  lines @ hostCoverageLines lines
+  lines @ hostCoverageLines lines @ ignoredBudgetLines lines
 
 let renderTrustTable (lines: TrustLine list) =
   let header =
@@ -1833,6 +1988,18 @@ let sagefsPipeline = pipeline "sagefs" {
       })
   }
 
+  stage "classify failures" {
+    // What KIND of red each failing case is: it is rerun alone in this checkout and gets a verdict (see "classifying
+    // a red" above). Never fails the stage and never changes an outcome: the trust report below still goes red.
+    when' (not bypassTests)
+    timeoutForStep 3600
+    run (fun _ ->
+      async {
+        do! classifyFailures ()
+        return Ok()
+      })
+  }
+
   stage "trust report" {
     // Skipped with the tiers under SAGEFS_EMERGENCY_BYPASS=1: with nothing run there is no
     // verdict to render, and leaving it in would only fail the run for a thing nobody did.
@@ -1844,7 +2011,7 @@ let sagefsPipeline = pipeline "sagefs" {
     run (fun _ ->
       async {
         let lines = trustLines ()
-        let table = renderTrustTable lines
+        let table = renderTrustTable lines + ignoredCasesSection ()
         printfn "%s" table
         // Kept beside the ledger so a local gate can record it with the pass.
         File.WriteAllText(Path.Combine(Path.GetDirectoryName trustLedger, "trust-report.md"), table + "\n")
@@ -1862,12 +2029,26 @@ let sagefsPipeline = pipeline "sagefs" {
         match firstFailure.Value with
         | None -> ()
         | Some failure ->
+          let history =
+            match caseHistoryText.TryGetValue((failure.Tier, failure.Case)) with
+            | true, summary -> FailureReport.Ledgered summary
+            | false, _ -> FailureReport.Pending
+          let verdictLines =
+            match caseVerdicts.TryGetValue((failure.Tier, failure.Case)) with
+            | true, result -> FlakeClassification.reportLines result
+            | false, _ -> []
+          let report = FailureReport.render failure.Tier rootDir failure.Reproduce history failure.Failure @ failure.LoadNote @ verdictLines
           let extra =
             alsoFailed
-            |> Seq.map (fun (tier, case, loadNote) -> sprintf "%salso failed, tier %s: %s" FailureReport.linePrefix tier case :: loadNote)
+            |> Seq.map (fun (tier, case, loadNote) ->
+              let kind =
+                match caseVerdicts.TryGetValue((tier, case)) with
+                | true, result -> sprintf " [rerun alone: %s]" (FlakeClassification.shortName result)
+                | false, _ -> ""
+              sprintf "%salso failed, tier %s: %s%s" FailureReport.linePrefix tier case kind :: loadNote)
             |> Seq.collect id
             |> List.ofSeq
-          let all = failure.Report @ extra
+          let all = report @ extra
           File.WriteAllText(failureReportFile, String.concat "\n" all + "\n")
           printfn "%s" (String.concat "\n" all)
         match lines |> List.filter (fun l -> l.Red) with

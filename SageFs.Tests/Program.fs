@@ -164,7 +164,7 @@ let main argv =
         (match score >= threshold with true -> 0 | false -> 1) mutationVerdict
     SageFs.Tests.TestInfrastructure.TrustSignal.record
       { SageFs.Tests.TestInfrastructure.TrustSignal.rowOf
-          "--mutation-score" totalMutations mutationTally mutationVerdict mutationExit with
+          "--mutation-score" totalMutations mutationTally [] mutationVerdict mutationExit with
           Ran = outcomes.Length
           Failed = survivors.Length }
     match score >= threshold with
