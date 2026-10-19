@@ -267,11 +267,13 @@ let private idealClaimProbeMsP99 = 0.010 // 10 µs
 ///     On a box with load average 8 the quietest-block p99 read 10.5-12.3ms
 ///     over three runs (p50 5.5-6.7ms), against 5.8-6.3ms on a quiet one.
 ///
-///     The bound for decide+project is 25ms: about 4x the quiet p99 and 2x the
-///     loaded one, so a loaded box does not false-fail it, and about a third of the 77-84ms
-///     the `Set`-per-bitplane implementation cost, so a return to that
-///     implementation (or any 4x regression) fails it.
-let private regressionBoundDecideProjectMsP99 = 25.000
+///     The bound for decide+project is 25ms, on the MEDIAN of the quietest block, not on p99. A p99 over
+///     100 samples is the second-slowest call, and with the other 13,000 tests of the default suite running beside
+///     it that call is a statement about the box: the 2026-10-19 default run read p99=27.2ms where its p50 was
+///     13.7ms. The median holds the cost of the work. 25ms is about 4x the quiet median (5.5-6.7ms) and 1.8x the
+///     busiest one seen, and under a third of the 79.9ms median the `Set`-per-bitplane implementation cost, so a
+///     return to that implementation (or any 4x regression) fails it.
+let private regressionBoundDecideProjectMsP50 = 25.000
 
 /// The claim probe bound is 40µs: 4x the measured 10µs p99, which is already
 /// at the ideal. A move from a linear scan over 10 claims to anything
@@ -281,23 +283,26 @@ let private regressionBoundClaimProbeMsP99 = 0.040 // 40 µs
 /// Prints the measured p50/p99 beside the ideal and the bound, and asserts the
 /// p99 is within the bound. The failure message carries the multiple by which
 /// the bound was missed.
-let private assertWithinBound (label: string) (idealMs: float) (boundMs: float) (samples: float[]) : unit =
+let private assertWithinBound (label: string) (idealMs: float) (boundMs: float) (statistic: string * float) (samples: float[]) : unit =
   let p50 = percentile samples 0.50
   let p99 = percentile samples 0.99
   printfn "[perf] %s: p50=%.4fms p99=%.4fms (ideal %.4fms, regression bound %.4fms)" label p50 p99 idealMs boundMs
-  (p99, boundMs)
+  let name, judged = statistic
+  (judged, boundMs)
   |> Expect.isLessThanOrEqual
     (sprintf
-      "%s: quietest-block p50=%.4fms p99=%.4fms should be within the regression bound %.4fms (the §3.4 ideal is %.4fms and is unmet for decide+project)"
-      label p50 p99 boundMs idealMs)
+      "%s: quietest-block p50=%.4fms p99=%.4fms, judged on %s=%.4fms, should be within the regression bound %.4fms (the §3.4 ideal is %.4fms and is unmet for decide+project)"
+      label p50 p99 name judged boundMs idealMs)
 
 [<Tests>]
 let cohortPerfBudgetTests =
   testList "Cohort perf budgets (sagefs-multiagent-vision.md §3.4, §7.4)" [
 
     testCase "decide + project: ten members, 7,000 tests" <| fun _ ->
-      assertWithinBound "decide+project (10 members, 7000 tests)" idealDecideProjectMsP99 regressionBoundDecideProjectMsP99 decideProjectSamples.Value
+      let samples = decideProjectSamples.Value
+      assertWithinBound "decide+project (10 members, 7000 tests)" idealDecideProjectMsP99 regressionBoundDecideProjectMsP50 ("p50", percentile samples 0.50) samples
 
     testCase "the save-observed claim probe (decide's ObserveSave branch)" <| fun _ ->
-      assertWithinBound "claim probe (10 held claims)" idealClaimProbeMsP99 regressionBoundClaimProbeMsP99 claimProbeSamples.Value
+      let samples = claimProbeSamples.Value
+      assertWithinBound "claim probe (10 held claims)" idealClaimProbeMsP99 regressionBoundClaimProbeMsP99 ("p99", percentile samples 0.99) samples
   ]
