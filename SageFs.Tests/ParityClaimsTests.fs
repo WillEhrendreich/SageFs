@@ -18,8 +18,8 @@
 /// is about the topic (the sentence "Neovim does not have it yet." never says "debug"), or a table row about the topic
 /// whose Neovim column is a dash or "none". That check reads the plugin's checkout, which is a separate repository, so it looks
 /// where SseParityTests looks (`SAGEFS_NVIM_DIR`, else next to the main checkout). When the checkout is not there the
-/// test is skipped and the skip says why, and the pure matcher is still proved against sample sentences in the same
-/// list, so a missing checkout can never turn the matcher off without a word.
+/// test fails and the failure says how to clone it (CI checks it out in main.yml), and the pure matcher is still proved
+/// against sample sentences in the same list.
 ///
 /// Third, no reader page says its work is "not in a release yet" (the sentence is true until the next tag and false
 /// after it), and every Status line in the progress diary names the release tag it is in.
@@ -221,6 +221,17 @@ let debugTestLua () : string =
 let workflowLua () : string =
   Path.Combine(nvimCheckout (), "lua", "sagefs", "workflow.lua")
 
+/// A missing plugin file fails the case, saying how to fix it: a check that cannot read the plugin has not checked
+/// anything, and a pass there would let a false "Neovim cannot" claim through. CI checks the plugin out and sets
+/// `SAGEFS_NVIM_DIR` (main.yml), the same variable and rule SseParityTests uses.
+let private requirePluginFile (path: string) : unit =
+  match File.Exists path with
+  | true -> ()
+  | false ->
+    failtestf
+      "sagefs.nvim is not checked out (%s is missing). Clone WillEhrendreich/sagefs.nvim next to this repo, or set SAGEFS_NVIM_DIR to its folder."
+      path
+
 [<Tests>]
 let tests =
   testList "Parity claims in the comparison pages" [
@@ -283,12 +294,9 @@ let tests =
 
     testCase "no page says Neovim cannot debug a test while sagefs.nvim has debug_test.lua" <| fun _ ->
       let lua = debugTestLua ()
-      match File.Exists lua with
-      | false ->
-        skiptest (sprintf "sagefs.nvim is not checked out (%s is missing). Clone WillEhrendreich/sagefs.nvim next to this repo, or set SAGEFS_NVIM_DIR to its folder, and this check runs." lua)
-      | true ->
-        neovimLackClaims debugTopic neovimLacksPatterns
-        |> Expect.equal (sprintf "no statement or table cell says Neovim has no test debugging, because %s exists; these do" lua) []
+      requirePluginFile lua
+      neovimLackClaims debugTopic neovimLacksPatterns
+      |> Expect.equal (sprintf "no statement or table cell says Neovim has no test debugging, because %s exists; these do" lua) []
 
     testCase "the matcher reads a line's topic, so a sentence without the word debug still counts, and a dash cell does too" <| fun _ ->
       let debugLine = "| **Debugging a failing test** | Hover the glyph, Debug | VS Code only. Neovim does not have it yet. See the guide |"
@@ -330,14 +338,13 @@ let tests =
 
     testCase "no page says Neovim cannot switch a workflow while sagefs.nvim has workflow.lua and :SageFsWorkflow" <| fun _ ->
       let lua = workflowLua ()
-      match File.Exists lua with
-      | false ->
-        skiptest (sprintf "sagefs.nvim is not checked out (%s is missing). Clone WillEhrendreich/sagefs.nvim next to this repo, or set SAGEFS_NVIM_DIR to its folder, and this check runs." lua)
-      | true ->
-        File.ReadAllText(Path.Combine(nvimCheckout (), "lua", "sagefs", "commands.lua"))
-        |> Expect.stringContains "the plugin registers :SageFsWorkflow" "\"SageFsWorkflow\""
-        neovimLackClaims workflowTopic neovimCannotSwitchPatterns
-        |> Expect.equal (sprintf "no statement or table cell says Neovim cannot switch workflows, because %s exists; these do" lua) []
+      let commands = Path.Combine(nvimCheckout (), "lua", "sagefs", "commands.lua")
+      requirePluginFile lua
+      requirePluginFile commands
+      File.ReadAllText commands
+      |> Expect.stringContains "the plugin registers :SageFsWorkflow" "\"SageFsWorkflow\""
+      neovimLackClaims workflowTopic neovimCannotSwitchPatterns
+      |> Expect.equal (sprintf "no statement or table cell says Neovim cannot switch workflows, because %s exists; these do" lua) []
 
     testCase "the claim pages exist, so the scan cannot pass by reading nothing" <| fun _ ->
       claimPages

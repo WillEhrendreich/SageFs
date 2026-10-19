@@ -25,6 +25,13 @@ let verifyDashboard (name: string) (html: string) =
   SageFs.Tests.TestInfrastructure.Snapshots.verify "DashboardSnapshotTests" name "html" scrubbed
 
 
+/// The output snapshots were generated with syntax highlighting, so a run without the tree-sitter
+/// grammar would render different HTML. The native library ships for every platform the tool does
+/// (runtimes/<rid>/native), so its absence is a packaging defect: fail with that, not with a diff.
+let private requireHighlighting () : unit =
+  SyntaxHighlight.isAvailable ()
+  |> Expect.isTrue "the tree-sitter-fsharp native library must load: check runtimes/<rid>/native in the test output"
+
 let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
   testTask "renderSessionStatus ready" {
     let html = renderSessionStatus "Ready" "session-abc" "/home/user/project" "" "REPL" |> renderNode
@@ -42,8 +49,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
   }
 
   testTask "renderOutput with mixed lines" {
-    if not (SyntaxHighlight.isAvailable()) then
-      Tests.skiptest "tree-sitter not available; snapshot was generated with syntax highlighting"
+    requireHighlighting ()
     let lines = [
       { Timestamp = Some "12:30:45"; Kind = ResultLine; Text = "val x: int = 42" }
       { Timestamp = Some "12:30:46"; Kind = ErrorLine; Text = "Type mismatch" }
@@ -464,8 +470,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
   }
 
   testTask "renderOutput single result line" {
-    if not (SyntaxHighlight.isAvailable()) then
-      Tests.skiptest "tree-sitter not available; snapshot was generated with syntax highlighting"
+    requireHighlighting ()
     let lines = [ { Timestamp = Some "14:00:00"; Kind = ResultLine; Text = "val it: int = 0" } ]
     let html = renderOutput lines "No output yet" |> renderNode
     do! verifyDashboard "dashboard_output_singleResult" html

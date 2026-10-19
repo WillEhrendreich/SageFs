@@ -24,15 +24,17 @@ let private snakeCaseRegex =
   Regex(@"^[a-z][a-z0-9_]*$", RegexOptions.Compiled)
 
 // `typeof` (not a runtime assembly scan) so the tool-count contract always runs
-// and can never silently skip on assembly load order. Still an Option to keep the
-// callers' `match ... with None -> skiptest | Some -> ...` shape, but it is now
-// always Some.
-let private tryGetMcpToolMethods () =
-  typeof<SageFs.Server.McpTools.SageFsTools>.GetMethods()
-  |> Array.filter (fun m ->
-    m.GetCustomAttributes(true)
-    |> Array.exists (fun attr -> attr.GetType().Name = "McpServerToolAttribute"))
-  |> Some
+// and can never silently skip on assembly load order. An empty answer means the attribute
+// lookup broke and every audit below would pass over nothing, so it fails the case loudly.
+let private mcpToolMethods () =
+  let methods =
+    typeof<SageFs.Server.McpTools.SageFsTools>.GetMethods()
+    |> Array.filter (fun m ->
+      m.GetCustomAttributes(true)
+      |> Array.exists (fun attr -> attr.GetType().Name = "McpServerToolAttribute"))
+  match Array.isEmpty methods with
+  | true -> failtest "no [<McpServerTool>] method was found on SageFsTools, so there is nothing to audit"
+  | false -> methods
 
 // ── Group 1: State Machine Reachability ──
 
@@ -116,8 +118,7 @@ let stateMachineReachabilityTests =
         availableTools state
         |> List.contains "get_startup_info"
         |> Expect.isFalse "get_startup_info must not be advertised")
-      tryGetMcpToolMethods ()
-      |> Option.get
+      mcpToolMethods ()
       |> Array.exists (fun m -> m.Name = "get_startup_info")
       |> Expect.isFalse "get_startup_info must not be registered"
   ]
@@ -219,74 +220,59 @@ let toolRegistrationTests =
 
     testCase "McpServerTool-attributed methods total exactly 70 (reflection)"
     <| fun _ ->
-      match tryGetMcpToolMethods () with
-      | None ->
-        skiptest
-          "SageFsTools type not found in loaded assemblies; \
-           reflection test skipped"
-      | Some methods ->
-        // 42 (incl. switch_workflow, finally [<McpServerTool>]-registered) + the
-        // 7 Claims v1 cohort tools (cohort-integration-plan.md Slice 2) + the 1
-        // item-14c cohort tool (set_integration_ref) + reset_hot_reload_state
-        // (hot-reload-state-spec.md rule 3) + manage_local_data +
-        // set_reflection_read_mode (rule 2's reflection read mode and its
-        // hot-loop questions) + get_workspace_hygiene and tidy_workspace (what
-        // agents left behind on the machine, and the plan that tidies it) +
-        // mint_member and revoke_member (per-run member tokens, Capability.fs) +
-        // nudge_value (the door onto the live-tweak engine) + delegate_conductor,
-        // withdraw_landing, veto_landing and resolve_veto (the cohort commands that had no tool).
-        methods.Length
-          |> Expect.equal "MCP tool method count" 70
+      let methods = mcpToolMethods ()
+      // 42 (incl. switch_workflow, finally [<McpServerTool>]-registered) + the
+      // 7 Claims v1 cohort tools (cohort-integration-plan.md Slice 2) + the 1
+      // item-14c cohort tool (set_integration_ref) + reset_hot_reload_state
+      // (hot-reload-state-spec.md rule 3) + manage_local_data +
+      // set_reflection_read_mode (rule 2's reflection read mode and its
+      // hot-loop questions) + get_workspace_hygiene and tidy_workspace (what
+      // agents left behind on the machine, and the plan that tidies it) +
+      // mint_member and revoke_member (per-run member tokens, Capability.fs) +
+      // nudge_value (the door onto the live-tweak engine) + delegate_conductor,
+      // withdraw_landing, veto_landing and resolve_veto (the cohort commands that had no tool).
+      methods.Length
+        |> Expect.equal "MCP tool method count" 70
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
     <| fun _ ->
-      match tryGetMcpToolMethods () with
-      | None ->
-        skiptest
-          "SageFsTools type not found; description audit skipped"
-      | Some methods ->
-        methods
-        |> Array.iter (fun m ->
-          let descAttr =
-            m.GetCustomAttributes(true)
-            |> Array.tryFind (fun a ->
-              a.GetType().Name = "DescriptionAttribute")
-          match descAttr with
-          | None ->
-            failtestf "method '%s' missing [<Description>]" m.Name
-          | Some attr ->
-            let value =
-              attr.GetType().GetProperty("Description")
-                .GetValue(attr) :?> string
-            String.IsNullOrWhiteSpace value
-            |> Expect.isFalse
-              (sprintf "'%s' has empty description" m.Name))
+      mcpToolMethods ()
+      |> Array.iter (fun m ->
+        let descAttr =
+          m.GetCustomAttributes(true)
+          |> Array.tryFind (fun a ->
+            a.GetType().Name = "DescriptionAttribute")
+        match descAttr with
+        | None ->
+          failtestf "method '%s' missing [<Description>]" m.Name
+        | Some attr ->
+          let value =
+            attr.GetType().GetProperty("Description")
+              .GetValue(attr) :?> string
+          String.IsNullOrWhiteSpace value
+          |> Expect.isFalse
+            (sprintf "'%s' has empty description" m.Name))
 
     testCase
       "every McpServerTool Description is substantive (>= 30 chars)"
     <| fun _ ->
-      match tryGetMcpToolMethods () with
-      | None ->
-        skiptest
-          "SageFsTools type not found; length audit skipped"
-      | Some methods ->
-        methods
-        |> Array.iter (fun m ->
-          let descAttr =
-            m.GetCustomAttributes(true)
-            |> Array.tryFind (fun a ->
-              a.GetType().Name = "DescriptionAttribute")
-          match descAttr with
-          | None -> ()
-          | Some attr ->
-            let value =
-              attr.GetType().GetProperty("Description")
-                .GetValue(attr) :?> string
-            (value.Length >= 30)
-            |> Expect.isTrue
-              (sprintf "'%s' description too short (%d chars)"
-                m.Name value.Length))
+      mcpToolMethods ()
+      |> Array.iter (fun m ->
+        let descAttr =
+          m.GetCustomAttributes(true)
+          |> Array.tryFind (fun a ->
+            a.GetType().Name = "DescriptionAttribute")
+        match descAttr with
+        | None -> ()
+        | Some attr ->
+          let value =
+            attr.GetType().GetProperty("Description")
+              .GetValue(attr) :?> string
+          (value.Length >= 30)
+          |> Expect.isTrue
+            (sprintf "'%s' description too short (%d chars)"
+              m.Name value.Length))
   ]
 
 // ── Group 4: State Transition Safety ──
@@ -390,32 +376,27 @@ let stateTransitionSafetyTests =
 
     testCase "all MCP tools × all states never throw (reflection)"
     <| fun _ ->
-      match tryGetMcpToolMethods () with
-      | None ->
-        skiptest
-          "SageFsTools not found; 190-combo test skipped"
-      | Some methods ->
-        let toolNames = methods |> Array.map (fun m -> m.Name)
-        let mutable tested = 0
-        allStates
-        |> List.iter (fun state ->
-          toolNames
-          |> Array.iter (fun tool ->
-            try
-              let _ = checkToolAvailability state tool
-              tested <- tested + 1
-            with ex ->
-              failtestf
-                "checkToolAvailability threw for (%A, %s): %s"
-                state tool ex.Message))
-        // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
-        // Slice 2) + the 1 item-14c cohort tool (set_integration_ref) +
-        // reset_hot_reload_state + manage_local_data +
-        // set_reflection_read_mode = 53.
-        // Every state against every registered tool: the product, not a typed-in count that goes stale with each tool.
-        tested
-        |> Expect.equal
-          "every (state, tool) pair was checked" (List.length allStates * Array.length toolNames)
+      let toolNames = mcpToolMethods () |> Array.map (fun m -> m.Name)
+      let mutable tested = 0
+      allStates
+      |> List.iter (fun state ->
+        toolNames
+        |> Array.iter (fun tool ->
+          try
+            let _ = checkToolAvailability state tool
+            tested <- tested + 1
+          with ex ->
+            failtestf
+              "checkToolAvailability threw for (%A, %s): %s"
+              state tool ex.Message))
+      // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
+      // Slice 2) + the 1 item-14c cohort tool (set_integration_ref) +
+      // reset_hot_reload_state + manage_local_data +
+      // set_reflection_read_mode = 53.
+      // Every state against every registered tool: the product, not a typed-in count that goes stale with each tool.
+      tested
+      |> Expect.equal
+        "every (state, tool) pair was checked" (List.length allStates * Array.length toolNames)
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

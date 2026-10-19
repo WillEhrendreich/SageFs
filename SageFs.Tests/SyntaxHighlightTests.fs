@@ -34,8 +34,10 @@ let syntaxHighlightTests = testSequenced <| testList "SyntaxHighlight" [
     Expect.equal "empty" 0 result.Length
 
   testCase "tokenize produces spans with keyword colors" <| fun _ ->
-    if not (SyntaxHighlight.isAvailable()) then
-      Tests.skiptest "tree-sitter-fsharp not available on this platform"
+    // The native grammar ships for every platform the tool does (runtimes/<rid>/native), so its
+    // absence is a packaging defect and has to fail here rather than pass over an empty result.
+    SyntaxHighlight.isAvailable ()
+    |> Expect.isTrue "the tree-sitter-fsharp native library must load: check runtimes/<rid>/native in the test output"
     let theme = Theme.defaults
     let result = SyntaxHighlight.tokenize theme "let x = 1"
     Expect.isGreaterThan "should have spans" (result.[0].Length, 0)

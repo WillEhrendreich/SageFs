@@ -118,26 +118,45 @@ let memberEvaluationTests =
       why |> Expect.stringContains "names the reason" (SandboxUnavailable.describe NotLinux)
       started.IsSet |> Expect.isFalse "the getter never started"
 
-    testCase "WHY — on Linux x86-64 a getter that writes a file is stopped by the filter" <| fun _ ->
-      match ThreadSandbox.availability () with
-      | Error reason -> skiptest (SandboxUnavailable.describe reason)
-      | Ok _ ->
-        let path = Path.Combine(Path.GetTempPath(), sprintf "sagefs-member-eval-%s.txt" (Guid.NewGuid().ToString "N"))
-        try
-          let evaluator = create (limits 2) (filtered SandboxPolicy.NoNetworkNoWritesNoSpawn)
-          match evaluator.Run (typeof<Writer>.GetProperty "Write") (box (Writer path)) with
-          | Error (MemberFailure.MemberThrew _) -> File.Exists path |> Expect.isFalse "the file was not written"
-          // `MemberTimedOut` here means the write WAS stopped and the thread did not clear inside
-          // `interruptGrace` (300 ms) after the 150 ms deadline. The security property this case exists for holds
-          // either way, which is the point: the file must not exist, however the sandbox reported the stop. Only
-          // a write that SUCCEEDED is a failure, and that is a different fact.
-          //
-          // NOT VACUOUS, and checked: dropping the `filtered` policy for `unfiltered` makes this arm fail with
-          // `expected the write to be denied, got Ok 1`, so a write that gets through is still caught here.
-          | Error MemberFailure.MemberTimedOut ->
-            File.Exists path
-            |> Expect.isFalse "the write was stopped, though the thread outlived the grace"
-          | other -> failtestf "expected the write to be denied, got %A" other
-        finally
-          if File.Exists path then File.Delete path
   ]
+
+/// The filter exists only on Linux x86-64, so the case that proves it stops a write is registered only there, decided
+/// when the list is built. Everywhere else the true statement is the product's own answer: it says it cannot contain
+/// the getter, gives the reason, and does not run it.
+[<Tests>]
+let memberEvaluationSandboxTests =
+  let newWritePath () =
+    Path.Combine(Path.GetTempPath(), sprintf "sagefs-member-eval-%s.txt" (Guid.NewGuid().ToString "N"))
+  let cases =
+    match ThreadSandbox.availability () with
+    | Ok _ ->
+      [ testCase "WHY — on Linux x86-64 a getter that writes a file is stopped by the filter" <| fun _ ->
+          let path = newWritePath ()
+          try
+            let evaluator = create (limits 2) (filtered SandboxPolicy.NoNetworkNoWritesNoSpawn)
+            match evaluator.Run (typeof<Writer>.GetProperty "Write") (box (Writer path)) with
+            | Error (MemberFailure.MemberThrew _) -> File.Exists path |> Expect.isFalse "the file was not written"
+            // `MemberTimedOut` here means the write WAS stopped and the thread did not clear inside
+            // `interruptGrace` (300 ms) after the 150 ms deadline. The security property this case exists for holds
+            // either way, which is the point: the file must not exist, however the sandbox reported the stop. Only
+            // a write that SUCCEEDED is a failure, and that is a different fact.
+            //
+            // NOT VACUOUS, and checked: dropping the `filtered` policy for `unfiltered` makes this arm fail with
+            // `expected the write to be denied, got Ok 1`, so a write that gets through is still caught here.
+            | Error MemberFailure.MemberTimedOut ->
+              File.Exists path
+              |> Expect.isFalse "the write was stopped, though the thread outlived the grace"
+            | other -> failtestf "expected the write to be denied, got %A" other
+          finally
+            if File.Exists path then File.Delete path ]
+    | Error reason ->
+      [ testCase "WHY — where no syscall filter can be installed, a getter that writes a file is refused with the reason and never run" <| fun _ ->
+          let path = newWritePath ()
+          try
+            let evaluator = create (limits 2) (filtered SandboxPolicy.NoNetworkNoWritesNoSpawn)
+            let why = notContained (evaluator.Run (typeof<Writer>.GetProperty "Write") (box (Writer path)))
+            why |> Expect.stringContains "names the reason" (SandboxUnavailable.describe reason)
+            File.Exists path |> Expect.isFalse "the getter was not run, so the file was not written"
+          finally
+            if File.Exists path then File.Delete path ]
+  testList "evaluating one member under the syscall filter" cases

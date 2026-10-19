@@ -210,22 +210,42 @@ let realGuardsOnAbandonedThreadTests =
       gone.Wait TestTimeouts.patience |> Expect.isTrue "when the thread ended the guards came off"
       target.HelperRan |> Expect.equal "the entry guard stopped the thread before the helper's body ran" 0
 
-    testCase "WHY - guarded code runs, and a guarded loop is stopped, on the thread the syscall filter is installed on" <| fun _ ->
-      match ThreadSandbox.availability () with
-      | Error reason -> skiptest (SandboxUnavailable.describe reason)
-      | Ok _ ->
-        let release = new ManualResetEventSlim(false)
-        let target = SageFs.Tests.GuardFixtures.FilteredSpinner(release)
-        // `Fine` returns by itself, so it gets the event bound; `Spin` ends only at the deadline, so it keeps the short one.
-        let evaluator = Evaluator(limits 4, filtered SandboxPolicy.NoNetworkNoWritesNoSpawn, GuardsOn SageFs.Features.GuardPatcher.prepare)
-        let returningEvaluator = Evaluator(returningLimits 4, filtered SandboxPolicy.NoNetworkNoWritesNoSpawn, GuardsOn SageFs.Features.GuardPatcher.prepare)
-        try
-          let fine = returningEvaluator.RunGuarded (typeof<SageFs.Tests.GuardFixtures.FilteredSpinner>.GetProperty "Fine") (box target)
-          fine.Outcome |> Expect.equal "the guarded getter returned under the filter" (Ok (box 7))
-          (SageFs.Features.GuardCoverage.guardedCount fine.Guards.Coverage, 0) |> Expect.isGreaterThan "and it was guarded"
-          let spun = evaluator.RunGuarded (typeof<SageFs.Tests.GuardFixtures.FilteredSpinner>.GetProperty "Spin") (box target)
-          spun.Outcome |> Expect.equal "timed out" (Error MemberFailure.MemberTimedOut)
-          spun.Guards.Trip |> Expect.equal "the loop guard stopped it on the filtered thread" GuardTrip.LoopStopped
-        finally
-          release.Set()
   ]
+
+/// The syscall filter exists only on Linux x86-64, so the case that runs guards on a filtered thread is registered
+/// only there, decided when the list is built. Everywhere else the true statement is the product's own answer: the
+/// getter is refused with the reason and not run. Sequenced for the same reason as the list above: it uses the real
+/// patcher.
+[<Tests>]
+let filteredGuardsTests =
+  let filteredSpinner = typeof<SageFs.Tests.GuardFixtures.FilteredSpinner>
+  let cases =
+    match ThreadSandbox.availability () with
+    | Ok _ ->
+      [ testCase "WHY - guarded code runs, and a guarded loop is stopped, on the thread the syscall filter is installed on" <| fun _ ->
+          let release = new ManualResetEventSlim(false)
+          let target = SageFs.Tests.GuardFixtures.FilteredSpinner(release)
+          // `Fine` returns by itself, so it gets the event bound; `Spin` ends only at the deadline, so it keeps the short one.
+          let evaluator = Evaluator(limits 4, filtered SandboxPolicy.NoNetworkNoWritesNoSpawn, GuardsOn SageFs.Features.GuardPatcher.prepare)
+          let returningEvaluator = Evaluator(returningLimits 4, filtered SandboxPolicy.NoNetworkNoWritesNoSpawn, GuardsOn SageFs.Features.GuardPatcher.prepare)
+          try
+            let fine = returningEvaluator.RunGuarded (filteredSpinner.GetProperty "Fine") (box target)
+            fine.Outcome |> Expect.equal "the guarded getter returned under the filter" (Ok (box 7))
+            (SageFs.Features.GuardCoverage.guardedCount fine.Guards.Coverage, 0) |> Expect.isGreaterThan "and it was guarded"
+            let spun = evaluator.RunGuarded (filteredSpinner.GetProperty "Spin") (box target)
+            spun.Outcome |> Expect.equal "timed out" (Error MemberFailure.MemberTimedOut)
+            spun.Guards.Trip |> Expect.equal "the loop guard stopped it on the filtered thread" GuardTrip.LoopStopped
+          finally
+            release.Set() ]
+    | Error reason ->
+      [ testCase "WHY - where no syscall filter can be installed, a guarded getter is refused with the reason and never run" <| fun _ ->
+          let release = new ManualResetEventSlim(false)
+          let target = SageFs.Tests.GuardFixtures.FilteredSpinner(release)
+          let returningEvaluator = Evaluator(returningLimits 4, filtered SandboxPolicy.NoNetworkNoWritesNoSpawn, GuardsOn SageFs.Features.GuardPatcher.prepare)
+          try
+            let fine = returningEvaluator.RunGuarded (filteredSpinner.GetProperty "Fine") (box target)
+            fine.Outcome
+            |> Expect.equal "refused with the product's own reason" (Error (MemberFailure.MemberNotContained (SandboxUnavailable.describe reason)))
+          finally
+            release.Set() ]
+  testSequenced <| testList "guards on a click under the syscall filter" cases

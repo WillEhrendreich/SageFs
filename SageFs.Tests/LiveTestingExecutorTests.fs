@@ -5,6 +5,12 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features.LiveTesting
 
+/// The assembly these tests live in. It is the assembly running them, so the lookup cannot miss
+/// and there is no "not loaded" case to skip: a scan of the AppDomain by name could, and would
+/// have turned a missing assembly into a passing run.
+let getTestAsm () : Assembly =
+  typeof<ExpectoModuleBindingFixture.Marker>.Assembly
+
 let executorDescriptionTests = testList "TestExecutor.description" [
   test "extracts AttributeBased description" {
     let desc = TestExecutor.description BuiltInExecutors.xunit
@@ -118,19 +124,12 @@ let attributeDiscoveryTests = testList "AttributeDiscovery" [
   }
 
   test "discovers Expecto [Tests] properties via custom executor" {
-    let testsAsm =
-      System.AppDomain.CurrentDomain.GetAssemblies()
-      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
-    match testsAsm with
-    | Some asm ->
-      match BuiltInExecutors.expecto with
-      | TestExecutor.Custom ce ->
-        let discovery = ce.Discover asm
-        (List.length discovery.Tests > 0)
-        |> Expect.isTrue "should find at least 1 expecto test property"
-      | _ -> failtest "Expected Custom"
-    | None ->
-      skiptest "SageFs.Tests assembly not loaded"
+    match BuiltInExecutors.expecto with
+    | TestExecutor.Custom ce ->
+      let discovery = ce.Discover (getTestAsm ())
+      (List.length discovery.Tests > 0)
+      |> Expect.isTrue "should find at least 1 expecto test property"
+    | _ -> failtest "Expected Custom"
   }
 
   test "discovers Expecto module let bindings exposed as getter methods" {
@@ -195,44 +194,24 @@ let reflectionExecutorTests = testList "ReflectionExecutor" [
 
 let discoverAllTests = testList "TestOrchestrator.discoverAll" [
   test "discovery returns RunTest closure" {
-    let testsAsm =
-      System.AppDomain.CurrentDomain.GetAssemblies()
-      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
-    match testsAsm with
-    | Some asm ->
-      let result = TestOrchestrator.discoverAll BuiltInExecutors.builtIn asm
-      (List.length result.Tests > 0)
-      |> Expect.isTrue "should discover tests"
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let result = TestOrchestrator.discoverAll BuiltInExecutors.builtIn (getTestAsm ())
+    (List.length result.Tests > 0)
+    |> Expect.isTrue "should discover tests"
   }
 ]
 
 let discoverTests = testList "TestOrchestrator.discoverTests" [
   test "discovers expecto tests from test assembly" {
-    let testsAsm =
-      System.AppDomain.CurrentDomain.GetAssemblies()
-      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
-    match testsAsm with
-    | Some asm ->
-      let result = TestOrchestrator.discoverAll BuiltInExecutors.builtIn asm
-      (List.length result.Tests > 0)
-      |> Expect.isTrue "should discover tests"
-    | None ->
-      skiptest "SageFs.Tests assembly not loaded"
+    let result = TestOrchestrator.discoverAll BuiltInExecutors.builtIn (getTestAsm ())
+    (List.length result.Tests > 0)
+    |> Expect.isTrue "should discover tests"
   }
 
   test "all discovered tests have framework=expecto" {
-    let testsAsm =
-      System.AppDomain.CurrentDomain.GetAssemblies()
-      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
-    match testsAsm with
-    | Some asm ->
-      let result = TestOrchestrator.discoverAll BuiltInExecutors.builtIn asm
-      result.Tests
-      |> List.iter (fun tc ->
-        tc.Framework |> Expect.equal "framework should be expecto" TestFramework.Expecto)
-    | None ->
-      skiptest "SageFs.Tests assembly not loaded"
+    let result = TestOrchestrator.discoverAll BuiltInExecutors.builtIn (getTestAsm ())
+    result.Tests
+    |> List.iter (fun tc ->
+      tc.Framework |> Expect.equal "framework should be expecto" TestFramework.Expecto)
   }
 ]
 
@@ -358,7 +337,7 @@ let issue32RegressionTests = testList "Issue #32: attr executors wired into RunT
       match outcome with
       | TestResult.Skipped _ -> ()
       | other -> failtestf "Expected Skipped for DI class, got %A" other
-    | None -> skiptest "NeedsConstructorArg test not discovered"
+    | None -> failtest "the NeedsConstructorArg fixture test was not discovered, so the DI skip path was never exercised"
   }
 
   testAsync "mixed executors: custom + attr dispatch correctly" {
@@ -379,7 +358,7 @@ let issue32RegressionTests = testList "Issue #32: attr executors wired into RunT
     let expectoTests =
       result.Tests |> List.filter (fun tc -> tc.Framework = TestFramework.Expecto)
     match expectoTests with
-    | [] -> skiptest "No expecto tests found — assembly may not expose them"
+    | [] -> failtest "no expecto tests were discovered in the test assembly, so the custom executor was never dispatched"
     | first :: _ ->
       let! outcome = result.RunTest first
       match outcome with
@@ -477,73 +456,58 @@ let private fsCheckPropertyFixture =
 
 let asyncFsCheckReflectionTests = testList "AsyncFsCheck reflection" [
   test "AsyncFsCheck tag 3 tests are discovered" {
-    let testsAsm =
-      System.AppDomain.CurrentDomain.GetAssemblies()
-      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
-    match testsAsm with
-    | Some asm ->
-      let tag3Count =
-        match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
-        | Some cache ->
-          let lookup = BuiltInExecutors.ExpectoExecutor.buildLookup cache asm
-          lookup |> Map.filter (fun _ (rft: BuiltInExecutors.ExpectoExecutor.ReflectedFlatTest) -> rft.Tag = 3) |> Map.count
-        | None -> 0
-      (tag3Count > 0) |> Expect.isTrue "should discover AsyncFsCheck (tag 3) tests"
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let asm = getTestAsm ()
+    let tag3Count =
+      match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
+      | Some cache ->
+        let lookup = BuiltInExecutors.ExpectoExecutor.buildLookup cache asm
+        lookup |> Map.filter (fun _ (rft: BuiltInExecutors.ExpectoExecutor.ReflectedFlatTest) -> rft.Tag = 3) |> Map.count
+      | None -> 0
+    (tag3Count > 0) |> Expect.isTrue "should discover AsyncFsCheck (tag 3) tests"
   }
 
   testAsync "AsyncFsCheck tests can be executed via reflection" {
-    let testsAsm =
-      System.AppDomain.CurrentDomain.GetAssemblies()
-      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
-    match testsAsm with
-    | Some asm ->
-      match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
-      | Some cache ->
-        let lookup = BuiltInExecutors.ExpectoExecutor.buildLookup cache asm
-        let fsCheckEntry =
-          lookup |> Map.toSeq |> Seq.tryFind (fun (_, rft) -> rft.Tag = 3)
-        match fsCheckEntry with
-        | Some (name, rft) ->
-          let! result =
-            BuiltInExecutors.ExpectoExecutor.executeReflected cache rft System.Threading.CancellationToken.None
-          match result with
-          | TestResult.Passed _ -> ()
-          | TestResult.Failed (f, _) ->
-            failtestf "AsyncFsCheck test '%s' failed: %A" name f
-          | other ->
-            failtestf "AsyncFsCheck test '%s' unexpected result: %A" name other
-        | None -> failtest "no AsyncFsCheck tests in lookup"
-      | None -> failtest "could not build reflection cache"
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let asm = getTestAsm ()
+    match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
+    | Some cache ->
+      let lookup = BuiltInExecutors.ExpectoExecutor.buildLookup cache asm
+      let fsCheckEntry =
+        lookup |> Map.toSeq |> Seq.tryFind (fun (_, rft) -> rft.Tag = 3)
+      match fsCheckEntry with
+      | Some (name, rft) ->
+        let! result =
+          BuiltInExecutors.ExpectoExecutor.executeReflected cache rft System.Threading.CancellationToken.None
+        match result with
+        | TestResult.Passed _ -> ()
+        | TestResult.Failed (f, _) ->
+          failtestf "AsyncFsCheck test '%s' failed: %A" name f
+        | other ->
+          failtestf "AsyncFsCheck test '%s' unexpected result: %A" name other
+      | None -> failtest "no AsyncFsCheck tests in lookup"
+    | None -> failtest "could not build reflection cache"
   }
 
   testAsync "no AsyncFsCheck tests fail with 'could not reflect property'" {
-    let testsAsm =
-      System.AppDomain.CurrentDomain.GetAssemblies()
-      |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
-    match testsAsm with
-    | Some asm ->
-      match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
-      | Some cache ->
-        let lookup = BuiltInExecutors.ExpectoExecutor.buildLookup cache asm
-        let fsCheckTests =
-          lookup |> Map.toList |> List.filter (fun (_, rft) -> rft.Tag = 3)
-        // Run a sample of up to 10 AsyncFsCheck tests
-        let sample = fsCheckTests |> List.truncate 10
-        let propertyReflectionErrors = ref 0
-        for (_, rft) in sample do
-          let! result =
-            BuiltInExecutors.ExpectoExecutor.executeReflected cache rft System.Threading.CancellationToken.None
-          match result with
-          | TestResult.Failed (TestFailure.ExceptionThrown(msg, _), _)
-              when msg.Contains("could not reflect") ->
-            propertyReflectionErrors.Value <- propertyReflectionErrors.Value + 1
-          | _ -> ()
-        propertyReflectionErrors.Value
-        |> Expect.equal "no AsyncFsCheck tests should fail with reflection error" 0
-      | None -> failtest "could not build reflection cache"
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let asm = getTestAsm ()
+    match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
+    | Some cache ->
+      let lookup = BuiltInExecutors.ExpectoExecutor.buildLookup cache asm
+      let fsCheckTests =
+        lookup |> Map.toList |> List.filter (fun (_, rft) -> rft.Tag = 3)
+      // Run a sample of up to 10 AsyncFsCheck tests
+      let sample = fsCheckTests |> List.truncate 10
+      let propertyReflectionErrors = ref 0
+      for (_, rft) in sample do
+        let! result =
+          BuiltInExecutors.ExpectoExecutor.executeReflected cache rft System.Threading.CancellationToken.None
+        match result with
+        | TestResult.Failed (TestFailure.ExceptionThrown(msg, _), _)
+            when msg.Contains("could not reflect") ->
+          propertyReflectionErrors.Value <- propertyReflectionErrors.Value + 1
+        | _ -> ()
+      propertyReflectionErrors.Value
+      |> Expect.equal "no AsyncFsCheck tests should fail with reflection error" 0
+    | None -> failtest "could not build reflection cache"
   }
 ]
 
@@ -562,35 +526,25 @@ let allExecutorTests = testList "Provider Executors" [
 
 // --- LiveTestingHook tests ---
 
-let getTestAsm () =
-  System.AppDomain.CurrentDomain.GetAssemblies()
-  |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
-
 let detectProvidersTests = testList "LiveTestingHook.detectProviders" [
   test "detects Expecto provider for SageFs.Tests assembly" {
-    match getTestAsm () with
-    | Some asm ->
-      let providers = LiveTestingHook.detectProviders BuiltInExecutors.builtIn asm
-      providers
-      |> List.exists (fun p ->
-        match p with
-        | ProviderDescription.Custom c -> c.Name = TestFramework.Expecto
-        | _ -> false)
-      |> Expect.isTrue "should detect expecto provider"
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let providers = LiveTestingHook.detectProviders BuiltInExecutors.builtIn (getTestAsm ())
+    providers
+    |> List.exists (fun p ->
+      match p with
+      | ProviderDescription.Custom c -> c.Name = TestFramework.Expecto
+      | _ -> false)
+    |> Expect.isTrue "should detect expecto provider"
   }
 
   test "does not detect xunit provider for SageFs.Tests assembly" {
-    match getTestAsm () with
-    | Some asm ->
-      let providers = LiveTestingHook.detectProviders BuiltInExecutors.builtIn asm
-      providers
-      |> List.exists (fun p ->
-        match p with
-        | ProviderDescription.AttributeBased a -> a.Name = TestFramework.XUnit
-        | _ -> false)
-      |> Expect.isFalse "should not detect xunit provider"
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let providers = LiveTestingHook.detectProviders BuiltInExecutors.builtIn (getTestAsm ())
+    providers
+    |> List.exists (fun p ->
+      match p with
+      | ProviderDescription.AttributeBased a -> a.Name = TestFramework.XUnit
+      | _ -> false)
+    |> Expect.isFalse "should not detect xunit provider"
   }
 
   test "returns empty for assembly with no test frameworks" {
@@ -604,21 +558,15 @@ let detectProvidersTests = testList "LiveTestingHook.detectProviders" [
 
 let hookDiscoverTestsTests = testList "LiveTestingHook.discoverTests" [
   test "discovers Expecto tests in SageFs.Tests assembly" {
-    match getTestAsm () with
-    | Some asm ->
-      let result = LiveTestingHook.discoverTests BuiltInExecutors.builtIn asm
-      Expect.isTrue "should discover multiple tests" (result.Tests.Length > 0)
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let result = LiveTestingHook.discoverTests BuiltInExecutors.builtIn (getTestAsm ())
+    Expect.isTrue "should discover multiple tests" (result.Tests.Length > 0)
   }
 
   test "all discovered tests have framework = expecto" {
-    match getTestAsm () with
-    | Some asm ->
-      let result = LiveTestingHook.discoverTests BuiltInExecutors.builtIn asm
-      result.Tests
-      |> List.forall (fun t -> t.Framework = TestFramework.Expecto)
-      |> Expect.isTrue "all tests should be expecto framework"
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let result = LiveTestingHook.discoverTests BuiltInExecutors.builtIn (getTestAsm ())
+    result.Tests
+    |> List.forall (fun t -> t.Framework = TestFramework.Expecto)
+    |> Expect.isTrue "all tests should be expecto framework"
   }
 
   test "discovers no tests in assembly with no test frameworks" {
@@ -682,14 +630,11 @@ let findAffectedTestsTests = testList "LiveTestingHook.findAffectedTests" [
 
 let afterReloadTests = testList "LiveTestingHook.afterReload" [
   test "afterReload produces complete result for SageFs.Tests assembly" {
-    match getTestAsm () with
-    | Some asm ->
-      let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
-      Expect.isTrue "should detect providers" (not (List.isEmpty result.DetectedProviders))
-      Expect.isTrue "should discover tests" (result.DiscoveredTests.Length > 0)
-      Expect.isTrue "affected = 0 when no methods changed"
-        (result.AffectedTestIds.Length = 0)
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn (getTestAsm ()) []
+    Expect.isTrue "should detect providers" (not (List.isEmpty result.DetectedProviders))
+    Expect.isTrue "should discover tests" (result.DiscoveredTests.Length > 0)
+    Expect.isTrue "affected = 0 when no methods changed"
+      (result.AffectedTestIds.Length = 0)
   }
 
   test "afterReload returns empty for assembly with no test frameworks" {
@@ -707,24 +652,21 @@ let afterReloadTests = testList "LiveTestingHook.afterReload" [
   }
 
   test "detected providers match discovered test frameworks" {
-    match getTestAsm () with
-    | Some asm ->
-      let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
-      let providerNames =
-        result.DetectedProviders
-        |> List.map (fun p ->
-          match p with
-          | ProviderDescription.AttributeBased a -> a.Name
-          | ProviderDescription.Custom c -> c.Name)
-        |> Set.ofList
-      let testFrameworks =
-        result.DiscoveredTests
-        |> Array.map (fun t -> t.Framework)
-        |> Set.ofArray
-      testFrameworks
-      |> Set.forall (fun fw -> providerNames.Contains fw)
-      |> Expect.isTrue "all test frameworks should have detected providers"
-    | None -> skiptest "SageFs.Tests assembly not loaded"
+    let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn (getTestAsm ()) []
+    let providerNames =
+      result.DetectedProviders
+      |> List.map (fun p ->
+        match p with
+        | ProviderDescription.AttributeBased a -> a.Name
+        | ProviderDescription.Custom c -> c.Name)
+      |> Set.ofList
+    let testFrameworks =
+      result.DiscoveredTests
+      |> Array.map (fun t -> t.Framework)
+      |> Set.ofArray
+    testFrameworks
+    |> Set.forall (fun fw -> providerNames.Contains fw)
+    |> Expect.isTrue "all test frameworks should have detected providers"
   }
 ]
 
