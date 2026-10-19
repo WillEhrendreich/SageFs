@@ -400,6 +400,27 @@ module CohortOwner =
         (mailbox :> IDisposable).Dispose()
         ValueTask.CompletedTask
 
+  /// Say what a replay had to skip or could not reproduce. The owner starts from the replayed state whatever the
+  /// audit holds (a ledger that cannot be read is a reason to start and say so, never to refuse to boot), so the
+  /// log is the only place a dropped row is visible: each one is written once, at Warning, with its sequence number
+  /// and the refusal. Rows whose recorded events no longer match are a policy-drift witness (the ledger does not
+  /// store `leaseWindow` or `settledRetention`), reported as ONE line because a single changed constant cascades
+  /// into many rows.
+  let logReplayFindings (logger: Utils.ILogger) (scope: CohortScope) (audit: ReplayAudit<MemberId>) : unit =
+    for dropped in audit.Dropped do
+      logger.LogWarning(
+        sprintf "[cohort-owner] replay of scope %s dropped ledger entry seq=%d: %A was refused (%A), so the state this owner holds does not include it"
+          (Scope.label scope) (int64 dropped.DroppedSeq) dropped.DroppedCommand dropped.Refusal
+      )
+    match audit.Diverged with
+    | [] -> ()
+    | first :: _ as diverged ->
+      let last = List.last diverged
+      logger.LogWarning(
+        sprintf "[cohort-owner] replay of scope %s no longer reproduces the events recorded for %d ledger entries (seq %d to %d): the lease window or the retention window changed since they were written, or decide changed"
+          (Scope.label scope) (List.length diverged) (int64 first.DivergedSeq) (int64 last.DivergedSeq)
+      )
+
   /// Production entropy: 32 bytes from the OS CSPRNG. Called only here, at
   /// the shell — never from inside `Cohort.decide` (§7.1).
   let productionEntropy () : byte[] = RandomNumberGenerator.GetBytes 32
@@ -432,7 +453,9 @@ module CohortOwner =
     (performer: LandingPerformer<MemberId>)
     : Handle =
     let entries = ledger.ReadAll scope
-    let head = replayHeadIn scope entries
+    let audit = replayAuditIn scope entries
+    logReplayFindings logger scope audit
+    let head = audit.Head
     let initialNextSeq =
       match entries with
       | [] -> 0L<ledgerSeq>

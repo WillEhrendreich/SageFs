@@ -1,11 +1,12 @@
 /// Phase 1 item 7 (sagefs-multiagent-vision.md §5.2, §7.1, §7.3, §10): the pure
-/// cohort core's seventeen model-based properties, run over generated command
-/// sequences (1-12), generated strategies on generated schedules (13-16), and a
-/// replayed regression corpus (17).
+/// cohort core's model-based properties (numbered 1 to 28 in the test names; 17 is
+/// the corpus replay and carries no number), run over generated command
+/// sequences, generated strategies on generated schedules, and a replayed
+/// regression corpus.
 ///
-/// Properties 8 and 9 are DEFERRED, not silently dropped — they need `cohortTools`
-/// and `Authority.tryPresent` (Phase 1 items 8 and 11, §8.1), which this island
-/// does not own; see the `Tests.skiptest` cases below for exactly why.
+/// Properties 8 and 9 run: `Affordances.cohortTools` landed (Phase 1 item 11), so
+/// they are the "cohort affordances" list at the bottom of this file, adapted to
+/// the cohort-tool scope that v1 gates (see the comment above that list).
 module SageFs.Tests.CohortPropertyTests
 
 open System
@@ -13,9 +14,13 @@ open Expecto
 open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
+open Microsoft.FSharp.Reflection
 open SageFs
 open SageFs.Cohort
 open SageFs.MemberTable
+open System.Threading.Tasks
+open SageFs.Features
+open SageFs.Features.CohortLedger
 open SageFs.Tests.SharedGenerators
 
 // ── A concrete member identity for these tests only ───────────────────────
@@ -66,6 +71,19 @@ let private scopeOf (i: int) = scopePool.[abs i % scopePool.Length]
 let private pathPool = [| "SageFs.Core/A.fs"; "SageFs.Core/inner/C.fs"; "SageFs/D.fs" |]
 let private pathOf (i: int) = pathPool.[abs i % pathPool.Length]
 
+/// How an `IAdvance` pushes the landing at the FRONT of the queue. An index into "every landing ever minted" lands the
+/// right one at the right stage about once in a hundred histories (measured: 1.9 percent reached a single Landed), so
+/// the pipeline gets an intent that names the front landing by position and chooses the command its stage calls for.
+[<RequireQualifiedAccess>]
+type FrontStep =
+  | Succeed
+  | Conflict
+  | ComputeAffected
+  | PassTests
+  | FailTests
+  | Inconclusive
+  | FastForwardFails
+
 /// An intent is resolved against the CURRENT harness state at fold time (a
 /// model-based command, not a literal `CohortCommand` — claim/landing ids do
 /// not exist until something has minted them). An intent that does not resolve
@@ -92,18 +110,44 @@ type Intent =
   | IVeto of by: int * landingIdx: int
   | IDelegate of by: int * toAgent: int
   | IResolveVeto of by: int * landingIdx: int
+  | IAdvance of FrontStep
+  /// `OpenCohort`: the cohort's own scope (an idempotent no-op that is still a ledger entry) or another one (refused).
+  | IOpen of scopeIdx: int
+  /// A `Join` addressed to a cohort that is not this one. `decide` refuses it before anything else, and the state
+  /// and the ledger must not move.
+  | IWrongScope of agent: int * scopeIdx: int
+  | IInconclusive of landingIdx: int
+  | IFastForwardFailed of landingIdx: int
+  | ISetHead of by: int * head: int
+
+let genFrontStep =
+  Gen.frequency [
+    8, Gen.constant FrontStep.Succeed
+    1, Gen.constant FrontStep.Conflict
+    2, Gen.constant FrontStep.ComputeAffected
+    2, Gen.constant FrontStep.PassTests
+    1, Gen.constant FrontStep.FailTests
+    1, Gen.constant FrontStep.Inconclusive
+    1, Gen.constant FrontStep.FastForwardFails
+  ]
 
 let private genIntent =
   Gen.frequency [
-    3, Gen.map2 (fun a r -> IJoin(a, r)) (Gen.choose (1, 4)) genRole
+    4, Gen.map2 (fun a r -> IJoin(a, r)) (Gen.choose (1, 4)) genRole
     2, Gen.map IDepart (Gen.choose (1, 4))
     2, Gen.map IRenewLease (Gen.choose (1, 4))
     2, Gen.map ITick (Gen.choose (0, 60))
-    4, Gen.map2 (fun a s -> IAcquire(a, s)) (Gen.choose (1, 4)) (Gen.choose (0, 3))
+    5, Gen.map2 (fun a s -> IAcquire(a, s)) (Gen.choose (1, 4)) (Gen.choose (0, 3))
     3, Gen.map2 (fun a c -> IReleaseOwn(a, c)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
     2, Gen.map3 (fun b c t -> IReassign(b, c, t)) (Gen.choose (1, 4)) (Gen.choose (0, 10)) (Gen.choose (1, 4))
     2, Gen.map2 (fun a p -> IObserveSave(a, p)) (Gen.choose (1, 4)) (Gen.choose (0, 3))
-    3, Gen.map2 (fun a c -> IRequestLanding(a, c)) (Gen.choose (1, 4)) (Gen.choose (0, 1000))
+    4, Gen.map2 (fun a c -> IRequestLanding(a, c)) (Gen.choose (1, 4)) (Gen.choose (0, 1000))
+    7, Gen.map IAdvance genFrontStep
+    1, Gen.map IOpen (Gen.choose (0, 5))
+    1, Gen.map2 (fun a s -> IWrongScope(a, s)) (Gen.choose (1, 4)) (Gen.choose (0, 3))
+    1, Gen.map IInconclusive (Gen.choose (0, 10))
+    1, Gen.map IFastForwardFailed (Gen.choose (0, 10))
+    1, Gen.map2 (fun b h -> ISetHead(b, h)) (Gen.choose (1, 4)) (Gen.choose (0, 5))
     2, Gen.map IRebaseOk (Gen.choose (0, 10))
     1, Gen.map2 (fun l f -> IRebaseConflict(l, f)) (Gen.choose (0, 10)) (Gen.choose (0, 5))
     2, Gen.map2 (fun l t -> IAffected(l, t)) (Gen.choose (0, 10)) (Gen.choose (0, 5))
@@ -133,6 +177,24 @@ let genDelegatingIntent =
 /// generated history spends its steps on the commands under test and not on getting anyone into the cohort.
 let seating = [ IJoin(1, JoinableRole.Implementer); IJoin(2, JoinableRole.Implementer); IJoin(3, JoinableRole.Verifier); IJoin(4, JoinableRole.Observer) ]
 
+/// The ordinary intents, leaning hard on the landing pipeline: claims by the two implementers, landings requested by
+/// them, and the front landing pushed along. Seated first, as the delegating histories are. This is the history the
+/// properties that need a landing to HAPPEN (5, 6, 7, 13) run over; the plain `genIntent` histories reach a landing in
+/// about one in twenty, which is right for the properties about members and claims and far too few for these.
+let genPipelineIntent =
+  Gen.frequency [
+    6, genIntent
+    5, Gen.map2 (fun a s -> IAcquire(a, s)) (Gen.choose (1, 2)) (Gen.choose (0, 3))
+    5, Gen.map2 (fun a c -> IRequestLanding(a, c)) (Gen.choose (1, 2)) (Gen.choose (0, 1000))
+    12, Gen.map IAdvance genFrontStep
+  ]
+
+type PipelineHistory = PipelineHistory of Intent list
+
+type PipelineGenerators =
+  static member History() =
+    Arb.fromGen (Gen.choose (10, 60) |> Gen.bind (fun n -> Gen.listOfLength n genPipelineIntent) |> Gen.map (fun intents -> PipelineHistory(seating @ intents)))
+
 /// A history that includes delegations, vetoes, clears and withdrawals.
 type DelegatingHistory = DelegatingHistory of Intent list
 
@@ -149,14 +211,24 @@ let private cohortConfig = {
     arbitrary = [ typeof<CohortGenerators> ]
 }
 
+let pipelineConfig = { cohortConfig with arbitrary = [ typeof<PipelineGenerators> ] }
+
 // ── The harness: fold Intents through `decide`, keeping a full step log ────
 
+/// `StepClock` and `StepEntropy` are what `decide` was handed for this step: a faithful `LedgerEntry` needs both,
+/// and they are named apart from `LedgerEntry.Clock`/`Entropy` so a record literal can never be read as the wrong type.
 type Step = {
   Before: CohortState<Agent>
   After: CohortState<Agent>
   Command: CohortCommand<Agent>
   Events: CohortEvent<Agent> list
+  StepClock: DateTime
+  StepEntropy: byte[]
 }
+
+/// Every command handed to `decide`, with what it said. `Steps` holds only the accepted ones; this is what lets a test
+/// ask whether a generator ever TRIED a command, and whether `decide` refused it for the reason it should.
+type Attempt = { Tried: CohortCommand<Agent>; Verdict: Result<unit, CohortError<Agent>> }
 
 type Harness = {
   Clock: DateTime
@@ -165,6 +237,7 @@ type Harness = {
   ClaimHistory: ClaimId list
   LandingHistory: LandingId list
   Steps: Step list
+  Attempts: Attempt list
 }
 
 let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
@@ -178,6 +251,10 @@ let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
 /// is a CLAIM scope and pools several on purpose — two axes, not one.
 let private machine = CohortScope.Machine
 
+/// Cohorts that are NOT the one every state in this file is opened as. A command addressed to one of these is refused
+/// `WrongCohortScope`, which is the guard the scope model rests on.
+let otherScopes = [| CohortScope.Named "elsewhere"; CohortScope.Repository "/repo-b" |]
+
 let private initHarness () : Harness = {
   Clock = epoch
   NextEntropy = 0
@@ -185,13 +262,14 @@ let private initHarness () : Harness = {
   ClaimHistory = []
   LandingHistory = []
   Steps = []
+  Attempts = []
 }
 
 let private applyCommand (h: Harness) (cmd: CohortCommand<Agent>) : Harness =
   let entropy = BitConverter.GetBytes h.NextEntropy
   let h1 = { h with NextEntropy = h.NextEntropy + 1 }
   match decide h1.Clock entropy h1.State cmd with
-  | Error _ -> h1
+  | Error refusal -> { h1 with Attempts = h1.Attempts @ [ { Tried = cmd; Verdict = Result.Error refusal } ] }
   | Ok(newState, events, _effects) ->
     let newClaims = newState.Claims |> Map.toList |> List.map fst |> List.filter (fun c -> not (List.contains c h1.ClaimHistory))
     let newLandings = newState.Landings |> Map.toList |> List.map fst |> List.filter (fun l -> not (List.contains l h1.LandingHistory))
@@ -199,189 +277,178 @@ let private applyCommand (h: Harness) (cmd: CohortCommand<Agent>) : Harness =
         State = newState
         ClaimHistory = h1.ClaimHistory @ newClaims
         LandingHistory = h1.LandingHistory @ newLandings
-        Steps = h1.Steps @ [ { Before = h1.State; After = newState; Command = cmd; Events = events } ] }
-
-let private resolveClaim (h: Harness) (idx: int) : ClaimId option =
-  if h.ClaimHistory.IsEmpty then None else Some h.ClaimHistory.[abs idx % h.ClaimHistory.Length]
-
-let private resolveLanding (h: Harness) (idx: int) : LandingId option =
-  if h.LandingHistory.IsEmpty then None else Some h.LandingHistory.[abs idx % h.LandingHistory.Length]
+        Steps = h1.Steps @ [ { Before = h1.State; After = newState; Command = cmd; Events = events; StepClock = h1.Clock; StepEntropy = entropy } ]
+        Attempts = h1.Attempts @ [ { Tried = cmd; Verdict = Ok() } ] }
 
 let private testIdsOf (n: int) (prefix: string) = [ for i in 1 .. (abs n % 5) -> TestId(sprintf "%s%d" prefix i) ]
 
-let private applyIntent (h: Harness) (intent: Intent) : Harness =
+let pick (pool: 'a list) (idx: int) : 'a option =
+  match pool with
+  | [] -> None
+  | _ -> Some pool.[abs idx % pool.Length]
+
+/// The ONE place an `Intent` becomes a `CohortCommand`, generic in the member type so the pure harness (`Agent`) and
+/// the live owner (`MemberId`) are driven by the very same resolution. Two earlier copies of this table disagreed
+/// about where claim and landing indices point, and a copy that drifts is a test of the copy.
+///
+/// `claimPool` and `landingPool` are the ids an index may point at; the caller says which (every id ever minted for
+/// the harness, the ids currently in state for the owner). The advance is how far the clock moves before the command
+/// runs, which only `ITick` uses. `None` is an intent that points at nothing yet, so it is skipped.
+let resolveIntent<'m when 'm: comparison>
+  (who: int -> 'm)
+  (absent: 'm)
+  (claimPool: ClaimId list)
+  (landingPool: LandingId list)
+  (state: CohortState<'m>)
+  (entropyN: int)
+  (intent: Intent)
+  : (TimeSpan * CohortCommand<'m>) option =
+  let now cmd = Some(TimeSpan.Zero, cmd)
+  let onLanding l build = pick landingPool l |> Option.map (fun lid -> TimeSpan.Zero, build lid)
   match intent with
-  | IJoin(a, role) -> applyCommand h (CohortCommand.Join(agentOf a, role, None, machine))
-  | IDepart a -> applyCommand h (CohortCommand.Depart(agentOf a, machine))
-  | IRenewLease a -> applyCommand h (CohortCommand.RenewLease(agentOf a, machine))
-  | ITick minutes -> applyCommand { h with Clock = h.Clock.AddMinutes(float (abs minutes % 90)) } (CohortCommand.Tick machine)
-  | IAcquire(a, s) -> applyCommand h (CohortCommand.AcquireClaim(agentOf a, scopeOf s, "purpose", machine))
+  | IOpen i -> now (CohortCommand.OpenCohort(if abs i % 3 = 0 then machine else otherScopes.[abs i % otherScopes.Length]))
+  | IWrongScope(a, i) -> now (CohortCommand.Join(who a, JoinableRole.Implementer, None, otherScopes.[abs i % otherScopes.Length]))
+  | IInconclusive l -> onLanding l (fun lid -> CohortCommand.VerificationInconclusive(lid, "session still warming", machine))
+  | IFastForwardFailed l -> onLanding l (fun lid -> CohortCommand.FastForwardFailed(lid, "ref moved under us", machine))
+  | ISetHead(by, h) -> now (CohortCommand.SetIntegrationHead(who by, sprintf "head-%d" (abs h % 3), machine))
+  | IJoin(a, role) -> now (CohortCommand.Join(who a, role, None, machine))
+  | IDepart a -> now (CohortCommand.Depart(who a, machine))
+  | IRenewLease a -> now (CohortCommand.RenewLease(who a, machine))
+  | ITick minutes -> Some(TimeSpan.FromMinutes(float (abs minutes % 90)), CohortCommand.Tick machine)
+  | IAcquire(a, s) -> now (CohortCommand.AcquireClaim(who a, scopeOf s, "purpose", machine))
   | IReleaseOwn(a, c) ->
-    match resolveClaim h c with
-    | None -> h
-    | Some cid ->
-      match Map.tryFind cid h.State.Claims with
-      | None -> h
-      | Some claim -> applyCommand h (CohortCommand.ReleaseClaim(agentOf a, cid, claim.Fence, machine))
-  | IReassign(by, c, toA) ->
-    match resolveClaim h c with
-    | None -> h
-    | Some cid -> applyCommand h (CohortCommand.ReassignClaim(agentOf by, cid, agentOf toA, machine))
-  | IObserveSave(a, p) -> applyCommand h (CohortCommand.ObserveSave(agentOf a, pathOf p, machine))
+    pick claimPool c
+    |> Option.bind (fun cid ->
+      Map.tryFind cid state.Claims
+      |> Option.map (fun claim -> TimeSpan.Zero, CohortCommand.ReleaseClaim(who a, cid, claim.Fence, machine)))
+  | IReassign(by, c, toA) -> pick claimPool c |> Option.map (fun cid -> TimeSpan.Zero, CohortCommand.ReassignClaim(who by, cid, who toA, machine))
+  | IObserveSave(a, p) -> now (CohortCommand.ObserveSave(who a, pathOf p, machine))
   | IRequestLanding(a, commit) ->
-    let agent = agentOf a
+    let agent = who a
     let backing =
-      h.State.Claims
+      state.Claims
       |> Map.toList
       |> List.choose (fun (cid, c) ->
         match c.State with
         | ClaimState.Held holder when holder = agent -> Some(cid, c.Fence)
         | _ -> None)
-    applyCommand h (CohortCommand.RequestLanding(agent, backing, [ sprintf "commit-%d" commit ], "landing statement", machine))
-  | IRebaseOk l ->
-    match resolveLanding h l with
-    | None -> h
-    | Some lid -> applyCommand h (CohortCommand.RebaseCompleted(lid, Ok(sprintf "sha-%d" h.NextEntropy), machine))
-  | IRebaseConflict(l, f) ->
-    match resolveLanding h l with
-    | None -> h
-    | Some lid -> applyCommand h (CohortCommand.RebaseCompleted(lid, Error [ sprintf "conflict-%d.fs" (abs f) ], machine))
-  | IAffected(l, t) ->
-    match resolveLanding h l with
-    | None -> h
-    | Some lid -> applyCommand h (CohortCommand.AffectedComputed(lid, testIdsOf t "t", machine))
-  | ITestsPass l ->
-    match resolveLanding h l with
-    | None -> h
-    | Some lid -> applyCommand h (CohortCommand.TestsCompleted(lid, [], machine))
-  | ITestsFail(l, f) ->
-    match resolveLanding h l with
-    | None -> h
-    | Some lid -> applyCommand h (CohortCommand.TestsCompleted(lid, testIdsOf (1 + abs f) "f", machine))
-  | IFastForward l ->
-    match resolveLanding h l with
-    | None -> h
-    | Some lid -> applyCommand h (CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" h.NextEntropy, machine))
-  | IWithdraw(a, l) ->
-    match resolveLanding h l with
-    | None -> h
-    | Some lid -> applyCommand h (CohortCommand.WithdrawLanding(agentOf a, lid, machine))
-  | IVeto(by, l) ->
-    match resolveLanding h l with
-    | None -> h
-    | Some lid -> applyCommand h (CohortCommand.VetoLanding(agentOf by, lid, "veto reason", machine))
+    now (CohortCommand.RequestLanding(agent, backing, [ sprintf "commit-%d" commit ], "landing statement", machine))
+  | IRebaseOk l -> onLanding l (fun lid -> CohortCommand.RebaseCompleted(lid, Ok(sprintf "sha-%d" entropyN), machine))
+  | IRebaseConflict(l, f) -> onLanding l (fun lid -> CohortCommand.RebaseCompleted(lid, Error [ sprintf "conflict-%d.fs" (abs f) ], machine))
+  | IAffected(l, t) -> onLanding l (fun lid -> CohortCommand.AffectedComputed(lid, testIdsOf t "t", machine))
+  | ITestsPass l -> onLanding l (fun lid -> CohortCommand.TestsCompleted(lid, [], machine))
+  | ITestsFail(l, f) -> onLanding l (fun lid -> CohortCommand.TestsCompleted(lid, testIdsOf (1 + abs f) "f", machine))
+  | IFastForward l -> onLanding l (fun lid -> CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" entropyN, machine))
+  | IWithdraw(a, l) -> onLanding l (fun lid -> CohortCommand.WithdrawLanding(who a, lid, machine))
+  | IVeto(by, l) -> onLanding l (fun lid -> CohortCommand.VetoLanding(who by, lid, "veto reason", machine))
   // `toAgent` 5 is an agent that never joins (`agentOf` maps 1..4), so absent targets are generated too.
-  | IDelegate(by, toA) -> applyCommand h (CohortCommand.DelegateConductor(agentOf by, (if toA = 5 then { Id = 5; Display = "agent-5" } else agentOf toA), machine))
-  | IResolveVeto(by, l) ->
-    match resolveLanding h l with
-    | None -> h
-    | Some lid -> applyCommand h (CohortCommand.ResolveVeto(agentOf by, lid, machine))
+  | IDelegate(by, toA) -> now (CohortCommand.DelegateConductor(who by, (if toA = 5 then absent else who toA), machine))
+  | IResolveVeto(by, l) -> onLanding l (fun lid -> CohortCommand.ResolveVeto(who by, lid, machine))
+  | IAdvance step ->
+    // The landing at the front of the queue, and the command ITS stage calls for. A landing that is not at the front
+    // is never advanced by `decide` (`LandingNotInExpectedState`), so naming the front is what lets a history finish one.
+    match state.Queue with
+    | [] -> None
+    | front :: _ ->
+      match Map.tryFind front state.Landings with
+      | None -> None
+      | Some request ->
+        match request.State, step with
+        | LandingState.Rebasing _, FrontStep.Conflict -> now (CohortCommand.RebaseCompleted(front, Error [ "conflict.fs" ], machine))
+        | LandingState.Rebasing _,
+          (FrontStep.Succeed | FrontStep.ComputeAffected | FrontStep.PassTests | FrontStep.FailTests | FrontStep.Inconclusive | FrontStep.FastForwardFails) ->
+          now (CohortCommand.RebaseCompleted(front, Ok(sprintf "sha-%d" entropyN), machine))
+        | LandingState.Verifying _, FrontStep.Succeed -> now (CohortCommand.FastForwardCompleted(front, sprintf "landed-%d" entropyN, machine))
+        | LandingState.Verifying _, FrontStep.Conflict -> now (CohortCommand.AffectedComputed(front, testIdsOf 2 "t", machine))
+        | LandingState.Verifying _, FrontStep.ComputeAffected -> now (CohortCommand.AffectedComputed(front, [], machine))
+        | LandingState.Verifying _, FrontStep.PassTests -> now (CohortCommand.TestsCompleted(front, [], machine))
+        | LandingState.Verifying _, FrontStep.FailTests -> now (CohortCommand.TestsCompleted(front, [ TestId "f1" ], machine))
+        | LandingState.Verifying _, FrontStep.Inconclusive -> now (CohortCommand.VerificationInconclusive(front, "session still warming", machine))
+        | LandingState.Verifying _, FrontStep.FastForwardFails -> now (CohortCommand.FastForwardFailed(front, "ref moved under us", machine))
+        | (LandingState.Queued | LandingState.Blocked _ | LandingState.Landed _ | LandingState.Withdrawn), _ -> None
+
+let absentAgent : Agent = { Id = 5; Display = "agent-5" }
+
+let private applyIntent (h: Harness) (intent: Intent) : Harness =
+  match resolveIntent agentOf absentAgent h.ClaimHistory h.LandingHistory h.State h.NextEntropy intent with
+  | None -> h
+  | Some(advance, cmd) -> applyCommand { h with Clock = h.Clock + advance } cmd
 
 let private run (intents: Intent list) : Harness = intents |> List.fold applyIntent (initHarness ())
 
 let private allStates (h: Harness) : CohortState<Agent> list =
   CohortState.empty () :: (h.Steps |> List.map (fun s -> s.After))
 
-/// `Harness.Steps` (built by `run`/`applyIntent`) does not carry each accepted
-/// step's own (Clock, Entropy) — only the running counters that produced them.
-/// A faithful `LedgerEntry` needs both, so this re-runs the intents itself,
-/// this time recording every accepted (Seq, Clock, Entropy, Command, Events) —
-/// the ledger properties 7/10/17 replay.
-let private toLedger (intents: Intent list) : LedgerEntry<Agent> list =
-  let mutable clock = epoch
-  let mutable nextEntropy = 0
-  let mutable state = CohortState.empty ()
-  let entries = ResizeArray()
-  let mutable seq = 0L
-  for intent in intents do
-    let cmdOpt =
-      match intent with
-      | IJoin(a, role) -> Some(CohortCommand.Join(agentOf a, role, None, machine))
-      | IDepart a -> Some(CohortCommand.Depart(agentOf a, machine))
-      | IRenewLease a -> Some(CohortCommand.RenewLease(agentOf a, machine))
-      | ITick minutes ->
-        clock <- clock.AddMinutes(float (abs minutes % 90))
-        Some(CohortCommand.Tick machine)
-      | IAcquire(a, s) -> Some(CohortCommand.AcquireClaim(agentOf a, scopeOf s, "purpose", machine))
-      | IReleaseOwn(a, c) ->
-        if state.Claims.IsEmpty then None
-        else
-          let cid = state.Claims |> Map.toList |> List.map fst |> fun ids -> ids.[abs c % ids.Length]
-          Some(CohortCommand.ReleaseClaim(agentOf a, cid, state.Claims.[cid].Fence, machine))
-      | IReassign(by, c, toA) ->
-        if state.Claims.IsEmpty then None
-        else
-          let cid = state.Claims |> Map.toList |> List.map fst |> fun ids -> ids.[abs c % ids.Length]
-          Some(CohortCommand.ReassignClaim(agentOf by, cid, agentOf toA, machine))
-      | IObserveSave(a, p) -> Some(CohortCommand.ObserveSave(agentOf a, pathOf p, machine))
-      | IRequestLanding(a, commit) ->
-        let agent = agentOf a
-        let backing =
-          state.Claims
-          |> Map.toList
-          |> List.choose (fun (cid, c) ->
-            match c.State with
-            | ClaimState.Held holder when holder = agent -> Some(cid, c.Fence)
-            | _ -> None)
-        Some(CohortCommand.RequestLanding(agent, backing, [ sprintf "commit-%d" commit ], "landing statement", machine))
-      | IRebaseOk l ->
-        if state.Landings.IsEmpty then None
-        else
-          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.RebaseCompleted(lid, Ok(sprintf "sha-%d" nextEntropy), machine))
-      | IRebaseConflict(l, f) ->
-        if state.Landings.IsEmpty then None
-        else
-          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.RebaseCompleted(lid, Error [ sprintf "conflict-%d.fs" (abs f) ], machine))
-      | IAffected(l, t) ->
-        if state.Landings.IsEmpty then None
-        else
-          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.AffectedComputed(lid, testIdsOf t "t", machine))
-      | ITestsPass l ->
-        if state.Landings.IsEmpty then None
-        else
-          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.TestsCompleted(lid, [], machine))
-      | ITestsFail(l, f) ->
-        if state.Landings.IsEmpty then None
-        else
-          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.TestsCompleted(lid, testIdsOf (1 + abs f) "f", machine))
-      | IFastForward l ->
-        if state.Landings.IsEmpty then None
-        else
-          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" nextEntropy, machine))
-      | IWithdraw(a, l) ->
-        if state.Landings.IsEmpty then None
-        else
-          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.WithdrawLanding(agentOf a, lid, machine))
-      | IVeto(by, l) ->
-        if state.Landings.IsEmpty then None
-        else
-          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.VetoLanding(agentOf by, lid, "veto reason", machine))
-      | IDelegate(by, toA) -> Some(CohortCommand.DelegateConductor(agentOf by, (if toA = 5 then { Id = 5; Display = "agent-5" } else agentOf toA), machine))
-      | IResolveVeto(by, l) ->
-        if state.Landings.IsEmpty then None
-        else
-          let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.ResolveVeto(agentOf by, lid, machine))
-    match cmdOpt with
-    | None -> ()
-    | Some cmd ->
-      let entropy = BitConverter.GetBytes nextEntropy
-      nextEntropy <- nextEntropy + 1
-      match decide clock entropy state cmd with
-      | Error _ -> ()
-      | Ok(newState, events, _effects) ->
-        entries.Add { Seq = LanguagePrimitives.Int64WithMeasure seq; Clock = clock; Entropy = entropy; Command = cmd; Events = events }
-        seq <- seq + 1L
-        state <- newState
-  List.ofSeq entries
+/// The ledger a run wrote: every ACCEPTED step as the `LedgerEntry` that records it (`Seq` dense from 0, the clock and
+/// entropy `decide` was handed, the command and the events it returned) — what the ledger properties 10 and 17 replay.
+/// Built from the run's own steps, so there is one fold behind it and not a second copy of the intent table.
+let private ledgerOf (h: Harness) : LedgerEntry<Agent> list =
+  h.Steps
+  |> List.mapi (fun i s ->
+    { Seq = LanguagePrimitives.Int64WithMeasure(int64 i)
+      Clock = s.StepClock
+      Entropy = s.StepEntropy
+      Command = s.Command
+      Events = s.Events })
+
+let private toLedger (intents: Intent list) : LedgerEntry<Agent> list = intents |> run |> ledgerOf
+
+// ── The live owner, driven by the same intents ───────────────────────────
+//
+// `run` folds `decide` and nothing else, so a property over it can only ever say something about `decide`. The owner
+// (`CohortOwner`) is the second, independent path: it holds the state in memory, applies commands in arrival order and
+// WRITES the ledger as it goes. Comparing what it holds with `replay` of what it wrote is the property that can fail,
+// because the two paths share `decide` but not the clock, the entropy or the order the ledger recorded.
+
+let silentLogger =
+  { new SageFs.Utils.ILogger with
+      member _.LogInfo _ = ()
+      member _.LogDebug _ = ()
+      member _.LogWarning _ = ()
+      member _.LogError _ = () }
+
+let memberOf (i: int) : MemberId = MemberId.Minted(sprintf "agent-%d" (1 + abs i % 4))
+let absentMember : MemberId = MemberId.Minted "agent-5"
+
+/// Drive a real `CohortOwner` over `port` with `intents`, resolving each against the state the owner holds NOW, and
+/// return the state it holds at the end. The owner's performer is the default (it completes nothing), so a landing
+/// moves only when an intent says so, and the ledger order is the intent order.
+let driveOwner (port: LedgerPort<MemberId>) (intents: Intent list) : Task<CohortState<MemberId>> =
+  task {
+    let clock = ref epoch
+    let drawn = ref 0
+    let entropy () =
+      let n = drawn.Value
+      drawn.Value <- n + 1
+      BitConverter.GetBytes n
+    use owner = CohortOwner.start silentLogger machine port (fun () -> clock.Value) entropy (fun _ -> ([], [], [], 0L))
+    for intent in intents do
+      let state = owner.ReadCohortState()
+      let claimIds = state.Claims |> Map.toList |> List.map fst
+      let landingIds = state.Landings |> Map.toList |> List.map fst
+      match resolveIntent memberOf absentMember claimIds landingIds state drawn.Value intent with
+      | None -> ()
+      | Some(advance, cmd) ->
+        clock.Value <- clock.Value + advance
+        let! _ = owner.Commit cmd
+        ()
+    return owner.ReadCohortState()
+  }
+
+/// Does the state the owner holds equal `replay` of the ledger it wrote?
+let ownerAgreesWithReplay (port: LedgerPort<MemberId>) (intents: Intent list) : Task<bool> =
+  task {
+    let! live = driveOwner port intents
+    return replay (port.ReadAll machine) = live
+  }
+
+/// Twins of the in-memory ledger that each record one thing wrongly. A comparison that cannot tell these from the
+/// honest ledger is not comparing anything.
+let ledgerThatRecordsTheWrongClock (inner: LedgerPort<MemberId>) : LedgerPort<MemberId> =
+  { inner with Append = fun e -> inner.Append { e with Clock = epoch } }
+
+let ledgerThatDropsEntropy (inner: LedgerPort<MemberId>) : LedgerPort<MemberId> =
+  { inner with Append = fun e -> inner.Append { e with Entropy = [||] } }
 
 // ── Property 1: at most one exclusive claim per overlapping scope ─────────
 
@@ -439,6 +506,10 @@ let private allowedTransition fromK toK =
   | "Rebasing", "Blocked" -> true
   | "Verifying", "Verifying" -> true
   | "Verifying", "Blocked" -> true
+  // A fast-forward that failed for an infrastructure reason sends the landing back through the pipeline (bounded by
+  // `maxFastForwardAttempts`). The generator never produced `FastForwardFailed` before the pipeline histories did, so
+  // this edge was missing from the declared graph and nothing said so. It is the documented retry, not a defect.
+  | "Verifying", "Rebasing" -> true
   | "Verifying", "Landed" -> true
   | _, "Withdrawn" -> true
   | _ -> false
@@ -483,11 +554,11 @@ let private landedOrderRespectsRequestOrder (h: Harness) =
   let requestOrder = events |> List.choose (function CohortEvent.LandingQueued(id, _) -> Some id | _ -> None)
   let landedOrder = events |> List.choose (function CohortEvent.LandingLanded(id, _) -> Some id | _ -> None)
   let posOf id = requestOrder |> List.tryFindIndex ((=) id)
-  landedOrder
-  |> List.map posOf
-  |> List.choose id
-  |> List.pairwise
-  |> List.forall (fun (a, b) -> a < b)
+  // TOTAL: a landed id that was never queued is a failure, not a row to drop. (`List.choose id` used to discard it,
+  // so a landing the queue never saw could land and the property would not notice.)
+  let positions = landedOrder |> List.map posOf
+  positions |> List.forall Option.isSome
+  && positions |> List.choose id |> List.pairwise |> List.forall (fun (a, b) -> a < b)
 
 // ── Property 14: a Departed member's claims are Orphaned in the same step ──
 
@@ -509,6 +580,183 @@ let private departureOrphansAllHeldClaimsImmediately (h: Harness) =
         heldBefore = orphanedThisStep
       | _ -> true))
 
+// ── Property 11: a landing verified against H1 never lands when the head is H2 <> H1 ──
+//
+// The state is REACHED through `decide` (join, set the head to H1, claim, request the landing, rebase, affected, tests),
+// then the conductor moves the head to H2, then the landing is fast-forwarded. It used to be a record literal with
+// "H1-" and "H2-" prefixed onto the two generated strings, so the heads could never be equal: the half of the
+// property that says a landing LANDS when the head did not move was dead, and a `decide` that never landed anything
+// passed it. Equal heads are now generated half the time.
+
+/// What a fast-forward after the head moved did. A case per outcome, so a landing that did something else is not
+/// confused with either of the two the property is about.
+type FastForwardReached =
+  | SetupRefused of why: string
+  | Landed of integrationCommit: string
+  | HeadMoved of verified: string * now: string
+  | SomethingElse of what: string
+
+type DecideFn =
+  DateTime
+    -> byte[]
+    -> CohortState<Agent>
+    -> CohortCommand<Agent>
+    -> Result<CohortState<Agent> * CohortEvent<Agent> list * CohortEffect<Agent> list, CohortError<Agent>>
+
+/// The head the landing was verified against, and the head at fast-forward time.
+type HeadPair = HeadPair of verifiedAgainst: string * atFastForward: string
+
+let fastForwardAfterHeadMoved (decideFn: DecideFn) (scope: ClaimScope) (HeadPair(h1, h2)) : FastForwardReached =
+  let conductor = agentOf 1
+  let step (state: Result<CohortState<Agent>, string>, n: int) (cmd: CohortCommand<Agent>) =
+    match state with
+    | Result.Error _ -> state, n
+    | Ok st ->
+      match decideFn epoch (BitConverter.GetBytes n) st cmd with
+      | Ok(next, _, _) -> Ok next, n + 1
+      | Error refusal -> Result.Error(sprintf "%A was refused: %A" cmd refusal), n + 1
+  let after (build: CohortState<Agent> -> CohortCommand<Agent>) (state: Result<CohortState<Agent>, string>, n: int) =
+    match state with
+    | Result.Error _ -> state, n
+    | Ok st -> step (state, n) (build st)
+  let claimOf (st: CohortState<Agent>) = st.Claims |> Map.toList |> List.head
+  let landingOf (st: CohortState<Agent>) = st.Landings |> Map.toList |> List.head |> fst
+  let verified =
+    (Ok(CohortState.empty ()), 0)
+    |> fun s -> step s (CohortCommand.Join(conductor, JoinableRole.Implementer, None, machine))
+    |> fun s -> step s (CohortCommand.SetIntegrationHead(conductor, h1, machine))
+    |> fun s -> step s (CohortCommand.AcquireClaim(conductor, scope, "purpose", machine))
+    |> after (fun st ->
+      let cid, claim = claimOf st
+      CohortCommand.RequestLanding(conductor, [ cid, claim.Fence ], [ "c1" ], "statement", machine))
+    |> after (fun st -> CohortCommand.RebaseCompleted(landingOf st, Ok "rebased-sha", machine))
+    |> after (fun st -> CohortCommand.AffectedComputed(landingOf st, [], machine))
+    |> after (fun st -> CohortCommand.TestsCompleted(landingOf st, [], machine))
+    |> fun s -> step s (CohortCommand.SetIntegrationHead(conductor, h2, machine))
+  match fst verified with
+  | Result.Error why -> SetupRefused why
+  | Ok st ->
+    let lid = landingOf st
+    match decideFn epoch [| 99uy |] st (CohortCommand.FastForwardCompleted(lid, "landed-sha", machine)) with
+    | Error refusal -> SomethingElse(sprintf "the fast-forward was refused: %A" refusal)
+    | Ok(next, events, _) ->
+      match next.Landings.[lid].State with
+      | LandingState.Landed sha when events |> List.exists (function CohortEvent.LandingLanded _ -> true | _ -> false) -> Landed sha
+      | LandingState.Blocked(LandingBlocker.HeadMoved(f, t), _) -> HeadMoved(f, t)
+      | other -> SomethingElse(sprintf "%A" other)
+
+/// What a fast-forward after the head moved MUST do: land when the heads agree, block naming both when they do not.
+let fastForwardDidTheRightThing (HeadPair(h1, h2)) (reached: FastForwardReached) : bool =
+  if h1 = h2 then
+    (match reached with Landed "landed-sha" -> true | _ -> false)
+  else
+    (match reached with HeadMoved(f, t) -> f = h1 && t = h2 | _ -> false)
+
+let genHead =
+  Gen.choose (0, 6)
+  |> Gen.bind (fun n -> Gen.listOfLength n (Gen.elements [ 'a' .. 'f' ]))
+  |> Gen.map (fun cs -> "head-" + String(Array.ofList cs))
+
+/// Equal heads about half the time, so neither branch of the property is a rarity.
+type HeadGenerators =
+  static member Pair() =
+    Gen.oneof [
+      genHead |> Gen.map (fun h -> HeadPair(h, h))
+      Gen.zip genHead genHead |> Gen.where (fun (a, b) -> a <> b) |> Gen.map HeadPair
+    ]
+    |> Arb.fromGen
+
+  static member Scope() = Gen.elements (List.ofArray scopePool) |> Arb.fromGen
+
+let headConfig ={ cohortConfig with arbitrary = [ typeof<HeadGenerators> ] }
+
+/// Two ways `decide` could be wrong that the property must notice. `neverLands` reports HeadMoved where the real one
+/// lands, with the payload the blocked path would carry; `ignoresTheHead` lands whatever the head is.
+let neverLands : DecideFn =
+  fun clock entropy state cmd ->
+    match cmd, decide clock entropy state cmd with
+    | CohortCommand.FastForwardCompleted(lid, _, _), Ok(next, events, effects) ->
+      match next.Landings.[lid].State, state.Landings.[lid].State with
+      | LandingState.Landed _, LandingState.Verifying(verified, _, _, _) ->
+        let blocked = { next.Landings.[lid] with State = LandingState.Blocked(LandingBlocker.HeadMoved(verified, state.IntegrationHead), NextAction.RebaseAndResubmit) }
+        Ok({ next with Landings = Map.add lid blocked next.Landings }, [ CohortEvent.LandingStateChanged(lid, blocked.State) ], effects)
+      | _ -> Ok(next, events, effects)
+    | _, result -> result
+
+let ignoresTheHead : DecideFn =
+  fun clock entropy state cmd ->
+    match cmd with
+    | CohortCommand.FastForwardCompleted(lid, _, _) ->
+      match state.Landings.[lid].State with
+      | LandingState.Verifying(verified, _, _, _) -> decide clock entropy { state with IntegrationHead = verified } cmd
+      | _ -> decide clock entropy state cmd
+    | _ -> decide clock entropy state cmd
+
+// ── Generators for the targeted races (4, 12, 15, 16, 19) ──────────────────
+//
+// These properties took an `int` and used it modulo four, so each was a four-case example test run two hundred times.
+// They take real generated values now: a claim scope drawn from the pool, how many acquire/release round trips move
+// the fence counter first, how far behind a presented fence is, an arbitrary display name, and a generated plan.
+
+/// How many acquire/release round trips happen before the claim under test.
+type Cycles = Cycles of int
+
+/// How many fences behind the current one a stale command presents.
+type Staleness = Staleness of int
+
+/// A display name, including ones that collide with nothing and ones made of awkward characters.
+type DisplayName = DisplayName of string
+
+[<RequireQualifiedAccess>]
+type Reconnection =
+  | Steady
+  | DropsFirst
+
+type PlanStep = { PlanScope: ClaimScope; Reconnect: Reconnection }
+
+type ReconnectPlan = ReconnectPlan of PlanStep list
+
+type RaceGenerators =
+  static member Scope() = Gen.elements (List.ofArray scopePool) |> Arb.fromGen
+  static member Cycles() = Gen.choose (0, 3) |> Gen.map Cycles |> Arb.fromGen
+  static member Staleness() = Gen.choose (1, 5) |> Gen.map Staleness |> Arb.fromGen
+
+  static member DisplayName() =
+    Gen.choose (1, 12)
+    |> Gen.bind (fun n -> Gen.listOfLength n (Gen.elements [ 'a'; 'Z'; '0'; ' '; '-'; '_'; 'é'; '/' ]))
+    |> Gen.map (fun cs -> DisplayName(String(Array.ofList cs)))
+    |> Arb.fromGen
+
+  static member Plan() =
+    let reconnection = Gen.elements [ Reconnection.Steady; Reconnection.DropsFirst ]
+    let step = Gen.map2 (fun scope reconnect -> { PlanScope = scope; Reconnect = reconnect }) (Gen.elements (List.ofArray scopePool)) reconnection
+    Gen.choose (1, 6) |> Gen.bind (fun n -> Gen.listOfLength n step) |> Gen.map ReconnectPlan |> Arb.fromGen
+
+/// How many of a sample of histories reached each landing outcome. Named `...In` so a field is never read as the
+/// event or state case of the same name.
+type Reach = { LandedIn: int; TwoLandedIn: int; BlockedIn: int; VetoedIn: int }
+
+let raceConfig ={ cohortConfig with arbitrary = [ typeof<RaceGenerators> ] }
+
+/// Every checked-in cohort ledger, parsed: file name and entries. A file that does not parse fails the test that asks.
+let corpusLedgers () : (string * LedgerEntry<MemberId> list) list =
+  let corpusDir = System.IO.Path.Combine(repoRoot, "SageFs.Tests", "cohorts")
+  System.IO.Directory.CreateDirectory corpusDir |> ignore
+  System.IO.Directory.GetFiles(corpusDir, "*.ledger.jsonl")
+  |> Array.sort
+  |> Array.map (fun file ->
+    match SageFs.Features.CohortLedgerExport.fromJsonl (System.IO.File.ReadAllText file) with
+    | Error e -> failwithf "%s failed to parse: %s" file e
+    | Ok(entries: LedgerEntry<MemberId> list) -> System.IO.Path.GetFileName file, entries)
+  |> List.ofArray
+
+/// The claim `who` currently HOLDS, if any. A released or orphaned claim stays in the map until it is swept, so
+/// "the one claim" is not `Claims |> Map.toList |> List.head`.
+let heldClaimOf (who: Agent) (h: Harness) : (ClaimId * Claim<Agent>) option =
+  h.State.Claims
+  |> Map.toList
+  |> List.tryFind (fun (_, c) -> match c.State with ClaimState.Held holder -> holder = who | _ -> false)
+
 [<Tests>]
 let cohortPropertyTests =
   testList "Cohort properties (Phase 1 item 7, §7.3)" [
@@ -529,15 +777,92 @@ let cohortPropertyTests =
       testPropertyWithConfig cohortConfig "5: LandingState transitions follow the declared graph" <| fun (intents: Intent list) ->
         landingTransitionsFollowTheGraph (run intents)
 
+      testPropertyWithConfig pipelineConfig "5 (pipeline histories): LandingState transitions follow the declared graph" <| fun (PipelineHistory intents) ->
+        landingTransitionsFollowTheGraph (run intents)
+
       testPropertyWithConfig cohortConfig "6: Landed implies every claim was Held by the requester at land time" <| fun (intents: Intent list) ->
         landedImpliesClaimsHeldAtLandTime (run intents)
 
-      testPropertyWithConfig cohortConfig "7: replay of the accepted ledger equals the live fold" <| fun (intents: Intent list) ->
-        let ledger = toLedger intents
-        let live = ledger |> List.fold (fun st e -> match decide e.Clock e.Entropy st e.Command with Ok(s, _, _) -> s | Error _ -> st) (CohortState.empty ())
-        replay ledger = live
+      testPropertyWithConfig pipelineConfig "6 (pipeline histories): Landed implies every claim was Held by the requester at land time" <| fun (PipelineHistory intents) ->
+        landedImpliesClaimsHeldAtLandTime (run intents)
+
+      // Two INDEPENDENT paths: the state a live `CohortOwner` holds after being driven through its command path, and
+      // `replay` of the ledger that same owner wrote. (This used to compare `List.fold decide` with `replay`, which is
+      // the same `List.fold decide`: it proved `decide` deterministic and nothing about the ledger.)
+      testPropertyWithConfig cohortConfig "7: the state the live owner holds equals replay of the ledger it wrote" <| fun (intents: Intent list) ->
+        ownerAgreesWithReplay (InMemory.create<MemberId> ()) intents
+
+      testPropertyWithConfig pipelineConfig "7 (pipeline histories): the state the live owner holds equals replay of the ledger it wrote, through landings" <| fun (PipelineHistory intents) ->
+        ownerAgreesWithReplay (InMemory.create<MemberId> ()) intents
+
+      // The teeth: the same comparison must FAIL for a ledger that records one thing wrongly. If it cannot, property 7
+      // above is comparing a value with itself again.
+      testTask "7 (teeth): a ledger that records the wrong clock, or drops the entropy, is caught by property 7's comparison" {
+        // Seated first, so the history spends its steps on claims, landings and lapses and not on getting anyone in.
+        let histories = Gen.sample 300 genIntents |> Array.map (fun intents -> seating @ intents)
+        let disagreements (wrap: LedgerPort<MemberId> -> LedgerPort<MemberId>) =
+          task {
+            let mutable count = 0
+            for intents in histories do
+              let! agrees = ownerAgreesWithReplay (wrap (InMemory.create<MemberId> ())) intents
+              if not agrees then count <- count + 1
+            return count
+          }
+        let! honest = disagreements id
+        honest |> Expect.equal "an honest ledger always agrees with the owner" 0
+        let! wrongClock = disagreements ledgerThatRecordsTheWrongClock
+        Expect.isGreaterThan "a ledger with the wrong clock disagrees on some history" (wrongClock, 0)
+        let! noEntropy = disagreements ledgerThatDropsEntropy
+        Expect.isGreaterThan "a ledger without the entropy disagrees on some history" (noEntropy, 0)
+      }
+
+      // A ledger this build wrote must replay without a single skipped row and without one event it cannot reproduce.
+      // This is what makes a row in `Dropped` or `Diverged` mean "the ledger is older than the code", not noise.
+      testPropertyWithConfig cohortConfig "7 (audit): replaying a ledger this build wrote drops no row and finds no event it cannot reproduce" <| fun (intents: Intent list) ->
+        let audit = replayAuditIn machine (toLedger intents)
+        audit.Dropped.IsEmpty && audit.Diverged.IsEmpty && audit.Head.State = replay (toLedger intents)
+
+      test "7 (audit): a row decide now refuses comes back in Dropped with its Seq and the refusal, and the state is what replayIn returns" {
+        let honest = toLedger [ IJoin(1, JoinableRole.Implementer) ]
+        let ghost = ClaimId "ghost"
+        let refused : LedgerEntry<Agent> =
+          { Seq = LanguagePrimitives.Int64WithMeasure 1L
+            Clock = epoch.AddMinutes 1.
+            Entropy = [||]
+            Command = CohortCommand.ReleaseClaim(agentOf 1, ghost, 0L<Measures.fence>, machine)
+            Events = [] }
+        let audit = replayAuditIn machine (honest @ [ refused ])
+        audit.Dropped
+        |> List.map (fun d -> int64 d.DroppedSeq, d.Refusal)
+        |> Expect.equal "the refused row is reported with its sequence number and the refusal" [ 1L, CohortError.UnknownClaim ghost ]
+        audit.Head.State |> Expect.equal "the dropped row changes nothing" (replayIn machine honest)
+        audit.Head.Seq |> Expect.equal "the head still names the last row read" refused.Seq
+      }
+
+      test "7 (audit): a row decide still accepts but answers with other events than were recorded comes back in Diverged" {
+        let honest = toLedger [ IJoin(1, JoinableRole.Implementer) ]
+        let tickAt = epoch.AddMinutes 20.
+        // 20 minutes of silence is inside today's 30 minute lease window, so decide returns no events for this Tick.
+        // The row records a departure, which is what a shorter window would have written.
+        let recorded : LedgerEntry<Agent> =
+          { Seq = LanguagePrimitives.Int64WithMeasure 1L
+            Clock = tickAt
+            Entropy = [||]
+            Command = CohortCommand.Tick machine
+            Events = [ CohortEvent.MemberDeparted(agentOf 1, tickAt) ] }
+        let audit = replayAuditIn machine (honest @ [ recorded ])
+        audit.Dropped |> Expect.isEmpty "the row still applies"
+        audit.Diverged
+        |> List.map (fun d -> int64 d.DivergedSeq, d.Recorded.Length, d.Replayed.Length)
+        |> Expect.equal "the row is reported with what was recorded and what replay produced" [ 1L, 1, 0 ]
+      }
 
       testPropertyWithConfig cohortConfig "13: landed order never precedes an earlier landing's request order" <| fun (intents: Intent list) ->
+        landedOrderRespectsRequestOrder (run intents)
+
+      // Two landings in one history is what this property is ABOUT, and the plain histories reach it in about one in
+      // four hundred. The pipeline histories reach it in most runs (see 29), and 29's seeded history guarantees it.
+      testPropertyWithConfig pipelineConfig "13 (pipeline histories): landed order never precedes an earlier landing's request order" <| fun (PipelineHistory intents) ->
         landedOrderRespectsRequestOrder (run intents)
 
       testPropertyWithConfig cohortConfig "14: a departing member's Held claims are all Orphaned in the same step" <| fun (intents: Intent list) ->
@@ -546,116 +871,227 @@ let cohortPropertyTests =
 
     testList "targeted races (4, 11, 12, 15)" [
 
-      testPropertyWithConfig cohortConfig "4: a stale fence is refused whatever else the command carries" <| fun (scopeIdx: int) ->
+      testPropertyWithConfig raceConfig "4: a stale fence is refused whatever else the command carries" <| fun (scope: ClaimScope) (Cycles roundTrips) (Staleness behind) ->
         let a = agentOf 1
         let h0 = initHarness ()
         let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
-        let h2 = applyCommand h1 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose", machine))
-        match h2.State.Claims |> Map.toList with
-        | [ (cid, claim) ] ->
-          let staleFence = claim.Fence - 1L<Measures.fence>
-          match decide h2.Clock [| 99uy |] h2.State (CohortCommand.ReleaseClaim(a, cid, staleFence, machine)) with
+        // Acquire/release round trips move the fence counter before the claim under test is taken, so the stale
+        // fence is not always "one below the first fence there ever was".
+        let h2 =
+          [ 1 .. roundTrips ]
+          |> List.fold
+            (fun h _ ->
+              let acquired = applyCommand h (CohortCommand.AcquireClaim(a, scope, "round trip", machine))
+              match heldClaimOf a acquired with
+              | Some(cid, claim) -> applyCommand acquired (CohortCommand.ReleaseClaim(a, cid, claim.Fence, machine))
+              | None -> acquired)
+            h1
+        let h3 = applyCommand h2 (CohortCommand.AcquireClaim(a, scope, "purpose", machine))
+        match heldClaimOf a h3 with
+        | Some(cid, claim) ->
+          let staleFence = claim.Fence - (int64 behind) * 1L<Measures.fence>
+          match decide h3.Clock [| 99uy |] h3.State (CohortCommand.ReleaseClaim(a, cid, staleFence, machine)) with
           | Error(CohortError.StaleClaimFence(errCid, presented, current)) ->
             errCid = cid && presented = staleFence && current = claim.Fence
           | _ -> false
-        | _ -> false
+        | None -> false
 
-      testPropertyWithConfig cohortConfig "11: a landing verified against H1 never lands when the head is H2 <> H1" <| fun (h1: string) (h2: string) ->
-        let requester = agentOf 1
-        let h1' = "H1-" + h1
-        let h2' = "H2-" + h2
-        match Purpose.tryCreate "purpose", Statement.tryCreate "statement" with
-        | Ok purpose, Ok statement ->
-          let claim = { Id = ClaimId "c-0"; Fence = 1L<Measures.fence>; Scope = ClaimScope.File "X.fs"; Purpose = purpose; Since = epoch; State = ClaimState.Held requester }
-          let req =
-            { Id = LandingId "l-0"; Requester = requester; Claims = [ (claim.Id, claim.Fence) ]; Commits = [ "c1" ]
-              BaseAtQueue = h1'; Statement = statement; State = LandingState.Verifying(h1', "rebased-" + h1', 1, 0)
-              FastForwardAttempts = 0; Settlement = LandingSettlement.Unsettled }
-          let state =
-            { CohortState.empty () with
-                IntegrationHead = h2'
-                Members = Map.ofList [ requester, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None } ]
-                Claims = Map.ofList [ claim.Id, claim ]
-                Landings = Map.ofList [ req.Id, req ]
-                Queue = [ req.Id ] }
-          match decide epoch [||] state (CohortCommand.FastForwardCompleted(req.Id, "landed-sha", machine)) with
-          | Ok(newState, events, _) when h1' = h2' ->
-            (match newState.Landings.[req.Id].State with LandingState.Landed sha -> sha = "landed-sha" | _ -> false)
-            && events |> List.exists (function CohortEvent.LandingLanded _ -> true | _ -> false)
-          | Ok(newState, _, _) ->
-            match newState.Landings.[req.Id].State with
-            | LandingState.Blocked(LandingBlocker.HeadMoved(f, t), _) -> f = h1' && t = h2'
-            | _ -> false
-          | Error _ -> false
-        | _ -> false
+      testPropertyWithConfig headConfig "11: a landing verified against H1 lands when the head is still H1 and is blocked HeadMoved(H1, H2) when it is H2 <> H1" <| fun (scope: ClaimScope) (pair: HeadPair) ->
+        fastForwardAfterHeadMoved decide scope pair |> fastForwardDidTheRightThing pair
 
-      testPropertyWithConfig cohortConfig "12: a departed member's stale-fence command never changes the claim it no longer holds" <| fun (scopeIdx: int) ->
+      // The teeth. Property 11 is only worth having if it fails for a `decide` that is wrong in either direction, and
+      // if both of its branches are reached: the earlier version could never reach the equal-heads branch at all.
+      testCase "11 (teeth): the property reaches both branches, and fails a decide that never lands and one that ignores the head" <| fun _ ->
+        let pairs = Gen.sample 400 (Arb.toGen (HeadGenerators.Pair()))
+        let satisfying (decideFn: DecideFn) =
+          pairs |> Array.filter (fun pair -> fastForwardAfterHeadMoved decideFn scopePool.[0] pair |> fastForwardDidTheRightThing pair) |> Array.length
+        let equalHeads = pairs |> Array.filter (fun (HeadPair(a, b)) -> a = b) |> Array.length
+        Expect.isGreaterThan "the equal-heads branch is reached" (equalHeads, 100)
+        Expect.isLessThan "the different-heads branch is reached" (equalHeads, pairs.Length - 100)
+        satisfying decide |> Expect.equal "the real decide satisfies every pair" pairs.Length
+        Expect.isLessThan "a decide that never lands fails the equal-heads pairs" (satisfying neverLands, pairs.Length - 100)
+        Expect.isLessThan "a decide that ignores the head fails the different-heads pairs" (satisfying ignoresTheHead, pairs.Length - 100)
+
+      testPropertyWithConfig raceConfig "12: a departed member's stale-fence command never changes the claim it no longer holds" <| fun (scope: ClaimScope) (Cycles bystanders) ->
         let a = agentOf 1
         let h0 = initHarness ()
         let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
-        let h2 = applyCommand h1 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose", machine))
-        match h2.State.Claims |> Map.toList with
-        | [ (cid, claimBeforeDepart) ] ->
-          let h3 = applyCommand h2 (CohortCommand.Depart(a, machine))
+        // Other members are present around the one that departs; none of them may change what happens to its claim.
+        let h2 =
+          [ 2 .. 1 + bystanders ]
+          |> List.fold (fun h i -> applyCommand h (CohortCommand.Join(agentOf i, JoinableRole.Implementer, None, machine))) h1
+        let h3 = applyCommand h2 (CohortCommand.AcquireClaim(a, scope, "purpose", machine))
+        match heldClaimOf a h3 with
+        | Some(cid, claimBeforeDepart) ->
+          let h4 = applyCommand h3 (CohortCommand.Depart(a, machine))
           // The member's late command, presenting the fence from BEFORE departure.
-          match decide h3.Clock [| 7uy |] h3.State (CohortCommand.ReleaseClaim(a, cid, claimBeforeDepart.Fence, machine)) with
+          match decide h4.Clock [| 7uy |] h4.State (CohortCommand.ReleaseClaim(a, cid, claimBeforeDepart.Fence, machine)) with
           | Error _ ->
-            match h3.State.Claims.[cid].State with
+            match h4.State.Claims.[cid].State with
             | ClaimState.Orphaned(prev, _) -> prev = a
             | _ -> false
           | Ok _ -> false
-        | _ -> false
+        | None -> false
 
-      testPropertyWithConfig cohortConfig "15: a hostile display-name collision never lets one member touch another's claim" <| fun (scopeIdx: int) ->
-        let a = { Id = 1; Display = "shared-name" }
-        let hostile = { Id = 2; Display = "shared-name" }
+      testPropertyWithConfig raceConfig "15: a hostile display-name collision never lets one member touch another's claim" <| fun (scope: ClaimScope) (DisplayName name) ->
+        let a = { Id = 1; Display = name }
+        let hostile = { Id = 2; Display = name }
         let h0 = initHarness ()
         let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
         let h2 = applyCommand h1 (CohortCommand.Join(hostile, JoinableRole.Implementer, None, machine))
-        let h3 = applyCommand h2 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose", machine))
-        match h3.State.Claims |> Map.toList with
-        | [ (cid, claim) ] ->
+        let h3 = applyCommand h2 (CohortCommand.AcquireClaim(a, scope, "purpose", machine))
+        match heldClaimOf a h3 with
+        | Some(cid, claim) ->
           match decide h3.Clock [| 3uy |] h3.State (CohortCommand.ReleaseClaim(hostile, cid, claim.Fence, machine)) with
           | Error(CohortError.NotClaimHolder(errCid, requester)) ->
             errCid = cid
             && requester = hostile
             && (match h3.State.Claims.[cid].State with ClaimState.Held h -> h = a | _ -> false)
           | _ -> false
-        | _ -> false
+        | None -> false
     ]
 
     testList "generated schedule with reconnection (16)" [
 
-      testPropertyWithConfig cohortConfig "16: intermittent reconnection between landings never changes the set of landed commits" <| fun (n: int) ->
-        let planLength = 1 + (abs n % 4)
+      // A generated plan: how many landings, which scope each claims, and before which of them the member drops its
+      // connection (departs and rejoins). `Reconnection` is a case per behaviour, so a step is never "flaky: true".
+      testPropertyWithConfig raceConfig "16: intermittent reconnection between landings never changes the set of landed commits" <| fun (ReconnectPlan steps) ->
         let a = agentOf 1
 
-        let runPlan (flaky: bool) =
-          let h0 = initHarness ()
-          let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
-          let landed = ResizeArray<string>()
-          let mutable h = h1
-          for i in 1 .. planLength do
-            if flaky then
-              h <- applyCommand h (CohortCommand.Depart(a, machine))
-              h <- applyCommand h (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
-            h <- applyCommand h (CohortCommand.AcquireClaim(a, scopeOf i, "purpose", machine))
-            let cid = h.State.Claims |> Map.toList |> List.map fst |> List.last
-            let fence = h.State.Claims.[cid].Fence
-            h <- applyCommand h (CohortCommand.RequestLanding(a, [ (cid, fence) ], [ sprintf "commit-%d" i ], "statement", machine))
-            let lid = h.State.Landings |> Map.toList |> List.map fst |> List.last
-            h <- applyCommand h (CohortCommand.RebaseCompleted(lid, Ok "head", machine))
-            h <- applyCommand h (CohortCommand.AffectedComputed(lid, [], machine))
-            h <- applyCommand h (CohortCommand.TestsCompleted(lid, [], machine))
-            h <- applyCommand h (CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" i, machine))
-            match h.State.Landings.[lid].State with
-            | LandingState.Landed sha -> landed.Add sha
-            | _ -> ()
-          h, Set.ofSeq landed
+        let runPlan (reconnection: PlanStep -> Reconnection) : Set<string> =
+          let joined = applyCommand (initHarness ()) (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
+          let _, landed =
+            steps
+            |> List.indexed
+            |> List.fold
+              (fun (h, landed) (i, step) ->
+                let reconnected =
+                  match reconnection step with
+                  | Reconnection.Steady -> h
+                  | Reconnection.DropsFirst ->
+                    applyCommand (applyCommand h (CohortCommand.Depart(a, machine))) (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
+                let acquired = applyCommand reconnected (CohortCommand.AcquireClaim(a, step.PlanScope, "purpose", machine))
+                match heldClaimOf a acquired with
+                | None -> acquired, landed
+                | Some(cid, claim) ->
+                  let requested =
+                    applyCommand acquired (CohortCommand.RequestLanding(a, [ (cid, claim.Fence) ], [ sprintf "commit-%d" i ], "statement", machine))
+                  match requested.State.Queue with
+                  | [] -> requested, landed
+                  | lid :: _ ->
+                    let finished =
+                      [ CohortCommand.RebaseCompleted(lid, Ok "head", machine)
+                        CohortCommand.AffectedComputed(lid, [], machine)
+                        CohortCommand.TestsCompleted(lid, [], machine)
+                        CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" i, machine) ]
+                      |> List.fold applyCommand requested
+                    match finished.State.Landings.[lid].State with
+                    | LandingState.Landed sha -> finished, Set.add sha landed
+                    | _ -> finished, landed)
+              (joined, Set.empty)
+          landed
 
-        let _, honestLanded = runPlan false
-        let _, flakyLanded = runPlan true
-        honestLanded = flakyLanded
+        let honestLanded = runPlan (fun _ -> Reconnection.Steady)
+        let flakyLanded = runPlan (fun step -> step.Reconnect)
+        // Every step landed in the honest run (a lone member with a free scope), so the comparison is not two empty sets.
+        honestLanded.Count = List.length steps && honestLanded = flakyLanded
+    ]
+
+    testList "the histories reach what the properties are about (29, 30)" [
+
+      // Reachability, measured on the REAL generators (4000 histories each, run through the real `decide`) when these
+      // floors were set, as a percentage of histories:
+      //
+      //                  Landed   two Landed   Blocked   Vetoed
+      //   before (old)     1.9       0.03         6.1      1.4    (the weights this suite shipped with)
+      //   plain            5.7       0.25         7.6      1.4
+      //   pipeline        87.3      66.8         70.9      3.9
+      //
+      // The floors sit well under the measurements, so a run of bad luck cannot trip them and a generator that stops
+      // reaching a landing does. A property over "every Landed event" is empty when no history lands.
+      testCase "29: the plain histories reach Landed and Blocked, and the pipeline histories reach Landed, two Landed, Blocked and Vetoed" <| fun _ ->
+        let sampled = 1000
+        let reach (gen: Gen<Intent list>) =
+          let histories = Gen.sample sampled gen |> Array.map run
+          let events (h: Harness) = h.Steps |> List.collect (fun s -> s.Events)
+          let landedCount (h: Harness) = events h |> List.filter (function CohortEvent.LandingLanded _ -> true | _ -> false) |> List.length
+          let blocked (h: Harness) = events h |> List.exists (function CohortEvent.LandingStateChanged(_, LandingState.Blocked _) -> true | _ -> false)
+          let vetoed (h: Harness) =
+            events h |> List.exists (function CohortEvent.LandingStateChanged(_, LandingState.Blocked(LandingBlocker.VetoedBy _, _)) -> true | _ -> false)
+          { LandedIn = histories |> Array.filter (fun h -> landedCount h >= 1) |> Array.length
+            TwoLandedIn = histories |> Array.filter (fun h -> landedCount h >= 2) |> Array.length
+            BlockedIn = histories |> Array.filter blocked |> Array.length
+            VetoedIn = histories |> Array.filter vetoed |> Array.length }
+        // A floor of N percent of 1000 histories is N * 10.
+        let percent (n: int) = n * sampled / 100
+        let plain = reach genIntents
+        Expect.isGreaterThan "plain histories reach a Landed landing in at least 3 percent" (plain.LandedIn, percent 3)
+        Expect.isGreaterThan "plain histories reach a Blocked landing in at least 3 percent" (plain.BlockedIn, percent 3)
+        let pipeline = reach (Arb.toGen (PipelineGenerators.History()) |> Gen.map (fun (PipelineHistory intents) -> intents))
+        Expect.isGreaterThan "pipeline histories reach a Landed landing in at least 60 percent" (pipeline.LandedIn, percent 60)
+        Expect.isGreaterThan "pipeline histories land TWO landings in at least 40 percent" (pipeline.TwoLandedIn, percent 40)
+        Expect.isGreaterThan "pipeline histories reach a Blocked landing in at least 40 percent" (pipeline.BlockedIn, percent 40)
+        Expect.isGreaterThan "pipeline histories reach a vetoed landing in at least 1 percent" (pipeline.VetoedIn, percent 1)
+
+      // The one history that lands two, written out, so property 13 and property 6 have a case that cannot be missed
+      // by a run of bad luck. Two implementers' worth of work from one member: claim, request, rebase, fast-forward, twice.
+      let twoLandings =
+        seating
+        @ [ IAcquire(1, 0); IRequestLanding(1, 1); IAdvance FrontStep.Succeed; IAdvance FrontStep.Succeed
+            IAcquire(1, 1); IRequestLanding(1, 2); IAdvance FrontStep.Succeed; IAdvance FrontStep.Succeed ]
+
+      testTask "30: a seeded history lands two landings, in request order, each with its claims held, and the owner agrees with replay" {
+        let h = run twoLandings
+        let events = h.Steps |> List.collect (fun s -> s.Events)
+        events
+        |> List.filter (function CohortEvent.LandingLanded _ -> true | _ -> false)
+        |> List.length
+        |> Expect.equal "two landings landed" 2
+        landedOrderRespectsRequestOrder h |> Expect.isTrue "they landed in the order they were requested"
+        landedImpliesClaimsHeldAtLandTime h |> Expect.isTrue "each landed with its claims held by the requester"
+        landingTransitionsFollowTheGraph h |> Expect.isTrue "each followed the declared graph"
+        let! agrees = ownerAgreesWithReplay (InMemory.create<MemberId> ()) twoLandings
+        agrees |> Expect.isTrue "the live owner holds what replay of its ledger holds"
+      }
+
+      testCase "30 (teeth): property 13 fails a landing order that runs backwards and a landing the queue never saw" <| fun _ ->
+        let first = LandingId "l-first"
+        let second = LandingId "l-second"
+        let history (events: CohortEvent<Agent> list) =
+          let step : Step =
+            { Before = CohortState.empty (); After = CohortState.empty (); Command = CohortCommand.Tick machine
+              Events = events; StepClock = epoch; StepEntropy = [||] }
+          { initHarness () with Steps = [ step ] }
+        let queued = [ CohortEvent.LandingQueued(first, agentOf 1); CohortEvent.LandingQueued(second, agentOf 1) ]
+        history (queued @ [ CohortEvent.LandingLanded(first, "a"); CohortEvent.LandingLanded(second, "b") ])
+        |> landedOrderRespectsRequestOrder
+        |> Expect.isTrue "in request order is accepted"
+        history (queued @ [ CohortEvent.LandingLanded(second, "b"); CohortEvent.LandingLanded(first, "a") ])
+        |> landedOrderRespectsRequestOrder
+        |> Expect.isFalse "the second landing landing first is refused"
+        history (queued @ [ CohortEvent.LandingLanded(LandingId "l-never-queued", "c") ])
+        |> landedOrderRespectsRequestOrder
+        |> Expect.isFalse "a landing that was never queued is refused, not dropped"
+
+      // `CohortCommand` has 21 cases and this suite's generator used to emit 17 of them; the four it did not
+      // (VerificationInconclusive, FastForwardFailed, SetIntegrationHead, OpenCohort) were never exercised by a
+      // property, and no test would have said so. Reflecting over the DU makes a new case fail here until a generator
+      // issues it, and "issues it" means `decide` ACCEPTED it, not that an intent was merely written.
+      testCase "31: every CohortCommand case is accepted by decide in some generated history, and a command for another cohort is refused WrongCohortScope" <| fun _ ->
+        let caseOf (cmd: CohortCommand<Agent>) = (fst (FSharpValue.GetUnionFields(cmd, typeof<CohortCommand<Agent>>))).Name
+        let allCases = FSharpType.GetUnionCases(typeof<CohortCommand<Agent>>) |> Array.map (fun c -> c.Name) |> Set.ofArray
+        let pipeline = Gen.sample 600 (Arb.toGen (PipelineGenerators.History())) |> Array.map (fun (PipelineHistory intents) -> run intents)
+        let plain = Gen.sample 600 genIntents |> Array.map (fun intents -> run (seating @ intents))
+        let delegating = Gen.sample 300 (Arb.toGen (DelegatingGenerators.History())) |> Array.map (fun (DelegatingHistory intents) -> run intents)
+        let histories = Array.concat [ pipeline; plain; delegating ]
+        let accepted = histories |> Array.collect (fun h -> h.Steps |> List.map (fun s -> caseOf s.Command) |> Array.ofList) |> Set.ofArray
+        Set.difference allCases accepted
+        |> Set.toList
+        |> Expect.equal "every CohortCommand case is accepted in some generated history; the ones listed never were" []
+        histories
+        |> Array.exists (fun h ->
+          h.Attempts |> List.exists (fun a -> match a.Verdict with Result.Error(CohortError.WrongCohortScope _) -> true | _ -> false))
+        |> Expect.isTrue "a command addressed to another cohort was generated and refused WrongCohortScope"
     ]
 
     testList "authority (Phase 1 item 8, §4.2)" [
@@ -711,7 +1147,7 @@ let cohortPropertyTests =
           | ConductorBinding.Vacant _ -> true
         anonymousOk && conductorOk && membersOk && bindingInvariantOk
 
-      testPropertyWithConfig cohortConfig "19: ReassignClaim is refused for a non-conductor and succeeds for the conductor" <| fun (scopeIdx: int) ->
+      testPropertyWithConfig raceConfig "19: ReassignClaim is refused for a non-conductor and succeeds for the conductor" <| fun (scope: ClaimScope) ->
         let conductor = agentOf 0
         let other = agentOf 1
         let target = agentOf 2
@@ -719,7 +1155,7 @@ let cohortPropertyTests =
         let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer, None, machine)) // first joiner: becomes conductor
         let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer, None, machine))
         let h3 = applyCommand h2 (CohortCommand.Join(target, JoinableRole.Implementer, None, machine))
-        let h4 = applyCommand h3 (CohortCommand.AcquireClaim(other, scopeOf scopeIdx, "purpose", machine))
+        let h4 = applyCommand h3 (CohortCommand.AcquireClaim(other, scope, "purpose", machine))
         match h4.State.Claims |> Map.toList with
         | [ (cid, _) ] ->
           let h5 = applyCommand h4 (CohortCommand.Depart(other, machine)) // orphans the claim
@@ -977,33 +1413,61 @@ let cohortPropertyTests =
         // events that were recorded alongside that command — proving a
         // checked-in ledger stays replayable across code changes, not merely
         // that its final state happens to match.
-        let corpusDir = System.IO.Path.Combine(repoRoot, "SageFs.Tests", "cohorts")
-        System.IO.Directory.CreateDirectory corpusDir |> ignore
-        let files = System.IO.Directory.GetFiles(corpusDir, "*.ledger.jsonl")
+        let ledgers = corpusLedgers ()
 
-        files.Length > 0
+        ledgers.Length > 0
         |> Expect.isTrue "at least one recorded ledger corpus file is checked in (item 18a's fixture)"
 
-        files
-        |> Array.iter (fun file ->
-          let jsonl = System.IO.File.ReadAllText file
-          match SageFs.Features.CohortLedgerExport.fromJsonl jsonl with
-          | Error e -> failtestf "%s failed to parse: %s" file e
-          | Ok(entries: LedgerEntry<MemberId> list) ->
-            entries
-            |> List.fold
-              (fun state (entry: LedgerEntry<MemberId>) ->
-                match decide entry.Clock entry.Entropy state entry.Command with
-                | Ok(newState, events, _effects) ->
-                  events
-                  |> Expect.equal
-                    (sprintf "%s seq %d replays to its recorded events" file (int64 entry.Seq))
-                    entry.Events
-                  newState
-                | Error e ->
-                  failtestf "%s seq %d: recorded command no longer applies cleanly: %A" file (int64 entry.Seq) e)
-              (CohortState.empty ())
-            |> ignore)
+        ledgers
+        |> List.iter (fun (file, entries) ->
+          entries
+          |> List.fold
+            (fun state (entry: LedgerEntry<MemberId>) ->
+              match decide entry.Clock entry.Entropy state entry.Command with
+              | Ok(newState, events, _effects) ->
+                events
+                |> Expect.equal
+                  (sprintf "%s seq %d replays to its recorded events" file (int64 entry.Seq))
+                  entry.Events
+                newState
+              | Error e ->
+                failtestf "%s seq %d: recorded command no longer applies cleanly: %A" file (int64 entry.Seq) e)
+            (CohortState.empty ())
+          |> ignore
+
+          // The same ledger through the audited replay: nothing dropped, and no event it cannot reproduce. A corpus
+          // ledger is the one place a change to `leaseWindow` or `settledRetention` must be noticed by name.
+          let audit = replayAuditIn CohortScope.Machine entries
+          audit.Dropped |> List.map (fun d -> int64 d.DroppedSeq) |> Expect.equal (sprintf "%s: no row is dropped" file) []
+          audit.Diverged |> List.map (fun d -> int64 d.DivergedSeq) |> Expect.equal (sprintf "%s: no row diverges" file) [])
+      }
+
+      // The corpus used to be four lines in one file and exercised 4 of the 21 `CohortCommand` cases. This fails the
+      // moment a case is added to the DU without a recorded ledger that issues it, so the corpus cannot quietly
+      // fall behind the type again. The ledgers are generated by folding commands through the real `decide`.
+      test "every CohortCommand case is issued by at least one recorded ledger" {
+        let caseOf (cmd: CohortCommand<MemberId>) = (fst (FSharpValue.GetUnionFields(cmd, typeof<CohortCommand<MemberId>>))).Name
+        let allCases = FSharpType.GetUnionCases(typeof<CohortCommand<MemberId>>) |> Array.map (fun c -> c.Name) |> Set.ofArray
+        let recorded =
+          corpusLedgers ()
+          |> List.collect (fun (_, entries) -> entries |> List.map (fun e -> caseOf e.Command))
+          |> Set.ofList
+        Set.difference allCases recorded
+        |> Set.toList
+        |> Expect.equal "every CohortCommand case appears in a corpus ledger; the ones listed do not" []
+      }
+
+      test "the corpus pins the policy constants: it records a lease lapse and a retention sweep" {
+        // `leaseWindow` and `settledRetention` are not stored in the ledger, so the events a `Tick` recorded are the
+        // only witness. If the corpus stopped containing a departure and a purge, changing either constant would
+        // pass this directory silently.
+        let events = corpusLedgers () |> List.collect (fun (_, entries) -> entries |> List.collect (fun e -> e.Events))
+        events
+        |> List.exists (function CohortEvent.MemberDeparted _ -> true | _ -> false)
+        |> Expect.isTrue "a recorded Tick departed a member whose lease lapsed"
+        events
+        |> List.exists (function CohortEvent.MemberPurged _ -> true | _ -> false)
+        |> Expect.isTrue "a recorded Tick purged settled history after the retention window"
       }
     ]
 
