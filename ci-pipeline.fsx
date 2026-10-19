@@ -264,6 +264,10 @@ let testDll = TierPlan.dllOf TierPlan.Framework.primary
 let trustLedger = Path.Combine(rootDir, "test-results", "trust-ledger.jsonl")
 Directory.CreateDirectory(Path.GetDirectoryName trustLedger) |> ignore
 if File.Exists trustLedger then File.Delete trustLedger
+// The first-failure report is written by the trust report stage, the last one. A run that is cancelled before then must
+// not leave the report of the run before it for a reader to take as its own.
+let staleFailureReport = Path.Combine(Path.GetDirectoryName trustLedger, "failure-report.txt")
+if File.Exists staleFailureReport then File.Delete staleFailureReport
 
 /// (tier, args, did the tier's process exit 0) for every tier this pipeline ran.
 let invokedTiers = Collections.Generic.List<string * string * bool>()

@@ -203,6 +203,62 @@ let gateTests =
       parseLeaseReply "<html>502</html>" |> Expect.equal "not json" LeaseOther
   ]
 
+let private passStart = DateTimeOffset.Parse "2026-10-18T20:00:00+00:00"
+
+/// How far before or after the pass started a file was written. Only the sign matters to the rule.
+let private halfHour = TimeSpan(0, 30, 0)
+
+let private reportAt (offset: TimeSpan) (text: string) =
+  ReportWrittenAt(passStart + offset, text)
+
+/// The ship printed the PREVIOUS pass's "first failure" block when the current pass was cancelled by the time cap
+/// (exit 130, 2026-10-18): the gate reuses one checkout, `git clean` keeps ignored files, and the pipeline only
+/// writes the report in its last stage, so a cancelled pass left the old file in place and the gate read it.
+[<Tests>]
+let failureReportTests =
+  testList "release rules: which failure report belongs to this pass" [
+
+    testCase "WHY — no report file means no report" <| fun _ ->
+      chooseFailureReport passStart NoReportFile |> Expect.equal "nothing on disk" NoReport
+
+    testCase "WHY — a report written after the pass started is this pass's" <| fun _ ->
+      chooseFailureReport passStart (reportAt halfHour "FAILURE x")
+      |> Expect.equal "written during the pass" (ShowReport "FAILURE x")
+
+    testCase "WHY — a report written before the pass started is stale and is never shown, whatever it says" <| fun _ ->
+      let before = passStart - halfHour
+      chooseFailureReport passStart (reportAt (-halfHour) "FAILURE the pass before")
+      |> Expect.equal "left over from an earlier pass" (StaleReport before)
+
+    testCase "WHY — a report written at the very start still counts" <| fun _ ->
+      chooseFailureReport passStart (reportAt TimeSpan.Zero "FAILURE x") |> Expect.equal "the boundary" (ShowReport "FAILURE x")
+
+    testProperty "WHY — a report is shown only if it was written at or after the pass started, for any file time" <|
+      prop (Gen.choose (-100000, 100000)) (fun seconds ->
+        match chooseFailureReport passStart (reportAt (TimeSpan.FromSeconds(float seconds)) "r") with
+        | ShowReport _ -> seconds >= 0
+        | StaleReport _ -> seconds < 0
+        | NoReport -> false)
+
+    testCase "WHY — a cancelled pass with a stale report says it wrote none and why, and never prints the old text" <| fun _ ->
+      let notice = failureNotice 130 (StaleReport(passStart - halfHour))
+      let text = String.concat "\n" notice
+      text |> Expect.stringContains "it says no report was written" "wrote no failure report"
+      text |> Expect.stringContains "it says the old one is not shown" "NOT shown"
+      text |> Expect.stringContains "exit 130 is named as a cancel, not a failure" "cancelled or timed out"
+      text.Contains "the pass before" |> Expect.isFalse "the stale text is not in the notice"
+
+    testCase "WHY — exits 124, 130 and 143 are cancels and a test exit is not" <| fun _ ->
+      for code in [ 124; 130; 143 ] do
+        endedByCancel code |> Expect.isTrue (sprintf "exit %d is a stop" code)
+      for code in [ 1; 2; 3 ] do
+        endedByCancel code |> Expect.isFalse (sprintf "exit %d is a test result" code)
+
+    testCase "WHY — this pass's own report is printed whole" <| fun _ ->
+      failureNotice 2 (ShowReport "FAILURE first failure\nFAILURE case: A\n")
+      |> Expect.equal "trimmed, nothing added" [ "FAILURE first failure\nFAILURE case: A" ]
+  ]
+
 /// The ported scripts are wired to each other by name, and a stale name is a script that fails when someone runs it.
 [<Tests>]
 let wiringTests =
@@ -246,6 +302,21 @@ let wiringTests =
           |> List.map (fun (i, line) -> sprintf "%s:%d %s" (Path.GetRelativePath(repoRoot, file)) (i + 1) (line.Trim())))
       // The one deliberate mention: the test that says the bash scripts are gone lives in RatchetRegistryTests.
       offenders |> Expect.isEmpty "every reference carries the .fsx name"
+
+    testCase "WHY — the gate prints only a failure report this pass wrote: it removes the old one first, notes when the pass began, and asks the rule" <| fun _ ->
+      let gate = read "scripts/local-gate.fsx"
+      let at (marker: string) = gate.IndexOf marker
+      (at "File.Delete reportFile", -1) |> Expect.isGreaterThan "the checkout's old report is removed"
+      (at "File.Delete reportFile", at "runPipeline wt sha log") |> Expect.isLessThan "removed before the pipeline runs"
+      (at "let passStartedAt", at "runPipeline wt sha log") |> Expect.isLessThan "the start time is taken before the pipeline runs"
+      gate |> Expect.stringContains "the rule decides which report to show" "ReleaseRules.chooseFailureReport passStartedAt onDisk"
+      gate |> Expect.stringContains "the notice is the pure one" "ReleaseRules.failureNotice failed choice"
+
+    testCase "WHY — the pipeline itself starts without the report of the run before it" <| fun _ ->
+      let pipeline = read "ci-pipeline.fsx"
+      pipeline |> Expect.stringContains "the stale report is deleted at start" "if File.Exists staleFailureReport then File.Delete staleFailureReport"
+      let firstStage = Regex.Match(pipeline, "^  stage \"", RegexOptions.Multiline).Index
+      (pipeline.IndexOf "File.Delete staleFailureReport", firstStage) |> Expect.isLessThan "before any stage can run"
   ]
 
 do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant wiringTests |> ignore
