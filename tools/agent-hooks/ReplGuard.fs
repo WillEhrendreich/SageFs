@@ -73,17 +73,33 @@ let directoryContains (ancestorOrSelf: string) (target: string) : bool =
   let t = normalizePath target
   a = t || t.StartsWith(a + "/")
 
-/// The whole "is there a REPL for this cwd" question: at least one session
-/// in `sessions` is Ready, and its working directory covers `cwd`. Status
-/// comparison is case-insensitive — the wire label's exact casing isn't
+[<Literal>]
+let faultedStatusLabel = "Faulted"
+
+/// What the fault note says when the daemon's session carries no reason of its own, so a Faulted session is
+/// never reported with an empty string.
+[<Literal>]
+let NoFaultReasonRecorded = "SageFs recorded no reason for this fault. The daemon log has the details."
+
+let hasStatus (label: string) (s: SessionSummary) =
+  System.String.Equals(s.Status, label, System.StringComparison.OrdinalIgnoreCase)
+
+/// The whole "is there a REPL for this cwd" question. A Ready session whose working directory covers `cwd` is a
+/// REPL, whatever else is there. Failing that, a Faulted session that covers it is reported with its own
+/// reason (the one with the deepest working directory, the one the agent is standing in). Anything else is
+/// `NoReadySessionCoversCwd`. Status comparison is case-insensitive — the wire label's exact casing isn't
 /// this file's contract to police.
 let sessionProbe (cwd: string) (sessions: SessionSummary list) : SessionProbe =
-  let covered =
-    sessions
-    |> List.exists (fun s ->
-      System.String.Equals(s.Status, readyStatusLabel, System.StringComparison.OrdinalIgnoreCase)
-      && directoryContains s.WorkingDirectory cwd)
-  if covered then ReadySessionCoversCwd else NoReadySessionCoversCwd
+  let covering = sessions |> List.filter (fun s -> directoryContains s.WorkingDirectory cwd)
+  match covering |> List.exists (hasStatus readyStatusLabel) with
+  | true -> ReadySessionCoversCwd
+  | false ->
+    match covering |> List.filter (hasStatus faultedStatusLabel) |> List.sortByDescending (fun s -> (normalizePath s.WorkingDirectory).Length) with
+    | nearest :: _ ->
+      match System.String.IsNullOrWhiteSpace nearest.FaultReason with
+      | true -> FaultedSessionCoversCwd NoFaultReasonRecorded
+      | false -> FaultedSessionCoversCwd nearest.FaultReason
+    | [] -> NoReadySessionCoversCwd
 
 /// The dotnet verbs that belong in the final gate, not the inner loop.
 type SlowVerb =
@@ -396,6 +412,19 @@ let adviceReason (verb: SlowVerb) =
     "dotnet build/test/run/fsi is for the final gate, run once when you're done, and for the one build before create_session (a worktree gets its own session)."
   ]
 
+/// The note for a slow verb that was allowed because the directory's session is Faulted: there is no REPL to go
+/// back to. It says what the session itself recorded as the fault, whole, and the way back. For a project with no
+/// build for any framework the host can load, that recorded text already names the exact command to run (issue
+/// #153), so the agent is told the fix instead of guessing it.
+let faultAdvice (verb: SlowVerb) (reason: string) =
+  let v = SlowVerb.toToken verb
+  String.concat "\n" [
+    sprintf "SageFs is running, but its session for this directory is Faulted, so there is no REPL to go back to and `dotnet %s` was allowed to run." v
+    "The session's own fault reason:"
+    reason
+    "To get the REPL back: do what the reason says (when it names a command, run exactly that one), then call hard_reset_fsi_session with rebuild=true. If the reason is a SageFs bug, report it with the exact text above."
+  ]
+
 /// Puts what is wrong with the configuration under a message, so the caller can see why the guard is stricter than they set it.
 let withProblems (problems: string list) (message: string) =
   match problems with
@@ -403,6 +432,9 @@ let withProblems (problems: string list) (message: string) =
   | _ -> String.concat "\n" (message :: problems)
 
 /// The guard's whole decision.
+///   - A slow verb (declared or not) whose directory has a FAULTED session and no Ready one is allowed with
+///     that session's own fault reason as advice, in either mode: nothing is denied, so there is no preference
+///     for the mode to bend (issue #160).
 ///   - An UNDECLARED slow verb, in an F# workspace, with SageFs answering
 ///     AND a Ready session whose working directory covers this cwd, is
 ///     denied on "use the REPL" grounds — unrelated to memory pressure.
@@ -428,7 +460,9 @@ let decideWith (policy: Policy) (command: string) (ctx: Context) : Decision =
       match policy.Mode with
       | Enforcing -> Deny(withProblems policy.Problems (denyReason verb))
       | Advising -> AllowWithAdvice(withProblems policy.Problems (adviceReason verb))
-    | FSharpWorkspace, DaemonAnswering, (Some(FaultedSessionCoversCwd _) | Some NoReadySessionCoversCwd | None)
+    | FSharpWorkspace, DaemonAnswering, Some(FaultedSessionCoversCwd reason) ->
+      AllowWithAdvice(withProblems policy.Problems (faultAdvice verb reason))
+    | FSharpWorkspace, DaemonAnswering, (Some NoReadySessionCoversCwd | None)
     | NotFSharpWorkspace, _, _
     | _, DaemonNotAnswering, _ -> Allow
   | DeclaredFinalGate verb ->
@@ -437,7 +471,12 @@ let decideWith (policy: Policy) (command: string) (ctx: Context) : Decision =
     | FSharpWorkspace, DaemonAnswering, Some(LeaseMustWait _ as probe) ->
       Deny(withProblems policy.Problems (busyDenyReason verb probe))
     | FSharpWorkspace, DaemonAnswering, Some LeaseGranted
-    | FSharpWorkspace, DaemonAnswering, None
+    | FSharpWorkspace, DaemonAnswering, None ->
+      match ctx.Session with
+      | Some(FaultedSessionCoversCwd reason) -> AllowWithAdvice(withProblems policy.Problems (faultAdvice verb reason))
+      | Some ReadySessionCoversCwd
+      | Some NoReadySessionCoversCwd
+      | None -> Allow
     | NotFSharpWorkspace, _, _
     | _, DaemonNotAnswering, _ -> Allow
 
