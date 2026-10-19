@@ -278,12 +278,6 @@ module Cohort =
     /// reinstate and nothing to reassign.
     | NeverBound
 
-  /// WHY the conductor seat is empty carries no clock, and `CohortError.ConductorVacant`
-  /// still wants a `since` — so this named sentinel is that stamp. A `DateTime`
-  /// literal at the call site would be a magic number; this is the "never"
-  /// it means, said once.
-  let neverHeldSince = DateTime.MinValue
-
   /// The conductor binding (§4.2) as a CLOSED SET rather than an `'m option`.
   ///
   /// The bare option could express "departed but still conductor" — and did.
@@ -770,8 +764,8 @@ module Cohort =
     | NotConductor of 'm
     /// ...and the other refusal, which is a different thing entirely: the seat
     /// is EMPTY. `former` names the last holder (`None` when nobody ever held
-    /// it — `why = NeverBound`), `since` when it emptied (`neverHeldSince` for
-    /// a never-bound cohort), `why` why. Distinct from `NotConductor` because
+    /// it — `why = NeverBound`), `since` when it emptied (the arrival time of
+    /// the refused command for a never-bound cohort), `why` why. Distinct from `NotConductor` because
     /// it implies a different user action: `NotConductor` is "the conductor can
     /// do it for you", `ConductorVacant` is "NOBODY can — a human has to
     /// appoint a conductor first". `delegate_conductor` exists now, but only a

@@ -112,7 +112,7 @@ let webLiveFs0037IncludesSwitchHint =
 /// had no switch route and said so in its own comment, so it left the dashboard out. The dashboard now has
 /// the workflow dropdown (`/dashboard/switch-workflow`, which calls `POST /api/sessions/{sid}/workflow`), and
 /// the hint has to be built from the same list that says which clients switch, so the two cannot drift.
-/// Neovim is not on it: `:SageFsWorkflow` takes no argument and only shows the current workflow.
+/// Neovim is on it too: `:SageFsWorkflow [name]` switches the session's workflow (Readme.md, Neovim section).
 let hintNamesEveryClientThatCanSwitch =
   testCase
     "the hint names every client that can switch a workflow, the dashboard among them" <| fun _ ->
@@ -130,9 +130,28 @@ let hintNamesEveryClientThatCanSwitch =
            (sprintf "the hint names %A" surface)
            (WorkflowErrorContext.SwitchSurface.describe surface)
 
-    // A client that cannot switch is never offered as the remedy.
-    enhanced.Contains "Neovim" |> Expect.isFalse "Neovim cannot switch a workflow yet"
-    enhanced.Contains "SageFsWorkflow" |> Expect.isFalse "its :SageFsWorkflow only shows the current workflow"
+    WorkflowErrorContext.SwitchSurface.all
+    |> List.contains WorkflowErrorContext.SwitchSurface.Neovim
+    |> Expect.isTrue "Neovim's :SageFsWorkflow switches a workflow, so it is one of the surfaces"
+
+    enhanced |> Expect.stringContains "the hint names the Neovim command" ":SageFsWorkflow"
+
+/// WHY: `SwitchSurface.all` is written by hand beside the type, so a case added to the type and left out of the
+/// list would drop a client from the hint with nothing failing. This pins the list to the type's own cases, which
+/// is what let Neovim go missing in the first place.
+let allListsEverySwitchSurfaceCase =
+  testCase
+    "SwitchSurface.all lists every case of the type" <| fun _ ->
+    let declared =
+      Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<WorkflowErrorContext.SwitchSurface>)
+      |> Array.map (fun case -> case.Name)
+      |> Array.sort
+    let listed =
+      WorkflowErrorContext.SwitchSurface.all
+      |> List.map (fun surface -> sprintf "%A" surface)
+      |> List.toArray
+      |> Array.sort
+    listed |> Expect.equal "every declared case is in the list, once" declared
 
 /// WHY: In REPL mode, FS0037 means a genuine duplicate — the user defined the same type
 /// name twice in the same ;; block. The workflow switcher is irrelevant here.
@@ -160,6 +179,7 @@ let tests = testList "WorkflowErrorContext" [
   testList "Scenarios — user-facing error guidance" [
     webLiveFs0037IncludesSwitchHint
     hintNamesEveryClientThatCanSwitch
+    allListsEverySwitchSurfaceCase
     interactiveFs0037NoSwitchHint
   ]
 ]
