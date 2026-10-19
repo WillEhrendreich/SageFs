@@ -136,6 +136,10 @@ let reproduceCommand (dll: string) (tierArgs: string) (name: string) : string =
 /// What the last green run said about this case.
 type History =
   | PassedBefore of sha: string
+  /// What the per-case ledger (CaseHistory) says about the case, already worded.
+  | Ledgered of summary: string
+  /// The case is rerun alone once the tiers have ended; its history and verdict follow in the final report.
+  | Pending
   | NotRecorded
 
 /// Prefix of every report line, so the pipeline's console filter shows them and nothing else needs a pattern.
@@ -153,7 +157,9 @@ let render (tier: string) (checkout: string) (reproduce: string) (history: Histo
   let historyText =
     match history with
     | PassedBefore sha -> sprintf "passed in the last green run (%s)" sha
-    | NotRecorded -> "not recorded: no per-case ledger yet"
+    | Ledgered summary -> summary
+    | Pending -> "pending: the case is rerun alone when the tiers have ended, then its history and verdict are printed"
+    | NotRecorded -> "not recorded: the gate keeps no case history here (no pass-record directory)"
   let message =
     match f.Message with
     | [] -> [ "(no message)" ]
