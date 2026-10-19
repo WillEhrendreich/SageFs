@@ -661,6 +661,34 @@ type ReflectionRewire =
       | _ -> out.Add ins
     out :> IEnumerable<CodeInstruction>
 
+/// The Harmony transpiler that drops every `tail.` prefix from a body, and nothing else.
+///
+/// F# marks a call to a function value that is the last act of a method (`sprintf "..." x`, `failwithf`, any `f x` where
+/// `f` is a closure) as `tail. callvirt FSharpFunc.Invoke`. Harmony cannot put a PREFIX in front of a body that has one:
+/// `Patch` throws InvalidProgramException and the method stays unpatched, so a reader written that way could never be
+/// probed. A body with the prefix dropped is valid beside a prefix. What it costs is a stack frame the runtime would have
+/// reused, on a method SageFs is watching for one read.
+type TailCallStrip =
+  static member Transpile(instructions: IEnumerable<CodeInstruction>) : IEnumerable<CodeInstruction> =
+    let out = List<CodeInstruction>()
+    // Whatever pointed at the dropped prefix points at the instruction after it now.
+    let carriedLabels = List<Label>()
+    let carriedBlocks = List<ExceptionBlock>()
+    for ins in instructions do
+      match ins.opcode = OpCodes.Tailcall with
+      | true ->
+        carriedLabels.AddRange ins.labels
+        carriedBlocks.AddRange ins.blocks
+      | false ->
+        ins.labels.InsertRange(0, carriedLabels)
+        ins.blocks.InsertRange(0, carriedBlocks)
+        carriedLabels.Clear()
+        carriedBlocks.Clear()
+        out.Add ins
+    out :> IEnumerable<CodeInstruction>
+
+let private withoutTailCalls = lazy (HarmonyMethod(typeof<TailCallStrip>.GetMethod(nameof TailCallStrip.Transpile)))
+
 /// Put a patch on `m`, or say why it can't go on.
 let private instrument (m: MethodBase) (what: Instrument) : Result<unit, string> =
   lock instrumentsLock (fun () ->
@@ -670,8 +698,8 @@ let private instrument (m: MethodBase) (what: Instrument) : Result<unit, string>
     | false, false ->
       try
         match what with
-        | ReaderProbe _ -> harmony.Value.Patch(m, prefix = hook "ReaderEntered") |> ignore
-        | GetterWatch _ -> harmony.Value.Patch(m, prefix = hook "GetterEntered") |> ignore
+        | ReaderProbe _ -> harmony.Value.Patch(m, prefix = hook "ReaderEntered", transpiler = withoutTailCalls.Value) |> ignore
+        | GetterWatch _ -> harmony.Value.Patch(m, prefix = hook "GetterEntered", transpiler = withoutTailCalls.Value) |> ignore
         | CallerProbe ->
           harmony.Value.Patch(m, transpiler = HarmonyMethod(typeof<ReflectionRewire>.GetMethod(nameof ReflectionRewire.Transpile)))
           |> ignore

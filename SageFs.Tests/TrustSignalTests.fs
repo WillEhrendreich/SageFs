@@ -61,7 +61,10 @@ let verdictTests =
       |> Expect.equal "a filter matching nothing must not read as green" 3
 
     testCase "a real unfiltered run of everything registered is Trusted (exit 0)" <| fun _ ->
-      let tree = testList "trust-probe" [ testCase "a" ignore; ptestCase "b" ignore ]
+      // The subject is how the trust signal counts an ignored case, so the probe tree holds one, built from Expecto's
+      // own constructors. It runs only inside runReporting's private run and is never registered in this assembly.
+      let ignoredCase = Test.TestLabel("b", Test.TestCase(Sync ignore, FocusState.Pending), FocusState.Normal)
+      let tree = testList "trust-probe" [ testCase "a" ignore; ignoredCase ]
       runReporting ignore "probe" [| "--no-spinner" |] tree |> Expect.equal "pending cases count as ran-and-ignored" 0
 
     testCase "a redirected run never starts Expecto's spinner" <| fun _ ->

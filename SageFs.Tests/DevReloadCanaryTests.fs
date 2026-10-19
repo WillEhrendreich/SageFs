@@ -38,6 +38,17 @@ type SnapshotOnlyTarget() =
   [<MethodImpl(MethodImplOptions.NoInlining)>]
   member _.Execute (x: int) = x + 1
 
+/// The bytes a canary compares a detour against. `snapshotMethodState` answers None only when the runtime would not
+/// prepare the method or let its native code be read, and a canary that cannot read code is blind exactly when a runtime
+/// or dependency change has broken method patching. So that answer is the canary's red, naming the method and the
+/// runtime, and never a reason to skip.
+let snapshotOrFail (m: MethodBase) : nativeint * byte[] =
+  match snapshotMethodState m with
+  | Some snapshot -> snapshot
+  | None ->
+    failtestf "snapshotMethodState could not read the native code of %s.%s on %s, so no detour canary can work here"
+      m.DeclaringType.Name m.Name System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription
+
 // ============================================================================
 // Unit tests: canary building blocks with instance methods (DevReload-style)
 // ============================================================================
@@ -46,24 +57,15 @@ let canaryUnitTests = testList "canary unit" [
 
   testCase "snapshotMethodState captures bytes for prefix-patchable instance method" <| fun () ->
     let m = typeof<SnapshotOnlyTarget>.GetMethod("Execute")
-    let result = snapshotMethodState m
-    result
-    |> Expect.isSome "should snapshot state for an instance method"
-    match result with
-    | Some (_, bytes) ->
-      bytes.Length
-      |> Expect.equal "should capture 16 bytes" 16
-    | None -> ()
+    let _, bytes = snapshotOrFail m
+    bytes.Length
+    |> Expect.equal "should capture 16 bytes" 16
 
   testCase "canary reports BytesUnchanged when no patch applied" <| fun () ->
     let m = typeof<SnapshotOnlyTarget>.GetMethod("Execute")
-    match snapshotMethodState m with
-    | Some (jitAddr, currentBytes) ->
-      let result = validateDetourCanary jitAddr currentBytes
-      result
-      |> Expect.equal "should detect unchanged bytes" CanaryResult.BytesUnchanged
-    | None ->
-      skiptest "could not snapshot method state on this platform"
+    let jitAddr, currentBytes = snapshotOrFail m
+    validateDetourCanary jitAddr currentBytes
+    |> Expect.equal "should detect unchanged bytes" CanaryResult.BytesUnchanged
 
   testCase "canary error path does not crash" <| fun () ->
     let err = CanaryResult.CanaryError (InvalidOperationException("test error"))
@@ -84,43 +86,37 @@ let prefixPatchIntegrationTests = testList "Harmony prefix patch" [
   testCase "canary validates prefix patch on Run-style instance method" <| fun () ->
     let target = typeof<PrefixRunTarget>.GetMethod("Run")
     let prefix = typeof<PrefixHook>.GetMethod("Prefix", BindingFlags.Public ||| BindingFlags.Static)
-    match snapshotMethodState target with
-    | Some (jitAddr, preBytes) ->
-      let harmony = Harmony("sagefs.test.devreload.canary.run")
-      harmony.Patch(target, prefix = HarmonyMethod(prefix)) |> ignore
-      let result = validateDetourCanary jitAddr preBytes
-      // The patch must actually fire: invoking the target after patching
-      // must run the prefix hook (BytesUnchanged alone is NOT proof — a
-      // silently-dead patch also reports unchanged bytes).
-      PrefixHook.Ran <- false
-      PrefixRunTarget().Run("http://localhost:0")
-      PrefixHook.Ran
-      |> Expect.isTrue "invoking the patched target must run the prefix hook"
-      match result with
-      | DetourConfirmed | BytesUnchanged -> ()
-      | CanaryError ex ->
-        failwithf "canary should not error on prefix patch, got: %s" ex.Message
-    | None ->
-      skiptest "could not snapshot method state on this platform"
+    let jitAddr, preBytes = snapshotOrFail target
+    let harmony = Harmony("sagefs.test.devreload.canary.run")
+    harmony.Patch(target, prefix = HarmonyMethod(prefix)) |> ignore
+    let result = validateDetourCanary jitAddr preBytes
+    // The patch must actually fire: invoking the target after patching
+    // must run the prefix hook (BytesUnchanged alone is NOT proof — a
+    // silently-dead patch also reports unchanged bytes).
+    PrefixHook.Ran <- false
+    PrefixRunTarget().Run("http://localhost:0")
+    PrefixHook.Ran
+    |> Expect.isTrue "invoking the patched target must run the prefix hook"
+    match result with
+    | DetourConfirmed | BytesUnchanged -> ()
+    | CanaryError ex ->
+      failwithf "canary should not error on prefix patch, got: %s" ex.Message
 
   testCase "canary validates prefix patch on RunAsync-style instance method" <| fun () ->
     let target = typeof<PrefixRunAsyncTarget>.GetMethod("RunAsync")
     let prefix = typeof<PrefixHook>.GetMethod("Prefix", BindingFlags.Public ||| BindingFlags.Static)
-    match snapshotMethodState target with
-    | Some (jitAddr, preBytes) ->
-      let harmony = Harmony("sagefs.test.devreload.canary.runasync")
-      harmony.Patch(target, prefix = HarmonyMethod(prefix)) |> ignore
-      let result = validateDetourCanary jitAddr preBytes
-      PrefixHook.Ran <- false
-      PrefixRunAsyncTarget().RunAsync("http://localhost:0").Wait()
-      PrefixHook.Ran
-      |> Expect.isTrue "invoking the patched target must run the prefix hook"
-      match result with
-      | DetourConfirmed | BytesUnchanged -> ()
-      | CanaryError ex ->
-        failwithf "canary should not error on prefix patch, got: %s" ex.Message
-    | None ->
-      skiptest "could not snapshot method state on this platform"
+    let jitAddr, preBytes = snapshotOrFail target
+    let harmony = Harmony("sagefs.test.devreload.canary.runasync")
+    harmony.Patch(target, prefix = HarmonyMethod(prefix)) |> ignore
+    let result = validateDetourCanary jitAddr preBytes
+    PrefixHook.Ran <- false
+    PrefixRunAsyncTarget().RunAsync("http://localhost:0").Wait()
+    PrefixHook.Ran
+    |> Expect.isTrue "invoking the patched target must run the prefix hook"
+    match result with
+    | DetourConfirmed | BytesUnchanged -> ()
+    | CanaryError ex ->
+      failwithf "canary should not error on prefix patch, got: %s" ex.Message
 ]
 
 // ============================================================================
