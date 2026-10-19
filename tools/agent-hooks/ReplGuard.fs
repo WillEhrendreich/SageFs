@@ -28,12 +28,17 @@ type LeaseProbe =
   | LeaseRefused of reason: string
   | LeaseMustWait of retryAfterSeconds: float * reason: string
 
-/// Whether some Ready daemon session's working directory contains (is at
-/// or above) the command's cwd. `NoReadySessionCoversCwd` covers both "no
-/// session at all for this directory" and "there's a session, but it isn't
-/// Ready yet" — either way there is no REPL here right now.
+/// What the daemon's sessions say about the command's cwd. A session covers cwd
+/// when its working directory is cwd or an ancestor of it.
+///   - `ReadySessionCoversCwd`: a Ready session covers it, so there is a REPL to go back to.
+///   - `FaultedSessionCoversCwd`: none is Ready and one is Faulted. `reason` is that
+///     session's own `faultReason` from `/health`, the daemon's account of what broke and
+///     (for a framework with no build) the exact command that fixes it.
+///   - `NoReadySessionCoversCwd`: no session at all for this directory, or the one there
+///     isn't Ready yet (still starting). Either way there is no REPL here right now.
 type SessionProbe =
   | ReadySessionCoversCwd
+  | FaultedSessionCoversCwd of reason: string
   | NoReadySessionCoversCwd
 
 /// `Lease` is `None` whenever it was never asked for (the command isn't a
@@ -46,8 +51,9 @@ type Context = { Project: ProjectScope; Daemon: DaemonProbe; Session: SessionPro
 /// The minimum a session summary the script fetches from `GET /health`'s
 /// `sessionStates` needs to answer "is there a Ready REPL for this cwd" —
 /// kept as plain primitives (not SageFs.Core's own session/status types) for
-/// the same dependency-free reason as `LeaseProbe` above.
-type SessionSummary = { WorkingDirectory: string; Status: string }
+/// the same dependency-free reason as `LeaseProbe` above. `FaultReason` is the
+/// session's own `faultReason` as the wire carries it, "" when it carries none.
+type SessionSummary = { WorkingDirectory: string; Status: string; FaultReason: string }
 
 [<Literal>]
 let private readyStatusLabel = "Ready"
@@ -422,7 +428,7 @@ let decideWith (policy: Policy) (command: string) (ctx: Context) : Decision =
       match policy.Mode with
       | Enforcing -> Deny(withProblems policy.Problems (denyReason verb))
       | Advising -> AllowWithAdvice(withProblems policy.Problems (adviceReason verb))
-    | FSharpWorkspace, DaemonAnswering, (Some NoReadySessionCoversCwd | None)
+    | FSharpWorkspace, DaemonAnswering, (Some(FaultedSessionCoversCwd _) | Some NoReadySessionCoversCwd | None)
     | NotFSharpWorkspace, _, _
     | _, DaemonNotAnswering, _ -> Allow
   | DeclaredFinalGate verb ->
@@ -437,6 +443,14 @@ let decideWith (policy: Policy) (command: string) (ctx: Context) : Decision =
 
 /// `decideWith` with the default policy: enforcing, nothing allowlisted.
 let decide (command: string) (ctx: Context) : Decision = decideWith Policy.strict command ctx
+
+/// Whether the guard has a use of the escape hatch to report to the daemon for a command.
+type HatchReport =
+  | Counted of SageFs.HatchUse
+  | NotCounted
+
+let hatchReportWith (policy: Policy) (command: string) (ctx: Context) : HatchReport =
+  NotCounted
 
 /// Whether the hook needs to look at the disk and the network at all, once `allow` has left its commands out.
 /// The program checks this first so non-dotnet commands never pay for a probe.

@@ -1349,6 +1349,11 @@ module McpTools =
         return Json.serialize Json.standard {| state = "NoSession"; message = msg |}
     }
 
+  /// The `hatch` section of `get_daemon_status`: how many times a `dotnet build`, `test`, `run` or `fsi` was let
+  /// through while the daemon was up, by kind.
+  let hatchSection (ledger: SageFs.Features.HatchLedger) =
+    {| total = 0 |}
+
   let getDaemonStatus (ctx: McpContext) : Task<string> =
     task {
       let machineMemory = SageFs.Features.MachineMemory.current ()

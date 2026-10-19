@@ -20,11 +20,7 @@ let private defaultMcpPort = 37749
 /// both are short and every failure reads as "not answering".
 let private healthTimeout = TimeSpan.FromMilliseconds 800.0
 let private leaseTimeout = TimeSpan.FromMilliseconds 1500.0
-
-let private str (el: JsonElement) (name: string) =
-  match el.TryGetProperty name with
-  | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
-  | _ -> ""
+let private hatchTimeout = TimeSpan.FromMilliseconds 800.0
 
 let rec private hasProjectAtOrAbove (dir: DirectoryInfo) =
   match dir with
@@ -48,21 +44,6 @@ let private mcpPort () =
   | true, p -> p
   | _ -> defaultMcpPort
 
-/// `GET /health`'s own `sessionStates` array already carries every session's `workingDirectory` and lifecycle
-/// `status`; this parses just those two fields into `SessionSummary`s for `sessionProbe`, best-effort: a shape
-/// it does not recognise yields `[]`, never an exception, so a daemon that answered health at all is never
-/// mistaken for a parse failure.
-let private parseSessionSummaries (healthBody: string) : SessionSummary list =
-  try
-    use doc = JsonDocument.Parse healthBody
-    match doc.RootElement.TryGetProperty "sessionStates" with
-    | true, states when states.ValueKind = JsonValueKind.Array ->
-      states.EnumerateArray()
-      |> Seq.map (fun s -> { WorkingDirectory = str s "workingDirectory"; Status = str s "status" })
-      |> List.ofSeq
-    | _ -> []
-  with _ -> []
-
 /// Probes `/health` once and reports both whether the daemon answered and what it said about its sessions:
 /// one HTTP call feeds both `DaemonProbe` and `SessionProbe`, instead of a second round trip to `/api/sessions`.
 let private healthProbe () : DaemonProbe * SessionSummary list =
@@ -73,7 +54,7 @@ let private healthProbe () : DaemonProbe * SessionSummary list =
     | false -> DaemonNotAnswering, []
     | true ->
       let body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-      DaemonAnswering, parseSessionSummaries body
+      DaemonAnswering, Verdict.parseSessionSummaries body
   with _ -> DaemonNotAnswering, []
 
 /// Ask the daemon for an expensive-work lease for THIS command's own final gate. Best-effort and fail-open:
@@ -110,13 +91,26 @@ let private leaseProbe (verb: SlowVerb) : LeaseProbe option =
       | _ -> None
   with _ -> None
 
+/// Tell the daemon the escape hatch was used, so the use is counted (`get_daemon_status`, `hatch`). Best-effort:
+/// the command has already been decided, so a daemon that is gone, slow or too old to have the route changes nothing.
+let private reportHatch (hatch: SageFs.HatchUse) : unit =
+  try
+    let declaration, repl = SageFs.HatchUse.toTokens hatch
+    use http = new HttpClient(Timeout = hatchTimeout)
+    let body = JsonSerializer.Serialize {| declaration = declaration; repl = repl |}
+    use content = new StringContent(body, Text.Encoding.UTF8, "application/json")
+    use resp = http.PostAsync(sprintf "http://localhost:%d/api/hatch/record" (mcpPort ()), content).GetAwaiter().GetResult()
+    ()
+  with _ -> ()
+
 /// The real machine, for `Verdict.verdict`.
 let private world : Verdict.World =
   { GetEnv = fun name -> Environment.GetEnvironmentVariable name |> Option.ofObj |> Option.defaultValue ""
     ReadRepoConfig = Verdict.readRepoConfig
     ProjectScope = projectScope
     Health = healthProbe
-    Lease = leaseProbe }
+    Lease = leaseProbe
+    ReportHatch = reportHatch }
 
 /// stdin as text, read straight off the stream: the Console reader sets up encodings first, which is startup
 /// this hook pays on every Bash call.

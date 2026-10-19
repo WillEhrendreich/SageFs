@@ -3242,6 +3242,16 @@ let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
 /// Finding #1/#13: one rule, one implementation).
 let validateSessionCreateRequest = SageFs.SessionPathValidation.validateSessionCreateRequest
 
+/// The escape hatch's count. The sagefs-repl-guard hook (tools/agent-hooks) posts here for every `dotnet build`, `test`,
+/// `run` or `fsi` it lets through while the daemon is up, and `get_daemon_status` reports the count. A plain HTTP route
+/// for the same reason as the lease routes: the hook has no MCP session to call a tool through.
+let mapHatchRoutes (record: SageFs.HatchUse -> unit) (app: WebApplication) =
+  app.MapPost("/api/hatch/record", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      do! jsonResponse ctx 200 {| success = true |}
+    } :> Task
+  ) |> ignore
+
 let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
@@ -4378,6 +4388,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       mapEventsRoute app rctx
       mapStatusRoutes app rctx
       mapSessionRoutes app rctx
+      mapHatchRoutes SageFs.Features.HatchWatch.record app
       mapLiveBindingsRoutes app rctx
       mapLiveTestingRoutes app rctx
       mapAnalysisRoutes app rctx

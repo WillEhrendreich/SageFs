@@ -146,10 +146,39 @@ let tests =
       let ctx = ctxFor [] noProxy (Ok "")
       let! text = getDaemonStatus ctx
       text
-      |> without [ "daemonVersion"; "coreVersion"; "daemonPid"; "telemetrySampledAt"; "machineMemory"; "leases" ]
+      |> without [ "daemonVersion"; "coreVersion"; "daemonPid"; "telemetrySampledAt"; "machineMemory"; "leases"; "hatch" ]
       |> Expect.equal "daemon status"
            """{"aggregateCpuPercent":0,"aggregateResidentBytes":0,"anomalies":[],"available":["get_daemon_status","get_session_status","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","hard_reset_fsi_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"daemonResidentBytes":0,"mcpPort":0,"memoryPressure":"normal","memoryPressureNote":"","overall":"Unknown","processes":[],"scope":"Daemon","sessions":{"evaluating":0,"faulted":0,"ready":0,"stopped":0,"total":0,"warmingUp":0},"state":"Ready","uptimeSeconds":0}"""
     }
+
+    testTask "WHY — get_daemon_status carries a hatch section, the live ledger's count, beside leases" {
+      let ctx = ctxFor [] noProxy (Ok "")
+      let! (text: string) = getDaemonStatus ctx
+      let node = JsonNode.Parse text :?> JsonObject
+      node.ContainsKey "hatch" |> Expect.isTrue "the key is there"
+      let hatch = node["hatch"] :?> JsonObject
+      hatch["uses"].AsArray().Count |> Expect.equal "every kind is listed, zeros included" 6
+    }
+
+    testCase "WHY — the hatch section writes when counting began, the total, when the last use was, and every kind in order" <| fun _ ->
+      let since = DateTimeOffset(2026, 10, 19, 9, 0, 0, TimeSpan.Zero)
+      let seen = DateTimeOffset(2026, 10, 19, 9, 5, 0, TimeSpan.Zero)
+      let declaredFaulted = { Declaration = GateDeclaration.DeclaredGate; Repl = ReplAtTheTime.Faulted }
+      let undeclaredFaulted = { Declaration = GateDeclaration.UndeclaredGate; Repl = ReplAtTheTime.Faulted }
+      let ledger =
+        SageFs.Features.HatchLedger.empty since
+        |> SageFs.Features.HatchLedger.record seen undeclaredFaulted
+        |> SageFs.Features.HatchLedger.record seen undeclaredFaulted
+        |> SageFs.Features.HatchLedger.record seen declaredFaulted
+      Json.serialize Json.standard (hatchSection ledger)
+      |> Expect.equal "the hatch section"
+           """{"since":"2026-10-19T09:00:00+00:00","total":3,"lastRecordedAt":"2026-10-19T09:05:00+00:00","uses":[{"declaration":"declared","repl":"ready","count":0},{"declaration":"declared","repl":"faulted","count":1},{"declaration":"declared","repl":"not_ready","count":0},{"declaration":"undeclared","repl":"ready","count":0},{"declaration":"undeclared","repl":"faulted","count":2},{"declaration":"undeclared","repl":"not_ready","count":0}]}"""
+
+    testCase "WHY — a ledger that has seen nothing writes lastRecordedAt as null, not a made-up time" <| fun _ ->
+      let since = DateTimeOffset(2026, 10, 19, 9, 0, 0, TimeSpan.Zero)
+      Json.serialize Json.standard (hatchSection (SageFs.Features.HatchLedger.empty since))
+      |> Expect.equal "never seen"
+           """{"since":"2026-10-19T09:00:00+00:00","total":0,"lastRecordedAt":null,"uses":[{"declaration":"declared","repl":"ready","count":0},{"declaration":"declared","repl":"faulted","count":0},{"declaration":"declared","repl":"not_ready","count":0},{"declaration":"undeclared","repl":"ready","count":0},{"declaration":"undeclared","repl":"faulted","count":0},{"declaration":"undeclared","repl":"not_ready","count":0}]}"""
 
     testCase "WHY — a lease decision writes kind and decision, then its detail, and names who holds it" <| fun _ ->
       let agent = "mcp-json-wire-holder"

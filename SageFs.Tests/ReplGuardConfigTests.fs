@@ -12,6 +12,7 @@ open System.IO
 open System.Text.Json
 open Expecto
 open Expecto.Flip
+open SageFs
 open SageFs.AgentHooks.ReplGuard
 open SageFs.AgentHooks.Verdict
 
@@ -69,8 +70,9 @@ let private worldFor (checkout: Checkout) (env: (string * string) list) (lease: 
   { GetEnv = fun name -> env |> List.tryFind (fun (k, _) -> k = name) |> Option.map snd |> Option.defaultValue ""
     ReadRepoConfig = readRepoConfig
     ProjectScope = fun _ -> FSharpWorkspace
-    Health = fun () -> DaemonAnswering, [ { WorkingDirectory = checkout.Root; Status = "Ready" } ]
-    Lease = fun _ -> lease }
+    Health = fun () -> DaemonAnswering, [ { WorkingDirectory = checkout.Root; Status = "Ready"; FaultReason = "" } ]
+    Lease = fun _ -> lease
+    ReportHatch = ignore }
 
 /// The JSON Claude Code sends a PreToolUse hook on stdin.
 let private payload (cwd: string) (command: string) =
@@ -331,9 +333,82 @@ let replGuardConfigTests = testList "sagefs-repl-guard: allowlist, Release build
           { worldFor co [] None with
               GetEnv = fun _ -> ask ""
               ReadRepoConfig = fun _ -> ask NoRepoConfig
-              Health = fun () -> ask (DaemonNotAnswering, []) }
+              Health = fun () -> ask (DaemonNotAnswering, [])
+              ReportHatch = fun _ -> ask () }
         [ "dotnet pack"; "echo dotnet build"; "dotnet tool update sagefs -g" ]
         |> List.iter (fun c -> run nosy co c |> Expect.isNone "allowed")
-        asked.Value |> Expect.equal "no environment, disk or daemon lookups" 0)
+        asked.Value |> Expect.equal "no environment, disk, daemon or hatch lookups" 0)
+  ]
+
+  // ---- issue #160: a Faulted session is told why, and every use of the hatch is reported ----
+
+  testList "a Faulted session and the hatch report" [
+    let faultReason = "SageFs.Core.fsproj has no build output for any framework this host can load. Build one with: dotnet build SageFs.Core -c Release -f net11.0"
+
+    /// A daemon that is up with a session at the checkout in the given state, and the uses of the hatch it was told about.
+    let reporting (co: Checkout) (env: (string * string) list) (status: string) (reason: string) =
+      let reported = ResizeArray<HatchUse>()
+      let world =
+        { worldFor co env None with
+            Health = fun () -> DaemonAnswering, [ { WorkingDirectory = co.Root; Status = status; FaultReason = reason } ]
+            ReportHatch = reported.Add }
+      world, reported
+
+    testCase "WHY — #160: with a Faulted session the build runs and the agent is handed the session's faultReason, not left to guess" <| fun _ ->
+      withCheckout NoConfigFile (fun co ->
+        let world, _ = reporting co [] "Faulted" faultReason
+        match run world co "dotnet build SageFs.Core" with
+        | None -> failtest "a Faulted session must advise"
+        | Some json ->
+          let out = hookOutput json
+          prop out "additionalContext" |> Expect.stringContains "the reason, whole" faultReason
+          hasProp out "permissionDecision" |> Expect.isFalse "not deciding permission, so the user's prompts still apply")
+
+    testCase "WHY — #160: advise mode says the same about a Faulted session, because there is no REPL to remind anyone of" <| fun _ ->
+      withCheckout NoConfigFile (fun co ->
+        let world, _ = reporting co [ GuardMode.Variable, "advise" ] "Faulted" faultReason
+        match run world co "dotnet build SageFs.Core" with
+        | None -> failtest "a Faulted session must advise"
+        | Some json -> prop (hookOutput json) "additionalContext" |> Expect.stringContains "the reason" faultReason)
+
+    testCase "WHY — #160: the hatch use is reported with what the command said and what the REPL was" <| fun _ ->
+      withCheckout NoConfigFile (fun co ->
+        let world, reported = reporting co [] "Faulted" faultReason
+        run world co "dotnet build SageFs.Core" |> ignore
+        reported |> List.ofSeq
+        |> Expect.equal "one undeclared use against a Faulted REPL" [ { Declaration = GateDeclaration.UndeclaredGate; Repl = ReplAtTheTime.Faulted } ])
+
+    testCase "WHY — #160: a denied command is not reported, because it did not run" <| fun _ ->
+      withCheckout NoConfigFile (fun co ->
+        let world, reported = reporting co [] "Ready" ""
+        run world co "dotnet test" |> Expect.isSome "enforce denies it"
+        reported.Count |> Expect.equal "nothing to count" 0)
+
+    testCase "WHY — #160: a declared final gate with the lease granted is reported as declared" <| fun _ ->
+      withCheckout NoConfigFile (fun co ->
+        let world, reported = reporting co [] "Ready" ""
+        let world = { world with Lease = fun _ -> Some LeaseGranted }
+        run world co "SAGEFS_FINAL_GATE=1 dotnet test" |> Expect.isNone "allowed"
+        reported |> List.ofSeq
+        |> Expect.equal "declared, REPL ready" [ { Declaration = GateDeclaration.DeclaredGate; Repl = ReplAtTheTime.Ready } ])
+
+    testCase "WHY — #160: the build before the first session is reported against a REPL that was not ready" <| fun _ ->
+      withCheckout NoConfigFile (fun co ->
+        let world, reported = reporting co [] "Starting" ""
+        run world co "dotnet build" |> Expect.isNone "allowed, silently"
+        reported |> List.ofSeq
+        |> Expect.equal "undeclared, not ready" [ { Declaration = GateDeclaration.UndeclaredGate; Repl = ReplAtTheTime.NotReady } ])
+
+    testCase "WHY — #160: /health's sessionStates are read for faultReason, and a null or missing one is an empty string" <| fun _ ->
+      parseSessionSummaries """{"sessionStates":[{"workingDirectory":"/r","status":"Faulted","faultReason":"boom"},{"workingDirectory":"/s","status":"Ready","faultReason":null},{"workingDirectory":"/t","status":"Starting"}]}"""
+      |> Expect.equal "three sessions"
+           [ { WorkingDirectory = "/r"; Status = "Faulted"; FaultReason = "boom" }
+             { WorkingDirectory = "/s"; Status = "Ready"; FaultReason = "" }
+             { WorkingDirectory = "/t"; Status = "Starting"; FaultReason = "" } ]
+
+    testCase "WHY — #160: a health body that is not the shape we know yields no sessions, never an exception" <| fun _ ->
+      [ "not json"; "{}"; """{"sessionStates":"nope"}""" ]
+      |> List.map parseSessionSummaries
+      |> Expect.equal "all empty" [ []; []; [] ]
   ]
 ]
