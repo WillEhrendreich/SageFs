@@ -175,8 +175,19 @@
     <Copy SourceFiles="%(_R2RReady.Cached)" DestinationFolder="$(_R2RHostDir)" Condition="'@(_R2RReady)' != ''" ContinueOnError="true" />
     <Touch Files="%(_R2RReady.Cached)" Condition="'@(_R2RReady)' != ''" ContinueOnError="true" />
     <ItemGroup>
-      <_R2RCacheEntry Include="$(_R2RCache)**/*.dll" />
-      <_R2RCacheFresh Include="@(_R2RCacheEntry)" Condition="$([System.DateTime]::Parse('%(_R2RCacheEntry.ModifiedTime)').AddDays($(SageFsReadyToRunCacheDays)).Ticks) &gt; $([System.DateTime]::Now.Ticks)" />
+      <!-- The scratch directories are EXCLUDED from the glob below. The cleanup reads every file
+           the cache holds, and a build that moves its images out of its scratch while another
+           build reads the cache leaves that build holding a file it cannot stat: the timestamp
+           comes back empty, and the cleanup used to parse it and fail the build with MSB4184.
+           The two target frameworks build beside each other and share this cache, and the
+           14-day cleanup only started deleting anything on 2026-10-19, the day the oldest
+           cached entries crossed that line. The release gate's pack stage hit it on that day
+           with every tier green, and 0.6.914 did not go out. -->
+      <_R2RCacheEntry Include="$(_R2RCache)**/*.dll" Exclude="$(_R2RCache)tmp-*/*.dll" />
+      <!-- An entry with no timestamp at all is STALE, not a reason to fail: the step is speed
+           only and says so, so the empty check comes FIRST (MSBuild's `and` short-circuits, so
+           the parse never runs on an empty string, which would throw). -->
+      <_R2RCacheFresh Include="@(_R2RCacheEntry)" Condition="'%(_R2RCacheEntry.ModifiedTime)' != '' and $([System.DateTime]::Parse('%(_R2RCacheEntry.ModifiedTime)').AddDays($(SageFsReadyToRunCacheDays)).Ticks) &gt; $([System.DateTime]::Now.Ticks)" />
       <_R2RCacheStale Include="@(_R2RCacheEntry)" Exclude="@(_R2RCacheFresh)" />
     </ItemGroup>
     <Delete Files="@(_R2RCacheStale)" ContinueOnError="true" />
