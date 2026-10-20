@@ -377,31 +377,36 @@ let private keepTieringLapsesAndFailsClosed (runtime: HostRuntime) =
           match report.Watch with
           | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Lapsed _ -> lapsed <- true
           | _ -> ()
-        match lapsed with
-        | false ->
-          // The runtime recompiles a method when its background compiler gets to it, and on net10.0 it never did in any run
-          // measured (600 calls, 1.2 million reads, 47 s: the watch stayed on; the likely reason is that MonoMod re-applies a
-          // detour when a method is JIT-compiled again, which this test does not depend on). A watch that never lapsed saw every read, so the contract on this side is the
-          // reverse of the lapse: the thrown-away reads are named, and the edit is a patch. The forced lapse in
-          // ReflectionReadTrackingTests covers the fail-closed side on every run, whatever the runtime does here.
-          let! (final: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
-          final.Watch
-          |> Expect.equal (sprintf "%d calls to reflectDrop (%d reads) did not lapse the watch, so it is still on.\nHost log:\n%s" calls (calls * reflectReadsPerCall) (RunningApp.log app)) SageFs.Middleware.ValueReads.ReflectionWatchStatus.Watching
-          let! verdict = HotReloadStateHarness.saveWithinBudget SageFs.Tests.TestTimeouts.heavyVerdictBudget app "let reflected = \"mirror\"" "let reflected = \"glass\""
-          str (json verdict) "outcome"
-          |> Expect.equal (sprintf "the watch saw every read and each one was thrown away, so this is a patch, applied and not yet seen running.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "PatchPending"
+        // The VERDICT decides which half of the contract this is, not the polls. The watch is on the
+        // reflection entry points, and the runtime's background compiler can recompile one of them at
+        // any moment: the watch lapses and comes back, and a poll once per 2000 reads can miss that
+        // entirely. The gate saw exactly that on 2026-10-19: the report said "watching", the verdict
+        // said RestartRequired, and this case called it a failure. The decision remembers the lapse,
+        // because a read through reflection in the gap cannot be ruled out, so it fails closed. That
+        // is the product doing the right thing, and the verdict is where this case can read that.
+        let! (final: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
+        let! verdict = HotReloadStateHarness.saveWithinBudget SageFs.Tests.TestTimeouts.heavyVerdictBudget app "let reflected = \"mirror\"" "let reflected = \"glass\""
+        let outcome = str (json verdict) "outcome"
+        let where =
+          sprintf "%d calls to reflectDrop (%d reads), the watch is %A now.\nHost log:\n%s"
+            calls (calls * reflectReadsPerCall) final.Watch (RunningApp.log app)
+        match outcome with
+        | "PatchPending" ->
+          // The watch never lapsed, so every read was seen, each one was thrown away, and the edit is
+          // a patch, applied and not yet seen running. The forced lapse in ReflectionReadTrackingTests
+          // covers the fail-closed side on every run, whatever the runtime does here.
           let! served = settle app "reflectPeek" "glass"
           served |> Expect.equal "and reflection reads the new value" "glass"
           let! confirmedVerdict = confirmed app
-          str (json confirmedVerdict) "outcome" |> Expect.equal (sprintf "the reflective read ran the patched getter.\nVerdict: %s\nHost log:\n%s" confirmedVerdict (RunningApp.log app)) "Patched"
-        | true ->
-          // 160,000 stack walks just ran, so give the verdict more room than a
-          // quiet app needs.
-          let! verdict = HotReloadStateHarness.saveWithinBudget SageFs.Tests.TestTimeouts.heavyVerdictBudget app "let reflected = \"mirror\"" "let reflected = \"glass\""
-          str (json verdict) "outcome"
-          |> Expect.notEqual (sprintf "the watch lapsed, so a read in the gap can't be ruled out. Patched here is the lie fail-closed exists to prevent.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
+          str (json confirmedVerdict) "outcome"
+          |> Expect.equal (sprintf "the reflective read ran the patched getter.\nVerdict: %s\n%s" confirmedVerdict where) "Patched"
+        | other ->
+          // The watch lapsed, so a read in the gap cannot be ruled out and the save fails closed.
+          // Patched here is the lie fail-closed exists to prevent.
           let _, message = firstReason verdict
           message |> Expect.stringContains "names the lapse, not a guess" "reflection"
+          other
+          |> Expect.equal (sprintf "a verdict that fails closed is the restart, not a patch.\nVerdict: %s\n%s" verdict where) "RestartRequired"
       finally
         stop app
     })
