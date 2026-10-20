@@ -169,7 +169,7 @@ When `is_compressed` is set, decompress before CRC validation. The CRC always co
 
 Readers MUST skip unknown section tags by following the directory entry's `offset` and `size`. This is the primary forward-compatibility mechanism: new sections can be added in future format versions without breaking old readers.
 
-> **Rationale — PROF as separate section:** Profiling data is optional, cold, and write-once. It's never read during normal restore — only when diagnosing performance. Keeping it separate means readers that don't care about profiling skip it entirely (section directory → tag 0x0004 → skip). It doesn't pollute the hot TOC entries with 28 extra bytes per interaction. But it's invaluable when needed: "interaction #47 spent 180ms in typecheck and 2ms in everything else" turns the snapshot from a backup file into a diagnostic artifact.
+> **Rationale — PROF as separate section:** Profiling data is optional, cold, and write-once. A normal restore never reads it; only diagnosing performance does. Keeping it separate means readers that don't care about profiling skip it entirely (section directory → tag 0x0004 → skip). It doesn't pollute the hot TOC entries with 28 extra bytes per interaction. But it's invaluable when needed: "interaction #47 spent 180ms in typecheck and 2ms in everything else" turns the snapshot from a backup file into a diagnostic artifact.
 >
 > **Rationale — BIND as separate section:** Runtime binding state (variable names, types, values) is useful for session restoration UX but not required for replay correctness. Making it optional avoids bloating files when bindings aren't needed.
 >
