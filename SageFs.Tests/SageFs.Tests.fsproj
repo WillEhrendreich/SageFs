@@ -793,6 +793,7 @@
         <Compile Include="LiveTestWatcherAtomicSaveTests.fs" />
         <Compile Include="RestartPolicyCircuitBreakerTests.fs" />
         <Compile Include="HostManifestTests.fs" />
+        <Compile Include="ReadyToRunTargetsTests.fs" />
         <Compile Include="HostAdaptationTests.fs" />
         <Compile Include="HostConcernTests.fs" />
         <Compile Include="HostCoreAdoptionTests.fs" />

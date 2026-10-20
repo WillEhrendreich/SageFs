@@ -804,6 +804,10 @@ module TestTimeouts =
   /// load average of 38, and above the 20 s `childExit` in the 2026-10-18 local gate, where two cases errored with
   /// a cancelled wait while the box also ran four other shards. The wait ends when the child does.
   let childTestDiscovery = secs 120.
+  /// MSBuild started to run one target of the ReadyToRun targets file: it loads the SDK, evaluates the
+  /// project and runs the cache cleanup. A few seconds by hand, and it is a build, so it gets the same
+  /// room as a child that lists the tests.
+  let readyToRunCacheProbe = secs 120.
   /// Let the async readers on a process's output drain after it exited, so the log is complete.
   let readerFlush = secs 1.
 
