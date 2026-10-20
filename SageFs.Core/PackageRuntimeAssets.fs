@@ -10,6 +10,7 @@ module SageFs.PackageRuntimeAssets
 
 open System
 open System.IO
+open System.Text.Json
 
 open Ionide.ProjInfo.Types
 
@@ -35,6 +36,102 @@ let runtimeAssetsOf (allItems: Map<string, Set<string * Map<string, string>>>) :
     match Map.tryFind "NuGetPackageId" metadata, Map.tryFind "NuGetPackageVersion" metadata with
     | Some package, Some version when not (String.IsNullOrEmpty package) -> Some { Package = package; Version = version; Path = path }
     | _ -> None)
+
+// ── The same fact, read out of a restore record ───────────────────────────────────────────────────────────
+//
+// `runtimeAssetsOf` above reads it out of MSBuild's items, which the manual-parse fallback does not have: it
+// never runs an MSBuild evaluation. A restore writes the same information down in `obj/project.assets.json`,
+// and that record is on disk for every project that has been restored.
+//
+// The fallback needs it because a CLASS LIBRARY's build output does not copy its packages: since .NET Core
+// 3.0 only an executable's or a test project's output holds them. So a library's bin/ holds the project's own
+// assembly and nothing else, the session cannot use the package at all, and the project's own code that calls
+// it fails at run time.
+
+/// The restore record of a project: `obj/project.assets.json`, or the Arcade layout's
+/// `artifacts/obj/<name>/project.assets.json`. A project built under a different intermediate path
+/// has neither, and then there is nothing to read.
+let assetsFilesOf (projectPath: string) (fileExists: string -> bool) : string list =
+  let dir = Path.GetDirectoryName (Path.GetFullPath projectPath)
+  let name = Path.GetFileNameWithoutExtension projectPath
+  [ Path.Combine(dir, "obj", "project.assets.json")
+    Path.Combine(dir, "artifacts", "obj", name, "project.assets.json") ]
+  |> List.filter fileExists
+
+let private propertyOf (element: JsonElement) (name: string) : JsonElement option =
+  let mutable found = Unchecked.defaultof<JsonElement>
+  if element.TryGetProperty(name, &found) then Some found else None
+
+let private stringOf (element: JsonElement) : string option =
+  match element.ValueKind with
+  | JsonValueKind.String -> Some(element.GetString())
+  | _ -> None
+
+let private properties (element: JsonElement) : (string * JsonElement) list =
+  match element.ValueKind with
+  | JsonValueKind.Object -> element.EnumerateObject() |> Seq.map (fun (p: JsonProperty) -> p.Name, p.Value) |> Seq.toList
+  | _ -> []
+
+/// `<id>/<version>` split into the two.
+let private splitIdentity (identity: string) : string * string =
+  match identity.LastIndexOf '/' with
+  | -1 -> identity, ""
+  | at -> identity.Substring(0, at), identity.Substring(at + 1)
+
+/// The runtime assets a restore record names, for the frameworks asked for. An empty list means every
+/// framework the record has.
+///
+/// The record names, for each package it resolved: the runtime assets it contributes to each framework
+/// (`targets/<tfm>/<id>/<version>.runtime`), the package's own path under a package folder
+/// (`libraries/<id>/<version>.path`), and the package folders to resolve it against (`packageFolders`).
+///
+/// `_._` is NuGet's "nothing here for this framework" placeholder, and it is not a file. A package whose
+/// folder the cache does not hold has nothing the session could load, so it is left out.
+let runtimeAssetsOfRestore (tfms: string list) (json: string) (directoryExists: string -> bool) : RuntimeAsset list =
+  try
+    use document = JsonDocument.Parse json
+    let root = document.RootElement
+    let folders =
+      match propertyOf root "packageFolders" with
+      | Some value -> properties value |> List.map fst
+      | None -> []
+    let libraries =
+      match propertyOf root "libraries" with
+      | Some value -> properties value |> Map.ofList
+      | None -> Map.empty
+    let targets =
+      match propertyOf root "targets" with
+      | Some value -> properties value |> Map.ofList
+      | None -> Map.empty
+    let frameworks = if tfms = [] then Map.keys targets |> Seq.toList else tfms
+    frameworks
+    |> List.collect (fun tfm ->
+      match Map.tryFind tfm targets with
+      | None -> []
+      | Some target ->
+        properties target
+        |> List.collect (fun (identity, package) ->
+          match propertyOf package "runtime" with
+          | None -> []
+          | Some runtime ->
+            let name, version = splitIdentity identity
+            let relative =
+              match Map.tryFind identity libraries with
+              | Some library -> (match propertyOf library "path" |> Option.bind stringOf with | Some p -> p | None -> "")
+              | None -> ""
+            if relative = "" then []
+            else
+              match folders |> List.map (fun folder -> Path.Combine(folder, relative)) |> List.tryFind directoryExists with
+              | None -> []
+              | Some folder ->
+                properties runtime
+                |> List.choose (fun (file, _) ->
+                  if file = "_._" then None
+                  else Some { Package = name; Version = version; Path = Path.Combine(folder, file) })))
+  with
+  // A record that is not JSON names no packages. It is a case, not a wildcard: the session keeps
+  // the references it has instead of failing to start.
+  | :? JsonException -> []
 
 let samePath (a: string) (b: string) : bool =
   String.Equals(Path.GetFullPath a, Path.GetFullPath b, StringComparison.OrdinalIgnoreCase)
