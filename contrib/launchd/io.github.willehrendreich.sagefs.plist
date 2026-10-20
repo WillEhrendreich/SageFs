@@ -5,22 +5,24 @@
   the same block as the README's, and a test keeps the two identical:
 
     dotnet_root="$(dirname "$(realpath "$(command -v dotnet)")")"
-    if [ -x "$dotnet_root/dotnet" ]; then
+    if [ ! -x "$dotnet_root/dotnet" ]; then
+      echo "No dotnet found through PATH, so nothing was installed. realpath needs macOS 12.3 or later." >&2
+    elif printf '%s' "$PATH" | grep -q '[|&<\]'; then
+      echo "Your PATH holds a |, &, < or \\, which the install cannot copy into the plist, so nothing was installed." >&2
+    else
       launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs 2>/dev/null
       mkdir -p ~/Library/LaunchAgents ~/Library/Logs/sagefs "$HOME/Library/Application Support/sagefs-daemon"
-      sed -e "s|@HOME@|$HOME|g" -e "s|@DOTNET_ROOT@|$dotnet_root|g" \
+      sed -e "s|@HOME@|$HOME|g" -e "s|@DOTNET_ROOT@|$dotnet_root|g" -e "s|@PATH@|$PATH|g" \
         contrib/launchd/io.github.willehrendreich.sagefs.plist \
         > ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.willehrendreich.sagefs.plist
-    else
-      echo "No dotnet found through PATH, so nothing was installed. realpath needs macOS 12.3 or later." >&2
     fi
 
   The daemon then outlives every agent, terminal and editor, and comes back at
   login.
 
   launchd expands no variables in a plist: not ~, not $HOME. So the file in the
-  repo holds two placeholders, and the sed line above fills them in. @HOME@ is
+  repo holds three placeholders, and the sed line above fills them in. @HOME@ is
   your home directory. @DOTNET_ROOT@ is the folder that holds the real dotnet
   executable, found through PATH with symlinks resolved. The tool's launcher
   finds the runtime through DOTNET_ROOT, and launchd does not read your shell
@@ -29,10 +31,19 @@
   than 12.3 (which has no realpath), it would otherwise write a plist that
   looks fine and cannot start.
 
-  If you move or upgrade .NET to a different folder, run the install again. It
-  unloads the old agent first, because launchd keeps a loaded agent's settings
-  until it is unloaded, and a second bootstrap fails while the first is loaded.
-  It unloads before it rewrites the plist: rewriting a loaded agent's plist and
+  @PATH@ is the PATH of the shell you run the install in. Without it the daemon,
+  and every worker and process it starts, gets launchd's default PATH,
+  /usr/bin:/bin:/usr/sbin:/sbin. Then an init.fsx that starts npm fails with "No
+  such file or directory", and a script that npm runs cannot find dotnet. A PATH
+  holding |, &, < or \ would come out of sed or the plist's XML changed, so the
+  install stops instead.
+
+  If you move or upgrade .NET to a different folder, or want the daemon to see a
+  PATH change (a new tool, another node version through nvm), run the install
+  again. launchctl kickstart -k does not reread the plist. The install unloads
+  the old agent first, because launchd keeps a loaded agent's settings until it
+  is unloaded, and a second bootstrap fails while the first is loaded. It
+  unloads before it rewrites the plist: rewriting a loaded agent's plist and
   then unloading it made the next bootstrap fail about one time in four.
 
   ProgramArguments assumes SageFs is installed as a global tool, which puts the
@@ -73,6 +84,8 @@
   <dict>
     <key>DOTNET_ROOT</key>
     <string>@DOTNET_ROOT@</string>
+    <key>PATH</key>
+    <string>@PATH@</string>
   </dict>
 
   <key>WorkingDirectory</key>
