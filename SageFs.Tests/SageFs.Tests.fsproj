@@ -20,6 +20,9 @@
         <Compile Include="../build/IgnoredBudget.fs" Link="Build/IgnoredBudget.fs" />
         <Compile Include="../build/TierSchedule.fs" Link="Build/TierSchedule.fs" />
         <Compile Include="../build/BuildStamps.fs" Link="Build/BuildStamps.fs" />
+        <!-- Before TestInfrastructure: the listing process prints the host tier's case count with this marker, and
+             the pipeline reads the same marker back. One home for it, so the two sides cannot drift. -->
+        <Compile Include="../build/HostListing.fs" Link="Build/HostListing.fs" />
         <Compile Include="RunnerDirs.fs" />
         <Compile Include="FixtureBuildCache.fs" />
         <Compile Include="HostSlots.fs" />

@@ -252,6 +252,7 @@ let writeReleaseManifest () =
 #load "build/IgnoredBudget.fs"
 #load "SageFs.Tests/RatchetBudgets.fs"
 #load "build/TierSchedule.fs"
+#load "build/HostListing.fs"
 #load "build/BuildStamps.fs"
 #load "build/PassRecord.fs"
 open SageFs.Build
@@ -831,8 +832,14 @@ let runTiers (tiers: TierPlan.Tier list) =
             hostCaseCount.Value <-
               match listed with
               | 0 ->
-                let cases = File.ReadAllLines listLog |> Array.filter (fun l -> Text.RegularExpressions.Regex.IsMatch(l, "^[NPF] ")) |> Array.length
-                Counted cases
+                // The count comes from the marker the listing process prints, not from the shape of
+                // Expecto's output: Expecto prints a per-test kind marker only when the tree carries
+                // a focus state, so counting its lines read 0 the moment the last pending test left
+                // the host suite, and the trust report called that a dropped suite. No marker line
+                // means we could not tell, which is not the same as 0 and is said as such.
+                match File.ReadAllLines listLog |> HostListing.countOf with
+                | Some cases -> Counted cases
+                | None -> NotCounted (sprintf "the listing printed no `%s` line (log: %s)" HostListing.marker listLog)
               | code -> NotCounted (sprintf "`--integration-host --list-tests` exited %d (log: %s)" code listLog)
             printfn "host tier: %A" hostCaseCount.Value
           })

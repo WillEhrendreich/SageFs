@@ -860,7 +860,15 @@ module TrustSignal =
     : int =
     let tier = qualifiedTier System.AppContext.TargetFrameworkName tier
     match argv |> Array.contains "--list-tests" with
-    | true -> Expecto.Tests.runTestsWithCLIArgs (spinnerArgs (consoleKind ())) argv tests
+    | true ->
+      // The trust report's host-coverage row needs the number of cases the whole host tier registers.
+      // It used to read it by counting the lines of this listing, and Expecto's output shape is not a
+      // contract: it prints a per-test kind marker only when the tree carries a focus state, so the
+      // count became 0 when the last pending test left the host suite, and the report read that as
+      // "the host suites register 0 cases" and called it a coverage gap. The number is known here, so
+      // it is printed here, and the pipeline reads that line (see build/HostListing.fs).
+      printfn "%s %d" SageFs.Build.HostListing.marker (registeredCount tests)
+      Expecto.Tests.runTestsWithCLIArgs (spinnerArgs (consoleKind ())) argv tests
     | false ->
       let summary = ref None
       let handler =

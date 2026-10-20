@@ -41,6 +41,33 @@ let hostCoverageListingWiringTests =
       let used = text.IndexOf "let runTiers"
       (declared >= 0 && used >= 0 && declared < used)
       |> Expect.isTrue "`let reusedTiers` comes before `let runTiers` in ci-pipeline.fsx"
+
+    // The count used to be read by counting the listing's lines that start with a kind marker
+    // (`N `, `P `, `F `). Expecto prints that marker only when the tree carries a focus state, so
+    // the count read 0 the moment the last pending test left the host suite, and the trust report
+    // called that a dropped suite. The count now comes from the marker the listing process prints.
+    testCase "the pipeline reads the case count from the listing's marker line, not from the shape of Expecto's output" <| fun _ ->
+      let text = pipeline.Value
+      text
+      |> Expect.stringContains "the pipeline reads the count through the shared reader" "HostListing.countOf"
+      text.Contains "^[NPF] "
+      |> Expect.isFalse "the pipeline does not count the listing's lines by their kind marker any more"
+
+    testCase "the listing process prints the count with the shared marker" <| fun _ ->
+      let text = File.ReadAllText(Path.Combine(RepoPaths.repoPathFull [||], "SageFs.Tests", "TestInfrastructure.fs"))
+      text
+      |> Expect.stringContains "the listing prints the count with the shared marker" "HostListing.marker"
+
+    testCase "a listing log with the marker reads the count, and one without it reads nothing at all" <| fun _ ->
+      [ "some output"; "SAGEFS LISTED CASES: 350"; "more output" ]
+      |> SageFs.Build.HostListing.countOf
+      |> Expect.equal "the count the listing printed" (Some 350)
+      [ "some output"; "more output" ]
+      |> SageFs.Build.HostListing.countOf
+      |> Expect.equal "no marker line is 'we could not tell', which is not 0" None
+      [ "SAGEFS LISTED CASES: not a number" ]
+      |> SageFs.Build.HostListing.countOf
+      |> Expect.equal "a marker line with no number in it reads nothing" None
   ]
 
 [<Tests>]
