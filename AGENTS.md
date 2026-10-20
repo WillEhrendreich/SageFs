@@ -272,6 +272,81 @@ budget table has a budget of zero, and a budget above the real count is itself a
 - Use **Conventional Commits** format: `type(scope): description`
 - Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `style`, `ci`, `build`
 
+### Writing: no slop
+Will hates AI slop, and these are the shapes that read as machine-made. The full catalogue with
+replacements lives in the `plain-english` skill (`~/.agents/skills/plain-english/SKILL.md`). The
+rules below are the ones that matter while writing, and they apply to every kind of prose an agent
+writes: docs, README and release notes, commit messages, code comments, issue text, PR
+descriptions, chat replies, and what an agent says back to the user.
+
+**No negative parallelisms.** Never build a sentence as a thing-this-is-not followed by a
+thing-this-is. "It's not this, it's that." "This isn't about correctness, it's about trust."
+"Not just X, but Y." "X, not Y." The second clause usually repeats the first clause's meaning in
+more words, so the reader has to undo the setup before reaching the point. Say the thing itself.
+- "This isn't a bug, it's a missing feature." becomes "The feature is missing."
+- "The gate fails on a slow save, not on a broken one." becomes "A slow save fails the gate. A broken save fails at once."
+A plain negative stays fine ("the gate does not retry"). The banned shape is the pair: a rejected
+framing and a preferred one, in the same sentence. When a reader might hold the wrong reading, say
+what it is in one plain sentence and put the other fact in the next one.
+
+**No staged openers.** "In today's fast-paced world", "In an era of", "In a world where", "Ever
+wondered", "Have you ever", "What if I told you", "Did you know", "Picture this", "Imagine a world
+where", "Let's dive in", "Let's explore".
+
+**No staged emphasis.** "the key takeaway", "the real question is", "at its core", "fundamentally
+speaking", "the truth is", "in reality", "the heart of the matter", "let that sink in", "read that
+again", "it's important to note", "it's worth noting", "one thing to consider", "it cannot be
+overstated".
+
+**No closing beats.** "in conclusion", "in summary", "to sum up", "all in all", "and that changes
+everything", "hope this helps", "feel free to reach out", "let me know if you'd like", "if you
+want, I can".
+
+**No weasel attribution.** "experts agree", "studies show", "research suggests", "scientists
+believe", "it is widely believed", "critics note", "observers note". Name the source or drop the
+attribution.
+
+**No fake-insight tails.** ", highlighting", ", reflecting", ", underscoring", ", demonstrating",
+", showcasing", ", paving the way for", ", raising questions about", ", sparking debate",
+", prompting reflection", ", reshaping our understanding". Name the thing itself.
+
+**No marketing register.** delve, tapestry, testament, landscape, realm, synergy, seamless, robust,
+transformative, game-changer, cutting-edge, pivotal, crucial, holistic, multifaceted, comprehensive,
+invaluable, unprecedented, vibrant, innovative, unlock, unleash, elevate, empower, foster,
+streamline, supercharge, revolutionize, amplify, bolster, catalyze, cultivate, showcase, embark,
+enhance, beacon, cornerstone, ecosystem, deep dive, key takeaways, valuable insights, paradigm
+shift, leverage. Some are fine when they name a real action: "end-to-end" for a test that really
+goes end to end, "harness" for a thing that really harnesses, "leverage" only when it names what
+was applied.
+
+**No stock phrases.** "thrilled to announce", "excited to share", "in today's fast-paced world",
+"let's dive in", "picture this", "imagine a world where", "it's important to note", "it's worth
+noting", "at the end of the day", "here's the thing", "make no mistake", "let's be honest", "the
+truth is", "in reality", "at its core", "the real question is", "let that sink in", "hope this
+helps", "great question".
+
+**No transition crutches.** moreover, furthermore, additionally, consequently, hence, nevertheless,
+nonetheless, notably, ultimately, overall, when it comes to, in terms of, generally speaking,
+needless to say, it goes without saying.
+
+**No filler grammar.** in order to, has the ability to, a large number of, in close proximity to,
+prior to the start of, during the course of, on a regular basis, in spite of the fact that, for all
+intents and purposes, with regard to, the fact of the matter is, conduct an investigation, provide
+assistance to, make a decision on.
+
+**No hyphenated clichés.** mission-critical, battle-tested, out-of-the-box, enterprise-grade,
+plug-and-play, turn-key, future-proof, results-driven, customer-centric, next-generation,
+best-of-breed, laser-focused, value-added, tried-and-true, ready-made.
+
+**No business jargon.** unpack, lean into, double down, take a step back, moving forward, circle
+back, on the same page, socialize, bandwidth, low-hanging fruit, move the needle.
+
+**No template residue.** "[Your Name]", "[TODO]", "[insert X]", "[company]", "[date]", "[email]",
+"[url]".
+
+**Nothing to sell, no landing beat.** Rule of three for cadence, em-dash stacks, bolded lead-in
+labels on prose paragraphs, and a closing aphorism ("that's the whole ballgame") are all the same
+kind of tell: shape with nothing in it.
 ### F# Style
 - Favor immutable types, discriminated unions, pattern matching, and pipeline operators (`|>`)
 - Use `Result<'T, 'TError>` for operations that can fail
