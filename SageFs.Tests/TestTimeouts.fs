@@ -128,6 +128,19 @@ module TestTimeouts =
   /// about a second; reaching this means the daemon stopped answering, and it is generous because a cold
   /// runner pays for a type-check cache and a JIT that nobody warmed. A passing run never waits it out.
   let liveTestingVerdictCeiling = secs 30.
+  /// Ceiling on the HTTP request that holds a test for a debugger, and on the one that releases
+  /// it. Holding waits for the host to reach the test, and releasing waits for the test to
+  /// finish, so both outlast an ordinary request. The daemon gives up at its own window
+  /// (`SageFs.Timeouts.debugHold`), so the request waits a little past it.
+  let debugHoldRequest = SageFs.Timeouts.debugHold + secs 30.
+  /// Ceiling on a DEBUGGER attaching to the process the daemon holds a test in. The attach has to
+  /// land inside the daemon's own hold window, because that window is when the test can still be
+  /// caught, and the window scales with the machine. A passing run never waits it out.
+  let debugAttach = SageFs.Timeouts.debugHold - secs 30.
+  /// How often the debugger is asked for the threads of the process it is attached to, while the
+  /// attach is still settling. The console takes commands as it becomes ready, and the answer is
+  /// what proves the attach, so the question is asked until it is answered.
+  let debuggerPoll = ms 500.
   /// Ceiling on an evaluated verdict being confirmed by a real build: the quiet window, a rebuild that
   /// restarts the worker, and a run against what it built. A passing run never waits it out. It outlasts the
   /// product's own deadline for a confirmation (`Timeouts.liveTestConfirmationDeadline`) by the margin of one
