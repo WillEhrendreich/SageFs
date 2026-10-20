@@ -220,8 +220,9 @@ module ManualProjectParse =
         | cfgDir :: _ ->
           let cfgRootDlls =
             Directory.EnumerateFiles(cfgDir, "*.dll", SearchOption.TopDirectoryOnly)
+          let tfmDirs = Directory.EnumerateDirectories cfgDir |> Seq.toList
           let tfmSubDlls =
-            Directory.EnumerateDirectories cfgDir
+            tfmDirs
             |> Seq.collect (fun tfmDir ->
               Directory.EnumerateFiles(tfmDir, "*.dll", SearchOption.TopDirectoryOnly))
           Seq.append cfgRootDlls tfmSubDlls
@@ -292,13 +293,34 @@ module ManualProjectParse =
           // doesn't already provide that assembly — the bin version is the
           // exact dependency the app was built against.
           let binNames = dlls |> List.map Path.GetFileName |> Set.ofList
+          // The packages a CLASS LIBRARY uses are not in its bin/: since .NET Core 3.0 only an
+          // executable's or a test project's output copies them. The manual fallback has no MSBuild
+          // evaluation to ask, so the packages come from the restore record, which every restored
+          // project has. A bin/ copy of the same file name still wins: it is the project's own, and
+          // two copies of one assembly is what FSI rejects with 0x80131040.
+          let packageAssets =
+            PackageRuntimeAssets.assetsFilesOf projPath File.Exists
+            |> List.collect (fun file ->
+              let json =
+                try
+                  File.ReadAllText file
+                with
+                // A record nobody can read names no packages. It is a case, not a wildcard.
+                | :? IOException -> ""
+                | :? UnauthorizedAccessException -> ""
+              PackageRuntimeAssets.runtimeAssetsOfRestore
+                (tfmDirs |> List.map Path.GetFileName)
+                json
+                Directory.Exists)
+            |> List.filter (fun asset -> not (binNames.Contains(Path.GetFileName asset.Path)))
           let combined =
             dlls
             |> List.append (aspNetShared |> List.filter (fun d -> not (binNames.Contains(Path.GetFileName d))))
             |> List.append (windowsDesktopShared |> List.filter (fun d -> not (binNames.Contains(Path.GetFileName d))))
+            |> List.append (packageAssets |> List.map (fun asset -> asset.Path))
             |> List.filter isManagedRef
             |> List.distinct
-          logger.LogInfo (sprintf "  Collected %d reference DLL(s) from %s (%d ASP.NET + %d WindowsDesktop shared framework)" combined.Length binDir aspNetShared.Length windowsDesktopShared.Length)
+          logger.LogInfo (sprintf "  Collected %d reference DLL(s) from %s (%d ASP.NET + %d WindowsDesktop shared framework, %d package)" combined.Length binDir aspNetShared.Length windowsDesktopShared.Length packageAssets.Length)
           combined)
 
   /// Parse an .fsproj (and its project references) into FSharpProjectOptions.

@@ -130,4 +130,48 @@ let tests =
         |> Expect.contains "the Arcade artifacts/bin output must be found even though <projectDir>/bin does not exist" "FSharp.Compiler.Service.dll"
       finally
         Directory.Delete(repoDir, true))
+
+    testCase "WHY — a class library's NuGet packages are referenced, because its build output does not copy them" (fun () ->
+      // Since .NET Core 3.0 only an executable's or a test project's output holds a copy of its
+      // packages. A class library's bin/ holds the project's own assembly and NOTHING else, so the
+      // manual fallback (which has no MSBuild evaluation to ask) referenced nothing the package
+      // provides: the session could not use the package at all, and the project's own code that
+      // calls it failed at run time. The packages are in the restore record.
+      let dir = Path.Combine(Path.GetTempPath(), "sagefs-manual-parse-packages-" + Guid.NewGuid().ToString("N"))
+      Directory.CreateDirectory dir |> ignore
+      try
+        File.WriteAllText(Path.Combine(dir, "App.fs"), "module App\nlet x = 1\n")
+        File.WriteAllText(Path.Combine(dir, "App.fsproj"), simpleFsproj)
+        // The library's own output: its assembly and nothing else.
+        let binDir = Path.Combine(dir, "bin", "Release", "net10.0")
+        Directory.CreateDirectory binDir |> ignore
+        File.WriteAllBytes(Path.Combine(binDir, "App.dll"), Array.init 32 byte)
+        // The restore record, and the package folder it points at.
+        let packages = Path.Combine(dir, "packages")
+        let packageDir = Path.Combine(packages, "skiafake", "1.2.3", "lib", "net10.0")
+        Directory.CreateDirectory packageDir |> ignore
+        File.WriteAllBytes(Path.Combine(packageDir, "SkiaFake.dll"), Array.init 32 byte)
+        let objDir = Path.Combine(dir, "obj")
+        Directory.CreateDirectory objDir |> ignore
+        let assets =
+          "{\n" +
+          "  \"version\": 3,\n" +
+          "  \"targets\": {\n" +
+          "    \"net10.0\": {\n" +
+          "      \"SkiaFake/1.2.3\": { \"type\": \"package\", \"runtime\": { \"lib/net10.0/SkiaFake.dll\": {} } }\n" +
+          "    }\n" +
+          "  },\n" +
+          "  \"libraries\": {\n" +
+          "    \"SkiaFake/1.2.3\": { \"type\": \"package\", \"path\": \"skiafake/1.2.3\" }\n" +
+          "  },\n" +
+          "  \"packageFolders\": { \"__PACKAGES__\": {} }\n" +
+          "}\n"
+        File.WriteAllText(Path.Combine(objDir, "project.assets.json"), assets.Replace("__PACKAGES__", packages.Replace("\\", "/")))
+
+        let refs = ManualProjectParse.collectBinReferences quietLogger [ Path.Combine(dir, "App.fsproj") ]
+        refs
+        |> List.map Path.GetFileName
+        |> Expect.contains "the package's runtime asset must be referenced, because the library's bin/ does not hold it" "SkiaFake.dll"
+      finally
+        Directory.Delete(dir, true))
   ]

@@ -109,14 +109,12 @@ let primaryProjectOutputDir (projects: string list) : string option =
 /// uses, which is where a package's native libraries are found (see `NativeAssets`). The two layouts a restore
 /// writes it in are `obj/` beside the project and `artifacts/obj/<name>/`; a project built under a different
 /// intermediate path yields none, and its session then looks for native libraries only beside the assemblies that ask.
+///
+/// The two layouts are named in ONE place, `PackageRuntimeAssets.assetsFilesOf`, because the manual-parse
+/// fallback needs the same record and must not learn the layouts again.
 let projectAssetsFilesWith (fileExists: string -> bool) (projects: string list) : string list =
   projects
-  |> List.collect (fun project ->
-    let projectDir = Path.GetDirectoryName(Path.GetFullPath project)
-    let name = Path.GetFileNameWithoutExtension(project: string)
-    [ Path.Combine(projectDir, "obj", "project.assets.json")
-      Path.Combine(projectDir, "artifacts", "obj", name, "project.assets.json") ]
-    |> List.filter fileExists)
+  |> List.collect (fun project -> PackageRuntimeAssets.assetsFilesOf project fileExists)
   |> List.distinct
 
 /// The isolated host's own FSharp.Core.dll (`typeof<unit>` lives there) — a sibling of the host's own entry
