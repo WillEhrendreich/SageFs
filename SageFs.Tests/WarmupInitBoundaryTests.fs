@@ -289,32 +289,44 @@ let startupProfileFailureTests =
           message |> Expect.stringContains "FSI's own words are kept after the cause" fsiWrapper
         | other -> failtestf "expected the profile to fail, got %A" other
 
-    testCase "WHY — a typo in init.fsx names the identifier and the line it is on, not only that there was an error" <| fun _ ->
+    testCase "WHY — a typo in a file init.fsx #loads names the identifier, and no line, since the line would read as init.fsx's" <| fun _ ->
       withTempDir <| fun site ->
-        match applyInSession site "let ok = 1\nlet x = undefinedThing" with
+        File.WriteAllText(Path.Combine(site, "helpers.fsx"), "let ok = 1\n\nlet x = undefinedThing")
+        match applyInSession site (sprintf "#load @\"%s\"" (Path.Combine(site, "helpers.fsx"))) with
         | StartupProfile.Failed(_, message) ->
-          message |> Expect.stringContains "the warning names the error and its line and column" "FS0039 2:8 — "
+          message |> Expect.stringContains "the warning names the error, with no location" "FS0039 — "
           message |> Expect.stringContains "the warning names the identifier" "undefinedThing"
         | other -> failtestf "expected the profile to fail, got %A" other
 
-    testCase "a failure with no error diagnostic is FSI's message alone, and warnings do not count" <| fun _ ->
+    testCase "a failure with no error diagnostic has no message of its own, and warnings do not count" <| fun _ ->
       let warning = diagnostic Features.Diagnostics.DiagnosticSeverity.Warning 64 (3, 4, 3, 9) "a warning"
       failureMessage "the host went away" [| warning |]
-      |> Expect.equal "nothing is added" "the host went away"
+      |> Expect.isNone "evalOrThrow raises FSI's exception unchanged"
 
-    testProperty "every distinct error is in the message once, before FSI's own words, and only an empty 1:0 range is shown without a location" <| fun (errors: (PositiveInt * NonNegativeInt * NonEmptyString) list) ->
+    testProperty "the first three distinct errors are listed, the rest counted, warnings left out, and FSI's words kept last" <| fun (raw: (bool * int * int * int * int) list) ->
+      // Each message is unique, so one containing another is no accident. The ranges are anything at all: the message
+      // shows no location, because a diagnostic does not say which file it is in.
       let diagnostics =
-        errors
-        |> List.map (fun (PositiveInt line, NonNegativeInt column, NonEmptyString message) ->
-          diagnostic Features.Diagnostics.DiagnosticSeverity.Blocking 39 (line, column, line, column) message)
+        raw
+        |> List.mapi (fun i (isError, a, b, c, d) ->
+          match isError with
+          | true -> diagnostic Features.Diagnostics.DiagnosticSeverity.Blocking 39 (a, b, c, d) (sprintf "<error %d>" i)
+          | false -> diagnostic Features.Diagnostics.DiagnosticSeverity.Warning 64 (a, b, c, d) (sprintf "<warning %d>" i))
         |> List.toArray
-      let described (d: Features.Diagnostics.Diagnostic) =
-        match d.Range.StartLine, d.Range.StartColumn with
-        | 1, 0 -> sprintf "FS0039 — %s" d.Message
-        | line, column -> sprintf "FS0039 %d:%d — %s" line column d.Message
-      let expected =
-        match diagnostics |> Array.map described |> Array.distinct with
-        | [||] -> fsiWrapper
-        | lines -> sprintf "%s (FSI: %s)" (String.concat "; " lines) fsiWrapper
-      failureMessage fsiWrapper (Array.append diagnostics diagnostics) = expected
+      let errors = diagnostics |> Array.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Blocking)
+      match failureMessage fsiWrapper (Array.append diagnostics diagnostics), errors with
+      | None, [||] -> true
+      | Some message, errors when errors.Length > 0 ->
+        let listed, counted = errors |> Array.splitAt (min 3 errors.Length)
+        let rest =
+          match counted.Length with
+          | 0 -> not (message.Contains " more error")
+          | 1 -> message.Contains " (and 1 more error) "
+          | n -> message.Contains(sprintf " (and %d more errors) " n)
+        listed |> Array.forall (fun d -> message.Contains(sprintf "FS0039 — %s" d.Message))
+        && counted |> Array.forall (fun d -> not (message.Contains d.Message))
+        && diagnostics |> Array.forall (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Blocking || not (message.Contains d.Message))
+        && rest
+        && message.EndsWith(sprintf "(FSI: %s)" fsiWrapper)
+      | _ -> false
   ]
