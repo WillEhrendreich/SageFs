@@ -1,4 +1,4 @@
-# SAGEFS - COMPREHENSIVE EXPLORATION
+# SAGEFS: an exploration
 
 ## EXECUTIVE SUMMARY
 
@@ -355,7 +355,7 @@ Daily Workflow:
 ## NEXT STEPS
 
 New Developers:
-1. Read docs/README.md (Architecture Deep Dive)
+1. Read docs/README.md (the architecture analysis)
 2. Explore SageFs.Core/ElmDaemon.fs (entry point)
 3. Trace test run: LiveTestingExecutors → Mcp → SseWriter
 4. Add MCP tool (Mcp.fs line ~250)

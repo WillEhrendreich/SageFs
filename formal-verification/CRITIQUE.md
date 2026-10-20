@@ -9,7 +9,7 @@
 
 ---
 
-## Overall Assessment
+## Assessment
 
 The SageFs formal verification project has 177 theorems proved across 11 Lean 4 files,
 zero `sorry`, stdlib-only (no Mathlib). The project has progressed from individual-

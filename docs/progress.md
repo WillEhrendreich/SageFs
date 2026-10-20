@@ -80,7 +80,7 @@ Rough edges: the horizons are guesses about distance and carry no dates. A landm
 
 One day, so a different shape from the others. Of the 84 commits dated 2026-10-01 on master when I wrote this window, the first batch is in v0.6.870, and the rest merged on the same day and are in v0.6.875. I tagged every entry below with which, because "it's on master" and "you can install it" are different claims. More merged after v0.6.875 that same day, and that is the window above this one.
 
-The reason for the day: I sat down with what Microsoft's hot reload and Visual Studio's Live Unit Testing do, wrote down every row where they were ahead or where SageFs gave a false green, and closed what could be closed. Links in this window go to [`e47b355b`](https://github.com/WillEhrendreich/SageFs/commit/e47b355b), master at the end of the day, and where I link a decision I mean an entry in [decisions.md](decisions.md).
+The reason for the day: I sat down with what Microsoft's hot reload and Visual Studio's Live Unit Testing do, wrote down every row where they were ahead or where SageFs gave a false green, and closed what could be closed. Links in this window go to [`e47b355b`](https://github.com/WillEhrendreich/SageFs/commit/e47b355b), master at day's end, and where I link a decision I mean an entry in [decisions.md](decisions.md).
 
 ### A dead FSI host leaves Ready and says why
 Status: in released v0.6.870.

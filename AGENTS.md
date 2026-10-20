@@ -1,35 +1,35 @@
-# SageFs — Coding Agent Guidelines
+# SageFs: Coding Agent Guidelines
 
-## STOP — Read This Before Anything Else
+## STOP: Read This Before Anything Else
 
 **The SageFs daemon is a long-running process that never exits on its own.** It hosts the FSI session, MCP server, and dashboard on ports 37749/37750. You will be tempted to wait for it. DO NOT.
 
 **The cardinal rule, stated three times because it is the only thing you keep getting wrong:**
 
-1. **NEVER narrate a wait to the user.** After starting a daemon, do not write "verifying" or "checking" or "started" and then stop. The next thing you produce must be a tool result — specifically a screenshot, an HTTP probe with a hard timeout, or the next concrete step. A chat message that is not a result or a question is the failure mode.
+1. **NEVER narrate a wait to the user.** After starting a daemon, do not write "verifying" or "checking" or "started" and then stop. The next thing you produce must be a tool result: specifically a screenshot, an HTTP probe with a hard timeout, or the next concrete step. A chat message that is not a result or a question is the failure mode.
 
-2. **NEVER call a command that blocks on the daemon's lifetime.** `Wait-Process`, `Start-Process -Wait`, waiting for a process to exit, `taskkill /T /F` on the daemon while also awaiting the result — all of these will hang forever because the daemon is not supposed to exit.
+2. **NEVER call a command that blocks on the daemon's lifetime.** `Wait-Process`, `Start-Process -Wait`, waiting for a process to exit, `taskkill /T /F` on the daemon while also awaiting the result, all of these will hang forever because the daemon is not supposed to exit.
 
 3. **NEVER treat `Start-Sleep` as "wait for the daemon to be ready" without a follow-up tool call in the same turn.** `Start-Sleep 3` followed by a chat message is the same hang, just shorter. `Start-Sleep 3` followed by a screenshot is fine. The sleep is not the problem. The text after the sleep is the problem.
 
-4. **NEVER re-derive an MCP connection from scratch. Run `dotnet fsi scripts/reconnect-mcp.fsx`.** If every MCP tool answers `404 Session not found`, the connection is LIVE and pointing at a session the daemon no longer has. The session lives in the daemon's MEMORY, and installing a build restarts the daemon on purpose, so the id a client holds dies. A client on Streamable HTTP sends `initialize` once and never again, so the failure repeats until someone reloads the client by hand. `reconnect-mcp.fsx` re-initializes and PROVES it (it first requires a never-minted id to be rejected, so a pass cannot mean "the endpoint merely answers"). If it prints `OK`, you are live; carry on. The durable fix is the stdio bridge — `claude mcp add sagefs -- sagefs mcp` — which owns the handshake itself, so the client never holds an id at all. `scripts/probe-bridge-stdio.fsx` drives that bridge from a script, which is how to dogfood it without a client. Full explanation: "404 Session not found" in `docs/mcp-tools.md`, and the same diagnosis in `skills/sagefs/troubleshooting.md`, which also says to check the daemon's version before believing anything else.
+4. **NEVER re-derive an MCP connection from scratch. Run `dotnet fsi scripts/reconnect-mcp.fsx`.** If every MCP tool answers `404 Session not found`, the connection is LIVE and pointing at a session the daemon no longer has. The session lives in the daemon's MEMORY, and installing a build restarts the daemon on purpose, so the id a client holds dies. A client on Streamable HTTP sends `initialize` once and never again, so the failure repeats until someone reloads the client by hand. `reconnect-mcp.fsx` re-initializes and PROVES it (it first requires a never-minted id to be rejected, so a pass cannot mean "the endpoint merely answers"). If it prints `OK`, you are live; carry on. The durable fix is the stdio bridge, `claude mcp add sagefs -- sagefs mcp`, which owns the handshake itself, so the client never holds an id at all. `scripts/probe-bridge-stdio.fsx` drives that bridge from a script, which is how to dogfood it without a client. Full explanation: "404 Session not found" in `docs/mcp-tools.md`, and the same diagnosis in `skills/sagefs/troubleshooting.md`, which also says to check the daemon's version before believing anything else.
 
-5. **NEVER hand-roll an MCP client over HTTP, and never script an edit with `python3 -c`.** Both were mistakes that cost real time today. The HTTP client looks like it works — `initialize` succeeds — then hangs on `tools/call`, because the bridge writes diagnostics to stderr and an unread pipe fills and BLOCKS it. Drain stderr on its own thread, and read until the response ID you asked for instead of a fixed line count (responses are SSE-framed, so a fixed count deadlocks). For edits, use the exact editor tool; `skills/sagefs/design.md` says so and this file's own rule above says so, and breaking it repeatedly is not a learning curve, it is a choice.
+5. **NEVER hand-roll an MCP client over HTTP, and never script an edit with `python3 -c`.** Both were mistakes that cost real time today. The HTTP client looks like it works, `initialize` succeeds, then hangs on `tools/call`, because the bridge writes diagnostics to stderr and an unread pipe fills and BLOCKS it. Drain stderr on its own thread, and read until the response ID you asked for instead of a fixed line count (responses are SSE-framed, so a fixed count deadlocks). For edits, use the exact editor tool; `skills/sagefs/design.md` says so and this file's own rule above says so, and breaking it repeatedly is not a learning curve, it is a choice.
 
-6. **A tool that never answers is a BUG in the product, not a timeout to work around.** A scope-colliding `join_cohort` leaves the bridge alive and streaming notifications while producing NO response at all, so the caller's only signal is a hang. An agent that reads that concludes "hard limit, no workaround" — which is a wrong conclusion produced by a missing answer. If a tool call you made produced no response, say so and treat it as a defect; do not re-derive the answer from the absence.
+6. **A tool that never answers is a BUG in the product, not a timeout to work around.** A scope-colliding `join_cohort` leaves the bridge alive and streaming notifications while producing NO response at all, so the caller's only signal is a hang. An agent that reads that concludes "hard limit, no workaround", which is a wrong conclusion produced by a missing answer. If a tool call you made produced no response, say so and treat it as a defect; do not re-derive the answer from the absence.
 
 ## Known red at 2026-10-04: NONE. The list below was cleared.
 
 Both entries from the 2026-10-03 list are fixed, and how is worth keeping because the first
 was not the bug it looked like:
 
-- **`a function inlined into its caller`** — FIXED (`fix(hot-reload): the inlined-callee
+- **`a function inlined into its caller`**. FIXED (`fix(hot-reload): the inlined-callee
   fixture is a REAL .dll`). The detour logic was correct; the FIXTURE was not a file. An
   `AssemblyBuilder` assembly has no `Save` on this runtime and reports an empty `Location`, so
   the host derived a null search path and never loaded it. The case died on "the fixture
   assembly loads" before the detour it exists to prove was attempted. The fixture is now
   written with `Mono.Cecil` (already a test-project dependency) with the identical IL shape.
-- **`real guards on a click whose thread is abandoned`** — no longer appears in a full run.
+- **`real guards on a click whose thread is abandoned`**, no longer appears in a full run.
 
 The lesson recorded for the next person: **"the fixture assembly loads" failing is a
 statement about the FIXTURE, not about the product.** Read the assertion's subject before
@@ -39,12 +39,12 @@ Do not reintroduce either by touching the `source`/`test_run_completed` work. Th
 attempt to establish this by checking out the baseline commit FAILED, and the reason is worth knowing:
 the baseline worktree crashes during Expecto discovery because `SkillLayoutTests`,
 `RetiredToolNameTests` and `ToolSurfaceHonestyTests` located the repo by walking up from
-`Environment.CurrentDirectory` — a defect fixed since. So a baseline worktree can
+`Environment.CurrentDirectory`, a defect fixed since. So a baseline worktree can
 only answer questions about suites whose discovery no longer depends on the CWD.
 
 7. **A LAZY REGISTRY'S "on create" HOOK MISSES EVERYTHING SEEDED BEFORE IT.** `CohortOwners.SetOnOwnerStarted`
    fires when an owner is CREATED. `DaemonMode.fs` seeded the daemon's own owner ~100 lines BEFORE
-   registering the hook, so the daemon's own cohort had **no subscriber at all** — no `CohortChanged`,
+   registering the hook, so the daemon's own cohort had **no subscriber at all**, no `CohortChanged`,
    so the dashboard's cohort panel rendered once and froze. A member could join and leave and nothing
    on screen moved. Every LATER scope worked, because those owners are created after the hook.
    The asymmetry is what made this read as a stale-COUNT bug instead of a missing subscription, and
@@ -53,36 +53,36 @@ only answer questions about suites whose discovery no longer depends on the CWD.
    body is more than a line, name it and call it from both places so neither can be forgotten.**
 
 8. **`Some X` counts a DIFFERENT collection than readers assume.** `CohortFrame.MemberIds` holds every
-   member a cohort has EVER seen — a departed member stays so their claims stay resolvable — while
+   member a cohort has EVER seen, a departed member stays so their claims stay resolvable, while
    `MemberSeat` says who is present. Both renderers counted `MemberIds`, so they reported "1 member"
    after the last one left, beside a conductor line reading VACANT. Fixing that then broke two other
    things, both now pinned by tests in `CohortPanelTests`: `ClaimHolderIndex` indexes `MemberIds` (so
    bounding it by the PRESENT count drops holder names), and the claims/landings list is nested inside
    the "has members" branch (so gating on members alone hides every claim the moment its holder leaves).
-   **When a count changes, grep for every use of the old collection's length before committing** — a
+   **When a count changes, grep for every use of the old collection's length before committing**, a
    count is also a loop bound and an index bound.
 
 ## The Bozzetto fork (Clef): `FidelityFramework/Bozzetto`
 
-It is **public and reachable** — https://github.com/FidelityFramework/Bozzetto. (An earlier
+It is **public and reachable**, https://github.com/FidelityFramework/Bozzetto. (An earlier
 note here said it 404s; that was my own misspelling, "Bozzett". Corrected.) Not cloned on this
 machine (44 checkouts in `~/Work`, no match), so everything below is from the published repo,
 not from a local build.
 
 **What it is.** A hard fork of this repo, by the Fidelity Framework. Fork point
-`5b685fb5` (2026-02-23), last synced to upstream `v0.6.834` at `c86c3402` on 2026-09-27 —
+`5b685fb5` (2026-02-23), last synced to upstream `v0.6.834` at `c86c3402` on 2026-09-27,
 54 commits, so it has moved a long way past the sync point. Renamed throughout: package
 `Bozzetto`, command `boz`, MCP port **47749**, control listener **47750**, state `~/.bozzetto`.
 SageFs's own 37749/37750 do not collide.
 
-**Where it deliberately diverged from this repo** — the reason it forked, so not a gap to chase:
+**Where it deliberately diverged from this repo**, the reason it forked, so not a gap to chase:
 
 - **No F# REPL.** Embedded production FSI hosting is retired. Interactive Clef execution is a
   Composer backend on LLVM ORC; changes to Bozzetto's own F# are validated with `dotnet build`
   and the unfiltered suite.
 - **The REPL inner loop is gone**, which is the one capability here with no equivalent there.
-  Everything else SageFs does — incremental builds, hot reload, live testing, a dashboard, an
-  MCP surface — has a counterpart, built on Composer's contracts instead of FSI's.
+  Everything else SageFs does, incremental builds, hot reload, live testing, a dashboard, an
+  MCP surface, has a counterpart, built on Composer's contracts instead of FSI's.
 - **Fable and Falco were dropped**, and PostgreSQL → binary manifests + SQLite (a direction
   this repo had already moved in).
 
@@ -98,7 +98,7 @@ $ git ls-files '$COMMANDCODE_SCRATCHPAD' | wc -l
 ```
 
 Six scratch files are **tracked in Bozzetto**, committed in `d2dc5c8`, and its `.gitignore` has
-no rule for them. This repo hit the identical mistake twice and fixed it here — see the comment
+no rule for them. This repo hit the identical mistake twice and fixed it here, see the comment
 in `.gitignore` at line 100, including the trap that caused it: the harness path is literally
 `$COMMANDCODE_SCRATCHPAD`, a **shell variable**, so a pattern reading
 `commandcode_scratchpad` looks right and matches nothing. SageFs's working rules are
@@ -161,20 +161,20 @@ silent no-op reads exactly like a successful one.
 - **No `sed -i`, no `python3 -c` file rewrites, no regex bulk edits.** They
   rewrite what they did not read, they swallow the one file that differed, and
   they cannot tell you which of thirty call sites they actually changed.
-- **Use the editor tool for a specific change** — read the region, then replace
+- **Use the editor tool for a specific change**: read the region, then replace
   that exact text. A call that did not match is a bug to investigate, not
   something to widen until something sticks.
 - **Scripting is F#, and it is dogfooded.** A repeated mechanical change goes
   in an `.fsx` run through SageFs, because the script is then F# you can
   evaluate, and it reports its own result. It MUST assert that each
-  replacement matched — and say so out loud — rather than exiting quietly.
+  replacement matched, and say so out loud, rather than exiting quietly.
 - **Verify the diff after any scripted change.** A pattern that matched in
   4 files and silently missed a 5th is the failure mode this rule exists to
   prevent.
 - **Gates run in a background agent you do not block on.** The release gate is
   a decision, not an iteration tool; re-rolling it to escape a flake costs
   minutes and proves nothing. Launch it, keep working, read the result when you
-  need it. Never poll it in a loop — that is the same waste as blocking.
+  need it. Never poll it in a loop, that is the same waste as blocking.
 - **Never `#load` an already-loaded project.** `#load`ing a Core file into a
   session that has Core loaded produces two copies of every type, and the
   symptom is a misleading incompatibility error
@@ -183,8 +183,8 @@ silent no-op reads exactly like a successful one.
   with no dependency on the loaded project.
 - **Prove the change in the REPL before you write it to a file.** An eval is
   under a second; a build that catches your misread type is two minutes, and it
-  catches it *after* you have edited. The full sequence — prove, persist, then
-  `hard_reset_fsi_session rebuild=true` to re-verify — is in
+  catches it *after* you have edited. The full sequence, prove, persist, then
+  `hard_reset_fsi_session rebuild=true` to re-verify, is in
   [`skills/sagefs/editing.md`](skills/sagefs/editing.md) under "Editing: prove
   it, then write it". Read that section before your first edit in a session.
 - **"I can't verify that in the session" is a conclusion you have not earned
@@ -211,7 +211,7 @@ silent no-op reads exactly like a successful one.
 
 - **`AGENTS.md` is the single source of truth.** `CLAUDE.md` is `@AGENTS.md`
   plus an auto-synced taste mirror; the `@` import means the live instructions
-  always arrive. Do not duplicate rules between the two — that is how they
+  always arrive. Do not duplicate rules between the two, that is how they
   drift. The skill, not this file, is what loads automatically on an F# task,
   so anything an agent must obey *before its first edit* belongs there.
 
@@ -222,12 +222,12 @@ SageFs is F# Interactive that already has your project loaded, re-runs the affec
 
 The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Do not treat them as current product surfaces or add new product documentation for them. Preserve Raylib application and game demos because they demonstrate SageFs support for game projects and are independent of the deprecated GUI frontend.
 
-The Visual Studio extension (`sagefs-vs/`) is deprecated and no longer built, tested, or published — do not treat it as a current product surface, do not add new product documentation for it, and do not route new engineering effort into it.
+The Visual Studio extension (`sagefs-vs/`) is deprecated and no longer built, tested, or published, do not treat it as a current product surface, do not add new product documentation for it, and do not route new engineering effort into it.
 
 ## Language & Stack
 
 - **Primary language**: F# (functional programming)
-- **Target framework**: `net11.0` (the shipped tool closure — SageFs, SageFs.Core, SageFs.Host — multi-targets `net10.0;net11.0`; see `Directory.Build.props`)
+- **Target framework**: `net11.0` (the shipped tool closure. SageFs, SageFs.Core, SageFs.Host, multi-targets `net10.0;net11.0`; see `Directory.Build.props`)
 - **Solution format**: `.slnx` (not `.sln`)
 - **Web framework**: Falco (functional web framework for ASP.NET Core)
 - **HTML rendering**: Falco.Markup
@@ -240,7 +240,7 @@ The Visual Studio extension (`sagefs-vs/`) is deprecated and no longer built, te
 ## Critical Coding Standards
 
 ### Indentation
-- **ALWAYS use 2 spaces**, never 4 spaces — this is non-negotiable across the entire codebase.
+- **ALWAYS use 2 spaces**, never 4 spaces: this is non-negotiable across the entire codebase.
 
 ### One home for each kind of decision (ratcheted, never magic)
 

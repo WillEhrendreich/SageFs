@@ -256,7 +256,7 @@ The server is the single source of truth. Commands come in through any door (MCP
 
 ---
 
-### Event Sourcing: Marten + PostgreSQL as the Backbone
+### Event Sourcing: Marten + PostgreSQL as the store
 
 **Status:**
 - ✅ **Domain event DUs**, `SageFsEvent`, `EventSource`, `DiagnosticEvent`, `EventMetadata` in `SageFs\Features\Events.fs`
@@ -1529,7 +1529,7 @@ The watchdog is the outermost process. The tray icon is its UI surface. The daem
 - On Windows: use `System.Windows.Forms.NotifyIcon` (or a cross-platform wrapper like `Avalonia.Desktop` tray support)
 - On Linux: `libappindicator` / `StatusNotifierItem` D-Bus protocol
 - On macOS: `NSStatusItem`
-- The watchdog process should be lightweight: no FSI, no Marten, just process supervision + tray icon
+- The watchdog process should be lightweight: process supervision + tray icon, no FSI and no Marten
 - Consider a cross-platform abstraction: `ITrayIcon` with platform backends, keeping the watchdog core pure
 
 #### MCP Session Routing
@@ -1694,7 +1694,7 @@ This is NOT a full IDE, it's a browser-accessible REPL for quick interactions wh
 - Breakpoints in `.fsx` files or inline REPL code
 - Step through hot-reloaded methods
 
-**This is extremely hard** and may require FCS changes. Lower priority but would be transformative.
+**This is extremely hard** and may require FCS changes. Lower priority, and it would change the shape of the work.
 
 ### 4.3 Type Provider Live Exploration
 

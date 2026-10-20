@@ -372,7 +372,7 @@
 ## 4. SAGEFSCLIENT.FS: HTTP API Surface
 
 **Type:** F# HTTP client  
-**Real vs Placeholder:** ✓ **REAL** (comprehensive coverage of daemon endpoints)
+**Real vs Placeholder:** ✓ **REAL** (it covers every daemon endpoint)
 
 ### 4.1 Lifecycle
 
@@ -533,12 +533,12 @@
 2. **Eval Commands (4):** Complete keyboard shortcuts, selection/file/block eval with context
 3. **Session Management (6):** Create, switch, reset, hard-reset, stop sessions
 4. **Hot Reload Commands (5):** Toggle, watch-all, unwatch-all, refresh, directory-level control
-5. **Live Testing UI:** Comprehensive dashboard with filtering, search, status display
+5. **Live Testing UI:** A dashboard with filtering, search, status display
 6. **SetRunPolicyCommand:** Cycles all 6 categories through every→save→demand→disabled (fixed Sprint 4)
 7. **Daemon Lifecycle (3):** Auto-discovery, start/stop, dashboard launch
 8. **Cancellation Support:** Cooperative eval abort (Ctrl+Alt+C)
 9. **Error List Bridge:** Diagnostics forwarding to VS Error List
-10. **SageFsClient.fs:** Comprehensive HTTP API with proper error handling, JSON parsing, model types
+10. **SageFsClient.fs:** An HTTP API with proper error handling, JSON parsing, model types
 11. **MEF Editor Assembly (net472):** Glyphs, squiggles, inline failure adornments (Sprints 4-5)
 
 ### ⚠️ PLACEHOLDER / INCOMPLETE

@@ -57,7 +57,7 @@ on, logged by category, or turned into a status code.
 
 Validate once, at the edge, and produce a type that cannot be wrong after that.
 Everything downstream of a parse takes the parsed type, so an invalid state is
-not merely discouraged, it is unrepresentable.
+unrepresentable, so the compiler refuses it.
 
 ```fsharp
 // Does not scale: every caller must remember to check.

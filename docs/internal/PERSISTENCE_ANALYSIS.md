@@ -402,7 +402,7 @@ type SqlitePersistence<'T> (dbPath: string, tableName: string) =
 | Daemon-level coordination | SageFs.Core/Features/DaemonPersistence.fs (lines 1-79) |
 | Domain types | SageFs.Core/Features/Replay.fs, LiveTestingTypes.fs |
 | Existing tests | SageFs.Tests/ManifestPersistenceTests.fs, BinaryFormatTests.fs |
-| Format spec | docs/binary-format-spec.md (41 KB, comprehensive) |
+| Format spec | docs/binary-format-spec.md (41 KB, covers the whole format) |
 
 ---
 

@@ -265,7 +265,7 @@ SageFs.Core/
 ## 🚀 Getting Started
 
 1. **Read the quick reference:** PERSISTENCE_QUICK_REF.md (10 min read)
-2. **Deep dive into analysis:** PERSISTENCE_ANALYSIS.md (30 min read)
+2. **The analysis:** PERSISTENCE_ANALYSIS.md (30 min read)
 3. **Study the format spec:** docs/binary-format-spec.md (key sections)
 4. **Review existing tests:** SageFs.Tests/ManifestPersistenceTests.fs (patterns)
 5. **Define IPersistence<'T>** interface

@@ -316,7 +316,7 @@ let sqliteComplianceTests = testList "SQLite ↔ Binary equivalence" [
 
 ## 📖 References
 
-- **Binary Format Spec:** docs/binary-format-spec.md (41 KB, comprehensive)
+- **Binary Format Spec:** docs/binary-format-spec.md (41 KB, covers the whole format)
 - **Tests:** SageFs.Tests/{ManifestPersistenceTests.fs, BinaryFormatTests.fs}
 - **Domain Types:** SageFs.Core/Features/{Replay.fs, LiveTestingTypes.fs}
 - **Current API:** SageFs.Core/Features/DaemonPersistence.fs (79 lines)

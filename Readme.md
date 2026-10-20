@@ -580,7 +580,7 @@ A hard reset spawns the replacement worker *first* and only retires the old one 
 
 <br />
 
-SageFs persists the daemon's session registry and per-session test caches to compact binary files for near-instant cold starts. No JSON parsing, no database, just raw binary with CRC-32C integrity checking.
+SageFs persists the daemon's session registry and per-session test caches to compact binary files for near-instant cold starts. The files are raw binary with CRC-32C integrity checking, no JSON parsing and no database.
 
 - **Daemon manifest** (`.sagefm`, v1): the durable session registry (which sessions existed, their projects, and working directories, plus which was active), replayed on startup to rebuild your sessions.
 - **Test cache files** (`.sagetc`, written as format version 3): test outcomes and durations, each test's coverage bitmap, and the flaky-detection history. [The format](docs/binary-format-spec.md#3-sagetc--test-cache-format) is written down next to the code that reads it.

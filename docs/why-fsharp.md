@@ -105,7 +105,7 @@ You cannot accidentally add milliseconds to seconds. You cannot pass a raw `floa
 expected. The compiler catches unit mismatches that would be silent, "why is this eval taking 1000x longer
 than it should" runtime bugs in any other language.
 
-Cost: zero. Units of measure are erased at compile time. No runtime overhead, no boxing, just compile-time
+Cost: zero. Units of measure are erased at compile time. No runtime overhead and no boxing: it all happens at compile time.
 safety for a whole class of numerical mistakes I'd otherwise make eventually.
 
 ---

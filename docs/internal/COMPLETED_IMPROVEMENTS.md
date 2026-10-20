@@ -353,7 +353,7 @@ Per IMPROVEMENT_PLAN.md priority matrix:
 
 **Problem:** PrettyPrompt couples the REPL to a terminal-only, Windows-console-dependent, closed-source library. SageFs needs a multi-frontend architecture (terminal, Datastar web, Neovim, VSCode, Raylib/ImGui) with a unified immediate-mode rendering pipeline.
 
-**Research output:** `docs/repl-tui-research.md` (~2650 lines), comprehensive analysis of:
+**Research output:** `docs/repl-tui-research.md` (~2650 lines), a full analysis of:
 - Candidate libraries (RadLine, Terminal.Gui, Spectre.Console, Reedline, Bubble Tea, python-prompt-toolkit)
 - Tree-sitter foundation (ionide/tree-sitter-fsharp via TreeSitter.DotNet)
 - Push-based reactive streaming architecture (SageFsEvent bus, IObservable)
