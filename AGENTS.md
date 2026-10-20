@@ -350,11 +350,11 @@ kind of tell: shape with nothing in it.
 ### F# Style
 - Favor immutable types, discriminated unions, pattern matching, and pipeline operators (`|>`)
 - Use `Result<'T, 'TError>` for operations that can fail
-- Keep domain logic pure — side effects only at system edges
+- Keep domain logic pure: side effects only at system edges
 - Small, composable functions with clear intent
 
 ### Testing
-- Tests use Expecto with `Expecto.Flip` — **message is always the first argument**:
+- Tests use Expecto with `Expecto.Flip`, **message is always the first argument**:
   ```fsharp
   actual |> Expect.equal "should be 42" 42
   actual |> Expect.isTrue "should be true"
@@ -374,7 +374,7 @@ Expecto exposes three filter flags and they do **not** mean the same thing:
 | `--filter-test-case <substring>` | **leaf case names only** |
 
 If the token you are filtering on lives in the `testList` name and not in any leaf
-case name, `--filter-test-case` matches **nothing** — and the run still prints
+case name, `--filter-test-case` matches **nothing**, and the run still prints
 `Failed: 0, Errored: 0` and **exits 0**. This has already happened here: an agent ran
 `--filter-test-case "roast-8"` against a list literally named for `roast-8` whose eight
 cases all begin `"WHY — "`, read the green result, and concluded the behaviour was
@@ -389,14 +389,14 @@ one `TRUST tier=… registered=N ran=N … verdict=…` line:
 | Verdict | Meaning | Exit |
 |---|---|---|
 | `Trusted` | unfiltered, everything registered ran, nothing failed | 0 |
-| `NarrowedRun` | passed, but a filter/`--run`/`--stress` narrowed it — inner loop only | 0 |
+| `NarrowedRun` | passed, but a filter/`--run`/`--stress` narrowed it, inner loop only | 0 |
 | `TestsFailed` | something failed or errored | 1/2 |
-| `NothingRan` | zero tests executed (the trap above) — filtered or not | **3** |
+| `NothingRan` | zero tests executed (the trap above): filtered or not | **3** |
 | `CountMismatch` | unfiltered, but ran ≠ registered | **3** |
 
 CI runs every test stage even after one goes red, collects each tier's row in a
 ledger (`SAGEFS_TRUST_LEDGER`), and its final `trust report` stage prints one
-table and fails on any tier that is not Trusted — including a tier whose process
+table and fails on any tier that is not Trusted, including a tier whose process
 died before reporting (`NoReport`). `TrustSignalTests` fails the fast suite if a
 registered tier is not invoked by `ci-pipeline.fsx`, or if a test run there
 bypasses the ledgered `testTier` step. Read the table, not a stage colour.
@@ -426,12 +426,12 @@ suite runs on net10; the integration, mutation and browser tiers stay on net11.
 Consequences, in order of importance:
 
 1. **A filtered run is never the acceptance check.** A gate is done when its own test
-   name appears in the output of a real, **unfiltered** run — `dotnet {testDll} --summary`,
+   name appears in the output of a real, **unfiltered** run, `dotnet {testDll} --summary`,
    or the relevant whole-suite entry point. Filters are for the inner loop only.
 2. **Never add a gate that is only reachable by a name filter.** Put it in the default
    suite as a plain `[<Tests>]` value, or select it structurally through the
    `Integration` registry in `TestInfrastructure.fs` (reference-based exclusion, which a
-   typo cannot defeat). CI itself uses no filter expressions — every stage runs a whole
+   typo cannot defeat). CI itself uses no filter expressions, every stage runs a whole
    suite. Keep it that way.
 3. **Do not put tracking tokens (`roast-N`, bug ids) in `testList` names.** Put them on
    the leaf cases where a case filter can see them, or leave them out entirely.
@@ -467,10 +467,10 @@ follows one. It only reads, so Ctrl-C ends the viewer and never the gate.
 
 ## Multi-agent / worktree sessions
 
-- **Sessions are checkout-aware.** A session's working directory is classified against the filesystem (`SageFs.Checkout.classify`, no `git` subprocess): a plain repository, a git **worktree** (its own root and branch — worktrees have a `.git` FILE, not a directory, pointing at the main checkout's `.git/worktrees/<name>` admin dir), or not a git checkout at all. `list_sessions` and the dashboard show a worktree session's branch.
-- **A git worktree is a routing boundary.** If you are working inside a worktree (e.g. `.claude/worktrees/agent-x`) and no session exists for it yet, tool calls resolve to `Gone` with a create hint — they never silently fall back to a session rooted at the main checkout, even though your directory is textually nested under it. Create a session for the worktree; do not assume the main checkout's session is yours to use.
-- **For a project the running daemon already serves, create a session in it.** Only spawn a second daemon when you are testing daemon code itself (changes to `SageFs.Core`/`SageFs`/`SageFs.Host`) that the running daemon cannot execute because it predates your change — and then give that daemon an explicit owner/TTL rather than leaving it to leak.
-- **Identity is bound to your MCP connection, not to the `agentName` you pass.** Two different connections that happen to declare the same `agentName` are tracked as two separate members — you cannot see or clear another connection's active session by reusing its name.
+- **Sessions are checkout-aware.** A session's working directory is classified against the filesystem (`SageFs.Checkout.classify`, no `git` subprocess): a plain repository, a git **worktree** (its own root and branch, worktrees have a `.git` FILE, not a directory, pointing at the main checkout's `.git/worktrees/<name>` admin dir), or not a git checkout at all. `list_sessions` and the dashboard show a worktree session's branch.
+- **A git worktree is a routing boundary.** If you are working inside a worktree (e.g. `.claude/worktrees/agent-x`) and no session exists for it yet, tool calls resolve to `Gone` with a create hint, they never silently fall back to a session rooted at the main checkout, even though your directory is textually nested under it. Create a session for the worktree; do not assume the main checkout's session is yours to use.
+- **For a project the running daemon already serves, create a session in it.** Only spawn a second daemon when you are testing daemon code itself (changes to `SageFs.Core`/`SageFs`/`SageFs.Host`) that the running daemon cannot execute because it predates your change, and then give that daemon an explicit owner/TTL rather than leaving it to leak.
+- **Identity is bound to your MCP connection, not to the `agentName` you pass.** Two different connections that happen to declare the same `agentName` are tracked as two separate members, you cannot see or clear another connection's active session by reusing its name.
 
 ## Orchestrator hygiene
 
@@ -511,6 +511,6 @@ the workspace tidy is the orchestrator's job, and these are the calls that do it
 
 - Do not introduce new NuGet dependencies without discussion
 - Do not change the indentation style (2 spaces)
-- Do not use `dotnet test` for local development — use the SageFs REPL
+- Do not use `dotnet test` for local development, use the SageFs REPL
 - Do not modify `Directory.Build.props` version numbers. Nothing bumps on commit: `scripts/ship.fsx` bumps once per push, and the pre-push hook (`scripts/pre-push.fsx`) refuses a master push that doesn't raise the version
 - Do not add Version attributes to PackageReference elements

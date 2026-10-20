@@ -1,11 +1,11 @@
-# SageFs Persistence Layer — Quick Reference for SQLite Compliance Tests
+# SageFs Persistence Layer: Quick Reference for SQLite Compliance Tests
 
 ## 📋 Overview Table
 
 | Aspect | Detail |
 |--------|--------|
 | **Current Formats** | 3 independent binary formats (.sagefm, .sagefs, .sagetc) |
-| **No Abstraction** | Each format has separate read/write — no IPersistence interface |
+| **No Abstraction** | Each format has separate read/write: no IPersistence interface |
 | **Serialization** | Length-prefixed UTF-8, little-endian, CRC-32 per section |
 | **File Locations** | ~/.sagefs/ (daemon.sagefm, sessions/*.sagefs, cache/*.sagetc) |
 | **Test Coverage** | ManifestPersistenceTests.fs, BinaryFormatTests.fs (property-based) |
@@ -38,7 +38,7 @@ docs/
 
 ## 📊 Three Formats at a Glance
 
-### .sagefm (Daemon Manifest) — 64-byte header + 1 section
+### .sagefm (Daemon Manifest): 64-byte header + 1 section
 
 **What:** Session list (which sessions exist, which is active)
 **Where:** ~/.sagefs/daemon.sagefm (singleton)
@@ -59,7 +59,7 @@ docs/
 
 ---
 
-### .sagefs (Session Persistence) — 64-byte header + 3-5 sections
+### .sagefs (Session Persistence): 64-byte header + 3-5 sections
 
 **What:** Eval history, code, outputs, references, metadata
 **Where:** ~/.sagefs/sessions/{sessionId}.sagefs
@@ -82,7 +82,7 @@ docs/
 
 ---
 
-### .sagetc (Test Cache) — 64-byte header + 3 sections
+### .sagetc (Test Cache): 64-byte header + 3 sections
 
 **What:** Test results + coverage bitmaps
 **Where:** ~/.sagefs/cache/{projectHash}.sagetc (one per project)
@@ -202,7 +202,7 @@ STC1: Tag (u32) | Offset (u64) | CRC (u32)
 ### Integrity Model
 - **Whole-file CRC** @ offset 0x24 (covers header + directory + all payloads)
 - **Per-section CRC** in directory entries (validates each section independently)
-- **No per-field CRC** (trust CRC after validation — don't re-check per entry)
+- **No per-field CRC** (trust CRC after validation: don't re-check per entry)
 
 ---
 

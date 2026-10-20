@@ -138,7 +138,7 @@ session that isn't ready yet) and quietly goes back to building. Three ways to
 pull it back, from least to most enforced:
 
 > If it was a version mismatch, check your own daemon before you blame the
-> agent. `sagefs status` prints when it started — a daemon that's been up since
+> agent. `sagefs status` prints when it started, a daemon that's been up since
 > before your last build is serving old code, and the agent was right that
 > something was wrong, just not about what. See
 > [stale daemon](TROUBLESHOOTING.md#stale-daemon--the-one-that-wastes-the-most-time).

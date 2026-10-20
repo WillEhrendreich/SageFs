@@ -36,7 +36,7 @@ Both die on their baseline assertion with
 
 4. **The port collision was real and is fixed** (`ed9220c1`). The suite's own
    message blamed "the port taken between reservation and bind", which sent me
-   looking for a timing race that does not exist — 120 concurrent reservations
+   looking for a timing race that does not exist. 120 concurrent reservations
    produced zero collisions. The actual fault: `TestPorts.tryReservePair`
    proved a port free by binding IPv4 `127.0.0.1`, but the dashboard binds IPv6
    `[::1]`. Different address, same port number. That produced three
@@ -46,7 +46,7 @@ Both die on their baseline assertion with
 5. **The mechanism is not broken.** Both tests pass alone in ~10 seconds, on
    the current tree, repeatedly.
 
-## What is left — the baseline has it too
+## What is left: the baseline has it too
 
 **Measured on the unmodified release commit `1b685a3d` (no work of mine
 checked out), full tier:**
@@ -68,7 +68,7 @@ default is worse than it was".
 
 1. **Not a timeout.** Budget 60s → 180s made it worse (69s/129s → 188s/368s).
 2. **Not CPU saturation.** Under 48 CPU spinners on 16 cores the test still
-   passes — 39.6s instead of 10s, green. So the machine being busy is not it.
+   passes. 39.6s instead of 10s, green. So the machine being busy is not it.
 3. **Not a regression from the type-migration work.** The unmodified release
    commit fails identically, above.
 4. **Not a port race.** `TestPorts` proved a port free on IPv4 while the
@@ -104,7 +104,7 @@ Measured on real paths and real logs, in the live REPL where possible:
 So the gap is narrow and specific: the session is Ready, the three tests are
 discovered and instrumented, `RunRequestedTests` is dispatched (the API replies
 `Queued 3 test(s)`, `success: true`), and the status then sits at
-`Passed=0 Stale=3 Running=0` — nothing in flight, nothing ever reported.
+`Passed=0 Stale=3 Running=0`, nothing in flight, nothing ever reported.
 
 `SageFsApp.fs:2919` handles the effect and calls
 `deps.GetStreamingTestProxy sid`; on `None` it dispatches every test as
@@ -120,16 +120,16 @@ runs, same command, same tree:
 
 | Run | Result |
 |---|---|
-| 18:48 | 246 passed, 0 failed, 2 errored — live testing + MCP outcome gates |
-| 19:13 | 246 passed, 0 failed, 2 errored — same two |
-| 19:42 | 246 passed, 0 failed, 2 errored — same two |
-| 22:00 | 246 passed, 0 failed, 2 errored — same two |
-| 23:01 | 246 passed, 0 failed, 2 errored — same two |
-| 00:50 | 246 passed, **1 failed, 1 errored** — live testing + **Daemon lifecycle** |
+| 18:48 | 246 passed, 0 failed, 2 errored: live testing + MCP outcome gates |
+| 19:13 | 246 passed, 0 failed, 2 errored: same two |
+| 19:42 | 246 passed, 0 failed, 2 errored: same two |
+| 22:00 | 246 passed, 0 failed, 2 errored: same two |
+| 23:01 | 246 passed, 0 failed, 2 errored: same two |
+| 00:50 | 246 passed, **1 failed, 1 errored**: live testing + **Daemon lifecycle** |
 
 The COUNT is rock stable at 246 passed / 2 failed. The IDENTITY of the second
 failure is not: it changed to a completely different suite in the last run.
-That is the signature of **load-ordering**, not one deterministic bug — the
+That is the signature of **load-ordering**, not one deterministic bug, the
 same two things are always being starved, but which of them loses the race
 depends on scheduling.
 
@@ -142,7 +142,7 @@ So the right target is the tier's concurrency, not any one test:
   wait on a worker rather than assert on in-memory state.
 - `testSequencedGroup` (`72979fd9`) only sequenced those two against EACH
   OTHER, which cannot help when the pressure is the other 248.
-- The fix belongs in how the tier schedules worker-dependent suites — bound the
+- The fix belongs in how the tier schedules worker-dependent suites: bound the
   tier's parallelism, or run the worker-waiting suites in a low-contention
   phase. Expecto exposes no parallelism CLI flag, so this is a code change in
   the tier's composition, with its own test.

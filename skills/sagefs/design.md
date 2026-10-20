@@ -1,7 +1,7 @@
 # How to write the code
 
 Read this before you design a type, a function signature, or a module. Every
-other skill is mechanics — how to drive the tool. This one is the OTHER half:
+other skill is mechanics, how to drive the tool. This one is the OTHER half:
 what the code is supposed to LOOK like, which is where a mechanically correct
 change can still be the wrong code.
 
@@ -15,7 +15,7 @@ finds a violation is right to say so.
    failing, so it might not be. Commit the red test on its own when the change
    is more than a few lines, so the failure is reviewable.
 2. **Green.** Make it pass with the simplest thing that works. Not the design
-   you have in mind — the one that passes.
+   you have in mind, the one that passes.
 3. **Refactor.** Only now, with a green suite, improve the shape.
 
 Never write the implementation first and add the test to match it: that test is
@@ -40,9 +40,9 @@ cannot do.
 
 Two kinds of failure, and they must not be confused:
 
-- **Not yet an error** — the operation did not fail, it did not produce a value.
+- **Not yet an error**: the operation did not fail, it did not produce a value.
   Return the real sum type.
-- **An error** — something went wrong that a caller could act on. Return
+- **An error**: something went wrong that a caller could act on. Return
   `Result<'T, 'Reason>`, where `'Reason` is a DU, not a string.
 
 A refusal carries **the rule AND the next action**. `RoleForbids(tool, required)`
@@ -57,7 +57,7 @@ on, logged by category, or turned into a status code.
 
 Validate once, at the edge, and produce a type that cannot be wrong after that.
 Everything downstream of a parse takes the parsed type, so an invalid state is
-not merely discouraged — it is unrepresentable.
+not merely discouraged, it is unrepresentable.
 
 ```fsharp
 // Does not scale: every caller must remember to check.
@@ -80,8 +80,8 @@ testable, replayable and debuggable, and one that mutates is none of those.
 ## Pure functional core, effects at the edge
 
 The decision is a pure function you can call from a REPL eval and from a test
-with no setup. The IO — the socket, the file, the database, the clock, the
-ledger — happens around it, once, at the edge. This is why the cohort reducer
+with no setup. The IO, the socket, the file, the database, the clock, the
+ledger, happens around it, once, at the edge. This is why the cohort reducer
 can be replayed offline by `sagefs play`.
 
 ## Hexagonal architecture, and vertical slices
@@ -92,7 +92,7 @@ declared in terms of what the domain needs ("a ledger of commands") and adapters
 supply them.
 
 **Vertical slices**: a feature is one file (or one folder) holding EVERYTHING it
-needs — its types, its decision, its projection, its tests. Not
+needs, its types, its decision, its projection, its tests. Not
 `Models/ | Services/ | Dto/` spread across the tree. A new tool, or a new SSE
 event, should live in one place you can read end to end.
 
@@ -117,7 +117,7 @@ a decision and became furniture: a helper nobody outside the file calls is
 still just a function, and the modifier only adds noise.
 
 F#, unlike most languages, has no way to hide a binding across modules
-anyway — `private` is a within-module hint, not encapsulation. So it buys
+anyway, `private` is a within-module hint, not encapsulation. So it buys
 nothing and reads as a claim about a boundary that does not exist.
 
 The ONE place it earns its keep: an **opaque type with a smart constructor**,
@@ -135,16 +135,16 @@ types here are shaped that way and those are load-bearing. The other ~1,500
 `let private` are not.
 
 If a binding genuinely should not be used elsewhere, the reviewer enforces
-that by reading — and the repo's own ratchets do it in code. A `private` on
+that by reading, and the repo's own ratchets do it in code. A `private` on
 everything makes the ones that matter invisible.
 
-## `__SOURCE_DIRECTORY__` — banned in COMPILED code, correct in a script
+## `__SOURCE_DIRECTORY__`, banned in COMPILED code, correct in a script
 
 **Never write `__SOURCE_DIRECTORY__` in a `.fs` file (compiled into an assembly).**
 There it is a build-time constant: the compiler bakes the source directory in when it
 compiles, so a test that locates a CHECKED-OUT repository through it measures
 wherever the assembly was COMPILED, not wherever it RUNS. The fixture looks right,
-the paths look plausible, and it silently resolves against a stale or absent tree —
+the paths look plausible, and it silently resolves against a stale or absent tree,
 the failure a review cannot see.
 
 **In a `.fsx` script it is a different thing entirely, and it is CORRECT.** The FSI
@@ -158,7 +158,7 @@ __SOURCE_DIRECTORY__ = /tmp/sd-test
 
 And moving the script and re-running reports the new location. So a script that uses
 it as the START of an upward walk is right, and "removing" it would make that script
-worse. Every script locator in `scripts/` keeps it for exactly this reason — it is
+worse. Every script locator in `scripts/` keeps it for exactly this reason, it is
 the anchor the walk starts from, never a path component in a result. **Do not
 "fix" those.**
 
@@ -174,7 +174,7 @@ platform-independent.
 
 **The one home for the compiled side is the `RepoPaths` module**
 (`SageFs.Core/RepoPaths.fs`), which resolves the root at RUNTIME. It declares NO
-namespace — it is a global-namespace `[<RequireQualifiedAccess>] module` — so
+namespace, it is a global-namespace `[<RequireQualifiedAccess>] module`, so
 `open SageFs.RepoPaths` fails with `FS0039` and you must call it fully qualified:
 
 ```fsharp

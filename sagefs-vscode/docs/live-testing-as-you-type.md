@@ -1,4 +1,4 @@
-# As-You-Type Live Testing — VS Code Extension
+# As-You-Type Live Testing: VS Code Extension
 
 > See `docs/live-testing-as-you-type.md` in the repo root for the centralized architecture,
 > endpoint contract, server pipeline, and decision log. This doc covers **VS Code-specific** implementation only.
@@ -84,20 +84,20 @@ member _.postEvaluateScope (request: EvaluateScopeRequest) =
 
 If Document Symbol Provider returns nothing (Ionide not running or can't parse),
 fall back to an indentation-based scan (~30 lines F#). If that also fails,
-don't POST — user sees stale results until code stabilizes. No harm done.
+don't POST, user sees stale results until code stabilizes. No harm done.
 
 ## Files to Modify
 
-1. `src/Extension.fs` — register `onDidChangeTextDocument`, debounce, scope extraction + POST
-2. `src/SageFsClient.fs` — add `postEvaluateScope` HTTP method
-3. `src/LiveTestingTypes.fs` — add `EvaluateScopeRequest` type (if not shared)
+1. `src/Extension.fs`, register `onDidChangeTextDocument`, debounce, scope extraction + POST
+2. `src/SageFsClient.fs`, add `postEvaluateScope` HTTP method
+3. `src/LiveTestingTypes.fs`, add `EvaluateScopeRequest` type (if not shared)
 
 ## VS Code-Specific Considerations
 
 - **Document Symbol Provider** via Ionide gives compiler-accurate function ranges.
   Cached and fast. Best scope detection available in VS Code.
 - **Broken code**: Document Symbol Provider may return stale/partial symbols from last
-  successful parse. Scope boundaries may be slightly off — SageFs type-checks and
+  successful parse. Scope boundaries may be slightly off. SageFs type-checks and
   rejects if the extracted code doesn't compile. Benign failure mode.
 - **No new dependencies**: `onDidChangeTextDocument` is built-in VS Code API.
 

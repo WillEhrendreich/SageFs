@@ -21,9 +21,9 @@ The SageFs persistence layer currently uses **three independent binary formats**
 | **Test Cache** | .sagetc | STC1 | v1 | Coverage bitmaps, test outcomes | SageFs.Core/Features/TestCachePersistence.fs |
 
 **File Locations in .sagefs/ directory:**
-- daemon.sagefm — singleton daemon manifest
-- sessions/{sessionId}.sagefs — one file per session
-- cache/{projectHash}.sagetc — one file per project (hash computed from project list)
+- daemon.sagefm: singleton daemon manifest
+- sessions/{sessionId}.sagefs: one file per session
+- cache/{projectHash}.sagetc: one file per project (hash computed from project list)
 
 ---
 
@@ -124,7 +124,7 @@ type TestResult =
 - Active session ID: optional lp-string (fits in padding)
 
 **Sections:**
-- **SESS** (0x53455353) — session entry list
+- **SESS** (0x53455353): session entry list
   - count: u32
   - For each: SessionId, projects list, working dir, created ms, stopped ms (or -1)
 
@@ -151,22 +151,22 @@ type TestResult =
 - CRC: u32
 
 **Sections:**
-- **META** (0x4D45) — session metadata
+- **META** (0x4D45): session metadata
   - SageFsVersion, FSharpVersion, DotNetVersion, ProjectPath, WorkingDirectory, SessionId
   - EvalCount, FailedEvalCount
   
-- **INPT** (0x494E) — interactions with string pool
+- **INPT** (0x494E): interactions with string pool
   - String pool architecture: deduplicates code and output strings
   - TOC: interaction count (u32), stride (u16=48), entries
   - Each entry (48 bytes): codeOffset, outputOffset, timestampMs, kind, flags, durationMicros, 24-byte pad
   - String pool: size (u32), then strings (length-prefixed UTF-8)
   
-- **REFS** (0x5245) — assembly references
+- **REFS** (0x5245): assembly references
   - count: u32
   - For each: kind (byte), path (lp-string)
 
-- **PROF** (optional) (0x0004) — profiling timings per interaction
-- **BIND** (optional) (0x0005) — runtime bindings (name, type, value)
+- **PROF** (optional) (0x0004): profiling timings per interaction
+- **BIND** (optional) (0x0005): runtime bindings (name, type, value)
 
 ### 3.4 .sagetc v1 (Test Cache)
 
@@ -180,15 +180,15 @@ type TestResult =
 **Directory entries (16 bytes each):** Tag (u32), Offset (u64), CRC (u32)
 
 **Sections:**
-- **IMAP** (0x494D4150) — instrumentation map identity
+- **IMAP** (0x494D4150): instrumentation map identity
   - count: u32
   - For each: TestId (lp-string), bitmap word count (u32), bitmap words (u64 array)
   
-- **TCOV** (0x54434F56) — test coverage metadata (optional, not fully used)
+- **TCOV** (0x54434F56): test coverage metadata (optional, not fully used)
   - count: u32
   - For each: TestId (lp-string), bit count (u32)
   
-- **TRES** (0x54524553) — test results
+- **TRES** (0x54524553): test results
   - count: u32
   - For each: TestId (lp-string), outcome (byte: 0=Pass, 1=Fail, 2=Skip, 3=Error), duration (u32 ms), message (optional lp-string)
 
@@ -293,11 +293,11 @@ Offset  Size  Content
 \\\
 
 ### 6.2 Key Design Decisions
-1. **CRC covers entire file** — not just header. Detects payload corruption.
-2. **Atomic writes** — write to .tmp, then move (atomic on modern filesystems).
-3. **Header CRC @ offset 36** — 4 bytes, contains CRC of file with these bytes zeroed.
-4. **Active session optional** — represents string option via sentinel (0xFFFFFFFF = None).
-5. **7-day pruning** — sessions stopped >7 days ago are filtered during load (in ManifestMapping.toReplayState).
+1. **CRC covers entire file**: not just header. Detects payload corruption.
+2. **Atomic writes**: write to .tmp, then move (atomic on modern filesystems).
+3. **Header CRC @ offset 36**: 4 bytes, contains CRC of file with these bytes zeroed.
+4. **Active session optional**: represents string option via sentinel (0xFFFFFFFF = None).
+5. **7-day pruning**: sessions stopped >7 days ago are filtered during load (in ManifestMapping.toReplayState).
 
 ---
 
@@ -408,11 +408,11 @@ type SqlitePersistence<'T> (dbPath: string, tableName: string) =
 
 ## 10. Next Steps for Implementation
 
-1. **Define IPersistence<'T> interface** — generic abstraction for both backends
-2. **Create SQL schema** — map binary types to normalized tables
-3. **Implement SQLitePersistence** — factory + CRUD operations
-4. **Write compliance test suite** — property-based + deterministic tests
-5. **Migration tool** — read binary files, write to SQLite, verify equivalence
-6. **Dual-backend support** — config flag to choose backend
-7. **Deprecation path** — binary format still supported for reads, SQLite for writes
+1. **Define IPersistence<'T> interface**: generic abstraction for both backends
+2. **Create SQL schema**: map binary types to normalized tables
+3. **Implement SQLitePersistence**: factory + CRUD operations
+4. **Write compliance test suite**: property-based + deterministic tests
+5. **Migration tool**: read binary files, write to SQLite, verify equivalence
+6. **Dual-backend support**: config flag to choose backend
+7. **Deprecation path**: binary format still supported for reads, SQLite for writes
 

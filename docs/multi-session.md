@@ -1,4 +1,4 @@
-# Multi-Session — Isolated Worker Processes
+# Multi-Session: Isolated Worker Processes
 
 Run several F# sessions at once, each on a different project and in a
 different state. Every session is a separate OS worker process, so one

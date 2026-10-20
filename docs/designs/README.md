@@ -1,4 +1,4 @@
-# SageFs Dashboard — Redesign Directions
+# SageFs Dashboard: Redesign Directions
 
 Four full redesigns of the SageFs web dashboard. Each is a complete,
 opinionated commitment to a different aesthetic and a different
@@ -21,14 +21,14 @@ The first dark direction (Terminal Noir) was already dark and
 remained unchanged. The other three were rebuilt as **dark
 variants** that preserve the original structural commitment but
 re-cast the palette in dark keys. The same layouts, the same
-typography, the same signatures — just the right room for the work.
+typography, the same signatures, just the right room for the work.
 
-- **2 · Ink & Paper → Dark Editorial** — the same masthead and italic
+- **2 · Ink & Paper → Dark Editorial**: the same masthead and italic
   captions, but on a deep ink background with a dimmed copper accent.
-- **3 · Architectural Grid → Dark Blueprint** — the same corner marks
+- **3 · Architectural Grid → Dark Blueprint**: the same corner marks
   and § sections, but on charcoal with a single signal-green accent
   that glows the way traces glow on a CRT.
-- **4 · Studio Oblique → Dark Studio** — the same hand-script
+- **4 · Studio Oblique → Dark Studio**: the same hand-script
   labels and asymmetric layout, but on charcoal with a deep
   oxblood slab. Terracotta survives the dark pivot because it
   works against dark too.
@@ -45,7 +45,7 @@ Two things matter for the redesign:
    - `document.documentElement.style.setProperty('--sidebar-width', w + 'px')`
      on **every** `mousemove` event (no rAF batching).
    - The CSS rule `.sidebar { transition: width 0.2s, padding 0.2s; }` in
-     `dashboard.css:103` — every mouse-move spawns a new 200ms tween
+     `dashboard.css:103`, every mouse-move spawns a new 200ms tween
      that gets immediately replaced, so the sidebar chases the cursor.
    - The CSS var lives on `<html>`, so *every* `mousemove` reflows the
      whole document, not just the sidebar.
@@ -66,7 +66,7 @@ Two things matter for the redesign:
 **Palette**: `#0A0A0F` bg · `#14141F` panel · `#1E1E2E` raised · `#00D4AA`
 mint accent · `#FF6B6B` error red · `#8BE9FD` blue · `#6B6B80` dim.
 
-**Type**: JetBrains Mono everywhere. Display, body, utility — one
+**Type**: JetBrains Mono everywhere. Display, body, utility, one
 family. The terminal is the type signature.
 
 **Layout**: Title bar with session tabs (one per REPL), a thin
@@ -86,7 +86,7 @@ aesthetic is total, not partial.
 **File**: `01-terminal-noir.html` · `design-01-terminal-noir.png`
 
 **Animation philosophy (resize)**: snappy. No transition on
-`.sidebar` — direct width write on `mousemove` rAF-batched. Feels
+`.sidebar`, direct width write on `mousemove` rAF-batched. Feels
 like a real terminal window dragging.
 
 ---
@@ -97,14 +97,14 @@ brass/copper accent · `#7A7466` dim · `#2A2A35` rule.
 
 **Type**: Playfair Display 700 for display (headings, masthead).
 Source Serif 4 for body. JetBrains Mono for code/output. Inter for
-small utility text. Four faces, all doing distinct work — now on dark.
+small utility text. Four faces, all doing distinct work, now on dark.
 
 **Layout**: Editorial masthead at the top with a serif wordmark and a
 small caps subtitle, a vertical hairline rule, then a two-column
 layout: a wide left column for the output stream, and a narrower
-right column for the "Session Ledger" — sessions rendered as
+right column for the "Session Ledger", sessions rendered as
 research-notebook rows separated by hairlines, not cards. § section
-markers (§ I — Sessions, § II — Controls) in italic brass.
+markers (§ I. Sessions, § II. Controls) in italic brass.
 
 **Signature**: the brass rule under each session row, the italic
 caption ("A session ledger, typeset on dark") that closes the
@@ -113,7 +113,7 @@ sidebar. The page reads as a midnight notebook, not a paper one.
 **Risk**: the serif-on-dark aesthetic for a developer tool. On paper it
 reads as a newspaper; on dark it reads as a midnight notebook. The
 bet is that the people who choose SageFs over a Jupyter notebook
-already value precision over decoration — and precision is what
+already value precision over decoration, and precision is what
 editorial typography *is*, even at night.
 
 **File**: `02-ink-paper.html` · `design-02-dark-editorial.png`
@@ -138,7 +138,7 @@ info, status), each column with its own hairline. Main area split into
 three columns: left sidebar (Build/Layers/Telemetry with § A/B/C
 marks), center output (§ numbered lines with a faint 80px grid behind
 the transcript), right sidebar (§ 1–4 Sessions/Hot Reload/Live
-Testing/Context). Corner marks on every panel — registration ticks
+Testing/Context). Corner marks on every panel, registration ticks
 like a blueprint.
 
 **Signature**: the § numbered sections + the corner marks on panels
@@ -148,7 +148,7 @@ on a dark surface, the way traces glow on a CRT.
 
 **Risk**: this is the "engineer's dashboard" reading. If your sessions
 ever deserve warmth, this design has no place to put it. The numbered
-sections also imply a sequence — which is honest (you do go Output →
+sections also imply a sequence, which is honest (you do go Output →
 Evaluate → Result, in that order) but it could read as rigid.
 
 **File**: `03-architectural-grid.html` · `design-03-dark-blueprint.png`
@@ -165,7 +165,7 @@ terracotta accent · `#6E1F24` oxblood slab · `#C4A96B` warm signal ·
 `#2E2528` rule.
 
 **Type**: DM Serif Display for the wordmark. Inter for body. JetBrains
-Mono for code. **Caveat** (a hand-drawn cursive) for accent labels —
+Mono for code. **Caveat** (a hand-drawn cursive) for accent labels,
 the session cards each have a one-line italic caption ("★" on the
 active card), and the output area is labeled with hand-set section
 labels ("today, on the fsi", "an entry" over the eval band).
@@ -179,20 +179,20 @@ buttons. The eval band has a terracotta left-border and a hand-script
 label floating above it.
 
 **Signature**: the hand-set Caveat labels. Every section has a caption
-written as if by a person — "notes", "an entry", "today, on the fsi".
+written as if by a person, "notes", "an entry", "today, on the fsi".
 The tilted oxblood slab and the floating terracotta bar are the
 asymmetry that breaks the grid. This is the only design that
 explicitly puts a human voice into the UI.
 
 **Risk**: Caveat is a *script* font, and it's a strong choice. If the
 audience is allergic to "cute" UI, the whole thing reads as performative
-warmth. The hand-written labels are not decorative — they encode the
-session's intent — but they will be misread as decoration by some.
+warmth. The hand-written labels are not decorative, they encode the
+session's intent, but they will be misread as decoration by some.
 
 **File**: `04-studio-oblique.html` · `design-04-dark-studio.png`
 
 **Animation philosophy (resize)**: spring. A 200ms cubic-bezier with
-a slight overshoot — the sidebar "lands" rather than arrives. Matches
+a slight overshoot, the sidebar "lands" rather than arrives. Matches
 the soft, hand-made feel.
 
 ---
@@ -225,7 +225,7 @@ Three things, in order of how much they shape the design:
    it (it's the "resize the sessions panel" performance problem you
    flagged). But honestly, sessions belong in the top tab strip with
    the active one expanded inline. That's a different design entirely
-   — let me know if you want to see it.
+  , let me know if you want to see it.
 
 3. **What does the eval input want to be?** A textarea is the default
    everywhere on the web, but for a REPL it might be wrong. Possibilities:

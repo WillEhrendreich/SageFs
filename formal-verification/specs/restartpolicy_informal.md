@@ -1,6 +1,6 @@
 # Informal Specification: RestartPolicy
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 > Source: `SageFs.Core/RestartPolicy.fs`
 
 ## Purpose
@@ -28,8 +28,8 @@ window prevents permanent give-up after well-spaced transient failures.
 | `WindowStart` | `DateTime option` | Start of the current counting window |
 
 ### `Decision`
-- `Restart of delay: TimeSpan` — restart with the given backoff delay
-- `GiveUp of SageFsError` — permanently stop restarting
+- `Restart of delay: TimeSpan`, restart with the given backoff delay
+- `GiveUp of SageFsError`, permanently stop restarting
 
 ## Functions
 
@@ -95,7 +95,7 @@ Pure decision function. Rules applied in order:
 ## Lean Model Abstractions
 
 The Lean model uses:
-- `Nat` instead of `int` (non-negative values only — matching invariants)
+- `Nat` instead of `int` (non-negative values only, matching invariants)
 - `Bool windowExpired` instead of `DateTime` comparison (abstracts away time arithmetic)
 - `Unit` instead of `SageFsError` (we don't model the error payload)
 - Integer ms instead of `TimeSpan` (capturing pure numeric backoff semantics)

@@ -1,4 +1,4 @@
-# SageFs Persistence Layer — Documentation Index
+# SageFs Persistence Layer: Documentation Index
 
 ## 📚 Quick Navigation
 
@@ -23,9 +23,9 @@
 
 ### Q1: What is the current binary persistence format?
 **Answer:** Three independent formats with shared 64-byte header architecture:
-- ✅ .sagefm v1 — Daemon manifest (sessions, active session)
-- ✅ .sagefs v3 — Session persistence (eval history, code, references)
-- ✅ .sagetc v1 — Test cache (coverage bitmaps, test results)
+- ✅ .sagefm v1: Daemon manifest (sessions, active session)
+- ✅ .sagefs v3: Session persistence (eval history, code, references)
+- ✅ .sagetc v1: Test cache (coverage bitmaps, test results)
 
 All use CRC-32 integrity checks, length-prefixed UTF-8 strings, and little-endian encoding.
 
@@ -75,7 +75,7 @@ module DaemonPersistence =
 ---
 
 ### Q4: What is .sagefm format? How is data serialized?
-**Answer:** Daemon manifest — list of sessions with active session reference.
+**Answer:** Daemon manifest, list of sessions with active session reference.
 
 **Structure:**
 - **Magic:** "SFM1" (0x53, 0x46, 0x4D, 0x31)
@@ -250,14 +250,14 @@ type SqlitePersistence<'T> (dbPath, tableName) : IPersistence<'T>
 ### Key Source Files (1,700+ lines)
 `
 SageFs.Core/
-├── BinaryFormat.fs (86 lines) — CRC-32, lp-string primitives
+├── BinaryFormat.fs (86 lines). CRC-32, lp-string primitives
 ├── Features/
-│   ├── ManifestPersistence.fs (311 lines) — .sagefm reader/writer
-│   ├── SessionPersistence.fs (509 lines) — .sagefs reader/writer
-│   ├── TestCachePersistence.fs (418 lines) — .sagetc reader/writer
-│   ├── DaemonPersistence.fs (79 lines) — High-level API (no interface)
-│   ├── Replay.fs (250+ lines) — Domain types (manifest, session)
-│   └── LiveTestingTypes.fs (1,200+ lines) — Domain types (test state)
+│   ├── ManifestPersistence.fs (311 lines), .sagefm reader/writer
+│   ├── SessionPersistence.fs (509 lines), .sagefs reader/writer
+│   ├── TestCachePersistence.fs (418 lines), .sagetc reader/writer
+│   ├── DaemonPersistence.fs (79 lines). High-level API (no interface)
+│   ├── Replay.fs (250+ lines). Domain types (manifest, session)
+│   └── LiveTestingTypes.fs (1,200+ lines). Domain types (test state)
 `
 
 ---

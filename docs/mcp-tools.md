@@ -73,7 +73,7 @@ HTTP endpoints are not MCP tools.
 ## Connect
 
 **stdio (recommended)**: your client spawns `sagefs mcp`, so there's no
-ordering to get wrong — no port to be missing, no cached connection
+ordering to get wrong, no port to be missing, no cached connection
 failure, no race between your client starting and the daemon starting.
 `sagefs mcp` checks whether the daemon is up, starts it if it isn't, waits
 for it, then bridges your client's stdin/stdout to it.
@@ -107,7 +107,7 @@ For clients that take raw JSON config:
 ```
 
 **Streamable HTTP** (for a client that only speaks HTTP, or that's already
-started before you get to configure it — the daemon has to be running
+started before you get to configure it, the daemon has to be running
 first):
 ```json
 { "mcpServers": { "sagefs": { "type": "streamable-http", "url": "http://localhost:37749/" } } }
@@ -124,12 +124,12 @@ If your client shows no SageFs tools, or it shows them but every call
 fails, you almost certainly configured HTTP and started your client before
 the daemon. An HTTP-based MCP client that fails to connect on its first try
 usually caches that failure and never retries, even once the daemon comes
-up seconds later — restarting the client is the only fix, and nothing
+up seconds later, restarting the client is the only fix, and nothing
 tells you that's what you need to do. Switch to stdio (`claude mcp add
 sagefs -- sagefs mcp`, above) and this stops happening: your client spawns
 the bridge itself, and the bridge makes sure the daemon is there before
 your client ever sees an empty tool list. If you want to stay on HTTP,
-check `sagefs status` — if it says no daemon is running, start one with
+check `sagefs status`, if it says no daemon is running, start one with
 `sagefs` and restart your client.
 
 ## "404 Session not found": the daemon was replaced under a live client
@@ -141,8 +141,8 @@ this before you assume your client is broken.
 `Mcp-Session-Id` when a client sends `initialize`, and the daemon holds that
 session in its process. So a client that connected over **Streamable HTTP**
 is holding an id the daemon only knows about. If the daemon is then
-**restarted** — which SageFs does on purpose whenever a new build is installed,
-so you get the new code — the new daemon has never heard of that id, and every
+**restarted**, which SageFs does on purpose whenever a new build is installed,
+so you get the new code, the new daemon has never heard of that id, and every
 request the client makes is refused.
 
 Measured, same id and same port either side of a restart:
@@ -163,7 +163,7 @@ id in place; `initialize` is the only thing that mints one.
 
 **Why stdio does not have this problem.** With `sagefs mcp` the session id is
 captured by the BRIDGE (`SageFs/McpStdioBridge.fs`, `forward`), not by your
-client — the client never sees one. The bridge is a process that lives for the
+client, the client never sees one. The bridge is a process that lives for the
 length of your session, so it is the thing that would have to recover, and
 that is what the bridge's own docs are about.
 
@@ -175,7 +175,7 @@ pass cannot mean "the endpoint merely answers"):
 dotnet fsi scripts/reconnect-mcp.fsx
 ```
 
-If it prints `OK`, the session is live again — no client reload needed. That
+If it prints `OK`, the session is live again, no client reload needed. That
 repairs the connection; it cannot change what your client does on its own, which
 is why the durable fix is stdio.
 
@@ -440,7 +440,7 @@ included. The id names a member now and cannot be used to be one.
 so a tool needs to know WHICH repository's cohort you mean: `join_cohort` in Nehemiah and
 `join_cohort` in Molina are different cohorts with different conductor seats, and one global
 cohort would have made the second collide with a cohort it never asked for. It must be the
-exact MCP wire name `working_directory` — the registered tool surface enforces that spelling
+exact MCP wire name `working_directory`, the registered tool surface enforces that spelling
 on every directory parameter, so one name works everywhere a client needs it. The rows
 mention it only where the behaviour is worth calling out; assume the rest take it too.
 
@@ -749,7 +749,7 @@ Claude Code doesn't read it.)
 ```
 
 If your client only takes a `url` (HTTP), the daemon has to be running
-first — see the troubleshooting note above. The `url` is
+first, see the troubleshooting note above. The `url` is
 `http://localhost:37749/` for Streamable HTTP, or `http://localhost:37749/sse`
 for SSE:
 

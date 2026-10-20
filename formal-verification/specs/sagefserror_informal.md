@@ -1,6 +1,6 @@
-# SageFsError — Informal Specification
+# SageFsError: Informal Specification
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*  
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*  
 > Source: `SageFs.Core/SageFsError.fs`
 
 ---
@@ -12,8 +12,8 @@ Every `Result<_, SageFsError>` across all layers uses this one discriminated uni
 
 The module provides:
 1. **Classification predicates**: `isClientError`, `isServerError`, `isGatewayError`, `isInfraError`
-2. **HTTP status mapping**: `toHttpStatus` — for serving errors over HTTP
-3. **Log severity mapping**: `toLogLevel` — for structured logging
+2. **HTTP status mapping**: `toHttpStatus`, for serving errors over HTTP
+3. **Log severity mapping**: `toLogLevel`, for structured logging
 
 ---
 
@@ -87,8 +87,8 @@ Every `SageFsError` value belongs to **exactly one** of the four categories.
 ## Edge Cases
 
 - `Unexpected exn` is a server error (500) even when the underlying exception is a user error.
-- `DaemonNotRunning` is a client error (404) — the caller should start the daemon.
-- `RestartLimitExceeded` is an infra error (409) — the system is in a conflict state.
+- `DaemonNotRunning` is a client error (404), the caller should start the daemon.
+- `RestartLimitExceeded` is an infra error (409), the system is in a conflict state.
 
 ---
 
@@ -96,11 +96,11 @@ Every `SageFsError` value belongs to **exactly one** of the four categories.
 
 | Error | isClient | isServer | isGateway | isInfra | HTTP |
 |-------|----------|----------|-----------|---------|------|
-| `SessionNotFound "abc"` | ✓ | — | — | — | 404 |
-| `EvalFailed "type error"` | — | ✓ | — | — | 500 |
-| `WorkerTimeout("s","op",30)` | — | — | ✓ | — | 504 |
-| `PortInUse 7000` | — | — | — | ✓ | 409 |
-| `PipeClosed` | — | — | ✓ | — | 502 |
+| `SessionNotFound "abc"` | ✓ |: |: |: | 404 |
+| `EvalFailed "type error"` |: | ✓ |: |: | 500 |
+| `WorkerTimeout("s","op",30)` |: |: | ✓ |: | 504 |
+| `PortInUse 7000` |: |: |: | ✓ | 409 |
+| `PipeClosed` |: |: | ✓ |: | 502 |
 
 ---
 
@@ -108,4 +108,4 @@ Every `SageFsError` value belongs to **exactly one** of the four categories.
 
 1. Should `DaemonNotRunning` be client (404) or infra (503)? Currently client.
 2. Are there any plans to add new error variants? If so, will the category assignment be obvious?
-3. `Unexpected exn` catches all exceptions — should it be split into separate error subtypes?
+3. `Unexpected exn` catches all exceptions, should it be split into separate error subtypes?

@@ -16,13 +16,13 @@ from 2026-10-04: **44 simulations, 41 invariant modules, 21 generator modules,
 harness finds things:
 
 - **Chaos is DATA.** A `Scenario` carries an explicit, ordered, SEEDED schedule
-  of events and faults — not ambient randomness. The same seed produces the
+  of events and faults, not ambient randomness. The same seed produces the
   identical run, so any failure replays exactly.
 - **Time is injected.** The run threads a simulated clock (`StartTime` plus
   accumulated `ClockAdvance` spans). Nothing calls `DateTime.Now`.
 - **The REAL code is the subject.** The sim folds events through the actual
-  production function — `RestartPolicy.decide`, `SessionLifecycle.onWorkerExited`,
-  `Cohort.decide` — and there is no reimplemented "candidate" to compare against.
+  production function, `RestartPolicy.decide`, `SessionLifecycle.onWorkerExited`,
+  `Cohort.decide`, and there is no reimplemented "candidate" to compare against.
 - **The oracle is a set of named invariants**, each a property the real code is
   claimed to satisfy, each in its own `*Invariants.fs`.
 
@@ -34,16 +34,16 @@ harness finds things:
 | Generators | `Generators.fs` + 20 per-area modules | valid-by-construction inputs; never emit a case the validator would reject |
 | Invariants | 39 `*Invariants.fs` | one named property per rule, pure over a single reachable state |
 | Faults | `FaultInjection.fs` | PURE combinators that rewrite a schedule: clock skew, reorder, DROP, DUPLICATE |
-| Shrinking | `Shrink.fs` | ddmin-style delta debugging — a failing 40-event run shrinks to a MINIMAL repro |
+| Shrinking | `Shrink.fs` | ddmin-style delta debugging: a failing 40-event run shrinks to a MINIMAL repro |
 
 `FaultInjection.fs` matters more than its size suggests: because a fault is
 data, you can compose it with a generator and assert the twin catches it. That
-is how "the watchers are watched" actually works — the fault injection is not
+is how "the watchers are watched" actually works, the fault injection is not
 decorative chaos, it is the mutant.
 
 ## Where the coverage already is
 
-**This list is derived from the filesystem, not written by hand** — an earlier
+**This list is derived from the filesystem, not written by hand**, an earlier
 draft of this file invented nine module names that do not exist, which is the
 exact rot this document exists to prevent. If you extend it, derive the names
 (`ls SageFs.Simulation/*.fs`) rather than recalling them.
@@ -66,7 +66,7 @@ evidence is what you are changing.
 `SessionStatusReconciliationSim`
 
 **The release gate itself**
-`PassRecordSim` — same-commit tier reuse (`build/PassRecord.fs`): seeded histories of
+`PassRecordSim`, same-commit tier reuse (`build/PassRecord.fs`): seeded histories of
 commits, byte-different rebuilds, a dirty tree, flaky tiers and a damaged record
 store, with twins that ignore the product binaries, ignore a dirty tree, or never
 reuse. The gate's other rules are plain unit tests, because nothing in them is a
@@ -77,7 +77,7 @@ schedule.
 `TestDebugSim`, `TypeShapeMigrationSim`
 
 **Cohort and landings**
-`CohortLandingSim`, plus the two **exhaustive** specs — `CohortSpec` enumerates
+`CohortLandingSim`, plus the two **exhaustive** specs, `CohortSpec` enumerates
 every reachable state over a bounded model, so it is a proof rather than a
 sample, and `CohortVacancySpec` carries the vacancy invariants with a twin that
 genuinely breaks them.
@@ -89,7 +89,7 @@ genuinely breaks them.
 `HealthAnomalySim`, `HygieneSim`, `LeaseSim`
 
 **The stdio bridge**
-`McpStdioBridgeSim` — worth knowing about when a bridge change is yours, since
+`McpStdioBridgeSim`, worth knowing about when a bridge change is yours, since
 the startup race it models is a real class of bug.
 
 **Shared, not per-area**: `Scenario.fs`, `Generators.fs`, `Shrink.fs`,
@@ -112,9 +112,9 @@ There are **20 mutation suites**, for: `Affordances`, `BinaryPrimitives`,
 **The three layers the framework's own header names**, which is a useful way to
 think about where a gap actually is:
 
-1. **Lean theorems** (`formal-verification/lean/`) — model correctness.
-2. **Correspondence tests** — model ↔ implementation alignment.
-3. **Mutation tests** — whether the TEST SUITE would notice a wrong answer.
+1. **Lean theorems** (`formal-verification/lean/`), model correctness.
+2. **Correspondence tests**: model ↔ implementation alignment.
+3. **Mutation tests**: whether the TEST SUITE would notice a wrong answer.
 
 A module with examples but no mutants is at layer 3 blind, however green it is.
 

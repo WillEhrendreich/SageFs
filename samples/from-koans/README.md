@@ -1,4 +1,4 @@
-# F# Koans — SageFs Edition
+# F# Koans: SageFs Edition
 
 22 progressive exercises teaching F# from scratch. Adapted from
 [FSharpKoans](https://github.com/ChrisMarinos/FSharpKoans) by Chris Marinos (MIT).
@@ -28,7 +28,7 @@ sagefs   # start the daemon, then create a session for SageFs.Samples.Koans.fspr
 Then open any `.fs` file in your editor (VS Code or Neovim):
 
 1. **Alt+Enter** on any expression to see its value inline
-2. **Edit** a test — change a value and save
+2. **Edit** a test: change a value and save
 3. **See** ✓/✗ gutter markers update, in well under a second on my machine (about 0.7 s from edit to verdict on the small FromCSharp sample, see [how live testing works](../../docs/how-live-testing-works.md))
 
 No terminal. No `dotnet run`. Just instant feedback.
@@ -77,10 +77,10 @@ as exercises:
    ```fsharp
    let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
    ```
-4. Save — SageFs shows 🔴 markers for failing tests
+4. Save: SageFs shows 🔴 markers for failing tests
 5. Fill in the blanks to turn them 🟢
 
-Or use the original `.fsx` scripts in this directory — they already have
+Or use the original `.fsx` scripts in this directory, they already have
 the `__` placeholders ready for you.
 
 ## Why SageFs Makes This More Fun

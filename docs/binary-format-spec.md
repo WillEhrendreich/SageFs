@@ -2,7 +2,7 @@
 
 **Version**: 1.1
 **Date**: 2026-03-02
-**Formats**: `.sagefm` v1 (daemon session manifest — the durable session registry), `.sagetc` (test cache; the writer in `SageFs.Core/Features/TestCachePersistence.fs` writes format version 3 with a minimum reader version of 1, and section 3 describes what it writes today). (`.sagefs` v3 below is the historical per-session format; it is retained in the codebase but is no longer written in production — the daemon manifest is the durable session state.)
+**Formats**: `.sagefm` v1 (daemon session manifest, the durable session registry), `.sagetc` (test cache; the writer in `SageFs.Core/Features/TestCachePersistence.fs` writes format version 3 with a minimum reader version of 1, and section 3 describes what it writes today). (`.sagefs` v3 below is the historical per-session format; it is retained in the codebase but is no longer written in production, the daemon manifest is the durable session state.)
 
 ---
 
@@ -21,7 +21,7 @@ Both formats share a common framing: 64-byte header, section directory, and CRC-
 
 Each principle is stated along with why it was chosen and what alternatives were rejected.
 
-1. **The persistence format IS the network format.** One serialization path for disk and wire. Session snapshots travel across machine boundaries over HTTP. If you serialize to JSON on disk and transcode to binary for the wire, you get two serialization paths, two sets of bugs, and twice the testing surface. One format, one code path — disk and wire use identical bytes.
+1. **The persistence format IS the network format.** One serialization path for disk and wire. Session snapshots travel across machine boundaries over HTTP. If you serialize to JSON on disk and transcode to binary for the wire, you get two serialization paths, two sets of bugs, and twice the testing surface. One format, one code path: disk and wire use identical bytes.
 
 2. **Binary from day one, not deferred.** You design a format once. Migrating from JSON to binary later means maintaining two code paths, a migration tool, backward compatibility shims, and a testing matrix that doubles. Designing binary now costs a week; migrating later costs a month. Benchmarks confirmed the decision: 4–8× faster reads directly improve daemon cold-start time (see `docs/binary-format-benchmarks.md`).
 
@@ -31,11 +31,11 @@ Each principle is stated along with why it was chosen and what alternatives were
 
 5. **No trailing sentinel.** File size is in the header. No trailer block. This simplifies both the writer (no second pass to write a footer) and the reader (no seeking to the end to find a footer before parsing).
 
-6. **Conservative encoding.** BARE-inspired (IETF draft-devault-bare-14): length-prefixed strings, fixed-width integers, little-endian throughout. No varints — fixed-width fields give predictable offsets and simpler readers at the cost of a few extra bytes. The BARE specification proves a serious binary format can be specified in a few pages and implemented in an afternoon.
+6. **Conservative encoding.** BARE-inspired (IETF draft-devault-bare-14): length-prefixed strings, fixed-width integers, little-endian throughout. No varints: fixed-width fields give predictable offsets and simpler readers at the cost of a few extra bytes. The BARE specification proves a serious binary format can be specified in a few pages and implemented in an afternoon.
 
 7. **Schema out-of-band.** The format doesn't describe itself inline. The reader knows the schema because it's compiled into the reader code. The format version in the header tells the reader WHICH schema to use. This eliminates the overhead of self-describing formats (JSON keys, protobuf field numbers).
 
-8. **Validate early, trust late.** All CRCs are checked when the file is opened. After validation passes, iterate the TOC without per-field checks. The section CRC guarantees structural integrity — if it passes, every field within is sound. Don't re-check CRCs per entry during replay.
+8. **Validate early, trust late.** All CRCs are checked when the file is opened. After validation passes, iterate the TOC without per-field checks. The section CRC guarantees structural integrity: if it passes, every field within is sound. Don't re-check CRCs per entry during replay.
 
 9. **Human-inspectable with standard tools.** A well-designed binary format is MORE debuggable than minified JSON because every byte has a defined purpose. Magic bytes jump out in hex dumps. Length-prefixed fields are self-navigating. Section markers are visible signposts. `xxd session.sagefs | head` shows magic, version, section count immediately.
 
@@ -55,7 +55,7 @@ u32     byte_length     (0 is valid — represents an empty string)
 u8[N]   utf8_bytes      (N = byte_length, no null terminator)
 ```
 
-**Optional string (`lp-string-option`)** — used where `string option` semantics are needed:
+**Optional string (`lp-string-option`)**, used where `string option` semantics are needed:
 ```
 0xFFFFFFFF              → None (no string)
 0x00000000              → Some "" (empty string)
@@ -64,7 +64,7 @@ u8[N]   utf8_bytes      (N = byte_length, no null terminator)
 
 ---
 
-## 2. `.sagefs` v3 — Session Persistence Format
+## 2. `.sagefs` v3. Session Persistence Format
 
 ### 2.1 File Layout
 
@@ -90,7 +90,7 @@ u8[N]   utf8_bytes      (N = byte_length, no null terminator)
 
 ### 2.2 Header (64 bytes)
 
-> **Rationale — Header size:** 64 bytes was a compromise between 16 bytes (minimal: magic + version + flags + section_count + total_size) and 96 bytes (generous: per-section CRCs in the header itself). 64 bytes provides enough room for CRCs, version info, and quick-stat fields (`interaction_count`) without waste. The 24 bytes of reserved fields give expansion room for future needs without requiring a format version bump.
+> **Rationale. Header size:** 64 bytes was a compromise between 16 bytes (minimal: magic + version + flags + section_count + total_size) and 96 bytes (generous: per-section CRCs in the header itself). 64 bytes provides enough room for CRCs, version info, and quick-stat fields (`interaction_count`) without waste. The 24 bytes of reserved fields give expansion room for future needs without requiring a format version bump.
 
 ```
 Offset  Size  Type      Field                 Description
@@ -110,9 +110,9 @@ Offset  Size  Type      Field                 Description
 0x38    8     u64       reserved_3            Must be 0
 ```
 
-> **Rationale — `interaction_count` in header:** This lets the UI show "Restoring session (247 interactions)" without parsing the INPT section. One u32 in the header saves a section parse for every UX status message. The INPT section header redundantly stores this value for standalone section parsing.
+> **Rationale, `interaction_count` in header:** This lets the UI show "Restoring session (247 interactions)" without parsing the INPT section. One u32 in the header saves a section parse for every UX status message. The INPT section header redundantly stores this value for standalone section parsing.
 >
-> **Rationale — Magic includes version:** `SFS3` embeds the major version directly in the magic bytes so a hex dump immediately reveals the format version without parsing the version field. This follows the principle that the format should be human-inspectable with standard tools.
+> **Rationale. Magic includes version:** `SFS3` embeds the major version directly in the magic bytes so a hex dump immediately reveals the format version without parsing the version field. This follows the principle that the format should be human-inspectable with standard tools.
 
 ### 2.3 Global Flags
 
@@ -129,7 +129,7 @@ Bit field in `flags` (offset 0x0C):
 
 ### 2.4 Section Directory Entry (20 bytes)
 
-> **Rationale — 20 bytes, not 16:** The extra 4 bytes (vs a minimal 16-byte entry) are the per-section CRC. This eliminates reading section payloads just to validate integrity. You read 64 + 20N bytes (header + directory), validate header CRC, and know exactly which sections are present, where they are, and their CRCs — before touching any payload data. For a 5-section file, the directory is 100 bytes; header + directory total is 164 bytes — less than two cache lines. The per-section CRC costs zero in practice.
+> **Rationale. 20 bytes, not 16:** The extra 4 bytes (vs a minimal 16-byte entry) are the per-section CRC. This eliminates reading section payloads just to validate integrity. You read 64 + 20N bytes (header + directory), validate header CRC, and know exactly which sections are present, where they are, and their CRCs, before touching any payload data. For a 5-section file, the directory is 100 bytes; header + directory total is 164 bytes, less than two cache lines. The per-section CRC costs zero in practice.
 
 Located immediately after header at offset `0x40`. Total size: `section_count × 20` bytes.
 
@@ -143,7 +143,7 @@ Offset  Size  Type      Field       Description
 +0x10   4     u32       crc32       CRC-32 of payload bytes
 ```
 
-> **Rationale — u64 offset:** Session files with assembly caches can exceed 4GB, so u32 offsets are insufficient. Using u64 for the offset field accommodates arbitrarily large files while costing only 4 extra bytes per directory entry.
+> **Rationale, u64 offset:** Session files with assembly caches can exceed 4GB, so u32 offsets are insufficient. Using u64 for the offset field accommodates arbitrarily large files while costing only 4 extra bytes per directory entry.
 
 **Per-section flags**:
 
@@ -154,7 +154,7 @@ Offset  Size  Type      Field       Description
 
 When `is_compressed` is set, decompress before CRC validation. The CRC always covers the decompressed payload.
 
-> **Rationale — Per-section compression:** Compression is opt-in at the section level rather than file-level because different sections have different compressibility profiles. META and REFS are tiny — compressing them adds overhead for negligible savings. INPT with blob pools benefits significantly. Section-level granularity lets the writer make the right choice per-section.
+> **Rationale. Per-section compression:** Compression is opt-in at the section level rather than file-level because different sections have different compressibility profiles. META and REFS are tiny, compressing them adds overhead for negligible savings. INPT with blob pools benefits significantly. Section-level granularity lets the writer make the right choice per-section.
 
 ### 2.5 Section Tags
 
@@ -165,15 +165,15 @@ When `is_compressed` is set, decompress before CRC validation. The CRC always co
 | 3 | 0x0003 | REFS | Yes | Assembly/NuGet references |
 | 4 | 0x0004 | PROF | No | Per-interaction profiling/timing |
 | 5 | 0x0005 | BIND | No | Runtime binding snapshot |
-| 6+ | — | — | No | Reserved for future use |
+| 6+ |: |: | No | Reserved for future use |
 
 Readers MUST skip unknown section tags by following the directory entry's `offset` and `size`. This is the primary forward-compatibility mechanism: new sections can be added in future format versions without breaking old readers.
 
-> **Rationale — PROF as separate section:** Profiling data is optional, cold, and write-once. A normal restore never reads it; only diagnosing performance does. Keeping it separate means readers that don't care about profiling skip it entirely (section directory → tag 0x0004 → skip). It doesn't pollute the hot TOC entries with 28 extra bytes per interaction. But it's invaluable when needed: "interaction #47 spent 180ms in typecheck and 2ms in everything else" turns the snapshot from a backup file into a diagnostic artifact.
+> **Rationale. PROF as separate section:** Profiling data is optional, cold, and write-once. A normal restore never reads it; only diagnosing performance does. Keeping it separate means readers that don't care about profiling skip it entirely (section directory → tag 0x0004 → skip). It doesn't pollute the hot TOC entries with 28 extra bytes per interaction. But it's invaluable when needed: "interaction #47 spent 180ms in typecheck and 2ms in everything else" turns the snapshot from a backup file into a diagnostic artifact.
 >
-> **Rationale — BIND as separate section:** Runtime binding state (variable names, types, values) is useful for session restoration UX but not required for replay correctness. Making it optional avoids bloating files when bindings aren't needed.
+> **Rationale. BIND as separate section:** Runtime binding state (variable names, types, values) is useful for session restoration UX but not required for replay correctness. Making it optional avoids bloating files when bindings aren't needed.
 >
-> **Note on skip-by-omission:** The current reader looks for specific required tags (META, INPT, REFS) and silently ignores others — which is correct forward-compatible skipping by omission. Future readers MUST NOT add checks that error on unknown section tags, as that would break forward compatibility.
+> **Note on skip-by-omission:** The current reader looks for specific required tags (META, INPT, REFS) and silently ignores others, which is correct forward-compatible skipping by omission. Future readers MUST NOT add checks that error on unknown section tags, as that would break forward compatibility.
 
 ### 2.6 META Section (tag 0x0001)
 
@@ -192,11 +192,11 @@ failed_eval_count      u32             Total failed evaluations
 session_id             lp-string       UUID of the session
 ```
 
-> **Rationale — Flat fields, known extensibility gap:** META uses a flat field sequence in fixed order with no length prefix or field tags. This is the simplest possible encoding — and intentionally so, since META fields are read once at restore time and never iterated. However, this means adding a field requires a version bump (increment `min_reader_version`), because old readers don't know how many bytes to skip. Every other section in the format has extensibility: INPT has `toc_entry_stride`, top-level has section tags, PROF/REFS/BIND use count-prefixed arrays. META is the exception. A future v4 could add `field_count:u32` or a mini TLV scheme, but for now the simplicity tradeoff is acceptable given how rarely META's field set changes.
+> **Rationale. Flat fields, known extensibility gap:** META uses a flat field sequence in fixed order with no length prefix or field tags. This is the simplest possible encoding, and intentionally so, since META fields are read once at restore time and never iterated. However, this means adding a field requires a version bump (increment `min_reader_version`), because old readers don't know how many bytes to skip. Every other section in the format has extensibility: INPT has `toc_entry_stride`, top-level has section tags, PROF/REFS/BIND use count-prefixed arrays. META is the exception. A future v4 could add `field_count:u32` or a mini TLV scheme, but for now the simplicity tradeoff is acceptable given how rarely META's field set changes.
 
 ### 2.7 INPT Section (tag 0x0002)
 
-> **Rationale — Pool architecture inside section envelope:** This section merges two design philosophies: a section directory (for top-level forward compatibility and independent CRC validation) with a pool architecture (for cache-friendly access patterns). The section directory tells you WHERE the inputs section is. The internal pool layout tells you HOW to read it efficiently. Fixed-stride TOC entries enable O(1) random access to any interaction via `base + i * stride`. Contiguous string and blob pools eliminate per-entry allocation during iteration.
+> **Rationale. Pool architecture inside section envelope:** This section merges two design philosophies: a section directory (for top-level forward compatibility and independent CRC validation) with a pool architecture (for cache-friendly access patterns). The section directory tells you WHERE the inputs section is. The internal pool layout tells you HOW to read it efficiently. Fixed-stride TOC entries enable O(1) random access to any interaction via `base + i * stride`. Contiguous string and blob pools eliminate per-entry allocation during iteration.
 
 **Section header (16 bytes)**:
 
@@ -230,9 +230,9 @@ Offset  Size  Type      Field                 Description
 
 Current stride is 48 bytes. A v4 writer may extend entries to 64 bytes by setting `toc_entry_stride = 64`; v3 readers advance by their known stride (48) and skip trailing bytes.
 
-> **Rationale — Fixed stride with extensible stride field:** When iterating 5,000 interactions, the reader computes `base + i * stride` and reads raw fields — no deserialization, no allocation. The stride field means future format versions can extend entries (appending new fields at the end) without breaking old readers, who advance by their known stride and ignore trailing bytes. This is the same trick as BARE's conservative extensibility.
+> **Rationale. Fixed stride with extensible stride field:** When iterating 5,000 interactions, the reader computes `base + i * stride` and reads raw fields, no deserialization, no allocation. The stride field means future format versions can extend entries (appending new fields at the end) without breaking old readers, who advance by their known stride and ignore trailing bytes. This is the same trick as BARE's conservative extensibility.
 >
-> **Rationale — Output strings in TOC:** The original design omitted FSI output text. But for session replay UX, seeing what each interaction PRODUCED is critical — the REPL user expects `val x : int = 42` to appear after restoration. Storing output means we don't need to re-capture stdout during replay; we display the cached output directly. This stores the result, not just the input.
+> **Rationale. Output strings in TOC:** The original design omitted FSI output text. But for session replay UX, seeing what each interaction PRODUCED is critical, the REPL user expects `val x : int = 42` to appear after restoration. Storing output means we don't need to re-capture stdout during replay; we display the cached output directly. This stores the result, not just the input.
 
 #### 2.7.1 Interaction Kind
 
@@ -258,7 +258,7 @@ Current stride is 48 bytes. A v4 writer may extend entries to 64 bytes by settin
 
 #### 2.7.3 String Deduplication (Optional)
 
-> **Rationale — Semantic compression before byte compression:** A typical REPL session has 200 interactions. Type signatures repeat heavily: "int" appears ~100 times, "string" ~50 times. Without dedup, the string pool stores 150 copies of short strings. With dedup, each is stored once. For network transfer, this is the difference between 50KB and 12KB of string data — before compression. Zstd catches redundancy anyway, but semantic dedup means the compressor starts from a better baseline. This is compression-oriented design: reduce redundancy at the structural level first, then let byte compression handle the rest.
+> **Rationale. Semantic compression before byte compression:** A typical REPL session has 200 interactions. Type signatures repeat heavily: "int" appears ~100 times, "string" ~50 times. Without dedup, the string pool stores 150 copies of short strings. With dedup, each is stored once. For network transfer, this is the difference between 50KB and 12KB of string data, before compression. Zstd catches redundancy anyway, but semantic dedup means the compressor starts from a better baseline. This is compression-oriented design: reduce redundancy at the structural level first, then let byte compression handle the rest.
 
 When `has_dedup_table` flag is set in the file header, repeated strings in the string pool are stored once. Multiple TOC entries reference the same `(offset, length)` pair.
 
@@ -286,7 +286,7 @@ ref_count              u32             Number of references
   path                 lp-string       Path or package identifier
 ```
 
-> **Rationale — Typed references with discriminator byte:** Session restore needs to know which DLLs, NuGet packages, scripts, and include paths were loaded so it can `#r` them in the correct order. A single flat list with a `ref_kind` discriminator byte (rather than separate sections per kind) keeps the encoding simple while allowing the reader to process them in original load order. Order matters because later references may depend on assemblies loaded by earlier ones.
+> **Rationale. Typed references with discriminator byte:** Session restore needs to know which DLLs, NuGet packages, scripts, and include paths were loaded so it can `#r` them in the correct order. A single flat list with a `ref_kind` discriminator byte (rather than separate sections per kind) keeps the encoding simple while allowing the reader to process them in original load order. Order matters because later references may depend on assemblies loaded by earlier ones.
 
 #### 2.8.1 Reference Kind
 
@@ -299,7 +299,7 @@ ref_count              u32             Number of references
 
 ### 2.9 PROF Section (tag 0x0004)
 
-> **Rationale — Per-phase timing baked into the format:** Understanding WHY a session restores slowly requires knowing which compiler phase is the bottleneck. Without per-phase timing, all you know is "180ms total." With PROF data, you know interaction #47 spent 180ms in the type-checker's constraint solver and 2ms in everything else. The PROF section turns the snapshot from a backup file into a diagnostic artifact. It lives in a separate section because it's cold data — only read when diagnosing performance, never during normal restore.
+> **Rationale. Per-phase timing baked into the format:** Understanding WHY a session restores slowly requires knowing which compiler phase is the bottleneck. Without per-phase timing, all you know is "180ms total." With PROF data, you know interaction #47 spent 180ms in the type-checker's constraint solver and 2ms in everything else. The PROF section turns the snapshot from a backup file into a diagnostic artifact. It lives in a separate section because it's cold data, only read when diagnosing performance, never during normal restore.
 
 ```
 Field                  Type            Description
@@ -332,7 +332,7 @@ binding_count          u32             Number of bound values
     value_bytes        u8[N]           Raw value (little-endian for numeric)
 ```
 
-> **Rationale — Optional section, tagged value encoding:** BIND captures FSI `let` bindings (name + type + value) for display in the TUI/GUI value inspector. It is optional (tag BIND may be absent from the section directory) because: (1) not all sessions have inspectable bindings, (2) binding values can be large, and (3) the feature is informational, not required for session restore. The `value_kind` discriminator with explicit `null` and `unsupported` sentinels avoids forcing serialization of complex F# types — the format stores what it can represent natively (primitives, strings, byte arrays) and marks everything else as `unsupported`, letting the UI show the type signature without the value.
+> **Rationale. Optional section, tagged value encoding:** BIND captures FSI `let` bindings (name + type + value) for display in the TUI/GUI value inspector. It is optional (tag BIND may be absent from the section directory) because: (1) not all sessions have inspectable bindings, (2) binding values can be large, and (3) the feature is informational, not required for session restore. The `value_kind` discriminator with explicit `null` and `unsupported` sentinels avoids forcing serialization of complex F# types, the format stores what it can represent natively (primitives, strings, byte arrays) and marks everything else as `unsupported`, letting the UI show the type signature without the value.
 
 #### 2.10.1 Value Kind
 
@@ -349,11 +349,11 @@ binding_count          u32             Number of bound values
 
 ---
 
-## 3. `.sagetc` — Test Cache Format
+## 3. `.sagetc`. Test Cache Format
 
 > **What changed since the first version of this section.** I wrote this section for format version 1, and the code moved on. The writer now writes **format version 3**: version 2 added outcome codes 5 to 7 (§3.6.1), and version 3 added a fourth section, FLKY (§3.7), with each test's flaky-detection history. Both left `min_reader_version` at 1. A test id is an `lp-string` and a coverage bitmap is made of 64-bit words, where the first draft here said `u32` ids and 32-bit words. This section was checked against `SageFs.Core/Features/TestCachePersistence.fs` on 2026-10-01, which is the authority if the two ever disagree.
 
-> **Rationale — Reuse SFS framing, different magic/tags:** The test cache format reuses the same 64-byte header layout, section directory, CRC scheme, and lp-string encoding as `.sagefs`. This avoids a second binary format implementation and its associated testing burden. The formats differ only in magic bytes (`STC1` vs `SFS3`), section tags, and payload schemas. A single `BinaryFormat` module handles low-level I/O for both.
+> **Rationale. Reuse SFS framing, different magic/tags:** The test cache format reuses the same 64-byte header layout, section directory, CRC scheme, and lp-string encoding as `.sagefs`. This avoids a second binary format implementation and its associated testing burden. The formats differ only in magic bytes (`STC1` vs `SFS3`), section tags, and payload schemas. A single `BinaryFormat` module handles low-level I/O for both.
 
 ### 3.1 File Layout
 
@@ -405,7 +405,7 @@ Offset  Size  Type      Field       Description
 +0x0C   4     u32       crc32       CRC-32 of payload bytes
 ```
 
-> **Rationale — STC directory has no size field (known weakness):** STC v1 directory entries are 16 bytes (4 tag + 8 offset + 4 CRC) compared to SFS's 20 bytes (which add an explicit `size:u32`). In STC, section size is computed from the gap between consecutive offsets, with the last section's size computed as `total_file_size - last_offset`. If `total_file_size` in the header is corrupted, the last section's computed size is wrong and may cause out-of-bounds reads. The SFS format's explicit size field is strictly better — it allows validating `offset + size <= total_file_size` per section before any read. This is a known design weakness that is not fixable without a breaking change (STC v2). The CRC check on the full file mitigates the risk: a corrupted `total_file_size` will fail the header CRC, so the file is rejected before the size computation ever runs.
+> **Rationale. STC directory has no size field (known weakness):** STC v1 directory entries are 16 bytes (4 tag + 8 offset + 4 CRC) compared to SFS's 20 bytes (which add an explicit `size:u32`). In STC, section size is computed from the gap between consecutive offsets, with the last section's size computed as `total_file_size - last_offset`. If `total_file_size` in the header is corrupted, the last section's computed size is wrong and may cause out-of-bounds reads. The SFS format's explicit size field is strictly better, it allows validating `offset + size <= total_file_size` per section before any read. This is a known design weakness that is not fixable without a breaking change (STC v2). The CRC check on the full file mitigates the risk: a corrupted `total_file_size` will fail the header CRC, so the file is rejected before the size computation ever runs.
 
 **Section identifiers.** The writer stores each tag as a little-endian `u32` whose value, read most significant byte first, spells the four letters. So `IMAP` is the value `0x494D4150`, which is the bytes `50 41 4D 49` in the file. An earlier version of this table listed the byte-swapped values.
 
@@ -416,9 +416,9 @@ Offset  Size  Type      Field       Description
 | TRES | "TRES" | 0x54524553 | Test results |
 | FLKY | "FLKY" | 0x464C4B59 | Flaky-detection history (format version 3 and later) |
 
-### 3.4 IMAP Section — Instrumentation Map Identity
+### 3.4 IMAP Section: Instrumentation Map Identity
 
-> **Rationale — Coverage bitmaps as the persistence unit:** The instrumentation map associates each test with a bitmap of probe hits. When the underlying source code changes, the probe layout changes (probes are invalidated), so the `imap_generation` counter in the header tracks whether the cached bitmaps are still valid. If the generation counter in the cache doesn't match the live instrumentation map, the entire cache is discarded — incremental invalidation at the individual probe level would require tracking source-to-probe mappings, which is a different (much more complex) feature. The bitmap encoding (packed u32 words) is chosen for direct `BitArray` interop in .NET and cache-friendly sequential access during coverage aggregation.
+> **Rationale. Coverage bitmaps as the persistence unit:** The instrumentation map associates each test with a bitmap of probe hits. When the underlying source code changes, the probe layout changes (probes are invalidated), so the `imap_generation` counter in the header tracks whether the cached bitmaps are still valid. If the generation counter in the cache doesn't match the live instrumentation map, the entire cache is discarded, incremental invalidation at the individual probe level would require tracking source-to-probe mappings, which is a different (much more complex) feature. The bitmap encoding (packed u32 words) is chosen for direct `BitArray` interop in .NET and cache-friendly sequential access during coverage aggregation.
 
 ```
 Field                  Type            Description
@@ -432,7 +432,7 @@ entry_count            u32             Number of coverage entries
 
 Each bit in a bitmap word represents one instrumentation probe. Bit 0 of word 0 is probe 0, bit 63 of word 0 is probe 63, bit 0 of word 1 is probe 64, etc.
 
-### 3.5 TCOV Section — Coverage Summary
+### 3.5 TCOV Section: Coverage Summary
 
 ```
 Field                  Type            Description
@@ -443,9 +443,9 @@ entry_count            u32             Number of entries
   total_probe_bits     u32             Total number of probes (= bitmap_word_count × 64)
 ```
 
-### 3.6 TRES Section — Test Results
+### 3.6 TRES Section: Test Results
 
-> **Rationale — Separate section from coverage bitmaps:** Test results (pass/fail/skip/error + duration + message) are stored separately from coverage bitmaps because they have different access patterns and lifetimes. The TUI's live test panel reads TRES on startup to show previous results immediately, without needing to load or interpret the (much larger) coverage bitmaps. The coverage bitmaps (IMAP) are loaded later, only when the coverage gutter feature is active.
+> **Rationale. Separate section from coverage bitmaps:** Test results (pass/fail/skip/error + duration + message) are stored separately from coverage bitmaps because they have different access patterns and lifetimes. The TUI's live test panel reads TRES on startup to show previous results immediately, without needing to load or interpret the (much larger) coverage bitmaps. The coverage bitmaps (IMAP) are loaded later, only when the coverage gutter feature is active.
 
 ```
 Field                  Type            Description
@@ -476,14 +476,14 @@ test-cache codec is lossless across restarts: v1 collapsed every failure kind
 into `Fail` (1), and readers decoded byte 1 as an assertion failure. The v2
 writer emits byte 5/6/7 for `AssertionFailed`/`ExceptionThrown`/`TimedOut`
 respectively and sets `format_version = 2` while leaving
-`min_reader_version = 1` — a v1 reader can still parse a v2 file (it treats
+`min_reader_version = 1`, a v1 reader can still parse a v2 file (it treats
 bytes 5-7 as assertion failures, which is strictly no worse than what its own
 writer stored). The v2 reader continues to decode legacy byte 1 as
 `AssertionFailed`, exactly matching what v1 writers produced. A `TimedOut`
 entry's timeout span is carried in the message string ("Timed out after
 `<N>s`") so the kind and duration both round-trip.
 
-### 3.7 FLKY Section — Flaky-Detection History
+### 3.7 FLKY Section: Flaky-Detection History
 
 Added in format version 3. Flaky detection keeps a small circular window of recent pass/fail samples for each test, and an earlier cache dropped those windows on every restart, which silently reset what the detector had learned. This section stores each window exactly, so the write index, the count and every slot come back as they were. The reader treats a missing FLKY section (a cache written before version 3) as an empty history and not an error. A FLKY section that is present has to pass its CRC like any other.
 
@@ -509,10 +509,10 @@ CRC-32 serves as a **data integrity check**, not a security mechanism. The threa
 
 - **Truncated writes:** If SageFs is killed mid-write, the OS file system journal protects FS metadata (directory entries, allocation tables) but NOT application data. A half-written `.sagefs` file will have valid sectors and pass OS-level checks, but be semantically incomplete. CRC catches this.
 - **Cross-system transfer:** Files copied between machines via USB, network share, cloud sync, or HTTP transfer can be corrupted in transit by faulty hardware, interrupted connections, or encoding errors.
-- **Bit rot:** While rare on modern SSDs, magnetic drives can experience silent data corruption where sectors read successfully but contain wrong data. The OS and file system do not detect this — the sectors pass hardware checks, but the payload is corrupted.
+- **Bit rot:** While rare on modern SSDs, magnetic drives can experience silent data corruption where sectors read successfully but contain wrong data. The OS and file system do not detect this: the sectors pass hardware checks, but the payload is corrupted.
 - **Truncated/partial cache loads:** The `.sagetc` test cache is loaded eagerly on daemon startup for <100ms cold-start UX. A fast integrity check prevents parsing garbage bytes from an incomplete previous write.
 
-CRC-32 is **explicitly NOT a security measure.** It provides zero protection against intentional tampering — CRC-32 collisions can be forged trivially (in milliseconds). If tamper-proofing is ever needed (e.g., signed session exports for cross-organization sharing), the appropriate tools are HMAC-SHA256 or Ed25519 signatures. Flag bits 5–31 in the header are reserved, and a future `is_signed` flag + `SIGN` section tag are logical extensions if that need arises. But that is a different feature from integrity checking.
+CRC-32 is **explicitly NOT a security measure.** It provides zero protection against intentional tampering. CRC-32 collisions can be forged trivially (in milliseconds). If tamper-proofing is ever needed (e.g., signed session exports for cross-organization sharing), the appropriate tools are HMAC-SHA256 or Ed25519 signatures. Flag bits 5–31 in the header are reserved, and a future `is_signed` flag + `SIGN` section tag are logical extensions if that need arises. But that is a different feature from integrity checking.
 
 **Why CRC-32, not something else:**
 
@@ -538,7 +538,7 @@ The header CRC covers the **entire file** (header + TOC + all section payloads),
 
 Readers validate by copying the entire file, zeroing `[0x24..0x27]`, computing CRC, and comparing to the stored value.
 
-> **Rationale — Full-file CRC:** An earlier design computed CRC over only the 64-byte header, leaving the TOC directory entries (section tags, offsets, per-section CRCs) at bytes 64–111+ unprotected. A bit flip in the TOC region (e.g., corrupting a section offset) could silently cause the reader to parse the wrong bytes as a section payload. The section CRC would then fail, but the error message would be misleading (reporting a payload CRC mismatch when the real problem is a corrupted offset). The full-file approach matches PNG and ZIP: one CRC covers the entire structure, so any single-bit flip anywhere in the file is detected at the first validation step. This creates a fail-fast funnel: header CRC fails → entire file rejected before any parsing.
+> **Rationale. Full-file CRC:** An earlier design computed CRC over only the 64-byte header, leaving the TOC directory entries (section tags, offsets, per-section CRCs) at bytes 64–111+ unprotected. A bit flip in the TOC region (e.g., corrupting a section offset) could silently cause the reader to parse the wrong bytes as a section payload. The section CRC would then fail, but the error message would be misleading (reporting a payload CRC mismatch when the real problem is a corrupted offset). The full-file approach matches PNG and ZIP: one CRC covers the entire structure, so any single-bit flip anywhere in the file is detected at the first validation step. This creates a fail-fast funnel: header CRC fails → entire file rejected before any parsing.
 
 ### 4.2 Section CRC
 
@@ -550,7 +550,7 @@ CRC32(file[offset .. offset + size - 1])
 
 For `.sagefs` with compression: decompress first, then CRC the decompressed bytes.
 
-> **Rationale — Two-level CRC:** The header CRC alone would suffice for detecting any corruption. Section CRCs add a second benefit: **per-section error localization.** When the header CRC fails, you know the file is corrupted but not where. Section CRCs let a diagnostic tool (`sagefs inspect --validate`) report which specific section is damaged, enabling partial recovery of undamaged sections in future tooling. The two-level approach also enables progressive validation: validate the header CRC (cheap, covers structure), then validate only the sections you actually need to parse.
+> **Rationale. Two-level CRC:** The header CRC alone would suffice for detecting any corruption. Section CRCs add a second benefit: **per-section error localization.** When the header CRC fails, you know the file is corrupted but not where. Section CRCs let a diagnostic tool (`sagefs inspect --validate`) report which specific section is damaged, enabling partial recovery of undamaged sections in future tooling. The two-level approach also enables progressive validation: validate the header CRC (cheap, covers structure), then validate only the sections you actually need to parse.
 
 ### 4.3 Validation Order
 
@@ -559,7 +559,7 @@ For `.sagefs` with compression: decompress first, then CRC the decompressed byte
 3. Read section directory
 4. For each section, validate its CRC before parsing payload
 
-> **Rationale — Validate early, trust late:** All integrity checks happen at file-open time. After validation passes, the reader iterates TOC entries and reads pool data without per-field re-validation. The section CRC guarantee means: if the CRC passed, every byte within the section is exactly what the writer wrote. This avoids defensive per-field bounds checking in the hot parsing path while maintaining full integrity confidence.
+> **Rationale. Validate early, trust late:** All integrity checks happen at file-open time. After validation passes, the reader iterates TOC entries and reads pool data without per-field re-validation. The section CRC guarantee means: if the CRC passed, every byte within the section is exactly what the writer wrote. This avoids defensive per-field bounds checking in the hot parsing path while maintaining full integrity confidence.
 
 ---
 
@@ -572,7 +572,7 @@ For `.sagefs` with compression: decompress first, then CRC the decompressed byte
 
 A reader with version `R` can read a file if `R >= min_reader_version`.
 
-> **Rationale — Two version fields:** `format_version` tells tooling which writer produced the file (useful for diagnostics and statistics). `min_reader_version` is the operational field — it gates whether a reader can parse the file at all. A v4 writer that only uses v3-compatible features can set `min_reader_version = 3`, allowing v3 readers to open the file. This decouples "what wrote the file" from "what can read it."
+> **Rationale. Two version fields:** `format_version` tells tooling which writer produced the file (useful for diagnostics and statistics). `min_reader_version` is the operational field, it gates whether a reader can parse the file at all. A v4 writer that only uses v3-compatible features can set `min_reader_version = 3`, allowing v3 readers to open the file. This decouples "what wrote the file" from "what can read it."
 
 ### 5.2 Forward Compatibility
 
@@ -580,7 +580,7 @@ A reader with version `R` can read a file if `R >= min_reader_version`.
 
 **Both formats**: Unknown section tags are skipped by following the directory entry's offset and size (`.sagefs`) or offset and next-section offset (`.sagetc`).
 
-> **Rationale — Conservative extensibility over negotiation:** New sections get new tags. New TOC fields append to the end. Old readers skip what they don't understand. There is no version negotiation, no feature capability exchange, no conditional parsing beyond the `min_reader_version` gate. This follows the BARE encoding philosophy: extend by appending, never by redefining.
+> **Rationale. Conservative extensibility over negotiation:** New sections get new tags. New TOC fields append to the end. Old readers skip what they don't understand. There is no version negotiation, no feature capability exchange, no conditional parsing beyond the `min_reader_version` gate. This follows the BARE encoding philosophy: extend by appending, never by redefining.
 
 ### 5.3 Format Differences Summary
 
@@ -604,7 +604,7 @@ Readers **MUST** enforce the following after CRC validation:
 2. **Enum validation**: Unknown enum byte values (e.g., `Outcome`, `InteractionKind`, `RefKind`) **MUST** produce an error, not a silent default. After the version check passes, unknown enum values indicate corruption, not forward-compatibility.
 3. **CRC mismatch**: If header CRC or any section CRC fails, return an error with expected and actual values.
 
-> **Rationale — Enum errors over defaults:** An earlier design mapped unknown enum values to defaults (e.g., unknown outcome → `Fail`). This makes illegal states representable by mapping them to legal states — exactly backwards. Once the `min_reader_version` gate passes, the reader knows it understands all enum variants the writer could have produced. Unknown values at that point indicate file corruption, not forward-compatibility, and must be reported as errors. The version gate is the correct forward-compatibility mechanism; enum defaults are the wrong one.
+> **Rationale. Enum errors over defaults:** An earlier design mapped unknown enum values to defaults (e.g., unknown outcome → `Fail`). This makes illegal states representable by mapping them to legal states, exactly backwards. Once the `min_reader_version` gate passes, the reader knows it understands all enum variants the writer could have produced. Unknown values at that point indicate file corruption, not forward-compatibility, and must be reported as errors. The version gate is the correct forward-compatibility mechanism; enum defaults are the wrong one.
 
 ### 5.5 Atomic Writes
 
@@ -614,4 +614,4 @@ Writers use write-to-tmp-then-rename to avoid partial writes:
 
 On startup, readers **SHOULD** delete orphaned `.sagefs.tmp` and `.sagetc.tmp` files in their respective directories. These indicate interrupted writes and contain incomplete data.
 
-> **Rationale — Write-to-tmp-then-rename:** If the process crashes between `File.WriteAllBytes` and completion, the primary file is left untouched — the reader loads the old (complete) file on next startup, which is correct behavior. `File.Move` with `overwrite: true` is atomic at the filesystem level on NTFS, ext4, and APFS. This means concurrent writes from multiple SageFs instances (e.g., racing on the same cache file) result in last-writer-wins, which is acceptable for a cache. The `.tmp` cleanup policy exists because crash-between-write-and-move leaves orphaned temp files that may confuse users debugging stale caches.
+> **Rationale. Write-to-tmp-then-rename:** If the process crashes between `File.WriteAllBytes` and completion, the primary file is left untouched, the reader loads the old (complete) file on next startup, which is correct behavior. `File.Move` with `overwrite: true` is atomic at the filesystem level on NTFS, ext4, and APFS. This means concurrent writes from multiple SageFs instances (e.g., racing on the same cache file) result in last-writer-wins, which is acceptable for a cache. The `.tmp` cleanup policy exists because crash-between-write-and-move leaves orphaned temp files that may confuse users debugging stale caches.
