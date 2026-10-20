@@ -476,13 +476,20 @@ module Integration =
   let hrRestartEntryPoint = "--integration-hr-restart"
   let hrDeltaEntryPoint = "--integration-hr-delta"
 
+  /// The tier of the patched-save growth series (PERF-1): 150 patched saves on one session, read as three windows
+  /// to see whether a save gets slower as the session ages. It needs the HR runner's daemon and fixture, so it has
+  /// the runner's setup (minus the journeys and the net10 copy) and a tier of its own: 150 saves behind the
+  /// journeys would set the wall of `--integration-hr`, and the series is only a measurement if nothing else has
+  /// aged or loaded its session.
+  let hrGrowthEntryPoint = "--integration-hr-growth"
+
   /// The `Dedicated` entry points Program.fs has a dispatch branch for. ONE
   /// list, read by Program.fs's fail-closed `unwiredDedicated` check and by the
   /// "every tier is invoked by CI" structural test — so "dispatched" and
   /// "invoked" are checked against the same set rather than two hand copies.
   let dispatchedEntryPoints =
     [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect"
-      hrRestartEntryPoint; hrDeltaEntryPoint ]
+      hrRestartEntryPoint; hrDeltaEntryPoint; hrGrowthEntryPoint ]
 
   /// The tree a plain default run (`--summary`, no `--all`/`--integration`)
   /// actually executes: every [<Tests>] value in this assembly, minus the

@@ -146,6 +146,7 @@ let ciWiringTests =
              "--integration-disconnect --summary"
              "--integration-hr --summary"
              "--integration-hr-delta --summary"
+             "--integration-hr-growth --summary"
              "--integration-lt --shard {k}/{ltShards} --summary" ]
       // Every browser-bearing tier carries the rendering reason, not the measuring one: the class
       // is what failed (four different cases across four runs), so the class is what is declared.

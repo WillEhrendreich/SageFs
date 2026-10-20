@@ -366,8 +366,45 @@ let prepareHotReloadFixture (repoRoot: string) (runtime: HotReloadStateHarness.H
   prebuildCopy dest "WebAppFixture.fsproj"
   dest
 
-/// Run the HR-DASH browser journeys end to end, owning the daemon lifecycle.
-let runHotReloadBrowserJourneys (cliArgs: string array) : int =
+/// What the HR runner's daemon and fixture are set up for. Both kinds boot the same way (an isolated daemon, a
+/// HotReload session on a temp copy of the WebAppFixture, the app started by its init profile); they differ in the
+/// copies they boot and the cases they run.
+[<RequireQualifiedAccess>]
+type HotReloadRunnerKind =
+  /// `--integration-hr`: the inlined-callee and dashboard journeys, then the patched latency series, on a net10
+  /// copy and a net11 copy.
+  | Journeys
+  /// `--integration-hr-growth`: the patched-save growth series alone, on the net11 copy alone. A session the
+  /// journeys had used would already be old, and the series is the measurement of what age does.
+  | GrowthCurve
+
+module HotReloadRunnerKind =
+  let entryPoint (kind: HotReloadRunnerKind) : string =
+    match kind with
+    | HotReloadRunnerKind.Journeys -> "--integration-hr"
+    | HotReloadRunnerKind.GrowthCurve -> SageFs.Tests.TestInfrastructure.Integration.hrGrowthEntryPoint
+
+  /// The fixture copies a kind boots, in the order it boots them. The net10 session goes first and the primary
+  /// one last: creating a session makes it the active one, and the dashboard journeys read the active session's
+  /// panel, so the net11 fixture they edit has to be the last created.
+  let runtimes (kind: HotReloadRunnerKind) : HotReloadStateHarness.HostRuntime list =
+    match kind with
+    | HotReloadRunnerKind.Journeys -> [ HotReloadStateHarness.HostRuntime.Net10; HotReloadStateHarness.HostRuntime.Net11 ]
+    | HotReloadRunnerKind.GrowthCurve -> [ HotReloadStateHarness.HostRuntime.Net11 ]
+
+/// A fixture copy that has a session: the runtime it runs on, where its sources are, and the url its app serves.
+type BootedFixture =
+  { Runtime: HotReloadStateHarness.HostRuntime
+    Dir: string
+    AppUrl: string }
+
+/// Why a fixture copy has no session. `bootHotReloadSession` has already said why on stderr.
+[<RequireQualifiedAccess>]
+type FixtureBootRefusal =
+  | DidNotBoot of dir: string
+
+/// Run the HR runner of `kind` end to end, owning the daemon lifecycle.
+let runHotReloadRunner (kind: HotReloadRunnerKind) (cliArgs: string array) : int =
   let repoRoot = RepoPaths.repoPathFull [||]
 
   let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
@@ -377,8 +414,9 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
 
   // The primary copy runs on net11 and carries the dashboard journeys. The net10
   // copy exists for the journeys that have to hold on both runtimes.
-  let fixtureDir = prepareHotReloadFixture repoRoot HotReloadStateHarness.HostRuntime.Net11
-  let net10FixtureDir = prepareHotReloadFixture repoRoot HotReloadStateHarness.HostRuntime.Net10
+  let fixtureDirs =
+    HotReloadRunnerKind.runtimes kind
+    |> List.map (fun runtime -> runtime, prepareHotReloadFixture repoRoot runtime)
 
   let psi = Diagnostics.ProcessStartInfo()
   psi.FileName <- exe
@@ -455,11 +493,11 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
 
   let exitWith (code: int) =
     stopDaemon ()
-    // A passing run takes its dirs away. A failing one keeps all three: the daemon's data dir holds the worker log, and the
+    // A passing run takes its dirs away. A failing one keeps them all: the daemon's data dir holds the worker log, and the
     // fixture copies hold the files the failing save was made in. That is the evidence for why it failed.
     let runEnd = SageFs.Tests.RunnerDirs.runEndOfExitCode code
-    SageFs.Tests.RunnerDirs.finish fixtureDir runEnd
-    SageFs.Tests.RunnerDirs.finish net10FixtureDir runEnd
+    for _, dir in fixtureDirs do
+      SageFs.Tests.RunnerDirs.finish dir runEnd
     SageFs.Tests.RunnerDirs.finish dataDir runEnd
     code
 
@@ -545,42 +583,62 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
       dumpDaemonLogs ()
       exitWith 1
     else
-      // The net10 session first and the primary one last: creating a session
-      // makes it the active one, and the dashboard journeys read the active
-      // session's panel, so the net11 fixture they edit has to be the last created.
-      match bootHotReloadSession net10FixtureDir with
-      | None -> exitWith 1
-      | Some net10AppUrl ->
-      match bootHotReloadSession fixtureDir with
-      | None -> exitWith 1
-      | Some appUrl ->
+      // Boot in the order `HotReloadRunnerKind.runtimes` names; the first copy that does not boot ends the run.
+      let rec bootAll (remaining: (HotReloadStateHarness.HostRuntime * string) list) (booted: BootedFixture list) : Result<BootedFixture list, FixtureBootRefusal> =
+        match remaining with
+        | [] -> Ok (List.rev booted)
+        | (runtime, dir) :: rest ->
+          match bootHotReloadSession dir with
+          | None -> Result.Error (FixtureBootRefusal.DidNotBoot dir)
+          | Some appUrl -> bootAll rest ({ Runtime = runtime; Dir = dir; AppUrl = appUrl } :: booted)
+      match bootAll fixtureDirs [] with
+      | Result.Error (FixtureBootRefusal.DidNotBoot _) -> exitWith 1
+      | Ok booted ->
         Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
-        Environment.SetEnvironmentVariable("SAGEFS_HR_APP_URL", appUrl)
-        Environment.SetEnvironmentVariable("SAGEFS_HR_FIXTURE_DIR", fixtureDir)
         Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.mcpPort, string mcpPort)
-        Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.net10AppUrl, net10AppUrl)
-        Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.net10FixtureDir, net10FixtureDir)
+        for fixture in booted do
+          match fixture.Runtime with
+          | HotReloadStateHarness.HostRuntime.Net11 ->
+            Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.net11AppUrl, fixture.AppUrl)
+            Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.net11FixtureDir, fixture.Dir)
+          | HotReloadStateHarness.HostRuntime.Net10 ->
+            Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.net10AppUrl, fixture.AppUrl)
+            Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.net10FixtureDir, fixture.Dir)
+        let entryPoint = HotReloadRunnerKind.entryPoint kind
         let hrArgv =
           cliArgs
-          |> Array.filter (fun a -> a <> "--integration-hr")
+          |> Array.filter (fun a -> a <> entryPoint)
         // The inlined-callee journeys go first: the dashboard journeys end with
         // restore saves on the net11 session, and an outcome from one of those
         // arriving during a journey would be read as that journey's save. The latency measurement goes
         // last, from a session the journeys have left at rest, and it saves Greeting.fs and CalledCallee.fs
         // of the net11 copy, so nothing may run beside it. The two run_app series are not here: each starts the
         // daemon it measures and has a tier of its own (`--integration-hr-restart`, `--integration-hr-delta`).
+        // The growth kind runs its one case alone, on the net11 copy: nothing else may have aged the session.
         let hrJourneys =
-          testList
-            "hot-reload journeys"
-            [ HotReloadInlinedCalleeJourneyTests.tests
-              HotReloadBrowserTests.tests
-              testSequenced (testList "Hot-reload latency" [ HotReloadLatencyTests.patchedLatencyCase ]) ]
+          match kind with
+          | HotReloadRunnerKind.Journeys ->
+            testList
+              "hot-reload journeys"
+              [ HotReloadInlinedCalleeJourneyTests.tests
+                HotReloadBrowserTests.tests
+                testSequenced (testList "Hot-reload latency" [ HotReloadLatencyTests.patchedLatencyCase ]) ]
+          | HotReloadRunnerKind.GrowthCurve ->
+            testSequenced (testList "Hot-reload patched-save growth" [ HotReloadLatencyTests.growthCase ])
         let result =
-          SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-hr" hrArgv hrJourneys
+          SageFs.Tests.TestInfrastructure.TrustSignal.run entryPoint hrArgv hrJourneys
         exitWith result
   with ex ->
     eprintfn "HR runner: %s" (ex.ToString())
     exitWith 1
+
+/// Run the HR-DASH browser journeys end to end, owning the daemon lifecycle.
+let runHotReloadBrowserJourneys (cliArgs: string array) : int =
+  runHotReloadRunner HotReloadRunnerKind.Journeys cliArgs
+
+/// Run the patched-save growth series end to end, on a fresh session of its own.
+let runHotReloadGrowthSeries (cliArgs: string array) : int =
+  runHotReloadRunner HotReloadRunnerKind.GrowthCurve cliArgs
 
 // ============================================================================
 // LT-DASH: live-testing browser journeys (real enable -> discover -> edit ->

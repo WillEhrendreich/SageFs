@@ -395,6 +395,15 @@ let main argv =
   | true -> runSeriesTier SageFs.Tests.HotReloadLatency.Series.DeltaSaveToServed
   | false ->
 
+  // The patched-save growth series (PERF-1): 150 patched saves on one fresh session, read as three windows. It needs
+  // the HR runner's daemon and net11 fixture but none of its journeys, so it boots them itself and runs alone.
+  match argv |> Array.contains SageFs.Tests.TestInfrastructure.Integration.hrGrowthEntryPoint with
+  | true ->
+    let result = SageFs.Tests.DashboardBrowserRunner.runHotReloadGrowthSeries argv
+    Environment.Exit result
+    result
+  | false ->
+
   // Run the [Integration] live-testing dashboard browser journeys
   // (Playwright.NET) against a session on the FromCSharp sample: enable live
   // testing through the panel -> 11 tests discovered/passing -> edit Hello.fs
