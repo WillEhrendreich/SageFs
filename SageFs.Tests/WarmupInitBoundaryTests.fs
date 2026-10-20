@@ -5,7 +5,10 @@ open System.IO
 open System.Threading
 open Expecto
 open Expecto.Flip
+open FsCheck
 open FSharp.Compiler.Interactive.Shell
+open Mono.Cecil
+open Mono.Cecil.Cil
 open SageFs
 open SageFs.FsiSession
 
@@ -219,4 +222,99 @@ let startupProfileLocationTests =
           | Some dir when dir <> sessionDir -> dirs = [ dir; sessionDir ]
           | Some dir -> dirs = [ dir ]
           | None -> dirs = [ sessionDir ])
+  ]
+
+/// A reference assembly, like a NuGet package's `ref/` folder holds: FSI compiles against it, and the runtime refuses
+/// to load it. `RefOnlyFixture.Marker.Answer()` returns 42 in a file that could run.
+let private writeReferenceAssembly (path: string) =
+  use assembly =
+    AssemblyDefinition.CreateAssembly(AssemblyNameDefinition("RefOnlyFixture", System.Version(1, 0, 0, 0)), "RefOnlyFixture", ModuleKind.Dll)
+  let main = assembly.MainModule
+  let marker =
+    TypeDefinition(
+      "RefOnlyFixture", "Marker",
+      TypeAttributes.Public ||| TypeAttributes.Abstract ||| TypeAttributes.Sealed ||| TypeAttributes.Class,
+      main.ImportReference(typeof<obj>))
+  let answer = MethodDefinition("Answer", MethodAttributes.Public ||| MethodAttributes.Static, main.ImportReference(typeof<int>))
+  let il = answer.Body.GetILProcessor()
+  il.Append(il.Create(OpCodes.Ldc_I4, 42))
+  il.Append(il.Create(OpCodes.Ret))
+  marker.Methods.Add answer
+  main.Types.Add marker
+  let referenceAssembly = typeof<System.Runtime.CompilerServices.ReferenceAssemblyAttribute>.GetConstructor(Type.EmptyTypes)
+  assembly.CustomAttributes.Add(CustomAttribute(main.ImportReference referenceAssembly))
+  assembly.Write path
+
+/// Run `contents` as the working directory's init.fsx in a real session, the way a session's warmup does.
+let private applyInSession (site: string) (contents: string) =
+  let path = Path.Combine(site, ".SageFs", "init.fsx")
+  Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
+  File.WriteAllText(path, contents)
+  let session = newInProcess ()
+  try
+    let eval code = evalOrThrow session code CancellationToken.None
+    StartupProfile.applyIfPresent site [ site ] eval ignore
+  finally
+    session.Dispose()
+
+let private diagnostic severity errorNumber (startLine, startColumn, endLine, endColumn) message : Features.Diagnostics.Diagnostic =
+  { Message = message
+    Subcategory = ""
+    Range = { StartLine = startLine; StartColumn = startColumn; EndLine = endLine; EndColumn = endColumn }
+    Severity = severity
+    ErrorNumber = errorNumber }
+
+let private fsiWrapper = "Operation could not be completed due to earlier error"
+
+[<Tests>]
+let startupProfileFailureTests =
+  testList "What a failed startup profile says" [
+    testCase "WHY — an init.fsx that runs to the end still fails when FSI could not load an assembly it uses, and the warning names the assembly" <| fun _ ->
+      // FSI records the failed load as an error even though the script caught the exception, so the profile fails
+      // and its bindings are lost. FSI's own message names no cause, so the warning has to carry the diagnostic.
+      withTempDir <| fun site ->
+        let fixture = Path.Combine(site, "RefOnlyFixture.dll")
+        writeReferenceAssembly fixture
+        let contents =
+          String.concat "\n" [
+            sprintf "#r @\"%s\"" fixture
+            "[<System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)>]"
+            "let useFixture () = RefOnlyFixture.Marker.Answer()"
+            "let caught = try useFixture () with _ -> -1" ]
+        match applyInSession site contents with
+        | StartupProfile.Failed(_, message) ->
+          message |> Expect.stringContains "the warning names the FSI error" "FS0193 — "
+          message |> Expect.stringContains "the warning says which assembly" "RefOnlyFixture"
+          message |> Expect.stringContains "the warning says why it could not load" "Reference assemblies cannot be loaded for execution"
+          message |> Expect.stringContains "FSI's own words are kept after the cause" fsiWrapper
+        | other -> failtestf "expected the profile to fail, got %A" other
+
+    testCase "WHY — a typo in init.fsx names the identifier and the line it is on, not only that there was an error" <| fun _ ->
+      withTempDir <| fun site ->
+        match applyInSession site "let ok = 1\nlet x = undefinedThing" with
+        | StartupProfile.Failed(_, message) ->
+          message |> Expect.stringContains "the warning names the error and its line and column" "FS0039 2:8 — "
+          message |> Expect.stringContains "the warning names the identifier" "undefinedThing"
+        | other -> failtestf "expected the profile to fail, got %A" other
+
+    testCase "a failure with no error diagnostic is FSI's message alone, and warnings do not count" <| fun _ ->
+      let warning = diagnostic Features.Diagnostics.DiagnosticSeverity.Warning 64 (3, 4, 3, 9) "a warning"
+      failureMessage "the host went away" [| warning |]
+      |> Expect.equal "nothing is added" "the host went away"
+
+    testProperty "every distinct error is in the message once, before FSI's own words, and only an empty 1:0 range is shown without a location" <| fun (errors: (PositiveInt * NonNegativeInt * NonEmptyString) list) ->
+      let diagnostics =
+        errors
+        |> List.map (fun (PositiveInt line, NonNegativeInt column, NonEmptyString message) ->
+          diagnostic Features.Diagnostics.DiagnosticSeverity.Blocking 39 (line, column, line, column) message)
+        |> List.toArray
+      let described (d: Features.Diagnostics.Diagnostic) =
+        match d.Range.StartLine, d.Range.StartColumn with
+        | 1, 0 -> sprintf "FS0039 — %s" d.Message
+        | line, column -> sprintf "FS0039 %d:%d — %s" line column d.Message
+      let expected =
+        match diagnostics |> Array.map described |> Array.distinct with
+        | [||] -> fsiWrapper
+        | lines -> sprintf "%s (FSI: %s)" (String.concat "; " lines) fsiWrapper
+      failureMessage fsiWrapper (Array.append diagnostics diagnostics) = expected
   ]
