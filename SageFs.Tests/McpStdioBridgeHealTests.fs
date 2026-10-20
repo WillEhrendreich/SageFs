@@ -212,6 +212,52 @@ let tests =
             })
     }
 
+    testTask "a request whose arguments carry a literal newline is ANSWERED, because the client is waiting for that id" {
+      // JSON forbids a literal newline inside a string, and a client that writes one anyway (a tool
+      // call whose argument string ends in a newline) sends a message the bridge cannot parse. The
+      // bridge reads stdio line by line, so what it sees is the FIRST line of that message — which
+      // still carries the id and the method, just not as valid JSON. Before this the bridge could
+      // only log it to stderr, the client waited for an answer that never came, and the caller read
+      // the silence as "no answer" (issue #164).
+      let sent = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"send_fsharp_code\",\"arguments\":{\"code\":\"let x = 1\n\"}}}"
+      let whatTheBridgeReads = sent.Split('\n').[0]
+
+      // 1. The message keeps its identity: the id is dug out of the text that will not parse.
+      let parsed = SageFs.McpBridge.parseRpcMessage whatTheBridgeReads
+      match parsed with
+      | RpcMessage.Request(RpcId.N 7L, "tools/call", _) -> ()
+      | other -> failtestf "a message that does not parse must keep its id and method, or the client is never answered: %A" other
+
+      // 2. The daemon is asked about it, and its refusal is what the client hears.
+      do!
+        withStubDaemon
+          (fun _ _ -> 400, """{"error":{"code":-32000,"message":"Bad Request: the request body could not be read"}}""")
+          (fun daemon ->
+            task {
+              use stdoutStream = new MemoryStream()
+              let stdout = SageFs.Server.McpStdioBridge.StdoutWriter(stdoutStream)
+              let captured = ResizeArray<string>()
+              use client = new HttpClient(Timeout = TestTimeouts.daemonRequest)
+
+              let! result =
+                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout captured.Add (Some "sid-1") None parsed
+
+              match result with
+              | Error(SageFs.Server.McpStdioBridge.ForwardError.Rejected reason) ->
+                reason
+                |> Expect.stringContains "the daemon's own words reach the caller" "could not be read"
+              | other -> failtestf "a 400 must be a Rejected, not a heal: %A" other
+
+              // 3. And the client gets an answer, against the request's own id.
+              SageFs.Server.McpStdioBridge.writeRejection stdout parsed "the daemon refused it"
+              let written = Encoding.UTF8.GetString(stdoutStream.ToArray())
+              written
+              |> Expect.stringContains "the client is told which id is answered" "\"id\":7"
+              written
+              |> Expect.stringContains "and the answer is a JSON-RPC error, not a result" "\"error\""
+            })
+    }
+
     testTask "only the exact unknown-session 404 is healed: a 404 with any other body still reaches the client" {
       do!
         withStubDaemon

@@ -1,6 +1,7 @@
 namespace SageFs
 
 open System.Text.Json
+open System.Text.RegularExpressions
 
 /// Pure decision core for the `sagefs mcp` stdio<->HTTP bridge — see
 /// SageFs/McpStdioBridge.fs for the IO edges (probing the daemon, spawning
@@ -42,6 +43,26 @@ module McpBridge =
     | RpcMessage.Response(_, raw)
     | RpcMessage.Unparseable(raw, _) -> raw
 
+  /// The id and the method of a line that does not parse, recovered leniently.
+  ///
+  /// JSON forbids a literal newline inside a string, and a client that writes one anyway (a
+  /// tool call whose argument string ends in a newline, say) sends a message the bridge cannot
+  /// parse. The client is still waiting for THAT request's id, and without it the bridge can only
+  /// log to stderr, and the call hangs for good (issue #164). So the id is dug out of the raw text
+  /// and the request keeps its identity: the daemon is asked about it, the daemon's own refusal is
+  /// the answer the client needs, and it names what it choked on.
+  let private recoverId (raw: string) : RpcId option =
+    let number = Regex("\"id\"\\s*:\\s*(-?\\d+)").Match(raw)
+    let text = Regex("\"id\"\\s*:\\s*\"([^\"]*)\"").Match(raw)
+    if number.Success then Some(RpcId.N(int64 number.Groups.[1].Value))
+    elif text.Success then Some(RpcId.S text.Groups.[1].Value)
+    else None
+
+  /// The method of a line that does not parse, recovered leniently (see `recoverId`).
+  let private recoverMethod (raw: string) : string option =
+    let m = Regex("\"method\"\\s*:\\s*\"([^\"]*)\"").Match(raw)
+    if m.Success then Some m.Groups.[1].Value else None
+
   /// Parse one line of stdio JSON-RPC. Pure and total: a parse failure
   /// becomes `Unparseable`, never an exception the caller has to guard.
   let parseRpcMessage (raw: string) : RpcMessage =
@@ -70,7 +91,13 @@ module McpBridge =
           "no 'id' and no 'method' — not a JSON-RPC request, notification, or response"
         )
     with ex ->
-      RpcMessage.Unparseable(raw, ex.Message)
+      // The line did not parse. It may still be a request the client is waiting for: a message
+      // whose arguments carry a LITERAL newline is exactly this. The id is recovered so the
+      // bridge can answer THAT request, and the message is forwarded so the daemon's own refusal
+      // (which names what it choked on) is what the client hears.
+      match recoverId raw, recoverMethod raw with
+      | Some id, Some m -> RpcMessage.Request(id, m, raw)
+      | _ -> RpcMessage.Unparseable(raw, ex.Message)
 
   /// The `params` object an `initialize` declared, verbatim.
   ///
