@@ -128,8 +128,12 @@ small `WebAppFixture`. The two `run_app` rows each start a daemon of their own, 
 tiers `--integration-hr-restart` and `--integration-hr-delta`, and `--integration-hr` keeps the journeys and the patched
 rows; what is measured and how many saves it takes did not change. The table below says nothing about a session older
 than 22 saves. A tier for that, `--integration-hr-growth`, takes 150 patched saves on one fresh session and fails when
-the median of the last 15 is more than twice the median of the first 15 (`growthBoundRatio` in `LatencyStats.fs`); it
-has not produced a curve to quote yet. The machine was an AMD Ryzen 7 5800XT, 16 threads,
+the median of the last 15 is more than twice the median of the first 15 (`growthBoundRatio` in `LatencyStats.fs`).
+It has produced a curve now, twice, and the curve is flat: the last window's median was 0.96x and then 0.85x the
+first window's, for both the save-to-served and the save-to-confirmed clock, so the last saves were FASTER than the
+first ones. Every stage of a save says the same thing (compiling 206 to 204 ms, applied 352 to 334 ms, served 315 to
+301 ms, confirmed 355 to 336 ms, first run; 205 to 203, 344 to 297, 311 to 264 and 349 to 297 on the second). The
+machine was an AMD Ryzen 7 5800XT, 16 threads,
 Linux, .NET 11.0.0-rc.1, and the tier ran 8 times in a row on 2026-10-01 with
 other jobs running on it. Each cell is the range of the 8 runs.
 
