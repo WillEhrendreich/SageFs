@@ -319,6 +319,7 @@
         <Compile Include="TestTreeSitterTests.fs" />
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="ProjectLoadingTests.fs" />
+        <Compile Include="PackageRuntimeAssetsTests.fs" />
         <Compile Include="BuildPreflightTests.fs" />
         <Compile Include="BuildPreflightBoundaryTests.fs" />
         <Compile Include="ProjectLoadProgressTests.fs" />
