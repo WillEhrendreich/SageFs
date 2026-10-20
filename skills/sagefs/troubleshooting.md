@@ -63,6 +63,13 @@ implying the command closes it.
 
 ## Things that will bite you
 
+- **A tool call through the `sagefs mcp` bridge gets NO answer at all, and the ones that hang
+  are the ones whose argument string ends in a newline.** JSON forbids a literal newline inside a
+  string, and a client that writes one anyway sends a message the bridge cannot parse. Before
+  0.6.916 the bridge could only log that to stderr, so the call hung for good and the only thing
+  the caller saw was silence. Since 0.6.916 the bridge digs the request id out of the text and
+  answers it with the daemon's own refusal, which names what it choked on. If you are on an older
+  build, send the newline escaped (`\n`) or the code from a file.
 - **A cohort tool (`acquire_claim`, `release_claim`, `request_landing`) says you have not
   joined, or refuses you after a successful `join_cohort`.** Cohorts are per repository.
   Pass the SAME `working_directory` (the repository you are working in) to `join_cohort`
