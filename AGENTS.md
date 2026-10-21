@@ -151,6 +151,19 @@ Working on SageFs itself has two extra catches:
   exact error, work in a session that doesn't load Core if you can (pure files
   can be `#load`ed into any session), and only then fall back to `dotnet` for
   that step. Never silently.
+- **A project's own `bin` can hold a STALE `SageFs.Core.dll`, and the symptom
+  hides.** A project that references SageFs.Core carries a copy of it in
+  `bin/<config>/<tfm>/`, and MSBuild only refreshes that copy when it thinks
+  it must. Change SageFs.Core, build the daemon, and the project's copy can
+  still be the old build: same version, different code. The daemon adopted it
+  (the adoption check compared the version, which matches) and the worker died
+  with a `MissingMethodException` for a method the daemon's own code calls. The
+  session then never reached Ready, and the only trace was a stack trace in a
+  worker log: a 120-second timeout with nothing to read. The daemon now
+  refuses that candidate with a message that says which file to rebuild, and it
+  refuses it in seconds. If a session on this repo hangs in warmup, check the
+  timestamp on the project's `bin/**/SageFs.Core.dll` against the tree's before
+  you read anything else.
 
 ## Editing: exact calls, and never a bulk rewrite
 

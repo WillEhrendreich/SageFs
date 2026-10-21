@@ -70,30 +70,97 @@ let tests =
         HostCoreAdoption.findCandidates [ projectDir ]
         |> Expect.equal "only the real build, never host/ or ref/ copies" [ real ])
 
-    testCase "decide adopts a candidate whose version equals the daemon's own" <| fun _ ->
+    let build (version: System.Version) (buildId: string) (offsetSeconds: float) : HostCoreAdoption.BuildFacts =
+      HostCoreAdoption.BuildFacts.Known(
+        version,
+        buildId,
+        DateTime(2026, 10, 20, 12, 0, 0, DateTimeKind.Utc).AddSeconds offsetSeconds)
+
+    testCase "decide adopts a candidate that is the same build, whatever the clock says" <| fun _ ->
       let version = System.Version(1, 2, 3)
 
-      HostCoreAdoption.decide version "/tmp/proj/bin/SageFs.Core.dll" version
+      HostCoreAdoption.decide (build version "build-a" 0.) "/tmp/proj/bin/SageFs.Core.dll" (build version "build-a" 0.)
       |> Expect.equal
-        "same version is the dogfooding case: adopt it"
+        "the same bytes are the same build: adopt it"
+        (HostCoreAdoption.Adoption.Adopted "/tmp/proj/bin/SageFs.Core.dll")
+
+    testCase "decide adopts a candidate that is the same build even when the project's copy is older on disk" <| fun _ ->
+      // The common case: a project that references the Core carries a copy of the daemon's own
+      // build, and the copy is as old as the last time the project was built.
+      let version = System.Version(1, 2, 3)
+
+      HostCoreAdoption.decide (build version "build-a" 0.) "/tmp/proj/bin/SageFs.Core.dll" (build version "build-a" -3600.)
+      |> Expect.equal
+        "a copy of the daemon's own build is adopted whatever the clock says"
+        (HostCoreAdoption.Adoption.Adopted "/tmp/proj/bin/SageFs.Core.dll")
+
+    testCase "decide adopts a candidate that is a NEWER build, because that is the rebuild the user just made" <| fun _ ->
+      let version = System.Version(1, 2, 3)
+
+      HostCoreAdoption.decide (build version "build-a" 0.) "/tmp/proj/bin/SageFs.Core.dll" (build version "build-b" 1.)
+      |> Expect.equal
+        "the dogfooding case: a newer build is adopted"
         (HostCoreAdoption.Adoption.Adopted "/tmp/proj/bin/SageFs.Core.dll")
 
     testCase "decide refuses a candidate whose version differs from the daemon's own" <| fun _ ->
       let hostVersion = System.Version(1, 2, 3)
       let candidateVersion = System.Version(1, 2, 4)
 
-      match HostCoreAdoption.decide hostVersion "/tmp/proj/bin/SageFs.Core.dll" candidateVersion with
+      match HostCoreAdoption.decide (build hostVersion "build-a" 0.) "/tmp/proj/bin/SageFs.Core.dll" (build candidateVersion "build-b" 0.) with
       | HostCoreAdoption.Adoption.Refused reason ->
         reason |> Expect.stringContains "the reason names the daemon's version" "1.2.3"
         reason |> Expect.stringContains "the reason names the candidate's version" "1.2.4"
         reason |> Expect.stringContains "the reason says what to do about it" "rebuild"
       | other -> failtestf "expected Refused, got %A" other
 
+    testCase "decide refuses a candidate whose version matches but whose BUILD is older, because that is the stale copy the version cannot catch" <| fun _ ->
+      let version = System.Version(1, 2, 3)
+
+      match HostCoreAdoption.decide (build version "build-new" 0.) "/tmp/proj/bin/SageFs.Core.dll" (build version "build-old" -1.) with
+      | HostCoreAdoption.Adoption.Refused reason ->
+        reason |> Expect.stringContains "the reason says the versions match" "same version"
+        reason |> Expect.stringContains "the reason says the build is older" "OLDER build"
+        reason |> Expect.stringContains "the reason says what to do about it" "Rebuild the project"
+      | other -> failtestf "expected Refused, got %A" other
+
+    testCase "the build id is the identity of the bytes, so a copy matches and a different build does not" <| fun _ ->
+      withTempDir (fun dir ->
+        let a = Path.Combine(dir, "a.dll")
+        let b = Path.Combine(dir, "b.dll")
+        File.WriteAllBytes(a, [| 1uy; 2uy; 3uy |])
+        File.Copy(a, b, true)
+        let c = Path.Combine(dir, "c.dll")
+        File.WriteAllBytes(c, [| 1uy; 2uy; 4uy |])
+        HostCoreAdoption.buildIdOf a
+        |> Expect.equal "a copy is the same build" (HostCoreAdoption.buildIdOf b)
+        HostCoreAdoption.buildIdOf a
+        |> Expect.notEqual "different bytes are a different build" (HostCoreAdoption.buildIdOf c))
+
+    testCase "a build that cannot be read is refused with the reason, not adopted" <| fun _ ->
+      let version = System.Version(1, 2, 3)
+      let missing = HostCoreAdoption.BuildFacts.Unreadable "the file is not there"
+
+      match HostCoreAdoption.decide (build version "build-a" 0.) "/tmp/proj/bin/SageFs.Core.dll" missing with
+      | HostCoreAdoption.Adoption.Refused reason ->
+        reason |> Expect.stringContains "the reason says the file could not be read" "could not be read"
+        reason |> Expect.stringContains "the reason carries the underlying why" "the file is not there"
+      | other -> failtestf "expected Refused, got %A" other
+
+    testCase "a build that cannot be read is said so, and the file it names is named too" <| fun _ ->
+      let version = System.Version(1, 2, 3)
+      let missing = HostCoreAdoption.BuildFacts.Unreadable "the file is not there"
+
+      match HostCoreAdoption.decide missing "/tmp/proj/bin/SageFs.Core.dll" (build version "build-a" 0.) with
+      | HostCoreAdoption.Adoption.Refused reason ->
+        reason |> Expect.stringContains "the reason says it is the daemon's own copy that could not be read" "running daemon's own"
+        reason |> Expect.stringContains "the reason carries the underlying why" "the file is not there"
+      | other -> failtestf "expected Refused, got %A" other
+
     testCase "decide's refusal names the absolute build it measured, so a build resolved somewhere else is visible" <| fun _ ->
       let hostVersion = System.Version(1, 2, 3)
       let candidate = Path.Combine(Path.GetTempPath(), "some-other-checkout", "bin", "SageFs.Core.dll")
 
-      match HostCoreAdoption.decide hostVersion candidate (System.Version(1, 2, 4)) with
+      match HostCoreAdoption.decide (build hostVersion "build-a" 0.) candidate (build (System.Version(1, 2, 4)) "build-b" 0.) with
       | HostCoreAdoption.Adoption.Refused reason ->
         reason |> Expect.stringContains "the reason names the exact dll that was compared" candidate
       | other -> failtestf "expected Refused, got %A" other
