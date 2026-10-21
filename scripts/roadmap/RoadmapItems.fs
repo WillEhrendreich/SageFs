@@ -127,14 +127,13 @@ let items : Item list =
       "The dashboard has the knob, and now both editors do too. Neovim scrubs with Alt-k and Alt-j: each press runs the same inspect-locate-bump-set flow `:SageFsNudge` runs, so the rules and the undo are the daemon's, and a count multiplies the steps. VS Code scrubs by dragging across a number with the multi-cursor modifier held, because its API never reports that a modifier is down; what it reports is the second cursor an Alt+click adds. Both write through `nudge_value`, so the journal, the seen hash, the refusal and the type-check rollback all apply."
 
     // Cross-repo landmarks DO resolve: a landmark may name `../sagefs.nvim/...`, and `codeUrl` in
-    // Roadmap.fs renders the link against that project's own repo rather than this one. So living in
-    // the plugin is no longer a reason to stay open, and the item below is no longer open for that
-    // reason. It stays open for the one its summary still names: a full attach inside our own tests,
-    // marked on that rather than on a claim.
+    // Roadmap.fs renders the link against that project's own repo rather than this one. So living in the
+    // plugin is no longer a reason to stay open, and the item below is no longer open for that
+    // reason either. The full attach inside our own tests is now in the tree, so the item is built.
     item "neovim-debug-a-failing-test" "Debug a failing test from Neovim" Editors Next
-      NoLandmarkYet
+      (landmark "SageFs.Tests/DebugAttachJourneyTests.fs" "journeyTests")
       [ "docs/LIVE_TESTING_GUIDE.md" ]
-      "The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim side is done too, in the sagefs.nvim repo: `:SageFsDebugTest` puts a failing test on the board and wires nvim-dap to those routes, on `<leader>rtg` and `D` on a panel row. The release goes out on `configurationDone`, when the adapter has really attached, so a slow attach is the daemon's to wait out rather than a grace period on this side. Still open is a full attach inside our own tests."
+      "The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim side is done too, in the sagefs.nvim repo: `:SageFsDebugTest` puts a failing test on the board and wires nvim-dap to those routes, on `<leader>rtg` and `D` on a panel row. The release goes out on `configurationDone`, when the adapter has really attached, so a slow attach is the daemon's to wait out rather than a grace period on this side. And the attach is now proven in our own tests: a real debugger attaches to the process the daemon names, lists that process's threads, and the held test runs when the debugger lets it go."
 
     item "neovim-catches-up" "The Neovim plugin catches up with the daemon" Editors Next
       (landmark "../sagefs.nvim/lua/sagefs/dashboard/state.lua" "handlers.eval_heartbeat")
@@ -144,7 +143,7 @@ let items : Item list =
     item "debug-failing-tests-in-vscode" "Debug failing tests properly in VS Code" LiveTesting Next
       NoLandmarkYet
       [ "docs/LIVE_TESTING_GUIDE.md"; "docs/how-live-testing-works.md" ]
-      "Debugging a failing test from the VS Code lens works for one test at a time. Still open is a full attach end to end in our own tests, and debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out."
+      "Debugging a failing test from the VS Code lens works for one test at a time. The attach is now proven in our own tests, the same case the Neovim item leans on. Still open is debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out."
 
     item "live-requests-not-dropped" "No live request dropped during a swap" LiveTesting Next
       (landmark "SageFs/Mcp.fs" "requireToolFor")
