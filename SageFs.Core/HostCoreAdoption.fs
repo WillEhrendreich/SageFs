@@ -256,10 +256,11 @@ module HostCoreAdoption =
     | best :: _ ->
       try
         let candidateVersion = AssemblyName.GetAssemblyName(best).Version
-        // The daemon's own copy of the Core, from the same host directory the candidate would
-        // be substituted into: the two are comparable because they are the same file when the
-        // project simply references the Core.
-        let hostCorePath = Path.Combine(sharedDaemonBaseDir, "host", assemblyName + ".dll")
+        // The daemon's OWN copy of the Core, the one it loaded and the one its own code was
+        // built against. The host directory holds a second copy, taken when the tool was
+        // installed, and comparing against that one would date every project by the install
+        // rather than by the build.
+        let hostCorePath = Path.Combine(sharedDaemonBaseDir, assemblyName + ".dll")
         let host = factsOf hostCorePath hostVersion
         let candidate = factsOf best candidateVersion
         match decide host best candidate with
