@@ -27,7 +27,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 ### Dashboard
 
 - [ ] **More settings editable from the dashboard.** The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime. ([configuration.md](configuration.md))
-- [ ] **Dashboard panels that follow your context.** Live bindings become a real pane in REPL mode, and cohort shows only while one is running. A pane hidden for being irrelevant says why and can be pinned open.
+- [ ] **Dashboard panels that follow your context.** A panel that is not relevant right now says why, in one line where the panel would have been: hot reload, live testing, cohort and friction each leave the reason behind, so a user can tell the dashboard having nothing to say from the dashboard hiding something. The cohort panel shows only while a cohort is running. The live bindings fold away and open again with one click, and the pin opens the pane when there are no bindings yet. What is not built is the live bindings becoming a real pane in REPL mode, and a pane moving between regions.
 
 ## Later (18)
 
