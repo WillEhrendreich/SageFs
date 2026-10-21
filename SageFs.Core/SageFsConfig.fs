@@ -134,10 +134,6 @@ let IsSupervised : bool =
 let RestartCount : int =
   envInt "SAGEFS_RESTART_COUNT" 0
 
-/// Whether hot reload (assembly patching) is enabled for this worker session.
-let HotReloadEnabled : bool =
-  envBool "SAGEFS_HOT_RELOAD" false
-
 /// Whether browser dev-reload (live page refresh) is enabled.
 let DevReloadEnabled : bool =
   envBool "SAGEFS_DEVRELOAD" false
