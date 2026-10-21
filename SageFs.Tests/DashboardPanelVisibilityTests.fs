@@ -122,6 +122,13 @@ let dashboardPanelVisibilityTests =
           | PanelVisibility.Shown -> false)
         |> Expect.isTrue "a REPL session hides all four, each with a reason"
 
+      testCase "a panel hidden because no session is selected says so, because a session can be open and not selected" <| fun _ ->
+        let noSession = { replFacts with Viewed = ViewedSession.NoSession }
+        match PanelVisibility.decide noSession OptionalPanel.HotReload with
+        | PanelVisibility.Hidden reason ->
+          reason |> Expect.stringContains "the reason says the session is not selected" "no session is selected"
+        | PanelVisibility.Shown -> failtest "a panel with no session selected is not shown"
+
       testCase "?panels=friction opts in, anything else doesn't" <| fun _ ->
         [ "friction"; "FRICTION"; "cohort,friction"; ""; "cohort"; null ]
         |> List.map PanelFacts.frictionOptInOfQuery

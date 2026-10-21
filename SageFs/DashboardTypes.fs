@@ -1643,7 +1643,7 @@ module PanelVisibility =
     match panel with
     | OptionalPanel.HotReload ->
       match facts.Viewed with
-      | ViewedSession.NoSession -> PanelVisibility.Hidden "Hot reload: no session is open"
+      | ViewedSession.NoSession -> PanelVisibility.Hidden "Hot reload: no session is selected"
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.HotReload _, _) -> PanelVisibility.Shown
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.Interactive, _) ->
         PanelVisibility.Hidden "Hot reload: this session is in REPL mode"
@@ -1651,7 +1651,7 @@ module PanelVisibility =
         PanelVisibility.Hidden "Hot reload: this session is in Live Testing mode"
     | OptionalPanel.LiveTesting ->
       match facts.Viewed with
-      | ViewedSession.NoSession -> PanelVisibility.Hidden "Live testing: no session is open"
+      | ViewedSession.NoSession -> PanelVisibility.Hidden "Live testing: no session is selected"
       | ViewedSession.Viewing(_, Features.LiveTestActivity.LiveTestActivity.Off) ->
         PanelVisibility.Hidden "Live testing: it's off for this session"
       | ViewedSession.Viewing _ -> PanelVisibility.Shown
