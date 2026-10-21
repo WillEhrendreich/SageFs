@@ -58,7 +58,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 
 ### Dashboard
 
-- [ ] **Move and dock dashboard panes.** Panes you can move, dock, hide and reopen like Visual Studio's tool windows, with a layout per workflow and a reset button for when you lose one.
+- [ ] **Move and dock dashboard panes.** Panes you can move, dock, hide and reopen like Visual Studio's tool windows, with a layout per workflow and a reset button for when you lose one. Two pieces of that are in: the live bindings fold away and open again with one click, because the tree can be taller than the dock's ceiling and the drag handle that changes the ceiling is a thin line to find, and the fold is the user's, so a push does not take it back; and the dock's own ceiling remembers itself between visits. Moving a pane between regions is not built.
 - [ ] **Friction reports you can read first.** Friction events stay local and bounded now, and the panel stays hidden until reporting has a real endpoint. A report you choose to send would show its exact payload first, then go to that endpoint or start as a prefilled GitHub issue. ([mcp-tools.md](mcp-tools.md))
 
 ### Platform and install

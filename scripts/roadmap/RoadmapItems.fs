@@ -280,7 +280,7 @@ let items : Item list =
     item "move-and-dock-dashboard-panes" "Move and dock dashboard panes" Dashboard Later
       NoLandmarkYet
       []
-      "Panes you can move, dock, hide and reopen like Visual Studio's tool windows, with a layout per workflow and a reset button for when you lose one."
+      "Panes you can move, dock, hide and reopen like Visual Studio's tool windows, with a layout per workflow and a reset button for when you lose one. Two pieces of that are in: the live bindings fold away and open again with one click, because the tree can be taller than the dock's ceiling and the drag handle that changes the ceiling is a thin line to find, and the fold is the user's, so a push does not take it back; and the dock's own ceiling remembers itself between visits. Moving a pane between regions is not built."
 
     item "friction-reports-you-can-read-first" "Friction reports you can read first" Dashboard Later
       NoLandmarkYet

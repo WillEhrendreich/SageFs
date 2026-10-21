@@ -1382,6 +1382,7 @@ h2 {
    button is the tallest thing in the row and sets its height — which is what kept a not-yet-read row at
    30px and cost a row of visible values. They stay square, just sized for the row they sit in. */
 .live-pane-pin,
+.live-pane-collapse,
 .live-held-btn {
   width: 20px;
   height: 20px;
