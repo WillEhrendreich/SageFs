@@ -735,7 +735,9 @@
         <Compile Include="GcDumpCaptureTests.fs" />
         <Compile Include="SessionStatusPayloadTests.fs" />
         <Compile Include="SessionBuildTotalityTests.fs" />
+        <Compile Include="ConsoleTickerSample.fs" />
         <Compile Include="RunAppSaveOutcomeTests.fs" />
+        <Compile Include="EvalReachesRunningAppTests.fs" />
         <Compile Include="AppPlacementTests.fs" />
         <Compile Include="PageChoicesTests.fs" />
         <Compile Include="MemorySupervisorTests.fs" />

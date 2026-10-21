@@ -652,6 +652,12 @@ module TestTimeouts =
   /// before the new text shows, so this is longer than the first line.
   let appOutputAfterSave = System.TimeSpan.FromSeconds 180.
 
+  /// How long the eval route may take, in seconds, from the eval to the running app serving what
+  /// it evaluated. The route pays a build, so this is generous next to the save-to-served figure
+  /// the hot-reload gate measures: it is here to catch a route that stopped working, not to
+  /// police a millisecond.
+  let evalToAppServedSeconds = 60.
+
   /// How long the tool layer's read caches (list_tests, coverage_intel, and the narrative
   /// cache behind explain_test_failure and diagnose) may lag a state change the status endpoint
   /// already confirmed. Waits poll and end early.
