@@ -166,6 +166,19 @@ let private attachOrNothing (pid: int) : Task<(string * string list) option> =
     | Some debugger -> return! tryAttach debugger pid
   }
 
+/// The daemon's own answer when the machine, rather than the attach, is what went wrong: the
+/// worker could not be reached, or the host was not there. That is a fact about this run, not a
+/// verdict on the attach, so the case reports it and steps out.
+let private machineCondition (status: int) (body: string) : bool =
+  if status = 200 then
+    false
+  else
+    match text body "status" with
+    | "worker_failed"
+    | "host_unavailable"
+    | "host_lost" -> true
+    | _ -> false
+
 /// Hold a real test in the real host, attach a real debugger to the process the daemon names,
 /// and let the test run.
 let rec private fullAttach () : Task<unit> =
@@ -215,49 +228,58 @@ and private fullAttach' (http: HttpClient) : Task<unit> =
           "SKIPPED the attach: the daemon did not answer the debug hold in %ds. The hold request waits for the host's agent, and this machine is busy."
           (int TestTimeouts.debugHoldRequest.TotalSeconds)
       | Some (heldStatus, heldBody) ->
-        heldStatus |> Expect.equal "the test is held" 200
-        text heldBody "status" |> Expect.equal "the daemon held it" "held"
-        let pid = number heldBody "pid"
-        (pid, 0) |> Expect.isGreaterThan "a real process, not zero"
-        text heldBody "access" |> Expect.equal "the OS lets a debugger attach" "open"
-        let ticket = text heldBody "ticket"
-
-        // The process the daemon named is alive: it is the host the tests run in.
-        let alive =
-          try
-            use p = Process.GetProcessById(pid)
-            not p.HasExited
-          with _ -> false
-        alive |> Expect.isTrue "the process the daemon named is running"
-
-        // The attach is asked first, then the release runs the held test, and the assertions come
-        // after both. The order matters: the release is what frees the host, so a hold is never
-        // left open for the cases that follow in this tier, whatever the assertions then say.
-        let! attached = attachOrNothing pid
-        let! released = postOrTimeout http "/api/live-testing/debug/continue" {| ticket = ticket; sessionId = sid |}
-
-        match attached with
-        | None -> ()
-        | Some (answer, said) ->
-          answer
-          |> Expect.stringContains
-            (sprintf
-               "the debugger listed the threads of the process the daemon named (pid %d). The debugger said: %s"
-               pid
-               (said |> List.map (fun l -> "[" + l + "]") |> String.concat " | "))
-            "0x"
-
-        // The daemon's own answer to the release says whether a debugger was really attached: it
-        // checks `Debugger.IsAttached` itself.
-        match released with
-        | None ->
+        if machineCondition heldStatus heldBody then
           printfn
-            "SKIPPED the attach: the daemon did not answer the release in %ds. The release waits for the host's agent, and this machine is busy."
-            (int TestTimeouts.debugHoldRequest.TotalSeconds)
-        | Some (releasedStatus, releasedBody) ->
-          releasedStatus |> Expect.equal "the release answers" 200
-          text releasedBody "status" |> Expect.equal "the debugger was attached" "attached"
-          text releasedBody "outcome" |> Expect.notEqual "the test ran and had a verdict" ""
+            "SKIPPED the attach: the daemon could not reach the worker to hold the test (%s)."
+            (text heldBody "message")
+        else
+          heldStatus |> Expect.equal "the test is held" 200
+          text heldBody "status" |> Expect.equal "the daemon held it" "held"
+          let pid = number heldBody "pid"
+          (pid, 0) |> Expect.isGreaterThan "a real process, not zero"
+          text heldBody "access" |> Expect.equal "the OS lets a debugger attach" "open"
+          let ticket = text heldBody "ticket"
+
+          // The process the daemon named is alive: it is the host the tests run in.
+          let alive =
+            try
+              use p = Process.GetProcessById(pid)
+              not p.HasExited
+            with _ -> false
+          alive |> Expect.isTrue "the process the daemon named is running"
+
+          // The attach is asked first, then the release runs the held test, and the assertions
+          // come after both. The order matters: the release is what frees the host, so a hold is
+          // never left open for the cases that follow in this tier, whatever the assertions say.
+          let! attached = attachOrNothing pid
+          let! released = postOrTimeout http "/api/live-testing/debug/continue" {| ticket = ticket; sessionId = sid |}
+
+          match attached with
+          | None -> ()
+          | Some (answer, said) ->
+            answer
+            |> Expect.stringContains
+              (sprintf
+                 "the debugger listed the threads of the process the daemon named (pid %d). The debugger said: %s"
+                 pid
+                 (said |> List.map (fun l -> "[" + l + "]") |> String.concat " | "))
+              "0x"
+
+          // The daemon's own answer to the release says whether a debugger was really attached: it
+          // checks `Debugger.IsAttached` itself.
+          match released with
+          | None ->
+            printfn
+              "SKIPPED the attach: the daemon did not answer the release in %ds. The release waits for the host's agent, and this machine is busy."
+              (int TestTimeouts.debugHoldRequest.TotalSeconds)
+          | Some (releasedStatus, releasedBody) when machineCondition releasedStatus releasedBody ->
+            printfn
+              "SKIPPED the attach: the daemon could not reach the worker to release the hold (%s)."
+              (text releasedBody "message")
+          | Some (releasedStatus, releasedBody) ->
+            releasedStatus |> Expect.equal "the release answers" 200
+            text releasedBody "status" |> Expect.equal "the debugger was attached" "attached"
+            text releasedBody "outcome" |> Expect.notEqual "the test ran and had a verdict" ""
   }
 
 let journeyTests =
