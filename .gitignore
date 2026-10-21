@@ -99,6 +99,9 @@ SageFs.Tests/fixtures/SageFsLikeRepoFixture/.runs/
 SageFs.Tests/fixtures/LiveTestingSample/.runs/
 # The TweakFixture copy each live-bindings knob journey edits (DashboardLiveBindingsTweakBrowserTests).
 SageFs.Tests/fixtures/TweakFixture/.runs/
+# The console ticker copy the run_app suites edit (ConsoleTickerSample). A run that dies before
+# its cleanup leaves the copy behind, and it is scratch, never a deliverable.
+samples/demos/SageFs.Samples.ConsoleTicker.Copy-*/
 
 # Muse's exploratory work — ideas to be mined and woven into the roadmap,
 # never a deliverable in itself.
