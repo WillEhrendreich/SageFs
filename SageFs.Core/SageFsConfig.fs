@@ -158,3 +158,25 @@ let OtelConfigured : bool =
 /// Most code should use the resolved port from Program.parseMcpPort, not this value directly.
 let McpPortFromEnv : int =
   envInt "SAGEFS_MCP_PORT" DefaultMcpPort
+
+/// The MCP port the environment names, when it names one. `McpPortFromEnv` cannot
+/// tell "unset" from "set to the default", and the port the Settings panel persists
+/// has to be able to win over the default without losing to an env var that was
+/// actually set.
+let McpPortFromEnvOpt : int option =
+  match Environment.GetEnvironmentVariable "SAGEFS_MCP_PORT" with
+  | null | "" -> None
+  | s ->
+    match Int32.TryParse s with
+    | true, v -> Some v
+    | false, _ -> None
+
+/// The MCP port, in the order the sources get to speak: the command line, then the
+/// environment, then the port the Settings panel persisted, then the default. The
+/// order is one pure function so the daemon and its clients cannot disagree about
+/// which port they are talking to.
+let chooseMcpPort (fromArgs: int option) (fromEnv: int option) (fromSettings: int option) : int =
+  fromArgs
+  |> Option.orElse fromEnv
+  |> Option.orElse fromSettings
+  |> Option.defaultValue DefaultMcpPort

@@ -62,20 +62,30 @@ type NewlineNormalizingWriter(inner: TextWriter) =
   override _.Flush() = inner.Flush()
   override _.FlushAsync() = inner.FlushAsync()
 
-/// Parse --mcp-port from args, falling back to env var or default SageFsConfig.DefaultMcpPort.
-let parseMcpPort (args: string array) =
+/// The port named on the command line, if it names one. A flag whose value is not
+/// a number names nothing, so the next source in the order gets to speak.
+let parseMcpPortArg (args: string array) : int option =
   let mcpPortIndex = args |> Array.tryFindIndex (fun a -> a = "--mcp-port")
-  let defaultPort = SageFsConfig.McpPortFromEnv
   match mcpPortIndex with
   | Some i when i + 1 < args.Length ->
     match Int32.TryParse(args.[i + 1]) with
-    | true, p -> p
-    | _ -> defaultPort
-  | _ -> defaultPort
+    | true, p -> Some p
+    | _ -> None
+  | _ -> None
+
+/// The port the daemon and its clients talk to: the command line first, then the
+/// environment, then the port the Settings panel persisted, then the default. The
+/// panel's row says it applies on the next daemon restart, and this is where that
+/// promise is kept — the persisted value was written and then read by nobody.
+let resolveMcpPort (args: string array) =
+  SageFsConfig.chooseMcpPort
+    (parseMcpPortArg args)
+    SageFsConfig.McpPortFromEnvOpt
+    (SageFs.SettingsCatalog.mcpPortFromLayers DaemonState.SageFsDir)
 
 let explicitDaemonInvocationUsesAlternatePort (args: string array) =
-  let requestedPort = parseMcpPort args
-  let defaultPort = SageFsConfig.McpPortFromEnv
+  let requestedPort = resolveMcpPort args
+  let defaultPort = SageFsConfig.DefaultMcpPort
   requestedPort <> defaultPort
 
 let deprecatedClientMessage name =
@@ -242,7 +252,7 @@ let runDaemon (args: string array) =
     eprintfn "%s" message
     startupRefusedExitCode
   | Ok bindHost ->
-  let mcpPort = parseMcpPort args
+  let mcpPort = resolveMcpPort args
   let flags = Args.DaemonFlags.parse (Array.toList args)
   match resolveOwnership args Environment.CurrentDirectory with
   | Error errors ->
@@ -676,15 +686,15 @@ let main args =
     0
 
   | Stop ->
-    let mcpPort = parseMcpPort args
+    let mcpPort = resolveMcpPort args
     stopCommand DaemonState.readOnPort wedgedPidFor DaemonState.requestShutdown stopKillProcess stopWaitForExit mcpPort
 
   | Status ->
-    let mcpPort = parseMcpPort args
+    let mcpPort = resolveMcpPort args
     statusCommand DaemonState.readOnPort wedgedPidFor fetchSessionCountHttp mcpPort
 
   | Check ->
-    let mcpPort  = parseMcpPort args
+    let mcpPort  = resolveMcpPort args
     let dashPort = mcpPort + 1
     let dir      = Environment.CurrentDirectory
     let results  = EnvCheck.runAll dir mcpPort dashPort
@@ -697,10 +707,10 @@ let main args =
     sweepCommand kill
 
   | Hygiene(tidy, repo) ->
-    hygieneCommand tidy repo (parseMcpPort args) |> awaitAtEntryPoint
+    hygieneCommand tidy repo (resolveMcpPort args) |> awaitAtEntryPoint
 
   | Mcp mcpArgs ->
-    let mcpPort = parseMcpPort mcpArgs
+    let mcpPort = resolveMcpPort mcpArgs
     // The process entry point waiting for the bridge to end; the bridge is the whole process.
     SageFs.Server.McpStdioBridge.runMcpStdio mcpPort
     |> awaitAtEntryPoint
@@ -739,7 +749,7 @@ let main args =
         eprintfn "Invalid connection file: %s" msg
         1
       | Ok connInfo ->
-        let mcpPort = parseMcpPort args
+        let mcpPort = resolveMcpPort args
         match DaemonState.readOnPort mcpPort with
         | None ->
           eprintfn "SageFs daemon is not running on port %d." mcpPort
@@ -787,7 +797,7 @@ let main args =
         eprintfn "  -> %s" guidance
       2
     | [] ->
-    let mcpPort = parseMcpPort args
+    let mcpPort = resolveMcpPort args
     let forceDedicatedDaemon = explicitDaemonInvocationUsesAlternatePort args
     match forceDedicatedDaemon, decideDaemonLaunch DaemonState.readOnPort mcpPort with
     | true, _ ->
