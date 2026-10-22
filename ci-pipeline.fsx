@@ -1891,7 +1891,7 @@ let sagefsPipeline = pipeline "sagefs" {
             let! result = runner $"dotnet build {project} -c Release --nologo"
             match result with
             | Ok() -> ()
-            | Error why -> return Error why
+            | Error why -> return! async.Return (Error why)
           return Ok()
       })
   }
