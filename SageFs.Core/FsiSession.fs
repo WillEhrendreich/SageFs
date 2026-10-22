@@ -113,44 +113,30 @@ let warmupDiagnostics (diagnostics: Diagnostics.Diagnostic array) : WarmUp.Warmu
        EndColumn = d.Range.EndColumn } : WarmUp.WarmupFcsDiagnostic))
   |> Array.toList
 
-/// How many errors a failed startup script's message lists before it only counts the rest. A broken `#load` can
-/// report hundreds, and the message reaches the log, the session's fault reason, the dashboard and MCP.
-let private errorsListed = 3
+/// Whether callers tell this failure apart by its type: a cancellation or a structured SageFs error, including one that
+/// arrives inside an `AggregateException`, which callers unwrap before they look (`McpRouteError.tryMapTransportFailure`).
+let rec private isTyped (ex: exn) =
+  match ex with
+  | :? OperationCanceledException
+  | :? SageFsErrorException -> true
+  | :? AggregateException as aggregate when not (isNull aggregate.InnerException) -> isTyped aggregate.InnerException
+  | _ -> false
 
-/// Why an eval failed, in words, or None when FSI reported no error. FSI's exception for a failed interaction says the
-/// same thing whatever went wrong ("Operation could not be completed due to earlier error"), and the reason is in its
-/// error diagnostics. That includes one FSI records while the code runs, such as an assembly it found and could not
-/// load, even when the user's code catches the exception. So the message lists the first few distinct errors, counts
-/// the rest, and keeps FSI's own words after them.
-let failureMessage (exceptionMessage: string) (diagnostics: Diagnostics.Diagnostic array) : string option =
-  let errors =
-    warmupDiagnostics diagnostics
-    |> List.filter (fun d -> d.Severity = "error")
-    |> List.map WarmUp.WarmupFcsDiagnostic.formatLine
-    |> List.distinct
-  match errors with
-  | [] -> None
-  | errors ->
-    let listed = errors |> List.truncate errorsListed |> String.concat "; "
-    let rest =
-      match errors.Length - errorsListed with
-      | 1 -> " (and 1 more error)"
-      | more when more > 1 -> sprintf " (and %d more errors)" more
-      | _ -> ""
-    Some(sprintf "%s%s (FSI: %s)" listed rest exceptionMessage)
+/// The exception a failed startup script raises. One with error diagnostics carries them in its message, with FSI's
+/// exception inside, since its message alone names no cause. A typed failure is raised as it is, because wrapping it
+/// would hide it from the callers that match on its type.
+let failureToRaise (ex: exn) (diagnostics: Diagnostics.Diagnostic array) : exn =
+  match isTyped ex, WarmUp.WarmupFcsDiagnostic.failureMessage ex.Message (warmupDiagnostics diagnostics) with
+  | true, _
+  | _, None -> ex
+  | false, Some message -> Exception(message, ex)
 
-/// Evaluate and raise on failure: the throwing form, for startup scripts whose failure must abort. A failure with
-/// error diagnostics raises them in its message, with FSI's exception inside, since its message alone names no cause.
-/// A cancellation or a structured SageFs error is raised as it is, because callers tell those apart by type.
+/// Evaluate and raise on failure: the throwing form, for startup scripts whose failure must abort.
 let evalOrThrow (session: IFsiSession) (code: string) (cancellationToken: CancellationToken) : unit =
   let eval = session.Eval(code, cancellationToken)
   match eval.Outcome with
   | FsiSucceeded -> ()
-  | FsiFailed ex ->
-    match ex, failureMessage ex.Message eval.Diagnostics with
-    | (:? OperationCanceledException | :? SageFsErrorException), _
-    | _, None -> raise ex
-    | _, Some message -> raise (Exception(message, ex))
+  | FsiFailed ex -> raise (failureToRaise ex eval.Diagnostics)
   | FsiInterrupted -> raise (OperationCanceledException "the evaluation was interrupted")
 
 /// Reflection-walk an FSI session's bound values into a JSON-serialized Features.LiveValueTree.LiveValueSnapshot,

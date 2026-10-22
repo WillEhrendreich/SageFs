@@ -298,12 +298,28 @@ let startupProfileFailureTests =
           message |> Expect.stringContains "the warning names the identifier" "undefinedThing"
         | other -> failtestf "expected the profile to fail, got %A" other
 
-    testCase "a failure with no error diagnostic has no message of its own, and warnings do not count" <| fun _ ->
+    testCase "WHY — a failure with no error diagnostic is raised unchanged, because warnings name no cause" <| fun _ ->
       let warning = diagnostic Features.Diagnostics.DiagnosticSeverity.Warning 64 (3, 4, 3, 9) "a warning"
-      failureMessage "the host went away" [| warning |]
-      |> Expect.isNone "evalOrThrow raises FSI's exception unchanged"
+      let ex = Exception "the host went away"
+      obj.ReferenceEquals(failureToRaise ex [| warning |], ex)
+      |> Expect.isTrue "evalOrThrow raises FSI's exception unchanged"
 
-    testProperty "the first three distinct errors are listed, the rest counted, warnings left out, and FSI's words kept last" <| fun (raw: (bool * int * int * int * int) list) ->
+    testCase "WHY — a cancellation or a SageFs error is raised as it is, even inside an AggregateException, so callers that match on the type still see it" <| fun _ ->
+      // Error diagnostics are present, so anything not typed would be wrapped: only the type keeps these out.
+      let error = diagnostic Features.Diagnostics.DiagnosticSeverity.Blocking 39 (1, 1, 1, 5) "undefinedThing"
+      let typed : (string * exn) list = [
+        "a cancellation", OperationCanceledException "cancelled"
+        "a SageFs error", SageFsErrorException(SageFsError.EvalFailed "Session is resetting")
+        "a cancellation in an AggregateException", AggregateException(OperationCanceledException "cancelled")
+        "a SageFs error in an AggregateException", AggregateException(SageFsErrorException(SageFsError.EvalFailed "Session is resetting")) ]
+      for name, ex in typed do
+        obj.ReferenceEquals(failureToRaise ex [| error |], ex)
+        |> Expect.isTrue (sprintf "%s is raised unwrapped" name)
+      let untyped = AggregateException(InvalidOperationException "boom")
+      (failureToRaise untyped [| error |]).InnerException
+      |> Expect.equal "an AggregateException of anything else is wrapped with the diagnostics" (untyped :> exn)
+
+    testProperty "WHY — the first three distinct errors are listed, the rest counted, warnings left out, and FSI's words kept last" <| fun (raw: (bool * int * int * int * int) list) ->
       // Each message is unique, so one containing another is no accident. The ranges are anything at all: the message
       // shows no location, because a diagnostic does not say which file it is in.
       let diagnostics =
@@ -314,7 +330,7 @@ let startupProfileFailureTests =
           | false -> diagnostic Features.Diagnostics.DiagnosticSeverity.Warning 64 (a, b, c, d) (sprintf "<warning %d>" i))
         |> List.toArray
       let errors = diagnostics |> Array.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Blocking)
-      match failureMessage fsiWrapper (Array.append diagnostics diagnostics), errors with
+      match WarmUp.WarmupFcsDiagnostic.failureMessage fsiWrapper (warmupDiagnostics (Array.append diagnostics diagnostics)), errors with
       | None, [||] -> true
       | Some message, errors when errors.Length > 0 ->
         let listed, counted = errors |> Array.splitAt (min 3 errors.Length)
