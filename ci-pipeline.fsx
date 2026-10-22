@@ -1887,12 +1887,14 @@ let sagefsPipeline = pipeline "sagefs" {
             for name in [ "SageFs.Core.dll"; "SageFs.Core.pdb" ] do
               let stale = System.IO.Path.Combine(bin, name)
               if System.IO.File.Exists stale then System.IO.File.Delete stale
+          let firstFailure = ref (None : string option)
           for project in sampleProjects do
-            let! result = runner $"dotnet build {project} -c Release --nologo"
-            match result with
+            match! runner $"dotnet build {project} -c Release --nologo" with
             | Ok() -> ()
-            | Error why -> return! async.Return (Error why)
-          return Ok()
+            | Error why -> if firstFailure.Value.IsNone then firstFailure := Some why
+          match firstFailure.Value with
+          | Some why -> return Error why
+          | None -> return Ok()
       })
   }
 
