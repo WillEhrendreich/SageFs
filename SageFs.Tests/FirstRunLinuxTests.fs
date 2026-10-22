@@ -7,6 +7,7 @@ open System
 open System.IO
 open System.Net.Http
 open System.Net.Sockets
+open System.Text.RegularExpressions
 open Expecto
 open Expecto.Flip
 open SageFs
@@ -37,6 +38,19 @@ let private parseUnit (text: string) : (string * (string * string) list) list =
       | (name, pairs) :: rest, i when i > 0 -> (name, pairs @ [ line.Substring(0, i), line.Substring(i + 1) ]) :: rest
       | _ -> failwithf "line is neither a section header nor Key=value: %s" line
   lines |> Array.fold folder [] |> List.rev
+
+/// The README's Linux install block, one trimmed line per command.
+let private readmeInstall () : string =
+  let readme = File.ReadAllText(Path.Combine(repoRoot, "Readme.md"))
+  let block = Regex.Match(readme, @"### Run it as a service \(Linux\)[\s\S]*?```bash\r?\n([\s\S]*?)```")
+  Expect.isTrue "the README's Linux section has a bash install block" block.Success
+  let install =
+    block.Groups[1].Value.Split([| '\r'; '\n' |], StringSplitOptions.RemoveEmptyEntries)
+    |> Array.map (fun line -> line.Trim())
+    |> Array.filter (fun line -> line <> "")
+    |> String.concat "\n"
+  Expect.isNotEmpty "the install block has commands" install
+  install
 
 [<Tests>]
 let tests =
@@ -99,6 +113,34 @@ let tests =
         values "StateDirectory"
         |> List.map (fun name -> Path.Combine(stateHome, name))
         |> Expect.contains "the working directory is one the unit creates" workingDirectory
+      }
+
+      test "the README install gives the unit the install shell's PATH in a drop-in, because systemd's default has no npm and no dotnet" {
+        // A user unit does not read the shell profile, and the daemon hands its PATH to every worker, so an init.fsx
+        // that starts npm fails. A PATH written into the unit would be someone else's, so the unit sets none and the
+        // install writes its own shell's into a drop-in systemd reads beside it.
+        let service = (parseUnit (File.ReadAllText unitPath) |> Map.ofList).["Service"]
+        service
+        |> List.exists (fun (key, value) -> key = "Environment" && value.Contains "PATH=")
+        |> Expect.isFalse "the shipped unit sets no PATH of its own"
+        let install = readmeInstall ()
+        install |> Expect.stringContains "the install creates the unit's drop-in folder" "mkdir -p ~/.config/systemd/user/sagefs.service.d"
+        install
+        |> Expect.stringContains "the drop-in sets PATH to the install shell's" """printf '[Service]\nEnvironment="PATH=%s"\n' "$PATH" > ~/.config/systemd/user/sagefs.service.d/path.conf"""
+        install |> Expect.stringContains "systemd rereads the drop-in before the restart" "systemctl --user daemon-reload"
+        install |> Expect.stringContains "a second install restarts the service, so it sees the new PATH" "systemctl --user restart sagefs"
+      }
+
+      test "the unit's comment carries the README's install block, line for line" {
+        // The other tests read the README's install. The copy in the unit's comment is the one a reader of the
+        // file follows, so it must not drift from the README's.
+        let comment =
+          File.ReadAllLines unitPath
+          |> Array.takeWhile (fun line -> line.StartsWith "#")
+          |> Array.map (fun line -> line.TrimStart('#').Trim())
+          |> Array.filter (fun line -> line <> "")
+          |> String.concat "\n"
+        comment |> Expect.stringContains "the unit's comment repeats the README's install exactly" (readmeInstall ())
       }
 
       test "ExecStart runs the installed tool with a flag the CLI help really lists" {

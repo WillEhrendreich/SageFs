@@ -7,8 +7,8 @@
     dotnet_root="$(dirname "$(realpath "$(command -v dotnet)")")"
     if [ ! -x "$dotnet_root/dotnet" ]; then
       echo "No dotnet found through PATH, so nothing was installed. realpath needs macOS 12.3 or later." >&2
-    elif printf '%s' "$PATH" | grep -q '[|&<\]'; then
-      echo "Your PATH holds a |, &, < or \\, which the install cannot copy into the plist, so nothing was installed." >&2
+    elif [ "$(printf '%s' "$PATH" | tr -d '|&<\\\n')" != "$PATH" ]; then
+      echo "Your PATH holds a |, &, <, \\ or line break, which the install cannot copy into the plist, so nothing was installed." >&2
     else
       launchctl bootout gui/$(id -u)/io.github.willehrendreich.sagefs 2>/dev/null
       mkdir -p ~/Library/LaunchAgents ~/Library/Logs/sagefs "$HOME/Library/Application Support/sagefs-daemon"
@@ -35,8 +35,10 @@
   and every worker and process it starts, gets launchd's default PATH,
   /usr/bin:/bin:/usr/sbin:/sbin. Then an init.fsx that starts npm fails with "No
   such file or directory", and a script that npm runs cannot find dotnet. A PATH
-  holding |, &, < or \ would come out of sed or the plist's XML changed, so the
-  install stops instead.
+  holding |, &, <, \ or a line break would come out of sed or the plist's XML
+  changed, so the install stops instead. The Linux unit has the same need, and
+  its install meets it with a drop-in, since systemd can read one beside the
+  unit.
 
   If you move or upgrade .NET to a different folder, or want the daemon to see a
   PATH change (a new tool, another node version through nvm), run the install
