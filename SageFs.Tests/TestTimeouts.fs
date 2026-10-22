@@ -107,6 +107,21 @@ module TestTimeouts =
   /// A session or a hot reload that takes many seconds to land.
   let pollSlow = secs 1.
 
+  // The Jupyter kernel over a real socket.
+
+  /// How long the kernel test waits for the kernel's own ZMQ sockets to
+  /// accept a connection. The kernel binds them when it starts, so this is
+  /// how long that takes on a cold process.
+  let jupyterKernelBind = secs 60.
+  /// How long the kernel test waits for the answer to an execution. The
+  /// daemon has no session for the working directory yet, so the kernel
+  /// creates one, and a cold session takes seconds to warm up.
+  let jupyterKernelExec = secs 120.
+  /// How long the kernel test waits for the IOPub subscription to be
+  /// registered before it sends the request — a PUB socket drops a
+  /// broadcast a late subscriber never sees.
+  let jupyterKernelSubscribe = ms 500.
+
   // Request timeouts on one HTTP call.
 
   /// One probe request to a local server, in a loop that retries it.

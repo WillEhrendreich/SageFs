@@ -766,7 +766,9 @@ let main args =
             JupyterDaemonBridge.makeSessionProxy
               (JupyterDaemonBridge.httpPostJson httpClient "/exec")
               (JupyterDaemonBridge.httpPostJson httpClient "/api/sessions/create")
+              (JupyterDaemonBridge.httpGetJson httpClient "/api/sessions")
               Environment.CurrentDirectory
+              Timeouts.jupyterSessionWarmup
           let exec, complete, isComplete = JupyterKernel.FsiBridge.fromProxy proxy
 
           use cts = new System.Threading.CancellationTokenSource()
