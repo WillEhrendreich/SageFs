@@ -172,6 +172,8 @@ let prePushTests =
       said |> Expect.stringContains "short sha" "pre-push: aaaaaaaa has not passed the local gate."
       said |> Expect.stringContains "the stack says how many" "this push carries 4 releases"
       said |> Expect.stringContains "the stack says what happens to the earlier ones" "never reach NuGet"
+      said
+      |> Expect.stringContains "the stack names the way out when a previous ship already left a bump behind" "scripts/ship.fsx -- <the commit that already carries the bump>"
       messagesFor AlreadyGated |> Expect.isEmpty "a gated push says nothing"
   ]
 

@@ -62,31 +62,23 @@ type NewlineNormalizingWriter(inner: TextWriter) =
   override _.Flush() = inner.Flush()
   override _.FlushAsync() = inner.FlushAsync()
 
-/// The port named on the command line, if it names one. A flag whose value is not
-/// a number names nothing, so the next source in the order gets to speak.
-let parseMcpPortArg (args: string array) : int option =
-  let mcpPortIndex = args |> Array.tryFindIndex (fun a -> a = "--mcp-port")
-  match mcpPortIndex with
-  | Some i when i + 1 < args.Length ->
-    match Int32.TryParse(args.[i + 1]) with
-    | true, p -> Some p
-    | _ -> None
-  | _ -> None
-
 /// The port the daemon and its clients talk to: the command line first, then the
 /// environment, then the port the Settings panel persisted, then the default. The
 /// panel's row says it applies on the next daemon restart, and this is where that
 /// promise is kept — the persisted value was written and then read by nobody.
-let resolveMcpPort (args: string array) =
-  SageFsConfig.chooseMcpPort
-    (parseMcpPortArg args)
-    SageFsConfig.McpPortFromEnvOpt
-    (SageFs.SettingsCatalog.mcpPortFromLayers DaemonState.SageFsDir)
+/// `DaemonPort` owns the order because the watchdog and the stdio bridge have to
+/// reach the same answer, and three places deciding it is three answers.
+let resolveMcpPort (args: string array) : int = DaemonPort.resolve (Array.toList args)
 
-let explicitDaemonInvocationUsesAlternatePort (args: string array) =
-  let requestedPort = resolveMcpPort args
-  let defaultPort = SageFsConfig.DefaultMcpPort
-  requestedPort <> defaultPort
+/// True when the command line asks for a port that is NOT the configured one, which is
+/// what makes an invocation "a port of one's own". A plain `sagefs`, and `sagefs
+/// --mcp-port` naming exactly what is configured, both mean the daemon everybody shares;
+/// only a flag that names something else starts a daemon of the caller's own. The
+/// configured port — environment, panel, default — is the baseline, not the hard default:
+/// a `SAGEFS_MCP_PORT` set for the whole machine used to read as "a port of one's own"
+/// and made every plain `sagefs` spawn a second daemon beside the running one.
+let explicitDaemonInvocationUsesAlternatePort (args: string array) : bool =
+  DaemonPort.hasOwnPort (Array.toList args)
 
 let deprecatedClientMessage name =
   sprintf "The '%s' client is deprecated and no longer shipped. Use http://localhost:37750/dashboard." name
@@ -259,7 +251,7 @@ let runDaemon (args: string array) =
     eprintfn "%s" (describeOwnershipRefusal errors)
     startupRefusedExitCode
   | Ok ownership ->
-  match decideCustomPortOwnership SageFsConfig.McpPortFromEnv mcpPort ownership with
+  match decideCustomPortOwnership (DaemonPort.configured ()) mcpPort ownership with
   | CustomPortOwnershipDecision.Refused message ->
     eprintfn "%s" message
     startupRefusedExitCode

@@ -1867,13 +1867,14 @@ let sagefsPipeline = pipeline "sagefs" {
     // The three `dotnet build samples/... -c Release --nologo` commands (sampleProjects) were started by
     // "ratchets" and run beside it; this stage joins them.
     //
-    // And then it rebuilds them, because the copies of SageFs.Core the samples carry have to be the image
-    // the daemon runs, not the one from before the ReadyToRun step rewrote it. The daemon's adoption check
-    // refuses a candidate whose bytes differ from its own, and the R2R rewrite lands after the solution
-    // build has already copied the plain Core into each sample: measured on 2026-10-22, the sample's copy
-    // was two seconds older than the Core it was copied from and the integration tier failed with
-    // "carries the same version as the running daemon's ... but it is an OLDER build". Deleting the copies
-    // and rebuilding here takes them from the Core as it stands after that rewrite.
+    // And then it rebuilds them, because the copy of SageFs.Core a sample holds has to be the build the
+    // daemon runs: `HostCoreAdoption.decide` compares SHA-256 first and the clock second, so a copy that
+    // is neither is a session the integration tier refuses. Measured on 2026-10-22, that copy was Core's
+    // net10.0 build (4442221b…) while the daemon ran the net11.0 build (51f28066…), because
+    // `SageFsCoreAssembly` named one fixed framework for every consumer; Directory.Build.props now takes
+    // the consumer's own. Deleting the copies and rebuilding here is what makes the copy be taken AFTER
+    // the solution build has written Core, which is the part the fix in props cannot do on its own: the
+    // samples job runs beside the build, so without this it is a coin flip on which of them ran first.
     run (fun ctx ->
       let runner = runnerFor ctx
       async {

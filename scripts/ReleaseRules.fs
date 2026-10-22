@@ -180,7 +180,9 @@ let messagesFor (verdict: PushVerdict) : string list =
   | StackedReleases(sha, count) ->
     [ sprintf "pre-push: this push carries %d releases (%s), and only the last one can ship." count (shortSha sha)
       "          the pipeline publishes the version at the tip of master, so the earlier ones never reach NuGet."
-      "          run: dotnet fsi scripts/ship.fsx       (one bump + gate + push at a time)" ]
+      "          a bump a previous ship left behind is one of them: gate that commit instead of adding another:"
+      "          run: dotnet fsi scripts/ship.fsx -- <the commit that already carries the bump>"
+      "          otherwise make the change first, then run: dotnet fsi scripts/ship.fsx" ]
   | SkippedGate sha ->
     [ sprintf "pre-push: WARNING pushing ungated %s (SAGEFS_SKIP_GATE=1); the runner will gate it" (shortSha sha) ]
   | NotGated sha ->
