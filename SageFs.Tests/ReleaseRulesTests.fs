@@ -32,11 +32,17 @@ let private sha40 (c: char) = String(c, 40)
 let private sha1 = sha40 'a'
 let private sha2 = sha40 'b'
 
-/// What the hook knows, from a table: version per commit and the commits that have a gate pass.
-let private facts (versions: (string * string) list) (passed: string list) (skip: bool) : PushFacts =
+/// What the hook knows, from a table: version per commit, the commits that have a gate pass, and how many
+/// release commits the pushed range adds (the count that decides whether one push carries one release or
+/// several, of which only the last can ship).
+let private factsWithReleases (versions: (string * string) list) (passed: string list) (skip: bool) (releases: int) : PushFacts =
   { VersionAt = fun sha -> versions |> List.tryFind (fun (s, _) -> s = sha) |> Option.map snd
     HasPass = fun sha -> List.contains sha passed
-    SkipGate = skip }
+    SkipGate = skip
+    ReleaseCountInRange = fun _ _ -> releases }
+
+/// The same facts for a push whose range carries one release, which is the normal case.
+let private facts versions passed skip = factsWithReleases versions passed skip 0
 
 let private master (local: string) (remote: string) : PushedRef =
   { LocalRef = "refs/heads/master"; LocalSha = local; RemoteRef = "refs/heads/master"; RemoteSha = remote }
@@ -126,6 +132,10 @@ let prePushTests =
       judgePush (facts [ sha1, "0.1.1"; sha2, "0.1.1" ] [] true) (master sha1 sha2)
       |> Expect.equal "still a repeat" (RepeatsVersion(sha1, "0.1.1", "0.1.1"))
 
+    testCase "WHY — the skip-gate override never excuses a stack of releases either: the runner can gate it, but it still publishes only the tip" <| fun _ ->
+      judgePush (factsWithReleases [ sha1, "0.1.2"; sha2, "0.1.1" ] [] true 3) (master sha1 sha2)
+      |> Expect.equal "still a stack" (StackedReleases(sha1, 3))
+
     testCase "WHY — an ungated commit is refused, and the override lets it through but says so" <| fun _ ->
       let known = [ sha1, "0.1.2"; sha2, "0.1.1" ]
       judgePush (facts known [] false) (master sha1 sha2) |> Expect.equal "refused" (NotGated sha1)
@@ -134,16 +144,34 @@ let prePushTests =
     testCase "WHY — a version git cannot read (an object this clone lacks) does not block the push on its own" <| fun _ ->
       judgePush (facts [] [ sha1 ] false) (master sha1 sha2) |> Expect.equal "unreadable versions skip the rule" AlreadyGated
 
+    testCase "WHY — a push carrying two releases is refused: the pipeline publishes the version at the tip, so the first release would never reach NuGet" <| fun _ ->
+      judgePush (factsWithReleases [ sha1, "0.1.2"; sha2, "0.1.1" ] [ sha1 ] false 2) (master sha1 sha2)
+      |> Expect.equal "stacked" (StackedReleases(sha1, 2))
+
+    testCase "WHY — one release in the range is the normal case and is not a refusal" <| fun _ ->
+      judgePush (factsWithReleases [ sha1, "0.1.2"; sha2, "0.1.1" ] [ sha1 ] false 1) (master sha1 sha2)
+      |> Expect.equal "gated and one release" AlreadyGated
+
+    testCase "WHY — the first push to master has no range to count, so it is never called stacked" <| fun _ ->
+      judgePush (factsWithReleases [ sha1, "0.1.1" ] [] false 9) (master sha1 zeroSha)
+      |> Expect.equal "not stacked" (NotGated sha1)
+
+    testCase "WHY — a range git cannot read is not a stack: only a count above one refuses" <| fun _ ->
+      judgePush (factsWithReleases [ sha1, "0.1.2"; sha2, "0.1.1" ] [ sha1 ] false 0) (master sha1 sha2)
+      |> Expect.equal "nothing to say about the range" AlreadyGated
+
     testCase "WHY — only a repeat and an ungated commit fail the push; the override and a pass do not" <| fun _ ->
-      [ RepeatsVersion(sha1, "1", "1"); NotGated sha1 ] |> List.forall refuses |> Expect.isTrue "refusals"
+      [ RepeatsVersion(sha1, "1", "1"); NotGated sha1; StackedReleases(sha1, 2) ] |> List.forall refuses |> Expect.isTrue "refusals"
       [ NotMaster; Deleting; AlreadyGated; SkippedGate sha1 ] |> List.exists refuses |> Expect.isFalse "no refusals"
 
     testCase "WHY — every refusal names the commands that fix it, and they are the F# scripts" <| fun _ ->
-      let said = [ RepeatsVersion(sha1, "0.1.1", "0.1.1"); NotGated sha1; SkippedGate sha1 ] |> List.collect messagesFor |> String.concat "\n"
+      let said = [ RepeatsVersion(sha1, "0.1.1", "0.1.1"); NotGated sha1; SkippedGate sha1; StackedReleases(sha1, 4) ] |> List.collect messagesFor |> String.concat "\n"
       said |> Expect.stringContains "ship" "dotnet fsi scripts/ship.fsx"
       said |> Expect.stringContains "gate" "dotnet fsi scripts/local-gate.fsx -- aaaaaaaa"
       said |> Expect.stringContains "bump" "dotnet fsi scripts/bump-version.fsx"
       said |> Expect.stringContains "short sha" "pre-push: aaaaaaaa has not passed the local gate."
+      said |> Expect.stringContains "the stack says how many" "this push carries 4 releases"
+      said |> Expect.stringContains "the stack says what happens to the earlier ones" "never reach NuGet"
       messagesFor AlreadyGated |> Expect.isEmpty "a gated push says nothing"
   ]
 

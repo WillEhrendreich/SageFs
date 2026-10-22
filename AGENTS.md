@@ -526,4 +526,5 @@ the workspace tidy is the orchestrator's job, and these are the calls that do it
 - Do not change the indentation style (2 spaces)
 - Do not use `dotnet test` for local development, use the SageFs REPL
 - Do not modify `Directory.Build.props` version numbers. Nothing bumps on commit: `scripts/ship.fsx` bumps once per push, and the pre-push hook (`scripts/pre-push.fsx`) refuses a master push that doesn't raise the version
+- One push to master is one release. The pipeline publishes the version at the tip, so a push carrying two release bumps loses the first one silently: 0.6.920, 0.6.921 and 0.6.922 were committed and pushed this way and never reached NuGet. The pre-push hook refuses a range that carries more than one release commit
 - Do not add Version attributes to PackageReference elements

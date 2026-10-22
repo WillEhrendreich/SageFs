@@ -105,19 +105,24 @@ type PushFacts =
     /// Whether the local gate recorded a pass for this commit.
     HasPass: string -> bool
     /// SAGEFS_SKIP_GATE=1.
-    SkipGate: bool }
+    SkipGate: bool
+    /// How many release commits the pushed range adds. One push to master is one release: the pipeline
+    /// publishes the version at the tip, so a range carrying two releases loses the first one silently.
+    ReleaseCountInRange: (string -> string -> int) }
 
 /// What the hook says about one pushed ref.
 type PushVerdict =
   | NotMaster
   | Deleting
   | RepeatsVersion of sha: string * pushed: string * published: string
+  | StackedReleases of sha: string * count: int
   | AlreadyGated
   | SkippedGate of sha: string
   | NotGated of sha: string
 
 /// Only a push to master is checked. A master push must raise the version (checked first, and a refusal ends
-/// the ref there), and must be a commit the gate has passed, unless the override is set.
+/// the ref there), must carry ONE release (the pipeline publishes the version at the tip, so a second release in
+/// the same push never reaches NuGet), and must be a commit the gate has passed, unless the override is set.
 let judgePush (facts: PushFacts) (push: PushedRef) : PushVerdict =
   match push.RemoteRef = "refs/heads/master", push.LocalSha = zeroSha with
   | false, _ -> NotMaster
@@ -130,15 +135,29 @@ let judgePush (facts: PushFacts) (push: PushedRef) : PushVerdict =
     match repeated with
     | Some(pushed, published) -> RepeatsVersion(push.LocalSha, pushed, published)
     | None ->
-      match facts.HasPass push.LocalSha, facts.SkipGate with
-      | true, _ -> AlreadyGated
-      | false, true -> SkippedGate push.LocalSha
-      | false, false -> NotGated push.LocalSha
+      // The first push to master has no range to count: every commit in it is new, and only one release can
+      // ever be in a tip that was just created.
+      let stacked =
+        match push.RemoteSha <> zeroSha with
+        | true ->
+          let count = facts.ReleaseCountInRange push.RemoteSha push.LocalSha
+          match count > 1 with
+          | true -> Some count
+          | false -> None
+        | false -> None
+      match stacked with
+      | Some count -> StackedReleases(push.LocalSha, count)
+      | None ->
+        match facts.HasPass push.LocalSha, facts.SkipGate with
+        | true, _ -> AlreadyGated
+        | false, true -> SkippedGate push.LocalSha
+        | false, false -> NotGated push.LocalSha
 
 /// A refusal fails the push; everything else lets it through.
 let refuses (verdict: PushVerdict) : bool =
   match verdict with
   | RepeatsVersion _
+  | StackedReleases _
   | NotGated _ -> true
   | NotMaster
   | Deleting
@@ -158,6 +177,10 @@ let messagesFor (verdict: PushVerdict) : string list =
       "          a repeated version publishes nothing (NuGet --skip-duplicate) and still goes green."
       "          run: dotnet fsi scripts/ship.fsx       (bump + gate + push)"
       "          or:  dotnet fsi scripts/bump-version.fsx && git commit -- Directory.Build.props sagefs-vscode/package.json" ]
+  | StackedReleases(sha, count) ->
+    [ sprintf "pre-push: this push carries %d releases (%s), and only the last one can ship." count (shortSha sha)
+      "          the pipeline publishes the version at the tip of master, so the earlier ones never reach NuGet."
+      "          run: dotnet fsi scripts/ship.fsx       (one bump + gate + push at a time)" ]
   | SkippedGate sha ->
     [ sprintf "pre-push: WARNING pushing ungated %s (SAGEFS_SKIP_GATE=1); the runner will gate it" (shortSha sha) ]
   | NotGated sha ->
