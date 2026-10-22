@@ -1866,7 +1866,34 @@ let sagefsPipeline = pipeline "sagefs" {
     //
     // The three `dotnet build samples/... -c Release --nologo` commands (sampleProjects) were started by
     // "ratchets" and run beside it; this stage joins them.
-    run (fun _ -> joinBackgroundNamed "samples" (sampleJobSteps.Length - 1))
+    //
+    // And then it rebuilds them, because the copies of SageFs.Core the samples carry have to be the image
+    // the daemon runs, not the one from before the ReadyToRun step rewrote it. The daemon's adoption check
+    // refuses a candidate whose bytes differ from its own, and the R2R rewrite lands after the solution
+    // build has already copied the plain Core into each sample: measured on 2026-10-22, the sample's copy
+    // was two seconds older than the Core it was copied from and the integration tier failed with
+    // "carries the same version as the running daemon's ... but it is an OLDER build". Deleting the copies
+    // and rebuilding here takes them from the Core as it stands after that rewrite.
+    run (fun ctx ->
+      let runner = runnerFor ctx
+      async {
+        let! joined = joinBackgroundNamed "samples" (sampleJobSteps.Length - 1)
+        match joined with
+        | Error why -> return Error why
+        | Ok() ->
+          for project in sampleProjects do
+            let bin =
+              System.IO.Path.Combine(rootDir, System.IO.Path.GetDirectoryName project, "bin", "Release", "net11.0")
+            for name in [ "SageFs.Core.dll"; "SageFs.Core.pdb" ] do
+              let stale = System.IO.Path.Combine(bin, name)
+              if System.IO.File.Exists stale then System.IO.File.Delete stale
+          for project in sampleProjects do
+            let! result = runner $"dotnet build {project} -c Release --nologo"
+            match result with
+            | Ok() -> ()
+            | Error why -> return Error why
+          return Ok()
+      })
   }
 
   stage "vscode extension compile" {
