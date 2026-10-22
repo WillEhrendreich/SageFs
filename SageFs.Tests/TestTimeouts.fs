@@ -121,6 +121,15 @@ module TestTimeouts =
   /// registered before it sends the request — a PUB socket drops a
   /// broadcast a late subscriber never sees.
   let jupyterKernelSubscribe = ms 500.
+  /// The warmup budget the bridge tests give the kernel when it waits for
+  /// a session it just created. The bridge polls until the daemon says
+  /// Ready, so this only has to be long enough for the poll to run a few
+  /// times — the real cold-build wait is the product's, not a test's.
+  let jupyterBridgeWarmup = secs 5.
+  /// The budget the bridge test gives a session that NEVER becomes ready,
+  /// so the test that proves the bridge gives up rather than waiting
+  /// forever does not itself wait forever.
+  let jupyterBridgeNeverReady = secs 1.
 
   // Request timeouts on one HTTP call.
 

@@ -162,7 +162,7 @@ let bridgeTests =
               return Ok (200, """{"sessions":[{"workingDirectory":"/kernel/cwd","status":"Ready"}]}""")
             })
           "/kernel/cwd"
-          (TimeSpan.FromSeconds 5.0)
+          TestTimeouts.jupyterBridgeWarmup
       let! _ = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + \"x\"", "r1"))
       let execBody = esc """{"code":"1 ~u002B ~u0022x~u0022","working_directory":"/kernel/cwd"}"""
       List.ofSeq execBodies |> Expect.equal "exec bodies" [ execBody; execBody ]

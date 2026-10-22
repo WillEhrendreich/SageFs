@@ -64,8 +64,6 @@ let private readyPost (workingDirectory: string) : PostJson =
 
 /// A short warmup budget for the tests: the bridge only has to prove it
 /// WAITS, not how long it would really wait for a cold build.
-let private testWarmupBudget = TimeSpan.FromSeconds 5.0
-
 let private replyId = "abc123"
 
 [<Tests>]
@@ -75,7 +73,7 @@ let makeSessionProxyTests =
     testAsync "WHY — EvalCode routes through /exec and returns the daemon's real result, proving the echo stub is gone" {
       let execPost = fakePost (Ok (200, """{"success":true,"result":"val it: int = 2"}"""))
       let createPost = fakePost (Ok (200, """{"success":true,"message":"unused"}"""))
-      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" testWarmupBudget
+      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" TestTimeouts.jupyterBridgeWarmup
       let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + 1", replyId))
       match response with
       | WorkerProtocol.WorkerResponse.EvalResult(rid, Ok result, _, _) ->
@@ -87,7 +85,7 @@ let makeSessionProxyTests =
     testAsync "WHY — a real compile failure from the daemon surfaces as a real eval error, not a fabricated echo" {
       let execPost = fakePost (Ok (200, """{"success":false,"result":"error FS0039: not defined","error":"error FS0039: not defined"}"""))
       let createPost = fakePost (Ok (200, "{}"))
-      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" testWarmupBudget
+      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" TestTimeouts.jupyterBridgeWarmup
       let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode("bogus", replyId))
       match response with
       | WorkerProtocol.WorkerResponse.EvalResult(_, Error (SageFsError.EvalFailed reason), _, _) ->
@@ -114,7 +112,7 @@ let makeSessionProxyTests =
             lastCreateBody <- body
             return Ok (200, """{"success":true,"message":"a1b2c3d4"}""")
           }
-      let proxy = makeSessionProxy execPost createPost (readyPost "/kernel/cwd") "/kernel/cwd" testWarmupBudget
+      let proxy = makeSessionProxy execPost createPost (readyPost "/kernel/cwd") "/kernel/cwd" TestTimeouts.jupyterBridgeWarmup
       let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + 1", replyId))
       execCalls |> Expect.equal "exec called twice: once to discover no session, once to retry" 2
       createCalls |> Expect.equal "a session was created exactly once" 1
@@ -149,7 +147,7 @@ let makeSessionProxyTests =
             else
               return Ok (200, """{"sessions":[{"workingDirectory":"/kernel/cwd","status":"Ready"}]}""")
           }
-      let proxy = makeSessionProxy execPost createPost waitPost "/kernel/cwd" testWarmupBudget
+      let proxy = makeSessionProxy execPost createPost waitPost "/kernel/cwd" TestTimeouts.jupyterBridgeWarmup
       let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + 1", replyId))
       (readyCalls >= 3) |> Expect.isTrue "the bridge asked again while the session was still warming up"
       match response with
@@ -171,7 +169,7 @@ let makeSessionProxyTests =
       // The session never leaves "Starting".
       let waitPost : PostJson =
         fun _body -> async { return Ok (200, """{"sessions":[{"workingDirectory":"/kernel/cwd","status":"Starting"}]}""") }
-      let proxy = makeSessionProxy execPost createPost waitPost "/kernel/cwd" (TimeSpan.FromSeconds 1.0)
+      let proxy = makeSessionProxy execPost createPost waitPost "/kernel/cwd" TestTimeouts.jupyterBridgeNeverReady
       let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + 1", replyId))
       execCalls |> Expect.equal "the eval was not retried into a session that never became ready" 1
       match response with
@@ -198,7 +196,7 @@ let makeSessionProxyTests =
             | _ -> return Ok (200, """{"success":true,"result":"val it: int = 2"}""")
           }
       let createPost : PostJson = fun _ -> async { createCalls <- createCalls + 1; return Ok (200, """{"success":true,"message":"a1b2c3d4"}""") }
-      let proxy = makeSessionProxy execPost createPost (readyPost "/kernel/cwd") "/kernel/cwd" testWarmupBudget
+      let proxy = makeSessionProxy execPost createPost (readyPost "/kernel/cwd") "/kernel/cwd" TestTimeouts.jupyterBridgeWarmup
       let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + 1", replyId))
       createCalls |> Expect.equal "a session was created for the unmatched working directory" 1
       match response with
@@ -211,7 +209,7 @@ let makeSessionProxyTests =
       let mutable createCalls = 0
       let execPost = fakePost (Ok (404, """{"success":false,"error":"Session 'abc123' is still warming up (Starting). Do NOT create a new session — it will compete for resources and make warmup slower.","errorDetails":{"case":"SessionNotRoutable"}}"""))
       let createPost : PostJson = fun _ -> async { createCalls <- createCalls + 1; return Ok (200, "{}") }
-      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" testWarmupBudget
+      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" TestTimeouts.jupyterBridgeWarmup
       let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + 1", replyId))
       createCalls |> Expect.equal "no session was created while one is warming up" 0
       match response with
@@ -267,7 +265,7 @@ let makeSessionProxyTests =
     testAsync "WHY — an unreachable daemon (no /exec at all) is a clear, actionable failure, never a silent echo" {
       let execPost : PostJson = fun _ -> async { return Error "Connection refused" }
       let createPost = fakePost (Ok (200, "{}"))
-      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" testWarmupBudget
+      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" TestTimeouts.jupyterBridgeWarmup
       let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + 1", replyId))
       match response with
       | WorkerProtocol.WorkerResponse.WorkerError SageFsError.DaemonNotRunning -> ()
@@ -277,7 +275,7 @@ let makeSessionProxyTests =
     testAsync "WHY — GetCompletions has no daemon endpoint yet; empty matches, not a lie about being disconnected" {
       let execPost = fakePost (Ok (200, "{}"))
       let createPost = fakePost (Ok (200, "{}"))
-      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" testWarmupBudget
+      let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" TestTimeouts.jupyterBridgeWarmup
       let! response = proxy (WorkerProtocol.WorkerMessage.GetCompletions("List.", 5, replyId))
       match response with
       | WorkerProtocol.WorkerResponse.CompletionResult(rid, matches) ->

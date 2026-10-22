@@ -168,9 +168,10 @@ module JupyterDaemonBridge =
     // why it could not tell". The named exceptions are the ones the read
     // can actually raise; a wildcard would swallow a bug in the read
     // itself and report it as a session that is merely not ready yet.
-    with :? JsonException
-      | :? KeyNotFoundException
-      | :? InvalidOperationException ->
+    with
+    | :? JsonException
+    | :? System.Collections.Generic.KeyNotFoundException
+    | :? InvalidOperationException ->
       false
 
   /// Build a real `WorkerProtocol.SessionProxy` that routes `EvalCode` to
