@@ -3134,7 +3134,7 @@ let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
       do! SseContext.withModelAsync rctx.SseContext (fun model ->
         task {
           let entries = LiveTestState.statusEntriesForSession sid model.LiveTesting.TestState
-          answer := System.Text.Json.JsonSerializer.Serialize(entries, rctx.SseContext.SseJsonOpts)
+          answer := Json.serialize Json.standard entries
         })
       do! rawJsonResponse ctx answer.Value
     } :> Task

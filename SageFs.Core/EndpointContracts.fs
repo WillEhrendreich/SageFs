@@ -85,6 +85,7 @@ module EndpointContracts =
     Endpoint.create POST "/api/live-testing/debug" "Testing" "Hold one test for a debugger; answers the process to attach to"
     Endpoint.create POST "/api/live-testing/debug/continue" "Testing" "Release the held test once the debugger is attached, and wait for it to finish"
     Endpoint.create GET "/api/live-testing/status" "Testing" "Get testing status"
+    Endpoint.create GET "/api/live-testing/entries" "Testing" "Get the test list a batch frame no longer carries"
     Endpoint.create GET "/api/live-testing/file-annotations" "Testing" "Get gutter annotations"
     Endpoint.create GET "/api/live-testing/test-trace" "Testing" "Get test execution trace"
   ]
