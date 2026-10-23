@@ -3120,6 +3120,25 @@ let serveEvents (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNe
   }
 
 let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
+  // The entries `test_results_batch` used to carry on the wire, over HTTP: a 2,604-case run reaches a
+  // client as one ~990 KB `data:` line today, and the client materialises the whole string before it
+  // parses it. This is the read side of the split — a summary on the stream, the list from here.
+  // One read of the daemon's model, the same call `replayCachedTestState` makes to build the batch.
+  app.MapGet("/api/live-testing/entries", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let sid = ctx.Request.Query["session"].ToString()
+      let sid = if System.String.IsNullOrWhiteSpace sid then "" else sid
+      // The model access is awaited whether or not it has a model to give, so this cannot hang: with
+      // no model, or a session nobody holds, the answer is an empty list, which is the truth for it.
+      let answer = ref "[]"
+      do! SseContext.withModelAsync rctx.SseContext (fun model ->
+        task {
+          let entries = LiveTestState.statusEntriesForSession sid model.LiveTesting.TestState
+          answer := System.Text.Json.JsonSerializer.Serialize(entries, rctx.SseContext.SseJsonOpts)
+        })
+      do! rawJsonResponse ctx answer.Value
+    } :> Task
+  ) |> ignore
   app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       match! resolveStreamScope rctx.Config.SessionOps (ctx.Request.Query["sessionId"].ToString()) with
