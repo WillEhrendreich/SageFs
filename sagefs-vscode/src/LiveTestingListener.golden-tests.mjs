@@ -157,7 +157,36 @@ run("parseSummary consumes fallback decision golden fixture", () => {
 });
 
 run("parseResultsBatch consumes coverage decision golden fixture", () => {
-  const events = Array.from(parseResultsBatch(2n, readFixture("results-batch-with-coverage-decision.json")));
+  // The frame is a tally and no list: `entries` lives behind GET /api/live-testing/entries, so the
+  // golden frame on its own has nothing to apply, and parseResultsBatch returning [] here is what
+  // makes hydrateFrame fetch. The fields below are the ones the frame still carries.
+  const fixture = readFixture("results-batch-with-coverage-decision.json");
+  assert(
+    Array.from(parseResultsBatch(2n, fixture)).length === 0,
+    "a summary-only frame must parse to no events until its list is fetched",
+  );
+
+  // What hydrateFrame does when the fetch answers: the list is attached to the same frame, and the
+  // entries are shaped as the route sends them (SageFs.Json standard, Pascal).
+  fixture.Entries = [
+    {
+      TestId: "t1", DisplayName: "t 1", FullName: "M.t1",
+      Origin: { Case: "ReflectionOnly" }, Framework: { Case: "Expecto" }, Category: { Case: "Unit" },
+      CurrentPolicy: { Case: "OnEveryChange" },
+      Status: { Case: "Passed", Fields: ["00:00:00.0100000"] },
+      PreviousStatus: { Case: "Passed", Fields: ["00:00:00.0100000"] },
+      Provenance: { Case: "Compiled" },
+    },
+    {
+      TestId: "t2", DisplayName: "t 2", FullName: "M.t2",
+      Origin: { Case: "ReflectionOnly" }, Framework: { Case: "Expecto" }, Category: { Case: "Unit" },
+      CurrentPolicy: { Case: "OnEveryChange" },
+      Status: { Case: "Failed", Fields: ["boom"] },
+      PreviousStatus: { Case: "Passed", Fields: ["00:00:00.0100000"] },
+      Provenance: { Case: "Compiled" },
+    },
+  ];
+  const events = Array.from(parseResultsBatch(2n, fixture));
   assert(events.length === 2, `expected 2 events, got ${events.length}`);
   const discovered = events[0];
   const batch = events[1];
