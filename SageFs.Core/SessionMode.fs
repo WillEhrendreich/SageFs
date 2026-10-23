@@ -99,9 +99,16 @@ type SessionManagementOps = {
   /// "2/4 Scanned 12 files"), if any. `None` before the first line or once
   /// the session has left Starting. get_fsi_status surfaces this so a
   /// WarmingUp poll on a big repo shows real, moving evidence of progress
-  /// instead of a static "15-30s" estimate (fcs-trial-a/b: no progress
-  /// reporting was the single biggest complaint).
+  /// instead of a static "15-30s" estimate (fcs-trial-a/b/c: no progress
+  /// reporting was the single biggest friction).
   GetWarmupProgress: SessionId -> Task<string option>
+  /// Ask the session's worker for its test discovery and its instrumentation maps AGAIN — the one
+  /// post every daemon-side caller of an in-worker FSI host swap (soft reset or in-worker hard
+  /// reset) makes once the swap resolves Ok, because the fresh host was warmed from a fresh copy
+  /// whose probe numbering differs from the maps and the discovery the daemon still holds. The
+  /// daemon wires this to `SessionRefetch.postRefetchLiveTestingStateAfterReset`; the gate lives in
+  /// the mailbox, so a session that cannot honestly be asked is refused there, not silently skipped.
+  RefetchLiveTestingState: SessionId -> Task<unit>
 }
 
 module SessionManagementOps =
@@ -125,4 +132,5 @@ module SessionManagementOps =
     SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
     GetAdoptedCore = fun _ -> Task.FromResult(None)
     GetWarmupProgress = fun _ -> Task.FromResult(None)
+    RefetchLiveTestingState = fun _ -> Task.FromResult(())
   }

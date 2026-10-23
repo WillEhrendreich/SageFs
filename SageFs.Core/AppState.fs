@@ -1033,7 +1033,7 @@ let private observeEvalLatencyToHealthWatch (elapsedMs: float) : unit =
 let observeEvalLatency (observe: float -> unit) (elapsedMs: float) : unit =
   observe elapsedMs
 
-let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (webDevReload: HostAgent.WebDevReload) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
+let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (webDevReload: HostAgent.WebDevReload) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) (instrumentationMaps: Features.LiveTesting.InstrumentationMap array ref) =
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
   let emit evt = try onEvent evt with ex -> logger.LogWarning (sprintf "Event emission failed: %s" ex.Message)
 
@@ -1703,6 +1703,10 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                   HotReloadState = HotReloadState.empty
                   StartupConfig = None }
             logger.LogInfo "✅ Hard reset complete"
+            // The fresh copy was instrumented just above; keep ITS maps, so the worker's
+            // GetInstrumentationMaps answers for the copy the FSI host now runs — the creation-time
+            // array's probe numbering belonged to the disposed copy.
+            instrumentationMaps.Value <- instrMaps
             publishSnapshot newSt Idle evalStats
             emit (Events.SessionHardReset {| Rebuild = rebuild |})
             reply.Reply(Ok "Hard reset complete. Fresh session with re-copied assemblies.")
@@ -1996,4 +2000,4 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
     actor.PostAndAsyncReply(fun reply -> CancelEval reply)
     |> Async.StartAsTask
 
-  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getSessionStatus, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent
+  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getSessionStatus, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent, instrumentationMaps

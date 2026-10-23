@@ -225,7 +225,12 @@ let fileSize : (string * int) list =
     // scope. Deliberate and reviewed; still below the 3079 this file stood at before the effect handler
     // moved out. Ratchet back DOWN when this file is split; never bump to paper over drift.
     "SageFs/SageFsApp.fs", 2509
-    "SageFs.Core/AppState.fs", 1999
+    // 1999 -> 2003: a one-time bump for the swap-refetch slice (roadmap "Level the REPL after a
+    // patch without losing it"): mkAppStateActor now threads an InstrumentationMapsRef, and the
+    // hard-reset arm writes the FRESH shadow copy's maps into it so GetInstrumentationMaps stops
+    // serving the creation-time array — a deliberate, reviewed fix, not silent accretion. Ratchet
+    // back DOWN when this file is split; never bump to paper over drift.
+    "SageFs.Core/AppState.fs", 2003
     // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
     // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
     // reviewed feature, not silent accretion. Ratchet back DOWN when

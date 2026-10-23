@@ -66,6 +66,7 @@ module ElmDaemonTestHelpers =
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
+      RefetchLiveTestingState = fun _ -> async { return () }
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
 

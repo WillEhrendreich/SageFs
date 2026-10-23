@@ -68,6 +68,9 @@ let createEffectDeps
     TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     RegisterFileWatcher = fun _ _ -> ()
     DisposeFileWatcher = fun _ _ -> ()
+    RefetchLiveTestingState = fun sessionId ->
+      // The one post the editor/dashboard reset effects make once an in-worker reset resolves Ok.
+      async { SessionRefetch.postRefetchLiveTestingStateAfterReset sessionManager sessionId }
   }
 
 /// Create an ElmProgram wired to real SageFs components.

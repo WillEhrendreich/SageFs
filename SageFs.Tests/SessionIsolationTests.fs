@@ -55,6 +55,7 @@ module McpSessionIsolation =
           AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
           SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
           GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None)
+          RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
           GetWarmupProgress = fun _ -> System.Threading.Tasks.Task.FromResult(None)
         }
         SessionMap = sessionMap
@@ -166,6 +167,7 @@ module McpSessionIsolation =
             AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
             SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
             GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None)
+            RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
             GetWarmupProgress = fun _ -> System.Threading.Tasks.Task.FromResult(None) }
           SessionMap = sessionMap
           McpPort = 0
@@ -423,6 +425,7 @@ module WorkingDirRoutingPriority =
           AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
           SwitchWorkflow = fun _ _ -> Task.FromResult(Error(SageFsError.HardResetFailed "Not available"))
           GetAdoptedCore = fun _ -> Task.FromResult(None)
+          RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
           GetWarmupProgress = fun _ -> Task.FromResult(None) }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
@@ -457,6 +460,7 @@ module WorkingDirRoutingPriority =
           AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
           SwitchWorkflow = fun _ _ -> Task.FromResult(Error(SageFsError.HardResetFailed "Not available"))
           GetAdoptedCore = fun _ -> Task.FromResult(None)
+          RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
           GetWarmupProgress = fun _ -> Task.FromResult(None) }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
@@ -652,6 +656,7 @@ module ResetIsolation =
       AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
       SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
       GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None)
+      RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
       GetWarmupProgress = fun _ -> System.Threading.Tasks.Task.FromResult(None)
     }
     let ctx =
@@ -754,6 +759,7 @@ module ResetIsolation =
       AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
       SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
       GetAdoptedCore = fun _ -> Task.FromResult(None)
+      RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
       GetWarmupProgress = fun _ -> Task.FromResult(None) }
 
     let ctx =
@@ -840,6 +846,7 @@ module ResetIsolation =
         AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
         GetAdoptedCore = fun _ -> Task.FromResult(None)
+        RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
         GetWarmupProgress = fun _ -> Task.FromResult(None)
       }
 
@@ -1011,6 +1018,7 @@ module ResetIsolation =
         AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
         GetAdoptedCore = fun _ -> Task.FromResult(None)
+        RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
         GetWarmupProgress = fun _ -> Task.FromResult(None)
       }
 
@@ -1100,6 +1108,7 @@ module ResetIsolation =
         AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
         GetAdoptedCore = fun _ -> Task.FromResult(None)
+        RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
         GetWarmupProgress = fun _ -> Task.FromResult(None)
       }
 
@@ -1514,6 +1523,7 @@ module SessionMapEviction =
         AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
         GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None)
+        RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
         GetWarmupProgress = fun _ -> System.Threading.Tasks.Task.FromResult(None) }
       SessionMap = ConcurrentDictionary<string, string>()
       McpPort = 0

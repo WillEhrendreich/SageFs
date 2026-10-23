@@ -2295,7 +2295,10 @@ let run (sessionId: string) (requestedPort: int) = async {
   let readyHandler (msg: WorkerMessage) = async {
     match msg with
     | WorkerMessage.GetInstrumentationMaps(replyId) ->
-      return WorkerResponse.InstrumentationMapsResult(replyId, result.InstrumentationMaps)
+      // The LIVE holder, not the array frozen at actor creation: an in-worker hard reset
+      // re-instruments a fresh copy and writes the holder (AppState's EvalHardReset), so the
+      // daemon's refetch after a swap gets the probe numbering of the copy that actually runs.
+      return WorkerResponse.InstrumentationMapsResult(replyId, result.InstrumentationMapsRef.Value)
     | WorkerMessage.SetSaveSource(source, replyId) ->
       saveSource.Value <- source
       Log.info "Save pipeline: saves now come from %A" source

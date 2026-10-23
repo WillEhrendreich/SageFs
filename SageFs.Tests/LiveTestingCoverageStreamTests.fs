@@ -266,6 +266,7 @@ module private Edge =
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
+      RefetchLiveTestingState = fun _ -> async { return () }
       TestCycleCancellation = TestCycleCancellation.create () }
 
 [<Tests>]

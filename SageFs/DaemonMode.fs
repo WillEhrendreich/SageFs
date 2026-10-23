@@ -706,6 +706,12 @@ let createSessionOpsWithRecovery
       task { return (readSnapshot()).AdoptedCore |> Map.tryFind sessionId }
     GetWarmupProgress = fun sessionId ->
       task { return (readSnapshot()).WarmupProgress |> Map.tryFind sessionId }
+    // The one post every in-worker reset that resolved Ok makes (SageFs.McpTools.resetSession,
+    // the editor's reset effects, the dashboard's reset button): the fresh FSI host was warmed
+    // from a fresh copy, so discovery and maps must be asked of it again. Fire-and-forget — the
+    // mailbox's own gate decides whether the session can be asked at all.
+    RefetchLiveTestingState = fun sessionId ->
+      task { SessionRefetch.postRefetchLiveTestingStateAfterReset sessionManager sessionId }
     UpdateSessionStatus = fun sessionId (status: WorkerProtocol.SessionLifecycleStatus) ->
       task {
         sessionManager.Post(
@@ -4457,12 +4463,15 @@ let run
     ResetSession = fun sid -> task {
       let sidStr = WorkerProtocol.SessionId.value sid
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.ResetSession "dash")
-      return
-        match result with
-        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) -> Ok "Session reset successfully"
-        | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error e)) -> Error (sprintf "Reset failed: %A" e)
-        | Ok other -> Error (sprintf "Unexpected: %A" other)
-        | Error e -> Error (SageFsError.describe e)
+      match result with
+      | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
+        // Resolved Ok, so the one post every in-worker reset owes: the fresh host runs a fresh
+        // copy, and the daemon re-fetches this session's discovery and instrumentation maps.
+        do! sessionOps.RefetchLiveTestingState sid
+        return Ok "Session reset successfully"
+      | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error e)) -> return Error (sprintf "Reset failed: %A" e)
+      | Ok other -> return Error (sprintf "Unexpected: %A" other)
+      | Error e -> return Error (SageFsError.describe e)
     }
     HardResetSession = fun sid -> task {
       let! result = sessionOps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker)

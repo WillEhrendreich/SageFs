@@ -108,6 +108,12 @@ type EffectDeps = {
   RegisterFileWatcher: string -> string -> unit
   /// Dispose the OS file watcher for the given session's project directory
   DisposeFileWatcher: string -> string -> unit
+  /// Ask the session's worker for its test discovery and its instrumentation maps AGAIN — the one
+  /// post the editor/dashboard reset effects make once an in-worker reset resolves Ok, because the
+  /// fresh FSI host was warmed from a fresh copy whose probe numbering differs from the maps and
+  /// the discovery the daemon still holds. The daemon wires this to
+  /// `SessionRefetch.postRefetchLiveTestingStateAfterReset`; the gate lives in the mailbox.
+  RefetchLiveTestingState: SessionId -> Async<unit>
 }
 
 /// Routes SageFsEffect to real infrastructure via injected deps.
@@ -517,7 +523,13 @@ module SageFsEffectHandler =
         withSession deps dispatch None (fun sid proxy ->
           async {
             let replyId = newReplyId ()
-            let! _ = proxy (WorkerMessage.ResetSession replyId)
+            let! resp = proxy (WorkerMessage.ResetSession replyId)
+            match resp with
+            | WorkerResponse.ResetResult (_, Ok ()) ->
+              // Resolved Ok, so the one post every in-worker reset owes: the fresh FSI host was
+              // warmed from a fresh copy, and the daemon re-fetches this session's discovery and maps.
+              do! deps.RefetchLiveTestingState sid
+            | _ -> ()
             dispatch (SageFsMsg.Event (
               TuiEvent.SessionStatusChanged (SessionId.value sid, SessionDisplayStatus.Starting)))
           })
@@ -526,7 +538,13 @@ module SageFsEffectHandler =
         withSession deps dispatch None (fun sid proxy ->
           async {
             let replyId = newReplyId ()
-            let! _ = proxy (WorkerMessage.HardResetSession (false, replyId))
+            let! resp = proxy (WorkerMessage.HardResetSession (false, replyId))
+            match resp with
+            | WorkerResponse.HardResetResult (_, Ok _) ->
+              // Resolved Ok, so the one post every in-worker reset owes: the fresh FSI host
+              // re-instrumented a fresh copy, and the daemon re-fetches discovery and maps.
+              do! deps.RefetchLiveTestingState sid
+            | _ -> ()
             dispatch (SageFsMsg.Event (
               TuiEvent.SessionStatusChanged (SessionId.value sid, SessionDisplayStatus.Restarting)))
           })
@@ -551,6 +569,13 @@ module SageFsEffectHandler =
               | _ -> return Error "unexpected response"
             }
             let! outcome = SmartReset.execute soft hard |> Async.AwaitTask
+            match outcome with
+            | SmartReset.Outcome.SoftResetSucceeded
+            | SmartReset.Outcome.EscalatedToHardReset _ ->
+              // Whichever reset resolved Ok, the one post every in-worker reset owes: the fresh
+              // FSI host runs a fresh copy, and the daemon re-fetches discovery and maps.
+              do! deps.RefetchLiveTestingState sid
+            | SmartReset.Outcome.AllResetsFailed _ -> ()
             let status =
               match outcome with
               | SmartReset.Outcome.SoftResetSucceeded ->

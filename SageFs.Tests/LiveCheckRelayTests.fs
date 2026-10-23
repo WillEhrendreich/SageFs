@@ -245,6 +245,7 @@ let liveCheckRelayTests =
               }
           ReadyDeadline = Timeouts.rebuildReadyWait
           GetWarmupContext = None
+          RefetchLiveTestingState = fun _ -> async { return () }
           TestCycleCancellation = TestCycleCancellation.create ()
           RegisterFileWatcher = fun _ _ -> ()
           DisposeFileWatcher = fun _ _ -> () }

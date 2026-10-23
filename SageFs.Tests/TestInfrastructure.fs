@@ -1197,6 +1197,7 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
     AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
     SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
     GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None)
+    RefetchLiveTestingState = fun _ -> System.Threading.Tasks.Task.FromResult(())
     GetWarmupProgress = fun _ -> System.Threading.Tasks.Task.FromResult(None) }
 
 /// Create a McpContext backed by the global shared actor

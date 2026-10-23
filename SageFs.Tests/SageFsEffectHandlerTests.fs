@@ -113,6 +113,7 @@ module TestDeps =
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
+      RefetchLiveTestingState = fun _ -> async { return () }
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
 
@@ -153,6 +154,7 @@ module TestDeps =
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
+      RefetchLiveTestingState = fun _ -> async { return () }
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
 
@@ -790,6 +792,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       GetWarmupContext = Some getWarmupCtx
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
+      RefetchLiveTestingState = fun _ -> async { return () }
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
     do! SageFsEffectHandler.execute deps dispatch
@@ -831,6 +834,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
+      RefetchLiveTestingState = fun _ -> async { return () }
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
     do! SageFsEffectHandler.execute deps dispatch
@@ -874,6 +878,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         Some (fun _ -> async { ctxCalled <- true; return None })
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
+      RefetchLiveTestingState = fun _ -> async { return () }
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
     do! SageFsEffectHandler.execute deps dispatch
@@ -950,6 +955,7 @@ module RunEndHarness =
         GetWarmupContext = None
         RegisterFileWatcher = fun _ _ -> ()
         DisposeFileWatcher = fun _ _ -> ()
+        RefetchLiveTestingState = fun _ -> async { return () }
         TestCycleCancellation = TestCycleCancellation.create ()
       }
       let messages = System.Collections.Concurrent.ConcurrentQueue<SageFsMsg>()

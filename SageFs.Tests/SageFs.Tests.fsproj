@@ -417,6 +417,7 @@
          <Compile Include="SessionManagerEarnedReadyTests.fs" />
          <Compile Include="SessionManagerRebuildOutcomeTests.fs" />
          <Compile Include="WorkerPostReadyRefetchTests.fs" />
+         <Compile Include="SwapRefetchTests.fs" />
          <Compile Include="SessionReloadTests.fs" />
          <Compile Include="ReplFreshnessTests.fs" />
          <Compile Include="AvailableProjectsDirectoryTests.fs" />

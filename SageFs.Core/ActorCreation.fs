@@ -85,8 +85,12 @@ type ActorResult = {
   ProjectDirectories: string list
   /// Shared hot-reload state — file watcher reads, API writes.
   HotReloadStateRef: HotReloadState.T ref
-  /// IL coverage instrumentation maps from shadow-copy instrumentation.
-  InstrumentationMaps: Features.LiveTesting.InstrumentationMap array
+  /// IL coverage instrumentation maps from shadow-copy instrumentation — a live holder, because an
+  /// in-worker hard reset re-instruments a FRESH shadow copy: `EvalHardReset` writes the holder with
+  /// the fresh maps, and the worker's `GetInstrumentationMaps` answer reads the holder, so the
+  /// answer always names the copy the FSI host NOW runs rather than the array frozen at actor
+  /// creation (whose probe numbering belonged to the disposed copy).
+  InstrumentationMapsRef: Features.LiveTesting.InstrumentationMap array ref
   /// Each project file with the assembly path the session actually loads
   /// (the shadow copy when shadowing), for running its entry point.
   ProjectTargets: (string * string) list
@@ -184,11 +188,13 @@ let createActorImmediate a =
       |> List.collect (fun p -> p.PackageRefs)
       |> WorkflowTypes.ProjectKind.classify
     SessionAgent.webDevReloadFor a.Workflow kind a.ReloadPort
-  let appActor, diagnosticsChanged, cancelEval, getSessionState, getSessionStatus, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent =
-    mkAppStateActor a.FsiKind a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled webDevReload a.OnEvent tracedBuild sln
+  // The ONE holder of what GetInstrumentationMaps serves: initialised with the maps just computed
+  // for the copy actor creation instrumented, written again by EvalHardReset's fresh copy.
+  let appActor, diagnosticsChanged, cancelEval, getSessionState, getSessionStatus, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent, liveInstrumentationMaps =
+    mkAppStateActor a.FsiKind a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled webDevReload a.OnEvent tracedBuild sln (ref instrumentationMaps)
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = classified |> SageFs.ProjectLoading.withConcerns hostPrep.Concerns; CheckOptions = originalSln.FsProjects }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMapsRef = liveInstrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = classified |> SageFs.ProjectLoading.withConcerns hostPrep.Concerns; CheckOptions = originalSln.FsProjects }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

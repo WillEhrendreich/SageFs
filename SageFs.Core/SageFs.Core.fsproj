@@ -446,6 +446,9 @@
              restarted or failing a command. -->
         <Compile Include="SupervisorWatchdog.fs" />
         <Compile Include="SessionManager.fs" />
+        <!-- After SessionManager: posts the one refetch every daemon-side caller of an in-worker
+             reset makes once the reset resolves Ok (SessionCommand.RefetchLiveTestingState). -->
+        <Compile Include="SessionRefetch.fs" />
         <Compile Include="SessionOperations.fs" />
         <Compile Include="AgentActivityTracker.fs" />
         <!-- The daemon stops an agent's session once its connection has been gone and it has been idle for the bound.

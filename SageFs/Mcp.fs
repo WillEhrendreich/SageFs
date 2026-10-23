@@ -1758,6 +1758,15 @@ module McpTools =
         | Error msg -> Error (SageFsError.ScriptLoadFailed (routeErrorMessage msg))
     })
 
+  /// The side effects a caller-driven reset owes the moment its reset resolves Ok — including the one rule every in-worker reset path follows: ask the worker for the session's discovery and maps again.
+  let private resetResolvedOk (ctx: McpContext) (sid: string) (previousStatus: WorkerProtocol.SessionLifecycleStatus) : Task<unit> =
+    task {
+      do! setSnapshotStatus ctx sid (readyAfterReset previousStatus)
+      compilationStates.TryRemove(sid) |> ignore
+      notifyElm ctx (TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+      do! ctx.SessionOps.RefetchLiveTestingState (toSessionId sid)
+    }
+
   let resetSession (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSessionAllowFaulted ctx agent sessionId workingDirectory (fun sid -> task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1766,8 +1775,7 @@ module McpTools =
         |> Option.map (fun sessionInfo -> sessionInfo.Status)
         |> Option.defaultValue (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.Unexplained WorkerProtocol.FaultOrigin.NotRecorded))
       do! setSnapshotStatus ctx sid (startingWhileReset previousStatus)
-      notifyElm ctx (
-        TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
+      notifyElm ctx (TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
         task {
           try
@@ -1781,10 +1789,7 @@ module McpTools =
         }
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
-        do! setSnapshotStatus ctx sid (readyAfterReset previousStatus)
-        compilationStates.TryRemove(sid) |> ignore
-        notifyElm ctx (
-          TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+        do! resetResolvedOk ctx sid previousStatus
         // Pushback: resetting a healthy (Ready) session destroys live REPL
         // definitions — say so explicitly. Faulted/Starting sessions have
         // nothing to lose, so no warning.
@@ -1795,8 +1800,7 @@ module McpTools =
         return sprintf "%sSession reset successfully. All previous definitions have been cleared." warning
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
         do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report (SageFsError.describe err)))
-        notifyElm ctx (
-          TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
+        notifyElm ctx (TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
         return sprintf "Error: %s" (SageFsError.describeForAgent err)
       | Ok other ->
         do! setSnapshotStatus ctx sid previousStatus
@@ -1824,8 +1828,7 @@ module McpTools =
         |> Option.map (fun sessionInfo -> sessionInfo.Status)
         |> Option.defaultValue (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.Unexplained WorkerProtocol.FaultOrigin.NotRecorded))
       do! setSnapshotStatus ctx sid (startingWhileReset previousStatus)
-      notifyElm ctx (
-        TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
+      notifyElm ctx (TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
         task {
           try
@@ -1839,10 +1842,7 @@ module McpTools =
         }
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
-        do! setSnapshotStatus ctx sid (readyAfterReset previousStatus)
-        compilationStates.TryRemove(sid) |> ignore
-        notifyElm ctx (
-          TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+        do! resetResolvedOk ctx sid previousStatus
         let warning =
           match previousStatus with
           | WorkerProtocol.SessionLifecycleStatus.Ready _ -> "⚠️ NOTE: resetting clears all REPL definitions and evaluation history. "
@@ -1850,8 +1850,7 @@ module McpTools =
         return Ok (sprintf "%sSession reset successfully. All previous definitions have been cleared." warning)
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
         do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report (SageFsError.describe err)))
-        notifyElm ctx (
-          TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
+        notifyElm ctx (TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
         return Error err
       | Ok other ->
         do! setSnapshotStatus ctx sid previousStatus
