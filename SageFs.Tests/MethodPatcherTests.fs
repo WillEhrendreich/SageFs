@@ -60,12 +60,26 @@ let tests =
       TestMethods.MethodToPatch "test" |> ignore
       TestMethods.IsPatched |> Expect.isTrue "prefix patch should have been called"
 
-    testCase "patching a method whose body calls sprintf is refused with InvalidProgramException, on net10 and net11 alike"
+    // Harmony copies the original's IL and rewrites it, and what the F# compiler emits for `sprintf`
+    // depends on optimization rather than on the framework. The optimized IL is refused, on net10 and
+    // net11 alike (both Release tiers pass this case), and the unoptimized IL that a Debug build emits
+    // patches and runs. Asserting only the refusal left the suite red on every Debug run, which is the
+    // lane the inner loop actually uses, so both are asserted and each branch says what it proves.
+    testCase "the optimized sprintf IL is refused with InvalidProgramException on net10 and net11 alike, and the unoptimized one patches"
     <| fun _ ->
       let harmony = new Harmony("test.patch.sprintf")
       let original = typeof<TestMethods>.GetMethod("SprintfMethodToPatch")
       let prefix = typeof<TestMethods>.GetMethod("PrefixPatch")
-      Expect.throwsT<InvalidProgramException>
-        "Harmony rewrites the original's IL, and the IL the F# compiler emits for sprintf is rejected"
-        (fun () -> harmony.Patch(original, prefix = new HarmonyMethod(prefix)) |> ignore)
+      let debuggable = typeof<TestMethods>.Assembly.GetCustomAttribute<System.Diagnostics.DebuggableAttribute>()
+      let unoptimized = not (isNull debuggable) && debuggable.IsJITOptimizerDisabled
+      match unoptimized with
+      | true ->
+        TestMethods.IsPatched <- false
+        harmony.Patch(original, prefix = new HarmonyMethod(prefix)) |> ignore
+        TestMethods.SprintfMethodToPatch "test" |> ignore
+        TestMethods.IsPatched |> Expect.isTrue "the prefix ran, so the unoptimized IL patched and the method is callable"
+      | false ->
+        Expect.throwsT<InvalidProgramException>
+          "Harmony rewrites the original's IL, and the optimized IL the F# compiler emits for sprintf is rejected"
+          (fun () -> harmony.Patch(original, prefix = new HarmonyMethod(prefix)) |> ignore)
   ]
