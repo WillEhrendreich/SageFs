@@ -107,8 +107,10 @@ type WarmupContextInfo =
     FailedOpens: string array array
     WarmupDurationMs: int }
 
-[<Import("httpGet", "./http-helpers.js")>]
-let httpGetRaw (url: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative
+// One Import for http-helpers.js's GET, in JsHelpers: it compiles before this file and before
+// LiveTestingListener, which also needs it, so the spelling lives once.
+let httpGetRaw (url: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> =
+  JsHelpers.httpGetRaw url timeout
 
 [<Import("httpPost", "./http-helpers.js")>]
 let httpPostRaw (url: string) (body: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative

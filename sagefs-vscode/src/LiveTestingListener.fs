@@ -443,6 +443,34 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     | "state" | "session" | "domain_model" | "warmup_completed" -> true
     | _ -> false
 
+  /// Deliver a frame, and go and get its list when the frame carries a tally and no list. The stream
+  /// sends a summary now and the list lives behind GET /api/live-testing/entries, so a discovery can
+  /// arrive with nothing to render. The frame is delivered first (the tally and the verdict do not
+  /// depend on the entries), then the list is fetched and the same frame is delivered again with it.
+  /// The deliverer is a parameter, so this needs no forward reference to `processEvent` and no
+  /// mutable hook to find it.
+  let hydrateFrame (sseUrl: string) (deliver: string -> obj -> unit) (eventType: string) (data: obj) : unit =
+    deliver eventType data
+    if eventType <> "test_results_batch" && eventType <> "test_run_completed" then () else
+    if not (List.isEmpty (parseResultsBatch discoveryGen data)) then () else
+    match fieldString "sessionId" data with
+    | Some sid when sid <> "" ->
+      let noQuery = sseUrl.Split([| '?' |]).[0]
+      let origin = noQuery.Substring(0, noQuery.LastIndexOf '/')
+      let url = sprintf "%s/api/live-testing/entries?session=%s" origin (System.Uri.EscapeDataString sid)
+      // Fire and forget: the tally is already applied, so a failed fetch leaves an empty panel
+      // rather than a wrong one, and the next discovery or run brings the list anyway.
+      // The shape JsHelpers uses for a promise nobody waits on: map the side effect, drop the
+      // resulting promise. The tally is already applied above, so a fetch that fails leaves an
+      // empty panel rather than a wrong one.
+      httpGetRaw url 15000
+      |> Promise.map (fun resp ->
+        if resp.statusCode = 200 && resp.body <> "" then
+          data?Entries <- jsonParse resp.body
+          deliver eventType data)
+      |> ignore
+    | _ -> ()
+
   let processEvent (eventType: string) (data: obj) =
     tryHandleEvent eventType (fun () ->
       // Skip session-scoped events that don't match the active session filter.
@@ -632,19 +660,19 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
   let disposable =
     match onReconnect, log with
     | Some reconnectFn, Some logger ->
-      subscribeTypedSseWithReconnect url processEvent (fun () ->
+      subscribeTypedSseWithReconnect url (hydrateFrame url processEvent) (fun () ->
         state <- VscLiveTestState.empty
         discoveryGen <- 0L
         observedSessions <- []  // the daemon replays its active session; the filter stays as the window set it
         reconnectFn ()
       ) disconnectFn logger
     | Some reconnectFn, None ->
-      subscribeTypedSseWithReconnect url processEvent (fun () ->
+      subscribeTypedSseWithReconnect url (hydrateFrame url processEvent) (fun () ->
         state <- VscLiveTestState.empty
         observedSessions <- []
         reconnectFn ()
       ) disconnectFn (fun msg -> try printfn "[SageFs SSE] %s" msg with _ -> ())
-    | _ -> subscribeTypedSse url processEvent
+    | _ -> subscribeTypedSse url (hydrateFrame url processEvent)
 
   { State = fun () -> state
     Summary = fun () -> VscLiveTestState.summary state

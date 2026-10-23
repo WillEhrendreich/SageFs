@@ -61,6 +61,12 @@ let promiseIgnoreLog (log: string -> unit) (p: JS.Promise<_>) : unit =
 
 // ── SSE subscribers with exponential backoff reconnect ──────────────────
 
+// The one binding for http-helpers.js's GET. It lives here, beside the SSE subscriber and before
+// every caller, because `LiveTestingListener` compiles before `SageFsClient` and needs it: a binding
+// defined after that file would not exist for it, which is the compile-order mistake it hit once.
+[<Import("httpGet", "./http-helpers.js")>]
+let httpGetRaw (url: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative
+
 [<Import("createSseSubscriber", "./sse-helpers.js")>]
 let private createSseSubscriber (url: string) (onMessage: string -> obj -> unit) (onReconnect: (unit -> unit) option) (logger: (string -> unit) option) (onDisconnect: (unit -> unit) option) : Disposable = jsNative
 
