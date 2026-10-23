@@ -269,6 +269,26 @@ list |> Expect.hasLength "should have 3 items" 3
 5. Commit with conventional commit messages
 6. Push and open a PR against `master`
 
+### Fork PRs wait for a maintainer to approve the run
+
+The `main build` workflow runs on `pull_request`, and a run from a fork sits at
+`action_required` until a maintainer approves it. While it waits, `gh pr checks` says
+`no checks reported`, so a missing result says nothing about your change. The approval
+is one command, and after it the run behaves like any other:
+
+```bash
+gh api -X POST "repos/WillEhrendreich/SageFs/actions/runs/<run-id>/approve"
+```
+
+The run id is on the PR's Checks tab, or from the API with the head sha:
+
+```bash
+gh api "repos/WillEhrendreich/SageFs/actions/runs?head_sha=<sha>" --jq '.workflow_runs[].id'
+```
+
+A PR whose head has no run at all has nothing to approve. Closing and reopening it makes
+`pull_request` fire again, and pushing a commit to the branch does the same.
+
 ### What Makes a Great PR
 
 - **Tests included**: new features need tests, bug fixes need a regression test
