@@ -7,11 +7,11 @@
 SageFs has **CRITICAL SILENT-FAILURE PATHS** where test discovery can report 0 tests without user-visible warnings:
 
 **5 Key Problem Areas:**
-1. **Async dispatch race** — nable_live_testing() reads state BEFORE Elm processes the enable message
-2. **Tree-sitter silently swallows errors** — Parse failures logged but NOT surfaced to state machine
-3. **No discovery-complete signal** — Can't distinguish "not enabled" from "enabled but 0 discovered"
-4. **Inverted logic in run_tests** — Check for activation state is backwards
-5. **Smoke test masks failures** — 0 tests is WARNING, not FAIL, so CI doesn't catch silent discovery failures
+1. **Async dispatch race**: nable_live_testing() reads state BEFORE Elm processes the enable message
+2. **Tree-sitter silently swallows errors**: Parse failures logged but NOT surfaced to state machine
+3. **No discovery-complete signal**: Can't distinguish "not enabled" from "enabled but 0 discovered"
+4. **Inverted logic in run_tests**: Check for activation state is backwards
+5. **Smoke test masks failures**: 0 tests is WARNING, not FAIL, so CI doesn't catch silent discovery failures
 
 ---
 
@@ -75,7 +75,7 @@ IO.Directory.GetFiles(dir, "*.fs", IO.SearchOption.AllDirectories)
 4. handleTestDiscovery continues, sums arrays, gets 0 total
 5. **No event fired for 0-count discovery**
 6. User sees: get_live_test_status() → {Enabled: true, Summary: {Total: 0, Passed: 0, Failed: 0}}
-7. User has NO IDEA why 0 tests — logs are in daemon, not visible
+7. User has NO IDEA why 0 tests: logs are in daemon, not visible
 
 **Call Site** (Line 734): Only dispatches TestLocationsDetected if array is non-empty
 \\\sharp
@@ -95,8 +95,8 @@ match Array.isEmpty locations with
 - Discovery crashed silently
 
 **Current Events**:
-- TestLocationsDetected(locations) — ONLY fired if count > 0
-- TestsDiscovered(tests) — ONLY fired if count > 0
+- TestLocationsDetected(locations): ONLY fired if count > 0
+- TestsDiscovered(tests): ONLY fired if count > 0
 - **No event fired if empty** → silent
 
 **Result**:
@@ -332,9 +332,9 @@ WHEN TO USE:
 - To distinguish "pending" from "failed" discovery
 
 RETURNS:
-- '✅ ACTIVE with N tests' — ready to run_tests
-- '⏳ ACTIVE, but 0 tests yet' — still discovering
-- '❌ INACTIVE' — enable_live_testing() didn't complete or was disabled
+- '✅ ACTIVE with N tests': ready to run_tests
+- '⏳ ACTIVE, but 0 tests yet': still discovering
+- '❌ INACTIVE': enable_live_testing() didn't complete or was disabled
 
 USAGE PATTERN (for agents):
   enable_live_testing()
@@ -492,4 +492,4 @@ if ( -eq 0) {
 | Inverted check | Wrong error message | Fix line 2270 boolean logic | Test both activation states |
 | Smoke test mute | CI passes with broken discovery | Fail if project should have tests | Check-script filesystem structure |
 
-All fixes maintain **backward compatibility** — new enum values and fields are additive.
+All fixes maintain **backward compatibility**, new enum values and fields are additive.

@@ -301,7 +301,9 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
 /// its life must not hang on whichever client happened to start it. A daemon on
 /// any other port is refused unless it names an owner (or a ttl), so there the
 /// bridge is the owner and the daemon goes when its client does. This is the
-/// same split `decideCustomPortOwnership` makes on the daemon's side.
+/// same split `decideCustomPortOwnership` makes on the daemon's side, and
+/// `homePort` is that same baseline — the configured port, so a port the user
+/// set in the Settings panel is home rather than somebody's temporary daemon.
 let ownerArguments (homePort: int) (mcpPort: int) (bridgePid: int) : string list =
   match mcpPort = homePort with
   | true -> []
@@ -329,7 +331,7 @@ let startDaemonProcess (mcpPort: int) : Task<Result<unit, string>> =
       MachineStartup.withoutDerivedTier psi.Environment
       psi.ArgumentList.Add("--mcp-port")
       psi.ArgumentList.Add(string mcpPort)
-      ownerArguments SageFsConfig.McpPortFromEnv mcpPort (Process.GetCurrentProcess().Id)
+      ownerArguments (DaemonPort.configured ()) mcpPort (Process.GetCurrentProcess().Id)
       |> List.iter psi.ArgumentList.Add
       let proc = Process.Start(psi)
       proc.OutputDataReceived.Add(fun e ->

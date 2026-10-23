@@ -18,7 +18,7 @@ These are the key decisions that shape SageFs's architecture, written to explain
 **Decision**: All client reads flow through a single SSE stream (`/events` or `/api/state`).
 No GET endpoints return domain data. POST endpoints return only acknowledgment (`202 Accepted`).
 
-**Why**: SageFs has 6 concurrent frontends — VS Code, Neovim, Visual Studio, TUI, Raylib GUI,
+**Why**: SageFs has 6 concurrent frontends. VS Code, Neovim, Visual Studio, TUI, Raylib GUI,
 and the web dashboard. If each frontend polled for state, we'd need rate limiting, cache
 invalidation, and stale-data reconciliation across all 6. SSE pushes updates instead: when
 state changes, every connected client gets the update within milliseconds.

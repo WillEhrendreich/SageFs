@@ -1,6 +1,6 @@
 # Informal Specification: SseReplayBuffer
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 > Source: `SageFs.Core/SseReplayBuffer.fs`
 
 ---
@@ -22,7 +22,7 @@ increasing sequence IDs (seqIds) to every event it stores.
 
 ### `SequencedSseEvent`
 A record holding `SeqId : int64`, `EventType : string`, `Payload : string`,
-`Timestamp : DateTimeOffset`. For correctness purposes, only `SeqId` matters — the
+`Timestamp : DateTimeOffset`. For correctness purposes, only `SeqId` matters, the
 content fields are irrelevant to replay logic.
 
 ### `ReplayResult`
@@ -46,7 +46,7 @@ serves as the current seqId counter.
 
 ---
 
-## `push` — assign seqId and store
+## `push`, assign seqId and store
 
 **Signature**: `push eventType payload buffer → (seqId, newBuffer)`
 
@@ -57,12 +57,12 @@ serves as the current seqId counter.
 4. If the ring was full, the oldest event is evicted (count stays at capacity).
 5. If the ring was not full, count increases by 1.
 
-**SeqId monotonicity**: SeqIds are strictly increasing — no two pushes produce
+**SeqId monotonicity**: SeqIds are strictly increasing, no two pushes produce
 the same seqId.
 
 ---
 
-## `replayFrom` — reconnect replay
+## `replayFrom`, reconnect replay
 
 **Signature**: `replayFrom lastSeenId buffer → ReplayResult`
 
@@ -74,22 +74,22 @@ Let:
 
 **Cases**:
 
-### Case 1 — Up-to-date (`lastSeenId ≥ total`)
+### Case 1: Up-to-date (`lastSeenId ≥ total`)
 The client is already current. Nothing to replay.
 → **`Replayed []`**
 
-### Case 2 — Empty ring, not current (`cnt = 0 ∧ lastSeenId < total`)
+### Case 2: Empty ring, not current (`cnt = 0 ∧ lastSeenId < total`)
 Events have been pushed but none are retained (pathological: capacity = 0 or all
 evicted). Cannot replay anything.
 → **`GapDetected (total + 1)`**
 Note: `total + 1` is the seqId of the *next* event that will be pushed, not an
 existing one.
 
-### Case 3 — Gap detected (`cnt > 0 ∧ firstWanted < oldestAvailable`)
+### Case 3: Gap detected (`cnt > 0 ∧ firstWanted < oldestAvailable`)
 The client missed events that have been evicted.
 → **`GapDetected oldestAvailable`**
 
-### Case 4 — No gap (`cnt > 0 ∧ firstWanted ≥ oldestAvailable ∧ lastSeenId < total`)
+### Case 4: No gap (`cnt > 0 ∧ firstWanted ≥ oldestAvailable ∧ lastSeenId < total`)
 All missed events are still in the ring. Returns exactly `total - lastSeenId` events
 in seqId order (oldest first). Each event's `SeqId` matches its position in the
 sequence.
@@ -130,9 +130,9 @@ sequence.
 | 5 | 3 | 6 | `Replayed []` (future, treated as up-to-date) |
 | 5 | 0 | 3 | `GapDetected 6` (empty ring) |
 | 5 | 3 | 1 | `GapDetected 3` (oldest=3, firstWanted=2 < 3) |
-| 5 | 3 | 2 | `Replayed [e3, e4, e5]` — 3 events, ids 3..5 |
-| 5 | 3 | 3 | `Replayed [e4, e5]` — 2 events |
-| 5 | 3 | 4 | `Replayed [e5]` — 1 event |
+| 5 | 3 | 2 | `Replayed [e3, e4, e5]`. 3 events, ids 3..5 |
+| 5 | 3 | 3 | `Replayed [e4, e5]`. 2 events |
+| 5 | 3 | 4 | `Replayed [e5]`. 1 event |
 | 0 | 0 | 0 | `Replayed []` (no events ever pushed) |
 
 ---

@@ -4,7 +4,7 @@ Working applications demonstrating SageFs with different frameworks.
 
 ## Projects
 
-### 🎨 Raylib Hello — Animated Shapes
+### 🎨 Raylib Hello: Animated Shapes
 
 A simple Raylib window with animated circle and pulsing ring.
 Great for learning how SageFs hot-reloads graphics code.
@@ -14,10 +14,10 @@ cd SageFs.Samples.RaylibHello
 dotnet run
 ```
 
-Change colors, shapes, or animation speeds — SageFs patches function
+Change colors, shapes, or animation speeds. SageFs patches function
 pointers via Harmony, so your changes appear instantly in the running window.
 
-### 🎮 Raylib Game — Star Catcher
+### 🎮 Raylib Game: Star Catcher
 
 A simple game: catch falling stars with arrow keys. Demonstrates game loops,
 scoring, and collision detection.
@@ -27,7 +27,7 @@ cd SageFs.Samples.RaylibGame
 dotnet run
 ```
 
-### 🌐 Webapp Datastar — Reactive Todo List
+### 🌐 Webapp Datastar: Reactive Todo List
 
 A real-time web application using Falco (F# web framework) and Datastar
 (SSE-based reactivity). Add, toggle, and delete todos with instant updates.
@@ -52,11 +52,11 @@ editor, the dashboard or an MCP client, and start the app with `run_app` (VS Cod
 **SageFs: Run App**). There is no `sagefs watch` command.
 
 SageFs provides:
-- **Hot reload** — edit functions and see changes in the running app. How a save reaches
+- **Hot reload**: edit functions and see changes in the running app. How a save reaches
   an app that `run_app` started (a restart or a patch, and what that does to its state) is
   in [docs/hot-reload.md](../../docs/hot-reload.md)
-- **Alt+Enter** — evaluate any expression inline
-- **Gutter markers** — see test results next to your code
+- **Alt+Enter**: evaluate any expression inline
+- **Gutter markers**: see test results next to your code
 
 `SageFs.Samples.ConsoleTicker` (and its `.Tests` project) is a console demo that is not
 described above.

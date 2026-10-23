@@ -2,15 +2,15 @@
 
 Read this when a SageFs tool errors, an eval gives a result that disagrees with the code in front of you, a lease or build is refused or delayed, or the REPL feels like it is fighting you.
 
-## "404 Session not found" — read this FIRST, it is not what it looks like
+## "404 Session not found": read this FIRST, it is not what it looks like
 
 **Your client is not broken. The connection is LIVE and pointing at a session that
 no longer exists.**
 
 The MCP session lives in the DAEMON'S MEMORY. The SDK mints an
 `Mcp-Session-Id` when a client sends `initialize`, and the daemon holds it in
-its process. When the daemon is RESTARTED — which SageFs does on purpose every
-time a new build is installed, so you get the new code — the new daemon has never
+its process. When the daemon is RESTARTED, which SageFs does on purpose every
+time a new build is installed, so you get the new code, the new daemon has never
 heard of that id, and every request the client makes is refused. Measured, same id
 and same port either side of a restart:
 
@@ -58,11 +58,18 @@ That works for any client that spawns a command, not just Claude Code. See
 
 **Say which side the fix is on.** Reconnecting is something to RUN. Whether the
 client heals ITSELF is a change to that client's MCP transport, not to this
-repo — so if the user wants it automatic, tell them it is their side rather than
+repo, so if the user wants it automatic, tell them it is their side rather than
 implying the command closes it.
 
 ## Things that will bite you
 
+- **A tool call through the `sagefs mcp` bridge gets NO answer at all, and the ones that hang
+  are the ones whose argument string ends in a newline.** JSON forbids a literal newline inside a
+  string, and a client that writes one anyway sends a message the bridge cannot parse. Before
+  0.6.916 the bridge could only log that to stderr, so the call hung for good and the only thing
+  the caller saw was silence. Since 0.6.916 the bridge digs the request id out of the text and
+  answers it with the daemon's own refusal, which names what it choked on. If you are on an older
+  build, send the newline escaped (`\n`) or the code from a file.
 - **A cohort tool (`acquire_claim`, `release_claim`, `request_landing`) says you have not
   joined, or refuses you after a successful `join_cohort`.** Cohorts are per repository.
   Pass the SAME `working_directory` (the repository you are working in) to `join_cohort`
@@ -101,14 +108,14 @@ implying the command closes it.
   - `"type not found, Version=..."` or a Core version mismatch.
   - `Could not load file or assembly 'System.Runtime, Version=N.0.0.0'` in
     worker stderr, on a project that builds fine on its own. That one means the
-    daemon's worker is on an older .NET than your project targets — it starts
+    daemon's worker is on an older .NET than your project targets, it starts
     fine and then chokes the moment it loads your DLLs.
   - No error at all: evals that quietly disagree with the code in front of you.
 
   **Check the daemon's version before you believe anything else.**
   `get_daemon_status` or `get_session_status`, `sagefs status`, or
   `/health`. If the daemon is behind the code
-  you're working on, say so and ask the user to restart it — that is the fix,
+  you're working on, say so and ask the user to restart it, that is the fix,
   and no amount of `hard_reset_fsi_session` will substitute for it, because the
   daemon process itself is the stale thing. Don't restart it yourself; it's
   theirs and other agents may be on it.
@@ -122,12 +129,12 @@ implying the command closes it.
 - **Clean up.** `stop_session` on every session you created. Kill only
   processes you started, by exact PID, never by name.
 
-## Busy versus broken — the distinction that matters most
+## Busy versus broken: the distinction that matters most
 
 When SageFs refuses or delays something, figure out which of these you're in
 before you do anything else. Getting this backwards is exactly how the
 incident in leases.md happened: every agent read "the REPL is fighting me" and
-reached for `dotnet`, when the REPL wasn't broken — the daemon was busy, and
+reached for `dotnet`, when the REPL wasn't broken, the daemon was busy, and
 `dotnet` spent the same memory anyway, outside its accounting, at the exact
 moment it was trying to shed load.
 
@@ -142,7 +149,7 @@ moment it was trying to shed load.
   the WRONG move here. **Wait the time it names, then retry the identical
   command or lease request.** Shelling out anyway, or spinning up your own
   daemon to get around a busy one, spends the exact memory SageFs is trying
-  to reclaim — invisibly to it. That is the whole mechanism of the incident
+  to reclaim, invisibly to it. That is the whole mechanism of the incident
   this section exists to prevent.
 
 If you genuinely cannot tell which one you're in, that itself is a bug: report
@@ -151,15 +158,15 @@ it exactly like a BROKEN case (tool, input, full error) rather than guessing.
 ## When the REPL fights you (this means BROKEN, not busy)
 
 Sometimes it will. A version skew, a load error, a tool that errors for reasons
-that aren't your code — this is the BROKEN case above, not the BUSY one. When
+that aren't your code, this is the BROKEN case above, not the BUSY one. When
 that happens:
 
 1. **Don't fall back silently.** Write down exactly what broke: the tool, the
    input, the full error.
 2. Try the obvious fix once: build first, qualify `Result.Ok`, create the
    session in the right worktree, check the daemon version.
-3. If it still fights you, use `dotnet` for **that one step only** — after
-   taking a lease for it if SageFs is up (see leases.md) — and say so in your
+3. If it still fights you, use `dotnet` for **that one step only**, after
+   taking a lease for it if SageFs is up (see leases.md), and say so in your
    report with the error from step 1. That report is how SageFs gets fixed.
    Silent fallbacks are how it stays broken. (If the `sagefs-repl-guard` hook is
    installed it also tells the daemon about every `dotnet build`, `test`, `run`
@@ -176,5 +183,5 @@ that happens:
 4. **Never spin up your own daemon to get around a busy one.** A second
    daemon spends the same machine memory the first one is trying to protect,
    completely outside anyone's accounting. Only spawn a second daemon when
-   you are testing daemon code itself that the running daemon predates — see
-   AGENTS.md's multi-agent section — and give it an explicit owner/TTL.
+   you are testing daemon code itself that the running daemon predates, see
+   AGENTS.md's multi-agent section, and give it an explicit owner/TTL.

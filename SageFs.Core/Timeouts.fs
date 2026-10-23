@@ -742,6 +742,23 @@ module Timeouts =
   /// blocks before it rechecks for cancellation. A poll; it bounds how long
   /// kernel shutdown can wait on a quiet socket.
   let jupyterReceivePoll = TimeSpan.FromMilliseconds(100.0)
+  /// How long the Jupyter kernel waits for a session it just created to
+  /// finish warming up, before it retries the eval that was refused.
+  ///
+  /// A session that has just been created is NOT ready: the worker starts,
+  /// loads the project's assemblies, and only then says `Ready`. An eval
+  /// sent into a warming-up session is refused by the daemon, so the kernel
+  /// has to wait or the first evaluation of a fresh session can never
+  /// succeed. The budget is the cold-build one a session's own warmup gets
+  /// (a test project can take minutes to restore and compile), so this is
+  /// generous on purpose — a kernel that gives up early reports that it
+  /// gave up, which is honest, but it must not give up on a session that
+  /// was merely slow.
+  let jupyterSessionWarmup = envOrDefaultMachine "SAGEFS_JUPYTER_WARMUP_SECONDS" 600.0
+  /// How often the Jupyter kernel asks the daemon whether the session it just
+  /// created is ready yet. A poll: there is nothing to wait on except the
+  /// daemon's own answer, so this is how often it asks.
+  let jupyterSessionWaitPoll = TimeSpan.FromMilliseconds(500.0)
   /// How often a running eval's heartbeat event (carrying elapsed time) is
   /// broadcast. It runs on its own thread so it keeps ticking when the eval is
   /// slow. No recorded reason for 500ms.

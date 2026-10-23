@@ -301,6 +301,7 @@
         <Compile Include="LtStream.fs" />
         <Compile Include="LiveTestingLatencyTests.fs" />
         <Compile Include="LiveTestingJourneyTests.fs" />
+        <Compile Include="DebugAttachJourneyTests.fs" />
         <Compile Include="LiveTestingShards.fs" />
         <Compile Include="LiveTestingShardsTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
@@ -435,6 +436,7 @@
          <Compile Include="JsonCentralizationTests.fs" />
          <Compile Include="TimeoutLiteralsTests.fs" />
          <Compile Include="DomainBudgetsTests.fs" />
+         <Compile Include="DocsSlopTests.fs" />
          <Compile Include="ProductBlockingCallsTests.fs" />
          <Compile Include="EnvVarDocTests.fs" />
          <Compile Include="../scripts/roadmap/Roadmap.fs" Link="Roadmap/Roadmap.fs" />
@@ -682,6 +684,7 @@
          <Compile Include="ObservedFrictionAcceptanceTests.fs" />
          <Compile Include="TargetedVerifyMcpToolTests.fs" />
          <Compile Include="JupyterKernelTests.fs" />
+         <Compile Include="JupyterKernelSocketTests.fs" />
          <Compile Include="JupyterDaemonBridgeTests.fs" />
         <Compile Include="TracingMiddlewareTests.fs" />
         <Compile Include="ResultExTests.fs" />
@@ -733,7 +736,9 @@
         <Compile Include="GcDumpCaptureTests.fs" />
         <Compile Include="SessionStatusPayloadTests.fs" />
         <Compile Include="SessionBuildTotalityTests.fs" />
+        <Compile Include="ConsoleTickerSample.fs" />
         <Compile Include="RunAppSaveOutcomeTests.fs" />
+        <Compile Include="EvalReachesRunningAppTests.fs" />
         <Compile Include="AppPlacementTests.fs" />
         <Compile Include="PageChoicesTests.fs" />
         <Compile Include="MemorySupervisorTests.fs" />

@@ -1,10 +1,10 @@
 # Informal Specification: `RingBuffer`
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 
 **Source file**: `SageFs.Core/RingBuffer.fs`
 **Module**: `SageFs.RingBuffer`
-**Phase**: 2 — Informal spec
+**Phase**: 2. Informal spec
 
 ---
 
@@ -35,12 +35,12 @@ type RingBuffer<'T> = {
 ### Internal representation invariants
 
 These hold for every well-formed `RingBuffer`:
-- `0 < Items.Length` (capacity is always positive — enforced by `create`)
+- `0 < Items.Length` (capacity is always positive, enforced by `create`)
 - `0 ≤ Head < Items.Length`
 - `0 ≤ Count ≤ Items.Length`
 - `TotalPushed ≥ 0`
 - `TotalPushed ≥ Count` (pushed at least as many as are stored)
-- `TotalPushed - Count ≥ 0` — the eviction count is non-negative
+- `TotalPushed - Count ≥ 0`, the eviction count is non-negative
 
 ---
 
@@ -133,7 +133,7 @@ Returns `buf.TotalPushed - buf.Count`. Always non-negative.
 **Postcondition**:
 - `count result = 0`
 - `capacity result = capacity buf` (preserved)
-- `totalPushed result = buf.TotalPushed` (preserved — history of how many were ever pushed)
+- `totalPushed result = buf.TotalPushed` (preserved, history of how many were ever pushed)
 - `isEmpty result = true`
 
 ---
@@ -161,7 +161,7 @@ These hold at all times for a ring buffer produced by the public API:
 - **Empty buffer**: `tryGet 0`, `current`, `previous` all return `None`.
 - **Exact capacity fill**: After exactly `capacity` pushes, `count = capacity`, `isFull = true`, `evictedCount = 0`.
 - **Wrap-around**: After more than `capacity` pushes, the `Head` index wraps around. The index arithmetic `(Head + age) % capacity` must correctly identify the right slot.
-- **`totalPushed` overflow**: For very long-running sessions, `TotalPushed` is `int64` so overflow only occurs after 2^63 pushes — negligible in practice.
+- **`totalPushed` overflow**: For very long-running sessions, `TotalPushed` is `int64` so overflow only occurs after 2^63 pushes, negligible in practice.
 
 ---
 

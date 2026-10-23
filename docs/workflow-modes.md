@@ -47,7 +47,7 @@ type SessionWorkflow =
 
 ## The Three Workflows, Explained
 
-### REPL Mode (Interactive) — The Default
+### REPL Mode (Interactive): The Default
 
 **What it feels like:** A supercharged F# Interactive session. You type code, it runs instantly. You change a type definition, re-evaluate, and it just works. You're sketching, exploring, prototyping.
 
@@ -67,7 +67,7 @@ type SessionWorkflow =
 - You're working in `.fsx` scripts
 - You're not building a web app (or don't mind manual browser refresh)
 
-### Live Testing Mode — For Red-Green Loops
+### Live Testing Mode: For Red-Green Loops
 
 **What it feels like:** the same full REPL as above, except the test loop is already running when you arrive. You type; affected tests re-run against the buffer you are typing into.
 
@@ -86,7 +86,7 @@ type SessionWorkflow =
 
 **Select it with:** `switch_workflow target='livetesting'` (aliases: `live-testing`, `testing`, `test`). Note the trap: plain **`live` means Hot Reload**, not live testing. See the alias table at the bottom.
 
-### Hot Reload Mode (also spelled "Live" / "WebLive") — For Web Developers
+### Hot Reload Mode (also spelled "Live" / "WebLive"): For Web Developers
 
 **What it feels like:** Save a file and the browser refreshes on its own. No rebuild, no restart, no manual F5.
 
@@ -209,7 +209,7 @@ Matching is by case-insensitive substring, so `Falco.Htmx` counts through `Falco
 
 ---
 
-## Live Testing — a Workflow *and* a Feature
+## Live Testing: a Workflow *and* a Feature
 
 This is the most common confusion, and the reason is that both things are real.
 

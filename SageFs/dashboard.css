@@ -1263,6 +1263,23 @@ h2 {
   display: none !important;
 }
 
+/* A panel that is not relevant right now says why, in one line, where the panel would have been.
+   The same bar the bottom dock draws for a pane with nothing in it, so the dashboard has one
+   vocabulary for "not here, and here is why". */
+.panel-hidden-reason {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: transparent;
+  border-style: dashed;
+  overflow-wrap: anywhere;
+}
+
+.panel-hidden-why {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .live-dock {
   flex-shrink: 0;
   display: flex;
@@ -1382,6 +1399,7 @@ h2 {
    button is the tallest thing in the row and sets its height — which is what kept a not-yet-read row at
    30px and cost a row of visible values. They stay square, just sized for the row they sit in. */
 .live-pane-pin,
+.live-pane-collapse,
 .live-held-btn {
   width: 20px;
   height: 20px;

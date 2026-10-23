@@ -144,7 +144,7 @@ let bridgeTests =
           async {
             execBodies.Add body
             match execBodies.Count with
-            | 1 -> return Ok (404, """{"success":false,"error":"Session not reachable: No active session. Use create_session to create one first.","errorDetails":{"case":"SessionNotRoutable"}}""")
+            | 1 -> return Ok (404, """{"success":false,"error":"Session not reachable: No active session. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session to create one first.","errorDetails":{"case":"SessionNotRoutable"}}""")
             | _ -> return Ok (200, """{"success":true,"result":"val it: int = 2"}""")
           }
       let createPost : JupyterDaemonBridge.PostJson =
@@ -153,7 +153,16 @@ let bridgeTests =
             createBodies.Add body
             return Ok (200, """{"success":true,"message":"a1b2c3d4"}""")
           }
-      let proxy = JupyterDaemonBridge.makeSessionProxy execPost createPost "/kernel/cwd"
+      let proxy =
+        JupyterDaemonBridge.makeSessionProxy
+          execPost
+          createPost
+          (fun _body ->
+            async {
+              return Ok (200, """{"sessions":[{"workingDirectory":"/kernel/cwd","status":"Ready"}]}""")
+            })
+          "/kernel/cwd"
+          TestTimeouts.jupyterBridgeWarmup
       let! _ = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + \"x\"", "r1"))
       let execBody = esc """{"code":"1 ~u002B ~u0022x~u0022","working_directory":"/kernel/cwd"}"""
       List.ofSeq execBodies |> Expect.equal "exec bodies" [ execBody; execBody ]

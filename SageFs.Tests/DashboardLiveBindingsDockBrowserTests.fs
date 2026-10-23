@@ -242,6 +242,24 @@ let journey () : Task<unit> = task {
     do! closePopoverWithButton page
     do! shot page "3-bindings"
 
+    // The pane folds its own tree away: the tree can be taller than the dock's ceiling, and the
+    // drag handle that changes the ceiling is a thin line to find. The fold is the user's, so it
+    // survives a push.
+    do! page.Locator("#live-pane-collapse").ClickAsync()
+    do! waitHidden page "#live-tree"
+    do! waitVisible page ".live-pane-bar"
+    let! foldState = page.Locator("#live-pane-collapse").GetAttributeAsync("aria-expanded")
+    foldState |> Expect.equal "the button says the tree is folded away" "false"
+    do! push "folded"
+    do! waitHidden page "#live-tree"
+    let! stillFolded = page.Locator("#live-pane-collapse").GetAttributeAsync("aria-expanded")
+    stillFolded |> Expect.equal "the fold survived the push" "false"
+    do! shot page "3b-folded"
+    do! page.Locator("#live-pane-collapse").ClickAsync()
+    do! waitVisible page "#live-tree"
+    do! waitVisible page "#lb_706572736f6e"
+    expectNoErrors errors "while folding the tree away and opening it again"
+
     // A changed value flashes and an unchanged one does not. The page's own observer records which preview cells have a
     // running animation at the moment their text is replaced.
     let! _ =

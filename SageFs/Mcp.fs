@@ -432,7 +432,7 @@ module McpTools =
                 setActiveSessionId ctx agent matchedId
                 return Ok matchedId
               | [] ->
-                return Error (sprintf "No sessions match workingDirectory '%s'. Running sessions: %s. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session for that directory, or switch_session to an existing matching session." wd (formatExistingSessionsHint sessions))
+                return Error (sprintf "%s '%s'. Running sessions: %s. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session for that directory, or switch_session to an existing matching session." McpSessionRouting.noSessionMatchesWorkingDirectoryOpener wd (formatExistingSessionsHint sessions))
               | matches ->
                 return Error (formatWorkingDirectoryAmbiguity "Multiple sessions match workingDirectory" wd matches)
             | _ ->
@@ -509,7 +509,7 @@ module McpTools =
                 let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
                 return classifySessionAvailability info false
             | _ ->
-              return Gone "No active session. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session to create one first."
+              return Gone (sprintf "%s Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session to create one first." McpSessionRouting.noSessionAnywhereOpener)
     }
 
   /// Helper: run a function with the resolved session ID, or return the error message.

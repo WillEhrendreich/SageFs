@@ -1,6 +1,7 @@
 namespace SageFs
 
 open System
+open System.IO
 open System.Text.Json
 open SageFs.McpSessionRouting
 
@@ -86,26 +87,27 @@ module JupyterDaemonBridge =
     with ex ->
       InfraError (SageFsError.JsonParseError ("/exec response", ex.Message))
 
-  /// The daemon suggests `create_session` in exactly two `SessionNotRoutable`
-  /// shapes (Mcp.fs's `resolveSessionId`/`formatSessionResolution`): "No
-  /// active session. Use create_session to create one first." (zero
-  /// sessions anywhere, no working directory given) and "No sessions match
-  /// workingDirectory '...'. ... Use create_session with that directory,
-  /// or switch_session ..." (zero sessions match the directory this bridge
-  /// always sends) — the second is what a bare daemon actually returns,
-  /// since this bridge always sends `working_directory`. Every OTHER
-  /// `SessionNotRoutable` reason — warming up, unroutable, faulted,
-  /// ambiguous — carries its own explicit "Do NOT create a new/duplicate
-  /// session" guidance baked into the same string, so excluding those
-  /// takes priority: a warming-up or faulted session must never be mistaken
-  /// for "create a new one". There is no structured signal for this
-  /// distinction over the wire today (`SageFsError.toJson`'s `case` is
-  /// `SessionNotRoutable` for all of them alike) — matching the literal
-  /// daemon message is the only signal this bridge has.
+  /// The daemon reports "there is no session to route this to" in two shapes
+  /// (Mcp.fs's `resolveSessionId`/`formatSessionResolution`): "No active
+  /// session. ..." (zero sessions anywhere) and "No sessions match
+  /// workingDirectory '...'. ..." (zero sessions match the directory this
+  /// bridge always sends) — the second is what a bare daemon actually
+  /// returns. Every OTHER `SessionNotRoutable` reason — warming up,
+  /// unroutable, faulted, ambiguous — describes a session that EXISTS but
+  /// cannot take work, and says so with its own explicit "Do NOT create a
+  /// new/duplicate session" guidance, so excluding those takes priority: a
+  /// warming-up or faulted session must never be mistaken for "create a new
+  /// one".
+  ///
+  /// The wording itself lives in `SageFs.McpSessionRouting`, next to the
+  /// messages the daemon builds, so the two cannot drift apart — they DID
+  /// drift once (the daemon's tool list changed on 2026-10-06 and this
+  /// bridge's own copy of the sentence went stale), and the symptom was a
+  /// kernel that could not evaluate anything on a daemon with no session,
+  /// while every test that fed the OLD wording still passed.
   let private isNoSessionAtAll (err: SageFsError) =
     match err with
-    | SageFsError.SessionNotRoutable reason ->
-      reason.Contains("Use create_session") && not (reason.Contains("Do NOT create"))
+    | SageFsError.SessionNotRoutable reason -> McpSessionRouting.reasonMeansNoSessionExists reason
     | _ -> false
 
   /// The real `PostJson` — a thin HTTP POST against one route on the
@@ -124,6 +126,54 @@ module JupyterDaemonBridge =
           return Error ex.Message
       }
 
+  /// The real readiness probe — a GET of the daemon's session list, which
+  /// reports every session with its directory and its status. Same shape as
+  /// `PostJson` (so the bridge's decision tree stays testable without a
+  /// socket), but it reads rather than writes, and it sends no body.
+  let httpGetJson (client: System.Net.Http.HttpClient) (path: string) : PostJson =
+    fun _body ->
+      async {
+        try
+          let! resp = client.GetAsync(path) |> Async.AwaitTask
+          let! respBody = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+          return Ok (int resp.StatusCode, respBody)
+        with ex ->
+          return Error ex.Message
+      }
+
+  /// Is the session rooted at `workingDirectory` ready to take work?
+  ///
+  /// The daemon's `GET /api/sessions` lists every session with its
+  /// `workingDirectory` and its `status`; a session that is still warming up
+  /// says so, and only a `Ready` one can be evaluated. The comparison is on
+  /// the normalized path, because the daemon reports an absolute path and
+  /// the kernel's own working directory is whatever it was started in.
+  let sessionIsReady (body: string) (workingDirectory: string) : bool =
+    try
+      use doc = JsonDocument.Parse(body)
+      let expected =
+        if String.IsNullOrWhiteSpace workingDirectory then "" else Path.GetFullPath workingDirectory
+      doc.RootElement.GetProperty("sessions").EnumerateArray()
+      |> Seq.exists (fun session ->
+        let dir = match session.GetProperty("workingDirectory").GetString() with
+                  | null -> ""
+                  | d -> d
+        let sameDir =
+          if expected = "" then true
+          else String.Equals(Path.GetFullPath dir, expected, StringComparison.OrdinalIgnoreCase)
+        sameDir && session.GetProperty("status").GetString() = "Ready")
+    // A body the daemon did not send in the shape this reads is not "not
+    // ready" and not "ready" either — it is an answer this code cannot
+    // read, and the honest answer to "is it ready" is "no, and here is
+    // why it could not tell". The named exceptions are the ones the read
+    // can actually raise; a wildcard would swallow a bug in the read
+    // itself and report it as a session that is merely not ready yet.
+    with
+    | :? JsonException
+    | :? System.Collections.Generic.KeyNotFoundException
+    | :? InvalidOperationException ->
+      false
+
   /// Build a real `WorkerProtocol.SessionProxy` that routes `EvalCode` to
   /// the daemon's `/exec` endpoint. Session selection mirrors `/exec`'s own
   /// `resolveSessionId` (Mcp.fs): the caller's already-active session, or —
@@ -131,14 +181,23 @@ module JupyterDaemonBridge =
   /// session rooted at the kernel's own working directory, or the single
   /// running session if there is exactly one. When none of that resolves —
   /// no session exists anywhere yet — one is created rooted at the kernel's
-  /// working directory and the eval is retried once, so a fresh `SageFs
-  /// --jupyter` run against a bare daemon works without a manual
+  /// working directory, WAITED FOR, and the eval is retried once, so a fresh
+  /// `SageFs --jupyter` run against a bare daemon works without a manual
   /// `create_session` step first. `execPost` and `createSessionPost` are
   /// injected so the whole decision tree is testable without a socket.
+  ///
+  /// `waitForReadyPost` answers "is the session for this working directory
+  /// ready yet" — the bridge MUST ask before it retries, because a session
+  /// that was just created is still warming up (15-30s for a test project)
+  /// and an eval sent into a warming-up session is refused. Without the
+  /// wait, the retry is refused too, and a fresh kernel can never evaluate
+  /// anything.
   let makeSessionProxy
     (execPost: PostJson)
     (createSessionPost: PostJson)
+    (waitForReadyPost: PostJson)
     (workingDirectory: string)
+    (warmupBudget: TimeSpan)
     : WorkerProtocol.SessionProxy =
 
     let execOnce (code: string) : Async<ExecOutcome> =
@@ -150,6 +209,29 @@ module JupyterDaemonBridge =
         | Error transportMessage ->
           Utils.Log.warn "[JupyterDaemonBridge] /exec unreachable: %s" transportMessage
           return InfraError SageFsError.DaemonNotRunning
+      }
+
+    /// Wait until the session for this working directory is Ready.
+    ///
+    /// The daemon answers "still warming up" until the session is up; the
+    /// bridge polls until it is not, and gives up on a budget rather than
+    /// waiting forever, so a session that never comes up fails the eval
+    /// instead of hanging the kernel.
+    let waitForReady (budget: TimeSpan) : Async<bool> =
+      async {
+        let deadline = DateTime.UtcNow.Add(budget)
+        let mutable ready = false
+        while not ready && DateTime.UtcNow < deadline do
+          let! outcome = waitForReadyPost ""
+          match outcome with
+          | Ok (status, respBody) when status = 200 -> ready <- sessionIsReady respBody workingDirectory
+          | Ok (_, _) -> ()
+          | Error transportMessage ->
+            Utils.Log.warn "[JupyterDaemonBridge] session wait unreachable: %s" transportMessage
+            ready <- false
+          if not ready then
+            do! Async.Sleep Timeouts.jupyterSessionWaitPoll
+        return ready
       }
 
     let toEvalResult (replyId: string) (outcome: ExecOutcome) =
@@ -170,8 +252,22 @@ module JupyterDaemonBridge =
             let! created = createSessionPost createBody
             match created with
             | Ok (status, _) when status >= 200 && status < 300 ->
-              let! retried = execOnce code
-              return toEvalResult replyId retried
+              // A session that was just created is still warming up, and an
+              // eval sent into a warming-up session is refused. So the
+              // bridge waits for it before it retries — otherwise the retry
+              // fails the same way and a fresh kernel can never evaluate
+              // anything.
+              let! ready = waitForReady warmupBudget
+              if not ready then
+                return WorkerProtocol.WorkerResponse.WorkerError (
+                  SageFsError.SessionCreationFailed (
+                    sprintf
+                      "the session for %s did not become ready within %O — the daemon created it, but it never finished warming up"
+                      workingDirectory
+                      warmupBudget))
+              else
+                let! retried = execOnce code
+                return toEvalResult replyId retried
             | Ok (status, respBody) ->
               return WorkerProtocol.WorkerResponse.WorkerError (
                 SageFsError.SessionCreationFailed (sprintf "HTTP %d: %s" status respBody))

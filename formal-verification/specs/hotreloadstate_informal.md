@@ -1,6 +1,6 @@
 # Informal Specification: HotReloadState
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 > Source: `SageFs.Core/HotReloadState.fs`
 
 ---
@@ -56,7 +56,7 @@ all characters are lowercased. The normalisation is transparent to callers.
 
 ## Invariants
 
-1. **Set semantics**: `Watched` is a set — no duplicates, order-independent membership.
+1. **Set semantics**: `Watched` is a set, no duplicates, order-independent membership.
 2. **Normalisation idempotence**: normalising an already-normalised path is a no-op.
 3. **watch/unwatch inverse**: `unwatch p (watch p s)` has the same `Watched` as `s`.
 4. **toggle involution**: `toggle p (toggle p s)` has the same `Watched` as `s`.

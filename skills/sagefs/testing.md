@@ -10,7 +10,7 @@ you need the details, use `explain_test_failure`.
 ### Don't await a slow gate
 
 A full test suite, a build, or `scripts/local-gate.fsx` takes minutes. Blocking on
-one — or polling it in a loop — is the same waste as having run it inline, and
+one, or polling it in a loop, is the same waste as having run it inline, and
 it blocks the actual work.
 
 - **Launch it, then keep working.** Use a background agent or a background
