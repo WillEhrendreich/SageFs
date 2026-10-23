@@ -200,6 +200,11 @@ let items : Item list =
       [ "docs/repl-loop-benchmarks.md" ]
       "I timed an edit plus a check in a warm session against a build plus a filtered test on three projects, from 306 lines to 86,019. The check answered in 21 to 25 milliseconds on all three, because it does not care how big the project is, while the build took 2 to 52 seconds and cares a great deal. The table is in docs with the machine and the load averages it was measured under, and a snippet that cannot type-check returns its errors in 81 milliseconds, so the fast number is a real check rather than one that says fine."
 
+    item "sse-events-stay-small" "A discovery event fits the stream it rides" Dashboard Next
+      (landmark "SageFs/SseEvent.fs" "SseEvent")
+      [ "docs/LIVE_TESTING_GUIDE.md" ]
+      "A suite of 2,604 tests reached the editor as one SSE event of about 990 KB, and the client's parser stopped inside the string: a million reconnects and no live testing. The daemon already fetches discovery over the worker wire, so the frame does not have to carry the whole list. I'd send a summary and let the client fetch, or chunk the entries behind a continuation, and whichever I pick the editor, the plugin and the dashboard all have to read it. The one thing I know is that raising a buffer is not the fix: the payload should not exist."
+
     item "native-nuget-in-sessions" "Native NuGet packages load in sessions" Isolation Now
       (landmark "SageFs.Core/NativeResolution.fs" "NativeAssets")
       [ "docs/how-isolation-works.md" ]

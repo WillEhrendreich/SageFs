@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 5, Later 18, Exploring 20. Already built: 34.
+On the page today: Now 0, Next 5, Later 18, Exploring 20. Already built: 35.
 
 ## Next (5)
 
@@ -111,7 +111,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub.
 
-## Built (34)
+## Built (35)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -165,6 +165,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 
 - [x] **App output in its own pane.** stdout and stderr from a running app get their own pane with follow, pause and search, so a chatty app stops burying your evals. The daemon holds one AppOutputPane per session, fed the same lines the transcript is fed from; the dock decides from that buffer and draws the answer, so the two cannot disagree about what the app wrote. Code: [`SageFs/AppOutputView.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/AppOutputView.fs)
 - [x] **A guided new-session dialog.** A plus button on the Sessions list opens a dialog that finds projects under a directory you can edit, says in a line what each workflow means, and warns before you make a second session in the same directory, naming the one that exists. A refusal from the daemon shows in the dialog with its next action, and Create closes it into a starting card at once. The no-session picker's Open Directory card still has its own form. Code: [`SageFs/NewSessionDialog.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/NewSessionDialog.fs)
+- [x] **A discovery event fits the stream it rides.** A suite of 2,604 tests reached the editor as one SSE event of about 990 KB, and the client's parser stopped inside the string: a million reconnects and no live testing. The daemon already fetches discovery over the worker wire, so the frame does not have to carry the whole list. I'd send a summary and let the client fetch, or chunk the entries behind a continuation, and whichever I pick the editor, the plugin and the dashboard all have to read it. The one thing I know is that raising a buffer is not the fix: the payload should not exist. Code: [`SageFs/SseEvent.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/SseEvent.fs)
 
 ### Platform and install
 
