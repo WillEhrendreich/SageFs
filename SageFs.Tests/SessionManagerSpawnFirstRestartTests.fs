@@ -1,5 +1,6 @@
 module SageFs.Tests.SessionManagerSpawnFirstRestartTests
 
+open System
 open System.Diagnostics
 open System.Threading
 open Expecto
@@ -395,6 +396,64 @@ let sessionManagerSpawnFirstRestartTests =
         |> Expect.equal "revert must restore the old worker pid" (Some oldPid)
         harness.FaultedEvents |> Seq.length
         |> Expect.equal "revert must not fire a fault callback" 0
+        // The revert ENDS the rebuild. Before this the old worker came back and the outcome
+        // stayed `InProgress`, so the session reported `Rebuilding` for the rest of its life
+        // and no later run could ever be certified: `run_tests` answered
+        // `PassedWhileRebuilding` long after the swap had been put back.
+        session.Info.Rebuild
+        |> function
+          | LastRebuild.Latest (RebuildOutcome.FailedStillServing _) -> ()
+          | other -> failtestf "the revert must end the rebuild as FailedStillServing (the old worker still serves); recorded %A" other
+
+    testCase "T6b — a silent REPLACEMENT worker reverts the swap and ends the rebuild, so the session stops reporting Rebuilding" <| fun _ ->
+      use owned = OwnedChild.start ()
+      let otherProcess = owned.Process
+
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun call ->
+            match call with
+            | 1 -> Ok(Process.GetCurrentProcess())
+            | _ -> Ok(otherProcess))
+
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        makeSessionReady harness info
+        let oldPid =
+          getManagedSession harness info.Id
+          |> getWorkerPid
+
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
+        | Ok _ -> ()
+        | Error err -> failtestf "restart failed: %s" (SageFsError.describe err)
+
+        // The replacement worker never says anything (this is the live case: under load the
+        // replacement was silent for its whole 30 s, and the daemon reverted it).
+        let newPid = otherProcess.Id
+
+        let silent =
+          { Stage = StartStage.WorkerPort
+            Budget =
+              { Attempt = 1
+                Inactivity = Timeouts.warmupInactivityLimit
+                Absolute = Timeouts.warmupAbsoluteMax
+                Earlier = [] }
+            Waited = Timeouts.warmupInactivityLimit
+            Progress = ProgressSeen.NoneYet }
+
+        harness.Mailbox.Post(SessionCommand.WorkerStartTimedOut(info.Id, newPid, silent, ""))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply)) |> ignore
+
+        let session = getManagedSession harness info.Id
+        session.Info.Status
+        |> Expect.equal "a silent replacement must restore the still-serving old worker" (SessionLifecycleStatus.Ready { Pid = oldPid; Port = Some 4123 })
+        session.Info.Rebuild
+        |> function
+          | LastRebuild.Latest (RebuildOutcome.FailedStillServing _) -> ()
+          | other -> failtestf "the revert must end the rebuild as FailedStillServing (the old worker still serves); recorded %A" other
+        harness.FaultedEvents |> Seq.length
+        |> Expect.equal "a reverted swap is not a faulted session" 0
 
     testCase "T7 — the new worker's ready commits the swap and retires the old worker" <| fun _ ->
       use owned = OwnedChild.start ()
