@@ -1,6 +1,6 @@
-# RetryPolicy — Informal Specification
+# RetryPolicy: Informal Specification
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Target
 
@@ -14,9 +14,9 @@
 `RetryPolicy` encapsulates the decision logic for retrying failed operations.
 Given a retry configuration, an attempt number, and an exception, it decides
 whether to:
-- **GiveUp** — stop retrying (exception is non-retryable, or attempts exhausted)
-- **RetryAfter delayMs** — retry after a computed back-off delay
-- **Success** — never returned by `decide` directly (used elsewhere in the system)
+- **GiveUp**: stop retrying (exception is non-retryable, or attempts exhausted)
+- **RetryAfter delayMs**: retry after a computed back-off delay
+- **Success**: never returned by `decide` directly (used elsewhere in the system)
 
 The back-off formula is **linear with jitter**:
 ```
@@ -68,7 +68,7 @@ backoffMs config attempt ∈ [ baseDelay/2 .. baseDelay * 3/2 )
   where baseDelay = config.BaseDelayMs * (attempt + 1)
 ```
 
-- The base delay is `config.BaseDelayMs * (attempt + 1)` — linear in attempt
+- The base delay is `config.BaseDelayMs * (attempt + 1)`, linear in attempt
 - With jitter (±50%), actual delay is in range `[baseDelay/2, 3*baseDelay/2)`
 - When `baseDelay = 0` (jitterRange = 0), the result is exactly `0`
 - The delay is **non-negative** for all valid inputs
@@ -120,7 +120,7 @@ The design intent is a simple retry gate that:
 - Adds jitter to spread retries across time when multiple callers use the same config
 - Provides a hard stop after `MaxRetries` attempts
 
-The jitter is non-deterministic, which means `decide` is not a pure function in F# —
+The jitter is non-deterministic, which means `decide` is not a pure function in F#,
 but the *deterministic core* (the base-delay formula and the GiveUp/RetryAfter
 branching logic) is pure and amenable to formal verification.
 

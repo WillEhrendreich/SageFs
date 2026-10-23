@@ -40,11 +40,13 @@ let tests =
       WatchdogRunner.daemonPort [ "--mcp-port"; "4242"; "--foo" ]
       |> Expect.equal "explicit port wins" 4242
 
-    testCase "WHY — without --mcp-port the daemon port is the configured default" <| fun _ ->
+    testCase "WHY — with no --mcp-port the watchdog takes the configured port, which is what the daemon binds" <| fun _ ->
+      // Before DaemonPort this fell back to McpPortFromEnv, so the day the Settings panel changed the
+      // port the watchdog would have seeded one daemon as if it were on another.
       WatchdogRunner.daemonPort [ "--foo" ]
-      |> Expect.equal "falls back to the env or default port" SageFsConfig.McpPortFromEnv
+      |> Expect.equal "the same thing the daemon resolves" (DaemonPort.configured ())
 
-    testCase "WHY — a --mcp-port with no readable number falls back to the configured default" <| fun _ ->
+    testCase "WHY — a --mcp-port with no readable number does not become the port either side thinks is bound" <| fun _ ->
       WatchdogRunner.daemonPort [ "--mcp-port"; "nope" ]
-      |> Expect.equal "unparseable falls back" SageFsConfig.McpPortFromEnv
+      |> Expect.equal "names nothing, so configured stands" (DaemonPort.configured ())
   ]

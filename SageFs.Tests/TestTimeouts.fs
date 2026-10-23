@@ -107,6 +107,30 @@ module TestTimeouts =
   /// A session or a hot reload that takes many seconds to land.
   let pollSlow = secs 1.
 
+  // The Jupyter kernel over a real socket.
+
+  /// How long the kernel test waits for the kernel's own ZMQ sockets to
+  /// accept a connection. The kernel binds them when it starts, so this is
+  /// how long that takes on a cold process.
+  let jupyterKernelBind = secs 60.
+  /// How long the kernel test waits for the answer to an execution. The
+  /// daemon has no session for the working directory yet, so the kernel
+  /// creates one, and a cold session takes seconds to warm up.
+  let jupyterKernelExec = secs 120.
+  /// How long the kernel test waits for the IOPub subscription to be
+  /// registered before it sends the request — a PUB socket drops a
+  /// broadcast a late subscriber never sees.
+  let jupyterKernelSubscribe = ms 500.
+  /// The warmup budget the bridge tests give the kernel when it waits for
+  /// a session it just created. The bridge polls until the daemon says
+  /// Ready, so this only has to be long enough for the poll to run a few
+  /// times — the real cold-build wait is the product's, not a test's.
+  let jupyterBridgeWarmup = secs 5.
+  /// The budget the bridge test gives a session that NEVER becomes ready,
+  /// so the test that proves the bridge gives up rather than waiting
+  /// forever does not itself wait forever.
+  let jupyterBridgeNeverReady = secs 1.
+
   // Request timeouts on one HTTP call.
 
   /// One probe request to a local server, in a loop that retries it.
@@ -128,6 +152,19 @@ module TestTimeouts =
   /// about a second; reaching this means the daemon stopped answering, and it is generous because a cold
   /// runner pays for a type-check cache and a JIT that nobody warmed. A passing run never waits it out.
   let liveTestingVerdictCeiling = secs 30.
+  /// Ceiling on the HTTP request that holds a test for a debugger, and on the one that releases
+  /// it. Holding waits for the host to reach the test, and releasing waits for the test to
+  /// finish, so both outlast an ordinary request. The daemon gives up at its own window
+  /// (`SageFs.Timeouts.debugHold`), so the request waits a little past it.
+  let debugHoldRequest = SageFs.Timeouts.debugHold + secs 30.
+  /// Ceiling on a DEBUGGER attaching to the process the daemon holds a test in. The attach has to
+  /// land inside the daemon's own hold window, because that window is when the test can still be
+  /// caught, and the window scales with the machine. A passing run never waits it out.
+  let debugAttach = SageFs.Timeouts.debugHold - secs 30.
+  /// How often the debugger is asked for the threads of the process it is attached to, while the
+  /// attach is still settling. The console takes commands as it becomes ready, and the answer is
+  /// what proves the attach, so the question is asked until it is answered.
+  let debuggerPoll = ms 500.
   /// Ceiling on an evaluated verdict being confirmed by a real build: the quiet window, a rebuild that
   /// restarts the worker, and a run against what it built. A passing run never waits it out. It outlasts the
   /// product's own deadline for a confirmation (`Timeouts.liveTestConfirmationDeadline`) by the margin of one
@@ -638,6 +675,12 @@ module TestTimeouts =
   /// A running app printing the edited text after a save. A rebuild and a restart are allowed
   /// before the new text shows, so this is longer than the first line.
   let appOutputAfterSave = System.TimeSpan.FromSeconds 180.
+
+  /// How long the eval route may take, in seconds, from the eval to the running app serving what
+  /// it evaluated. The route pays a build, so this is generous next to the save-to-served figure
+  /// the hot-reload gate measures: it is here to catch a route that stopped working, not to
+  /// police a millisecond.
+  let evalToAppServedSeconds = 60.
 
   /// How long the tool layer's read caches (list_tests, coverage_intel, and the narrative
   /// cache behind explain_test_failure and diagnose) may lag a state change the status endpoint

@@ -1,6 +1,6 @@
 # Informal Specification: `Affordances.availableTools`
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Source
 
@@ -138,4 +138,4 @@ has no semantic significance for `checkToolAvailability`.
    `availableTools WarmingUp`? Not exactly (WarmingUp adds `get_recent_fsi_events`
    but both have `create_session`). The subset ordering is partial, not total.
 3. **EvalStats**: the `EvalStats` type and module are defined in the same file but
-   are unrelated to `availableTools` — they track evaluation timing. No FV planned.
+   are unrelated to `availableTools`, they track evaluation timing. No FV planned.

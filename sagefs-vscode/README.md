@@ -1,4 +1,4 @@
-# SageFs — VS Code Extension
+# SageFs: VS Code Extension
 
 > **Live eval, live testing, coverage and hot reload all run today, each with limits that are written down.** [The main README](../Readme.md) and [docs/](../docs/README.md) say what is solid and what isn't.
 
@@ -27,7 +27,7 @@ SageFs brings live evaluation, instant test feedback, and coverage visualization
 1. **Install SageFs CLI**: `dotnet tool install --global SageFs`
 2. **Install this extension**: Search **SageFs** in the Extensions sidebar, or `code --install-extension willehrendreich.sagefs`
 3. **Open an F# project** in VS Code
-4. **Press `Alt+Enter`** on any expression — the daemon starts automatically and results appear inline
+4. **Press `Alt+Enter`** on any expression, the daemon starts automatically and results appear inline
 
 Live testing is a per-session toggle. If you pick the Live Testing workflow (`SageFs: Switch Workflow`) it is turned on for you once the session is ready. In the other workflows, run `SageFs: Enable Live Testing` once your test session is loaded.
 
@@ -46,12 +46,12 @@ Live testing is a per-session toggle. If you pick the Live Testing workflow (`Sa
 | Previous `;;` code block | `Ctrl+Up` | SageFs: Previous Code Block |
 | Next failing test | `Alt+Shift+]` | SageFs: Next Failing Test |
 | Previous failing test | `Alt+Shift+[` | SageFs: Previous Failing Test |
-| Clear inline results | — | SageFs: Clear Inline Results |
-| Run all tests | — | SageFs: Run All Tests |
-| Toggle live testing | — | SageFs: Enable / Disable Live Testing |
-| Session picker | — | SageFs: Switch Session |
-| Reset session | — | SageFs: Hard Reset (Rebuild) |
-| Load current script | — | SageFs: Load Current Script |
+| Clear inline results |: | SageFs: Clear Inline Results |
+| Run all tests |: | SageFs: Run All Tests |
+| Toggle live testing |: | SageFs: Enable / Disable Live Testing |
+| Session picker |: | SageFs: Switch Session |
+| Reset session |: | SageFs: Hard Reset (Rebuild) |
+| Load current script |: | SageFs: Load Current Script |
 
 > 💡 All keybindings are scoped to F# files only. `Shift+Enter` is deactivated when a notebook is focused to avoid conflicts with Jupyter.
 
@@ -72,8 +72,8 @@ Live testing is a per-session toggle. If you pick the Live Testing workflow (`Sa
 
 | Marker | Meaning |
 |--------|---------|
-| ▸ (green) | Line is covered — all covering tests pass |
-| ▸ (red) | Line is covered — some covering tests are failing |
+| ▸ (green) | Line is covered: all covering tests pass |
+| ▸ (red) | Line is covered: some covering tests are failing |
 | ○ (gray) | Line has no test coverage |
 
 ### Inline Decorations
@@ -98,7 +98,7 @@ The status bar (bottom of VS Code) shows three items:
 | **Test summary** | `🧪 42/42 ✓` | All tests passing |
 | | `🧪 40/42 ✗ 2` | 40 passing, 2 failing (red background) |
 | | `🧪 ⟳ Running 5/42` | Tests currently executing (spinner) |
-| | `🧪 ⚠ 10/42 stale` | Tests need re-run — code changed (yellow background) |
+| | `🧪 ⚠ 10/42 stale` | Tests need re-run: code changed (yellow background) |
 | | `🧪 No tests` | No tests discovered yet |
 | **Eval performance** | `P50: 12ms P95: 45ms` | Eval latency percentiles with sparkline |
 | **Hot reload** | `Hot reload: patched 3/3` | What the last save did to the running app, see below. Hidden until the first save. |
@@ -127,42 +127,42 @@ The tooltip has the daemon's message, the mechanism, and, when a patch left the 
 ## Features
 
 ### Code Evaluation
-- **Alt+Enter** — Evaluate the current selection or `;;`-delimited code block. Results appear as inline decorations.
-- **Alt+Shift+Enter** — Evaluate the entire file
-- **Shift+Enter** — Evaluate current block and advance cursor to the next
-- **Ctrl+Alt+Enter** — Evaluate all `;;` blocks in the file
-- **CodeLens** — Clickable "▶ Eval" buttons above every `;;` block
-- **Density cycling** — Toggle between Full / Normal / Minimal inline result display
+- **Alt+Enter**: Evaluate the current selection or `;;`-delimited code block. Results appear as inline decorations.
+- **Alt+Shift+Enter**: Evaluate the entire file
+- **Shift+Enter**: Evaluate current block and advance cursor to the next
+- **Ctrl+Alt+Enter**: Evaluate all `;;` blocks in the file
+- **CodeLens**: Clickable "▶ Eval" buttons above every `;;` block
+- **Density cycling**: Toggle between Full / Normal / Minimal inline result display
 
 ### Live Unit Testing
-- **Inline test decorations** — ✓/✗/● markers on test lines, updated in real-time via SSE
-- **Native Test Explorer** — Tests appear in VS Code's built-in Test Explorer via a `TestController` adapter
-- **Test result CodeLens** — "✓ Passed" / "✗ Failed" above every test function
-- **Failure diagnostics** — Failed tests appear as native VS Code squiggles
-- **Coverage gutter bars** — Per-line coverage health (AllPassing / SomeFailing / NoCoverage) shown in the gutter
-- **Inline failure details** — `⊘` markers with Expected/Actual diffs, exception messages, and timeouts
-- **Failure narratives** — Enriched failure context: summary, time since last pass, causal changes
-- **Test source locations** — Test Explorer items automatically link to their source file and line
-- **Test policy controls** — Enable/disable live testing, run all tests, or configure run policies from the command palette
-- **Call graph viewer** — Visualize test dependency graphs
-- **Test trace** — Browse test cycle events
+- **Inline test decorations**: ✓/✗/● markers on test lines, updated in real-time via SSE
+- **Native Test Explorer**: Tests appear in VS Code's built-in Test Explorer via a `TestController` adapter
+- **Test result CodeLens**: "✓ Passed" / "✗ Failed" above every test function
+- **Failure diagnostics**: Failed tests appear as native VS Code squiggles
+- **Coverage gutter bars**: Per-line coverage health (AllPassing / SomeFailing / NoCoverage) shown in the gutter
+- **Inline failure details**, `⊘` markers with Expected/Actual diffs, exception messages, and timeouts
+- **Failure narratives**: Enriched failure context: summary, time since last pass, causal changes
+- **Test source locations**: Test Explorer items automatically link to their source file and line
+- **Test policy controls**: Enable/disable live testing, run all tests, or configure run policies from the command palette
+- **Call graph viewer**: Visualize test dependency graphs
+- **Test trace**: Browse test cycle events
 
 ### Live Diagnostics
 - F# type errors and warnings stream in via SSE as you edit, appearing as native VS Code squiggles
 
 ### Hot Reload
-- **Hot Reload sidebar** — Tree view in the activity bar showing all project files with per-file and per-directory watch toggles
+- **Hot Reload sidebar**: Tree view in the activity bar showing all project files with per-file and per-directory watch toggles
 - Toggle individual files, directories, or watch/unwatch everything at once
 
 #### Scrub a running value
-- **Value knob** — Hold the modifier your `editor.multiCursorModifier` names (Alt by default) and drag across a number to scrub it: one column of drag is one step, and whole numbers step by one while decimals step in their last place. The literal keeps the file's style, so hex stays hex.
+- **Value knob**: Hold the modifier your `editor.multiCursorModifier` names (Alt by default) and drag across a number to scrub it: one column of drag is one step, and whole numbers step by one while decimals step in their last place. The literal keeps the file's style, so hex stays hex.
 - The write goes through the daemon's `nudge_value` tool rather than the file, which is what gives it the dashboard knob's rules for free: the write is journaled, checked against the `seen` hash the inspect returned, refused with what moved if the source changed underneath, and rolled back if the new text does not type-check.
-- **The honest limit, because the gesture is a workaround.** VS Code's extension API never reports that a modifier is held — `TextEditorSelectionChangeEvent` carries no `modifiers`, and there are no editor mouse events at all. What the API does report is what an Alt+click *creates*: with `multiCursorModifier = "alt"` (the default) it adds a cursor, so a mouse-driven selection change carrying more than one selection is the only way that state arrives. Set `editor.multiCursorModifier` to something else and the knob does not engage, by design rather than by bug.
+- **The honest limit, because the gesture is a workaround.** VS Code's extension API never reports that a modifier is held, `TextEditorSelectionChangeEvent` carries no `modifiers`, and there are no editor mouse events at all. What the API does report is what an Alt+click *creates*: with `multiCursorModifier = "alt"` (the default) it adds a cursor, so a mouse-driven selection change carrying more than one selection is the only way that state arrives. Set `editor.multiCursorModifier` to something else and the knob does not engage, by design rather than by bug.
 
 ### Session Management
-- **Session Context sidebar** — Loaded assemblies, opened namespaces, failed opens, warmup details
-- **Sessions sidebar** — View all sessions with inline switch/stop/reset actions
-- **Multi-session** — Create, switch, and manage multiple sessions from the command palette
+- **Session Context sidebar**: Loaded assemblies, opened namespaces, failed opens, warmup details
+- **Sessions sidebar**: View all sessions with inline switch/stop/reset actions
+- **Multi-session**: Create, switch, and manage multiple sessions from the command palette
 
 #### Which session a window uses
 
@@ -181,18 +181,18 @@ Each row in the Sessions sidebar reads `<project names> <id> · active · this w
 The daemon sends every session's events to every window. By default I show only the ones about this window's session, a session started in this workspace, or a file under this workspace: a session fault, and the `File reloaded` lines in the Output channel. Another agent's fault does not pop up in your window. The Output channel notes the ones I left out at the `debug` log level. Turn on `sagefs.showEventsFromAllSessions` to see everything.
 
 A session fault message is one sentence and a remedy. The daemon's full diagnosis goes to the Output channel, and the message's Show Output button opens it.
-- **Export session** — Save current session state as a `.fsx` script
-- **Session menu** — Quick-access menu for all session operations
+- **Export session**: Save current session state as a `.fsx` script
+- **Session menu**: Quick-access menu for all session operations
 
 ### More
-- **Type Explorer sidebar** — Browse .NET types and namespaces interactively from the activity bar
-- **Event history** — Browse recent pipeline events via QuickPick
-- **FSI bindings browser** — View all current FSI bindings
-- **Dashboard webview** — Open the SageFs dashboard directly inside VS Code
-- **Status bar** — Active project, eval count, test summary, eval performance sparkline. Click to open dashboard.
-- **Auto-start** — Detects `.fsproj`/`.sln`/`.slnx` files and offers to start SageFs automatically
-- **Ionide integration** — Hijacks Ionide's `FSI: Send Selection` commands so Alt+Enter routes through SageFs
-- **11 custom theme colors** — Inline result and gutter colors respect your VS Code theme (the list is under `contributes.colors` in `package.json`)
+- **Type Explorer sidebar**: Browse .NET types and namespaces interactively from the activity bar
+- **Event history**: Browse recent pipeline events via QuickPick
+- **FSI bindings browser**: View all current FSI bindings
+- **Dashboard webview**: Open the SageFs dashboard directly inside VS Code
+- **Status bar**: Active project, eval count, test summary, eval performance sparkline. Click to open dashboard.
+- **Auto-start**: Detects `.fsproj`/`.sln`/`.slnx` files and offers to start SageFs automatically
+- **Ionide integration**: Hijacks Ionide's `FSI: Send Selection` commands so Alt+Enter routes through SageFs
+- **11 custom theme colors**: Inline result and gutter colors respect your VS Code theme (the list is under `contributes.colors` in `package.json`)
 
 ---
 
@@ -243,7 +243,7 @@ code --install-extension sagefs-*.vsix
 | `sagefs.dashboardPort` | `37750` | Legacy fallback dashboard port. SageFs normally discovers the daemon and derives the dashboard port from the MCP port. |
 | `sagefs.autoStart` | `true` | Automatically start SageFs when opening F# projects |
 | `sagefs.projectPath` | `""` | Explicit `.fsproj` path (auto-detect if empty) |
-| `sagefs.logLevel` | `"info"` | Output channel verbosity (`debug`, `info`, `error` — no `warn` level) |
+| `sagefs.logLevel` | `"info"` | Output channel verbosity (`debug`, `info`, `error`, no `warn` level) |
 | `sagefs.showEventsFromAllSessions` | `false` | Show session faults and file reloads from every session on the daemon. Off by default, so a window shows its own session's and its workspace's. |
 | `sagefs.inlineResultTimeout` | `30000` | How long (ms) inline eval results stay visible before auto-clearing. `0` keeps them forever. |
 | `sagefs.cellHighlight` | `true` | Highlight the current code cell (block) the cursor is in |
@@ -262,71 +262,71 @@ code --install-extension sagefs-*.vsix
 | SageFs: Evaluate Entire File | `Alt+Shift+Enter` | Evaluate full file |
 | SageFs: Evaluate & Advance | `Shift+Enter` | Evaluate current block, move cursor to next |
 | SageFs: Evaluate All Blocks | `Ctrl+Alt+Enter` | Evaluate every `;;` block in the file |
-| SageFs: Evaluate Code Block | — | Evaluate the `;;`-delimited block at cursor |
+| SageFs: Evaluate Code Block |: | Evaluate the `;;`-delimited block at cursor |
 | SageFs: Cancel Evaluation | `Ctrl+Shift+C` | Cancel a running evaluation |
 | SageFs: Next Code Block | `Ctrl+Down` | Jump cursor to next `;;` block |
 | SageFs: Previous Code Block | `Ctrl+Up` | Jump cursor to previous `;;` block |
-| SageFs: Clear Inline Results | — | Remove all inline result decorations |
-| SageFs: Cycle Density (Full → Normal → Minimal) | — | Toggle Full → Normal → Minimal inline display |
-| SageFs: Load Current Script | — | Load the active `.fsx` file into the session |
+| SageFs: Clear Inline Results |: | Remove all inline result decorations |
+| SageFs: Cycle Density (Full → Normal → Minimal) |: | Toggle Full → Normal → Minimal inline display |
+| SageFs: Load Current Script |: | Load the active `.fsx` file into the session |
 
 ### Daemon & Session
 
 | Command | Keybinding | Description |
 |---------|-----------|-------------|
-| SageFs: Start Daemon | — | Start the SageFs daemon |
-| SageFs: Stop Daemon | — | Stop the SageFs daemon |
-| SageFs: Restart Daemon | — | Restart the SageFs daemon |
-| SageFs: Open Dashboard | — | Open web dashboard in VS Code |
+| SageFs: Start Daemon |: | Start the SageFs daemon |
+| SageFs: Stop Daemon |: | Stop the SageFs daemon |
+| SageFs: Restart Daemon |: | Restart the SageFs daemon |
+| SageFs: Open Dashboard |: | Open web dashboard in VS Code |
 | SageFs: Show Output | none | Open the SageFs Output channel |
-| SageFs: Check Health | — | Run the extension's health check |
-| SageFs: Create Session | — | Create a new FSI session |
-| SageFs: Switch Session | — | Switch to a different session |
-| SageFs: Switch Project | — | Change which `.fsproj`/`.sln` the session loads |
-| SageFs: Browse for Project | — | Pick a project file from a file dialog |
-| SageFs: Reconnect to Daemon | — | Re-open the connection to the daemon |
-| SageFs: Switch Workflow | — | Switch the session between REPL, Live Testing and Hot Reload |
-| SageFs: Stop Session | — | Stop the active session |
-| SageFs: Reset Session | — | Soft reset (clear definitions, keep session) |
-| SageFs: Hard Reset (Rebuild) | — | Full rebuild and reload |
-| SageFs: Session Menu | — | Quick-access menu for all session operations |
-| SageFs: Export Session as .fsx | — | Save session state to a script file |
-| SageFs: Show FSI Bindings | — | Browse current FSI bindings |
-| SageFs: Configure Warmup Auto-Open | — | Create or open `.SageFs/config.fsx` |
-| SageFs: Refresh Sessions | — | Refresh the Sessions sidebar |
-| SageFs: Refresh Session Context | — | Refresh the Session Context sidebar |
-| SageFs: Run App | — | Run the session's executable project, with hot reload |
-| SageFs: Stop App | — | Stop the app started by Run App |
-| SageFs: Open Getting Started Sample | — | Open the bundled getting-started `.fsx` |
+| SageFs: Check Health |: | Run the extension's health check |
+| SageFs: Create Session |: | Create a new FSI session |
+| SageFs: Switch Session |: | Switch to a different session |
+| SageFs: Switch Project |: | Change which `.fsproj`/`.sln` the session loads |
+| SageFs: Browse for Project |: | Pick a project file from a file dialog |
+| SageFs: Reconnect to Daemon |: | Re-open the connection to the daemon |
+| SageFs: Switch Workflow |: | Switch the session between REPL, Live Testing and Hot Reload |
+| SageFs: Stop Session |: | Stop the active session |
+| SageFs: Reset Session |: | Soft reset (clear definitions, keep session) |
+| SageFs: Hard Reset (Rebuild) |: | Full rebuild and reload |
+| SageFs: Session Menu |: | Quick-access menu for all session operations |
+| SageFs: Export Session as .fsx |: | Save session state to a script file |
+| SageFs: Show FSI Bindings |: | Browse current FSI bindings |
+| SageFs: Configure Warmup Auto-Open |: | Create or open `.SageFs/config.fsx` |
+| SageFs: Refresh Sessions |: | Refresh the Sessions sidebar |
+| SageFs: Refresh Session Context |: | Refresh the Session Context sidebar |
+| SageFs: Run App |: | Run the session's executable project, with hot reload |
+| SageFs: Stop App |: | Stop the app started by Run App |
+| SageFs: Open Getting Started Sample |: | Open the bundled getting-started `.fsx` |
 
-The Sessions sidebar also has inline per-row actions (Switch To, Stop, Reset) — click the icons on a session row instead of going through the command palette.
+The Sessions sidebar also has inline per-row actions (Switch To, Stop, Reset), click the icons on a session row instead of going through the command palette.
 
 ### Hot Reload
 
 | Command | Keybinding | Description |
 |---------|-----------|-------------|
-| SageFs: Toggle Hot Reload for File | — | Toggle file watching for current file |
-| SageFs: Toggle Directory Hot Reload | — | Toggle watching for a directory |
-| SageFs: Watch All Files | — | Enable watching for all project files |
-| SageFs: Unwatch All Files | — | Disable all file watching |
-| SageFs: Refresh Hot Reload | — | Refresh the hot reload file list |
+| SageFs: Toggle Hot Reload for File |: | Toggle file watching for current file |
+| SageFs: Toggle Directory Hot Reload |: | Toggle watching for a directory |
+| SageFs: Watch All Files |: | Enable watching for all project files |
+| SageFs: Unwatch All Files |: | Disable all file watching |
+| SageFs: Refresh Hot Reload |: | Refresh the hot reload file list |
 
 ### Live Testing
 
 | Command | Keybinding | Description |
 |---------|-----------|-------------|
-| SageFs: Enable Live Testing | — | Turn on live test execution |
-| SageFs: Disable Live Testing | — | Turn off live test execution |
-| SageFs: Run All Tests | — | Execute all tests now |
-| SageFs: Run This Test | — | Run one test (from the CodeLens above it) |
-| SageFs: Debug This Test | — | Hold one test, attach a .NET debugger to the process that runs it, release it |
-| SageFs: Show Covering Tests | — | The tests that cover a symbol (from a coverage CodeLens) |
-| SageFs: Set Test Run Policy | — | Configure per-category run policies |
-| SageFs: Show Test Call Graph | — | Visualize test dependency graph |
-| SageFs: Show Test Trace | — | Browse test cycle events |
-| SageFs: Show Recent Events | — | Browse pipeline event history |
-| SageFs: Explain Test Failure | — | Enriched failure context for the test at cursor |
-| SageFs: Suggest Repair for Failed Test | — | Trace causal changes and suggest a fix |
+| SageFs: Enable Live Testing |: | Turn on live test execution |
+| SageFs: Disable Live Testing |: | Turn off live test execution |
+| SageFs: Run All Tests |: | Execute all tests now |
+| SageFs: Run This Test |: | Run one test (from the CodeLens above it) |
+| SageFs: Debug This Test |: | Hold one test, attach a .NET debugger to the process that runs it, release it |
+| SageFs: Show Covering Tests |: | The tests that cover a symbol (from a coverage CodeLens) |
+| SageFs: Set Test Run Policy |: | Configure per-category run policies |
+| SageFs: Show Test Call Graph |: | Visualize test dependency graph |
+| SageFs: Show Test Trace |: | Browse test cycle events |
+| SageFs: Show Recent Events |: | Browse pipeline event history |
+| SageFs: Explain Test Failure |: | Enriched failure context for the test at cursor |
+| SageFs: Suggest Repair for Failed Test |: | Trace causal changes and suggest a fix |
 | SageFs: Next Failing Test | `Alt+Shift+]` | Jump to the next failing test |
 | SageFs: Previous Failing Test | `Alt+Shift+[` | Jump to the previous failing test |
 
@@ -347,7 +347,7 @@ The Sessions sidebar also has inline per-row actions (Switch To, Stop, Reset) �
 The daemon isn't running. Fix:
 1. Run `dotnet tool install --global SageFs` if you haven't installed the CLI
 2. Click the status bar item, or run Command Palette → "SageFs: Start Daemon"
-3. The extension auto-starts the daemon when it detects F# projects — if this isn't happening, check `sagefs.autoStart` is `true`
+3. The extension auto-starts the daemon when it detects F# projects: if this isn't happening, check `sagefs.autoStart` is `true`
 
 ### No inline results after Alt+Enter
 1. Check the Output panel (View → Output → select "SageFs" from the dropdown) for errors
@@ -380,11 +380,11 @@ The extension detects daemon crashes and shows a restart prompt. If it keeps cra
 
 ## Architecture
 
-This extension is written entirely in F# using [Fable](https://fable.io/) — no TypeScript. The F# source compiles to JavaScript, giving you type-safe extension code with the same language as your project.
+This extension is written entirely in F# using [Fable](https://fable.io/), no TypeScript. The F# source compiles to JavaScript, giving you type-safe extension code with the same language as your project.
 
 Key architectural decisions:
 - **SSE (Server-Sent Events)** for all real-time data: test results, diagnostics, coverage, eval results
-- **POST commands** for all actions: eval, reset, start/stop — responses are acknowledgments only
+- **POST commands** for all actions: eval, reset, start/stop: responses are acknowledgments only
 - **Native VS Code APIs** via Fable bindings: TestController, CodeLens, TreeView, Diagnostics, Decorations
 
 ## Development

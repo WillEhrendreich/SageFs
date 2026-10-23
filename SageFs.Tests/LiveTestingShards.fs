@@ -14,13 +14,20 @@ open Expecto
 open SageFs.Build
 
 /// The tree the `--integration-lt` runner runs. One daemon and one session per shard, so a shard's cases are in sequence.
+///
+/// The debug case is LAST, and that is not a matter of taste. It holds a test in the host, and the
+/// release of that hold waits for the host's agent; on a loaded machine the release can outlast the
+/// daemon's own hold window, and the host keeps the test. A case that follows it then waits for a
+/// test that never runs. The daemon's hold expires by itself, but the expiry is longer than the
+/// patience of the cases around it.
 let tree () : Test =
   testSequenced (
     testList
       "Live testing against the FromCSharp sample"
       [ LiveTestingJourneyTests.journeyTests
         LiveTestingBrowserTests.tests
-        LiveTestingLatencyTests.latencyTests ])
+        LiveTestingLatencyTests.latencyTests
+        DebugAttachJourneyTests.journeyTests ])
 
 /// The name of a case: its own, which is unique across the tier.
 let nameOf (flat: FlatTest) : string = List.last flat.name

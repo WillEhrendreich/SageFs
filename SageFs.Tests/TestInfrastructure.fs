@@ -224,6 +224,60 @@ module TestPorts =
   /// fails with "no free port pair in the assigned range". The lock is held for the scan only.
   let reservePair () : int * int = lock envLock reservePairNow
 
+  /// N free ports, for a process that binds several of its own (the Jupyter
+  /// kernel binds five ZMQ sockets: shell, iopub, stdin, control, heartbeat).
+  ///
+  /// Same allocator and same tier range as `reservePair`, and the same
+  /// bind-then-release: the ports are held only long enough to prove they
+  /// are free, then released for the process that will bind them. A test
+  /// that asked the OS for ports itself (binding port 0) would ignore the
+  /// tier's assigned range, which is how a neighbouring tier's daemon ends
+  /// up fighting for the same port.
+  ///
+  /// The reservations are held ALL AT ONCE and released together, so the N
+  /// ports are distinct: releasing each one as it was found would hand back
+  /// the same port twice, and the caller would be told to bind one socket
+  /// twice.
+  let reservePorts (count: int) : int list =
+    lock envLock (fun () ->
+      if count <= 0 then []
+      else
+        // Each reservation takes a PAIR (the port and its +1 neighbour),
+        // because that is what a daemon needs; the kernel's sockets are
+        // single, so only the first of each pair is handed out and the
+        // neighbours are left alone for whatever else wants them.
+        let held = ResizeArray<TcpListener>()
+        try
+          let chosen =
+            List.init count (fun _ ->
+              let mcpPort =
+                match assignedRange () with
+                | Some(lo, hi) ->
+                  let span = max 1 (hi - lo - 1)
+                  Seq.init maxRangeAttempts (fun _ -> lo + Random.Shared.Next span)
+                  |> Seq.choose tryReservePair
+                  |> Seq.tryHead
+                  |> Option.defaultWith (fun () ->
+                    failwithf "TestPorts.reservePorts: no free port in the assigned range %d-%d (%s)" lo hi rangeEnvVar)
+                | None ->
+                  Seq.init maxEphemeralAttempts (fun _ -> tryReservePair 0)
+                  |> Seq.tryPick id
+                  |> Option.defaultWith (fun () ->
+                    failwith "TestPorts.reservePorts: unable to reserve free ephemeral loopback ports")
+              // Keep the pair bound until every port is chosen, so the next
+              // candidate cannot be the one just released.
+              let keep = new TcpListener(IPAddress.IPv6Loopback, mcpPort)
+              keep.Start()
+              held.Add keep
+              mcpPort)
+          for listener in held do
+            (listener :> IDisposable).Dispose()
+          chosen
+        with ex ->
+          for listener in held do
+            (listener :> IDisposable).Dispose()
+          raise ex)
+
 /// Structural registry of [Integration] suites. Every integration suite is
 /// registered here together with the runner that owns it, so:
 ///  - the default run excludes registered suites by the IDENTITY of their test

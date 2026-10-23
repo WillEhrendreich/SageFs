@@ -9,7 +9,7 @@ Free tier covers everything you'd realistically use:
 
 - **Workers**: 100,000 requests/day free
 - **R2**: 10 GB storage, 10M Class A ops/month, 10M Class B ops/month free
-- **No Durable Objects** — keeps it free, the Worker is stateless
+- **No Durable Objects**: keeps it free, the Worker is stateless
 
 A typical user submitting a report = 1 POST + 1 R2 PUT = well within free
 tier even with thousands of users.
@@ -44,7 +44,7 @@ npm install
 npm run deploy
 ```
 
-Note the Worker URL — it will be `https://sagefs-friction-receiver.<your-subdomain>.workers.dev`
+Note the Worker URL, it will be `https://sagefs-friction-receiver.<your-subdomain>.workers.dev`
 or whatever custom domain you configure.
 
 ### 4. (Optional) Custom domain
@@ -57,7 +57,7 @@ Triggers → Custom Domains.
 
 In the SageFs dashboard, open the Friction panel (right-side drawer).
 Enter your endpoint URL and (if set) the ingest token. The endpoint
-URL and token are stored locally — never sent anywhere automatically.
+URL and token are stored locally, never sent anywhere automatically.
 
 ## What the Worker accepts
 
@@ -84,20 +84,20 @@ The schema is `1`. The server rejects anything else with a 400.
 
 ## What the Worker does
 
-1. **Token check** — if `INGEST_TOKEN` is set, requests without a matching
+1. **Token check**: if `INGEST_TOKEN` is set, requests without a matching
    `X-SageFs-Token` header are rejected with 401.
-2. **Size check** — requests over `MAX_PAYLOAD_BYTES` (default 64KB) are
+2. **Size check**: requests over `MAX_PAYLOAD_BYTES` (default 64KB) are
    rejected with 413.
-3. **Schema validation** — the body must be a JSON object with the
+3. **Schema validation**: the body must be a JSON object with the
    expected fields and types. Otherwise 400.
-4. **Defense-in-depth sanitization** — the server re-applies the same
+4. **Defense-in-depth sanitization**: the server re-applies the same
    path/IP/email/session-id redaction as the client. Even if a buggy
    daemon sends a raw path, what's stored in R2 is safe.
-5. **Store in R2** — one object per submission, keyed by
+5. **Store in R2**: one object per submission, keyed by
    `YYYY/MM/DD/<timestamp>-<random>.json`. The R2 prefix is a real date
    so you can list by month in the Cloudflare dashboard or with
    `wrangler r2 object list --prefix 2026/01/`.
-6. **Discord notification** — if `DISCORD_WEBHOOK_URL` is set, a short
+6. **Discord notification**: if `DISCORD_WEBHOOK_URL` is set, a short
    summary is posted to Discord. The full report is in R2; the Discord
    message is just a heads-up.
 
@@ -115,7 +115,7 @@ wrangler r2 object get sagefs-friction 2026/01/15/lwxyz-abc12345.json
 ```
 
 The full JSON is what SageFs sent after server-side sanitization. If
-anything sensitive ever lands here, it's a bug — report it.
+anything sensitive ever lands here, it's a bug, report it.
 
 ## What SageFs sends
 

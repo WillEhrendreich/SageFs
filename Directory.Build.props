@@ -26,7 +26,7 @@
          NoWarn NU1608/NU1902 for the pre-1.0/known-audited transitive pins. -->
     <CheckNulls>true</CheckNulls>
     <NoWarn>$(NoWarn);NU1608;NU1902</NoWarn>
-    <Version>0.6.916</Version>
+    <Version>0.6.925</Version>
     <!-- Reproducible/tamper-evident restore: commit packages.lock.json per
          project and fail restore if it drifts from Directory.Packages.props
          without a regenerate. RestoreLockedMode is scoped to CI so local
@@ -93,15 +93,29 @@
        always has a stale `SageFs.Core.dll` on disk, so the condition was true
        and the stale assembly satisfied the reference.
 
-       So the property states the PATH unconditionally and lets the build decide
-       whether the file is there. The ordering target then builds Core when it
-       is missing, and a missing HintPath after that is a real error rather than
-       a silently-skipped reference. -->
+        So the property states the PATH unconditionally and lets the build decide
+        whether the file is there. The ordering target then builds Core when it
+        is missing, and a missing HintPath after that is a real error rather than
+        a silently-skipped reference.
+
+        THE FRAMEWORK IN THAT PATH IS THE CONSUMER'S OWN, not a fixed one. It was
+        net10.0 for everybody, so a raw `dotnet build` of a net11.0 sample copied
+        Core's net10.0 build into its net11.0 output, and the session's bin then
+        held a SageFs.Core.dll that is a different compilation of the same source
+        from the one the daemon runs. The daemon under a net11 dotnet runs Core's
+        net11.0 build, so `HostCoreAdoption.decide`, which compares SHA-256 first
+        and the clock second, saw "same version, different bytes" and let the clock
+        decide. Measured on the 0.6.924 gate: the sample held the net10.0 build
+        (4442221b…) while the daemon ran the net11.0 build (51f28066…), so the
+        integration tier refused the session when the copy happened to be written
+        first and passed when it happened to be written second. The gate was a coin
+        flip on build order. `$(TargetFramework)` is set earlier in this file, so
+        every consumer gets the build that matches what it runs. -->
   <PropertyGroup>
     <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
   </PropertyGroup>
   <PropertyGroup>
-    <SageFsCoreAssembly>$(MSBuildThisFileDirectory)SageFs.Core/bin/$(Configuration)/net10.0/SageFs.Core.dll</SageFsCoreAssembly>
+    <SageFsCoreAssembly>$(MSBuildThisFileDirectory)SageFs.Core/bin/$(Configuration)/$(TargetFramework)/SageFs.Core.dll</SageFsCoreAssembly>
   </PropertyGroup>
 </Project>
 

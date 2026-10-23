@@ -11,7 +11,7 @@
 `TimeTravel` wraps a `SnapshotRing` (a ring-buffer of model snapshots) with a
 navigation cursor (`TimeTravelMode`) so the user can step backwards and forwards
 through the history of model states for debugging.  While in `Viewing` mode the
-ring is frozen — new `record` calls are silently ignored.  `Live` mode is the
+ring is frozen, new `record` calls are silently ignored.  `Live` mode is the
 normal operating state.
 
 ---
@@ -20,14 +20,14 @@ normal operating state.
 
 ### `TimeTravelMode`
 A discriminated union with two cases:
-- `Live` — the system is tracking the present state.
-- `Viewing of age: int` — the user has navigated `age` steps into the past
+- `Live`, the system is tracking the present state.
+- `Viewing of age: int`, the user has navigated `age` steps into the past
   (age ≥ 1).
 
 ### `TimeTravelState<'Model>`
 A product type containing:
-- `Ring` — a `SnapshotRing<'Model>` (a ring-buffer of snapshots).
-- `Mode` — the current `TimeTravelMode`.
+- `Ring`, a `SnapshotRing<'Model>` (a ring-buffer of snapshots).
+- `Mode`, the current `TimeTravelMode`.
 
 ---
 
@@ -92,7 +92,7 @@ A product type containing:
 
 1. **Age ≥ 1 in Viewing mode**: `Viewing age` implies `age ≥ 1`.
 2. **Viewing age ≤ count − 1**: to be in `Viewing age`, we require `age < count`
-   (the snapshot at that age must exist).  Note: this is a _logical_ invariant —
+   (the snapshot at that age must exist).  Note: this is a _logical_ invariant,
    it holds when `stepBack` is used correctly, but `TimeTravelState` itself does
    not enforce it structurally.
 3. **Ring frozen in Viewing mode**: `record` is a no-op when `Mode = Viewing _`.
@@ -110,7 +110,7 @@ A product type containing:
 - Empty ring with `stepBack`: no-op (count = 0 ≤ 1).
 - Single snapshot with `stepBack`: no-op (count = 1 ≤ 1).
 - `stepForward` when already `Live`: no-op.
-- `record` when `Viewing`: silently discarded — history does not grow while browsing.
+- `record` when `Viewing`: silently discarded, history does not grow while browsing.
 - `currentModel` on empty ring: returns `None`.
 
 ---
@@ -137,7 +137,7 @@ let s7 = record "msg3" 0.3 m3 s3      -- Viewing 1, unchanged (frozen)
   show the same model as `Live`.  Current code prevents `Viewing 0` from being
   created by navigation, but there is no structural check.
 - The `stepBack` guard is `age + 1 < count` (strict), meaning we can never be
-  `Viewing (count - 1)` — the oldest snapshot is always one step out of reach when
+  `Viewing (count - 1)`, the oldest snapshot is always one step out of reach when
   count > 0.  Is this intentional?  (Actually re-reading: from `Live` we go to
   `Viewing 1`, and then from `Viewing k` we go to `Viewing (k+1)` if `k+1 < count`.
   So with count = 3, max age = 2 = count - 1.  That means from `Live` with count = 3

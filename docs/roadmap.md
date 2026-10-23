@@ -9,29 +9,25 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 6, Later 18, Exploring 20. Already built: 33.
+On the page today: Now 0, Next 5, Later 18, Exploring 20. Already built: 34.
 
-## Next (6)
+## Next (5)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Live testing
 
-- [ ] **Debug failing tests properly in VS Code.** Debugging a failing test from the VS Code lens works for one test at a time. Still open is a full attach end to end in our own tests, and debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out. ([LIVE_TESTING_GUIDE.md](LIVE_TESTING_GUIDE.md), [how-live-testing-works.md](how-live-testing-works.md))
+- [ ] **Debug failing tests properly in VS Code.** Debugging a failing test from the VS Code lens works for one test at a time. The attach is now proven in our own tests, the same case the Neovim item leans on. Still open is debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out. ([LIVE_TESTING_GUIDE.md](LIVE_TESTING_GUIDE.md), [how-live-testing-works.md](how-live-testing-works.md))
 
 ### Hot reload
 
-- [ ] **A REPL eval changes the running app.** An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes. Nobody has driven it end to end against a running run_app app yet, so I can't tell you how long an eval takes to be served. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built. ([how-hot-reload-works.md](how-hot-reload-works.md))
+- [ ] **A REPL eval changes the running app.** An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes, and it is now driven end to end against a running run_app app in our own tests. The eval writes the declaration back, the file change reaches the worker, and the running app serves the new code. Measured here, the whole route takes about 5.6 seconds, most of it the build. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built. ([how-hot-reload-works.md](how-hot-reload-works.md))
 - [ ] **Level the REPL after a patch without losing it.** Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. I'd make the daemon re-fetch maps and discovery after any host swap and check the REPL is idle and empty first, then do it for you. ([decisions.md](decisions.md), [how-hot-reload-works.md](how-hot-reload-works.md))
-
-### Editors
-
-- [ ] **Debug a failing test from Neovim.** The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim side is done too, in the sagefs.nvim repo: `:SageFsDebugTest` puts a failing test on the board and wires nvim-dap to those routes, on `<leader>rtg` and `D` on a panel row. The release goes out on `configurationDone`, when the adapter has really attached, so a slow attach is the daemon's to wait out rather than a grace period on this side. Still open is a full attach inside our own tests. ([LIVE_TESTING_GUIDE.md](LIVE_TESTING_GUIDE.md))
 
 ### Dashboard
 
 - [ ] **More settings editable from the dashboard.** The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime. ([configuration.md](configuration.md))
-- [ ] **Dashboard panels that follow your context.** Live bindings become a real pane in REPL mode, and cohort shows only while one is running. A pane hidden for being irrelevant says why and can be pinned open.
+- [ ] **Dashboard panels that follow your context.** A panel that is not relevant right now says why, in one line where the panel would have been: hot reload, live testing, cohort and friction each leave the reason behind, so a user can tell the dashboard having nothing to say from the dashboard hiding something. The cohort panel shows only while a cohort is running. The live bindings fold away and open again with one click, and the pin opens the pane when there are no bindings yet. What is not built is the live bindings becoming a real pane in REPL mode, and a pane moving between regions.
 
 ## Later (18)
 
@@ -62,7 +58,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 
 ### Dashboard
 
-- [ ] **Move and dock dashboard panes.** Panes you can move, dock, hide and reopen like Visual Studio's tool windows, with a layout per workflow and a reset button for when you lose one.
+- [ ] **Move and dock dashboard panes.** Panes you can move, dock, hide and reopen like Visual Studio's tool windows, with a layout per workflow and a reset button for when you lose one. Two pieces of that are in: the live bindings fold away and open again with one click, because the tree can be taller than the dock's ceiling and the drag handle that changes the ceiling is a thin line to find, and the fold is the user's, so a push does not take it back; and the dock's own ceiling remembers itself between visits. Moving a pane between regions is not built.
 - [ ] **Friction reports you can read first.** Friction events stay local and bounded now, and the panel stays hidden until reporting has a real endpoint. A report you choose to send would show its exact payload first, then go to that endpoint or start as a prefilled GitHub issue. ([mcp-tools.md](mcp-tools.md))
 
 ### Platform and install
@@ -115,7 +111,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub.
 
-## Built (33)
+## Built (34)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -162,6 +158,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 
 ### Editors
 
+- [x] **Debug a failing test from Neovim.** The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim side is done too, in the sagefs.nvim repo: `:SageFsDebugTest` puts a failing test on the board and wires nvim-dap to those routes, on `<leader>rtg` and `D` on a panel row. The release goes out on `configurationDone`, when the adapter has really attached, so a slow attach is the daemon's to wait out rather than a grace period on this side. And the attach is now proven in our own tests: a real debugger attaches to the process the daemon names, lists that process's threads, and the held test runs when the debugger lets it go. Code: [`SageFs.Tests/DebugAttachJourneyTests.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Tests/DebugAttachJourneyTests.fs)
 - [x] **The Neovim plugin catches up with the daemon.** The plugin shows hot reload's pending and never-entered states, the live-values pane with its Safe mode click, workflow switching and the session's own app state, and it names the session on every session-scoped call. It reads a tool's answer as its first text block, finds a nudged value by the range the daemon reports, sends the session's id with every nudge, shows a vetoed landing with who vetoed it and why, and lists the files a re-sign left on the old method with how sure each match is. The slow-eval heartbeat is wired too: while an eval runs the output section ticks its elapsed time, a beat aimed at another file cannot corrupt it, and the line stops the moment eval_result lands. Code: [`../sagefs.nvim/lua/sagefs/dashboard/state.lua`](https://github.com/WillEhrendreich/sagefs.nvim/blob/master/lua/sagefs/dashboard/state.lua)
 
 ### Dashboard

@@ -17,7 +17,7 @@ Welcome. SageFs is open source and I'm glad of any help, whether that's a typo, 
 
 - The .NET SDK that `global.json` pins, which is a .NET 11 release candidate (`11.0.100-rc.1.26425.128`, with `allowPrerelease` on) as I write this. The repo builds for `net11.0` by default, and the shipped tool (`SageFs`, `SageFs.Core`, `SageFs.Host`) multi-targets `net10.0;net11.0` so a .NET 10 user can install it. Get the SDK from [dotnet.microsoft.com/download/dotnet/11.0](https://dotnet.microsoft.com/download/dotnet/11.0)
 - Git
-- An editor — VS Code with Ionide, Neovim, Rider, or your preference
+- An editor: VS Code with Ionide, Neovim, Rider, or your preference
 
 ### Clone and Build
 
@@ -82,10 +82,10 @@ The Neovim plugin lives in a separate repo: [sagefs.nvim](https://github.com/Wil
 The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Do not extend them as current product surfaces. Raylib application and game demos remain valuable examples of SageFs game-project support and should be preserved.
 
 **Good starting points for reading code:**
-- `SageFs/DaemonMode.fs` — daemon composition and client routing
-- `SageFs/Dashboard.fs` — current browser dashboard
-- `SageFs/McpServer.fs` and `SageFs/McpTools.fs` — MCP transport and tools
-- `SageFs.Tests/` — the test project shows how every module is exercised
+- `SageFs/DaemonMode.fs`, daemon composition and client routing
+- `SageFs/Dashboard.fs`, current browser dashboard
+- `SageFs/McpServer.fs` and `SageFs/McpTools.fs`. MCP transport and tools
+- `SageFs.Tests/`, the test project shows how every module is exercised
 
 ## Debugging SageFs
 
@@ -146,11 +146,11 @@ Visual Studio / Rider: Open `SageFs.slnx`, set `SageFs.Tests` as the startup pro
 
 ### Performance guards
 
-Performance is guarded locally, in the normal test run — not by a separate CI
+Performance is guarded locally, in the normal test run, not by a separate CI
 job on noisy shared runners. The heavyweight BenchmarkDotNet suite was removed:
 it gated releases on microbenchmark variance for paths no user feels (the
 deprecated TUI, features with no product consumer), while the one benchmark that
-measured a real hot path — the per-eval binding-scope rebuild — was never in the
+measured a real hot path, the per-eval binding-scope rebuild, was never in the
 threshold gate at all.
 
 In its place, `PerfTests.fs` carries lightweight guards that run every time you
@@ -172,14 +172,14 @@ dotnet build && dotnet pack SageFs -o nupkg
 dotnet tool update --global SageFs --add-source ./nupkg --no-cache
 ```
 
-Then restart SageFs. If you only changed test code, a simpler rebuild is enough — no reinstall needed.
+Then restart SageFs. If you only changed test code, a simpler rebuild is enough, no reinstall needed.
 
 ### Viewing Logs
 
-- **Daemon console** — real-time output in the terminal where SageFs is running
-- **Dashboard** — `http://localhost:37750/dashboard` shows session state, events, test results
-- **Log files** — the daemon writes `mcp-server<yyyyMMdd>.log` and each session's worker writes `<data dir>/workers/<sessionId>.log`. `GET http://localhost:37750/api/daemon-info` returns the daemon log's path as `logPath`. See [Where the logs are](docs/TROUBLESHOOTING.md#where-the-logs-are).
-- **OpenTelemetry** — start with `dotnet fsi scripts/start-sagefs-otel.fsx` (it sets the OTEL variables and runs `sagefs`) for structured traces, or set `OTEL_EXPORTER_OTLP_ENDPOINT` yourself on any platform
+- **Daemon console**: real-time output in the terminal where SageFs is running
+- **Dashboard**, `http://localhost:37750/dashboard` shows session state, events, test results
+- **Log files**: the daemon writes `mcp-server<yyyyMMdd>.log` and each session's worker writes `<data dir>/workers/<sessionId>.log`. `GET http://localhost:37750/api/daemon-info` returns the daemon log's path as `logPath`. See [Where the logs are](docs/TROUBLESHOOTING.md#where-the-logs-are).
+- **OpenTelemetry**: start with `dotnet fsi scripts/start-sagefs-otel.fsx` (it sets the OTEL variables and runs `sagefs`) for structured traces, or set `OTEL_EXPORTER_OTLP_ENDPOINT` yourself on any platform
 
 ## Running Tests
 
@@ -203,11 +203,11 @@ For local development, prefer running tests inside SageFs's own REPL for instant
 ### Test Categories
 
 Tests are auto-categorized:
-- **Unit** — pure logic, runs on every change
-- **Integration** — needs external resources, runs on demand by default
-- **Browser** — Playwright .NET tests, runs on demand
-- **Property** — FsCheck generative tests
-- **Benchmark** — performance tests
+- **Unit**: pure logic, runs on every change
+- **Integration**: needs external resources, runs on demand by default
+- **Browser**: Playwright .NET tests, runs on demand
+- **Property**: FsCheck generative tests
+- **Benchmark**: performance tests
 
 ## Coding Standards
 
@@ -215,9 +215,9 @@ The full coding standards are in [AGENTS.md](AGENTS.md). Here are the essentials
 
 ### The Non-Negotiables
 
-- **2 spaces for indentation** — not 4, not tabs. The entire codebase uses 2 spaces.
-- **Conventional Commits** — `feat(core): add session routing`, `fix(dashboard): handle reconnect`, `docs: update contributing guide`
-- **No `Version` in PackageReference** — all NuGet versions live in `Directory.Packages.props`
+- **2 spaces for indentation**: not 4, not tabs. The entire codebase uses 2 spaces.
+- **Conventional Commits**, `feat(core): add session routing`, `fix(dashboard): handle reconnect`, `docs: update contributing guide`
+- **No `Version` in PackageReference**, all NuGet versions live in `Directory.Packages.props`
 
 ### F# Style
 
@@ -256,9 +256,9 @@ list |> Expect.hasLength "should have 3 items" 3
 
 ### Before You Start
 
-1. **Check existing issues** — someone may already be working on it
-2. **Open an issue first** for large changes — let's discuss the approach before you invest time
-3. **Small PRs are better** — easier to review, faster to merge
+1. **Check existing issues**: someone may already be working on it
+2. **Open an issue first** for large changes: let's discuss the approach before you invest time
+3. **Small PRs are better**: easier to review, faster to merge
 
 ### PR Workflow
 
@@ -271,10 +271,10 @@ list |> Expect.hasLength "should have 3 items" 3
 
 ### What Makes a Great PR
 
-- **Tests included** — new features need tests, bug fixes need a regression test
-- **Small and focused** — one logical change per PR
-- **Clear description** — what changed, why, and how to verify
-- **Passes CI** — green build, no new warnings
+- **Tests included**: new features need tests, bug fixes need a regression test
+- **Small and focused**: one logical change per PR
+- **Clear description**: what changed, why, and how to verify
+- **Passes CI**: green build, no new warnings
 
 ### What We'll Review
 
@@ -288,16 +288,16 @@ list |> Expect.hasLength "should have 3 items" 3
 
 Not sure where to start? Here are some areas where help is especially welcome:
 
-- **Documentation** — improve docs, add examples, fix typos
-- **Test coverage** — add property-based tests, improve edge case coverage
-- **Snapshot tests** — add Verify snapshot tests for rendered output
-- **Bug fixes** — check the issue tracker for bugs labeled `good-first-issue`
-- **Error messages** — make diagnostics clearer and more helpful
-- **FSI quirks** — `SageFs.Core/FsiRewrite.fs` is ~25 lines and handles FSI edge cases — PRs welcome
+- **Documentation**: improve docs, add examples, fix typos
+- **Test coverage**: add property-based tests, improve edge case coverage
+- **Snapshot tests**: add Verify snapshot tests for rendered output
+- **Bug fixes**: check the issue tracker for bugs labeled `good-first-issue`
+- **Error messages**: make diagnostics clearer and more helpful
+- **FSI quirks**, `SageFs.Core/FsiRewrite.fs` is ~25 lines and handles FSI edge cases. PRs welcome
 
 ## Architecture Overview
 
-SageFs is **daemon-first** — one long-running server, many clients:
+SageFs is **daemon-first**, one long-running server, many clients:
 
 ```
                 ┌───────────────┐
@@ -322,16 +322,16 @@ SageFs is **daemon-first** — one long-running server, many clients:
 ```
 
 Key architectural concepts:
-- **Thin clients** — editors, dashboard tabs, and MCP clients use the same session-scoped daemon contracts
-- **Web dashboard** — browser operations and state updates use Falco.Datastar and SSE
-- **Worker isolation** — each FSI session runs in an isolated sub-process (Erlang-style)
-- **SSE for reads** — all state changes push to clients via Server-Sent Events
-- **POST for commands** — write operations are POST-only, return acknowledgment only
+- **Thin clients**: editors, dashboard tabs, and MCP clients use the same session-scoped daemon contracts
+- **Web dashboard**: browser operations and state updates use Falco.Datastar and SSE
+- **Worker isolation**: each FSI session runs in an isolated sub-process (Erlang-style)
+- **SSE for reads**: all state changes push to clients via Server-Sent Events
+- **POST for commands**: write operations are POST-only, return acknowledgment only
 
 ## Questions?
 
 - Open a [Discussion](https://github.com/WillEhrendreich/SageFs/discussions) for general questions
 - Open an [Issue](https://github.com/WillEhrendreich/SageFs/issues) for bugs or feature requests
-- PRs are always welcome — even small ones
+- PRs are always welcome: even small ones
 
 Thank you for contributing! 🎉

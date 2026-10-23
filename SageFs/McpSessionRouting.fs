@@ -100,6 +100,44 @@ module McpSessionRouting =
           s.WorkingDirectory)
       |> String.concat "; "
 
+  /// The OPENING words of the two reasons that mean "no session exists for
+  /// this request" — as opposed to a session that exists but cannot take
+  /// work yet (warming up, faulted, ambiguous).
+  ///
+  /// WHY the openers and not the whole sentence: the tail of these messages
+  /// names the tools that can create a session, and that tail has already
+  /// changed once (2026-10-06: "Use create_session" became "Use
+  /// get_available_projects, then create_project_session, ..."). A client that
+  /// matched the old tail silently stopped recognising "no session" — the
+  /// Jupyter kernel could no longer create one, and every test that fed the
+  /// OLD wording still passed. The opener states the situation; the tail only
+  /// suggests a fix.
+  ///
+  /// The openers live here, next to the messages they belong to, so the
+  /// daemon's wording and the clients that read it cannot drift apart.
+  let noSessionAnywhereOpener = "No active session."
+
+  let noSessionMatchesWorkingDirectoryOpener = "No sessions match workingDirectory"
+
+  /// Does this reason mean "there is no session to route this to", so a
+  /// client MAY create one? A reason about a session that EXISTS but is
+  /// warming up, faulted or ambiguous says so with its own explicit "Do NOT
+  /// create" guidance, and that exclusion wins: a warming-up session must
+  /// never be mistaken for "create a new one".
+  ///
+  /// WHY the opener is MATCHED rather than required at the start: the same
+  /// reason reaches a client in two shapes — the RAW one
+  /// (`errorDetails.fields.reason`, which is the DU's own field) and the
+  /// DESCRIBED one (the flat `error` field, which `SageFsError.describe`
+  /// has already prefixed with "Session not reachable: "). A client that
+  /// reads only the described shape would see the opener in the middle of
+  /// the string, so the opener is looked for anywhere in it.
+  let reasonMeansNoSessionExists (reason: string) =
+    let saysNoSession =
+      reason.Contains(noSessionAnywhereOpener, StringComparison.Ordinal)
+      || reason.Contains(noSessionMatchesWorkingDirectoryOpener, StringComparison.Ordinal)
+    saysNoSession && not (reason.Contains("Do NOT create"))
+
   /// Find a session whose WorkingDirectory matches the given path.
   /// Convenience helper only — authoritative callers must detect ambiguity
   /// before selecting a single session.

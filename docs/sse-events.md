@@ -2,7 +2,7 @@
 
 Editors receive daemon events over the main SSE stream, `GET /events` on port 37749. Most events carry a `SessionId` field so a client can filter to the session it cares about. The four cohort events are the exception: a cohort spans every session in its **repository**, so they carry no `SessionId`.
 
-One daemon holds one cohort **per repository**, so these four describe whichever repository's cohort is relevant. The `state` stream's `cohortChanged` event is the one that says *which* — it carries the `CohortScope` that changed, so a client redrawing every cohort it happens to be showing is how you get a change attributed to the wrong repository. Filter on that scope, or on the repository you are working in.
+One daemon holds one cohort **per repository**, so these four describe whichever repository's cohort is relevant. The `state` stream's `cohortChanged` event is the one that says *which*, it carries the `CohortScope` that changed, so a client redrawing every cohort it happens to be showing is how you get a change attributed to the wrong repository. Filter on that scope, or on the repository you are working in.
 
 The daemon emits 25 event types across four sources: 22 `SseWriter` events on `/events`, one `session` event (8 subtypes), one `state` event (8 variants), and `diagnostics` on its own stream.
 
@@ -126,10 +126,10 @@ One cohort spans every session and agent on the daemon, so these four events car
 
 | Event | Payload | Description |
 |:---|:---|:---|
-| `cohort_matrix` | `Version`, `Members[]` (id, role, seat, conductor), `Claims[]` (id, scope, holder, fence, state), `Tests[]`, `Rows[]` (generation, pass[], fail[], stale[]) | The full projected cohort frame: every member, every claim, and the test matrix. Version-gated — an unchanged frame emits nothing. |
+| `cohort_matrix` | `Version`, `Members[]` (id, role, seat, conductor), `Claims[]` (id, scope, holder, fence, state), `Tests[]`, `Rows[]` (generation, pass[], fail[], stale[]) | The full projected cohort frame: every member, every claim, and the test matrix. Version-gated: an unchanged frame emits nothing. |
 | `claim_changed` | `ClaimId`, `Scope`, `Holder` (nullable), `Fence`, `Kind` (acquired\|released\|orphaned\|reassigned) | One claim's state changed. `Holder` is the current holder, or null when orphaned or released. |
 | `landing_changed` | `LandingId`, `Requester`, `State` (queued\|rebasing\|verifying\|blocked\|landed\|withdrawn), `Blocker`, `NextAction` | One landing's state changed. `Blocker` and `NextAction` are populated only when `State = "blocked"`. |
-| `save_observed` | `ClaimId`, `Observer`, `Holder`, `Scope`, `Path` | Claim early warning: a cohort member's file watcher saw a save land inside a different member's held claim. Advisory only — it never blocks the save. |
+| `save_observed` | `ClaimId`, `Observer`, `Holder`, `Scope`, `Path` | Claim early warning: a cohort member's file watcher saw a save land inside a different member's held claim. Advisory only: it never blocks the save. |
 
 ---
 

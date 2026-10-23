@@ -1,4 +1,4 @@
-# Why F#? — Lessons from Building SageFs
+# Why F#?: Lessons from Building SageFs
 
 I built SageFs (F# Interactive with your project loaded, live tests and hot reload on top, and a daemon that
 lets an editor, a browser dashboard and an AI agent share one session) almost entirely in F#. Here's what I actually learned doing it,
@@ -105,7 +105,7 @@ You cannot accidentally add milliseconds to seconds. You cannot pass a raw `floa
 expected. The compiler catches unit mismatches that would be silent, "why is this eval taking 1000x longer
 than it should" runtime bugs in any other language.
 
-Cost: zero. Units of measure are erased at compile time. No runtime overhead, no boxing, just compile-time
+Cost: zero. Units of measure are erased at compile time. No runtime overhead and no boxing: it all happens at compile time.
 safety for a whole class of numerical mistakes I'd otherwise make eventually.
 
 ---

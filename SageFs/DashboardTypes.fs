@@ -216,6 +216,13 @@ module DomIds =
   let [<Literal>] DirSuggestions = "dir-suggestions"
   let [<Literal>] HotReloadPanel = "hot-reload-panel"
   let [<Literal>] LiveTestingPanel = "live-testing-panel"
+  /// The line a panel that is not relevant right now leaves in its place, saying why. One per
+  /// panel, because the morph matches an element by its id and four of them sharing one id would
+  /// be matched by position.
+  let [<Literal>] HiddenReasonHotReload = "hidden-reason-hot-reload"
+  let [<Literal>] HiddenReasonLiveTesting = "hidden-reason-live-testing"
+  let [<Literal>] HiddenReasonCohort = "hidden-reason-cohort"
+  let [<Literal>] HiddenReasonFriction = "hidden-reason-friction"
   let [<Literal>] TestTrace = "test-trace"
   let [<Literal>] ThemeVars = "theme-vars"
   let [<Literal>] ThemePicker = "theme-picker"
@@ -1636,7 +1643,7 @@ module PanelVisibility =
     match panel with
     | OptionalPanel.HotReload ->
       match facts.Viewed with
-      | ViewedSession.NoSession -> PanelVisibility.Hidden "Hot reload: no session is open"
+      | ViewedSession.NoSession -> PanelVisibility.Hidden "Hot reload: no session is selected"
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.HotReload _, _) -> PanelVisibility.Shown
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.Interactive, _) ->
         PanelVisibility.Hidden "Hot reload: this session is in REPL mode"
@@ -1644,7 +1651,7 @@ module PanelVisibility =
         PanelVisibility.Hidden "Hot reload: this session is in Live Testing mode"
     | OptionalPanel.LiveTesting ->
       match facts.Viewed with
-      | ViewedSession.NoSession -> PanelVisibility.Hidden "Live testing: no session is open"
+      | ViewedSession.NoSession -> PanelVisibility.Hidden "Live testing: no session is selected"
       | ViewedSession.Viewing(_, Features.LiveTestActivity.LiveTestActivity.Off) ->
         PanelVisibility.Hidden "Live testing: it's off for this session"
       | ViewedSession.Viewing _ -> PanelVisibility.Shown
@@ -1658,11 +1665,31 @@ module PanelVisibility =
       | FrictionPanelOptIn.NotOptedIn ->
         PanelVisibility.Hidden "Friction: hidden until reporting has a real endpoint (open /dashboard?panels=friction to see it)"
 
-  /// A hidden panel renders nothing at all.
+  /// A hidden panel says why, in one line, in the place the panel would have been.
+  ///
+  /// The reasons were computed all along and thrown away: a panel that is not relevant simply
+  /// was not there, and a user could not tell whether the dashboard had nothing to say or was
+  /// hiding something. The bar is the same one the bottom dock uses for a pane with nothing in
+  /// it, so the vocabulary is the dashboard's own. The reason names the panel, so the line says
+  /// which one is missing.
+  let private reasonBar (panel: OptionalPanel) (reason: string) : Falco.Markup.XmlNode =
+    let id =
+      match panel with
+      | OptionalPanel.HotReload -> DomIds.HiddenReasonHotReload
+      | OptionalPanel.LiveTesting -> DomIds.HiddenReasonLiveTesting
+      | OptionalPanel.Cohort -> DomIds.HiddenReasonCohort
+      | OptionalPanel.Friction -> DomIds.HiddenReasonFriction
+    Elem.div
+      [ Attr.id id
+        Attr.class' "panel panel-hidden-reason"
+        Attr.create "role" "status" ]
+      [ Elem.span [ Attr.class' "panel-hidden-why" ] [ Text.raw reason ] ]
+
+  /// A hidden panel renders the line that says why it is not there.
   let private keep (facts: PanelFacts) (panel: OptionalPanel) (node: Falco.Markup.XmlNode) =
     match decide facts panel with
     | PanelVisibility.Shown -> node
-    | PanelVisibility.Hidden _ -> Text.raw ""
+    | PanelVisibility.Hidden reason -> reasonBar panel reason
 
   /// Drop the panels that aren't relevant from a built snapshot. Still one
   /// snapshot and one fat morph; hidden panels just aren't in it.

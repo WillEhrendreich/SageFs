@@ -1,6 +1,6 @@
 # Informal Specification: ResultEx
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 > Source: `SageFs.Core/ResultEx.fs`
 
 ## Last Updated
@@ -16,10 +16,10 @@ for composing `Result<'T, 'E>` computations. It extends the standard F# `Result`
 module with operations that make error handling explicit and composable.
 
 The module's operations fall into four groups:
-1. **Transformers** — map success/error values without changing the structure
-2. **Sequencers** — chain computations that may fail
-3. **Combinators** — combine multiple results
-4. **Collectors** — process lists of results
+1. **Transformers**: map success/error values without changing the structure
+2. **Sequencers**: chain computations that may fail
+3. **Combinators**: combine multiple results
+4. **Collectors**: process lists of results
 
 ---
 
@@ -32,7 +32,7 @@ function specialises the error to `SageFsError`, but the rest are fully generic.
 
 ## Functions and their specifications
 
-### `map f r` — Transform success value
+### `map f r`. Transform success value
 
 **Precondition**: `f : 'T → 'U` is total  
 **Postcondition**:
@@ -44,7 +44,7 @@ function specialises the error to `SageFsError`, but the rest are fully generic.
 
 ---
 
-### `bind f r` — Monadic sequencing
+### `bind f r`. Monadic sequencing
 
 **Precondition**: `f : 'T → Result<'U, 'E>` is total  
 **Postcondition**:
@@ -60,7 +60,7 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `mapError f r` — Transform error value
+### `mapError f r`. Transform error value
 
 **Postcondition**:
 - If `r = Ok v` → `mapError f r = Ok v`
@@ -68,7 +68,7 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `defaultWith f r` — Recover from error
+### `defaultWith f r`. Recover from error
 
 **Postcondition**:
 - If `r = Ok v` → `defaultWith f r = v`
@@ -76,7 +76,7 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `defaultValue d r` — Recover with constant
+### `defaultValue d r`. Recover with constant
 
 **Postcondition**:
 - If `r = Ok v` → `defaultValue d r = v`
@@ -84,7 +84,7 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `ofOption err o` — Lift Option to Result
+### `ofOption err o`. Lift Option to Result
 
 **Postcondition**:
 - If `o = Some v` → `ofOption err o = Ok v`
@@ -92,7 +92,7 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `toOption r` — Demote Result to Option
+### `toOption r`. Demote Result to Option
 
 **Postcondition**:
 - If `r = Ok v`    → `toOption r = Some v`
@@ -103,7 +103,7 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `zip r1 r2` — Combine two results (first-error wins)
+### `zip r1 r2`. Combine two results (first-error wins)
 
 **Postcondition**:
 - If `r1 = Ok a, r2 = Ok b` → `zip r1 r2 = Ok (a, b)`
@@ -112,7 +112,7 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `apply fResult xResult` — Applicative apply
+### `apply fResult xResult`. Applicative apply
 
 **Postcondition**:
 - If `fResult = Ok f, xResult = Ok x` → `apply fResult xResult = Ok (f x)`
@@ -121,19 +121,19 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `tap f r` — Peek at success value (side-effect, pass-through)
+### `tap f r`. Peek at success value (side-effect, pass-through)
 
 **Postcondition**: result is unchanged; `tap f r = r` (ignoring side effects)
 
 ---
 
-### `tapError f r` — Peek at error value (side-effect, pass-through)
+### `tapError f r`. Peek at error value (side-effect, pass-through)
 
 **Postcondition**: result is unchanged; `tapError f r = r` (ignoring side effects)
 
 ---
 
-### `sequence results` — Collect list of results (all-or-first-error)
+### `sequence results`. Collect list of results (all-or-first-error)
 
 **Postcondition**:
 - If all elements are `Ok vi` → `sequence results = Ok [v0; v1; …; vn-1]` (order preserved)
@@ -149,13 +149,13 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `traverse f items` — Map-then-collect
+### `traverse f items`. Map-then-collect
 
 **Postcondition**: `traverse f items = sequence (List.map f items)`
 
 ---
 
-### `partition results` — Split into oks and errors
+### `partition results`. Split into oks and errors
 
 **Postcondition**: 
 - Returns `(oks, errs)` where `oks` = values from `Ok` elements (in order)
@@ -164,7 +164,7 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 
 ---
 
-### `isOk r` / `isError r` — Boolean predicates
+### `isOk r` / `isError r`. Boolean predicates
 
 **Postcondition**:
 - `isOk r = true  ↔ ∃ v, r = Ok v`
@@ -200,5 +200,5 @@ These three laws make `Result<_, 'E>` a monad over the `Ok` case.
 2. **`tap`/`tapError` semantics**: the spec treats these as identity functions
    (ignoring side effects). In a pure Lean model, we verify the return value
    only, not the side effects.
-3. **`describe` function**: specialised to `SageFsError` — should it be
+3. **`describe` function**: specialised to `SageFsError`, should it be
    verified against the actual `SageFsError.describe` implementation?
