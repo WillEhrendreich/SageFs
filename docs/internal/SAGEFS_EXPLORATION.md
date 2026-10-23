@@ -1,4 +1,4 @@
-# 🎯 SAGEFS EXPLORATION — EXECUTIVE SUMMARY
+# 🎯 SAGEFS EXPLORATION: EXECUTIVE SUMMARY
 
 ## What Was Explored
 
@@ -67,37 +67,37 @@
 ## 📊 FEATURES CATEGORIZED (28 Total)
 
 **Domain Analysis (4)**
-  • CellDependencyGraph — Build directed graphs (producer → consumer)
-  • EvalProvenance — Track staleness (Fresh vs StaleUpstream)
-  • EvalTimeline — P50/P95/P99 performance metrics with sparklines
-  • EvalDiff — Line-by-line diffs (Unchanged | Added | Removed | Modified)
+  • CellDependencyGraph. Build directed graphs (producer → consumer)
+  • EvalProvenance. Track staleness (Fresh vs StaleUpstream)
+  • EvalTimeline. P50/P95/P99 performance metrics with sparklines
+  • EvalDiff. Line-by-line diffs (Unchanged | Added | Removed | Modified)
 
 **Testing (4)**
-  • LiveTestingTypes — TestRunStatus, TestFailure, TestResult DUs
-  • LiveTestingInstrumentation — Hook into test lifecycle
-  • LiveTestingExecutors — Multi-provider test execution
-  • TestNarration — Convert results to emoji + causal narratives
+  • LiveTestingTypes. TestRunStatus, TestFailure, TestResult DUs
+  • LiveTestingInstrumentation. Hook into test lifecycle
+  • LiveTestingExecutors. Multi-provider test execution
+  • TestNarration. Convert results to emoji + causal narratives
 
 **UI & Introspection (5)**
-  • BindingExplorer — Extract bindings from FSI output
-  • AutoCompletion — F# code completions
-  • DomainModelViz — Visualize domain models
-  • Diagnostics — Compiler diagnostics aggregation
-  • DiagnosticsStore — Persist diagnostics per code hash
+  • BindingExplorer. Extract bindings from FSI output
+  • AutoCompletion. F# code completions
+  • DomainModelViz. Visualize domain models
+  • Diagnostics. Compiler diagnostics aggregation
+  • DiagnosticsStore. Persist diagnostics per code hash
 
 **Session & State (6)**
-  • MessageJournal — Ring-buffer immutable journal
-  • Events — Global event DU + EventSource tracking
-  • SessionPersistence — Snapshot/restore state
-  • SessionScribe — Audit log
-  • DaemonPersistence — Daemon state across restarts
-  • FeatureHooks — Feature aggregation + SSE dedup (⭐ core integration)
+  • MessageJournal. Ring-buffer immutable journal
+  • Events. Global event DU + EventSource tracking
+  • SessionPersistence. Snapshot/restore state
+  • SessionScribe. Audit log
+  • DaemonPersistence. Daemon state across restarts
+  • FeatureHooks. Feature aggregation + SSE dedup (⭐ core integration)
 
 **Persistence & Export (4)**
-  • ManifestPersistence — Project manifest save/load
-  • NotebookExport — Jupyter notebook export
-  • ScratchPad — Ephemeral notebook
-  • Replay — Replay recorded evaluations
+  • ManifestPersistence. Project manifest save/load
+  • NotebookExport. Jupyter notebook export
+  • ScratchPad. Ephemeral notebook
+  • Replay. Replay recorded evaluations
 
 **Infrastructure (5)**
   • TestCachePersistence, TestTreeSitter, EvalDedup, DaemonHealth, FeatureHooks
@@ -107,16 +107,16 @@
 ## 🧪 TEST PATTERNS (Quick Reference)
 
 **MessageJournalTests.fs** → Test immutable aggregates
-  testCase "capacity limits entries" — verify ring buffer cap
-  testCase "evicted count tracks overflow" — verify metadata tracking
+  testCase "capacity limits entries", verify ring buffer cap
+  testCase "evicted count tracks overflow", verify metadata tracking
 
 **EvalProvenanceTests.fs** → Test property computation + annotations
-  testCase "transitive staleness propagates" — verify BFS reachability
-  testCase "toAnnotation produces gutter icon" — verify UI generation
+  testCase "transitive staleness propagates", verify BFS reachability
+  testCase "toAnnotation produces gutter icon", verify UI generation
 
 **TestNarrationTests.fs** → Test narrative generation
-  testCase "minimal narration is brief" — verify density levels
-  testCase "narrative identifies culprit" — verify causal analysis
+  testCase "minimal narration is brief", verify density levels
+  testCase "narrative identifies culprit", verify causal analysis
 
 ---
 
@@ -194,21 +194,21 @@ Tool → availableTools(state) [Pure function ✓]
 
 ## 🚀 RECOMMENDED NEW FEATURES
 
-1. **Symbol Usage Analyzer** — Track where bindings are used
+1. **Symbol Usage Analyzer**: Track where bindings are used
    Pattern: CellDependencyGraph + forward reachability
    UI: Highlight consuming cells
    Impact: Helps refactoring
 
-2. **Test Failure Replay** — Re-run with history of changes
+2. **Test Failure Replay**: Re-run with history of changes
    Pattern: Event sourcing + Replay.fs
    UI: Show diffs since last pass
    Impact: Debugging aid
 
-3. **Cell Execution Cache** — Skip re-run if deps unchanged
+3. **Cell Execution Cache**: Skip re-run if deps unchanged
    Pattern: MessageJournal + EvalProvenance
    Impact: 5-10× speedup
 
-4. **Performance Profiler** — Top hot symbols with p99 timing
+4. **Performance Profiler**: Top hot symbols with p99 timing
    Pattern: EvalProvenance + EvalTimeline + Struct
    UI: Sparklines like EvalTimeline
    Impact: Performance analysis
@@ -227,4 +227,4 @@ Tool → availableTools(state) [Pure function ✓]
 
 ---
 
-**Done:** Comprehensive analysis of 28 features, 7 patterns, integration points, and test examples.
+**Done:** An analysis of 28 features, 7 patterns, integration points, and test examples.

@@ -455,6 +455,7 @@
              initialiser, which reads Timeouts (see the file). -->
         <Compile Include="DataDirChoice.fs" />
         <Compile Include="DaemonState.fs" />
+        <Compile Include="DaemonPort.fs" />
         <Compile Include="McpBridge.fs" />
         <Compile Include="WarmupContext.fs" />
         <Compile Include="SessionHealth.fs" />

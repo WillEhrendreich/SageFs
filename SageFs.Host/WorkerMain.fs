@@ -2353,15 +2353,15 @@ let run (sessionId: string) (requestedPort: int) = async {
         | false -> [])
 
     // Hot-reload is OFF by default — nothing watched until the user explicitly
-    // opts in via the dashboard or SAGEFS_HOT_RELOAD=all env var. The file
+    // opts in via the dashboard or the watch-all environment variable. The file
     // watcher still runs (it's cheap OS infrastructure shared with live testing),
     // but no files are marked for hot-reload detouring.
-    match Environment.GetEnvironmentVariable("SAGEFS_HOT_RELOAD") with
-    | "all" ->
+    let _, watchAllFiles = SageFs.Args.WorkerConfig.hotReloadChoice Environment.GetEnvironmentVariable
+    if watchAllFiles then
       result.HotReloadStateRef.Value <-
         HotReloadState.watchAll projectFiles HotReloadState.empty
-      Log.info "Hot reload: watching %d project files (SAGEFS_HOT_RELOAD=all)" projectFiles.Length
-    | _ ->
+      Log.info "Hot reload: watching %d project files (SAGEFS_HOT_RELOAD_ALL_FILES)" projectFiles.Length
+    else
       Log.info "Hot reload: off by default (0 files watched)"
     let! server =
       WorkerHttpTransport.startServerWithShutdown

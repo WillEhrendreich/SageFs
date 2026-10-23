@@ -15,7 +15,7 @@ never to probe what an API looks like.
 
 **Read `design.md`** before designing a type, signature or module: the house
 standard for what the code should LOOK like, where a mechanically correct change
-can still be the wrong code. The rest of this skill is mechanics — how to DRIVE
+can still be the wrong code. The rest of this skill is mechanics, how to DRIVE
 the tool.
 
 ## First minute
@@ -58,7 +58,7 @@ the tool.
   on real input and read the output first.
 - Edit with exact editor calls: read the region, replace that exact text. Never
   `sed -i`, `python3 -c` or bulk regex edits: a silent no-op looks like success.
-- Never `#load` or `#r` anything the session already loaded — two copies of
+- Never `#load` or `#r` anything the session already loaded, two copies of
   every type, and the lock blocks rebuilds. `#load` only a pure file.
 - To learn an API's or AST's shape, ask the session (reflect over the type, or
   parse a sample and print it). Never guess or start a `dotnet fsi` script.

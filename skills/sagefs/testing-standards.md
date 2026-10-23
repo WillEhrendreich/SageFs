@@ -11,7 +11,7 @@ Both facilities already exist and are substantial. `SageFs.Simulation/` holds
 gate in CI. You are expected to reach for them, not to re-invent them.
 
 **What your own users should do, in their own framework**, is a separate
-question with a separate answer — the same three techniques, expressed for
+question with a separate answer, the same three techniques, expressed for
 whatever test framework they already use, in
 `docs/property-and-mutation-testing.md`. That page carries the framework-neutral
 ideas, the Expecto/FsCheck recipes for F# users, and the equivalent tools for
@@ -22,14 +22,14 @@ about this repository's own suite.
 
 RED → GREEN → REFACTOR, and inside RED there are two different questions:
 
-- **"Does it do the right thing?"** — an example test. Necessary, never
+- **"Does it do the right thing?"**: an example test. Necessary, never
   sufficient. One input is one point; it says nothing about the space.
-- **"Could anything else have got this right?"** — DST and mutation testing.
+- **"Could anything else have got this right?"**: DST and mutation testing.
   This is the question that catches a decision that happens to work on the
   input you tried.
 
-So: write the example test to get RED and drive GREEN, then — before you call
-the change done — ask the second question and prove the answer.
+So: write the example test to get RED and drive GREEN, then, before you call
+the change done, ask the second question and prove the answer.
 
 ## Deterministic simulation testing, for anything with a STATE MACHINE
 
@@ -77,7 +77,7 @@ r.Violations |> Expect.contains "..." "BOUND-IS-PRESENT"
 ```
 
 If you cannot make the twin fail, you have not proved the invariant is
-reachable — you have proved your harness is decorative. Say so rather than
+reachable, you have proved your harness is decorative. Say so rather than
 shipping a green run.
 
 **6. Determinism and replay.** Same seed, same trace, same result. The repo tests
@@ -102,7 +102,7 @@ gap to close now, not a note for later.
 
 **Write a mutation test for every decision you add or change.** The repo has them
 for `Affordances`, `RestartPolicy`, `ReloadPlanningDecision`, `SseWriter`,
-`Watchdog`, `SageFsError` and more — if your module has none, that is the
+`Watchdog`, `SageFsError` and more, if your module has none, that is the
 pattern to copy.
 
 The mutants that matter are the ones that flip a decision:
@@ -115,7 +115,7 @@ The mutants that matter are the ones that flip a decision:
 
 **The non-vacuity rule, which is the whole point.** A mutation test that does not
 fail when you remove it is not a mutation test. Before you trust one, break the
-mutation and confirm the test goes red — then put it back and confirm the file is
+mutation and confirm the test goes red, then put it back and confirm the file is
 byte-identical (`git diff` clean). Two mutants in this repo were built and then
 found to leave residue; grep for it.
 
@@ -134,7 +134,7 @@ Before you say a change is finished:
    with named invariants, and its twin genuinely violates them.
 3. If it has branches: mutants exist for each decision changed, and every one is
    killed by an existing assertion.
-4. The sim is deterministic — same seed, same trace.
+4. The sim is deterministic: same seed, same trace.
 5. `dotnet build` / the suite run once at the end, as the gate, not as your
    editing loop.
 

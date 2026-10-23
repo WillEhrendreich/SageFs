@@ -23,7 +23,7 @@ loop explicitly:
 5. persist to the file
 6. `hard_reset_fsi_session` with `rebuild=true`
 7. re-verify, then commit
-8. `dotnet` only as the final gate, run in the BACKGROUND — do not block on it
+8. `dotnet` only as the final gate, run in the BACKGROUND, do not block on it
 9. if the REPL will not load a session, say so in the report with the exact error. In
    the SageFs repo itself that is a bug in the thing being worked on: fix it or file
    it with the paths it names before going on, do not build around it. Anywhere else

@@ -2,7 +2,7 @@
 
 Benchmark results comparing the `.sagefs` v3 and `.sagetc` v1 binary formats against JSON (System.Text.Json) serialization.
 
-> **Note:** the `.sagefs` per-session format is no longer written in production — durable session state is now the daemon manifest (`.sagefm` v1). These numbers stand as a benchmark of the binary-vs-JSON codec approach the current formats share, not of an active persistence path.
+> **Note:** the `.sagefs` per-session format is no longer written in production, durable session state is now the daemon manifest (`.sagefm` v1). These numbers stand as a benchmark of the binary-vs-JSON codec approach the current formats share, not of an active persistence path.
 >
 > They were also measured on `.sagetc` v1, on a .NET 10 preview. The test cache writer has moved on since (format version 3, with 64-bit coverage words and a flaky-history section), and I haven't re-run any of this against it. Read the figures as the shape of the comparison on that day.
 
@@ -18,7 +18,7 @@ Benchmark results comparing the `.sagefs` v3 and `.sagetc` v1 binary formats aga
 
 ---
 
-## 2. `.sagefs` v3 — Session Persistence
+## 2. `.sagefs` v3. Session Persistence
 
 ### 2.1 Scenario
 
@@ -41,13 +41,13 @@ Benchmark results comparing the `.sagefs` v3 and `.sagetc` v1 binary formats aga
 ### 2.3 Analysis
 
 - **Write** performance advantage is dramatic (57×) because JSON must escape strings, allocate intermediate `Utf8JsonWriter` buffers, and pretty-print (or minify) the output. Binary writes raw bytes sequentially.
-- **Read** speedup of 4.1× is the operationally important number — daemon cold start reads the session file to restore state.
+- **Read** speedup of 4.1× is the operationally important number: daemon cold start reads the session file to restore state.
 - **Size** reduction of 1.53× is modest because text-only sessions have no assembly blobs. With DLL/PDB caching (typical production usage), binary size advantage grows significantly because JSON would base64-encode blob data (33% overhead).
 - **Allocation** reduction of 11.5× reduces GC pressure during startup, especially relevant for the daemon process which may restore multiple sessions.
 
 ---
 
-## 3. `.sagetc` v1 — Test Cache
+## 3. `.sagetc` v1. Test Cache
 
 ### 3.1 Scenarios
 
@@ -85,7 +85,7 @@ Each test entry includes: test ID, outcome (random Pass/Fail/Skip/Error), durati
 | 100 tests, 1,000 words | 344 | 2,610 | **7.6×** |
 | 1,000 tests, 1,000 words | 3,120 | 24,024 | **7.7×** |
 
-**Read verdict**: Binary reads are **5–8.5× faster** across all scenarios. This is the key win — the daemon reads `.sagetc` on startup to restore coverage state. At 1,000 tests, binary read completes in ~0.3ms vs ~2.4ms for JSON.
+**Read verdict**: Binary reads are **5–8.5× faster** across all scenarios. This is the key win, the daemon reads `.sagetc` on startup to restore coverage state. At 1,000 tests, binary read completes in ~0.3ms vs ~2.4ms for JSON.
 
 ### 3.4 Write Performance
 
@@ -131,7 +131,7 @@ Each test entry includes: test ID, outcome (random Pass/Fail/Skip/Error), durati
 
 Both binary formats are justified for production use:
 
-1. **Read performance is the primary win** — both formats serve daemon cold start, where minimizing startup latency directly improves developer experience.
+1. **Read performance is the primary win**: both formats serve daemon cold start, where minimizing startup latency directly improves developer experience.
 2. **`.sagefs` write performance** is excellent because session persistence writes happen infrequently (on session save) and the format avoids JSON string escaping overhead.
 3. **`.sagetc` write performance** needs optimization for large test suites. The current MemoryStream-based writer can be improved with buffer pooling and span-based serialization.
 4. **File size** is secondary to read performance for both use cases. Neither format produces unreasonably large files.

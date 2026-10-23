@@ -36,26 +36,10 @@ open SageFs
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
-
-let private sharedTickerDir = Path.Combine(Http.repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker")
-
-/// The files that make the sample buildable. `packages.lock.json` matters: CI
-/// restores in locked mode, and a project with no lock file would fail there.
-let private sampleFiles =
-  [ "SageFs.Samples.ConsoleTicker.fsproj"; "Program.fs"; "Ticker.fs"; "packages.lock.json" ]
-
-/// A private copy beside the real sample, so the fsproj's relative path to the
-/// repository (Directory.Build.props, SageFs.Core) still resolves.
-let private copySample () : string =
-  let dir =
-    Path.Combine(Http.repoRoot, "samples", "demos", sprintf "SageFs.Samples.ConsoleTicker.SaveGate.%s" (Guid.NewGuid().ToString("N").Substring(0, 8)))
-  Directory.CreateDirectory dir |> ignore
-  for name in sampleFiles do
-    File.Copy(Path.Combine(sharedTickerDir, name), Path.Combine(dir, name))
-  dir
+module Sample = SageFs.Tests.ConsoleTickerSample
 
 /// The message the ticker prints after its counter, as shipped.
-let private shippedMessage = "SageFs keeps ticking"
+let private shippedMessage = Sample.shippedMessage
 
 let private connect (port: int) : Task<McpClient> =
   let opts = HttpClientTransportOptions(Endpoint = Uri(sprintf "http://localhost:%d/" port))
@@ -115,7 +99,7 @@ let private waitForDashboard (http: HttpClient) (dashboardUrl: string) (timeout:
 let runAppSaveOutcomeTests =
   Integration.hostList "run_app save outcome" [
     testTask "WHY — a save to a file of an app started with run_app changes what the RUNNING app prints, because the reload agent and the app are in different processes and an in-place patch reported success while the app kept printing the old text" {
-      let workDir = copySample ()
+      let workDir = Sample.copy ()
       let project = Path.Combine(workDir, "SageFs.Samples.ConsoleTicker.fsproj")
       let source = Path.Combine(workDir, "Ticker.fs")
       let original = File.ReadAllText source

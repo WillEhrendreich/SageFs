@@ -7,18 +7,12 @@ open SageFs
 open SageFs.Utils
 open SageFs.Watchdog
 
-/// The MCP port the supervised daemon will bind: `--mcp-port <n>` in its args, else the configured
-/// default. The watchdog does not bind it, it only uses it to tell daemons apart.
-let daemonPort (daemonArgs: string list) : int =
-  let rec find (args: string list) =
-    match args with
-    | "--mcp-port" :: value :: rest ->
-      match Int32.TryParse value with
-      | true, port -> port
-      | false, _ -> find rest
-    | _ :: rest -> find rest
-    | [] -> SageFsConfig.McpPortFromEnv
-  find daemonArgs
+/// The MCP port the supervised daemon will bind — `DaemonPort`'s own answer for these args, which is
+/// the daemon's answer too: `--mcp-port <n>` in its args, else the environment, else the port the
+/// Settings panel persisted, else the default. The watchdog does not bind it, it only uses it to tell
+/// daemons apart (the jitter seed below), so a second reading of the rule here would be a second rule:
+/// two daemons the panel put on different ports would draw the same seed and restart in lockstep.
+let daemonPort (daemonArgs: string list) : int = DaemonPort.resolve daemonArgs
 
 /// The jitter seed for one crash of one daemon: the working directory and port identify the daemon,
 /// the crash time makes each crash of it different. Two daemons in different directories (or on

@@ -527,7 +527,7 @@ function M.classify_event(event)
     SessionStopped = \"session_stopped\",
     DiagnosticsUpdated = \"diagnostics_updated\",
     state = \"state_update\",
-    -- Testing cycle (PascalCase — internal Elm events)
+    -- Testing cycle (PascalCase, internal Elm events)
     TestLocationsDetected = \"test_locations_detected\",
     TestsDiscovered = \"tests_discovered\",
     TestRunStarted = \"test_run_started\",
@@ -540,7 +540,7 @@ function M.classify_event(event)
     ProvidersDetected = \"providers_detected\",
     TestCycleTimingRecorded = \"test_cycle_timing_recorded\",
     RunTestsRequested = \"run_tests_requested\",
-    -- Testing cycle (snake_case — typed SSE events from SageFs)
+    -- Testing cycle (snake_case, typed SSE events from SageFs)
     test_results_batch = \"test_results_batch\",
     test_summary = \"test_summary\",
     test_run_started = \"test_run_started\",
@@ -752,7 +752,7 @@ local SSE_HANDLER_DEFS = {
   { action = \"cell_dependencies\", event = \"cell_dependencies\" },
   { action = \"binding_scope_map\", event = \"binding_scope_map\" },
   { action = \"eval_timeline\", event = \"eval_timeline\" },
-  -- Inline eval result decorations — fire event so plugins can display ghost text
+  -- Inline eval result decorations, fire event so plugins can display ghost text
   { action = \"eval_result\", event = \"eval_result\" },
 }
 \\\

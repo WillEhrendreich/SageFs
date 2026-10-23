@@ -122,6 +122,13 @@ let dashboardPanelVisibilityTests =
           | PanelVisibility.Shown -> false)
         |> Expect.isTrue "a REPL session hides all four, each with a reason"
 
+      testCase "a panel hidden because no session is selected says so, because a session can be open and not selected" <| fun _ ->
+        let noSession = { replFacts with Viewed = ViewedSession.NoSession }
+        match PanelVisibility.decide noSession OptionalPanel.HotReload with
+        | PanelVisibility.Hidden reason ->
+          reason |> Expect.stringContains "the reason says the session is not selected" "no session is selected"
+        | PanelVisibility.Shown -> failtest "a panel with no session selected is not shown"
+
       testCase "?panels=friction opts in, anything else doesn't" <| fun _ ->
         [ "friction"; "FRICTION"; "cohort,friction"; ""; "cohort"; null ]
         |> List.map PanelFacts.frictionOptInOfQuery
@@ -166,5 +173,28 @@ let dashboardPanelVisibilityTests =
       testCase "an opted-in tab renders the friction panel" <| fun _ ->
         renderedIds { replFacts with Friction = FrictionPanelOptIn.OptedIn } (snapshotWith off joined)
         |> Expect.equal "just friction" [ DomIds.FrictionPanel ]
+
+      testCase "a panel that is not relevant says why, where the panel would have been" <| fun _ ->
+        let html = PanelVisibility.apply replFacts (snapshotWith off joined) |> renderMainContent |> renderNode
+        html |> Expect.stringContains "the hot reload panel says why it is not there" "Hot reload: this session is in REPL mode"
+        html |> Expect.stringContains "the live testing panel says why it is not there" "Live testing: it's off for this session"
+        html |> Expect.stringContains "the cohort panel says why it is not there" "Cohort: no cohort is running"
+        html |> Expect.stringContains "the friction panel says why it is not there" "Friction: hidden until reporting has a real endpoint"
+
+      testCase "the reason a panel is hidden names that panel, so the line says which one is missing" <| fun _ ->
+        let html = PanelVisibility.apply replFacts (snapshotWith off joined) |> renderMainContent |> renderNode
+        html |> Expect.stringContains "the hot reload line" (idAttr DomIds.HiddenReasonHotReload)
+        html |> Expect.stringContains "the live testing line" (idAttr DomIds.HiddenReasonLiveTesting)
+        html |> Expect.stringContains "the cohort line" (idAttr DomIds.HiddenReasonCohort)
+        html |> Expect.stringContains "the friction line" (idAttr DomIds.HiddenReasonFriction)
+
+      testCase "a panel that is shown leaves no reason line behind" <| fun _ ->
+        let html =
+          PanelVisibility.apply { replFacts with Viewed = ViewedSession.Viewing(hotReload, off) } (snapshotWith off joined)
+          |> renderMainContent
+          |> renderNode
+        html |> Expect.stringContains "the hot reload panel is there" (idAttr DomIds.HotReloadPanel)
+        html.Contains(idAttr DomIds.HiddenReasonHotReload)
+        |> Expect.isFalse "and it does not say why it is missing"
     ]
   ]

@@ -1,8 +1,8 @@
-# SageFs — Visual Studio Extension
+# SageFs: Visual Studio Extension
 
 > **Deprecated, and no longer built, tested or published.** I checked on 2026-10-01: `ci-pipeline.fsx` and the publish workflow build and release the VS Code extension and the NuGet tool, and nothing in either touches `sagefs-vs/`. The source stays here as legacy code. A release won't carry a `.vsix` for Visual Studio, so don't look for one, and everything below describes the extension as it was when it last shipped. For an editor today, use [VS Code](../sagefs-vscode/README.md), Neovim or the web dashboard.
 
-A Visual Studio extension for [SageFs](../Readme.md) — the live F# development server. Evaluate F# code, see inline results, stream diagnostics into the Error List, get completions, manage sessions, control hot reload, and monitor live test status — all from within Visual Studio.
+A Visual Studio extension for [SageFs](../Readme.md), the live F# development server. Evaluate F# code, see inline results, stream diagnostics into the Error List, get completions, manage sessions, control hot reload, and monitor live test status, all from within Visual Studio.
 
 ## Requirements
 
@@ -16,8 +16,8 @@ A Visual Studio extension for [SageFs](../Readme.md) — the live F# development
 1. **Install SageFs CLI**: `dotnet tool install --global SageFs`
 2. **Install the VSIX**: Download from [Releases](https://github.com/WillEhrendreich/SageFs/releases) → double-click to install
 3. **Open an F# project** in Visual Studio 2022
-4. **Press `Alt+Enter`** on any expression — the daemon starts automatically
-5. **Enable live testing, then save a file** — test state and gutter markers update
+4. **Press `Alt+Enter`** on any expression, the daemon starts automatically
+5. **Enable live testing, then save a file**: test state and gutter markers update
 
 The extension connects to the SageFs daemon automatically. No configuration needed for eval and session features; live testing itself is still an explicit toggle.
 
@@ -84,7 +84,7 @@ F# completions are powered by SageFs's FSI session. The extension passes `workin
 
 ### Error List Integration
 
-SageFs diagnostics (type errors, warnings) stream into the native VS Error List via SSE — real-time feedback as you code.
+SageFs diagnostics (type errors, warnings) stream into the native VS Error List via SSE, real-time feedback as you code.
 
 ### Gutter Test Status Markers
 
@@ -136,10 +136,10 @@ The **Set Run Policy** command opens an interactive picker. Select a category an
 
 ### Tool Windows
 
-- **Session Context** — Connection status, loaded assemblies, opened namespaces, warmup details
-- **Hot Reload Files** — Project files with watch status
-- **Live Testing** — Test summary, toggle, run-all, per-category run policy, and results text
-- **Type Explorer** — Browse .NET types and namespaces; auto-refreshes when a new FSI session warms up
+- **Session Context**: Connection status, loaded assemblies, opened namespaces, warmup details
+- **Hot Reload Files**: Project files with watch status
+- **Live Testing**: Test summary, toggle, run-all, per-category run policy, and results text
+- **Type Explorer**: Browse .NET types and namespaces; auto-refreshes when a new FSI session warms up
 
 ## 🎨 Understanding What You See
 
@@ -149,8 +149,8 @@ The **Set Run Policy** command opens an interactive picker. Select a category an
 |-------|-------|---------|
 | ● | Green | Test passing |
 | ● | Red | Test failing |
-| █ (bar) | Green | Coverage healthy — all tests pass |
-| █ (bar) | Red | Coverage degraded — some tests failing |
+| █ (bar) | Green | Coverage healthy: all tests pass |
+| █ (bar) | Red | Coverage degraded: some tests failing |
 | █ (bar) | Gray | No test coverage |
 
 ### Inline Adornments
@@ -166,15 +166,15 @@ The **Set Run Policy** command opens an interactive picker. Select a category an
 | Item | Meaning |
 |------|---------|
 | `SageFs: Connected` | Daemon running, SSE stream active |
-| `SageFs: Disconnected` | Connection lost — will retry |
+| `SageFs: Disconnected` | Connection lost: will retry |
 | `Tests: 42 ✓ 2 ✗` | Test summary |
 
 ## Architecture
 
 The extension uses a two-layer architecture:
 
-- **`SageFs.VisualStudio`** (C#) — Thin shim using the VS Extensibility SDK. Defines commands, CodeLens providers, tool windows, and menu items. Targets `net8.0-windows8.0`.
-- **`SageFs.VisualStudio.Core`** (F#) — All HTTP client logic, daemon management, SSE subscriptions, and domain types. This is where the real work happens.
+- **`SageFs.VisualStudio`** (C#). Thin shim using the VS Extensibility SDK. Defines commands, CodeLens providers, tool windows, and menu items. Targets `net8.0-windows8.0`.
+- **`SageFs.VisualStudio.Core`** (F#). All HTTP client logic, daemon management, SSE subscriptions, and domain types. This is where the real work happens.
 
 Communication with SageFs uses the same HTTP + SSE protocol as all other frontends. The daemon runs on port 37749 (MCP) and 37750 (dashboard/API) by default.
 
@@ -210,7 +210,7 @@ If a feature is causing problems, you can disable it by creating an empty file a
 
 | File | What it disables |
 |------|-----------------|
-| `%LOCALAPPDATA%\SageFs\disable-glyphs.flag` | All gutter test status markers (also acts as a master switch — disables squiggles and inline hints too) |
+| `%LOCALAPPDATA%\SageFs\disable-glyphs.flag` | All gutter test status markers (also acts as a master switch: disables squiggles and inline hints too) |
 | `%LOCALAPPDATA%\SageFs\disable-squiggles.flag` | Error/warning squiggles from diagnostics |
 | `%LOCALAPPDATA%\SageFs\disable-inline-hints.flag` | Inline failure adornments |
 | `.sagefs/disable-inline-hints.flag` | Disables inline eval adornments (per-solution) |

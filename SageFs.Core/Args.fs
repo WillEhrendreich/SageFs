@@ -107,6 +107,41 @@ module WorkerConfig =
   let noWatchEnvVar = "SAGEFS_NO_WATCH"
   let autoOpenNamespacesEnvVar = "SAGEFS_AUTO_OPEN_NAMESPACES"
   let hotReloadEnvVar = "SAGEFS_HOT_RELOAD"
+  /// Watch every project file for hot reload, not only the session's own. This is the watch-all
+  /// half of `SAGEFS_HOT_RELOAD`, which used to say `all` and so said two things at once.
+  let hotReloadAllFilesEnvVar = "SAGEFS_HOT_RELOAD_ALL_FILES"
+  /// What the hot-reload environment says: whether the worker runs the hot-reload flow, and
+  /// whether every project file is watched for it.
+  ///
+  /// `SAGEFS_HOT_RELOAD` switches the flow on. `all` is the older spelling of "on, and watch
+  /// every project file", and it is kept, so a setup that used it keeps working. The value the
+  /// daemon hands a worker is `1`, which is why the watch-all half has a name of its own: one
+  /// variable that said two things meant a value the other reader could not parse, and it
+  /// warned about it on every start.
+  ///
+  /// `SAGEFS_HOT_RELOAD_ALL_FILES` says the same thing with its own name, and it is the one to
+  /// reach for. Watching files without the flow is meaningless, so it switches the flow on too.
+  let hotReloadChoice (getEnv: string -> string) : bool * bool =
+    let lower name =
+      match getEnv name with
+      | null | "" -> ""
+      | v -> v.Trim().ToLowerInvariant()
+    let raw = lower hotReloadEnvVar
+    let allFilesEnv = lower hotReloadAllFilesEnvVar
+    let allFiles = raw = "all" || allFilesEnv = "1" || allFilesEnv = "true" || allFilesEnv = "yes"
+    let on = allFiles || raw = "1" || raw = "true" || raw = "yes"
+    on, allFiles
+
+  /// The hot-reload environment a worker is started with: the flow's own variable, and the
+  /// watch-all half under its own name.
+  ///
+  /// The watch-all travels separately because the flow's variable says "1" by the time the
+  /// worker reads it, and a worker that inherited "all" would read that as a value the flow
+  /// cannot parse.
+  let hotReloadWorkerEnvironment (on: bool) (allFiles: bool) : (string * string) list =
+    [ if on then hotReloadEnvVar, "1"
+      if allFiles then hotReloadAllFilesEnvVar, "1" ]
+
   /// PID of the daemon process that spawned this worker. Workers monitor this
   /// so they can exit when the daemon is killed hard (Task Manager, taskkill /F,
   /// crash) instead of becoming orphans (issue #126).
@@ -147,10 +182,7 @@ module WorkerConfig =
       match getEnv autoOpenNamespacesEnvVar with
       | "0" | "false" -> false
       | _ -> true
-    let hotReloadEnabled =
-      match getEnv hotReloadEnvVar with
-      | "1" | "true" -> true
-      | _ -> false
+    let hotReloadEnabled, _ = hotReloadChoice getEnv
     let daemonPid =
       match getEnv daemonPidEnvVar with
       | null | "" -> None
@@ -222,7 +254,11 @@ let buildWorkerSpawnConfigWith
     if SessionProjectTarget.isBare targets then WorkerConfig.bareEnvVar, "1"
     if noWatch then WorkerConfig.noWatchEnvVar, "1"
     if not autoOpenNamespaces then WorkerConfig.autoOpenNamespacesEnvVar, "0"
-    if WorkflowTypes.SessionWorkflow.isHotReloadActive workflow then WorkerConfig.hotReloadEnvVar, "1"
+    // The watch-all half travels under its own name, because the flow's variable says "1" by the
+    // time the worker reads it, and a worker that inherited "all" would read it as a value the
+    // flow cannot parse.
+    let _, allFiles = WorkerConfig.hotReloadChoice Environment.GetEnvironmentVariable
+    yield! WorkerConfig.hotReloadWorkerEnvironment (WorkflowTypes.SessionWorkflow.isHotReloadActive workflow) allFiles
     yield! SageFs.Features.MetadataDelta.MetadataDeltaMode.workerEnvironment (WorkflowTypes.SessionWorkflow.isHotReloadActive workflow) deltaMode
   ]
   args, envVars

@@ -580,7 +580,7 @@ The SageFs Dashboard is a developer tool for interactive F# code evaluation via 
     - expect: The status should be updated via SSE/Datastar
   3. Monitor for any server-side events that change connection status
     - expect: Status updates should appear without page refresh
-    - expect: Real-time updates should be seamless
+    - expect: Real-time updates should arrive with no visible delay
 
 #### 8.2. sse-updates-session-info
 

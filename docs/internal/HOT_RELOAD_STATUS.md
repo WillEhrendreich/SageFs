@@ -3,7 +3,7 @@
 > ## ✅ Status: Working for function-body changes
 >
 > A save propagates into the running app for **module-declared, route-captured
-> apps** — the Falco/Giraffe/Saturn/Oxpecker pattern (`module App.Program` +
+> apps**, the Falco/Giraffe/Saturn/Oxpecker pattern (`module App.Program` +
 > `let routes = [...]` captured by value at startup). Verified live against
 > `samples/demos/SageFs.Samples.WebappDatastar`: the same running process served
 > the new text after a save, with no restart, including for a handler whose
@@ -16,7 +16,7 @@
 > list)` ended up with a parameter type from the FSI assembly while the compiled
 > method's came from the project assembly. `HotReloadCore.compatibleForDetour`
 > compares parameter types for equality, rejected the pair, and applied no
-> detour — while still reporting the handlers that happened to have BCL-only
+> detour, while still reporting the handlers that happened to have BCL-only
 > signatures as "hot reloaded" and refreshing the browser. That is why the page
 > reloaded with the old code.
 >
@@ -37,12 +37,12 @@
 
 `SageFs.Tests/WebAppHotReloadVerificationTests.fs` holds `ShapeMatrix.cells`.
 Every cell starts a real app whose handler table is captured at startup, saves a
-real source file, and asserts what the SAME process serves afterwards — never
+real source file, and asserts what the SAME process serves afterwards, never
 "the pipeline ran", never "a detour was planned".
 
 The fixture's call shape is itself a matrix dimension. It has to be: the earlier
 gate (`fixtures/WebAppFixture/Greeting.fs`) was a `namespace`-declared
-`[<MethodImpl(NoInlining)>]` function that the route CALLED at request time —
+`[<MethodImpl(NoInlining)>]` function that the route CALLED at request time,
 the one shape a detour has always been able to rewire. It was genuinely green,
 ran in CI, and was the exact complement of the bug users hit. The matrix fixture
 is `fixtures/WebAppFixture/Shapes.fs`: a dotted module-declared file, handlers
@@ -52,17 +52,17 @@ as explicit `RestartOnly` cells with their reason.
 ## ✅ What Works
 
 ### 6. Browser Auto-Refresh via DevReload
-- **`SageFs.DevReload`** — pure broadcaster in `SageFs.Core` with zero ASP.NET dependency
-- **`SageFs.DevReloadMiddleware`** — ASP.NET Core middleware in `SageFs` project
-- **`SageFs.DevReloadInjector`** — Harmony auto-injection into `WebApplication.Run/RunAsync`
+- **`SageFs.DevReload`**, pure broadcaster in `SageFs.Core` with zero ASP.NET dependency
+- **`SageFs.DevReloadMiddleware`**. ASP.NET Core middleware in `SageFs` project
+- **`SageFs.DevReloadInjector`**. Harmony auto-injection into `WebApplication.Run/RunAsync`
 - Injects a tiny `<script>` before `</body>` in all `text/html` responses
 - Script opens SSE connection to `/__sagefs__/reload`
-- **Zero configuration** — works automatically for any ASP.NET Core app loaded in SageFs
+- **Zero configuration**: works automatically for any ASP.NET Core app loaded in SageFs
 
 #### DevReload Event Lifecycle
 
 `DevReloadEvent` (`SageFs.Core/DevReload.fs`) has one non-terminal case and four
-terminal outcomes — deliberately no bare "Reload" case, because a save can do more
+terminal outcomes, deliberately no bare "Reload" case, because a save can do more
 than one thing to a running app:
 
 ```
@@ -76,11 +76,11 @@ Compiling(fileName)  → CompilationFailed(error, report, diagnostics)  (browser
 SuggestedAction, Reasons }` (`SageFs.Core/Features/ReloadBroadcast.fs`) — the same values
 every client (browser overlay, VS Code, an editor extension) reads, so they cannot disagree
 about what a save did. `DevReloadEvent.refreshes` is the single place that decides whether
-the browser refreshes; only `Patched` and `Restarted` return `true` — a save that patched
+the browser refreshes; only `Patched` and `Restarted` return `true`, a save that patched
 nothing, or a save that needs a restart SageFs isn't driving, does not send a refresh.
 
 #### Safety Features
-- **Infinite-reload guard**: sessionStorage counter — if >3 reloads in 5s, pauses with red warning
+- **Infinite-reload guard**: sessionStorage counter: if >3 reloads in 5s, pauses with red warning
 - **Error overlay**: compilation errors shown directly in the browser (red panel, `#dc2626`)
 - **Idempotent injection**: `data-sagefs-injected` attribute prevents double script injection
 - **Kill switch**: Set `SAGEFS_DEVRELOAD=false` or `0` to disable entirely
@@ -93,14 +93,14 @@ nothing, or a save that needs a restart SageFs isn't driving, does not send a re
   Harmony re-points methods for the patch path
 - On `.fsproj` change: triggers soft reset to pick up new references
 - 500ms debounce prevents thrashing on rapid saves
-- **`--no-watch` does not disable this.** It is parsed but not wired to anything —
-  `SessionManager.startWorkerProcess` always spawns workers with watching on — and
+- **`--no-watch` does not disable this.** It is parsed but not wired to anything,
+  `SessionManager.startWorkerProcess` always spawns workers with watching on, and
   `sagefs`'s CLI refuses the flag with a message saying so (`SageFs.Core/Args.fs`,
   `SageFs/Program.fs`). There is currently no daemon-startup or session-creation
   control to turn file watching off.
 
 ### 2. Hot Reload with Harmony Method Detouring
-- Handlers can be updated in real-time — no restart needed, proven by
+- Handlers can be updated in real-time: no restart needed, proven by
   `SageFs.Tests/WebAppHotReloadVerificationTests.fs`'s shape matrix against a real
   running process (see the banner at the top of this file)
 - This works for both:
@@ -133,7 +133,7 @@ nothing, or a save that needs a restart SageFs isn't driving, does not send a re
 1. **File change detected** → FileWatcher debounces (500ms)
 2. **Action decided** → `.fs`/`.fsx` → `ReloadPlanning.routeFor` picks `PatchInPlace baseline`
    (there's a build-time baseline for this file) or `ReevaluateWholeFile` (there isn't, or the
-   source was edited after the build — the whole file is re-evaluated instead of diff-patched);
+   source was edited after the build, the whole file is re-evaluated instead of diff-patched);
    `.fsproj` → SoftReset
 3. **DevReload broadcasts `Compiling`** → browser shows the recompiling overlay
 4. **On the patch path**: only the changed functions are emitted against the compiled
@@ -155,25 +155,25 @@ nothing, or a save that needs a restart SageFs isn't driving, does not send a re
 These design decisions exist for specific reasons. Before changing them, understand why they're there.
 
 ### AppDomain.CurrentDomain for shared state
-**Why**: `DevReload.getChannels()` stores the ConcurrentDictionary in `AppDomain.CurrentDomain.GetData()` instead of a static field. This is because Harmony's auto-injection causes SageFs.Core.dll to be loaded multiple times in the same process (host copy + FSI shadow copy). A static field would create two separate dictionaries — the browser's SSE client registers against the shadow-copy DLL, while the broadcast functions (`DevReload.broadcastPatched`, `broadcastRestarted`, `broadcastNotApplied`, `broadcastCompilationFailed`) run in the host DLL. AppDomain storage is shared across all assembly loads, solving this mismatch.
+**Why**: `DevReload.getChannels()` stores the ConcurrentDictionary in `AppDomain.CurrentDomain.GetData()` instead of a static field. This is because Harmony's auto-injection causes SageFs.Core.dll to be loaded multiple times in the same process (host copy + FSI shadow copy). A static field would create two separate dictionaries, the browser's SSE client registers against the shadow-copy DLL, while the broadcast functions (`DevReload.broadcastPatched`, `broadcastRestarted`, `broadcastNotApplied`, `broadcastCompilationFailed`) run in the host DLL. AppDomain storage is shared across all assembly loads, solving this mismatch.
 
 ### Channel-per-client (not shared Channel)
-**Why**: Each SSE client gets its own `Channel<DevReloadEvent>`. A shared channel with multiple readers would require fan-out logic and risk one slow reader blocking others. Per-client channels provide natural backpressure isolation — if one browser tab is slow, others aren't affected. The ConcurrentDictionary keyed by connection ID supports this cleanly.
+**Why**: Each SSE client gets its own `Channel<DevReloadEvent>`. A shared channel with multiple readers would require fan-out logic and risk one slow reader blocking others. Per-client channels provide natural backpressure isolation, if one browser tab is slow, others aren't affected. The ConcurrentDictionary keyed by connection ID supports this cleanly.
 
 ### Harmony auto-injection (not manual middleware registration)
-**Why**: `DevReloadInjector.install()` patches `WebApplication.Run/RunAsync` via Harmony prefix. This means DevReload works **without any code changes** to the user's app — they just load their project in SageFs and it works. Manual `app.Use(middleware)` requires users to modify their code, which is worse DX and breaks the "zero-config" principle.
+**Why**: `DevReloadInjector.install()` patches `WebApplication.Run/RunAsync` via Harmony prefix. This means DevReload works **without any code changes** to the user's app, they just load their project in SageFs and it works. Manual `app.Use(middleware)` requires users to modify their code, which is worse DX and breaks the "zero-config" principle.
 
 ### Pre-allocated SSE byte arrays
-**Why**: The SSE endpoint in `WorkerHttpTransport.fs` pre-allocates `heartbeatBytes`, `connectedBytes`, `compilingBytes`, and `reloadBytes` as module-level `ReadOnlyMemory<byte>` values. SSE heartbeats fire every 15s per client — allocating fresh byte arrays each time creates unnecessary GC pressure. Only `Compiling(Some file)` and `CompilationFailed(error)` allocate dynamically because their payloads vary.
+**Why**: The SSE endpoint in `WorkerHttpTransport.fs` pre-allocates `heartbeatBytes`, `connectedBytes`, `compilingBytes`, and `reloadBytes` as module-level `ReadOnlyMemory<byte>` values. SSE heartbeats fire every 15s per client, allocating fresh byte arrays each time creates unnecessary GC pressure. Only `Compiling(Some file)` and `CompilationFailed(error)` allocate dynamically because their payloads vary.
 
 ### Single cleanup via RequestAborted.Register (not IDisposable)
-**Why**: The SSE endpoint previously had both a `use cleanup = { new IDisposable ... }` and a `RequestAborted.Register(fun _ -> unregisterClient id)`. This caused double-unregister on normal disconnect (scope exit fires IDisposable, then abort fires the callback). Since `unregisterClient` decrements a counter, double-calling would make the counter go negative. Now only `RequestAborted.Register` handles cleanup. `unregisterClient` is idempotent via `TryRemove` — second call is a no-op.
+**Why**: The SSE endpoint previously had both a `use cleanup = { new IDisposable ... }` and a `RequestAborted.Register(fun _ -> unregisterClient id)`. This caused double-unregister on normal disconnect (scope exit fires IDisposable, then abort fires the callback). Since `unregisterClient` decrements a counter, double-calling would make the counter go negative. Now only `RequestAborted.Register` handles cleanup. `unregisterClient` is idempotent via `TryRemove`, second call is a no-op.
 
 ### Infinite-reload guard (sessionStorage, not server-side)
-**Why**: The guard runs in the browser, not on the server. Server-side rate limiting would need per-connection state management and doesn't protect against the actual failure mode (JavaScript `catch(ex) { reload() }` in a loop). The browser guard uses `sessionStorage` so it persists across reloads but not across tab close — a fresh tab always starts clean.
+**Why**: The guard runs in the browser, not on the server. Server-side rate limiting would need per-connection state management and doesn't protect against the actual failure mode (JavaScript `catch(ex) { reload() }` in a loop). The browser guard uses `sessionStorage` so it persists across reloads but not across tab close, a fresh tab always starts clean.
 
 ### Direct ConcurrentDictionary iteration (no snapshot)
-**Why**: `broadcast()` iterates `for kvp in channels do ...` directly rather than `channels.Values |> Seq.toList`. ConcurrentDictionary's enumerator is lock-free and supports concurrent modification. The previous `Seq.toList` snapshot allocated a new list on every broadcast — unnecessary since we only call `TryWrite` (which never throws even if the channel is full or the client was just removed).
+**Why**: `broadcast()` iterates `for kvp in channels do ...` directly rather than `channels.Values |> Seq.toList`. ConcurrentDictionary's enumerator is lock-free and supports concurrent modification. The previous `Seq.toList` snapshot allocated a new list on every broadcast, unnecessary since we only call `TryWrite` (which never throws even if the channel is full or the client was just removed).
 
 ## ⚠️ Known Limitations
 
@@ -185,7 +185,7 @@ A running process cannot be given a new module initialisation. These shapes are
 | Shape | Why a detour cannot reach it |
 |---|---|
 | `let h : HttpHandler = Response.ofHtml (pageLayout [])` | the value was computed once at module init and captured by the route |
-| `let h : HttpHandler = fun ctx -> ...` | `ReloadPlanning` classifies a parameterless binding as a value, so the whole file is treated as a startup change. The IL would allow it (F# emits a static method plus a closure that calls it) — reclassifying syntactic-lambda value bindings as functions is an open improvement |
+| `let h : HttpHandler = fun ctx -> ...` | `ReloadPlanning` classifies a parameterless binding as a value, so the whole file is treated as a startup change. The IL would allow it (F# emits a static method plus a closure that calls it), reclassifying syntactic-lambda value bindings as functions is an open improvement |
 | `let mutable state = ...` | the field was assigned at startup; a reader compiles to a direct field load (`ldfld`) |
 | a changed signature, a new/removed declaration, a changed type | the compiled assembly's shape no longer matches |
 
@@ -244,12 +244,12 @@ When the daemon is running bare and a client creates a session for `MyProject.fs
   - Files reloaded via file watcher `#load`
 - Already-compiled DLL code is NOT rewritten
 
-### Console I/O — Resolved
+### Console I/O: Resolved
 - PrettyPrompt has been **removed** from SageFs. The daemon-first architecture runs headless; `SageFs connect` provides the REPL client.
 
 ## 🎯 How to Use Hot Reload
 
-The daemon is headless — there is no `--use <script>` script-launch mode and no
+The daemon is headless, there is no `--use <script>` script-launch mode and no
 `--no-watch` (see the note under "Automatic File Watching" above). File watching turns on
 automatically once a session is created:
 
@@ -258,8 +258,8 @@ sagefs                       # start the daemon bare, waits for clients
 ```
 
 Create a session for your project from an editor, MCP, or the dashboard
-(`http://localhost:37750/dashboard`), start your app in it — either you run it yourself
-in the REPL, or `run_app` runs it for you — then just edit `.fs` files and save. Look for
+(`http://localhost:37750/dashboard`), start your app in it, either you run it yourself
+in the REPL, or `run_app` runs it for you, then just edit `.fs` files and save. Look for
 `[DevReload]`/`[HotReload]` log lines in the daemon console.
 
 Set `SAGEFS_DEVRELOAD=0` (or `false`) to disable the browser-refresh injection specifically;
@@ -298,7 +298,7 @@ The system:
 - Diffs the saved file against the source its loaded assembly was built from
 - Emits only the changed functions, against the compiled module's own identity
 - Harmony re-points those methods at runtime
-- No restart, no manual intervention — just edit and save
+- No restart, no manual intervention: just edit and save
 
 Changes that take effect at startup (values, mutable fields, types, signatures)
 restart the app instead; see the banner at the top of this file.

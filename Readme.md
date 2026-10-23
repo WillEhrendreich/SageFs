@@ -372,19 +372,19 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | Live diagnostics (SSE) | ✅ | ✅ | ✅ | ✅ |
 | Hot reload controls | ✅ | ✅ | ✅ | ✅ |
 | Session management | ✅ | ✅ | ✅ | ✅ |
-| Code completion | ✅ | ✅ | — | — |
-| CodeLens | ✅ | ✅ | — | — |
-| **Live test gutters** | ✅ | ✅ | — | — |
-| **Coverage gutters** | ✅ | ✅ | — | — |
+| Code completion | ✅ | ✅ |: |: |
+| CodeLens | ✅ | ✅ |: |: |
+| **Live test gutters** | ✅ | ✅ |: |: |
+| **Coverage gutters** | ✅ | ✅ |: |: |
 | **Failure narratives** | ✅ | ✅ | ✅ | ✅ |
-| **Test source-jump** | ✅ | ✅ | — | — |
-| **Debug a failing test** | ✅ | ✅ | — | — |
+| **Test source-jump** | ✅ | ✅ |: |: |
+| **Debug a failing test** | ✅ | ✅ |: |: |
 | Test panel | ✅ | ✅ | ✅ | ✅ |
-| Test policy controls | ✅ | ✅ | ✅ | — |
-| Type explorer | ✅ | ✅ | — | — |
-| Call graph | ✅ | ✅ | — | — |
+| Test policy controls | ✅ | ✅ | ✅ |: |
+| Type explorer | ✅ | ✅ |: |: |
+| Call graph | ✅ | ✅ |: |: |
 | History browser | ✅ | ✅ | ✅ | ✅ |
-| Test trace | ✅ | ✅ | ✅ | — |
+| Test trace | ✅ | ✅ | ✅ |: |
 
 A ✅ in the MCP column means a tool in the [70-tool surface](docs/mcp-tools.md) does it. Five of those rows are not MCP tools at all, and I'd rather the table said so than claimed a tool that isn't there: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (`POST /api/completions` and `POST /api/explore`); the call graph is `GET /api/dependency-graph`, since the `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells* rather than source symbols; run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
 
@@ -536,7 +536,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 **Architecture**: Daemon-first design with isolated worker sub-processes, a web dashboard, editor integrations, and an affordance-driven MCP surface. [Full details →](docs/architecture.md)
 
-### Repository Map — where things live
+### Repository Map: where things live
 
 - `SageFs.Core/`, the shared engine and runtime logic: session management, MCP/session operations, live testing, persistence, and shared rendering primitives
 - `SageFs/`, the CLI entrypoint, daemon host, MCP server, dashboard, and worker HTTP transport
@@ -589,7 +589,7 @@ A hard reset spawns the replacement worker *first* and only retires the old one 
 
 <br />
 
-SageFs persists the daemon's session registry and per-session test caches to compact binary files for near-instant cold starts. No JSON parsing, no database, just raw binary with CRC-32C integrity checking.
+SageFs persists the daemon's session registry and per-session test caches to compact binary files for near-instant cold starts. The files are raw binary with CRC-32C integrity checking, no JSON parsing and no database.
 
 - **Daemon manifest** (`.sagefm`, v1): the durable session registry (which sessions existed, their projects, and working directories, plus which was active), replayed on startup to rebuild your sessions.
 - **Test cache files** (`.sagetc`, written as format version 3): test outcomes and durations, each test's coverage bitmap, and the flaky-detection history. [The format](docs/binary-format-spec.md#3-sagetc--test-cache-format) is written down next to the code that reads it.
@@ -724,7 +724,7 @@ You don't need to know F# already. Find your background below for a guide that m
 
 See what SageFs makes possible beyond the REPL:
 
-#### 🌐 Reactive Web App — Falco + Datastar, zero JavaScript
+#### 🌐 Reactive Web App: Falco + Datastar, zero JavaScript
 
 A full CRUD todo app in about 100 lines of F#. Edit a handler and save, and the browser updates immediately: no webpack, no bundler, no framework setup.
 
@@ -732,13 +732,13 @@ A full CRUD todo app in about 100 lines of F#. Edit a handler and save, and the 
 
 > **The two Raylib demos below are unverified for hot reload.** Hot reload itself works (see [docs/hot-reload.md](docs/hot-reload.md)), but no automated test of any kind drives a Raylib window through a save, so the "updates live" claims here rest on nothing executable. I built them to show the shape of the thing, not as a proven guarantee. Treat them accordingly. The reload rules still apply, and one of them matters here: `starMaxSpeed`, `playerWidth` and `starColors` are plain `let` values, and a redefined value only takes effect when nothing in the running app kept a copy of the old one. A function that hands the value on (a frame loop passing it to Raylib, say) makes that save a restart, and the save says who kept it. See [Values](docs/hot-reload.md#values). I haven't run these demos through a save, so I don't know which of those two things you'll see.
 
-#### 🎨 GPU Window — Raylib Hello World with hot reload
+#### 🎨 GPU Window: Raylib Hello World with hot reload
 
 A Raylib window intended to hot-patch on save: change the color, the text, or the animation, save, and it should update in the running window, no restart, no flicker.
 
 **→ [`samples/demos/raylib-hello.fsx`](samples/demos/raylib-hello.fsx)**
 
-#### 🕹️ Interactive Game — live-tweakable physics
+#### 🕹️ Interactive Game: live-tweakable physics
 
 A playable star-catcher game. Editing `starMaxSpeed`, `playerWidth`, and `starColors` in the source file and saving is meant to apply to the running game without interrupting play.
 

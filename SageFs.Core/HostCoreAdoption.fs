@@ -3,6 +3,7 @@ namespace SageFs
 open System
 open System.IO
 open System.Reflection
+open System.Security.Cryptography
 
 /// roast-4 #0(a): adopt a session project's own build of SageFs.Core into
 /// the worker process the daemon is about to spawn.
@@ -97,25 +98,92 @@ module HostCoreAdoption =
       try File.GetLastWriteTimeUtc path
       with _ -> DateTime.MinValue)
 
-  /// Decide whether to adopt a candidate build of SageFs.Core against the
-  /// running daemon's own version.
+  /// What is known about one build of SageFs.Core, or why it could not be read.
   ///
-  /// An EQUAL version is the dogfooding case, not a coincidence to be
-  /// suspicious of: the user edited SageFs.Core, `dotnet build` on the
-  /// session project rebuilt Core (and, via ProjectReference, the daemon's
-  /// own binaries too) — within that window both builds are one build, and
-  /// the project's copy is exactly the code the user wants running. Only a
-  /// genuinely DIFFERENT version is refused.
-  let decide (hostVersion: Version) (candidatePath: string) (candidateVersion: Version) : Adoption =
-    match candidateVersion = hostVersion with
-    | true -> Adoption.Adopted candidatePath
-    | false ->
+  /// A union rather than a record with a catch-all, because "the file could not be read" is a
+  /// case the caller has to answer, not a value to swallow.
+  type BuildFacts =
+    /// The assembly version, the identity of the build's bytes (the SHA-256 of the file, hex),
+    /// and when the build was written.
+    | Known of version: Version * buildId: string * builtAt: DateTime
+    /// The file could not be read: it is missing, unreadable, or not a file.
+    | Unreadable of reason: string
+
+  /// The identity of a build's bytes: the SHA-256 of the file, hex. A file copy keeps these
+  /// bytes, so a project that references the Core carries the daemon's own build and the two
+  /// ids match.
+  let buildIdOf (path: string) : string =
+    File.ReadAllBytes path
+    |> SHA256.HashData
+    |> Convert.ToHexString
+    |> fun hex -> hex.ToLowerInvariant()
+
+  /// What is known about the build at `path`, or why it could not be read.
+  let factsOf (path: string) (version: Version) : BuildFacts =
+    try
+      Known(version, buildIdOf path, File.GetLastWriteTimeUtc path)
+    with
+    | :? System.IO.IOException as ex -> Unreadable ex.Message
+    | :? System.UnauthorizedAccessException as ex -> Unreadable ex.Message
+
+  /// Decide whether to adopt a candidate build of SageFs.Core against the running daemon's own.
+  ///
+  /// Three answers, each answering a different question, and a candidate has to satisfy all of
+  /// them.
+  ///
+  /// The VERSION is what the API contract is checked against, and an EQUAL version is the
+  /// dogfooding case, not a coincidence to be suspicious of: the user edited SageFs.Core,
+  /// `dotnet build` on the session project rebuilt Core (and, via ProjectReference, the daemon's
+  /// own binaries too) — within that window both builds are one build, and the project's copy is
+  /// exactly the code the user wants running. Only a genuinely DIFFERENT version is refused.
+  ///
+  /// The BYTES say whether the two are the same build. A project that simply references the
+  /// Core carries a copy of the daemon's own build, and the copy is the same code whatever the
+  /// clock says about when it was written.
+  ///
+  /// The CLOCK says which of two different builds is newer, and it is what catches a stale copy.
+  /// A project whose `bin` still holds the Core from before the daemon was built has the SAME
+  /// version and OLDER code, and the version check waves it through; the worker then loads that
+  /// older Core and dies inside the product, not at the boundary, with a MissingMethodException
+  /// for a method the daemon's own code calls. Measured: such a session never reaches Ready, and
+  /// the failure is a stack trace in a worker log rather than a refusal the user can read.
+  ///
+  /// So: the same bytes are adopted whatever the clock says (a copy of the daemon's own build);
+  /// a different, NEWER build is adopted (the rebuild the user just made); a different, OLDER
+  /// build is refused (a stale copy). Comparing the bytes alone would refuse the dogfooding
+  /// case, and the clock alone would refuse a project that merely references the Core.
+  let decide (host: BuildFacts) (candidatePath: string) (candidate: BuildFacts) : Adoption =
+    match host, candidate with
+    | Known(hostVersion, hostBuildId, hostBuiltAt), Known(candidateVersion, candidateBuildId, candidateBuiltAt) ->
+      let sameBytes = hostBuildId = candidateBuildId
+      let newer = candidateBuiltAt >= hostBuiltAt
+      match candidateVersion = hostVersion, sameBytes, newer with
+      | true, true, _ -> Adoption.Adopted candidatePath
+      | true, false, true -> Adoption.Adopted candidatePath
+      | false, _, _ ->
+        Adoption.Refused(
+          sprintf
+            "The running SageFs daemon (SageFs.Core %s) and the session project's own build (SageFs.Core %s, read from %s) come from different builds — rebuild SageFs so both come from one build, then retry. If that path is not the checkout you meant, the project path was resolved somewhere else: pass an absolute path."
+            (hostVersion.ToString())
+            (candidateVersion.ToString())
+            (Path.GetFullPath candidatePath))
+      | true, false, false ->
+        Adoption.Refused(
+          sprintf
+            "The session project's own build of SageFs.Core (read from %s) carries the same version as the running daemon's (SageFs.Core %s) but it is an OLDER build, so a worker that loaded it would fail on a method the daemon's own code calls. Rebuild the project so its SageFs.Core.dll is the one the daemon was built from, then retry."
+            (Path.GetFullPath candidatePath)
+            (hostVersion.ToString()))
+    | Unreadable reason, _ ->
       Adoption.Refused(
         sprintf
-          "The running SageFs daemon (SageFs.Core %s) and the session project's own build (SageFs.Core %s, read from %s) come from different builds — rebuild SageFs so both come from one build, then retry. If that path is not the checkout you meant, the project path was resolved somewhere else: pass an absolute path."
-          (hostVersion.ToString())
-          (candidateVersion.ToString())
-          (Path.GetFullPath candidatePath))
+          "The running daemon's own SageFs.Core could not be read, so it cannot say whether the session project's build is the same one: %s"
+          reason)
+    | _, Unreadable reason ->
+      Adoption.Refused(
+        sprintf
+          "The session project's own build of SageFs.Core (read from %s) could not be read, so the daemon cannot say whether it is the same build the daemon was made from: %s"
+          (Path.GetFullPath candidatePath)
+          reason)
 
   /// Copies `sharedHostDir` into a fresh `<privateRoot>/host/` directory and
   /// substitutes `SageFs.Core.dll` (+ `.pdb`, if either side has one) with
@@ -188,7 +256,14 @@ module HostCoreAdoption =
     | best :: _ ->
       try
         let candidateVersion = AssemblyName.GetAssemblyName(best).Version
-        match decide hostVersion best candidateVersion with
+        // The daemon's OWN copy of the Core, the one it loaded and the one its own code was
+        // built against. The host directory holds a second copy, taken when the tool was
+        // installed, and comparing against that one would date every project by the install
+        // rather than by the build.
+        let hostCorePath = Path.Combine(sharedDaemonBaseDir, assemblyName + ".dll")
+        let host = factsOf hostCorePath hostVersion
+        let candidate = factsOf best candidateVersion
+        match decide host best candidate with
         | Adoption.Refused reason -> Error reason
         | Adoption.Adopted path ->
           let sharedHostDir = Path.Combine(sharedDaemonBaseDir, "host")

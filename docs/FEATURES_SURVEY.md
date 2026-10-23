@@ -1,6 +1,6 @@
 # SageFs Feature Modules Survey
 
-> **Stale — historical snapshot.** The module count below (33) was right when this survey was
+> **Stale, historical snapshot.** The module count below (33) was right when this survey was
 > written and is wrong now: `SageFs.Core/Features/` has grown well past a hundred `.fs` files,
 > and the directory listing (`ls SageFs.Core/Features/*.fs | wc -l`, which also misses the
 > `MetadataDelta/` and `Tweak/` subfolders) is the only way to get the current number. The
@@ -11,14 +11,14 @@
 
 ## Summary
 
-Total Feature Modules: **33** in SageFs.Core/Features/ (as of this survey's last update — see stale-data note above)
+Total Feature Modules: **33** in SageFs.Core/Features/ (as of this survey's last update, see stale-data note above)
 Plus **2** root-level SageFs.Core modules with feature characteristics
 
 ---
 
 ## FEATURES/ DIRECTORY MODULES
 
-### 1. **AutoCompletion** — Code completion via FuzzySharp ranking.
+### 1. **AutoCompletion**: Code completion via FuzzySharp ranking.
 - **Module**: SageFs.Features.AutoCompletion
 - **Types**: CompletionKind (enum), completion ranking
 - **Functions**: label, rankByType, etc.
@@ -29,7 +29,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ❌ No dedicated test (covered in AutoCompletionAndEventsTests.fs)
 - **Status**: DARK (pure logic, exposed through other tools)
 
-### 2. **BindingExplorer** — Tracks FSI bindings, shadowing, references.
+### 2. **BindingExplorer**: Tracks FSI bindings, shadowing, references.
 - **Module**: SageFs.Features.BindingExplorer
 - **Types**: BindingInfo, BindingScopeSnapshot, CellInput
 - **Functions**: parseBinding, buildScopeSnapshot, etc.
@@ -39,7 +39,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ BindingExplorerTests.fs
 - **Status**: LIT (SSE emission in FeatureHooks)
 
-### 3. **CellDependencyGraph** — Builds dependency DAG from eval history.
+### 3. **CellDependencyGraph**: Builds dependency DAG from eval history.
 - **Module**: SageFs.Features.CellDependencyGraph
 - **Types**: CellId, CellInfo, CellGraph
 - **Functions**: analyzeCell, buildGraph, topologicalSort
@@ -48,7 +48,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ CellDependencyGraphTests.fs
 - **Status**: LIT (SSE push in FeatureHooks)
 
-### 4. **CoverageInstrumenter** — IL-level branch coverage via Mono.Cecil.
+### 4. **CoverageInstrumenter**: IL-level branch coverage via Mono.Cecil.
 - **Module**: SageFs.Features.LiveTesting.CoverageInstrumenter
 - **Types**: Coverage bitmap tracking
 - **Functions**: collectSequencePoints, injectCoverageTracking, etc.
@@ -57,7 +57,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ CoverageInstrumenterTests.fs
 - **Status**: DARK (pure IL transformation, no external wiring)
 
-### 5. **DaemonHealth** — Session health monitoring and aggregation.
+### 5. **DaemonHealth**: Session health monitoring and aggregation.
 - **Module**: SageFs.Features.DaemonHealth
 - **Types**: SessionHealthStatus, OverallHealth, HealthSnapshot
 - **Functions**: aggregateHealth, sessionStatusLabel, etc.
@@ -66,7 +66,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ DaemonHealthTests.fs
 - **Status**: DARK (pure domain model, no external wiring)
 
-### 6. **DaemonPersistence** — Binaries (.sagetc, .sagefs) I/O orchestration.
+### 6. **DaemonPersistence**: Binaries (.sagetc, .sagefs) I/O orchestration.
 - **Module**: SageFs.Features.DaemonPersistence
 - **Types**: ManifestSessionEntry, DaemonManifestData
 - **Functions**: projectHash, saveTestCache, loadTestCache, saveSession, loadSession
@@ -75,7 +75,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ❌ No (complex I/O, likely in integration tests)
 - **Status**: DARK (pure I/O coordination, no external wiring)
 
-### 7. **Diagnostician** — Composes failures, ripples, suggestions, perf into report.
+### 7. **Diagnostician**: Composes failures, ripples, suggestions, perf into report.
 - **Module**: SageFs.Features.Diagnostician
 - **Types**: DiagnosedFailure, DiagnosticReport, DiagnosticSeverity
 - **Functions**: composeReport, rankFailures, suggestFixes
@@ -84,7 +84,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ DiagnosticianTests.fs
 - **Status**: LIT (MCP tool + SSE emission)
 
-### 8. **Diagnostics** — F# compiler diagnostic parsing.
+### 8. **Diagnostics**: F# compiler diagnostic parsing.
 - **Module**: SageFs.Features.Diagnostics
 - **Types**: Range, DiagnosticSeverity, Diagnostic
 - **Functions**: mkDiagnostic (adapter from FSharpDiagnostic)
@@ -93,7 +93,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ❌ No dedicated test (covered in diagnostics tests)
 - **Status**: DARK (pure parsing, used internally)
 
-### 9. **DomainModelViz** — Extracts state machines from DU + functions.
+### 9. **DomainModelViz**: Extracts state machines from DU + functions.
 - **Module**: SageFs.Features.DomainModelViz
 - **Types**: DUCaseInfo, StateTransition, StateMachineModel
 - **Functions**: DUExtractor.fromType, renderStateDiagram, etc.
@@ -105,14 +105,14 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ DomainModelVizTests.fs
 - **Status**: DARK (the module survives; nothing calls it over the wire)
 
-### 10. **EvalDedup** — REMOVED.
+### 10. **EvalDedup**: REMOVED.
 - It returned the previous result for identical code sent within 2 seconds, without
   running it. A REPL runs what it is sent, and the cache also stored failures as
   results, matched on a 32-bit hash, and never evicted. Sending the same
   side-effecting snippet twice now runs it twice
   (`McpToolExecutionTests`, "the same side-effecting code sent twice in a row RUNS twice").
 
-### 11. **EvalDiff** — Line-by-line diff of eval outputs.
+### 11. **EvalDiff**: Line-by-line diff of eval outputs.
 - **Module**: SageFs.Features.EvalDiff
 - **Types**: DiffLine, DiffSummary
 - **Functions**: diffLines, summarize
@@ -121,7 +121,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ EvalDiffTests.fs
 - **Status**: LIT (MCP tool + SSE emission)
 
-### 12. **EvalLens** — Pipeline stage purity classification (Pure/Effectful/Unknown).
+### 12. **EvalLens**: Pipeline stage purity classification (Pure/Effectful/Unknown).
 - **Module**: SageFs.Features.EvalLens
 - **Types**: LensClassification, PipelineStage, LensResult
 - **Functions**: classifyPipeline, decomposeExpression
@@ -130,7 +130,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ EvalLensTests.fs
 - **Status**: LIT (MCP tool, no SSE needed)
 
-### 13. **EvalProvenance** — Staleness tracking (Fresh/StaleUpstream).
+### 13. **EvalProvenance**: Staleness tracking (Fresh/StaleUpstream).
 - **Module**: SageFs.Features.EvalProvenance
 - **Types**: Staleness, EvalProvenance
 - **Functions**: compute, describe
@@ -139,7 +139,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ EvalProvenanceTests.fs
 - **Status**: DARK (pure logic, used internally)
 
-### 14. **EvalRipple** — Cascade re-evaluation plan via topological sort.
+### 14. **EvalRipple**: Cascade re-evaluation plan via topological sort.
 - **Module**: SageFs.Features.EvalRipple
 - **Types**: RippleStatus, RippleStep, RipplePlan
 - **Functions**: toposort, planRipple
@@ -148,7 +148,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ EvalRippleTests.fs
 - **Status**: LIT (MCP tool)
 
-### 15. **EvalTimeline** — Performance sparkline + percentile stats.
+### 15. **EvalTimeline**: Performance sparkline + percentile stats.
 - **Module**: SageFs.Features.EvalTimeline
 - **Types**: EvalStatus, TimelineEntry, TimelineState, TimelineStats
 - **Functions**: sparkline, percentiles, record
@@ -157,7 +157,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ EvalTimelineTests.fs
 - **Status**: LIT (MCP tool + SSE emission)
 
-### 16. **Ghostwriter** — Type-directed suggestions for next cell.
+### 16. **Ghostwriter**: Type-directed suggestions for next cell.
 - **Module**: SageFs.Features.Ghostwriter
 - **Types**: ScopeBinding, Suggestion
 - **Functions**: suggest, rankSuggestions
@@ -166,7 +166,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ GhostwriterTests.fs
 - **Status**: LIT (MCP tool)
 
-### 17. **LiveTestingExecutors** — Attribute-based + custom test executors.
+### 17. **LiveTestingExecutors**: Attribute-based + custom test executors.
 - **Module**: SageFs.Features.LiveTesting.LiveTestingExecutors
 - **Types**: AttributeTestExecutor, CustomTestExecutor, DiscoveryResult, TestExecutor
 - **Functions**: runTest, discoverTests
@@ -175,7 +175,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ LiveTestingExecutorTests.fs
 - **Status**: DARK (pure execution engine, data pumped via McpServer)
 
-### 18. **LiveTestingInstrumentation** — OTEL activity/meter setup.
+### 18. **LiveTestingInstrumentation**: OTEL activity/meter setup.
 - **Module**: SageFs.Features.LiveTesting.LiveTestingInstrumentation
 - **Types**: Histograms, Counters (ActivitySource, Meter)
 - **Functions**: (static OTEL setup)
@@ -184,7 +184,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ❌ No dedicated test
 - **Status**: DARK (pure observability, no business logic)
 
-### 19. **LiveTestingTypes** — Domain types for tests, results, coverage, failures.
+### 19. **LiveTestingTypes**: Domain types for tests, results, coverage, failures.
 - **Module**: SageFs.Features.LiveTesting
 - **Types**: TestCase, TestResult, TestSummary, FailureNarrative, CausalChange, TestId, etc.
 - **Functions**: testStatusLabel, narrateFailure, etc.
@@ -193,7 +193,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ LiveTestingTypesTests.fs, LiveTestingCoreTests.fs
 - **Status**: LIT (SSE emission in McpServer.fs)
 
-### 20. **ManifestPersistence** — .sagefm v1 binary format I/O.
+### 20. **ManifestPersistence**: .sagefm v1 binary format I/O.
 - **Module**: SageFs.Features.ManifestPersistence (ManifestTypes, ManifestWriter, ManifestReader)
 - **Types**: ManifestSessionEntry, DaemonManifestData
 - **Functions**: save, load, read, write
@@ -202,7 +202,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ ManifestPersistenceTests.fs
 - **Status**: DARK (pure I/O, no external wiring)
 
-### 21. **MessageJournal** — Audit log of eval events (Debug/Info/Warn/Error).
+### 21. **MessageJournal**: Audit log of eval events (Debug/Info/Warn/Error).
 - **Module**: SageFs.Features.MessageJournal
 - **Types**: JournalLevel, JournalEntry, JournalState
 - **Functions**: add, filter, format
@@ -211,7 +211,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ MessageJournalTests.fs
 - **Status**: LIT (MCP tool)
 
-### 22. **NotebookExport** — Cell metadata parsing/formatting for .fsx export.
+### 22. **NotebookExport**: Cell metadata parsing/formatting for .fsx export.
 - **Module**: SageFs.Features.NotebookExport
 - **Types**: CellMetadata, CellMarker
 - **Functions**: format, parse
@@ -220,7 +220,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ NotebookExportTests.fs
 - **Status**: LIT (MCP tool)
 
-### 23. **Replay** — Session state reconstruction from events (pure fold).
+### 23. **Replay**: Session state reconstruction from events (pure fold).
 - **Module**: SageFs.Features.Replay
 - **Types**: ReplayStatus, EvalRecord, SessionReplayState
 - **Functions**: fold, recover
@@ -229,7 +229,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ ReplayTests.fs
 - **Status**: DARK (pure event fold, internal use)
 
-### 24. **ScratchPad** — Ephemeral snippets that don't pollute history.
+### 24. **ScratchPad**: Ephemeral snippets that don't pollute history.
 - **Module**: SageFs.Features.ScratchPad
 - **Types**: ScratchSnippet, ScratchPadState
 - **Functions**: create, addSnippet, markResult, export
@@ -238,7 +238,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ ScratchPadTests.fs
 - **Status**: LIT (MCP tool)
 
-### 25. **SessionFilmstrip** — Visual history of evaluations (frame-based).
+### 25. **SessionFilmstrip**: Visual history of evaluations (frame-based).
 - **Module**: SageFs.Features.SessionFilmstrip
 - **Types**: FilmstripEvent, FilmstripFrame
 - **Functions**: buildFilmstrip, filterFrames
@@ -247,13 +247,13 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ SessionFilmstripTests.fs
 - **Status**: LIT (MCP tool)
 
-### 26. **SessionPersistence** — .sagefs v3 per-session binary format (REMOVED).
+### 26. **SessionPersistence**: .sagefs v3 per-session binary format (REMOVED).
 - **Status**: REMOVED. The `SageFs.Features.SessionPersistence` module and the
   `.sagefs` per-session format had no production caller and were deleted. Durable
   session state now lives in the daemon manifest (`.sagefm` v1, see
   `ManifestPersistence`), replayed on startup to rebuild sessions.
 
-### 27. **SessionScribe** — Topological sort + dedup for script export.
+### 27. **SessionScribe**: Topological sort + dedup for script export.
 - **Module**: SageFs.Features.SessionScribe
 - **Types**: ScribeEntry
 - **Functions**: dedup, toposort
@@ -262,7 +262,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ SessionScribeTests.fs
 - **Status**: LIT (MCP tool)
 
-### 28. **TestCachePersistence** — .sagetc binary format I/O (writer format version 3).
+### 28. **TestCachePersistence**: .sagetc binary format I/O (writer format version 3).
 - **Module**: SageFs.Features.TestCachePersistence (TestCacheTypes, TestCacheFile, TestCacheMapping)
 - **Types**: Outcome, CoverageEntry, ResultEntry, StcData
 - **Functions**: save, load, toStruct
@@ -271,7 +271,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ❌ No (complex I/O, likely in integration tests)
 - **Status**: DARK (pure I/O codec, no external wiring)
 
-### 29. **TestNarration** — Human-readable failure narratives.
+### 29. **TestNarration**: Human-readable failure narratives.
 - **Module**: SageFs.Features.TestNarration
 - **Types**: NarrationDetail
 - **Functions**: statusLabel, narrateFailure, narrateOutcome
@@ -280,7 +280,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ TestNarrationTests.fs
 - **Status**: LIT (SSE emission via LiveTesting)
 
-### 30. **WhatIf** — Preview hypothetical binding overrides.
+### 30. **WhatIf**: Preview hypothetical binding overrides.
 - **Module**: SageFs.Features.WhatIf
 - **Types**: WhatIfOverride, WhatIfPlan, WhatIfDiffResult
 - **Functions**: createOverride, formatOverride, planWhatIf
@@ -293,7 +293,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 
 ## ROOT-LEVEL SageFs.Core FEATURE MODULES
 
-### 1. **SessionEvents** — Typed SSE events for session lifecycle.
+### 1. **SessionEvents**: Typed SSE events for session lifecycle.
 - **Module**: SageFs.SessionEvents
 - **Types**: SessionEvent, SessionEventSubtype
 - **Functions**: serializeSessionEvent, formatSessionSseEvent
@@ -302,7 +302,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ (covered in end-to-end tests)
 - **Status**: LIT (SSE infrastructure)
 
-### 2. **TimeTravel** — Ring buffer snapshots for historical debugging.
+### 2. **TimeTravel**: Ring buffer snapshots for historical debugging.
 - **Module**: SageFs.TimeTravel
 - **Types**: TimeTravelMode, TimeTravelState<'Model>
 - **Functions**: create, record, navigate, view
@@ -329,20 +329,20 @@ dotnet fsi scripts/regenerate-feature-survey.fsx
 It carries a **negative control**: it first proves it can find tools that are definitely registered
 (`send_fsharp_code`, `run_tests`, `list_tests`) and exits non-zero if it cannot. That control
 exists because the script's first version scanned for a registration shape this codebase does not
-use, found zero tools, and reported every tool on this page as unregistered — a probe that always
+use, found zero tools, and reported every tool on this page as unregistered, a probe that always
 answers "not found" looks like a working probe and answers nothing.
 
 The daemon registers **65** tools (measured live via `discover_features` on 2026-10-02). The tools
-named below that are NOT registered — a reader chasing any of these will find nothing:
+named below that are NOT registered, a reader chasing any of these will find nothing:
 
-- `get_live_test_status` — retired; live-testing status is read via `get_session_status`
-- `get_fsi_status` — superseded by `get_session_status`
-- `create_session` — the `create_*_session` family takes its place
-- `load_fsharp_script`, `get_completions`, `explore_namespace`, `explore_type` — not exposed over MCP
+- `get_live_test_status`, retired; live-testing status is read via `get_session_status`
+- `get_fsi_status`, superseded by `get_session_status`
+- `create_session`, the `create_*_session` family takes its place
+- `load_fsharp_script`, `get_completions`, `explore_namespace`, `explore_type`, not exposed over MCP
 - `enable_live_testing`, `disable_live_testing`, `set_run_policy`, `set_test_timeouts`,
-  `get_test_trace`, `query_test_coverage`, `get_file_coverage` — live testing is driven through
+  `get_test_trace`, `query_test_coverage`, `get_file_coverage`, live testing is driven through
   `run_tests` / `list_tests` / `run_app` and the session's workflow
-- `visualize_domain_model` — not exposed over MCP
+- `visualize_domain_model`, not exposed over MCP
 
 Registered tools, by area:
 

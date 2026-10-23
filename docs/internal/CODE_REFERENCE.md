@@ -15,7 +15,7 @@ type JournalEntry = {
   Message: string
 }
 
-// The aggregate — single immutable record
+// The aggregate, single immutable record
 type Journal = {
   Buffer: RingBuffer.RingBuffer<JournalEntry>
 }
@@ -185,10 +185,10 @@ let computeEvalDiffPush (opts: JsonSerializerOptions) (sessionId: string option)
   
   // KEY PATTERN: Compare with last sent
   if Some sseStr = state.LastEvalDiffSse then
-    // No change — don't push
+    // No change, don't push
     { updatedState with LastEvalDiffSse = Some sseStr }, None
   else
-    // Changed — push to client
+    // Changed, push to client
     { updatedState with LastEvalDiffSse = Some sseStr }, Some sseStr
 
 // Same pattern for other features

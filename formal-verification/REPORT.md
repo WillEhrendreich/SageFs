@@ -1,14 +1,14 @@
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 
-> ⚠️ **STALE / HISTORICAL REFERENCE — NOT AN ACTIVE GATE (2026-09-14).** This Lean
+> ⚠️ **STALE / HISTORICAL REFERENCE. NOT AN ACTIVE GATE (2026-09-14).** This Lean
 > tree was last substantively touched 2026-05-11; its CI job was deleted
 > 2026-09-13; there is no Lean toolchain on the dev/CI machines, so nothing here
 > has been checked against current `HEAD`, and its correspondence to the F# is a
 > hand-maintained table (`CORRESPONDENCE.md`) that no compiler verifies. The
 > figures below are also stale (the tree has since grown to ~302 theorems / 16
-> modules). The go-forward formal-verification strategy is real-code-first —
+> modules). The go-forward formal-verification strategy is real-code-first,
 > FsCheck properties, illegal-states-unrepresentable types, a statically-extracted
-> actor wait-for-graph acyclicity check, and metamorphic/equivalence tests — per
+> actor wait-for-graph acyclicity check, and metamorphic/equivalence tests, per
 > `../formal-verification-options.md`. This tree is retained as reference only.
 
 **Status** (as of 2026-05-06, STALE): 177 theorems, 11 Lean files, 0 `sorry`, Lean 4.30.0-rc2.
@@ -35,7 +35,7 @@ remaining. The nine base modules verify individual components: `RingBuffer` (20)
 (12 theorems) proves the evaluation-gate end-to-end, `PhaseTransition.lean` (14 theorems)
 defines and proves a `validTransition` inductive relation covering all 8 state-machine
 edges with safety invariants, and the new `SmartReset.lean` (8 theorems) extracts and
-fully verifies the pure escalation logic of `SmartReset.execute` — proving biconditional
+fully verifies the pure escalation logic of `SmartReset.execute`, proving biconditional
 characterizations of all three outcomes (`SoftResetSucceeded`, `EscalatedToHardReset`,
 `AllResetsFailed`). No implementation bugs have been found. The project uses stdlib-only
 Lean 4 (no Mathlib) due to CI network constraints.
@@ -67,7 +67,7 @@ self-contained but logically depends on the state definitions from `SessionLifec
 
 ## What Was Verified
 
-### Layer 1 — Core Primitives (4 files, ~59 theorems)
+### Layer 1: Core Primitives (4 files, ~59 theorems)
 
 ```mermaid
 graph LR
@@ -88,7 +88,7 @@ graph LR
 - `withOverrides_idempotent_single`: applying a single-key override twice = once
 - `defaults_hex_lengths`: all 34 default colors have exactly 7 characters
 
-### Layer 2 — Data Structures (1 file, 20 theorems)
+### Layer 2: Data Structures (1 file, 20 theorems)
 
 ```mermaid
 graph LR
@@ -101,7 +101,7 @@ graph LR
 - `push_tryGet_head`: most recent item is always retrievable immediately after push
 - `tryGet_bound`: retrieval of out-of-range ages returns `none`
 
-### Layer 3 — Application Logic (3 files, 47 theorems)
+### Layer 3: Application Logic (3 files, 47 theorems)
 
 ```mermaid
 graph LR
@@ -122,7 +122,7 @@ graph LR
 - `smartReset_all_failed_iff`: `AllResetsFailed e1 e2` ↔ both resets errored
 - `smartReset_escalated_iff`: `EscalatedToHardReset msg` ↔ soft failed ∧ hard succeeded
 
-### Layer 4 — State Machines (2 files, 39 theorems)
+### Layer 4: State Machines (2 files, 39 theorems)
 
 ```mermaid
 graph LR
@@ -132,13 +132,13 @@ graph LR
 
 **Key results**:
 - `uninitialized_unreachable`: `SessionState.Uninitialized` is unreachable via
-  `toState` — a structural finding about the session state model
+  `toState`, a structural finding about the session state model
 - `toState_active_idle_is_ready`: `Active _ Idle` always maps to `Ready`
 - `watch_idempotent`: watching an already-watched path is a no-op
 - `toggle_involution`: toggling twice returns to the original state
 - `watchedCount_watch_new`: watching a new path increments count by 1
 
-### Layer 5 — Cross-cutting Composition (2 files, 26 theorems)
+### Layer 5: Cross-cutting Composition (2 files, 26 theorems)
 
 ```mermaid
 graph LR
@@ -183,7 +183,7 @@ graph LR
 | `Composition.lean` | 12 | 5 ✅ | evaluation gate end-to-end |
 | `PhaseTransition.lean` | 14 | 5 ✅ | `validTransition` + safety + successor coverage |
 | `SmartReset.lean` | 8 | 5 ✅ | escalation logic biconditionals |
-| **Total** | **191** | — | **0 sorry** |
+| **Total** | **191** |: | **0 sorry** |
 
 ---
 
@@ -200,7 +200,7 @@ theorem uninitialized_unreachable (p : Phase α) :
   cases p <;> simp [toState]
 ```
 
-The F# `SessionPhase` type has no `Uninitialized` constructor — `Initializing _`
+The F# `SessionPhase` type has no `Uninitialized` constructor, `Initializing _`
 maps to `WarmingUp`, not `Uninitialized`.  This is a positive finding: it means
 the external API can never observe `Uninitialized` from a well-typed session phase.
 
@@ -224,11 +224,11 @@ connecting the two independent models end-to-end.
 `PhaseTransition.lean` defines a `validTransition` inductive relation modelling
 the 8 session-phase transitions in `AppState.fs`, then proves key safety invariants:
 
-- **`eval_cannot_fault_directly`**: evaluation failure always returns to `Ready` —
+- **`eval_cannot_fault_directly`**: evaluation failure always returns to `Ready`,
   only explicit reset operations can reach `Faulted`. This matches the F# handler
   where `EvalFinished(Error ex)` sets `sessionState'' = SessionState.Ready`.
 - **`faulted_only_recovers_to_init`**: `Faulted` can only transition to
-  `Initializing` — no shortcut to `Active`.
+  `Initializing`, no shortcut to `Active`.
 - **`uninitialized_unreachable_as_target`**: corroborates the `SessionLifecycle`
   finding at the transition level.
 
@@ -259,7 +259,7 @@ graph TD
 | Configuration | Override semantics, defaults | Hex color parsing, file I/O |
 | Pipeline | Stage trace structure | `Stopwatch` timing, IO operations |
 
-**RingBuffer divergence (D3)**: Resolved — `rbClear` now preserves `total`, matching
+**RingBuffer divergence (D3)**: Resolved, `rbClear` now preserves `total`, matching
 the F# `clear` behaviour. See CORRESPONDENCE.md §D3.
 
 **`String.beq` commutativity**: `Theme` and `HotReloadState` proofs rely on
@@ -286,7 +286,7 @@ projections, and combinator laws all hold as specified.
    (CORRESPONDENCE.md §D3) and is flagged as a known inaccuracy.
 
 2. **`SessionState.Uninitialized` reachability**: initially expected to be reachable;
-   the proof revealed it is not — leading to the structural finding documented above.
+   the proof revealed it is not, leading to the structural finding documented above.
 
 ### Interesting Structural Discoveries
 
@@ -297,10 +297,10 @@ projections, and combinator laws all hold as specified.
 - `Affordances.availableTools` never produces duplicates, provable by structural
   induction on the list construction.
 - `Composition.stateToSessionState_bijective`: the two independent `State`/`SessionState`
-  inductives (defined in separate files without cross-imports) are provably isomorphic —
+  inductives (defined in separate files without cross-imports) are provably isomorphic,
   confirming the design intent.
 - `PhaseTransition.eval_cannot_fault_directly`: evaluation failure always returns
-  to `Ready`, never to `Faulted` — a key safety property confirmed at the transition level.
+  to `Ready`, never to `Faulted`, a key safety property confirmed at the transition level.
 
 ---
 
@@ -334,14 +334,14 @@ timeline
 ## Toolchain
 
 - **Prover**: Lean 4 (version 4.30.0-rc2)
-- **Libraries**: Lean 4 stdlib only (no Mathlib — CI network constraints prevent download)
+- **Libraries**: Lean 4 stdlib only (no Mathlib: CI network constraints prevent download)
 - **CI**: NONE. `lean-ci.yml` was removed 2026-09-13 (`03cb0c1b`); no Fun.Build
   stage builds these proofs, and there is no Lean toolchain on the dev/CI
   machines. These proofs are NOT gated and have NOT been checked against current
-  `HEAD` — treat them as historical reference, not a live guarantee (see the
+  `HEAD`, treat them as historical reference, not a live guarantee (see the
   banner at the top of this file and `../formal-verification-options.md`).
 - **Build system**: Lake
-- **Correspondence tests**: `formal-verification/tests/ringbuffer/run.fsx` — 50 tests passing
+- **Correspondence tests**: `formal-verification/tests/ringbuffer/run.fsx`. 50 tests passing
 
 | Tactic | Primary usage |
 |--------|---------------|

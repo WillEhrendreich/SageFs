@@ -1,6 +1,6 @@
 # Informal Specification: `BinaryFormat.Crc32`
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 
 **Source file**: `SageFs.Core/BinaryFormat.fs`
 **Module**: `SageFs.Crc32`
@@ -37,7 +37,7 @@ module Crc32 =
 ## Preconditions
 
 ### `compute data offset length`
-- `data` is not null (assumed — .NET non-nullable array)
+- `data` is not null (assumed, .NET non-nullable array)
 - `offset ≥ 0`
 - `length ≥ 0`
 - `offset + length ≤ data.Length` (otherwise `data.[i]` throws `IndexOutOfRangeException`)
@@ -72,7 +72,7 @@ Equivalent to `compute data 0 data.Length`. Returns CRC-32 of the entire array.
 ```
 ∀ data, computeAll data = compute data 0 data.Length
 ```
-This is a direct consequence of the implementation — `computeAll` is a one-line alias.
+This is a direct consequence of the implementation, `computeAll` is a one-line alias.
 In Lean this will reduce to `rfl` or `simp [computeAll, compute]`.
 
 ### P2: Empty input
@@ -89,7 +89,7 @@ value with the ISO 3309 initialisation/finalisation convention is `0x00000000u`.
 
 ### P3: CRC-32 of a known single byte
 CRC-32 of `[0x00u]` = `0x2144DF1Cu` (standard reference value for this polynomial).
-This serves as a sanity-check / regression test — verifiable by `decide` on the Lean model.
+This serves as a sanity-check / regression test, verifiable by `decide` on the Lean model.
 
 ### P4: Non-zero output for known non-empty input
 ```
@@ -133,11 +133,11 @@ This is trivially true from the array comprehension `[| for i in 0u..255u do ...
 
 ## Invariants
 
-**I1 — Accumulator invariant**: During `compute`, the loop variable `crc` is always a
-valid `UInt32` (no arithmetic overflow — all operations are XOR and right-shift, which
+**I1. Accumulator invariant**: During `compute`, the loop variable `crc` is always a
+valid `UInt32` (no arithmetic overflow, all operations are XOR and right-shift, which
 preserve the UInt32 range).
 
-**I2 — Table entries are CRC values**: Each `table[i]` equals the CRC-32 of the single
+**I2. Table entries are CRC values**: Each `table[i]` equals the CRC-32 of the single
 byte `i` under the ISO 3309 polynomial, with XOR initialisation but *without* the final
 XOR complement. This is a loop invariant on the table construction.
 
@@ -203,7 +203,7 @@ reference. Should the Lean spec include this as a `#eval`-verified sanity check,
 sufficient to verify only the algebraic properties (consistency, empty input)?
 
 **Q3**: The `.sagefm` format uses CRC-32 for integrity checking. Is there a higher-level
-property worth verifying — e.g., "if `computeAll payload ≠ expected`, the manifest is
+property worth verifying, e.g., "if `computeAll payload ≠ expected`, the manifest is
 rejected"? This would require modelling the manifest reader, which is outside scope for
 now.
 
@@ -221,4 +221,4 @@ now.
 5. **Table invariant I2**: Prove by `decide` for a small subset; the full 256-entry
    claim may require `native_decide`.
 
-**Tactic budget estimate**: ~60–80 lines of Lean for P1–P6 with model definitions.
+**Tactic budget estimate**: ~60–80 lines of Lean for P1. P6 with model definitions.

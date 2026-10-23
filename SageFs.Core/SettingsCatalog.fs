@@ -233,3 +233,20 @@ module SettingsCatalog =
   /// The Phase-A pilot catalog.
   let pilots : SettingDescriptor list =
     [ sessionDefaultWorkingDir; perTestTimeout; globalTestRunTimeout; mcpPort; bindHost ]
+
+  /// The MCP port the persisted layers hold, if they hold one that parses. The
+  /// Settings panel writes this value and its row says it applies on the next
+  /// daemon restart; until the daemon read it, nothing did, and the row's promise
+  /// was not kept. A layer that holds nothing is not a value (the descriptor's
+  /// default is the resolution's answer, not a persisted one), and a corrupt value
+  /// is not a reason to refuse to start: the caller falls back to the next source
+  /// in the order.
+  let mcpPortFromLayers (globalDir: string) : int option =
+    let paths : ConfigPaths = { GlobalDir = globalDir; Repo = NoRepoCheckout }
+    match resolve paths mcpPort with
+    | Ok provenance ->
+      match provenance.Source, provenance.Effective with
+      | LDefault, _ -> None
+      | _, VPort p -> Some(Port.value p)
+      | _, _ -> None
+    | Error _ -> None

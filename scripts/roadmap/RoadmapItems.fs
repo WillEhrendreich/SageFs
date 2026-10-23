@@ -101,7 +101,7 @@ let items : Item list =
     item "repl-eval-reaches-the-running-app" "A REPL eval changes the running app" HotReload Next
       NoLandmarkYet
       [ "docs/how-hot-reload-works.md" ]
-      "An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes. Nobody has driven it end to end against a running run_app app yet, so I can't tell you how long an eval takes to be served. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built."
+      "An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes, and it is now driven end to end against a running run_app app in our own tests. The eval writes the declaration back, the file change reaches the worker, and the running app serves the new code. Measured here, the whole route takes about 5.6 seconds, most of it the build. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built."
 
     item "level-the-repl-without-losing-it" "Level the REPL after a patch without losing it" HotReload Next
       NoLandmarkYet
@@ -127,14 +127,13 @@ let items : Item list =
       "The dashboard has the knob, and now both editors do too. Neovim scrubs with Alt-k and Alt-j: each press runs the same inspect-locate-bump-set flow `:SageFsNudge` runs, so the rules and the undo are the daemon's, and a count multiplies the steps. VS Code scrubs by dragging across a number with the multi-cursor modifier held, because its API never reports that a modifier is down; what it reports is the second cursor an Alt+click adds. Both write through `nudge_value`, so the journal, the seen hash, the refusal and the type-check rollback all apply."
 
     // Cross-repo landmarks DO resolve: a landmark may name `../sagefs.nvim/...`, and `codeUrl` in
-    // Roadmap.fs renders the link against that project's own repo rather than this one. So living in
-    // the plugin is no longer a reason to stay open, and the item below is no longer open for that
-    // reason. It stays open for the one its summary still names: a full attach inside our own tests,
-    // marked on that rather than on a claim.
+    // Roadmap.fs renders the link against that project's own repo rather than this one. So living in the
+    // plugin is no longer a reason to stay open, and the item below is no longer open for that
+    // reason either. The full attach inside our own tests is now in the tree, so the item is built.
     item "neovim-debug-a-failing-test" "Debug a failing test from Neovim" Editors Next
-      NoLandmarkYet
+      (landmark "SageFs.Tests/DebugAttachJourneyTests.fs" "journeyTests")
       [ "docs/LIVE_TESTING_GUIDE.md" ]
-      "The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim side is done too, in the sagefs.nvim repo: `:SageFsDebugTest` puts a failing test on the board and wires nvim-dap to those routes, on `<leader>rtg` and `D` on a panel row. The release goes out on `configurationDone`, when the adapter has really attached, so a slow attach is the daemon's to wait out rather than a grace period on this side. Still open is a full attach inside our own tests."
+      "The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim side is done too, in the sagefs.nvim repo: `:SageFsDebugTest` puts a failing test on the board and wires nvim-dap to those routes, on `<leader>rtg` and `D` on a panel row. The release goes out on `configurationDone`, when the adapter has really attached, so a slow attach is the daemon's to wait out rather than a grace period on this side. And the attach is now proven in our own tests: a real debugger attaches to the process the daemon names, lists that process's threads, and the held test runs when the debugger lets it go."
 
     item "neovim-catches-up" "The Neovim plugin catches up with the daemon" Editors Next
       (landmark "../sagefs.nvim/lua/sagefs/dashboard/state.lua" "handlers.eval_heartbeat")
@@ -144,7 +143,7 @@ let items : Item list =
     item "debug-failing-tests-in-vscode" "Debug failing tests properly in VS Code" LiveTesting Next
       NoLandmarkYet
       [ "docs/LIVE_TESTING_GUIDE.md"; "docs/how-live-testing-works.md" ]
-      "Debugging a failing test from the VS Code lens works for one test at a time. Still open is a full attach end to end in our own tests, and debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out."
+      "Debugging a failing test from the VS Code lens works for one test at a time. The attach is now proven in our own tests, the same case the Neovim item leans on. Still open is debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out."
 
     item "live-requests-not-dropped" "No live request dropped during a swap" LiveTesting Next
       (landmark "SageFs/Mcp.fs" "requireToolFor")
@@ -184,7 +183,7 @@ let items : Item list =
     item "dashboard-follows-context" "Dashboard panels that follow your context" Dashboard Next
       NoLandmarkYet
       []
-      "Live bindings become a real pane in REPL mode, and cohort shows only while one is running. A pane hidden for being irrelevant says why and can be pinned open."
+      "A panel that is not relevant right now says why, in one line where the panel would have been: hot reload, live testing, cohort and friction each leave the reason behind, so a user can tell the dashboard having nothing to say from the dashboard hiding something. The cohort panel shows only while a cohort is running. The live bindings fold away and open again with one click, and the pin opens the pane when there are no bindings yet. What is not built is the live bindings becoming a real pane in REPL mode, and a pane moving between regions."
 
     item "app-output-pane" "App output in its own pane" Dashboard Next
       (landmark "SageFs/AppOutputView.fs" "render")
@@ -281,7 +280,7 @@ let items : Item list =
     item "move-and-dock-dashboard-panes" "Move and dock dashboard panes" Dashboard Later
       NoLandmarkYet
       []
-      "Panes you can move, dock, hide and reopen like Visual Studio's tool windows, with a layout per workflow and a reset button for when you lose one."
+      "Panes you can move, dock, hide and reopen like Visual Studio's tool windows, with a layout per workflow and a reset button for when you lose one. Two pieces of that are in: the live bindings fold away and open again with one click, because the tree can be taller than the dock's ceiling and the drag handle that changes the ceiling is a thin line to find, and the fold is the user's, so a push does not take it back; and the dock's own ceiling remembers itself between visits. Moving a pane between regions is not built."
 
     item "friction-reports-you-can-read-first" "Friction reports you can read first" Dashboard Later
       NoLandmarkYet
