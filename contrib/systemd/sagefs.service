@@ -19,8 +19,8 @@
 # A user unit does not read your shell profile, so the daemon, and every worker
 # and process it starts, would get systemd's default PATH. Then an init.fsx that
 # starts npm fails with "No such file or directory", and a script that npm runs
-# cannot find dotnet. A PATH is yours and not everyone's, so this file sets none:
-# the install writes the PATH of the shell you run it in to a drop-in,
+# cannot find dotnet. A PATH belongs to one machine, so this file sets none: the
+# install writes the PATH of the shell you run it in to a drop-in,
 # sagefs.service.d/path.conf, which systemd reads beside the unit. Inside its
 # quotes systemd expands % and \, and a line break ends the setting, so a PATH
 # holding ", %, \ or a line break would come out changed, and the install stops
