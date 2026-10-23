@@ -5,21 +5,21 @@
 ## 0.6.43
 
 ### New Features
-- **Coverage gutter bars** — Green/red/gray `▸`/`○` markers in the editor gutter showing test coverage health per line (AllPassing, SomeFailing, NoCoverage)
-- **Inline failure decorations** — `⊘` markers showing test name and Expected/Actual diff, exception messages, and timeouts inline next to code
-- **Failure narrative enrichment** — Test failure messages now include causal analysis via `ℹ️` summary: what changed, when it last passed, causal changes
-- **Test source navigation** — Test Explorer items automatically link to source file and line number via `test_source_locations` SSE events
-- **Evaluate & Advance** (`Shift+Enter`) — Evaluate current `;;` block and move cursor to the next
-- **Evaluate All Blocks** (`Ctrl+Alt+Enter`) — Run every `;;` block in the file sequentially
-- **Block navigation** — `Ctrl+Down` / `Ctrl+Up` to jump between `;;` code blocks
-- **Cancel Evaluation** (`Ctrl+Shift+C`) — Cancel a long-running evaluation
-- **Load Current Script** — Load the active `.fsx` file directly into the FSI session
-- **Session Menu** — Quick-access menu combining all session operations
-- **Export Session as .fsx** — Save current session state to a replayable script
-- **Sessions sidebar** — View all sessions with inline switch/stop/reset actions
-- **FSI Bindings browser** — View all current FSI bindings via QuickPick
-- **Test Trace viewer** — Browse test cycle events
-- **Density cycling** — Toggle Full → Normal → Minimal inline result display
+- **Coverage gutter bars**: Green/red/gray `▸`/`○` markers in the editor gutter showing test coverage health per line (AllPassing, SomeFailing, NoCoverage)
+- **Inline failure decorations**, `⊘` markers showing test name and Expected/Actual diff, exception messages, and timeouts inline next to code
+- **Failure narrative enrichment**: Test failure messages now include causal analysis via `ℹ️` summary: what changed, when it last passed, causal changes
+- **Test source navigation**: Test Explorer items automatically link to source file and line number via `test_source_locations` SSE events
+- **Evaluate & Advance** (`Shift+Enter`). Evaluate current `;;` block and move cursor to the next
+- **Evaluate All Blocks** (`Ctrl+Alt+Enter`). Run every `;;` block in the file sequentially
+- **Block navigation**, `Ctrl+Down` / `Ctrl+Up` to jump between `;;` code blocks
+- **Cancel Evaluation** (`Ctrl+Shift+C`). Cancel a long-running evaluation
+- **Load Current Script**: Load the active `.fsx` file directly into the FSI session
+- **Session Menu**: Quick-access menu combining all session operations
+- **Export Session as .fsx**: Save current session state to a replayable script
+- **Sessions sidebar**: View all sessions with inline switch/stop/reset actions
+- **FSI Bindings browser**: View all current FSI bindings via QuickPick
+- **Test Trace viewer**: Browse test cycle events
+- **Density cycling**: Toggle Full → Normal → Minimal inline result display
 
 ### Improvements
 - SSE event handling for `file_annotations`, `failure_narratives`, and `test_source_locations`

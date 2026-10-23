@@ -54,10 +54,31 @@ let propsAt (sha: string) : string option =
     | false -> None
   with _ -> None
 
+/// How many release commits the pushed range carries. One push to master is one release: the pipeline
+/// publishes the version at the tip, so a range with two release commits in it loses the first one
+/// silently. The marker is the commit subject `scripts/ship.fsx` writes ("chore: release v<version>").
+/// A count of zero when git cannot answer means "nothing to say about the range", not "no releases":
+/// the rule below refuses only on a count above one, so an unreadable range never blocks a push on its own.
+let releaseCommitsInRange (fromSha: string) (toSha: string) : int =
+  try
+    let psi = ProcessStartInfo("git")
+    [ "log"; "--oneline"; fromSha + ".." + toSha; "--grep=^chore: release v" ] |> List.iter psi.ArgumentList.Add
+    psi.UseShellExecute <- false
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    use p = Process.Start psi
+    let out = p.StandardOutput.ReadToEndAsync()
+    let err = p.StandardError.ReadToEndAsync()
+    match p.WaitForExit gitTimeout && p.ExitCode = 0 with
+    | true -> out.Result.Split('\n') |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line)) |> Array.length
+    | false -> 0
+  with _ -> 0
+
 let facts : ReleaseRules.PushFacts =
   { VersionAt = fun sha -> propsAt sha |> Option.bind ReleaseRules.versionIn
     HasPass = fun sha -> File.Exists(Path.Combine(gateHome, "passed", sha, "ok"))
-    SkipGate = skipGate }
+    SkipGate = skipGate
+    ReleaseCountInRange = releaseCommitsInRange }
 
 /// The override is logged, never silent: one line per ungated push, kept next to the gate's own state.
 let recordOverride (sha: string) : unit =

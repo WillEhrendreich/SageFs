@@ -97,7 +97,7 @@ Use hard reset to pick up source file changes:
 **If a hard reset doesn't fix it, read the next section.** A hard reset reloads
 the session. It cannot help when the stale thing is the daemon itself.
 
-### Stale daemon — the one that wastes the most time
+### Stale daemon: the one that wastes the most time
 
 A daemon that has been running since before your code changed keeps serving the
 assemblies it started with. Nothing warns you, and it does not look like a
@@ -122,7 +122,7 @@ It prints both `Version` and `Started`. `Started` is usually the faster tell:
 if the daemon has been up since before your last build, it is serving code
 older than what you're looking at, whatever the version says.
 
-If it's behind the code you're working on, restarting the *session* won't help —
+If it's behind the code you're working on, restarting the *session* won't help,
 restart the *daemon*:
 
 ```bash
@@ -303,7 +303,7 @@ before it; and a hot-reload compile held the compiler past
   `SAGEFS_DASHBOARD_STALE_AFTER_SECONDS` (15 by default)
 - Corporate proxies may need explicit WebSocket/SSE passthrough configuration
 
-### Eval watchdog — detecting daemon crash during eval
+### Eval watchdog: detecting daemon crash during eval
 
 Supported editor integrations include an **eval watchdog**. If the daemon becomes unresponsive during an evaluation:
 
@@ -628,12 +628,12 @@ more patience before the session is given up on ([Slow machines](#slow-machines)
 regardless of progress. A session that's genuinely still working (a big repo resolving many
 projects) keeps that inactivity clock reset by its own progress and can run up
 to the absolute ceiling; a session that's gone quiet is faulted within the
-inactivity window, with a stated reason — never left reading "Starting" with
+inactivity window, with a stated reason, never left reading "Starting" with
 nothing to show for it. `get_session_status` on a warming session reports the
 structured `WarmingUp` state, lifecycle, target, loaded projects, and worker
 facts. Use the daemon or worker logs for detailed warmup timing. `stop_session`
 returns promptly in every case, including on an already-faulted or still-warming
-session — it does not wait for warmup to finish or fail first.
+session, it does not wait for warmup to finish or fail first.
 
 ---
 

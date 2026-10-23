@@ -102,4 +102,15 @@ let tests =
         |> Expect.isNone "no SageFs.Core on disk yields None"
       finally
         try Directory.Delete(tmp, true) with _ -> ()
+
+    testCase "WHY — Directory.Build.props points a sample at its own framework's Core, because a net11 sample handed net10 Core is a session the adoption check can only pass on the clock" <| fun _ ->
+      // Measured on the 0.6.924 gate: ConsoleTicker's bin held Core's net10.0 build (4442221b…) while the
+      // daemon ran net11.0 (51f28066…), so `decide` saw the same version, different bytes, and the
+      // integration tier failed whenever the sample's copy happened to be written first. The copy has to
+      // be the consumer's own framework or the comparison is a coin flip on build order.
+      let props = File.ReadAllText(Path.Combine(RepoPaths.repoPathFull [||], "Directory.Build.props"))
+      props
+      |> Expect.stringContains "the path takes the consuming project's own framework" "SageFs.Core/bin/$(Configuration)/$(TargetFramework)/SageFs.Core.dll"
+      props.Contains "bin/$(Configuration)/net10.0/SageFs.Core.dll"
+      |> Expect.isFalse "no fixed framework is left in the path"
   ]

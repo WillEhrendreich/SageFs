@@ -6,16 +6,16 @@
 
 | Step | Commit | Reachable from a save? |
 |---|---|---|
-| 1 granular restart | `4195ca99` | yes — `RestartScope` names the unit |
-| 2 holder | — | no caller yet |
-| 3 derived migration | — | no caller yet |
+| 1 granular restart | `4195ca99` | yes, `RestartScope` names the unit |
+| 2 holder |: | no caller yet |
+| 3 derived migration |: | no caller yet |
 | 4 rewrite side conditions | `45b75eb1` | no caller yet |
 | 5 translation validation | `4465eae0` | no caller yet |
-| attribution | `c5d5f5b9` | yes — from the planner's own parse |
-| subject decision | `fa6c0060` | yes — every reason classified |
-| subject → action | `07735851`, `5bb2d7f6` | yes — through `RestartPlan` |
+| attribution | `c5d5f5b9` | yes: from the planner's own parse |
+| subject decision | `fa6c0060` | yes: every reason classified |
+| subject → action | `07735851`, `5bb2d7f6` | yes: through `RestartPlan` |
 | boundaries | `6ad97294`, `70519d6c` | user-declared, wins over inference |
-| build cost | `bab682b7`, `b2f46465` | yes — decides respawn vs rebuild |
+| build cost | `bab682b7`, `b2f46465` | yes: decides respawn vs rebuild |
 
 Steps 2–5 are built, tested and DST'd, and still have no caller. That is the
 honest state, not a detail.
@@ -46,23 +46,23 @@ two boundaries  -> Ambiguous ["store-a"; "store-b"]
   that claimed a cheaper build would be refuted by the build system.
 - **A scoped restart is not yet cheaper.** Width and cost are different
   questions. Today `Liveness.Unknown` pays the build, so behaviour is
-  unchanged — and correctly so.
+  unchanged, and correctly so.
 - **The holder is not in anyone's app yet.** Nothing is a `Cell<'a>` because
   nothing has opted in.
 
-## The one thing that would make it cheaper — and why it is blocked
+## The one thing that would make it cheaper: and why it is blocked
 
 A boundary that can establish LIVENESS. The signature is in place
 (`Liveness` travels with the restart), so establishing it is one value in one
-place — `WorkerMain.fs`, where the live path currently says `Unknown`.
+place, `WorkerMain.fs`, where the live path currently says `Unknown`.
 
 **And the obvious probe does not work, measured.** .NET exposes no per-type
 instance count. Checked rather than assumed:
 
-- `GC.GetGCMemoryInfo()` — total bytes, no per-type count
-- `GC.GetGeneration()` — per-thread, no per-type count
-- `AppDomain.GetAssemblies()` — types **LOADED**, not instances
-- `GC.GetTotalMemory()` — total bytes
+- `GC.GetGCMemoryInfo()`, total bytes, no per-type count
+- `GC.GetGeneration()`, per-thread, no per-type count
+- `AppDomain.GetAssemblies()`, types **LOADED**, not instances
+- `GC.GetTotalMemory()`, total bytes
 
 And the decisive check:
 
@@ -78,7 +78,7 @@ liveness, pay a rebuild every time, and look like a working probe while
 answering nothing. `Liveness.Unknown` is therefore the CORRECT answer today,
 not a placeholder waiting to be filled in.
 
-**What would actually answer it.** Not reflection — instrumentation. SageFs
+**What would actually answer it.** Not reflection, instrumentation. SageFs
 already knows where values live for a *kept binding*: `HotReloadCore.AppHolds`
 records which `MethodInfo` the app captured, and `LiveStateEmit.probeCode` asks
 the app directly about a specific field. A liveness probe for a TYPE change
@@ -87,7 +87,7 @@ holder owning the instances (steps 2–5, which have no caller yet), or a
 runtime hook SageFs installs that counts constructions of a named type.
 
 That is a real build, and it is the honest next piece. It is not started here
-rather than half-built and claimed — and the note records WHY, so the next
+rather than half-built and claimed, and the note records WHY, so the next
 person does not spend a day on the reflection probe that cannot work.
 
 ## The reachability question, settled by measurement
@@ -104,7 +104,7 @@ locates the running `SageFs.Core.dll`, writes a `.targets` that adds the
 `Reference`, and passes it to `dotnet build` as
 `-p:CustomAfterMicrosoftCommonTargets=<temp>.targets`.
 
-Proven end to end through the real product path — a project with **zero**
+Proven end to end through the real product path, a project with **zero**
 `Reference` elements, no `SageFsCoreAssembly` property, using the holder API:
 
 ```
@@ -114,8 +114,8 @@ bin/Debug/net11.0/SageFs.Core.dll    <- 7,495,168 bytes, copied
 /tmp/sagefs-inject-*.targets         <- gone; cleanup ran
 ```
 
-And again on the **real ConsoleTicker** with both fallbacks removed — the
-fsproj `Reference` block and the `SageFsCoreAssembly` property — through
+And again on the **real ConsoleTicker** with both fallbacks removed, the
+fsproj `Reference` block and the `SageFsCoreAssembly` property, through
 `SessionBuild.runBuildAsync` itself:
 
 ```
@@ -125,11 +125,11 @@ BUILD OK: Build succeeded
 ```
 
 So neither fallback is load-bearing for the Run App path. "It compiled" and
-"it runs" are separate claims, and only the second proves `Private=true` —
+"it runs" are separate claims, and only the second proves `Private=true`,
 without it the app dies at RUN time with a missing assembly, long after a green
 build.
 
-## What is still NOT wired — measured, not estimated
+## What is still NOT wired: measured, not estimated
 
 Three modules are built, tested and DST'd, and have **zero production callers**:
 
@@ -143,7 +143,7 @@ TranslationValidation: 0 production files
 ```
 
 A decision function with no live caller is a lookup nobody performs. They are
-not dead code to be deleted — they are the next seam.
+not dead code to be deleted, they are the next seam.
 
 ### The seam, precisely
 
@@ -163,20 +163,20 @@ So the shape of the next piece is:
 
 1. When liveness says a live value of the old shape EXISTS, build the old and
    new `RecordShape` from the type's own definition.
-2. Ask `decideRecord`. If it migrates, take a **third** action — rewrite the
+2. Ask `decideRecord`. If it migrates, take a **third** action, rewrite the
    value in place and respawn, with no `dotnet build` at all.
 3. If it refuses, fall to today's `RebuildProject`, carrying the refusal as the
    `because` so the user learns *which field* was undecidable rather than that
    something was.
 4. Run every use site of the rewritten binding through `TranslationValidation`
-   before believing the result — that is what `Undecidable` is for, and it is
+   before believing the result, that is what `Undecidable` is for, and it is
    the check that makes a migration safe rather than merely possible.
 
 The hard part is step 1, and it is honest to say so: SageFs does not currently
 retain the old shape of a type across an edit, so the old `RecordShape` has to
 come from the last known parse. That is a real build, not a wiring exercise.
 
-### The AST, measured — and where the cycle stopped
+### The AST, measured: and where the cycle stopped
 
 Reaching a field's KIND from source took several build cycles, so the findings
 are recorded rather than left for the next person to rediscover. All of it
@@ -189,18 +189,18 @@ only context where `Fantomas.FCS` is in scope (`check_fsharp_code` and a bare
 | namespace | `Fantomas.FCS.Syntax`, NOT `FSharp.Compiler.Ast` |
 | `SynField` members | `idOpt: FSharpOption<FSharpOption<Ident>>`, `fieldType: SynType`, plus `isMutable`, `isStatic`, `attributes` |
 | `SynField` destructuring | takes **ONE** binding; naming two members in the pattern is a syntax error |
-| `SynField` case field | **no public constructor and no nameable case field** — `GetConstructors()` returns empty |
+| `SynField` case field | **no public constructor and no nameable case field**, `GetConstructors()` returns empty |
 | `idOpt` element | a bare `Ident`, NOT a `SynIdent` (the compiler says so) |
 | `SynType` | only `Is*` predicates; a type's NAME lives on `typeInfo` |
 
-So the declared type *is* on the node as `fieldType: SynType` — the information
-is present — but it cannot be reached from a pattern that names it, because the
+So the declared type *is* on the node as `fieldType: SynType`, the information
+is present, but it cannot be reached from a pattern that names it, because the
 DU's single case field has no discoverable name. That is why every field is
 `Undecidable`.
 
 **This is the correct place to stop, and stopping is safe.** An undecidable
 field refuses the migration, so the answer falls back to the rebuild we already
-do — no wrong-typed value can reach a live object. The alternative was a guess,
+do, no wrong-typed value can reach a live object. The alternative was a guess,
 and the guess is what this whole refactor exists to remove.
 
 The next step is a decision, not more archaeology: either Fantomas gains a
@@ -212,19 +212,19 @@ reflection-into-private-fields hack in the middle of a hot-reload path.
 ## Gate parallel 2 is better, not yet sufficient
 
 At `SAGEFS_TIER_PARALLEL=5` seven host tests errored as timeouts. At 2 the first
-run was all-green. At 2 on a *busier* run, three tiers went red again — and that
+run was all-green. At 2 on a *busier* run, three tiers went red again, and that
 second run is the more informative one, because it separates the two classes:
 
 | Tier | Symptom | Isolated re-run |
 |---|---|---|
 | `--integration-host[1/5]` | 1 errored, hot-reload keep-tiering | a *different* test errors in isolation |
 | `--integration-browser` | 1 errored | **variable: 1 run 1 failed + 1 errored, next run clean** |
-| `default` | 1 **failed** — `recordEval` scaled 11.0x for 10x history (budget 8x) | **5 of 5 passed** |
+| `default` | 1 **failed**, `recordEval` scaled 11.0x for 10x history (budget 8x) | **5 of 5 passed** |
 
 `--integration-host` naming a *different* failing test on each run is the
 signature of contention, and the repo already documents it for the
 live-testing tests. `--integration-browser` is variable, so a single verdict
-there is not evidence of anything — only the rate is.
+there is not evidence of anything, only the rate is.
 
 `recordEval` is a **wall-clock budget**, and it passed 5 of 5 in isolation
 against a gate run that failed it. That is not proof of innocence, so the
@@ -248,21 +248,21 @@ machine as it actually stood:
 | `--integration-host[1/5]` keep-tiering | not reproduced; a *different* test errors in isolation | **unresolved** |
 
 Load average during all of it: **18.6 / 24.6 / 23.4, peaking at 43.0** on 16
-logical cores — 1.4x to 2.7x oversubscribed for the entire window, because the
+logical cores. 1.4x to 2.7x oversubscribed for the entire window, because the
 verification was competing with the gate. The runner was loaded *by
 construction*, which is the condition a wall-clock budget is least able to
 survive.
 
 ### What the perf budget really measures
 
-`SageFs.Tests/PerfTests.fs:62-71` — ceiling 8x against a stated baseline of
+`SageFs.Tests/PerfTests.fs:62-71`, ceiling 8x against a stated baseline of
 ~1.1x. Wall-clock via `Stopwatch.GetTimestamp`, but deliberately hardened:
 min-of-15 after 2 warmups, with a forced `GC.Collect` and
 `WaitForPendingFinalizers` before each timed block, so GC pauses and a loaded
 machine only ever ADD time and the fastest observed run is closest to real cost.
 
 So the margin is **7.3x**, and an observed 11.0x is close enough to 8x to trip
-it and close enough to 1.1x to be noise — the same test being marginal on a
+it and close enough to 1.1x to be noise, the same test being marginal on a
 loaded box, twice over. It is not a quadratic signal: the guard separates an
 O(n) rescan (~10x) from the O(n^2) it watches for (~100x).
 
@@ -276,7 +276,7 @@ reaches, so `recordEval` cannot execute the new code at all.
 is arithmetically inconsistent with the test. Its only failure path is
 `saveWithinBudget (TimeSpan.FromSeconds 150.0)`, which cannot expire before
 150s; its other guards are 180s and 120s. So 25.0s is not its assertion timing
-out — it is harness or host-spawn startup. Called **unresolved** rather than
+out, it is harness or host-spawn startup. Called **unresolved** rather than
 exempted, because it did not reproduce. The test also skips itself when the
 watch never lapses, on documented grounds that some runs never get there.
 
@@ -296,7 +296,7 @@ PROBE unchecked rebuild=true     not evidence: pay
 
 Line two is the entire point of `LiveCount`. Before it, "a registry was asked
 and found nothing" and "no registry was consulted" were both `None`, and
-`rebuilds` collapsed the answer to a bool — so the two claims that must differ
+`rebuilds` collapsed the answer to a bool, so the two claims that must differ
 most were the two that could not.
 
 ### Three mistakes that were the DRIVER's, not the product's
@@ -310,7 +310,7 @@ none of them was:
 2. **Tool arguments are snake_case.** `working_directory`, not
    `workingDirectory`. The tool answered with the exact missing parameter name.
 3. **The transport replies as SSE.** A JSON-RPC result arrives on a `data:`
-   line, so searching the raw body finds nothing *even on success* — a driver
+   line, so searching the raw body finds nothing *even on success*, a driver
    that reports that as a failure is reporting a failure that is not one.
 
 Each was found by reading what the daemon actually said rather than inferring
@@ -321,9 +321,9 @@ saw cannot tell warmup from breakage.
 
 | Approach | Result |
 |---|---|
-| `-p:CustomAfterMicrosoftCommonTargets=<file>` | **works** — the file can ADD a `Reference` |
-| `-p:ReferencePath=<dir>` | **does not work** — it only tells MSBuild where to SEARCH for references that already exist, so it can never introduce one |
-| `<ProjectReference>` to `SageFs.Core` | fails with NU1605 — pulls a newer `FSharp.Core` transitively, read as a downgrade, and the repo treats warnings as errors |
+| `-p:CustomAfterMicrosoftCommonTargets=<file>` | **works**: the file can ADD a `Reference` |
+| `-p:ReferencePath=<dir>` | **does not work**: it only tells MSBuild where to SEARCH for references that already exist, so it can never introduce one |
+| `<ProjectReference>` to `SageFs.Core` | fails with NU1605: pulls a newer `FSharp.Core` transitively, read as a downgrade, and the repo treats warnings as errors |
 
 The `ReferencePath` row is the load-bearing one. I assumed the property form
 would work before measuring, and it produced a clean FS0039 on `HolderRegistry`
@@ -332,7 +332,7 @@ that looked exactly like a missing assembly. That is why the injection is a
 
 ### Where the assembly is found, and where it must not be
 
-`typeof<HolderRegistry>.Assembly.Location` — **not** `AppContext.BaseDirectory`.
+`typeof<HolderRegistry>.Assembly.Location`, **not** `AppContext.BaseDirectory`.
 The latter is deliberately overridden to the *user project's* build output
 inside the FSI host, so it points at the app rather than at the tool: a lookup
 that would have found the wrong DLL and looked correct.
@@ -360,7 +360,7 @@ than defects:
 - every affected test's net11.0 twin passed in the SAME run, while the net10.0
   twin took 75–79s against a 60s budget;
 - the same tests pass serially and at a clean baseline commit;
-- the repo already documents it — `SageFs.Tests/HttpApiIntegrationTests.fs`
+- the repo already documents it, `SageFs.Tests/HttpApiIntegrationTests.fs`
   says the worker's test proxy "does not become available inside the wait" under
   contention and "passes alone in ~10s".
 
@@ -371,19 +371,19 @@ One caveat measured rather than assumed: `--integration-browser` is the
 sensitive tier. It errored once at parallelism 2 while ten other tiers passed,
 on a 15s UI-wait assertion, then passed on 4 consecutive runs on an idle
 machine. A single green run of one tier is not evidence that the tier is
-sound — only the repetition is. So: **run the gate at `SAGEFS_TIER_PARALLEL=2`
+sound, only the repetition is. So: **run the gate at `SAGEFS_TIER_PARALLEL=2`
 or lower**, and treat a lone browser-tier error as contention until a repeat
 run says otherwise.
 
-So the earlier claim in this file — that the opt-in design is unreachable from
-user code — **was wrong**, and is corrected here rather than quietly dropped.
+So the earlier claim in this file, that the opt-in design is unreachable from
+user code, **was wrong**, and is corrected here rather than quietly dropped.
 `SageFs.Core` is a `Library`, so a user project can reference it; what is
 missing is only the ergonomic step of the reference being added for them.
 
 **A correction worth recording.** The first version of that app printed
 `ticks: 1 1 1` and it looked like a holder defect. It was not: the app *read*
 the cell and never *wrote* it. Proved by asking the product in a live SageFs
-session before touching the code — writes then reads through the same cell give
+session before touching the code, writes then reads through the same cell give
 `[1; 2; 3]`. SageFs was right and the test app was wrong.
 
 ### What still needs doing
@@ -397,7 +397,7 @@ session before touching the code — writes then reads through the same cell giv
 | Piece | Reachable from a save? |
 |---|---|
 | granular restart, attribution, subject, `RestartPlan` | yes |
-| build-cost decision (`LiveCount`) | yes — answers `Unconsulted` unless an app registers a holder |
+| build-cost decision (`LiveCount`) | yes: answers `Unconsulted` unless an app registers a holder |
 | `Holder` / `HolderRegistry` / `RegisteredHolder` | yes, by reference; ergonomics still missing |
 
 ## How to verify
@@ -427,7 +427,7 @@ whether the harness itself is the cause rather than assuming it either way.
 `PerfBudget.scalingRatio` times all `small` iterations, then all `large`. The
 large batch runs ~10x longer per iteration, so under load it has a far bigger
 window to catch a bad scheduling moment. min-of-15 reduces that but cannot
-equalise it, so load DRIFT between the two batches biases the ratio upward —
+equalise it, so load DRIFT between the two batches biases the ratio upward,
 the observed failure direction.
 
 The candidate fix interleaves the two workloads so each pair is measured under
@@ -435,7 +435,7 @@ the same machine conditions.
 
 ## Measured, under deliberate load (8 spinners on 16 cores)
 
-Run 1 — looked conclusive:
+Run 1, looked conclusive:
 
 ```
 CORES 16
@@ -446,7 +446,7 @@ flat/interleaved   mean=0.84 sd=0.18 max=1.01
 A 3x variance reduction and a worst case of 1.01 against 1.98. Good enough to
 have shipped on the spot.
 
-Run 2 — same script, same load, seconds apart:
+Run 2, same script, same load, seconds apart:
 
 ```
 flat/sequential    mean=1.21 sd=0.37 min=0.94 max=1.96
@@ -467,7 +467,7 @@ measurement with a different real measurement and calling it a fix.
 **And the near-miss is the point worth recording.** A single 6-sample run said
 3x. I nearly took it. A timing claim needs enough repetitions that a repeat can
 disagree with it, and this is the second time in this work that one sample
-looked decisive and the next one did not — the first was the `ticks: 1 1 1`
+looked decisive and the next one did not, the first was the `ticks: 1 1 1`
 counter, which was my test app's bug, not the product's.
 
 ## What is actually established
@@ -489,8 +489,8 @@ counter, which was my test app's bug, not the product's.
 zero production callers and no reference from `FeatureHooks.recordEval`.
 feat(reload): read a record shape from the COMPILED type, not the text AST
 
-Revises the answer recorded one commit ago. The text AST is a dead end — the
-information is on the node and unreachable — and the compiled type carries the
+Revises the answer recorded one commit ago. The text AST is a dead end, the
+information is on the node and unreachable, and the compiled type carries the
 same information through a supported public API the repo ALREADY uses at
 SageFs.Core/Features/LiveValueTree.fs:161.
 
@@ -507,7 +507,7 @@ Two things this buys, both measured:
 1. DECIDABLE KINDS. The text route produced `Undecidable` for every field,
    because `SynField` exposes `fieldType: SynType` but has no nameable case
    field. Here the kind is a real `System.Type`, so `int`/`string`/`bool` are
-   decidable and everything else is still `Undecidable` — and refuses, which is
+   decidable and everything else is still `Undecidable`, and refuses, which is
    the right direction for a `byte[]` or a `Map`.
 
 2. THE OLD VALUE, not just its description. `PreComputeRecordReader` reads a
@@ -524,11 +524,11 @@ feat(reload): a migration is now DECIDABLE, not always a refusal
 `decideRecord` has existed, tested and DST'd, and could never succeed: every
 field came back `Undecidable`, because the text-AST route cannot reach a field's
 declared type (`SynField` exposes `fieldType: SynType` but has no nameable case
-field — measured, one commit ago). A decision that can only ever return
+field, measured, one commit ago). A decision that can only ever return
 `Refused` is a stub wearing a decision's clothes.
 
 `compiledShapeOf` reads the same information from the COMPILED type, through
-`FSharpType.GetRecordFields` — a supported public API the repo already uses at
+`FSharpType.GetRecordFields`, a supported public API the repo already uses at
 `LiveValueTree.fs:161`. The rule set is deliberately the same three kinds, so
 the two producers cannot drift into disagreeing about what is carryable.
 
@@ -545,7 +545,7 @@ Measured, before writing it:
 Two things this buys, and the second is the larger one:
 
 1. DECIDABLE KINDS, so `decideRecord` over two identical shapes now returns
-   `Carried` — asserted directly, because "the path can succeed" is the whole
+   `Carried`, asserted directly, because "the path can succeed" is the whole
    claim and a test that only checked the refusal would not have proven it.
 
 2. THE OLD VALUE, not just its description. `compiledFieldsOf` reads a live
@@ -569,7 +569,7 @@ One test was wrong on first run and the correction is the instructive part:
 it compared whole `FieldKind` values for equality, which fails because
 `Undecidable` carries a reason string and the two routes legitimately word it
 differently. The check is over the CASE, not the value.
-feat(reload): a third restart outcome — carry the live value, skip the build
+feat(reload): a third restart outcome, carry the live value, skip the build
 
 `RestartAction` had two cases and neither is the one a live value deserves.
 `RespawnOnly` is right when NOTHING holds the old shape. `RebuildProject` is
@@ -585,7 +585,7 @@ user cannot see and would have to discover by losing state.
 `decideFromLivenessAndMigration` takes BOTH facts rather than merging them,
 because merging is how the cheap answer wins. A caller that reports "worth
 carrying" while also reporting "nothing is live" gets the honest answer, not the
-cheaper one it asked for — asserted directly, with all three verdicts paired
+cheaper one it asked for, asserted directly, with all three verdicts paired
 against an empty liveness answer.
 
 The safety properties are the ordering of the cases:
@@ -599,8 +599,8 @@ The safety properties are the ordering of the cases:
 - liveness that was never established, or could not answer, pays the build
   REGARDLESS of a carryable verdict.
 
-The compiler found both non-exhaustive matches when the case was added —
-`AppRunOrchestration.fs` and a pre-existing `RestartCostTests` — which is the
+The compiler found both non-exhaustive matches when the case was added,
+`AppRunOrchestration.fs` and a pre-existing `RestartCostTests`, which is the
 DU doing its job. Both are now explicit, and both say why.
 
 In `AppRunOrchestration` the new case falls back to a REBUILD, and the reason is
@@ -611,11 +611,11 @@ DOES produce the action, the compiler points at that line rather than the
 failure surfacing as discarded state.
 
 `decideFromLiveCount` is untouched and asserted unchanged, so no shipped
-behaviour moved — the addition is a new function, not a rewrite wearing one.
+behaviour moved, the addition is a new function, not a rewrite wearing one.
 
 7 new tests, 7 passed. Full default tier: 9851 registered, 9851 ran, 0 failed,
 verdict=Trusted.
-## What is still NOT wired — the boundary is now measured, not guessed
+## What is still NOT wired: the boundary is now measured, not guessed
 
 `MigrationPlan.decide` is the producer, and it is proven reachable end to end:
 
@@ -646,7 +646,7 @@ Cell     = Value:FSharpRef`1
 ```
 
 A migration needs the old VALUE. The only holder of that value is the `Cell`,
-and the registry never sees a `Cell` — it records an id, a type NAME and a
+and the registry never sees a `Cell`, it records an id, a type NAME and a
 superseded flag. So the value cannot be recovered from the registry by any
 change confined to the decision layer; it has to be captured where the value
 is held.
@@ -658,13 +658,13 @@ honest shapes:
    receives the value; storing `obj` alongside the id makes the registry able to
    answer "is this carryable?" directly. Cost: the registry becomes a strong
    reference to live state, which is exactly what a "liveness source" should
-   NOT be — it would keep an object alive that the app has otherwise released,
+   NOT be, it would keep an object alive that the app has otherwise released,
    turning an honest `Release` into a lie.
 
 2. **The app's own boundary declares a migration hook.** A boundary already
    exists (`RestartBoundaries.Boundary`) and already says "I hold instances of
    this type". Giving it an optional `migrate : obj -> Type -> MigrationWorth`
-   puts the value where it is already in scope — the app — and keeps the
+   puts the value where it is already in scope, the app, and keeps the
    registry a pure index. Cost: the user writes a small function, and a
    boundary that does not supply one migrates nothing.
 
@@ -676,7 +676,7 @@ holding it, not because anything uses it. The measure has to be a by-product of
 the owner, not a shadow copy the measure keeps alive.
 
 So the next piece is: `Boundary` gains an optional migration hook, and the live
-path calls `MigrationPlan.decide` with whatever the boundary supplies —
+path calls `MigrationPlan.decide` with whatever the boundary supplies,
 `NoValueToMigrate` when it supplies nothing, which is the honest answer for every
 boundary today.
 ## The boundary subsystem is built, tested, and entirely unwired
@@ -696,10 +696,10 @@ So the state of the whole granular-restart effort, honestly:
 |---|---|
 | granular restart, attribution, subject, `RestartPlan` | **yes** |
 | build-cost decision (`LiveCount`, `RestartAction`) | **yes** |
-| `Holder` / `HolderRegistry` / `RegisteredHolder` | **yes** — ConsoleTicker uses it |
-| `RestartBoundaries.Registry` | no — nothing constructs one |
-| `restartReasonWithBoundary` | no — nothing calls it |
-| `MigrateAndRespawn` / `MigrationPlan` | no — no live caller supplies a value |
+| `Holder` / `HolderRegistry` / `RegisteredHolder` | **yes**: ConsoleTicker uses it |
+| `RestartBoundaries.Registry` | no: nothing constructs one |
+| `restartReasonWithBoundary` | no: nothing calls it |
+| `MigrateAndRespawn` / `MigrationPlan` | no: no live caller supplies a value |
 
 `WorkerMain.fs:1020` gets a type's boundary from the HOLDER REGISTRY
 (`holderRegistry.LiveCountOf typeName`), not from a declared boundary. So the
@@ -709,8 +709,8 @@ be restartable in principle.
 
 ### Why the boundary registry is not wired, and what it would take
 
-`Registry.For` needs a `WorkerProtocol.SessionId`. The worker has one — it is
-`AppRunner`'s — so the registry is constructible there. What is missing is the
+`Registry.For` needs a `WorkerProtocol.SessionId`. The worker has one, it is
+`AppRunner`'s, so the registry is constructible there. What is missing is the
 DECISION to construct it and the threading of a `MigrationWorth` from a
 boundary's hook into `requireRestart`, which currently takes `(first, rest,
 subject, liveness)`.
@@ -719,7 +719,7 @@ That is a real seam, not a one-liner:
 
 1. the worker constructs `RestartBoundaries.Registry.For sessionId` once, and
    the app can declare boundaries into it (that API needs surfacing through MCP
-   or a startup hook — today there is no way for an APP to declare one);
+   or a startup hook, today there is no way for an APP to declare one);
 2. `requireRestart` gains a `migrationWorth` parameter, alongside `liveness`
    rather than folded into it, because they answer different questions;
 3. `AppRunState.RestartRequired` and `RunEnd.RebuildForChanges` carry it, the
@@ -729,7 +729,7 @@ That is a real seam, not a one-liner:
    `MigrateAndRespawn` arm it already has stops being a fallback.
 
 Step 1 is the one with a product decision in it: **how does an app declare a
-boundary?** The holder registry needs no declaration — the app opts in by
+boundary?** The holder registry needs no declaration, the app opts in by
 holding something. A boundary currently needs an explicit call, and there is
 no path for a user's app to make one. Until there is, the honest state is what
 the table says.
@@ -742,7 +742,7 @@ Measured, and it invalidates a claim this document has been making.
     Program.fs:47       let registry        = SageFs.HolderRegistry.New ()
     WorkerMain.fs:1080  holderRegistry.LiveCountOf typeName
 
-The app runs **in-process** — `SageFs.Host/AppRunner.fs:197` is
+The app runs **in-process**, `SageFs.Host/AppRunner.fs:197` is
 `Assembly.LoadFrom target` followed by an entry-point invoke, not a process
 launch. So both registries live in the SAME process, in the SAME AppDomain,
 and they are still **two unrelated objects**: `HolderRegistry` has no static or
@@ -753,14 +753,14 @@ reading a registry the app never touched. It reports `0` for every type, always.
 So:
 
 - `LiveCount.HeldByNothing` is produced for every live holder in a real app, and
-- the restart takes `RespawnOnly` — a cheap action — on the strength of a
+- the restart takes `RespawnOnly`, a cheap action, on the strength of a
   registry nothing wrote to.
 
 **That is the most expensive defect in this whole series, and it is invisible
 from the outside**: it fails in the CHEAP direction, a stale live value survives
 a restart that was told nothing was alive, and every test passes because the
 tests construct a registry, register into it, and read it back from the SAME
-instance. The isolation tests make it look deliberate — "one app's cell cannot
+instance. The isolation tests make it look deliberate, "one app's cell cannot
 make another's restart pay" — while the real behaviour is "no app's cell can make
 any restart pay, ever".
 
@@ -777,11 +777,11 @@ it has to be a handle the APP obtains rather than one SageFs guesses at:
   starts the app, and `RegisteredHolder`/`holdRegistered` register into
   `Current` when the app gives no registry of its own;
 - a boundary registry follows the same rule, which is what makes a DECLARED
-  boundary reachable at all — today the app has no way to declare one, and this
+  boundary reachable at all, today the app has no way to declare one, and this
   is the channel that would let it.
 
 The moment that exists, `LiveCount` stops being decorative. Until then, the
-honest reading of the live path is `Unconsulted`, not `HeldByNothing` — and
+honest reading of the live path is `Unconsulted`, not `HeldByNothing`, and
 that distinction is the entire reason `LiveCount` was built.
 ## What a migration can and cannot do at a type change
 
@@ -800,7 +800,7 @@ changes.
 
 The app is running the OLD assembly, and the new one is what a `dotnet build`
 would produce. Before that build runs there is no `System.Type` for the edited
-record — only the source text. So `newShape` is **not available as a compiled
+record, only the source text. So `newShape` is **not available as a compiled
 type at decision time**; it is at best derivable from the edited source, and
 the text-AST route was measured to be a dead end for field KINDS (the one
 question a migration needs answered).
@@ -812,7 +812,7 @@ on.
 
 `LiveCell.Holds` is a string. `compiledShapeOf` takes a `System.Type`. A
 `TypeShapeMigration.Field` is `{ Name: string; Kind: FieldKind }`, and nothing
-on the cell can produce a `FieldKind` — the name "Order" carries no field list,
+on the cell can produce a `FieldKind`, the name "Order" carries no field list,
 no defaults, and no kinds. Resolving a name back to a `System.Type` would mean
 searching loaded assemblies, which is reflection dressed up: it reports what
 happens to be LOADED, not what was there before the edit, and it is the same
@@ -824,8 +824,8 @@ A type change cannot currently be migrated, and no amount of wiring the pieces
 together changes that. The honest options are:
 
 1. **Migrate on a shape comparison the source can answer.** Keep the record's
-   declared field list in the BASELINE parse — `ReloadPlanning` already keeps a
-   `FileDecls` per watched file and a `Header` per type decl — and diff the
+   declared field list in the BASELINE parse, `ReloadPlanning` already keeps a
+   `FileDecls` per watched file and a `Header` per type decl, and diff the
    baseline shape against the new one. Field KINDS come from the compiled type
    for fields that exist in both, and from the AST only for a field that is
    genuinely new. That splits the question: a carried field's kind is known
@@ -834,13 +834,13 @@ together changes that. The honest options are:
    field's *name* and whether the new definition gives it a default are not).
 
 2. **Narrow the claim.** A migration is provably safe for the *carried* fields
-   — same name, same kind, value copied across — and provably unsafe for a field
+  , same name, same kind, value copied across, and provably unsafe for a field
    whose kind changed or whose value cannot be produced. So the decidable
    subset is "same fields, same kinds, everything else refused", and the
    *baseline* is where the old shape must be kept.
 
 The second is a correction to what this document has implied. The shape
-producer (`compiledShapeOf`) is real, proven and correct — it reads a *live*
+producer (`compiledShapeOf`) is real, proven and correct, it reads a *live*
 value's type. What is missing is the OLD shape of a type across an edit, and no
 producer of that exists. `LiveCell.Holds: string` is not it.
 
@@ -855,7 +855,7 @@ correct answer until the old shape is retained.
 Retaining it is a small, well-scoped piece: `RestartAttribution.KnownUnit`
 carries `{ Name; DeclaresType }` and is derived from `FileDecls`, which is
 already retained per watched file. Extending it with the declared shape at the
-point the parse happens would give the decision the old side for free — the
+point the parse happens would give the decision the old side for free, the
 parse is already running, the data is already there, and nothing in the current
 design depends on the old shape not existing.
 ## Both shapes exist, and the baseline is frozen
@@ -870,7 +870,7 @@ something better and something worse, both measured.
     match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText source) with
     | Ok decls -> reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
 
-`TryAdd`, not `AddOrUpdate` — the baseline is written ONCE, at build time, from
+`TryAdd`, not `AddOrUpdate`, the baseline is written ONCE, at build time, from
 the source the assembly was BUILT FROM. So `KnownUnit.DeclaresFields`, derived
 from those baselines, is the OLD shape. Correct, and the previous commit's
 capture is capturing the right thing.
@@ -885,7 +885,7 @@ capture is capturing the right thing.
 Saving a watched file makes it NEWER than the assembly, so
 `baselineIsTrustworthy` is false, so the baseline is never (re)written, so it
 keeps describing the pre-save source forever. That is self-consistent for
-patching — a file newer than its build genuinely cannot be diff-patched — but
+patching, a file newer than its build genuinely cannot be diff-patched, but
 it means `reloadBaselines` is a snapshot of the BUILD, not a running record, and
 the comment at `WorkerMain.fs:758` ("every save advances") is wrong about what
 the code does.
@@ -906,33 +906,33 @@ reader exactly as it briefly misled me.
 
 The new side is obtainable without a build: `extractDecls` runs on any file in
 under a millisecond, and the restart site already has the file path. So the
-missing producer is a `declaredRecordFields` over the EDITED text — which is the
+missing producer is a `declaredRecordFields` over the EDITED text, which is the
 same function that just proved it can read a record's fields, pointed at the
 new file rather than the baseline.
 
 That is the whole remaining seam, and it is narrow: both shapes, both parsers,
 and one missing call. What it will NOT give is a field KIND for a genuinely new
 field, because the AST binding cannot reach one (measured). So a new field is
-either defaulted-and-added or refused, decided by the caller — which is the
+either defaulted-and-added or refused, decided by the caller, which is the
 honest, safe answer and is already what `decideRecord` expects.
 ## The last seam: nothing supplies a `MigrationWorth`
 
 Measured: `AppRunOrchestration.fs:174` calls `decideFromLiveCount`, which
-ignores migration entirely, and `MigrationPlan.decide` — which does use it —
+ignores migration entirely, and `MigrationPlan.decide`, which does use it,
 has no production caller. So `MigrateAndRespawn` is a real, tested, reachable-by-
 construction outcome that no save can produce.
 
 What the restart site already has, in `restartOrFallBack (fileName: string)`:
 
-- `fileName` — the edited path, so the NEW shape is one `extractDecls` away
+- `fileName`, the edited path, so the NEW shape is one `extractDecls` away
   (sub-millisecond, and the file is already on disk in its edited state);
-- `reloadBaselines` — via `knownUnits()`, which now carries `DeclaresFields`,
+- `reloadBaselines`, via `knownUnits()`, which now carries `DeclaresFields`,
   so the OLD shape is already there;
-- `declaredBoundaryFor typeName` — the boundary, which may also carry a
+- `declaredBoundaryFor typeName`, the boundary, which may also carry a
   `Migrate` hook (a boundary that knows how to migrate outranks a name-only
   comparison, because the app is the only thing that can actually move the
   value);
-- `holderRegistry` — the liveness answer.
+- `holderRegistry`, the liveness answer.
 
 So the producer is four lines and every input is present. The precedence it
 should follow, and the reason each level wins:
@@ -943,13 +943,13 @@ should follow, and the reason each level wins:
    second-guessed by it.
 2. **The name comparison**, when there is no hook. Safe for carried and removed
    fields, refusing anything a name cannot settle.
-3. **`NoValueToMigrate`**, when the boundary is silent — which is every
+3. **`NoValueToMigrate`**, when the boundary is silent, which is every
    boundary today. And silence is NOT "nothing is live": that claim belongs to
    `LiveCount`, and conflating them is how a cheap restart gets granted without
    evidence, which is the defect the whole `LiveCount` refactor exists to end.
 
 The honest consequence: with no boundary hook anywhere, the name comparison runs
-and answers the ADDED-AND-UNDEFAULTED case by refusing — which lands on today's
+and answers the ADDED-AND-UNDEFAULTED case by refusing, which lands on today's
 `RebuildProject`. So wiring this changes **no** behaviour for any existing user,
 and turns into a real saving the moment an app supplies a hook. That is a
 deliberate property: a change that can only ever pay a build today cannot make
@@ -960,8 +960,8 @@ anyone worse, and it is exercised end to end by the tests rather than by hope.
 **This is now closed.** Carrying the value used to stop at a decision, because
 the executor did not exist. It does: `ShapeMigration.migrate` constructs the new
 value (see "The premise behind that conclusion was WRONG" above), and an app
-reaches it by declaring two hooks — `ShapeMigration.hook` and
-`ShapeMigration.subjectFor` — through `Registry.DeclareWithSubject`.
+reaches it by declaring two hooks, `ShapeMigration.hook` and
+`ShapeMigration.subjectFor`, through `Registry.DeclareWithSubject`.
 
 One correction to what this section used to say, because it was wrong and would
 have sent the next reader to the wrong file: `Swap<'before,'after>` is in
@@ -971,16 +971,16 @@ have sent the next reader to the wrong file: `Swap<'before,'after>` is in
 Chased this because `HolderRewrite` is the last module with zero production
 callers, and its name reads like the thing a migration needs. It is not.
 
-`HolderRewrite.classify` takes `BindingFacts` — `IsModuleLevel`, `Inline`,
+`HolderRewrite.classify` takes `BindingFacts`, `IsModuleLevel`, `Inline`,
 `LiteralAttr`, `AddressTaken`, `ByRefUsage`, `InQuotation`, `PinnedStorage`,
-`Visibility`, `CopySemantics` — and answers whether a BINDING can be rewritten
+`Visibility`, `CopySemantics`, and answers whether a BINDING can be rewritten
 in place. That is the question "may SageFs redefine this `let` in the running
 process at all?", and the refusals are about that: a public field, an address
 taken, copy semantics unverified.
 
 A value migration is a different question: "given a live value laid out by the
 old shape, can I produce one of the new shape?" Its inputs are two SHAPES and
-the value — which is `TypeShapeMigration` plus `Holder.Cell`, both of which are
+the value, which is `TypeShapeMigration` plus `Holder.Cell`, both of which are
 wired. None of `BindingFacts` is needed for it, and asking whether a field is
 `PublicAcrossAssembly` before copying its value would refuse cases that are
 perfectly safe, and permit nothing that `decideRecord` had not already decided.
@@ -995,7 +995,7 @@ tempting name to invite the next reader into the same wrong wiring:
 | `HolderRewrite` | "may this binding be rewritten in place at all?" | a gate for a REWRITE, not a migration; nothing rewrites yet |
 | `MigrationPlan` | "is it worth carrying, and should we restart?" | **superseded** by `WorkerMain.migrationWorthFor` + `RestartCost` |
 | `TypeShapeMigration` | "can this value cross into the new shape?" | **wired** |
-| `ShapeMigration` | "build the new value from the live one" | **wired** — `migrate`, reached via `ShapeMigration.hook` |
+| `ShapeMigration` | "build the new value from the live one" | **wired**, `migrate`, reached via `ShapeMigration.hook` |
 
 ### `MigrationPlan` is the one to be careful with, because it is not merely redundant
 
@@ -1015,30 +1015,30 @@ field's KIND from its NAME:
 `RetryCount: string` is therefore carried as an int, `decideRecord` sees two
 equal kinds and reports `Carried`, and the value that reaches the constructor is
 a string in an int slot. Nothing in the product reads that verdict, so it is not
-a live defect — but it is a THIRD opinion about what a field is, and the other
+a live defect, but it is a THIRD opinion about what a field is, and the other
 two (`TypeShapeMigration.compiledShapeOf` and `ReloadPlanning.fieldKindOf`) both
 read real types and both return `Undecidable` when they cannot tell. A guess
 from English naming is the weakest of the three and is the only one with a
 consumer that would trust it.
 
-Deleting it is a separate decision and has not been made here — it touches the
+Deleting it is a separate decision and has not been made here, it touches the
 `SageFs.Core` and `SageFs.Simulation` compile lists and four test files. What is
 settled is that it must not be WIRED, and that its one genuinely missing
-contribution — a name tier for a boundary that declared no hook — belongs in
+contribution, a name tier for a boundary that declared no hook, belongs in
 `WorkerMain.migrationWorthFor` built on `ReloadPlanning.recordShapeOf`, never on
 `decideFromNames`.
 
 The one that is genuinely still missing is the executor for a migration: given
 `MigrateAndRespawn`, write the carried value back into the holder's `ref`. That
-is a small, honest piece — `Holder.Cell` already exposes `Value: 'a ref`, and a
-migration produces the new value — and it belongs at the point where the
+is a small, honest piece, `Holder.Cell` already exposes `Value: 'a ref`, and a
+migration produces the new value, and it belongs at the point where the
 restart actually acts, which is `SessionManager.RestartSession`. Doing it before
 a decision reaches it would be a decision with an executor and no producer, which
 is the shape this series has been removing in the other direction.
 ## The migration executor has a process boundary in the way
 
-Chasing the executor — the piece that writes a carried value back into the
-holder's `ref` — turned up a constraint that changes its shape, and it is worth
+Chasing the executor, the piece that writes a carried value back into the
+holder's `ref`, turned up a constraint that changes its shape, and it is worth
 recording before anyone writes it.
 
 Measured:
@@ -1049,7 +1049,7 @@ Measured:
 The app runs INSIDE the worker, so the live cell and the `ref` a migration must
 write are in the WORKER's process. `RestartSession` is handled by
 `SessionManager`, which runs in the DAEMON. So a `RestartPlan` carrying the
-carried value — or a `System.Type` — would be carrying an object across a
+carried value, or a `System.Type`, would be carrying an object across a
 process boundary, and the daemon cannot even name the app's types: they are
 loaded in the worker, in an AppDomain SageFs does not own.
 
@@ -1073,8 +1073,8 @@ never work, and no amount of correct pure-domain code would change that.
 
 ### Which is why nothing should be wired until the worker path is built
 
-The decision chain is now complete and correct end to end — `LiveCount` ->
-`migrationWorthFor` -> `decideFromLivenessAndMigration` -> `RestartAction` — and
+The decision chain is now complete and correct end to end, `LiveCount` ->
+`migrationWorthFor` -> `decideFromLivenessAndMigration` -> `RestartAction`, and
 every step is tested. What it feeds is a `RestartSession` that cannot yet carry
 the instruction across the boundary that matters.
 
@@ -1088,7 +1088,7 @@ question costs a build, and only a positive `MigrateAndRespawn` with a hook's
 Measured, and it is the reason the last gap is not just "wire the writer".
 
 A `Migrate` plan takes the `rebuild = false` arm in `SessionManager`, so no
-`dotnet build` runs. That is the whole point — it is the cheap action. But it
+`dotnet build` runs. That is the whole point, it is the cheap action. But it
 means:
 
     the new type has NO compiled form at migration time
@@ -1102,7 +1102,7 @@ because the thing being constructed does not exist yet.
 
 - **Reflection over a new assembly.** There is no new assembly until a build, and
   a build is what the action avoids. Asking reflection for a type it cannot find
-  would produce a "cannot migrate" — honest, but it is the same answer the
+  would produce a "cannot migrate", honest, but it is the same answer the
   refusal already gives, reached expensively.
 - **A fabricated value.** Passing `Unchecked.defaultof` into the old cell would
   make a migration LOOK carried while the value is now nonsense. That is
@@ -1117,20 +1117,20 @@ because the thing being constructed does not exist yet.
    it needs no new assembly: the new shape is a record of the same field names
    and kinds, which the *edited source* supplies. The cost is that the app's own
    code still references the OLD type, so the win is a preserved value rather
-   than a running new type — real, but not the feature.
+   than a running new type, real, but not the feature.
 
 2. **Build first, then migrate.** Reverse the order: the rebuild is what makes
    the migration possible, so `MigrateAndRespawn` is the WRONG shape for a
    type change. A type change cannot avoid the build by carrying the value,
    because the value's type is what the build produces.
 
-### Which means the honest conclusion — and the conclusion is now OUTDATED
+### Which means the honest conclusion: and the conclusion is now OUTDATED
 
 **This section concluded that `MigrateAndRespawn` could not pay off for a type
 change. That conclusion was wrong, and the correction is above**: a patched type
 is compiled at runtime, so it can be constructed, and `ShapeMigration.migrate`
 does it. The text below is kept because the reasoning that produced the wrong
-answer is the reasoning to recognise — a premise asserted rather than measured.
+answer is the reasoning to recognise, a premise asserted rather than measured.
 
 **`MigrateAndRespawn` as designed cannot pay off for a type change**, and the
 right move is to say so rather than wire an executor that fabricates a value or
@@ -1140,18 +1140,18 @@ What is genuinely achievable, and is a real improvement over a whole-app
 rebuild:
 
 - a type change scoped to its declaring BOUNDARY, which already works and needs
-  no build saving — it is about not restarting unrelated state;
+  no build saving, it is about not restarting unrelated state;
 - a VALUE carried across a change that does NOT alter the type's shape, e.g. a
   pure function or a changed implementation behind an unchanged signature. There
   the old object is still the right type, the value carries trivially, and no
   build is needed. That is a genuinely cheap case, and the current machinery is
-  already correct for it — it is simply not reachable because a type change is
+  already correct for it, it is simply not reachable because a type change is
   the only trigger wired.
 
 So the next piece is a TRIGGER, not an executor: apply the same liveness-and-
 migration decision to a changed IMPLEMENTATION of an unchanged shape, where
 `decideRecord` over two identical shapes says `Carried` and there is nothing to
-fabricate. That is a smaller, honest, and genuinely useful win — and it is
+fabricate. That is a smaller, honest, and genuinely useful win, and it is
 reachable with what is already built and tested.
 feat(reload): carry a value across a changed IMPLEMENTATION of an unchanged shape
 
@@ -1175,32 +1175,32 @@ Measured in a live SageFs session:
     E2E is a real TickerStateV2 = true
 
 Then run against the **shipped artifact** rather than a test fixture, which is
-the more honest target — it is what a consumer actually gets:
+the more honest target, it is what a consumer actually gets:
 
     E2E ShapeMigration type = true
     E2E DeclareWithSubject = true
 
 The artifact run is also a workaround, and the reason is worth recording because
 it cost a session. A `SageFs.Core` session loads a **shadow copy** of Core taken
-when the session started, so a module added since will not resolve there — not
+when the session started, so a module added since will not resolve there, not
 even after `hard_reset_fsi_session rebuild=true`, which re-adopts the shadow
 rather than rebuilding it. Measured:
 
     built  SageFs.Core/bin/Release/net11.0/SageFs.Core.dll   mtime=02:28:55
     shadow /tmp/sagefs-shadow-14965-69cfc769/SageFs.Core.dll  mtime=16:58:29
 
-A day stale. The tell is the assembly's own `Location` — when it points into
+A day stale. The tell is the assembly's own `Location`, when it points into
 `/tmp/sagefs-shadow-...`, the session cannot see new Core and no amount of
 rebuilding in place will change that; a fresh session is the fix. Comparing
 those two timestamps is the one-command version of the diagnosis.
 
-## The premise behind that conclusion was WRONG — and testing it is what proved it
+## The premise behind that conclusion was WRONG: and testing it is what proved it
 
 The previous commit established that a TYPE change cannot migrate cheaply: a
 `Migrate` plan skips the build, so the new type has no compiled form, so there
 is nothing to call a constructor on. Building an executor for that would mean
 either paying the build the action exists to avoid, or passing
-`Unchecked.defaultof` into a live value and calling it carried — the "silently
+`Unchecked.defaultof` into a live value and calling it carried, the "silently
 wrong value" this whole design refuses.
 
 **That premise did not survive being tested.** A patched type is compiled by the
@@ -1225,7 +1225,7 @@ built on it rather than on the retreat described above.
 None of these are obvious, and each was a bug before it was a fact:
 
 1. **The constructor takes one argument per field.** So a migration is a
-   constructor call, not a setter-based rewrite — a record's properties are
+   constructor call, not a setter-based rewrite, a record's properties are
    read-only to reflection, so copying field-by-field is not available at all.
 2. **Constructor parameters are lower-cased (`id`, `name`) while fields are
    Pascal-cased (`Id`, `Name`).** Name-matching must be case-insensitive.
@@ -1236,7 +1236,7 @@ None of these are obvious, and each was a bug before it was a fact:
 
 The bug that cost the most rounds was neither of those. `defaultOf` had a
 `| None -> box 0` fallback, so an added `string` field received an `Int32` and
-the constructor rejected it — reported as `NoConstructor`, which named the wrong
+the constructor rejected it, reported as `NoConstructor`, which named the wrong
 cause entirely. Reporting the given and wanted types is what located it:
 
 ```
@@ -1253,13 +1253,13 @@ type, because inventing a value is worse than rebuilding.
 The `Map` case above is the real limit: a migration can only supply a field the
 edit added when that field's type has a genuine default. For an F# `Map` or a
 `list`-bearing record, the safe answer is a rebuild. So the reachable win is
-"an added field of a defaultable kind carries across; anything else rebuilds" —
+"an added field of a defaultable kind carries across; anything else rebuilds",
 which is a real and common case, not a retreat, but it is not every case.
 
 ## What makes it reachable
 
-The decision machinery was already correct for it — `decideRecord` over two
-identical shapes answers `Carried` — and `Holder.Cell` already exposes
+The decision machinery was already correct for it, `decideRecord` over two
+identical shapes answers `Carried`, and `Holder.Cell` already exposes
 `Value: 'a ref`, so the write is a single assignment. The only thing missing was
 a TRIGGER: today the wired trigger is `TypeChanged`, and an implementation-only
 change is not a type change.
@@ -1269,12 +1269,12 @@ the safety direction is unchanged by construction: `decideRecord` refuses an
 added-and-undefaulted field, an undecidable kind, or a changed kind, so only a
 genuinely unchanged shape reaches `Carried`, and everything else still pays the
 build.
-feat(reload): the reachable win — carry a value across an implementation change
+feat(reload): the reachable win, carry a value across an implementation change
 
 The last gap, closed honestly. The trigger is now a CHANGED IMPLEMENTATION, not
 a changed type.
 
-`ValueChanged` — a `let` whose body moved — leaves the object's LAYOUT untouched,
+`ValueChanged`, a `let` whose body moved, leaves the object's LAYOUT untouched,
 so the live value is already the new value. No new type, no constructor, nothing
 to fabricate. Proven on the real functions before building:
 
@@ -1289,7 +1289,7 @@ the correction is above: a patched type is compiled at runtime, so it can be
 constructed, and `ShapeMigration.migrate` does it.
 
 The route is different because a record's properties are read-only to
-reflection — there is no setter to write a changed field through. So:
+reflection, there is no setter to write a changed field through. So:
 
 - an **implementation** change is carried by a single `ref` write, because the
   old object already *is* the new type;
@@ -1317,7 +1317,7 @@ specifically BECAUSE the trigger was widened.
 
 ## What a user actually gets
 
-- a type change whose live value carries across, with **no build** — the
+- a type change whose live value carries across, with **no build**: the
   measured limit is whether a field the edit ADDED has an honest default, and
   when it does not the answer is a rebuild that says so;
 - a type change scoped to its declaring boundary, whether or not it carries;
@@ -1351,7 +1351,7 @@ back so both see the same load:
 | earlier | 36 passed, **1 failed** | (11-tier gate) **1 failed** |
 
 BASELINE **4 pass / 1 fail**. HEAD **2 pass / 2 fail**. Neither side is
-deterministic, and the side WITHOUT the change fails it too — so the honest
+deterministic, and the side WITHOUT the change fails it too, so the honest
 verdict is *flaky, pre-existing, not caused by 67af6421*. Reporting 2/4 as a
 regression, or 4/5 as a flake, would both be rounding a 1-in-5 event into a
 story.
@@ -1365,7 +1365,7 @@ pins on a `scroll` EVENT firing:
 
 The test drives the scroll from the page with `el.scrollTop = el.scrollHeight`
 and then waits a fixed 400 ms. Whether the browser has dispatched and the
-Datastar effect has re-evaluated by then is a scheduling race — and a slow
+Datastar effect has re-evaluated by then is a scheduling race, and a slow
 machine makes the pill still visible, which is exactly the observed failure. The
 fix is to wait for the pill to hide rather than for a wall-clock duration, but
 that is dashboard work, unrelated to this series, and it is not being changed
@@ -1427,7 +1427,7 @@ worker really had nothing to run. Running the worker by hand with its stderr
 captured showed why:
 
     Loaded 0 project(s).
-    Loader returned 0 projects — attempting manual fsproj parse
+    Loader returned 0 projects, attempting manual fsproj parse
 
 An Interactive worker and a HotReload worker behaved identically, line for line
 apart from pids and timings. The project loader itself was coming back empty.

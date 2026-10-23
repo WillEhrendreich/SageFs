@@ -1,6 +1,6 @@
-# SessionLifecycle — Informal Specification
+# SessionLifecycle: Informal Specification
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Target
 
@@ -15,10 +15,10 @@
 SageFs maintains a live F# Interactive session. The session can be warming up,
 active-and-idle, active-and-evaluating, or faulted. Two types model this:
 
-- `SessionPhase` — the **rich internal representation**, making impossible states
+- `SessionPhase`, the **rich internal representation**, making impossible states
   unrepresentable. Carries domain data only where meaningful (e.g., `AppState` is
   only present when `Active`).
-- `SessionState` — the **external/legacy representation**, exposed to MCP clients
+- `SessionState`, the **external/legacy representation**, exposed to MCP clients
   and the dashboard. Has an extra `Uninitialized` value not reachable from `SessionPhase`.
 
 ---
@@ -67,7 +67,7 @@ let toSessionState = function
 ```
 
 **Postconditions**:
-- Result is never `Uninitialized` — `SessionPhase` has no Uninitialized case.
+- Result is never `Uninitialized`, `SessionPhase` has no Uninitialized case.
 - Result is `Ready` if and only if the phase is `Active _ Idle`.
 - Result is `Evaluating` if and only if the phase is `Active _ Evaluating`.
 - Result is `Faulted` if and only if the phase is `Faulted`.
@@ -76,7 +76,7 @@ let toSessionState = function
 
 **Notable gap**: `SessionState.Uninitialized` is unreachable from any `SessionPhase`.
 This means external consumers may see an `Uninitialized` state only before the first
-`SessionPhase` is published — it is never produced by `toSessionState`.
+`SessionPhase` is published, it is never produced by `toSessionState`.
 
 ### `SessionPhase.tryAppState : SessionPhase → AppState option`
 ```fsharp
@@ -100,7 +100,7 @@ let label = function
   | Faulted -> "Faulted"
 ```
 
-**Postconditions**: `label` is injective — different states produce different strings.
+**Postconditions**: `label` is injective, different states produce different strings.
 
 ---
 
@@ -122,10 +122,10 @@ These functions are pure and total; no preconditions are required.
 
 ## Edge Cases
 
-- `Initializing (None)` — no status message; maps to `WarmingUp` regardless.
-- `Initializing (Some msg)` — with message; still maps to `WarmingUp`.
-- `Active (st, Idle)` — any `AppState` value; maps to `Ready`.
-- `Active (st, Evaluating)` — any `AppState` value; maps to `Evaluating`.
+- `Initializing (None)`, no status message; maps to `WarmingUp` regardless.
+- `Initializing (Some msg)`, with message; still maps to `WarmingUp`.
+- `Active (st, Idle)`, any `AppState` value; maps to `Ready`.
+- `Active (st, Evaluating)`, any `AppState` value; maps to `Evaluating`.
 
 ---
 

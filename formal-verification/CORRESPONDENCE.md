@@ -1,6 +1,6 @@
 # Formal Verification Correspondence
 
-> 🔬 Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.
+> 🔬 Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.
 
 > ⚠️ **HAND-MAINTAINED, DRIFT-PRONE, NOT MECHANICALLY CHECKED (2026-09-14).** This
 > table is a manual mapping pinned to commit `bb95c100` (2026-05-11); no test or
@@ -32,7 +32,7 @@ known divergence so that the validity of the associated proofs can be assessed h
 | `RingBuffer α` | `RingBuffer<'T>` | `SageFs.Core/RingBuffer.fs` | **Abstraction** | F# is a mutable record; Lean is immutable. Field names differ (see below). |
 | `RingBuffer.items` | `Items : 'T array` | `RingBuffer.fs` | **Exact** | Both are fixed-capacity arrays. |
 | `RingBuffer.head` | `Head : int` | `RingBuffer.fs` | **Approximation** | F# uses `int` (signed, 64-bit on 64-bit targets); Lean uses `Nat`. Negative values are impossible by invariant, so the invariant holds on both representations. |
-| `RingBuffer.count` | `Count : int` | `RingBuffer.fs` | **Approximation** | Same as above — F# `int`, Lean `Nat`. |
+| `RingBuffer.count` | `Count : int` | `RingBuffer.fs` | **Approximation** | Same as above: F# `int`, Lean `Nat`. |
 | `RingBuffer.total` | `Total : int` | `RingBuffer.fs` | **Approximation** | Same as above. |
 | `WellFormed buf` | *(invariant, not explicit)* | `RingBuffer.fs` | **Abstraction** | The Lean `WellFormed` predicate makes implicit F# invariants (`head < capacity`, `count ≤ capacity`, `count ≤ total`) explicit and proved. |
 
@@ -48,21 +48,21 @@ known divergence so that the validity of the associated proofs can be assessed h
 
 ### Known divergences
 
-#### D1 — `int` vs `Nat` for head/count/total
+#### D1, `int` vs `Nat` for head/count/total
 
 - **Lean model**: `head`, `count`, `total` are `Nat` (non-negative natural numbers).
 - **F# source**: these fields are `int` (signed 64-bit integers on 64-bit systems).
 - **Impact**: The `WellFormed` predicate ensures these values are non-negative at all times, so theorems proved under `WellFormed` remain valid for the F# implementation. Overflow at `Int.MaxValue` (≈ 9.2 × 10¹⁸ pushes) is not modelled.
-- **Proof impact**: All theorems assume `WellFormed` — this divergence does not affect their validity under normal usage.
+- **Proof impact**: All theorems assume `WellFormed`, this divergence does not affect their validity under normal usage.
 
-#### D2 — Immutable vs mutable array
+#### D2: Immutable vs mutable array
 
 - **Lean model**: `rbPush` produces a new `RingBuffer` with a new array (via `Array.set`).
 - **F# source**: `push` mutates the existing `Items` array in place, then returns a new record with updated `Head`, `Count`, `Total`.
 - **Impact**: The Lean model captures the pure input-to-output mapping. Proofs about what `tryGet` returns after `push` remain valid because the observable state (contents at each age slot) is identical.
 - **Proof impact**: None for the proved theorems (all are about values, not identity/sharing).
 
-#### D3 — `rbClear` total handling ✅ RESOLVED
+#### D3, `rbClear` total handling ✅ RESOLVED
 
 - **Previous state**: an earlier version of `rbClear` reset `total` to 0, diverging from F#.
 - **Current state**: `rbClear` preserves `total` (`total := buf.total`). The F# `clear` also
@@ -70,13 +70,13 @@ known divergence so that the validity of the associated proofs can be assessed h
 - **`clear_total` theorem**: correctly states `(rbClear default buf).total = buf.total`.
 - **Proof impact**: No inaccuracy remains. All theorems involving `rbClear` are valid vs F#.
 
-#### D4 — `rbCreate` preserves item contents
+#### D4, `rbCreate` preserves item contents
 
 - **Lean model**: `rbCreate default cap h` fills the array with `default` via `Array.replicate`.
 - **F# source**: `create capacity` initialises items to `Array.zeroCreate` (all `Unchecked.defaultof<'T>`).
 - **Impact**: Both produce an array full of a "default" element. For reference types the F# value is `null`; in Lean the caller supplies the default. This is a minor abstraction gap, not a correctness issue.
 
-#### D5 — No error handling for `push` when `cap = 0`
+#### D5: No error handling for `push` when `cap = 0`
 
 - **Lean model**: The `WellFormed` predicate requires `0 < items.size`, so `rbPush` is never called on a zero-capacity buffer. The function would panic on such input.
 - **F# source**: Presumably undefined / exception for `capacity = 0`.
@@ -104,7 +104,7 @@ All theorems below are proved by `lake build` with Lean 4.30.0-rc2 (no `sorry`),
 | `count_nonneg` | count ≥ 0 (trivial for Nat) | ✅ Yes (trivial) |
 | `create_total_zero` | new buffer has total 0 | ✅ Yes |
 | `push_total` | `rbPush` increments total | ✅ Yes |
-| `clear_total` | `rbClear` preserves total | ✅ Yes — F# also preserves `Total` (D3 resolved) |
+| `clear_total` | `rbClear` preserves total | ✅ Yes: F# also preserves `Total` (D3 resolved) |
 | `total_ge_count` | total ≥ count | ✅ Yes |
 | `evictedCount_eq` | evicted = total - count | ✅ Yes |
 | `evictedCount_nonneg` | evicted ≥ 0 | ✅ Yes |
@@ -116,7 +116,7 @@ All theorems below are proved by `lake build` with Lean 4.30.0-rc2 (no `sorry`),
 
 | Theorem | Reason | Status |
 |---|---|---|
-| `push_aging` | Requires modular arithmetic lemma over `%` not available without Mathlib | `sorry` — deferred to next run |
+| `push_aging` | Requires modular arithmetic lemma over `%` not available without Mathlib | `sorry`, deferred to next run |
 
 ---
 
@@ -148,13 +148,13 @@ All theorems below are proved by `lake build` with Lean 4.30.0-rc2 (no `sorry`),
 
 ### Known divergences
 
-#### D1 — `resSequence` accumulator order
+#### D1, `resSequence` accumulator order
 
 - **Lean**: `go acc xs` accumulates in reverse; `List.reverse acc` at the end restores order.
 - **F#**: `go acc xs` accumulates in reverse; `List.rev acc` at the end restores order.
 - **Impact**: The two are semantically identical. The Lean accumulator proof of `resSequence_length` requires induction on the accumulator state, which is deferred as a `sorry`.
 
-#### D2 — `resPartition` quadratic append
+#### D2, `resPartition` quadratic append
 
 - **Lean**: uses `foldl` with `acc.1 ++ [v]` (quadratic list append).
 - **F#**: accumulates with mutable `oks`/`errs` lists, iterates `List.rev results` for order.
@@ -212,13 +212,13 @@ No runnable correspondence test harness exists yet. Manual review confirms seman
 
 ### Known divergences
 
-#### D1 — Time abstracted as `Bool`
+#### D1: Time abstracted as `Bool`
 
 - **Lean**: `state.windowExpired : Bool` directly encodes whether the reset window has elapsed.
 - **F#**: `state.WindowStart : DateTime option` is compared against `DateTime.UtcNow + ResetWindow`.
-- **Impact**: Lean proofs about `rbDecide` hold for all `windowExpired` values. In the F# implementation, the value of `windowExpired` depends on the wall clock — a source of non-determinism not captured by the Lean model. Proofs about whether restarting happens given a window-expired state remain valid; proofs cannot say *when* the window expires.
+- **Impact**: Lean proofs about `rbDecide` hold for all `windowExpired` values. In the F# implementation, the value of `windowExpired` depends on the wall clock, a source of non-determinism not captured by the Lean model. Proofs about whether restarting happens given a window-expired state remain valid; proofs cannot say *when* the window expires.
 
-#### D2 — Error payload omitted
+#### D2: Error payload omitted
 
 - **Lean**: `RPDecision.giveUp` carries no error value.
 - **F#**: `Decision.GiveUp of SageFsError` carries an error.
@@ -265,7 +265,7 @@ No runnable test harness. Manual code review confirms all proved theorems reflec
 
 ### Known divergences
 
-#### D1 — Jitter omitted
+#### D1: Jitter omitted
 
 - **Lean**: `baseDelay` is deterministic (`config.baseDelayMs * (attempt+1)`).
 - **F#**: `backoffMs` adds ±50% random jitter via `System.Random.Shared`.
@@ -276,7 +276,7 @@ No runnable test harness. Manual code review confirms all proved theorems reflec
   for the F# implementation. The theorem is about the abstract model.
 - **Significance**: Jitter is a correctness concern only if the tests check exact delay values. For property-based tests (delay ∈ [base/2, 3*base/2]), the Lean proofs provide a useful floor guarantee.
 
-#### D2 — Exception payload omitted
+#### D2: Exception payload omitted
 
 - **Lean**: `isRetryable : Bool`; no exception value.
 - **F#**: `isRetryable : exn → bool`; exception drives the decision.
@@ -290,7 +290,7 @@ No runnable test harness. Manual code review confirms all proved theorems reflec
 | `rtDecide_retry_when_available` | Retryable + attempts left → RetryAfter | ✅ Yes (ignoring jitter) |
 | `rtDecide_giveup_exhausted` | Retryable + no attempts left → GiveUp | ✅ Yes |
 | `baseDelay_zero` | attempt 0 → base delay | ✅ Yes (jitter-free model) |
-| `baseDelay_formula` | delay = base * (attempt+1) | ⚠️ Approximate — jitter-free |
+| `baseDelay_formula` | delay = base * (attempt+1) | ⚠️ Approximate: jitter-free |
 | `baseDelay_mono` | delay is monotone in attempt | ✅ Yes (for jitter-free base) |
 | `baseDelay_pos` | delay > 0 when base > 0 | ✅ Yes |
 | `rtDecide_zero_retries` | maxRetries=0 → always GiveUp | ✅ Yes |
@@ -301,7 +301,7 @@ No runnable test harness. Manual code review confirms all proved theorems reflec
 
 ### Validation evidence
 
-No runnable test harness. Jitter divergence is the key limitation — formally noted above.
+No runnable test harness. Jitter divergence is the key limitation, formally noted above.
 
 ---
 
@@ -325,14 +325,14 @@ No runnable test harness. Jitter divergence is the key limitation — formally n
 
 ### Known divergences
 
-#### D1 — `checkToolAvailability` has no direct F# counterpart
+#### D1, `checkToolAvailability` has no direct F# counterpart
 
 - **Lean**: `checkToolAvailability` is a derived helper introduced in the Lean spec.
 - **F#**: callers use `availableTools` and filter/check membership themselves.
 - **Impact**: All theorems about `checkToolAvailability` are derivable from theorems
-  about `availableTools`. No F# function is incorrectly modelled — the helper is additive.
+  about `availableTools`. No F# function is incorrectly modelled, the helper is additive.
 
-#### D2 — `hard_reset_fsi_session` vs `reset_fsi_session`
+#### D2, `hard_reset_fsi_session` vs `reset_fsi_session`
 
 - The F# `Faulted` state includes both `reset_fsi_session` and `hard_reset_fsi_session`
   in its tool list. The Lean model includes both. Verified as identical.
@@ -371,8 +371,8 @@ All 19 theorems are proved by `decide` (fully enumerated over the finite `Sessio
 
 | Target | Lean definition | F# function | Issue | Severity |
 |---|---|---|---|---|
-| `RingBuffer.rbClear` | Preserves `total` ✅ | F# `clear` preserves `Total` | D3 resolved — no divergence | None |
-| `RetryPolicy.baseDelay` | Jitter-free formula | F# adds ±50% random jitter | See D1 in RetryPolicy section | Low — `baseDelay_formula` is an approximation |
+| `RingBuffer.rbClear` | Preserves `total` ✅ | F# `clear` preserves `Total` | D3 resolved: no divergence | None |
+| `RetryPolicy.baseDelay` | Jitter-free formula | F# adds ±50% random jitter | See D1 in RetryPolicy section | Low, `baseDelay_formula` is an approximation |
 
 ---
 
@@ -385,7 +385,7 @@ All 19 theorems are proved by `decide` (fully enumerated over the finite `Sessio
 
 | Lean name | F# name | F# file + location | Correspondence | Notes |
 |---|---|---|---|---|
-| `HRS` | `HotReloadState.T` | `SageFs.Core/HotReloadState.fs` | **Abstraction** | F# uses `Set<string>` (a balanced BST giving O(log n) membership and uniqueness by construction). Lean models this as `List String` with idempotent `watch` (no-op if already present) to enforce absence of duplicates. Ordering is not preserved — only membership matters for the verified properties. |
+| `HRS` | `HotReloadState.T` | `SageFs.Core/HotReloadState.fs` | **Abstraction** | F# uses `Set<string>` (a balanced BST giving O(log n) membership and uniqueness by construction). Lean models this as `List String` with idempotent `watch` (no-op if already present) to enforce absence of duplicates. Ordering is not preserved, only membership matters for the verified properties. |
 | `HRS.watched` | `T.Watched : Set<string>` | `SageFs.Core/HotReloadState.fs` | **Approximation** | `Set<string>` has no duplicates and has a defined ordering; `List String` may have duplicates only in states produced by `unwatch` after prior direct list manipulation (impossible via the public API). All public operations preserve no-duplicate invariant. |
 
 ### Function correspondence
@@ -400,7 +400,7 @@ All 19 theorems are proved by `decide` (fully enumerated over the finite `Sessio
 | `watchMany ps s` | `HotReloadState.watchMany ps s` | `HotReloadState.fs` | **Exact** | Left fold of `watch` over `ps`. Identical algorithm. |
 | `unwatchAll` | `HotReloadState.unwatchAll` | `HotReloadState.fs` | **Exact** | Returns `empty`. |
 | `watchAll ps` | `HotReloadState.watchAll ps` | `HotReloadState.fs` | **Exact** | Ignores prior state, folds `watch` over `ps` from `empty`. |
-| `watchedCount s` | `HotReloadState.watchedCount s` | `HotReloadState.fs` | **Approximation** | F# uses `Set.count` (O(n) walk); Lean uses `List.length`. For lists without duplicates (maintained by the public API) these are equal. With duplicates, Lean would overcount — but the public API never creates duplicates. |
+| `watchedCount s` | `HotReloadState.watchedCount s` | `HotReloadState.fs` | **Approximation** | F# uses `Set.count` (O(n) walk); Lean uses `List.length`. For lists without duplicates (maintained by the public API) these are equal. With duplicates, Lean would overcount, but the public API never creates duplicates. |
 | `dirOf p` | *(path helper)* | `HotReloadState.fs` | **Approximation** | Lean model: split on `"/"`, drop last component, rejoin. F# uses `System.IO.Path.GetDirectoryName` (handles Windows `\` separators, drive letters, UNC paths, etc.). The Lean model is correct only for Unix-style `/`-separated paths. |
 | `watchByDirectory dir allPaths s` | `HotReloadState.watchByDirectory` | `HotReloadState.fs` | **Abstraction** | Lean matches on `dirOf p == dir ∨ dirOf p.startsWith (dir ++ "/")`. F# uses the same logic but with `System.IO.Path`-based helpers. |
 | `unwatchByDirectory dir s` | `HotReloadState.unwatchByDirectory` | `HotReloadState.fs` | **Abstraction** | Same abstraction as `watchByDirectory`. |
@@ -436,20 +436,20 @@ All 19 theorems are proved by `decide` (fully enumerated over the finite `Sessio
 
 ### Known divergences
 
-#### D1 — `Set<string>` vs `List String`
+#### D1, `Set<string>` vs `List String`
 
 - **Lean model**: `watched : List String`. Membership is O(n); no structural ordering.
 - **F# source**: `Watched : Set<string>`. Membership is O(log n) in an AVL tree; elements are ordered and unique.
-- **Impact on proofs**: All membership theorems hold regardless of representation. `watchedCount` theorems assume no duplicates in `watched`, which holds for all states reachable via the public API — but is not explicitly stated as an invariant in the current Lean model.
+- **Impact on proofs**: All membership theorems hold regardless of representation. `watchedCount` theorems assume no duplicates in `watched`, which holds for all states reachable via the public API, but is not explicitly stated as an invariant in the current Lean model.
 - **Recommendation**: Add a `NoDuplicates s` predicate and prove it is preserved by all operations. This would make the `watchedCount` theorems unconditionally valid.
 
-#### D2 — `normalize` is modelled as identity
+#### D2, `normalize` is modelled as identity
 
 - **Lean model**: All path comparisons use literal string equality.
 - **F# source**: `normalize` canonicalises paths (case folding on Windows, resolving `.`/`..` components, etc.).
 - **Impact**: Theorems about paths with different representations for the same logical path (e.g., `/foo/./bar` vs `/foo/bar`) are not captured. All theorems are correct for already-normalised paths.
 
-#### D3 — `dirOf` vs `System.IO.Path.GetDirectoryName`
+#### D3, `dirOf` vs `System.IO.Path.GetDirectoryName`
 
 - **Lean model**: Splits on `"/"` only.
 - **F# source**: Uses .NET's `Path.GetDirectoryName`, which handles `\` on Windows, drive letters, and UNC paths.
@@ -487,21 +487,21 @@ The Lean model has been manually cross-referenced against `SageFs.Core/HotReload
 
 ### Known divergences
 
-#### D1 — `ElapsedMs` omitted
+#### D1, `ElapsedMs` omitted
 
 - **Lean model**: `EPStage` and `EPTracked` have no timing field.
 - **F# source**: Both `CompletedStage` and `TrackedResult` carry `ElapsedMs : float<ms>`.
 - **Impact**: All proved theorems concern structural trace shape (stage counts, order, result propagation), not timing values. No theorem is invalidated by this omission.
 - **Proof impact**: None.
 
-#### D2 — Error payload abstracted to `Unit`
+#### D2: Error payload abstracted to `Unit`
 
 - **Lean model**: `EPTracked.value : Except Unit α`; error carries no information.
 - **F# source**: `TrackedResult.Value : Result<'T, SageFsError>`; errors carry typed error data.
 - **Impact**: Theorems about *which* error is propagated are not provable in the current model. Theorems about *structural* error propagation (an error short-circuits; the stage is recorded as `failed`) remain valid because the error payload is ignored.
 - **Proof impact**: Structural theorems are unaffected.
 
-#### D3 — `stage` and `stageOk` not modelled
+#### D3, `stage` and `stageOk` not modelled
 
 - **Lean model**: Proofs work directly with `epBind` and `epReturn`.
 - **F# source**: `EvalPipeline.stage` and `EvalPipeline.stageOk` wrap `IO` timing. They are pipeline-entry points, not part of the pure CE semantics.
@@ -556,12 +556,12 @@ line by line.
 
 ### Known divergences
 
-#### D1 — `α` abstraction for AppState
+#### D1, `α` abstraction for AppState
 
 - **Lean model**: `Phase α` uses a type variable `α` for the session content.
 - **F# source**: `SessionPhase.Active` carries a concrete `AppState` record.
 - **Impact**: Theorems about AppState field values (e.g., loaded solutions, open files) are not provable in the current model. Lifecycle state-machine theorems are fully valid.
-- **Proof impact**: None for proved theorems — all are about phase/state structure, not AppState fields.
+- **Proof impact**: None for proved theorems: all are about phase/state structure, not AppState fields.
 
 ### Theorems proved (all without `sorry`)
 
@@ -613,14 +613,14 @@ has been manually cross-referenced against `SageFs.Core/AppState.fs` (lines
 
 ### Known divergences
 
-#### D1 — `Map<string, string>` vs `List (String × String)`
+#### D1, `Map<string, string>` vs `List (String × String)`
 
-- **Lean model**: `withOverrides` takes `overrides : List (String × String)` — an association list.
+- **Lean model**: `withOverrides` takes `overrides : List (String × String)`, an association list.
 - **F# source**: `Theme.withOverrides` takes `Map<string, string>` (a sorted, functional map).
 - **Impact**: Both have first-match semantics for lookups. `Map` has O(log n) lookups; the Lean association list is O(n). The observable input/output semantics are identical for any valid override map (no duplicate keys). Theorems about `withOverrides` correctness are unaffected.
 - **Proof impact**: None for proved theorems.
 
-#### D2 — Field name casing
+#### D2: Field name casing
 
 - **Lean model**: `camelCase` fields (e.g. `fgDefault`, `bgPanel`).
 - **F# source**: `PascalCase` fields (e.g. `FgDefault`, `BgPanel`).
@@ -711,13 +711,13 @@ transitions are permitted in the SageFs session actor, and proves safety invaria
 
 ### Known divergences
 
-#### D1 — Concurrency and cancellation not modelled
+#### D1: Concurrency and cancellation not modelled
 
 - **Lean model**: `validTransition` is a pure inductive relation; no concurrency.
 - **F# source**: The eval actor uses `MailboxProcessor`, `CancellationTokenSource`, thread joins, and `CancelEval` messages.
 - **Impact**: Race conditions, cancellation interleaving, and timeout edge cases are not captured. The transition relation models the *intended* sequential behavior.
 
-#### D2 — `cancelEval` path collapsed into `evalToInit`
+#### D2, `cancelEval` path collapsed into `evalToInit`
 
 - **Lean model**: `evalToInit` represents any hard reset during evaluation.
 - **F# source**: `CancelEval` can interrupt a running eval and restart the session.
@@ -764,13 +764,13 @@ message handlers (approximately lines 984–1350).
 
 ### Known divergences
 
-#### D1 — Async `Task<_>` modelled as pure function
+#### D1: Async `Task<_>` modelled as pure function
 
 - **Lean model**: `smartResetLogic soft hard` is a pure function of two synchronous results.
 - **F# source**: `execute` returns `Task<Outcome>`, awaiting two async operations sequentially.
 - **Impact**: Race conditions, cancellation, and timeout are not modelled. The pure logic of the escalation decision is fully captured.
 
-#### D2 — `SageFsError` abstracted as `String`
+#### D2, `SageFsError` abstracted as `String`
 
 - **Lean model**: Both error cases use `String`.
 - **F# source**: Errors are `SageFsError` (a structured union type with more context).
@@ -808,13 +808,13 @@ are structurally identical in both F# and Lean.
 
 | Lean name | F# name | F# file + location | Correspondence | Notes |
 |---|---|---|---|---|
-| `SseBuffer` | `Buffer` (inner record of `SseReplayBuffer`) | `SageFs.Core/SseReplayBuffer.fs` | **Abstraction** | F# Buffer wraps a `RingBuffer<SequencedSseEvent>`; Lean abstracts to `(total, count, cap)` — the three fields that drive replay logic. Event content (`Payload`, `Timestamp`) is omitted. |
-| `SseWellFormed` | — (implicit invariant) | `SageFs.Core/SseReplayBuffer.fs` | **Abstraction** | Codifies `cap > 0`, `count ≤ cap`, and `count ≤ total` as a Lean Prop. |
-| `ReplayResult` | `ReplayResult` DU | `SageFs.Core/SseReplayBuffer.fs` | **Exact** | `Replayed n` / `GapDetected firstAvail` — same two cases; event list abstracted to count `n`. |
+| `SseBuffer` | `Buffer` (inner record of `SseReplayBuffer`) | `SageFs.Core/SseReplayBuffer.fs` | **Abstraction** | F# Buffer wraps a `RingBuffer<SequencedSseEvent>`; Lean abstracts to `(total, count, cap)`, the three fields that drive replay logic. Event content (`Payload`, `Timestamp`) is omitted. |
+| `SseWellFormed` |: (implicit invariant) | `SageFs.Core/SseReplayBuffer.fs` | **Abstraction** | Codifies `cap > 0`, `count ≤ cap`, and `count ≤ total` as a Lean Prop. |
+| `ReplayResult` | `ReplayResult` DU | `SageFs.Core/SseReplayBuffer.fs` | **Exact** | `Replayed n` / `GapDetected firstAvail`, same two cases; event list abstracted to count `n`. |
 | `sseCreate` | `SseReplayBuffer.create` | `SageFs.Core/SseReplayBuffer.fs` | **Exact** | Zero-initialised buffer; takes `cap` and positivity proof. |
 | `ssePush` | `SseReplayBuffer.push` | `SageFs.Core/SseReplayBuffer.fs` | **Abstraction** | F# mutates the inner `RingBuffer` and emits the event with `DateTimeOffset`; Lean returns `(seqId, newBuffer)` purely. |
 | `sseReplayFrom` | `SseReplayBuffer.replayFrom` | `SageFs.Core/SseReplayBuffer.fs` | **Exact** | The four-branch conditional is structurally identical. Event list is abstracted to count. |
-| `applyPushN` | — (reasoning helper) | — | **N/A** | Not in F#; used for inductive arguments about `n` pushes. |
+| `applyPushN` |: (reasoning helper) |: | **N/A** | Not in F#; used for inductive arguments about `n` pushes. |
 
 ### Known divergences
 
@@ -866,7 +866,7 @@ structurally identical in both F# and Lean. All 19 theorems verified by
 | Lean name | F# name | F# file + location | Correspondence | Notes |
 |---|---|---|---|---|
 | `Mode` | `TimeTravelMode` | `SageFs.Core/TimeTravel.fs` | **Exact** | Both have `Live` and `Viewing` (with age payload). Lean uses `Nat` for age; F# uses `int`. Age ≥ 1 invariant is made explicit in Lean. |
-| `TTState` | *(internal state record)* | `SageFs.Core/TimeTravel.fs` | **Abstraction** | Lean models only `mode`, `count` (number of recorded snapshots), and `capacity`. The underlying ring buffer array is not represented — only its logical count matters for mode transitions. |
+| `TTState` | *(internal state record)* | `SageFs.Core/TimeTravel.fs` | **Abstraction** | Lean models only `mode`, `count` (number of recorded snapshots), and `capacity`. The underlying ring buffer array is not represented, only its logical count matters for mode transitions. |
 | `WellFormed s` | *(implicit invariant)* | `SageFs.Core/TimeTravel.fs` | **Abstraction** | Explicit Lean predicate capturing: `count ≤ capacity`, viewing age ≥ 1. Made explicit in Lean; implicit by construction in F#. |
 | `isLive s` | *(pattern match on mode)* | `SageFs.Core/TimeTravel.fs` | **Exact** | `true` iff `s.mode = Mode.Live`. |
 | `viewingAge s` | *(pattern match on mode)* | `SageFs.Core/TimeTravel.fs` | **Exact** | Returns `some age` when Viewing, `none` when Live. |
@@ -883,14 +883,14 @@ structurally identical in both F# and Lean. All 19 theorems verified by
 
 ### Known divergences
 
-#### D1 — `int` vs `Nat` for age/count/capacity
+#### D1, `int` vs `Nat` for age/count/capacity
 
 - **Lean model**: `age`, `count`, `capacity` are `Nat` (non-negative natural numbers).
 - **F# source**: these values are `int` (signed 64-bit integers).
 - **Impact**: The `WellFormed` predicate ensures these values are non-negative. Arithmetic overflow at `Int.MaxValue` snapshots is not modelled; this is inconsequential in practice.
 - **Proof impact**: All theorems proved assuming `WellFormed` remain valid for the F# implementation under normal usage.
 
-#### D2 — Ring buffer contents not modelled
+#### D2: Ring buffer contents not modelled
 
 - **Lean model**: `TTState` does not contain the actual ring buffer array; only `count` is tracked.
 - **F# source**: The real implementation maintains a `RingBuffer<ModelSnapshot>` with actual snapshot data.
@@ -938,6 +938,6 @@ verified by `lake build` with Lean 4 v4.30.0-rc2 (0 sorry).
 The following targets have been identified in `TARGETS.md` but have no Lean files yet.
 Correspondence will be documented here as each target reaches Phase 4.
 
-- `KeyMap` (Phase 1 — research only)
-- `BinaryManifest` (Phase 1 — research only)
-- `StateMachine` (Phase 1 — research only)
+- `KeyMap` (Phase 1, research only)
+- `BinaryManifest` (Phase 1, research only)
+- `StateMachine` (Phase 1, research only)

@@ -1,6 +1,6 @@
-# SageFs — FV Target List
+# SageFs: FV Target List
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
 - **Date**: 2026-05-11 09:41 UTC
@@ -57,15 +57,15 @@
 | `lean/FVSquad/SseReplayBuffer.lean` | 19 | 0 | 5 ✅ |
 | `lean/FVSquad/FsiRewrite.lean` | 17 | 0 | 5 ✅ |
 | `lean/FVSquad/TimeTravel.lean` | 30 | 0 | 5 ✅ |
-| **Total** | **283** | **0** | — |
+| **Total** | **283** | **0** |: |
 
 ## Open Issues / PRs
 
-- Task 4+5 (TimeTravel): ✅ DONE this run — 30 theorems, 0 sorry (run 25661826548)
-- Task 6 (Correspondence): ✅ DONE this run — TimeTravel section added to CORRESPONDENCE.md
-- Task 8 (Correspondence): No runnable test harnesses yet — HIGH PRIORITY
-- Task 7 (Critique): ✅ DONE — CRITIQUE.md created
-- Task 9 (CI): ✅ DONE — lean-ci.yml created
-- Task 4+5 (SageFsError): ✅ DONE this run — 26 theorems, 0 sorry
+- Task 4+5 (TimeTravel): ✅ DONE this run: 30 theorems, 0 sorry (run 25661826548)
+- Task 6 (Correspondence): ✅ DONE this run: TimeTravel section added to CORRESPONDENCE.md
+- Task 8 (Correspondence): No runnable test harnesses yet: HIGH PRIORITY
+- Task 7 (Critique): ✅ DONE: CRITIQUE.md created
+- Task 9 (CI): ✅ DONE: lean-ci.yml created
+- Task 4+5 (SageFsError): ✅ DONE this run: 26 theorems, 0 sorry
 
 

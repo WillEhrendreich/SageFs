@@ -9,7 +9,7 @@ not in a test tier:
     ── STAGE #5 vscode extension compile finished. 162ms. ──
 
 162 ms is a process that never started, not a compile that failed. Stages 0-4 all
-passed, including `build samples for integration suites` — the stage the
+passed, including `build samples for integration suites`, the stage the
 clean-checkout build fix repaired.
 
 ## Measured

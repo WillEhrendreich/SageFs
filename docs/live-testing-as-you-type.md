@@ -1,4 +1,4 @@
-# As-You-Type Live Testing — Architecture & Design
+# As-You-Type Live Testing: Architecture & Design
 
 > **Status note**: This document is partly historical, and I'm leaving it that way on
 > purpose. It explains *why* the design looks the way it does, even where the shipped

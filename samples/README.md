@@ -1,7 +1,7 @@
 # SageFs Samples
 
 Learn F# interactively with SageFs! Each sample is a proper .NET project
-you can open, build, and run — or use SageFs for instant inline feedback.
+you can open, build, and run, or use SageFs for instant inline feedback.
 
 ## Quick Start
 
@@ -17,9 +17,9 @@ sagefs
 
 ## Sample Projects
 
-### 🧘 [F# Koans](from-koans/) — Learn F# from Scratch
+### 🧘 [F# Koans](from-koans/): Learn F# from Scratch
 
-22 progressive exercises teaching F# fundamentals — from `let` bindings
+22 progressive exercises teaching F# fundamentals, from `let` bindings
 to discriminated unions and data pipelines. Adapted from
 [FSharpKoans](https://github.com/ChrisMarinos/FSharpKoans) for SageFs.
 
@@ -27,7 +27,7 @@ to discriminated unions and data pipelines. Adapted from
 from-koans/SageFs.Samples.Koans/     162 tests
 ```
 
-### 🌉 Language Bridges — Coming from Another Language?
+### 🌉 Language Bridges: Coming from Another Language?
 
 Each bridge shows F# equivalents for patterns you already know.
 Pick the one that matches your background:
@@ -41,7 +41,7 @@ from-rust/SageFs.Samples.FromRust/              18 tests
 from-jupyter/SageFs.Samples.FromJupyter/        12 tests
 ```
 
-### 🎮 [Demos](demos/) — Real Applications
+### 🎮 [Demos](demos/): Real Applications
 
 Working applications demonstrating SageFs capabilities:
 
@@ -75,7 +75,7 @@ With SageFs, you get:
 - ✓/✗ gutter markers next to each test
 - Alt+Enter on any expression for inline results
 - Live feedback as you edit. On my machine, with the small FromCSharp sample, the verdict on the edited function's test arrives about 0.7 s after the edit (see [how live testing works](../docs/how-live-testing-works.md))
-- No terminal scrolling — results appear in your editor
+- No terminal scrolling: results appear in your editor
 
 ### Option 3: dotnet test (CI integration)
 
@@ -95,7 +95,7 @@ They work as standalone SageFs exercises:
 1. Open any `.fsx` file in VS Code or Neovim
 2. Alt+Enter expressions to see results inline
 3. Fill in `__` blanks to make tests pass
-4. Save — SageFs shows ✓/✗ gutter markers
+4. Save: SageFs shows ✓/✗ gutter markers
 
 The `.fsx` files have `__` placeholders (the exercise).
 The `.fs` project files have solved answers (for verification).

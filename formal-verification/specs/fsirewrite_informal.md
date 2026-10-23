@@ -1,6 +1,6 @@
 # Informal Specification: FsiRewrite
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 > Source: `SageFs.Core/FsiRewrite.fs`
 
 ## Purpose
@@ -23,7 +23,7 @@ module level in FSI.
 For each line in `code.Split('\n')`:
 - If `line.TrimStart().StartsWith("use ")` **and** `line.Length > line.TrimStart().Length`
   (i.e. the line is indented), then the line in the output has `"use "` replaced by `"let "`
-  in the trimmed position — keeping the original indentation prefix intact.
+  in the trimmed position, keeping the original indentation prefix intact.
 - Otherwise, the line is unchanged.
 
 The output is `String.Join('\n', rewrittenLines)`:
@@ -34,7 +34,7 @@ Both branches produce the same semantic output.
 
 ## Invariants
 
-1. **Idempotency**: `rewrite(rewrite(code)) = rewrite(code)` — applying twice is the same
+1. **Idempotency**: `rewrite(rewrite(code)) = rewrite(code)`, applying twice is the same
    as applying once. After a `use` is rewritten to `let`, the resulting line starts with
    `"let "` (not `"use "`), so the second pass leaves it unchanged.
 

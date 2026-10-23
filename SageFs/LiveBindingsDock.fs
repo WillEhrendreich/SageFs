@@ -37,12 +37,15 @@ module DockSignals =
   let [<Literal>] LivePins = "livePins"
   /// Whether the pane is pinned open even with no bindings.
   let [<Literal>] LivePanePinned = "livePanePinned"
+  /// Whether the pane's tree is folded away, so the dock is one row again.
+  let [<Literal>] LivePaneCollapsed = "livePaneCollapsed"
 
   /// The initial value of every signal above, for the page shell.
   let initial : XmlAttribute list =
     [ Ds.signal (LiveFilter, "")
       Ds.signal (LivePins, ",")
-      Ds.signal (LivePanePinned, false) ]
+      Ds.signal (LivePanePinned, false)
+      Ds.signal (LivePaneCollapsed, false) ]
     // What a row's knob stages before it posts (LiveBindingsTweakView): declared once, with the dock's own.
     @ TweakSignals.initial
 
@@ -56,6 +59,7 @@ module DockIds =
   let [<Literal>] PanePin = "live-pane-pin"
   let [<Literal>] EmptyState = "live-empty-state"
   let [<Literal>] NoMatch = "live-nomatch"
+  let [<Literal>] PaneCollapse = "live-pane-collapse"
 
   /// Every element the morph keeps client-owned attributes on has an id of its own, so the morph matches it by id and never
   /// by position: matched by position, a preserved `class` would be carried from whatever stood in that slot before.
@@ -159,6 +163,25 @@ let private panePinButton (id: string) : XmlNode =
       Ds.onClick (sprintf "$%s = !$%s" DockSignals.LivePanePinned DockSignals.LivePanePinned) ]
     [ Text.raw "📌" ]
 
+/// Fold the pane's tree away, or open it again.
+///
+/// The dock's ceiling is a drag handle, and a drag handle is a thin line to find. The tree can
+/// also be taller than the ceiling and the user is left with a dock that eats the transcript, so
+/// the pane carries its own fold: one click leaves the header and takes the tree away, and the
+/// dock is a row again. The state is a client signal, so a push never undoes it.
+let private collapseButton () : XmlNode =
+  Elem.button
+    [ Attr.id DockIds.PaneCollapse
+      Attr.class' "session-btn live-pane-collapse"
+      Attr.type' "button"
+      Attr.create "aria-label" "Fold the live bindings away, or open them again"
+      Attr.create "aria-expanded" "true"
+      Ds.attr' ("aria-expanded", sprintf "!$%s ? 'true' : 'false'" DockSignals.LivePaneCollapsed)
+      Ds.preserveAttr "aria-expanded"
+      Ds.onClick (sprintf "$%s = !$%s" DockSignals.LivePaneCollapsed DockSignals.LivePaneCollapsed) ]
+    [ Elem.span [ Ds.show (sprintf "!$%s" DockSignals.LivePaneCollapsed) ] [ Text.raw "▼" ]
+      Elem.span [ Ds.show (sprintf "$%s" DockSignals.LivePaneCollapsed) ] [ Text.raw "▲" ] ]
+
 /// Where a pane's visibility follows the pin: the extra class it is drawn with, and the attributes that keep it in step with the
 /// signal. Server-rendered in the state the pin starts in, so the first paint is right before Datastar runs.
 let private followPin (display: PinDisplay) (baseClass: string) : XmlAttribute list =
@@ -186,6 +209,19 @@ let renderCollapsedBar (why: CollapsedBecause) (display: PinDisplay) : XmlNode =
 /// The pane's body when there are no bindings to draw. It says why in the words the collapsed bar uses.
 let private renderEmptyState : XmlNode =
   Elem.div [ Attr.id DockIds.EmptyState; Attr.class' "live-empty"; testid "live-bindings-empty" ] [ textEnc (CollapsedBecause.text NothingBoundYet) ]
+
+/// The tree, or whatever stands in for it, with the fold on it.
+///
+/// One place, so the fold works for the walked tree and for the printed bindings that stand in
+/// for it while no walk has come back. The class is preserved, so the morph leaves the fold alone:
+/// it is the user's, and a push must not take it back.
+let private treeElement (children: XmlNode list) : XmlNode =
+  Elem.div
+    [ Attr.id DockIds.Tree
+      Attr.class' "live-tree"
+      Ds.class' ("live-hidden", sprintf "$%s" DockSignals.LivePaneCollapsed)
+      Ds.preserveAttr "class" ]
+    children
 
 let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindingsPane.PaneView) : XmlNode list =
   let evaluateEndpoint = sprintf "/api/sessions/%s/live-values/evaluate" (Uri.EscapeDataString sessionId)
@@ -308,7 +344,7 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
       | LiveBindingsPane.NothingClickedYet -> ()
       | LiveBindingsPane.LineSays text -> Elem.div [ Attr.class' "live-containment" ] [ textEnc (sprintf "last click: %s" text) ]
     ]
-    Elem.div [ Attr.id DockIds.Tree; Attr.class' "live-tree" ] [
+    treeElement [
       match view.Snapshot.Bindings with
       | [] -> renderEmptyState
       | bindings ->
@@ -352,8 +388,8 @@ let renderPaneWith (tweaks: TweakView) (sessionId: string) (source: BindingsSour
   let body =
     match source with
     | WalkedBindings view -> renderTree sessionId tweaks view
-    | PrintedBindings scope -> [ Elem.div [ Attr.id DockIds.Tree; Attr.class' "live-tree" ] [ renderBindingsPanel (Some scope) ] ]
-    | NothingBound -> [ Elem.div [ Attr.id DockIds.Tree; Attr.class' "live-tree" ] [ renderEmptyState ] ]
+    | PrintedBindings scope -> [ treeElement [ renderBindingsPanel (Some scope) ] ]
+    | NothingBound -> [ treeElement [ renderEmptyState ] ]
   // The text panel carries `bindings-panel` itself, so the wrapper must not repeat it.
   let paneId =
     match source with
@@ -374,6 +410,7 @@ let renderPaneWith (tweaks: TweakView) (sessionId: string) (source: BindingsSour
           Attr.create "autocomplete" "off"
           Attr.create "spellcheck" "false"
           Ds.bind DockSignals.LiveFilter ]
+      collapseButton ()
       panePinButton DockIds.PanePin
     ]
     yield! body

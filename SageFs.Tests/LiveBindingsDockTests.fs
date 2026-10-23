@@ -61,6 +61,14 @@ let dockStateTests =
       html.Contains DockIds.CollapsedBar |> Expect.isFalse "nothing is collapsed"
       html.Contains "live-pane live-hidden" |> Expect.isFalse "the pane is not hidden at first paint"
 
+    testCase "the pane carries its own fold, so the tree can be taken away without finding the drag handle" <| fun _ ->
+      let html = dock (WalkedBindings(view [ person; scores ]))
+      html |> Expect.stringContains "the fold's button" (sprintf "id=\"%s\"" DockIds.PaneCollapse)
+      html |> Expect.stringContains "the fold is a signal of its own" (sprintf "$%s = !$%s" DockSignals.LivePaneCollapsed DockSignals.LivePaneCollapsed)
+      html |> Expect.stringContains "the tree is hidden while the fold is on" (sprintf "$%s" DockSignals.LivePaneCollapsed)
+      html |> Expect.stringContains "the morph leaves the fold alone" "data-preserve-attr=\"class\""
+      html |> Expect.stringContains "the button says whether the tree is open" "aria-expanded"
+
     testCase "a session with no bindings collapses to ONE line that says why, and the pane is there but hidden until the pin opens it" <| fun _ ->
       let html = dock NothingBound
       html |> Expect.stringContains "the reason, in words" (CollapsedBecause.text NothingBoundYet)

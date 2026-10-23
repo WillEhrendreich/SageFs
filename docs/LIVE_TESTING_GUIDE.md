@@ -72,13 +72,13 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
 7. Test Explainer & Verification:
    - File: SageFs/Mcp.fs
    - MCP tools (what agents actually call):
-     * explain_test_failure — why a test failed
-     * targeted_verify — run and verify specific tests
-     * list_tests — list discovered tests
-     * coverage_intel — coverage summary
+     * explain_test_failure: why a test failed
+     * targeted_verify: run and verify specific tests
+     * list_tests: list discovered tests
+     * coverage_intel: coverage summary
    - Internal functions behind these (not standalone MCP tools):
-     * explainTestRun — computes why a test ran
-     * getFileCoverage — per-line coverage; surfaced to editors via SSE
+     * explainTestRun: computes why a test ran
+     * getFileCoverage: per-line coverage; surfaced to editors via SSE
        file_annotations and the HTTP API (GET /api/live-testing/file-annotations),
        not as an MCP tool
    - run_tests is the one MCP door for running tests. It dispatches the same

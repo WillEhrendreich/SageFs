@@ -286,6 +286,50 @@ let hotReloadWorkerConfigTests =
       let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "0"; WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.HotReloadEnabled |> Expect.isFalse "should be disabled"
+
+    testCase "SAGEFS_HOT_RELOAD=all still enables hot-reload, because that is what the docs said it did" <| fun () ->
+      let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "all"; WorkerConfig.bareEnvVar, "1" ]
+      let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
+      config.HotReloadEnabled |> Expect.isTrue "the older spelling still opts in"
+      let on, allFiles = WorkerConfig.hotReloadChoice getEnv
+      on |> Expect.isTrue "hot reload is on"
+      allFiles |> Expect.isTrue "and every project file is watched"
+
+    testCase "SAGEFS_HOT_RELOAD_ALL_FILES enables hot-reload and watches every project file" <| fun () ->
+      let getEnv = fakeEnv [ WorkerConfig.hotReloadAllFilesEnvVar, "1"; WorkerConfig.bareEnvVar, "1" ]
+      let on, allFiles = WorkerConfig.hotReloadChoice getEnv
+      on |> Expect.isTrue "watching files without the flow would be meaningless, so the flow is on"
+      allFiles |> Expect.isTrue "every project file is watched"
+
+    testCase "SAGEFS_HOT_RELOAD=1 watches only the session's own files" <| fun () ->
+      let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "1" ]
+      let on, allFiles = WorkerConfig.hotReloadChoice getEnv
+      on |> Expect.isTrue "the flow is on"
+      allFiles |> Expect.isFalse "but every file is not watched"
+
+    testCase "a value that is neither a switch nor a spelling is neither on nor watching" <| fun () ->
+      let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "perhaps" ]
+      let on, allFiles = WorkerConfig.hotReloadChoice getEnv
+      on |> Expect.isFalse "not on"
+      allFiles |> Expect.isFalse "not watching everything"
+
+    testCase "the watch-all half travels to the worker under its own name, because the flow's variable says 1 by then" <| fun () ->
+      let carried = WorkerConfig.hotReloadWorkerEnvironment true true
+      carried
+      |> List.map fst
+      |> Expect.contains "the worker is told to watch every file, under the name that says one thing"
+        WorkerConfig.hotReloadAllFilesEnvVar
+      carried
+      |> List.map (fun (k, v) -> k, v)
+      |> Expect.contains "the flow's own variable says 1, which is what a worker can read"
+        (WorkerConfig.hotReloadEnvVar, "1")
+
+    testCase "a worker that watches only the session's own files is told so" <| fun () ->
+      let carried = WorkerConfig.hotReloadWorkerEnvironment true false
+      carried
+      |> List.map fst
+      |> List.contains WorkerConfig.hotReloadAllFilesEnvVar
+      |> Expect.isFalse "no watch-all for the worker"
   ]
 
 let hotReloadSpawnConfigTests =

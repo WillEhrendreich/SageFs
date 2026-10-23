@@ -236,6 +236,39 @@ let catalogTests =
           Timeouts.setPerTestTimeout original)
   ]
 
+/// The port the Settings panel persists and the daemon reads. The row says it
+/// applies on the next daemon restart; until now the value was written and then
+/// read by nobody, so the row was a promise nobody kept.
+[<Tests>]
+let mcpPortRoutingTests =
+  testList "Settings — the MCP port the daemon reads" [
+
+    testCase "WHY — a port the panel persisted is the port the daemon reads, because the row promises it applies on the next daemon start" <| fun _ ->
+      withTempDir (fun dir ->
+        let paths = { GlobalDir = dir; Repo = NoRepoCheckout }
+        match SettingsCatalog.edit paths LGlobal "40000" SettingsCatalog.mcpPort with
+        | Error why -> failtestf "expected Ok, got Error %A" why
+        | Ok _ -> ()
+        SettingsCatalog.mcpPortFromLayers dir
+        |> Expect.equal "the daemon reads the persisted port" (Some 40000))
+
+    testCase "WHY — a layer that holds no port leaves the daemon on the default, because absence is not a value" <| fun _ ->
+      withTempDir (fun dir ->
+        SettingsCatalog.mcpPortFromLayers dir |> Expect.isNone "nothing persisted")
+
+    testCase "WHY — a persisted port that cannot be parsed is not a value, and the daemon falls back instead of refusing to start" <| fun _ ->
+      withTempDir (fun dir ->
+        SettingsStore.setKey (SettingsStore.globalPath dir) SettingsCatalog.mcpPort.Key "not-a-port"
+        |> Expect.isOk "the raw write succeeds; the read is what refuses it"
+        SettingsCatalog.mcpPortFromLayers dir |> Expect.isNone "a value that cannot be read is not a value")
+
+    testCase "WHY — the port sources speak in one order: the command line, then the environment, then the panel, then the default" <| fun _ ->
+      SageFsConfig.chooseMcpPort (Some 1) (Some 2) (Some 3) |> Expect.equal "the command line wins" 1
+      SageFsConfig.chooseMcpPort None (Some 2) (Some 3) |> Expect.equal "the environment wins over the panel" 2
+      SageFsConfig.chooseMcpPort None None (Some 3) |> Expect.equal "the panel wins over the default" 3
+      SageFsConfig.chooseMcpPort None None None |> Expect.equal "the default holds" SageFsConfig.DefaultMcpPort
+  ]
+
 [<Tests>]
 let defaultWorkingDirTests =
   testList "Settings — default working directory (session.defaultWorkingDirectory)" [

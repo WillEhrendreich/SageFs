@@ -1866,7 +1866,37 @@ let sagefsPipeline = pipeline "sagefs" {
     //
     // The three `dotnet build samples/... -c Release --nologo` commands (sampleProjects) were started by
     // "ratchets" and run beside it; this stage joins them.
-    run (fun _ -> joinBackgroundNamed "samples" (sampleJobSteps.Length - 1))
+    //
+    // And then it rebuilds them, because the copy of SageFs.Core a sample holds has to be the build the
+    // daemon runs: `HostCoreAdoption.decide` compares SHA-256 first and the clock second, so a copy that
+    // is neither is a session the integration tier refuses. Measured on 2026-10-22, that copy was Core's
+    // net10.0 build (4442221b…) while the daemon ran the net11.0 build (51f28066…), because
+    // `SageFsCoreAssembly` named one fixed framework for every consumer; Directory.Build.props now takes
+    // the consumer's own. Deleting the copies and rebuilding here is what makes the copy be taken AFTER
+    // the solution build has written Core, which is the part the fix in props cannot do on its own: the
+    // samples job runs beside the build, so without this it is a coin flip on which of them ran first.
+    run (fun ctx ->
+      let runner = runnerFor ctx
+      async {
+        let! joined = joinBackgroundNamed "samples" (sampleJobSteps.Length - 1)
+        match joined with
+        | Error why -> return Error why
+        | Ok() ->
+          for project in sampleProjects do
+            let bin =
+              System.IO.Path.Combine(rootDir, System.IO.Path.GetDirectoryName project, "bin", "Release", "net11.0")
+            for name in [ "SageFs.Core.dll"; "SageFs.Core.pdb" ] do
+              let stale = System.IO.Path.Combine(bin, name)
+              if System.IO.File.Exists stale then System.IO.File.Delete stale
+          let firstFailure = ref (None : string option)
+          for project in sampleProjects do
+            match! runner $"dotnet build {project} -c Release --nologo" with
+            | Ok() -> ()
+            | Error why -> if firstFailure.Value.IsNone then firstFailure := Some why
+          match firstFailure.Value with
+          | Some why -> return Error why
+          | None -> return Ok()
+      })
   }
 
   stage "vscode extension compile" {

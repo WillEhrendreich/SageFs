@@ -1,6 +1,6 @@
 # Informal Specification: Theme
 
-🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 Source: `SageFs.Core/Theme.fs`
 
 ---
@@ -10,14 +10,14 @@ Source: `SageFs.Core/Theme.fs`
 The `Theme` module defines a typed color palette for the SageFs TUI, GUI, and
 dashboard. It provides:
 
-1. **`ThemeConfig`** — a 34-field record where each field is a named hex RGB
+1. **`ThemeConfig`**, a 34-field record where each field is a named hex RGB
    string (format `#rrggbb`), covering foreground colors, background colors,
    border colors, status indicator colors, and syntax-highlighting token colors.
 
-2. **`defaults`** — the default SageFs "dark" theme, fully specified with
+2. **`defaults`**, the default SageFs "dark" theme, fully specified with
    hard-coded hex strings.
 
-3. **`withOverrides`** — a combinator that layers a partial `Map<string, string>`
+3. **`withOverrides`**, a combinator that layers a partial `Map<string, string>`
    of key-value overrides onto a base `ThemeConfig`.  Each field checks whether
    the override map contains a matching key; if so, the override value is used;
    otherwise the base field value is preserved.
@@ -26,7 +26,7 @@ dashboard. It provides:
 
 ## Preconditions
 
-- `withOverrides` accepts any `Map<string, string>` — there is no precondition on
+- `withOverrides` accepts any `Map<string, string>`, there is no precondition on
   the override values being valid hex strings.
 - Override keys are field names in camelCase (e.g. `"fgDefault"`, `"bgPanel"`).
   An unrecognised key is silently ignored.
@@ -102,5 +102,5 @@ overridden, and the remainder always fall back to a known-good default.
 1. Should `withOverrides` validate that override values are valid hex strings,
    or is that the caller's responsibility?
 2. The F# `defaults` module-level aliases (e.g. `let fgDefault = defaults.FgDefault`)
-   are not part of the formal model — are they used externally?
+   are not part of the formal model, are they used externally?
 3. Is case-insensitive key matching intended for override map keys?

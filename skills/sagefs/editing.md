@@ -17,7 +17,7 @@ So, in order:
 
 1. **Prove the behaviour in the REPL.** Write the new function, call it on real
    input, and *read the output* before it touches a file.
-2. **Then persist it** with the editor tool — read the region, replace that
+2. **Then persist it** with the editor tool: read the region, replace that
    exact text.
 3. **Then re-verify** with `hard_reset_fsi_session rebuild=true`.
 
@@ -32,7 +32,7 @@ green, and the thing you meant to change is unchanged.
 - **Use the editor tool for a specific change.** A call that did not match is a
   bug to investigate, not something to widen until something sticks.
 - **Scripting is F#, and it is dogfooded.** A genuinely repeated mechanical
-  change goes in an `.fsx` run through SageFs — then the script is F# you can
+  change goes in an `.fsx` run through SageFs, then the script is F# you can
   evaluate, and it reports its own result. It MUST assert that each
   replacement matched, and say so out loud, rather than exiting quietly.
 - **Verify the diff after any scripted change.** A pattern that matched in 4
@@ -47,13 +47,13 @@ get two copies of every type. The symptom is not a load error:
 The type 'FSI_0035.SageFs.HolderRegistry' is not compatible with the type 'SageFs.HolderRegistry'
 ```
 
-That is not a version mismatch and not a bug in the code — it is your own
+That is not a version mismatch and not a bug in the code, it is your own
 `#load`. The rule:
 
 - **Core (or any already-loaded project) is never `#load`ed.** Use the loaded
   types directly. If the session's Core predates your change, that is *skew*,
-  not a reason to `#load` — see "a stale daemon" in troubleshooting.md.
-- **`#load` a PURE file** — one with no dependency on the loaded project. That
+  not a reason to `#load`, see "a stale daemon" in troubleshooting.md.
+- **`#load` a PURE file**, one with no dependency on the loaded project. That
   is the reliable way to evaluate a pure decision function fast, and it is how
   you prototype a new module before it is wired in.
 
@@ -61,11 +61,11 @@ That is not a version mismatch and not a bug in the code — it is your own
 
 Cheaper to know up front than to discover in a 90-second build:
 
-- `///` is not valid between DU fields — use `//`.
+- `///` is not valid between DU fields, use `//`.
 - A DU case carrying an inline value needs parens (`Case 0`), or F# reads it as
   function application.
 - Cases under `[<RequireQualifiedAccess>]` must be qualified at the call site.
-- `_.X` does not chain — use an explicit `this` parameter.
+- `_.X` does not chain, use an explicit `this` parameter.
 - `let mutable` bindings must precede members in a type.
 - Two types with the same name in one namespace collide at every call site.
 - A case with two fields wants one tuple, not a bare `*` list.

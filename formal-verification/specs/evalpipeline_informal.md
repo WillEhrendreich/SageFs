@@ -1,6 +1,6 @@
 # Informal Specification: EvalPipeline
 
-> 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
+> 🔬 *Lean Squad, automated formal verification for `WillEhrendreich/SageFs`.*
 > Source: `SageFs.Core/EvalPipeline.fs`
 
 ## Last Updated
@@ -16,9 +16,9 @@
 evaluations. It enables the `pipeline { ... }` syntax, where each `let! x =
 stage "name" (fun () -> ...)` step is:
 
-1. **Timed** — elapsed milliseconds are recorded.
-2. **Traced** — on completion the step is appended to a `CompletedStage list`.
-3. **Railway-oriented** — if a step returns `Error e`, the rest of the pipeline
+1. **Timed**: elapsed milliseconds are recorded.
+2. **Traced**: on completion the step is appended to a `CompletedStage list`.
+3. **Railway-oriented**: if a step returns `Error e`, the rest of the pipeline
    is short-circuited; no further steps are executed.
 
 The primary exported value is the `pipeline` CE instance together with helper
@@ -30,8 +30,8 @@ functions `stage`, `stageOk`, `totalMs`, `succeeded`, and `formatRailway`.
 
 | Type | Description |
 |------|-------------|
-| `StageOutcome` | `Succeeded \| Failed of SageFsError` — per-step result |
-| `CompletedStage` | `{ Name; ElapsedMs; Outcome }` — immutable record of one step |
+| `StageOutcome` | `Succeeded \| Failed of SageFsError`, per-step result |
+| `CompletedStage` | `{ Name; ElapsedMs; Outcome }`, immutable record of one step |
 | `TrackedResult<'T>` | Intermediate struct: carries `Value : Result<'T,SageFsError>`, `StageName`, `ElapsedMs` |
 | `PipelineTrace<'T>` | Final: `{ Result : Result<'T,SageFsError>; Stages : CompletedStage list }` |
 | `PipelineBuilder` | The CE class implementing `Bind`, `Return`, `ReturnFrom`, `Zero` |
@@ -63,12 +63,12 @@ Let `tracked : TrackedResult<'a>` and `f : 'a -> PipelineTrace<'b>`.
 - **Failure path** (`tracked.Value = Error e`):
   - Returns `{ Result = Error e; Stages = [completed] }`.
   - The current step's `Outcome` is `StageOutcome.Failed e`.
-  - `f` is **never called** — no further stages are executed.
+  - `f` is **never called**, no further stages are executed.
   - The resulting `Stages` list has exactly **one** element.
 
 ### `PipelineBuilder.Return`
 
-- Returns `{ Result = Ok x; Stages = [] }` — a successful trace with no stages.
+- Returns `{ Result = Ok x; Stages = [] }`, a successful trace with no stages.
 
 ### `PipelineBuilder.Zero`
 
@@ -96,33 +96,33 @@ Let `tracked : TrackedResult<'a>` and `f : 'a -> PipelineTrace<'b>`.
 
 ## Invariants
 
-### I1 — Stage list length after failure
+### I1: Stage list length after failure
 
 After any `Bind` on a `TrackedResult` whose `Value = Error _`:
 - `(result.Stages).Length = 1` (just the failing stage).
 
-### I2 — Stage list length after success (relative)
+### I2: Stage list length after success (relative)
 
 After any `Bind` on a `TrackedResult` whose `Value = Ok _`:
 - `(result.Stages).Length = 1 + (f v).Stages.Length`.
 
-### I3 — Failure terminates the pipeline
+### I3: Failure terminates the pipeline
 
 In a multi-step pipeline `let! a = s1 in let! b = s2 in ...`, if step `k`
 returns `Error e`, then steps `k+1, k+2, ...` are never executed and their
 `CompletedStage` records never appear in the trace.
 
-### I4 — Outcome reflects value
+### I4: Outcome reflects value
 
 For every `CompletedStage cs` in a trace:
 - `cs.Outcome = Succeeded ↔` the corresponding `TrackedResult.Value = Ok _`.
 - `cs.Outcome = Failed e ↔` the corresponding `TrackedResult.Value = Error e`.
 
-### I5 — Result consistency
+### I5: Result consistency
 
 `succeeded trace ↔ trace.Result = Ok _`.
 
-### I6 — Empty return stages
+### I6: Empty return stages
 
 `(PipelineBuilder.Return x).Stages = []`.
 
@@ -176,8 +176,8 @@ let trace =
 
 The design intention is a **structured concurrency record**: every evaluation in
 SageFs that uses this CE produces an audit trail usable for the dashboard railway
-visualisation. The railway metaphor (`formatRailway`) — using `✓`/`✗` symbols and
-` → ` separators — is a deliberate developer-experience feature to show where a
+visualisation. The railway metaphor (`formatRailway`), using `✓`/`✗` symbols and
+` → ` separators, is a deliberate developer-experience feature to show where a
 multi-step evaluation succeeded or failed.
 
 The key correctness property is **short-circuit faithfulness**: a stage that
@@ -192,11 +192,11 @@ railway correctly.
 
 1. **Stage ordering in `Bind`**: the current implementation prepends `completed`
    to `rest.Stages`, so stages appear in **execution order** (first → last). Is
-   this the intended display order? *Yes — `formatRailway` iterates `trace.Stages`
+   this the intended display order? *Yes, `formatRailway` iterates `trace.Stages`
    front-to-back, so prepend = execution order.*
 
 2. **Concurrent stages**: the CE does not support parallel stages (`and!` / `MergeSources`).
-   Is this intentional? (Likely yes — timing and ordering are sequential by design.)
+   Is this intentional? (Likely yes, timing and ordering are sequential by design.)
 
 3. **Null/empty stage names**: are empty string stage names legal? The spec permits
    them but displays them as empty in `formatRailway`. Maintainer confirmation welcome.

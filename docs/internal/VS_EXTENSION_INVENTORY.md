@@ -1,4 +1,4 @@
-# SageFs Visual Studio Extension — Sprint Planning Inventory
+# SageFs Visual Studio Extension: Sprint Planning Inventory
 
 **Generated for:** Rapid sprint planning exercise  
 **Scope:** Extension state analysis (real vs placeholder), architecture assessment  
@@ -19,14 +19,14 @@
 - Description: "Inline eval, session management, and hot-reload for F# via SageFs daemon"
 
 **DI Registration:**
-- **SageFsClient** (singleton) — HTTP client for daemon communication
-- **EvalCancellation** (singleton) — Cooperative cancellation token source
-- **LiveTestingSubscriber** (singleton) — Starts WebSocket listener on port 37749
+- **SageFsClient** (singleton): HTTP client for daemon communication
+- **EvalCancellation** (singleton): Cooperative cancellation token source
+- **LiveTestingSubscriber** (singleton): Starts WebSocket listener on port 37749
 
 **Architectural Notes:**
 - All real logic lives in F# project: SageFs.VisualStudio.Core
 - C# layer is just a shim for VS integration (attribute routing, commands, tool windows)
-- This is a clean design — no business logic in C#
+- This is a clean design: no business logic in C#
 
 ---
 
@@ -37,9 +37,9 @@
 **Status:** ✓ **REAL & FUNCTIONAL**
 
 **Files:**
-- \LiveTestingWindow.cs\ — Command + Window registration
-- \LiveTestingControl.xaml\ — **WPF XAML** UI (DataTemplate)
-- \LiveTestingData.cs\ — Data context + binding logic
+- \LiveTestingWindow.cs\: Command + Window registration
+- \LiveTestingControl.xaml\: **WPF XAML** UI (DataTemplate)
+- \LiveTestingData.cs\: Data context + binding logic
 
 **UI Framework:** WPF/XAML (Microsoft.VisualStudio.Extensibility.ToolWindows)
 
@@ -68,9 +68,9 @@
 **Status:** ✓ **REAL & FUNCTIONAL**
 
 **Files:**
-- \SessionContextWindow.cs\ — Command + Window registration
-- \SessionContextControl.xaml\ — **WPF XAML** (DataTemplate with VS theming)
-- \SessionContextData.cs\ — Data context + auto-refresh timer
+- \SessionContextWindow.cs\: Command + Window registration
+- \SessionContextControl.xaml\: **WPF XAML** (DataTemplate with VS theming)
+- \SessionContextData.cs\: Data context + auto-refresh timer
 
 **UI Framework:** WPF/XAML (bound to VS environment colors)
 
@@ -84,10 +84,10 @@
 - **Hot Reload Section:** Shows watched vs total files
 
 **API Calls:**
-- \client.PingAsync()\ — Connection check
-- \client.GetSessionsAsync()\ — Active session list
-- \client.GetWarmupContextAsync(sessionId)\ — Warmup state (assemblies, namespaces)
-- \client.GetHotReloadStateAsync(sessionId)\ — Watched files
+- \client.PingAsync()\: Connection check
+- \client.GetSessionsAsync()\: Active session list
+- \client.GetWarmupContextAsync(sessionId)\: Warmup state (assemblies, namespaces)
+- \client.GetHotReloadStateAsync(sessionId)\: Watched files
 
 **Auto-Refresh:** 10-second Timer, stopped on Dispose()
 
@@ -98,9 +98,9 @@
 **Status:** ✓ **REAL & FUNCTIONAL**
 
 **Files:**
-- \HotReloadWindow.cs\ — Command + Window registration
-- \HotReloadControl.xaml\ — **WPF XAML** (simple UI)
-- \HotReloadData.cs\ — Data context
+- \HotReloadWindow.cs\: Command + Window registration
+- \HotReloadControl.xaml\: **WPF XAML** (simple UI)
+- \HotReloadData.cs\: Data context
 
 **UI Framework:** WPF/XAML
 
@@ -113,8 +113,8 @@
 - **File List:** Ordered, with watch status icon (👁 or blank)
 
 **API Calls:**
-- \client.GetSessionsAsync()\ — Get first session
-- \client.GetHotReloadStateAsync(sessionId)\ — Fetch watched files list
+- \client.GetSessionsAsync()\: Get first session
+- \client.GetHotReloadStateAsync(sessionId)\: Fetch watched files list
 - \client.WatchAllAsync(sessionId)\
 - \client.UnwatchAllAsync(sessionId)\
 - \client.RefreshHotReloadAsync(sessionId)\
@@ -126,9 +126,9 @@
 **Status:** ✓ **REAL & FUNCTIONAL**
 
 **Files:**
-- \TypeExplorerWindow.cs\ — Command + Window registration
-- \TypeExplorerControl.xaml\ — **WPF XAML** (searchable)
-- \TypeExplorerData.cs\ — Data context + search logic
+- \TypeExplorerWindow.cs\: Command + Window registration
+- \TypeExplorerControl.xaml\: **WPF XAML** (searchable)
+- \TypeExplorerData.cs\: Data context + search logic
 
 **UI Framework:** WPF/XAML
 
@@ -142,8 +142,8 @@
 **Search Logic:** Case-insensitive \.Contains()\ on namespace/assembly names
 
 **API Calls:**
-- \client.GetSessionsAsync()\ — Get first session
-- \client.GetWarmupContextAsync(sessionId)\ — Assemblies + namespaces list
+- \client.GetSessionsAsync()\: Get first session
+- \client.GetWarmupContextAsync(sessionId)\: Assemblies + namespaces list
 
 ---
 
@@ -167,7 +167,7 @@
 #### **EvalRangeCommand**
 - **Shortcut:** Ctrl+Alt+Enter
 - **Behavior:** Evaluates ;;-delimited block around cursor (or selection)
-- **Logic:** \FindBlockAroundCursor(text, cursorOffset)\ — scans backward/forward for ;;
+- **Logic:** \FindBlockAroundCursor(text, cursorOffset)\: scans backward/forward for ;;
 - **Status:** ✓ REAL
 
 #### **LoadScriptCommand**
@@ -192,7 +192,7 @@
 - **Behavior:** Lists sessions → uses OK/Cancel to confirm switch to second session
 - **API:** \client.GetSessionChoicesAsync(ct)\ → \client.SwitchToSessionAsync(sessionId, ct)\
 - **UserInput:** ShowPromptAsync("Switch to session: {name}?", PromptOptions.OKCancel)
-- **Status:** ✓ REAL (but simplified — only OK/Cancel, not a multi-choice picker)
+- **Status:** ✓ REAL (but simplified: only OK/Cancel, not a multi-choice picker)
 
 #### **ResetSessionCommand**
 - **Shortcut:** None
@@ -300,7 +300,7 @@
 #### **RunTestAtCursorCommand** *(Sprint 6)*
 - **Shortcut:** Shift+Alt+T
 - **Behavior:** Finds the test function at or above the cursor line and runs it
-- **Algorithm:** `TestsForFile(filePath).Where(t => t.Line <= cursorLine).OrderByDescending(t.Line).First()` — Seemann's algorithm: finds the test *containing* the cursor rather than the one *after* it
+- **Algorithm:** `TestsForFile(filePath).Where(t => t.Line <= cursorLine).OrderByDescending(t.Line).First()`. Seemann's algorithm: finds the test *containing* the cursor rather than the one *after* it
 - **API:** `subscriber.TestsForFile(filePath)` → `client.RunTestsAsync(test.FullName, ct)` 
 - **Output:** "▶ Running [DisplayName] at line N…" or "⊘ No test found at or above line N"
 - **Result delivery:** Via SSE → inline adornments + glyph margin (no polling needed)
@@ -327,21 +327,21 @@
 #### **NextBlockCommand**
 - **Shortcut:** Ctrl+Alt+]
 - **Behavior:** Finds next ;;-delimited block after cursor and evals it
-- **Logic:** \FindNextBlock(text, fromOffset)\ — scans forward for ;; boundaries
+- **Logic:** \FindNextBlock(text, fromOffset)\: scans forward for ;; boundaries
 - **Cancellation:** Supports cooperative cancellation via \Core.EvalCancellation\
 - **Status:** ✓ REAL
 
 #### **PrevBlockCommand**
 - **Shortcut:** Ctrl+Alt+[
 - **Behavior:** Finds previous ;;-delimited block before cursor and evals it
-- **Logic:** \FindPrevBlock(text, fromOffset)\ — scans backward for ;; boundaries
+- **Logic:** \FindPrevBlock(text, fromOffset)\: scans backward for ;; boundaries
 - **Cancellation:** Cooperative cancellation support
 - **Status:** ✓ REAL
 
 #### **EvalAndAdvanceCommand**
 - **Shortcut:** Ctrl+Alt+Shift+Enter
 - **Behavior:** Evaluate current block around cursor
-- **Intent:** "The core rapid-iteration loop" — step through .fsx files block-by-block
+- **Intent:** "The core rapid-iteration loop": step through .fsx files block-by-block
 - **Cancellation:** Cooperative support
 - **Status:** ✓ REAL
 
@@ -361,7 +361,7 @@
 - **State:** Toggles between \ridge != null\ states
 - **Status:** ✓ REAL
 
-#### (Command to show tool windows — 4 commands, registered as [VisualStudioContribution])
+#### (Command to show tool windows: 4 commands, registered as [VisualStudioContribution])
 - **ShowLiveTestingCommand**
 - **ShowSessionContextCommand**
 - **ShowHotReloadCommand**
@@ -369,17 +369,17 @@
 
 ---
 
-## 4. SAGEFSCLIENT.FS — HTTP API Surface
+## 4. SAGEFSCLIENT.FS: HTTP API Surface
 
 **Type:** F# HTTP client  
-**Real vs Placeholder:** ✓ **REAL** (comprehensive coverage of daemon endpoints)
+**Real vs Placeholder:** ✓ **REAL** (it covers every daemon endpoint)
 
 ### 4.1 Lifecycle
 
 | Method | Endpoint | Purpose | Returns |
 |--------|----------|---------|---------|
 | \PingAsync\ | GET /api/sessions | Connection check | bool |
-| \StartDaemonAsync\ | — | Stub (NOP) | unit task |
+| \StartDaemonAsync\ |: | Stub (NOP) | unit task |
 | \StopDaemonAsync\ | POST /api/shutdown | Shutdown | unit task |
 
 ### 4.2 Execution & Evaluation
@@ -401,7 +401,7 @@
 |--------|----------|---------|---------|
 | \GetSessionsAsync\ | GET /api/sessions | List all sessions | SessionInfo list |
 | \CreateSessionAsync\ | POST /api/sessions/create | New session | unit task |
-| \GetSessionChoicesAsync\ | — | Format session picker | (string * string) list |
+| \GetSessionChoicesAsync\ |: | Format session picker | (string * string) list |
 | \SwitchToSessionAsync\ | POST /api/sessions/switch | Switch active session | bool |
 | \StopSessionAsync\ | POST /api/sessions/stop | Stop session by ID | bool |
 | \ResetSessionAsync\ | POST /api/sessions/reset | Soft reset | unit task |
@@ -467,10 +467,10 @@
 ### 4.10 Configuration
 
 **Public Properties:**
-- \McpPort\ (default 37749) — MCP (message control protocol) port
-- \DashboardPort\ (default 37750) — Web dashboard port
-- \BaseUrl\ — \http://localhost:{McpPort}\
-- \DashUrl\ — \http://localhost:{DashboardPort}\
+- \McpPort\ (default 37749): MCP (message control protocol) port
+- \DashboardPort\ (default 37750): Web dashboard port
+- \BaseUrl\: \http://localhost:{McpPort}\
+- \DashUrl\: \http://localhost:{DashboardPort}\
 
 **HTTP Client:** Configured with automatic decompression (GZip/Deflate)
 
@@ -521,7 +521,7 @@
 }
 \\\
 
-**Note:** Some entries in string-resources refer to commands not found in Commands/ (e.g., "ClearResults", "CodeLens", "TestCodeLens") — likely removed/refactored, or registered elsewhere (CodeLens likely in Services/).
+**Note:** Some entries in string-resources refer to commands not found in Commands/ (e.g., "ClearResults", "CodeLens", "TestCodeLens"), likely removed/refactored, or registered elsewhere (CodeLens likely in Services/).
 
 ---
 
@@ -533,29 +533,29 @@
 2. **Eval Commands (4):** Complete keyboard shortcuts, selection/file/block eval with context
 3. **Session Management (6):** Create, switch, reset, hard-reset, stop sessions
 4. **Hot Reload Commands (5):** Toggle, watch-all, unwatch-all, refresh, directory-level control
-5. **Live Testing UI:** Comprehensive dashboard with filtering, search, status display
+5. **Live Testing UI:** A dashboard with filtering, search, status display
 6. **SetRunPolicyCommand:** Cycles all 6 categories through every→save→demand→disabled (fixed Sprint 4)
 7. **Daemon Lifecycle (3):** Auto-discovery, start/stop, dashboard launch
 8. **Cancellation Support:** Cooperative eval abort (Ctrl+Alt+C)
 9. **Error List Bridge:** Diagnostics forwarding to VS Error List
-10. **SageFsClient.fs:** Comprehensive HTTP API with proper error handling, JSON parsing, model types
+10. **SageFsClient.fs:** An HTTP API with proper error handling, JSON parsing, model types
 11. **MEF Editor Assembly (net472):** Glyphs, squiggles, inline failure adornments (Sprints 4-5)
 
 ### ⚠️ PLACEHOLDER / INCOMPLETE
 
-1. **SwitchSessionCommand:** Simplified to OK/Cancel (switches to second session) — should ideally be a multi-choice dialog
-2. **Type Explorer Search:** Basic `.Contains()` — no fuzzy matching or advanced filtering
+1. **SwitchSessionCommand:** Simplified to OK/Cancel (switches to second session): should ideally be a multi-choice dialog
+2. **Type Explorer Search:** Basic `.Contains()`, no fuzzy matching or advanced filtering
 
 ### ⚠️ STUB / NOP
 
-1. **StartDaemonAsync** in SageFsClient.fs — currently a no-op (`return ()`). Daemon lifecycle is handled in DaemonCommands.cs via `Core.DaemonManager` (F#).
+1. **StartDaemonAsync** in SageFsClient.fs: currently a no-op (`return ()`). Daemon lifecycle is handled in DaemonCommands.cs via `Core.DaemonManager` (F#).
 
 ### 🔮 FUTURE (Sprint 6+)
 
-1. **CodeLens provider** — `file_annotations.CodeLenses` already emits `{Line, Label, Command: RunTest|DebugTest|ShowHistory}` — wire `ICodeLensProvider` for '▶ Run | 🐛 Debug | 📜 History' above test functions
-2. **Inline eval adornments** — show `// => result` right of eval lines (like Rider), dims to 35% opacity on edit, clears on re-eval
-3. **Session management panel** — Sessions tool window: list FSI sessions, start/kill, show eval counts
-4. **Status bar indicator** — 'SageFs ● connected' in VS status bar via `IVsStatusbar`
+1. **CodeLens provider**, `file_annotations.CodeLenses` already emits `{Line, Label, Command: RunTest|DebugTest|ShowHistory}`, wire `ICodeLensProvider` for '▶ Run | 🐛 Debug | 📜 History' above test functions
+2. **Inline eval adornments**: show `// => result` right of eval lines (like Rider), dims to 35% opacity on edit, clears on re-eval
+3. **Session management panel**: Sessions tool window: list FSI sessions, start/kill, show eval counts
+4. **Status bar indicator**: 'SageFs ● connected' in VS status bar via `IVsStatusbar`
 ---
 
 ## 7. KEYBOARD SHORTCUTS
@@ -591,9 +591,9 @@ VS Extension (C#)
       └─ DiagnosticsBridge
          
 Core Logic (F#)
-  ├─ SageFsClient — HTTP + JSON parsing
-  ├─ LiveTestingSubscriber — WebSocket stream
-  ├─ DaemonManager — Process lifecycle
+  ├─ SageFsClient. HTTP + JSON parsing
+  ├─ LiveTestingSubscriber. WebSocket stream
+  ├─ DaemonManager. Process lifecycle
   └─ Type definitions
 \\\
 
@@ -612,7 +612,7 @@ Core Logic (F#)
    - Check if related to code lens results
 
 5. **Performance:** Cache warmup context + add TTL
-   - SessionContextData refreshes every 10s — could add exponential backoff if unchanged
+   - SessionContextData refreshes every 10s: could add exponential backoff if unchanged
 
 6. **Error Handling:** Unified error UI for common failures
    - Current: Each command handles errors independently
@@ -635,8 +635,8 @@ Core Logic (F#)
 - Fuzzy search in Type Explorer (2 pts)
 
 ### Investigation Needed
-- "ClearResults" command — where should it go?
-- CodeLens integration — not found in Commands/, check Services/
+- "ClearResults" command: where should it go?
+- CodeLens integration: not found in Commands/, check Services/
 
 ### Tech Debt (Nice-to-Have)
 - Consolidate error handling → shared error UI
@@ -645,7 +645,7 @@ Core Logic (F#)
 
 ---
 
-## 10. MEF EDITOR ASSEMBLY — `SageFs.VisualStudio.Editor` (net472)
+## 10. MEF EDITOR ASSEMBLY, `SageFs.VisualStudio.Editor` (net472)
 
 **Status:** ✅ Fully implemented through Sprint 5. 39/39 unit tests passing.
 
@@ -663,13 +663,13 @@ Colored WPF `Ellipse` glyphs in the gutter per test function line:
 | 🟡 Amber | Test running |
 | ⚫ Gray | Test detected / not yet run |
 
-#### B. Squiggles (SquiggleTagger) — Option C
+#### B. Squiggles (SquiggleTagger): Option C
 Roslyn-style squiggles under F# code with daemon-reported diagnostics:
 - Red squiggles = errors, yellow = warnings, dotted = hints
 - Tooltip shows the diagnostic message
 - Source: `/diagnostics` SSE endpoint
 
-#### C. Inline Failure Adornments (InlineFailureAdornmentManager) — Option D
+#### C. Inline Failure Adornments (InlineFailureAdornmentManager): Option D
 Right-aligned text adornments on failing test lines:
 ```
 let myTest () =  ⊘ myTest — Expected: 42  Actual: 0
@@ -698,26 +698,26 @@ SseConnectionHub                     — deduplicates SSE connections (2 total: 
 
 ### Key Design Decisions
 
-1. **`PrivateAssets="all"` on all VS SDK NuGet refs** — prevents type-identity crashes from double-loading
-2. **`TagsChanged` on UI thread** — `Application.Current?.Dispatcher.BeginInvoke(...)` — missing this causes mysterious editor crashes
-3. **`HttpClient.Timeout = 75s`** (NOT `InfiniteTimeSpan`) — prevents zombie connections
-4. **`[ContentType("F#")]` + `[ContentType("F# Script")]`** on ALL MEF exports — VS does NOT walk the base-type chain for tagger/factory/listener exports; `.fsx` needs an explicit second attribute
-5. **`SseConnectionHub`** — static per-endpoint multiplexer; at most 2 HTTP SSE connections total
-6. **`SageFsFeatureFlags`** — per-feature runtime disable flags in `%LOCALAPPDATA%\SageFs\`:
-   - `disable-glyphs.flag` — all features (legacy, from GlyphSpikeGuard)
-   - `disable-squiggles.flag` — squiggles only
-   - `disable-inline-hints.flag` — inline adornments only
-7. **LayoutChanged guard** — `InlineFailureAdornmentManager` skips full redraw when `NewOrReformattedLines.Count == 0 && TranslatedLines.Count == 0`; prevents per-scroll-tick WPF churn
-8. **Editor font metrics** — adornments read `FormattedLineSource.DefaultTextProperties` for font family/size; renders at 90% of editor font size, italic
-9. **Vertical centering** — uses `block.DesiredSize.Height` after `Measure()` instead of magic constant
+1. **`PrivateAssets="all"` on all VS SDK NuGet refs**, prevents type-identity crashes from double-loading
+2. **`TagsChanged` on UI thread**, `Application.Current?.Dispatcher.BeginInvoke(...)`, missing this causes mysterious editor crashes
+3. **`HttpClient.Timeout = 75s`** (NOT `InfiniteTimeSpan`), prevents zombie connections
+4. **`[ContentType("F#")]` + `[ContentType("F# Script")]`** on ALL MEF exports. VS does NOT walk the base-type chain for tagger/factory/listener exports; `.fsx` needs an explicit second attribute
+5. **`SseConnectionHub`**, static per-endpoint multiplexer; at most 2 HTTP SSE connections total
+6. **`SageFsFeatureFlags`**, per-feature runtime disable flags in `%LOCALAPPDATA%\SageFs\`:
+   - `disable-glyphs.flag`, all features (legacy, from GlyphSpikeGuard)
+   - `disable-squiggles.flag`, squiggles only
+   - `disable-inline-hints.flag`, inline adornments only
+7. **LayoutChanged guard**, `InlineFailureAdornmentManager` skips full redraw when `NewOrReformattedLines.Count == 0 && TranslatedLines.Count == 0`; prevents per-scroll-tick WPF churn
+8. **Editor font metrics**: adornments read `FormattedLineSource.DefaultTextProperties` for font family/size; renders at 90% of editor font size, italic
+9. **Vertical centering**: uses `block.DesiredSize.Height` after `Measure()` instead of magic constant
 
 ### Kill Switches (4 layers)
 
 1. **Build gate:** `$(EnableGlyphSpike)=true` must be set to include the MEF project reference
-2. **Runtime — all off:** `%LOCALAPPDATA%\SageFs\disable-glyphs.flag`
-3. **Runtime — squiggles off:** `%LOCALAPPDATA%\SageFs\disable-squiggles.flag`
-4. **Runtime — adornments off:** `%LOCALAPPDATA%\SageFs\disable-inline-hints.flag`
-5. **Clean boundary:** all spike code isolated in `SageFs.VisualStudio.Editor\` — delete folder + remove project ref to fully revert
+2. **Runtime: all off:** `%LOCALAPPDATA%\SageFs\disable-glyphs.flag`
+3. **Runtime: squiggles off:** `%LOCALAPPDATA%\SageFs\disable-squiggles.flag`
+4. **Runtime: adornments off:** `%LOCALAPPDATA%\SageFs\disable-inline-hints.flag`
+5. **Clean boundary:** all spike code isolated in `SageFs.VisualStudio.Editor\`, delete folder + remove project ref to fully revert
 
 ### Port Discovery
 
@@ -752,10 +752,10 @@ SseConnectionHub                     — deduplicates SSE connections (2 total: 
 ### Test Coverage
 
 `SageFs.VisualStudio.Editor.Tests` (net472 xUnit, 39 tests):
-- `TestStateTrackerTests` (20) — all daemon JSON shapes
-- `PortConfigTests` (1) — smoke test
-- `DiagnosticStateTrackerTests` (8) — /diagnostics parsing
-- `FileAnnotationTrackerTests` (9) — file_annotations parsing, path normalization
+- `TestStateTrackerTests` (20), all daemon JSON shapes
+- `PortConfigTests` (1), smoke test
+- `DiagnosticStateTrackerTests` (8), /diagnostics parsing
+- `FileAnnotationTrackerTests` (9), file_annotations parsing, path normalization
 
 ---
 

@@ -6,15 +6,15 @@ They are intentionally small, human-readable, and semantic. Each fixture exists 
 
 **These files are generated, not hand-authored.** `SageFs.Tests/SseGoldenFixtureGenerationTests.fs`
 calls the real `SageFs.SseWriter.format*Event` functions (with the exact `JsonSerializerOptions`
-production wires up — no naming-policy transform) and fails if a checked-in file here differs from
+production wires up, no naming-policy transform) and fails if a checked-in file here differs from
 what that call produces right now. Do not hand-edit these files: a field rename, an added field, or a
 DU shape change to `TestSummary` / `LiveTestingDecision` / `TestResultsBatchPayload` (or anything they
 carry) will make that test fail, and the fix is to review the diff and, if it's a deliberate change,
 regenerate with `SAGEFS_UPDATE_SSE_FIXTURES=1 dotnet run --project SageFs.Tests -- --filter-test-list "SSE golden fixture generation" --summary`.
 
 Before this file-generation gate existed, two of the three fixtures below (`summary-with-*`) were
-shaped after `SseWriter.formatTestSummaryEvent` — a function no production code path actually calls
-(only `formatTestSummaryEventWithDiscovery` is wired into `McpServer.fs`) — so they were missing the
+shaped after `SseWriter.formatTestSummaryEvent`, a function no production code path actually calls
+(only `formatTestSummaryEventWithDiscovery` is wired into `McpServer.fs`), so they were missing the
 `Enabled`/`NotYetRun`/`Activity`/`ActivityText`/`ActivityShort`/`DiscoveryState`/`DiscoveryGeneration`
 fields the real event carries, and the batch fixture wrapped `TestId`/`Generation` in a DU `Fields`
 envelope and left `Framework`/`Category`/`CurrentPolicy` as bare strings when the real

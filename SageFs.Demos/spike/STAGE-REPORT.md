@@ -1,4 +1,4 @@
-# Phase-0 Foundation Spike — Stage Report
+# Phase-0 Foundation Spike: Stage Report
 
 Ran on this machine (Arch Linux, Hyprland/Wayland desktop, `bwrap` unprivileged
 userns, 16 cores / 62 GB RAM) against the tree at `03eaafe8` (fast-forwarded
@@ -7,13 +7,13 @@ from `master` at the start of this session; see git log). Grounded in
 
 **Result: all four stages PASS. The two riskiest unknowns (sandbox
 control/data-plane boundary, and the libXtst input edge) are proven, and the
-full vertical slice — sealed cell → real SageFs daemon → real Chromium →
+full vertical slice, sealed cell → real SageFs daemon → real Chromium →
 XTEST click → Playwright-observed session card → StepLog back across the
-boundary — works end to end.**
+boundary, works end to end.**
 
 No process was left running, no port was left listening, and no core dump was
 produced by the final, working versions of these scripts (see §Cleanup
-verification and §Notes on debugging below — three *earlier, broken*
+verification and §Notes on debugging below, three *earlier, broken*
 iterations of the scripts did genuinely crash while the right bwrap/Xvfb/build
 flags were being found, which is exactly what a foundation spike is for; each
 crash is root-caused below, not hidden).
@@ -25,12 +25,12 @@ bundled/extracted per-RID. That is stale: `ldconfig -p | grep -i xtst` shows
 `/usr/lib/libXtst.so.6` present today, alongside `libX11.so.6`. Stage 3 below
 RO-binds the system libraries directly rather than extracting a package. The
 P/Invoke edge itself (`XOpenDisplay` / `XTestFakeMotionEvent` /
-`XTestFakeButtonEvent` / `XFlush`) is identical either way — this only removes
+`XTestFakeButtonEvent` / `XFlush`) is identical either way, this only removes
 one bundling step from Phase 4, it does not change the architecture.
 
 ---
 
-## Stage 1 — Sandbox + capture — **PASS**
+## Stage 1: Sandbox + capture: **PASS**
 
 **Claim:** a `bwrap` cell with a private Xvfb, captured by `ffmpeg x11grab`,
 with the output file landing on the host via an RW bind mount.
@@ -55,10 +55,10 @@ bwrap --unshare-user --unshare-net --unshare-pid --unshare-ipc --uid 0 --gid 0 \
 ```
 
 **Evidence:**
-- `/tmp/sagefs-demo-spike/cells/stage1/out/stage1.mkv` — 133,160 bytes.
+- `/tmp/sagefs-demo-spike/cells/stage1/out/stage1.mkv`. 133,160 bytes.
 - `ffprobe`: `codec_type=video width=1280 height=720 duration=2.000000`.
 - Host-side file appeared at the bind-mount path the instant the cell wrote
-  it — proves the RW bind-mount data plane from §4.1 works exactly as
+  it, proves the RW bind-mount data plane from §4.1 works exactly as
   described: "a bind mount is just a window onto a host directory."
 
 **Two real bugs found and fixed here (both are genuine Arch/bwrap/Xvfb
@@ -74,7 +74,7 @@ findings, not typos):**
    `swrast_dri.so` on its error path (this machine has an NVIDIA GPU; Xvfb's
    glamor/EGL probing picked the NVIDIA EGL vendor JSON, which crashes when
    it can't find a working GBM device inside the sandbox's minimal `/dev`).
-   Fix: two changes. (a) `bwrap --uid 0 --gid 0` — an unprivileged user
+   Fix: two changes. (a) `bwrap --uid 0 --gid 0`, an unprivileged user
    namespace lets you map your own real uid to a uid of your choosing inside
    the namespace (this is the standard "rootless container" trick), and
    mapping to 0 satisfies Xvfb's ownership check. (b) Force Mesa's software
@@ -83,13 +83,13 @@ findings, not typos):**
    (this machine has both `10_nvidia.json` and `50_mesa.json`; glvnd picks the
    lowest-numbered file first, i.e. NVIDIA, unless overridden).
 
-Neither of these appears in demo-gif-plan.md §4.1/§4.3 — they're Phase-0
+Neither of these appears in demo-gif-plan.md §4.1/§4.3, they're Phase-0
 findings this spike exists to surface: the same two flags will be needed
 wherever the real tool spawns Xvfb in a cell.
 
 ---
 
-## Stage 2 — GUI in the cell + capture — **PASS**
+## Stage 2: GUI in the cell + capture: **PASS**
 
 **Claim:** a real headed Chromium (the bundled Playwright browser) inside the
 cell, rendering a local `file://` page, captured, with proof the page
@@ -97,7 +97,7 @@ actually painted.
 
 **Script:** `spike/stage2-gui-capture.fsx`, page fixture:
 `spike/fixtures/stage2.html` (a big green "Quick Start"-styled button at a
-known position, `data-testid="quick-start"` — same test id the real dashboard
+known position, `data-testid="quick-start"`, same test id the real dashboard
 uses, so this fixture doubles as a rehearsal for Stage 4's target).
 
 **Command shape:** same bwrap flags as Stage 1, plus `--ro-bind` of
@@ -112,16 +112,16 @@ fixtures dir → `/work`, then inside the cell:
 ```
 
 **Evidence:**
-- `stage2.mkv` — 137,183 bytes, 1280×720, 2s (via `ffprobe`).
-- `stage2.png` — an **in-cell X11 screenshot** (`import -window root -display
+- `stage2.mkv`. 137,183 bytes, 1280×720, 2s (via `ffprobe`).
+- `stage2.png`, an **in-cell X11 screenshot** (`import -window root -display
   :99`, ImageMagick), not a Playwright screenshot as the plan's fallback
-  phrasing allows — pixel-checked at the button's known centre (240,140):
+  phrasing allows, pixel-checked at the button's known centre (240,140):
   `srgb(0,200,60)`, exactly the authored colour. This is a *pixel-level*, not
   eyeballed, proof the page rendered.
 
 **One real bug found and fixed:** the first attempt launched Chrome with a
 bare URL (no `--app=`), which opens the normal browser chrome (tabs, address
-bar, an "only for automated testing" infobar) — those UI elements occupy the
+bar, an "only for automated testing" infobar), those UI elements occupy the
 top ~140px, so the pixel probe at the button's *page* coordinates actually
 sampled the browser's own chrome and read near-white, not the button. Fix:
 `--app=<url>` (kiosk-style, no browser UI), after which page coordinates and
@@ -131,14 +131,14 @@ dashboard actor is specified to use `--app=`, and this is exactly why.
 
 ---
 
-## Stage 3 — Fake input via libXtst — **PASS**
+## Stage 3: Fake input via libXtst: **PASS**
 
 **Claim:** a .NET/F# process P/Invokes `libX11`/`libXtst` to move the pointer
 and click a button in the real Chromium page from Stage 2, and the click is
 proven to have registered by reading the page back through Playwright
 (`document.title` changed), not by inspecting pixels.
 
-**Source:** `spike/xtest-app/{XTestApp.fsproj,Program.fs}` — a standalone F#
+**Source:** `spike/xtest-app/{XTestApp.fsproj,Program.fs}`, a standalone F#
 console app (kept isolated from the repo's solution/build; see §Notes on
 repo-tree interactions below for why an explicit `ManagePackageVersionsCentrally=false`
 and an explicit `FSharp.Core` package reference were required). It:
@@ -147,7 +147,7 @@ and an explicit `FSharp.Core` package reference were required). It:
    (`LaunchPersistentContextAsync`, `--app=<url>`, matching Stage 2).
 3. Delivers the click via `XTestFakeMotionEvent` → `XFlush` → sleep →
    `XTestFakeButtonEvent(press)` → `XFlush` → sleep →
-   `XTestFakeButtonEvent(release)` → `XFlush` — **not** Playwright's own
+   `XTestFakeButtonEvent(release)` → `XFlush`, **not** Playwright's own
    `.ClickAsync()`.
 4. Reads `page.TitleAsync()` before and after; the fixture's `onclick` sets
    `document.title = 'clicked'`.
@@ -166,8 +166,8 @@ Stage 2, plus a 4s `ffmpeg` recording for evidence.
   OK: page title after click = clicked
   PASS: XTest-delivered click registered with the real Chromium page
   ```
-- `stage3.mkv` — 276,378 bytes.
-- `xtestapp.stderr.log` — empty (no exceptions).
+- `stage3.mkv`. 276,378 bytes.
+- `xtestapp.stderr.log`, empty (no exceptions).
 
 **Bugs found and fixed (all in the build/packaging path, none in the X11
 logic itself once the FSharp.Core issue was found):**
@@ -176,7 +176,7 @@ logic itself once the FSharp.Core issue was found):**
    startup with `System.IO.FileNotFoundException: Could not load ... FSharp.Core`.
    The single-file bundler under this SDK/RID combination does not include
    it. Fix: publish as a normal self-contained **folder** (no
-   `PublishSingleFile`) — `FSharp.Core.dll` is then present alongside the
+   `PublishSingleFile`), `FSharp.Core.dll` is then present alongside the
    apphost. This is a real, reproducible SDK behavior worth knowing before
    Phase 4 designs the tool's actual distribution format around single-file
    publishing.
@@ -191,8 +191,8 @@ logic itself once the FSharp.Core issue was found):**
    (needed so `Microsoft.Playwright`'s version could be pinned without
    touching the shared `Directory.Packages.props`), the F# SDK's *implicit*
    FSharp.Core reference logic ends up with an empty
-   `$(FSharpCoreImplicitPackageVersion)` — the CPM import happens before the
-   project's own opt-out property takes effect — and the self-contained
+   `$(FSharpCoreImplicitPackageVersion)`, the CPM import happens before the
+   project's own opt-out property takes effect, and the self-contained
    publish shipped with **no** `FSharp.Core.dll` at all (confirmed via
    `project.assets.json` having zero FSharp.Core entries), which is the *same*
    `FileNotFoundException`/`SIGABRT` as bug #1, but from a different root
@@ -206,32 +206,32 @@ logic itself once the FSharp.Core issue was found):**
    inherits `global.json`/CPM whether or not it's referenced by the `.slnx`.**
 3. **`abort()` on unhandled exceptions.** While chasing bug #2, an unhandled
    exception in `main` (wrapped only in an `async {}` computation, not a
-   top-level `try/with`) caused the CLR to call `abort()` — SIGABRT + a core
-   dump — rather than exit cleanly. This is now fixed at the source (see
+   top-level `try/with`) caused the CLR to call `abort()`. SIGABRT + a core
+   dump, rather than exit cleanly. This is now fixed at the source (see
    §Crash-safety below): `main` wraps `run argv` in `try/with` and reports a
    `FAIL:`/non-zero exit instead of ever letting an exception reach the
    runtime's default unhandled-exception path.
 
 ---
 
-## Stage 4 — The real thing — **PASS**
+## Stage 4: The real thing: **PASS**
 
 **Claim:** a real SageFs daemon runs inside the cell; its real dashboard is
 opened in the in-cell Chromium; a libXtst click on the *actual*
 `data-testid="quick-start"` control (the real one, `SageFs/DashboardFragments.fs:542`)
 creates a session, observed via Playwright waiting for
 `data-testid="session-card"` to appear; the whole exchange is recorded; and
-the control/data boundary from §4.1 is exercised literally — a tiny runner
+the control/data boundary from §4.1 is exercised literally, a tiny runner
 pipes a one-line `ScenarioPlan` JSON into the cell-agent's stdin and reads a
 `StepLog` JSON back on its stdout, with nothing else crossing the sandbox
 wall except the `/out` bind mount for the video file.
 
-**Source:** `spike/cell-agent/{CellAgent.fsproj,Program.fs}` — the one process
+**Source:** `spike/cell-agent/{CellAgent.fsproj,Program.fs}`, the one process
 `bwrap` runs as the sandbox's pid 1. It reads exactly one line of
 `ScenarioPlan` JSON from `Console.In`, does the same
 XOpenDisplay→Playwright-launch→resolve-target→XTest-click→Playwright-observe
 sequence as Stage 3 (generalized: the click target is resolved via
-`page.Locator(selector).BoundingBoxAsync()` — a real semantic-target-to-
+`page.Locator(selector).BoundingBoxAsync()`, a real semantic-target-to-
 screen-rect resolution, not a hardcoded coordinate, matching §4.3's
 `Targets`/`ResolvedTarget` design), and writes exactly one line of `StepLog`
 JSON to `Console.Out`.
@@ -263,10 +263,10 @@ bwrap ... \
   ```json
   {"scenarioId":"hello-dashboard","outcome":"Passed","clickedAt":[251,317],"startedMs":0,"endedMs":2937,"message":"clicked (251,317), '[data-testid=session-card]' appeared"}
   ```
-- `stage4.mkv` — 639,618 bytes, 6s. A frame at ~1.4s
+- `stage4.mkv`. 639,618 bytes, 6s. A frame at ~1.4s
   (`ffmpeg -vf select=eq(n\,20)`) shows the real dashboard's "Start a Session"
   picker rendered inside the cell with the cursor approaching the Quick Start
-  card — i.e. the actual product UI, served by a daemon that was built from
+  card, i.e. the actual product UI, served by a daemon that was built from
   this worktree's current source and is running inside the sandbox, not a
   fixture.
 - `daemon.log` (tail) shows a normal warmup/shutdown cycle:
@@ -276,17 +276,17 @@ bwrap ... \
   are under the cell's own tmpfs `/home/demo/.sagefs`, never the host's real
   `~/.SageFs`.
 - The click landed at `(251,317)`, which `BoundingBoxAsync()` resolved from
-  the live page — this was **not** hand-typed; it fell out of the same
+  the live page, this was **not** hand-typed; it fell out of the same
   Quick-Start card position visible in the frame above.
 - Cell exit code 0; `[ "$ok" = "1" ]` gate in the script passed both the
   StepLog-Passed check and the video-file-exists check.
 
-**One real bug found and fixed, not X11/input-related — a genuine
+**One real bug found and fixed, not X11/input-related, a genuine
 architectural finding for Phase 1+:**
 
 - **`page.WaitForLoadStateAsync(LoadState.NetworkIdle)` never resolves against
   this dashboard, and times out at 30s.** Root cause: the dashboard is a
-  Datastar/SSE application by design — `Dashboard.fs` keeps a long-lived
+  Datastar/SSE application by design, `Dashboard.fs` keeps a long-lived
   `EventSource` connection to `/dashboard/stream` open for the life of the
   page, so Chromium's network activity is *never* idle. `NetworkIdle` is
   fundamentally the wrong load-state to wait for on any SSE-driven page. Fix:
@@ -303,7 +303,7 @@ dotnet tool (`~/.dotnet/tools/sagefs`, version `0.6.483-local4`, a locally
 packed build from *before* this session's `data-testid` commit
 (`03eaafe8`) was merged in). Its dashboard HTML genuinely contains
 `Quick Start` text but **zero** `data-testid` attributes anywhere in the DOM
-— confirmed live via `page.EvaluateAsync("document.getElementById('main').outerHTML.indexOf('data-testid')")`
+, confirmed live via `page.EvaluateAsync("document.getElementById('main').outerHTML.indexOf('data-testid')")`
 returning `-1` for over 4 seconds while the button was fully visible on
 screen. This produced a confusing "the element visibly exists but the
 Locator can never find it" symptom that looked like a Playwright/X11
@@ -313,7 +313,7 @@ worktree. Fix: build the daemon from source
 `SageFs/bin/Release/net10.0/SageFs.dll` directly instead of the stale global
 tool. **Lesson for Phase 1+:** the demo tool must always build/run the daemon
 from the checkout under test, never assume the globally-installed `sagefs`
-is current — which the plan's own §8 packaging section already implies
+is current, which the plan's own §8 packaging section already implies
 (`sagefs-demos` is its own tool, independent of `sagefs`) but this spike is
 the first place that assumption actually mattered.
 
@@ -329,8 +329,8 @@ coredumpctl list --since="10 minutes ago"
 curl -s http://127.0.0.1:37749/health   # the user's REAL daemon
 ```
 Results: no Xvfb/bwrap/chrome/ffmpeg/SageFs/cellagent/xtestapp process from
-this spike survives any stage (only pre-existing, unrelated processes —
-Steam's own bwrap sandbox, the user's browser/Slack — ever match these
+this spike survives any stage (only pre-existing, unrelated processes,
+Steam's own bwrap sandbox, the user's browser/Slack, ever match these
 greps); no port in the `47xxx` range is listening; zero core dumps in the
 final, working runs; and the user's real daemon on `37749`/`37750` was
 queried only read-only (`/health`) and remained untouched throughout,
@@ -344,7 +344,7 @@ EGL segfault in Stage 1 before `LIBGL_ALWAYS_SOFTWARE`/`__EGL_VENDOR_LIBRARY_FIL
 were added; `xtestapp`'s `FileNotFoundException`→`abort()` in Stage 3 before
 the FSharp.Core fixes; one dotnet SIGABRT from an unrelated concurrent
 process in this same multi-agent session). Each is root-caused above, not
-patched over with `ulimit -c 0` or `DOTNET_DbgEnableMiniDump=0` — those
+patched over with `ulimit -c 0` or `DOTNET_DbgEnableMiniDump=0`, those
 suppressions were added, then explicitly reverted, per the correction. The
 lasting fix in this codebase is `Program.fs`'s top-level `try/with` in both
 `xtest-app` and `cell-agent`: from that point on, every remaining run in this
@@ -356,20 +356,20 @@ uncaught-exception `abort()`.
 ## Verdict
 
 **Go.** All four Phase-0 stages pass, including Stage 4 (nothing stopped at
-"if this cannot stand up in ~a day, stop and rethink" — the whole chain
+"if this cannot stand up in ~a day, stop and rethink", the whole chain
 stood up in one session, well inside that budget). The two riskiest
-unknowns named in §10 — the sandbox control/data-plane boundary, and the
-libXtst input edge — are both proven, not just individually but composed
+unknowns named in §10, the sandbox control/data-plane boundary, and the
+libXtst input edge, are both proven, not just individually but composed
 together against the real product (a real daemon, the real dashboard
 markup, the real `data-testid` contract) rather than only the throwaway
 fixture page. Concretely de-risked for Phase 1+:
 
 - `bwrap --uid 0 --gid 0` + pre-created `/tmp/.X11-unix` + forced Mesa EGL is
   the complete, working Xvfb-in-bwrap recipe on this machine (Arch,
-  NVIDIA GPU) — codify these exact flags in `Isolation.Bubblewrap`, they are
+  NVIDIA GPU), codify these exact flags in `Isolation.Bubblewrap`, they are
   not optional extras.
 - `--app=<url>` Chromium is required for the page-coordinate-equals-screen-
-  coordinate assumption Stage 3/4's target resolution depends on — already
+  coordinate assumption Stage 3/4's target resolution depends on, already
   in the plan's §4.4, now empirically confirmed necessary.
 - `libXtst` P/Invoke works exactly as designed against the *system* library
   on this machine; the bundling machinery in §8 is still worth building for
@@ -378,12 +378,12 @@ fixture page. Concretely de-risked for Phase 1+:
   shape for anything P/Invoking native libraries in this toolchain; revisit
   before Phase 4 commits to a distribution format.
 - `LoadState.NetworkIdle` must never be used against SageFs's Datastar/SSE
-  surfaces — codify as a rule for every `Actor` in Phase 1's design, not a
+  surfaces, codify as a rule for every `Actor` in Phase 1's design, not a
   per-scenario workaround.
 - The demo tool must always drive a daemon built from the checkout under
   test, never the globally-installed `sagefs`.
 
 Nothing here suggests the cell/actor/boundary architecture in §4 needs
 rethinking. The friction encountered was entirely in flag-tuning and
-build/packaging edges — exactly the class of thing a foundation spike exists
+build/packaging edges, exactly the class of thing a foundation spike exists
 to surface cheaply, before Phase 1 builds real planners on top of it.
