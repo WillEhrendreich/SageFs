@@ -1883,11 +1883,19 @@ let sagefsPipeline = pipeline "sagefs" {
         | Error why -> return Error why
         | Ok() ->
           for project in sampleProjects do
-            let bin =
-              System.IO.Path.Combine(rootDir, System.IO.Path.GetDirectoryName project, "bin", "Release", "net11.0")
-            for name in [ "SageFs.Core.dll"; "SageFs.Core.pdb" ] do
-              let stale = System.IO.Path.Combine(bin, name)
-              if System.IO.File.Exists stale then System.IO.File.Delete stale
+            let releaseDir =
+              System.IO.Path.Combine(rootDir, System.IO.Path.GetDirectoryName project, "bin", "Release")
+            // Every framework the sample actually built for, rather than one named here: a sample that
+            // targeted net10 would otherwise keep the stale copy this stage exists to remove.
+            let frameworks =
+              if System.IO.Directory.Exists releaseDir then
+                System.IO.Directory.GetDirectories releaseDir |> Array.map System.IO.Path.GetFileName
+              else
+                Array.empty
+            for tfm in frameworks do
+              for name in [ "SageFs.Core.dll"; "SageFs.Core.pdb" ] do
+                let stale = System.IO.Path.Combine(releaseDir, tfm, name)
+                if System.IO.File.Exists stale then System.IO.File.Delete stale
           let firstFailure = ref (None : string option)
           for project in sampleProjects do
             match! runner $"dotnet build {project} -c Release --nologo" with
