@@ -25,20 +25,49 @@ module WarmupFcsDiagnostic =
     | Some fn -> sprintf "FS%04d %s:%d:%d — %s" d.ErrorNumber fn d.StartLine d.StartColumn d.Message
     | None -> sprintf "FS%04d — %s" d.ErrorNumber d.Message
 
-  /// FSI's own exception message for a failed interaction is a generic
-  /// wrapper ("Operation could not be completed due to earlier error(s)")
-  /// regardless of what actually went wrong — true whether the failing
-  /// statement was the first in the submission or came after an earlier one
-  /// in the same batch. The real reason lives in the diagnostics FCS
-  /// reported alongside it. Prefer the first Error-severity diagnostic's own
-  /// message; fall back to the exception message only when FSI genuinely
-  /// captured no diagnostics at all (a host-level exception, not a compile
-  /// error).
+  /// The diagnostics that say why an eval failed. FSI's own exception message
+  /// for a failed interaction is a generic wrapper ("Operation could not be
+  /// completed due to earlier error(s)") whatever actually went wrong, and
+  /// whether the failing statement was the first in the submission or came
+  /// after an earlier one in the same batch. The real reason lives in the
+  /// error-severity diagnostics FCS reported alongside it. Every message that
+  /// explains a failed eval reads them through here.
+  let errors (diagnostics: WarmupFcsDiagnostic list) : WarmupFcsDiagnostic list =
+    diagnostics |> List.filter (fun d -> d.Severity = "error")
+
+  /// Why a warm-up open failed, in one diagnostic's words: the first error's
+  /// own message, falling back to the exception message only when FSI
+  /// captured no error at all, as with a host-level exception.
   let pickErrorMessage (exceptionMessage: string) (diagnostics: WarmupFcsDiagnostic list) : string =
-    diagnostics
-    |> List.tryFind (fun d -> d.Severity = "error")
+    errors diagnostics
+    |> List.tryHead
     |> Option.map (fun d -> d.Message)
     |> Option.defaultValue exceptionMessage
+
+  /// How many errors a failed startup script's message lists before it only
+  /// counts the rest. A broken `#load` can report hundreds, and the message
+  /// reaches the log, the session's fault reason, the dashboard and MCP.
+  /// Three, because the first error is usually the cause and the ones after
+  /// it usually its cascade: three is enough to see whether they share a
+  /// cause, and few enough that FSI's own words stay on a one-line status.
+  let private errorsListed = 3
+
+  /// Why a startup script failed, in words, or None when FSI reported no
+  /// error. That includes an error FSI records while the code runs, such as an
+  /// assembly it found and could not load, even when the user's code catches
+  /// the exception. So the message lists the first few distinct errors,
+  /// counts the rest, and keeps FSI's own words after them.
+  let failureMessage (exceptionMessage: string) (diagnostics: WarmupFcsDiagnostic list) : string option =
+    match errors diagnostics |> List.map formatLine |> List.distinct with
+    | [] -> None
+    | lines ->
+      let listed = lines |> List.truncate errorsListed |> String.concat "; "
+      let rest =
+        match lines.Length - errorsListed with
+        | 1 -> " (and 1 more error)"
+        | more when more > 1 -> sprintf " (and %d more errors)" more
+        | _ -> ""
+      Some(sprintf "%s%s (FSI: %s)" listed rest exceptionMessage)
 
 /// Whether an openable entity is an F# module or a namespace.
 [<RequireQualifiedAccess>]

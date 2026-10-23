@@ -92,11 +92,51 @@ type IFsiSession =
   /// Release a held test (the editor's debugger is attached) and wait up to `park` for it to finish.
   abstract DebugContinue: ticket: TestDebug.DebugTicket * park: TimeSpan -> Async<AgentReply<TestDebug.DebugProgress>>
 
+/// A session's diagnostics in the warmup's shape, so a warmup report and a failed startup script describe an error
+/// the same way. Neither session kind carries a file name, so none is given, and `formatLine` shows no location: a
+/// line alone could belong to a file the script `#load`s.
+let warmupDiagnostics (diagnostics: Diagnostics.Diagnostic array) : WarmUp.WarmupFcsDiagnostic list =
+  diagnostics
+  |> Array.map (fun d ->
+    ({ Message = d.Message
+       Severity =
+         match d.Severity with
+         | Diagnostics.DiagnosticSeverity.Blocking -> "error"
+         | Diagnostics.DiagnosticSeverity.Warning -> "warning"
+         | Diagnostics.DiagnosticSeverity.Info
+         | Diagnostics.DiagnosticSeverity.Hidden -> "info"
+       ErrorNumber = d.ErrorNumber
+       FileName = None
+       StartLine = d.Range.StartLine
+       EndLine = d.Range.EndLine
+       StartColumn = d.Range.StartColumn
+       EndColumn = d.Range.EndColumn } : WarmUp.WarmupFcsDiagnostic))
+  |> Array.toList
+
+/// Whether callers tell this failure apart by its type: a cancellation or a structured SageFs error, including one that
+/// arrives inside an `AggregateException`, which callers unwrap before they look (`McpRouteError.tryMapTransportFailure`).
+let rec private isTyped (ex: exn) =
+  match ex with
+  | :? OperationCanceledException
+  | :? SageFsErrorException -> true
+  | :? AggregateException as aggregate when not (isNull aggregate.InnerException) -> isTyped aggregate.InnerException
+  | _ -> false
+
+/// The exception a failed startup script raises. One with error diagnostics carries them in its message, with FSI's
+/// exception inside, since its message alone names no cause. A typed failure is raised as it is, because wrapping it
+/// would hide it from the callers that match on its type.
+let failureToRaise (ex: exn) (diagnostics: Diagnostics.Diagnostic array) : exn =
+  match isTyped ex, WarmUp.WarmupFcsDiagnostic.failureMessage ex.Message (warmupDiagnostics diagnostics) with
+  | true, _
+  | _, None -> ex
+  | false, Some message -> Exception(message, ex)
+
 /// Evaluate and raise on failure: the throwing form, for startup scripts whose failure must abort.
 let evalOrThrow (session: IFsiSession) (code: string) (cancellationToken: CancellationToken) : unit =
-  match (session.Eval(code, cancellationToken)).Outcome with
+  let eval = session.Eval(code, cancellationToken)
+  match eval.Outcome with
   | FsiSucceeded -> ()
-  | FsiFailed ex -> raise ex
+  | FsiFailed ex -> raise (failureToRaise ex eval.Diagnostics)
   | FsiInterrupted -> raise (OperationCanceledException "the evaluation was interrupted")
 
 /// Reflection-walk an FSI session's bound values into a JSON-serialized Features.LiveValueTree.LiveValueSnapshot,

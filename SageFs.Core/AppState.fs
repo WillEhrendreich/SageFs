@@ -842,24 +842,8 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
     | false -> onProgress(3, 4, "Scanned assemblies, auto-open disabled")
     // Phase 3: Open all collected names with rich diagnostics via iterative retry
     let mutable openCount = 0
-    let toWarmupDiagnostics (diagnostics: Diagnostics.Diagnostic array) : WarmupFcsDiagnostic list =
-      diagnostics
-      |> Array.map (fun d ->
-        { Message = d.Message
-          Severity =
-            match d.Severity with
-            | Diagnostics.DiagnosticSeverity.Blocking -> "error"
-            | Diagnostics.DiagnosticSeverity.Warning -> "warning"
-            | Diagnostics.DiagnosticSeverity.Info
-            | Diagnostics.DiagnosticSeverity.Hidden -> "info"
-          ErrorNumber = d.ErrorNumber
-          // The session port does not carry a file name; warm-up opens are evaluated from stdin anyway.
-          FileName = None
-          StartLine = d.Range.StartLine
-          EndLine = d.Range.EndLine
-          StartColumn = d.Range.StartColumn
-          EndColumn = d.Range.EndColumn })
-      |> Array.toList
+    // The session port does not carry a file name; warm-up opens are evaluated from stdin anyway.
+    let toWarmupDiagnostics = FsiSession.warmupDiagnostics
     // The real "why" for a failed open lives in the diagnostics, not in
     // FSI's own generic exception message — see WarmUp.WarmupFcsDiagnostic.pickErrorMessage.
     let describeOpenFailure (ex: exn) (diagnostics: Diagnostics.Diagnostic array) =
