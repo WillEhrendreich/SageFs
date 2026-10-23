@@ -171,11 +171,16 @@ let formatResultsBatchWithSource
   (payload: Features.LiveTesting.TestResultsBatchPayload)
   (source: obj option)
   : string =
+  // No `Entries` here: the list lives behind GET /api/live-testing/entries, so a frame's size tracks
+  // the tally rather than the size of the user's suite. A 2,604-case run reached a client as one
+  // ~990 KB `data:` line and the client materialised the whole string before parsing it. The tally,
+  // freshness, completion, generation and decision all still ride on this frame unchanged, and both
+  // readers take the list from the route: the plugin through batch_hydration, the editor through
+  // hydrateFrame.
   let envelope =
     {| Generation = payload.Generation
        Freshness = payload.Freshness
        Completion = payload.Completion
-       Entries = payload.Entries
        Summary = payload.Summary
        LastDecision = payload.LastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
 

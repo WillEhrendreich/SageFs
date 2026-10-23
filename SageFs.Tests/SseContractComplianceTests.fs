@@ -287,8 +287,11 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
     testCase "test_results_batch has expected properties" <| fun () ->
       formatTestResultsBatchEvent jsonOpts None (mkTestResultsBatch 2) None
       |> extractDataPayload
+      // No "entries": the list is a fetch (GET /api/live-testing/entries) so the frame's size stops
+      // tracking the size of the suite. The tally, freshness, generation, decision and summary are
+      // what a client renders from the stream itself.
       |> assertJsonProperties "test_results_batch"
-        [ "generation"; "freshness"; "completion"; "entries"; "summary"; "lastDecision" ]
+        [ "generation"; "freshness"; "completion"; "summary"; "lastDecision" ]
 
     testCase "file_annotations has expected properties" <| fun () ->
       formatFileAnnotationsEvent jsonOpts None (mkFileAnnotations ())
