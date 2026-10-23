@@ -1,12 +1,32 @@
-# SageFs as a systemd USER unit.
+# SageFs as a systemd USER unit. Install it from the repo root, with the same
+# block as the README's (a test keeps the two identical):
 #
-#   mkdir -p ~/.config/systemd/user
-#   cp contrib/systemd/sagefs.service ~/.config/systemd/user/
-#   systemctl --user enable --now sagefs
+#   if [ "$(printf '%s' "$PATH" | tr -d '"%\\\n')" != "$PATH" ]; then
+#     echo "Your PATH holds a \", %, \\ or line break, which the install cannot copy into the unit, so nothing was installed." >&2
+#   else
+#     mkdir -p ~/.config/systemd/user/sagefs.service.d
+#     cp contrib/systemd/sagefs.service ~/.config/systemd/user/
+#     printf '[Service]\nEnvironment="PATH=%s"\n' "$PATH" > ~/.config/systemd/user/sagefs.service.d/path.conf
+#     systemctl --user daemon-reload
+#     systemctl --user enable sagefs
+#     systemctl --user restart sagefs
+#   fi
 #
 # The daemon then outlives every agent, terminal and editor, and comes back at
 # login. Add `loginctl enable-linger $USER` if it should also start at boot,
 # before you log in.
+#
+# A user unit does not read your shell profile, so the daemon, and every worker
+# and process it starts, would get systemd's default PATH. Then an init.fsx that
+# starts npm fails with "No such file or directory", and a script that npm runs
+# cannot find dotnet. A PATH belongs to one machine, so this file sets none: the
+# install writes the PATH of the shell you run it in to a drop-in,
+# sagefs.service.d/path.conf, which systemd reads beside the unit. Inside its
+# quotes systemd expands % and \, and a line break ends the setting, so a PATH
+# holding ", %, \ or a line break would come out changed, and the install stops
+# instead. To make the daemon see a PATH change (a new tool, another node
+# version through nvm), run the install again: it rewrites the drop-in, reloads
+# systemd and restarts the service.
 #
 # ExecStart assumes `dotnet tool install --global SageFs`, which puts the
 # executable at ~/.dotnet/tools/sagefs (%h is your home directory). The tool's

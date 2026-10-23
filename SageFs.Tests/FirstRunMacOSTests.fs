@@ -109,6 +109,17 @@ let tests =
         | other -> failtestf "EnvironmentVariables is a dict, got %A" other
       }
 
+      test "sets PATH to the install shell's, because launchd's default has no npm and no dotnet" {
+        // launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin, and the daemon hands it to every worker, so an
+        // init.fsx that starts npm fails, and a script npm runs cannot find dotnet. A PATH written into the plist
+        // would be someone else's, so it is a placeholder the install fills from its own shell.
+        match agent () |> Map.tryFind "EnvironmentVariables" with
+        | Some(PDict vars) ->
+          vars |> List.tryFind (fst >> (=) "PATH") |> Option.map snd
+          |> Expect.equal "PATH is the placeholder the README install fills in" (Some(PString "@PATH@"))
+        | other -> failtestf "EnvironmentVariables is a dict, got %A" other
+      }
+
       test "WorkingDirectory is one SageFs will watch from, outside its data folder, and one the README install creates" {
         // A daemon started in $HOME hands $HOME out as a session root (a request that names no directory falls
         // back to the daemon's cwd), and SageFs refuses to watch a home directory. Inside the data folder, the
