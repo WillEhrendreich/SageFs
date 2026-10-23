@@ -203,7 +203,7 @@ let items : Item list =
     item "sse-events-stay-small" "A discovery event fits the stream it rides" Dashboard Next
       (landmark "SageFs/SseEvent.fs" "SseEvent")
       [ "docs/LIVE_TESTING_GUIDE.md" ]
-      "A suite of 2,604 tests reached the editor as one SSE event of about 990 KB, and the client's parser stopped inside the string: a million reconnects and no live testing. The daemon already fetches discovery over the worker wire, so the frame does not have to carry the whole list. I'd send a summary and let the client fetch, or chunk the entries behind a continuation, and whichever I pick the editor, the plugin and the dashboard all have to read it. The one thing I know is that raising a buffer is not the fix: the payload should not exist."
+      "A suite of 2,604 tests reached the editor as one SSE event of about 990 KB: the whole discovery list in a single `data:` line, replayed to every connection that catches up on /events. Size was not what broke it. The reader has no size limit and the daemon writes whole frames; what broke it was a buffer that outlived its connection, so a reconnect inherited the dead connection's partial line, and that is fixed and proven, zero parse errors with the reset and one without. What is left is cost: the daemon already fetches discovery over the worker wire, so a summary on the stream with the list behind a fetch takes a catch-up from 990 KB to a few dozen bytes. I would send the summary first and let a client that wants the list ask for it, and whichever shape I pick the editor, the plugin and the dashboard all have to read it."
 
     item "native-nuget-in-sessions" "Native NuGet packages load in sessions" Isolation Now
       (landmark "SageFs.Core/NativeResolution.fs" "NativeAssets")
