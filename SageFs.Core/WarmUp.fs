@@ -27,18 +27,17 @@ module WarmupFcsDiagnostic =
 
   /// The diagnostics that say why an eval failed. FSI's own exception message
   /// for a failed interaction is a generic wrapper ("Operation could not be
-  /// completed due to earlier error(s)") regardless of what actually went
-  /// wrong — true whether the failing statement was the first in the
-  /// submission or came after an earlier one in the same batch. The real
-  /// reason lives in the error-severity diagnostics FCS reported alongside
-  /// it. Every message that explains a failed eval reads them through here.
+  /// completed due to earlier error(s)") whatever actually went wrong, and
+  /// whether the failing statement was the first in the submission or came
+  /// after an earlier one in the same batch. The real reason lives in the
+  /// error-severity diagnostics FCS reported alongside it. Every message that
+  /// explains a failed eval reads them through here.
   let errors (diagnostics: WarmupFcsDiagnostic list) : WarmupFcsDiagnostic list =
     diagnostics |> List.filter (fun d -> d.Severity = "error")
 
   /// Why a warm-up open failed, in one diagnostic's words: the first error's
   /// own message, falling back to the exception message only when FSI
-  /// genuinely captured no error at all (a host-level exception, not a
-  /// compile error).
+  /// captured no error at all, as with a host-level exception.
   let pickErrorMessage (exceptionMessage: string) (diagnostics: WarmupFcsDiagnostic list) : string =
     errors diagnostics
     |> List.tryHead
