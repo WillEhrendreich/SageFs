@@ -92,7 +92,12 @@ let tests =
             match landmark.Symbol.Trim() <> "" && Directory.Exists folder with
             | true -> None
             | false -> Some (sprintf "%s -> %s (%s)" item.Id landmark.Path landmark.Symbol))
-      bad |> Expect.isEmpty "every landmark names a symbol and a folder that exists"
+      // The offenders travel in the message, not only in Expecto's diff: the ratchet lane prints the
+      // assertion message and nothing else, so a red run in CI gave no way to learn WHICH landmark
+      // broke without reproducing the whole tier locally. That is what happened on two pull requests.
+      bad
+      |> Expect.isEmpty (
+        sprintf "every landmark names a symbol and a folder that exists; these do not: %A" bad)
 
     testCase "WHY — the area and horizon lists name every case, so an item can never land in a section that is not rendered" <| fun _ ->
       (areas |> List.length) |> Expect.equal "every Area is listed" (unionCaseCount<Area> ())
