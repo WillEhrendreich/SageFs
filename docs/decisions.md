@@ -1235,8 +1235,12 @@ Evidence: `SageFs.Core/SessionReload.fs` (`ReplFreshness`), `SageFs.Core/Session
 send, check), `SageFs.Tests/McpRunTestsTests.fs`, `SageFs.Tests/ReplFreshnessDashboardTests.fs` (the card, in HTML and in
 Chromium), `SageFs.Tests/SessionManagerRebuildOutcomeTests.fs` (the session carries it, a replaced worker clears it), and
 `SageFs.Tests/RunAppDeltaTests.fs` (`run_app repl freshness`, the measurement).
-Reopen it if: the daemon starts re-fetching maps and discovery after a host swap, or the FSI host can apply a delta and keep its
-coverage.
+Reopen it if: the FSI host can apply a delta and keep its coverage. The first condition is met, so record it here rather than leave the
+entry stale: the daemon re-fetches maps and discovery after every in-worker host swap now (`SageFs.Core/SessionRefetch.fs`, the one op
+every reset caller wires, with `WorkerPostReady.RefetchGate` refusing a session whose worker is not settled and dropping an answer from a
+worker that has since been replaced), pinned by `SageFs.Tests/WorkerPostReadyRefetchTests.fs` and `SageFs.Tests/SwapRefetchTests.fs`.
+What still blocks the automatic refresh is the other two pieces named above: the actor-side idle-and-empty check, and the host's in-flight
+test count.
 ## A run_tests receipt says whether the build it ran against is behind the files on disk
 
 Nehemiah edited a test file on disk, did not rebuild, and called `run_tests`. The receipt said `3 passed` and nothing else. I

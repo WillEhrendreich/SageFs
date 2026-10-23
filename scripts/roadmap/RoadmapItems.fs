@@ -106,7 +106,7 @@ let items : Item list =
     item "level-the-repl-without-losing-it" "Level the REPL after a patch without losing it" HotReload Next
       NoLandmarkYet
       [ "docs/decisions.md"; "docs/how-hot-reload-works.md" ]
-      "Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. I'd make the daemon re-fetch maps and discovery after any host swap and check the REPL is idle and empty first, then do it for you."
+      "Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. Half of the fix is already in: the daemon re-fetches maps and discovery after every in-worker host swap, refused through a gate rather than half-refreshed when the worker is unsettled. What is still missing is the idle-and-empty check inside the eval actor, which cancels a running eval before a hard reset so the check cannot live outside it, and the host's own in-flight test count, because a test run runs in the host and the actor's idle phase proves nothing about it. With those, the refresh becomes a background step with the loud state held until it finishes."
 
     item "live-tweak-front-door" "Nudge a value in the running app" HotReload Now
       (landmark "SageFs/McpNudge.fs" "nudgeValue")
