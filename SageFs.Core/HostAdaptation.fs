@@ -126,7 +126,7 @@ module HostAdaptation =
         |> String.concat "; "
       sprintf "  - %s: %s" conflict.Assembly pins
     sprintf
-      "Projects in this session resolve different versions of the same assembly, and one FSI process loads one version of an assembly, so the project that pinned the other would silently run against the wrong one:\n%s\nAlign the versions (a Directory.Packages.props with central package management is the usual way), or create one session per project."
+      "Projects in this session resolve different versions of the same assembly, and one FSI process loads one version of an assembly, so the project that pinned the other would silently run against the wrong one:\n%s\nThese are the versions the session resolved. They move when a project is restored and rebuilt: if a project file changed after that, restore the solution and then rebuild the session (`SageFs: hardReset` in the editor, or `hard_reset_fsi_session rebuild=true`), so the version the project now asks for is the one that gets loaded. Failing that, align the versions (a Directory.Packages.props with central package management is the usual way), or create one session per project."
       (conflicts |> List.map describeConflict |> String.concat "\n")
 
   /// The folders the runtime has to probe for the overrides' files, each once.
