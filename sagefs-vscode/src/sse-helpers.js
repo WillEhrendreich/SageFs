@@ -37,6 +37,14 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
 
   const startListening = () => {
     log(`Connecting to ${url}`);
+    // A connection that died mid-line must not seed the next one. `buffer` and
+    // `currentEvent` are per-connection, and without this the first chunk of a
+    // reconnect is concatenated onto the dead connection's partial line: the
+    // joined "line" is unparseable, so every later frame that reuses it fails
+    // with an unterminated string at a position that is the old frame's length.
+    // That is what a 990 KB discovery event looked like from the editor.
+    buffer = '';
+    currentEvent = 'message';
     req = http.get(url, { timeout: 0, headers: { 'Accept-Encoding': 'br, gzip, deflate' } }, (res) => {
       // Reconnect truth: announce "connected" only once the replacement
       // connection has SUCCEEDED (HTTP response received). Previously
