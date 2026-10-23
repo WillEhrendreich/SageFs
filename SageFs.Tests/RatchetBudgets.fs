@@ -135,7 +135,7 @@ let fileSize : (string * int) list =
     // remains is a one-line field, a forwarding call, and the comments saying WHY each site
     // passes the directory it does — including the one that reads no directory at all,
     // because `commitCohort`'s command already carries its scope.
-    "SageFs/Mcp.fs", 3274 // one line for the hatch section of get_daemon_status (#160); still below the 3289 it held before today's merges
+    "SageFs/Mcp.fs", 3273 // one line for the hatch section of get_daemon_status (#160); still below the 3289 it held before today's merges
     // 850 -> 830: ratcheted DOWN (never up) after moving the
     // session-path-containment validator (resolveRealSessionPath/
     // isUncPath/validateSessionCreateRequest) out into its own
@@ -230,7 +230,7 @@ let fileSize : (string * int) list =
     // hard-reset arm writes the FRESH shadow copy's maps into it so GetInstrumentationMaps stops
     // serving the creation-time array — a deliberate, reviewed fix, not silent accretion. Ratchet
     // back DOWN when this file is split; never bump to paper over drift.
-    "SageFs.Core/AppState.fs", 2003
+    "SageFs.Core/AppState.fs", 1987
     // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
     // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
     // reviewed feature, not silent accretion. Ratchet back DOWN when
@@ -285,7 +285,15 @@ let fileSize : (string * int) list =
     // handler carries out is StartTimeoutDecision.fs.
     // 1599 -> 1579: stopWorker moved to WorkerStop.stopProcess (about 40 lines), net of the reaper hand-off, the reaping
     // book field and the two commands a stop needs now that it no longer waits for its worker inside the loop.
-    "SageFs.Core/SessionManager.fs", 1579 ]
+    // 1579 -> 1554: TestDiscoveryReport and SessionManagerCallbacks moved to SessionManagerCallbacks.fs (about 45 lines
+    // net), below, which compiles before this file does.
+    "SageFs.Core/SessionManager.fs", 1554
+    // Added 2026-10-23 with the split of SessionManager.fs: TestDiscoveryReport and
+    // SessionManagerCallbacks are the seam between the loop and its callers — what a worker said
+    // about its tests, and every event the manager tells the outside world — and neither reaches
+    // into the loop, so they compile before it. Set at the file's true size (measured after the
+    // WorkerProtocol open it needs, which is what the first count missed).
+    "SageFs.Core/SessionManagerCallbacks.fs", 50 ]
 
 /// Product code that parks a thread-pool thread on a child process's stdout or stderr for the life of the process:
 /// a `Task.Run` (or `Task.Factory.StartNew`) whose body reads a Process stream line by line or to the end. The

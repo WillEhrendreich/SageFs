@@ -615,17 +615,17 @@ module SageFsEffectHandler =
               async {
                 try
                   let! resp = proxy (WorkerMessage.GetTestDiscovery replyId)
-                  return SessionManager.TestDiscoveryReport.ofResponse resp
+                  return TestDiscoveryReport.ofResponse resp
                 with ex ->
-                  return SessionManager.TestDiscoveryReport.DiscoveryFailed ex.Message
+                  return TestDiscoveryReport.DiscoveryFailed ex.Message
               }
             match report with
-            | SessionManager.TestDiscoveryReport.Discovered (tests, providers) ->
+            | TestDiscoveryReport.Discovered (tests, providers) ->
               match List.isEmpty providers with
               | true -> ()
               | false -> dispatch (SageFsMsg.Event (TuiEvent.ProvidersDetected providers))
               dispatch (SageFsMsg.Event (TuiEvent.TestsDiscovered (SessionId.value sid, tests)))
-            | SessionManager.TestDiscoveryReport.DiscoveryFailed reason ->
+            | TestDiscoveryReport.DiscoveryFailed reason ->
               Utils.Log.warn "[SageFsApp] Initial test discovery failed for %s: %s" (SessionId.value sid) reason
               dispatch (SageFsMsg.Event (TuiEvent.TestDiscoveryFailed (SessionId.value sid, reason)))
         | Features.LiveTesting.TestCycleEffect.ParseTreeSitter (content, filePath) ->

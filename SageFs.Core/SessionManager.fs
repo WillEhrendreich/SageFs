@@ -50,21 +50,6 @@ module SessionManager =
     AdoptedCore: (string * DateTime) option
   }
 
-  /// What a worker said when asked for its tests.
-  [<RequireQualifiedAccess>]
-  type TestDiscoveryReport =
-    | Discovered of tests: Features.LiveTesting.TestCase array * providers: Features.LiveTesting.ProviderDescription list
-    | DiscoveryFailed of reason: string
-
-  module TestDiscoveryReport =
-    let ofResponse (response: WorkerResponse) : TestDiscoveryReport =
-      match response with
-      | WorkerResponse.InitialTestDiscovery (tests, providers) -> TestDiscoveryReport.Discovered (tests, providers)
-      | WorkerResponse.WorkerError err -> TestDiscoveryReport.DiscoveryFailed (SageFsError.describe err)
-      | other ->
-        let case, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(other, typeof<WorkerResponse>)
-        TestDiscoveryReport.DiscoveryFailed (sprintf "Unexpected reply to test discovery: %s" case.Name)
-
   [<RequireQualifiedAccess>]
   type SessionCommand =
     | CreateSession of
@@ -366,38 +351,6 @@ module SessionManager =
     Ledger = StartLedger.shared
   }
 
-  /// Everything the manager tells the outside world, plus the supervisor's alarm.
-  type SessionManagerCallbacks =
-    { OnSessionProgressChanged: unit -> unit
-      OnTestDiscovery: SessionId -> TestDiscoveryReport -> unit
-      OnInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit
-      OnSessionReady: SessionId -> unit
-      OnWarmupProgress: SessionId -> string -> unit
-      OnSessionFaulted: SessionId -> string -> unit
-      OnAppOutput: SessionId -> SageFs.AppOutput.Stream -> string -> unit
-      /// The loop is wedged, restarted, or failed a command (see SupervisorWatchdog).
-      OnSupervisorAlarm: SupervisorWatchdog.SupervisorAlarm -> unit
-      /// Health changed (an alarm degraded it, or a good command cleared it); the daemon feeds SupervisorHealthWatch.
-      OnSupervisorHealth: SupervisorHealth -> unit
-      /// Runs on the loop thread as each command starts, outside the per-command
-      /// guard, so a throw restarts the loop: an observability hook and a test seam.
-      OnCommandStart: string -> unit
-      Watchdog: SupervisorWatchdog.Settings }
-
-  module SessionManagerCallbacks =
-    let silent : SessionManagerCallbacks =
-      { OnSessionProgressChanged = ignore
-        OnTestDiscovery = fun _ _ -> ()
-        OnInstrumentationMaps = fun _ _ -> ()
-        OnSessionReady = ignore
-        OnWarmupProgress = fun _ _ -> ()
-        OnSessionFaulted = fun _ _ -> ()
-        OnAppOutput = fun _ _ _ -> ()
-        OnSupervisorAlarm = ignore
-        OnSupervisorHealth = ignore
-        OnCommandStart = ignore
-        Watchdog = SupervisorWatchdog.defaultSettings }
-
   /// Create the supervisor MailboxProcessor, with an alarm for its own trouble.
   /// Returns (mailbox, readSnapshot) where readSnapshot is a lock-free CQRS query function.
   let internal createWithAlarm
@@ -604,6 +557,22 @@ module SessionManager =
       let endRebuild (id: SessionId) (outcome: RebuildOutcome) (state: ManagerState) : ManagerState =
         let recorded = ManagerState.recordRebuild id outcome state
         { recorded with ReadyWaiters = ReadyWait.settleAfterRebuild holdAnswer id outcome recorded.ReadyWaiters }
+
+      // A swap that was PUT BACK: the old worker resumes serving, the pending entry goes, and the
+      // rebuild ENDS as FailedStillServing. Both revert paths do exactly this, and the outcome is
+      // the whole point of the helper: without it the session keeps reporting `Rebuilding` while
+      // the old worker serves it the whole time, so no later run can ever be certified
+      // (`run_tests` answers `PassedWhileRebuilding` for the rest of the session's life).
+      let endRevertedSwap (id: SessionId) (error: SageFsError) (oldSession: ManagedSession) (state: ManagerState) : ManagerState =
+        let reverted =
+          endRebuild
+            id
+            (RebuildOutcome.FailedStillServing (error, DateTime.UtcNow))
+            (ManagerState.clearPendingSwap id
+              { ManagerState.addSession id oldSession state with
+                  WarmupProgress = Map.remove id state.WarmupProgress })
+        onSessionReady id
+        reverted
 
       let lastGoodState = ref ManagerState.empty
       // publishSnapshot is a fire-and-forget notification; a throwing snapshot
@@ -992,12 +961,7 @@ module SessionManager =
               match ManagerState.tryGetPendingSwap id state with
               | Some oldSession ->
                 Log.warn "[SessionManager] Replacement worker spawn failed for session %s; reverting to the still-serving old worker: %s" (SessionId.value id) msg
-                let newState =
-                  ManagerState.clearPendingSwap id
-                    { ManagerState.addSession id oldSession state with
-                        WarmupProgress = Map.remove id state.WarmupProgress }
-                onSessionReady id
-                return newState
+                return endRevertedSwap id (SageFsError.WorkerSpawnFailed msg) oldSession state
               | None ->
                 // Unreachable: RevertSwap is only returned when a swap is pending.
                 Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
@@ -1037,8 +1001,19 @@ module SessionManager =
               match ManagerState.tryGetPendingSwap id state with
               | Some oldSession ->
                 Log.warn "[SessionManager] Replacement worker for session %s was silent for %.0fs; reverting to the still-serving old worker" (SessionId.value id) timeout.Budget.Inactivity.TotalSeconds
-                onSessionReady id
-                return ManagerState.clearPendingSwap id { ManagerState.addSession id oldSession state with WarmupProgress = Map.remove id state.WarmupProgress }
+                // The live case this helper exists for: under load a replacement stayed silent for
+                // its whole allowance, the swap went back, and the session reported `Rebuilding`
+                // for the rest of its life because nothing ended the rebuild.
+                return
+                  endRevertedSwap
+                    id
+                    (SageFsError.WorkerTimeout(
+                      SessionId.value id,
+                      StartStage.describe timeout.Stage,
+                      timeout.Budget.Inactivity.TotalSeconds
+                    ))
+                    oldSession
+                    state
               | None -> return state
             | StartTimeoutDecision.Decision.Retry (budget, progress) ->
               Log.warn "[SessionManager] Session %s: the worker was silent for %.0fs, %.0fs in all (attempt %d of %d); starting it again and allowing %.0fs of silence" (SessionId.value id) timeout.Budget.Inactivity.TotalSeconds timeout.Waited.TotalSeconds timeout.Budget.Attempt StartEscalation.MaxAttempts budget.Inactivity.TotalSeconds

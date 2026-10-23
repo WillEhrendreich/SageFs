@@ -1247,11 +1247,11 @@ let handleTestDiscovery
   (log: ILogger)
   (dispatch: SageFsMsg -> unit)
   (sid: WorkerProtocol.SessionId)
-  (report: SessionManager.TestDiscoveryReport) =
+  (report: TestDiscoveryReport) =
   match report with
-  | SessionManager.TestDiscoveryReport.Discovered (tests, providers) ->
+  | TestDiscoveryReport.Discovered (tests, providers) ->
     dispatchDiscoveredTests readSnapshot workingDir log dispatch sid tests providers
-  | SessionManager.TestDiscoveryReport.DiscoveryFailed reason ->
+  | TestDiscoveryReport.DiscoveryFailed reason ->
     let id = WorkerProtocol.SessionId.value sid
     log.LogWarning("[Daemon] Test discovery failed for {SessionId}: {Reason}", id, reason)
     dispatch (SageFsMsg.Event (TuiEvent.TestDiscoveryFailed (id, reason)))
@@ -2193,7 +2193,7 @@ let run
       cts.Token)
   | None -> ()
   // Test discovery callback — set after elmRuntime is created
-  let mutable onTestDiscoveryCallback : (WorkerProtocol.SessionId -> SessionManager.TestDiscoveryReport -> unit) =
+  let mutable onTestDiscoveryCallback : (WorkerProtocol.SessionId -> TestDiscoveryReport -> unit) =
     fun _ _ -> ()
   let mutable onInstrumentationMapsCallback : (WorkerProtocol.SessionId -> Features.LiveTesting.InstrumentationMap array -> unit) =
     fun _ _ -> ()
@@ -2215,7 +2215,7 @@ let run
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
   let sessionManager, readSnapshot =
     SessionManager.createMonitored cts.Token
-      { SessionManager.SessionManagerCallbacks.silent with
+      { SessionManagerCallbacks.silent with
           OnSessionProgressChanged = fun () -> stateChangedEvent.Trigger SessionProgress
           OnTestDiscovery = fun sid report -> onTestDiscoveryCallback sid report
           OnInstrumentationMaps = fun sid maps -> onInstrumentationMapsCallback sid maps

@@ -445,6 +445,7 @@
         <!-- Tells somebody when the session manager's own loop is wedged,
              restarted or failing a command. -->
         <Compile Include="SupervisorWatchdog.fs" />
+        <Compile Include="SessionManagerCallbacks.fs" />
         <Compile Include="SessionManager.fs" />
         <!-- After SessionManager: posts the one refetch every daemon-side caller of an in-worker
              reset makes once the reset resolves Ok (SessionCommand.RefetchLiveTestingState). -->

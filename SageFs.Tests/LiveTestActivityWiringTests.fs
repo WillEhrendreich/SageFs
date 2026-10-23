@@ -179,7 +179,7 @@ let activityInputTests =
 [<Tests>]
 let discoveryReportTests =
   let test = mkTestCase "Math.Tests.adds" TestFramework.Expecto TestCategory.Unit
-  let dispatchedFor (report: SessionManager.TestDiscoveryReport) =
+  let dispatchedFor (report: TestDiscoveryReport) =
     let dispatched = ResizeArray<SageFsMsg>()
     let dir = Directory.CreateTempSubdirectory "sagefs-discovery-"
     try
@@ -195,28 +195,28 @@ let discoveryReportTests =
     List.ofSeq dispatched
   testList "LiveTestActivity discovery report" [
     testCase "WHY — TestDiscoveryReport.ofResponse — a discovery reply is Discovered" <| fun _ ->
-      SessionManager.TestDiscoveryReport.ofResponse (WorkerProtocol.WorkerResponse.InitialTestDiscovery ([| test |], []))
-      |> Expect.equal "discovered" (SessionManager.TestDiscoveryReport.Discovered ([| test |], []))
+      TestDiscoveryReport.ofResponse (WorkerProtocol.WorkerResponse.InitialTestDiscovery ([| test |], []))
+      |> Expect.equal "discovered" (TestDiscoveryReport.Discovered ([| test |], []))
 
     testCase "WHY — TestDiscoveryReport.ofResponse — a worker error is DiscoveryFailed with its description because the user must see why" <| fun _ ->
       let err = SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "Tests.dll is missing" ])
-      SessionManager.TestDiscoveryReport.ofResponse (WorkerProtocol.WorkerResponse.WorkerError err)
-      |> Expect.equal "failed" (SessionManager.TestDiscoveryReport.DiscoveryFailed (SageFsError.describe err))
+      TestDiscoveryReport.ofResponse (WorkerProtocol.WorkerResponse.WorkerError err)
+      |> Expect.equal "failed" (TestDiscoveryReport.DiscoveryFailed (SageFsError.describe err))
 
     testCase "WHY — TestDiscoveryReport.ofResponse — any other reply is DiscoveryFailed because silently dropping it leaves discovery pending forever" <| fun _ ->
-      match SessionManager.TestDiscoveryReport.ofResponse (WorkerProtocol.WorkerResponse.EvalCancelled false) with
-      | SessionManager.TestDiscoveryReport.DiscoveryFailed reason -> reason.StartsWith "Unexpected reply" |> Expect.isTrue "names the unexpected reply"
+      match TestDiscoveryReport.ofResponse (WorkerProtocol.WorkerResponse.EvalCancelled false) with
+      | TestDiscoveryReport.DiscoveryFailed reason -> reason.StartsWith "Unexpected reply" |> Expect.isTrue "names the unexpected reply"
       | other -> failwithf "expected DiscoveryFailed, got %A" other
 
     testCase "WHY — handleTestDiscovery — a failed discovery reaches the Elm model because it is otherwise only logged" <| fun _ ->
-      dispatchedFor (SessionManager.TestDiscoveryReport.DiscoveryFailed "could not load Tests.dll")
+      dispatchedFor (TestDiscoveryReport.DiscoveryFailed "could not load Tests.dll")
       |> List.exists (function
         | SageFsMsg.Event (TuiEvent.TestDiscoveryFailed (s, reason)) -> s = sid && reason = "could not load Tests.dll"
         | _ -> false)
       |> Expect.isTrue "dispatches TestDiscoveryFailed"
 
     testCase "WHY — handleTestDiscovery — a discovery with zero tests is still dispatched because finding nothing is an answer" <| fun _ ->
-      dispatchedFor (SessionManager.TestDiscoveryReport.Discovered ([||], []))
+      dispatchedFor (TestDiscoveryReport.Discovered ([||], []))
       |> List.exists (function
         | SageFsMsg.Event (TuiEvent.TestsDiscovered (s, tests)) -> s = sid && Array.isEmpty tests
         | _ -> false)
