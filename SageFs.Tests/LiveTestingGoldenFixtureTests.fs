@@ -50,4 +50,14 @@ let tests =
       decision.GetProperty("Precision").GetString() |> Expect.equal "precision should stay stable" "suppressed_by_policy"
       decision.GetProperty("Trust").GetString() |> Expect.equal "trust should stay stable" "suppressed"
       decision.GetProperty("DeferredTests").GetArrayLength() |> Expect.equal "deferred test count should stay stable" 1
+
+    testCase "docs/sse-events.md documents the batch frame as a tally and names the entries route" <| fun _ ->
+      // The docs are a wire contract too: this row claimed a statuses array the frame stopped
+      // carrying the moment the list became a fetch, and no doc named the route a client needs
+      // instead. The endpoint-registry ratchet pins the route exists; this pins the docs say so.
+      let docs = File.ReadAllText(Path.Combine(repoRoot, "docs", "sse-events.md"))
+      docs.Contains "Test statuses array"
+      |> Expect.isFalse "the batch row must not claim a list the frame no longer carries"
+      docs.Contains "GET /api/live-testing/entries"
+      |> Expect.isTrue "the docs must name the route a client fetches the rows from"
   ]

@@ -548,34 +548,37 @@ let managedDependencyResolutionIntegrationTests =
               ]
             File.WriteAllText(harnessFsproj, harnessFsprojContent)
             File.WriteAllText(Path.Combine(harnessDir, "Program.fs"), harnessProgramContent)
-            // The same race one layer up: the harness lives in a per-run temp dir, so there is no obj
-            // to share, but five shards restoring at once hit the shared NuGet cache together and the
-            // loser dies before it compiles (exit=1, zero diagnostics). The same lock serialises every
-            // build this file starts, so one shard builds while the other four wait.
-            let rec buildWithRetry attempt =
+            // The lock stays for the sample build (its obj IS shared with the other four shards);
+            // for this build the shard-vs-shard race was later measured out of the picture — 8
+            // concurrent SageFs.Core rebuilds and restores all exited 0, and this temp dir is a
+            // fresh Guid per run — so what matters here is the wait below.
+            let rec buildWithBackoff (backoffs: TimeSpan list) =
               task {
                 let! outcome =
                   runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
                 match outcome with
                 | Ok (0, _, _) -> return outcome
-                | _ when attempt < 1 ->
-                  do! Task.Delay TestTimeouts.buildLockRetry
-                  return! buildWithRetry (attempt + 1)
-                | _ -> return outcome
+                | _ ->
+                  match backoffs with
+                  | [] -> return outcome
+                  | wait :: rest ->
+                    do! Task.Delay wait
+                    return! buildWithBackoff rest
               }
             let! (gate: FileStream option) = acquireBuildLock sampleBuildLockName (DateTime.UtcNow + TestTimeouts.workerSessionReady)
             if gate.IsNone then
               failtestf "the harness build lock was not taken within %O" TestTimeouts.workerSessionReady
-            // One retry, scoped to this build: a shard still died inside the lock with an empty
-            // build log (exit=1, no diagnostics, ~1.4s, load 16+), while the gate's own rerun
-            // passes 3 of 3 every time — so the contention is with something no lock here can
-            // see, another tier building in the same checkout or the machine itself. A lone
-            // rebuild clears it; a second failure prints its own output and the load and fails
-            // for real.
+            // Why this waits instead of failing at once: the build dies in the restore step with
+            // ZERO diagnostics (exit=1, ~1s) only while sibling tiers run, and the gate's own rerun
+            // passes 3 of 3 every time once they are gone. Two hypotheses were measured and both
+            // disproven: machine load (it failed at load 6.88 and at 16.71) and sibling builds
+            // racing the checkout's obj (8 concurrent rebuilds plus restores of SageFs.Core, all
+            // exit 0). So the wait matches the one thing proven to clear it — the siblings going
+            // away — and a final failure still prints its output and the load average.
             let! built =
               task {
                 try
-                  return! buildWithRetry 0
+                  return! buildWithBackoff TestTimeouts.harnessBuildBackoffs
                 finally
                   releaseBuildLock gate
               }

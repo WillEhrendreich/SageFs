@@ -70,16 +70,16 @@ let helloPath () = Path.Combine(LtEnv.fixtureDir.Value, "Hello.fs")
 /// `verdictIn`, `provenanceIn` and `batchIsConfirmed` synchronous and answering exactly what a
 /// hydrated client sees. A fetch that fails leaves the frame as it arrived, so a reader still says
 /// the row is absent instead of answering from an earlier frame's list.
-let private withEntries (event: string) (data: string) : Task<string> =
+let private withEntries (event: string) (data: string) : Task<struct (string * string)> =
   task {
     if event <> "test_results_batch" && event <> "test_run_completed" then
-      return data
+      return struct (data, "")
     else
       try
         use doc = JsonDocument.Parse data
         let root = doc.RootElement
         match root.TryGetProperty "Entries" with
-        | true, _ -> return data
+        | true, _ -> return struct (data, "")
         | false, _ ->
           let sid =
             match root.TryGetProperty "SessionId" with
@@ -89,18 +89,19 @@ let private withEntries (event: string) (data: string) : Task<string> =
               | true, v when not (String.IsNullOrWhiteSpace(v.GetString())) -> v.GetString()
               | _ -> ""
           if sid = "" then
-            return data
+            return struct (data, "batch frame carried no SessionId, so its rows could not be fetched")
           else
             use http = new HttpClient(BaseAddress = baseUrl (), Timeout = TestTimeouts.httpRequest)
             let! body =
               http.GetStringAsync(sprintf "/api/live-testing/entries?session=%s" (Uri.EscapeDataString sid))
             let frame = System.Text.Json.Nodes.JsonNode.Parse data
             frame["Entries"] <- System.Text.Json.Nodes.JsonNode.Parse body
-            return frame.ToJsonString()
-      with _ ->
-        // A frame the harness could not enrich is still a frame: the reader below reports the row
-        // as absent and the timeout quotes what actually arrived.
-        return data
+            return struct (frame.ToJsonString(), "")
+      with ex ->
+        // A frame the harness could not enrich is still a frame — the reader below reports the row
+        // as absent — but the failure goes into the feed history, because this file's whole
+        // contract is that a timeout explains what happened, not only what was missing.
+        return struct (data, sprintf "entries fetch failed: %s: %s" (ex.GetType().Name) ex.Message)
   }
 
 /// The line the measured edits flip. The suite has exactly one test that fails when it changes:
@@ -140,7 +141,9 @@ let openFeed () : SseFeed =
               match event with
               | "" -> ()
               | name ->
-                let! enriched = withEntries name (data.ToString())
+                let! struct (enriched, fetchError) = withEntries name (data.ToString())
+                if fetchError <> "" then
+                  lock history (fun () -> history.Add(Note(fetchError, Stopwatch.GetTimestamp())))
                 publish name enriched
               event <- ""
               data.Clear() |> ignore

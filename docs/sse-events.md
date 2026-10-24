@@ -11,6 +11,7 @@ The daemon emits 25 event types across four sources: 22 `SseWriter` events on `/
 ```
 GET /events                      → SSE stream (all events below except diagnostics)
 GET /events?sessionId=<id>       → the same stream, narrowed to one session
+GET /api/live-testing/entries?session=<id> → the test rows `test_results_batch` no longer carries (the fetch hydrateFrame and batch_hydration make)
 GET /diagnostics                 → SSE stream (compiler diagnostics only — separate endpoint)
 ```
 
@@ -106,7 +107,7 @@ in-memory effect. The same is true of a getter a click runs on an OS with no fil
 | Event | Payload | Description |
 |:---|:---|:---|
 | `test_summary` | Passed/failed/skipped/total counts, activation state | Aggregate test-run statistics. |
-| `test_results_batch` | Test statuses array, run state, freshness generation | Batch of individual test results with staleness tracking. |
+| `test_results_batch` | `Completion`, `Freshness`, `Generation`, `LastDecision`, `Summary` (no list) | The tally for one run. The rows are a fetch (`GET /api/live-testing/entries?session=<id>`): a 2,604-case list made this frame ~990 KB, so it moved off the stream in 0.6.928. |
 | `test_trace` | Pre-serialized JSON trace data | Execution trace with diagnostic metadata for test runs. |
 | `test_source_locations` | `Locations[]` (testId, filePath, lineNumber) | Maps test names to source locations for jump-to-definition. |
 | `file_annotations` | `testAnnotations[]`, `codeLenses[]`, `coverageAnnotations[]`, `inlineFailures[]` | Per-file test decorations, coverage data, and inline failure markers. |

@@ -43,6 +43,11 @@ module TestTimeouts =
   /// A retry interval, not a budget: the build lock is held by whichever shard is building, and
   /// 250ms is short enough that the wait costs a shard little and long enough not to spin.
   let buildLockRetry = ms 250.
+  /// Backoff between attempts at the harness build when it dies with no diagnostics while sibling
+  /// tiers are running. Waiting is the mechanism, not a patch over the exit code: the failure never
+  /// reproduces alone, the gate's own rerun passes 3 of 3 the moment siblings are gone, and two
+  /// hypotheses (machine load, sibling builds racing obj) were measured and disproven.
+  let harnessBuildBackoffs = [ secs 2.; secs 5.; secs 12. ]
   /// Ceiling on a child process that reads a 4 MB assembly twice, diffs and writes a delta for it five times, and
   /// has the runtime apply it (DeltaChild `bench`). The first pass has the JIT in it and a loaded runner is slower.
   let bigAssemblyDelta = secs 120.
