@@ -76,7 +76,12 @@ let runBrowserJourneys (cliArgs: string array) : int =
   drain daemon.StandardError daemonErrLog
 
   use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
-  client.Timeout <- TestTimeouts.httpProbe
+  // httpDaemon, not httpProbe: httpProbe's contract is a probe in a retry loop (5s), and these
+  // clients make ONE call each to the daemon this runner just started — /api/sessions/create,
+  // live-testing enable. Under gate load that cold daemon took longer than 5s to answer and the
+  // whole tier died at 7s with a TaskCanceledException from syncPost. A request to a daemon that
+  // may be mid-build is exactly what httpDaemon names.
+  client.Timeout <- TestTimeouts.httpDaemon
 
   let dumpDaemonLogs () =
     for path in [ daemonOutLog; daemonErrLog ] do
@@ -456,7 +461,12 @@ let runHotReloadRunner (kind: HotReloadRunnerKind) (cliArgs: string array) : int
   drain daemon.StandardError daemonErrLog
 
   use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
-  client.Timeout <- TestTimeouts.httpProbe
+  // httpDaemon, not httpProbe: httpProbe's contract is a probe in a retry loop (5s), and these
+  // clients make ONE call each to the daemon this runner just started — /api/sessions/create,
+  // live-testing enable. Under gate load that cold daemon took longer than 5s to answer and the
+  // whole tier died at 7s with a TaskCanceledException from syncPost. A request to a daemon that
+  // may be mid-build is exactly what httpDaemon names.
+  client.Timeout <- TestTimeouts.httpDaemon
 
   let dumpDaemonLogs () =
     for path in [ daemonOutLog; daemonErrLog ] do
@@ -718,7 +728,12 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   drain daemon.StandardError daemonErrLog
 
   use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
-  client.Timeout <- TestTimeouts.httpProbe
+  // httpDaemon, not httpProbe: httpProbe's contract is a probe in a retry loop (5s), and these
+  // clients make ONE call each to the daemon this runner just started — /api/sessions/create,
+  // live-testing enable. Under gate load that cold daemon took longer than 5s to answer and the
+  // whole tier died at 7s with a TaskCanceledException from syncPost. A request to a daemon that
+  // may be mid-build is exactly what httpDaemon names.
+  client.Timeout <- TestTimeouts.httpDaemon
 
   let dumpDaemonLogs () =
     for path in [ daemonOutLog; daemonErrLog ] do
