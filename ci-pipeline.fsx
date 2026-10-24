@@ -2162,10 +2162,15 @@ let sagefsPipeline = pipeline "sagefs" {
     //
     // SageFs now multi-targets net10.0;net11.0 (issue #131), so this smoke
     // test runs TWICE — once per SDK the tool claims to support — each under
-    // its own throwaway working dir carrying a global.json PINNED (rollForward
-    // "disable") to that exact SDK, so `dotnet` resolution can't accidentally
-    // fall through to the other one. A single run under whichever SDK happens
-    // to be ambient would only ever prove ONE of the two payloads works.
+    // its own throwaway working dir carrying a global.json pinned to that SDK's
+    // FEATURE BAND (rollForward "latestFeature"), so `dotnet` resolution can't
+    // fall through to the other major while a patch inside the band can't fail
+    // the gate. An exact pin (rollForward "disable") did exactly that: the
+    // machine moved 10.0.401 -> 10.0.402 and the release gate died on SDK
+    // resolution with all 31 minutes of test tiers green, and CI installs
+    // 10.0.x, so the exact pin would break there the same way. A single run
+    // under whichever SDK happens to be ambient would only ever prove ONE of
+    // the two payloads works.
     //
     // `--version` alone left the failure class that actually shipped broken
     // before (missing SageFs.Host.dll, the tool exe dropped, the net11-only
@@ -2183,7 +2188,7 @@ let sagefsPipeline = pipeline "sagefs" {
     timeoutForStep 1500
     run (fun _ ->
       async {
-        let sdks = [ "10.0.401", "net10.0"; "11.0.100-rc.1.26425.128", "net11.0" ]
+        let sdks = [ "10.0.100", "net10.0"; "11.0.100-rc.1.26425.128", "net11.0" ]
         let smokeScript = Path.Combine(rootDir, "scripts", "smoke-test.fsx")
         // The script's own defaults (15 s to a healthy daemon, 45 s to a Ready session) are for a quiet machine;
         // the gate's tail can still be a loaded one (a session went Ready in 31 s at load 80), and a slow
@@ -2270,7 +2275,7 @@ let sagefsPipeline = pipeline "sagefs" {
             Directory.CreateDirectory workDir |> ignore
             File.WriteAllText(
               Path.Combine(workDir, "global.json"),
-              $"""{{"sdk":{{"version":"{sdkVersion}","rollForward":"disable"}}}}""")
+              $"""{{"sdk":{{"version":"{sdkVersion}","rollForward":"latestFeature","allowPrerelease":true}}}}""")
             let toolPath = Path.Combine(workDir, "tool")
             let log = Path.Combine(workDir, "smoke.log")
             let! installExit =
