@@ -365,6 +365,45 @@ let private runDotnet (args: string list) (patience: TimeSpan) : Task<Result<int
 /// Where the sample's build output is for this runtime, built first when nothing is there yet: a case states what it
 /// needs and gets it, instead of skipping when a neighbouring stage has not produced it. Shared by the cases below, so
 /// the build runs at most once per process. A build that fails fails every case that needs it, with the build's output.
+/// What the machine looks like right now, for a failure whose own output is empty. A build that
+/// dies with no diagnostics is usually contending with another build, and the message has to say
+/// so itself rather than leave the next reader guessing at "Build FAILED, 0 Error(s)".
+let private contentionNote () =
+  try
+    if File.Exists "/proc/loadavg" then sprintf " (load average %s)" (File.ReadAllText "/proc/loadavg" |> fun s -> s.Split([| '\n' |]).[0])
+    else ""
+  with _ -> ""
+
+/// One process at a time builds these projects, and the lock has to survive two facts about this
+/// suite. The gate runs five shards, each its own process, and on a clean tree each one decides the
+/// sample is unbuilt and builds it: concurrent `dotnet build`s of one project race on its obj, the
+/// loser fails before compiling, and its whole output is "Determining projects to restore...
+/// Build FAILED, 0 Error(s)". It passed every rerun alone, which is exactly what a race between
+/// siblings looks like. And a named Mutex is NOT the primitive for this: a Mutex is owned by the
+/// thread that took it, while a task CE may resume on another thread and release it from there
+/// ("Cannot release a lock that is not owned by the current thread" — measured, three runs in a
+/// row). A FileStream opened with FileShare.None is: its handle IS the lock, so any thread may
+/// close it, and a process that dies closes its handle and frees the next waiter, so no stale
+/// lock outlives its owner.
+let rec acquireBuildLock (lockName: string) (deadline: DateTime) : Task<FileStream option> =
+  task {
+    let path = Path.Combine(Path.GetTempPath(), lockName + ".lock")
+    try
+      return Some (new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+    with :? System.IO.IOException ->
+      if DateTime.UtcNow >= deadline then return None
+      else
+        do! Task.Delay TestTimeouts.buildLockRetry
+        return! acquireBuildLock lockName deadline
+  }
+
+let private releaseBuildLock (gate: FileStream option) =
+  match gate with
+  | Some stream -> stream.Dispose()
+  | None -> ()
+
+let private sampleBuildLockName = "sagefs-tests-webappdatastar-sample-build"
+
 let private webappDatastarSampleBinDir : Lazy<Task<string>> =
   lazy (
     task {
@@ -375,14 +414,24 @@ let private webappDatastarSampleBinDir : Lazy<Task<string>> =
       match built () with
       | Some dir -> return dir
       | None ->
-        match! runDotnet [ "build"; sampleFsproj; "-c"; "Release"; "-f"; runtimeMoniker; "--nologo" ] TestTimeouts.workerSessionReady with
-        | Error msg -> return failwith msg
-        | Ok (exitCode, out, err) when exitCode <> 0 ->
-          return failwithf "the WebappDatastar sample did not build for %s (exit=%d):\n%s\n%s" runtimeMoniker exitCode out err
-        | Ok _ ->
-          match built () with
-          | Some dir -> return dir
-          | None -> return failwithf "the sample built, but no %s landed under %s" sampleEntryAssembly (Path.Combine(sampleProjectDir, "bin")) })
+        let! gate = acquireBuildLock sampleBuildLockName (DateTime.UtcNow + TestTimeouts.workerSessionReady)
+        if gate.IsNone then
+          return failwithf "the sample build lock was not taken within %O" TestTimeouts.workerSessionReady
+        else
+          try
+            match built () with
+            | Some dir -> return dir
+            | None ->
+              match! runDotnet [ "build"; sampleFsproj; "-c"; "Release"; "-f"; runtimeMoniker; "--nologo" ] TestTimeouts.workerSessionReady with
+              | Error msg -> return failwith msg
+              | Ok (exitCode, out, err) when exitCode <> 0 ->
+                return failwithf "the WebappDatastar sample did not build for %s (exit=%d)%s:\n%s\n%s" runtimeMoniker exitCode (contentionNote ()) out err
+              | Ok _ ->
+                match built () with
+                | Some dir -> return dir
+                | None -> return failwithf "the sample built, but no %s landed under %s" sampleEntryAssembly (Path.Combine(sampleProjectDir, "bin"))
+          finally
+            releaseBuildLock gate })
 
 [<Tests>]
 let managedDependencyResolutionIntegrationTests =
@@ -499,11 +548,24 @@ let managedDependencyResolutionIntegrationTests =
               ]
             File.WriteAllText(harnessFsproj, harnessFsprojContent)
             File.WriteAllText(Path.Combine(harnessDir, "Program.fs"), harnessProgramContent)
-            let! built = runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
+            // The same race one layer up: the harness lives in a per-run temp dir, so there is no obj
+            // to share, but five shards restoring at once hit the shared NuGet cache together and the
+            // loser dies before it compiles (exit=1, zero diagnostics). The same lock serialises every
+            // build this file starts, so one shard builds while the other four wait.
+            let! (gate: FileStream option) = acquireBuildLock sampleBuildLockName (DateTime.UtcNow + TestTimeouts.workerSessionReady)
+            if gate.IsNone then
+              failtestf "the harness build lock was not taken within %O" TestTimeouts.workerSessionReady
+            let! built =
+              task {
+                try
+                  return! runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
+                finally
+                  releaseBuildLock gate
+              }
             match built with
             | Error msg -> failtest msg
             | Ok (buildExit, buildOut, buildErr) when buildExit <> 0 ->
-              failtestf "harness build failed (exit=%d):\n%s\n%s" buildExit buildOut buildErr
+              failtestf "harness build failed (exit=%d)%s:\n%s\n%s" buildExit (contentionNote ()) buildOut buildErr
             | Ok _ ->
               let harnessDll = Path.Combine(harnessDir, "bin", "Debug", runtimeMoniker, "Harness.dll")
               let! ran = runDotnet [ "exec"; harnessDll; sampleBinDir ] TestTimeouts.patienceInProcess

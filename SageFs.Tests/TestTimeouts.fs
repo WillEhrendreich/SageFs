@@ -39,6 +39,10 @@ module TestTimeouts =
   /// request through a started web host, a daemon failing a bad bind). A cold start on a loaded
   /// runner takes seconds, so this is generous.
   let patience = secs 20.
+  /// How long to wait between attempts at taking the cross-process build lock in AppRunnerTests.
+  /// A retry interval, not a budget: the build lock is held by whichever shard is building, and
+  /// 250ms is short enough that the wait costs a shard little and long enough not to spin.
+  let buildLockRetry = ms 250.
   /// Ceiling on a child process that reads a 4 MB assembly twice, diffs and writes a delta for it five times, and
   /// has the runtime apply it (DeltaChild `bench`). The first pass has the JIT in it and a loaded runner is slower.
   let bigAssemblyDelta = secs 120.
