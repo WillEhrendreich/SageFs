@@ -356,11 +356,12 @@ module TestTimeouts =
 
   /// The client timeout for one ordinary HTTP request to a local host that is already up.
   let requestPatience = System.TimeSpan.FromSeconds 30.
-  /// The ceiling on a switched dashboard panel's history re-rendering on a loaded machine. The
-  /// switch-back case measured red at the 30s requestPatience: the panel id lands while the
-  /// session's history is still arriving over SSE, and a full browser run errored on roughly one
-  /// run in three here (never seen in a gate yet, but the gate runs six tiers at once, so it would
-  /// not get kinder). One HTTP round trip is not this wait.
+  /// The ceiling on a switched dashboard panel's history re-rendering on a loaded machine. Named
+  /// for what the wait actually is (SSE catch-up plus render) rather than borrowed from
+  /// requestPatience, a single HTTP round trip. Note the re-attribution: the failure this was
+  /// introduced alongside was later PROVEN to be stale build artifacts, not a slow render — nine
+  /// consecutive green switch runs once the chain and the sample bins came from one build — so this
+  /// ceiling stands as the right budget, not as a workaround that was needed.
   let panelSwitchRender = System.TimeSpan.FromSeconds 90.
 
   /// The client timeout for a long-lived SSE read: the stream stays open for as long as

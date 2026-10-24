@@ -229,9 +229,12 @@ let leaksSeen (page: IPage) : Task<string[]> =
 /// The panel is on `want` and shows its marker. Waits for the morph to land rather than reading in the gap.
 let waitForPanelOn (page: IPage) (want: Subject) : Task<bool> =
   // panelSwitchRender, not requestPatience: after switch-back the id lands before the history
-  // arrives, so 30s read a still-hydrating panel as "never switched" on about one run in three
-  // under load. The leak observer above still records every intermediate state, so the longer
-  // wait hides nothing.
+  // arrives, so the ceiling belongs to this wait on its own terms. The intermittent emptiness this
+  // was written beside was later disproven as a product bug: zero sweep/stop events in a failing
+  // run, and the failing runs' own daemon message blamed stale artifacts (a sample bin carrying an
+  // older same-version SageFs.Core). Nine consecutive green runs once the Debug/Release chain and
+  // the sample bins came from one build. The leak observer above still records every intermediate
+  // state, so the longer wait hides nothing.
   waitUntil (TestTimeouts.asMs TestTimeouts.panelSwitchRender) (fun () -> task {
     let! sid, text = panelNow page
     return sid = want.Id && text.Contains want.Marker
