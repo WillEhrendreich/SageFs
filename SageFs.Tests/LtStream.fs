@@ -63,6 +63,46 @@ module LtEnv =
 let baseUrl () = Uri(sprintf "http://localhost:%s" LtEnv.mcpPort.Value)
 let helloPath () = Path.Combine(LtEnv.fixtureDir.Value, "Hello.fs")
 
+/// The list a batch frame used to carry, fetched from where the stream keeps it now. The split put
+/// the tally, the completion and the decision on the wire and the rows behind
+/// GET /api/live-testing/entries — the same fetch the plugin and the editor make — so the harness
+/// fetches at receipt and puts them on the frame before any reader asks. One seam keeps `entryOf`,
+/// `verdictIn`, `provenanceIn` and `batchIsConfirmed` synchronous and answering exactly what a
+/// hydrated client sees. A fetch that fails leaves the frame as it arrived, so a reader still says
+/// the row is absent instead of answering from an earlier frame's list.
+let private withEntries (event: string) (data: string) : Task<string> =
+  task {
+    if event <> "test_results_batch" && event <> "test_run_completed" then
+      return data
+    else
+      try
+        use doc = JsonDocument.Parse data
+        let root = doc.RootElement
+        match root.TryGetProperty "Entries" with
+        | true, _ -> return data
+        | false, _ ->
+          let sid =
+            match root.TryGetProperty "SessionId" with
+            | true, v when not (String.IsNullOrWhiteSpace(v.GetString())) -> v.GetString()
+            | _ ->
+              match root.TryGetProperty "sessionId" with
+              | true, v when not (String.IsNullOrWhiteSpace(v.GetString())) -> v.GetString()
+              | _ -> ""
+          if sid = "" then
+            return data
+          else
+            use http = new HttpClient(BaseAddress = baseUrl (), Timeout = TestTimeouts.httpRequest)
+            let! body =
+              http.GetStringAsync(sprintf "/api/live-testing/entries?session=%s" (Uri.EscapeDataString sid))
+            let frame = System.Text.Json.Nodes.JsonNode.Parse data
+            frame["Entries"] <- System.Text.Json.Nodes.JsonNode.Parse body
+            return frame.ToJsonString()
+      with _ ->
+        // A frame the harness could not enrich is still a frame: the reader below reports the row
+        // as absent and the timeout quotes what actually arrived.
+        return data
+  }
+
 /// The line the measured edits flip. The suite has exactly one test that fails when it changes:
 /// "add infers int" (3 + 4 = 7).
 let greenAdd = "let add a b = a + b"
@@ -99,7 +139,9 @@ let openFeed () : SseFeed =
             | "" ->
               match event with
               | "" -> ()
-              | name -> publish name (data.ToString())
+              | name ->
+                let! enriched = withEntries name (data.ToString())
+                publish name enriched
               event <- ""
               data.Clear() |> ignore
             | l when l.StartsWith("event:", StringComparison.Ordinal) -> event <- l.Substring("event:".Length).Trim()
