@@ -29,7 +29,13 @@ let tests =
       let json = readFixture "results-batch-with-coverage-decision.json"
       use doc = JsonDocument.Parse(json)
       let root = doc.RootElement
-      root.GetProperty("Entries").GetArrayLength() |> Expect.equal "entry count should stay stable" 2
+      // The list is a fetch, not a frame: `entries` moved behind GET /api/live-testing/entries so a
+      // frame's size tracks the run rather than the suite. What a downstream client still renders
+      // from the wire itself is the tally and the decision, so those are what this pins — and the
+      // absence of the list is asserted rather than skipped, because it is the contract.
+      let mutable holder = Unchecked.defaultof<System.Text.Json.JsonElement>
+      root.TryGetProperty("Entries", &holder)
+      |> Expect.isFalse "the frame must not carry a list anymore; it is fetched"
       let decision = root.GetProperty("LastDecision")
       decision.GetProperty("Cause").GetString() |> Expect.equal "cause should stay stable" "keystroke_buffered"
       decision.GetProperty("Precision").GetString() |> Expect.equal "precision should stay stable" "coverage_approximation"
