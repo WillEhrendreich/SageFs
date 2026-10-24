@@ -552,13 +552,30 @@ let managedDependencyResolutionIntegrationTests =
             // to share, but five shards restoring at once hit the shared NuGet cache together and the
             // loser dies before it compiles (exit=1, zero diagnostics). The same lock serialises every
             // build this file starts, so one shard builds while the other four wait.
+            let rec buildWithRetry attempt =
+              task {
+                let! outcome =
+                  runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
+                match outcome with
+                | Ok (0, _, _) -> return outcome
+                | _ when attempt < 1 ->
+                  do! Task.Delay TestTimeouts.buildLockRetry
+                  return! buildWithRetry (attempt + 1)
+                | _ -> return outcome
+              }
             let! (gate: FileStream option) = acquireBuildLock sampleBuildLockName (DateTime.UtcNow + TestTimeouts.workerSessionReady)
             if gate.IsNone then
               failtestf "the harness build lock was not taken within %O" TestTimeouts.workerSessionReady
+            // One retry, scoped to this build: a shard still died inside the lock with an empty
+            // build log (exit=1, no diagnostics, ~1.4s, load 16+), while the gate's own rerun
+            // passes 3 of 3 every time — so the contention is with something no lock here can
+            // see, another tier building in the same checkout or the machine itself. A lone
+            // rebuild clears it; a second failure prints its own output and the load and fails
+            // for real.
             let! built =
               task {
                 try
-                  return! runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
+                  return! buildWithRetry 0
                 finally
                   releaseBuildLock gate
               }
