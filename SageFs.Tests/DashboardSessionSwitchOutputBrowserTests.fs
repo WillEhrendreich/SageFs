@@ -228,7 +228,11 @@ let leaksSeen (page: IPage) : Task<string[]> =
 
 /// The panel is on `want` and shows its marker. Waits for the morph to land rather than reading in the gap.
 let waitForPanelOn (page: IPage) (want: Subject) : Task<bool> =
-  waitUntil BrowserWaits.daemonWork (fun () -> task {
+  // panelSwitchRender, not requestPatience: after switch-back the id lands before the history
+  // arrives, so 30s read a still-hydrating panel as "never switched" on about one run in three
+  // under load. The leak observer above still records every intermediate state, so the longer
+  // wait hides nothing.
+  waitUntil (TestTimeouts.asMs TestTimeouts.panelSwitchRender) (fun () -> task {
     let! sid, text = panelNow page
     return sid = want.Id && text.Contains want.Marker
   })
