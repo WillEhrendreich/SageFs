@@ -499,6 +499,9 @@
         <Compile Include="FileWatcher.fs" />
         <Compile Include="DaemonOwnership.fs" />
         <Compile Include="LiveTestWatcherCore.fs" />
+        <!-- Which sessions' live testing a changed file reaches: the owners of its directory
+             that have live testing on, decided from each session's OWN cycle. -->
+        <Compile Include="LiveTestFileRouting.fs" />
         <!-- Pure eval-actor decision core (SessionActivity/SessionGeneration/
              EvalPhase/EvalInput/EvalDecision/decide) — compiled BEFORE
              AppState.fs so it stays a standalone file the DST harness can

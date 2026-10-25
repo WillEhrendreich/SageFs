@@ -245,7 +245,9 @@ type SageFsMsg =
   | CycleRunPolicy
   | ToggleCoverage
   | TestCycleTick of now: DateTimeOffset
+  /// Reaches the named session's live testing when it has it on, whichever session is primary. `None` is the primary.
   | BufferContentChanged of targetSession: string option * filePath: string * content: string
+  /// Reaches each session owning the file that has live testing on (`LiveTestFileRouting.route`).
   | FileContentChanged of filePath: string * content: string
   | FcsTypeCheckCompleted of string option * Features.LiveTesting.AnalysisIdentity option * Features.LiveTesting.FcsTypeCheckResult
   | RestoreTestCache of Features.LiveTesting.LiveTestState
@@ -798,6 +800,17 @@ module SageFsUpdate =
             model.PerSessionLiveTesting
             |> Map.add sid cycle }
 
+  /// Whether live testing is on for a session, read from that session's OWN cycle wherever it
+  /// lives (Primary or its background slot). Never from the primary cycle on its behalf.
+  let private sessionActivation (model: SageFsModel) (sessionId: SessionId) =
+    (SageFsModel.cycleForSession (SessionId.value sessionId) model).TestState.Activation
+
+  /// Whether a session's file watcher should exist: the primary cycle is on (the global enable) or the session's own is.
+  let private watchingActivation (sessionId: string) (model: SageFsModel) =
+    LiveTestFileRouting.eitherOn
+      model.LiveTesting.TestState.Activation
+      (SageFsModel.cycleForSession sessionId model).TestState.Activation
+
   let private tryUpdateLiveTestingState
     (targetSession: string option)
     (updateCycle: Features.LiveTesting.LiveTestCycleState -> Features.LiveTesting.LiveTestCycleState * 'result)
@@ -834,6 +847,19 @@ module SageFsUpdate =
     |> Features.LiveTesting.LiveTestCycleState.pendingRebuildCancellationEffect
     |> Option.toList
     |> List.map SageFsEffect.TestCycle
+
+  /// Run `edit` on the cycle at `target`. Returns the same model when the edit changed nothing.
+  /// A real change cancels the rebuild that cycle had pending, because it was about older text.
+  let private editCycleAt
+    (target: SageFsModel.LiveTestingTarget)
+    (edit: Features.LiveTesting.LiveTestCycleState -> Features.LiveTesting.LiveTestCycleState)
+    (model: SageFsModel)
+    : SageFsModel * SageFsEffect list =
+    let current = SageFsModel.cycleFor target model
+    let cycle' = edit current
+    match obj.ReferenceEquals(cycle', current) with
+    | true -> model, []
+    | false -> setLiveTestingState target cycle' model, pendingRebuildCancellationEffects current
 
   /// Drop a gone or stopped session's live-testing state (see `SessionTestAttribution.retire`).
   let private retireSessionLiveTesting (sessionId: string) (newActive: ActiveSession) (model: SageFsModel) =
@@ -1282,11 +1308,11 @@ module SageFsUpdate =
           | false ->
             snap :: model.Sessions.Sessions
         let watcherEffects =
-          match model.LiveTesting.TestState.Activation with
+          match watchingActivation (SessionId.value snap.Id) model with
           | Features.LiveTesting.LiveTestingActivation.Active ->
             [ SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.RegisterFileWatcher
                 (SessionId.value snap.Id, snap.WorkingDirectory)) ]
-          | _ -> []
+          | Features.LiveTesting.LiveTestingActivation.Inactive -> []
         { model with
             CreatingSession = false
             Sessions = {
@@ -1334,7 +1360,7 @@ module SageFsUpdate =
           | _ -> false
 
         let watcherEffects =
-          match model.LiveTesting.TestState.Activation, priorSession with
+          match watchingActivation sessionId model, priorSession with
           | LiveTestingActivation.Active, Some session when not (isWatcherEligible session.Status) && isWatcherEligible status ->
               [ SageFsEffect.TestCycle (
                   Features.LiveTesting.TestCycleEffect.RegisterFileWatcher (
@@ -2006,17 +2032,19 @@ module SageFsUpdate =
         // Dispose the watcher claims that EnableLiveTesting registered for
         // every running/stale session. Without this, each enable/disable
         // cycle leaks a FileSystemWatcher per session (OS handles + stale
-        // FileReloaded attribution after re-enable).
+        // FileReloaded attribution after re-enable). A session that was switched on by itself
+        // keeps its watcher: this message turns off the primary cycle, not that session.
+        let disabled = { model with LiveTesting = lt }
         let watcherEffects =
           model.Sessions.Sessions
           |> List.choose (fun session ->
-            match session.Status with
-            | SessionDisplayStatus.Running
-            | SessionDisplayStatus.Idle ->
+            match session.Status, sessionActivation disabled session.Id with
+            | SessionDisplayStatus.Running, Features.LiveTesting.LiveTestingActivation.Inactive
+            | SessionDisplayStatus.Idle, Features.LiveTesting.LiveTestingActivation.Inactive ->
               Some (SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.DisposeFileWatcher
                 (SessionId.value session.Id, session.WorkingDirectory)))
             | _ -> None)
-        { model with LiveTesting = lt }, watcherEffects
+        disabled, watcherEffects
 
     | SageFsMsg.EnableLiveTestingForSession sessionId ->
       // Mirrors `EnableLiveTesting`, targeting this session's own cycle.
@@ -2143,42 +2171,32 @@ module SageFsUpdate =
             PerSessionLiveTesting = perSessionState' }, mappedEffects
 
     | SageFsMsg.BufferContentChanged (targetSession, filePath, content) ->
+      // The buffer reaches the session it names when that session has live testing on; primary does not matter.
       let afterKeystroke : SageFsModel * SageFsEffect list =
-        let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
-        match isActive with
-        | false -> model, []
-        | true ->
-            let now = DateTimeOffset.UtcNow
-            match targetSession with
-            | Some sid when activeLiveTestingSessionId model = Some sid ->
-                let current = model.LiveTesting
-                let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-                match obj.ReferenceEquals(cycle', current) with
-                | true -> model, []
-                | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
-            | Some sid ->
-                let sessionExists =
-                  model.Sessions.Sessions
-                  |> List.exists (fun session -> SessionId.value session.Id = sid)
-                match sessionExists with
-                | false -> model, []
-                | true ->
-                    let current =
-                      model.PerSessionLiveTesting
-                      |> Map.tryFind sid
-                      |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
-                    let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-                    match obj.ReferenceEquals(cycle', current) with
-                    | true -> model, []
-                    | false ->
-                        { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
-                        pendingRebuildCancellationEffects current
-            | None ->
-                let current = model.LiveTesting
-                let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-                match obj.ReferenceEquals(cycle', current) with
-                | true -> model, []
-                | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
+        let keystroke = Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath DateTimeOffset.UtcNow
+        match targetSession with
+        | None ->
+            // No session named: the primary cycle, as before.
+            match model.LiveTesting.TestState.Activation with
+            | Features.LiveTesting.LiveTestingActivation.Active ->
+                editCycleAt SageFsModel.LiveTestingTarget.Primary keystroke model
+            | Features.LiveTesting.LiveTestingActivation.Inactive -> model, []
+        | Some sid ->
+            let namedSession =
+              ActiveSession.sessionId model.Sessions.ActiveSessionId
+              |> Option.filter (fun active -> SessionId.value active = sid)
+              |> Option.orElse (
+                model.Sessions.Sessions
+                |> List.tryFind (fun session -> SessionId.value session.Id = sid)
+                |> Option.map (fun session -> session.Id))
+            match namedSession with
+            | None -> model, []
+            | Some known ->
+                match LiveTestFileRouting.withLiveTestingOn (sessionActivation model) [ known ] with
+                | [] -> model, []
+                | _ ->
+                    let target = SageFsModel.resolveOrCreateLiveTestingTarget (Some sid) model
+                    editCycleAt target keystroke model
       // A buffer other than the one a real build is confirming: that confirmation is about text no longer being
       // edited, so it stops here instead of spending a build on it.
       let editedModel, editedEffects = afterKeystroke
@@ -2187,46 +2205,28 @@ module SageFsUpdate =
       editedModel', editedEffects @ confirmationEffects
 
     | SageFsMsg.FileContentChanged (filePath, content) ->
-      let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
-      match isActive with
-      | false -> model, []
-      | true ->
-        let now = DateTimeOffset.UtcNow
-        let owningSession =
-          model.Sessions.Sessions
-          |> List.tryFind (fun s ->
-            not (System.String.IsNullOrEmpty s.WorkingDirectory) &&
-            filePath.StartsWith(s.WorkingDirectory, System.StringComparison.OrdinalIgnoreCase))
-        match owningSession with
-        | None ->
-          // No session owns this file — update the primary (active) session
-          let current = model.LiveTesting
-          let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
-          match obj.ReferenceEquals(cycle', current) with
-          | true -> model, []
-          | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
-        | Some s ->
-          match model.Sessions.ActiveSessionId with
-          | ActiveSession.Viewing activeId when activeId = s.Id ->
-            // File belongs to the active session — update primary
-            let current = model.LiveTesting
-            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
-            match obj.ReferenceEquals(cycle', current) with
-            | true -> model, []
-            | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
-          | _ ->
-            // File belongs to a background session — update per-session state
-            let sid = SessionId.value s.Id
-            let current =
-              model.PerSessionLiveTesting
-              |> Map.tryFind sid
-              |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
-            let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath now
-            match obj.ReferenceEquals(cycle', current) with
-            | true -> model, []
-            | false ->
-                { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
-                pendingRebuildCancellationEffects current
+      // Each session owning the file that has live testing on, read from its own cycle, gets the save.
+      let save = Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath DateTimeOffset.UtcNow
+      let roots =
+        model.Sessions.Sessions
+        |> List.map (fun s ->
+          ({ SessionId = s.Id; WorkingDirectory = s.WorkingDirectory } : LiveTestFileRouting.SessionRoot))
+      match LiveTestFileRouting.route (sessionActivation model) roots filePath with
+      | LiveTestFileRouting.FileRoute.SessionLess ->
+        // No session owns the file (it came from the daemon's fallback watch directory), so the
+        // primary cycle takes it, and only while the primary has live testing on.
+        match model.LiveTesting.TestState.Activation with
+        | Features.LiveTesting.LiveTestingActivation.Active ->
+          editCycleAt SageFsModel.LiveTestingTarget.Primary save model
+        | Features.LiveTesting.LiveTestingActivation.Inactive -> model, []
+      | LiveTestFileRouting.FileRoute.ToSessions receivers ->
+        receivers
+        |> List.fold
+          (fun (accModel, accEffects) receiver ->
+            let target = SageFsModel.resolveOrCreateLiveTestingTarget (Some (SessionId.value receiver)) accModel
+            let model', effects = editCycleAt target save accModel
+            model', accEffects @ effects)
+          (model, [])
 
     | SageFsMsg.FcsTypeCheckCompleted (targetSession, analysisIdentity, result) ->
       let model', maybeEffects =
