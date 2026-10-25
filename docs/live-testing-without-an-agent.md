@@ -118,13 +118,15 @@ The marks at the end of the line and the coverage marks are drawn by the extensi
 
 In Neovim you get signs in the sign column and a test panel (`:SageFsTestPanel`, `<leader>rt`) where `<CR>` jumps to the source.
 
-The dashboard shows it too. This is the sidebar and output once the sample's tests have all passed, with the Live Testing panel on:
+The dashboard shows it too. This is its Live Testing panel once the sample's tests have all passed:
 
-![The SageFs dashboard with live testing on and every test passing: the session card shows a green check count, the Live Testing panel has a Disable button, and the output pane lists the test runs.](images/live-testing-dashboard-green.png)
+![The dashboard's Live Testing panel: "Live Testing: ON", a green count of 11, a Disable button, and "All 11 tests passed".](images/live-testing-panel-green.png)
 
-And this is the same session after I broke a test on purpose. The header says 1 failure, the Live Testing panel lists the failure, and the session card carries the stale source warning that a save raises until the confirming build finishes:
+And this is the same session after I broke a test on purpose:
 
-![The SageFs dashboard with one failing test: the header reads 1 failure, the Live Testing panel shows the pass and fail counts, and the output pane has a red test run line.](images/live-testing-dashboard-red.png)
+![The same panel with one failing test: a green 10 and a red 1, and the line "1 failed · 10 passed".](images/live-testing-panel-red.png)
+
+While a save's confirming build runs, the session card above that panel also carries a red STALE SOURCE warning.
 
 ## 6. A worked example
 
