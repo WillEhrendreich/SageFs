@@ -514,6 +514,23 @@ let nestedCheckoutTests =
       isInNestedCheckout root (under [ "src"; "App.fs" ]) marked
       |> Flip.Expect.isFalse "the root marker is ignored"
     }
+    testCase "WHY — isInNestedCheckout — a sibling directory whose name only begins with the root's is outside the root, so its own checkout marker says nothing about the root's files" <| fun () ->
+      let parent = Path.Combine(Path.GetTempPath(), "sagefs-siblings")
+      let repo = Path.Combine(parent, "repo")
+      let sibling = Path.Combine(parent, "repo2")
+      let marked (d: string) = String.Equals(d.TrimEnd(Path.DirectorySeparatorChar), sibling, StringComparison.Ordinal)
+      isInNestedCheckout repo (Path.Combine(sibling, "sub", "x.fs")) marked
+      |> Flip.Expect.isFalse "repo2 is not under repo, whatever its name starts with"
+      isInNestedCheckout repo (Path.Combine(repo, "sub", "x.fs")) (fun d -> String.Equals(d, Path.Combine(repo, "sub"), StringComparison.Ordinal))
+      |> Flip.Expect.isTrue "a marker really inside the root still counts"
+    testCase "WHY — isUnderPrunedPath — a path in a sibling whose name only begins with the root's is outside the root, so its node_modules is not the root's pruned subtree" <| fun () ->
+      let parent = Path.Combine(Path.GetTempPath(), "sagefs-siblings")
+      let repo = Path.Combine(parent, "repo")
+      let sibling = Path.Combine(parent, "repo2")
+      isUnderPrunedPath repo (Path.Combine(sibling, "node_modules", "x.fs")) (fun _ -> false)
+      |> Flip.Expect.isFalse "repo2/node_modules is not under repo"
+      isUnderPrunedPath repo (Path.Combine(repo, "node_modules", "x.fs")) (fun _ -> false)
+      |> Flip.Expect.isTrue "repo/node_modules still is"
     testProperty "WHY — isInNestedCheckout — a file is excluded exactly when a marker lies strictly between the root and the file" <|
       fun (depth: byte) (markAt: byte) ->
         let depth = int depth % 6 + 1

@@ -57,12 +57,14 @@ let shouldExcludeFile (patterns: string list) (filePath: string) : bool =
 /// be attributed to the root's session. The root's own marker does not count —
 /// a session's repository root is where its files live.
 let isInNestedCheckout (root: string) (path: string) (hasCheckoutMarker: string -> bool) : bool =
-  let rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+  let pathCase = PathContainment.PathCase.ofCurrentOs ()
+  let rootFull = Path.GetFullPath root
   let rec walk (dir: string) =
     match dir with
     | null | "" -> false
-    | d when String.Equals(d.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), rootFull, StringComparison.OrdinalIgnoreCase) -> false
-    | d when not (d.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) -> false
+    // The walk ends at the root itself and at anything outside it. A sibling whose name only
+    // begins with the root's (`/a/repo2` beside `/a/repo`) is outside, which a text prefix missed.
+    | d when not (PathContainment.isStrictlyUnder pathCase rootFull d) -> false
     | d when hasCheckoutMarker d -> true
     | d -> walk (Path.GetDirectoryName d)
   walk (Path.GetDirectoryName(Path.GetFullPath path))
@@ -286,13 +288,13 @@ let shouldSuppressRecompile
 /// exactly the same set of paths; unlike `isInNestedCheckout` (which only
 /// checks checkout markers) this also catches the name-based exclusions.
 let isUnderPrunedPath (root: string) (path: string) (hasCheckoutMarker: string -> bool) : bool =
-  let rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+  let pathCase = PathContainment.PathCase.ofCurrentOs ()
+  let rootFull = Path.GetFullPath root
   let rec walk (dir: string) =
     match dir with
     | null | "" -> false
-    | d when String.Equals(d.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), rootFull, StringComparison.OrdinalIgnoreCase) -> false
-    | d when not (d.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) -> false
-    | d when shouldPruneDir rootFull d hasCheckoutMarker -> true
+    | d when not (PathContainment.isStrictlyUnder pathCase rootFull d) -> false
+    | d when shouldPruneDir root d hasCheckoutMarker -> true
     | d -> walk (Path.GetDirectoryName d)
   walk (Path.GetDirectoryName(Path.GetFullPath path))
 
@@ -373,9 +375,8 @@ let classifyWatchRoot (home: string) (root: string) : WatchRootVerdict =
     match String.IsNullOrWhiteSpace home with
     | true -> false
     | false ->
-      let homeFull = normalize home
-      String.Equals(rootFull, homeFull, StringComparison.Ordinal)
-      || homeFull.StartsWith(rootFull.TrimEnd(Path.DirectorySeparatorChar) + string Path.DirectorySeparatorChar, StringComparison.Ordinal)
+      // The home directory is the root, or lies inside it.
+      PathContainment.isWithin (PathContainment.PathCase.ofCurrentOs ()) rootFull (normalize home)
   match String.Equals(rootFull, Path.GetPathRoot rootFull, StringComparison.Ordinal), holdsHome with
   | true, _ -> WatchRootVerdict.TooBroad (sprintf "%s is a filesystem root" rootFull)
   | false, true -> WatchRootVerdict.TooBroad (sprintf "%s is the home directory or contains it" rootFull)
