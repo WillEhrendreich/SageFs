@@ -9,9 +9,9 @@ SageFs brings live evaluation, instant test feedback, and coverage visualization
 | Feature | What it does |
 |---------|-------------|
 | **Inline Results** | Expression values appear next to your code as you evaluate |
-| **Live Testing** | When live testing is enabled, the affected tests re-run as you edit (saved or not) and feed green ✓ / red ✗ gutter state |
+| **Live Testing** | When live testing is enabled, the affected tests re-run as you edit (saved or not) and feed green ✓ / red ✗ marks at the end of each test's line |
 | **Debug a failing test** | A failing test gets a Debug lens, a Debug link in its hover and Debug Test in the Test Explorer. It attaches a .NET debugger to the process that runs your tests. Breakpoints bind in your compiled project code, and not in code you evaluated in the session, which has no debug symbols |
-| **Coverage Gutters** | Colored bars show which lines are covered by tests |
+| **Coverage Marks** | Colored marks in front of each line show whether tests cover it |
 | **Failure Details** | Inline `⊘` markers show Expected vs Actual diffs |
 | **Failure Narratives** | Rich context: what changed, when it last passed, causal analysis |
 | **Test Source Jump** | Test Explorer items link to their source location automatically |
@@ -59,22 +59,27 @@ Live testing is a per-session toggle. If you pick the Live Testing workflow (`Sa
 
 ## 🎨 Understanding What You See
 
-### Gutter Icons
+### Test marks
 
-| Icon | Meaning |
+The extension draws these as text after the end of the test's line, and as a tick in the scrollbar's overview ruler. It puts no icon in the gutter. The only gutter icon you see is VS Code's own run and debug glyph from the Test Explorer.
+
+| Mark | Meaning |
 |------|---------|
-| ✓ (green) | All tests passing for this line |
-| ✗ (red) | A test covering this line has failed |
-| ⊘ (gray) | Test skipped or disabled by policy |
-| ● | Test status marker on test definition lines |
+| ✓ (green) | The test passed. A test that was skipped, or disabled by policy, gets this mark too, and its hover starts with ⊘ and says why |
+| ✗ (red) | The test failed or threw. The line also gets a faint red background |
+| ● | The test is running, its result is stale because the code changed, or it has not run yet. The hover says which |
 
-### Coverage Bars (left gutter)
+### Coverage marks (in front of the code)
+
+These are text drawn before the first character of the line, not gutter icons.
 
 | Marker | Meaning |
 |--------|---------|
 | ▸ (green) | Line is covered: all covering tests pass |
 | ▸ (red) | Line is covered: some covering tests are failing |
 | ○ (gray) | Line has no test coverage |
+
+The per-line health view draws a `│` in the same three colors instead of `▸` and `○`.
 
 ### Inline Decorations
 
@@ -139,7 +144,7 @@ The tooltip has the daemon's message, the mechanism, and, when a patch left the 
 - **Native Test Explorer**: Tests appear in VS Code's built-in Test Explorer via a `TestController` adapter
 - **Test result CodeLens**: "✓ Passed" / "✗ Failed" above every test function
 - **Failure diagnostics**: Failed tests appear as native VS Code squiggles
-- **Coverage gutter bars**: Per-line coverage health (AllPassing / SomeFailing / NoCoverage) shown in the gutter
+- **Coverage marks**: Per-line coverage health (AllPassing / SomeFailing / NoCoverage) drawn as text in front of the line
 - **Inline failure details**, `⊘` markers with Expected/Actual diffs, exception messages, and timeouts
 - **Failure narratives**: Enriched failure context: summary, time since last pass, causal changes
 - **Test source locations**: Test Explorer items automatically link to their source file and line
@@ -192,7 +197,7 @@ A session fault message is one sentence and a remedy. The daemon's full diagnosi
 - **Status bar**: Active project, eval count, test summary, eval performance sparkline. Click to open dashboard.
 - **Auto-start**: Detects `.fsproj`/`.sln`/`.slnx` files and offers to start SageFs automatically
 - **Ionide integration**: Hijacks Ionide's `FSI: Send Selection` commands so Alt+Enter routes through SageFs
-- **11 custom theme colors**: Inline result and gutter colors respect your VS Code theme (the list is under `contributes.colors` in `package.json`)
+- **11 custom theme colors**: Inline result and test mark colors respect your VS Code theme (the list is under `contributes.colors` in `package.json`)
 
 ---
 
@@ -355,7 +360,7 @@ The daemon isn't running. Fix:
 3. Try restarting: Command Palette → "SageFs: Hard Reset (Rebuild)"
 4. Make sure your cursor is in an F# file (keybindings only activate for `fsharp` language)
 
-### Tests not appearing in gutter
+### Tests not getting marks
 1. SageFs discovers [Expecto](https://github.com/haf/expecto), xUnit (including v3), NUnit, MSTest, and TUnit tests. Expecto is the best-covered path today, so start there if you can.
 2. Enable live testing: Command Palette → "SageFs: Enable Live Testing"
 3. Check that the daemon discovered tests: status bar should show a test count (e.g., `🧪 42/42 ✓`)

@@ -42,8 +42,8 @@ Live testing is also a workflow, not only a toggle. See [Workflow Modes](workflo
 | Test discovery and execution | Supported | Supported | Supported | Supported |
 | Run affected tests on save | Supported | Supported | Shared | Shared |
 | Test result panel | Supported | Supported | Supported | N/A |
-| Test gutter markers | Supported | Supported | N/A | N/A |
-| Coverage gutters | Supported | Supported | N/A | N/A |
+| Test marks (VS Code: end of line and overview ruler, Neovim: sign column) | Supported | Supported | N/A | N/A |
+| Coverage marks (VS Code: text before the code, Neovim: sign column) | Supported | Supported | N/A | N/A |
 | Failure narratives | Supported | Supported | Supported | Supported |
 | Explain test failures and causal changes | Shared | Shared | Supported | Supported |
 

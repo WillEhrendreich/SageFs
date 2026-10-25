@@ -6,7 +6,7 @@ You leave behind the `dotnet watch run` loop, terminal-only output, the custom `
 
 **What you'll notice right away:**
 - Alt+Enter on any expression shows the result inline, not in the terminal.
-- Expecto tests with live gutter markers (✓/✗) build directly on what koan assertions taught you.
+- Expecto tests with live ✓/✗ marks on the test lines build directly on what koan assertions taught you.
 - No more `dotnet run` cycles; feedback is instant.
 - The skills the koans taught you (DUs, pipelines, options, pattern matching) apply directly to real code, unchanged.
 

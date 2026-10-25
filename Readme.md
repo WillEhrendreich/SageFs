@@ -53,7 +53,7 @@ Start `sagefs` once. Then:
 |:---|:---|
 | It starts empty | A session loads your real project, built by the SDK `dotnet` picks in that folder, in its own host process. Your package versions never fight mine. No config files, and it works on half-written code. |
 | One process, one terminal | One daemon, any number of isolated session workers. VS Code, Neovim, the dashboard and agents all talk to the same live session at the same time, and each keeps its own view. |
-| It knows nothing about your tests | Edit a function, saved or not, and the *affected* tests re-run against it. The failing one goes red in your gutter and green again when you fix it, without touching the file on disk. Each line lists the tests that run it, each result says whether it ran against evaluated code or a real build, you can pause it or scope it to some tests, and in VS Code you can debug the failing test. When it can't tell what an edit affects it runs everything, it never reads an empty selection as green. See [live testing](docs/live-testing-as-you-type.md). |
+| It knows nothing about your tests | Edit a function, saved or not, and the *affected* tests re-run against it. The failing one goes red in your editor and green again when you fix it, without touching the file on disk. Each line lists the tests that run it, each result says whether it ran against evaluated code or a real build, you can pause it or scope it to some tests, and in VS Code you can debug the failing test. When it can't tell what an edit affects it runs everything, it never reads an empty selection as green. See [live testing](docs/live-testing-as-you-type.md). |
 | It can't touch a running app | Save a `.fs` file and SageFs re-points the changed methods in the process that's already running, including inline lambdas in a route list, instance members, and code you added, removed or gave a new signature. Your state stays where it was. A new member on an existing type restarts the app, and so does anything else it can't patch, and it says why. See [hot reload](docs/hot-reload.md). |
 | Values scroll away | Every binding in your session is shown live in the dashboard, top-down, and updates after each eval. |
 | Only you can drive it | An MCP server with [71 tools](docs/mcp-tools.md). An agent evals, type-checks and runs your tests in the same session you're looking at, and `run_tests` hands back a receipt so a stale pass never counts as green. |
@@ -82,7 +82,7 @@ This started as an experiment in how far agentic development could go, and it's 
 - [How SageFs Works](#how-sagefs-works)
 - [What You Get in Each Editor](#what-you-get-in-each-editor)
 - [Keybindings](#%EF%B8%8F-keybindings-across-editors)
-- [Gutter Icons](#-gutter-icons)
+- [Test and coverage marks](#-test-and-coverage-marks)
 - [Live Testing Cost Comparison](#live-testing-cost-comparison)
 - [Under the Hood](#under-the-hood)
 - [Repository Map](#repository-map--where-things-live)
@@ -248,9 +248,9 @@ The supervisor starts a new daemon whenever the old one is gone, so `sagefs stop
 
 ### 5. Enable live testing
 
-> **Live testing runs as you type.** SageFs evals your edited buffer into the session and re-runs only the *affected* tests against the new code. An unsaved edit flips a failing test red and back to green when you fix it, without ever touching the file on disk. Results stream inline with source-mapped gutter markers and coverage. All five frameworks (Expecto, xUnit v2 and v3, NUnit, MSTest, TUnit) discover, run, and report with framework-specific messages.
+> **Live testing runs as you type.** SageFs evals your edited buffer into the session and re-runs only the *affected* tests against the new code. An unsaved edit flips a failing test red and back to green when you fix it, without ever touching the file on disk. Results stream inline with source-mapped test marks and coverage. All five frameworks (Expecto, xUnit v2 and v3, NUnit, MSTest, TUnit) discover, run, and report with framework-specific messages.
 
-When live testing is enabled and a project is loaded, edits (saved or unsaved) re-run the affected tests automatically and update gutter state. The engine, SSE events, coverage, and editor integrations work today across VS Code and Neovim. [Live testing without an agent](docs/live-testing-without-an-agent.md) takes you from a fresh install to red and green in your editor, and says how to turn it on in VS Code, Neovim, the dashboard and over HTTP.
+When live testing is enabled and a project is loaded, edits (saved or unsaved) re-run the affected tests automatically and update the marks. The engine, SSE events, coverage, and editor integrations work today across VS Code and Neovim. [Live testing without an agent](docs/live-testing-without-an-agent.md) takes you from a fresh install to red and green in your editor, and says how to turn it on in VS Code, Neovim, the dashboard and over HTTP.
 
 ### 6. What you'll see
 
@@ -392,8 +392,8 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | Session management | ✅ | ✅ | ✅ | ✅ |
 | Code completion | ✅ | ✅ | no | HTTP |
 | CodeLens | ✅ | ✅ | no | no |
-| **Live test gutters** | ✅ | ✅ | no | no |
-| **Coverage gutters** | ✅ | ✅ | no | no |
+| **Live test marks** | ✅ | ✅ | no | no |
+| **Coverage marks** | ✅ | ✅ | no | no |
 | **Failure narratives** | ✅ | ✅ | ✅ | ✅ |
 | **Test source-jump** | ✅ | ✅ | no | no |
 | **Debug a failing test** | ✅ | ✅ | no | no |
@@ -413,7 +413,7 @@ A ✅ in the MCP column means a tool in the [71-tool surface](docs/mcp-tools.md)
 
 Install **SageFs** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) or [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs), or the `.vsix` in [Releases](https://github.com/WillEhrendreich/SageFs/releases). Written in F# via [Fable](https://fable.io/), not TypeScript.
 
-Current wiring includes Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, call graph, event history, dashboard webview, status bar, auto-start, Ionide command hijacking, coverage gutter bars, inline failure decorations, failure narrative enrichment, and test source-jump.
+Current wiring includes Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, call graph, event history, dashboard webview, status bar, auto-start, Ionide command hijacking, coverage marks, inline failure decorations, failure narrative enrichment, and test source-jump.
 
 #### Neovim
 
@@ -484,9 +484,11 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel (experimental)
 
 ---
 
-## 🎨 Gutter Icons
+## 🎨 Test and coverage marks
 
-| Icon | Meaning |
+Neovim draws these as signs in the sign column. VS Code draws the test marks (✓ ✗ ●) at the end of the test's line and in the scrollbar's overview ruler, and the coverage marks as text in front of the code. The only icon VS Code puts in the gutter itself is its own Test Explorer run and debug glyph, which comes from the **SageFs Live Tests** controller.
+
+| Mark | Meaning |
 |------|---------|
 | ✓ (green) | Test passing, this code is covered by at least one passing test |
 | ✗ (red) | Test failing, a test covering this code has failed |
@@ -496,7 +498,7 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel (experimental)
 | │ (gray bar) | Not covered, no test reaches this line |
 | ⊘ | Inline failure, shows the test name and Expected/Actual diff |
 
-> 💡 **Hover** over any gutter icon for details. In Neovim, press `<C-d>` on a failing test for the full failure narrative.
+> 💡 **Hover** over a mark for details. In Neovim, press `<C-d>` on a failing test for the full failure narrative.
 >
 > 🐛 **In VS Code, a failing test has a Debug lens and a Debug link in its hover**, and the Test Explorer has Debug Test. It attaches the C# extension's .NET debugger to the process that runs your tests, so breakpoints bind in your compiled project code. Code you evaluated in the session has no debug symbols, so breakpoints in it will not bind. [How it works and what it needs](docs/LIVE_TESTING_GUIDE.md#debugging-a-failing-test).
 
