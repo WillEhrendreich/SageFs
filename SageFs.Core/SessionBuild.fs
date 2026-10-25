@@ -277,6 +277,23 @@ module SessionBuild =
     | false -> [ "build"; buildProject; "--no-restore"; optimizationDisablingProperty ]
     | true  -> [ "build"; buildProject; optimizationDisablingProperty ]
 
+  /// The process a session rebuild starts: `dotnet` with `args` in `workingDir`, its environment scrubbed of
+  /// whatever MSBuild-resolution variables THIS process (daemon or worker) inherited or picked up, so the
+  /// session's own build resolves the SDK from `workingDir` and not from whichever project SageFs last loaded
+  /// internally (see SageFs.ProcessEnvironment), plus `buildEnvironment`. Public so a test can read the
+  /// environment a real rebuild would start with, without starting one.
+  let buildStartInfo (args: string list) (workingDir: string) : ProcessStartInfo =
+    let psi = ProcessStartInfo(
+      "dotnet",
+      RedirectStandardOutput = true,
+      RedirectStandardError = true,
+      UseShellExecute = false,
+      WorkingDirectory = workingDir)
+    for arg in args do
+      psi.ArgumentList.Add(arg)
+    applyTo psi buildEnvironment
+    psi
+
   /// Whether a failed build's output says a NuGet restore is required, so the
   /// build is worth retrying WITH a restore instead of being reported as a
   /// compile failure. Covers the fresh-project assets-missing error (NETSDK1004)
@@ -462,20 +479,7 @@ module SessionBuild =
           // (`BuildFailure`), with stdout/stderr for diagnostics and the retry.
           let runOnce (args: string list) : Async<Result<string, BuildFailure>> =
             async {
-              let psi = ProcessStartInfo(
-                "dotnet",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                WorkingDirectory = workingDir)
-              for arg in args do
-                psi.ArgumentList.Add(arg)
-              // Strip whatever MSBuild-resolution variables THIS process (daemon
-              // or worker) may itself have inherited or picked up, so the
-              // session's own build resolves the SDK from `workingDir`, not
-              // from whichever project SageFs last loaded internally. See
-              // SageFs.ProcessEnvironment.
-              applyTo psi []
+              let psi = buildStartInfo args workingDir
               // Starting the process can throw (dotnet not on the daemon's PATH,
               // or the working directory is gone). That is a build that did not
               // run, and it has to come back as one: the caller answers through a

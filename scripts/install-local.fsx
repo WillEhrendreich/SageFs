@@ -23,6 +23,11 @@ open System.IO
 open System.Net.Http
 open System.Threading
 
+// The pack below starts MSBuild once and never comes back to its nodes. Reuse made it die with MSB4223 under load
+// (three times in one session), and only an exported variable got it through. Every child inherits this.
+// The daemon's own builds name the same variable in SageFs.ProcessEnvironment.buildEnvironment.
+Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", "1")
+
 // ── named values ─────────────────────────────────────────────────────────────
 
 let mcpPort = match Environment.GetEnvironmentVariable "SAGEFS_MCP_PORT" with | null | "" -> 37749 | p -> int p

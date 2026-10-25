@@ -306,6 +306,17 @@ let private markUsed (directory: string) : unit =
   try File.WriteAllText(Path.Combine(directory, HostLastUsedMarker), DateTime.UtcNow.ToString "o")
   with _ -> ()
 
+/// The environment the host's `dotnet build` runs in: what every SageFs build gets, the tiering knobs, and the
+/// SDK root when the project pinned a repo-local SDK. DOTNET_ROOT is inherited, and it points at whichever
+/// install started us. A repo-local SDK loses to it: the muxer runs, then MSBuild loads its targets from the
+/// inherited root instead. Point the whole build at the SDK the project asked for.
+let hostBuildEnvironment (dotnet: string) (selection: SdkSelection) : (string * string) list =
+  ProcessEnvironment.buildEnvironment
+  @ hostBuildRuntimeEnvironment
+  @ (match selection.DotnetRoot with
+     | None -> []
+     | Some root -> [ "DOTNET_ROOT", root; "DOTNET_HOST_PATH", SdkSelection.muxer dotnet selection ])
+
 /// Ensure a host built by `selection`'s SDK exists under `cacheRoot`, building it if not.
 let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: string) : Result<HostBuild, HostBuildError> =
   let sdkVersion = selection.Version
@@ -338,17 +349,8 @@ let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: strin
             File.WriteAllText(Path.Combine(source, name), content)
           File.WriteAllBytes(Path.Combine(source, HostHarmonyName + ".dll"), harmonyBytes)
           File.WriteAllText(Path.Combine(source, "global.json"), globalJson sdkVersion)
-          // DOTNET_ROOT is inherited, and it points at whichever install
-          // started us. A repo-local SDK loses to it: the muxer runs, then
-          // MSBuild loads its targets from the inherited root instead. Point
-          // the whole build at the SDK the project asked for.
-          let buildEnvironment =
-            hostBuildRuntimeEnvironment
-            @ (match selection.DotnetRoot with
-               | None -> []
-               | Some root -> [ "DOTNET_ROOT", root; "DOTNET_HOST_PATH", SdkSelection.muxer dotnet selection ])
           runCaptureWith
-            buildEnvironment
+            (hostBuildEnvironment dotnet selection)
             dotnet
             [ "build"; "FsiHost.fsproj"; "-c"; "Release"; "-o"; Path.Combine(directory, "bin"); "--nologo"; "-v"; "q" ]
             source

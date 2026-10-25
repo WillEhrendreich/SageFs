@@ -48,6 +48,12 @@ let sanitize (parentEnvironment: Map<string, string>) (overrides: (string * stri
   let cleaned = poisonedVariables |> List.fold (fun env key -> Map.remove key env) parentEnvironment
   overrides |> List.fold (fun env (key, value) -> Map.add key value env) cleaned
 
+/// What every `dotnet build` SageFs starts adds to its environment, for the build itself (`poisonedVariables`
+/// are removed, these are added). SageFs starts each build once and never comes back to its MSBuild nodes, so a
+/// node left running only waits to be picked up by the next build, and under load that pickup died with
+/// MSB4223 three times in one session. A caller composes this with whatever else its build needs.
+let buildEnvironment : (string * string) list = [ "MSBUILDDISABLENODEREUSE", "1" ]
+
 /// Apply `sanitize` to a real `ProcessStartInfo`: remove every poisoned key the
 /// process would otherwise inherit, then set `overrides`. Every spawn site
 /// should call this instead of writing straight to `psi.Environment`.

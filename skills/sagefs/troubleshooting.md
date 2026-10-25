@@ -123,6 +123,13 @@ implying the command closes it.
   An agent lost an entire session to this: it read the load error as "SageFs is
   broken", spent hours working around it with `dotnet`, and the daemon was
   simply old. Checking the version first would have cost one tool call.
+- **A rebuild or a pack dies with `MSB4223` under load.** An MSBuild node left running by
+  an earlier build was picked up by this one and fell over. The daemon's session rebuilds
+  and the FSI host build, `ship.fsx` and `install-local.fsx` all set
+  `MSBUILDDISABLENODEREUSE=1` themselves now, so on a daemon built after that change there
+  is nothing to do. On an older one, `export MSBUILDDISABLENODEREUSE=1` in the shell that starts the daemon (the
+  daemon passes it down) and run the step again. For a `dotnet build` you start yourself the
+  same variable applies, and `dotnet build-server shutdown` clears nodes already running.
 - **A filtered test run is never the acceptance check.** A filter that matches
   nothing prints `0 failed` and exits 0 in plain Expecto. SageFs's trust line
   says `NothingRan` or `NarrowedRun`. Only an unfiltered run counts.

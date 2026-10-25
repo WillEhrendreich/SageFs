@@ -225,3 +225,27 @@ let forwardingTests =
       finally
         try Directory.Delete(workDir, true) with _ -> ()
   ]
+
+/// Session rebuilds and the pack died with MSB4223 three times in one session under load, and only went on once an agent
+/// exported MSBUILDDISABLENODEREUSE=1 by hand. SageFs starts every one of these builds once and never reuses the node, so the
+/// variable is part of what a build SageFs starts IS, set where the process is made.
+[<Tests>]
+let buildEnvironmentTests =
+  testList "ProcessEnvironment.buildEnvironment" [
+
+    testCase "WHY — the build environment turns MSBuild node reuse off, so a build under load cannot die on a node an earlier build left behind (MSB4223)" <| fun _ ->
+      ProcessEnvironment.buildEnvironment
+      |> Expect.contains "MSBUILDDISABLENODEREUSE=1 is in the build environment" ("MSBUILDDISABLENODEREUSE", "1")
+
+    testCase "WHY — the ProcessStartInfo a session rebuild starts carries it, even when the daemon itself inherited a different value" <| fun _ ->
+      TestInfrastructure.withEnvVar "MSBUILDDISABLENODEREUSE" (Some "0") (fun () ->
+        let psi = SessionBuild.buildStartInfo [ "build"; "App.fsproj"; "--no-restore" ] (Path.GetTempPath())
+        psi.Environment.["MSBUILDDISABLENODEREUSE"] |> Expect.equal "the rebuild's child sees node reuse off" "1"
+        psi.ArgumentList |> Seq.toList |> Expect.equal "the arguments are the ones asked for" [ "build"; "App.fsproj"; "--no-restore" ]
+        psi.FileName |> Expect.equal "it runs dotnet" "dotnet")
+
+    testCase "WHY — the FSI host build's environment carries it beside the tiering knobs, because that build is a dotnet build too" <| fun _ ->
+      let selection : FsiHostBuild.SdkSelection = { Version = "10.0.100"; DotnetRoot = None }
+      FsiHostBuild.hostBuildEnvironment "dotnet" selection
+      |> Expect.contains "node reuse is off for the host build" ("MSBUILDDISABLENODEREUSE", "1")
+  ]

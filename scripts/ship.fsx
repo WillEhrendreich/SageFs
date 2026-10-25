@@ -26,6 +26,10 @@ open System.Diagnostics
 open System.IO
 open System.Text.RegularExpressions
 
+// Every build this script starts (the test build, the pack, the child fsi scripts) is one-shot, and MSBuild node reuse
+// made them die with MSB4223 under load. Children inherit this, so recovery never depends on remembering a shell variable.
+Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", "1")
+
 // ---- running things ------------------------------------------------------------------------------------
 
 /// What a finished process left behind.
