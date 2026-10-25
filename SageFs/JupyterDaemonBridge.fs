@@ -275,11 +275,15 @@ module JupyterDaemonBridge =
               Utils.Log.warn "[JupyterDaemonBridge] session create unreachable: %s" transportMessage
               return WorkerProtocol.WorkerResponse.WorkerError SageFsError.DaemonNotRunning
           | other -> return toEvalResult replyId other
-        | WorkerProtocol.WorkerMessage.GetCompletions (_, _, replyId) ->
-          // /exec has no completions endpoint — report "no matches" rather
-          // than pretending to be disconnected from a daemon we ARE
+        | WorkerProtocol.WorkerMessage.GetCompletions (_, _, _, replyId) ->
+          // /exec has no completions endpoint, so the bridge says completions are not offered here: no
+          // matches, and the reason, rather than pretending to be disconnected from a daemon we ARE
           // connected to.
-          return WorkerProtocol.WorkerResponse.CompletionResult(replyId, [])
+          return
+            WorkerProtocol.WorkerResponse.CompletionResult(
+              replyId,
+              Features.AutoCompletion.CompletionAnswer.Unavailable(
+                Features.AutoCompletion.CompletionUnavailable.NotOffered "the Jupyter bridge reaches the daemon through /exec, which has no completion endpoint"))
         | other ->
           return WorkerProtocol.WorkerResponse.WorkerError (
             SageFsError.Unexpected (NotSupportedException(sprintf "%A is not supported by the Jupyter daemon bridge" other)))

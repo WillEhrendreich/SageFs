@@ -37,7 +37,7 @@ let routeMappingTests =
 
     testCase "GetCompletions maps to POST /completions" <| fun _ ->
       let method, path, _ =
-        WorkerHttpTransport.toRoute (WorkerMessage.GetCompletions("Sys", 3, "comp1"))
+        WorkerHttpTransport.toRoute (WorkerMessage.GetCompletions("Sys", 3, CompletionFixtures.editorLimit, "comp1"))
       method |> Expect.equal "method" "POST"
       path |> Expect.equal "path" "/completions"
 
@@ -109,8 +109,8 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.CheckResult(rid, [])
   | WorkerMessage.TypeCheckWithSymbols(_, _, rid) ->
     return WorkerResponse.TypeCheckWithSymbolsResult(rid, [], [])
-  | WorkerMessage.GetCompletions(_, _, rid) ->
-    return WorkerResponse.CompletionResult(rid, ["System"; "String"])
+  | WorkerMessage.GetCompletions(_, _, _, rid) ->
+    return WorkerResponse.CompletionResult(rid, CompletionFixtures.namesOf SageFs.Features.AutoCompletion.CompletionKind.Namespace ["System"; "String"])
   | WorkerMessage.CancelEval ->
     return WorkerResponse.EvalCancelled true
   | WorkerMessage.RunApp(_, _, rid)

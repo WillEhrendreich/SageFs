@@ -470,8 +470,9 @@ module WorkerHttpTransport =
         use doc = JsonDocument.Parse(body)
         let code = (jsonProp doc "code").GetString()
         let cursorPos = (jsonProp doc "cursorPos").GetInt32()
+        let limit = Serialization.deserialize<SageFs.Features.AutoCompletion.CompletionLimit> ((jsonProp doc "limit").GetRawText())
         let rid = (jsonProp doc "replyId").GetString()
-        return! respond' ctx (WorkerMessage.GetCompletions(code, cursorPos, rid))
+        return! respond' ctx (WorkerMessage.GetCompletions(code, cursorPos, limit, rid))
       })) |> ignore
 
       map Routes.cancel (Func<HttpContext, Task>(fun ctx ->

@@ -82,6 +82,13 @@ type WireCompletion =
     ReplacementText: string
     Glyph: string }
 
+/// Why the host could not list candidates at the caret. An empty list means there are none; these mean it could not look.
+type CompletionFailure =
+  /// FCS recovered from an error and flagged the declaration list as an error (`IsError`).
+  | ListingFlaggedError
+  /// The check raised; the message is the exception's.
+  | CheckRaised of message: string
+
 /// Why a config.fsx expression did not produce a DirectoryConfig.
 type ConfigFailure =
   | ConfigDoesNotCompile of diagnostics: FsiDiagnostic list
@@ -188,6 +195,7 @@ type Response =
   | CheckResult of id: int64 * diagnostics: FsiDiagnostic list
   | SymbolsResult of id: int64 * diagnostics: FsiDiagnostic list * symbols: WireSymbolRef list
   | CompletionsResult of id: int64 * items: WireCompletion list
+  | CompletionsFailed of id: int64 * failure: CompletionFailure
   | DescriptionResult of id: int64 * text: string
   | ConfigResult of id: int64 * outcome: ConfigOutcome
   | AgentStartResult of id: int64 * started: HostAgent.AgentStarted

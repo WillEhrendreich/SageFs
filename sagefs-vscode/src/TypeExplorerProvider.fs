@@ -63,29 +63,39 @@ let private parseCompletionsJson (parentContext: string) (json: string) : obj ar
       match jsIsNullOrUndefined parsed?completions with
       | true -> [||]
       | false -> !!parsed?completions
-    match completions.Length with
-    | 0 -> Some [| leafItem "No members" "" "info" :> obj |]
-    | _ ->
-      completions
-      |> Array.truncate 200
-      |> Array.map (fun c ->
-        let label = fieldString "label" c |> Option.defaultValue "?"
-        let kind = fieldString "kind" c |> Option.defaultValue ""
-        let insertText = fieldString "insertText" c |> Option.defaultValue label
-        let detail = fieldString "detail" c |> Option.defaultValue ""
-        let icon = kindIcon kind
-        let fullName =
-          match parentContext with
-          | "" | null -> insertText
-          | p -> sprintf "%s.%s" p insertText
-        match drillableKinds.Contains kind with
-        | true ->
-          let desc = match kind with "" -> "" | k -> k
-          expandableItem label desc icon (sprintf "explore:%s" fullName) :> obj
-        | false ->
-          let desc = match detail with "" -> kind | d -> d
-          leafItem label desc icon :> obj)
-      |> Some
+    match fieldString "unavailable" parsed, completions.Length with
+    // The daemon could not look (session not active, host gone, compiler error). Say so and why, never "No members".
+    | Some _, _ ->
+      let reason = fieldString "reason" parsed |> Option.defaultValue "the daemon could not list this name"
+      Some [| leafItem "Could not list members" reason "warning" :> obj |]
+    | None, 0 -> Some [| leafItem "No members" "" "info" :> obj |]
+    | None, _ ->
+      let size = TypeExplorerPure.parseSetSize (fieldInt "total" parsed) (fieldString "totalKind" parsed |> Option.defaultValue "")
+      let rows =
+        completions
+        |> Array.truncate TypeExplorerPure.RowsRequested
+        |> Array.map (fun c ->
+          let label = fieldString "label" c |> Option.defaultValue "?"
+          let kind = fieldString "kind" c |> Option.defaultValue ""
+          let insertText = fieldString "insertText" c |> Option.defaultValue label
+          let detail = fieldString "detail" c |> Option.defaultValue ""
+          let icon = kindIcon kind
+          let fullName =
+            match parentContext with
+            | "" | null -> insertText
+            | p -> sprintf "%s.%s" p insertText
+          match drillableKinds.Contains kind with
+          | true ->
+            let desc = match kind with "" -> "" | k -> k
+            expandableItem label desc icon (sprintf "explore:%s" fullName) :> obj
+          | false ->
+            let desc = match detail with "" -> kind | d -> d
+            leafItem label desc icon :> obj)
+      let tail =
+        TypeExplorerPure.tailRow (TypeExplorerPure.tailOf rows.Length size)
+        |> List.map (fun (label, desc) -> leafItem label desc "info" :> obj)
+        |> Array.ofList
+      Some(Array.append rows tail)
   with _ -> None
 
 let private exploreAndParse (query: string) (c: Client.Client) =

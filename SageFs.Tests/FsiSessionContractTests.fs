@@ -6,6 +6,7 @@ open System.Threading
 open Expecto
 open Expecto.Flip
 open FSharp.Compiler.Interactive.Shell
+open SageFs.Features.AutoCompletion
 open SageFs.FsiHostBuild
 open SageFs.FsiHostClient
 open SageFs.FsiSession
@@ -14,6 +15,12 @@ open SageFs.RemoteFsiSession
 open SageFs.Tests.TestInfrastructure
 
 let private repoRoot = RepoPaths.repoPathFull [||]
+
+/// The items of an answer that listed something; a test that expects candidates fails with the reason when none could be listed.
+let private answeredItems (answer: CompletionAnswer<CompletionItem>) : CompletionItem list =
+  match answer with
+  | CompletionAnswer.Answered(items, _) -> items
+  | CompletionAnswer.Unavailable reason -> failtestf "expected candidates, got: %s" (CompletionUnavailable.describe reason)
 
 let private dotnet =
   match Environment.GetEnvironmentVariable "DOTNET_HOST_PATH" with
@@ -184,11 +191,39 @@ let contract (label: string) (create: unit -> Async<IFsiSession>) : Test =
       Expect.stringContains "collapsed, with its reason" "ClassesCollapsed" (session.LiveValuesJson(ref 0L)))
 
     case "Completions offers List.map after 'List.ma'" (fun session ->
-      let items = session.Completions("List.ma", 7, "ma")
+      let items = answeredItems (session.Completions("List.ma", 7, "ma", CompletionLimit.UpTo EditorCandidates))
       Expect.isTrue "map is offered" (items |> List.exists (fun item -> item.ReplacementText = "map")))
 
+    case "WHY — Completions of a static class lists its members with their real kinds, on both the in-process and the isolated session" (fun session ->
+      let text = "System.IO.Path."
+      let items = answeredItems (session.Completions(text, text.Length, "", CompletionLimit.EveryMember))
+      let kindOf name = items |> List.tryFind (fun item -> item.DisplayText = name) |> Option.map (fun item -> item.Kind)
+      Expect.equal "Combine is a method" (Some CompletionKind.Method) (kindOf "Combine")
+      Expect.equal "DirectorySeparatorChar is a field" (Some CompletionKind.Field) (kindOf "DirectorySeparatorChar"))
+
+    case "WHY — Completions of a module states its real kinds, so a union case is not mistaken for a type" (fun session ->
+      let text = "List."
+      let items = answeredItems (session.Completions(text, text.Length, "", CompletionLimit.EveryMember))
+      let kindOf name = items |> List.tryFind (fun item -> item.DisplayText = name) |> Option.map (fun item -> item.Kind)
+      Expect.equal "map is a method" (Some CompletionKind.Method) (kindOf "map")
+      Expect.isTrue "Cons is not a type, class or module" (match kindOf "Cons" with | Some CompletionKind.Class | Some CompletionKind.Module | Some CompletionKind.Type | None -> false | Some _ -> true))
+
+    case "WHY — an editor's limit cuts the list but the answer still states the true size of the set" (fun session ->
+      let text = "System.IO."
+      match session.Completions(text, text.Length, "", CompletionLimit.UpTo 5) with
+      | CompletionAnswer.Answered(items, CompletionTotal.Exact total) ->
+        Expect.equal "five items" 5 items.Length
+        Expect.isTrue "the set is larger than the five shown" (total > 5)
+      | other -> failtestf "expected an exact total, got %A" other)
+
+    case "WHY — a name that is not there is an empty answer, not an unavailable one, because nobody failed to look" (fun session ->
+      let text = "Definitely.Not.A.Name."
+      match session.Completions(text, text.Length, "", CompletionLimit.EveryMember) with
+      | CompletionAnswer.Answered([], _) -> ()
+      | other -> failtestf "expected an empty answer, got %A" other)
+
     case "a candidate's description is available on demand" (fun session ->
-      let items = session.Completions("List.ma", 7, "ma")
+      let items = answeredItems (session.Completions("List.ma", 7, "ma", CompletionLimit.UpTo EditorCandidates))
       match items |> List.tryFind (fun item -> item.ReplacementText = "map") with
       | None -> failtest "map was not offered"
       | Some item ->

@@ -453,8 +453,8 @@ let jupyterKernelTests =
           let mockProxy : WorkerProtocol.SessionProxy = fun msg ->
             async {
               match msg with
-              | WorkerProtocol.WorkerMessage.GetCompletions (_, _, replyId) ->
-                return WorkerProtocol.WorkerResponse.CompletionResult(replyId, ["map"; "filter"; "fold"])
+              | WorkerProtocol.WorkerMessage.GetCompletions (_, _, _, replyId) ->
+                return WorkerProtocol.WorkerResponse.CompletionResult(replyId, CompletionFixtures.plainNames ["map"; "filter"; "fold"])
               | _ -> return failwith "unexpected"
             }
           let handler = FsiBridge.completeHandler mockProxy

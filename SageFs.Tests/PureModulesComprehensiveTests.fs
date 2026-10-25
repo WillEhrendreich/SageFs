@@ -10,6 +10,7 @@ open SageFs.Features.AutoCompletion
 open SageFs.AppState
 open SageFs.FileWatcher
 open SageFs.McpAdapter
+open SageFs.McpCompletions
 open SageFs.FrameDiff
 open SageFs.Features.Events
 open SageFs.Features.Diagnostics
@@ -806,7 +807,7 @@ let formatEventsJsonTests = testList "formatEventsJson: MCP protocol contract" [
 
 let formatCompletionsJsonTests = testList "formatCompletionsJson: MCP protocol contract" [
   test "empty completions produces valid JSON with count 0" {
-    let result = formatCompletionsJson []
+    let result = formatCompletionsJson (CompletionAnswer.Answered([], CompletionTotal.Exact 0))
     use doc = JsonDocument.Parse(result)
     let root = doc.RootElement
     root.GetProperty("count").GetInt32() |> Expect.equal "count" 0
@@ -819,7 +820,7 @@ let formatCompletionsJsonTests = testList "formatCompletionsJson: MCP protocol c
       Kind = CompletionKind.Method
       GetDescription = None
     }
-    let result = formatCompletionsJson [item]
+    let result = formatCompletionsJson (CompletionAnswer.Answered([item], CompletionTotal.Exact 1))
     use doc = JsonDocument.Parse(result)
     let comp = doc.RootElement.GetProperty("completions").[0]
     comp.GetProperty("label").GetString() |> Expect.equal "label" "myFunction"
@@ -833,7 +834,7 @@ let formatCompletionsJsonTests = testList "formatCompletionsJson: MCP protocol c
       Kind = CompletionKind.Union
       GetDescription = None
     }
-    let result = formatCompletionsJson [item]
+    let result = formatCompletionsJson (CompletionAnswer.Answered([item], CompletionTotal.Exact 1))
     use doc = JsonDocument.Parse(result)
     let label = doc.RootElement.GetProperty("completions").[0].GetProperty("label").GetString()
     label |> Expect.equal "roundtrip" "func<'a>"

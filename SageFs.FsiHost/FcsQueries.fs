@@ -87,10 +87,17 @@ let evalConfig (session: FsiEvaluationSession) (content: string) : ConfigOutcome
   with ex -> ConfigRejected(ConfigThrew ex.Message)
 
 /// The completion candidates at the caret, kept as FCS items so a description can be produced on demand.
-let candidates (session: FsiEvaluationSession) (text: string) (caret: int) : DeclarationListItem[] =
-  let partialName = QuickParse.GetPartialLongNameEx(text, caret - 1)
-  let parse, typed, _ = session.ParseAndCheckInteraction text
-  (typed.GetDeclarationListInfo(Some parse, 1, text, partialName)).Items
+let candidates (session: FsiEvaluationSession) (text: string) (caret: int) : Result<DeclarationListItem[], CompletionFailure> =
+  try
+    let partialName = QuickParse.GetPartialLongNameEx(text, caret - 1)
+    let parse, typed, _ = session.ParseAndCheckInteraction text
+    let listing = typed.GetDeclarationListInfo(Some parse, 1, text, partialName)
+    // On an error FCS hands back one `<Note>` item flagged IsError. That is a refusal to list, not a member.
+    match listing.IsError with
+    | true -> Result.Error ListingFlaggedError
+    | false -> Result.Ok listing.Items
+  with ex ->
+    Result.Error(CheckRaised ex.Message)
 
 /// FCS's own name for a glyph, read from the type (no hand-written strings): SageFs maps it back by name.
 let private glyphName (glyph: FSharpGlyph) : string =

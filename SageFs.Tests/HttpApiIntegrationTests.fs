@@ -1069,6 +1069,57 @@ let httpApiRoutingTests =
         killDaemon proc
     }
 
+    testTask "WHY — POST /api/completions — a static class lists its members with their real kinds, and the reply states the size of the set and whether it is exact, so a client never mistakes the 50-item default for everything" {
+      let port = reserveLoopbackPort ()
+      let! proc, client =
+        startDaemonWithArgs port repoRoot []
+      try
+        let! createStatus, createBody =
+          createSession client smokeSampleProject smokeSampleProjectDir
+        createStatus |> Expect.equal "session create should succeed" 200
+
+        let! ready, sessionsBody =
+          waitForReadySession client smokeSampleProjectDir TestTimeouts.readyBudget
+
+        ready
+        |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
+
+        let payload =
+          {| code = "System.IO."
+             cursorPosition = 10
+             limit = 5
+             workingDirectory = smokeSampleProjectDir |}
+
+        let! status, body = postJson client "/api/completions" payload
+        status |> Expect.equal "200 OK" 200
+        let doc = JsonDocument.Parse(body: string)
+        let count = doc.RootElement.GetProperty("count").GetInt32()
+        let total = doc.RootElement.GetProperty("total").GetInt32()
+        let totalKind = doc.RootElement.GetProperty("totalKind").GetString()
+        doc.Dispose()
+        count |> Expect.equal (sprintf "the limit cuts the reply, got: %s" body) 5
+        (total, 5) |> Expect.isGreaterThan (sprintf "and the total is the size of the set, not the cut, got: %s" body)
+        totalKind |> Expect.equal "an exact total says so" "exact"
+
+        let staticPayload =
+          {| code = "System.IO.Path."
+             cursorPosition = 15
+             limit = 200
+             workingDirectory = smokeSampleProjectDir |}
+        let! staticStatus, staticBody = postJson client "/api/completions" staticPayload
+        staticStatus |> Expect.equal "200 OK" 200
+        let staticDoc = JsonDocument.Parse(staticBody: string)
+        let kinds =
+          staticDoc.RootElement.GetProperty("completions").EnumerateArray()
+          |> Seq.map (fun item -> item.GetProperty("label").GetString(), item.GetProperty("kind").GetString())
+          |> Seq.toList
+        staticDoc.Dispose()
+        kinds |> Expect.contains (sprintf "Combine is a method, got: %s" staticBody) ("Combine", "Method")
+      finally
+        client.Dispose()
+        killDaemon proc
+    }
+
     // Gap F (outcome-gate sweep): POST /api/sessions/{sid}/workflow reuses
     // SessionOps.SwitchWorkflow, which restarts the SAME session id
     // spawn-first into the target workflow (McpServer.fs:2641-2656) instead

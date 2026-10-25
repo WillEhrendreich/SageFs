@@ -114,8 +114,8 @@ let tests =
         |> Expect.equal "WorkerReady" """{"type":"WorkerReady"}"""
 
       testCase "WHY — a union with fields carries them in `value`, so daemon and worker agree on where a field is" <| fun _ ->
-        WorkerProtocol.Serialization.serialize (WorkerResponse.CompletionResult("r1", [ "a"; "b" ]))
-        |> Expect.equal "CompletionResult" """{"type":"CompletionResult","value":["r1",["a","b"]]}"""
+        WorkerProtocol.Serialization.serialize (WorkerResponse.CompletionResult("r1", CompletionFixtures.plainNames [ "a"; "b" ]))
+        |> Expect.equal "CompletionResult" """{"type":"CompletionResult","value":["r1",{"type":"Answered","value":[[{"displayText":"a","replacementText":"a","kind":{"type":"Variable"}},{"displayText":"b","replacementText":"b","kind":{"type":"Variable"}}],{"type":"Exact","value":[2]}]}]}"""
 
       testCase "WHY — an anonymous request body gets camelCase keys" <| fun _ ->
         WorkerProtocol.Serialization.serialize {| code = "1+1"; replyId = "r1" |}

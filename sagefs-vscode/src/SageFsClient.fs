@@ -789,7 +789,8 @@ let exploreCompletions (qualifiedName: string) (sessionId: string) (c: Client) =
       let code = sprintf "%s." qualifiedName
       // /dashboard/completions answers as an SSE stream for the dashboard's dropdown;
       // the JSON contract is the MCP API, routed to this session by id.
-      let body = jsonStringify {| code = code; cursor_position = code.Length; sessionId = sessionId |}
+      // `limit` asks for as many members as the tree shows; the reply's `total` says whether that was all of them.
+      let body = jsonStringify {| code = code; cursor_position = code.Length; sessionId = sessionId; limit = TypeExplorerPure.RowsRequested |}
       let! resp = httpPost c "/api/completions" body 10000
       match resp.statusCode with
       | 200 -> return Some resp.body

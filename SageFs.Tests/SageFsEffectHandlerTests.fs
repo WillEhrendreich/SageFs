@@ -66,7 +66,7 @@ module TestDeps =
         match msg with
         | WorkerMessage.EvalCode (code, rid) ->
           log.EvalCalls <- log.EvalCalls @ [rid, code]
-        | WorkerMessage.GetCompletions (code, pos, rid) ->
+        | WorkerMessage.GetCompletions (code, pos, _, rid) ->
           log.CompletionCalls <- log.CompletionCalls @ [rid, code, pos]
         | WorkerMessage.GetTestDiscovery rid ->
           log.TestDiscoveryCalls <- log.TestDiscoveryCalls @ [rid]
@@ -335,8 +335,8 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with
-      | WorkerMessage.GetCompletions (_, _, rid) ->
-        WorkerResponse.CompletionResult (rid, ["ToString"; "GetType"])
+      | WorkerMessage.GetCompletions (_, _, _, rid) ->
+        WorkerResponse.CompletionResult (rid, CompletionFixtures.namesOf SageFs.Features.AutoCompletion.CompletionKind.Method ["ToString"; "GetType"])
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable dispatched : SageFsMsg list = []
@@ -347,6 +347,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     | SageFsMsg.Event (TuiEvent.CompletionReady items) ->
       items |> Expect.hasLength "2 items" 2
       items.[0].Label |> Expect.equal "first" "ToString"
+      items.[0].Kind |> Expect.equal "the kind FCS gave the candidate, not a constant" "Method"
     | other -> failtestf "expected CompletionReady, got %A" other
   }
 
@@ -714,9 +715,9 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with
-      | WorkerMessage.GetCompletions (_, _, rid) ->
+      | WorkerMessage.GetCompletions (_, _, _, rid) ->
         WorkerResponse.CompletionResult (
-          rid, ["Length"; "Head"; "Tail"])
+          rid, CompletionFixtures.plainNames ["Length"; "Head"; "Tail"])
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable lastModel : SageFsModel option = None

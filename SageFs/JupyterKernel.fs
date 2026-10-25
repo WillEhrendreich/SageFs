@@ -533,11 +533,15 @@ module JupyterKernel =
       fun code pos ->
         async {
           let replyId = Guid.NewGuid().ToString("N").[..7]
-          let! response = proxy (WorkerProtocol.WorkerMessage.GetCompletions(code, pos, replyId))
+          let! response =
+            proxy (WorkerProtocol.WorkerMessage.GetCompletions(code, pos, Features.AutoCompletion.CompletionLimit.UpTo Features.AutoCompletion.EditorCandidates, replyId))
           match response with
-          | WorkerProtocol.WorkerResponse.CompletionResult (_rid, completions) ->
+          | WorkerProtocol.WorkerResponse.CompletionResult (_rid, answer) ->
             return {
-              Matches = completions
+              Matches =
+                answer
+                |> Features.AutoCompletion.CompletionAnswer.itemsOrEmpty
+                |> List.map (fun entry -> entry.DisplayText)
               CursorStart = pos
               CursorEnd = pos
               Status = "ok"

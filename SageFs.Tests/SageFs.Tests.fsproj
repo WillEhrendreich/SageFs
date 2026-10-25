@@ -10,6 +10,7 @@
     <ItemGroup>
         <Compile Include="LiveTestingBudgets.fs" />
         <Compile Include="TestTimeouts.fs" />
+        <Compile Include="CompletionFixtures.fs" />
         <Compile Include="CasePhases.fs" />
         <!-- Before TestInfrastructure: the trust ledger names a tier by its framework. build/TierPlan.fs is compiled into
              SageFs.Simulation (its scheduler DST folds through it) and reached here through that project reference. -->
@@ -47,6 +48,7 @@
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpToolExecutionTests.fs" />
         <Compile Include="McpMemberPageTests.fs" />
+        <Compile Include="CompletionAnswerTests.fs" />
         <Compile Include="ReplFreshnessSurfaceTests.fs" />
         <Compile Include="EvalWriteBackSurfaceTests.fs" />
         <Compile Include="SourceStateSurfaceTests.fs" />

@@ -281,9 +281,13 @@ let private run (fsiArgs: string list) : int =
           send (SymbolsResult(id, diagnostics, symbols))
         | RunComplete(id, text, caret) ->
           // Keep the FCS items so a later Describe can produce a description for one of them.
-          let items = try FcsQueries.candidates session text caret with _ -> [||]
-          lastCompletions.Value <- (id, items)
-          send (CompletionsResult(id, items |> Array.map FcsQueries.toCompletion |> Array.toList))
+          match FcsQueries.candidates session text caret with
+          | Result.Ok items ->
+            lastCompletions.Value <- (id, items)
+            send (CompletionsResult(id, items |> Array.map FcsQueries.toCompletion |> Array.toList))
+          | Result.Error failure ->
+            lastCompletions.Value <- (id, [||])
+            send (CompletionsFailed(id, failure))
         | RunDescribe(id, completionsId, index) ->
           let latestId, items = lastCompletions.Value
           let text =

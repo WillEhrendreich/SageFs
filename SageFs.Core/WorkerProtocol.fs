@@ -342,7 +342,7 @@ module WorkerProtocol =
     | EvalCode of code: string * replyId: string
     | CheckCode of code: string * replyId: string
     | TypeCheckWithSymbols of code: string * filePath: string * replyId: string
-    | GetCompletions of code: string * cursorPos: int * replyId: string
+    | GetCompletions of code: string * cursorPos: int * limit: Features.AutoCompletion.CompletionLimit * replyId: string
     | CancelEval
     | LoadScript of filePath: string * replyId: string
     | ResetSession of replyId: string
@@ -468,7 +468,8 @@ module WorkerProtocol =
     | EvalResult of replyId: string * result: Result<string, SageFsError> * diagnostics: WorkerDiagnostic list * metadata: Map<string, string>
     | CheckResult of replyId: string * diagnostics: WorkerDiagnostic list
     | TypeCheckWithSymbolsResult of replyId: string * diagnostics: WorkerDiagnostic list * symbolRefs: WorkerSymbolRef list
-    | CompletionResult of replyId: string * completions: string list
+    /// The candidates with the kind FCS gave each and the size of the set they came from, or why none could be listed.
+    | CompletionResult of replyId: string * answer: Features.AutoCompletion.CompletionAnswer<Features.AutoCompletion.CompletionEntry>
     | StatusResult of replyId: string * status: WorkerStatusSnapshot
     /// Reply to GetLiveValues: the same JSON a Features.LiveValueTree.LiveValueSnapshot
     /// serializes to today (the daemon already deserializes that type).

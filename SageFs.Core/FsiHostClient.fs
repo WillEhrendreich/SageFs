@@ -176,6 +176,7 @@ type FsiHostSession
           | Result.Ok(CheckResult(id, _) as answer) -> complete id answer
           | Result.Ok(SymbolsResult(id, _, _) as answer) -> complete id answer
           | Result.Ok(CompletionsResult(id, _) as answer) -> complete id answer
+          | Result.Ok(CompletionsFailed(id, _) as answer) -> complete id answer
           | Result.Ok(DescriptionResult(id, _) as answer) -> complete id answer
           | Result.Ok(ConfigResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentStartResult(id, _) as answer) -> complete id answer
@@ -315,11 +316,12 @@ type FsiHostSession
       | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
-  /// Unsorted completion candidates at the caret, with the id to pass to `Describe`.
-  member _.Complete(text: string, caret: int) : Async<HostCall<int64 * WireCompletion list>> =
+  /// Unsorted completion candidates at the caret, with the id to pass to `Describe`; or why the host could not list them.
+  member _.Complete(text: string, caret: int) : Async<HostCall<Result<int64 * WireCompletion list, CompletionFailure>>> =
     async {
       match! roundTrip CancellationToken.None (fun id -> Complete(id, text, caret)) with
-      | Got(CompletionsResult(id, items)) -> return Answered(id, items)
+      | Got(CompletionsResult(id, items)) -> return Answered(Result.Ok(id, items))
+      | Got(CompletionsFailed(_, failure)) -> return Answered(Result.Error failure)
       | Got other -> return HostGone(unexpected "complete" other)
       | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
