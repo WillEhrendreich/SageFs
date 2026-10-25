@@ -440,6 +440,7 @@
          <Compile Include="TimeoutLiteralsTests.fs" />
          <Compile Include="DomainBudgetsTests.fs" />
          <Compile Include="DocsSlopTests.fs" />
+         <Compile Include="VsCodeCommandTitleDocsTests.fs" />
          <Compile Include="ProductBlockingCallsTests.fs" />
          <Compile Include="EnvVarDocTests.fs" />
          <Compile Include="../scripts/roadmap/Roadmap.fs" Link="Roadmap/Roadmap.fs" />
