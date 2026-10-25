@@ -431,7 +431,7 @@ let items : Item list =
 
     item "bake-the-build-env-into-the-tooling" "Bake MSBUILDDISABLENODEREUSE into the tooling" Platform Next
       NoLandmarkYet
-      [ "skills/sagefs/SKILL.md" ]
+      [ "docs/agents.md" ]
       "Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once the agent exported MSBUILDDISABLENODEREUSE=1 by hand. Set it around every build the scripts start and name it on the skill's troubleshooting page, so recovery never depends on remembering a shell variable."
 
     item "give-the-gate-a-clean-checkout" "Give the gate a clean checkout every time" Platform Next
@@ -452,7 +452,7 @@ let items : Item list =
     item "fix-the-readme-capability-mcp-marks" "Fix the Readme capability table's MCP marks" Docs Next
       NoLandmarkYet
       [ "docs/mcp-tools.md" ]
-      "The capability table still ticks completion and type explorer under MCP although both are HTTP routes, an audit row that waited through two releases. With list_members registered honestly, mark those two rows as routes, or expose real tools and tick them."
+      "The capability table still ticks completion and type explorer under MCP although both are HTTP routes, an audit row that waited through two releases. With list_members registered under a fresh name, mark those two rows as routes, or expose real tools and tick them."
 
     item "walk-the-rest-of-the-symbol-ladder" "Walk the rest of the symbol ladder" Agents Next
       NoLandmarkYet

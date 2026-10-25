@@ -35,14 +35,14 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Platform and install
 
-- [ ] **Bake MSBUILDDISABLENODEREUSE into the tooling.** Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once the agent exported MSBUILDDISABLENODEREUSE=1 by hand. Set it around every build the scripts start and name it on the skill's troubleshooting page, so recovery never depends on remembering a shell variable. ([SKILL.md](../skills/sagefs/SKILL.md))
+- [ ] **Bake MSBUILDDISABLENODEREUSE into the tooling.** Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once the agent exported MSBUILDDISABLENODEREUSE=1 by hand. Set it around every build the scripts start and name it on the skill's troubleshooting page, so recovery never depends on remembering a shell variable. ([agents.md](agents.md))
 - [ ] **Give the gate a clean checkout every time.** The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. Rebuild when the checkout's artifacts predate the gated SHA, or clear them first, so an interrupted run cannot fail its successor. ([agents.md](agents.md))
 - [ ] **Make a failed gate's retry one command.** A failed gate leaves its bump commit behind, and the next push refuses only after a whole new gate unless that commit is dropped first. Hand-dropping it cost several cycles in one session. Either reuse an unfired bump already in the range, or write the ship.fsx -- <sha> retry path that ReleaseRules.fs already tests into agents.md, so the next agent finds it instead of deriving it. ([agents.md](agents.md))
 
 ### Docs and onboarding
 
 - [ ] **Write down what a new tool must declare.** Adding list_members took six declarations: the registered set, the docs row and both counts, gatingDomain, ToolName with its toToolName and all, RouteKind, and ToolClass. Section 9 of the progressive map research holds the slice plan; it needs this checklist too, so the next tool registers once and every gate passes the first time. ([progressive-map-research-2026-10-24.md](progressive-map-research-2026-10-24.md))
-- [ ] **Fix the Readme capability table's MCP marks.** The capability table still ticks completion and type explorer under MCP although both are HTTP routes, an audit row that waited through two releases. With list_members registered honestly, mark those two rows as routes, or expose real tools and tick them. ([mcp-tools.md](mcp-tools.md))
+- [ ] **Fix the Readme capability table's MCP marks.** The capability table still ticks completion and type explorer under MCP although both are HTTP routes, an audit row that waited through two releases. With list_members registered under a fresh name, mark those two rows as routes, or expose real tools and tick them. ([mcp-tools.md](mcp-tools.md))
 
 ## Later (18)
 
