@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 6, Later 18, Exploring 20. Already built: 40.
+On the page today: Now 0, Next 6, Later 18, Exploring 20. Already built: 41.
 
 ## Next (6)
 
@@ -26,7 +26,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Agents and cohorts
 
-- [ ] **Walk the rest of the symbol ladder.** Slices 2 to 5 of the progressive map plan: kind grouping with sibling counts, references as new worker work whose reply states its scope, the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again. ([progressive-map-research-2026-10-24.md](progressive-map-research-2026-10-24.md))
+- [ ] **Walk the rest of the symbol ladder.** Slices 3 to 5 of the progressive map plan: references as new worker work whose reply states its scope, the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again. ([progressive-map-research-2026-10-24.md](progressive-map-research-2026-10-24.md))
 
 ### Dashboard
 
@@ -115,7 +115,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub.
 
-## Built (40)
+## Built (41)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -159,6 +159,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - [x] **A member token bound to one session.** A minted token now names the one session or checkout it may route to. A tool that takes a session id or a working directory is held to that on every call, a session list and the session resources are cut to it, and a refusal says which rule it hit and what to do. `mint_member` takes a `session_id`, and its `working_directory` has to be an absolute path. Code: [`SageFs.Core/Capability.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Capability.fs)
 - [x] **One typed list of what counts as destructive.** SageFs could say who may call a tool, but nothing said what calling it does to your work. There is now one `Set<ToolName>` on the same DU the authority gate reads, held to the registered tools by a test so a renamed tool cannot leave a stale name behind, and `tools/list` publishes it as MCP's own `destructiveHint`, so a client asks the server instead of keeping a copy of the list itself. Code: [`SageFs.Core/Affordances.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Affordances.fs)
 - [x] **Ask you before a destructive tool runs.** The server asks you itself now, over MCP's own elicitation request: a confirm-tier tool stops after the four gates already there and before its body, names what it is about to take away, and a decline refuses the call the way a gate rejection does. The tier sits on the same `ToolName` the authority gate reads rather than in another string list, and it says out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into. A session an agent created itself does not ask when that same connection (or member token) resets or stops it, because nobody else put anything in it. Sessions a person or another agent made still ask. Code: [`SageFs/McpServer.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpServer.fs)
+- [x] **Ask what is inside a name, a page at a time.** `list_members` takes a qualified name and answers with its members a page at a time. The reply gives a total that is either exact or marked as a lower bound, a count for each real kind (classes, modules, methods and so on) with the kinds you can step into first, and a footer naming the offset of the next page. A name that lists nothing says why: it is a leaf, an empty container, or it does not resolve under its parent. The kind comes from the compiler through the worker. Before, the daemon guessed it from the shape of the name, and every reply stopped at 50 members whatever the real size. Code: [`SageFs/McpMemberPage.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpMemberPage.fs)
 
 ### Editors
 

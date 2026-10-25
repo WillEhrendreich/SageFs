@@ -190,6 +190,14 @@ and is the product this plan adds.
 | 4 | Name-path resolution fallback for stale references | stale name resolves, test pins the fallback |
 | 5 | Result-size ratchet rows for the family; wire the Readme capability row (closes outcome-gate-sweep 9a) | ratchet table contains the rows; capability table matches the registry |
 
+Status, 2026-10-25: slices 1 and 2 are built. Slice 2 first shipped with two groups (drillable and leaf)
+because the worker sent display names only and the daemon guessed a kind from the shape of the name, so
+`Cons` and `Empty` under `List` counted as drillable. The worker now carries the compiler's own kind and a
+true total (`CompletionTotal`, exact or at least N), so the reply counts classes, modules, methods and so
+on. Two limits remain. The completions request still passes an empty word, so a partial identifier gets the
+50 shortest names in scope. And a total is only marked "at least" past the wire ceiling of 2,000 members,
+which none of the sets measured reached.
+
 Reopen it if: the `GetCompletions` route cannot express true children (fuzzy prefix instead of
 members), in which case slice 1 shrinks to `list_members` on namespaces only and the index question
 returns to this document with a measured symbol census.
