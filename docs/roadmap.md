@@ -9,9 +9,9 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 7, Later 18, Exploring 20. Already built: 39.
+On the page today: Now 0, Next 6, Later 18, Exploring 20. Already built: 40.
 
-## Next (7)
+## Next (6)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -32,10 +32,6 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 - [ ] **More settings editable from the dashboard.** The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime. ([configuration.md](configuration.md))
 - [ ] **Dashboard panels that follow your context.** A panel that is not relevant right now says why, in one line where the panel would have been: hot reload, live testing, cohort and friction each leave the reason behind, so a user can tell the dashboard having nothing to say from the dashboard hiding something. The cohort panel shows only while a cohort is running. The live bindings fold away and open again with one click, and the pin opens the pane when there are no bindings yet. What is not built is the live bindings becoming a real pane in REPL mode, and a pane moving between regions.
-
-### Platform and install
-
-- [ ] **Make a failed gate's retry one command.** A failed gate leaves its bump commit behind, and the next push refuses only after a whole new gate unless that commit is dropped first. Hand-dropping it cost several cycles in one session. Either reuse an unfired bump already in the range, or write the ship.fsx -- <sha> retry path that ReleaseRules.fs already tests into agents.md, so the next agent finds it instead of deriving it. ([agents.md](agents.md))
 
 ## Later (18)
 
@@ -119,7 +115,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub.
 
-## Built (39)
+## Built (40)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -182,6 +178,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - [x] **The daemon starts at login on macOS.** A launchd user agent starts the daemon at login and restarts its supervisor after a crash, the same job the systemd unit does on Linux. The README install fills in your home directory and your .NET folder, because launchd expands no variables. tw0po1nt wrote it and tested it on macOS 27 on an Apple Silicon Mac. An Intel Mac and the Homebrew dotnet formula are untested. Code: [`contrib/launchd/io.github.willehrendreich.sagefs.plist`](https://github.com/WillEhrendreich/SageFs/blob/master/contrib/launchd/io.github.willehrendreich.sagefs.plist)
 - [x] **Builds SageFs starts no longer die on a leftover MSBuild node.** Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once an agent exported MSBUILDDISABLENODEREUSE=1 by hand. The daemon's session rebuilds and its FSI host build now take the variable from one named list, and ship.fsx and install-local.fsx set it for every build they start. The skill's troubleshooting page names the error and the one-line fix for an older daemon. Code: [`SageFs.Core/ProcessEnvironment.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ProcessEnvironment.fs)
 - [x] **An interrupted gate cannot fail the run after it.** The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. The gate now writes what it is doing beside the checkout before the pipeline starts and what it left once the pipeline ends on its own. A run that finds the first and no second clears the checkout's build output before it builds, and a checkout with no record is cleared too. A run that finished, even a red one, keeps its warm build. Code: [`SageFs.Core/GateCheckout.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/GateCheckout.fs)
+- [x] **A failed gate's retry is one command.** A failed gate used to leave its bump commit behind, and a rerun added a second one that the pre-push hook refused only after a whole new gate. Now a plain `ship.fsx` looks at the release commits in origin/master..HEAD first. With none it bumps. With one that is above the published version it keeps that bump and gates HEAD. With two or more it stops before any gate, names the commits and prints the `git rebase --onto` line that drops each extra one. The hook counts release commits with the same reader, and the marker text lives in one place. The retry path is written up in docs/agents.md. Code: [`scripts/ReleaseRules.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/scripts/ReleaseRules.fs)
 
 ### Docs and onboarding
 

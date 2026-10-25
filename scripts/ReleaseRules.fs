@@ -180,15 +180,100 @@ let messagesFor (verdict: PushVerdict) : string list =
   | StackedReleases(sha, count) ->
     [ sprintf "pre-push: this push carries %d releases (%s), and only the last one can ship." count (shortSha sha)
       "          the pipeline publishes the version at the tip of master, so the earlier ones never reach NuGet."
-      "          a bump a previous ship left behind is one of them: gate that commit instead of adding another:"
-      "          run: dotnet fsi scripts/ship.fsx -- <the commit that already carries the bump>"
-      "          otherwise make the change first, then run: dotnet fsi scripts/ship.fsx" ]
+      "          a bump a failed ship left behind is one of them. A plain ship now reuses a single bump, and names"
+      "          the commands that drop the extra ones when there are several:"
+      "          run: dotnet fsi scripts/ship.fsx" ]
   | SkippedGate sha ->
     [ sprintf "pre-push: WARNING pushing ungated %s (SAGEFS_SKIP_GATE=1); the runner will gate it" (shortSha sha) ]
   | NotGated sha ->
     [ sprintf "pre-push: %s has not passed the local gate." (shortSha sha)
       "          run: dotnet fsi scripts/ship.fsx        (gate + push)"
       sprintf "          or:  dotnet fsi scripts/local-gate.fsx -- %s && git push" (shortSha sha) ]
+
+// ── the release bump ─────────────────────────────────────────────────────────
+
+/// The start of a release commit's subject. ship.fsx writes it, the pre-push hook counts it, and the bump plan
+/// finds it: this is the one place the text lives.
+let releaseSubjectPrefix = "chore: release v"
+
+/// The subject of the commit that bumps the version to `version`.
+let releaseSubject (version: string) : string = releaseSubjectPrefix + version
+
+/// Whether a commit subject is a release commit's.
+let isReleaseSubject (subject: string) : bool =
+  subject.StartsWith(releaseSubjectPrefix, StringComparison.Ordinal)
+
+/// The release commits in the output of `git log --format="%H %s"`, as full shas in the order git printed them.
+/// A line with no subject, or a subject that only mentions the marker, is not one.
+let releaseShasIn (log: string) : string list =
+  log.Replace("\r\n", "\n").Split('\n')
+  |> Array.choose (fun line ->
+    match line.IndexOf ' ' with
+    | -1 -> None
+    | at when isReleaseSubject (line.Substring(at + 1)) -> Some(line.Substring(0, at))
+    | _ -> None)
+  |> List.ofArray
+
+/// A version read from a commit's Directory.Build.props, or the fact that it could not be.
+type VersionRead =
+  | Read of version: string
+  | Unreadable
+
+/// What a plain `ship.fsx` does about the version, decided from the release commits still waiting to be pushed.
+type BumpPlan =
+  /// None waiting: bump, as ever.
+  | BumpAnew
+  /// One waiting, and it raises the published version: gate HEAD with it, add no second one.
+  | ReuseBump of sha: string * version: string
+  /// Several waiting: one push is one release, so refuse before any gate.
+  | RefuseStacked of shas: string list
+  /// One waiting, but it does not raise what is published, so it would publish nothing.
+  | RefuseNotRaised of sha: string * version: string * published: string
+  /// One waiting, and its Directory.Build.props carries no readable version.
+  | RefuseUnreadable of sha: string
+
+/// The plan for the release commits in `origin/master..HEAD`, oldest first. `published` is the version on
+/// origin/master; when it cannot be read the waiting commit is reused, which is what the pre-push hook does too
+/// (it refuses a repeat only when both versions are known).
+let planBump (releasesOldestFirst: string list) (versionAt: string -> VersionRead) (published: VersionRead) : BumpPlan =
+  match releasesOldestFirst with
+  | [] -> BumpAnew
+  | [ only ] ->
+    match versionAt only, published with
+    | Unreadable, _ -> RefuseUnreadable only
+    | Read version, Read onMaster when not (raisesVersion version onMaster) -> RefuseNotRaised(only, version, onMaster)
+    | Read version, _ -> ReuseBump(only, version)
+  | several -> RefuseStacked several
+
+/// The command that removes one commit from the branch and replays what came after it.
+let dropCommitCommand (sha: string) : string = sprintf "git rebase --onto %s^ %s" sha sha
+
+/// What ship prints about the plan, one string per line. A refusal ends with the commands that fix it. For a
+/// stack it keeps the oldest bump and drops the others newest first, so each command names a sha the earlier
+/// ones left alone, and no replay touches the version line a later bump had changed.
+let bumpPlanMessages (plan: BumpPlan) : string list =
+  match plan with
+  | BumpAnew -> []
+  | ReuseBump(sha, version) ->
+    [ sprintf "ship: %s already carries the release bump to v%s and is not pushed yet." (shortSha sha) version
+      "      gating HEAD with that bump in place, and not adding a second one." ]
+  | RefuseStacked shas ->
+    let oldest = List.head shas
+    let extra = shas |> List.tail |> List.rev
+    [ sprintf "ship: %d release commits are waiting to be pushed, and one push is one release: %s" shas.Length (shas |> List.map shortSha |> String.concat ", ")
+      "      nothing was bumped or gated. The earlier ones never reach NuGet."
+      sprintf "      keep the oldest, %s, and drop the others, newest first:" (shortSha oldest) ]
+    @ (extra |> List.map (fun sha -> "        " + dropCommitCommand sha))
+    @ [ "      then run dotnet fsi scripts/ship.fsx again; it gates HEAD with the bump that is left." ]
+  | RefuseNotRaised(sha, version, published) ->
+    [ sprintf "ship: %s is an unpushed bump to v%s, and origin/master is already at v%s." (shortSha sha) version published
+      "      a repeated version publishes nothing (NuGet --skip-duplicate) and still goes green. Nothing was gated."
+      sprintf "      drop it: %s" (dropCommitCommand sha)
+      "      then run dotnet fsi scripts/ship.fsx again; it bumps from the version on master." ]
+  | RefuseUnreadable sha ->
+    [ sprintf "ship: %s is a release commit but its Directory.Build.props has no readable <Version>. Nothing was gated." (shortSha sha)
+      sprintf "      drop it: %s" (dropCommitCommand sha)
+      "      then run dotnet fsi scripts/ship.fsx again." ]
 
 // ── the local gate ───────────────────────────────────────────────────────────
 

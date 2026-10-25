@@ -196,3 +196,32 @@ spawns and tidy once the work has merged:
 [`mcp-tools.md`](mcp-tools.md#workspace-hygiene) has the details. The brief you
 give a sub-agent should say to remove nothing it doesn't own and to report its
 worktree path and branch, so the orchestrator knows what to reap.
+
+## 7. When a ship fails its gate and you run it again
+
+This one is for working on SageFs itself. `dotnet fsi scripts/ship.fsx` bumps
+the version, commits it as `chore: release v<version>`, gates that commit
+and pushes it. A failed gate leaves the bump commit on your local master. One
+push is one release, so the pre-push hook refuses a second bump on top of the
+first, and an old ship only found that out after another gate of about ten
+minutes.
+
+Fix what failed, commit the fix, and run the same command again. Before it
+touches anything, plain `ship.fsx` counts the release commits in
+`origin/master..HEAD`:
+
+- **None.** It bumps, as always.
+- **One.** It does not bump again. It prints which commit that is and its
+  version, then gates and pushes HEAD with that bump in place. It reuses the
+  bump only when its version is above the one on origin/master. Otherwise it
+  stops and names the two versions it compared.
+- **Two or more.** It stops before any ratchet or gate, names the commits, and
+  prints the `git rebase --onto <sha>^ <sha>` line for each extra one. Run
+  them as printed (the oldest stays, the rest go newest first), then run
+  `ship.fsx` again.
+
+The rule is `ReleaseRules.planBump` in
+[`scripts/ReleaseRules.fs`](../scripts/ReleaseRules.fs). The pre-push hook
+counts release commits with the same reader, so the two cannot disagree about
+what a release commit is. `ship.fsx -- <commit>` still gates and pushes a
+given commit without bumping.

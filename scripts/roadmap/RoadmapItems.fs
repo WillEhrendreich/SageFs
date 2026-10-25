@@ -439,10 +439,10 @@ let items : Item list =
       [ "docs/agents.md" ]
       "The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. The gate now writes what it is doing beside the checkout before the pipeline starts and what it left once the pipeline ends on its own. A run that finds the first and no second clears the checkout's build output before it builds, and a checkout with no record is cleared too. A run that finished, even a red one, keeps its warm build."
 
-    item "make-a-failed-gate-retry-one-command" "Make a failed gate's retry one command" Platform Next
-      NoLandmarkYet
+    item "make-a-failed-gate-retry-one-command" "A failed gate's retry is one command" Platform Next
+      (landmark "scripts/ReleaseRules.fs" "planBump")
       [ "docs/agents.md" ]
-      "A failed gate leaves its bump commit behind, and the next push refuses only after a whole new gate unless that commit is dropped first. Hand-dropping it cost several cycles in one session. Either reuse an unfired bump already in the range, or write the ship.fsx -- <sha> retry path that ReleaseRules.fs already tests into agents.md, so the next agent finds it instead of deriving it."
+      "A failed gate used to leave its bump commit behind, and a rerun added a second one that the pre-push hook refused only after a whole new gate. Now a plain `ship.fsx` looks at the release commits in origin/master..HEAD first. With none it bumps. With one that is above the published version it keeps that bump and gates HEAD. With two or more it stops before any gate, names the commits and prints the `git rebase --onto` line that drops each extra one. The hook counts release commits with the same reader, and the marker text lives in one place. The retry path is written up in docs/agents.md."
 
     item "write-down-what-a-new-tool-declares" "What a new tool must declare is written down" Docs Next
       (landmark "docs/mcp-tools.md" "## Adding a tool")

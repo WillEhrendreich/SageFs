@@ -11,10 +11,12 @@
 //
 // The bump lives here, not in a commit hook, so an ordinary commit never
 // touches Directory.Build.props and parallel worktrees never collide on it.
-// One push to master is one release, so one ship is one bump. Pass a commit to
-// gate and push something that already carries its bump (a re-run after a fix,
-// or a commit made elsewhere); the bump is skipped then, and the pre-push hook still
-// refuses anything that doesn't raise the version.
+// One push to master is one release, so one ship is one bump. A failed gate leaves its bump commit on master,
+// and a plain rerun after the fix looks at the release commits in origin/master..HEAD first
+// (ReleaseRules.planBump): none, it bumps; exactly one that raises the published version, it keeps that bump
+// and gates HEAD; several, it stops before any gate and prints the commands that drop the extra ones.
+// Pass a commit to gate and push something that already carries its bump (a commit made elsewhere); the bump
+// is skipped then, and the pre-push hook still refuses anything that doesn't raise the version.
 //
 // Before it bumps anything or calls the gate it builds SageFs.Tests in Release and runs the ratchet lane
 // (`SageFs.Tests.dll --ratchets`) on the working tree, which has to be exactly the commit being shipped.
@@ -178,8 +180,25 @@ let private bumpAndCommit () : unit =
       | Some v -> v
       | None -> die [ sprintf "ship: bump-version printed no version: %s" (text.Trim()) ]
     | { Output = text } -> die [ sprintf "ship: bump-version failed: %s" (text.Trim()) ]
-  git [ "commit"; "--quiet"; "--no-verify"; "-m"; sprintf "chore: release v%s" version; "--"; "Directory.Build.props"; "sagefs-vscode/package.json" ] |> ignore
+  git [ "commit"; "--quiet"; "--no-verify"; "-m"; ReleaseRules.releaseSubject version; "--"; "Directory.Build.props"; "sagefs-vscode/package.json" ] |> ignore
   printfn "ship: bumped to %s" version
+
+/// What a plain ship does about the version, from the release commits already waiting in origin/master..HEAD.
+/// A failed gate leaves its bump commit there; the rule (ReleaseRules.planBump) reuses one and refuses several.
+/// The fetch keeps a release somebody else pushed meanwhile out of the range.
+let private planTheBump () : ReleaseRules.BumpPlan =
+  match (start repo "git" [ "-C"; repo; "fetch"; "--quiet"; "origin"; "master" ] true).Code with
+  | 0 -> ()
+  | _ -> eprintfn "ship: could not fetch origin/master, so the unpushed range is read against the last fetch."
+  let versionAt (rev: string) : ReleaseRules.VersionRead =
+    match start repo "git" [ "-C"; repo; "show"; rev + ":Directory.Build.props" ] true with
+    | { Code = 0; Output = props } ->
+      match ReleaseRules.versionIn props with
+      | Some version -> ReleaseRules.Read version
+      | None -> ReleaseRules.Unreadable
+    | _ -> ReleaseRules.Unreadable
+  let waiting = git [ "log"; "--reverse"; "--format=%H %s"; "origin/master..HEAD" ] |> ReleaseRules.releaseShasIn
+  ReleaseRules.planBump waiting versionAt (versionAt "origin/master")
 
 let private sha : string =
   match given with
@@ -189,6 +208,15 @@ let private sha : string =
     runRatchets resolved
     resolved
   | None ->
+    // STEP plan: before the roadmap refresh, the ratchets or any gate, so a stack is refused in seconds.
+    let plan = planTheBump ()
+    let said = ReleaseRules.bumpPlanMessages plan
+    match plan with
+    | ReleaseRules.BumpAnew
+    | ReleaseRules.ReuseBump _ -> said |> List.iter (printfn "%s")
+    | ReleaseRules.RefuseStacked _
+    | ReleaseRules.RefuseNotRaised _
+    | ReleaseRules.RefuseUnreadable _ -> die said
     match git [ "status"; "--porcelain"; "--"; "Directory.Build.props"; "sagefs-vscode/package.json" ] with
     | "" -> ()
     | _ ->
@@ -207,7 +235,12 @@ let private sha : string =
     // STEP ratchets head
     runRatchets (git [ "rev-parse"; "HEAD" ])
     // STEP bump
-    bumpAndCommit ()
+    match plan with
+    | ReleaseRules.BumpAnew -> bumpAndCommit ()
+    | ReleaseRules.ReuseBump _ -> ()
+    | ReleaseRules.RefuseStacked _
+    | ReleaseRules.RefuseNotRaised _
+    | ReleaseRules.RefuseUnreadable _ -> die said
     git [ "rev-parse"; "HEAD" ]
 
 // The plugin reaches users commit by commit, so a daemon change that moves the wire contract has to land

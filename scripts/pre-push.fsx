@@ -56,13 +56,14 @@ let propsAt (sha: string) : string option =
 
 /// How many release commits the pushed range carries. One push to master is one release: the pipeline
 /// publishes the version at the tip, so a range with two release commits in it loses the first one
-/// silently. The marker is the commit subject `scripts/ship.fsx` writes ("chore: release v<version>").
+/// silently. The marker is the commit subject `scripts/ship.fsx` writes (ReleaseRules.releaseSubject), and
+/// ReleaseRules.releaseShasIn is the one reader of it, shared with ship's own bump plan.
 /// A count of zero when git cannot answer means "nothing to say about the range", not "no releases":
 /// the rule below refuses only on a count above one, so an unreadable range never blocks a push on its own.
 let releaseCommitsInRange (fromSha: string) (toSha: string) : int =
   try
     let psi = ProcessStartInfo("git")
-    [ "log"; "--oneline"; fromSha + ".." + toSha; "--grep=^chore: release v" ] |> List.iter psi.ArgumentList.Add
+    [ "log"; "--format=%H %s"; fromSha + ".." + toSha ] |> List.iter psi.ArgumentList.Add
     psi.UseShellExecute <- false
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
@@ -70,7 +71,7 @@ let releaseCommitsInRange (fromSha: string) (toSha: string) : int =
     let out = p.StandardOutput.ReadToEndAsync()
     let err = p.StandardError.ReadToEndAsync()
     match p.WaitForExit gitTimeout && p.ExitCode = 0 with
-    | true -> out.Result.Split('\n') |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line)) |> Array.length
+    | true -> out.Result |> ReleaseRules.releaseShasIn |> List.length
     | false -> 0
   with _ -> 0
 
