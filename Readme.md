@@ -4,7 +4,7 @@
 
 ### You save. The affected tests re-run. The running app serves the new code.
 
-F# Interactive that already has your project loaded, re-runs your tests on unsaved edits, and patches your running app. VS Code, Neovim, a browser dashboard and your AI agent all share the one session. Free, MIT.
+Your F# project, loaded once and kept running. Ask it whether something compiles and it answers in about 20 milliseconds, on a 300-line sample or an 86,000-line engine. Tests re-run on edits you haven't saved. A save reaches the app that's already running, with its state. VS Code, Neovim, a browser dashboard and your AI agent all work in that one live session. Free, MIT.
 
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10 and 11](https://img.shields.io/badge/.NET-10%20%7C%2011-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
@@ -16,7 +16,23 @@ F# Interactive that already has your project loaded, re-runs your tests on unsav
 
 ## What is SageFs?
 
-Hey, I'm Will. SageFs is the thing I wanted every time I sat there waiting on a rebuild just to find out whether one little function did what I thought it did.
+Hey, I'm Will. Every .NET workflow I've used has the same shape. You change a file, something rebuilds, something restarts, and then you find out whether you were right. On this repo's engine that is about fifty seconds of build before a single test starts. SageFs is what I built so I'd stop waiting to find out.
+
+The idea is small. Your project is loaded into one live F# session and stays there, warm and running. Anything that wants to know something about your code asks that session, instead of rebuilding the code to find out.
+
+| You want to know | Rebuilding | Asking the live session |
+|:---|:---|:---|
+| Does this still compile? | `dotnet build`: 2 s on a 300-line sample, 49 to 52 s on projects of 22,000 and 86,000 lines | 21 to 25 ms on all three. The check does not care how big the project is ([the numbers](docs/repl-loop-benchmarks.md)) |
+| Did I break a test? | Build, then run the tests | The tests the edit can reach re-run on the edit, saved or not: 0.7 s from keystroke to verdict on the 11-test sample I measured ([how live testing works](docs/how-live-testing-works.md)) |
+| Does my running app do the new thing? | Stop, build, start, click back to where you were | Save. The changed methods are re-pointed in the process that's already running and its state stays. A save was served in 1.8 to 2.6 s on the test fixture, against 6 to 8.5 s for the restart it replaced ([how hot reload works](docs/how-hot-reload-works.md)) |
+
+Those were measured on one machine with other work running, and each page says where its number stops being true.
+
+Because it is one session, the rest follows. VS Code, Neovim and the browser dashboard all look at the same live program at once, each with its own view. An AI agent stops shelling out to `dotnet build` and guessing: it type-checks, evals and runs your tests in the session you are looking at, and every test run comes back with a receipt that says what source it ran on, so a pass on stale code never counts as green. When several agents work in one repo they join a cohort, with claims on files and landings that are verified before they reach the trunk, and the rules of that coordination are checked by deterministic simulation.
+
+None of the pieces is new on its own. Visual Studio has Live Unit Testing, C# has hot reload, and Smalltalk and Clojure people have lived inside running programs for decades. What I couldn't find was F# getting any of it, or all of it hanging off one session that you and your agents share. Where Microsoft's version is ahead I say so on the pages that compare them.
+
+The pages keep themselves honest. Nothing on [the roadmap](docs/roadmap.md) is marked done by hand: an item moves to Built when its code shows up in the tree, and a test fails if the page and the code disagree. The tool counts you read here are held to the same rule.
 
 ### F# Interactive is amazing. Here's what I wanted on top of it.
 
@@ -51,6 +67,8 @@ If you want to see where it's going, [the roadmap](docs/roadmap.md) lists what I
 I'm not going to pretend all of that is finished. [Live testing](docs/live-testing-as-you-type.md) and hot reload each have documented limits, written down next to the tests that pin them. But all of it runs today, and none of it is a mockup.
 
 **How's it different from Ionide?** Ionide gives you the editor smarts (IntelliSense, diagnostics, project support) through the F# Compiler Service, and it's great. SageFs adds live *execution*: eval any expression and see the result inline, continuous test feedback on every save (or keystroke, if you want it), and hot reload that patches your running app. Use both together: Ionide for editing, SageFs for running. They get along fine.
+
+**How's it different from `dotnet watch`?** `dotnet watch` rebuilds when you save. SageFs keeps your project loaded, so it re-runs only the tests an edit can reach, before you save if you like, and it patches a running F# app where `dotnet watch` restarts it. `dotnet watch` is the better pick for a small app or a C# project, and it needs nothing installed. [The comparison, row by row](docs/vs-dotnet-watch.md).
 
 My CI runs on Linux only, so nothing automated covers Windows or macOS. The tool is a .NET global tool and the package is built to install on both. Windows is untested here, so tell me what breaks. macOS has one known failure: someone ran the suite on an Apple Silicon Mac and five of the hot reload detour tests fail there (`GenericReloadTests`, "the real detours"). I don't know why yet, and nobody has tried an Intel Mac. Until that's sorted, treat hot reload on macOS as unproven ([#149](https://github.com/WillEhrendreich/SageFs/issues/149)). SageFs itself installs with the .NET 10 SDK or the .NET 11 SDK. Your *projects* aren't stuck on that version though. Each session's host gets built with whichever SDK `dotnet` picks in your project's folder, and runs on that SDK's runtime. So a `global.json` pin is honored, and without one you get the newest SDK you have installed. If you want a project on .NET 10 while an 11 preview is also installed, pin it with `global.json`.
 

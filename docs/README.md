@@ -17,6 +17,7 @@ Everything else is reference material you can come back to when you need it.
 - **[How hot reload works](how-hot-reload-works.md)**: the ideas it borrows (Erlang, Clojure, Smalltalk), what F# and .NET lack by default, and a row-by-row comparison with .NET's hot reload that says where it is level, where it is behind and what the plan is
 - **[How live testing works](how-live-testing-works.md)**: one keystroke, in the order the data moves, and a row-by-row comparison with Visual Studio Live Unit Testing, including the measured latency and what is still rough
 - **[How SageFs opens projects plain FSI can't](how-isolation-works.md)**: why FSI fails on name-based assembly resolution, the process and closure design that avoids it, and how a project's pinned versions are adapted to or refused
+- **[SageFs and `dotnet watch`](vs-dotnet-watch.md)**: re-running tests and updating a running app, side by side, and when `dotnet watch` is the better pick
 - **[Hot Reload](hot-reload.md)**: file watch → FSI eval → Harmony patch → browser refresh, and its current limits
 - **[Live Testing As You Type](live-testing-as-you-type.md)**: the three-speed feedback pipeline
 - **[Property, Mutation and Simulation Testing](property-and-mutation-testing.md)**: making your own test suite strong enough that a green run means something: property testing, mutation testing and deterministic simulation in whichever framework you already use (with Expecto/FsCheck recipes for F#), and why the SageFs REPL makes them affordable to write
