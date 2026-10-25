@@ -78,6 +78,37 @@ let wiringTests =
       let started = pipeline.IndexOf "startBackgroundOnce \"net10-tests\""
       (products > 0) |> Expect.isTrue "the pipeline builds the products project"
       (started > products) |> Expect.isTrue "and starts the isolated build only after that step"
+
+    testCase "WHY — the net10 recipe in AGENTS.md is the commands the build plan produces, in the order the pipeline runs them, so the prose cannot drift from TierPlan" <| fun _ ->
+      let lines = (read "AGENTS.md").Replace("\r\n", "\n").Split('\n')
+      let anchor =
+        match lines |> Array.tryFindIndex (fun line -> line.StartsWith "The default suite runs on every framework") with
+        | Some index -> index
+        | None -> failtest "AGENTS.md lost the paragraph that gives the net10 recipe"
+      let fenceOpen =
+        match lines |> Array.indexed |> Array.skip anchor |> Array.tryFind (fun (_, line) -> line.StartsWith "```") with
+        | Some (index, _) -> index
+        | None -> failtest "the net10 paragraph in AGENTS.md has no command block"
+      let documented =
+        lines
+        |> Array.skip (fenceOpen + 1)
+        |> Array.takeWhile (fun line -> not (line.StartsWith "```"))
+        |> Array.filter (fun line -> line.Trim() <> "")
+        |> List.ofArray
+      let restore, build =
+        match testBuildCommands Net10 with
+        | [ restore; build ] -> restore, build
+        | other -> failtestf "expected a restore then a build, got %A" other
+      let primaryClosureBuild = "dotnet build build/GateProducts.proj -c Release"
+      read "ci-pipeline.fsx" |> Expect.stringContains "the pipeline builds the closure with the command the recipe starts from" primaryClosureBuild
+      documented
+      |> Expect.equal
+           "the closure build for both frameworks, then the plan's restore, the seed, the plan's build, then the net10 test assembly"
+           [ primaryClosureBuild
+             restore
+             sprintf "sh -c '%s'" (seedScript Net10)
+             build
+             sprintf "dotnet %s --summary" (dllOf Net10) ]
   ]
 
 [<Tests>]

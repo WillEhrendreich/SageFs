@@ -423,12 +423,21 @@ throws on) is invisible to a net11 run. Each framework is its own tier and its
 own trust row: `default` on net11, `default-net10` on net10. The `build other
 frameworks` stage (after `ratchets`) builds the net10 test assembly with
 `TierPlan.testBuildCommands`, which leaves the
-tracked lock files and the net11 `obj/` alone. To run it by hand:
+tracked lock files and the net11 `obj/` alone. It compiles only the test
+assembly, against the shipped closure that `build/GateProducts.proj` built for
+both frameworks, once `TierPlan.seedScript` has copied that closure's
+intermediate outputs into the private obj directory. To run it by hand, first
+build net11 with `dotnet build SageFs.Tests -c Release`, then run these five
+commands in order from the repo root. The first one writes the net10
+ReadyToRun report under `SageFs/obj/Release/net10.0/`, which the net10
+`HostManifestTests` case reads. `BuildPlanTests` compares this block with what
+`TierPlan` produces and fails on any difference, so it cannot drift:
 
 ```
-P="-p:TargetFramework=net10.0 -p:NuGetLockFilePath=obj/tier-net10.0/packages.lock.json -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-net10.0/"
-dotnet restore SageFs.Tests $P
-dotnet build SageFs.Tests -c Release --no-restore $P
+dotnet build build/GateProducts.proj -c Release
+dotnet restore SageFs.Tests -p:TargetFramework=net10.0 -p:NuGetLockFilePath=obj/tier-net10.0/packages.lock.json -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-net10.0/
+sh -c 'test -d SageFs.Core/obj/Release/net10.0 && rm -rf SageFs.Core/obj/tier-net10.0/Release/net10.0 && mkdir -p SageFs.Core/obj/tier-net10.0/Release && cp -a --reflink=auto SageFs.Core/obj/Release/net10.0 SageFs.Core/obj/tier-net10.0/Release/net10.0 && test -d SageFs.Simulation/obj/Release/net10.0 && rm -rf SageFs.Simulation/obj/tier-net10.0/Release/net10.0 && mkdir -p SageFs.Simulation/obj/tier-net10.0/Release && cp -a --reflink=auto SageFs.Simulation/obj/Release/net10.0 SageFs.Simulation/obj/tier-net10.0/Release/net10.0 && test -d SageFs/obj/Release/net10.0 && rm -rf SageFs/obj/tier-net10.0/Release/net10.0 && mkdir -p SageFs/obj/tier-net10.0/Release && cp -a --reflink=auto SageFs/obj/Release/net10.0 SageFs/obj/tier-net10.0/Release/net10.0 && test -d SageFs.Host/obj/Release/net10.0 && rm -rf SageFs.Host/obj/tier-net10.0/Release/net10.0 && mkdir -p SageFs.Host/obj/tier-net10.0/Release && cp -a --reflink=auto SageFs.Host/obj/Release/net10.0 SageFs.Host/obj/tier-net10.0/Release/net10.0'
+dotnet build SageFs.Tests -c Release --no-restore --no-dependencies -p:TargetFramework=net10.0 -p:NuGetLockFilePath=obj/tier-net10.0/packages.lock.json -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-net10.0/
 dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --summary
 ```
 
