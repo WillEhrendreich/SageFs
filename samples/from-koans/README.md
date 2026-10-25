@@ -1,6 +1,6 @@
 # F# Koans: SageFs Edition
 
-22 progressive exercises teaching F# from scratch. Adapted from
+Progressive exercises teaching F# from scratch, listed in the table below. Adapted from
 [FSharpKoans](https://github.com/ChrisMarinos/FSharpKoans) by Chris Marinos (MIT).
 
 ## Quick Start
@@ -10,11 +10,7 @@ cd SageFs.Samples.Koans
 dotnet run
 ```
 
-You should see:
-
-```
-EXPECTO! 162 tests run — 162 passed, 0 failed. Success!
-```
+Expecto prints its summary when the run ends. Every test passes and the last line says `Success!`.
 
 ## Using with SageFs (recommended)
 
@@ -29,7 +25,7 @@ Then open any `.fs` file in your editor (VS Code or Neovim):
 
 1. **Alt+Enter** on any expression to see its value inline
 2. **Edit** a test: change a value and save
-3. **See** ✓/✗ gutter markers update, in well under a second on my machine (about 0.7 s from edit to verdict on the small FromCSharp sample, see [how live testing works](../../docs/how-live-testing-works.md))
+3. **See** the ✓/✗ marks on the test lines update, in well under a second on my machine (about 0.7 s from edit to verdict on the small FromCSharp sample, see [how live testing works](../../docs/how-live-testing-works.md))
 
 No terminal. No `dotnet run`. Just instant feedback.
 
@@ -77,8 +73,8 @@ as exercises:
    ```fsharp
    let inline __<'T> : 'T = failwith "Seek wisdom by filling in the __"
    ```
-4. Save: SageFs shows 🔴 markers for failing tests
-5. Fill in the blanks to turn them 🟢
+4. Save: SageFs marks the failing tests ✗
+5. Fill in the blanks to turn them ✓
 
 Or use the original `.fsx` scripts in this directory, they already have
 the `__` placeholders ready for you.
@@ -88,9 +84,9 @@ the `__` placeholders ready for you.
 | Original Koans | SageFs Edition |
 |-----------------|----------------|
 | NUnit `AssertEquality` | Expecto.Flip pipelines |
-| `dotnet run` ~3s/cycle | Save → gutter marker in under a second |
+| `dotnet run` ~3s/cycle | Save → a ✓/✗ mark in under a second |
 | One failure halts all | All tests run, each shows ✓/✗ |
-| Scroll terminal output | Gutter arrow jumps to failure |
+| Scroll terminal output | The failure's Expected and Actual sit next to the test |
 | Custom `[<Koan>]` runner | Industry-standard Expecto |
 | Edit → build → run | Alt+Enter for instant results |
 

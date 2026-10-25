@@ -444,6 +444,7 @@
          <Compile Include="TimeoutLiteralsTests.fs" />
          <Compile Include="DomainBudgetsTests.fs" />
          <Compile Include="DocsSlopTests.fs" />
+         <Compile Include="SampleReadmeTests.fs" />
          <Compile Include="VsCodeCommandTitleDocsTests.fs" />
          <Compile Include="ProductBlockingCallsTests.fs" />
          <Compile Include="EnvVarDocTests.fs" />
