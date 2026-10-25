@@ -119,7 +119,12 @@ let hotReloadToolTests =
         let steps =
           n.GetProperty("nextSteps").EnumerateArray() |> Seq.map (fun x -> x.GetString()) |> String.concat " "
         Expect.stringContains steps "switch_workflow" "nextSteps directs to switch_workflow"
-        Expect.stringContains steps "workflow=live" "nextSteps directs to create a Live session")
+        Expect.stringContains steps "workflow=live" "nextSteps directs to create a Live session"
+        [ "the dashboard control", "workflow selector"
+          "the VS Code command", "SageFs: Switch Workflow"
+          "the Neovim command", ":SageFsWorkflow" ]
+        |> List.iter (fun (route, name) ->
+          Expect.stringContains steps name (sprintf "nextSteps give a person %s, because the tool name alone is no use to one" route)))
 
     testCase "enable_hot_reload respects SAGEFS_DEVRELOAD=0" <| fun _ ->
       SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" (Some "0") (fun () ->
@@ -167,6 +172,11 @@ let hotReloadToolTests =
       let steps =
         n.GetProperty("nextSteps").EnumerateArray() |> Seq.map (fun x -> x.GetString()) |> String.concat " "
       Expect.stringContains steps "switch_workflow" "nextSteps directs to switch_workflow"
+      [ "the dashboard control", "workflow selector"
+        "the VS Code command", "SageFs: Switch Workflow"
+        "the Neovim command", ":SageFsWorkflow" ]
+      |> List.iter (fun (route, name) ->
+        Expect.stringContains steps name (sprintf "nextSteps give a person %s, because the tool name alone is no use to one" route))
 
     testCase "every hot reload outcome renders to its own stable token" <| fun _ ->
       let tokens =

@@ -1296,7 +1296,7 @@ process-wide kill switch for hot reload.""")>]
                     let modeLabel = SageFs.WorkflowTypes.SessionWorkflow.label workflow
                     return resultJson HotReloadOutcome.RequiresLiveMode false workerPort (sprintf "Not available: this session is in %s mode" modeLabel) false
                         [| "Hot reload requires Live mode, which is configured when the session's FSI process starts and cannot be turned on afterward."
-                           "Switch this session to Live mode: switch_workflow target=live (this recreates the session, so REPL definitions and cell state are lost)."
+                           "Switch this session to Live mode, which recreates the session, so REPL definitions and cell state are lost. Pick Hot Reload in the dashboard's workflow selector, run SageFs: Switch Workflow in VS Code or :SageFsWorkflow in Neovim, or call switch_workflow with target=live."
                            "Or start a fresh Live session: create_project_session or create_solution_session with workflow=live." |]
         })
         |> withEchoReply ctx "enable_hot_reload"
@@ -1348,7 +1348,7 @@ var, this is per-session and reversible. The env var, if set, takes precedence."
                 return resultJson HotReloadOutcome.NeverActive true (sprintf "Not active: this session is in %s mode, so hot reload was never on" modeLabel) [||]
             | SageFs.WorkflowTypes.SessionWorkflow.HotReload _ ->
                 return resultJson HotReloadOutcome.RuntimeDisableUnavailable false "Active: this session is in Live mode; a per-session runtime off-switch is not wired up"
-                    [| "To turn hot reload off, switch this session to Interactive mode: switch_workflow target=interactive (recreates the session; REPL state is lost)."
+                    [| "To turn hot reload off, switch this session to Interactive mode, which recreates the session, so REPL state is lost. Pick REPL in the dashboard's workflow selector, run SageFs: Switch Workflow in VS Code or :SageFsWorkflow in Neovim, or call switch_workflow with target=interactive."
                        "To disable hot reload daemon-wide, start the daemon with SAGEFS_DEVRELOAD=0." |]
         })
         |> withEchoReply ctx "disable_hot_reload"
