@@ -17,6 +17,7 @@ Everything else is reference material you can come back to when you need it.
 - **[How hot reload works](how-hot-reload-works.md)**: the ideas it borrows (Erlang, Clojure, Smalltalk), what F# and .NET lack by default, and a row-by-row comparison with .NET's hot reload that says where it is level, where it is behind and what the plan is
 - **[How live testing works](how-live-testing-works.md)**: one keystroke, in the order the data moves, and a row-by-row comparison with Visual Studio Live Unit Testing, including the measured latency and what is still rough
 - **[How SageFs opens projects plain FSI can't](how-isolation-works.md)**: why FSI fails on name-based assembly resolution, the process and closure design that avoids it, and how a project's pinned versions are adapted to or refused
+- **[SageFs and `dotnet watch`](vs-dotnet-watch.md)**: re-running tests and updating a running app, side by side, and when `dotnet watch` is the better pick
 - **[Hot Reload](hot-reload.md)**: file watch → FSI eval → Harmony patch → browser refresh, and its current limits
 - **[Live Testing As You Type](live-testing-as-you-type.md)**: the three-speed feedback pipeline
 - **[Property, Mutation and Simulation Testing](property-and-mutation-testing.md)**: making your own test suite strong enough that a green run means something: property testing, mutation testing and deterministic simulation in whichever framework you already use (with Expecto/FsCheck recipes for F#), and why the SageFs REPL makes them affordable to write
@@ -27,7 +28,7 @@ Everything else is reference material you can come back to when you need it.
 ## Reference
 - **[Can I use SageFs with…?](ecosystem-compatibility.md)**: Falco, Giraffe, Saturn, Oxpecker, plain ASP.NET, Fable/SAFE, React/Vue/Angular, Native AOT, .NET Framework
 - **[Feature Matrix](FEATURE_MATRIX.md)**: capabilities across VS Code, Neovim, the web dashboard, and MCP
-- **[MCP Tools](mcp-tools.md)**: the 66 affordance-gated tools and per-client config
+- **[MCP Tools](mcp-tools.md)**: the affordance-gated tools and per-client config
 - **[SSE Events](sse-events.md)**: wire format for the events editors consume
 - **[Binary Format Spec](binary-format-spec.md)**: the `.sagefs` and `.sagetc` persistence formats
 - **[Binary Format Benchmarks](binary-format-benchmarks.md)**: serialization performance data
