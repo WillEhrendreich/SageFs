@@ -3504,21 +3504,12 @@ let run
            EvalCount = s.EvalCount
            LastActivity = System.DateTimeOffset(s.LastActivity, System.TimeSpan.Zero) }
          : SageFs.Features.SessionHealthSummary))
+    // Daemon-wide: every session that has live testing on, not the primary session alone.
     let testingSummary =
-      let ts = model.LiveTesting.TestState
-      match ts.Activation with
-      | SageFs.Features.LiveTesting.LiveTestingActivation.Inactive -> None
-      | SageFs.Features.LiveTesting.LiveTestingActivation.Active ->
-        let entries = SageFs.Features.LiveTesting.LiveTestState.statusEntriesForSession "" ts
-        match entries.Length with
-        | 0 -> None
-        | _ ->
-          let summary = SageFs.Features.LiveTesting.TestSummary.fromStatuses ts.Activation (entries |> Array.map (fun e -> e.Status))
-          Some ({ TotalTests = summary.Total
-                  Passed = summary.Passed
-                  Failed = summary.Failed
-                  Running = summary.Running }
-                : SageFs.Features.LiveTestHealthSummary)
+      match SageFs.LiveTestViewReads.daemonLiveTesting model with
+      | SageFs.LiveTestViewReads.DaemonLiveTesting.Totals summary -> Some summary
+      | SageFs.LiveTestViewReads.DaemonLiveTesting.NoSessionHasItOn
+      | SageFs.LiveTestViewReads.DaemonLiveTesting.OnWithNoTestsYet -> None
     let machineMemory = SageFs.Features.MachineMemory.current ()
     let telemetry =
       SageFs.Server.DaemonTelemetry.sample (
@@ -4285,35 +4276,16 @@ let run
     GetTweakView = fun sessionId workingDirectory files snapshot reload ->
       SageFs.Server.LiveBindingsTweakService.Service.viewForFiles
         tweakService (WorkerProtocol.SessionId.value sessionId) workingDirectory files snapshot reload
-    GetLiveTestingStatus = fun () ->
-      let model = elmRuntime.GetModel()
-      let activeId =
-        SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
-        |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
-      SageFs.Features.LiveTesting.LiveTestCycleState.liveTestingStatusBarForSession activeId model.LiveTesting
+    GetLiveTestingStatus = fun viewing ->
+      SageFs.LiveTestViewReads.statusBarFor viewing (elmRuntime.GetModel())
     GetLiveTestActivity = fun sessionId ->
       SageFsModel.liveTestActivityFor sessionId (elmRuntime.GetModel())
-    GetLiveTestingActive = fun () ->
-      let model = elmRuntime.GetModel()
-      match model.LiveTesting.TestState.Activation with
-      | SageFs.Features.LiveTesting.LiveTestingActivation.Active -> true
-      | SageFs.Features.LiveTesting.LiveTestingActivation.Inactive -> false
     GetEvalTimeline = fun () ->
       let state = System.Threading.Volatile.Read(&sharedFeatureState.contents)
       SageFs.Features.EvalTimeline.timelineStats 20 state.CachedTimeline
     GetDaemonHealth = getDaemonHealth
-    GetFailureNarratives = fun () ->
-      let model = elmRuntime.GetModel()
-      let testState = model.LiveTesting.TestState
-      match testState.Activation with
-      | Features.LiveTesting.LiveTestingActivation.Inactive -> []
-      | _ ->
-      testState.Cached.FailureNarratives
-      |> Map.toList
-      |> List.choose (fun (testId, narrative) ->
-        testState.DiscoveredTests
-        |> Array.tryFind (fun tc -> tc.Id = testId)
-        |> Option.map (fun tc -> tc.DisplayName, narrative))
+    GetFailureNarratives = fun viewing ->
+      SageFs.LiveTestViewReads.failureNarrativesFor viewing (elmRuntime.GetModel())
     GetCurrentDiagnostics = fun () ->
       let model = elmRuntime.GetModel()
       model.Diagnostics

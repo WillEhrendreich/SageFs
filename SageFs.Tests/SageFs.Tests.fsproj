@@ -836,6 +836,7 @@
         <Compile Include="HotReloadKeptStateSurfaceTests.fs" />
         <Compile Include="DaemonStateChangeContractTests.fs" />
         <Compile Include="PathContainmentTests.fs" />
+        <Compile Include="LiveTestViewReadsTests.fs" />
         <Compile Include="LiveTestWatcherCoreTests.fs" />
         <Compile Include="FrictionCaptureDurabilityTests.fs" />
         <Compile Include="FrictionSendSafetyTests.fs" />

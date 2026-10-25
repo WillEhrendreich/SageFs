@@ -1084,7 +1084,7 @@ let buildDashboardSnapshotWithSessions
         | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
       Elem.div [] [ processLivenessPanel; renderSessionHealthLine viewedHealth ]
     let failureNarrativesPanel =
-      let pairs = q.GetFailureNarratives()
+      let pairs = q.GetFailureNarratives sessionId
       renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
     let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
     // Filmstrip panel removed from the UI (pushed the UI down for low-value
@@ -1324,9 +1324,9 @@ let buildNoSessionSnapshotWithSessionsSorted
       match daemonHealth with
       | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot infra.DaemonStartedAt snap)
       | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
+    // No session in view, so no session's failures to show.
     let failureNarrativesPanel =
-      let pairs = q.GetFailureNarratives()
-      renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
+      renderFailureNarratives (FailureNarrativesPanelView.fromNarratives [])
     let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
     // Filmstrip panel removed from the UI (pushed the UI down for low-value
     // per-eval history); don't spend the per-push GetFilmstripEntries work.
@@ -3111,7 +3111,7 @@ let createApiStateStream
                       icon = SageFs.Features.LiveTesting.GutterIcon.toLabel a.Icon
                       tooltip = a.Tooltip |}) |})
         | None -> []
-      let liveTestingStatus = q.GetLiveTestingStatus ()
+      let liveTestingStatus = q.GetLiveTestingStatus activeSid
       let! hrState = q.GetHotReloadState activeSid
       let watchedCount = hrState |> Option.map (fun hr -> hr.watchedCount) |> Option.defaultValue 0
       let testSourceLocations =

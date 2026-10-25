@@ -1346,17 +1346,19 @@ type DashboardQueries = {
       -> SessionReload
       -> Threading.Tasks.Task<Features.Tweak.BindingTweak.TweakView>
   GetBindingScopeSnapshot: unit -> Features.BindingExplorer.BindingScopeSnapshot option
-  GetLiveTestingStatus: unit -> string
-  /// Whether live testing is currently Active or Inactive.
-  GetLiveTestingActive: unit -> bool
+  /// The status-bar text of the session being looked at: its own cycle's rebuild, timing, test
+  /// summary and decision hint, never the primary session's.
+  GetLiveTestingStatus: WorkerProtocol.SessionId -> string
   /// The one live-testing state for a session ("" when no session is viewed).
   GetLiveTestActivity: string -> Features.LiveTestActivity.LiveTestActivity
   /// Read current EvalTimeline stats from the shared feature push state.
   GetEvalTimeline: unit -> Features.EvalTimeline.TimelineStats
   /// Read current daemon health snapshot from the shared feature push state.
   GetDaemonHealth: unit -> Features.HealthSnapshot option
-  /// Read current failure narratives from live test state — (testName, narrative) pairs.
-  GetFailureNarratives: unit -> (string * Features.LiveTesting.FailureNarrative) list
+  /// The failure narratives of the session being looked at, as (testName, narrative) pairs. Empty
+  /// while that session has live testing off. The dashboard MUST pass the per-client viewing
+  /// session, as it does for every other per-session read here.
+  GetFailureNarratives: WorkerProtocol.SessionId -> (string * Features.LiveTesting.FailureNarrative) list
   /// Read current FSI diagnostics (errors/warnings) from the diagnostics store.
   GetCurrentDiagnostics: unit -> Diagnostic list
   /// Read recent eval filmstrip entries from the eval history — newest-last, capped at 20.
