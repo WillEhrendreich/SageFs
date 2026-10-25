@@ -276,6 +276,14 @@ let renderTests =
       text |> Expect.stringContains "names the file" "A.fs"
       text |> Expect.stringContains "says how to fix it" "rebuild"
 
+    testCase "WHY — the stale description names a route for a person and a route for an agent, because the dashboard, the editors and MCP all read it" <| fun _ ->
+      let text = SourceState.describe staleA
+      [ "the dashboard button", "HARD_RESET"
+        "the VS Code command", "SageFs: Hard Reset (Rebuild)"
+        "the Neovim command", ":SageFsHardReset"
+        "the MCP tool and its argument", "hard_reset_fsi_session with rebuild=true" ]
+      |> List.iter (fun (route, name) -> text |> Expect.stringContains (sprintf "names %s" route) name)
+
     testCase "WHY — the banner is empty only when the build is current" <| fun _ ->
       SourceState.banner inSync |> Expect.equal "nothing to warn about" ""
       [ staleA; rebuildingState; unknownState ]

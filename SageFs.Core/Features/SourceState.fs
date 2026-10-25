@@ -214,7 +214,7 @@ module SourceState =
         | false ->
           sprintf "%s; and %d more" (changed |> List.truncate namedInSentence |> List.map becauseText |> String.concat "; ") (changed.Length - namedInSentence)
       sprintf
-        "STALE SOURCE: %d file(s) changed on disk after the build this session runs, so the REPL and the tests run code that is not what the files say: %s. hard_reset_fsi_session with rebuild=true builds the files and loads them."
+        "STALE SOURCE: %d file(s) changed on disk after the build this session runs, so the REPL and the tests run code that is not what the files say: %s. To build the files and load them, press HARD_RESET in the dashboard, run SageFs: Hard Reset (Rebuild) in VS Code or :SageFsHardReset in Neovim, or from an MCP client call hard_reset_fsi_session with rebuild=true."
         changed.Length named
     | SourceState.Rebuilding since ->
       sprintf "A rebuild is in progress (started %s). The session keeps serving the build from before it, so a run now says nothing about the edits the rebuild is picking up." (clock since)

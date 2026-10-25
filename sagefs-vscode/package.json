@@ -870,7 +870,7 @@
           {
             "id": "sagefs.liveTesting",
             "title": "Explore Live Testing",
-            "description": "SageFs automatically discovers and runs your tests. Check the Tests view in the SageFs sidebar for live results.\n\n[Enable Live Testing](command:sagefs.enableLiveTesting)",
+            "description": "A new session starts with live testing off, and no test runs until you turn it on. Click the link below, or run **SageFs: Enable Live Testing** from the command palette. After that SageFs finds your tests and re-runs the affected ones as you edit, saved or not. Results show on the test lines and in VS Code's Testing view, under SageFs Live Tests.\n\n[Enable Live Testing](command:sagefs.enableLiveTesting)",
             "media": {
               "image": "$(testing-run-icon)",
               "altText": "Testing icon"

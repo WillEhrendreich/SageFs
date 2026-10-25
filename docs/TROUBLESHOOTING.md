@@ -292,7 +292,7 @@ before it; and a hot-reload compile held the compiler past
 - Verify live testing is enabled: check your editor's test status indicator
 - Check run policies: some test categories (integration, browser) default to
   `demand` (manual trigger only)
-- Check live-test status in your editor: `:SageFsLiveTestStatus` (Neovim), the Tests pane (VS Code), or the web dashboard
+- Check live-test status in your editor: `:SageFsTests` (Neovim), the Testing view under SageFs Live Tests (VS Code), or the Live Testing panel in the web dashboard
 
 ### SSE connections dropping
 

@@ -218,6 +218,13 @@ let nameListsTests =
     testCase "WHY — the hint for live testing being off names the tool that does switch it on" <| fun _ ->
       Features.LiveTesting.LiveTestDiscoveryState.hint Features.LiveTesting.LiveTestDiscoveryState.Disabled
       |> Expect.stringContains "the real way in" "switch_workflow"
+
+    testCase "WHY — the same hint also names the routes a person has, because the dashboard and HTTP callers read it too and have no tool called switch_workflow" <| fun _ ->
+      let hint = Features.LiveTesting.LiveTestDiscoveryState.hint Features.LiveTesting.LiveTestDiscoveryState.Disabled
+      [ "the HTTP route that turns it on without restarting the session", "POST /api/live-testing/enable"
+        "the VS Code command", "SageFs: Enable Live Testing"
+        "the Neovim command", ":SageFsEnableTesting" ]
+      |> List.iter (fun (route, name) -> hint |> Expect.stringContains (sprintf "names %s" route) name)
   ]
 
 [<Tests>]

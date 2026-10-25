@@ -167,7 +167,7 @@ LiveTestState:
 {
   DiscoveredTests: TestCase[]
   LastResults: Map<TestId, TestRunResult>           // Latest outcome per test
-  StatusEntries: TestStatusEntry[]                  // UI gutter state
+  StatusEntries: TestStatusEntry[]                  // state behind the editor marks
   RunPhases: Map<string, TestRunPhase>              // Per-session execution phase
   TestSessionMap: Map<TestId, string>               // Routing: TestId → session
   TestCoverageBitmaps: Map<TestId, CoverageBitmap>  // IL coverage per test
@@ -298,7 +298,7 @@ data: {"SessionId":"<id>", "Narratives": [{"TestId":"string", "TestName":"string
 
 ## Debugging a failing test
 
-You can debug a failing test from VS Code and from Neovim. In VS Code a failing test gets a Debug lens next to its result, a Debug link in the hover of its gutter mark, and Debug Test in the Test Explorer (that is also what puts Debug Test on the glyph). In Neovim, `:SageFsDebugTest` debugs the failing test on the cursor's line (or the file's only failing test after you confirm, or a test you name by name or id), `<leader>rtg` does the same from a buffer, and `D` on a row of the test panel debugs that row's test. Neovim attaches through [nvim-dap](https://github.com/mfussenegger/nvim-dap) and netcoredbg. Without nvim-dap it still holds the test and prints the process id to attach to.
+You can debug a failing test from VS Code and from Neovim. In VS Code a failing test gets a Debug lens next to its result, a Debug link in the hover of its mark, and Debug Test in the Test Explorer (that is also what puts Debug Test on the glyph). In Neovim, `:SageFsDebugTest` debugs the failing test on the cursor's line (or the file's only failing test after you confirm, or a test you name by name or id), `<leader>rtg` does the same from a buffer, and `D` on a row of the test panel debugs that row's test. Neovim attaches through [nvim-dap](https://github.com/mfussenegger/nvim-dap) and netcoredbg. Without nvim-dap it still holds the test and prints the process id to attach to.
 
 How it works: the test runs in the process that loaded your code, which is the isolated FSI host (or the worker, for an in-process session). So the editor attaches a .NET debugger to that process.
 
@@ -321,7 +321,7 @@ If nobody releases the test within two minutes (`Timeouts.debugHold`), the host 
 **What it does not do yet.**
 
 - It debugs one test at a time. The host holds one test, and a second request is refused until the first ends.
-- The result of a debug run is shown in the editor. It is not recorded in the live-testing state, so the gutter updates on the next normal run.
+- The result of a debug run is shown in the editor. It is not recorded in the live-testing state, so the test marks update on the next normal run.
 - I have run the host side against a real isolated host, and checked the ptrace door opens and closes on a real process. I have not run a full attach with the C# extension's debugger from this repo's tests. The VS Code side is covered by contract tests that run without VS Code.
 
 The two routes, for any editor client. Both answer the same JSON shape (camelCase) and read the body whatever the status code is.
@@ -335,5 +335,5 @@ The other statuses are `hold_already_open`, `no_debugger_within`, `released_with
 
 ## Editor Integrations
 
-- **VS Code**: `FileAnnotationsListener.fs` parses file_annotations. `Extension.fs` renders coverage gutter decorations + inline failures. `TestControllerAdapter.fs` enriches test items with failure narratives, and registers the Debug profile. `TestDebugCommand.fs` and `TestDebugPure.fs` debug a failing test (see above).
+- **VS Code**: `FileAnnotationsListener.fs` parses file_annotations. `Extension.fs` renders the coverage marks (text in front of the code, not gutter icons) + inline failures. `TestControllerAdapter.fs` enriches test items with failure narratives, and registers the Debug profile. `TestDebugCommand.fs` and `TestDebugPure.fs` debug a failing test (see above).
 - **Neovim**: lives in its own repo, [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) (not in this tree). Its `testing.lua` caches source_locations and failure_narratives, `telescope_picker.lua` jumps to source on `<CR>`, and `commands.lua` shows a narrative floating window on `<C-d>`. `debug_test.lua` and `debug_test_ui.lua` debug a failing test through nvim-dap (`:SageFsDebugTest`, `<leader>rtg`, `D` on a panel row; see above).

@@ -2585,11 +2585,11 @@ module McpTools =
             let discovered = state.DiscoveredTests.Length
             match discovered > 0 with
             | true ->
-              return sprintf "Live testing enabled. %d tests already discovered. Use get_live_test_status to confirm current DiscoveryState." discovered
+              return sprintf "Live testing enabled. %d tests already discovered. Confirm DiscoveryState with GET /api/live-testing/status?session=ID (an MCP client uses list_tests)." discovered
             | false ->
-              return "Live testing enabled. Initial discovery now runs asynchronously; use get_live_test_status to confirm DiscoveryState."
+              return "Live testing enabled. Initial discovery now runs asynchronously. Confirm DiscoveryState with GET /api/live-testing/status?session=ID (an MCP client uses list_tests)."
           | None ->
-            return "Live testing enabled. Initial discovery now runs asynchronously; use get_live_test_status to confirm DiscoveryState."
+            return "Live testing enabled. Initial discovery now runs asynchronously. Confirm DiscoveryState with GET /api/live-testing/status?session=ID (an MCP client uses list_tests)."
     }
 
   let setRunPolicy (ctx: McpContext) (category: string) (policy: string) : Task<string> =
@@ -2706,7 +2706,7 @@ module McpTools =
         Policies = state.RunPolicies |> Map.toList |> List.map (fun (c, p) -> sprintf "%A: %A" c p)
         Hint = match isActive with
                | true -> None
-               | false -> Some "Live testing is not active. Switch the session to the livetesting workflow with switch_workflow to start test discovery and automatic re-runs."
+               | false -> Some (Features.LiveTesting.LiveTestDiscoveryState.hint Features.LiveTesting.LiveTestDiscoveryState.Disabled)
       |}
       Task.FromResult (Json.serialize Json.standard resp)
 
@@ -2726,7 +2726,7 @@ module McpTools =
             tc.FullName.Contains(testName, StringComparison.OrdinalIgnoreCase)
             || tc.DisplayName.Contains(testName, StringComparison.OrdinalIgnoreCase))
         match matchingTests with
-        | [||] -> return sprintf "No test found matching '%s'. Use get_live_test_status to list tests." testName
+        | [||] -> return sprintf "No test found matching '%s'. Use list_tests to list them." testName
         | tests ->
           let explanations =
             tests

@@ -182,7 +182,9 @@ let mcpDiscoverySemanticsTests =
 
       let! response = setLiveTesting ctx true
 
-      response |> Expect.stringContains "enable should point callers at status" "get_live_test_status"
+      response |> Expect.stringContains "enable should point callers at the status route, which is the one that exists" "/api/live-testing/status"
+      response.Contains("get_live_test_status")
+      |> Expect.isFalse "enable must not name a tool the daemon does not register (there is no get_live_test_status)"
       response |> Expect.stringContains "enable should mention automatic initial discovery" "Initial discovery"
       response.Contains("no-op eval")
       |> Expect.isFalse "enable should no longer claim that callers must prime discovery with a no-op eval"
