@@ -52,6 +52,7 @@
         <Compile Include="WorkspaceHygieneRender.fs" />
         <Compile Include="HygieneFs.fs" />
         <Compile Include="GateReaper.fs" />
+        <Compile Include="GateCheckout.fs" />
         <Compile Include="MemberTable.fs" />
         <Compile Include="Capability.fs" />
         <Compile Include="Tutorial.fs" />

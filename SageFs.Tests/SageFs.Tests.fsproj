@@ -94,6 +94,7 @@
         <Compile Include="HygieneAsyncScanTests.fs" />
         <Compile Include="HygieneExecuteTests.fs" />
         <Compile Include="GateReaperTests.fs" />
+        <Compile Include="GateCheckoutTests.fs" />
         <Compile Include="RunnerDirsTests.fs" />
         <Compile Include="FixtureBuildCacheTests.fs" />
         <Compile Include="HygieneSurfaceTests.fs" />

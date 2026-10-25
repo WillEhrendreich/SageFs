@@ -28,6 +28,7 @@
 // Exit codes: 0 passed (or already had); 1 --promote of a commit with no pass; 64 bad arguments; 9 a git step
 // failed; any other code is the pipeline's own, passed through.
 #load "ReleaseRules.fs"
+#load "../SageFs.Core/GateCheckout.fs"
 
 open System
 open System.Diagnostics
@@ -47,6 +48,9 @@ let gateHome =
 let passedRoot = Path.Combine(gateHome, "passed")
 let logsRoot = Path.Combine(gateHome, "logs")
 let ownersRoot = Path.Combine(gateHome, "owners")
+/// Where SageFs.GateCheckout keeps its record of how each checkout's build output was last left. Not a checkout- or
+/// tier-named directory, so the reaper does not mistake it for one.
+let buildStateRoot = Path.Combine(gateHome, "build-state")
 let lockPath = Path.Combine(gateHome, "lock")
 let currentPath = Path.Combine(gateHome, "current")
 let dataDir = Path.Combine(gateHome, "data")
@@ -413,6 +417,19 @@ let gate (sha: string) (force: bool) : int =
       takeLease ()
       try
         let wt = prepareCheckout sha
+        // A killed run leaves build output made for a commit the tree has moved past; SageFs.GateCheckout decides.
+        let cleanup = SageFs.GateCheckout.prepare buildStateRoot wt
+        match cleanup.Decision with
+        | SageFs.GateCheckout.OutputDecision.Clear reason ->
+          say (sprintf "cleared %d build output director%s: %s" cleanup.Cleared.Length (if cleanup.Cleared.Length = 1 then "y" else "ies") reason)
+        | SageFs.GateCheckout.OutputDecision.Keep -> ()
+        for dir, why in cleanup.Failed do
+          say (sprintf "could not remove %s: %s" dir why)
+        let noteRecord (state: SageFs.GateCheckout.CheckoutBuild) =
+          match SageFs.GateCheckout.record buildStateRoot wt state with
+          | Ok () -> ()
+          | Error(SageFs.GateCheckout.RecordNotWritten(path, why)) -> say (sprintf "could not record the checkout's build state in %s: %s" path why)
+        noteRecord (SageFs.GateCheckout.CheckoutBuild.Interrupted sha)
         let log = Path.Combine(logsRoot, short + ".log")
         // A report from an earlier run of this commit must never be mistaken for this run's.
         (try File.Delete(Path.Combine(logsRoot, short + ".failure.txt")) with _ -> ())
@@ -426,6 +443,7 @@ let gate (sha: string) (force: bool) : int =
         printfn "    log: %s" log
         let clock = Stopwatch.StartNew()
         let code = runPipeline wt sha log (ReleaseRules.freshnessOfForce force)
+        noteRecord (SageFs.GateCheckout.afterPipeline (ReleaseRules.endedByCancel code) sha)
         let elapsed = ReleaseRules.formatElapsed clock.Elapsed
         printfn ""
         match code with
