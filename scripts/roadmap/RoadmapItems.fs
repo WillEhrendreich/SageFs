@@ -429,30 +429,30 @@ let items : Item list =
       [ "docs/agents.md" ]
       "Where a host can prompt before a tool call, a small plugin can hold the destructive list and ask there, which covers the clients a server-side prompt can never reach. It would be one shared policy compiled into four thin shells rather than four copies of the same list, and none of the four hosts has been run yet."
 
-    item "bake-the-build-env-into-the-tooling" "Bake MSBUILDDISABLENODEREUSE into the tooling" Platform Next
-      NoLandmarkYet
+    item "bake-the-build-env-into-the-tooling" "Builds SageFs starts no longer die on a leftover MSBuild node" Platform Next
+      (landmark "SageFs.Core/ProcessEnvironment.fs" "buildEnvironment")
       [ "docs/agents.md" ]
-      "Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once the agent exported MSBUILDDISABLENODEREUSE=1 by hand. Set it around every build the scripts start and name it on the skill's troubleshooting page, so recovery never depends on remembering a shell variable."
+      "Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once an agent exported MSBUILDDISABLENODEREUSE=1 by hand. The daemon's session rebuilds and its FSI host build now take the variable from one named list, and ship.fsx and install-local.fsx set it for every build they start. The skill's troubleshooting page names the error and the one-line fix for an older daemon."
 
-    item "give-the-gate-a-clean-checkout" "Give the gate a clean checkout every time" Platform Next
-      NoLandmarkYet
+    item "give-the-gate-a-clean-checkout" "An interrupted gate cannot fail the run after it" Platform Next
+      (landmark "SageFs.Core/GateCheckout.fs" "decide")
       [ "docs/agents.md" ]
-      "The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. Rebuild when the checkout's artifacts predate the gated SHA, or clear them first, so an interrupted run cannot fail its successor."
+      "The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. The gate now writes what it is doing beside the checkout before the pipeline starts and what it left once the pipeline ends on its own. A run that finds the first and no second clears the checkout's build output before it builds, and a checkout with no record is cleared too. A run that finished, even a red one, keeps its warm build."
 
     item "make-a-failed-gate-retry-one-command" "Make a failed gate's retry one command" Platform Next
       NoLandmarkYet
       [ "docs/agents.md" ]
       "A failed gate leaves its bump commit behind, and the next push refuses only after a whole new gate unless that commit is dropped first. Hand-dropping it cost several cycles in one session. Either reuse an unfired bump already in the range, or write the ship.fsx -- <sha> retry path that ReleaseRules.fs already tests into agents.md, so the next agent finds it instead of deriving it."
 
-    item "write-down-what-a-new-tool-declares" "Write down what a new tool must declare" Docs Next
-      NoLandmarkYet
+    item "write-down-what-a-new-tool-declares" "What a new tool must declare is written down" Docs Next
+      (landmark "docs/mcp-tools.md" "## Adding a tool")
       [ "docs/progressive-map-research-2026-10-24.md" ]
-      "Adding list_members took six declarations: the registered set, the docs row and both counts, gatingDomain, ToolName with its toToolName and all, RouteKind, and ToolClass. Section 9 of the progressive map research holds the slice plan; it needs this checklist too, so the next tool registers once and every gate passes the first time."
+      "Adding list_members took six declarations, and it missed four hand-kept test lists as well, which left the default suite red on master. The tools page now lists all seven places in the order that keeps the build green, names the test that goes red for each, and says what else a tool commit carries: the Plugin trailer, and a name that is not a retired one. The slice plan in the progressive map research points there."
 
-    item "fix-the-readme-capability-mcp-marks" "Fix the Readme capability table's MCP marks" Docs Next
-      NoLandmarkYet
+    item "fix-the-readme-capability-mcp-marks" "The Readme capability table says which rows are HTTP routes" Docs Next
+      (landmark "Readme.md" "Code completion | ✅ | ✅ | no | HTTP")
       [ "docs/mcp-tools.md" ]
-      "The capability table still ticks completion and type explorer under MCP although both are HTTP routes, an audit row that waited through two releases. With list_members registered under a fresh name, mark those two rows as routes, or expose real tools and tick them."
+      "The ticks under MCP for completion and the type explorer were gone in March, but the cells that replaced them were a bare colon, which reads as a typo. The rows that are HTTP routes and no tool now say HTTP, every other empty cell says no, and the note under the table says what each word means."
 
     item "walk-the-rest-of-the-symbol-ladder" "Walk the rest of the symbol ladder" Agents Next
       NoLandmarkYet

@@ -9,9 +9,9 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 11, Later 18, Exploring 20. Already built: 35.
+On the page today: Now 0, Next 7, Later 18, Exploring 20. Already built: 39.
 
-## Next (11)
+## Next (7)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -35,14 +35,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Platform and install
 
-- [ ] **Bake MSBUILDDISABLENODEREUSE into the tooling.** Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once the agent exported MSBUILDDISABLENODEREUSE=1 by hand. Set it around every build the scripts start and name it on the skill's troubleshooting page, so recovery never depends on remembering a shell variable. ([agents.md](agents.md))
-- [ ] **Give the gate a clean checkout every time.** The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. Rebuild when the checkout's artifacts predate the gated SHA, or clear them first, so an interrupted run cannot fail its successor. ([agents.md](agents.md))
 - [ ] **Make a failed gate's retry one command.** A failed gate leaves its bump commit behind, and the next push refuses only after a whole new gate unless that commit is dropped first. Hand-dropping it cost several cycles in one session. Either reuse an unfired bump already in the range, or write the ship.fsx -- <sha> retry path that ReleaseRules.fs already tests into agents.md, so the next agent finds it instead of deriving it. ([agents.md](agents.md))
-
-### Docs and onboarding
-
-- [ ] **Write down what a new tool must declare.** Adding list_members took six declarations: the registered set, the docs row and both counts, gatingDomain, ToolName with its toToolName and all, RouteKind, and ToolClass. Section 9 of the progressive map research holds the slice plan; it needs this checklist too, so the next tool registers once and every gate passes the first time. ([progressive-map-research-2026-10-24.md](progressive-map-research-2026-10-24.md))
-- [ ] **Fix the Readme capability table's MCP marks.** The capability table still ticks completion and type explorer under MCP although both are HTTP routes, an audit row that waited through two releases. With list_members registered under a fresh name, mark those two rows as routes, or expose real tools and tick them. ([mcp-tools.md](mcp-tools.md))
 
 ## Later (18)
 
@@ -126,7 +119,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub.
 
-## Built (35)
+## Built (39)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -187,10 +180,14 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - [x] **Slow machines get timeouts that fit them.** On an old quad core with a spinning disk a session never reached Ready, because the 30 second silence limit killed the worker mid-build and the retries repeated the same 30. SageFs now probes the machine, files it as Fast, Standard, Constrained or Minimal, and scales the waits that are for the machine. A start that runs out of patience retries with a longer one, and a give-up names the wait, the attempts and what to set. On that machine it now reaches Ready in about a minute cold and 17 seconds warm. Code: [`SageFs.Core/MachineTier.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/MachineTier.fs)
 - [x] **SageFs tidies what agents leave behind.** Agents leave worktrees, branches and gate checkouts behind, and on my machine 65 old gate records alone came to 17.6 GB. A dashboard panel, two MCP tools and `sagefs hygiene` list the leftovers and tidy only the safe ones, after you confirm the exact plan you were shown. Code: [`SageFs.Core/WorkspaceHygiene.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/WorkspaceHygiene.fs)
 - [x] **The daemon starts at login on macOS.** A launchd user agent starts the daemon at login and restarts its supervisor after a crash, the same job the systemd unit does on Linux. The README install fills in your home directory and your .NET folder, because launchd expands no variables. tw0po1nt wrote it and tested it on macOS 27 on an Apple Silicon Mac. An Intel Mac and the Homebrew dotnet formula are untested. Code: [`contrib/launchd/io.github.willehrendreich.sagefs.plist`](https://github.com/WillEhrendreich/SageFs/blob/master/contrib/launchd/io.github.willehrendreich.sagefs.plist)
+- [x] **Builds SageFs starts no longer die on a leftover MSBuild node.** Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once an agent exported MSBUILDDISABLENODEREUSE=1 by hand. The daemon's session rebuilds and its FSI host build now take the variable from one named list, and ship.fsx and install-local.fsx set it for every build they start. The skill's troubleshooting page names the error and the one-line fix for an older daemon. Code: [`SageFs.Core/ProcessEnvironment.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ProcessEnvironment.fs)
+- [x] **An interrupted gate cannot fail the run after it.** The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. The gate now writes what it is doing beside the checkout before the pipeline starts and what it left once the pipeline ends on its own. A run that finds the first and no second clears the checkout's build output before it builds, and a checkout with no record is cleared too. A run that finished, even a red one, keeps its warm build. Code: [`SageFs.Core/GateCheckout.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/GateCheckout.fs)
 
 ### Docs and onboarding
 
 - [x] **Published numbers for the REPL loop.** I timed an edit plus a check in a warm session against a build plus a filtered test on three projects, from 306 lines to 86,019. The check answered in 21 to 25 milliseconds on all three, because it does not care how big the project is, while the build took 2 to 52 seconds and cares a great deal. The table is in docs with the machine and the load averages it was measured under, and a snippet that cannot type-check returns its errors in 81 milliseconds, so the fast number is a real check rather than one that says fine. Code: [`docs/repl-loop-benchmarks.md`](https://github.com/WillEhrendreich/SageFs/blob/master/docs/repl-loop-benchmarks.md)
+- [x] **What a new tool must declare is written down.** Adding list_members took six declarations, and it missed four hand-kept test lists as well, which left the default suite red on master. The tools page now lists all seven places in the order that keeps the build green, names the test that goes red for each, and says what else a tool commit carries: the Plugin trailer, and a name that is not a retired one. The slice plan in the progressive map research points there. Code: [`docs/mcp-tools.md`](https://github.com/WillEhrendreich/SageFs/blob/master/docs/mcp-tools.md)
+- [x] **The Readme capability table says which rows are HTTP routes.** The ticks under MCP for completion and the type explorer were gone in March, but the cells that replaced them were a bare colon, which reads as a typo. The rows that are HTTP routes and no tool now say HTTP, every other empty cell says no, and the note under the table says what each word means. Code: [`Readme.md`](https://github.com/WillEhrendreich/SageFs/blob/master/Readme.md)
 
 ---
 
