@@ -131,6 +131,17 @@ let nameListsTests =
     testCase "WHY — the state list above covers every session state, so a new state cannot skip the check" <| fun _ ->
       sessionStates.Length |> Expect.equal "every case" (FSharpType.GetUnionCases(typeof<SessionState>).Length)
 
+    testCase "WHY — list_members is the progressive map's first rung: registered, documented, not retired" <| fun _ ->
+      // Slice 1 of docs/progressive-map-research-2026-10-24.md section 9. The six historical
+      // explore/completion names stayed retired (RetiredToolNameTests), so the ladder's first rung
+      // ships under a fresh name; the row check below forces its docs row into the same change.
+      registeredNames
+      |> Set.contains "list_members"
+      |> Expect.isTrue "list_members must be in the registered set (slice 1 of the progressive map)"
+      SageFs.Affordances.RetiredTool.toolNames
+      |> List.contains "list_members"
+      |> Expect.isFalse "the ladder's name must share nothing with the retired tools"
+
     testCase "WHY — docs/mcp-tools.md lists exactly the registered tools" <| fun _ ->
       let docs = File.ReadAllText(Path.Combine(repoRoot, "docs", "mcp-tools.md"))
       let documented =

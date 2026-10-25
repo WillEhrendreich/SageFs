@@ -2454,6 +2454,22 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         SageFs.McpAnalysis.discoverFeatures ctx (RegisteredTools.describe typeof<SageFsTools>) topicOpt sid wd |> withEcho ctx "discover_features"
 
     [<McpServerTool>]
+    [<Description("""The members of a qualified name (a namespace, module or type): one rung of the symbol ladder. Names only, with a total and an offset footer for the next page, never bodies, so a walk stays bounded. Ask a child's qualified name next to descend.""")>]
+    member _.list_members(
+        [<Description("Fully qualified name whose members to list, e.g. 'SageFs.SessionManager'. No trailing dot.")>]
+        qualified_name: string,
+        [<Description("Skip this many members; 0 for the first page. The reply's footer names the offset to use.")>]
+        [<Optional; DefaultParameterValue(0)>]
+        offset: int,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        logger.LogDebug("MCP-TOOL: list_members called, name={Name}, offset={Offset}", qualified_name, offset)
+        SageFs.McpTools.listMembers ctx "mcp" qualified_name offset wd |> withEcho ctx "list_members"
+
+    [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.
 
 V1 does NOT suggest a new value for the binding — it surfaces the causal symbol, its current code, and the ripple of cells that would re-evaluate on any change. The developer supplies the new value.

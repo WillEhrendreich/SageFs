@@ -79,6 +79,14 @@ let WorkerStartupTimeoutMs : int =
 let SessionManagerQueueCapacity : int =
   envInt "SAGEFS_SESSION_MANAGER_QUEUE_CAPACITY" 256
 
+/// Members any one `list_members` reply carries (the rung cap of the progressive map,
+/// docs/progressive-map-research-2026-10-24.md). The reply always states the total and names the
+/// offset for the rest, so the cap bounds the message without hiding the size of the set. Sized
+/// around the house reply ceiling; measure a real namespace before raising it, and lower it if
+/// measured replies run long.
+let ListMembersMax : int =
+  envInt "SAGEFS_LIST_MEMBERS_MAX" 100
+
 /// The loopback interface the daemon's HTTP listeners (MCP, dashboard) bind.
 /// There is deliberately no non-loopback case: SageFs evaluates arbitrary F#
 /// for whoever reaches those ports and has no authentication, so a LAN bind

@@ -22,6 +22,33 @@ let tests =
   // ("result text should be present" flake, CI-only). Sequencing isolates them
   // from the parallel phase, matching every sibling shared-actor suite.
   testSequenced <| testList "MCP tool execution" [
+    testCase "list_members caps a page, states the total, and names the offset for the rest" <| fun () ->
+      // Slice 1 exit test (docs/progressive-map-research-2026-10-24.md section 9): one reply can
+      // never become the map, and the walk continues from the footer. Ranges derive from the cap,
+      // so an env override of SAGEFS_LIST_MEMBERS_MAX still passes.
+      let total = 500
+      let max = SageFsConfig.ListMembersMax
+      let members = [ for i in 1 .. total -> sprintf "member_%03d" i ]
+      let reply = formatListMembers "SageFs.SessionManager" max 0 members
+      (reply.Length < 4000) |> Expect.isTrue "one page stays under the house reply ceiling"
+      reply |> Expect.stringContains "the total is the real size" (sprintf "%d total" total)
+      reply |> Expect.stringContains "the page ends at the cap" (sprintf "showing 1-%d." max)
+      reply.Contains "member_101" |> Expect.isFalse "the cap holds even when the set is larger"
+      reply |> Expect.stringContains "the footer names the offset to call again with" (sprintf "call again with offset=%d" max)
+      let pageTwo = formatListMembers "SageFs.SessionManager" max max members
+      pageTwo
+      |> Expect.stringContains "the second page continues where the first stopped"
+        (sprintf "showing %d-%d." (max + 1) (min (2 * max) total))
+      pageTwo
+      |> Expect.stringContains "and it reports what is still out of range"
+        (sprintf "(%d more;" (total - min (2 * max) total))
+      let lastOffset = (total - 1) / max * max
+      let lastPage = formatListMembers "SageFs.SessionManager" max lastOffset members
+      lastPage
+      |> Expect.stringContains "the last page reaches the end of the set"
+        (sprintf "showing %d-%d." (lastOffset + 1) total)
+      lastPage.Contains "call again with offset"
+      |> Expect.isFalse "the last page carries no next-offset footer"
     testTask "hard_reset_fsi_session with rebuild returns before background restart completes" {
       let result = globalActorResult.Value
       let sessionMap = ConcurrentDictionary<string, string>()
