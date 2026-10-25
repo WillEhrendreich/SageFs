@@ -56,6 +56,16 @@ let private withLiveTesting (model: SageFsModel) =
     SageFsUpdate.update SageFsMsg.EnableLiveTesting model
   model'
 
+/// Switch live testing on for one session's own cycle, as the MCP and the daemon do. A save in a
+/// session reaches its live testing only when that session has it on, so a test that follows a
+/// background session's file changes switches it on for that session.
+let private withLiveTestingFor (snap: SessionSnapshot) (model: SageFsModel) =
+  let model', _ =
+    SageFsUpdate.update
+      (SageFsMsg.EnableLiveTestingForSession (WorkerProtocol.SessionId.value snap.Id))
+      model
+  model'
+
 let private unionCaseNameOf (value: obj) =
   let ty = value.GetType()
   let case, _ = FSharpValue.GetUnionFields(value, ty)
@@ -140,6 +150,7 @@ let stream1Tests =
         |> withSession snapA
         |> withSession snapB
         |> withLiveTesting
+        |> withLiveTestingFor snapB
 
       let fileB = "/projects/beta/src/Lib.fs"
       let model', _ =
@@ -174,6 +185,7 @@ let stream1Tests =
         |> withSession snapA
         |> withSession snapB
         |> withLiveTesting
+        |> withLiveTestingFor snapB
 
       // File change only in session A's directory
       let fileA = "/projects/alpha/src/Domain.fs"
@@ -692,6 +704,7 @@ let stream5Tests =
         |> withSession snapA
         |> withSession snapB
         |> withLiveTesting
+        |> withLiveTestingFor snapB
 
       let fileB = "/projects/beta/src/Lib.fs"
       let afterChange, _ =

@@ -85,6 +85,11 @@
              routing; twins broadcast-to-all / double-fire. -->
         <Compile Include="FileReloadRoutingSim.fs" />
         <Compile Include="FileReloadRoutingInvariants.fs" />
+        <!-- Live-testing file routing DST: folds the real LiveTestFileRouting.route; twins
+             primary-gated / ignores-activation. -->
+        <Compile Include="LiveTestFileRoutingSim.fs" />
+        <Compile Include="LiveTestFileRoutingInvariants.fs" />
+        <Compile Include="LiveTestFileRoutingGenerators.fs" />
         <Compile Include="FsiEmitSim.fs" />
         <Compile Include="FsiEmitInvariants.fs" />
         <!-- Patch confirmation DST: folds the real PatchConfirmation decision over the

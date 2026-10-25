@@ -610,6 +610,8 @@
         <Compile Include="CohortVetoSpecTests.fs" />
         <Compile Include="EvalActorSimTests.fs" />
         <Compile Include="FileReloadRoutingSimTests.fs" />
+        <Compile Include="LiveTestFileRoutingTests.fs" />
+        <Compile Include="LiveTestFileRoutingSimTests.fs" />
         <Compile Include="WatcherLifecycleSimTests.fs" />
         <Compile Include="DstFaultInjectionTests.fs" />
         <Compile Include="SseGoldenFixtureGenerationTests.fs" />
