@@ -19,15 +19,21 @@
 ///
 /// This list is NOT tagged `[Benchmark]`, so it runs in the default suite and
 /// gates every run. Each budget gets one test case reading a shared `Lazy`
-/// measurement (computed once per test run, thread-safe). The measurement is
-/// several blocks of samples and the QUIETEST block (lowest p99) is the one
-/// asserted: a loaded box inflates a block from outside, and the code under
-/// test can only be slower than its quietest block, never faster. The p50 and
-/// p99 are printed, then the p99 is asserted against a regression bound set
-/// from the measured numbers with headroom. The bound is a regression gate and
-/// not the vision's ideal. The ideal for decide+project (1 ms) is NOT met, and
-/// the comment on the bounds below says by how much and where the gap is. The
-/// cases always assert and never skip.
+/// measurement (computed once per test run, thread-safe). Load can only make a
+/// timing slower, never faster, so each budget judges a statistic that a busy
+/// box moves little: decide+project judges the median of its quietest block,
+/// and the claim probe judges its BEST batch (the cheapest of hundreds of timed
+/// batches). The p50 and p99 are printed beside it, then the judged number is
+/// asserted against a regression bound set from the measured numbers with
+/// headroom. The bound is a regression gate and not the vision's ideal. The
+/// ideal for decide+project (1 ms) is NOT met, and the comment on the bounds
+/// below says by how much and where the gap is. The cases always assert and
+/// never skip.
+///
+/// A budget that cannot fail is not a budget, so the claim probe also has a
+/// twin: the same probe over several times the held claims, which the same bound
+/// must reject (`claimProbeTwinSlowerBy`). If a later edit loosens the bound or the
+/// statistic until the twin slips under it, the twin's case fails.
 module SageFs.Tests.CohortPerfBudgetTests
 
 open System
@@ -57,19 +63,22 @@ let private scope = CohortScope.Machine
 let private memberCount = 10
 let private testCount = 7000
 
-let private members : MemberId list =
-  [ for i in 1 .. memberCount -> MemberId.Minted(sprintf "member-%02d" i) ]
+let private membersOf (count: int) : MemberId list =
+  [ for i in 1 .. count -> MemberId.Minted(sprintf "member-%02d" i) ]
 
-/// Ten `Join`s then ten disjoint `File` claims (one per member, under distinct
-/// paths so `AcquireClaim`'s exclusivity scan never refuses one) — a cohort
-/// mid-feature, not an empty state. Mirrors the fold idiom
-/// `CohortPanelTests.frameAfterWith` uses to build a `LedgerHead` with no
-/// owner/ledger/IO involved.
-let private buildHead () : LedgerHead<MemberId> =
+let private members : MemberId list = membersOf memberCount
+
+/// A `Join` then a disjoint `File` claim for each of the given members (one claim
+/// per member, under distinct paths so `AcquireClaim`'s exclusivity scan never
+/// refuses one) — a cohort mid-feature, not an empty state. Mirrors the fold
+/// idiom `CohortPanelTests.frameAfterWith` uses to build a `LedgerHead` with no
+/// owner/ledger/IO involved. The budgets use ten members; the claim probe's twin
+/// uses more, to make the same scan cost several times as much.
+let private buildHeadOf (cohort: MemberId list) : LedgerHead<MemberId> =
   let joins =
-    members |> List.map (fun m -> CohortCommand.Join(m, JoinableRole.Implementer, Some(MemberId.display m), scope))
+    cohort |> List.map (fun m -> CohortCommand.Join(m, JoinableRole.Implementer, Some(MemberId.display m), scope))
   let acquires =
-    members
+    cohort
     |> List.map (fun m ->
       CohortCommand.AcquireClaim(
         m,
@@ -117,7 +126,7 @@ let private snapshots : SessionSnapshot<MemberId>[] =
     [| snapshotFor 0 None |]
     (members |> List.mapi (fun idx m -> snapshotFor (idx + 1) (Some m)) |> Array.ofList)
 
-let private head = buildHead ()
+let private head = buildHeadOf members
 
 /// The command that exercises the save-observed claim probe: a save inside
 /// one member's own claim is the common case (no violation, but the scan
@@ -167,6 +176,58 @@ let private quietestBlock (warmup: int) (perBlock: int) (f: unit -> unit) : floa
   [| for b in 0 .. blockCount - 1 -> measureMs (if b = 0 then warmup else 0) perBlock f |]
   |> Array.minBy (fun block -> percentile block 0.99)
 
+/// What a run of timed batches reduces to. A batch is `CallsPerBatch` calls timed
+/// as one span and divided down to a per-call time, so the clock cost (tens of
+/// nanoseconds) is shared by the whole batch and a single descheduled call is
+/// diluted instead of owning the sample.
+///
+/// `BestBatchMs` is the cheapest batch. Another process, a GC pause or a
+/// neighbour's compile can only add time to a batch, never take any away, so the
+/// cheapest of hundreds of batches is the one least touched by the box, and it
+/// sits close to what the code costs by itself. `TypicalBatchMs` is the median
+/// batch, printed for the reader and never judged: on a shared box it tracks
+/// the box.
+type BatchReading =
+  { BestBatchMs: float
+    TypicalBatchMs: float
+    Batches: int
+    CallsPerBatch: int }
+
+/// Warms `f` up, forces a clean GC generation so a warmup collection does not
+/// land in the timed span, then times `batches` batches of `callsPerBatch` calls.
+let measureBatches (warmup: int) (batches: int) (callsPerBatch: int) (f: unit -> unit) : BatchReading =
+  for _ in 1 .. warmup do
+    f ()
+  GC.Collect()
+  GC.WaitForPendingFinalizers()
+  GC.Collect()
+  let freq = float Stopwatch.Frequency
+  let perCallMs = Array.zeroCreate<float> batches
+  for i in 0 .. batches - 1 do
+    let t0 = Stopwatch.GetTimestamp()
+    for _ in 1 .. callsPerBatch do
+      f ()
+    let t1 = Stopwatch.GetTimestamp()
+    perCallMs.[i] <- float (t1 - t0) / freq * 1000.0 / float callsPerBatch
+  Array.sortInPlace perCallMs
+  { BestBatchMs = perCallMs.[0]
+    TypicalBatchMs = percentile perCallMs 0.50
+    Batches = batches
+    CallsPerBatch = callsPerBatch }
+
+/// What a budget decided about a reading, as a value the real case and its twin
+/// both read: the real case demands `WithinBound`, the twin demands `OverBound`.
+[<RequireQualifiedAccess>]
+type BudgetVerdict =
+  | WithinBound of measuredMs: float * boundMs: float
+  | OverBound of measuredMs: float * boundMs: float
+
+/// Judges the best batch against a bound.
+let judgeBestBatch (boundMs: float) (reading: BatchReading) : BudgetVerdict =
+  match reading.BestBatchMs <= boundMs with
+  | true -> BudgetVerdict.WithinBound(reading.BestBatchMs, boundMs)
+  | false -> BudgetVerdict.OverBound(reading.BestBatchMs, boundMs)
+
 // ── Shared measurements (computed once; `Lazy` is thread-safe by default) ──
 
 /// §3.4 / §7.4: "decide + project for ten members and 7,000 tests under 1 ms
@@ -190,18 +251,45 @@ let private decideProjectSamples : Lazy<float[]> =
 
 /// §3.4 / §7.4: "the save-observed claim probe under 10 µs." `decide` alone,
 /// isolating the `ObserveSave` linear scan over the fixture's 10 held claims
-/// from `project`'s cost. A call is a few microseconds, so a block needs a
-/// thousand samples for the p99 to rest on ten of them, and the warmup is
-/// large enough to get the scan out of the tier-0 JIT.
-let private claimProbeWarmup = 500
-let private claimProbeSamplesPerBlock = 1000
+/// from `project`'s cost. A call is a few microseconds, so it is timed in
+/// batches (see `BatchReading`). 800 batches of 16 calls is about 130 µs a
+/// batch and about 0.1 s in all: a batch is short enough to fit between two
+/// descheduling events on a busy box, and with 800 of them every one would have
+/// to be hit for the best batch to rise. The warmup is large enough to get the
+/// scan out of the tier-0 JIT.
+let private claimProbeWarmup = 2000
+let private claimProbeBatches = 800
+let private claimProbeCallsPerBatch = 16
 
-let private claimProbeSamples : Lazy<float[]> =
-  lazy
-    (quietestBlock claimProbeWarmup claimProbeSamplesPerBlock (fun () ->
-      match decide epoch [||] head.State observeSaveCommand with
-      | Ok _ -> ()
-      | Error err -> failwithf "unexpected refusal in the claim-probe perf loop: %A" err))
+let private claimProbeOnce () : unit =
+  match decide epoch [||] head.State observeSaveCommand with
+  | Ok _ -> ()
+  | Error err -> failwithf "unexpected refusal in the claim-probe perf loop: %A" err
+
+let private claimProbeReading : Lazy<BatchReading> =
+  lazy (measureBatches claimProbeWarmup claimProbeBatches claimProbeCallsPerBatch claimProbeOnce)
+
+/// The twin: the same probe over `claimProbeTwinSlowerBy` times as many held
+/// claims, so the linear scan costs that many times as much per save. That is the
+/// size a per-claim cost reaches when a change makes each claim cost several
+/// times what it did (a rescan per claim, a copy of the claim map per call). The
+/// first twin tried was the real call repeated eight times in a loop. In some
+/// processes that loop ran faster per call than one call alone (a batch read 3 µs
+/// a call against 8 µs a call), so its best batch landed within 20% of the
+/// bound. A bigger input does not have that fast mode. The scaled input cost 17 to 18 times the real probe in
+/// every run (160 claims, best batch 58-60 µs against 3.3 µs, in the REPL). It
+/// is measured exactly like the real probe and judged against the same bound.
+let claimProbeTwinSlowerBy = 16
+
+let private claimProbeTwinHead = buildHeadOf (membersOf (memberCount * claimProbeTwinSlowerBy))
+
+let private claimProbeTwinOnce () : unit =
+  match decide epoch [||] claimProbeTwinHead.State observeSaveCommand with
+  | Ok _ -> ()
+  | Error err -> failwithf "unexpected refusal in the claim-probe twin loop: %A" err
+
+let private claimProbeTwinReading : Lazy<BatchReading> =
+  lazy (measureBatches claimProbeWarmup claimProbeBatches claimProbeCallsPerBatch claimProbeTwinOnce)
 
 // ── Budgets ─────────────────────────────────────────────────────────────
 
@@ -214,12 +302,13 @@ let private idealClaimProbeMsP99 = 0.010 // 10 µs
 /// dev box, Release build) with headroom for a loaded box. Each case asserts
 /// the quietest block's p99 against its bound and never skips:
 ///
-///   - claim probe: p50=1.76µs, p99=10.20µs — already at the 10µs ideal (the
-///     0.20µs overshoot is Stopwatch/tiered-JIT noise at single-digit-µs
-///     scale, not a real gap: `decide`'s `ObserveSave` branch is a plain
-///     linear scan over 10 held claims, Cohort.fs:659-669). A 4x margin
-///     (40µs) keeps the gate real without flaking under a loaded CI runner.
-///     MET.
+///   - claim probe: MET at the 10µs ideal when run alone (`decide`'s
+///     `ObserveSave` branch is a plain linear scan over 10 held claims). The
+///     numbers it was first written from (p50=1.76µs, p99=10.20µs) are no
+///     longer what it reads: the probe alone reads p50 7.3-8.0µs and p99
+///     8-11µs in Release (2026-10-25, a shared box). Its bound and
+///     the statistic it is judged on are explained at
+///     `regressionBoundClaimProbeMsBestBatch`.
 ///   - decide+project: ORIGINALLY p50=79.9ms, p99=101.5ms — ~80-100x OVER the
 ///     1ms ideal. Root cause (confirmed, not just inspected): `project`'s
 ///     `bitmapFor` built a fresh immutable `Set<TestId>` per session per
@@ -275,10 +364,40 @@ let private idealClaimProbeMsP99 = 0.010 // 10 µs
 ///     return to that implementation (or any 4x regression) fails it.
 let private regressionBoundDecideProjectMsP50 = 25.000
 
-/// The claim probe bound is 40µs: 4x the measured 10µs p99, which is already
-/// at the ideal. A move from a linear scan over 10 claims to anything
-/// quadratic or allocating would cross it.
-let private regressionBoundClaimProbeMsP99 = 0.040 // 40 µs
+/// The claim probe bound is 25µs on the BEST batch, where it used to be 40µs on
+/// the p99 of the quietest block. The p99 bound sat on the typical value: a full
+/// default run, with 13,000 other tests allocating and collecting beside it,
+/// read p99=40.0µs, then 45.5µs, against 40µs (p50 12.8µs and 19.2µs, where the
+/// probe alone has a p50 of 7.3-8.0µs and a p99 of 8.3-11.4µs). A p99 over 1,000
+/// samples is the tenth slowest call, and on a shared box that call is a
+/// statement about the box.
+///
+/// What the numbers are, all Release, 800 batches of 16 calls, 2026-10-25 on the
+/// shared box (load average 31-37 before any load of ours):
+///   - probe alone, best batch:        6.8-8.7µs  (typical batch 8.4-10.6µs)
+///   - probe with 32 niced busy loops: 9.9-12.8µs (typical batch 13.4-15.1µs)
+///   - twin (16x the held claims):     47-51µs alone, 73-82µs with the loops
+/// The old statistic on the same kind of runs: p99 8-11µs alone and 16-22µs with
+/// the loops.
+///
+/// The bound is sized for the SLOWEST the probe runs, because the code does not run
+/// at one speed. The same call reads 3.3µs in the REPL's long-lived worker and
+/// 7-9µs in the test process, and in some test processes a repeat loop around it
+/// dropped to 3µs a call part way through. That is what the JIT's tiering looks
+/// like (it promotes a method after a quiet 100 ms, and a suite that keeps
+/// compiling new tests keeps pushing that back), so the number a run reads
+/// depends on how far the process has got. 25µs is the point between the two
+/// sides: 1.95x the worst loaded best batch, so a neighbour's build does not fail
+/// it, and 1.9x under the cheapest twin, so a scan that does 3.4x the work of the
+/// first-tier probe still fails. A regression smaller than that, in a process
+/// that has tiered up, passes; the twin pins the size that cannot.
+let private regressionBoundClaimProbeMsBestBatch = 0.025 // 25 µs
+
+/// Prints the measured best and typical batch beside the ideal and the bound.
+let private printReading (label: string) (idealMs: float) (boundMs: float) (reading: BatchReading) : unit =
+  printfn
+    "[perf] %s: best batch=%.4fms typical batch=%.4fms over %d batches of %d calls (ideal %.4fms p99, regression bound %.4fms)"
+    label reading.BestBatchMs reading.TypicalBatchMs reading.Batches reading.CallsPerBatch idealMs boundMs
 
 /// Prints the measured p50/p99 beside the ideal and the bound, and asserts the
 /// p99 is within the bound. The failure message carries the multiple by which
@@ -303,6 +422,22 @@ let cohortPerfBudgetTests =
       assertWithinBound "decide+project (10 members, 7000 tests)" idealDecideProjectMsP99 regressionBoundDecideProjectMsP50 ("p50", percentile samples 0.50) samples
 
     testCase "the save-observed claim probe (decide's ObserveSave branch)" <| fun _ ->
-      let samples = claimProbeSamples.Value
-      assertWithinBound "claim probe (10 held claims)" idealClaimProbeMsP99 regressionBoundClaimProbeMsP99 ("p99", percentile samples 0.99) samples
+      let reading = claimProbeReading.Value
+      printReading "claim probe (10 held claims)" idealClaimProbeMsP99 regressionBoundClaimProbeMsBestBatch reading
+      match judgeBestBatch regressionBoundClaimProbeMsBestBatch reading with
+      | BudgetVerdict.WithinBound _ -> ()
+      | BudgetVerdict.OverBound(measuredMs, boundMs) ->
+        failtestf
+          "WHY — the claim probe's best batch is %.4fms against a regression bound of %.4fms (typical batch %.4fms, the §3.4 ideal is %.4fms p99). The best batch is the one a busy box moves least, so a number over the bound means the probe itself does more work."
+          measuredMs boundMs reading.TypicalBatchMs idealClaimProbeMsP99
+
+    testCase "WHY — the claim probe budget has teeth: the same probe over several times the held claims is over the bound" <| fun _ ->
+      let reading = claimProbeTwinReading.Value
+      printReading (sprintf "claim probe twin (%dx the held claims)" claimProbeTwinSlowerBy) idealClaimProbeMsP99 regressionBoundClaimProbeMsBestBatch reading
+      match judgeBestBatch regressionBoundClaimProbeMsBestBatch reading with
+      | BudgetVerdict.OverBound _ -> ()
+      | BudgetVerdict.WithinBound(measuredMs, boundMs) ->
+        failtestf
+          "WHY — the twin scans %dx the held claims and its best batch is %.4fms, under the %.4fms bound. A bound that passes %dx the work cannot catch a regression: tighten the bound or change what is judged."
+          claimProbeTwinSlowerBy measuredMs boundMs claimProbeTwinSlowerBy
   ]
