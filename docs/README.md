@@ -7,6 +7,7 @@ Everything else is reference material you can come back to when you need it.
 - **[What SageFs has become](progress.md)**: what you had, what you have now, and why it matters, stretch by stretch since February, each change linked to its code. The newest window is 2026-10-01, and a note at the top of the page says which release carries it and what the latest release is
 - **[Roadmap](roadmap.md)**: what I'm building now, what's next, and the ideas further out. An item moves to Built on its own when its code lands
 - **[Get Started](../Readme.md#get-started)**: install, check your environment, start the daemon, connect an editor
+- **[Live testing without an agent](live-testing-without-an-agent.md)**: from an F# project and an editor to red and green in your editor, with no agent involved
 - **[Using SageFs with AI agents](agents.md)**: install the SageFs skill, so your agent uses the REPL instead of rebuilding, and pull it back when it drifts
 - **[Workflow Modes](workflow-modes.md)**: REPL, Live Testing, and Hot Reload: when to use which, and how the Live Testing *workflow* differs from the live-testing *toggle*
 - **[What you get in each editor](../Readme.md#what-you-get-in-each-editor)**: VS Code, Neovim, the web dashboard, and MCP

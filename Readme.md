@@ -232,7 +232,7 @@ The supervisor starts a new daemon whenever the old one is gone, so `sagefs stop
 
 > **Live testing runs as you type.** SageFs evals your edited buffer into the session and re-runs only the *affected* tests against the new code. An unsaved edit flips a failing test red and back to green when you fix it, without ever touching the file on disk. Results stream inline with source-mapped gutter markers and coverage. All five frameworks (Expecto, xUnit v2 and v3, NUnit, MSTest, TUnit) discover, run, and report with framework-specific messages.
 
-When live testing is enabled and a project is loaded, edits (saved or unsaved) re-run the affected tests automatically and update gutter state. The engine, SSE events, coverage, and editor integrations work today across VS Code and Neovim.
+When live testing is enabled and a project is loaded, edits (saved or unsaved) re-run the affected tests automatically and update gutter state. The engine, SSE events, coverage, and editor integrations work today across VS Code and Neovim. [Live testing without an agent](docs/live-testing-without-an-agent.md) takes you from a fresh install to red and green in your editor, and says how to turn it on in VS Code, Neovim, the dashboard and over HTTP.
 
 ### 6. What you'll see
 
