@@ -293,7 +293,11 @@ let fileSize : (string * int) list =
     // about its tests, and every event the manager tells the outside world — and neither reaches
     // into the loop, so they compile before it. Set at the file's true size (measured after the
     // WorkerProtocol open it needs, which is what the first count missed).
-    "SageFs.Core/SessionManagerCallbacks.fs", 50 ]
+    "SageFs.Core/SessionManagerCallbacks.fs", 50
+    // Added with the Mcp.fs split (the file-size ratchet asked for it, as it did for SessionManager):
+    // the bounded member-listing rung of the progressive map, pure formatter plus its session-routed
+    // half. Set at the file's true size.
+    "SageFs/McpListMembers.fs", 58 ]
 
 /// Product code that parks a thread-pool thread on a child process's stdout or stderr for the life of the process:
 /// a `Task.Run` (or `Task.Factory.StartNew`) whose body reads a Process stream line by line or to the end. The

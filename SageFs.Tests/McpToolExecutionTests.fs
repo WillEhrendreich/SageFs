@@ -9,6 +9,7 @@ open Microsoft.Extensions.Logging.Abstractions
 open SageFs
 open SageFs.McpTools
 open SageFs.Server.McpTools
+open SageFs.McpListMembers
 open SageFs.Tests.TestInfrastructure
 
 [<Tests>]

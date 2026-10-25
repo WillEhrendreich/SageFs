@@ -2467,7 +2467,7 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: list_members called, name={Name}, offset={Offset}", qualified_name, offset)
-        SageFs.McpTools.listMembers ctx "mcp" qualified_name offset wd |> withEcho ctx "list_members"
+        SageFs.McpListMembers.listMembers ctx "mcp" qualified_name offset wd |> withEcho ctx "list_members"
 
     [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.

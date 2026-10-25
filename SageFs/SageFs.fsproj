@@ -159,6 +159,7 @@
         <Compile Include="LiveBindingsTweakService.fs" />
         <Compile Include="LiveBindingsTweakRoute.fs" />
         <Compile Include="McpRunTests.fs" />
+        <Compile Include="McpListMembers.fs" />
         <Compile Include="McpAnalysis.fs" />
         <Compile Include="McpDebugTest.fs" />
 
