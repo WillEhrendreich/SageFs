@@ -171,6 +171,8 @@ and is the product this plan adds.
    caps have one source for both sides.
 3. Registration is the gate: a tool joins `SageFsTools` plus its `docs/mcp-tools.md` row in the same
    change or `ToolSurfaceHonestyTests` goes red; `RetiredToolNameTests` forbids the six old names.
+   The rest of a tool's declarations (gate domain, name, routing kind, class) are listed in order in
+   `docs/mcp-tools.md` under "Adding a tool", so each slice registers once.
 4. Every numeric budget lives in `TestTimeouts`/the budget tables and only ratchets down; a
    per-tool result-size row per new tool.
 5. Each slice ships its exit test in the default tier as a plain `[<Tests>]` case, verified through

@@ -372,21 +372,21 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | Live diagnostics (SSE) | ✅ | ✅ | ✅ | ✅ |
 | Hot reload controls | ✅ | ✅ | ✅ | ✅ |
 | Session management | ✅ | ✅ | ✅ | ✅ |
-| Code completion | ✅ | ✅ |: |: |
-| CodeLens | ✅ | ✅ |: |: |
-| **Live test gutters** | ✅ | ✅ |: |: |
-| **Coverage gutters** | ✅ | ✅ |: |: |
+| Code completion | ✅ | ✅ | no | HTTP |
+| CodeLens | ✅ | ✅ | no | no |
+| **Live test gutters** | ✅ | ✅ | no | no |
+| **Coverage gutters** | ✅ | ✅ | no | no |
 | **Failure narratives** | ✅ | ✅ | ✅ | ✅ |
-| **Test source-jump** | ✅ | ✅ |: |: |
-| **Debug a failing test** | ✅ | ✅ |: |: |
+| **Test source-jump** | ✅ | ✅ | no | no |
+| **Debug a failing test** | ✅ | ✅ | no | no |
 | Test panel | ✅ | ✅ | ✅ | ✅ |
-| Test policy controls | ✅ | ✅ | ✅ |: |
-| Type explorer | ✅ | ✅ |: |: |
-| Call graph | ✅ | ✅ |: |: |
+| Test policy controls | ✅ | ✅ | ✅ | HTTP |
+| Type explorer | ✅ | ✅ | no | HTTP |
+| Call graph | ✅ | ✅ | no | HTTP |
 | History browser | ✅ | ✅ | ✅ | ✅ |
-| Test trace | ✅ | ✅ | ✅ |: |
+| Test trace | ✅ | ✅ | ✅ | no |
 
-A ✅ in the MCP column means a tool in the [71-tool surface](docs/mcp-tools.md) does it. Five of those rows are not MCP tools at all, and I'd rather the table said so than claimed a tool that isn't there: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (`POST /api/completions` and `POST /api/explore`); the call graph is `GET /api/dependency-graph`, since the `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells* rather than source symbols; run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
+A ✅ in the MCP column means a tool in the [71-tool surface](docs/mcp-tools.md) does it. `HTTP` means the editors reach it through a daemon route and no tool does, and `no` means nothing does. Five of the rows are not MCP tools at all, and I'd rather the table said so than claimed a tool that isn't there: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (`POST /api/completions` and `POST /api/explore`); the call graph is `GET /api/dependency-graph`, since the `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells* rather than source symbols; run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
 
 <details>
 <summary><strong>Editor setup guides</strong></summary>

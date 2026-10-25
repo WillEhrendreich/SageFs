@@ -714,6 +714,20 @@ landing that was blocked, withdrawn or is still being verified never reaches the
 only records the landing. A worker in a trunk session takes its saves from landings only, so a save a person makes in the
 trunk checkout is not hot reloaded there.
 
+## Adding a tool
+
+A new tool is declared in seven places, and a test goes red for each one you miss. This is the order that keeps the build green. `my_tool` stands for the new name.
+
+1. **The tool.** A `[<McpServerTool>]` member in `SageFs/McpTools.fs`, with its description and `[<Optional; DefaultParameterValue(...)>]` on every optional parameter, as its neighbours do. A body longer than a few lines goes in a file of its own, listed in `SageFs/SageFs.fsproj`, because the file-size ratchet asks for it (`list_members` is in `SageFs/McpListMembers.fs`).
+2. **The gate domain.** `gatingDomain` in `SageFs.Core/Affordances.fs` needs `"my_tool", ToolGate.AlwaysAvailable`, or a state-gated entry. `McpToolGateTests` checks that the domain holds exactly the registered tools, so a missing entry and a stray one both fail.
+3. **The name.** `ToolName` in the same file: the union case, its line in `ToolName.toToolName`, and its place in `ToolName.all`. `ToolName.allToolNames` is built from those.
+4. **The routing kind.** The `RouteKind` assignments in `SageFs.Core/Capability.fs`. A tool that acts on a session is `OnSession`. `MemberRouteGateTests` fails for a tool with no kind, because a token bound to one session has to know where the call is going.
+5. **The tool class.** `ToolClass.toolsOf` in the same file. A tool no class holds is refused to every role, and `CapabilityTests` fails for it.
+6. **The docs.** A row for it in the table above that matches its job, and the tool count. `ToolSurfaceHonestyTests` holds the table to the registered set, and holds every page that writes "N tools" (this one, `Readme.md`, `docs/architecture.md`, `docs/architecture-decisions.md`, `docs/FEATURE_MATRIX.md` and `docs/agents.md`) to the registered count.
+7. **The test tables.** Four hand-kept lists say what the surface is on purpose. The expected-name set in `McpWireProtocolTests`, a `requiredParamsByTool` row in `ToolDescriptionTests` for any parameter with no default, and the exact count in two places: `ToolDescriptionTests` ("keeps the tool count surgical") and `McpAffordanceHardeningTests` ("total exactly N"). They are tripwires, so a new tool means editing them in the same change. `list_members` landed without them and the default suite went red on master.
+
+Two more things catch people. A commit that touches this page or `SageFs/McpTools.fs` is a wire-surface change, so it carries a `Plugin:` trailer (`done` with what changed in sagefs.nvim, or `n/a` with why it needs nothing), and `scripts/ship.fsx` refuses a release without one. And a name that was retired stays retired: `RetiredToolNameTests` fails on a new tool that reuses one, which is why the symbol ladder's first rung is `list_members` and not a revived old name.
+
 ## Per-client config
 
 Prefer stdio (`command`/`args`, spawns `sagefs mcp`) over HTTP (`url`,
