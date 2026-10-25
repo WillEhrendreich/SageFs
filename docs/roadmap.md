@@ -9,9 +9,9 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 11, Later 18, Exploring 20. Already built: 35.
+On the page today: Now 0, Next 10, Later 18, Exploring 20. Already built: 36.
 
-## Next (11)
+## Next (10)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -37,7 +37,6 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 - [ ] **Bake MSBUILDDISABLENODEREUSE into the tooling.** Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once the agent exported MSBUILDDISABLENODEREUSE=1 by hand. Set it around every build the scripts start and name it on the skill's troubleshooting page, so recovery never depends on remembering a shell variable. ([agents.md](agents.md))
 - [ ] **Give the gate a clean checkout every time.** The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. Rebuild when the checkout's artifacts predate the gated SHA, or clear them first, so an interrupted run cannot fail its successor. ([agents.md](agents.md))
-- [ ] **Make a failed gate's retry one command.** A failed gate leaves its bump commit behind, and the next push refuses only after a whole new gate unless that commit is dropped first. Hand-dropping it cost several cycles in one session. Either reuse an unfired bump already in the range, or write the ship.fsx -- <sha> retry path that ReleaseRules.fs already tests into agents.md, so the next agent finds it instead of deriving it. ([agents.md](agents.md))
 
 ### Docs and onboarding
 
@@ -126,7 +125,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub.
 
-## Built (35)
+## Built (36)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -187,6 +186,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - [x] **Slow machines get timeouts that fit them.** On an old quad core with a spinning disk a session never reached Ready, because the 30 second silence limit killed the worker mid-build and the retries repeated the same 30. SageFs now probes the machine, files it as Fast, Standard, Constrained or Minimal, and scales the waits that are for the machine. A start that runs out of patience retries with a longer one, and a give-up names the wait, the attempts and what to set. On that machine it now reaches Ready in about a minute cold and 17 seconds warm. Code: [`SageFs.Core/MachineTier.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/MachineTier.fs)
 - [x] **SageFs tidies what agents leave behind.** Agents leave worktrees, branches and gate checkouts behind, and on my machine 65 old gate records alone came to 17.6 GB. A dashboard panel, two MCP tools and `sagefs hygiene` list the leftovers and tidy only the safe ones, after you confirm the exact plan you were shown. Code: [`SageFs.Core/WorkspaceHygiene.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/WorkspaceHygiene.fs)
 - [x] **The daemon starts at login on macOS.** A launchd user agent starts the daemon at login and restarts its supervisor after a crash, the same job the systemd unit does on Linux. The README install fills in your home directory and your .NET folder, because launchd expands no variables. tw0po1nt wrote it and tested it on macOS 27 on an Apple Silicon Mac. An Intel Mac and the Homebrew dotnet formula are untested. Code: [`contrib/launchd/io.github.willehrendreich.sagefs.plist`](https://github.com/WillEhrendreich/SageFs/blob/master/contrib/launchd/io.github.willehrendreich.sagefs.plist)
+- [x] **A failed gate's retry is one command.** A failed gate used to leave its bump commit behind, and a rerun added a second one that the pre-push hook refused only after a whole new gate. Now a plain `ship.fsx` looks at the release commits in origin/master..HEAD first. With none it bumps. With one that is above the published version it keeps that bump and gates HEAD. With two or more it stops before any gate, names the commits and prints the `git rebase --onto` line that drops each extra one. The hook counts release commits with the same reader, and the marker text lives in one place. The retry path is written up in docs/agents.md. Code: [`scripts/ReleaseRules.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/scripts/ReleaseRules.fs)
 
 ### Docs and onboarding
 

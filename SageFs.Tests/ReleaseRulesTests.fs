@@ -173,8 +173,125 @@ let prePushTests =
       said |> Expect.stringContains "the stack says how many" "this push carries 4 releases"
       said |> Expect.stringContains "the stack says what happens to the earlier ones" "never reach NuGet"
       said
-      |> Expect.stringContains "the stack names the way out when a previous ship already left a bump behind" "scripts/ship.fsx -- <the commit that already carries the bump>"
+      |> Expect.stringContains "the stack says a plain ship deals with a bump a failed ship left behind" "A plain ship now reuses a single bump"
       messagesFor AlreadyGated |> Expect.isEmpty "a gated push says nothing"
+  ]
+
+let private sha3 = sha40 'c'
+
+/// A table of versions per commit, as the plan's `versionAt` reads them.
+let private versionTable (versions: (string * string) list) : string -> VersionRead =
+  fun sha ->
+    match versions |> List.tryFind (fun (s, _) -> s = sha) with
+    | Some(_, version) -> Read version
+    | None -> Unreadable
+
+let private isRefusal (plan: BumpPlan) : bool =
+  match plan with
+  | BumpAnew
+  | ReuseBump _ -> false
+  | RefuseStacked _
+  | RefuseNotRaised _
+  | RefuseUnreadable _ -> true
+
+/// A log line the way `git log --format="%H %s"` prints it.
+let private logLine (sha: string) (subject: string) = sha + " " + subject
+
+[<Tests>]
+let bumpPlanTests =
+  testList "release rules: the bump plan behind a plain ship" [
+
+    testCase "WHY — the marker has one home: the subject ship commits, the hook counts and the plan finds are the same text" <| fun _ ->
+      releaseSubject "0.6.930" |> Expect.equal "the subject" "chore: release v0.6.930"
+      isReleaseSubject (releaseSubject "0.6.930") |> Expect.isTrue "a subject ship wrote is recognised"
+      isReleaseSubject "fix(release): chore: release v0.6.930 is mentioned" |> Expect.isFalse "a subject that only mentions it is not one"
+      isReleaseSubject "chore: release notes" |> Expect.isFalse "the marker ends in v"
+
+    testCase "WHY — release commits are read from the log by subject, in the order git printed them, and a body line that only looks like one is ignored" <| fun _ ->
+      let log =
+        [ logLine sha1 (releaseSubject "0.6.931")
+          logLine sha2 "fix(release): the retry"
+          logLine sha3 (releaseSubject "0.6.930")
+          "" ]
+        |> String.concat "\n"
+      releaseShasIn log |> Expect.equal "newest first, as printed" [ sha1; sha3 ]
+      releaseShasIn "" |> Expect.isEmpty "an empty range has none"
+      releaseShasIn (sha1 + "\n") |> Expect.isEmpty "a line with no subject has none"
+
+    testCase "WHY — nothing waiting means bump, exactly as ship always did" <| fun _ ->
+      planBump [] (versionTable []) (Read "0.6.929") |> Expect.equal "bump anew" BumpAnew
+      planBump [] (versionTable []) Unreadable |> Expect.equal "bump anew when master is unreadable too" BumpAnew
+
+    testCase "WHY — one bump left behind by a failed gate is reused: a second one is what made the hook refuse after a whole new gate" <| fun _ ->
+      planBump [ sha1 ] (versionTable [ sha1, "0.6.930" ]) (Read "0.6.929")
+      |> Expect.equal "reuse it" (ReuseBump(sha1, "0.6.930"))
+
+    testCase "WHY — a waiting bump that does not raise what master has is refused with both versions, since it would publish nothing" <| fun _ ->
+      planBump [ sha1 ] (versionTable [ sha1, "0.6.929" ]) (Read "0.6.929")
+      |> Expect.equal "equal" (RefuseNotRaised(sha1, "0.6.929", "0.6.929"))
+      planBump [ sha1 ] (versionTable [ sha1, "0.6.9" ]) (Read "0.6.10")
+      |> Expect.equal "lower, compared as numbers" (RefuseNotRaised(sha1, "0.6.9", "0.6.10"))
+
+    testCase "WHY — a waiting bump whose version cannot be read is refused, never guessed at" <| fun _ ->
+      planBump [ sha1 ] (versionTable []) (Read "0.6.929") |> Expect.equal "unreadable" (RefuseUnreadable sha1)
+
+    testCase "WHY — an unreadable master version reuses the waiting bump, the way the hook only refuses a repeat when both versions are known" <| fun _ ->
+      planBump [ sha1 ] (versionTable [ sha1, "0.6.930" ]) Unreadable |> Expect.equal "reuse" (ReuseBump(sha1, "0.6.930"))
+
+    testCase "WHY — two or more waiting bumps are refused before any gate, whatever their versions" <| fun _ ->
+      planBump [ sha1; sha2 ] (versionTable [ sha1, "0.6.930"; sha2, "0.6.931" ]) (Read "0.6.929")
+      |> Expect.equal "stacked" (RefuseStacked [ sha1; sha2 ])
+      planBump [ sha1; sha2; sha3 ] (versionTable []) Unreadable
+      |> Expect.equal "stacked even when nothing is readable" (RefuseStacked [ sha1; sha2; sha3 ])
+
+    testProperty "PROPERTY: the plan refuses exactly when the range has several bumps, or one that does not raise or cannot be read" <|
+      prop (Gen.zip (Gen.choose (0, 4)) (Gen.zip versionGen versionGen)) (fun (count, (waiting, onMaster)) ->
+        let shas = [ for i in 1 .. count -> sha40 (char (int 'a' + i)) ]
+        let versionAt = fun _ -> Read(show waiting)
+        let plan = planBump shas versionAt (Read(show onMaster))
+        let expectedRefusal =
+          match count with
+          | 0 -> false
+          | 1 -> not (raisesVersion (show waiting) (show onMaster))
+          | _ -> true
+        isRefusal plan = expectedRefusal)
+
+    testProperty "PROPERTY: a plain ship adds a bump only when none is waiting" <|
+      prop (Gen.choose (0, 4)) (fun count ->
+        let shas = [ for i in 1 .. count -> sha40 (char (int 'a' + i)) ]
+        let plan = planBump shas (fun _ -> Read "0.6.930") (Read "0.6.929")
+        (plan = BumpAnew) = (count = 0))
+
+    testCase "WHY — reusing a bump says which commit and which version, and adds no commands" <| fun _ ->
+      let said = bumpPlanMessages (ReuseBump(sha1, "0.6.930")) |> String.concat "\n"
+      said |> Expect.stringContains "the short sha" "ship: aaaaaaaa already carries the release bump to v0.6.930"
+      said |> Expect.stringContains "no second bump" "not adding a second one"
+      bumpPlanMessages BumpAnew |> Expect.isEmpty "a fresh bump says nothing"
+
+    testCase "WHY — a stack names every commit and prints the command that drops each extra one, newest first, keeping the oldest" <| fun _ ->
+      let said = bumpPlanMessages (RefuseStacked [ sha1; sha2; sha3 ])
+      let text = String.concat "\n" said
+      text |> Expect.stringContains "the count" "3 release commits are waiting"
+      text |> Expect.stringContains "the oldest is kept" "keep the oldest, aaaaaaaa"
+      text |> Expect.stringContains "the way back to the plain command" "dotnet fsi scripts/ship.fsx again"
+      let drops = said |> List.filter (fun line -> line.Contains "git rebase --onto") |> List.map (fun line -> line.Trim())
+      drops |> Expect.equal "newest first, never the oldest" [ dropCommitCommand sha3; dropCommitCommand sha2 ]
+      dropCommitCommand sha2 |> Expect.equal "the command" (sprintf "git rebase --onto %s^ %s" sha2 sha2)
+
+    testCase "WHY — the other refusals say why and print the one command that drops the commit" <| fun _ ->
+      let notRaised = bumpPlanMessages (RefuseNotRaised(sha1, "0.6.929", "0.6.929")) |> String.concat "\n"
+      notRaised |> Expect.stringContains "both versions" "bump to v0.6.929, and origin/master is already at v0.6.929"
+      notRaised |> Expect.stringContains "the command" (dropCommitCommand sha1)
+      let unreadable = bumpPlanMessages (RefuseUnreadable sha1) |> String.concat "\n"
+      unreadable |> Expect.stringContains "the reason" "no readable <Version>"
+      unreadable |> Expect.stringContains "the command" (dropCommitCommand sha1)
+
+    testCase "WHY — every refusal says what to run next, and a plan that goes ahead never prints a command to run" <| fun _ ->
+      let refusals = [ RefuseStacked [ sha1; sha2 ]; RefuseNotRaised(sha1, "1", "1"); RefuseUnreadable sha1 ]
+      for refusal in refusals do
+        bumpPlanMessages refusal |> String.concat "\n" |> Expect.stringContains "the way on" "dotnet fsi scripts/ship.fsx again"
+      for going in [ BumpAnew; ReuseBump(sha1, "1") ] do
+        bumpPlanMessages going |> String.concat "\n" |> fun text -> text.Contains "git rebase" |> Expect.isFalse "no drop command"
   ]
 
 [<Tests>]
@@ -341,6 +458,24 @@ let wiringTests =
       (at "let passStartedAt", at "runPipeline wt sha log") |> Expect.isLessThan "the start time is taken before the pipeline runs"
       gate |> Expect.stringContains "the rule decides which report to show" "ReleaseRules.chooseFailureReport passStartedAt onDisk"
       gate |> Expect.stringContains "the notice is the pure one" "ReleaseRules.failureNotice failed choice"
+
+    testCase "WHY — ship, the hook and the plan share one marker: neither script spells the subject out, and ship asks the plan before it bumps" <| fun _ ->
+      let code (relative: string) =
+        read relative
+        |> fun text -> text.Split('\n')
+        |> Array.filter (fun line -> not (line.TrimStart().StartsWith "//"))
+        |> String.concat "\n"
+      for script in [ "scripts/ship.fsx"; "scripts/pre-push.fsx" ] do
+        (code script).Contains releaseSubjectPrefix |> Expect.isFalse (sprintf "%s writes the marker only through ReleaseRules" script)
+      let ship = code "scripts/ship.fsx"
+      ship |> Expect.stringContains "the commit message comes from the shared subject" "ReleaseRules.releaseSubject version"
+      ship |> Expect.stringContains "ship asks the plan" "ReleaseRules.planBump"
+      ship |> Expect.stringContains "ship prints the plan" "ReleaseRules.bumpPlanMessages"
+      (ship.IndexOf "let plan = planTheBump ()", ship.IndexOf "mustRun \"the roadmap refresh\"") |> Expect.isLessThan "the plan is made before the roadmap refresh, the ratchets or any gate"
+      (ship.IndexOf "let plan = planTheBump ()", -1) |> Expect.isGreaterThan "and it is made"
+      (ship.IndexOf "let plan = planTheBump ()", ship.IndexOf "| ReleaseRules.BumpAnew -> bumpAndCommit ()") |> Expect.isLessThan "and before the bump"
+      (ship.IndexOf "| ReleaseRules.BumpAnew -> bumpAndCommit ()", -1) |> Expect.isGreaterThan "a bump happens only on the BumpAnew plan"
+      code "scripts/pre-push.fsx" |> Expect.stringContains "the hook counts through the same reader" "ReleaseRules.releaseShasIn"
 
     testCase "WHY — the pipeline itself starts without the report of the run before it" <| fun _ ->
       let pipeline = read "ci-pipeline.fsx"
