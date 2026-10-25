@@ -94,7 +94,9 @@ let requiredParamsByTool =
     "mint_member", set ["agentName"; "role"]
     "revoke_member", set ["agentName"; "member_id"]
     // The nudge door: every call says what it is doing; the file, address, hash and value depend on the action.
-    "nudge_value", set ["action"] ]
+    "nudge_value", set ["action"]
+    // The symbol ladder's first rung: the name to list is required; the offset and the directory default.
+    "list_members", set ["qualified_name"] ]
   |> Map.ofList
 
 [<Tests>]
@@ -252,7 +254,8 @@ let descriptionPropertyTests =
       // + nudge_value: the door onto the live-tweak engine.
       // + delegate_conductor, withdraw_landing, veto_landing and resolve_veto: the four cohort commands that
       // existed in the core with no tool to issue them.
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 70
+      // + list_members: the progressive map's first rung (docs/progressive-map-research-2026-10-24.md).
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 71
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

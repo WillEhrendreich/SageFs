@@ -73,6 +73,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "impact_forecast"
       "join_cohort"
       "leave_cohort"
+      "list_members"
       "list_runnable_projects"
       "list_sessions"
       "list_tests"

@@ -218,7 +218,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 70 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 71 (reflection)"
     <| fun _ ->
       let methods = mcpToolMethods ()
       // 42 (incl. switch_workflow, finally [<McpServerTool>]-registered) + the
@@ -230,9 +230,10 @@ let toolRegistrationTests =
       // agents left behind on the machine, and the plan that tidies it) +
       // mint_member and revoke_member (per-run member tokens, Capability.fs) +
       // nudge_value (the door onto the live-tweak engine) + delegate_conductor,
-      // withdraw_landing, veto_landing and resolve_veto (the cohort commands that had no tool).
+      // withdraw_landing, veto_landing and resolve_veto (the cohort commands that had no tool) +
+      // list_members (the progressive map's first rung).
       methods.Length
-        |> Expect.equal "MCP tool method count" 70
+        |> Expect.equal "MCP tool method count" 71
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
