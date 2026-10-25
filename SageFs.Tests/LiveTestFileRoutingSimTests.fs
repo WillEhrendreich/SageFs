@@ -9,7 +9,7 @@ open SageFs.Simulation.LiveTestFileRoutingInvariants
 /// DST for "which sessions' live testing does a file change reach". The subject is the real
 /// `SageFs.LiveTestFileRouting.route`, which `SageFsUpdate` consults for `FileContentChanged`.
 /// The fold is `SageFs.Simulation/LiveTestFileRoutingSim.fs`; the twins are the original
-/// primary-gated shape and an activation-ignoring shape.
+/// primary-gated shape, an activation-ignoring shape and ownership by text prefix.
 
 let private simConfig = { FsCheckConfig.defaultConfig with maxTest = 500 }
 
@@ -57,6 +57,12 @@ let tests =
         (t.Final.Decisions |> List.exactlyOne).Routed
         |> Expect.equal "fallback" Routed.Fallback
         assertHolds t
+
+      testCase "WHY — lookalikeSibling: a save in a sibling directory whose name starts like a session's is nobody's" <| fun _ ->
+        let t = run LiveTestFileRoutingGenerators.lookalikeSibling
+        (t.Final.Decisions |> List.exactlyOne).Routed
+        |> Expect.equal "fallback, not the session rooted at the shorter name" Routed.Fallback
+        assertHolds t
     ]
 
     testList "the twins reproduce the wrong shapes" [
@@ -73,6 +79,12 @@ let tests =
              "the receives-nothing invariant must fire"
              "a-session-with-live-testing-off-or-not-owning-the-path-receives-nothing"
 
+      testCase "WHY — REPRODUCED: the text-prefix twin hands a lookalike sibling's save to the session whose directory name it starts with" <| fun _ ->
+        firedBy (runRawPrefix LiveTestFileRoutingGenerators.lookalikeSibling)
+        |> Expect.contains
+             "the lookalike-sibling invariant must fire"
+             "a-sibling-directory-whose-name-starts-with-a-session-directory-is-not-that-sessions"
+
       testCase "WHY — the invariants have teeth: some seeded scenario violates them under each twin" <| fun _ ->
         let seeds = [ 1 .. 120 ]
         let anyViolates twin =
@@ -81,6 +93,8 @@ let tests =
         |> Expect.isTrue "the primary-gated twin is caught by some seed"
         anyViolates runIgnoresActivation
         |> Expect.isTrue "the activation-ignoring twin is caught by some seed"
+        anyViolates runRawPrefix
+        |> Expect.isTrue "the text-prefix twin is caught by some seed"
     ]
 
     testList "determinism and replay" [

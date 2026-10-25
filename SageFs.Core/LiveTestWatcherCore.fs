@@ -115,19 +115,19 @@ module LiveTestWatcherCore =
     | FileSaved path -> { state with Pending = Set.add path state.Pending }, [ ArmDebounce ]
     | DebounceElapsed -> { state with Pending = Set.empty }, [ DrainPending(Set.toList state.Pending) ]
 
-  /// Session ID(s) owning the dir that contains `path` (longest matching dir
-  /// prefix wins; the fallback dir claims no session and is not in
-  /// DirSessions, so a path under only the fallback dir resolves to []).
-  /// Path/dir comparison is normalized (full path, ordinal-ignore-case) to
-  /// match the daemon-CWD / session-working-dir comparisons this replaces
-  /// (see the pre-mailbox `dirForPath`/`sessionsForPath` in DaemonMode.fs).
+  /// Session ID(s) owning the dir that contains `path` (the deepest containing
+  /// dir wins; the fallback dir claims no session and is not in DirSessions,
+  /// so a path under only the fallback dir resolves to []).
+  /// "Contains" is `PathContainment.isWithin`, the one definition: whole path
+  /// segments after the platform resolves `.`, `..` and a trailing separator,
+  /// compared with the platform's case rule. `/a/repo2/x.fs` is not inside
+  /// `/a/repo`; a text prefix test said it was.
   let sessionsForPath (dirSessions: Map<string, SessionId list>) (path: string) : SessionId list =
-    let normalizedPath = System.IO.Path.GetFullPath(path)
+    let pathCase = PathContainment.PathCase.ofCurrentOs ()
     dirSessions
     |> Map.toSeq
-    |> Seq.filter (fun (dir, _) ->
-      normalizedPath.StartsWith(System.IO.Path.GetFullPath(dir), System.StringComparison.OrdinalIgnoreCase))
-    |> Seq.sortByDescending (fun (dir, _) -> dir.Length)
+    |> Seq.filter (fun (dir, _) -> PathContainment.isWithin pathCase dir path)
+    |> Seq.sortByDescending (fun (dir, _) -> PathContainment.depth dir)
     |> Seq.tryHead
     |> Option.map snd
     |> Option.defaultValue []
@@ -139,7 +139,5 @@ module LiveTestWatcherCore =
   /// (the fallback contract), while a save queued before its dir was removed
   /// resolves to a dir no longer in `Watched` and is dropped (the stale case).
   let isUnderWatchedDir (watched: Set<string>) (path: string) : bool =
-    let normalizedPath = System.IO.Path.GetFullPath(path)
-    watched
-    |> Set.exists (fun dir ->
-      normalizedPath.StartsWith(System.IO.Path.GetFullPath(dir), System.StringComparison.OrdinalIgnoreCase))
+    let pathCase = PathContainment.PathCase.ofCurrentOs ()
+    watched |> Set.exists (fun dir -> PathContainment.isWithin pathCase dir path)

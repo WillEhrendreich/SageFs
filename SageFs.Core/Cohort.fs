@@ -166,10 +166,7 @@ module Cohort =
       | i -> n.Substring(0, i)
 
     let private underDir (dir: string) (path: string) =
-      let d = normalize dir
-      let p = normalize path
-      if d = "" then true
-      else p = d || p.StartsWith(d + "/", StringComparison.Ordinal)
+      PathContainment.isWithinCanonical (normalize dir) (normalize path)
 
     /// Path arithmetic, never a regex per claim (§5.1). `File` overlaps `File`
     /// iff they name the same path; `Project` overlaps `Project` iff either

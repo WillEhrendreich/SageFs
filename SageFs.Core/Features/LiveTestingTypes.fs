@@ -1858,8 +1858,8 @@ module LiveTestDiscoveryState =
       // dead-end. Name the likely causes and the concrete recovery action so a
       // stuck user can get unstuck instead of concluding the feature is broken.
       "Live testing found zero tests. If this project has tests: (1) the test \
-       assembly may not be loaded yet — run hard_reset_fsi_session with \
-       rebuild:true to rebuild and reload, which re-runs discovery; (2) confirm \
+       assembly may not be loaded yet, so rebuild and reload to re-run discovery with the Hard Reset button in the dashboard, SageFs: Hard Reset (Rebuild) in VS Code, \
+       :SageFsHardReset in Neovim, or hard_reset_fsi_session with rebuild:true from an MCP client; (2) confirm \
        the project references a supported framework (Expecto, xUnit, NUnit, \
        MSTest, TUnit) and exposes public tests (Expecto [<Tests>] values, or \
        [<Fact>]/[<Test>]/[<TestMethod>] methods); (3) for a background \

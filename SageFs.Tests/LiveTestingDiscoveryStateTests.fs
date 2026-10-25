@@ -111,6 +111,24 @@ let tests =
       |> Expect.stringContains "zero-test hint must name the supported frameworks so the user can check their project" "Expecto"
     }
 
+    test "WHY — the zero-test hint gives a person a route to the rebuild, because hard_reset_fsi_session is a tool only an agent can call" {
+      let hint = LiveTestDiscoveryState.hint LiveTestDiscoveryState.ReadyZeroTests
+      [ "the dashboard control", "Hard Reset button in the dashboard"
+        "the VS Code command", "SageFs: Hard Reset (Rebuild)"
+        "the Neovim command", ":SageFsHardReset"
+        "the agent's tool", "hard_reset_fsi_session" ]
+      |> List.iter (fun (route, name) -> hint |> Expect.stringContains (sprintf "names %s" route) name)
+    }
+
+    test "WHY — no live-testing discovery hint carries an em dash" {
+      [ LiveTestDiscoveryState.Disabled
+        LiveTestDiscoveryState.Discovering
+        LiveTestDiscoveryState.ReadyZeroTests
+        LiveTestDiscoveryState.ReadyWithTests 3 ]
+      |> List.filter (fun state -> (LiveTestDiscoveryState.hint state).Contains "—")
+      |> Expect.isEmpty "a hint with an em dash reads as machine-made"
+    }
+
     test "active state with queued discovery does not require priming eval" {
       let state =
         { LiveTestState.empty with

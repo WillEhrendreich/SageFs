@@ -15,21 +15,14 @@ module SessionSourceScope =
   /// relative to the root it is tested against. An empty root list contains
   /// nothing.
   let isWithinRoots (roots: string list) (file: string) : bool =
-    let comparison =
-      match System.OperatingSystem.IsWindows() with
-      | true -> System.StringComparison.OrdinalIgnoreCase
-      | false -> System.StringComparison.Ordinal
+    let pathCase = SageFs.PathContainment.PathCase.ofCurrentOs ()
     roots
     |> List.exists (fun root ->
       match System.String.IsNullOrWhiteSpace root with
       | true -> false
       | false ->
         let fullRoot = System.IO.Path.GetFullPath root
-        let prefix =
-          match fullRoot.EndsWith(System.IO.Path.DirectorySeparatorChar) with
-          | true -> fullRoot
-          | false -> fullRoot + string System.IO.Path.DirectorySeparatorChar
-        System.IO.Path.GetFullPath(file, fullRoot).StartsWith(prefix, comparison))
+        SageFs.PathContainment.isStrictlyUnder pathCase fullRoot (System.IO.Path.GetFullPath(file, fullRoot)))
 
   /// Demote every test whose source position lies outside `roots` back to
   /// `ReflectionOnly`. Fail-closed: no roots, no locations.

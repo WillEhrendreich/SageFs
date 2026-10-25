@@ -70,10 +70,25 @@ module LiveTestFileRoutingInvariants =
           | [], _, _ -> None
           | _ -> Some (sprintf "path %s: session(s) %A received it but own it with live testing off, or do not own it" d.Path extra)) }
 
+  /// A directory is a different directory from a sibling whose name starts with the same text.
+  /// Stated on its own so the text-prefix defect names itself when it comes back.
+  let aLookalikeSiblingDirectoryIsNobodys : Invariant =
+    { Id = "a-sibling-directory-whose-name-starts-with-a-session-directory-is-not-that-sessions"
+      Description =
+        "A save in a directory beside a session's directory, whose name merely begins with the same text, belongs to no session and goes to the fallback."
+      Check = fun t ->
+        firstViolation t (fun d ->
+          match d.Path = lookalikePath, d.Routed with
+          | false, _
+          | true, Routed.Fallback -> None
+          | true, Routed.Sessions idxs ->
+            Some (sprintf "path %s is a lookalike sibling owned by no session but was routed to session(s) %A" d.Path idxs)) }
+
   let all : Invariant list =
     [ reachesExactlyTheOwnersThatHaveItOn
       primaryNeverGatesAnotherSession
-      aSessionWithItOffReceivesNothing ]
+      aSessionWithItOffReceivesNothing
+      aLookalikeSiblingDirectoryIsNobodys ]
 
   /// The invariants that failed for a trace, as (id, message).
   let violations (t: Trace) : (string * string) list =

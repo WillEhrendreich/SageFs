@@ -414,7 +414,7 @@ let apiStateTests =
       let queries =
         { DashboardRenderGateTests.mkQueries (ref 0) [] with
             GetElmRegionsForSession = fun _ -> Some [ region; bare ]
-            GetLiveTestingStatus = fun () -> "running"
+            GetLiveTestingStatus = fun _ -> "running"
             GetTestSourceLocations =
               fun () -> [ { CellId = 0; TestName = "t1"; FilePath = "f.fs"; StartLine = 9; EndLine = 10 } ] }
       let body = new FrameSignalStream()

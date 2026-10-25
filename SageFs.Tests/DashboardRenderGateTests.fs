@@ -48,13 +48,12 @@ let mkQueries (getAllSessionsCount: int ref) (sessions: WorkerProtocol.SessionIn
     SetAppOutput = fun _ _ -> ()
     GetTweakView = fun _ _ _ _ _ -> System.Threading.Tasks.Task.FromResult SageFs.Features.Tweak.BindingTweak.TweakView.none
     GetBindingScopeSnapshot = fun () -> None
-    GetLiveTestingStatus = fun () -> ""
-    GetLiveTestingActive = fun () -> false
+    GetLiveTestingStatus = fun _ -> ""
     GetLiveTestActivity = fun _ -> SageFs.Features.LiveTestActivity.LiveTestActivity.Off
     GetEvalTimeline =
       fun () -> SageFs.Features.EvalTimeline.TimelineState.empty |> SageFs.Features.EvalTimeline.timelineStats 20
     GetDaemonHealth = fun () -> None
-    GetFailureNarratives = fun () -> []
+    GetFailureNarratives = fun _ -> []
     GetCurrentDiagnostics = fun () -> []
     GetFilmstripEntries = fun () -> []
     GetTestSourceLocations = fun () -> []
