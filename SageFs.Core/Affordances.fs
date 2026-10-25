@@ -182,6 +182,7 @@ let private gatingDomain : Map<string, ToolGate> =
     "get_session_status", ToolGate.AlwaysAvailable
     "get_friction_report", ToolGate.AlwaysAvailable
     "get_available_projects", ToolGate.AlwaysAvailable
+    "list_members", ToolGate.AlwaysAvailable
     "acquire_full_build_lease", ToolGate.AlwaysAvailable
     "acquire_test_suite_lease", ToolGate.AlwaysAvailable
     "acquire_run_app_lease", ToolGate.AlwaysAvailable

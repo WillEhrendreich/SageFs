@@ -150,11 +150,11 @@ the fix sealed the surface (docs/decisions.md:1351). The names sit in
 `SageFs.Core/Affordances.fs` `RetiredTool`; `RetiredToolNameTests` scans docs for them;
 `ToolSurfaceHonestyTests` fails if discovery, affordances or `docs/mcp-tools.md` disagree with the
 registered set or name a retired tool. Consequences: (a) slice 1 must use a FRESH registered name,
-not resurrect a retired one; (b) the enforcement this plan needs already exists and is inherited —
+not resurrect a retired one; (b) the enforcement this plan needs already exists and is inherited:
 docs cannot drift from the registry without a red default-tier test, which is the exact
 "correct by construction" answer for the tool surface; (c) a prior audit already flagged Readme
 capability rows claiming MCP completion/type-explorer that are not MCP tools
-(outcome-gate-sweep.md, row 9a) — registering honestly is what closes that row.
+(outcome-gate-sweep.md, row 9a); registering honestly is what closes that row.
 
 **Probe results.** `POST /api/explore {"name": ...}` answers HTTP 200 with the house refusal when no
 session is bound ("No active session. Use get_available_projects, then ..."), i.e. the route is
@@ -165,7 +165,7 @@ and is the product this plan adds.
 ### How this stays true (structural enforcement)
 
 1. One builder constructs every ladder reply (caps, counts, snapshot, name path attached by the
-   builder; raw lists cannot be sent — module-private constructors), the `EvalResultSummary`
+   builder; raw lists cannot be sent; module-private constructors), the `EvalResultSummary`
    doctrine pushed into types.
 2. One shared `LadderContract` F# file compiled into .NET and into the Fable extension, so kinds and
    caps have one source for both sides.
