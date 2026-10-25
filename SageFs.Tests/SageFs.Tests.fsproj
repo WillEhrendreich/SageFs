@@ -46,6 +46,7 @@
         <Compile Include="McpServerOversizedRequestTests.fs" />
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpToolExecutionTests.fs" />
+        <Compile Include="McpMemberPageTests.fs" />
         <Compile Include="ReplFreshnessSurfaceTests.fs" />
         <Compile Include="EvalWriteBackSurfaceTests.fs" />
         <Compile Include="SourceStateSurfaceTests.fs" />

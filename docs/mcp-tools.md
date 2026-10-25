@@ -232,7 +232,7 @@ columns from 0 (counted in characters, not bytes), and `endColumn` is one past t
 | `reset_fsi_session` | Soft reset: clears definitions, keeps loaded DLLs. |
 | `hard_reset_fsi_session` | Full reset: rebuilds the project, reloads, starts fresh. Needed after `.fsproj` or package changes. With `rebuild=true` it answers at once and builds in the background; call `get_session_status` with `wait_seconds=60` to wait for the outcome. In a repo that builds its own SageFs.Core, the build compiles against that Core, not the daemon's. |
 | `get_available_projects` | Discover `.fsproj` / `.sln` / `.slnx` files under a directory. |
-| `list_members` | The members of a qualified name (namespace, module or type): one rung of the symbol ladder. Names only, with a total and an offset footer for the next page. |
+| `list_members` | The members of a qualified name (namespace, module or type): one rung of the symbol ladder. Names only. The reply gives the total and a count per kind (`drillable`, then `leaf`, the split the VS Code Type Explorer expands on) before the names, lists drillable names first, and ends with an offset footer for the next page. Kinds are read from the shape of each name, because the worker sends names only. |
 | `list_runnable_projects` | List the session's projects and which ones `run_app` can run (`OutputType=Exe`). |
 | `switch_workflow` | Switch the session's workflow: `repl` (Interactive), `livetesting` (Live Testing), or `live` (Hot Reload, aliases `hotreload`/`weblive`/`web`, kept for backward compatibility). Creates a new session in the target workflow and stops the old one; VS Code and the dashboard's own `POST /api/sessions/{sid}/workflow` route restart the same session id in place instead. |
 
