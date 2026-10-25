@@ -427,4 +427,34 @@ let items : Item list =
     item "confirmation-gates-in-every-agent-host" "Confirmation gates in every agent host" Agents Exploring
       NoLandmarkYet
       [ "docs/agents.md" ]
-      "Where a host can prompt before a tool call, a small plugin can hold the destructive list and ask there, which covers the clients a server-side prompt can never reach. It would be one shared policy compiled into four thin shells rather than four copies of the same list, and none of the four hosts has been run yet." ]
+      "Where a host can prompt before a tool call, a small plugin can hold the destructive list and ask there, which covers the clients a server-side prompt can never reach. It would be one shared policy compiled into four thin shells rather than four copies of the same list, and none of the four hosts has been run yet."
+
+    item "bake-the-build-env-into-the-tooling" "Bake MSBUILDDISABLENODEREUSE into the tooling" Platform Next
+      NoLandmarkYet
+      [ "skills/sagefs/SKILL.md" ]
+      "Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once the agent exported MSBUILDDISABLENODEREUSE=1 by hand. Set it around every build the scripts start and name it on the skill's troubleshooting page, so recovery never depends on remembering a shell variable."
+
+    item "give-the-gate-a-clean-checkout" "Give the gate a clean checkout every time" Platform Next
+      NoLandmarkYet
+      [ "docs/agents.md" ]
+      "The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. Rebuild when the checkout's artifacts predate the gated SHA, or clear them first, so an interrupted run cannot fail its successor."
+
+    item "make-a-failed-gate-retry-one-command" "Make a failed gate's retry one command" Platform Next
+      NoLandmarkYet
+      [ "docs/agents.md" ]
+      "A failed gate leaves its bump commit behind, and the next push refuses only after a whole new gate unless that commit is dropped first. Hand-dropping it cost several cycles in one session. Either reuse an unfired bump already in the range, or write the ship.fsx -- <sha> retry path that ReleaseRules.fs already tests into agents.md, so the next agent finds it instead of deriving it."
+
+    item "write-down-what-a-new-tool-declares" "Write down what a new tool must declare" Docs Next
+      NoLandmarkYet
+      [ "docs/progressive-map-research-2026-10-24.md" ]
+      "Adding list_members took six declarations: the registered set, the docs row and both counts, gatingDomain, ToolName with its toToolName and all, RouteKind, and ToolClass. Section 9 of the progressive map research holds the slice plan; it needs this checklist too, so the next tool registers once and every gate passes the first time."
+
+    item "fix-the-readme-capability-mcp-marks" "Fix the Readme capability table's MCP marks" Docs Next
+      NoLandmarkYet
+      [ "docs/mcp-tools.md" ]
+      "The capability table still ticks completion and type explorer under MCP although both are HTTP routes, an audit row that waited through two releases. With list_members registered honestly, mark those two rows as routes, or expose real tools and tick them."
+
+    item "walk-the-rest-of-the-symbol-ladder" "Walk the rest of the symbol ladder" Agents Next
+      NoLandmarkYet
+      [ "docs/progressive-map-research-2026-10-24.md" ]
+      "Slices 2 to 5 of the progressive map plan: kind grouping with sibling counts, references as new worker work whose reply states its scope, the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again." ]

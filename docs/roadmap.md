@@ -9,9 +9,9 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 5, Later 18, Exploring 20. Already built: 35.
+On the page today: Now 0, Next 11, Later 18, Exploring 20. Already built: 35.
 
-## Next (5)
+## Next (11)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -24,10 +24,25 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 - [ ] **A REPL eval changes the running app.** An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes, and it is now driven end to end against a running run_app app in our own tests. The eval writes the declaration back, the file change reaches the worker, and the running app serves the new code. Measured here, the whole route takes about 5.6 seconds, most of it the build. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built. ([how-hot-reload-works.md](how-hot-reload-works.md))
 - [ ] **Level the REPL after a patch without losing it.** Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. Half of the fix is already in: the daemon re-fetches maps and discovery after every in-worker host swap, refused through a gate rather than half-refreshed when the worker is unsettled. What is still missing is the idle-and-empty check inside the eval actor, which cancels a running eval before a hard reset so the check cannot live outside it, and the host's own in-flight test count, because a test run runs in the host and the actor's idle phase proves nothing about it. With those, the refresh becomes a background step with the loud state held until it finishes. ([decisions.md](decisions.md), [how-hot-reload-works.md](how-hot-reload-works.md))
 
+### Agents and cohorts
+
+- [ ] **Walk the rest of the symbol ladder.** Slices 2 to 5 of the progressive map plan: kind grouping with sibling counts, references as new worker work whose reply states its scope, the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again. ([progressive-map-research-2026-10-24.md](progressive-map-research-2026-10-24.md))
+
 ### Dashboard
 
 - [ ] **More settings editable from the dashboard.** The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime. ([configuration.md](configuration.md))
 - [ ] **Dashboard panels that follow your context.** A panel that is not relevant right now says why, in one line where the panel would have been: hot reload, live testing, cohort and friction each leave the reason behind, so a user can tell the dashboard having nothing to say from the dashboard hiding something. The cohort panel shows only while a cohort is running. The live bindings fold away and open again with one click, and the pin opens the pane when there are no bindings yet. What is not built is the live bindings becoming a real pane in REPL mode, and a pane moving between regions.
+
+### Platform and install
+
+- [ ] **Bake MSBUILDDISABLENODEREUSE into the tooling.** Session rebuilds and install-local's pack died with MSB4223 three times in one session under load, and they only proceeded once the agent exported MSBUILDDISABLENODEREUSE=1 by hand. Set it around every build the scripts start and name it on the skill's troubleshooting page, so recovery never depends on remembering a shell variable. ([SKILL.md](../skills/sagefs/SKILL.md))
+- [ ] **Give the gate a clean checkout every time.** The gate reuses one checkout directory, and a killed run's versioned outputs crashed the next run in zero seconds with a FileNotFoundException naming a SageFs.Core version the tree no longer was. Rebuild when the checkout's artifacts predate the gated SHA, or clear them first, so an interrupted run cannot fail its successor. ([agents.md](agents.md))
+- [ ] **Make a failed gate's retry one command.** A failed gate leaves its bump commit behind, and the next push refuses only after a whole new gate unless that commit is dropped first. Hand-dropping it cost several cycles in one session. Either reuse an unfired bump already in the range, or write the ship.fsx -- <sha> retry path that ReleaseRules.fs already tests into agents.md, so the next agent finds it instead of deriving it. ([agents.md](agents.md))
+
+### Docs and onboarding
+
+- [ ] **Write down what a new tool must declare.** Adding list_members took six declarations: the registered set, the docs row and both counts, gatingDomain, ToolName with its toToolName and all, RouteKind, and ToolClass. Section 9 of the progressive map research holds the slice plan; it needs this checklist too, so the next tool registers once and every gate passes the first time. ([progressive-map-research-2026-10-24.md](progressive-map-research-2026-10-24.md))
+- [ ] **Fix the Readme capability table's MCP marks.** The capability table still ticks completion and type explorer under MCP although both are HTTP routes, an audit row that waited through two releases. With list_members registered honestly, mark those two rows as routes, or expose real tools and tick them. ([mcp-tools.md](mcp-tools.md))
 
 ## Later (18)
 
