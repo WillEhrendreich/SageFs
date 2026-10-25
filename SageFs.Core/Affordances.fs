@@ -1282,6 +1282,28 @@ let confirmationLosses : Map<ToolName, string> =
       ToolName.ManageLocalData, "the local stores SageFs keeps on this machine"
       ToolName.StopApp, "the running app's state, held in memory" ]
 
+/// The confirm-tier tools that act on exactly ONE session, so that a session the caller created itself can
+/// skip the prompt (`ConfirmationPolicy.decide`). A subset of `confirmationLosses`, and judged
+/// tool by tool:
+///
+///   * `stop_session` IN: it ends the one session whose id the call names.
+///   * `reset_fsi_session` IN: it clears the REPL of the one session the call routes to.
+///   * `hard_reset_fsi_session` IN: the same session, rebuilt; the session id is kept.
+///   * `switch_workflow` IN: the daemon restarts THIS session id into the other workflow, so the only thing
+///     lost is the REPL of one session.
+///   * `stop_app` IN: it stops the app of the one session the call routes to.
+///   * `manage_local_data` OUT: it clears stores on this machine, which belong to no session.
+///
+/// Every tool outside the confirm tier is out by definition: it never asks. A new confirm-tier tool is out
+/// until someone writes it in here, so a tool added later keeps asking.
+let singleSessionConfirmTools : Set<ToolName> =
+  set
+    [ ToolName.StopSession
+      ToolName.ResetFsiSession
+      ToolName.HardResetFsiSession
+      ToolName.SwitchWorkflow
+      ToolName.StopApp ]
+
 module AuthorityRefusal =
   /// One sentence: what was refused and by what rule.
   let describe (refusal: AuthorityRefusal) : string =

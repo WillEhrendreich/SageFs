@@ -384,6 +384,7 @@
         <Compile Include="ResultEx.fs" />
         <Compile Include="EvalPipeline.fs" />
         <Compile Include="Affordances.fs" />
+        <Compile Include="ConfirmationPolicy.fs" />
         <Compile Include="WorkerProtocol.fs" />
         <Compile Include="RestartBoundaries.fs" />
         <Compile Include="Features\TrunkSessions.fs" />

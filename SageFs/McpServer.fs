@@ -468,27 +468,89 @@ let confirmWithin
       | ex when not (ex :? OperationCanceledException) -> return Result.Error(CouldNotBeAsked ex.Message)
   }
 
-/// `confirmWithin` against a live client, waiting as long as `budget` allows.
-let confirmViaElicitationWithin
+/// The session a call acts on, as the gate already resolved it. A session that exists is the target in
+/// whatever state it is (a faulted session is the one a hard reset is for). `stop_session` is the one
+/// confirm-tier tool the gate does not resolve, so it is the id the call passed.
+let targetSessionOf (admission: SageFs.McpTools.GateAdmission) : SageFs.ConfirmationPolicy.TargetSession =
+  match admission.Resolution with
+  | SageFs.McpTools.GateResolution.Resolved resolution ->
+    match resolution with
+    | SageFs.McpSessionRouting.Routable sessionId
+    | SageFs.McpSessionRouting.WarmingUp(sessionId, _)
+    | SageFs.McpSessionRouting.Unroutable(sessionId, _)
+    | SageFs.McpSessionRouting.FaultedSession(sessionId, _) -> SageFs.ConfirmationPolicy.TargetSession.Session sessionId
+    | SageFs.McpSessionRouting.Gone _ -> SageFs.ConfirmationPolicy.TargetSession.NoSession
+  | SageFs.McpTools.GateResolution.NotResolved ->
+    match admission.SessionId with
+    | Some sessionId -> SageFs.ConfirmationPolicy.TargetSession.Session sessionId
+    | None -> SageFs.ConfirmationPolicy.TargetSession.NoSession
+
+/// Who the daemon recorded as the maker of a session: the same record `stop_session` already uses to refuse a
+/// session another bound connection created (`McpTools.sessionOwners`, written when a connection creates one).
+let creatorOfSession (sessionId: string) : SageFs.ConfirmationPolicy.SessionCreator =
+  match SageFs.McpTools.sessionOwners.TryGetValue sessionId with
+  | true, recordedKey -> SageFs.ConfirmationPolicy.SessionCreator.ofRecordedKey recordedKey
+  | false, _ -> SageFs.ConfirmationPolicy.SessionCreator.Unrecorded
+
+/// Whether this call still has to ask a person: the pure `ConfirmationPolicy.decide`, fed from the gate's admission.
+/// Fails closed. Anything the gate did not resolve to a session, a tool outside the one-session set and a
+/// session with no creator on record all come out `Required`.
+let confirmationFor
+  (creatorOf: string -> SageFs.ConfirmationPolicy.SessionCreator)
+  (caller: SageFs.MemberTable.MemberId)
+  (admission: SageFs.McpTools.GateAdmission)
+  (toolName: string)
+  : SageFs.ConfirmationPolicy.Confirmation =
+  match SageFs.Affordances.ToolName.tryParse toolName with
+  | None -> SageFs.ConfirmationPolicy.Confirmation.Required SageFs.ConfirmationPolicy.ConfirmationReason.ToolSpansMoreThanOneSession
+  | Some tool ->
+    let target = targetSessionOf admission
+    let creator =
+      match target with
+      | SageFs.ConfirmationPolicy.TargetSession.Session sessionId when not (String.IsNullOrWhiteSpace sessionId) -> creatorOf sessionId
+      | SageFs.ConfirmationPolicy.TargetSession.Session _
+      | SageFs.ConfirmationPolicy.TargetSession.NoSession -> SageFs.ConfirmationPolicy.SessionCreator.Unrecorded
+    SageFs.ConfirmationPolicy.decide tool target creator caller
+
+/// The confirmation step of the gate: a call on a session its caller created itself runs without any
+/// elicitation request, and every other call goes through `confirmWithin` exactly as before.
+let confirmCallWithin
   (budget: TimeSpan)
+  (caps: ClientCapabilities)
+  (ask: ElicitRequestParams -> CancellationToken -> Task<ElicitResult>)
+  (creatorOf: string -> SageFs.ConfirmationPolicy.SessionCreator)
+  (caller: SageFs.MemberTable.MemberId)
+  (admission: SageFs.McpTools.GateAdmission)
+  (toolName: string)
+  (ct: CancellationToken)
+  : Task<Result<unit, ConfirmationRefusal>> =
+  match confirmationFor creatorOf caller admission toolName with
+  | SageFs.ConfirmationPolicy.Confirmation.NotRequired _ -> Task.FromResult(Ok())
+  | SageFs.ConfirmationPolicy.Confirmation.Required _ -> confirmWithin budget caps ask toolName ct
+
+/// `confirmCallWithin` against the live client, for the identity this call is bound to (a member token if it
+/// presented one, else its connection) and the daemon's own creator record.
+let confirmCall
   (server: ModelContextProtocol.Server.McpServer)
+  (admission: SageFs.McpTools.GateAdmission)
   (toolName: string)
   (ct: CancellationToken)
   : Task<Result<unit, string>> =
   task {
     let ask (parameters: ElicitRequestParams) (token: CancellationToken) =
       server.ElicitAsync(parameters, token).AsTask()
-    let! outcome = confirmWithin budget server.ClientCapabilities ask toolName ct
+    let! outcome =
+      confirmCallWithin
+        SageFs.Timeouts.confirmationAnswer
+        server.ClientCapabilities
+        ask
+        creatorOfSession
+        (SageFs.McpTools.memberIdFor "mcp")
+        admission
+        toolName
+        ct
     return outcome |> Result.mapError (ConfirmationRefusal.describe toolName)
   }
-
-/// The default: wait `Timeouts.confirmationAnswer`, a person reading a sentence.
-let confirmViaElicitation
-  (server: ModelContextProtocol.Server.McpServer)
-  (toolName: string)
-  (ct: CancellationToken)
-  : Task<Result<unit, string>> =
-  confirmViaElicitationWithin SageFs.Timeouts.confirmationAnswer server toolName ct
 
 /// CallToolFilter that captures the McpServer and appends accumulated events
 /// to tool responses. This ensures the LLM sees events even if the client
@@ -682,7 +744,7 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
                 // a caller that would be refused anyway never gets to prompt a
                 // human about it, and a decline stops the body exactly the way
                 // a gate rejection does.
-                let! confirmation = confirmViaElicitation ctx.Server requestName ct
+                let! confirmation = confirmCall ctx.Server admission requestName ct
                 match confirmation with
                 | Result.Error confirmError -> return buildGateErrorResult requestName confirmError
                 | Ok () ->

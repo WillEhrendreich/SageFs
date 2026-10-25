@@ -84,6 +84,7 @@
         <Compile Include="McpAffordanceHardeningTests.fs" />
         <Compile Include="McpToolGateTests.fs" />
         <Compile Include="ConfirmationUnansweredTests.fs" />
+        <Compile Include="ConfirmationPolicyTests.fs" />
         <Compile Include="WorkerMainTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="CheckoutTests.fs" />
@@ -275,6 +276,7 @@
         <Compile Include="SessionReaperSimTests.fs" />
         <Compile Include="StopOffLoopSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
+        <Compile Include="ConfirmationGateSimTests.fs" />
         <Compile Include="ReadyWaitSimTests.fs" />
         <Compile Include="SourceStateProbeTests.fs" />
         <Compile Include="SourceStateSimTests.fs" />
