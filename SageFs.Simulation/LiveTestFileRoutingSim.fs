@@ -20,14 +20,17 @@ open SageFs.WorkerProtocol
 ///   * Chaos is DATA. Same seed, same ops, identical trace, forever. No clock, no IO.
 ///   * The oracle is INDEPENDENT of the router: expected receivers come from the sim's own
 ///     bookkeeping of which pool directory each file was saved in and which sessions are on.
-///   * Two TWIN routers reintroduce wrong shapes so the invariants prove they have teeth:
+///   * Three TWIN routers reintroduce wrong shapes so the invariants prove they have teeth:
 ///     `runPrimaryGated` (the original bug: nothing is routed unless the primary has live testing
-///     on) and `runIgnoresActivation` (every owner receives the change whether it has live testing
-///     on or not).
+///     on), `runIgnoresActivation` (every owner receives the change whether it has live testing
+///     on or not) and `runRawPrefix` (a path is owned by every directory whose TEXT it starts
+///     with, so a save in `/x/checkout-lookalike` reaches the session rooted at `/x/checkout`).
 module LiveTestFileRoutingSim =
 
   /// One scripted step. `Save` writes a file directly in the root directory of the session at
-  /// that index. `SaveOutsider` writes a file no session's directory contains.
+  /// that index. `SaveOutsider` writes a file no session's directory contains. `SaveLookalike`
+  /// writes a file in a sibling directory whose name begins with session 0's directory name, so
+  /// no session owns it.
   [<RequireQualifiedAccess>]
   type RoutingOp =
     | TurnOn of sessionIdx: int
@@ -35,6 +38,7 @@ module LiveTestFileRoutingSim =
     | MakePrimary of sessionIdx: int
     | Save of sessionIdx: int
     | SaveOutsider
+    | SaveLookalike
 
   /// A fully-specified, replayable scenario.
   type Scenario = { Seed: int; Ops: RoutingOp list }
@@ -48,6 +52,10 @@ module LiveTestFileRoutingSim =
        "/sim/route/checkout/.claude/worktrees/agent-x" |]
 
   let private outsiderPath = "/sim/route/elsewhere/Stray.fs"
+
+  /// A sibling of session 0's directory (`/sim/route/checkout`) whose name starts with the same
+  /// text. No session is rooted there.
+  let lookalikePath = "/sim/route/checkout-lookalike/Stray.fs"
 
   let poolSize = rootDirs.Length
 
@@ -99,6 +107,24 @@ module LiveTestFileRoutingSim =
       let allOn = [ 0 .. poolSize - 1 ] |> List.map (fun i -> i, LiveTestingActivation.Active) |> Map.ofList
       real primary allOn path
 
+  /// TWIN 3: ownership by text prefix. Every session whose directory the path's text starts with
+  /// owns it, the longest directory winning, with no regard for where a segment ends.
+  let private rawPrefix : Router =
+    fun _ activations path ->
+      let activationOf s = activationOfIdx activations (indexOf s)
+      let owning =
+        roots |> List.filter (fun root -> path.StartsWith(root.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
+      match owning with
+      | [] -> Routed.Fallback
+      | _ ->
+        let longest = owning |> List.map (fun root -> root.WorkingDirectory.Length) |> List.max
+        owning
+        |> List.filter (fun root -> root.WorkingDirectory.Length = longest)
+        |> List.map (fun root -> root.SessionId)
+        |> LiveTestFileRouting.withLiveTestingOn activationOf
+        |> List.map indexOf
+        |> Routed.Sessions
+
   /// One save's outcome. `ExpectedOwners` and `ExpectedReceivers` come from the sim's own
   /// bookkeeping (the pool directory the file was saved in, and the on-set at that moment), never
   /// from the router.
@@ -120,11 +146,7 @@ module LiveTestFileRoutingSim =
   let private initial : SimState =
     { Primary = 0; Activations = Map.empty; Decisions = [] }
 
-  let private decide (router: Router) (state: SimState) (saveIdx: int option) : RoutingDecision =
-    let path =
-      match saveIdx with
-      | Some i -> pathIn i
-      | None -> outsiderPath
+  let private decide (router: Router) (state: SimState) (saveIdx: int option) (path: string) : RoutingDecision =
     let owners =
       match saveIdx with
       | Some i -> [ 0 .. poolSize - 1 ] |> List.filter (fun j -> rootDirs.[j] = rootDirs.[i]) |> Set.ofList
@@ -151,8 +173,9 @@ module LiveTestFileRoutingSim =
         | RoutingOp.TurnOn i -> { state with Activations = state.Activations |> Map.add i LiveTestingActivation.Active }
         | RoutingOp.TurnOff i -> { state with Activations = state.Activations |> Map.add i LiveTestingActivation.Inactive }
         | RoutingOp.MakePrimary i -> { state with Primary = i }
-        | RoutingOp.Save i -> { state with Decisions = decide router state (Some i) :: state.Decisions }
-        | RoutingOp.SaveOutsider -> { state with Decisions = decide router state None :: state.Decisions }
+        | RoutingOp.Save i -> { state with Decisions = decide router state (Some i) (pathIn i) :: state.Decisions }
+        | RoutingOp.SaveOutsider -> { state with Decisions = decide router state None outsiderPath :: state.Decisions }
+        | RoutingOp.SaveLookalike -> { state with Decisions = decide router state None lookalikePath :: state.Decisions }
       go router state' rest
 
   /// The result of folding a scenario to completion.
@@ -171,3 +194,7 @@ module LiveTestFileRoutingSim =
   /// Through the activation-ignoring twin: proves the invariants catch a delivery to a session
   /// that has live testing off.
   let runIgnoresActivation (scenario: Scenario) : Trace = runWith "twin-ignores-activation" ignoresActivation scenario
+
+  /// Through the text-prefix twin: proves the invariants catch a save in a lookalike sibling
+  /// directory being attributed to the session whose directory name it starts with.
+  let runRawPrefix (scenario: Scenario) : Trace = runWith "twin-raw-prefix" rawPrefix scenario

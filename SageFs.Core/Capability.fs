@@ -54,7 +54,7 @@ module Capability =
     let value (ScopePrefix canonical) : string = canonical
 
     let private pathWithin (path: string) (prefix: string) =
-      prefix = "" || path = prefix || path.StartsWith(prefix + "/", StringComparison.Ordinal)
+      PathContainment.isWithinCanonical prefix path
 
     /// `inner` is `outer` or a directory under it. A partial order.
     let isWithin (ScopePrefix inner) (ScopePrefix outer) : bool = pathWithin inner outer

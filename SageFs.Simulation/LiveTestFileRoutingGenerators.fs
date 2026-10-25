@@ -14,11 +14,12 @@ module LiveTestFileRoutingGenerators =
     let pick () = rnd.Next(0, poolSize)
     let ops =
       [ for _ in 1 .. n ->
-          match rnd.Next(0, 10) with
+          match rnd.Next(0, 11) with
           | 0 | 1 -> RoutingOp.TurnOn (pick ())
           | 2 -> RoutingOp.TurnOff (pick ())
           | 3 -> RoutingOp.MakePrimary (pick ())
           | 4 -> RoutingOp.SaveOutsider
+          | 5 -> RoutingOp.SaveLookalike
           | _ -> RoutingOp.Save (pick ()) ]
     { Seed = seed; Ops = ops }
 
@@ -43,3 +44,9 @@ module LiveTestFileRoutingGenerators =
   let outsiderGoesToFallback : Scenario =
     { Seed = 4
       Ops = [ RoutingOp.TurnOn 0; RoutingOp.SaveOutsider ] }
+
+  /// A save in `/sim/route/checkout-lookalike`, a sibling of session 0's directory whose name
+  /// starts with the same text. Session 0 has live testing on and must not receive it.
+  let lookalikeSibling : Scenario =
+    { Seed = 5
+      Ops = [ RoutingOp.TurnOn 0; RoutingOp.SaveLookalike ] }

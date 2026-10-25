@@ -143,6 +143,37 @@ let isUnderWatchedDirTests =
     testCase "a file outside every watched dir is not under-watched" <| fun _ ->
       isUnderWatchedDir (Set.singleton dir2) filePath
       |> Expect.isFalse "filePath is under dir1, not dir2"
+
+    testCase "WHY — a sibling directory whose name starts with a watched dir's name is not under it" <| fun _ ->
+      isUnderWatchedDir (Set.singleton dir1) (System.IO.Path.Combine(dir1 + "2", "Lib.fs"))
+      |> Expect.isFalse "proj12/Lib.fs is beside proj1, not inside it"
+
+    testCase "WHY — a watched dir written with a trailing separator still holds its files" <| fun _ ->
+      isUnderWatchedDir (Set.singleton (dir1 + "/")) filePath
+      |> Expect.isTrue "proj1/ is proj1"
+  ]
+
+let ownershipTests =
+  testList "LiveTestWatcherCore.sessionsForPath directory boundary" [
+
+    testCase "WHY — a save in a sibling directory whose name starts like a session's directory belongs to no session" <| fun _ ->
+      let dirSessions = Map.ofList [ dir1, [ s1 ] ]
+      sessionsForPath dirSessions (System.IO.Path.Combine(dir1 + "2", "Lib.fs"))
+      |> Expect.equal "proj12 is not proj1" []
+
+    testCase "WHY — the sibling does not shadow its neighbour: the session rooted at the longer name owns its own files" <| fun _ ->
+      let longer = dir1 + "2"
+      let dirSessions = Map.ofList [ dir1, [ s1 ]; longer, [ s2 ] ]
+      sessionsForPath dirSessions (System.IO.Path.Combine(longer, "Lib.fs"))
+      |> Expect.equal "proj12 owns proj12/Lib.fs" [ s2 ]
+      sessionsForPath dirSessions filePath
+      |> Expect.equal "proj1 owns proj1/Lib.fs" [ s1 ]
+
+    testCase "WHY — the deepest containing directory wins whatever its trailing separator" <| fun _ ->
+      let nested = System.IO.Path.Combine(dir1, "nested")
+      let dirSessions = Map.ofList [ dir1 + "/", [ s1 ]; nested + "/", [ s2 ] ]
+      sessionsForPath dirSessions (System.IO.Path.Combine(nested, "Lib.fs"))
+      |> Expect.equal "nested/ is deeper than proj1/" [ s2 ]
   ]
 
 let propertyTests =
@@ -218,4 +249,4 @@ let propertyTests =
 
 [<Tests>]
 let liveTestWatcherCoreTests =
-  testList "LiveTestWatcherCore" [ scenarioTests; neededDirsTests; isUnderWatchedDirTests; propertyTests ]
+  testList "LiveTestWatcherCore" [ scenarioTests; neededDirsTests; isUnderWatchedDirTests; ownershipTests; propertyTests ]
