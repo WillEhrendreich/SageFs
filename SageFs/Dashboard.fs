@@ -1342,8 +1342,14 @@ let buildNoSessionSnapshotWithSessionsSorted
         | true -> Some (sprintf "%d connected" tracker.TotalCount)
         | false -> Some (String.Join(" ", parts))
       | None -> None
-    // No session in view: the activity across every session's tests.
-    let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity "")
+    // No session in view: the activity across every live session's tests. An empty id names the
+    // primary session's cycle alone, which reads off while another session is running tests, so
+    // each live session is asked by its own id and the answers are rolled up.
+    let liveTestingPanel =
+      liveRows
+      |> List.map (fun card -> q.GetLiveTestActivity (WorkerProtocol.SessionId.value card.Id))
+      |> LiveTestViewReads.rollUpActivity
+      |> renderLiveTestingPanel
     let evalToPixelP50Ms, evalToPixelP99Ms = evalToPixelPercentiles ()
     let snap : DashboardSnapshot = {
       Version = infra.Version

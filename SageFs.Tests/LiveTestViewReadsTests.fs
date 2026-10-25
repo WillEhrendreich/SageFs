@@ -196,3 +196,85 @@ let viewedSession =
       statusBarFor snaps.[0].Id model
       |> Expect.equal "the primary session has live testing off and nothing to show" ""
   ]
+
+// ── the activity of the daemon as a whole ───────────────────────────
+
+let tally (passed: int) (failed: int) (running: int) : LiveTestActivity.TestTally =
+  { LiveTestActivity.TestTally.empty with Passed = passed; Failed = failed; Running = running }
+
+let totalOf (activity: SessionActivity) : int =
+  LiveTestActivity.TestTally.total (tallyOfActivity activity)
+
+let genActivity : Gen<SessionActivity> =
+  gen {
+    let! passed = Gen.choose (0, 4)
+    let! failed = Gen.choose (0, 3)
+    let! running = Gen.choose (0, 2)
+    // At least one passed, so every state that carries results carries some.
+    let counts = tally (passed + 1) failed running
+    return!
+      Gen.elements
+        [ SessionActivity.Off
+          SessionActivity.Discovering
+          SessionActivity.DiscoveryFailed "no host"
+          SessionActivity.NoTestsFound [ "Expecto" ]
+          SessionActivity.BlockedByCompileErrors ("A.fs", 2, counts)
+          SessionActivity.BlockedByFailedRebuild ("build failed", counts)
+          SessionActivity.Rebuilding (3, counts)
+          SessionActivity.Running counts
+          SessionActivity.Settled counts ]
+  }
+
+[<Tests>]
+let activityRollUp =
+  testList "live testing view reads: the activity of the daemon as a whole" [
+
+    testCase "WHY — a session running tests shows while the first session has live testing off, which the no-session landing missed by asking the primary alone" <| fun _ ->
+      rollUpActivity [ SessionActivity.Off; SessionActivity.Settled (tally 3 0 0) ]
+      |> Expect.equal "the second session's three tests" (SessionActivity.Settled (tally 3 0 0))
+
+    testCase "WHY — no session with live testing on is off, and so is no session at all" <| fun _ ->
+      rollUpActivity [ SessionActivity.Off; SessionActivity.Off ] |> Expect.equal "off everywhere" SessionActivity.Off
+      rollUpActivity [] |> Expect.equal "no sessions" SessionActivity.Off
+
+    testCase "WHY — the tests of every session that has it on are added together, and a running one makes the whole running" <| fun _ ->
+      rollUpActivity [ SessionActivity.Settled (tally 2 0 0); SessionActivity.Running (tally 1 1 1) ]
+      |> Expect.equal "2 + 1 passed, 1 failed, 1 running" (SessionActivity.Running (tally 3 1 1))
+
+    testCase "WHY — a session held back by compile errors leads, with its file named and every session's last results" <| fun _ ->
+      rollUpActivity [ SessionActivity.Settled (tally 2 0 0); SessionActivity.BlockedByCompileErrors ("A.fs", 2, tally 1 1 0) ]
+      |> Expect.equal "blocked, with 3 passed and 1 failed" (SessionActivity.BlockedByCompileErrors ("A.fs", 2, tally 3 1 0))
+
+    testCase "WHY — sessions rebuilding add up the tests waiting on a rebuild" <| fun _ ->
+      rollUpActivity [ SessionActivity.Rebuilding (3, tally 1 0 0); SessionActivity.Rebuilding (4, tally 2 0 0) ]
+      |> Expect.equal "7 tests waiting, 3 last results" (SessionActivity.Rebuilding (7, tally 3 0 0))
+
+    testCase "WHY — known tests outrank a session still looking for its own" <| fun _ ->
+      rollUpActivity [ SessionActivity.Discovering; SessionActivity.Settled (tally 1 0 0) ]
+      |> Expect.equal "the settled session's results are shown" (SessionActivity.Settled (tally 1 0 0))
+      rollUpActivity [ SessionActivity.Off; SessionActivity.Discovering ]
+      |> Expect.equal "with nothing else on, discovery is the news" SessionActivity.Discovering
+
+    testCase "WHY — sessions with no tests name every framework they detected, once" <| fun _ ->
+      rollUpActivity [ SessionActivity.NoTestsFound [ "Expecto" ]; SessionActivity.NoTestsFound [ "Expecto"; "xUnit" ] ]
+      |> Expect.equal "both frameworks" (SessionActivity.NoTestsFound [ "Expecto"; "xUnit" ])
+
+    testPropertyWithConfig propConfig "WHY — one session rolled up is that session, whatever it reports"
+      <| fun () ->
+        Prop.forAll (Arb.fromGen genActivity) (fun activity -> rollUpActivity [ activity ] = activity)
+
+    testPropertyWithConfig propConfig "WHY — a session with live testing off never changes the answer, wherever it sits in the list"
+      <| fun () ->
+        let genCase = Gen.zip (Gen.listOf genActivity) (Gen.choose (0, 6))
+        Prop.forAll (Arb.fromGen genCase) (fun (activities, at) ->
+          let at = min at (List.length activities)
+          let withOff = List.take at activities @ [ SessionActivity.Off ] @ List.skip at activities
+          rollUpActivity withOff = rollUpActivity activities)
+
+    testPropertyWithConfig propConfig "WHY — the tests of the roll-up are the tests of the sessions that have it on, added together, in any order"
+      <| fun () ->
+        Prop.forAll (Arb.fromGen (Gen.listOf genActivity)) (fun activities ->
+          let expected = activities |> List.sumBy totalOf
+          totalOf (rollUpActivity activities) = expected
+          && totalOf (rollUpActivity (List.rev activities)) = expected)
+  ]

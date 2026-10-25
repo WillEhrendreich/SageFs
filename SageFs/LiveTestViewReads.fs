@@ -88,3 +88,90 @@ module LiveTestViewReads =
             Passed = summary.Passed
             Failed = summary.Failed
             Running = summary.Running }
+
+  /// One session's live-testing activity, as every surface shows it.
+  type SessionActivity = LiveTestActivity.LiveTestActivity
+
+  let addTallies(a: LiveTestActivity.TestTally) (b: LiveTestActivity.TestTally) : LiveTestActivity.TestTally =
+    { Passed = a.Passed + b.Passed
+      Failed = a.Failed + b.Failed
+      Running = a.Running + b.Running
+      Stale = a.Stale + b.Stale
+      NotYetRun = a.NotYetRun + b.NotYetRun
+      Skipped = a.Skipped + b.Skipped
+      Disabled = a.Disabled + b.Disabled }
+
+  /// The tests a session's activity reports, none when it reports no tests.
+  let tallyOfActivity (activity: SessionActivity) : LiveTestActivity.TestTally =
+    match activity with
+    | SessionActivity.Off
+    | SessionActivity.Discovering
+    | SessionActivity.DiscoveryFailed _
+    | SessionActivity.NoTestsFound _ -> LiveTestActivity.TestTally.empty
+    | SessionActivity.BlockedByCompileErrors (_, _, tally) -> tally
+    | SessionActivity.BlockedByFailedRebuild (_, tally) -> tally
+    | SessionActivity.Rebuilding (_, tally) -> tally
+    | SessionActivity.Running tally -> tally
+    | SessionActivity.Settled tally -> tally
+
+  /// How much a session's activity has to say to someone looking at the whole daemon. The order
+  /// is `LiveTestActivity.decide`'s: states about tests that are known outrank states about
+  /// finding them, and a held-back run (compile errors, a rebuild) outranks a quiet one.
+  let activityPrecedence (activity: SessionActivity) : int =
+    match activity with
+    | SessionActivity.Off -> 0
+    | SessionActivity.NoTestsFound _ -> 1
+    | SessionActivity.DiscoveryFailed _ -> 2
+    | SessionActivity.Discovering -> 3
+    | SessionActivity.Settled _ -> 4
+    | SessionActivity.Running _ -> 5
+    | SessionActivity.BlockedByFailedRebuild _ -> 6
+    | SessionActivity.Rebuilding _ -> 7
+    | SessionActivity.BlockedByCompileErrors _ -> 8
+
+  let testsBeingRebuilt(activity: SessionActivity) : int =
+    match activity with
+    | SessionActivity.Rebuilding (testCount, _) -> testCount
+    | SessionActivity.Off
+    | SessionActivity.Discovering
+    | SessionActivity.DiscoveryFailed _
+    | SessionActivity.NoTestsFound _
+    | SessionActivity.BlockedByCompileErrors _
+    | SessionActivity.BlockedByFailedRebuild _
+    | SessionActivity.Running _
+    | SessionActivity.Settled _ -> 0
+
+  let frameworksDetected(activity: SessionActivity) : string list =
+    match activity with
+    | SessionActivity.NoTestsFound frameworks -> frameworks
+    | SessionActivity.Off
+    | SessionActivity.Discovering
+    | SessionActivity.DiscoveryFailed _
+    | SessionActivity.BlockedByCompileErrors _
+    | SessionActivity.BlockedByFailedRebuild _
+    | SessionActivity.Rebuilding _
+    | SessionActivity.Running _
+    | SessionActivity.Settled _ -> []
+
+  /// The one activity of the daemon as a whole, from the activity of each session. A session with
+  /// live testing off adds nothing, so a primary with it off cannot hide a session that is running
+  /// tests. The tests of the sessions that have it on are added together, and the most pressing
+  /// state among them leads (see `activityPrecedence`). With none on, live testing is off.
+  let rollUpActivity (activities: SessionActivity list) : SessionActivity =
+    let withItOn = activities |> List.filter (fun activity -> activityPrecedence activity > 0)
+    match withItOn with
+    | [] -> SessionActivity.Off
+    | _ ->
+      let tally = withItOn |> List.map tallyOfActivity |> List.fold addTallies LiveTestActivity.TestTally.empty
+      match List.maxBy activityPrecedence withItOn with
+      | SessionActivity.Off -> SessionActivity.Off
+      | SessionActivity.NoTestsFound _ ->
+        SessionActivity.NoTestsFound (withItOn |> List.collect frameworksDetected |> List.distinct)
+      | SessionActivity.DiscoveryFailed reason -> SessionActivity.DiscoveryFailed reason
+      | SessionActivity.Discovering -> SessionActivity.Discovering
+      | SessionActivity.Settled _ -> SessionActivity.Settled tally
+      | SessionActivity.Running _ -> SessionActivity.Running tally
+      | SessionActivity.BlockedByFailedRebuild (reason, _) -> SessionActivity.BlockedByFailedRebuild (reason, tally)
+      | SessionActivity.Rebuilding _ -> SessionActivity.Rebuilding (withItOn |> List.sumBy testsBeingRebuilt, tally)
+      | SessionActivity.BlockedByCompileErrors (file, errorCount, _) ->
+        SessionActivity.BlockedByCompileErrors (file, errorCount, tally)
