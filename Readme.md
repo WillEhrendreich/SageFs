@@ -254,12 +254,12 @@ When live testing is enabled and a project is loaded, edits (saved or unsaved) r
 
 ### 6. What you'll see
 
-- **Gutter markers**: ✓ green (passing), ✗ red (failing), ○ gray (no coverage)
+- **Test marks**: ✓ green (passing), ✗ red (failing), ● while it runs. In VS Code the mark sits at the end of the test's line and in the scrollbar's overview ruler, there is no icon in the gutter. In Neovim it is a sign in the sign column.
 - **Inline results**: Expression values appear to the right of your code
-- **Coverage bars**: Colored bars in the gutter show which lines are covered by tests
+- **Coverage marks**: In VS Code a small colored `│` (or `▸` and `○` for the per-test view) is drawn as text in front of the code, green for covered by passing tests, red when a covering test fails, gray for no coverage. Neovim puts coverage in the sign column.
 - **Failure details**: Hover over red markers to see Expected vs Actual diffs
 
-> 💡 **Tip**: Use the **SageFs: Mark All Tests Stale** command (Command Palette) to re-run everything.
+> 💡 **Tip**: Use the **SageFs: Run All Tests** command (Command Palette) to re-run everything.
 
 ```
 MCP (streamable HTTP):  http://localhost:37749/       ← recommended for new MCP clients
