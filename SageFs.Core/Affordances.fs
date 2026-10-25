@@ -629,6 +629,7 @@ type ToolName =
   | SwitchSession
   | GetAvailableProjects
   | ListRunnableProjects
+  | ListMembers
   | GetFrictionReport
   | GetFrictionSummary
   | GetRecentFsiEvents
@@ -716,6 +717,7 @@ module ToolName =
     | ToolName.ListSessions -> "list_sessions"
     | ToolName.SwitchSession -> "switch_session"
     | ToolName.GetAvailableProjects -> "get_available_projects"
+    | ToolName.ListMembers -> "list_members"
     | ToolName.ListRunnableProjects -> "list_runnable_projects"
     | ToolName.GetFrictionReport -> "get_friction_report"
     | ToolName.GetFrictionSummary -> "get_friction_summary"
@@ -789,6 +791,7 @@ module ToolName =
       ToolName.SwitchSession
       ToolName.GetAvailableProjects
       ToolName.ListRunnableProjects
+      ToolName.ListMembers
       ToolName.GetFrictionReport
       ToolName.GetFrictionSummary
       ToolName.GetRecentFsiEvents
