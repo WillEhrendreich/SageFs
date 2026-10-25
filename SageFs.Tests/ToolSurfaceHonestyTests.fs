@@ -155,17 +155,20 @@ let nameListsTests =
       docs |> Expect.stringContains "the advertised count" (sprintf "The full advertised set is %d tools" registered.Length)
 
     testCase "WHY — every page that says how many tools there are says the registered count, so a hand-typed number cannot go stale" <| fun _ ->
-      // "70 tools", "66-tool catalog": a number written next to the word "tool" in the pages a reader trusts. The
-      // count is the registered set's, read by reflection; a page that carries a different one is wrong, and a page
-      // that wants no number at all can simply not write one.
+      // "70 tools", "66-tool catalog", "70 MCP tools", "66 affordance-gated tools": a number written next to the word
+      // "tool" in the pages a reader trusts, with the qualifiers a sentence puts between them. The count is the
+      // registered set's, read by reflection; a page that carries a different one is wrong, and a page that wants no
+      // number at all can simply not write one. ("70 MCP tools" slipped past a pattern that wanted the number
+      // directly beside "tools", and the Readme said 70 for a release while every other page said 71.)
       let pages =
         [ [ "Readme.md" ]
+          [ "docs"; "README.md" ]
           [ "docs"; "architecture-decisions.md" ]
           [ "docs"; "FEATURE_MATRIX.md" ]
           [ "docs"; "mcp-tools.md" ]
           [ "docs"; "agents.md" ]
           [ "docs"; "architecture.md" ] ]
-      let counted = Regex(@"\b(\d+)[ -]tools?\b", RegexOptions.IgnoreCase)
+      let counted = Regex(@"\b(\d+)[ -](?:(?:MCP|affordance-gated|registered|advertised)[ -])*tools?\b", RegexOptions.IgnoreCase)
       let wrong =
         pages
         |> List.collect (fun page ->

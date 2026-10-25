@@ -410,7 +410,7 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 #### AI Agent (MCP)
 
-SageFs exposes 70 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time (a member token is shown only what its role allows); calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
+SageFs exposes 71 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time (a member token is shown only what its role allows); calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
 
 **Streamable HTTP** (recommended: auto-reconnects, no session drops):
 ```json

@@ -35,85 +35,16 @@ let private findMcpToolMethods () =
 
 [<Tests>]
 let mcpToolRegistrationTests = testList "MCP tool registration" [
-  test "all expected tools are registered via [<McpServerTool>]" {
-    let expected = set [
-      "acquire_claim"
-      "acquire_full_build_lease"
-      "acquire_run_app_lease"
-      "acquire_test_suite_lease"
-      "cancel_eval"
-      "check_fsharp_code"
-      "coverage_intel"
-      "create_bare_session"
-      "create_project_session"
-      "create_solution_session"
-      "decompose_pipeline"
-      "delegate_conductor"
-      "diagnose"
-      "disable_hot_reload"
-      "discover_features"
-      "enable_hot_reload"
-      "explain_test_failure"
-      "export_notebook"
-      "export_session_transcript"
-      "get_available_projects"
-      "get_cell_dependencies"
-      "get_cohort_status"
-      "get_daemon_status"
-      "get_eval_diff"
-      "get_eval_timeline"
-      "get_friction_report"
-      "get_friction_summary"
-      "get_message_journal"
-      "get_recent_fsi_events"
-      "get_session_filmstrip"
-      "get_session_status"
-      "get_workspace_hygiene"
-      "hard_reset_fsi_session"
-      "impact_forecast"
-      "join_cohort"
-      "leave_cohort"
-      "list_members"
-      "list_runnable_projects"
-      "list_sessions"
-      "list_tests"
-      "manage_local_data"
-      "mint_member"
-      "nudge_value"
-      "manage_scratch_pad"
-      "plan_ripple"
-      "preview_what_if"
-      "reassign_claim"
-      "release_claim"
-      "report_friction"
-      "request_landing"
-      "revoke_member"
-      "release_work_lease"
-      "reset_fsi_session"
-      "reset_hot_reload_state"
-      "resolve_veto"
-      "run_app"
-      "run_tests"
-      "send_fsharp_code"
-      "set_integration_ref"
-      "set_reflection_read_mode"
-      "stop_app"
-      "stop_session"
-      "suggest_next_action"
-      "suggest_next_cell"
-      "suggest_repair"
-      "switch_session"
-      "switch_workflow"
-      "targeted_verify"
-      "tidy_workspace"
-      "veto_landing"
-      "withdraw_landing"
-    ]
+  test "the registered tools are exactly the closed set of tool names" {
+    // The expected side is the ToolName union (SageFs.Core/Affordances.fs), which the gate, the routing kinds and the
+    // tool classes are all keyed on. A hand-kept list here went stale the moment a tool landed (list_members), so the
+    // two independent declarations are compared instead: a tool added to one and not the other fails here.
+    let expected = SageFs.Affordances.ToolName.allToolNames |> set
     let actual =
       findMcpToolMethods ()
       |> Array.map (fun m -> m.Name)
       |> set
-    actual |> Expect.equal "registered tools match expected set" expected
+    actual |> Expect.equal "registered tools are the closed set" expected
   }
 
   test "no tool has an empty description" {
