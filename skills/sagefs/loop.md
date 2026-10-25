@@ -42,10 +42,12 @@ Useful tools while you're in the loop:
   throwaway `dotnet fsi` script to find out.
 - **Don't know the name yet? Walk the ladder with `list_members`.** Give it a
   qualified name (`System.IO`, then `System.IO.Path`) and it lists that name's
-  members: a total, a count per kind (`drillable`, then `leaf`), the names
-  capped per page, and a footer with the `offset` for the next page. Drillable
-  names (namespaces, modules, types) take another `list_members` call with
-  their own qualified name; leaves are the end of the walk. Kinds are read from
-  the shape of each name, so a capitalised method or union case (`Substring`,
-  `Cons`) counts as drillable and comes back with 0 members when you descend
-  into it. Once you hold the name, reflect over it in the session as above.
+  members: a total, a count per kind (`12 modules, 40 methods, 3 classes`), the
+  names capped per page, and a footer with the `offset` for the next page.
+  The kind of each member is the one the compiler gave it. Drillable kinds
+  (namespaces, modules, types) take another `list_members` call with their own
+  qualified name; leaves (methods, values, properties, union cases) are the
+  end of the walk. The total reads `at least N` when the worker's list was cut
+  at its bound, and a name that lists nothing says why (a leaf, a name that
+  does not resolve, a session that could not be asked) in place of `0 total`.
+  Once you hold the name, reflect over it in the session as above.

@@ -131,14 +131,17 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
       | Answered held -> WalkModeNow held
       | HostGone reason -> WalkModeNotSet(HostNotRunning reason)
 
-    member _.Completions(text, caret, word) =
+    member _.Completions(text, caret, word, limit) =
       // F# candidates come from the host, unsorted; SageFs ranks them exactly as it does in-process.
-      let fromHost (queryText: string) (queryCaret: int) (_word: string) : AutoCompletion.CompletionItem seq =
+      let fromHost (queryText: string) (queryCaret: int) (_word: string) : Result<AutoCompletion.CompletionItem seq, AutoCompletion.CompletionUnavailable> =
         match wait (host.Complete(queryText, queryCaret)) with
-        | Answered(completionsId, items) ->
-          items |> List.mapi (fun index item -> toCompletionItem host completionsId index item) |> Seq.ofList
-        | HostGone _ -> Seq.empty
-      AutoCompletion.getCompletionsWith fromHost text caret word
+        | Answered(Result.Ok(completionsId, items)) ->
+          Result.Ok(items |> List.mapi (fun index item -> toCompletionItem host completionsId index item) |> Seq.ofList)
+        | Answered(Result.Error ListingFlaggedError) ->
+          Result.Error(AutoCompletion.CompletionUnavailable.CompilerError AutoCompletion.FsCompletions.compilerErrorMessage)
+        | Answered(Result.Error(CheckRaised message)) -> Result.Error(AutoCompletion.CompletionUnavailable.CheckThrew message)
+        | HostGone reason -> Result.Error(AutoCompletion.CompletionUnavailable.HostLost reason)
+      AutoCompletion.getCompletionsWith fromHost limit text caret word
 
     member _.Diagnose(text) =
       match wait (host.Check text) with

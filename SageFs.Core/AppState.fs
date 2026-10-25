@@ -201,7 +201,7 @@ type Middleware = MiddlewareNext -> EvalRequest * AppState -> EvalResponse * App
 type Command =
   | Eval of EvalRequest * CancellationToken * AsyncReplyChannel<EvalResponse>
   | CancelEval of AsyncReplyChannel<bool>
-  | Autocomplete of text: string * caret: int * word: string * AsyncReplyChannel<list<AutoCompletion.CompletionItem>>
+  | Autocomplete of text: string * caret: int * word: string * limit: AutoCompletion.CompletionLimit * AsyncReplyChannel<AutoCompletion.CompletionAnswer<AutoCompletion.CompletionItem>>
   | GetBoundValue of name: string * AsyncReplyChannel<obj Option>
   /// Pulled on demand, after the eval reply — never attached to it (roast-4
   /// #2). Serialized JSON of a Features.LiveValueTree.LiveValueSnapshot.
@@ -242,7 +242,7 @@ type internal QueryCommand =
   | QueryGetWarmupFailures of AsyncReplyChannel<WarmupFailure list>
   | QueryGetWarmupContext of AsyncReplyChannel<WarmupContext>
   | QueryGetStatusMessage of AsyncReplyChannel<string option>
-  | QueryAutocomplete of text: string * caret: int * word: string * AsyncReplyChannel<list<AutoCompletion.CompletionItem>>
+  | QueryAutocomplete of text: string * caret: int * word: string * limit: AutoCompletion.CompletionLimit * AsyncReplyChannel<AutoCompletion.CompletionAnswer<AutoCompletion.CompletionItem>>
   | QueryGetDiagnostics of text: string * AsyncReplyChannel<Diagnostics.Diagnostic array>
   | QueryGetTypeCheckWithSymbols of text: string * filePath: string * AsyncReplyChannel<Diagnostics.TypeCheckWithSymbolsResult>
   | QueryGetBoundValue of name: string * AsyncReplyChannel<obj Option>
@@ -1064,14 +1064,14 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
         | QueryGetStatusMessage reply ->
           reply.Reply (SessionPhase.statusMessage snapshot.Phase)
           return snapshot
-        | QueryAutocomplete(text, caret, word, reply) ->
+        | QueryAutocomplete(text, caret, word, limit, reply) ->
           match snapshot.Phase with
           | Active (st, _) ->
-            let res = st.Session.Completions(text, caret, word)
+            let res = st.Session.Completions(text, caret, word, limit)
             reply.Reply res
             return snapshot
-          | _ ->
-            reply.Reply []
+          | Initializing _ | Faulted _ ->
+            reply.Reply(AutoCompletion.CompletionAnswer.Unavailable AutoCompletion.CompletionUnavailable.SessionNotActive)
             return snapshot
         | QueryGetDiagnostics(text, reply) ->
           match snapshot.Phase with
@@ -1864,8 +1864,8 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           queryActor.Post(QueryGetStartupConfig reply)
         | GetWarmupFailures reply ->
           queryActor.Post(QueryGetWarmupFailures reply)
-        | Autocomplete(text, caret, word, reply) ->
-          queryActor.Post(QueryAutocomplete(text, caret, word, reply))
+        | Autocomplete(text, caret, word, limit, reply) ->
+          queryActor.Post(QueryAutocomplete(text, caret, word, limit, reply))
         | GetDiagnostics(text, reply) ->
           queryActor.Post(QueryGetDiagnostics(text, reply))
         | GetTypeCheckWithSymbols(text, filePath, reply) ->

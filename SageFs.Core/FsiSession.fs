@@ -60,7 +60,8 @@ type IFsiSession =
   abstract EvaluateMember: binding: string * path: string list -> string
   /// Choose how much of a class the live-values walk may run, from now on. A new session walks in Safe mode.
   abstract SetWalkMode: mode: LiveValueTree.WalkMode -> WalkModeOutcome
-  abstract Completions: text: string * caret: int * word: string -> AutoCompletion.CompletionItem list
+  /// Ranked candidates at the caret, cut to `limit`, with the size of the set they came from; or why nobody could look.
+  abstract Completions: text: string * caret: int * word: string * limit: AutoCompletion.CompletionLimit -> AutoCompletion.CompletionAnswer<AutoCompletion.CompletionItem>
   abstract Diagnose: text: string -> Diagnostics.Diagnostic array
   abstract TypeCheckWithSymbols: filePath: string * text: string -> Diagnostics.TypeCheckWithSymbolsResult
   /// The current value of a bound name, or null when it is not bound.
@@ -206,7 +207,7 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
       Volatile.Write(&walkMode.contents, mode)
       WalkModeNow mode
 
-    member _.Completions(text, caret, word) = AutoCompletion.getCompletions session text caret word
+    member _.Completions(text, caret, word, limit) = AutoCompletion.getCompletions session limit text caret word
 
     member _.Diagnose(text) = Diagnostics.getDiagnostics session text
 

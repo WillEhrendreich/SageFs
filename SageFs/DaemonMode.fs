@@ -4566,16 +4566,15 @@ let run
         | Some send ->
           let replyId = sprintf "dash-comp-%d" (System.Random.Shared.Next())
           let! resp =
-            send (WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPos, replyId))
+            send (WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPos, SageFs.Features.AutoCompletion.CompletionLimit.UpTo SageFs.Features.AutoCompletion.EditorCandidates, replyId))
             |> Async.StartAsTask
           return
             match resp with
-            | WorkerProtocol.WorkerResponse.CompletionResult(_, items) ->
-              items |> List.map (fun label ->
-                { SageFs.Features.AutoCompletion.DisplayText = label
-                  SageFs.Features.AutoCompletion.ReplacementText = label
-                  SageFs.Features.AutoCompletion.Kind = SageFs.Features.AutoCompletion.CompletionKind.Variable
-                  SageFs.Features.AutoCompletion.GetDescription = None })
+            | WorkerProtocol.WorkerResponse.CompletionResult(_, answer) ->
+              // The dropdown has nowhere to say why it is empty, so an unavailable answer shows no rows.
+              answer
+              |> SageFs.Features.AutoCompletion.CompletionAnswer.map SageFs.Features.AutoCompletion.CompletionEntry.toItem
+              |> SageFs.Features.AutoCompletion.CompletionAnswer.itemsOrEmpty
             | _ -> []
         | None -> return []
       with

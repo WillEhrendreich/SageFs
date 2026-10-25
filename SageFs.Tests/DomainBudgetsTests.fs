@@ -209,11 +209,11 @@ let counted : Lazy<Map<string, int>> =
 let budgets : (string * int) list =
   [ "SageFs.Core: option fields", 158
     "SageFs.Core: bool fields", 55
-    "SageFs.Core: wildcard over owned union", 254
+    "SageFs.Core: wildcard over owned union", 253
     "SageFs.Core: with wildcard", 201
     "SageFs: option fields", 83
     "SageFs: bool fields", 22
-    "SageFs: wildcard over owned union", 68
+    "SageFs: wildcard over owned union", 67
     "SageFs: with wildcard", 77
     "SageFs.Host: option fields", 0
     "SageFs.Host: bool fields", 0
@@ -222,7 +222,7 @@ let budgets : (string * int) list =
     "SageFs.FsiHost: option fields", 0
     "SageFs.FsiHost: bool fields", 1
     "SageFs.FsiHost: wildcard over owned union", 0
-    "SageFs.FsiHost: with wildcard", 11 ]
+    "SageFs.FsiHost: with wildcard", 10 ]
 
 /// The budget table as data, so `--ratchets --tighten` can lower it.
 let budgetTable =

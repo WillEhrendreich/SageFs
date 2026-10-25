@@ -430,27 +430,7 @@ module McpAdapter =
       |> List.map (fun item -> sprintf "%s (%s)" item.DisplayText (Features.AutoCompletion.CompletionKind.label item.Kind))
       |> String.concat "\n"
 
-  let formatCompletionsJson (items: Features.AutoCompletion.CompletionItem list) : string =
-    let jsonItems =
-      items
-      |> List.map (fun item ->
-        let detail =
-          match item.GetDescription with
-          | Some getDesc ->
-            try
-              let tags = getDesc ()
-              let text = tags |> Array.map (fun t -> t.Text) |> String.concat ""
-              match text.Length > 0 with
-              | true -> sprintf ""","detail":"%s" """ (escapeJson text)
-              | false -> ""
-            with
-            | :? System.OperationCanceledException -> reraise()
-            | _ -> ""
-          | None -> ""
-        sprintf """{"label":"%s","kind":"%s","insertText":"%s"%s}"""
-          (escapeJson item.DisplayText) (Features.AutoCompletion.CompletionKind.label item.Kind) (escapeJson item.ReplacementText) detail)
-      |> String.concat ","
-    sprintf """{"completions":[%s],"count":%d}""" jsonItems (List.length items)
+  // The JSON of `POST /api/completions` (formatCompletionsJson) lives in McpCompletions.fs with the routes it answers.
 
   let formatExplorationResult (qualifiedName: string) (items: Features.AutoCompletion.CompletionItem list) : string =
     match items with

@@ -135,7 +135,7 @@ let fileSize : (string * int) list =
     // remains is a one-line field, a forwarding call, and the comments saying WHY each site
     // passes the directory it does — including the one that reads no directory at all,
     // because `commitCohort`'s command already carries its scope.
-    "SageFs/Mcp.fs", 3273 // one line for the hatch section of get_daemon_status (#160); still below the 3289 it held before today's merges
+    "SageFs/Mcp.fs", 3204 // 3273 -> 3204: the completions routes moved to McpCompletions.fs
     // 850 -> 830: ratcheted DOWN (never up) after moving the
     // session-path-containment validator (resolveRealSessionPath/
     // isUncPath/validateSessionCreateRequest) out into its own
@@ -150,7 +150,7 @@ let fileSize : (string * int) list =
     // had no production caller, so they are gone.
     // 681 -> 676: the startup info options object is SageFs.Json's, and the
     // structured eval result no longer carries three JsonIgnore attributes.
-    "SageFs/McpAdapter.fs", 676
+    "SageFs/McpAdapter.fs", 656
     // 5100 -> 5160: a one-time bump for the live-testing-asyoutype-plan.md
     // Brief 4 keystone (EvalThenRunRequest, TestCycleEffect.
     // EvalBufferThenRunAffected, TestCycleEffects.redirectToEvalBuffer,
@@ -298,10 +298,22 @@ let fileSize : (string * int) list =
     // the bounded member-listing rung of the progressive map, pure formatter plus its session-routed
     // half. Set at the file's true size.
     // 58 -> 43: the page (kinds, counts, paging, rendering) moved to McpMemberPage.fs.
-    "SageFs/McpListMembers.fs", 43
-    // Added with slice 2 of the progressive map: the list_members reply as data (rung per member,
-    // count per rung, the capped slice, the continuation) plus its rendering. Set at the true size.
-    "SageFs/McpMemberPage.fs", 122 ]
+    // 43 -> 24: the session-routed half moved to McpMembersRoute.fs, so this file is the pure formatter only.
+    "SageFs/McpListMembers.fs", 24
+    // Added with slice 2 of the progressive map: the list_members reply as data (count per kind,
+    // the capped slice, the continuation) plus its rendering. 122 -> 87: the kind vocabulary moved to
+    // McpMemberKinds.fs and the empty-name reasons to McpNoMembers.fs.
+    "SageFs/McpMemberPage.fs", 87
+    // Added when list_members took the worker's real kinds (the name-shape guess is gone): the
+    // drillable/leaf split and the count-line nouns, one exhaustive match each. Set at the true size.
+    "SageFs/McpMemberKinds.fs", 83
+    // Added with the same change: why a name that lists nothing lists nothing, and how each reason reads.
+    "SageFs/McpNoMembers.fs", 66
+    // Added with the same change: the session-routed half of list_members, split out of McpListMembers.fs.
+    "SageFs/McpMembersRoute.fs", 47
+    // Added with the same change: the completions routes and their JSON, out of Mcp.fs (3273 -> 3204) and
+    // McpAdapter.fs (676 -> 656). Set at the true size.
+    "SageFs/McpCompletions.fs", 143 ]
 
 /// Product code that parks a thread-pool thread on a child process's stdout or stderr for the life of the process:
 /// a `Task.Run` (or `Task.Factory.StartNew`) whose body reads a Process stream line by line or to the end. The

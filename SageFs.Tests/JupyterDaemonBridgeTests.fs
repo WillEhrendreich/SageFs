@@ -272,15 +272,14 @@ let makeSessionProxyTests =
       | other -> failtestf "expected WorkerError DaemonNotRunning, got %A" other
     }
 
-    testAsync "WHY — GetCompletions has no daemon endpoint yet; empty matches, not a lie about being disconnected" {
+    testAsync "WHY — GetCompletions has no daemon endpoint yet; the answer says completions are not offered here, not that the bridge is disconnected" {
       let execPost = fakePost (Ok (200, "{}"))
       let createPost = fakePost (Ok (200, "{}"))
       let proxy = makeSessionProxy execPost createPost (readyPost "/work/dir") "/work/dir" TestTimeouts.jupyterBridgeWarmup
-      let! response = proxy (WorkerProtocol.WorkerMessage.GetCompletions("List.", 5, replyId))
+      let! response = proxy (WorkerProtocol.WorkerMessage.GetCompletions("List.", 5, CompletionFixtures.editorLimit, replyId))
       match response with
-      | WorkerProtocol.WorkerResponse.CompletionResult(rid, matches) ->
+      | WorkerProtocol.WorkerResponse.CompletionResult(rid, SageFs.Features.AutoCompletion.CompletionAnswer.Unavailable(SageFs.Features.AutoCompletion.CompletionUnavailable.NotOffered _)) ->
         rid |> Expect.equal "replyId" replyId
-        matches |> Expect.isEmpty "no completions wired yet"
-      | other -> failtestf "expected CompletionResult, got %A" other
+      | other -> failtestf "expected CompletionResult naming NotOffered, got %A" other
     }
   ]

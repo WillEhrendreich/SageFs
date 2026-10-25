@@ -188,10 +188,12 @@ module SageFsEffectHandler =
   let completionResponseToMsg
     (response: WorkerResponse) : SageFsMsg =
     match response with
-    | WorkerResponse.CompletionResult (_, items) ->
+    | WorkerResponse.CompletionResult (_, answer) ->
       let completionItems =
-        items |> List.map (fun label ->
-          { Label = label; Kind = "member"; Detail = None })
+        answer
+        |> Features.AutoCompletion.CompletionAnswer.itemsOrEmpty
+        |> List.map (fun entry ->
+          { Label = entry.DisplayText; Kind = Features.AutoCompletion.CompletionKind.label entry.Kind; Detail = None })
       SageFsMsg.Event (TuiEvent.CompletionReady completionItems)
     | _ ->
       SageFsMsg.Event (TuiEvent.CompletionReady [])
@@ -430,7 +432,7 @@ module SageFsEffectHandler =
             let replyId = newReplyId ()
             let! response =
               proxy (
-                WorkerMessage.GetCompletions (text, cursor, replyId))
+                WorkerMessage.GetCompletions (text, cursor, Features.AutoCompletion.CompletionLimit.UpTo Features.AutoCompletion.EditorCandidates, replyId))
             dispatch (completionResponseToMsg response)
           })
 

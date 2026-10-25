@@ -159,8 +159,13 @@
         <Compile Include="LiveBindingsTweakService.fs" />
         <Compile Include="LiveBindingsTweakRoute.fs" />
         <Compile Include="McpRunTests.fs" />
+        <!-- The completions routes, out of Mcp.fs: the symbol ladder (McpListMembers) and the editors' HTTP routes share them. -->
+        <Compile Include="McpCompletions.fs" />
+        <Compile Include="McpMemberKinds.fs" />
         <Compile Include="McpMemberPage.fs" />
+        <Compile Include="McpNoMembers.fs" />
         <Compile Include="McpListMembers.fs" />
+        <Compile Include="McpMembersRoute.fs" />
         <Compile Include="McpAnalysis.fs" />
         <Compile Include="McpDebugTest.fs" />
 

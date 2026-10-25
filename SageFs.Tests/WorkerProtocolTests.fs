@@ -124,9 +124,15 @@ let workerProtocolTests =
 
       testCase "GetCompletions round-trips"
       <| fun _ ->
-        let msg = WorkerMessage.GetCompletions("System.", 7, "r3")
+        let msg = WorkerMessage.GetCompletions("System.", 7, CompletionFixtures.editorLimit, "r3")
         let _, result = roundTrip<WorkerMessage> msg
         result |> Expect.equal "should round-trip" msg
+
+      testCase "WHY — GetCompletions carries its limit, so the ladder's EveryMember reaches the worker as asked and not as an editor's cap"
+      <| fun _ ->
+        let msg = WorkerMessage.GetCompletions("System.IO.", 10, SageFs.Features.AutoCompletion.CompletionLimit.EveryMember, "r3b")
+        let _, result = roundTrip<WorkerMessage> msg
+        result |> Expect.equal "EveryMember survives the wire" msg
 
       testCase "CancelEval round-trips"
       <| fun _ ->
@@ -247,9 +253,35 @@ let workerProtocolTests =
 
       testCase "CompletionResult round-trips"
       <| fun _ ->
-        let resp = WorkerResponse.CompletionResult("r5", ["Console"; "Convert"; "Char"])
+        let resp = WorkerResponse.CompletionResult("r5", CompletionFixtures.namesOf SageFs.Features.AutoCompletion.CompletionKind.Class ["Console"; "Convert"; "Char"])
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
+
+      testCase "WHY — CompletionResult carries the real kind of each entry and states whether its total is exact, so neither is guessed on the daemon"
+      <| fun _ ->
+        let answer =
+          SageFs.Features.AutoCompletion.CompletionAnswer.Answered(
+            [ CompletionFixtures.entry SageFs.Features.AutoCompletion.CompletionKind.Union "Option"
+              CompletionFixtures.entry SageFs.Features.AutoCompletion.CompletionKind.Method "map" ],
+            SageFs.Features.AutoCompletion.CompletionTotal.AtLeast 2000)
+        let resp = WorkerResponse.CompletionResult("r5b", answer)
+        let _, result = roundTrip<WorkerResponse> resp
+        result |> Expect.equal "kinds and the floor survive the wire" resp
+
+      testCase "WHY — an unavailable completion answer round-trips, because a name that could not be listed must not arrive as an empty list"
+      <| fun _ ->
+        let reasons =
+          [ SageFs.Features.AutoCompletion.CompletionUnavailable.SessionNotActive
+            SageFs.Features.AutoCompletion.CompletionUnavailable.CompilerError "boom"
+            SageFs.Features.AutoCompletion.CompletionUnavailable.HostLost "gone"
+            SageFs.Features.AutoCompletion.CompletionUnavailable.CheckThrew "threw"
+            SageFs.Features.AutoCompletion.CompletionUnavailable.NoSession "none"
+            SageFs.Features.AutoCompletion.CompletionUnavailable.WorkerUnreachable "down"
+            SageFs.Features.AutoCompletion.CompletionUnavailable.NotOffered "no" ]
+        for reason in reasons do
+          let resp = WorkerResponse.CompletionResult("r5c", SageFs.Features.AutoCompletion.CompletionAnswer.Unavailable reason)
+          let _, result = roundTrip<WorkerResponse> resp
+          result |> Expect.equal "should round-trip" resp
 
       testCase "StatusResult round-trips"
       <| fun _ ->
@@ -614,7 +646,7 @@ let workerProtocolTests =
         [ WorkerMessage.EvalCode("1+1", "r1")
           WorkerMessage.CheckCode("1+1", "r2")
           WorkerMessage.TypeCheckWithSymbols("1+1", "f.fsx", "r3")
-          WorkerMessage.GetCompletions("System.", 7, "r4")
+          WorkerMessage.GetCompletions("System.", 7, CompletionFixtures.editorLimit, "r4")
           WorkerMessage.LoadScript(@"C:\a.fsx", "r5")
           WorkerMessage.RunTests([| sampleTc |], 4, "r6")
           WorkerMessage.EvalLiveTestFile("f.fs", "let x = 1", "r7")

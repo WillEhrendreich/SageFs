@@ -234,13 +234,13 @@ let handleMessage
       let workerSymRefs = result.SymbolRefs |> List.map WorkerProtocol.WorkerSymbolRef.fromDomain
       return WorkerResponse.TypeCheckWithSymbolsResult(replyId, workerDiags, workerSymRefs)
 
-    | WorkerMessage.GetCompletions(code, cursorPos, replyId) ->
+    | WorkerMessage.GetCompletions(code, cursorPos, limit, replyId) ->
       let word = ""
-      let! completions =
-        actor.PostAndAsyncReply(fun rc -> Autocomplete(code, cursorPos, word, rc))
+      let! answer =
+        actor.PostAndAsyncReply(fun rc -> Autocomplete(code, cursorPos, word, limit, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Completion
-      let names = completions |> List.map (fun c -> c.DisplayText)
-      return WorkerResponse.CompletionResult(replyId, names)
+      // The kind FCS gave each candidate and the size of the set cross the wire with the names.
+      return WorkerResponse.CompletionResult(replyId, answer |> SageFs.Features.AutoCompletion.CompletionAnswer.map SageFs.Features.AutoCompletion.CompletionEntry.ofItem)
 
     | WorkerMessage.CancelEval ->
       let! cancelled = actor.PostAndAsyncReply(fun rc -> CancelEval rc)

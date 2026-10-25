@@ -326,7 +326,7 @@ let completionJsonTests =
         { DisplayText = "ToString"; ReplacementText = "ToString"; Kind = CompletionKind.Method; GetDescription = None }
         { DisplayText = "Length"; ReplacementText = "Length"; Kind = CompletionKind.Property; GetDescription = None }
       ]
-      let result = McpAdapter.formatCompletionsJson items
+      let result = McpCompletions.formatCompletionsJson (CompletionAnswer.Answered(items, CompletionTotal.Exact 2))
       use doc = System.Text.Json.JsonDocument.Parse(result)
       doc.RootElement.GetProperty("completions").GetArrayLength()
       |> Expect.equal "2 completions" 2
@@ -334,7 +334,7 @@ let completionJsonTests =
       |> Expect.equal "count is 2" 2
 
     testCase "empty list returns empty completions" <| fun _ ->
-      let result = McpAdapter.formatCompletionsJson []
+      let result = McpCompletions.formatCompletionsJson (CompletionAnswer.Answered([], CompletionTotal.Exact 0))
       use doc = System.Text.Json.JsonDocument.Parse(result)
       doc.RootElement.GetProperty("completions").GetArrayLength()
       |> Expect.equal "0 completions" 0
@@ -343,7 +343,7 @@ let completionJsonTests =
       let items = [
         { DisplayText = "Foo"; ReplacementText = "FooBar"; Kind = CompletionKind.Property; GetDescription = None }
       ]
-      let result = McpAdapter.formatCompletionsJson items
+      let result = McpCompletions.formatCompletionsJson (CompletionAnswer.Answered(items, CompletionTotal.Exact 1))
       use doc = System.Text.Json.JsonDocument.Parse(result)
       let first = doc.RootElement.GetProperty("completions").EnumerateArray() |> Seq.head
       first.GetProperty("label").GetString()

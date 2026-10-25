@@ -2454,7 +2454,7 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         SageFs.McpAnalysis.discoverFeatures ctx (RegisteredTools.describe typeof<SageFsTools>) topicOpt sid wd |> withEcho ctx "discover_features"
 
     [<McpServerTool>]
-    [<Description("""The members of a qualified name (a namespace, module or type): one rung of the symbol ladder. Names only, never bodies, so a walk stays bounded. The reply gives the total and a count per kind (drillable, then leaf) before the names, lists drillable names first, and ends with the offset for the next page. Ask a drillable child's qualified name next to descend.""")>]
+    [<Description("""The members of a qualified name (a namespace, module or type): one rung of the symbol ladder. Names only, never bodies, so a walk stays bounded. The reply gives the total (an exact count, or "at least" when the list was cut at the worker's bound) and a count per kind (modules, methods, types and so on, the kind the compiler gave each member) before the names, lists drillable kinds first, and ends with the offset for the next page. A name with no members says why: a leaf such as a method, a name that does not resolve, or a session that could not be asked. Ask a drillable child's qualified name next to descend.""")>]
     member _.list_members(
         [<Description("Fully qualified name whose members to list, e.g. 'SageFs.SessionManager'. No trailing dot.")>]
         qualified_name: string,
@@ -2467,7 +2467,7 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: list_members called, name={Name}, offset={Offset}", qualified_name, offset)
-        SageFs.McpListMembers.listMembers ctx "mcp" qualified_name offset wd |> withEcho ctx "list_members"
+        SageFs.McpMembersRoute.listMembers ctx "mcp" qualified_name offset wd |> withEcho ctx "list_members"
 
     [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.

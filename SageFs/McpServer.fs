@@ -4215,7 +4215,7 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/api/explore", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let! name = readJsonProp ctx "name"
-      let! result = SageFs.McpTools.exploreNamespace rctx.McpContext "http" name None
+      let! result = SageFs.McpCompletions.exploreNamespace rctx.McpContext "http" name None
       do! rawJsonResponse ctx result
     } :> Task
   ) |> ignore
@@ -4238,8 +4238,14 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
         tryGetJsonStringAliases root [ "workingDirectory"; "working_directory" ]
       // An editor that knows its session routes by id: a working directory can match several.
       let sessionId = tryGetJsonStringAliases root [ "sessionId"; "session_id" ]
-      let! items = SageFs.McpTools.getCompletionsItems rctx.McpContext "http" code cursor sessionId workingDirectory
-      do! rawJsonResponse ctx (SageFs.McpAdapter.formatCompletionsJson items)
+      // An editor that wants more than its popup's worth (the Type Explorer lists a whole namespace) says how
+      // many; the reply's `total` and `totalKind` say whether that was all of them.
+      let limit =
+        match tryGetJsonIntAliases root [ "limit" ] with
+        | Some n -> SageFs.Features.AutoCompletion.CompletionLimit.UpTo (System.Math.Max(1, System.Math.Min(n, SageFs.Features.AutoCompletion.WireCeiling)))
+        | None -> SageFs.Features.AutoCompletion.CompletionLimit.UpTo SageFs.Features.AutoCompletion.EditorCandidates
+      let! answer = SageFs.McpCompletions.getCompletionsLimited rctx.McpContext "http" code cursor limit sessionId workingDirectory
+      do! rawJsonResponse ctx (SageFs.McpCompletions.formatCompletionsJson answer)
     } :> Task
   ) |> ignore
   app.MapGet("/api/dependency-graph", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

@@ -31,9 +31,9 @@ module HttpWorkerClient =
     | WorkerMessage.TypeCheckWithSymbols(code, filePath, rid) ->
       "POST", "/typecheck-symbols",
       Some (Serialization.serialize {| code = code; filePath = filePath; replyId = rid |})
-    | WorkerMessage.GetCompletions(code, cursorPos, rid) ->
+    | WorkerMessage.GetCompletions(code, cursorPos, limit, rid) ->
       "POST", "/completions",
-      Some (Serialization.serialize {| code = code; cursorPos = cursorPos; replyId = rid |})
+      Some (Serialization.serialize {| code = code; cursorPos = cursorPos; limit = limit; replyId = rid |})
     | WorkerMessage.CancelEval ->
       "POST", "/cancel", None
     | WorkerMessage.LoadScript(filePath, rid) ->

@@ -232,7 +232,7 @@ columns from 0 (counted in characters, not bytes), and `endColumn` is one past t
 | `reset_fsi_session` | Soft reset: clears definitions, keeps loaded DLLs. |
 | `hard_reset_fsi_session` | Full reset: rebuilds the project, reloads, starts fresh. Needed after `.fsproj` or package changes. With `rebuild=true` it answers at once and builds in the background; call `get_session_status` with `wait_seconds=60` to wait for the outcome. In a repo that builds its own SageFs.Core, the build compiles against that Core, not the daemon's. |
 | `get_available_projects` | Discover `.fsproj` / `.sln` / `.slnx` files under a directory. |
-| `list_members` | The members of a qualified name (namespace, module or type): one rung of the symbol ladder. Names only. The reply gives the total and a count per kind (`drillable`, then `leaf`, the split the VS Code Type Explorer expands on) before the names, lists drillable names first, and ends with an offset footer for the next page. Kinds are read from the shape of each name, because the worker sends names only. |
+| `list_members` | The members of a qualified name (namespace, module or type): one rung of the symbol ladder. Names only. The reply gives the total and a count per kind before the names (for example `12 modules, 40 methods, 3 classes`, then how many are drillable, the split the VS Code Type Explorer expands on), lists drillable kinds first, and ends with an offset footer for the next page. The kind of each member is the one the compiler gave it: the worker sends it with the name. The total is exact, or reads `at least N` when the worker's list was cut at its bound of 2000 members. A name that lists nothing says why instead of `0 total`: it is a leaf (a method, a value, a property), its parent does not list it so it does not resolve, or the session could not be asked. |
 | `list_runnable_projects` | List the session's projects and which ones `run_app` can run (`OutputType=Exe`). |
 | `switch_workflow` | Switch the session's workflow: `repl` (Interactive), `livetesting` (Live Testing), or `live` (Hot Reload, aliases `hotreload`/`weblive`/`web`, kept for backward compatibility). Creates a new session in the target workflow and stops the old one; VS Code and the dashboard's own `POST /api/sessions/{sid}/workflow` route restart the same session id in place instead. |
 
@@ -346,6 +346,12 @@ affects, so do not gate a change on it. `run_tests` is the tool that answers abo
 Completions, the type explorer, per-file coverage, the symbol-to-tests lookup and the domain-model diagram are not MCP tools.
 The editors reach the first, second and third over the daemon's HTTP API (`/api/completions`, `/api/explore`,
 `/api/live-testing/file-annotations`), and `discover_features` does not list them.
+
+`POST /api/completions` answers `{ completions: [{ label, kind, insertText, detail? }], count, total, totalKind }`.
+`kind` is the compiler's own (`Method`, `Module`, `EnumMember`, ...), `count` is the items in the reply, and `total` with
+`totalKind` (`exact` or `atLeast`) give the size of the set they were cut from. The default cut is 50; a request may send
+`limit` (1 to 2000) for more. A reply that could not look, because the session was not active or its host was gone, carries
+no items and `unavailable` (a stable word) with `reason`, so an empty `completions` always means there is nothing to list.
 
 ## Export and history
 
@@ -718,7 +724,7 @@ trunk checkout is not hot reloaded there.
 
 A new tool is declared in seven places, and a test goes red for each one you miss. This is the order that keeps the build green. `my_tool` stands for the new name.
 
-1. **The tool.** A `[<McpServerTool>]` member in `SageFs/McpTools.fs`, with its description and `[<Optional; DefaultParameterValue(...)>]` on every optional parameter, as its neighbours do. A body longer than a few lines goes in a file of its own, listed in `SageFs/SageFs.fsproj`, because the file-size ratchet asks for it (`list_members` is in `SageFs/McpListMembers.fs`).
+1. **The tool.** A `[<McpServerTool>]` member in `SageFs/McpTools.fs`, with its description and `[<Optional; DefaultParameterValue(...)>]` on every optional parameter, as its neighbours do. A body longer than a few lines goes in a file of its own, listed in `SageFs/SageFs.fsproj`, because the file-size ratchet asks for it (`list_members` is in `SageFs/McpMembersRoute.fs`, with its pure halves in `McpListMembers.fs`, `McpMemberPage.fs` and `McpNoMembers.fs`).
 2. **The gate domain.** `gatingDomain` in `SageFs.Core/Affordances.fs` needs `"my_tool", ToolGate.AlwaysAvailable`, or a state-gated entry. `McpToolGateTests` checks that the domain holds exactly the registered tools, so a missing entry and a stray one both fail.
 3. **The name.** `ToolName` in the same file: the union case, its line in `ToolName.toToolName`, and its place in `ToolName.all`. `ToolName.allToolNames` is built from those.
 4. **The routing kind.** The `RouteKind` assignments in `SageFs.Core/Capability.fs`. A tool that acts on a session is `OnSession`. `MemberRouteGateTests` fails for a tool with no kind, because a token bound to one session has to know where the call is going.

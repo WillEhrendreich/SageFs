@@ -4,6 +4,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.McpTools
+open SageFs.McpCompletions
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
