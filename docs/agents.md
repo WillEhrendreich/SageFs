@@ -40,7 +40,8 @@ The other files in the folder are read only when their trigger comes up:
 - `editing.md`: proving a change before writing it, and the `#load` trap
 - `testing.md`: running tests and slow gates
 - `leases.md`: leases before a full build, test run or app run
-- `troubleshooting.md`: stale daemons, busy versus broken, when the REPL fights you
+- `troubleshooting.md`: stale daemons, busy versus broken, when the REPL fights you,
+  and the "needs a person to confirm" wait (a session your own connection made never asks)
 - `claude-code.md`: permission prompts and auto mode
 - `agents.md`: briefing a sub-agent
 

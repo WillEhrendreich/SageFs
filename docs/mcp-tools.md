@@ -44,6 +44,20 @@ unattended agent runs in where nobody is sitting there to click, and `run_app`
 is listed as destructive but not asked about, because running the app is what
 you asked for and the REPL loss is written on the tool itself.
 
+A session the calling agent created itself does not ask. If your connection
+(or your member token, which outranks the connection) made the session, then
+`stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`, `switch_workflow`
+and `stop_app` run at once on it, because nobody else put anything in it. Those
+five act on one session. `manage_local_data` acts on your machine's stores, so
+it asks every time. Everything else asks as before: a session you made through
+the dashboard, the CLI or an editor, a session another connection or token
+made, a session the daemon has no record of (a daemon restart forgets who made
+what), and any call that names no session it can find. The match uses the
+connection or token the daemon bound to the call. The `agentName` a caller
+passes plays no part. Sub-agents that share one connection and use no tokens count as
+one caller, so they can reset each other's sessions without a prompt; give each
+its own token if that matters.
+
 The part worth knowing: a client that never advertised elicitation is neither
 prompted nor refused. The prompt is skipped, and the four gates ahead of it
 still decide everything they decided before. The stdio bridge lands in exactly
@@ -57,9 +71,10 @@ A refusal says plainly that nothing was done and the session is still running.
 A client that advertises elicitation but cannot answer (a headless agent, or a
 UI whose prompt never takes an answer) waits the full 60 seconds and then
 gets "needs a person to confirm it, and no answer came within 00:01:00", with
-the way out spelled out. There is no setting that turns the prompt off, so a
-caller with nobody to answer uses the daemon's HTTP API on the same port, which
-does not ask: `POST /api/sessions/stop` with `{"sessionId": "<id>"}` for
+the way out spelled out. That only happens on a session the caller did not
+create. There is no setting that turns the prompt off, so a caller with nobody
+to answer, working on a session it did not create, uses the daemon's HTTP API on
+the same port, which does not ask: `POST /api/sessions/stop` with `{"sessionId": "<id>"}` for
 `stop_session`, `POST /reset` and `POST /hard-reset` for the two resets,
 `POST /api/sessions/<id>/workflow`, `POST /api/sessions/<id>/stop-app` and
 `POST /api/local-data/clear?store=<store>` for the rest. (`sagefs stop` stops

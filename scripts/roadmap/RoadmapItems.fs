@@ -325,7 +325,7 @@ let items : Item list =
     item "ask-before-a-destructive-tool-runs" "Ask you before a destructive tool runs" Agents Later
       (landmark "SageFs/McpServer.fs" "confirmationStep")
       [ "docs/mcp-tools.md" ]
-      "The server asks you itself now, over MCP's own elicitation request: a confirm-tier tool stops after the four gates already there and before its body, names what it is about to take away, and a decline refuses the call the way a gate rejection does. The tier sits on the same `ToolName` the authority gate reads rather than in another string list, and it says out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into."
+      "The server asks you itself now, over MCP's own elicitation request: a confirm-tier tool stops after the four gates already there and before its body, names what it is about to take away, and a decline refuses the call the way a gate rejection does. The tier sits on the same `ToolName` the authority gate reads rather than in another string list, and it says out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into. A session an agent created itself does not ask when that same connection (or member token) resets or stops it, because nobody else put anything in it. Sessions a person or another agent made still ask."
 
     // ---- Exploring: ideas, no promise ----
 

@@ -133,8 +133,18 @@ implying the command closes it.
 - **A filtered test run is never the acceptance check.** A filter that matches
   nothing prints `0 failed` and exits 0 in plain Expecto. SageFs's trust line
   says `NothingRan` or `NarrowedRun`. Only an unfiltered run counts.
-- **Clean up.** `stop_session` on every session you created. Kill only
-  processes you started, by exact PID, never by name.
+- **A reset or stop that waits a minute and then says "needs a person to
+  confirm".** `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`,
+  `switch_workflow` and `stop_app` ask a person first, except on a session your own
+  connection (or member token) created: those run at once. So this message means the
+  session is not yours (a person made it from the dashboard or an editor, another
+  connection made it, or the daemon restarted and forgot who did). Create your own
+  session instead of resetting that one. If you must act on it with nobody to answer, the
+  daemon's HTTP route on the same port does not ask: `POST /hard-reset`
+  `{"sessionId": "<id>", "rebuild": true}`, `POST /reset`,
+  `POST /api/sessions/stop`. The list is in `docs/mcp-tools.md`.
+- **Clean up.** `stop_session` on every session you created; it does not ask for those.
+  Kill only processes you started, by exact PID, never by name.
 
 ## Busy versus broken: the distinction that matters most
 
