@@ -297,7 +297,11 @@ let fileSize : (string * int) list =
     // Added with the Mcp.fs split (the file-size ratchet asked for it, as it did for SessionManager):
     // the bounded member-listing rung of the progressive map, pure formatter plus its session-routed
     // half. Set at the file's true size.
-    "SageFs/McpListMembers.fs", 58 ]
+    // 58 -> 43: the page (kinds, counts, paging, rendering) moved to McpMemberPage.fs.
+    "SageFs/McpListMembers.fs", 43
+    // Added with slice 2 of the progressive map: the list_members reply as data (rung per member,
+    // count per rung, the capped slice, the continuation) plus its rendering. Set at the true size.
+    "SageFs/McpMemberPage.fs", 122 ]
 
 /// Product code that parks a thread-pool thread on a child process's stdout or stderr for the life of the process:
 /// a `Task.Run` (or `Task.Factory.StartNew`) whose body reads a Process stream line by line or to the end. The

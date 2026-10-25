@@ -9,25 +9,11 @@ open SageFs.McpTools
 module McpListMembers =
 
   /// The members of a qualified name as ONE bounded rung. The engine is the same GetCompletions
-  /// route exploreQualifiedName uses; what this adds is the contract: a total, a cap, and a footer
-  /// naming the offset that fetches the rest, so one reply can never become the map. Pure, so the
-  /// bound is testable without a session.
+  /// route exploreQualifiedName uses; what this adds is the contract: a total, a count per kind, a
+  /// cap, and a footer naming the offset that fetches the rest, so one reply can never become the
+  /// map. The page itself is built in McpMemberPage.
   let formatListMembers (qualifiedName: string) (maxItems: int) (offset: int) (members: string list) : string =
-    let total = members.Length
-    let start = max 0 (min offset total)
-    let page = members |> List.skip start |> List.truncate maxItems
-    let endPos = start + page.Length
-    let header =
-      sprintf "Members of %s: %d total, showing %d-%d."
-        qualifiedName total (if List.isEmpty page then 0 else start + 1) endPos
-    let footer =
-      match endPos < total with
-      | true -> sprintf "(%d more; call again with offset=%d)" (total - endPos) endPos
-      | false -> ""
-    let body = page |> List.map (sprintf "  %s") |> String.concat "\n"
-    match footer with
-    | "" -> sprintf "%s\n%s" header body
-    | f -> sprintf "%s\n%s\n%s" header body f
+    McpMemberPage.pageMembers qualifiedName maxItems offset members |> McpMemberPage.render
 
   /// The session-routed half of the rung. Name paths are the ladder's identity (they survive an
   /// edit; a table of integer handles would not), so the reply carries names, the total, and the

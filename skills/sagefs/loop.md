@@ -40,3 +40,12 @@ Useful tools while you're in the loop:
 - **Want to know an API's or an AST's shape?** Ask the session: reflect over the
   type, parse a sample and print it. Never guess, and never spin up a
   throwaway `dotnet fsi` script to find out.
+- **Don't know the name yet? Walk the ladder with `list_members`.** Give it a
+  qualified name (`System.IO`, then `System.IO.Path`) and it lists that name's
+  members: a total, a count per kind (`drillable`, then `leaf`), the names
+  capped per page, and a footer with the `offset` for the next page. Drillable
+  names (namespaces, modules, types) take another `list_members` call with
+  their own qualified name; leaves are the end of the walk. Kinds are read from
+  the shape of each name, so a capitalised method or union case (`Substring`,
+  `Cons`) counts as drillable and comes back with 0 members when you descend
+  into it. Once you hold the name, reflect over it in the session as above.

@@ -2454,7 +2454,7 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         SageFs.McpAnalysis.discoverFeatures ctx (RegisteredTools.describe typeof<SageFsTools>) topicOpt sid wd |> withEcho ctx "discover_features"
 
     [<McpServerTool>]
-    [<Description("""The members of a qualified name (a namespace, module or type): one rung of the symbol ladder. Names only, with a total and an offset footer for the next page, never bodies, so a walk stays bounded. Ask a child's qualified name next to descend.""")>]
+    [<Description("""The members of a qualified name (a namespace, module or type): one rung of the symbol ladder. Names only, never bodies, so a walk stays bounded. The reply gives the total and a count per kind (drillable, then leaf) before the names, lists drillable names first, and ends with the offset for the next page. Ask a drillable child's qualified name next to descend.""")>]
     member _.list_members(
         [<Description("Fully qualified name whose members to list, e.g. 'SageFs.SessionManager'. No trailing dot.")>]
         qualified_name: string,
