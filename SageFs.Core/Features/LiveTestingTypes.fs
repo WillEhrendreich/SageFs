@@ -1850,7 +1850,7 @@ module LiveTestDiscoveryState =
 
   let hint = function
     | LiveTestDiscoveryState.Disabled ->
-      "Live testing is not active. Switch the session to the livetesting workflow with switch_workflow to start discovery."
+      "Live testing is off. Turn it on with the Enable button in the dashboard, SageFs: Enable Live Testing in VS Code, :SageFsEnableTesting in Neovim or POST /api/live-testing/enable, or from an MCP client with switch_workflow and target livetesting."
     | LiveTestDiscoveryState.Discovering ->
       "Live testing is active and discovery is still in progress."
     | LiveTestDiscoveryState.ReadyZeroTests ->
