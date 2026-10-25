@@ -122,3 +122,73 @@ progressive; the gap is navigation over the symbol map, which is what this docum
   loop either way.
 - The byte caps themselves (they belong in the named tunables home, measured against the chunk sizes
   the type explorer already requests).
+
+## 9. Revision after the roast and the probes (2026-10-24, supersedes §4-§6 where they differ)
+
+Probed and read before any code. This section is the plan of record; the sections above stay as
+evidence.
+
+**Overturned: "the references engine exists".** `ReloadPlanning.symbolUsesOfAsync` takes a source
+string, builds a synthetic `reload-planning-check-N.fs`, and resolves through
+`GetProjectOptionsFromScript`, under `Timeouts.reloadPlanningCheck` with an explicit fallback to
+identifier-name reading. That is file-scoped approximation for patch planning. Project-wide uses are
+NEW worker work: a protocol message, a project context, and a reply that states its scope
+("file-scoped (n)" versus "project-wide (n)"), because an agent that hears a bare count will trust
+it. Rung 5 is a feature, not an exposure.
+
+**Overturned: integer handles as the public key.** The engine that exists is name-keyed:
+`exploreQualifiedName` (SageFs/Mcp.fs:2184) sends `<qualifiedName>.` to the worker as
+`GetCompletions` and prints members; the extension posts the same shape to `/api/completions` and
+parses `{ completions: [{label, kind, insertText, detail?}], count}` (SageFsClient.fs:786-794).
+`POST /api/explore` (McpServer.fs:4215) is the same engine through `exploreNamespace`. Decision:
+qualified NAME paths are the public key (they survive edits, which integer handles do not), and any
+index built later is an internal memo keyed by snapshot, never the reply's identity.
+
+**The history nobody put in the plan.** `explore_namespace`, `explore_type` and `get_completions`
+were NEVER registered tools: `discover_features` advertised six names `tools/list` never had, and
+the fix sealed the surface (docs/decisions.md:1351). The names sit in
+`SageFs.Core/Affordances.fs` `RetiredTool`; `RetiredToolNameTests` scans docs for them;
+`ToolSurfaceHonestyTests` fails if discovery, affordances or `docs/mcp-tools.md` disagree with the
+registered set or name a retired tool. Consequences: (a) slice 1 must use a FRESH registered name,
+not resurrect a retired one; (b) the enforcement this plan needs already exists and is inherited —
+docs cannot drift from the registry without a red default-tier test, which is the exact
+"correct by construction" answer for the tool surface; (c) a prior audit already flagged Readme
+capability rows claiming MCP completion/type-explorer that are not MCP tools
+(outcome-gate-sweep.md, row 9a) — registering honestly is what closes that row.
+
+**Probe results.** `POST /api/explore {"name": ...}` answers HTTP 200 with the house refusal when no
+session is bound ("No active session. Use get_available_projects, then ..."), i.e. the route is
+session-routed exactly like the tools. The engine's current output is unbounded plain text (one line
+per completion, no count, no paging) (`SageFs/Mcp.fs:2193-2201`), so the bound is genuinely missing
+and is the product this plan adds.
+
+### How this stays true (structural enforcement)
+
+1. One builder constructs every ladder reply (caps, counts, snapshot, name path attached by the
+   builder; raw lists cannot be sent — module-private constructors), the `EvalResultSummary`
+   doctrine pushed into types.
+2. One shared `LadderContract` F# file compiled into .NET and into the Fable extension, so kinds and
+   caps have one source for both sides.
+3. Registration is the gate: a tool joins `SageFsTools` plus its `docs/mcp-tools.md` row in the same
+   change or `ToolSurfaceHonestyTests` goes red; `RetiredToolNameTests` forbids the six old names.
+4. Every numeric budget lives in `TestTimeouts`/the budget tables and only ratchets down; a
+   per-tool result-size row per new tool.
+5. Each slice ships its exit test in the default tier as a plain `[<Tests>]` case, verified through
+   a SageFs session receipt (TRUST `ran=registered`), never a filter-only gate.
+6. The plan itself lives under a "reopen it if" clause in `docs/decisions.md` once adopted, and its
+   size claims carry committed probe scripts, so the document cannot outlive its evidence.
+
+### Slices (one surface, one exit test each)
+
+| Slice | Deliverable | Exit test (default tier) |
+|:--|:--|:--|
+| 1 | `list_members` (fresh name): bounded member listing of a qualified name, count and paging footer, session-routed through the existing engine | registry contains the tool and its docs row; a 500-member fixture reply is capped and carries the count; no retired name appears in its description |
+| 2 | Kind grouping and sibling counts matching `drillableKinds`; skill teaches the ladder | reply shape test; skill-mentions-tool guard |
+| 3 | References tool: new worker message, project-scoped, scope stated in the reply | scope line asserted both ways; failure states the budget used |
+| 4 | Name-path resolution fallback for stale references | stale name resolves, test pins the fallback |
+| 5 | Result-size ratchet rows for the family; wire the Readme capability row (closes outcome-gate-sweep 9a) | ratchet table contains the rows; capability table matches the registry |
+
+Reopen it if: the `GetCompletions` route cannot express true children (fuzzy prefix instead of
+members), in which case slice 1 shrinks to `list_members` on namespaces only and the index question
+returns to this document with a measured symbol census.
+
