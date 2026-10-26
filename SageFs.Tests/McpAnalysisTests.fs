@@ -242,6 +242,17 @@ let coverageTests =
       match Answer.coverageIntel (sideOf withBitmap WorkflowKind.Interactive) with
       | ToolAnswer.Measured _ -> ()
       | ToolAnswer.NotAvailable reason -> failtestf "expected a measurement, got %s" (NotAvailableReason.token reason)
+
+    testCase "WHY — a recorded bitmap with no branch to count says NothingToMeasure and carries no percentage" <| fun _ ->
+      let withBitmap =
+        { failingCycle with
+            TestState =
+              { failingCycle.TestState with
+                  TestCoverageBitmaps = Map.ofList [ (failingTest.Id, CoverageBitmap.ofBoolArray [| true; false |]) ] } }
+      let report = (measuredJson (Answer.coverageIntel (sideOf withBitmap WorkflowKind.Interactive))).EnumerateArray() |> Seq.head
+      report.GetProperty("Verdict").GetString() |> Expect.equal "named" "NothingToMeasure"
+      report.GetProperty("CoveragePercent").ValueKind |> Expect.equal "null, not 0" JsonValueKind.Null
+      report.GetProperty("Summary").GetString().Contains "%" |> Expect.isFalse "and the summary prints none"
   ]
 
 // ── Routing: the session's own cycle, never the primary's ─────

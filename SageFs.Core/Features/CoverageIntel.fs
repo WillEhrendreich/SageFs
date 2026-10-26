@@ -10,6 +10,9 @@ type CoverageVerdict =
   | PartialBlindSpot
   /// <40% — "write tests before debugging"
   | DiagnosticBlindSpot
+  /// The failure's path holds no instrumented branch, so there is no percentage to take: a test that never passed has no
+  /// causal code, and 0 of 0 branches is not "0% covered".
+  | NothingToMeasure
 
 /// An uncovered branch in code related to a failing test.
 type BranchGap = {
@@ -43,7 +46,7 @@ module CoverageIntelReport =
     CoveragePercent = 0.0
     BlindSpots = []
     CorrelatedFailures = []
-    Verdict = DiagnosticBlindSpot
+    Verdict = NothingToMeasure
   }
 
 /// Pure composition: joins FailureNarrative + InstrumentationMaps + CoverageBitmaps
@@ -56,6 +59,20 @@ module CoverageIntel =
     | p when p >= 80.0 -> WellCovered
     | p when p >= 40.0 -> PartialBlindSpot
     | _ -> DiagnosticBlindSpot
+
+  /// The verdict for `covered` of `total` branches. With no branch to count there is no percentage, so the verdict says so
+  /// instead of reading a zero denominator as poor coverage.
+  let verdictOf (covered: int) (total: int) : CoverageVerdict =
+    match total with
+    | 0 -> NothingToMeasure
+    | _ -> classifyVerdict (float covered / float total * 100.0)
+
+  /// The percentage a report may put on the wire: none when its verdict says there was nothing to measure, because the 0.0 the
+  /// record holds then is only a default. Every tool that renders a report takes its percentage from here.
+  let measuredPercent (report: CoverageIntelReport) : System.Nullable<float> =
+    match report.Verdict with
+    | NothingToMeasure -> System.Nullable<float>()
+    | WellCovered | PartialBlindSpot | DiagnosticBlindSpot -> System.Nullable<float>(report.CoveragePercent)
 
   /// Extract causal symbol names from a FailureNarrative.
   let extractCausalSymbols (narrative: FailureNarrative) : string list =
@@ -264,7 +281,7 @@ module CoverageIntel =
       CoveragePercent = percent
       BlindSpots = allBlindSpots
       CorrelatedFailures = allCorrelated
-      Verdict = classifyVerdict percent
+      Verdict = verdictOf coveredCount allPoints
     }
 
   /// Compose coverage intelligence for multiple test failures.
@@ -288,12 +305,19 @@ module CoverageIntel =
       | WellCovered -> "✅"
       | PartialBlindSpot -> "⚠️"
       | DiagnosticBlindSpot -> "🔴"
-    let header = sprintf "%s %s — %.0f%% branch coverage (%d/%d)"
-                   icon report.TestName report.CoveragePercent
-                   report.CoveredBranches report.TotalBranches
+      | NothingToMeasure -> "➖"
+    let header =
+      match report.Verdict with
+      | NothingToMeasure ->
+        sprintf "%s %s — no instrumented branch on this failure's path, so there is no coverage figure" icon report.TestName
+      | WellCovered | PartialBlindSpot | DiagnosticBlindSpot ->
+        sprintf "%s %s — %.0f%% branch coverage (%d/%d)"
+          icon report.TestName report.CoveragePercent
+          report.CoveredBranches report.TotalBranches
     let lines = ResizeArray<string>()
     lines.Add header
     match report.Verdict with
+    | NothingToMeasure -> ()
     | DiagnosticBlindSpot ->
       lines.Add "  ⚡ Write tests before debugging — related code is largely untested"
     | PartialBlindSpot ->

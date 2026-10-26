@@ -232,10 +232,23 @@ let private failureBelongsToItsSession (client: McpClient) (bareSid: string) (fi
     expectMeasured "suggest_next_action in the session that ran no test" otherActions
     (payloadOf otherActions).GetProperty("TotalFailures").GetInt32() |> Expect.equal "the other session's failure is not ranked here" 0
 
+    // A failing test is never an empty list and never a made-up zero. A session that has recorded no coverage for it says which switch is
+    // missing. A session that has recorded some (a run in a session that is not the primary one records its own) says the failure has no
+    // instrumented branch on its path when that is so: the test never passed, so it has no causal code, and "0% of 0 branches" is not a
+    // measurement.
     let! coverage = call client "coverage_intel" [ "session_id", box fixtureSid ]
-    answerKind coverage |> Expect.equal (sprintf "a failing test and no coverage is not an empty list. Text: %s" coverage.Text) NotAvailable
-    [ "NeedsAWorkflow"; "NeedsLiveTesting"; "NoCoverageRecorded" ]
-    |> Expect.contains (sprintf "the reason says which switch is missing. Text: %s" coverage.Text) (reasonOf coverage)
+    match answerKind coverage with
+    | kind when kind = NotAvailable ->
+      [ "NeedsAWorkflow"; "NeedsLiveTesting"; "NoCoverageRecorded" ]
+      |> Expect.contains (sprintf "the reason says which switch is missing. Text: %s" coverage.Text) (reasonOf coverage)
+    | _ ->
+      expectMeasured "coverage_intel in the session that ran the failing test" coverage
+      let reports = [ for report in (payloadOf coverage).EnumerateArray() -> report ]
+      reports |> Expect.hasLength (sprintf "one failing test, one report. Text: %s" coverage.Text) 1
+      reports.[0].GetProperty("Verdict").GetString()
+      |> Expect.equal (sprintf "a failure with nothing to measure says so and does not read as poor coverage. Text: %s" coverage.Text) "NothingToMeasure"
+      reports.[0].GetProperty("CoveragePercent").ValueKind
+      |> Expect.equal (sprintf "and carries no percentage. Text: %s" coverage.Text) System.Text.Json.JsonValueKind.Null
   }
 
 /// An eval sent the way an editor sends it (POST /exec, which VS Code and Neovim use) is in the session's

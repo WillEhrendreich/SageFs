@@ -95,14 +95,18 @@ module ActionPrioritizer =
     |> List.collect (fun report ->
       let failureAction =
         match report.Verdict with
-        | DiagnosticBlindSpot | PartialBlindSpot ->
+        | DiagnosticBlindSpot ->
           [ { Kind = ActionKind.InvestigateFailure report.TestId
               Priority = FailurePriority
-              Reason = sprintf "Test '%s' failing with %s coverage" report.TestName
-                         (match report.Verdict with
-                          | DiagnosticBlindSpot -> "poor"
-                          | PartialBlindSpot -> "partial"
-                          | WellCovered -> "good") } ]
+              Reason = sprintf "Test '%s' failing with poor coverage" report.TestName } ]
+        | PartialBlindSpot ->
+          [ { Kind = ActionKind.InvestigateFailure report.TestId
+              Priority = FailurePriority
+              Reason = sprintf "Test '%s' failing with partial coverage" report.TestName } ]
+        | NothingToMeasure ->
+          [ { Kind = ActionKind.InvestigateFailure report.TestId
+              Priority = FailurePriority
+              Reason = sprintf "Test '%s' failing; no instrumented branch on its path, so coverage has nothing to say" report.TestName } ]
         | WellCovered ->
           [ { Kind = ActionKind.InvestigateFailure report.TestId
               Priority = FailurePriority + 5

@@ -253,3 +253,19 @@ let propertyTests =
       (toInt h2 <= toInt h3)
       |> Expect.isTrue "attention ≤ critical"
   ]
+
+[<Tests>]
+let nothingToMeasureActionTests =
+  testList "ActionPrioritizer.actionsFromCoverage with nothing to measure" [
+
+    testCase "WHY — a failure coverage cannot speak about is investigated, with no claim about its coverage" <| fun _ ->
+      let report = mkCoverageReport NothingToMeasure 0 "never passed"
+      let actions = ActionPrioritizer.actionsFromCoverage [ report ]
+      actions |> Expect.hasLength "one action" 1
+      match actions.[0].Kind with
+      | ActionKind.InvestigateFailure _ -> ()
+      | other -> failwithf "expected InvestigateFailure, got %A" other
+      actions.[0].Priority |> Expect.equal "ordinary failure priority" ActionPrioritizer.FailurePriority
+      actions.[0].Reason.Contains "poor" |> Expect.isFalse "it does not call the coverage poor"
+      actions.[0].Reason.Contains "good" |> Expect.isFalse "or good"
+  ]

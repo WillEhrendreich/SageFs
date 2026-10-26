@@ -615,3 +615,56 @@ let bitmapFallbackCompositionTests =
 
       report.CorrelatedFailures |> Expect.hasLength "graph found t2" 1
   ]
+
+// ── A failure with nothing to measure is not 0% ───────────────
+
+/// A report for a failure whose path holds no instrumented branch: the case that reads "0% (0/0)" when a zero denominator is
+/// allowed to become a percentage.
+let private nothingToMeasureReport () : CoverageIntelReport =
+  let narrative = mkNarrative [] "a test that never passed has no causal code"
+  let points = [| mkSequencePoint "src.fs" 10 10 0 |]
+  CoverageIntel.composeForFailure
+    (mkTestId "t1") "never passed" narrative
+    [] [| mkInstrumentationMap points |] (Map.ofList [ mkTestId "t1", mkBitmap 1 [ 0 ] ]) emptyDepGraph
+
+[<Tests>]
+let nothingToMeasureTests =
+  testList "a failure whose path holds no instrumented branch says there is nothing to measure" [
+
+    testCase "WHY — no branches at all is NothingToMeasure, never DiagnosticBlindSpot" <| fun _ ->
+      CoverageIntel.verdictOf 0 0
+      |> Expect.equal "a zero denominator is not a percentage" NothingToMeasure
+
+    testCase "WHY — with branches the verdict is still the percentage's" <| fun _ ->
+      CoverageIntel.verdictOf 0 2 |> Expect.equal "none of two hit" DiagnosticBlindSpot
+      CoverageIntel.verdictOf 1 2 |> Expect.equal "half hit" PartialBlindSpot
+      CoverageIntel.verdictOf 2 2 |> Expect.equal "all hit" WellCovered
+
+    testProperty "WHY — verdictOf agrees with classifyVerdict whenever there is something to count" <| fun (covered: byte) (extra: byte) ->
+      let total = int covered + int extra + 1
+      let hit = int covered
+      CoverageIntel.verdictOf hit total
+      |> Expect.equal "same as the percentage's verdict" (CoverageIntel.classifyVerdict (float hit / float total * 100.0))
+
+    testCase "WHY — composing a failure with no causal files gives NothingToMeasure and zero branches" <| fun _ ->
+      let report = nothingToMeasureReport ()
+      report.Verdict |> Expect.equal "nothing to measure" NothingToMeasure
+      report.TotalBranches |> Expect.equal "no branches counted" 0
+
+    testCase "WHY — the empty report is not a poor-coverage claim" <| fun _ ->
+      (CoverageIntelReport.empty (mkTestId "t1") "x").Verdict
+      |> Expect.equal "the default says nothing to measure" NothingToMeasure
+
+    testCase "WHY — the summary does not print a percentage it did not measure" <| fun _ ->
+      let text = CoverageIntel.summarize (nothingToMeasureReport ())
+      text.Contains "%" |> Expect.isFalse "no percent sign"
+      text.Contains "Write tests" |> Expect.isFalse "no advice to write tests, nothing says they are missing"
+      text |> Expect.stringContains "says what is true" "no instrumented branch"
+
+    testCase "WHY — the JSON carries no number for coverage it did not measure" <| fun _ ->
+      let json = SageFs.Json.serialize SageFs.Json.standard (SageFs.McpAnalysisViews.toCoverageIntelJson (nothingToMeasureReport ()))
+      use doc = System.Text.Json.JsonDocument.Parse json
+      doc.RootElement.GetProperty("CoveragePercent").ValueKind
+      |> Expect.equal "null, not 0" System.Text.Json.JsonValueKind.Null
+      doc.RootElement.GetProperty("Verdict").GetString() |> Expect.equal "named" "NothingToMeasure"
+  ]

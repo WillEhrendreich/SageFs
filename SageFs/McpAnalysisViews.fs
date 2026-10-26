@@ -28,10 +28,12 @@ let private verdictString (v: Features.CoverageIntel.CoverageVerdict) =
   | Features.CoverageIntel.WellCovered -> "WellCovered"
   | Features.CoverageIntel.PartialBlindSpot -> "PartialBlindSpot"
   | Features.CoverageIntel.DiagnosticBlindSpot -> "DiagnosticBlindSpot"
+  | Features.CoverageIntel.NothingToMeasure -> "NothingToMeasure"
 
-/// Convert a CoverageIntelReport to a JSON-serializable anonymous record.
+/// Convert a CoverageIntelReport to a JSON-serializable anonymous record. A failure with no branch to count has no
+/// percentage, so the field is null and the verdict says why.
 let toCoverageIntelJson (report: Features.CoverageIntel.CoverageIntelReport) =
-  {| CoveragePercent = report.CoveragePercent
+  {| CoveragePercent = Features.CoverageIntel.CoverageIntel.measuredPercent report
      CoveredBranches = report.CoveredBranches
      TotalBranches = report.TotalBranches
      Verdict = verdictString report.Verdict

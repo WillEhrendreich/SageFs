@@ -2007,8 +2007,8 @@ This replaces calling explain_test_failure + plan_ripple + get_eval_timeline + s
 Composes the session's failure narratives + IL instrumentation bitmaps + test dependency graph into per-failure coverage intelligence. It reads only that session's own test results and coverage, never another session's.
 
 OUTPUT: Per-failing-test analysis with:
-- Coverage verdict: WellCovered (>80% branches hit), PartialBlindSpot (40-80%), or DiagnosticBlindSpot (<40%)
-- Branch coverage percentage and uncovered branch locations
+- Coverage verdict: WellCovered (>80% branches hit), PartialBlindSpot (40-80%), DiagnosticBlindSpot (<40%), or NothingToMeasure (no instrumented branch on the failure's path, for example a test that never passed)
+- Branch coverage percentage (null for NothingToMeasure) and uncovered branch locations
 - Causal symbols that changed before the failure
 - Correlated failures (other tests covering the same code paths)
 - Blind spot details: files, lines, and branch IDs with zero coverage
