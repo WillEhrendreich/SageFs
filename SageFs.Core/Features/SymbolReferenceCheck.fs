@@ -37,8 +37,11 @@ module SymbolReferenceCheck =
   /// The ceiling and the retention the cache is held to. The project cache size says how many projects are held and
   /// nothing about their bytes, so bytes and idleness decide separately whether the cache is kept
   /// (`ReferenceCacheRetention.decide`).
+  let residentCeiling : ResidentCeiling =
+    ResidentCeiling.resolve SageFs.SageFsConfig.ReferencesResidentCeilingSetting (MachineMemory.current ()).TotalBytes
+
   let cachePolicy : CachePolicy =
-    { CeilingBytes = SageFs.SageFsConfig.ReferencesResidentCeilingBytes
+    { CeilingBytes = residentCeiling.Bytes
       Retention = Timeouts.referencesCacheRetention }
 
   /// The held checker and the timer that sweeps it while nobody asks. The timer is a field of this record, and the record
@@ -51,6 +54,7 @@ module SymbolReferenceCheck =
   let cache : Lazy<HeldCache> =
     lazy
       (let clock = Stopwatch.StartNew()
+       Log.info "list_references: compiler cache ceiling is %s" (ResidentCeiling.describe residentCeiling)
        let holder =
          CacheHolder<FSharpChecker>(
            { Create = newChecker

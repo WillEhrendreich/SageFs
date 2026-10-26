@@ -227,3 +227,117 @@ let tests =
         fake.Dropped |> Expect.equal "dropped nothing" 0
     ]
   ]
+
+let gigabyte = 1024L * megabyte
+
+let ceilingMb (totalGb: int64) : int64 =
+  (ResidentCeiling.ceilingOf (totalGb * gigabyte)).Bytes / megabyte
+
+let totalOfMb (mb: uint32) : int64 = (int64 mb + 1L) * megabyte
+
+/// What `list_references` needs of the worker to answer the largest session measured (eight projects, SageFs.Tests): 4.0
+/// to 4.3 GB resident after the first ask, 4.5 GB at the highest reading.
+let eightProjectPeakBytes = 4608L * megabyte
+
+[<Tests>]
+let ceilingTests =
+  testList "the resident ceiling a machine gets" [
+
+    testList "examples at the machine sizes people run" [
+      testCase "WHY — a 4 GB machine gets the floor, enough for one project and no more" <| fun _ ->
+        ceilingMb 4L |> Expect.equal "floor" 1280L
+        (ResidentCeiling.ceilingOf (4L * gigabyte)).Basis |> Expect.equal "named" CeilingBasis.FloorOfSmallMachine
+
+      testCase "WHY — an 8 GB machine is still on the floor, because a share of it would not hold one project" <| fun _ ->
+        ceilingMb 8L |> Expect.equal "floor" 1280L
+
+      testCase "WHY — a 16 GB machine gives one worker's cache 15 percent, about 2.4 GB" <| fun _ ->
+        ceilingMb 16L |> Expect.equal "15 percent of 16 GB" 2457L
+        (ResidentCeiling.ceilingOf (16L * gigabyte)).Basis |> Expect.equal "named" CeilingBasis.ShareOfMemory
+
+      testCase "WHY — a 32 GB machine holds the eight-project session whole, which is why the share is 15 percent and not 12" <| fun _ ->
+        ceilingMb 32L |> Expect.equal "15 percent of 32 GB" 4915L
+        ((ResidentCeiling.ceilingOf (32L * gigabyte)).Bytes >= eightProjectPeakBytes) |> Expect.isTrue "above the 4.5 GB peak"
+
+      testCase "WHY — a 64 GB machine reaches the cap, 8 GB, and the eight-project session fits with room" <| fun _ ->
+        ceilingMb 64L |> Expect.equal "cap" 8192L
+        (ResidentCeiling.ceilingOf (64L * gigabyte)).Basis |> Expect.equal "named" CeilingBasis.CapOfLargeMachine
+        ((ResidentCeiling.ceilingOf (64L * gigabyte)).Bytes >= eightProjectPeakBytes) |> Expect.isTrue "above the 4.5 GB peak"
+
+      testCase "WHY — a 128 GB machine is held to the same cap, because one worker's cache has no use for a share of that much" <| fun _ ->
+        ceilingMb 128L |> Expect.equal "cap" 8192L
+
+      testCase "WHY — the machine this was measured on (62.7 GiB, as /proc/meminfo reports it) is not left on the flat 2,560 MB that answered 7 of 8" <| fun _ ->
+        let measured = 67329937408L
+        ((ResidentCeiling.ceilingOf measured).Bytes >= eightProjectPeakBytes) |> Expect.isTrue "holds the session"
+    ]
+
+    testList "the rule" [
+      testProperty "WHY — more memory never gives a smaller ceiling" <| fun (a: uint32) (b: uint32) ->
+        let low, high = (min a b), (max a b)
+        (ResidentCeiling.ceilingOf (totalOfMb low)).Bytes <= (ResidentCeiling.ceilingOf (totalOfMb high)).Bytes
+
+      testProperty "WHY — a readable machine never gets less than the floor, so a small one still caches a project" <| fun (mb: uint32) ->
+        (ResidentCeiling.ceilingOf (totalOfMb mb)).Bytes >= ResidentCeiling.floorBytes
+
+      testProperty "WHY — no machine gets more than the cap" <| fun (mb: uint32) ->
+        (ResidentCeiling.ceilingOf (totalOfMb mb)).Bytes <= ResidentCeiling.capBytes
+
+      testProperty "WHY — between the floor and the cap the ceiling is the share, exactly, and says so" <| fun (mb: uint32) ->
+        let total = totalOfMb mb
+        let share = total * ResidentCeiling.sharePercent / 100L
+        let ceiling = ResidentCeiling.ceilingOf total
+        match share >= ResidentCeiling.floorBytes && share <= ResidentCeiling.capBytes with
+        | false -> true
+        | true -> ceiling.Bytes = share && ceiling.Basis = CeilingBasis.ShareOfMemory
+
+      testProperty "WHY — the ceiling is never more than the share unless the floor lifts it" <| fun (mb: uint32) ->
+        let total = totalOfMb mb
+        let ceiling = ResidentCeiling.ceilingOf total
+        ceiling.Bytes <= total * ResidentCeiling.sharePercent / 100L || ceiling.Basis = CeilingBasis.FloorOfSmallMachine
+    ]
+
+    testList "memory that cannot be read" [
+      testCase "WHY — zero total memory is a named case with the old 2,560 MB, never a silent zero ceiling that would drop every cache" <| fun _ ->
+        let ceiling = ResidentCeiling.ceilingOf 0L
+        ceiling.Bytes |> Expect.equal "the fallback" (2560L * megabyte)
+        ceiling.Basis |> Expect.equal "named" CeilingBasis.MemoryUnreadable
+
+      testProperty "WHY — a negative total is unreadable too" <| fun (n: NegativeInt) ->
+        (ResidentCeiling.ceilingOf (int64 n.Get)).Basis = CeilingBasis.MemoryUnreadable
+    ]
+
+    testList "the operator's value" [
+      testProperty "WHY — a positive megabyte count from SAGEFS_REFERENCES_RESIDENT_CEILING_MB wins on every machine" <| fun (mb: PositiveInt) (machineMb: uint32) ->
+        let ceiling = ResidentCeiling.resolve (SageFsConfig.ResidentCeilingSetting.Megabytes mb.Get) (totalOfMb machineMb)
+        ceiling.Bytes = int64 mb.Get * megabyte && ceiling.Basis = CeilingBasis.SetByOperator
+
+      testCase "WHY — unset leaves the machine's own number" <| fun _ ->
+        let total = 16L * gigabyte
+        ResidentCeiling.resolve SageFsConfig.ResidentCeilingSetting.Unset total
+        |> Expect.equal "same as the rule" (ResidentCeiling.ceilingOf total)
+
+      testCase "WHY — a value that is not a positive integer falls back to the machine's number, and is kept to be warned about" <| fun _ ->
+        let total = 16L * gigabyte
+        ResidentCeiling.resolve (SageFsConfig.ResidentCeilingSetting.Rejected "lots") total
+        |> Expect.equal "same as the rule" (ResidentCeiling.ceilingOf total)
+
+      testCase "WHY — the setting reads a positive integer, and names anything else instead of guessing" <| fun _ ->
+        SageFsConfig.ResidentCeilingSetting.parse "6144" |> Expect.equal "positive" (SageFsConfig.ResidentCeilingSetting.Megabytes 6144)
+        SageFsConfig.ResidentCeilingSetting.parse null |> Expect.equal "null" SageFsConfig.ResidentCeilingSetting.Unset
+        SageFsConfig.ResidentCeilingSetting.parse "" |> Expect.equal "empty" SageFsConfig.ResidentCeilingSetting.Unset
+        for text in [ "0"; "-5"; "1.5"; "6 GB"; "lots" ] do
+          SageFsConfig.ResidentCeilingSetting.parse text
+          |> Expect.equal (sprintf "'%s' is rejected with its text" text) (SageFsConfig.ResidentCeilingSetting.Rejected text)
+
+      testCase "WHY — every basis has its own words in the log line, so the log says where the number came from" <| fun _ ->
+        let described =
+          [ CeilingBasis.SetByOperator
+            CeilingBasis.ShareOfMemory
+            CeilingBasis.FloorOfSmallMachine
+            CeilingBasis.CapOfLargeMachine
+            CeilingBasis.MemoryUnreadable ]
+          |> List.map (fun basis -> ResidentCeiling.describe { Bytes = 1L * gigabyte; Basis = basis })
+        (List.distinct described).Length |> Expect.equal "five different lines" 5
+    ]
+  ]

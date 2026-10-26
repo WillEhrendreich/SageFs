@@ -33,6 +33,23 @@ type CachePolicy =
   { CeilingBytes: int64
     Retention: TimeSpan }
 
+/// Where a ceiling came from. A closed set, so the worker's log says whether the number was the operator's, a share of
+/// the machine, a floor or a cap, and an unreadable machine is a case of its own and never a zero.
+[<RequireQualifiedAccess>]
+type CeilingBasis =
+  /// `SAGEFS_REFERENCES_RESIDENT_CEILING_MB` was set to a positive integer.
+  | SetByOperator
+  | ShareOfMemory
+  /// The share would not hold one project, so the machine gets the floor.
+  | FloorOfSmallMachine
+  /// The share is more than one worker's cache has a use for, so the machine gets the cap.
+  | CapOfLargeMachine
+  /// The machine's total memory could not be read.
+  | MemoryUnreadable
+
+/// The bytes the worker may hold before the cache is dropped, and why that many.
+type ResidentCeiling = { Bytes: int64; Basis: CeilingBasis }
+
 [<RequireQualifiedAccess>]
 module ReleaseReason =
   let describe (reason: ReleaseReason) : string =
@@ -42,6 +59,61 @@ module ReleaseReason =
     | ReleaseReason.IdlePastRetention(idle, retention) ->
       sprintf "no ask for %.0fs, past the %.0fs retention" idle.TotalSeconds retention.TotalSeconds
     | ReleaseReason.MemoryNotNormal pressure -> sprintf "memory pressure is %s" (MemoryPressure.describe pressure)
+
+/// The default ceiling is a function of the machine. Measured on 2026-10-25 on the SageFs.Tests session (eight projects),
+/// a worker goes from 0.77 GB at Ready to 4.0 to 4.3 GB after the first ask (4.5 GB at the highest reading), and one
+/// project is about 0.4 to 0.5 GB on top of the baseline. At a flat 2,560 MB the cache was dropped in the middle of the ask
+/// and every ask answered `partial, 7 of 8`; at 6,144 MB it answered `project-wide, 8 of 8` and the second ask was warm.
+/// A flat number is a guess about a machine it cannot see, so:
+///   * the share is 15 percent of total memory: 4.5 GB over 15 percent is 30 GB, so a 32 GB machine and up answer that
+///     session project-wide, and a 16 GB machine gives one worker's cache 2.4 GB;
+///   * the floor is 1,280 MB: the worker's own 0.77 GB and about one project, so a small machine still keeps one project
+///     warm between asks (the machine-pressure rule still drops it when the machine is short);
+///   * the cap is 8,192 MB: the 4.5 GB peak with room to spare, and past it a bigger machine would only let a runaway
+///     cache take more.
+[<RequireQualifiedAccess>]
+module ResidentCeiling =
+
+  let bytesPerMegabyte : int64 = 1048576L
+
+  /// Percent of the machine's total memory one worker's cache may take, before the floor and the cap.
+  let sharePercent : int64 = 15L
+
+  let floorBytes : int64 = 1280L * bytesPerMegabyte
+
+  let capBytes : int64 = 8192L * bytesPerMegabyte
+
+  /// What the ceiling was before it depended on the machine, and what a machine whose memory cannot be read gets.
+  let unreadableBytes : int64 = 2560L * bytesPerMegabyte
+
+  /// The ceiling for a machine with this much physical memory. Pure and monotone in the total. A total that is zero or
+  /// negative is `MemoryUnreadable` with the old flat number.
+  let ceilingOf (totalBytes: int64) : ResidentCeiling =
+    match totalBytes > 0L with
+    | false -> { Bytes = unreadableBytes; Basis = CeilingBasis.MemoryUnreadable }
+    | true ->
+      match totalBytes * sharePercent / 100L with
+      | share when share < floorBytes -> { Bytes = floorBytes; Basis = CeilingBasis.FloorOfSmallMachine }
+      | share when share > capBytes -> { Bytes = capBytes; Basis = CeilingBasis.CapOfLargeMachine }
+      | share -> { Bytes = share; Basis = CeilingBasis.ShareOfMemory }
+
+  /// The operator's megabytes when one was set, otherwise the machine's own number.
+  let resolve (setting: SageFsConfig.ResidentCeilingSetting) (totalBytes: int64) : ResidentCeiling =
+    match setting with
+    | SageFsConfig.ResidentCeilingSetting.Megabytes megabytes ->
+      { Bytes = int64 megabytes * bytesPerMegabyte; Basis = CeilingBasis.SetByOperator }
+    | SageFsConfig.ResidentCeilingSetting.Unset
+    | SageFsConfig.ResidentCeilingSetting.Rejected _ -> ceilingOf totalBytes
+
+  /// One log line: the number and where it came from.
+  let describe (ceiling: ResidentCeiling) : string =
+    let megabytes = ceiling.Bytes / bytesPerMegabyte
+    match ceiling.Basis with
+    | CeilingBasis.SetByOperator -> sprintf "%d MB, set by SAGEFS_REFERENCES_RESIDENT_CEILING_MB" megabytes
+    | CeilingBasis.ShareOfMemory -> sprintf "%d MB, %d percent of the machine's memory" megabytes sharePercent
+    | CeilingBasis.FloorOfSmallMachine -> sprintf "%d MB, the floor: %d percent of this machine's memory would hold less" megabytes sharePercent
+    | CeilingBasis.CapOfLargeMachine -> sprintf "%d MB, the cap: %d percent of this machine's memory is more than one worker's cache needs" megabytes sharePercent
+    | CeilingBasis.MemoryUnreadable -> sprintf "%d MB, the machine's memory could not be read" megabytes
 
 [<RequireQualifiedAccess>]
 module ReferenceCacheRetention =

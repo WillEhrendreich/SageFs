@@ -93,18 +93,43 @@ let ListMembersMax : int =
 let ReferencesProjectCacheSize : int =
   envInt "SAGEFS_REFERENCES_PROJECT_CACHE" 12
 
-/// Megabytes the worker may hold in all before `list_references` drops the compiler's cache. A project count says how
-/// many projects are held and nothing about their size: measured on 2026-10-25 on the SageFs.Tests session (8
-/// projects), a worker went from 0.77 GB at Ready to 4.0 GB after the first ask and stayed at 3.5 to 4.2 GB for as long
-/// as it was left, with nothing that released it. 2.5 GB sits well under that, above the worker's own 0.77 GB with room
-/// for the smaller sessions (one or two projects) to stay warm between asks. Raise it on a machine with memory to
-/// spare so a large session keeps its cache between asks.
-let ReferencesResidentCeilingMb : int =
-  envInt "SAGEFS_REFERENCES_RESIDENT_CEILING_MB" 2560
+/// What an operator said about the megabytes the worker may hold before `list_references` drops the compiler's cache,
+/// as a closed set. A value that is not a positive integer is kept with its text, so the warning can quote it and the
+/// default for the machine applies; it is never read as zero, which would drop the cache on every ask.
+[<RequireQualifiedAccess>]
+type ResidentCeilingSetting =
+  /// Nothing set: the ceiling is a share of the machine's memory (`ResidentCeiling.ceilingOf`).
+  | Unset
+  | Megabytes of megabytes: int
+  | Rejected of text: string
 
-/// The same ceiling in bytes, the unit the worker's resident set is read in.
-let ReferencesResidentCeilingBytes : int64 =
-  int64 ReferencesResidentCeilingMb * 1024L * 1024L
+[<RequireQualifiedAccess>]
+module ResidentCeilingSetting =
+
+  /// A positive integer is a setting; empty or absent is unset; anything else is rejected with its text.
+  let parse (text: string | null) : ResidentCeilingSetting =
+    match text with
+    | null -> ResidentCeilingSetting.Unset
+    | "" -> ResidentCeilingSetting.Unset
+    | s ->
+      match Int32.TryParse s with
+      | true, megabytes when megabytes > 0 -> ResidentCeilingSetting.Megabytes megabytes
+      | _ -> ResidentCeilingSetting.Rejected s
+
+/// SAGEFS_REFERENCES_RESIDENT_CEILING_MB, read once. The ceiling's default is not a number here: it is a share of the
+/// machine's memory, worked out where the machine can be read (`ResidentCeiling.resolve`, which compiles after this
+/// file). A flat default could not fit both a 4 GB laptop and the 64 GB workstation where the eight-project
+/// SageFs.Tests session needs 4.0 to 4.3 GB to be answered project-wide.
+let ReferencesResidentCeilingSetting : ResidentCeilingSetting =
+  let setting = ResidentCeilingSetting.parse (Environment.GetEnvironmentVariable "SAGEFS_REFERENCES_RESIDENT_CEILING_MB")
+  match setting with
+  | ResidentCeilingSetting.Rejected text ->
+    eprintfn
+      "[SageFsConfig] WARNING: env var SAGEFS_REFERENCES_RESIDENT_CEILING_MB=%s is not a positive integer; using the default for this machine"
+      text
+  | ResidentCeilingSetting.Unset
+  | ResidentCeilingSetting.Megabytes _ -> ()
+  setting
 
 /// References any one `list_references` reply carries. A line is a file position and a kind, shorter than a member
 /// name, so the cap matches `ListMembersMax`. The reply states the total and names the offset for the rest.

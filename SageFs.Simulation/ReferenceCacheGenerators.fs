@@ -2,6 +2,7 @@ namespace SageFs.Simulation
 
 open System
 open SageFs
+open SageFs.Features
 open SageFs.Simulation.ReferenceCacheSim
 
 /// Seeded, dependency-free generators for a worker that answers `list_references` over a long afternoon. `fromSeed n`
@@ -25,12 +26,20 @@ module ReferenceCacheGenerators =
     | 6 -> Step.Squeeze(match rnd.Next 2 with | 0 -> MemoryPressure.Tight | _ -> MemoryPressure.Critical)
     | _ -> Step.Squeeze MemoryPressure.Normal
 
+  /// The machine sizes an afternoon may run on, in gigabytes: the sizes people own, from the smallest that runs SageFs to
+  /// the largest workstation. The ceiling is the real one for that machine, so the invariants are proven for the default
+  /// a machine actually gets and not for a number picked to suit them.
+  let machineSizesGb : int64 list = [ 2L; 4L; 8L; 16L; 32L; 64L; 128L ]
+
+  let ceilingOnMachine (totalGb: int64) : int64 =
+    (ResidentCeiling.ceilingOf (totalGb * 1024L * megabyte)).Bytes
+
   /// A general afternoon: asks, silences and a machine that tightens and eases. Same seed, identical scenario.
   let fromSeed (seed: int) : Scenario =
     let rnd = Random(seed)
     { Seed = seed
       BaselineBytes = int64 (rnd.Next(200, 900)) * megabyte
-      CeilingBytes = int64 (rnd.Next(1500, 4000)) * megabyte
+      CeilingBytes = ceilingOnMachine machineSizesGb.[rnd.Next machineSizesGb.Length]
       RetentionSeconds = rnd.Next(60, 900)
       SweepEverySeconds = rnd.Next(5, 60)
       BudgetSeconds = rnd.Next(20, 90)
@@ -70,6 +79,18 @@ module ReferenceCacheGenerators =
     { baseline with
         Seed = 503
         Steps = [ Step.Ask [ project "Core" 10 800 ]; Step.Squeeze MemoryPressure.Tight; Step.Idle 60 ] }
+
+  /// The largest session measured, SageFs.Tests: eight projects of about 450 MB each over a 770 MB worker, 4.4 GB in all.
+  /// The budget is long enough for eight cold checks, so only the ceiling can stop the ask.
+  let eightProjects : ProjectCost list =
+    [ for i in 1 .. 8 -> project (sprintf "P%d" i) 10 450 ]
+
+  let eightProjectsTwice : Scenario =
+    { baseline with
+        Seed = 505
+        BaselineBytes = 770L * megabyte
+        BudgetSeconds = baselineBudget * 2
+        Steps = [ Step.Ask eightProjects; Step.Ask eightProjects ] }
 
   /// Two asks of the same project inside the retention and under the ceiling: the second is warm.
   let staysWarm : Scenario =

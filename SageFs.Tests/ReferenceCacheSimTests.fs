@@ -66,6 +66,36 @@ let tests =
         | other -> failtestf "expected two asks, got %d" other.Length
     ]
 
+    testList "the default ceiling a machine gets" [
+      testCase "WHY — on a 64 GB machine the eight-project session is cached whole, nothing is released, and the second ask is warm" <| fun _ ->
+        let scenario = { ReferenceCacheGenerators.eightProjectsTwice with CeilingBytes = ReferenceCacheGenerators.ceilingOnMachine 64L }
+        let t = run Policy.Real scenario
+        assertHolds t
+        t.Releases |> Expect.isEmpty "no release"
+        let asks = t.Snapshots |> List.filter (fun s -> s.Moment = Moment.AfterAsk)
+        match asks with
+        | [ first; second ] ->
+          first.CachedBytes |> Expect.equal "all eight projects are held after the first ask" (8L * 450L * megabyte)
+          (second.AskSeconds < first.AskSeconds) |> Expect.isTrue "the second ask is warm"
+        | other -> failtestf "expected two asks, got %d" other.Length
+
+      testCase "REPRODUCED — the flat 2,560 MB the default used to be drops the cache in the middle of the same ask" <| fun _ ->
+        let scenario = { ReferenceCacheGenerators.eightProjectsTwice with CeilingBytes = 2560L * megabyte }
+        let t = run Policy.Real scenario
+        (t.Releases |> List.isEmpty |> not) |> Expect.isTrue "the old default released mid-ask"
+        match t.Releases with
+        | ReleaseReason.OverResidentCeiling _ :: _ -> ()
+        | other -> failtestf "expected the ceiling reason first, got %A" other
+
+      testPropertyWithConfig simConfig
+        "WHY — on every machine size the real holder holds the invariants for the ceiling that machine gets"
+        <| fun (seed: int) ->
+          ReferenceCacheGenerators.machineSizesGb
+          |> List.iter (fun gb ->
+            let scenario = { ReferenceCacheGenerators.fromSeed seed with CeilingBytes = ReferenceCacheGenerators.ceilingOnMachine gb }
+            assertHolds (run Policy.Real scenario))
+    ]
+
     testList "the twins reproduce the bugs the invariants exist for" [
       testCase "REPRODUCED — the never-releases twin keeps a multi-gigabyte cache past the ceiling and past the retention" <| fun _ ->
         let over = run Policy.NeverReleases ReferenceCacheGenerators.growsPastTheCeiling
