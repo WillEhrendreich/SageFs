@@ -11,7 +11,7 @@ open Expecto.Flip
 open TreeSitter
 open SageFs.Features.LiveTesting
 
-let private fixtureSource =
+let fixtureSource =
   String.concat "\n" [
     "[<Tests>]"
     "let ``six builders`` = testList \"outer\" ["
@@ -24,19 +24,19 @@ let private fixtureSource =
     "]"
   ]
 
-let private repoRoot = RepoPaths.repoPathFull [||]
+let repoRoot = RepoPaths.repoPathFull [||]
 
-let private goldenDir =
+let goldenDir =
   Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "TreeSitter")
 
-let private goldenFile = Path.Combine(goldenDir, "expecto-builder-shapes.txt")
+let goldenFile = Path.Combine(goldenDir, "expecto-builder-shapes.txt")
 
 [<Literal>]
-let private UpdateVariable = "SAGEFS_UPDATE_TREE_SITTER_GOLDEN"
+let UpdateVariable = "SAGEFS_UPDATE_TREE_SITTER_GOLDEN"
 
 /// One line per node: `type [row:col]`, and the source text for a leaf, so both the shape and the
 /// positions the matcher will read are pinned.
-let private renderShapeLines (library: string) (code: string) : string list =
+let renderShapeLines (library: string) (code: string) : string list =
   let language = new Language(library, "tree_sitter_fsharp")
   use parser = new Parser(language)
   use tree = parser.Parse(code)
