@@ -1,0 +1,227 @@
+# More settings editable from the dashboard
+
+Roadmap item: `more-settings-editable` (Next, Dashboard). Plan written 2026-10-26 against master 59a8692c.
+
+## Resume here
+
+This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
+
+| Field | Now |
+|:--|:--|
+| Status | Not started |
+| Size | M |
+| Branch and worktree | none yet |
+| Last green commit | none yet |
+| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: a saved per-test timeout is in force after a restart. Then take the steps below in order. |
+| Decisions made | none yet (the open ones are under "Decisions for Will") |
+| Surprises | none yet |
+
+## What done looks like
+
+You open `/dashboard/settings` and every setting someone plausibly has to change on a real machine is a row. Each row shows the
+value in use right now, the layer it came from (default, global file, repo file, environment variable, command-line flag), the
+value you saved if that differs, and whether the change applies live or after a daemon restart. A saved value that an
+environment variable or flag overrides says so on the row, with the variable's name. After a restart the daemon uses what the
+panel saved, and the row confirms it. The outcome gate is a Playwright journey in the Expecto suite (own daemon, fresh
+`SAGEFS_DATA_DIR`, `--integration-browser` tier) over this matrix: each first-batch setting x {default, saved global, saved repo,
+environment override, flag override where a flag exists} x {before restart, after restart}. Every cell asserts the visible
+value, the source badge and the in-use value. No cell is skipped.
+
+## What exists today
+
+Checked by opening the files; the roadmap text was not taken on trust.
+
+- The core is `SageFs.Core/Settings.fs`: `ConfigLayer = LDefault | LGlobal | LRepo | LSession`, `ConfigError`, closed value
+  types (`Port`, `EnumValue`, `Toggle`, `DirectoryPath`, `ValidTimeout`, `LoopbackHost`), `SettingDescriptor`
+  (Key, Name, Description, Category, Scope, Applicability, Default, Parse, Render, Apply) and the pure
+  `SettingsResolver.resolve`.
+- `SageFs.Core/SettingsStore.fs` persists a flat string map at `<SageFsDir>/settings.json` (global) and
+  `<repo>/.SageFs/settings.json` (repo), atomic by tmp plus move. `SettingsCatalog.resolve/edit/clear` glue them to a descriptor.
+- The catalog has five descriptors in `SettingsCatalog.pilots` (default working directory, per-test timeout, test-run timeout,
+  MCP port, bind host) and two in `SageFs.Core/SessionAgent.fs` (`reflectionReadModeSetting`, `tieredCompilationSetting`).
+  `Dashboard.fs` `settingsRows` and `descriptorForSignal` concatenate the same seven.
+- `SageFs/SettingsPanel.fs` renders the page and the edit controls with `Ds.signal`, `Ds.bind`, `Ds.post`. Routes are
+  `GET /dashboard/settings`, `POST /dashboard/settings/edit/{sig}`, `POST /dashboard/settings/clear/{sig}`
+  (`Dashboard.fs`, near line 3488). It is a standalone page, reached by the gear link in `renderMainContent`
+  (`DashboardFragments.fs` line 2311), not a pane in the one-morph shell.
+- Only some saved values are ever read back. The MCP port is (`SettingsCatalog.mcpPortFromLayers`, used by
+  `DaemonPort.configured`, order in `SageFsConfig.chooseMcpPort`: flag, env, saved, default). Reflection mode and tiering are read at
+  session start (`SessionAgent.reflectionSettingsFor`). The default directory pre-fills the New Session form
+  (`Dashboard.resolveDefaultWorkingDir`).
+- `docs/configuration.md` lists 21 non-duration variables and 65 duration variables. Durations are `let` values in
+  `SageFs.Core/Timeouts.fs`, frozen at module initialisation by the private `envOrDefault*` helpers. `Timeouts.fs` compiles at
+  position 27 of `SageFs.Core.fsproj`, `Settings.fs` at 67, so `Timeouts` cannot call the settings store.
+- Tests: `SageFs.Tests/SettingsTests.fs` (core, store, catalog, port-read-back), `SettingsPanelTests.fs` (string asserts on the
+  render). I found no browser test of the panel.
+
+Defects I found while reading, each a reason the panel can say something untrue today:
+
+1. Saved live timeouts are lost on restart. `SettingsCatalog.edit` calls `descriptor.Apply` for `Live` rows. I found no other
+   caller of `Apply`, so `Timeouts.setPerTestTimeout` is never run at daemon start from the file. The panel keeps showing the
+   saved number while the daemon uses the default.
+2. The bind host row reads the file layers only. The daemon takes the bind host from `SAGEFS_BIND_HOST` alone
+   (`SageFsConfig.BindHost`, used in `Program.fs` `runDaemon`). With the variable set to `::1` the row says `localhost`, source
+   `default`. The row is `Guarded`, so it has no control; `docs/progress.md` says read-only on purpose. The roadmap sentence that
+   lists bind host among the edited settings overstates it.
+3. The MCP port row ignores `SAGEFS_MCP_PORT` and `--mcp-port`, which outrank the saved value, so it can show a port the daemon
+   is not on.
+4. "This repo" means the daemon's current directory. `settingsPaths ()` in `Dashboard.fs` uses `Environment.CurrentDirectory`,
+   while reflection settings use the session's working directory. One layer file, two meanings.
+5. `SettingsStore.setKey` reads the layer, adds the key and rewrites the file with no lock. Two tabs saving different keys at the
+   same moment can drop one. I have not reproduced it. The simulation below settles it.
+
+## Design
+
+Rank of what to move first. Evidence is how often the repo's own docs send a person to the variable
+(`docs/TROUBLESHOOTING.md` mention counts) and whether the doc names it as the first thing to reach for.
+
+| Rank | Setting (variable) | Why this place | Type | Applies |
+|---|---|---|---|---|
+| 1 | `SAGEFS_WARMUP_INACTIVITY_SECONDS` (5 mentions), `SAGEFS_WARMUP_MAX_MINUTES` (3), `SAGEFS_BUILD_TIMEOUT_MINUTES` (2) | `configuration.md` says these are the ones to raise on a big repo or slow CI | `ValidTimeout`-like positive span | restart |
+| 2 | `SAGEFS_MACHINE_TIER` (5) | Forces every machine-scaled wait | DU `AutoDetect \| Forced of MachineTier` | restart |
+| 3 | `SAGEFS_PER_TEST_TIMEOUT_SECONDS` (2, already in catalog) | Fix defect 1 first | existing | live |
+| 4 | `SAGEFS_ABANDONED_SESSION_HOURS` | `0` is a real answer, a good test of the type | DU `ReaperOff \| After of hours` | restart |
+| 5 | `SAGEFS_UPDATE_CHECK_DISABLED`, `SAGEFS_DEVRELOAD`, `SAGEFS_METADATA_DELTA` | on/off switches docs repeat in three pages | `Toggle` | restart (DevReload and delta are read per worker start) |
+| 6 | `SAGEFS_EDITOR` | link scheme for file:line links | `EnumValue` | live for new pages |
+| 7 | Local data retention (`SAGEFS_FRICTION_MAX_*`, `SAGEFS_COHORT_LEDGER_RETENTION_DAYS`, `SAGEFS_HOST_CACHE_MAX_AGE_DAYS`, `SAGEFS_WORKER_LOG_MAX_AGE_DAYS`) | rarely changed; sit beside `manage_local_data` | positive int | restart |
+| 8 | Launch flags `--no-resume`, `--no-watch`, `--prune` | shown as read-only "launch flag" rows first | `Toggle` | read-only |
+
+Shown read-only with their source, never editable here: `SAGEFS_BIND_HOST` and `SAGEFS_IDENTITY_POLICY` (security, fail closed;
+changing them from a page the daemon serves is the wrong trust direction), `SAGEFS_DATA_DIR` (the settings file lives inside
+it), `SAGEFS_MEMBER_TOKEN` (a secret, never rendered), every "Set by SageFs" variable, every `SAGEFS_TEST_*`.
+
+Types, added to `Settings.fs` (the compiler then lists every match that must be updated):
+
+```fsharp
+type ConfigLayer = LDefault | LGlobal | LRepo | LSession | LEnvironment | LCommandLine   // rank 0..5
+
+type ExternalSource =
+  | NoExternalSource
+  | FromEnvironment of variable: string
+  | FromFlag of flag: string
+  | FromEnvironmentOrFlag of variable: string * flag: string
+
+type EnvRead = EnvUnset | EnvSet of raw: string          // injected, so tests never touch the process environment
+
+type InUse =                                             // what the live subsystem uses right now
+  | InUseSameAsSaved
+  | InUseDiffers of inUse: SettingValue                  // row shows "saved X, in use Y, restart to apply"
+```
+
+`SettingDescriptor` gains `External: ExternalSource` and `Current: unit -> SettingValue`. `Current` reads the real consumer
+(`Timeouts.warmupInactivityLimit`, the bound MCP port, the tier in force), never the file, so the in-use column is evidence and
+not an echo of what was saved. `ConfigPaths` gains `Environment: string -> EnvRead` and `Flags: Map<string, string>`.
+`SettingsCatalog.resolve` folds the two new layers into `SettingsResolver.resolve`; precedence is flag, environment, session,
+repo, global, default, the order `chooseMcpPort` already uses.
+
+Editing a setting that a higher layer overrides is allowed and says so on the row ("saved 900; ignored while
+`SAGEFS_WARMUP_MAX_MINUTES=15` is set"). The write is not refused, because the person may unset the variable next.
+
+Start-up wiring, two options, decided by the first measurement:
+
+- A. `SettingsBootstrap.importSaved` runs first in `Program.fs main`, before anything touches `Timeouts`, and sets each saved
+  duration's variable in the daemon's own environment when it is unset, recording the names it set. The resolver treats a variable
+  recorded as imported is read as the global layer and never as `LEnvironment`. Workers inherit the environment, so they agree with the daemon.
+- B. `Timeouts` gets a `layered` lookup the daemon installs once. Same ordering risk as A, no environment mutation.
+
+`SettingsCatalog.applyAtStart` runs `Apply` for every `Live` descriptor with its resolved value at start. This is the fix for
+defect 1.
+
+Scope: the first batch is `Global` only. A repo-level warmup limit needs the limit passed per session at create time instead of
+read from a daemon-wide static, which is a read-site change in `SessionManager`; it is a separate, later step.
+
+The repo layer: `ConfigPaths.Repo` is resolved from the viewed session's working directory (the dashboard already tracks it as
+`snap.WorkingDir`), with `NoRepoCheckout` when there is none. The edit-target selector then names the directory it will write.
+
+Files: `Settings.fs`, `SettingsCatalog.fs`, `SettingsStore.fs` (a lock plus compare-and-write), `SessionAgent.fs` (descriptors move
+out of the session module into the catalog), `Dashboard.fs`, `SettingsPanel.fs`, a new `SageFs/SettingsBootstrap.fs`,
+`docs/configuration.md` (a generated "Editable in Settings" column via `scripts/gen-configuration-doc.fsx`).
+
+Wire and clients: none. The settings routes are page-internal, not in `EndpointContracts.fs`, so `apiVersion` stays 4 and
+`sagefs.nvim` and `sagefs-vscode` need nothing. No new MCP tool, so no catalog token cost. A later read endpoint for editors is
+possible and is not part of this plan.
+
+Persistence: `settings.json` stays a flat string map. New keys are additive. A key the build does not know is kept.
+
+## Tests
+
+RED first, in this order. Each fails today.
+
+1. `SettingsStartupTests`: "a saved per-test timeout is the per-test timeout after a restart". Write
+   `{"livetest.perTestTimeoutSeconds":"42"}` to a temp global dir, call `SettingsCatalog.applyAtStart`, assert
+   `Timeouts.perTestDefault()` is 42 s. Compile-red (the function does not exist). Sequenced list that restores the default.
+2. `SettingsResolveExternalTests`: with `Environment = fun "SAGEFS_MCP_PORT" -> EnvSet "5000"` and a saved 6000, the resolution
+   is `LEnvironment`, effective 5000, `PerLayer` lists both. Property: the winner is always the highest-ranked present layer
+   (extends the existing `SettingsResolver` property to six layers).
+3. `SettingsBindHostTruthTests`: with `SAGEFS_BIND_HOST=::1` injected, the bind host row's effective value is `::1`, source
+   environment, and the row has no edit control.
+4. `SettingsRepoLayerTests`: the repo layer path is `<session working dir>/.SageFs/settings.json`, and with no checkout the
+   repo target is refused with `LayerUnavailable`.
+5. Property: `Parse (Render v) = Ok v` for every first-batch descriptor over generated legal values; and no string outside the
+   legal set parses (extends `Port`/`EnumValue` properties).
+6. Ratchet: every `SAGEFS_*` name in `Timeouts.fs` and `SageFsConfig.fs` is either a descriptor's `External` or in an explicit
+   `NotEditable of reason` table, in the style of `EnvVarDocTests`. The table is a budget that only goes down.
+
+Simulation (`SageFs.Simulation/SettingsStoreSim.fs` + `SettingsStoreSimInvariants.fs`, tests in
+`SettingsStoreSimDstTests.fs`, modelled on `RetentionSim.fs`). Pool: three keys, two tabs, one repo layer. Ops: `Edit(tab, key,
+value)`, `Clear(tab, key)`, `CrashDuringWrite`, `CorruptFile`, `Restart`. Faults from `FaultInjection.fs`: reorder, duplicate,
+drop. Invariants: (a) after quiescence the file holds the last edit of each key (no lost update); (b) a crash leaves the old or
+new file, never a partial one; (c) a corrupt layer resolves to an error row naming the file, never to a wrong value; (d) after
+`Restart` plus `applyAtStart`, every `Live` descriptor's `Current` equals its resolved value. Twin: the current
+read-modify-write without a lock, which invariant (a) must catch. No wall-clock waits: the schedule is data and the clock is
+injected.
+
+Outcome gate: `DashboardSettingsBrowserTests.fs`, `Integration.register (Integration.Dedicated "--integration-browser")`, own
+daemon on reserved ports with `--no-resume` (copy the `startDaemon` shape from `HygieneBrowserTests.fs`). Matrix above. It waits on
+`PlaywrightExpect.waitForSSE` and `waitForSelectorText`, never a sleep; the restart step waits for the new daemon's ready state.
+Also checks at 375 px that rows wrap and nothing scrolls sideways (the `layoutProblems` helper in
+`DashboardLiveBindingsDockBrowserTests.fs`) and zero console and `PatchElementsNoTargetsFound` errors.
+
+## Steps
+
+1. RED tests 1 and 2, then `ExternalSource`, `EnvRead`, the two new layers and `applyAtStart`. Green on the core tests.
+   Owns `Settings.fs`, `SettingsCatalog.fs`, `SettingsTests.fs`.
+2. Defects 3 and 4: resolve with the injected environment and flags, repo layer from the session directory. Owns
+   `Dashboard.fs` (`settingsPaths`, `settingsRows`), `SettingsPanel.fs`, `SettingsPanelTests.fs`.
+3. `Current` on every descriptor, the "in use" and "overridden by" row text. Owns `SettingsPanel.fs`.
+4. Store lock and compare-and-write, with the simulation and its twin. Parallel with 2 and 3: owns `SettingsStore.fs`,
+   `SettingsStoreSim*.fs`.
+5. Measure first #1, then `SettingsBootstrap.fs` for rank 1 and 2 (warmup, build, tier). Owns `Program.fs`, `SettingsBootstrap.fs`.
+6. Rank 4 and 5 descriptors (reaper DU, toggles). One commit per descriptor group.
+7. The browser journey, written against ranks 1 to 3 first, extended as each rank lands.
+8. `docs/configuration.md` column and the ratchet table. Commit trailer for the wire surface is not needed: no wire file changes.
+
+Steps 2 to 4 are file-disjoint and can run in parallel after step 1.
+
+## Measure first
+
+- When does `Timeouts` initialise inside the `sagefs` exe? Experiment: a test child process sets a variable inside a function
+  that runs first in `main`, then reads `Timeouts.warmupInactivityLimit`. If it sees the value, option A works. If the first read
+  happened earlier (for example from a static in another file), the variable is ignored and option B, or moving the import
+  earlier, is needed. This decides step 5.
+- Do workers read `Timeouts` values the daemon sets, or recompute them? Read `SageFs.Host` for `Timeouts.` uses; if the worker
+  reads `warmupInactivityLimit` itself it needs the environment (option A) and not an in-memory hook (option B).
+- How long does `settings.json` take to resolve for 30 rows? Each row calls `readLayer` twice, so 60 file reads per page render.
+  Expect microseconds; measure once, cache per render if not.
+
+## Risks and dependencies
+
+- Importing saved values into the environment (option A) changes what `sagefs check` and the daemon log say about a variable the
+  person never set. The recorded-names rule above is the guard; a test must cover it.
+- Persisted timeouts that were saved before this change start applying after it. The panel already promised that, so this is
+  a fix, and the release note should say it.
+- Depends on nothing else. `command-palette-and-one-timeline` can list "Open settings" and "Edit setting X" once rows have stable
+  keys. `dashboard-follows-context` shares the "say why" vocabulary: an overridden row is the same idea as a hidden panel.
+
+## Size
+
+M, about two weeks for steps 1 to 8 on ranks 1 to 5, because the core types are in place and the work is wiring, one browser
+journey and one simulation. Ranks 6 to 8 are S each afterwards.
+
+## Decisions for Will
+
+- Option A (import saved values into the process environment) or option B (a lookup seam in `Timeouts`)? Recommend A for
+  rank 1 and 2 after the first measurement, because workers then agree without more plumbing.
+- Should an edit be refused or accepted when an environment variable overrides it? Recommend accepted, with the row saying it is
+  ignored until the variable is unset.
+- Keep bind host and identity policy read-only? Recommend yes, and correct the roadmap sentence.

@@ -100,12 +100,12 @@ let items : Item list =
 
     item "repl-eval-reaches-the-running-app" "A REPL eval changes the running app" HotReload Next
       NoLandmarkYet
-      [ "docs/how-hot-reload-works.md" ]
+      [ "docs/how-hot-reload-works.md"; "docs/plans/repl-eval-reaches-the-running-app.md" ]
       "An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes, and it is now driven end to end against a running run_app app in our own tests. The eval writes the declaration back, the file change reaches the worker, and the running app serves the new code. Measured here, the whole route takes about 5.6 seconds, most of it the build. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built."
 
     item "level-the-repl-without-losing-it" "Level the REPL after a patch without losing it" HotReload Next
       NoLandmarkYet
-      [ "docs/decisions.md"; "docs/how-hot-reload-works.md" ]
+      [ "docs/decisions.md"; "docs/how-hot-reload-works.md"; "docs/plans/level-the-repl-without-losing-it.md" ]
       "Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. Half of the fix is already in: the daemon re-fetches maps and discovery after every in-worker host swap, refused through a gate rather than half-refreshed when the worker is unsettled. What is still missing is the idle-and-empty check inside the eval actor, which cancels a running eval before a hard reset so the check cannot live outside it, and the host's own in-flight test count, because a test run runs in the host and the actor's idle phase proves nothing about it. With those, the refresh becomes a background step with the loud state held until it finishes."
 
     item "live-tweak-front-door" "Nudge a value in the running app" HotReload Now
@@ -142,7 +142,7 @@ let items : Item list =
 
     item "debug-failing-tests-in-vscode" "Debug failing tests properly in VS Code" LiveTesting Next
       NoLandmarkYet
-      [ "docs/LIVE_TESTING_GUIDE.md"; "docs/how-live-testing-works.md" ]
+      [ "docs/LIVE_TESTING_GUIDE.md"; "docs/how-live-testing-works.md"; "docs/plans/debug-failing-tests-in-vscode.md" ]
       "Debugging a failing test from the VS Code lens works for one test at a time. The attach is now proven in our own tests, the same case the Neovim item leans on. Still open is debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out."
 
     item "live-requests-not-dropped" "No live request dropped during a swap" LiveTesting Next
@@ -177,12 +177,12 @@ let items : Item list =
 
     item "more-settings-editable" "More settings editable from the dashboard" Dashboard Next
       NoLandmarkYet
-      [ "docs/configuration.md" ]
+      [ "docs/configuration.md"; "docs/plans/more-settings-editable.md" ]
       "The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime."
 
     item "dashboard-follows-context" "Dashboard panels that follow your context" Dashboard Next
       NoLandmarkYet
-      []
+      [ "docs/plans/dashboard-follows-context.md" ]
       "A panel that is not relevant right now says why, in one line where the panel would have been: hot reload, live testing, cohort and friction each leave the reason behind, so a user can tell the dashboard having nothing to say from the dashboard hiding something. The cohort panel shows only while a cohort is running. The live bindings fold away and open again with one click, and the pin opens the pane when there are no bindings yet. What is not built is the live bindings becoming a real pane in REPL mode, and a pane moving between regions."
 
     item "app-output-pane" "App output in its own pane" Dashboard Next
@@ -229,27 +229,27 @@ let items : Item list =
 
     item "type-change-keeps-state" "Type changes keep your running state" HotReload Later
       NoLandmarkYet
-      [ "docs/granular-restart-scope.md"; "docs/decisions.md" ]
+      [ "docs/granular-restart-scope.md"; "docs/decisions.md"; "docs/plans/type-change-keeps-state.md" ]
       "A record that gains a field can keep its live value today, but only if your app registers a boundary and only for simple fields such as int and string. I want that to need nothing from you and to cover more field kinds, because a type change is the biggest restart left."
 
     item "delta-adds-fields-and-types" "Adding a field without a restart" HotReload Later
       NoLandmarkYet
-      [ "docs/how-hot-reload-works.md"; "docs/decisions.md" ]
+      [ "docs/how-hot-reload-works.md"; "docs/decisions.md"; "docs/plans/delta-adds-fields-and-types.md" ]
       "A run_app save that adds a field to a type, or adds a lambda that captures something, still restarts the app. The runtime can take those as deltas. My emitter writes rows only for method bodies and added methods so far."
 
     item "browser-refresh-beyond-pages" "Refresh CSS and static files too" HotReload Later
       NoLandmarkYet
-      [ "docs/how-hot-reload-works.md" ]
+      [ "docs/how-hot-reload-works.md"; "docs/plans/browser-refresh-beyond-pages.md" ]
       "Browser refresh covers your pages when a save lands. CSS, static assets and Razor or Blazor views aren't part of it, and .NET Hot Reload covers them."
 
     item "hot-reload-on-windows-and-macos" "Hot reload checked on Windows and macOS" Platform Later
       NoLandmarkYet
-      [ "docs/how-hot-reload-works.md"; "Readme.md" ]
+      [ "docs/how-hot-reload-works.md"; "Readme.md"; "docs/plans/hot-reload-on-windows-and-macos.md" ]
       "My CI is Linux only, so the hot reload detour has no passing evidence on Windows, macOS or arm64, and the docs say so. The one data point so far is bad: on an Apple Silicon Mac the five real-detour tests for generic functions fail, and I don't know why (issue #149). Until someone with a Mac captures the failures, hot reload on macOS is unproven."
 
     item "start-on-login-windows" "Start on login for Windows" Platform Later
       NoLandmarkYet
-      [ "docs/progress.md"; "Readme.md" ]
+      [ "docs/progress.md"; "Readme.md"; "docs/plans/start-on-login-windows.md" ]
       "Linux gets a systemd user unit and macOS a launchd agent, and each starts the daemon for you. Nothing starts it at login on Windows yet."
 
     item "start-on-login-macos" "The daemon starts at login on macOS" Platform Later
@@ -259,67 +259,67 @@ let items : Item list =
 
     item "getter-sandbox-beyond-linux" "The getter sandbox beyond Linux x86-64" Platform Later
       NoLandmarkYet
-      [ "docs/decisions.md" ]
+      [ "docs/decisions.md"; "docs/plans/getter-sandbox-beyond-linux.md" ]
       "Clicking a getter in the live-bindings pane runs it under a syscall filter that stops network use and file writes, on Linux x86-64 only. Elsewhere the getter runs under its deadline alone, and the pane says so."
 
     item "a-token-for-every-daemon-call" "A token for every daemon call" Platform Later
       NoLandmarkYet
-      [ "docs/mcp-tools.md" ]
+      [ "docs/mcp-tools.md"; "docs/plans/a-token-for-every-daemon-call.md" ]
       "The daemon binds loopback only and checks Origin so a web page can't drive it, but nothing authenticates a local caller. A minted token the daemon requires would, and it's the same handle agents need for their own identity."
 
     item "admit-heavy-work-by-measured-cost" "Admit heavy work by measured cost" Platform Later
       NoLandmarkYet
-      []
+      [ "docs/plans/admit-heavy-work-by-measured-cost.md" ]
       "Heavy work already takes a lease, and the daemon sheds under memory pressure with a retry hint. It doesn't yet know what a rebuild of your project usually costs, so it reacts instead of predicting. I'd record peak memory and duration per kind of work and admit against the headroom."
 
     item "sessions-learn-the-load-order" "Sessions learn the right load order" Repl Later
       NoLandmarkYet
-      []
+      [ "docs/plans/sessions-learn-the-load-order.md" ]
       "A session whose projects load in the wrong order retries and usually recovers. I'd order loads by MSBuild's project graph first, and remember the edges it missed so the second start loads clean on the first pass."
 
     item "jupyter-kernel-that-works" "A Jupyter kernel that installs and works" Repl Later
       NoLandmarkYet
-      [ "docs/coming-from-jupyter.md"; "Readme.md" ]
+      [ "docs/coming-from-jupyter.md"; "Readme.md"; "docs/plans/jupyter-kernel-that-works.md" ]
       "`sagefs --jupyter` is marked experimental because nothing in my suite opens a ZMQ socket against it. I'd add a one-command install and a test that drives it end to end, then richer output than plain text."
 
     item "move-and-dock-dashboard-panes" "Move and dock dashboard panes" Dashboard Later
       NoLandmarkYet
-      []
+      [ "docs/plans/move-and-dock-dashboard-panes.md" ]
       "Panes you can move, dock, hide and reopen like Visual Studio's tool windows, with a layout per workflow and a reset button for when you lose one. Two pieces of that are in: the live bindings fold away and open again with one click, because the tree can be taller than the dock's ceiling and the drag handle that changes the ceiling is a thin line to find, and the fold is the user's, so a push does not take it back; and the dock's own ceiling remembers itself between visits. Moving a pane between regions is not built."
 
     item "friction-reports-you-can-read-first" "Friction reports you can read first" Dashboard Later
       NoLandmarkYet
-      [ "docs/mcp-tools.md" ]
+      [ "docs/mcp-tools.md"; "docs/plans/friction-reports-you-can-read-first.md" ]
       "Friction events stay local and bounded now, and the panel stays hidden until reporting has a real endpoint. A report you choose to send would show its exact payload first, then go to that endpoint or start as a prefilled GitHub issue."
 
     item "markers-on-expecto-cases" "Markers on individual Expecto cases" LiveTesting Later
       NoLandmarkYet
-      [ "docs/how-live-testing-works.md" ]
+      [ "docs/how-live-testing-works.md"; "docs/plans/markers-on-expecto-cases.md" ]
       "Expecto test cases come from reflection and have no source line, so the gutter marks the `[<Tests>]` binding but not each testCase, and a category comes from the test's name alone. I'd read cases from source and take categories from where you put them."
 
     item "confirm-builds-without-restarting-the-worker" "Confirm builds without restarting the worker" LiveTesting Later
       NoLandmarkYet
-      [ "docs/decisions.md"; "docs/how-live-testing-works.md" ]
+      [ "docs/decisions.md"; "docs/how-live-testing-works.md"; "docs/plans/confirm-builds-without-restarting-the-worker.md" ]
       "The confirming build restarts the worker, so FSI state and unsaved edits in other files don't survive it. A second worker for the build would avoid that at the price of a second FSI host's memory."
 
     item "live-testing-numbers-on-bigger-projects" "Live testing numbers on bigger projects" LiveTesting Later
       NoLandmarkYet
-      [ "docs/how-live-testing-works.md" ]
+      [ "docs/how-live-testing-works.md"; "docs/plans/live-testing-numbers-on-bigger-projects.md" ]
       "Keystroke to verdict is p50 712 ms and save to green p50 542 ms, measured on an 11-test sample. I have no figure for a large solution, for slow tests or for the confirming build."
 
     item "run-tests-reuses-proven-results" "run_tests reuses proven results" LiveTesting Later
       NoLandmarkYet
-      [ "docs/decisions.md" ]
+      [ "docs/decisions.md"; "docs/plans/run-tests-reuses-proven-results.md" ]
       "The content-addressed cache that stops a landing being proven twice works only for the cohort landing gate. I'd feed it into run_tests receipts too, and run tests inside the live session once I know a redefinition changes what your compiled tests call."
 
     item "watch-your-agents-from-your-phone" "Watch your agents from your phone" Agents Later
       NoLandmarkYet
-      []
+      [ "docs/plans/watch-your-agents-from-your-phone.md" ]
       "A second listener on your Tailscale address would serve the dashboard read-only to a phone with a short-lived token. A conductor could then approve or veto a landing from a link, but only once the minted handles above exist."
 
     item "tokens-survive-a-restart" "Member tokens survive a daemon restart" Agents Later
       NoLandmarkYet
-      [ "docs/mcp-tools.md" ]
+      [ "docs/mcp-tools.md"; "docs/plans/tokens-survive-a-restart.md" ]
       "Tokens live in the daemon's memory, so a restart drops every one and the orchestrator mints new ones. Keeping their hashes would let a run survive a restart, but only in a store that is not the cohort ledger, and I'd rather see someone need it first."
 
     item "ask-before-a-destructive-tool-runs" "Ask you before a destructive tool runs" Agents Later
@@ -331,102 +331,102 @@ let items : Item list =
 
     item "use-the-fsharp-compilers-deltas" "Use the F# compiler's own deltas" HotReload Exploring
       NoLandmarkYet
-      [ "docs/how-hot-reload-works.md"; "docs/decisions.md" ]
+      [ "docs/how-hot-reload-works.md"; "docs/decisions.md"; "docs/plans/use-the-fsharp-compilers-deltas.md" ]
       "dotnet/fsharp#19941 would have the compiler write metadata deltas itself. If it ships in an SDK, what I wrote becomes the part that applies and confirms them, and it could reach the REPL host too. I'm tracking it and not waiting for it."
 
     item "breakpoints-in-patched-code" "Breakpoints in patched code" HotReload Exploring
       NoLandmarkYet
-      [ "docs/hot-reload.md"; "docs/decisions.md" ]
+      [ "docs/hot-reload.md"; "docs/decisions.md"; "docs/plans/breakpoints-in-patched-code.md" ]
       "Saves land while a debugger is attached, and I've tested that with netcoredbg on four shapes. Nothing sets a breakpoint, steps, or edits a method the debugger is stopped in, because a detour rewrites the first bytes a breakpoint may sit in."
 
     item "redefine-a-value-a-handler-renders" "Redefine a value a handler renders" HotReload Exploring
       NoLandmarkYet
-      [ "docs/hot-reload.md" ]
+      [ "docs/hot-reload.md"; "docs/plans/redefine-a-value-a-handler-renders.md" ]
       "Edit a value that a page handler hands on and the next save is a restart, because I can't tell whether the response kept it. Following the value past the handler would let those patch, and I'd rather prove that than assume it."
 
     item "hot-reload-without-tiering-off" "Hot reload without turning tiering off" HotReload Exploring
       NoLandmarkYet
-      [ "docs/hot-reload.md" ]
+      [ "docs/hot-reload.md"; "docs/plans/hot-reload-without-tiering-off.md" ]
       "Hot reload sessions run with tiered compilation off so a watch on a value can't silently lapse, and that costs warmup time. A cheaper way to keep the watch reliable would let me leave JIT tiering alone."
 
     item "mutants-in-the-live-session" "Mutation testing in the live session" LiveTesting Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/mutants-in-the-live-session.md" ]
       "Hot-patching a mutant into the running image might cost milliseconds where Stryker.NET pays a build each. Nobody has timed it, and a day against Stryker on a fixture would tell me."
 
     item "test-selection-that-learns" "Test selection that learns from history" LiveTesting Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/test-selection-that-learns.md" ]
       "Small local models trained on your own run history could rank which tests to run first and flag the flaky ones. It's a parked design with no code, and selection by coverage works without it."
 
     item "a-token-per-subagent-in-claude-code" "A token per sub-agent in Claude Code" Agents Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/a-token-per-subagent-in-claude-code.md" ]
       "A header is per connection, so sub-agents that share one connection share a token. Only a per-call `_meta` tells them apart, and Claude Code gives the model no per-call header, so a harness hook that sets it would be the way in."
 
     item "claim-an-interface" "Claim an interface, not just a file" Agents Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/claim-an-interface.md" ]
       "An agent would claim a .fsi signature file, every member's session would check its code against it, and a change to it would need a recorded decision. Claims cover only files and projects today."
 
     item "plan-a-cohort-as-code" "Plan a cohort as F# code" Agents Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/plan-a-cohort-as-code.md" ]
       "A plan builder would fail at construction if two members claim the same file, and later could propose a claim split from coverage data for you to edit."
 
     item "fork-and-rewind" "Fork a cohort or a session at a point" Agents Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/fork-and-rewind.md" ]
       "Replay a session's cells up to one point into a new worktree, or fork a whole cohort at a ledger sequence number, the way git branches a commit. A cell with side effects replays differently, and the result would say so."
 
     item "a-cohort-across-machines" "A cohort across machines" Agents Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/a-cohort-across-machines.md" ]
       "Once members are handles instead of sockets, one could join from another machine. The coordination core is already pure and message-passing, so it could cross a network."
 
     item "ask-the-live-codebase-in-fsharp" "Ask the live codebase in F#" Agents Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/ask-the-live-codebase-in-fsharp.md" ]
       "A type provider over the repo and the cohort would make a misspelled symbol or test name a compile error at the agent's prompt, and active patterns could filter the cohort in code. This is research."
 
     item "repl-guard-for-other-agents" "A REPL guard for agents other than Claude" Agents Exploring
       NoLandmarkYet
-      [ "docs/agents.md" ]
+      [ "docs/agents.md"; "docs/plans/repl-guard-for-other-agents.md" ]
       "The hook that sends an agent back to the REPL instead of running dotnet build is a Claude Code hook. Other agent tools have nothing like it yet."
 
     item "editors-beyond-vscode-and-neovim" "Rider, Zed, Helix and Emacs" Editors Exploring
       NoLandmarkYet
-      [ "docs/agents.md" ]
+      [ "docs/agents.md"; "docs/plans/editors-beyond-vscode-and-neovim.md" ]
       "SageFs speaks HTTP and SSE, so any editor could connect, but only VS Code and Neovim have clients. When people ask for more, Rider comes up most."
 
     item "a-notebook-over-a-live-session" "A notebook that is a window onto a live session" Repl Exploring
       NoLandmarkYet
-      [ "docs/coming-from-jupyter.md" ]
+      [ "docs/coming-from-jupyter.md"; "docs/plans/a-notebook-over-a-live-session.md" ]
       "Cells that update when you edit source, and a value tree as the default output, over the same session your editor and your agent already share."
 
     item "faster-time-to-ready" "Faster time to Ready" Repl Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/faster-time-to-ready.md" ]
       "Warmup is long enough to notice on a bigger solution. Opening namespaces is 60 to 90 percent of it and the replay cache doesn't touch that part, so a precompiled warmup assembly might, once I've measured whether it would help."
 
     item "command-palette-and-one-timeline" "A command palette and one timeline" Dashboard Exploring
       NoLandmarkYet
-      []
+      [ "docs/plans/command-palette-and-one-timeline.md" ]
       "Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub."
 
     item "check-the-scope-before-the-write" "Check the scope before the write, not after" Agents Exploring
       NoLandmarkYet
-      [ "docs/agents.md" ]
+      [ "docs/agents.md"; "docs/plans/check-the-scope-before-the-write.md" ]
       "A claim is policy today: it refuses another member's claim over the same file, but nothing stops a process writing outside the checkout, and the daemon says that about itself. The one component sitting between an agent and its own file tools could ask where a write is going before it happens, which is the difference between a claim and a boundary."
 
     item "drive-real-agents-as-members" "Drive real coding agents as cohort members" Agents Exploring
       NoLandmarkYet
-      [ "docs/agents.md" ]
+      [ "docs/agents.md"; "docs/plans/drive-real-agents-as-members.md" ]
       "One process would hold the seat, mint a token per run and drive Claude, Copilot, OpenCode or Pi over the Agent Client Protocol as a member with its own claims and landings, answering that member's permission requests from the scope it holds. It has to join the cohort before it mints anything, because a fresh connection is Anonymous and the very first mint would be refused."
 
     item "confirmation-gates-in-every-agent-host" "Confirmation gates in every agent host" Agents Exploring
       NoLandmarkYet
-      [ "docs/agents.md" ]
+      [ "docs/agents.md"; "docs/plans/confirmation-gates-in-every-agent-host.md" ]
       "Where a host can prompt before a tool call, a small plugin can hold the destructive list and ask there, which covers the clients a server-side prompt can never reach. It would be one shared policy compiled into four thin shells rather than four copies of the same list, and none of the four hosts has been run yet."
 
     item "bake-the-build-env-into-the-tooling" "Builds SageFs starts no longer die on a leftover MSBuild node" Platform Next
@@ -461,5 +461,5 @@ let items : Item list =
 
     item "walk-the-rest-of-the-symbol-ladder" "Walk the rest of the symbol ladder" Agents Next
       NoLandmarkYet
-      [ "docs/progressive-map-research-2026-10-24.md" ]
+      [ "docs/progressive-map-research-2026-10-24.md"; "docs/plans/walk-the-rest-of-the-symbol-ladder.md" ]
       "The references rung is built: `list_references` takes a qualified name and lists every definition and use the compiler resolves to it across the session's projects, a page at a time. Its first line is the scope (project-wide, partial with the projects it did not reach, or unavailable with the reason), so a count never travels without how far the compiler looked, and one budget covers all the projects together. What remains of the progressive map plan: the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again." ]

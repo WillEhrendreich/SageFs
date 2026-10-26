@@ -184,6 +184,8 @@ let intro : string list =
     ""
     "I don't edit status by hand. Each item can name a landmark, a file and a symbol that will exist in the code once the work does. When it shows up in the tree, the item moves to Built on its own and links to the code. A test fails if this page and the code disagree, so a stale page can't be committed."
     ""
+    "Every item that is not built yet links to a plan in [docs/plans](plans/README.md). The plan has the design and the first failing test, and a block at its top that says where the work stands: its status, its branch, the last green commit and the next action. Work can stop and start again with a different person or tool and nobody has to retell it. A test fails if an open item has no plan or a plan has lost its block."
+    ""
     "The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does."
     "" ]
 

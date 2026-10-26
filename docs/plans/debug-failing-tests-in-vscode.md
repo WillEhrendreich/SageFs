@@ -1,0 +1,159 @@
+# Debug failing tests properly in VS Code
+
+Roadmap item: `debug-failing-tests-in-vscode` (Next, Live testing). Plan written 2026-10-26 against master `59a8692c`.
+
+## Resume here
+
+This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
+
+| Field | Now |
+|:--|:--|
+| Status | Not started |
+| Size | M for the Next scope, L overall |
+| Branch and worktree | none yet |
+| Last green commit | none yet |
+| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: `holdBody` carries the session id. Then take the steps below in order. |
+| Decisions made | none yet (the open ones are under "Decisions for Will") |
+| Surprises | none yet |
+
+## What done looks like
+
+You click Debug on a failing test in VS Code, the C# debugger attaches to the process that runs it, the test runs under your breakpoints, and when it finishes the test's mark, lens and Test Explorer row show the verdict you just saw, on every client, without a normal run. You can select several tests in the Test Explorer and debug them in one attach, one after another. When the test lives in code the session evaluated, SageFs offers the compiled copy so your breakpoints bind. The outcome gate is a journey under `--integration-lt` that runs the three configurations below and asserts the row the user would see; the HTTP answer is only the means.
+
+| Axis | Cells |
+|---|---|
+| Test code | compiled (PDB), defined by eval (no PDB) |
+| Selection | one test, three tests |
+| Verdict | passes under the debugger, fails under the debugger, debugger detached early |
+| Client | VS Code extension host, Neovim (unchanged, must keep working) |
+
+No cell may skip silently. A machine without a debugger fails with a "prerequisite missing" case that names the install command.
+
+## What exists today
+
+Verified by reading the files named.
+
+- The daemon holds a test in the host and hands back a pid and a ticket. Routes `POST /api/live-testing/debug` and `/debug/continue` are in `SageFs/McpServer.fs` (around line 4117, `respondDebug`), which delegate to `McpDebugTest.beginDebug` and `McpDebugTest.continueDebug` in `SageFs/McpDebugTest.fs`. Those call `DebugTestRequest.beginDebug` / `continueDebug` (`SageFs.Core/DebugTestRequest.fs`), which send `WorkerMessage.DebugTestBegin` and `DebugTestContinue` to the worker (`SageFs.Host/WorkerMain.fs` around line 320).
+- The host side is `HostAgent.TestDebug` (`SageFs.Core/HostAgent.fs` from line 293): a pure `step` over a one-slot `Hold` (`Idle | Holding | Awaiting | Running | Ended`), and the `DebugHold` shell around it. `Agent.DebugBegin` / `DebugContinue` expose it. The slot holds exactly one `TestCase`.
+- `DebugHold` runs the test with `firstAnswer runners test` (`HostAgent.fs` around line 722), not through `executeOne`. So there is no per-test timeout (good for a breakpoint) and also no stdout capture and no coverage read.
+- The result of a finished hold is `DebugProgress.Ended (DebugEnd.Attached TestResult)`. `McpDebugTest.continueDebug` turns it into a `DebugWire` and drops it. Nothing dispatches it into the Elm model. That is the "debug runs updating the gutter" gap. `docs/LIVE_TESTING_GUIDE.md` says so under "What it does not do yet".
+- The VS Code side: `sagefs-vscode/src/TestDebugCommand.fs` (`debugTest`, `begin'`, `attachAndWait`, `waitForTest`), pure decisions in `TestDebugPure.fs` (`DebugAnswerView`, `beginStep`, `continueStep`, `chooseDebugger`, `RecommendedExtensionId = "ms-dotnettools.csharp"`), HTTP in `SageFsClient.fs` (`debugTest`, `debugContinue` near line 742), registration in `Extension.fs` (`reg "sagefs.debugTest"`, near line 2866). The Test Explorer profile in `TestControllerAdapter.fs` (`debugHandler`) debugs only `items.[0]` of the request.
+- A difference from Neovim that I found by reading both: `sagefs.nvim/lua/sagefs/debug_test.lua` sends `sessionId` in both bodies (`build_hold_body`, `build_continue_body`). The VS Code client sends `{ testId }` and `{ ticket }` only. The neighbouring `sagefs.runTest` command goes through `sessionCommand` and does name its session. On a daemon with two sessions the VS Code debug route resolves its session by the daemon's fallback rules, and the continue can land on a different session than the hold.
+- The attach is proven for Neovim's debugger only: `SageFs.Tests/DebugAttachJourneyTests.fs` (tier `--integration-lt`) attaches `dotnet-debug`/`netcoredbg`, lists the threads of the pid the daemon named, then releases the test. It prints `SKIPPED the attach` when the machine cannot reach the worker or the debugger is absent. No test drives the VS Code extension through a real attach. `sagefs-vscode/tests/TestDebugContractTests.fsx` covers the pure module, and `sagefs-vscode/test-electron/ExtensionHostSuite.fs` runs commands inside a real extension host, but none of its cases debugs.
+- The simulation exists: `SageFs.Simulation/TestDebugSim.fs`, invariants in `TestDebugSimInvariants.fs`, tests in `SageFs.Tests/TestDebugSimTests.fs`. Route tests: `DebugTestRoutesHttpTests.fs`, `DebugTestRequestTests.fs`, `TestDebugTests.fs`.
+- Live testing already has a pause: `LivePause = Live | Paused` (`LiveTestingTypes.fs`), routes `/api/live-testing/pause` and `/resume`. `docs/decisions.md` ("Pause and an include or exclude set are enough") says a debug session is the editor's to pause with.
+
+I could not find: any use of the pause route by the debug command, a test of a test stopped at a breakpoint for longer than the watchdog (`Timeouts.watchdogGracePeriod` is 30 s forMachine), or a per-file buffer table (not needed here).
+
+## Design
+
+Four slices, in dependency order. Slices 1 to 3 are the Next-horizon scope. Slice 4 waits on `confirm-builds-without-restarting-the-worker`.
+
+### Slice 1: the VS Code client names its session
+
+Move body construction into `TestDebugPure` (pure, runs under `dotnet fsi`): `holdBody testId sessionId` and `continueBody ticket sessionId`, mirroring Neovim. `Extension.fs` passes the window's session id the way `sagefs.runTest` does. `sessionId` is already an optional field on both routes, so no wire change and no `apiVersion` move.
+
+### Slice 2: a debug run is recorded where every other run is
+
+New file `SageFs.Core/Features/DebugRunRecord.fs`:
+
+```fsharp
+type DebugRunRecord =
+  { Session: string
+    Ticket: string
+    Result: TestRunResult
+    /// Compiled when the PDB existed, Evaluated when the test was defined by eval.
+    Basis: ResultProvenance }
+
+/// Pure: the cycle with this one verdict on its row. A ticket already recorded changes nothing.
+val record : DebugRunRecord -> LiveTestCycleState -> LiveTestCycleState
+```
+
+Rules, each a test below:
+
+- The row takes the verdict and the provenance from `SymbolSupport` (`CompiledWithSymbols` gives `Compiled`, `DefinedByEval` gives `Evaluated`).
+- Idempotent per ticket. `DebugHold.Continue` is "safe to repeat", and a late continue after the hold ended still answers, so the daemon sees `Ended (Attached _)` more than once. The cycle keeps a bounded set of recorded tickets.
+- A debug run is not a flake sample. It skips `FlakyDetection.recordResult` and `evaluateQuarantineForBatch`, because a test stopped at a breakpoint for ten minutes says nothing about stability.
+- It skips `PendingRunSummary` (no "N passed" line appears later under an unrelated run).
+- It records the verdict and `Output = None`. The duration the host measured includes time stopped at breakpoints. Record `TimeSpan.Zero` and make the row show no duration for a debug verdict. This is the one place I am unsure what the row renders for zero; step 3 reads that code first.
+
+Wiring: a new `TuiEvent.DebugRunFinished of DebugRunRecord`, dispatched from `McpDebugTest.continueDebug` through `ctx.Dispatch` (the same hook `McpRunTests.runTests` uses) when the answer is `DebugProgress.Ended (DebugEnd.Attached result)`. Existing SSE (`test_results_batch`, `file_annotations`) carries the change to VS Code, Neovim and the dashboard, so no client needs new code for the gutter. `SageFsApp.fs` (2467 lines) and `LiveTestingTypes.fs` (3708) sit exactly at their `RatchetBudgets.fileSize` entries: the reducer arm must be net zero lines in `SageFsApp.fs`, so it is one line delegating to `DebugRunRecord.record`, paid for by moving a comparable block out in the same commit.
+
+The host also has to leave coverage clean. A debug run executes instrumented code and sets probe bits that no `TakeCoverage` clears, so the next normal test's reading would include the debugged test's lines. `DebugHold`'s `runTest` wrapper calls `CoverageProbes.readAndClear` before and after and discards the reading. (Feeding it to the daemon as that test's coverage is possible later; it is out of scope here.)
+
+### Slice 3: automatic runs wait while a test is held
+
+A held or running debug test stops the whole host process at a breakpoint, so a keystroke eval or a type-check sent to that host would queue behind it until `LiveCheckRelay`'s 30 s bound. The VS Code command calls `POST /api/live-testing/pause` when the hold is granted and `/resume` in its `finally`, the way `docs/decisions.md` says an editor should. Resume must run on every exit path, including a detach and a dead attach, so the `finally` goes in `TestDebugCommand.debugTest` around `begin'`. A later daemon-owned pause (a `LivePause` case carrying why) would give Neovim the same for free. It changes a wire shape, so it is a separate step and a decision below.
+
+### Slice 4: several tests, then evaluated code
+
+Several tests. Change the slot to hold a head and a tail (so an empty batch cannot be built), and run them sequentially under one attach. `WorkerMessage.DebugTestBegin` carries the list too; that message is between the daemon and its own worker, which ship together.
+
+```fsharp
+type Hold =
+  | Idle
+  | Holding of ticket: DebugTicket * tests: (TestCase * TestCase list)
+  | Awaiting of ticket: DebugTicket * tests: (TestCase * TestCase list)
+  | Running of ticket: DebugTicket * remaining: TestCase list * finished: (TestId * TestResult) list
+  | Ended of ticket: DebugTicket * outcome: DebugEnd   // Attached carries (TestId * TestResult) list
+```
+
+Parallel debugging is refused by construction: one process, one debugger, one thread stops everything. The request gains an optional `testIds` array beside `testId`; the response gains a `results` array and keeps the flat fields for the single-test case. Additive, so `apiVersion` stays 4. Per-test progress (the gutter updates as each test finishes, not at the end) needs `DebugProgress.StillRunning` to carry the finished-so-far list and the daemon to record the new ones per poll. Do the end-of-batch record first, per-test progress second. `TestControllerAdapter.debugHandler` passes every id in `request.include`. `sagefs.nvim` needs nothing; it keeps sending `testId`, and the plugin trailer is `Plugin: n/a, request and response are additive and Neovim debugs one test`.
+
+Evaluated code. `DebugWire.Symbols` already says `"eval"` and `SymbolsNote` already tells the person to rebuild. Offer it: when `Symbols = eval` the extension asks "Build and debug the compiled copy?" and the daemon runs the confirming build in a throwaway worker, so the session's FSI state survives (`confirm-builds-without-restarting-the-worker`), then holds the test in that worker. The pid in the answer is the throwaway worker's. Until that item lands, the note stays and nothing else changes. The unsaved buffer cannot be debugged this way and the message says so.
+
+## Tests
+
+RED first, in this order. Names are proposals.
+
+1. `sagefs-vscode/tests/TestDebugContractTests.fsx`: `holdBody "t1" "s1"` contains `"sessionId":"s1"` and `continueBody "debug-1-1" "s1"` the same. Fails today because the functions do not exist.
+2. `SageFs.Tests/DebugRunRecordTests.fs` (default suite, pure): a cycle with test `T` discovered and `Passed` gets `Failed` after `record` of a failed debug result for `T`, with provenance `Compiled`; the same record twice changes nothing the second time; a `DefinedByEval` record gives `Evaluated`; the flake window and `PendingRunSummary` are untouched.
+3. `DebugTestRoutesHttpTests.fs`: with a fake worker that answers `Ended (Attached (Failed ...))`, two `continue` calls dispatch exactly one `DebugRunFinished`.
+4. `HostAgentDebugCoverageTests`: probes set during a held run are not visible to the next `TakeCoverage`.
+5. Property (FsCheck): any interleaving of repeated `continue` calls and `Expire`/`HostEnding` events yields at most one record per ticket, and none for `NoDebuggerWithin`, `ReleasedWithoutDebugger`, `NoSuchHold`, `HostLost`.
+6. Mutation: `DebugRunRecord.record` with the ticket check removed, with the flake skip removed, with `Basis` swapped. Each must be killed (`MutationTestingFramework.Mutant<'a>`).
+7. Simulation: extend `TestDebugSim` with the daemon side. Pool: two sessions, three tests, tickets. Ops: begin, release with and without a debugger, repeat continue, host ends, expire. Invariants: a recorded verdict has an `Attached` end for the same ticket; the model holds at most one record per ticket; a record only ever lands in the session that began the hold. Twins: record on every continue (breaks idempotence), record `NoDebuggerWithin` as a failure (fabricates a failure), resolve the session by the daemon default (cross-session record). Each twin must violate its invariant; same seed gives the same trace.
+8. Batch (slice 4): `Hold` property tests: results come back in the order requested, a failure in test 2 does not skip test 3, `HostEnding` mid-batch ends the rest as `HostLost`.
+
+Outcome gate. `SageFs.Tests/DebugRowJourneyTests.fs`, tier `--integration-lt`, built on `DebugAttachJourneyTests` (reuse `attachAndAsk`). After the attach and release, read `GET /api/live-testing/entries` (the route the harness already fetches in `LtStream.withEntries`) and assert the debugged test's row verdict. Matrix: failing test and passing test, compiled code, one and three tests. The eval cell asserts `symbols = "eval"` and the note, and the row says `Evaluated`. A missing debugger fails with the install command; it does not print SKIPPED. To retire the existing `SKIPPED` branches, `machineCondition` cases become failing cases when the tier is the self-hosted gate (`SAGEFS_REQUIRE_DEBUGGER=1`), one named switch.
+
+VS Code real attach. Add a case to `sagefs-vscode/test-electron/ExtensionHostSuite.fs` that executes `sagefs.debugTest` for a failing test inside a real extension host. Microsoft's `coreclr` adapter is not redistributable to a CI image, so the test registers its own `DebugAdapterDescriptorFactory` for type `coreclr` that launches `netcoredbg --interpreter=vscode` (the debugger the Neovim journey already uses), and asserts on the daemon's entries, with no UI scraping. This proves the extension's sequence (hold, `startDebugging`, `onDidStartDebugSession`, continue, detach) against a real adapter. It does not prove Microsoft's adapter attaches, and the plan says so in the guide.
+
+No wall-clock waits. Every wait ends on an event: the debug session's start/terminate events, the daemon's `/events` frames through `LtStream.expectFrame`, the hold's own `Ended`. The existing `Timeouts.debugAttachGrace` stays the host's bound and is not copied into a test.
+
+## Steps
+
+1. Slice 1 (RED test 1, then `TestDebugPure` bodies, then `SageFsClient` and `Extension.fs`). Files: `sagefs-vscode/src/TestDebugPure.fs`, `SageFsClient.fs`, `Extension.fs`, the contract test. Commit trailer: `Plugin: n/a, the VS Code client now sends what Neovim already sends`.
+2. Host coverage hygiene (RED test 4). Files: `SageFs.Core/HostAgent.fs`. Parallel with 1.
+3. Read how a `Passed` with zero duration renders (`LiveTestStatusView.fs`, `TestAnnotations.fs`); then `DebugRunRecord.fs` with tests 2, 5, 6. New file plus its fsproj entry and `SageFs.Tests` entries.
+4. Wire `TuiEvent.DebugRunFinished`, the one-line reducer arm, `McpDebugTest.continueDebug` dispatch (tests 3, 7). Files: `SageFs/TuiEvent.fs`, `SageFs/SageFsApp.fs`, `SageFs/McpDebugTest.fs`, `SageFs.Simulation/TestDebugSim*.fs`. Needs 3.
+5. Pause around the VS Code run (slice 3). Files: `TestDebugCommand.fs`, `SageFsClient.fs`. Needs 1. Parallel with 3 and 4.
+6. The row journey (`DebugRowJourneyTests.fs`) and the extension-host case with the `netcoredbg` shim. Needs 4 and 1.
+7. Docs: `LIVE_TESTING_GUIDE.md` (remove "not recorded in the live-testing state"), `how-live-testing-works.md` (the Debugging section and the Visual Studio table row), the roadmap landmark moves to `DebugRunRecord.fs`.
+8. Batch hold (slice 4a), then per-test progress (4b), then `TestControllerAdapter.debugHandler` and a multi-select cell in the journey.
+9. Compiled-copy offer for evaluated code, after `confirm-builds-without-restarting-the-worker`.
+
+First week: steps 1 to 5 are file-disjoint enough for three sub-agents (client and pause; host coverage; record and wiring), and step 6 lands at the end of the week.
+
+## Measure first
+
+- A test stopped at a breakpoint for four minutes: does anything recycle the host? Experiment: hold a test, attach netcoredbg, hit a breakpoint, wait past `watchdogGracePeriod` (30 s, scaled), read `get_session_status` and the daemon log. If the worker or host is recycled, the debug session dies and slice 3 must also stop the watchdog from counting a held host as unresponsive, which is a `SessionManager` change and moves the size to L.
+- How long `ms-dotnettools.csharp`'s adapter takes to attach to the host. The 5 s `debugAttachGrace` was set from netcoredbg's 1.5 s. I have no number for vsdbg. A manual run on a machine with Microsoft's VS Code gives it; if it exceeds the grace, the release path returns `released_without_debugger` for every real user.
+- What `DebugHold` does for an in-process (non-isolated) session, where the host is the worker itself and a breakpoint freezes the worker's HTTP server. The continue route would stop answering.
+
+## Risks and dependencies
+
+- Microsoft's debugger is licensed for Microsoft's VS Code build. The proof above uses netcoredbg, which is an honest limit on what CI shows.
+- `TestResultsBatchPayload.deriveCompletion` marks a batch Complete when it returned every requested result; a one-test debug record must not look like a full discovery to clients. Clients sweep on `DiscoveryGeneration`, so this should hold. Test 2 should assert the record does not bump `DiscoveryGeneration`.
+- Depends on `confirm-builds-without-restarting-the-worker` for slice 4's evaluated-code half. The Built item `neovim-debug-a-failing-test` shares the routes: any wire change here needs the plugin's `KNOWN_STATUSES` and bodies checked in the same stretch.
+- Enables: nothing in this group depends on it, but the out-of-run record path in step 4 is the pattern `run-tests-reuses-proven-results` follows for a reused verdict.
+
+## Size
+
+M for steps 1 to 7 (the Next scope: one to two weeks, mostly the record path and the extension-host proof), L overall with slice 4, because the batch hold changes the pure `Hold` type and its simulation.
+
+## Decisions for Will
+
+1. Where should auto-pause live? Recommendation: client-driven now (slice 3), daemon-owned later as a `LivePause` case with a reason, so Neovim gets it with the same commit and the dashboard can show "paused: debugging".
+2. Should a debug verdict overwrite a normal verdict on the row? Recommendation: yes, it is the latest real run of that code. The debug origin is recorded in the daemon log and nowhere on the row.
+3. Is the netcoredbg shim an acceptable stand-in for Microsoft's adapter in CI? Recommendation: yes, with the guide stating that Microsoft's adapter is checked by hand per release.

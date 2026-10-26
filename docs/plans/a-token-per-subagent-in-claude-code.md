@@ -1,0 +1,138 @@
+# A token per sub-agent in Claude Code
+
+Roadmap item: `a-token-per-subagent-in-claude-code` (Exploring, Agents). Plan written 2026-10-26 against master 59a8692c.
+
+## Resume here
+
+This block is the item's own handoff. Whoever works on the item updates it in the same commit as the work, so a different person, session or tool can pick up from here without anyone retelling it. The rules that apply to every item are in [Picking up an item](README.md#picking-up-an-item-in-any-harness).
+
+| Field | Now |
+|:--|:--|
+| Status | Not started |
+| Size | S for phase 0, M for phase 2 |
+| Branch and worktree | none yet |
+| Last green commit | none yet |
+| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: a string-referenced server is reported as sharing the parent. Then take the steps below in order. |
+| Decisions made | none yet (the open ones are under "Decisions for Will") |
+| Surprises | none yet |
+
+## What done looks like
+
+Two Claude Code sub-agents spawned from one session show up in `get_cohort_status` as two members (`cap:<id>` each), hold separate claims and build leases, and are refused separately by the role gate. The model never sees a token: nothing in a transcript, a prompt or a tool argument carries one. The outcome gate is a real Claude Code run (scripted, `claude -p`) over the matrix: sub-agent mechanism (shared connection today; the chosen mechanism) by token source (minted by hand; minted by a tool outside the model). The shared-connection cell must show one member, the chosen-mechanism cells two. Until that run exists nothing here is proven, and the first phase of this plan is the experiment that decides whether the mechanism works at all.
+
+## What exists today
+
+Verified in the repo:
+
+- A token outranks its connection. `SageFs/McpCapability.fs` `presentationFrom` reads `_meta["sagefs/memberToken"]` first (per call), then the hash claim the HTTP edge built from the `X-SageFs-Member-Token` header (per connection). `CapabilityTransport.presentationOf` in `SageFs.Core/Capability.fs` holds that rule.
+- `useMemberToken` (`SageFs/McpServer.fs:833`) turns the header into a principal. The call filter (`createServerCaptureFilter`, around `McpServer.fs:575`) calls `presentToken` and binds `currentCapability`.
+- The stdio bridge sends the header from `SAGEFS_MEMBER_TOKEN` (`SageFs/McpStdioBridge.fs:592`, `CapabilityTransport.headerFromEnvironment`). So a process started with that variable is a distinct member today.
+- `docs/decisions.md` (around lines 1428 to 1538) records finding F8: sub-agents of one Claude Code session share one connection, so one member. "Only a per-call `_meta` can" tell them apart without a second connection. The roadmap item repeats that.
+- `mint_member` (`SageFs/McpCapability.fs` `mintMember`) is conductor only and returns the raw token once, in the tool result. A tool result is part of the transcript.
+
+Verified in Claude Code's own docs on 2026-10-26 (code.claude.com, fetched, first 100,000 to 200,000 characters of the hooks page and the first 100,000 of the sub-agents and MCP pages; the tails were not read):
+
+| Claim | What the docs say |
+|:--|:--|
+| Hooks run in sub-agents | PreToolUse input has `agent_id` and `agent_type` "inside subagents". The sub-agents page documents `agent_type` only, so `agent_id` rests on the hooks page. |
+| A hook can change a tool's arguments | `updatedInput` under `hookSpecificOutput` "replaces the entire input object". The visible text never says it applies to MCP tools and never mentions `_meta`, headers or request metadata. |
+| A hook can match SageFs tools | Matcher `mcp__sagefs__.*`. A bare `mcp__sagefs` matches nothing. |
+| A sub-agent can have its own MCP server | Sub-agent frontmatter `mcpServers`: an inline definition "scoped to this subagent only", full `.mcp.json` schema, `stdio`, `http`, `sse`, `ws`. "Inline servers ... are connected when the subagent starts ... and disconnected when it finishes. String references share the parent session's connection." |
+| `.mcp.json` HTTP servers take headers | `headers` object with `${VAR}` expansion, and `headersHelper` (a command printing a JSON object of headers, 10 second limit, run "fresh on each connection", not per request; re-run once on a 401 or 403). |
+| `SubagentStart` and `SubagentStop` hook events exist | Listed in the events section. What a `SubagentStart` hook can return was not in the text I read. |
+
+Not verified, and each could change the design: that an inline sub-agent server accepts `headers` (the page says "same schema as `.mcp.json`" without saying so for headers); that `${VAR}` expands inside sub-agent frontmatter; whether `headersHelper` receives anything that names the sub-agent (environment variables, arguments); whether `updatedInput` is applied to MCP calls; whether Claude Code puts anything of its own in `_meta` on a `tools/call` beyond the capability block the MCP page mentions for revision 2026-07-28.
+
+Conclusion for the roadmap sentence "a harness hook that sets `_meta` would be the way in": the documented hook outputs do not include `_meta`, and putting a token into `updatedInput` would put it in a tool argument, which the design forbids because transcripts keep arguments. The way in that the docs do support is a connection per sub-agent.
+
+## Design
+
+The mechanism is one inline MCP server per sub-agent, each with its own connection and its own token header. No daemon wire change is needed for the first version, because the header path exists.
+
+```yaml
+# .claude/agents/sagefs-analyst.md  (frontmatter)
+name: sagefs-analyst
+mcpServers:
+  - sagefs:
+      type: http
+      url: http://localhost:37749/
+      headers:
+        X-SageFs-Member-Token: ${SAGEFS_ANALYST_TOKEN}
+```
+
+A string reference (`- sagefs`) shares the parent's connection and defeats the point; the plan's docs and a test must say so.
+
+Where the token comes from is the real design question, and the answer cannot be the model:
+
+1. By hand, for the experiment: the person runs `mint_member` once, exports the variable, starts Claude Code.
+2. From outside the model (the version that scales): a small command, `sagefs member mint --role Analysis --scope src/Foo/ --ttl 60 --print-env`, which calls a daemon HTTP route and prints `export SAGEFS_ANALYST_TOKEN=...` for a launcher script. It needs the daemon to authenticate a human or script as the conductor without the MCP connection that is the conductor today. That is the operator credential in `a-token-for-every-daemon-call`. This plan depends on that item for its second phase.
+3. From `headersHelper`: run at each connection, so at sub-agent start. If it can learn which sub-agent it is serving, it can mint a token for it and print the header, and nothing is exported and nothing is in a transcript. It needs the operator credential too, and the open question above (does it get an identity).
+
+Pure core, new file `SageFs.Core/SubagentTokenPlan.fs`: given a list of sub-agent definitions (name, role, scope, ttl) it produces the list of mint requests and the frontmatter snippet, so a launcher is a thin shell. Types:
+
+```fsharp
+[<RequireQualifiedAccess>]
+type TokenSource =
+  | MintedByHand of envVar: string
+  | MintedByLauncher of mintRequest: MintRequest
+  | MintedByHeadersHelper of mintRequest: MintRequest
+
+type SubagentWiring =
+  | OwnConnection of agent: string * token: TokenSource
+  | SharesParent of agent: string        // reported by the doctor check, never generated
+```
+
+Nothing in the daemon moves in phase 1. Phase 2 adds: `sagefs member mint` (new CLI verb in `SageFs/Program.fs`, the same place `sagefs status` and `sagefs hygiene` live) and one HTTP route `POST /api/members/mint` that wraps `McpCapability.mintMember`. A new HTTP route is a wire change: `EndpointContracts.fs` gains an entry, `apiVersion` moves only if an existing shape breaks (it does not, so it stays 4), `sagefs.nvim` needs nothing, `sagefs-vscode` needs nothing, and the commit carries `Plugin: n/a, an agent launcher route that no editor calls`. Token cost: zero, no MCP tool is added. The `mint_member` tool description gains one sentence saying the token travels in a transcript and a launcher is the safer path.
+
+Persistence: none. Tokens stay in memory (see `tokens-survive-a-restart`).
+
+A doctor check, `sagefs check`, can warn when `.claude/agents/*.md` references `- sagefs` by name, because that shares the parent connection.
+
+## Tests
+
+RED first.
+
+1. Default tier, `SageFs.Tests/SubagentTokenPlanTests.fs`: `WHY - a sub-agent whose frontmatter names the server by string shares the parent connection, so it is reported as SharesParent`. Parses frontmatter text; fails to compile today (module missing).
+2. Property: for any set of N sub-agent definitions with distinct names, the plan has N distinct env var names and N mint requests, and never a mint request wider than its declared role (uses `Grant` widening from `Capability.fs`).
+3. Integration tier (`--integration-host`), extending `CapabilityHttpIntegrationTests.fs`: two real `HttpClientTransport` clients with different `X-SageFs-Member-Token` headers on two connections are two members in `get_cohort_status`; a third client sharing the first client's connection and passing the second token only in `_meta` is the second member (this proves the `_meta` path the roadmap item describes, which already works). This pins that the daemon half is finished.
+4. Outcome gate (`--integration-claude`, a new tier that needs `claude` on the path and fails loudly when it is absent, as the VS Code journey runner does): a scripted `claude -p` run with an orchestrator prompt that spawns two sub-agents defined as above, each calling `get_cohort_status` once. Assert two distinct `cap:` ids and that no `sfm_` string appears in the transcript file under `~/.claude/projects/`. Matrix: sub-agent kind (string reference, inline http, inline stdio via `sagefs mcp`) by token source (hand, launcher). The string-reference row asserts ONE member, so the test also documents the failure it exists to prevent.
+5. No wall-clock waits: the run ends when `claude -p` exits; the assertions read files after exit.
+
+Simulation: this item adds no new state machine in the daemon, so no DST. The sim for the mint route belongs to `a-token-for-every-daemon-call`. The plan generator in test 2 is the property substitute.
+
+## Steps
+
+1. Phase 0, no code in the product (a day): run the experiment below by hand and write the results into this plan's "Measure first" table. Everything after depends on what it says.
+2. Test 1 and `SubagentTokenPlan.fs` (pure), listed in `SageFs.Core/SageFs.Core.fsproj`. Owns that file and `SubagentTokenPlanTests.fs`.
+3. Test 3 in `CapabilityHttpIntegrationTests.fs`. File-disjoint from step 2, can run in parallel.
+4. Docs: `docs/agents.md` section on sub-agents, `skills/sagefs/agents.md` (the brief an orchestrator gives), `docs/mcp-tools.md` member-token section. Carries a `Plugin: n/a` trailer.
+5. After `a-token-for-every-daemon-call` lands its operator credential: the mint route, the CLI verb, the launcher, test 4. Owns `SageFs/Program.fs` (verb only), `SageFs/McpMintRoute.fs` (new), `EndpointContracts.fs` (one line).
+
+## Measure first
+
+The experiment, run on this machine with a throwaway repo and a test daemon on its own port pair and data dir:
+
+| Experiment | What to record | What each result means |
+|:--|:--|:--|
+| Sub-agent file with inline `type: http`, `headers` using `${VAR}`; two such sub-agents with different tokens; each calls `get_cohort_status` | Number of distinct members in the reply; the `Mcp-Session-Id` values in the daemon log | Two members: mechanism works, go to step 2. One member or a connection error: headers or expansion are not honoured in sub-agent frontmatter; try the inline stdio form with `env`, and if that fails too the item stays Exploring and the harness needs a feature request. |
+| Same with a string reference `- sagefs` | Number of members | One member confirms the docs and the F8 finding on the current Claude Code version. |
+| `headersHelper` on an inline sub-agent server that dumps its environment and arguments to a file | Anything that names the sub-agent (name, `agent_id`, session id) | If yes, mechanism 3 is possible. If no, mechanism 3 is dead and only 1 and 2 remain. |
+| PreToolUse hook on `mcp__sagefs__.*` that returns `updatedInput` with an extra key, and a daemon log of the incoming arguments and `_meta` | Whether the arguments arrive changed; whether `_meta` changed | Confirms or removes the last doubt about the hook route. It would still be a tool argument, so even a yes does not change the design. |
+| Cost: tools loaded into the sub-agent | Tokens in the sub-agent's first turn with and without tool search | An inline server adds the SageFs catalog (about 28,000 tokens undeferred) to the sub-agent's context only; tool search is on by default per the harness research, which should cut it. |
+
+## Risks and dependencies
+
+- The sub-agents page says inline servers are connected "subject to the trust rule for the agent file's folder", and project-level frontmatter needs the workspace trust dialog accepted. An untrusted folder silently loses the server. The doctor check should say so.
+- Plugin sub-agents ignore `mcpServers` ("Ignored for plugin subagents"), so a SageFs plugin cannot ship this wiring; the person's own `.claude/agents/` must.
+- The Claude Code docs change; every fact above is dated 2026-10-26.
+- Depends on: `a-token-for-every-daemon-call` (operator credential, phase 2), `each-agent-its-own-member` (done). Feeds: `drive-real-agents-as-members`, `watch-your-agents-from-your-phone` (nothing direct).
+
+## Size
+
+S for phase 0 and the pure planner (days). M for phase 2, because it waits on the operator credential and adds a CLI verb, a route and a new test tier.
+
+## Decisions for Will
+
+- Run the Phase 0 experiment before any code? Recommendation: yes, today. It costs an afternoon and decides whether this item is real.
+- Ship the launcher and route only after the operator credential, or add a narrow interim route that only the conductor's own connection can call? Recommendation: wait, so the credential is designed once.
+- Ask Anthropic for a per-call `_meta` hook output? Recommendation: write it down as a feature request only if the experiment shows headers do not work in sub-agent frontmatter.

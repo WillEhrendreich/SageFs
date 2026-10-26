@@ -120,4 +120,69 @@ let tests =
       page |> Expect.stringContains "it is listed under Built" "## Built"
       page |> Expect.stringContains "it links to the code" "blob/master/src/Built.fs"
       (page.Contains "## Next") |> Expect.isFalse "its old horizon section is gone"
+
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — every roadmap item that is not built has a plan it links to, and every plan belongs to an item, so no item can lose its handoff" <| fun _ ->
+      let planIds =
+        Directory.GetFiles(Path.Combine(repoRoot, "docs", "plans"), "*.md")
+        |> Array.map Path.GetFileNameWithoutExtension
+        |> Array.filter (fun name -> name <> "README")
+        |> Set.ofArray
+      let itemIds = items |> List.map (fun item -> item.Id) |> Set.ofList
+      let openItems =
+        items
+        |> List.filter (fun item ->
+          match standing readFromRepo item with
+          | OpenAt _ -> true
+          | Built _ -> false)
+      openItems |> List.map (fun item -> item.Id) |> List.filter (fun id -> not (Set.contains id planIds))
+      |> Expect.isEmpty "every item that is not built has docs/plans/<id>.md"
+      openItems |> List.filter (fun item -> not (List.contains (sprintf "docs/plans/%s.md" item.Id) item.Links)) |> List.map (fun item -> item.Id)
+      |> Expect.isEmpty "and links to it from its roadmap entry"
+      planIds |> Set.filter (fun id -> not (Set.contains id itemIds)) |> Set.toList
+      |> Expect.isEmpty "and a plan exists only for an item that is on the roadmap"
+
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — every plan carries a Resume here block with every field and a status from the closed set, so someone with no other context can pick the item up" <| fun _ ->
+      let fields = [ "Status"; "Size"; "Branch and worktree"; "Last green commit"; "Next action"; "Decisions made"; "Surprises" ]
+      let statuses = [ "Not started"; "In progress"; "Blocked"; "Done" ]
+      let problems =
+        Directory.GetFiles(Path.Combine(repoRoot, "docs", "plans"), "*.md")
+        |> Array.filter (fun path -> Path.GetFileNameWithoutExtension path <> "README")
+        |> Array.collect (fun path ->
+          let name = Path.GetFileNameWithoutExtension path
+          let text = File.ReadAllText path |> normalize
+          let missingBlock = if text.Contains "\n## Resume here\n" then [||] else [| sprintf "%s: no '## Resume here' block" name |]
+          let missingFields =
+            fields
+            |> List.filter (fun field -> not (Regex.IsMatch(text, sprintf @"(?m)^\| %s \| .+ \|$" (Regex.Escape field))))
+            |> List.map (fun field -> sprintf "%s: no '%s' row" name field)
+            |> List.toArray
+          let badStatus =
+            let m = Regex.Match(text, @"(?m)^\| Status \| (.+) \|$")
+            match m.Success && statuses |> List.exists (fun s -> m.Groups.[1].Value.StartsWith s) with
+            | true -> [||]
+            | false -> [| sprintf "%s: Status must start with one of %s" name (String.concat ", " statuses) |]
+          Array.concat [ missingBlock; missingFields; badStatus ])
+      problems |> Array.toList |> Expect.isEmpty "every plan has the block, every row, and a valid status"
+
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — a plan says Done exactly when its roadmap item is Built, so the handoff and the page cannot disagree about whether the work is finished" <| fun _ ->
+      let problems =
+        items
+        |> List.choose (fun item ->
+          let path = Path.Combine(repoRoot, "docs", "plans", item.Id + ".md")
+          match File.Exists path with
+          | false -> None
+          | true ->
+            let m = Regex.Match(File.ReadAllText path |> normalize, @"(?m)^\| Status \| (.+) \|$")
+            let saysDone = m.Success && m.Groups.[1].Value.StartsWith "Done"
+            let isBuilt =
+              match standing readFromRepo item with
+              | Built _ -> true
+              | OpenAt _ -> false
+            match saysDone = isBuilt with
+            | true -> None
+            | false ->
+              let said = if saysDone then "Done" else "not Done"
+              let page = if isBuilt then "Built" else "open"
+              Some (sprintf "%s: the plan says %s but the roadmap says %s" item.Id said page))
+      problems |> Expect.isEmpty "Done if and only if Built"
   ]
