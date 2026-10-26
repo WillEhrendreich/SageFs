@@ -16,31 +16,15 @@ open SageFs.Affordances
 open SageFs.MemberTable
 
 /// Who the daemon recorded as the maker of a session. The record is `McpTools.sessionOwners`, written when a
-/// connection (or a member token, which outranks the connection) creates a session over MCP. A session a
-/// person made, from the dashboard, the CLI or an editor, has no record.
+/// connection (or a member token, which outranks the connection) creates a session over MCP. It holds the
+/// `MemberId` itself, so the decision compares identities and never the text `MemberId.display` prints. A
+/// session a person made, from the dashboard, the CLI or an editor, has no record.
 [<RequireQualifiedAccess>]
 type SessionCreator =
   /// No record: a person made it, or the daemon no longer remembers (a restart drops the record).
   | Unrecorded
   /// An MCP connection or a member token made it.
   | Recorded of MemberId
-
-module SessionCreator =
-  /// Read a recorded key back into the identity it was written from. `MemberId.display` is the written form,
-  /// so this is its inverse; a key that carries none of the known prefixes is a `Minted` name, which `display`
-  /// writes verbatim.
-  let ofRecordedKey (key: string) : SessionCreator =
-    match System.String.IsNullOrWhiteSpace key with
-    | true -> SessionCreator.Unrecorded
-    | false ->
-      match key with
-      | k when k.StartsWith("mcp:", System.StringComparison.Ordinal) ->
-        SessionCreator.Recorded(MemberId.Mcp(k.Substring 4))
-      | k when k.StartsWith("cap:", System.StringComparison.Ordinal) ->
-        SessionCreator.Recorded(MemberId.Capability(k.Substring 4))
-      | k when k.StartsWith("browser:", System.StringComparison.Ordinal) ->
-        SessionCreator.Recorded(MemberId.Browser(k.Substring 8))
-      | k -> SessionCreator.Recorded(MemberId.Minted k)
 
 /// The session a call acts on, as the gate resolved it.
 [<RequireQualifiedAccess>]

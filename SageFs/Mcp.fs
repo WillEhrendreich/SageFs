@@ -124,22 +124,22 @@ module McpTools =
 
   /// Sessions created by MCP, keyed by session id and owned by the bound
   /// transport MemberId. This is separate from SessionMap: switching a
-  /// connection to an existing session must not transfer ownership.
-  let sessionOwners = Collections.Concurrent.ConcurrentDictionary<string, string>()
+  /// connection to an existing session must not transfer ownership. The value is the identity itself,
+  /// never its display text: the confirmation gate compares it with the caller's identity.
+  let sessionOwners = Collections.Concurrent.ConcurrentDictionary<string, MemberTable.MemberId>()
 
-  let claimSessionOwner (agent: string) (sessionId: string) =
-    sessionOwners.TryAdd(sessionId, resolvedKey agent) |> ignore
+  let claimSessionOwner (owner: MemberTable.MemberId) (sessionId: string) =
+    sessionOwners.TryAdd(sessionId, owner) |> ignore
 
   let releaseSessionOwner (sessionId: string) =
-    let mutable removed = Unchecked.defaultof<string>
-    sessionOwners.TryRemove(sessionId, &removed) |> ignore
+    sessionOwners.TryRemove sessionId |> ignore
 
   let ownsMcpSession sessionId =
     match currentTransportSessionId.Value with
     | None -> None
     | Some _ ->
       match sessionOwners.TryGetValue sessionId with
-      | true, owner when owner = resolvedKey "mcp" -> Some true
+      | true, owner when owner = memberIdFor "mcp" -> Some true
       | _ -> Some false
 
   /// Get the active session ID for a specific agent/client.
@@ -2213,7 +2213,7 @@ module McpTools =
       match result with
       | Result.Ok sid ->
         setActiveSessionId ctx agent sid
-        claimSessionOwner agent sid
+        claimSessionOwner (memberIdFor agent) sid
         // So a worktree left behind can say which connection made it (the connection is the identity).
         HygieneService.OwnerLedger.recordCreation DaemonState.SageFsDir ctx.ActivityTracker (resolvedKey agent) agent sid workingDir
         let perProject =

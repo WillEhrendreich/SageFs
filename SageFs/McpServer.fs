@@ -487,9 +487,10 @@ let targetSessionOf (admission: SageFs.McpTools.GateAdmission) : SageFs.Confirma
 
 /// Who the daemon recorded as the maker of a session: the same record `stop_session` already uses to refuse a
 /// session another bound connection created (`McpTools.sessionOwners`, written when a connection creates one).
+/// The record holds the identity itself, so the lookup compares nothing but identities.
 let creatorOfSession (sessionId: string) : SageFs.ConfirmationPolicy.SessionCreator =
   match SageFs.McpTools.sessionOwners.TryGetValue sessionId with
-  | true, recordedKey -> SageFs.ConfirmationPolicy.SessionCreator.ofRecordedKey recordedKey
+  | true, owner -> SageFs.ConfirmationPolicy.SessionCreator.Recorded owner
   | false, _ -> SageFs.ConfirmationPolicy.SessionCreator.Unrecorded
 
 /// Whether this call still has to ask a person: the pure `ConfirmationPolicy.decide`, fed from the gate's admission.
