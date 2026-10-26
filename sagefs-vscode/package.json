@@ -185,8 +185,8 @@
         "title": "SageFs: Show Recent Events"
       },
       {
-        "command": "sagefs.showCallGraph",
-        "title": "SageFs: Show Test Call Graph"
+        "command": "sagefs.showSymbolTests",
+        "title": "SageFs: Show Tests Covering a Symbol"
       },
       {
         "command": "sagefs.showBindings",
@@ -576,7 +576,7 @@
           "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
-          "command": "sagefs.showCallGraph",
+          "command": "sagefs.showSymbolTests",
           "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {

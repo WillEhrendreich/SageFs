@@ -29,6 +29,7 @@
     <Compile Include="StatusBarPure.fs" />
     <Compile Include="NudgeKnobPure.fs" />
     <Compile Include="TypeExplorerPure.fs" />
+    <Compile Include="SymbolTestsPure.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsListener.fs" />
     <Compile Include="CodeBlocks.fs" />

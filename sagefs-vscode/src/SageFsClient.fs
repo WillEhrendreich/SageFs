@@ -805,12 +805,16 @@ let exploreCompletions (qualifiedName: string) (sessionId: string) (c: Client) =
 let getRecentEvents (count: int) (c: Client) =
   getRaw "getRecentEvents" (sprintf "/api/recent-events?count=%d" count) 10000 c
 
-let getDependencyGraph (symbol: string) (c: Client) =
+/// The tests that cover symbols, for ONE session. With no symbol the reply lists every symbol the
+/// session has a map for; with one it lists that symbol's tests. The reply's `State` says why a map is
+/// empty (see SymbolTestsPure). The daemon reads the session's own cycle, never the primary's.
+let getSymbolTests (sessionId: string) (symbol: string) (c: Client) =
+  let session = sprintf "session=%s" (JS.encodeURIComponent sessionId)
   let path =
     match symbol with
-    | "" -> "/api/dependency-graph"
-    | s -> sprintf "/api/dependency-graph?symbol=%s" (JS.encodeURIComponent s)
-  getRaw "getDependencyGraph" path 10000 c
+    | "" -> sprintf "/api/dependency-graph?%s" session
+    | s -> sprintf "/api/dependency-graph?symbol=%s&%s" (JS.encodeURIComponent s) session
+  getRaw "getSymbolTests" path 10000 c
 
 let cancelEval (sessionId: string) (c: Client) =
   asActiveSession sessionId c (fun () -> postCommand c "/api/cancel-eval" "{}" 5000)

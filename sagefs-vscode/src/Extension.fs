@@ -700,7 +700,7 @@ let openGettingStarted () =
       + "// Next steps:\n"
       + "//   • Save an .fs file to trigger hot reload + live test updates\n"
       + "//   • Check the SageFs sidebar for test results and sessions\n"
-      + "//   • Try 'SageFs: Show Call Graph' from the command palette\n"
+      + "//   • Try 'SageFs: Show Tests Covering a Symbol' from the command palette\n"
       + "//   • Explore samples/ in the SageFs repo for more examples\n"
     let! doc = Workspace.openTextDocument content "fsharp"
     let! _ = Window.showTextDocument doc
@@ -2911,50 +2911,55 @@ let activate (context: ExtensionContext) =
           | Some "Show Output" -> showOutputPanel ()
           | _ -> ()
       }) |> promiseIgnoreLog logToOutput)
-  reg "sagefs.showCallGraph" (fun _ ->
+  reg "sagefs.showSymbolTests" (fun _ ->
     withClient (fun c ->
       promise {
-        let! overviewOpt = Client.getDependencyGraph "" c
-        match overviewOpt with
-        | None ->
-          let! choice = Window.showWarningMessage "Could not fetch dependency graph" [| "Start SageFs"; "Show Output" |]
-          match choice with
-          | Some "Start SageFs" -> Commands.executeCommand "sagefs.start" |> ignore
-          | Some "Show Output" -> showOutputPanel ()
-          | _ -> ()
-        | Some body ->
-          let parsed = jsonParse body
-          let total = fieldInt "TotalSymbols" parsed |> Option.defaultValue 0
-          match total with
-          | 0 ->
-            Window.showInformationMessage "No dependency graph available yet" [||] |> ignore
-          | _ ->
-            let! inputOpt = Window.showInputBox (sprintf "Enter symbol name (%d symbols tracked)" total)
-            match inputOpt with
-            | Some sym when sym.Trim().Length > 0 ->
-              let! detailOpt = Client.getDependencyGraph (sym.Trim()) c
-              match detailOpt with
-              | None ->
-                let! choice = Window.showWarningMessage "Could not fetch graph" [| "Start SageFs"; "Show Output" |]
-                match choice with
-                | Some "Start SageFs" -> Commands.executeCommand "sagefs.start" |> ignore
-                | Some "Show Output" -> showOutputPanel ()
-                | _ -> ()
-              | Some detail ->
-                let parsed2 = jsonParse detail
-                let tests = fieldArray "Tests" parsed2 |> Option.defaultValue [||]
-                match tests with
-                | [||] ->
-                  Window.showInformationMessage (sprintf "No tests cover '%s'" sym) [||] |> ignore
-                | _ ->
-                  let items =
-                    tests |> Array.map (fun t ->
-                      let name = fieldString "TestName" t |> Option.defaultValue "?"
-                      let status = fieldString "Status" t |> Option.defaultValue "unknown"
-                      let icon = match status with "passed" -> "✓" | "failed" -> "✗" | _ -> "●"
-                      sprintf "%s %s [%s]" icon name status)
-                  Window.showQuickPick items (sprintf "Tests covering '%s'" sym) |> promiseIgnoreLog logToOutput
+        match! resolveCommandTarget c with
+        | SessionScopePure.CommandTarget.NoSessionForThisWindow ->
+          Window.showWarningMessage noSessionForThisWindowMessage [||] |> ignore
+        | SessionScopePure.CommandTarget.Session sessionId ->
+          let! overviewOpt = Client.getSymbolTests sessionId "" c
+          match overviewOpt with
+          | None ->
+            let! choice = Window.showWarningMessage "Could not fetch the tests covering symbols" [| "Start SageFs"; "Show Output" |]
+            match choice with
+            | Some "Start SageFs" -> Commands.executeCommand "sagefs.start" |> ignore
+            | Some "Show Output" -> showOutputPanel ()
             | _ -> ()
+          | Some body ->
+            let parsed = jsonParse body
+            let total = fieldInt "TotalSymbols" parsed |> Option.defaultValue 0
+            match total with
+            | 0 ->
+              let state = fieldString "State" parsed |> Option.defaultValue "" |> SymbolTestsPure.parseState
+              Window.showInformationMessage (SymbolTestsPure.emptyMessage state) [||] |> ignore
+            | _ ->
+              let! inputOpt = Window.showInputBox (sprintf "Enter symbol name (%d symbols tracked)" total)
+              match inputOpt with
+              | Some sym when sym.Trim().Length > 0 ->
+                let! detailOpt = Client.getSymbolTests sessionId (sym.Trim()) c
+                match detailOpt with
+                | None ->
+                  let! choice = Window.showWarningMessage "Could not fetch the tests covering that symbol" [| "Start SageFs"; "Show Output" |]
+                  match choice with
+                  | Some "Start SageFs" -> Commands.executeCommand "sagefs.start" |> ignore
+                  | Some "Show Output" -> showOutputPanel ()
+                  | _ -> ()
+                | Some detail ->
+                  let parsed2 = jsonParse detail
+                  let tests = fieldArray "Tests" parsed2 |> Option.defaultValue [||]
+                  match tests with
+                  | [||] ->
+                    Window.showInformationMessage (sprintf "No tests cover '%s'" sym) [||] |> ignore
+                  | _ ->
+                    let items =
+                      tests |> Array.map (fun t ->
+                        let name = fieldString "TestName" t |> Option.defaultValue "?"
+                        let status = fieldString "Status" t |> Option.defaultValue "unknown"
+                        let icon = match status with "passed" -> "✓" | "failed" -> "✗" | _ -> "●"
+                        sprintf "%s %s [%s]" icon name status)
+                    Window.showQuickPick items (sprintf "Tests covering '%s'" sym) |> promiseIgnoreLog logToOutput
+              | _ -> ()
       }) |> promiseIgnoreLog logToOutput)
   reg "sagefs.showBindings" (fun _ ->
     match liveTestListener |> Option.map (fun l -> l.Bindings ()) with
