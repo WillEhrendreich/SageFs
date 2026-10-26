@@ -154,6 +154,9 @@ module McpCohortIntegration =
               match sessionResult with
               | Ok sessionId ->
                 cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Started sessionId }
+                // The landing gate drives this session. Saves in its worktree must not also drive its live loop, whose confirming
+                // build would swap the worker under a verification (LiveTestFileRouting.SessionPurpose.Verifying).
+                ctx.Dispatch |> Option.iter (fun dispatch -> dispatch (SageFsMsg.SessionVerifiesLandings sessionId))
                 return Ok (
                   sprintf
                     "Integration configured: head=%s worktree=%s branch=%s trunk=%s session=%s"

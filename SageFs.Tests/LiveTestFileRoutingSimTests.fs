@@ -63,6 +63,13 @@ let tests =
         (t.Final.Decisions |> List.exactlyOne).Routed
         |> Expect.equal "fallback, not the session rooted at the shorter name" Routed.Fallback
         assertHolds t
+
+      testCase "WHY — savesInTheVerifyingWorktree: a save in the cohort's verifying session's worktree drives no live loop, even with live testing on and even as primary" <| fun _ ->
+        let t = run LiveTestFileRoutingGenerators.savesInTheVerifyingWorktree
+        t.Final.Decisions
+        |> List.map (fun d -> d.Routed)
+        |> Expect.equal "both saves reach nobody, and neither falls back" [ Routed.Sessions []; Routed.Sessions [] ]
+        assertHolds t
     ]
 
     testList "the twins reproduce the wrong shapes" [
@@ -85,6 +92,12 @@ let tests =
              "the lookalike-sibling invariant must fire"
              "a-sibling-directory-whose-name-starts-with-a-session-directory-is-not-that-sessions"
 
+      testCase "WHY — REPRODUCED: the twin that drives the verifying session like any other lets a save reach it" <| fun _ ->
+        firedBy (runVerifierDrivenLikeAny LiveTestFileRoutingGenerators.savesInTheVerifyingWorktree)
+        |> Expect.contains
+             "the verifying-session invariant must fire"
+             "a-verifying-session-is-driven-by-no-save-and-its-files-do-not-fall-back"
+
       testCase "WHY — the invariants have teeth: some seeded scenario violates them under each twin" <| fun _ ->
         let seeds = [ 1 .. 120 ]
         let anyViolates twin =
@@ -95,6 +108,8 @@ let tests =
         |> Expect.isTrue "the activation-ignoring twin is caught by some seed"
         anyViolates runRawPrefix
         |> Expect.isTrue "the text-prefix twin is caught by some seed"
+        anyViolates runVerifierDrivenLikeAny
+        |> Expect.isTrue "the verifier-driven twin is caught by some seed"
     ]
 
     testList "determinism and replay" [

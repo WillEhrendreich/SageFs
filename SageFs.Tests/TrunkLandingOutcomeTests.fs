@@ -355,24 +355,12 @@ let private land (w: World) (agent: Agent) (relPath: string) (startPoint: string
 let private integrationTip (w: World) : Task<string> = git w.Repo [ "rev-parse"; sprintf "refs/heads/%s" w.IntegrationBranch ]
 
 /// What the verifying session itself answers for an expression: the way to see what it holds, rather than infer it from a verdict.
-/// The session can be mid-rebuild when asked. A landing writes files into its worktree, the session's live loop confirms them with a
-/// real build once they have been quiet for two seconds, and the worker swap refuses an eval with "still warming up" until it is
-/// Ready. So the question is asked again until the session takes it, and what it answers then is what the rebuilt session holds.
+/// The landing gate drives this session and nothing else does: a save in its worktree is not routed to its live loop
+/// (`LiveTestFileRouting.SessionPurpose.Verifying`), so no confirming build swaps its worker after a landing, and a read straight
+/// after one meets a Ready session by construction, with nothing to wait for or retry.
 let private integrationSays (w: World) (expression: string) : Task<string> =
-  task {
-    let answer = ref ""
-    do!
-      waitFor
-        TestTimeouts.workerSessionReady
-        (fun () -> sprintf "the integration session %s to take a question. Last answer: %s" w.IntegrationSession answer.Value)
-        (fun () -> task {
-          let! text =
-            callTool w.Alice.Client "send_fsharp_code"
-              [ "agentName", box w.Alice.Name; "code", box (expression + ";;"); "session_id", box w.IntegrationSession ]
-          answer.Value <- text
-          return not (text.Contains "is still warming up") })
-    return answer.Value
-  }
+  callTool w.Alice.Client "send_fsharp_code"
+    [ "agentName", box w.Alice.Name; "code", box (expression + ";;"); "session_id", box w.IntegrationSession ]
 
 /// The whole line that binds `binding` in a file of the integration branch, as the tip holds it. Rows lean on one another, so a
 /// row that edits a binding another row may or may not have landed reads what is there rather than assuming it.

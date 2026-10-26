@@ -78,6 +78,7 @@
         <Compile Include="TuiEvent.fs" />
         <Compile Include="TestsPane.fs" />
         <Compile Include="SessionTestAttribution.fs" />
+        <Compile Include="WarmupBanner.fs" />
         <Compile Include="SageFsApp.fs" />
         <Compile Include="LiveTestViewReads.fs" />
         <Compile Include="DependencyGraphRoute.fs" />

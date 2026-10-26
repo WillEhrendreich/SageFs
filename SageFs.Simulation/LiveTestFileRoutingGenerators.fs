@@ -45,6 +45,12 @@ module LiveTestFileRoutingGenerators =
     { Seed = 4
       Ops = [ RoutingOp.TurnOn 0; RoutingOp.SaveOutsider ] }
 
+  /// The session the cohort made to verify landings (session 4) has live testing on, because the landing gate needs its run
+  /// requests honoured, and a file in its worktree is saved. No session's live loop is driven by it.
+  let savesInTheVerifyingWorktree : Scenario =
+    { Seed = 6
+      Ops = [ RoutingOp.TurnOn 4; RoutingOp.Save 4; RoutingOp.MakePrimary 4; RoutingOp.Save 4 ] }
+
   /// A save in `/sim/route/checkout-lookalike`, a sibling of session 0's directory whose name
   /// starts with the same text. Session 0 has live testing on and must not receive it.
   let lookalikeSibling : Scenario =

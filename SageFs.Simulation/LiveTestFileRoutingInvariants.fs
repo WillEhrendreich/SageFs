@@ -84,11 +84,28 @@ module LiveTestFileRoutingInvariants =
           | true, Routed.Sessions idxs ->
             Some (sprintf "path %s is a lookalike sibling owned by no session but was routed to session(s) %A" d.Path idxs)) }
 
+  /// The session the cohort made to verify landings is driven by the landing gate, never by a save. Its worktree's files are
+  /// still owned (they are not the fallback's), they simply reach no session's live loop.
+  let aVerifyingSessionIsDrivenByNoSave : Invariant =
+    { Id = "a-verifying-session-is-driven-by-no-save-and-its-files-do-not-fall-back"
+      Description =
+        "A save in the verifying session's worktree reaches no session, and is not handed to the fallback as a file no session owns."
+      Check = fun t ->
+        firstViolation t (fun d ->
+          match d.SaveIdx = Some verifyingIdx, d.Routed with
+          | false, _
+          | true, Routed.Sessions [] -> None
+          | true, Routed.Fallback ->
+            Some (sprintf "path %s is the verifying session's own, but was routed to the fallback as if no session owned it" d.Path)
+          | true, Routed.Sessions idxs ->
+            Some (sprintf "path %s: a save in the verifying session's worktree drove session(s) %A" d.Path idxs)) }
+
   let all : Invariant list =
     [ reachesExactlyTheOwnersThatHaveItOn
       primaryNeverGatesAnotherSession
       aSessionWithItOffReceivesNothing
-      aLookalikeSiblingDirectoryIsNobodys ]
+      aLookalikeSiblingDirectoryIsNobodys
+      aVerifyingSessionIsDrivenByNoSave ]
 
   /// The invariants that failed for a trace, as (id, message).
   let violations (t: Trace) : (string * string) list =

@@ -6,67 +6,6 @@ open SageFs.WarmUp
 open SageFs.Features.Diagnostics
 open SageFs.Features.LiveTesting
 
-/// Converts a SessionContext into OutputLine list for the warmup banner.
-/// Shown in the output pane BEFORE any eval results so users know what was loaded.
-module WarmupBanner =
-  let toOutputLines (ctx: SessionContext) : OutputLine list =
-    let w = ctx.Warmup
-    let sid = ctx.SessionId
-    let now = DateTime.UtcNow
-    let opened = w.NamespacesOpened.Length
-    let failed = w.FailedOpens.Length
-    let asmCount = w.AssembliesLoaded.Length
-    let lines = Collections.Generic.List<OutputLine>()
-    lines.Add {
-      Kind = OutputKind.System
-      Text = sprintf "🔧 Warmup: %d assemblies, %d opened, %d failed, %dms"
-        asmCount opened failed (WarmupContext.totalDurationMs w)
-      Timestamp = now; SessionId = sid
-    }
-    match asmCount > 0 with
-    | true ->
-      for a in w.AssembliesLoaded do
-        lines.Add {
-          Kind = OutputKind.System
-          Text = sprintf "  📦 %s (%d ns, %d modules)" a.Name a.NamespaceCount a.ModuleCount
-          Timestamp = now; SessionId = sid
-        }
-    | false -> ()
-    // Per-namespace opens are streamed via WarmupProgress events during warmup.
-    // Banner only shows failures.
-    for f in w.FailedOpens do
-      let kind = OpenableKind.label f.Kind
-      lines.Add {
-        Kind = OutputKind.Failure
-        Text = sprintf "  ✖ Failed to open %s (%s) — %s" f.Name kind f.ErrorMessage
-        Timestamp = now; SessionId = sid
-      }
-      for d in f.Diagnostics do
-        lines.Add {
-          Kind = OutputKind.Failure
-          Text = sprintf "    %s" (WarmupFcsDiagnostic.formatLine d)
-          Timestamp = now; SessionId = sid
-        }
-      WarmupOpenFailure.suggestedAction f
-      |> Option.iter (fun action ->
-        lines.Add { Kind = OutputKind.Failure; Text = sprintf "    → %s" action; Timestamp = now; SessionId = sid })
-    match ctx.FileStatuses.Length > 0 with
-    | true ->
-      let loaded = ctx.FileStatuses |> List.filter (fun f -> f.Readiness = Loaded) |> List.length
-      lines.Add {
-        Kind = OutputKind.System
-        Text = sprintf "  Files (%d/%d loaded):" loaded ctx.FileStatuses.Length
-        Timestamp = now; SessionId = sid
-      }
-      for f in ctx.FileStatuses do
-        lines.Add {
-          Kind = OutputKind.System
-          Text = sprintf "    %s %s" (FileReadiness.icon f.Readiness) f.Path
-          Timestamp = now; SessionId = sid
-        }
-    | false -> ()
-    lines |> Seq.toList
-
 /// Converts TestRunResult[] into OutputLine list for the session output pane.
 /// Shows per-test name, pass/fail status, duration, and failure messages.
 module TestOutputFormatter =
@@ -242,6 +181,9 @@ type SageFsMsg =
   /// `DisableLiveTesting` stay Primary-only for call sites with no session.
   | EnableLiveTestingForSession of sessionId: string
   | DisableLiveTestingForSession of sessionId: string
+  /// The cohort made this session to verify landings. From now on its worktree's saves and its buffers' keystrokes do not drive
+  /// its live loop: the landing gate evaluates files into it and runs its tests itself (`LiveTestFileRouting.SessionPurpose`).
+  | SessionVerifiesLandings of sessionId: string
   | CycleRunPolicy
   | ToggleCoverage
   | TestCycleTick of now: DateTimeOffset
@@ -288,6 +230,9 @@ type SageFsModel = {
   /// Per-session live test cycle state for non-active sessions.
   /// The active session's state lives in LiveTesting; background sessions are tracked here.
   PerSessionLiveTesting: Map<string, Features.LiveTesting.LiveTestCycleState>
+  /// The sessions the cohort made to verify landings. The landing gate drives them; a save or a keystroke does not
+  /// (`LiveTestFileRouting.SessionPurpose.Verifying`).
+  VerifyingSessions: Set<string>
   /// Tests currently quarantined (environmentally flaky, or manually) and therefore
   /// excluded from the next automatic selection. Recoverable: `QuarantineLogic.evaluate`
   /// releases an `EnvironmentalFlaky` entry once the test classifies `Stable` again — a
@@ -330,6 +275,7 @@ module SageFsModel =
     ResolvedSourceLocations = []
     PendingSuggestion = None
     PerSessionLiveTesting = Map.empty
+    VerifyingSessions = Set.empty
     QuarantinedTests = Map.empty
     EvalsFinished = EvalTally.empty
   }
@@ -804,6 +750,17 @@ module SageFsUpdate =
   /// lives (Primary or its background slot). Never from the primary cycle on its behalf.
   let private sessionActivation (model: SageFsModel) (sessionId: SessionId) =
     (SageFsModel.cycleForSession (SessionId.value sessionId) model).TestState.Activation
+
+  /// The sessions as the live-testing router sees them: where each lives, and whether the cohort made it to verify landings.
+  let private liveTestRoots (model: SageFsModel) : LiveTestFileRouting.SessionRoot list =
+    model.Sessions.Sessions
+    |> List.map (fun s ->
+      { SessionId = s.Id
+        WorkingDirectory = s.WorkingDirectory
+        Purpose =
+          (match Set.contains (SessionId.value s.Id) model.VerifyingSessions with
+           | true -> LiveTestFileRouting.SessionPurpose.Verifying
+           | false -> LiveTestFileRouting.SessionPurpose.Working) })
 
   /// Whether a session's file watcher should exist: the primary cycle is on (the global enable) or the session's own is.
   let private watchingActivation (sessionId: string) (model: SageFsModel) =
@@ -2046,6 +2003,9 @@ module SageFsUpdate =
             | _ -> None)
         disabled, watcherEffects
 
+    | SageFsMsg.SessionVerifiesLandings sessionId ->
+      { model with VerifyingSessions = Set.add sessionId model.VerifyingSessions }, []
+
     | SageFsMsg.EnableLiveTestingForSession sessionId ->
       // Mirrors `EnableLiveTesting`, targeting this session's own cycle.
       let target = SageFsModel.resolveOrCreateLiveTestingTarget (Some sessionId) model
@@ -2192,7 +2152,9 @@ module SageFsUpdate =
             match namedSession with
             | None -> model, []
             | Some known ->
-                match LiveTestFileRouting.withLiveTestingOn (sessionActivation model) [ known ] with
+                // A verifying session is driven by the landing gate, not by keystrokes (`drivenByEdits`).
+                let driven = LiveTestFileRouting.drivenByEdits (liveTestRoots model) [ known ]
+                match LiveTestFileRouting.withLiveTestingOn (sessionActivation model) driven with
                 | [] -> model, []
                 | _ ->
                     let target = SageFsModel.resolveOrCreateLiveTestingTarget (Some sid) model
@@ -2207,11 +2169,7 @@ module SageFsUpdate =
     | SageFsMsg.FileContentChanged (filePath, content) ->
       // Each session owning the file that has live testing on, read from its own cycle, gets the save.
       let save = Features.LiveTesting.LiveTestCycleState.onFileSaveWithContent content filePath DateTimeOffset.UtcNow
-      let roots =
-        model.Sessions.Sessions
-        |> List.map (fun s ->
-          ({ SessionId = s.Id; WorkingDirectory = s.WorkingDirectory } : LiveTestFileRouting.SessionRoot))
-      match LiveTestFileRouting.route (sessionActivation model) roots filePath with
+      match LiveTestFileRouting.route (sessionActivation model) (liveTestRoots model) filePath with
       | LiveTestFileRouting.FileRoute.SessionLess ->
         // No session owns the file (it came from the daemon's fallback watch directory), so the
         // primary cycle takes it, and only while the primary has live testing on.

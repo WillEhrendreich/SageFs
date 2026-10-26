@@ -19,10 +19,21 @@ module LiveTestFileRouting =
   open WorkerProtocol
   open SageFs.Features.LiveTesting
 
-  /// A session as the router sees it: where it lives on disk.
+  /// Why a session exists, as far as the live loop is concerned.
+  [<RequireQualifiedAccess>]
+  type SessionPurpose =
+    /// A session a person or an agent works in: a save in its directory and a keystroke in its buffer drive its live loop.
+    | Working
+    /// A session the cohort made to verify landings. The landing gate evaluates the rebased files into it and runs its
+    /// tests itself, so a save in its worktree must not also drive its live loop: that loop confirms with a real build,
+    /// the build swaps the worker, and a swap in the middle of a verification is a race the gate never asked for.
+    | Verifying
+
+  /// A session as the router sees it: where it lives on disk, and why it exists.
   type SessionRoot =
     { SessionId: SessionId
-      WorkingDirectory: string }
+      WorkingDirectory: string
+      Purpose: SessionPurpose }
 
   /// Where a file change goes.
   [<RequireQualifiedAccess>]
@@ -67,6 +78,20 @@ module LiveTestFileRouting =
         Map.empty
     LiveTestWatcherCore.sessionsForPath dirSessions path
 
+  /// The sessions among `sessions` whose live loop a save or a keystroke may drive: every one except a session known to be
+  /// verifying. A verifying session still OWNS the files in its worktree (so they are never mistaken for session-less ones and
+  /// handed to the primary), it just is not driven by them. A session the roots do not mention is a working one.
+  let drivenByEdits (roots: SessionRoot list) (sessions: SessionId list) : SessionId list =
+    sessions
+    |> List.filter (fun sid ->
+      roots
+      |> List.exists (fun root ->
+        root.SessionId = sid
+        && (match root.Purpose with
+            | SessionPurpose.Verifying -> true
+            | SessionPurpose.Working -> false))
+      |> not)
+
   /// Route one changed file. `activationOf` answers for a session's OWN live-testing cycle.
   let route
     (activationOf: SessionId -> LiveTestingActivation)
@@ -75,4 +100,4 @@ module LiveTestFileRouting =
     : FileRoute =
     match owners roots path with
     | [] -> FileRoute.SessionLess
-    | owning -> FileRoute.ToSessions (withLiveTestingOn activationOf owning)
+    | owning -> FileRoute.ToSessions (withLiveTestingOn activationOf (drivenByEdits roots owning))

@@ -20,11 +20,13 @@ open SageFs.WorkerProtocol
 ///   * Chaos is DATA. Same seed, same ops, identical trace, forever. No clock, no IO.
 ///   * The oracle is INDEPENDENT of the router: expected receivers come from the sim's own
 ///     bookkeeping of which pool directory each file was saved in and which sessions are on.
-///   * Three TWIN routers reintroduce wrong shapes so the invariants prove they have teeth:
+///   * Four TWIN routers reintroduce wrong shapes so the invariants prove they have teeth:
 ///     `runPrimaryGated` (the original bug: nothing is routed unless the primary has live testing
 ///     on), `runIgnoresActivation` (every owner receives the change whether it has live testing
-///     on or not) and `runRawPrefix` (a path is owned by every directory whose TEXT it starts
-///     with, so a save in `/x/checkout-lookalike` reaches the session rooted at `/x/checkout`).
+///     on or not), `runRawPrefix` (a path is owned by every directory whose TEXT it starts
+///     with, so a save in `/x/checkout-lookalike` reaches the session rooted at `/x/checkout`) and
+///     `runVerifierDrivenLikeAny` (the session the cohort made to verify landings is driven by
+///     saves like any other, so its confirming build can swap the worker under a verification).
 module LiveTestFileRoutingSim =
 
   /// One scripted step. `Save` writes a file directly in the root directory of the session at
@@ -44,12 +46,17 @@ module LiveTestFileRoutingSim =
   type Scenario = { Seed: int; Ops: RoutingOp list }
 
   // The pool. Sessions 1 and 2 share a directory, session 3 lives inside session 0's directory
-  // (a worktree under a checkout), session 0 is the checkout.
+  // (a worktree under a checkout), session 0 is the checkout, and session 4 is the one the cohort
+  // made to verify landings, in a directory of its own.
   let private rootDirs =
     [| "/sim/route/checkout"
        "/sim/route/shared"
        "/sim/route/shared"
-       "/sim/route/checkout/.claude/worktrees/agent-x" |]
+       "/sim/route/checkout/.claude/worktrees/agent-x"
+       "/sim/route/cohort-integration" |]
+
+  /// The pool index of the session the cohort made to verify landings.
+  let verifyingIdx = 4
 
   let private outsiderPath = "/sim/route/elsewhere/Stray.fs"
 
@@ -64,10 +71,18 @@ module LiveTestFileRoutingSim =
     | Ok s -> s
     | Error e -> failwithf "sim session id %s invalid: %s" raw e
 
-  let private sessions = [| sid "000000a0"; sid "000000a1"; sid "000000a2"; sid "000000a3" |]
+  let private sessions = [| sid "000000a0"; sid "000000a1"; sid "000000a2"; sid "000000a3"; sid "000000a4" |]
 
-  let private roots : LiveTestFileRouting.SessionRoot list =
-    [ for i in 0 .. poolSize - 1 -> { SessionId = sessions.[i]; WorkingDirectory = rootDirs.[i] } ]
+  let private purposeOf (idx: int) : LiveTestFileRouting.SessionPurpose =
+    match idx = verifyingIdx with
+    | true -> LiveTestFileRouting.SessionPurpose.Verifying
+    | false -> LiveTestFileRouting.SessionPurpose.Working
+
+  let private rootsWith (purpose: int -> LiveTestFileRouting.SessionPurpose) : LiveTestFileRouting.SessionRoot list =
+    [ for i in 0 .. poolSize - 1 ->
+        { SessionId = sessions.[i]; WorkingDirectory = rootDirs.[i]; Purpose = purpose i } ]
+
+  let private roots = rootsWith purposeOf
 
   let private pathIn (sessionIdx: int) = IO.Path.Combine(rootDirs.[sessionIdx], "Lib.fs")
 
@@ -125,6 +140,17 @@ module LiveTestFileRoutingSim =
         |> List.map indexOf
         |> Routed.Sessions
 
+  /// TWIN 4: the session the cohort made to verify landings is driven like any other, so a save in
+  /// its worktree reaches it once it has live testing on, and its confirming build can swap the
+  /// worker under a verification.
+  let private verifierDrivenLikeAny : Router =
+    fun _ activations path ->
+      let activationOf s = activationOfIdx activations (indexOf s)
+      let everyoneWorks = rootsWith (fun _ -> LiveTestFileRouting.SessionPurpose.Working)
+      match LiveTestFileRouting.route activationOf everyoneWorks path with
+      | LiveTestFileRouting.FileRoute.SessionLess -> Routed.Fallback
+      | LiveTestFileRouting.FileRoute.ToSessions owning -> Routed.Sessions (owning |> List.map indexOf)
+
   /// One save's outcome. `ExpectedOwners` and `ExpectedReceivers` come from the sim's own
   /// bookkeeping (the pool directory the file was saved in, and the on-set at that moment), never
   /// from the router.
@@ -154,9 +180,11 @@ module LiveTestFileRoutingSim =
     let receivers =
       owners
       |> Set.filter (fun j ->
-        match activationOfIdx state.Activations j with
-        | LiveTestingActivation.Active -> true
-        | LiveTestingActivation.Inactive -> false)
+        // The verifying session is driven by the landing gate, never by a save.
+        j <> verifyingIdx
+        && (match activationOfIdx state.Activations j with
+            | LiveTestingActivation.Active -> true
+            | LiveTestingActivation.Inactive -> false))
     { SaveIdx = saveIdx
       Path = path
       Primary = state.Primary
@@ -198,3 +226,8 @@ module LiveTestFileRoutingSim =
   /// Through the text-prefix twin: proves the invariants catch a save in a lookalike sibling
   /// directory being attributed to the session whose directory name it starts with.
   let runRawPrefix (scenario: Scenario) : Trace = runWith "twin-raw-prefix" rawPrefix scenario
+
+  /// Through the twin that drives the verifying session like any other: proves the invariants catch
+  /// a save reaching the session the landing gate drives.
+  let runVerifierDrivenLikeAny (scenario: Scenario) : Trace =
+    runWith "twin-verifier-driven-like-any" verifierDrivenLikeAny scenario

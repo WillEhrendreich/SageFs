@@ -294,3 +294,61 @@ let watchers =
       |> Expect.isTrue "and session b still receives its saves"
     }
   ]
+
+// ── a session the cohort verifies in is driven by the landing gate alone ────────────────
+
+/// The cohort's integration session. The landing gate evaluates a rebase's files into it and runs its tests itself, so a save in
+/// its worktree must not also drive its live loop: that loop confirms the save with a real build, the build swaps the worker, and a
+/// swap in the middle of a verification (or of a read straight after one) is a race with nothing to gain.
+let private markVerifying (snap: SessionSnapshot) (model: SageFsModel) : SageFsModel =
+  update (SageFsMsg.SessionVerifiesLandings (idOf snap)) model
+
+[<Tests>]
+let verifyingSessionCases =
+  testList "live testing file routing: a verifying session is not driven by saves" [
+
+    test "WHY — a save in a verifying session's worktree reaches no session, and is not handed to the primary as a session-less file" {
+      let model, snaps = buildWorld { reportedWorld with Primary = 1 }
+      let verifying = markVerifying snaps.[1] model
+      let path = pathIn 1
+      let after = update (SageFsMsg.FileContentChanged (path, "module Lib\nlet x = 1")) verifying
+      reachedSet after snaps path |> Expect.equal "it reaches nobody" Set.empty
+      after.LiveTesting.ActiveFile |> Expect.isNone "the primary cycle did not take it as a file no session owns"
+    }
+
+    test "WHY — an unsaved-buffer change aimed at a verifying session reaches no session" {
+      let model, snaps = buildWorld reportedWorld
+      let verifying = markVerifying snaps.[1] model
+      let path = pathIn 1
+      let after = update (SageFsMsg.BufferContentChanged (Some (idOf snaps.[1]), path, "module Lib\nlet x = 1")) verifying
+      reachedSet after snaps path |> Expect.equal "it reaches nobody" Set.empty
+    }
+
+    test "WHY — a working session beside a verifying one is driven exactly as before" {
+      let spec = { Activations = [ LiveTestingActivation.Active; LiveTestingActivation.Active ]; Primary = 0; Target = 0; Ordering = Ordering.SwitchThenEnable }
+      let model, snaps = buildWorld spec
+      let verifying = markVerifying snaps.[1] model
+      let path = pathIn 0
+      let after = update (SageFsMsg.FileContentChanged (path, "module Lib\nlet x = 1")) verifying
+      reachedSet after snaps path |> Expect.equal "session 0 still receives its own save" (Set.singleton 0)
+    }
+
+    testPropertyWithConfig propConfig
+      "WHY — whatever the world, a save in a verifying session's directory reaches nobody"
+      <| Prop.forAll (Arb.fromGen genSpec) (fun spec ->
+        let model, snaps = buildWorld spec
+        let verifying = markVerifying snaps.[spec.Target] model
+        let path = pathIn spec.Target
+        let after = update (SageFsMsg.FileContentChanged (path, "module Lib\nlet x = 1")) verifying
+        Set.isEmpty (reachedSet after snaps path))
+
+    testPropertyWithConfig propConfig
+      "WHY — marking one session verifying never changes what another session receives"
+      <| Prop.forAll (Arb.fromGen genSpec) (fun spec ->
+        let model, snaps = buildWorld spec
+        let other = (spec.Target + 1) % snaps.Length
+        let verifying = markVerifying snaps.[other] model
+        let path = pathIn spec.Target
+        let after = update (SageFsMsg.FileContentChanged (path, "module Lib\nlet x = 1")) verifying
+        reachedSet after snaps path = expectedSet spec)
+  ]
