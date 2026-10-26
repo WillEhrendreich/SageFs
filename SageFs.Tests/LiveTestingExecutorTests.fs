@@ -511,6 +511,30 @@ let asyncFsCheckReflectionTests = testList "AsyncFsCheck reflection" [
   }
 ]
 
+// --- discoverLeafTests keeps the structured name path ---
+
+/// Step 4 of docs/plans/markers-on-expecto-cases.md: the list chain a leaf's name
+/// was joined from is data the matcher needs, so discovery must carry it instead
+/// of throwing it away at the String.concat.
+let discoverNamePathTests = testList "ExpectoExecutor.discoverLeafTests name path" [
+  test "every discovered leaf carries the structured path its FullName was joined from" {
+    let asm = getTestAsm ()
+    match BuiltInExecutors.ExpectoExecutor.tryBuildCache asm with
+    | Some cache ->
+      let cases = BuiltInExecutors.ExpectoExecutor.discoverLeafTests cache asm
+      cases |> Expect.isNonEmpty "this assembly's own tests should be discoverable"
+      cases
+      |> List.exists (fun c -> c.NamePath.Length >= 2)
+      |> Expect.isTrue "at least one leaf sits under a list, so a structured path has depth"
+      cases
+      |> List.filter (fun c ->
+        not (c.FullName.EndsWith("/" + String.concat "/" c.NamePath, System.StringComparison.Ordinal))
+        || c.DisplayName <> List.last c.NamePath)
+      |> Expect.isEmpty "every FullName ends with its own path joined by /, and the display name is the path's last segment"
+    | None -> failtest "could not build the expecto reflection cache for this assembly"
+  }
+]
+
 [<Tests>]
 let allExecutorTests = testList "Provider Executors" [
   executorDescriptionTests
@@ -522,6 +546,7 @@ let allExecutorTests = testList "Provider Executors" [
   issue32RegressionTests
   issue38RegressionTests
   asyncFsCheckReflectionTests
+  discoverNamePathTests
 ]
 
 // --- LiveTestingHook tests ---
