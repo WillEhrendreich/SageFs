@@ -149,7 +149,7 @@ The tooltip has the daemon's message, the mechanism, and, when a patch left the 
 - **Failure narratives**: Enriched failure context: summary, time since last pass, causal changes
 - **Test source locations**: Test Explorer items automatically link to their source file and line
 - **Test policy controls**: Enable/disable live testing, run all tests, or configure run policies from the command palette
-- **Call graph viewer**: Visualize test dependency graphs
+- **Tests covering a symbol**: pick a symbol and list the tests that cover it, for the session this window shows
 - **Test trace**: Browse test cycle events
 
 ### Live Diagnostics
@@ -327,7 +327,7 @@ The Sessions sidebar also has inline per-row actions (Switch To, Stop, Reset), c
 | SageFs: Debug This Test |: | Hold one test, attach a .NET debugger to the process that runs it, release it |
 | SageFs: Show Covering Tests |: | The tests that cover a symbol (from a coverage CodeLens) |
 | SageFs: Set Test Run Policy |: | Configure per-category run policies |
-| SageFs: Show Test Call Graph |: | Visualize test dependency graph |
+| SageFs: Show Tests Covering a Symbol |: | List the tests that cover a symbol, for this window's session |
 | SageFs: Show Test Trace |: | Browse test cycle events |
 | SageFs: Show Recent Events |: | Browse pipeline event history |
 | SageFs: Explain Test Failure |: | Enriched failure context for the test at cursor |

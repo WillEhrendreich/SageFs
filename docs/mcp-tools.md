@@ -369,6 +369,18 @@ The editors reach the first, second and third over the daemon's HTTP API (`/api/
 `limit` (1 to 2000) for more. A reply that could not look, because the session was not active or its host was gone, carries
 no items and `unavailable` (a stable word) with `reason`, so an empty `completions` always means there is nothing to list.
 
+`GET /api/dependency-graph` is the symbol-to-tests lookup. It lists the tests that cover a symbol; it has no call edges. It
+answers for one session: `?session=<id>` names it, and with none the route follows the rule `GET /api/live-testing/status`
+follows (the only session, else a refusal that names the choices). Without `symbol` the reply is
+`{ Session, State, Symbols: [{ Symbol, TestCount }], TotalSymbols }`; with `?symbol=<full name>` it is
+`{ Session, State, Symbol, Tests: [{ TestId, TestName, Status }], TotalSymbols }`. The tests are the ones discovery found. A
+symbol is tied to a test by the name graph or by recorded coverage: a symbol on a line of an analysed file is covered by the
+tests whose own coverage reached that line, and lines that run when a module initializes belong to no test. `State` says why
+a map is the size it is: `nothing_analysed` (no file of the session has been type-checked, so the next edit or save fills it),
+`no_coverage_recorded` (files are analysed and a test run fills it), `coverage_of_another_build` (tests have coverage, but
+not of the build the session holds, so a run against the built assembly fills it), `nothing_reached` (coverage is recorded and
+no test reaches an analysed symbol, so it will not fill by itself) or `mapped`.
+
 ## Export and history
 
 | Tool | What it does |
