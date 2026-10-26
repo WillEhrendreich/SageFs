@@ -329,6 +329,7 @@
         <Compile Include="SyntaxHighlightTests.fs" />
         <Compile Include="TestTreeSitterTests.fs" />
         <Compile Include="TestTreeSitterCasesTests.fs" />
+        <Compile Include="ExpectoCasesTests.fs" />
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="ProjectLoadingTests.fs" />
         <Compile Include="PackageRuntimeAssetsTests.fs" />
