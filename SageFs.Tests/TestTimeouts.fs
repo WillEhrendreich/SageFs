@@ -43,11 +43,6 @@ module TestTimeouts =
   /// A retry interval, not a budget: the build lock is held by whichever shard is building, and
   /// 250ms is short enough that the wait costs a shard little and long enough not to spin.
   let buildLockRetry = ms 250.
-  /// Backoff between attempts at the harness build when it dies with no diagnostics while sibling
-  /// tiers are running. Waiting is the mechanism, not a patch over the exit code: the failure never
-  /// reproduces alone, the gate's own rerun passes 3 of 3 the moment siblings are gone, and two
-  /// hypotheses (machine load, sibling builds racing obj) were measured and disproven.
-  let harnessBuildBackoffs = [ secs 2.; secs 5.; secs 12. ]
   /// Ceiling on a child process that reads a 4 MB assembly twice, diffs and writes a delta for it five times, and
   /// has the runtime apply it (DeltaChild `bench`). The first pass has the JIT in it and a loaded runner is slower.
   let bigAssemblyDelta = secs 120.
@@ -239,6 +234,11 @@ module TestTimeouts =
   let workerPortReport = secs 120.
   /// A hot-reload host's session becoming Ready, including its first build.
   let workerSessionReady = secs 180.
+  /// How long a shard waits its turn for the build lock in AppRunnerTests. The holder is always alive and its own build is
+  /// bounded by `workerSessionReady`, and a dead holder frees the lock at once, so the wait is the holders ahead of it: the
+  /// gate's five shards plus one, each at most that long. The lock is waited for, not raced, so nothing here is a guess at
+  /// how busy the machine is.
+  let buildLockQueue = System.TimeSpan.FromTicks(workerSessionReady.Ticks * 6L)
   /// The running app answering its first request.
   let appFirstAnswer = secs 30.
   /// The worker reporting that a file is watched after watch-all.

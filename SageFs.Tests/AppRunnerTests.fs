@@ -385,9 +385,17 @@ let private contentionNote () =
 /// row). A FileStream opened with FileShare.None is: its handle IS the lock, so any thread may
 /// close it, and a process that dies closes its handle and frees the next waiter, so no stale
 /// lock outlives its owner.
+///
+/// WHERE the lock file lives decides whether it locks anything. It used to live in `Path.GetTempPath()`,
+/// and the gate gives every tier a TMPDIR of its own (`integration-host-4of5.tmp`), so five shards each
+/// took "the" lock in a private directory, none ever waited for another, and they all built at once.
+/// Run against separate temp dirs, five copies of this suite lost builds to `MSB3371` on the sample's
+/// obj; run against one shared temp dir, five of five passed. The lock now sits beside the test
+/// assembly, which every shard of one checkout shares and no other checkout does, because the thing
+/// being protected is that checkout's obj directories.
 let rec acquireBuildLock (lockName: string) (deadline: DateTime) : Task<FileStream option> =
   task {
-    let path = Path.Combine(Path.GetTempPath(), lockName + ".lock")
+    let path = Path.Combine(AppContext.BaseDirectory, lockName + ".lock")
     try
       return Some (new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
     with :? System.IO.IOException ->
@@ -414,9 +422,9 @@ let private webappDatastarSampleBinDir : Lazy<Task<string>> =
       match built () with
       | Some dir -> return dir
       | None ->
-        let! gate = acquireBuildLock sampleBuildLockName (DateTime.UtcNow + TestTimeouts.workerSessionReady)
+        let! gate = acquireBuildLock sampleBuildLockName (DateTime.UtcNow + TestTimeouts.buildLockQueue)
         if gate.IsNone then
-          return failwithf "the sample build lock was not taken within %O" TestTimeouts.workerSessionReady
+          return failwithf "the sample build lock was not taken within %O" TestTimeouts.buildLockQueue
         else
           try
             match built () with
@@ -548,37 +556,18 @@ let managedDependencyResolutionIntegrationTests =
               ]
             File.WriteAllText(harnessFsproj, harnessFsprojContent)
             File.WriteAllText(Path.Combine(harnessDir, "Program.fs"), harnessProgramContent)
-            // The lock stays for the sample build (its obj IS shared with the other four shards);
-            // for this build the shard-vs-shard race was later measured out of the picture — 8
-            // concurrent SageFs.Core rebuilds and restores all exited 0, and this temp dir is a
-            // fresh Guid per run — so what matters here is the wait below.
-            let rec buildWithBackoff (backoffs: TimeSpan list) =
-              task {
-                let! outcome =
-                  runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
-                match outcome with
-                | Ok (0, _, _) -> return outcome
-                | _ ->
-                  match backoffs with
-                  | [] -> return outcome
-                  | wait :: rest ->
-                    do! Task.Delay wait
-                    return! buildWithBackoff rest
-              }
-            let! (gate: FileStream option) = acquireBuildLock sampleBuildLockName (DateTime.UtcNow + TestTimeouts.workerSessionReady)
+            // The harness is a fresh directory, but it references SageFs.Core and SageFs.Host, so building it
+            // rebuilds those two projects in THIS checkout's shared obj directories, the same state every
+            // other shard of the checkout touches. One build at a time, under the lock that sits beside the
+            // test assembly (see `acquireBuildLock`). There is no retry: a build that fails under the lock
+            // has failed for a reason, and the failure prints that reason.
+            let! (gate: FileStream option) = acquireBuildLock sampleBuildLockName (DateTime.UtcNow + TestTimeouts.buildLockQueue)
             if gate.IsNone then
-              failtestf "the harness build lock was not taken within %O" TestTimeouts.workerSessionReady
-            // Why this waits instead of failing at once: the build dies in the restore step with
-            // ZERO diagnostics (exit=1, ~1s) only while sibling tiers run, and the gate's own rerun
-            // passes 3 of 3 every time once they are gone. Two hypotheses were measured and both
-            // disproven: machine load (it failed at load 6.88 and at 16.71) and sibling builds
-            // racing the checkout's obj (8 concurrent rebuilds plus restores of SageFs.Core, all
-            // exit 0). So the wait matches the one thing proven to clear it — the siblings going
-            // away — and a final failure still prints its output and the load average.
+              failtestf "the harness build lock was not taken within %O" TestTimeouts.buildLockQueue
             let! built =
               task {
                 try
-                  return! buildWithBackoff TestTimeouts.harnessBuildBackoffs
+                  return! runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
                 finally
                   releaseBuildLock gate
               }
