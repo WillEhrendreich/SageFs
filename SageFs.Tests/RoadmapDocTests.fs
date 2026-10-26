@@ -16,7 +16,7 @@ let private repoRoot = RepoPaths.repoPathFull [||]
 let private mainRoot = RepoPaths.mainCheckoutRoot repoRoot
 
 let private readFromRepo (relative: string) : FileState =
-  let path = Path.Combine(repoRoot, relative)
+  let path = resolvePath repoRoot mainRoot relative
   match File.Exists path with
   | true -> Lines(File.ReadAllLines path)
   | false -> Missing
@@ -92,7 +92,7 @@ let tests =
           match item.Arrival with
           | NoLandmarkYet -> None
           | Marked landmark ->
-            let folder = Path.GetDirectoryName(Path.Combine(repoRoot, landmark.Path))
+            let folder = Path.GetDirectoryName(resolvePath repoRoot mainRoot landmark.Path)
             match landmark.Symbol.Trim() <> "" && Directory.Exists folder with
             | true -> None
             | false -> Some (sprintf "%s -> %s (%s)" item.Id landmark.Path landmark.Symbol))

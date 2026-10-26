@@ -97,7 +97,14 @@ let horizonBlurb (horizon: Horizon) : string =
 /// pure: each caller computes `mainRoot` itself and passes it in, and every reader goes through here
 /// so the generator and the test can never disagree about where a path lives.
 let resolvePath (localRoot: string) (mainRoot: string) (relative: string) : string =
-  Path.GetFullPath(Path.Combine(localRoot, relative))
+  let root = Path.TrimEndingDirectorySeparator(Path.GetFullPath localRoot)
+  let resolved = Path.GetFullPath(Path.Combine(localRoot, relative))
+  let insideTree =
+    resolved = root ||
+    resolved.StartsWith(root + string Path.DirectorySeparatorChar, StringComparison.Ordinal)
+  match insideTree with
+  | true -> resolved
+  | false -> Path.GetFullPath(Path.Combine(mainRoot, relative))
 
 let private isComment (line: string) = line.TrimStart().StartsWith "//"
 
