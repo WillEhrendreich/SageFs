@@ -259,9 +259,15 @@
         <Compile Include="Features\PatchRoute.fs" />
         <Compile Include="Features\LiveTestingInstrumentation.fs" />
         <Compile Include="Features\ReflectionDiscovery.fs" />
+        <!-- TestTreeSitter sits above LiveTestingExecutors so ExpectoCases (which
+             needs its parse surface for discover, step 5) can also sit above
+             LiveTestingExecutors (which needs categoryOf, step 6). TestTreeSitter
+             depends only on LiveTestingTypes and SageFs.Utils; nothing inside Core
+             consumed it from its old position below. -->
+        <Compile Include="Features\TestTreeSitter.fs" />
+        <Compile Include="Features\ExpectoCases.fs" />
         <Compile Include="Features\LiveTestingExecutors.fs" />
         <Compile Include="Features\TestDiscoveryMerge.fs" />
-        <Compile Include="Features\TestTreeSitter.fs" />
         <Compile Include="Features\AutoCompletion.fs" />
         <Compile Include="Features\Diagnostics.fs" />
         <Compile Include="Features\DiagnosticsStore.fs" />

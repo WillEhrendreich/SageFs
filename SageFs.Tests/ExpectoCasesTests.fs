@@ -81,7 +81,7 @@ let rec genShape (depth: int) : Gen<NodeShape> =
   }
 
 /// One generated file: one root shape per binding, one to three bindings.
-let genBindings : Gen<NodeShape list list> =
+let genBindings : Gen<NodeShape list> =
   gen {
     let! count = Gen.choose (1, 3)
     let! bindings = Gen.listOfLength count (genShape 3)
@@ -131,7 +131,7 @@ let slashName (n: int) = sprintf "n%d/slash" n
 /// what each leaf needs back: its runtime path, its line, its binding. When
 /// `computedAt` names a node, that node's SOURCE name becomes Computed while
 /// the runtime path every consumer sees keeps the original literal.
-let buildFile (nameOf: int -> string) (file: string) (computedAt: (int * int list) option) (bindings: NodeShape list list) : BuiltFile =
+let buildFile (nameOf: int -> string) (file: string) (computedAt: (int * int list) option) (bindings: NodeShape list) : BuiltFile =
   let rec walkShape (bIdx: int) (indexPath: int list) (sourcePath: SourceName list) (runtimePath: string list) (shape: NodeShape) (state: BuildState) : BuildState =
     let nameId = state.NextName
     let name = nameOf nameId
