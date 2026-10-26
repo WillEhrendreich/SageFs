@@ -590,7 +590,7 @@ let discoverDaemon (candidateMcpPorts: int list) (c: Client) =
 
   loop candidateMcpPorts
 
-let [<Literal>] expectedApiVersion = 3
+let [<Literal>] expectedApiVersion = 4
 
 let checkVersion (status: SystemStatus) : Result<unit, string> =
   match status.apiVersion with

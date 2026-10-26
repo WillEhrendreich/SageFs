@@ -26,7 +26,9 @@ module EndpointContracts =
   /// API contract version. Increment when endpoints are added, removed, or
   /// have breaking changes to request/response shapes. Plugins can check this
   /// against their minimum required version to detect incompatibility.
-  let apiVersion = 3
+  /// 4: `GET /api/dependency-graph` answers for one session (a `session` parameter, a `State` in the reply, and a 400
+  /// when several sessions are open and none is named).
+  let apiVersion = 4
 
   /// All daemon endpoints grouped by category.
   let coreEndpoints = [

@@ -247,9 +247,13 @@ let endpointContractTests = testList "EndpointContracts" [
     }
 
     test "apiVersion matches current contract shape" {
-      // Pin the version so any contract change forces a conscious version bump
+      // Pin the version so any contract change forces a conscious version bump. A field added to an
+      // existing event (the run `source` on test_run_completed) is additive and left it where it was:
+      // a client that does not know the field ignores it. What moved it to 4 was a behaviour a client
+      // can see without reading a new field, a 400 from /api/dependency-graph when several sessions
+      // are open and the request names none.
       apiVersion
-      |> Expect.equal "apiVersion should be 3 for current contract" 3
+      |> Expect.equal "apiVersion should be 4 for current contract (4: /api/dependency-graph answers for one session)" 4
     }
 
     test "VS Code extension expectedApiVersion matches daemon apiVersion" {

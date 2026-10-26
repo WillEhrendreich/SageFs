@@ -345,15 +345,6 @@ let runSourceShapeTests = testList "the run's source is the disk/build fact, not
     let source = doc.RootElement.GetProperty("source")
     source.GetProperty("filesChecked").GetInt32()
     |> Expect.equal "the comparison count rides with the verdict" TestMagnitudes.packedProbeCount
-
-  testCase "apiVersion did NOT move: a field added to an existing event is not a shape change" <| fun _ ->
-    // Adding a field to an existing SSE event is additive, not a breaking change: every
-    // client that read the event before still reads it the same way, and a client that
-    // does not know `source` ignores it. `EndpointContracts.apiVersion`'s own doc says
-    // it moves when endpoints are added/removed or request/response shapes change
-    // BREAKINGLY. So it stays put, and `compat.lua`'s closed 3..3 range stays true.
-    EndpointContracts.apiVersion
-    |> Expect.equal "the wire contract version is unchanged by an additive field" 3
 ]
 
 do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant runSourceEmissionTests |> ignore
