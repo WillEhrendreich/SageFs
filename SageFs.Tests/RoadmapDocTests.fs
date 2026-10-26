@@ -11,6 +11,10 @@ open SageFs.Roadmap
 
 let private repoRoot = RepoPaths.repoPathFull [||]
 
+/// The main checkout that owns `repoRoot`: a worktree's `.git` file points into it, a normal checkout is
+/// its own. It is the anchor `resolvePath` gives a path that climbs out of the tree.
+let private mainRoot = RepoPaths.mainCheckoutRoot repoRoot
+
 let private readFromRepo (relative: string) : FileState =
   let path = Path.Combine(repoRoot, relative)
   match File.Exists path with
@@ -98,6 +102,17 @@ let tests =
       bad
       |> Expect.isEmpty (
         sprintf "every landmark names a symbol and a folder that exists; these do not: %A" bad)
+
+    testCase "WHY — a path that climbs out of the checkout resolves against the main checkout even from a nested root, and an in-repo path resolves against this root, so every worktree reads the same sibling file and its own branch" <| fun _ ->
+      let nestedRoot = Path.Combine(repoRoot, ".claude", "worktrees", "sample")
+      resolvePath nestedRoot mainRoot "../sagefs.nvim/lua/sagefs/dashboard/state.lua"
+      |> Expect.equal
+        "an out-of-checkout path is anchored at the main checkout, not the nested root"
+        (Path.GetFullPath(Path.Combine(mainRoot, "../sagefs.nvim/lua/sagefs/dashboard/state.lua")))
+      resolvePath nestedRoot mainRoot "docs/roadmap.md"
+      |> Expect.equal
+        "an in-repo path stays anchored at this root, so a worktree reads its own branch"
+        (Path.GetFullPath(Path.Combine(nestedRoot, "docs/roadmap.md")))
 
     testCase "WHY — the area and horizon lists name every case, so an item can never land in a section that is not rendered" <| fun _ ->
       (areas |> List.length) |> Expect.equal "every Area is listed" (unionCaseCount<Area> ())

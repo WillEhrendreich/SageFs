@@ -8,6 +8,7 @@
 module SageFs.Roadmap
 
 open System
+open System.IO
 open System.Text
 
 type Area =
@@ -84,6 +85,19 @@ let horizonBlurb (horizon: Horizon) : string =
   | Next -> "Designed, or close to it, and queued behind Now. Weeks to a couple of months."
   | Later -> "I want it and I roughly know how. Months to a year, and the order will move."
   | Exploring -> "An idea I'm turning over. No promise, and some of these will die."
+
+// ---- paths -------------------------------------------------------------
+
+/// Where a roadmap-relative path actually lives on disk.
+///
+/// A path that climbs OUT of the checkout (`../sagefs.nvim/...`) is anchored at the MAIN checkout, the
+/// parent of git's common dir, so every worktree of this repo reads the same sibling file. A path
+/// inside the tree stays anchored at THIS root, so a worktree reads its own branch's file. In the main
+/// checkout both anchors are the same directory, so the rule changes nothing there. This file stays
+/// pure: each caller computes `mainRoot` itself and passes it in, and every reader goes through here
+/// so the generator and the test can never disagree about where a path lives.
+let resolvePath (localRoot: string) (mainRoot: string) (relative: string) : string =
+  Path.GetFullPath(Path.Combine(localRoot, relative))
 
 let private isComment (line: string) = line.TrimStart().StartsWith "//"
 
