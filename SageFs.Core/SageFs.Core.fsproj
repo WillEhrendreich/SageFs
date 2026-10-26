@@ -192,6 +192,11 @@
         <!-- After ReloadPlanning: finds the callers of a re-signed or removed declaration in the project's other files, by the
              compiler's symbol resolution over the whole project or by name. -->
         <Compile Include="Features\CallerCheck.fs" />
+        <!-- The references rung of the progressive map. SymbolReferences is pure (what scope a reply may claim, and the
+             budget shared by a session's projects); SymbolReferenceCheck is the compiler call, reusing CallerCheck's
+             project checker. Both before WorkerProtocol, which carries the answer. -->
+        <Compile Include="Features\SymbolReferences.fs" />
+        <Compile Include="Features\SymbolReferenceCheck.fs" />
         <!-- Pure: when a patch is live (its new body has been seen running). After ReloadPlanning
              (it matches probes to the declarations the planner landed) and EntryProbes. -->
         <Compile Include="Features\PatchConfirmation.fs" />

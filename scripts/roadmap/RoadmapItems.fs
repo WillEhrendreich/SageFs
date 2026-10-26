@@ -462,4 +462,4 @@ let items : Item list =
     item "walk-the-rest-of-the-symbol-ladder" "Walk the rest of the symbol ladder" Agents Next
       NoLandmarkYet
       [ "docs/progressive-map-research-2026-10-24.md" ]
-      "Slices 3 to 5 of the progressive map plan: references as new worker work whose reply states its scope, the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again." ]
+      "The references rung is built: `list_references` takes a qualified name and lists every definition and use the compiler resolves to it across the session's projects, a page at a time. Its first line is the scope (project-wide, partial with the projects it did not reach, or unavailable with the reason), so a count never travels without how far the compiler looked, and one budget covers all the projects together. What remains of the progressive map plan: the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again." ]

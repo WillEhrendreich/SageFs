@@ -152,6 +152,8 @@ module WorkerHttpTransport =
     let check = WorkerRoute.Post "/check"
     let typecheckSymbols = WorkerRoute.Post "/typecheck-symbols"
     let completions = WorkerRoute.Post "/completions"
+    /// Runs the compiler over the session's projects, so it is a POST like the other routes that ask the compiler.
+    let references = WorkerRoute.Post "/references"
     let cancel = WorkerRoute.Post "/cancel"
     let loadScript = WorkerRoute.Post "/load-script"
     let reset = WorkerRoute.Post "/reset"
@@ -203,7 +205,7 @@ module WorkerHttpTransport =
 
   let routes : WorkerRoute list = [
     Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.liveValuesEvaluate; Routes.liveValuesMode; Routes.eval; Routes.check
-    Routes.typecheckSymbols; Routes.completions; Routes.cancel; Routes.loadScript
+    Routes.typecheckSymbols; Routes.completions; Routes.references; Routes.cancel; Routes.loadScript
     Routes.reset; Routes.hardReset; Routes.runTests; Routes.runTestsStream
     Routes.testDiscovery; Routes.evalLiveTestFile; Routes.instrumentationMaps; Routes.shutdown
     Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle; Routes.hotReloadResetState; Routes.hotReloadReflectionMode
@@ -473,6 +475,14 @@ module WorkerHttpTransport =
         let limit = Serialization.deserialize<SageFs.Features.AutoCompletion.CompletionLimit> ((jsonProp doc "limit").GetRawText())
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.GetCompletions(code, cursorPos, limit, rid))
+      })) |> ignore
+
+      map Routes.references (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let qualifiedName = (jsonProp doc "qualifiedName").GetString()
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.GetReferences(qualifiedName, rid))
       })) |> ignore
 
       map Routes.cancel (Func<HttpContext, Task>(fun ctx ->

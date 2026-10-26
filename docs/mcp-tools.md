@@ -80,7 +80,7 @@ the same port, which does not ask: `POST /api/sessions/stop` with `{"sessionId":
 `POST /api/local-data/clear?store=<store>` for the rest. (`sagefs stop` stops
 the whole daemon, not one session.)
 
-The full advertised set is 71 tools, grouped below. This is separate
+The full advertised set is 72 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those
 HTTP endpoints are not MCP tools.
@@ -248,6 +248,7 @@ columns from 0 (counted in characters, not bytes), and `endColumn` is one past t
 | `hard_reset_fsi_session` | Full reset: rebuilds the project, reloads, starts fresh. Needed after `.fsproj` or package changes. With `rebuild=true` it answers at once and builds in the background; call `get_session_status` with `wait_seconds=60` to wait for the outcome. In a repo that builds its own SageFs.Core, the build compiles against that Core, not the daemon's. |
 | `get_available_projects` | Discover `.fsproj` / `.sln` / `.slnx` files under a directory. |
 | `list_members` | The members of a qualified name (namespace, module or type): one rung of the symbol ladder. Names only. The reply gives the total and a count per kind before the names (for example `12 modules, 40 methods, 3 classes`, then how many are drillable, the split the VS Code Type Explorer expands on), lists drillable kinds first, and ends with an offset footer for the next page. The kind of each member is the one the compiler gave it: the worker sends it with the name. The total is exact, or reads `at least N` when the worker's list was cut at its bound of 2000 members. A name that lists nothing says why instead of `0 total`: it is a leaf (a method, a value, a property), its parent does not list it so it does not resolve, or the session could not be asked. |
+| `list_references` | Every definition and use of a qualified name across the session's projects: the rung below `list_members`. The first line of the reply is the scope, `Scope: project-wide` when the compiler checked every project of the session, `Scope: partial` naming the projects it did not reach, or `Scope: unavailable` with the reason. A count never appears without that line, and a partial count covers only the projects it names. The compiler's own full name decides what matches (a call through an alias, an `open` or a pipeline counts; a same-spelled name in another module does not; overloads of one method count together). One budget (`SAGEFS_REFERENCES_CHECK_SECONDS`) covers all projects together, and a skipped project's line states the budget and the time spent. Files that did not check cleanly are named, because a use inside one may be missing. References are listed by file, line and column with their kind, a page at a time, ending with the offset for the next page. |
 | `list_runnable_projects` | List the session's projects and which ones `run_app` can run (`OutputType=Exe`). |
 | `switch_workflow` | Switch the session's workflow: `repl` (Interactive), `livetesting` (Live Testing), or `live` (Hot Reload, aliases `hotreload`/`weblive`/`web`, kept for backward compatibility). Creates a new session in the target workflow and stops the old one; VS Code and the dashboard's own `POST /api/sessions/{sid}/workflow` route restart the same session id in place instead. |
 

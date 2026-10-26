@@ -102,7 +102,7 @@ let private machineScaled : Set<string> =
         "shutdownManifestCommit"; "testCycleTimerStop"; "cacheSaveTimerStop"; "workerHttpServerStop"
         "startupDelay"; "stopSessionMailboxTimeout"; "supervisorWedgeAfter"
         "sessionDispose"; "warmupReadyPollMax"; "workerProxyRegister"; "daemonStartWait"
-        "jupyterSessionWarmup" ]
+        "jupyterSessionWarmup"; "referencesCheck" ]
 
 /// Declared as another wait for the machine, so they scale through it.
 let private derivedFromMachine : (string * string) list =
@@ -179,7 +179,7 @@ let tests =
         declared.[name].Contains source |> Expect.isTrue (sprintf "%s is declared from %s" name source)
 
     testCase "WHY — the number of waits for the machine only goes up when a table says so (a ratchet on the count, with the reason a wait is fixed in the table above)" <| fun _ ->
-      machineScaled |> Set.count |> Expect.equal "waits for the machine (60 + debugAttachGrace: a debugger process attaching to the host takes longer on a slower machine, + hygieneScan: a scan is a few dozen git spawns, which is what a slower or busier machine stretches, + jupyterSessionWarmup: a cold session restores and compiles, so a slower machine takes longer to reach Ready)" 63
+      machineScaled |> Set.count |> Expect.equal "waits for the machine (60 + debugAttachGrace: a debugger process attaching to the host takes longer on a slower machine, + hygieneScan: a scan is a few dozen git spawns, which is what a slower or busier machine stretches, + jupyterSessionWarmup: a cold session restores and compiles, so a slower machine takes longer to reach Ready, + referencesCheck: the compiler checking every project of a session takes longer on a slower machine)" 64
       fixedTable |> List.length |> Expect.equal "fixed durations (97 + capabilityDefaultLifetime and capabilityMaxLifetime, which are presence: a run's token is trusted for a stated time, + debugAttachLook, a poll: the runtime raises no attach event, + confirmationAnswer, a wait for a person to answer a confirmation prompt, + abandonedSessionBound, a threshold: how long an agent's session may sit abandoned before the daemon stops it, which is the product's judgement and not a start the machine takes, + jupyterSessionWaitPoll, a poll: the kernel asks the daemon whether the session is Ready yet, and nothing else happens while it waits)" 103
 
     testCase "WHY — each machine constant in the running process equals its written value scaled for the process's tier, so the wiring is real and not only the text" <| fun _ ->

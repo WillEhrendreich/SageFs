@@ -104,6 +104,13 @@
         <Compile Include="CallerPendingSim.fs" />
         <Compile Include="CallerPendingInvariants.fs" />
         <Compile Include="CallerPendingGenerators.fs" />
+        <!-- References rung DST: folds the real ReferenceGather.run (one budget for every project of a session) and
+             ReferenceReply.ofAnswer over a simulated clock and checker; the truth is an independent walk of the budget
+             against the project costs. Twins call a partial look project-wide, give every project the whole budget, and
+             forget which projects a partial look skipped. -->
+        <Compile Include="ReferenceScopeSim.fs" />
+        <Compile Include="ReferenceScopeInvariants.fs" />
+        <Compile Include="ReferenceScopeGenerators.fs" />
         <!-- Session reaper DST: folds the real Reaper.SweepAsync over real SessionInfo values through arrivals, departures,
              use, daemon restarts and sweeps; the truth is an independent fold of who was seen when. Twins forget the
              restart, ignore presence and treat a person's session as an agent's. -->

@@ -51,3 +51,12 @@ Useful tools while you're in the loop:
   at its bound, and a name that lists nothing says why (a leaf, a name that
   does not resolve, a session that could not be asked) in place of `0 total`.
   Once you hold the name, reflect over it in the session as above.
+- **Who uses a name? `list_references` is the next rung.** Give it the same
+  qualified name and it lists every definition and use the compiler resolves
+  to it, across the session's projects, a page at a time with an `offset`
+  footer. Read the first line before you trust any count: `Scope:
+  project-wide` means every project of the session was checked, `Scope:
+  partial` names the projects it did not reach (one budget covers them all, and
+  the line states how much of it was spent), and `Scope: unavailable` carries no
+  count at all, which is not an answer that nothing references the name. Files
+  that did not check cleanly are named, since a use inside one may be missing.

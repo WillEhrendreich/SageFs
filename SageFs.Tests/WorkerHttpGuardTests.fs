@@ -390,6 +390,7 @@ let private crossSitePosts = [
   "/run-tests", """{"tests":[],"maxParallelism":1,"replyId":"r1"}"""
   "/run-tests-stream", """{"tests":[],"maxParallelism":1}"""
   "/completions", """{"code":"Sys","cursorPos":3,"replyId":"r1"}"""
+  "/references", """{"qualifiedName":"Mod.fn","replyId":"r1"}"""
   // ASP.NET routing is case-insensitive: /EVAL reaches the /eval handler.
   "/EVAL", """{"code":"1+1","replyId":"r1"}"""
   "/Hard-Reset", """{"rebuild":false,"replyId":"r1"}"""

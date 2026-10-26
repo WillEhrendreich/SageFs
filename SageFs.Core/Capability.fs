@@ -164,7 +164,7 @@ module Capability =
       | ToolClass.SessionRead ->
         [ "get_daemon_status"; "get_session_status"; "list_sessions"; "get_available_projects"
           "list_runnable_projects"; "get_friction_report"; "get_friction_summary"; "discover_features"
-          "get_recent_fsi_events"; "switch_session"; "list_members" ]
+          "get_recent_fsi_events"; "switch_session"; "list_members"; "list_references" ]
       | ToolClass.Feedback -> [ "report_friction" ]
       | ToolClass.CodeAnalysis ->
         [ "check_fsharp_code"; "diagnose"; "coverage_intel"; "impact_forecast"; "suggest_next_action"; "plan_ripple"
@@ -419,7 +419,7 @@ module Capability =
             "send_fsharp_code"; "cancel_eval"; "manage_scratch_pad"; "reset_fsi_session"
             "hard_reset_fsi_session"; "switch_workflow"; "stop_session"; "enable_hot_reload"
             "disable_hot_reload"; "reset_hot_reload_state"; "set_reflection_read_mode"; "run_app"
-            "stop_app"; "nudge_value"; "list_members" ]
+            "stop_app"; "nudge_value"; "list_members"; "list_references" ]
       @ tagged RouteKind.CreatesSession [ "create_project_session"; "create_solution_session"; "create_bare_session" ]
       @ tagged RouteKind.ListsSessions [ "list_sessions" ]
       @ tagged RouteKind.ReadsDirectory [ "get_available_projects" ]

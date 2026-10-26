@@ -96,7 +96,9 @@ let requiredParamsByTool =
     // The nudge door: every call says what it is doing; the file, address, hash and value depend on the action.
     "nudge_value", set ["action"]
     // The symbol ladder's first rung: the name to list is required; the offset and the directory default.
-    "list_members", set ["qualified_name"] ]
+    "list_members", set ["qualified_name"]
+    // The rung below it: the name to find references to is required; the offset and the directory default.
+    "list_references", set ["qualified_name"] ]
   |> Map.ofList
 
 [<Tests>]
@@ -255,7 +257,8 @@ let descriptionPropertyTests =
       // + delegate_conductor, withdraw_landing, veto_landing and resolve_veto: the four cohort commands that
       // existed in the core with no tool to issue them.
       // + list_members: the progressive map's first rung (docs/progressive-map-research-2026-10-24.md).
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 71
+      // + list_references: the rung below it, whose reply states its scope first.
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 72
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

@@ -167,6 +167,10 @@
         <Compile Include="McpNoMembers.fs" />
         <Compile Include="McpListMembers.fs" />
         <Compile Include="McpMembersRoute.fs" />
+        <!-- Slice 3 of the progressive map: the references rung. The page (scope line first, totals before paging) is pure;
+             the route asks the session's worker. -->
+        <Compile Include="McpReferencesPage.fs" />
+        <Compile Include="McpReferencesRoute.fs" />
         <Compile Include="McpAnalysis.fs" />
         <Compile Include="McpDebugTest.fs" />
 

@@ -343,6 +343,9 @@ module WorkerProtocol =
     | CheckCode of code: string * replyId: string
     | TypeCheckWithSymbols of code: string * filePath: string * replyId: string
     | GetCompletions of code: string * cursorPos: int * limit: Features.AutoCompletion.CompletionLimit * replyId: string
+    /// Every definition and use of a qualified name in the session's projects, each checked by the compiler under one
+    /// budget (`Timeouts.referencesCheck`). The answer says which projects it covers.
+    | GetReferences of qualifiedName: string * replyId: string
     | CancelEval
     | LoadScript of filePath: string * replyId: string
     | ResetSession of replyId: string
@@ -470,6 +473,9 @@ module WorkerProtocol =
     | TypeCheckWithSymbolsResult of replyId: string * diagnostics: WorkerDiagnostic list * symbolRefs: WorkerSymbolRef list
     /// The candidates with the kind FCS gave each and the size of the set they came from, or why none could be listed.
     | CompletionResult of replyId: string * answer: Features.AutoCompletion.CompletionAnswer<Features.AutoCompletion.CompletionEntry>
+    /// Reply to GetReferences: what each project of the session said. The scope a reader may claim is derived from it
+    /// (`ReferenceReply.ofAnswer`), never carried beside it.
+    | ReferencesResult of replyId: string * answer: Features.ReferencesAnswer
     | StatusResult of replyId: string * status: WorkerStatusSnapshot
     /// Reply to GetLiveValues: the same JSON a Features.LiveValueTree.LiveValueSnapshot
     /// serializes to today (the daemon already deserializes that type).
@@ -526,6 +532,7 @@ module WorkerProtocol =
       | WorkerMessage.CheckCode _
       | WorkerMessage.TypeCheckWithSymbols _
       | WorkerMessage.GetCompletions _
+      | WorkerMessage.GetReferences _
       | WorkerMessage.LoadScript _
       | WorkerMessage.RunTests _
       | WorkerMessage.EvaluateLiveMember _

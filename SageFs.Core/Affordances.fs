@@ -183,6 +183,7 @@ let private gatingDomain : Map<string, ToolGate> =
     "get_friction_report", ToolGate.AlwaysAvailable
     "get_available_projects", ToolGate.AlwaysAvailable
     "list_members", ToolGate.AlwaysAvailable
+    "list_references", ToolGate.AlwaysAvailable
     "acquire_full_build_lease", ToolGate.AlwaysAvailable
     "acquire_test_suite_lease", ToolGate.AlwaysAvailable
     "acquire_run_app_lease", ToolGate.AlwaysAvailable
@@ -630,6 +631,7 @@ type ToolName =
   | GetAvailableProjects
   | ListRunnableProjects
   | ListMembers
+  | ListReferences
   | GetFrictionReport
   | GetFrictionSummary
   | GetRecentFsiEvents
@@ -718,6 +720,7 @@ module ToolName =
     | ToolName.SwitchSession -> "switch_session"
     | ToolName.GetAvailableProjects -> "get_available_projects"
     | ToolName.ListMembers -> "list_members"
+    | ToolName.ListReferences -> "list_references"
     | ToolName.ListRunnableProjects -> "list_runnable_projects"
     | ToolName.GetFrictionReport -> "get_friction_report"
     | ToolName.GetFrictionSummary -> "get_friction_summary"
@@ -792,6 +795,7 @@ module ToolName =
       ToolName.GetAvailableProjects
       ToolName.ListRunnableProjects
       ToolName.ListMembers
+      ToolName.ListReferences
       ToolName.GetFrictionReport
       ToolName.GetFrictionSummary
       ToolName.GetRecentFsiEvents
