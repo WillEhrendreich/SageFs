@@ -24,7 +24,9 @@ let machine (totalMb: int64) (availableMb: int64) : MachineMemory.Stats =
 /// A made-up duration for a made-up clock, named by its number of seconds.
 let seconds (s: float) : TimeSpan = TimeSpan.FromSeconds s
 
-let retentionSeconds = 600.0
+/// The product's own retention, so a test takes a production duration from `Timeouts` and reads every other instant
+/// relative to it.
+let retentionSeconds = Timeouts.referencesCacheRetention.TotalSeconds
 
 let policy : CachePolicy = { CeilingBytes = 3000L * megabyte; Retention = seconds retentionSeconds }
 
@@ -84,9 +86,9 @@ let tests =
         | other -> failtestf "expected the ceiling reason, got %A" other
 
       testCase "WHY — a cache nobody asked for within the retention is memory held for a question that may not return" <| fun _ ->
-        match decide policy (reading 1200L 601.0 MemoryPressure.Normal) with
+        match decide policy (reading 1200L (retentionSeconds + 1.0) MemoryPressure.Normal) with
         | CacheDecision.Release(ReleaseReason.IdlePastRetention(idle, retention)) ->
-          idle |> Expect.equal "the idle time is named" (seconds 601.0)
+          idle |> Expect.equal "the idle time is named" (seconds (retentionSeconds + 1.0))
           retention |> Expect.equal "the retention is named" (seconds retentionSeconds)
         | other -> failtestf "expected the idle reason, got %A" other
 
@@ -97,19 +99,19 @@ let tests =
         |> Expect.equal "critical releases" (CacheDecision.Release(ReleaseReason.MemoryNotNormal MemoryPressure.Critical))
 
       testCase "WHY — the retention itself is inside the window: only longer than it releases" <| fun _ ->
-        decide policy (reading 1200L 600.0 MemoryPressure.Normal) |> Expect.equal "exactly the retention is kept" CacheDecision.Keep
+        decide policy (reading 1200L retentionSeconds MemoryPressure.Normal) |> Expect.equal "exactly the retention is kept" CacheDecision.Keep
 
       testCase "WHY — the ceiling itself is inside the window: only more than it releases" <| fun _ ->
         decide policy (reading 3000L 1.0 MemoryPressure.Normal) |> Expect.equal "exactly the ceiling is kept" CacheDecision.Keep
 
       testCase "WHY — when two causes hold at once the ceiling is named first, so the log says the bytes" <| fun _ ->
-        match decide policy (reading 4500L 9999.0 MemoryPressure.Critical) with
+        match decide policy (reading 4500L (retentionSeconds * 10.0) MemoryPressure.Critical) with
         | CacheDecision.Release(ReleaseReason.OverResidentCeiling _) -> ()
         | other -> failtestf "expected the ceiling reason first, got %A" other
 
       testProperty "WHY — below the ceiling, within the retention and with the machine at ease, the cache is never released" <| fun (residentMb: uint16) (idleSeconds: uint16) ->
         let resident = min (int64 residentMb) 3000L
-        let idle = min (float idleSeconds) 600.0
+        let idle = min (float idleSeconds) retentionSeconds
         decide policy (reading resident idle MemoryPressure.Normal) = CacheDecision.Keep
 
       testProperty "WHY — above the ceiling the cache is released whatever the idle time and the pressure are" <| fun (extraMb: uint16) (idleSeconds: uint16) (p: int) ->
@@ -178,7 +180,7 @@ let tests =
         holder.Acquire() |> ignore
         fake.CachedMb <- 800L
         holder.Settle()
-        fake.Now <- seconds 601.0
+        fake.Now <- seconds (retentionSeconds + 1.0)
         holder.Sweep()
         fake.Dropped |> Expect.equal "dropped" 1
         match fake.Reasons with
@@ -191,7 +193,7 @@ let tests =
         holder.Acquire() |> ignore
         fake.CachedMb <- 800L
         holder.Settle()
-        fake.Now <- seconds 100.0
+        fake.Now <- seconds (retentionSeconds / 6.0)
         holder.Sweep()
         fake.Dropped |> Expect.equal "kept" 0
 
@@ -201,7 +203,7 @@ let tests =
         holder.Acquire() |> ignore
         fake.CachedMb <- 800L
         holder.Settle()
-        fake.Now <- seconds 700.0
+        fake.Now <- seconds (retentionSeconds + 100.0)
         let next = holder.Acquire()
         next |> Expect.equal "a second checker" 2
         fake.Dropped |> Expect.equal "the stale one was dropped" 1

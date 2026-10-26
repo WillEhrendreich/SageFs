@@ -36,13 +36,19 @@ module ReferenceCacheGenerators =
       BudgetSeconds = rnd.Next(20, 90)
       Steps = [ for _ in 1 .. rnd.Next(4, 14) -> stepFrom rnd ] }
 
+  /// Ten minutes of silence before an idle cache goes, a sweep every half minute, a one minute budget for an ask. The
+  /// named scenarios below are written against these.
+  let baselineRetention = 600
+  let baselineSweep = 30
+  let baselineBudget = 60
+
   let baseline : Scenario =
     { Seed = 500
       BaselineBytes = 500L * megabyte
       CeilingBytes = 3000L * megabyte
-      RetentionSeconds = 600
-      SweepEverySeconds = 30
-      BudgetSeconds = 60
+      RetentionSeconds = baselineRetention
+      SweepEverySeconds = baselineSweep
+      BudgetSeconds = baselineBudget
       Steps = [] }
 
   // Named minimal scenarios (the exact replays the tests assert on)
