@@ -2470,6 +2470,22 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         SageFs.McpMembersRoute.listMembers ctx "mcp" qualified_name offset wd |> withEcho ctx "list_members"
 
     [<McpServerTool>]
+    [<Description("""Every definition and use of a qualified name across the session's projects, one rung below list_members on the symbol ladder. The first line of the reply is the scope: "project-wide" when the compiler checked every project of the session, "partial" naming the projects it did not reach, or "unavailable" with the reason. A count never appears without that line, so a count under "partial" covers only the projects it names. The compiler's own full name decides what matches, so a call through an alias, an open or a pipeline counts and a same-spelled name in another module does not; overloads of one method count together. One budget covers all projects together, and a failure states the budget used. Lists file, line, column and whether each is a definition or a use, a page at a time, ending with the offset for the next page.""")>]
+    member _.list_references(
+        [<Description("Fully qualified name to find references to, e.g. 'SageFs.Features.CallerCheck.callersAsync'. No trailing dot.")>]
+        qualified_name: string,
+        [<Description("Skip this many references; 0 for the first page. The reply's footer names the offset to use.")>]
+        [<Optional; DefaultParameterValue(0)>]
+        offset: int,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        logger.LogDebug("MCP-TOOL: list_references called, name={Name}, offset={Offset}", qualified_name, offset)
+        SageFs.McpReferencesRoute.listReferences ctx "mcp" qualified_name offset wd |> withEcho ctx "list_references"
+
+    [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.
 
 V1 does NOT suggest a new value for the binding — it surfaces the causal symbol, its current code, and the ripple of cells that would re-evaluate on any change. The developer supplies the new value.

@@ -545,6 +545,12 @@ module Timeouts =
   /// report says the compiler timed out. Three single-file checks: it is the same compiler over every file of the project
   /// instead of one, and it scales through `reloadPlanningCheck` with the machine. No recorded reason for the three.
   let callerCheck = reloadPlanningCheck * 3.0
+  /// How long the compiler checks behind `list_references` may take, ALL the session's projects together. One
+  /// budget covers the whole question, so the cost of a reply is bounded whatever the project count: a project that
+  /// starts with nothing left is skipped and named as not checked, and the reply's scope line says so. Longer than
+  /// `callerCheck` because a person asked for this answer and is waiting for it, where a save only wants to say who
+  /// is stranded. An operator on a very large solution can raise it.
+  let referencesCheck = envOrDefaultMachine "SAGEFS_REFERENCES_CHECK_SECONDS" 60.0
 
   // -- Running an app (run_app) --
   /// How long an app's entry point may run before it builds a host. If it has not by then,

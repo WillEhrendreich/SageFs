@@ -343,6 +343,11 @@ let handleMessage
     | WorkerMessage.ApplySaves(_, replyId) ->
       return WorkerResponse.SavesApplied(replyId, Features.TrunkFollow.SessionOutcome.NoPipeline "this host has no hot reload save pipeline")
 
+    // The session's project options live in `run`, so its ready handler answers this before a message gets here. A host
+    // with no project options has no project to check, and says so.
+    | WorkerMessage.GetReferences(_, replyId) ->
+      return WorkerResponse.ReferencesResult(replyId, Features.ReferencesAnswer.NoProjectLoaded)
+
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
   }
@@ -2306,6 +2311,9 @@ let run (sessionId: string) (requestedPort: int) = async {
     | WorkerMessage.ApplySaves(files, replyId) ->
       let! outcome = applyLandedSaves files
       return WorkerResponse.SavesApplied(replyId, outcome)
+    | WorkerMessage.GetReferences(qualifiedName, replyId) ->
+      let! answer = Features.SymbolReferenceCheck.answerAsync Timeouts.referencesCheck result.CheckOptions qualifiedName
+      return WorkerResponse.ReferencesResult(replyId, answer)
     | _ -> return! handler msg
   }
 

@@ -198,6 +198,24 @@ on. Two limits remain. The completions request still passes an empty word, so a 
 50 shortest names in scope. And a total is only marked "at least" past the wire ceiling of 2,000 members,
 which none of the sets measured reached.
 
+Slice 3, 2026-10-25: `list_references` is built, and the probe the plan asked for said yes. Project-wide uses
+are reachable in the worker: it already holds each project's compiler options (`CheckOptions`, the same ones the
+caller check on a save uses) and `FSharpCheckProjectResults.GetAllUsesOfAllSymbols` resolves every use, so the
+worker message `GetReferences` checks the session's projects and keeps the uses whose full name equals the name
+asked for. Measured on 2026-10-25 against a daemon built from this tree, on a machine at load average 18 to 26,
+Debug build: SageFs.Core alone (330 files) 23.5 s cold and 0.7 s warm; the SageFs.Tests session (8 projects,
+17,379 tests) 7 of 8 projects in the 60 s budget, then the last, the test project, in 41 s on the second ask, then
+3.7 s warm. Two things the first run got wrong are fixed and pinned. The caller check's checker keeps three
+projects, so a session of eight evicted each project before the next ask came back to it and every ask started
+from nothing; the references checker has its own cache of 12 (`SAGEFS_REFERENCES_PROJECT_CACHE`). The test
+project came first in session order and used the whole budget before any other project was reached; the projects
+are now tried smallest first. The reply's first line is the scope (project-wide, partial naming the projects not
+reached, or unavailable with the reason) and is derived in one place, `ReferenceReply.ofAnswer`; one budget
+(`Timeouts.referencesCheck`, `SAGEFS_REFERENCES_CHECK_SECONDS`, 60 s) covers all projects together, and a skipped
+project's line states the budget and the time spent. Not done: no file-scoped answer exists. The tool takes a name
+with no file, so the only file-scoped engine (`ReloadPlanning.symbolUsesOfAsync`) has no file to run on. Not proved: that a check cut off partway through one project keeps its partial work (the evidence is
+that finished projects stay checked). Cost: the worker holding all eight projects was at 4.5 GB resident.
+
 Reopen it if: the `GetCompletions` route cannot express true children (fuzzy prefix instead of
 members), in which case slice 1 shrinks to `list_members` on namespaces only and the index question
 returns to this document with a measured symbol census.

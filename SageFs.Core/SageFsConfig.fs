@@ -87,6 +87,17 @@ let SessionManagerQueueCapacity : int =
 let ListMembersMax : int =
   envInt "SAGEFS_LIST_MEMBERS_MAX" 100
 
+/// Projects the compiler keeps checked for `list_references`, so a second ask after a run that ran out of budget goes
+/// further instead of starting over. Sized above the project count of the largest session measured (eight, the test
+/// project's session); each cached project holds its typed trees, so raise it only with memory to spare.
+let ReferencesProjectCacheSize : int =
+  envInt "SAGEFS_REFERENCES_PROJECT_CACHE" 12
+
+/// References any one `list_references` reply carries. A line is a file position and a kind, shorter than a member
+/// name, so the cap matches `ListMembersMax`. The reply states the total and names the offset for the rest.
+let ListReferencesMax : int =
+  envInt "SAGEFS_LIST_REFERENCES_MAX" 100
+
 /// The loopback interface the daemon's HTTP listeners (MCP, dashboard) bind.
 /// There is deliberately no non-loopback case: SageFs evaluates arbitrary F#
 /// for whoever reaches those ports and has no authentication, so a LAN bind

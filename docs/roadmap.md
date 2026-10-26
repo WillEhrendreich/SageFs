@@ -26,7 +26,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Agents and cohorts
 
-- [ ] **Walk the rest of the symbol ladder.** Slices 3 to 5 of the progressive map plan: references as new worker work whose reply states its scope, the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again. ([progressive-map-research-2026-10-24.md](progressive-map-research-2026-10-24.md))
+- [ ] **Walk the rest of the symbol ladder.** The references rung is built: `list_references` takes a qualified name and lists every definition and use the compiler resolves to it across the session's projects, a page at a time. Its first line is the scope (project-wide, partial with the projects it did not reach, or unavailable with the reason), so a count never travels without how far the compiler looked, and one budget covers all the projects together. What remains of the progressive map plan: the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again. ([progressive-map-research-2026-10-24.md](progressive-map-research-2026-10-24.md))
 
 ### Dashboard
 

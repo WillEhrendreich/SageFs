@@ -34,6 +34,9 @@ module HttpWorkerClient =
     | WorkerMessage.GetCompletions(code, cursorPos, limit, rid) ->
       "POST", "/completions",
       Some (Serialization.serialize {| code = code; cursorPos = cursorPos; limit = limit; replyId = rid |})
+    | WorkerMessage.GetReferences(qualifiedName, rid) ->
+      "POST", "/references",
+      Some (Serialization.serialize {| qualifiedName = qualifiedName; replyId = rid |})
     | WorkerMessage.CancelEval ->
       "POST", "/cancel", None
     | WorkerMessage.LoadScript(filePath, rid) ->
