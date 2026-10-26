@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress (step 1 of 9) |
 | Size | M |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: two cases under one `testList` get two lines. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | plan/markers-on-expecto-cases in /home/will/Work/SageFs (main checkout, no separate worktree) |
+| Last green commit | Step 1 green in this commit: ratchet lane Trusted 485/485 and the new golden test green (2026-10-26). The full default suite has not been re-run since step 1 landed. |
+| Next action | Step 2: RED test 2 first (`categorize ["Building blocks"]` is Unit, `"Searching"` is not Architecture), then whole-token label matching in `CategoryDetection.categorize`, net zero lines in LiveTestingTypes.fs. |
+| Decisions made | 2026-10-26, Will's session: "Measure first" question 1 answered before any code. Tree-sitter reaches the `testCase` application in all six builder shapes: each parses as an `application_expression` whose second child is the string literal, under `application_expression`, `infix_expression` (for `<\|`) or `ce_expression` (for the CE builders). No hand scanner fallback needed. Pinned in `SageFs.Tests/fixtures/TreeSitter/expecto-builder-shapes.txt`. |
+| Surprises | None yet. |
 
 ## What done looks like
 

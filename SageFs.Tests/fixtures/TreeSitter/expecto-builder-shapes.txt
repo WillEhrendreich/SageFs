@@ -1,0 +1,115 @@
+--- shape-0 ---
+  application_expression [2:2]
+    application_expression [2:2]
+      long_identifier_or_op [2:2]
+        identifier [2:2] 'testCase'
+      const [2:11]
+        string [2:11]
+          " [2:11] '"'
+          " [2:17] '"'
+    paren_expression [2:19]
+      ( [2:19] '('
+      fun_expression [2:20]
+        fun [2:20] 'fun'
+        argument_patterns [2:24]
+          const [2:24]
+            unit [2:24] '()'
+        -> [2:27] '->'
+        const [2:30]
+          unit [2:30] '()'
+      ) [2:32] ')'
+--- shape-1 ---
+  infix_expression [3:2]
+    application_expression [3:2]
+      long_identifier_or_op [3:2]
+        identifier [3:2] 'testCase'
+      const [3:11]
+        string [3:11]
+          " [3:11] '"'
+          " [3:16] '"'
+    infix_op [3:18] '<|'
+    fun_expression [3:21]
+      fun [3:21] 'fun'
+      argument_patterns [3:25]
+        _ [3:25] '_'
+      -> [3:27] '->'
+      const [3:30]
+        unit [3:30] '()'
+--- shape-2 ---
+  ce_expression [4:2]
+    application_expression [4:2]
+      long_identifier_or_op [4:2]
+        identifier [4:2] 'testTask'
+      const [4:11]
+        string [4:11]
+          " [4:11] '"'
+          " [4:16] '"'
+    { [4:18] '{'
+    do_expression [4:20]
+      do [4:20] 'do'
+      const [4:23]
+        unit [4:23] '()'
+    } [4:26] '}'
+--- shape-3 ---
+  ce_expression [5:2]
+    application_expression [5:2]
+      long_identifier_or_op [5:2]
+        identifier [5:2] 'testAsync'
+      const [5:12]
+        string [5:12]
+          " [5:12] '"'
+          " [5:18] '"'
+    { [5:20] '{'
+    do_expression [5:22]
+      do [5:22] 'do'
+      const [5:25]
+        unit [5:25] '()'
+    } [5:28] '}'
+--- shape-4 ---
+  application_expression [6:2]
+    application_expression [6:2]
+      long_identifier_or_op [6:2]
+        identifier [6:2] 'testProperty'
+      const [6:15]
+        string [6:15]
+          " [6:15] '"'
+          " [6:20] '"'
+    paren_expression [6:22]
+      ( [6:22] '('
+      fun_expression [6:23]
+        fun [6:23] 'fun'
+        argument_patterns [6:27]
+          ( [6:27] '('
+          typed_pattern [6:28]
+            identifier_pattern [6:28]
+              long_identifier_or_op [6:28]
+                identifier [6:28] 'x'
+            : [6:29] ':'
+            simple_type [6:31]
+              long_identifier [6:31]
+                identifier [6:31] 'int'
+          ) [6:34] ')'
+        -> [6:36] '->'
+        infix_expression [6:39]
+          long_identifier_or_op [6:39]
+            identifier [6:39] 'x'
+          infix_op [6:41]
+            = [6:41] '='
+          long_identifier_or_op [6:43]
+            identifier [6:43] 'x'
+      ) [6:44] ')'
+--- shape-5 ---
+  ce_expression [7:2]
+    application_expression [7:2]
+      long_identifier_or_op [7:2]
+        identifier [7:2] 'test'
+      const [7:7]
+        string [7:7]
+          " [7:7] '"'
+          " [7:15] '"'
+    { [7:17] '{'
+    do_expression [7:19]
+      do [7:19] 'do'
+      const [7:22]
+        unit [7:22] '()'
+    } [7:25] '}'

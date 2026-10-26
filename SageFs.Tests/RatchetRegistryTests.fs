@@ -178,6 +178,7 @@ let private notRatchets : (string * string) list =
     "SageFsErrorJsonShapeTests.fs", "one golden JSON file inside a unit list"
     "StableIdentityEvalTests.fs", "product behaviour on a fixture"
     "TestCountBadge.fs", "a helper that stamps the README, not a test"
+    "TestTreeSitterCasesTests.fs", "pins the parse shape of six builder forms against one golden file it writes; a grammar pin, not a rule over the tree"
     "TutorialTests.fs", "pins the shape of one sample script"
     "UsabilityFixesTests.fs", "one case reads Directory.Build.props inside a list of unit tests" ]
 
