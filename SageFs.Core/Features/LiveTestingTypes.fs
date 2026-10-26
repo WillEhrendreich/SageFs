@@ -2349,23 +2349,23 @@ module CategoryDetection =
     (referencedAssemblies: string array)
     (sourceContent: string option)
     : TestCategory =
-    let labelLower = labels |> List.map (fun l -> l.ToLowerInvariant())
-    match labelLower |> List.exists (fun l -> l.Contains "unit") with
+    let labelWords = labels |> List.collect (fun l -> Regex.Split(l.ToLowerInvariant(), @"[^\p{L}\p{N}]+") |> Array.toList) |> Set.ofList
+    match labelWords.Contains "unit" with
     | true -> TestCategory.Unit
     | false ->
-    match labelLower |> List.exists (fun l -> l.Contains "integration") with
+    match labelWords.Contains "integration" with
     | true -> TestCategory.Integration
     | false ->
-    match labelLower |> List.exists (fun l -> l.Contains "browser" || l.Contains "e2e" || l.Contains "ui") with
+    match labelWords.Contains "browser" || labelWords.Contains "e2e" || labelWords.Contains "ui" with
     | true -> TestCategory.Browser
     | false ->
-    match labelLower |> List.exists (fun l -> l.Contains "benchmark") with
+    match labelWords.Contains "benchmark" with
     | true -> TestCategory.Benchmark
     | false ->
-    match labelLower |> List.exists (fun l -> l.Contains "property") with
+    match labelWords.Contains "property" with
     | true -> TestCategory.Property
     | false ->
-    match labelLower |> List.exists (fun l -> l.Contains "architecture" || l.Contains "arch") with
+    match labelWords.Contains "architecture" || labelWords.Contains "arch" with
     | true -> TestCategory.Architecture
     | false ->
     match fullName.ToLowerInvariant().Contains "integration" with

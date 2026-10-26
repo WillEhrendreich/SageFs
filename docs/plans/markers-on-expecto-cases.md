@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (step 1 of 9) |
+| Status | In progress (step 2 of 9) |
 | Size | M |
 | Branch and worktree | plan/markers-on-expecto-cases in /home/will/Work/SageFs (main checkout, no separate worktree) |
-| Last green commit | Step 1 green in this commit: ratchet lane Trusted 485/485 and the new golden test green (2026-10-26). The full default suite has not been re-run since step 1 landed. |
-| Next action | Step 2: RED test 2 first (`categorize ["Building blocks"]` is Unit, `"Searching"` is not Architecture), then whole-token label matching in `CategoryDetection.categorize`, net zero lines in LiveTestingTypes.fs. |
-| Decisions made | 2026-10-26, Will's session: "Measure first" question 1 answered before any code. Tree-sitter reaches the `testCase` application in all six builder shapes: each parses as an `application_expression` whose second child is the string literal, under `application_expression`, `infix_expression` (for `<\|`) or `ce_expression` (for the CE builders). No hand scanner fallback needed. Pinned in `SageFs.Tests/fixtures/TreeSitter/expecto-builder-shapes.txt`. |
-| Surprises | None yet. |
+| Last green commit | Step 2 green in this commit: both CategoryDetection lists pass (22 + 5 rows) with the whole-token fix, and the step 1 golden test is green. Ratchet lane Trusted 485/485 earlier in this branch's life; re-run it after this commit. The full default suite has not been re-run since step 1 landed. |
+| Next action | Step 3: `ExpectoCases.fs` with `SourceCase`, `SourceName`, `CasePlacement` and `place`, plus tests 1, 4, 5, 7 (Exact placement for two cases under one list, the FsCheck properties, the mutation rows). New file, pure, no tree-sitter needed. |
+| Decisions made | 2026-10-26, Will's session: "Measure first" question 1 answered before any code. Tree-sitter reaches the `testCase` application in all six builder shapes: each parses as an `application_expression` whose second child is the string literal, under `application_expression`, `infix_expression` (for `<\|`) or `ce_expression` (for the CE builders). No hand scanner fallback needed. Pinned in `SageFs.Tests/fixtures/TreeSitter/expecto-builder-shapes.txt`. 2026-10-26, step 2: label matching splits each label on non-letter/non-digit runs and compares whole tokens, keeping `arch` and `ui` working as whole labels while `building` and `searching` no longer trip them. Net zero lines in LiveTestingTypes.fs (3708, at its budget). |
+| Surprises | `categorize` had two existing rows pinning `["arch"]` as Architecture, so the fix had to keep whole-token `arch` working rather than dropping the short form. Also: the FSI session resolves `SageFs.Tests` oddly because `PaneId` has a union case `Tests` (documented in ProjectLoading.fs); qualifying with `global.SageFs.Tests...` avoids it. |
 
 ## What done looks like
 
