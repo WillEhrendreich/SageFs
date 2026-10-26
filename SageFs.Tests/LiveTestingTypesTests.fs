@@ -582,6 +582,14 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       CategoryDetection.categorize ["arch"] "My.Test" TestFramework.NUnit [||] None
       |> Expect.equal "should be Architecture" TestCategory.Architecture
     }
+    test "a label that only contains ui as a substring is not Browser" {
+      CategoryDetection.categorize ["Building blocks"] "My.Test" TestFramework.XUnit [||] None
+      |> Expect.equal "should be Unit: ui sits inside building, and a whole label never said ui" TestCategory.Unit
+    }
+    test "a label that only contains arch as a substring is not Architecture" {
+      CategoryDetection.categorize ["Searching"] "My.Test" TestFramework.NUnit [||] None
+      |> Expect.equal "should be Unit: arch sits inside searching, and a whole label never said arch" TestCategory.Unit
+    }
     test "Playwright assembly maps to Browser" {
       CategoryDetection.categorize [] "My.Test" TestFramework.XUnit [| "Microsoft.Playwright" |] None
       |> Expect.equal "should be Browser" TestCategory.Browser
