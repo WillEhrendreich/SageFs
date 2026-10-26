@@ -93,6 +93,19 @@ let ListMembersMax : int =
 let ReferencesProjectCacheSize : int =
   envInt "SAGEFS_REFERENCES_PROJECT_CACHE" 12
 
+/// Megabytes the worker may hold in all before `list_references` drops the compiler's cache. A project count says how
+/// many projects are held and nothing about their size: measured on 2026-10-25 on the SageFs.Tests session (8
+/// projects), a worker went from 0.77 GB at Ready to 4.0 GB after the first ask and stayed at 3.5 to 4.2 GB for as long
+/// as it was left, with nothing that released it. 2.5 GB sits well under that, above the worker's own 0.77 GB with room
+/// for the smaller sessions (one or two projects) to stay warm between asks. Raise it on a machine with memory to
+/// spare so a large session keeps its cache between asks.
+let ReferencesResidentCeilingMb : int =
+  envInt "SAGEFS_REFERENCES_RESIDENT_CEILING_MB" 2560
+
+/// The same ceiling in bytes, the unit the worker's resident set is read in.
+let ReferencesResidentCeilingBytes : int64 =
+  int64 ReferencesResidentCeilingMb * 1024L * 1024L
+
 /// References any one `list_references` reply carries. A line is a file position and a kind, shorter than a member
 /// name, so the cap matches `ListMembersMax`. The reply states the total and names the offset for the rest.
 let ListReferencesMax : int =

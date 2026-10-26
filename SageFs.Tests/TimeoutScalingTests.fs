@@ -56,7 +56,7 @@ let private fixedTable : (string * FixedBecause) list =
       "workerProxyFirstDelay"; "workerHealthProbeInterval"; "watchdogInterval"; "supervisorCheckInterval"
       "ttlCheckFloor"; "ttlCheckCeiling"; "agentActivityCleanupInterval"; "cohortReaperInterval"; "debugAttachLook"
       "orphanTempDirSweepInterval"; "logFlushInterval"; "evalHeartbeatInterval"; "manifestSaveInterval"
-      "compileTimerRedraw"; "stdioFlush"; "scheduledGraceDelay" ]
+      "compileTimerRedraw"; "stdioFlush"; "scheduledGraceDelay"; "referencesCacheSweep" ]
   @ all FixedBecause.Debounce
       [ "liveTestTreeSitterDebounce"; "liveTestFcsDebounce"; "liveTestFcsDebounceMax"; "liveTestWatcherDebounce"
         "fileWatchDebounce"; "doubleCompileGuard"; "liveTestConfirmationQuiet"; "testSseThrottle"
@@ -68,7 +68,7 @@ let private fixedTable : (string * FixedBecause) list =
       [ "cohortLeaseWindow"; "cohortSettledRetention"; "agentPresenceEviction"; "agentActivityFresh"
         "memoryIdleShedAfter"; "leaseTtlRunApp"; "nestedCheckoutDaemonTtl"; "idleSessionThreshold"
         "frictionResetThrashWindow"; "frictionHardResetAfterCreateWindow"; "leaseAskStaleAfter"
-        "capabilityDefaultLifetime"; "capabilityMaxLifetime" ]
+        "capabilityDefaultLifetime"; "capabilityMaxLifetime"; "referencesCacheRetention" ]
   @ all FixedBecause.Backoff
       [ "restartBaseBackoff"; "retryBaseDelay"; "restartMaxBackoff"; "restartCountResetWindow"
         "leaseRetryAfterNormal"; "leaseRetryAfterTight"; "leaseRetryAfterCritical"; "leaseMinRetryAfter" ]

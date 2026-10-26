@@ -193,10 +193,9 @@
              compiler's symbol resolution over the whole project or by name. -->
         <Compile Include="Features\CallerCheck.fs" />
         <!-- The references rung of the progressive map. SymbolReferences is pure (what scope a reply may claim, and the
-             budget shared by a session's projects); SymbolReferenceCheck is the compiler call, reusing CallerCheck's
-             project checker. Both before WorkerProtocol, which carries the answer. -->
+             budget shared by a session's projects), before WorkerProtocol, which carries the answer. The compiler call,
+             SymbolReferenceCheck, compiles after MemoryPressure.fs, with the retention rule it asks. -->
         <Compile Include="Features\SymbolReferences.fs" />
-        <Compile Include="Features\SymbolReferenceCheck.fs" />
         <!-- Pure: when a patch is live (its new body has been seen running). After ReloadPlanning
              (it matches probes to the declarations the planner landed) and EntryProbes. -->
         <Compile Include="Features\PatchConfirmation.fs" />
@@ -312,6 +311,10 @@
              (its learned baseline rises right along with it), so shape alone
              reported Healthy through two real incidents that ate the machine. -->
         <Compile Include="MemoryPressure.fs" />
+        <!-- When the compiler cache behind list_references is kept or dropped: pure, over the pressure level just above
+             and MachineMemory. SymbolReferenceCheck, the compiler call, holds its checker through it. -->
+        <Compile Include="Features\ReferenceCacheRetention.fs" />
+        <Compile Include="Features\SymbolReferenceCheck.fs" />
         <!-- The supervisor's health DU and the daemon's reading of it, ahead
              of DaemonHealth.fs so overallStatus can degrade the daemon for a
              wedged session manager. The watchdog itself needs WorkerSpawn and
