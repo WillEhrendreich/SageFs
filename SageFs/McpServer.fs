@@ -4311,52 +4311,34 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
     } :> Task
   ) |> ignore
   app.MapGet("/api/dependency-graph", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    let symbol =
-      match ctx.Request.Query.TryGetValue("symbol") with
-      | true, v -> Some (string v)
-      | _ -> None
-    let json, status =
-      match rctx.SseContext.GetElmModel with
-      | Some getModel ->
-        let model = getModel ()
-        let graph = model.LiveTesting.DepGraph
-        let results = model.LiveTesting.TestState.LastResults
-        let body =
-          match symbol with
-          | Some sym ->
-            let tests =
-              Map.tryFind sym graph.SymbolToTests
-              |> Option.defaultValue [||]
-              |> Array.map (fun testId ->
-                let tid = SageFs.Features.LiveTesting.TestId.value testId
-                let status =
-                  match Map.tryFind testId results with
-                  | Some r ->
-                    match r.Result with
-                    | SageFs.Features.LiveTesting.TestResult.Passed _ -> "passed"
-                    | SageFs.Features.LiveTesting.TestResult.Failed _ -> "failed"
-                    | _ -> "other"
-                  | None -> "unknown"
-                let testName =
-                  match Map.tryFind testId results with
-                  | Some r -> r.TestName
-                  | None -> tid
-                {| TestId = tid; TestName = testName; Status = status |})
-            Json.serialize Json.standard
-              {| Symbol = sym; Tests = tests; TotalSymbols = graph.SymbolToTests.Count |}
-          | None ->
-            let symbols =
-              graph.SymbolToTests
-              |> Map.toArray
-              |> Array.map (fun (sym, tids) -> {| Symbol = sym; TestCount = tids.Length |})
-            Json.serialize Json.standard
-              {| Symbols = symbols; TotalSymbols = symbols.Length |}
-        body, 200
-      | None ->
-        """{"error":"Elm model not available"}""", 503
     task {
-      ctx.Response.StatusCode <- status
-      do! rawJsonResponse ctx json
+      let symbol =
+        match ctx.Request.Query.TryGetValue("symbol") with
+        | true, v -> Some (string v)
+        | _ -> None
+      // The tests covering a symbol belong to ONE session. The route read the primary cycle's graph
+      // whoever asked, so a session that was not primary was answered from another session's.
+      // ?session=<id> names the session; with none, the rule is the one /api/live-testing/status uses
+      // (the only session, else a typed refusal that names the choices).
+      let requested =
+        let sp = ctx.Request.Query.[LiveTestingSessionQueryParam].ToString()
+        match System.String.IsNullOrWhiteSpace sp with
+        | true -> None
+        | false -> Some sp
+      let! resolved = resolveLiveTestingRouteTarget rctx requested
+      match rctx.SseContext.GetElmModel, resolved with
+      | None, _ -> do! jsonResponse ctx 503 {| error = "Elm model not available" |}
+      | Some getModel, SageFs.Server.DashboardTypes.SessionRouteTarget.Target (sid, _) ->
+        let model = getModel ()
+        let json =
+          match symbol with
+          | Some sym -> SageFs.DependencyGraphRoute.forSymbol sid model sym
+          | None -> SageFs.DependencyGraphRoute.overview sid model
+        do! rawJsonResponse ctx json
+      | Some _, refused ->
+        match SageFs.Server.DashboardTypes.SessionRouting.toRefusal refused with
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+        | Ok _ -> failwith "a refusal case cannot resolve to a session"
     } :> Task
   ) |> ignore
   app.MapGet("/api/recent-events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

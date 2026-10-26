@@ -120,7 +120,7 @@ module EndpointContracts =
   let codeAnalysisEndpoints = [
     Endpoint.create POST "/api/explore" "Analysis" "Code exploration"
     Endpoint.create POST "/api/completions" "Analysis" "Code completions"
-    Endpoint.create GET "/api/dependency-graph" "Analysis" "Dependency graph"
+    Endpoint.create GET "/api/dependency-graph" "Analysis" "Tests covering a symbol, for one session"
   ]
 
   /// All daemon endpoints.

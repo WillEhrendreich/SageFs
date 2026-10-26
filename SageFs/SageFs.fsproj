@@ -80,6 +80,7 @@
         <Compile Include="SessionTestAttribution.fs" />
         <Compile Include="SageFsApp.fs" />
         <Compile Include="LiveTestViewReads.fs" />
+        <Compile Include="DependencyGraphRoute.fs" />
         <Compile Include="LiveCheckRelay.fs" />
         <Compile Include="SageFsEffectHandler.fs" />
         <Compile Include="SageFsSseDedup.fs" />

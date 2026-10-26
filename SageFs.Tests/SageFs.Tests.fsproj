@@ -617,6 +617,9 @@
         <Compile Include="FileReloadRoutingSimTests.fs" />
         <Compile Include="LiveTestFileRoutingTests.fs" />
         <Compile Include="LiveTestFileRoutingSimTests.fs" />
+        <Compile Include="SymbolTestsTests.fs" />
+        <Compile Include="SymbolTestsRoutingSimTests.fs" />
+        <Compile Include="DependencyGraphRouteTests.fs" />
         <Compile Include="WatcherLifecycleSimTests.fs" />
         <Compile Include="DstFaultInjectionTests.fs" />
         <Compile Include="SseGoldenFixtureGenerationTests.fs" />

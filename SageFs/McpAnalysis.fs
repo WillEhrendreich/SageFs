@@ -40,8 +40,9 @@ module McpAnalysis =
 
     /// The test side of `sessionId`: the cycle that owns its data, and its own maps.
     let ofModel (model: SageFsModel) (sessionId: string) (workflow: WorkflowKind) : TestSide =
-      { Cycle = SageFsModel.cycleOwnedBySession sessionId model
-        Maps = model.LiveTesting.InstrumentationMaps |> Map.tryFind sessionId |> Option.defaultValue [||]
+      let cycle = SageFsModel.cycleOwnedBySession sessionId model
+      { Cycle = cycle
+        Maps = cycle.InstrumentationMaps |> Map.tryFind sessionId |> Option.defaultValue [||]
         Workflow = workflow }
 
   /// The pure decisions: what each tool says given what its session has recorded.
