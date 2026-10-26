@@ -77,13 +77,6 @@ let tests =
       decide ToolName.StopSession mine (SessionCreator.Recorded tab) tab
       |> Expect.equal "browser caller" (Confirmation.Required ConfirmationReason.CallerNotBound)
 
-    testCase "WHY — a recorded key reads back to the identity it was written from" <| fun _ ->
-      [ alice; bob; token; otherToken; tab; unbound ]
-      |> List.iter (fun who ->
-        SessionCreator.ofRecordedKey (MemberId.display who)
-        |> Expect.equal (sprintf "%s round trips" (MemberId.display who)) (SessionCreator.Recorded who))
-      SessionCreator.ofRecordedKey "" |> Expect.equal "empty key is no record" SessionCreator.Unrecorded
-
     testCase "WHY — every reason has a sentence" <| fun _ ->
       [ ConfirmationReason.ToolSpansMoreThanOneSession
         ConfirmationReason.NoSessionToJudge
@@ -208,5 +201,48 @@ let gateTests =
         confirmCallWithin TestTimeouts.confirmationBudget (ClientCapabilities()) ask (madeBy bob "s-1") alice (resolved "s-1") "hard_reset_fsi_session" CancellationToken.None
       outcome |> Expect.isOk "skipped as before"
       asked () |> Expect.equal "no request" 0
+    }
+
+    // ── the daemon's own creator record, read the way the live gate reads it ───────────────────────
+
+    testCase "WHY — the record keeps the identity it was given, so only that identity skips the prompt on its own session" <| fun _ ->
+      let everyone = [ alice; bob; token; otherToken; tab; unbound ]
+      for owner in everyone do
+        let sessionId = sprintf "owner-record-%s" (MemberId.display owner)
+        SageFs.McpTools.claimSessionOwner owner sessionId
+        try
+          creatorOfSession sessionId
+          |> Expect.equal (sprintf "%s is read back as itself" (MemberId.display owner)) (SessionCreator.Recorded owner)
+          for caller in everyone do
+            let expected =
+              match caller, owner = caller with
+              | MemberId.Browser _, _
+              | MemberId.Minted _, _ -> Confirmation.Required ConfirmationReason.CallerNotBound
+              | MemberId.Mcp _, true
+              | MemberId.Capability _, true -> Confirmation.NotRequired(OwnSession.CreatedByThisCaller sessionId)
+              | MemberId.Mcp _, false
+              | MemberId.Capability _, false -> Confirmation.Required ConfirmationReason.CreatedBySomeoneElse
+            confirmationFor creatorOfSession caller (resolved sessionId) "hard_reset_fsi_session"
+            |> Expect.equal (sprintf "made by %s, called by %s" (MemberId.display owner) (MemberId.display caller)) expected
+        finally
+          SageFs.McpTools.releaseSessionOwner sessionId
+
+    testCase "WHY — a session nobody recorded reads back as unrecorded, and releasing a record that is not there does nothing" <| fun _ ->
+      SageFs.McpTools.releaseSessionOwner "owner-never-recorded"
+      creatorOfSession "owner-never-recorded" |> Expect.equal "no record" SessionCreator.Unrecorded
+
+    testTask "WHY — an unbound agent that names itself with another identity's display text is still an unbound agent, so that identity is asked" {
+      for who in [ alice; bob; token; otherToken ] do
+        let sessionId = sprintf "owner-lookalike-%s" (MemberId.display who)
+        let ask, asked = counting ()
+        // No connection is bound in a test, so the agent name is the identity: `Minted` text that looks like `who`.
+        SageFs.McpTools.claimSessionOwner (SageFs.McpTools.memberIdFor (MemberId.display who)) sessionId
+        try
+          let! outcome =
+            confirmCallWithin TestTimeouts.confirmationBudget canAsk ask creatorOfSession who (resolved sessionId) "hard_reset_fsi_session" CancellationToken.None
+          outcome |> Expect.isOk (sprintf "%s: the prompt was accepted" (MemberId.display who))
+          asked () |> Expect.equal (sprintf "%s did not make that session, so one person was asked" (MemberId.display who)) 1
+        finally
+          SageFs.McpTools.releaseSessionOwner sessionId
     }
   ]

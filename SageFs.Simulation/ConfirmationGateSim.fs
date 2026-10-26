@@ -13,8 +13,8 @@ open SageFs.MemberTable
 /// person, stopped, and forgotten by a daemon restart (the creator record lives in memory). Callers then call
 /// confirm-tier tools on a session, and the question at each call is whether a person was asked.
 ///
-/// The decision under test is the REAL `ConfirmationPolicy.decide`, fed the way the gate feeds it: the creator comes from the
-/// recorded key text read back with `SessionCreator.ofRecordedKey`, never from the sim's own table. The truth is an
+/// The decision under test is the REAL `ConfirmationPolicy.decide`, fed the way the gate feeds it: the creator is the
+/// recorded `MemberId` itself, the way `McpTools.sessionOwners` holds it, never the sim's own table. The truth is an
 /// independent bookkeeping that never calls `decide`: who made each session, whether the daemon still remembers.
 ///
 /// Same rules as the other simulations: chaos is data (a `Scenario` is an op list, a seed replays it), and twins put
@@ -90,13 +90,13 @@ module ConfirmationGateSim =
   let toolOf (index: int) : ToolName = List.item (abs index % List.length tools) tools
 
   /// The decision, per policy. The twins differ from the real one only in what they feed it or what they ignore.
-  let asks (policy: Policy) (tool: ToolName) (session: int) (caller: int) (record: string option) : bool =
+  let asks (policy: Policy) (tool: ToolName) (session: int) (caller: int) (record: SessionCreator) : bool =
     let target = TargetSession.Session (sessionName session)
     let creator =
       match record, policy with
-      | Some key, _ -> SessionCreator.ofRecordedKey key
-      | None, Policy.TreatsNoRecordAsOwn -> SessionCreator.Recorded (identity caller)
-      | None, _ -> SessionCreator.Unrecorded
+      | SessionCreator.Recorded _, _ -> record
+      | SessionCreator.Unrecorded, Policy.TreatsNoRecordAsOwn -> SessionCreator.Recorded (identity caller)
+      | SessionCreator.Unrecorded, _ -> SessionCreator.Unrecorded
     match policy with
     | Policy.SkipsEverySession -> false
     | Policy.TreatsEveryToolAsOneSession ->
@@ -110,15 +110,15 @@ module ConfirmationGateSim =
       | Confirmation.NotRequired _ -> false
 
   let runWith (name: string) (policy: Policy) (scenario: Scenario) : Trace =
-    // The daemon's creator record: session name to the key the creating call was bound to.
-    let step ((sessions: Map<int, Session>, records: Map<string, string>), acc) (op: Op) =
+    // The daemon's creator record: session name to the identity the creating call was bound to.
+    let step ((sessions: Map<int, Session>, records: Map<string, MemberId>), acc) (op: Op) =
       match op with
       | Op.Creates(caller, session) ->
         match Map.containsKey session sessions with
         | true -> (sessions, records), { Op = op; Asked = false; OneSessionTool = false; CallerMadeItAndItIsRemembered = false } :: acc
         | false ->
           (Map.add session { Maker = Maker.Caller caller; Remembered = true } sessions,
-           Map.add (sessionName session) (MemberId.display (identity caller)) records),
+           Map.add (sessionName session) (identity caller) records),
           { Op = op; Asked = false; OneSessionTool = false; CallerMadeItAndItIsRemembered = false } :: acc
       | Op.PersonCreates session ->
         let next =
@@ -134,7 +134,10 @@ module ConfirmationGateSim =
         { Op = op; Asked = false; OneSessionTool = false; CallerMadeItAndItIsRemembered = false } :: acc
       | Op.Calls(caller, toolIndex, session) ->
         let tool = toolOf toolIndex
-        let record = Map.tryFind (sessionName session) records
+        let record =
+          match Map.tryFind (sessionName session) records with
+          | Some maker -> SessionCreator.Recorded maker
+          | None -> SessionCreator.Unrecorded
         let truthOwn =
           match Map.tryFind session sessions with
           | Some { Maker = Maker.Caller maker; Remembered = true } -> maker = caller
