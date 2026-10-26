@@ -237,6 +237,7 @@
         <Compile Include="Features\RequestedRuns.fs" />
         <Compile Include="Features\TestTreemap.fs" />
         <Compile Include="Features\TestAnnotations.fs" />
+        <Compile Include="Features\SymbolTests.fs" />
         <Compile Include="Features\TestRunKey.fs" />
         <Compile Include="Features\SessionSourceScope.fs" />
         <Compile Include="Features\InputHashCoverage.fs" />

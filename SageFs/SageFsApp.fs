@@ -1947,8 +1947,8 @@ module SageFsUpdate =
         Instrumentation.coverageMapsReceived.Add(1L)
         let totalProbes = maps |> Array.sumBy (fun m -> m.TotalProbes) |> int64
         Instrumentation.coverageProbesTotal.Add(totalProbes)
-        let lt = model.LiveTesting
-        { model with LiveTesting = { lt with InstrumentationMaps = Map.add sessionId maps lt.InstrumentationMaps } }, []
+        let model', _ = tryUpdateLiveTestingState (Some sessionId) (fun cycle -> { cycle with InstrumentationMaps = Map.add sessionId maps cycle.InstrumentationMaps }, ()) model
+        model', []
 
       | TuiEvent.TestDiscoveryFailed (sessionId, reason) ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->

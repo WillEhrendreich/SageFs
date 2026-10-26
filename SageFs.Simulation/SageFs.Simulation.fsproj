@@ -90,6 +90,11 @@
         <Compile Include="LiveTestFileRoutingSim.fs" />
         <Compile Include="LiveTestFileRoutingInvariants.fs" />
         <Compile Include="LiveTestFileRoutingGenerators.fs" />
+        <!-- Symbol-to-tests DST: folds the real SymbolTests.ofCycle over the asked session's
+             cycle; twin answers every session from the primary's cycle. -->
+        <Compile Include="SymbolTestsRoutingSim.fs" />
+        <Compile Include="SymbolTestsRoutingInvariants.fs" />
+        <Compile Include="SymbolTestsRoutingGenerators.fs" />
         <Compile Include="FsiEmitSim.fs" />
         <Compile Include="FsiEmitInvariants.fs" />
         <!-- Patch confirmation DST: folds the real PatchConfirmation decision over the

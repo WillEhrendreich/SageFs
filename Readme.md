@@ -400,7 +400,7 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | Test panel | ✅ | ✅ | ✅ | ✅ |
 | Test policy controls | ✅ | ✅ | ✅ | HTTP |
 | Type explorer | ✅ | ✅ | no | HTTP |
-| Call graph | ✅ | ✅ | no | HTTP |
+| Tests covering a symbol | ✅ | ✅ | no | HTTP |
 | History browser | ✅ | ✅ | ✅ | ✅ |
 | Test trace | ✅ | ✅ | ✅ | no |
 
@@ -413,7 +413,7 @@ A ✅ in the MCP column means a tool in the [72-tool surface](docs/mcp-tools.md)
 
 Install **SageFs** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) or [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs), or the `.vsix` in [Releases](https://github.com/WillEhrendreich/SageFs/releases). Written in F# via [Fable](https://fable.io/), not TypeScript.
 
-Current wiring includes Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, call graph, event history, dashboard webview, status bar, auto-start, Ionide command hijacking, coverage marks, inline failure decorations, failure narrative enrichment, and test source-jump.
+Current wiring includes Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, tests covering a symbol, event history, dashboard webview, status bar, auto-start, Ionide command hijacking, coverage marks, inline failure decorations, failure narrative enrichment, and test source-jump.
 
 #### Neovim
 
@@ -424,7 +424,7 @@ Current wiring includes Alt+Enter eval, CodeLens, live test decorations, native 
 { "WillEhrendreich/sagefs.nvim", ft = { "fsharp" }, opts = { port = 37749, auto_connect = true } }
 ```
 
-Features: Cell eval, inline results, gutter signs, SSE live updates, live test panel, coverage panel with per-file breakdown, type explorer, call graph, history browser, session export to `.fsx`, code completion, branch coverage gutters, filterable test panel, display density presets, combined statusline component, Telescope source-jump (`<CR>`), failure narrative floating window (`<C-d>`), and SSE-driven test state caching.
+Features: Cell eval, inline results, gutter signs, SSE live updates, live test panel, coverage panel with per-file breakdown, type explorer, tests covering a symbol, history browser, session export to `.fsx`, code completion, branch coverage gutters, filterable test panel, display density presets, combined statusline component, Telescope source-jump (`<CR>`), failure narrative floating window (`<C-d>`), and SSE-driven test state caching.
 
 #### AI Agent (MCP)
 

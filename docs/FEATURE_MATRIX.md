@@ -57,7 +57,7 @@ Live testing is also a workflow, not only a toggle. See [Workflow Modes](workflo
 | Domain model and pipeline analysis | Shared | Shared | Partial | Supported |
 
 Completions and CodeLens are editor features backed by FSharp.Compiler.Service; they are not MCP tools. Neither
-is the type explorer, the call graph, the test-run policy control, or the test trace. Those are HTTP endpoints
+is the type explorer, the tests covering a symbol, the test-run policy control, or the test trace. Those are HTTP endpoints
 the editors and the dashboard call (`GET /api/dependency-graph`, `POST /api/live-testing/policy`,
 `GET /api/live-testing/test-trace`). Completions and the type explorer have routes (`POST /api/completions`,
 `POST /api/explore`) and no MCP tool; I deleted the unregistered `get_completions` and `explore_type` members
