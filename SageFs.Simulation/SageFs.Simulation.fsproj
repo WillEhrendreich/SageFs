@@ -116,6 +116,9 @@
         <Compile Include="ReferenceScopeSim.fs" />
         <Compile Include="ReferenceScopeInvariants.fs" />
         <Compile Include="ReferenceScopeGenerators.fs" />
+        <Compile Include="ReferenceCacheSim.fs" />
+        <Compile Include="ReferenceCacheInvariants.fs" />
+        <Compile Include="ReferenceCacheGenerators.fs" />
         <!-- Session reaper DST: folds the real Reaper.SweepAsync over real SessionInfo values through arrivals, departures,
              use, daemon restarts and sweeps; the truth is an independent fold of who was seen when. Twins forget the
              restart, ignore presence and treat a person's session as an agent's. -->

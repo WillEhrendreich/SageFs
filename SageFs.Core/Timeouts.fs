@@ -551,6 +551,15 @@ module Timeouts =
   /// `callerCheck` because a person asked for this answer and is waiting for it, where a save only wants to say who
   /// is stranded. An operator on a very large solution can raise it.
   let referencesCheck = envOrDefaultMachine "SAGEFS_REFERENCES_CHECK_SECONDS" 60.0
+  /// How long the compiler's cache behind `list_references` is kept with nobody asking. The cache holds gigabytes on a
+  /// large session, so it goes once the questions stop. Ten minutes covers a burst of questions while someone plans a
+  /// change, and is far longer than one ask (`referencesCheck`), so the cache is never dropped between two projects of
+  /// the same question. Not scaled by the machine tier: it is a wait for a person and not for the machine.
+  let referencesCacheRetention = envOrDefault "SAGEFS_REFERENCES_CACHE_RETENTION_SECONDS" 600.0
+  /// How often the worker looks at whether the cache behind `list_references` has outlived its retention. A sweep reads
+  /// one number and decides, so the cost of looking is nothing; the interval is the most a cache can outlive its
+  /// retention by.
+  let referencesCacheSweep = envOrDefault "SAGEFS_REFERENCES_CACHE_SWEEP_SECONDS" 30.0
 
   // -- Running an app (run_app) --
   /// How long an app's entry point may run before it builds a host. If it has not by then,

@@ -3,6 +3,8 @@ namespace SageFs.Features
 open System
 open System.IO
 open System.Diagnostics
+open SageFs
+open SageFs.Utils
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Symbols
@@ -18,8 +20,57 @@ module SymbolReferenceCheck =
   /// keeps the files it finished, so asking again goes further, but only while the project stays cached: with a cache of
   /// three (the caller check's), a session of eight projects evicted each project before the next ask came back to it,
   /// and the same question started from nothing every time (measured on the SageFs.Tests session, 2026-10-25).
-  let checker : Lazy<FSharpChecker> =
-    lazy (FSharpChecker.Create(projectCacheSize = SageFs.SageFsConfig.ReferencesProjectCacheSize))
+  let newChecker () : FSharpChecker =
+    FSharpChecker.Create(projectCacheSize = SageFs.SageFsConfig.ReferencesProjectCacheSize)
+
+  /// Gives back what a checker cached: its project caches, the shared reference-assembly readers, and then a full
+  /// collection, so the memory returns to the worker and not just to the checker's free list.
+  let dropChecker (checker: FSharpChecker) : unit =
+    checker.ClearLanguageServiceRootCachesAndCollectAndFinalizeAllTransients()
+    GC.Collect(2, GCCollectionMode.Aggressive, true, true)
+
+  /// The worker's resident set, which is what the machine sees and what a project count cannot bound.
+  let residentBytes () : int64 =
+    use self = Process.GetCurrentProcess()
+    self.WorkingSet64
+
+  /// The ceiling and the retention the cache is held to. The project cache size says how many projects are held and
+  /// nothing about their bytes, so bytes and idleness decide separately whether the cache is kept
+  /// (`ReferenceCacheRetention.decide`).
+  let cachePolicy : CachePolicy =
+    { CeilingBytes = SageFs.SageFsConfig.ReferencesResidentCeilingBytes
+      Retention = Timeouts.referencesCacheRetention }
+
+  /// The held checker and the timer that sweeps it while nobody asks. The timer is a field of this record, and the record
+  /// is held by the lazy below for the life of the worker, so the timer is never collected and silently stopped.
+  type HeldCache =
+    { Holder: CacheHolder<FSharpChecker>
+      SweepTimer: Threading.Timer }
+
+  /// Built on the first ask, so a worker that never answers `list_references` pays for no timer.
+  let cache : Lazy<HeldCache> =
+    lazy
+      (let clock = Stopwatch.StartNew()
+       let holder =
+         CacheHolder<FSharpChecker>(
+           { Create = newChecker
+             Drop = dropChecker
+             ResidentBytes = residentBytes
+             Pressure = fun () -> ReferenceCacheRetention.pressureOf (MachineMemory.current ())
+             Now = fun () -> clock.Elapsed
+             Policy = cachePolicy
+             Released = fun reason -> Log.info "list_references: compiler cache dropped, %s" (ReleaseReason.describe reason) })
+       let sweepEvery = Timeouts.referencesCacheSweep
+       // A sweep runs as an async that reports its failure: an exception thrown on a timer thread ends the worker.
+       let sweep =
+         async {
+           let! outcome = Async.Catch(async { holder.Sweep() })
+           match outcome with
+           | Choice1Of2() -> ()
+           | Choice2Of2 failure -> Log.warn "list_references: the cache sweep failed: %s" failure.Message
+         }
+       { Holder = holder
+         SweepTimer = new Threading.Timer((fun _ -> Async.Start sweep), null, sweepEvery, sweepEvery) })
 
   /// The full name the compiler gives a symbol, or empty when it has none. An entity with no qualified name (a type
   /// abbreviation) answers through `TryFullName`; everything else answers through `FullName`.
@@ -58,7 +109,10 @@ module SymbolReferenceCheck =
     let work =
       async {
         let! cancel = Async.CancellationToken
-        let! results = checker.Value.ParseAndCheckProject options
+        // Asked before every project: a ceiling crossed or a machine squeezed partway through a question drops the cache
+        // before the next project, and the time the rebuild takes is spent from the same budget.
+        let checker = cache.Value.Holder.Acquire()
+        let! results = checker.ParseAndCheckProject options
         let sites, unclean = sitesOf cancel name results
         return ProjectCheck.Answered(sites, unclean)
       }
@@ -85,8 +139,15 @@ module SymbolReferenceCheck =
     let ordered = projects |> inBudgetOrder |> List.map (fun o -> projectNameOf o, withoutReferencedProjects o)
     let byName = Map.ofList ordered
     let clock = Stopwatch.StartNew()
-    ReferenceGather.run
-      budget
-      (fun () -> clock.Elapsed)
-      (fun project left -> checkProject name byName.[project] left)
-      (ordered |> List.map fst)
+    async {
+      try
+        return!
+          ReferenceGather.run
+            budget
+            (fun () -> clock.Elapsed)
+            (fun project left -> checkProject name byName.[project] left)
+            (ordered |> List.map fst)
+      finally
+        // Whatever the ask ended in, the cache is no longer in use, so a sweep may drop it and the ceiling is asked now.
+        cache.Value.Holder.Settle()
+    }

@@ -49,6 +49,7 @@
         <Compile Include="McpToolExecutionTests.fs" />
         <Compile Include="McpMemberPageTests.fs" />
         <Compile Include="SymbolReferencesTests.fs" />
+        <Compile Include="ReferenceCacheRetentionTests.fs" />
         <Compile Include="CompletionAnswerTests.fs" />
         <Compile Include="ReplFreshnessSurfaceTests.fs" />
         <Compile Include="EvalWriteBackSurfaceTests.fs" />
@@ -277,6 +278,7 @@
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="CallerPendingSimTests.fs" />
         <Compile Include="ReferenceScopeSimTests.fs" />
+        <Compile Include="ReferenceCacheSimTests.fs" />
         <Compile Include="SessionReaperSimTests.fs" />
         <Compile Include="StopOffLoopSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
