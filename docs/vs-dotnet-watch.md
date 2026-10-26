@@ -10,7 +10,7 @@ People keep asking how this differs from `dotnet watch`, and "watch mode, but fa
 | What runs | The test command you gave it, so every test unless you filter | The tests the edit can reach, worked out from the symbols the test and the code share and from per-test coverage. When it cannot tell, it runs all of them rather than none ([how the choice is made](how-live-testing-works.md)) |
 | What it runs against | A build of your saved files | Code evaluated in the live session, and a real build of the saved text confirms or contradicts it once you stop typing for two seconds. Each result says which one it ran against |
 | Speed | I have not timed it | Keystroke to verdict p50 712 ms, save to all green p50 542 ms. That is 11 tests on one machine, so read it as "fast on a small project". I have no figure for a large solution ([the numbers and their limits](how-live-testing-works.md)) |
-| Where you see it | The terminal | The editor gutter, the web dashboard, or an MCP client. There is no plain-terminal pass/fail printout yet |
+| Where you see it | The terminal | Marks in your editor, the web dashboard, or an MCP client. There is no plain-terminal pass/fail printout yet |
 
 A type error in the buffer means nothing is evaluated and nothing runs. The last results stay up, marked as blocked by compile errors ([live-testing-as-you-type.md](live-testing-as-you-type.md)).
 

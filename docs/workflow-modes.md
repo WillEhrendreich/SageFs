@@ -221,7 +221,7 @@ So: *"is live testing on?"* and *"which workflow am I in?"* are two different qu
 
 ### What live testing does
 
-When enabled, SageFs watches which functions your tests call (via a dependency graph). When you change a function, it automatically re-runs only the tests that cover that function. Results appear inline in your editor: green gutter marks for passing, red for failing, with failure details shown right next to the code.
+When enabled, SageFs watches which functions your tests call (via a dependency graph). When you change a function, it automatically re-runs only the tests that cover that function. Results appear inline in your editor: a green mark for passing and a red one for failing, with failure details shown right next to the code (at the end of the test's line in VS Code, in the sign column in Neovim).
 
 ### How to turn the feature on
 

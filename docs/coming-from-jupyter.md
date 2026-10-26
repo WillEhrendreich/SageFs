@@ -15,7 +15,7 @@ SageFs keeps the good part and drops the rest. Your code lives in a plain `.fsx`
 ```fsharp
 // Your "cell" is any expression. Run it anywhere.
 let data = [1.0; 2.0; 3.0; 4.0; 5.0]
-let mean = data |> List.average     // Alt+Enter → 3.0, right in the gutter
+let mean = data |> List.average     // Alt+Enter → 3.0, right next to the line
 let std  =
   data
   |> List.map (fun x -> (x - mean) ** 2.0)
