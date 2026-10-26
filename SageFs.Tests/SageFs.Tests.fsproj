@@ -328,6 +328,7 @@
         <Compile Include="DiffEmitTests.fs" />
         <Compile Include="SyntaxHighlightTests.fs" />
         <Compile Include="TestTreeSitterTests.fs" />
+        <Compile Include="TestTreeSitterCasesTests.fs" />
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="ProjectLoadingTests.fs" />
         <Compile Include="PackageRuntimeAssetsTests.fs" />
