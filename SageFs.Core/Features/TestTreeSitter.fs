@@ -153,3 +153,9 @@ module TestTreeSitter =
   /// Check if tree-sitter test discovery is available.
   let isAvailable () : bool =
     availability () |> NativeAvailability.isAvailable
+
+  /// The native language and the compiled test queries, or nothing when the native
+  /// library is unavailable. `ExpectoCases.discover` parses with these instead of
+  /// building a second Language against the same library.
+  let tryResources () : (Language * Query) option =
+    resources.Value.Resources

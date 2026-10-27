@@ -4,6 +4,8 @@
 /// file we parsed? Step 5 adds `discover` (from the text) and step 6 `categoryOf`.
 namespace SageFs.Features.LiveTesting
 
+open TreeSitter
+
 /// What a node in the source IS: the `[<Tests>]` binding, a list, or a case.
 [<RequireQualifiedAccess>]
 type SourceKind =
@@ -117,3 +119,166 @@ module ExpectoCases =
           | None ->
             fullName, CasePlacement.NearestAncestor (caseEntry.FilePath, caseEntry.Line, unmatched)
     reflectedPaths |> List.map placeOne
+
+  // ---- step 5: discover -----------------------------------------------------------------
+
+  /// Every named node of a parse tree, in document order.
+  let namedNodes (root: Node) : Node list =
+    let collected = ResizeArray<Node>()
+    let rec walk (node: Node) =
+      if node.IsNamed then collected.Add node
+      for child in node.Children do walk child
+    walk root
+    List.ofSeq collected
+
+  /// True when `outer` covers the given source range and is larger than it.
+  let spanStrictlyHolds (outer: Node) (startIndex: int) (endIndex: int) : bool =
+    int outer.StartIndex <= startIndex
+    && int outer.EndIndex >= endIndex
+    && (int outer.StartIndex < startIndex || int outer.EndIndex > endIndex)
+
+  /// True when `outer` covers the given source range at all.
+  let spanHolds (outer: Node) (startIndex: int) (endIndex: int) : bool =
+    int outer.StartIndex <= startIndex && int outer.EndIndex >= endIndex
+
+  /// The innermost application that holds a captured builder identifier: the
+  /// builder and its name argument, before any body the grammar adds around it.
+  let builderApplication (nodes: Node list) (identifier: Node) : Node option =
+    nodes
+    |> List.filter (fun node ->
+      node.Type = "application_expression"
+      && spanHolds node (int identifier.StartIndex) (int identifier.EndIndex))
+    |> List.sortBy (fun node -> int node.EndIndex - int node.StartIndex)
+    |> List.tryHead
+
+  /// The full expression the builder application sits in: the application with its
+  /// arguments, the infix form, or the computation expression. The application
+  /// itself when nothing wraps it, so a case is never dropped for lack of a parent.
+  let containingExpression (nodes: Node list) (inner: Node) : Node option =
+    let larger =
+      nodes
+      |> List.filter (fun node ->
+        (node.Type = "application_expression"
+         || node.Type = "infix_expression"
+         || node.Type = "ce_expression")
+        && spanStrictlyHolds node (int inner.StartIndex) (int inner.EndIndex))
+      |> List.sortBy (fun node -> int node.EndIndex - int node.StartIndex)
+      |> List.tryHead
+    match larger with
+    | Some expression -> Some expression
+    | None -> Some inner
+
+  /// The name argument of a builder: the string literal the text shows, or
+  /// Computed for an expression (an interpolated string counts as computed).
+  let nameArgument (code: string) (application: Node) : SourceName =
+    if application.Children.Count >= 2 then
+      let argument = application.Children.[1]
+      match argument.Type with
+      | "const" ->
+        let raw = code.Substring(int argument.StartIndex, int argument.EndIndex - int argument.StartIndex)
+        match raw.Length >= 2 && raw.StartsWith "\"" && raw.EndsWith "\"" with
+        | true -> SourceName.Literal (raw.Substring(1, raw.Length - 2))
+        | false -> SourceName.Computed
+      | _ -> SourceName.Computed
+    else SourceName.Computed
+
+  /// The `[<Tests>]` bindings, lists and cases of one Expecto file, read straight
+  /// from the parse tree: a name the text shows becomes Literal, a name only the
+  /// running code can know becomes Computed. Nothing is discovered without the
+  /// native library, which is how TestTreeSitter.discover answers too.
+  let discover (filePath: string) (code: string) : SourceCase array =
+    if System.String.IsNullOrWhiteSpace code then
+      Array.empty
+    else
+      match TestTreeSitter.tryResources () with
+      | None -> Array.empty
+      | Some (language, query) ->
+        use parser = new Parser(language)
+        use tree = parser.Parse(code)
+        let root = tree.RootNode
+        let nodes = namedNodes root
+        let captures = query.Execute(root).Captures |> Seq.toList
+        let captured (captureName: string) =
+          captures
+          |> List.filter (fun capture -> capture.Name = captureName)
+          |> List.map (fun capture -> capture.Node)
+        let pairsOf (identifiers: Node list) =
+          identifiers
+          |> List.choose (fun identifier ->
+            builderApplication nodes identifier
+            |> Option.bind (fun application ->
+              containingExpression nodes application |> Option.map (fun expression -> application, expression)))
+
+        // Lists outermost first, so every list path exists before a list nested inside it.
+        let listPairs =
+          pairsOf (captured "expectoList.builder")
+          |> List.sortBy (fun (inner, expression) ->
+            int inner.StartIndex, -(int expression.EndIndex - int expression.StartIndex))
+        let listPaths, _ =
+          listPairs
+          |> List.mapFold
+            (fun known (inner, expression) ->
+              let enclosing =
+                known
+                |> List.filter (fun (node, _) -> spanHolds node (int expression.StartIndex) (int expression.EndIndex))
+                |> List.sortBy (fun (node, _) -> int node.EndIndex - int node.StartIndex)
+              let path = (enclosing |> List.collect snd) @ [ nameArgument code inner ]
+              (expression, path), known @ [ (expression, path) ])
+            []
+        let listEntries =
+          listPaths
+          |> List.map (fun (expression, path) ->
+            { Kind = SourceKind.List
+              FilePath = filePath
+              Path = path
+              Line = int expression.StartPosition.Row + 1
+              Column = int expression.StartPosition.Column
+              EndLine = int expression.EndPosition.Row + 1
+              Body = code.Substring(int expression.StartIndex, int expression.EndIndex - int expression.StartIndex) })
+
+        let caseEntries =
+          pairsOf (captured "expectoCase.builder")
+          |> List.map (fun (inner, expression) ->
+            let enclosing =
+              listPaths
+              |> List.filter (fun (node, _) -> spanHolds node (int expression.StartIndex) (int expression.EndIndex))
+              |> List.sortBy (fun (node, _) -> int node.EndIndex - int node.StartIndex)
+            let parentPath =
+              match List.tryLast enclosing with
+              | Some (_, path) -> path
+              | None -> []
+            { Kind = SourceKind.Case
+              FilePath = filePath
+              Path = parentPath @ [ nameArgument code inner ]
+              Line = int expression.StartPosition.Row + 1
+              Column = int expression.StartPosition.Column
+              EndLine = int expression.EndPosition.Row + 1
+              Body = code.Substring(int expression.StartIndex, int expression.EndIndex - int expression.StartIndex) })
+
+        let bindingEntries =
+          TestTreeSitter.discover filePath code
+          |> Array.filter (fun location ->
+            location.AttributeName = "Tests" || location.AttributeName = "TestsAttribute")
+          |> Array.choose (fun location ->
+            let nameRow = location.Line - 1
+            let declaration =
+              nodes
+              |> List.filter (fun node ->
+                node.Type = "declaration_expression"
+                && int node.StartPosition.Row <= nameRow
+                && int node.EndPosition.Row >= nameRow)
+              |> List.sortBy (fun node -> int node.EndIndex - int node.StartIndex)
+              |> List.tryHead
+            declaration
+            |> Option.map (fun node ->
+              { Kind = SourceKind.Binding
+                FilePath = filePath
+                Path = []
+                Line = int node.StartPosition.Row + 1
+                Column = int node.StartPosition.Column
+                EndLine = int node.EndPosition.Row + 1
+                Body = code.Substring(int node.StartIndex, int node.EndIndex - int node.StartIndex) }))
+
+        List.append (List.append (List.ofArray bindingEntries) listEntries) caseEntries
+        |> List.sortBy (fun entry -> entry.Line, entry.Column)
+        |> List.toArray

@@ -81,3 +81,18 @@
     "TestMethod" "TestMethodAttribute" "DataTestMethod" "DataTestMethodAttribute"
     "Benchmark" "BenchmarkAttribute"
     "Property" "PropertyAttribute"))
+
+;; --- Expecto case and list builders (ExpectoCases.discover) ---
+;; The application that carries a list body. The name argument may be a literal
+;; string or an expression, so discover reads it from the node and decides.
+((application_expression
+   (long_identifier_or_op (identifier) @expectoList.builder))
+ (#any-of? @expectoList.builder "testList"))
+
+;; The application that carries a case builder and its name argument. The full
+;; case (name plus body) is the expression that contains this one.
+((application_expression
+   (long_identifier_or_op (identifier) @expectoCase.builder))
+ (#any-of? @expectoCase.builder
+   "testCase" "testCaseTask" "testTask" "testAsync" "testProperty" "test"))
+

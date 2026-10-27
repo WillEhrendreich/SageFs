@@ -110,12 +110,12 @@ let tests =
         |> Array.sortBy fst
         |> List.ofArray
         |> Expect.equal "each builder sits on the line it was written on, under the list chain above it"
-          [ 2, [ "outer"; "paren" ]
-            3, [ "outer"; "pipe" ]
-            4, [ "outer"; "task" ]
-            5, [ "outer"; "async" ]
-            6, [ "outer"; "prop" ]
-            7, [ "outer"; "builder" ] ]
+          [ 3, [ "outer"; "paren" ]
+            4, [ "outer"; "pipe" ]
+            5, [ "outer"; "task" ]
+            6, [ "outer"; "async" ]
+            7, [ "outer"; "prop" ]
+            8, [ "outer"; "builder" ] ]
     }
 
     test "a name the text computes is discovered as Computed, never guessed" {
