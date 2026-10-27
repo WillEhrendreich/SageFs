@@ -224,7 +224,7 @@ let fileSize : (string * int) list =
     // 2270 -> 2509: the reducer cases and helpers for result provenance, build confirmation, pause and
     // scope. Deliberate and reviewed; still below the 3079 this file stood at before the effect handler
     // moved out. Ratchet back DOWN when this file is split; never bump to paper over drift.
-    "SageFs/SageFsApp.fs", 2467
+    "SageFs/SageFsApp.fs", 2465
     // 1999 -> 2003: a one-time bump for the swap-refetch slice (roadmap "Level the REPL after a
     // patch without losing it"): mkAppStateActor now threads an InstrumentationMapsRef, and the
     // hard-reset arm writes the FRESH shadow copy's maps into it so GetInstrumentationMaps stops

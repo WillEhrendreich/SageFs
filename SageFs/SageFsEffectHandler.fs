@@ -644,7 +644,8 @@ module SageFsEffectHandler =
           Instrumentation.treeSitterParseMs.Record(elapsed.TotalMilliseconds)
           Features.LiveTesting.LiveTestingInstrumentation.treeSitterHistogram.Record(elapsed.TotalMilliseconds)
           Instrumentation.succeedSpan span
-          dispatch (SageFsMsg.Event (TuiEvent.TestLocationsDetected ("", locations)))
+          let cases = Features.LiveTesting.ExpectoCases.discover filePath content
+          dispatch (SageFsMsg.Event (TuiEvent.TestLocationsDetected ("", locations, cases)))
           let timing : Features.LiveTesting.TestCycleTiming = {
             Depth = Features.LiveTesting.TestCycleDepth.TreeSitterOnly elapsed
             TotalTests = 0; AffectedTests = 0

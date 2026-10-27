@@ -1395,11 +1395,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         (SageFsModel.initial())
     let model2, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.TestLocationsDetected ("s-1", locations)))
+        (SageFsMsg.Event (TuiEvent.TestLocationsDetected ("s-1", locations, [||])))
         model1
     let model3, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.TestLocationsDetected ("s-1", locations)))
+        (SageFsMsg.Event (TuiEvent.TestLocationsDetected ("s-1", locations, [||])))
         model2
     obj.ReferenceEquals(model3, model2)
     |> Expect.isTrue "duplicate source locations should not force another rerender"

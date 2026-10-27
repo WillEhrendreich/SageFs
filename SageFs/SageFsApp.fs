@@ -1476,21 +1476,19 @@ module SageFsUpdate =
               RecentOutput = output }, []
 
       // ── Live testing events ──
-      | TuiEvent.TestLocationsDetected (sessionId, detected) ->
+      | TuiEvent.TestLocationsDetected (sessionId, detected, cases) ->
         // Routed to the session that found them, not always Primary.
         let locations = SessionTestAttribution.locationsFor model.Sessions.Sessions sessionId detected
         let model', changed =
           tryUpdateLiveTestingState (Some sessionId) (fun cycle ->
             let state = cycle.TestState
-            let merged =
-              match Array.isEmpty state.DiscoveredTests with
-              | true -> state.DiscoveredTests
-              | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations locations state.DiscoveredTests
-            match state.SourceLocations = locations && state.DiscoveredTests = merged with
+            let (sourceLocations, discovered) =
+              Features.LiveTesting.TestLocationsApplied.apply locations cases state.DiscoveredTests
+            match state.SourceLocations = sourceLocations && state.DiscoveredTests = discovered with
             | true -> cycle, false
             | false ->
               recomputeStatuses cycle (fun s ->
-                { s with SourceLocations = locations; DiscoveredTests = merged }), true) model
+                { s with SourceLocations = sourceLocations; DiscoveredTests = discovered }), true) model
         match changed with
         | Some true -> model', []
         | _ -> model, []

@@ -273,6 +273,7 @@
              consumed it from its old position below. -->
         <Compile Include="Features\TestTreeSitter.fs" />
         <Compile Include="Features\ExpectoCases.fs" />
+        <Compile Include="Features\TestLocationsApplied.fs" />
         <Compile Include="Features\LiveTestingExecutors.fs" />
         <Compile Include="Features\TestDiscoveryMerge.fs" />
         <Compile Include="Features\AutoCompletion.fs" />

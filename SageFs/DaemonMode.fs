@@ -1202,7 +1202,7 @@ let private dispatchDiscoveredTests
         IO.Path.GetDirectoryName fullPath)
       |> List.distinct
     | None -> [ workingDir ]
-  let locations =
+  let discovered =
     match Features.LiveTesting.TestTreeSitter.isAvailable () with
     | true ->
       projectDirs
@@ -1224,14 +1224,17 @@ let private dispatchDiscoveredTests
           |> Array.collect (fun f ->
             try
               let code = IO.File.ReadAllText f
-              Features.LiveTesting.TestTreeSitter.discover f code
+              [| (Features.LiveTesting.TestTreeSitter.discover f code,
+                  Features.LiveTesting.ExpectoCases.discover f code) |]
             with ex ->
               log.LogWarning("[Daemon] Tree-sitter discovery failed for {File}: {Error}", f, ex.Message)
               Array.empty)
         | false -> Array.empty)
     | false -> Array.empty
+  let locations = discovered |> Array.collect fst
+  let cases = discovered |> Array.collect snd
   match Array.isEmpty locations with
-  | false -> dispatch (SageFsMsg.Event (TuiEvent.TestLocationsDetected (WorkerProtocol.SessionId.value sid, locations)))
+  | false -> dispatch (SageFsMsg.Event (TuiEvent.TestLocationsDetected (WorkerProtocol.SessionId.value sid, locations, cases)))
   | true -> ()
   // Zero tests is still an answer: it completes this session's discovery.
   dispatch (SageFsMsg.Event (TuiEvent.TestsDiscovered (WorkerProtocol.SessionId.value sid, tests)))

@@ -63,6 +63,23 @@ module ExpectoCases =
       | SourceName.Literal _ -> true
       | SourceName.Computed -> false)
 
+  /// The source case a reflected path lands on: the case whose path is literal
+  /// end to end when the text verifies one, otherwise the first case whose path
+  /// holds a computed name at those segments. No match is nothing — the caller
+  /// answers NotInSource, never a guess. `place` and the edge share this one
+  /// selection so a mark and its evidence can never disagree about which case
+  /// they came from.
+  let matchedCase (source: SourceCase array) (segments: string list) : SourceCase option =
+    let cases =
+      source
+      |> Array.filter (fun entry -> entry.Kind = SourceKind.Case && matchesPath entry.Path segments)
+    match
+      cases
+      |> Array.tryFind (fun entry -> (literalPrefix entry.Path |> List.length) = List.length entry.Path)
+    with
+    | Some entry -> Some entry
+    | None -> cases |> Array.tryHead
+
   /// Where every reflected leaf places. A path that is literal end to end is
   /// Exact on the case's own line. A path holding a computed name falls back to
   /// NearestAncestor: the line of the deepest ancestor whose own path is literal
@@ -73,20 +90,14 @@ module ExpectoCases =
     let holdsLine (caseLine: int) (entry: SourceCase) =
       entry.Line <= caseLine && caseLine <= entry.EndLine
     let placeOne (fullName: string, segments: string list) : string * CasePlacement =
-      let cases =
-        source
-        |> Array.filter (fun entry -> entry.Kind = SourceKind.Case && matchesPath entry.Path segments)
-      let exact =
-        cases
-        |> Array.tryFind (fun entry -> (literalPrefix entry.Path |> List.length) = List.length entry.Path)
-      match exact with
-      | Some entry ->
-        fullName, CasePlacement.Exact (entry.FilePath, entry.Line)
+      match matchedCase source segments with
       | None ->
-        match cases |> Array.tryHead with
-        | None ->
-          fullName, CasePlacement.NotInSource
-        | Some caseEntry ->
+        fullName, CasePlacement.NotInSource
+      | Some caseEntry ->
+        match (literalPrefix caseEntry.Path |> List.length) = List.length caseEntry.Path with
+        | true ->
+          fullName, CasePlacement.Exact (caseEntry.FilePath, caseEntry.Line)
+        | false ->
           let unmatched =
             List.zip caseEntry.Path segments
             |> List.choose (fun (name, segment) ->

@@ -310,7 +310,7 @@ type TuiEvent =
   | WarmupCompleted of duration: TimeSpan * failures: string list
   | WarmupContextUpdated of SessionContext
   // ── Live testing ──
-  | TestLocationsDetected of sessionId: string * locations: Features.LiveTesting.SourceTestLocation array
+  | TestLocationsDetected of sessionId: string * locations: Features.LiveTesting.SourceTestLocation array * cases: Features.LiveTesting.SourceCase array
   | TestsDiscovered of sessionId: string * tests: Features.LiveTesting.TestCase array
   /// Merges a fresh live-merged discovery report (Brief 3's
   /// `TestDiscoveryMerge.merge` — compiled ∪ FSI-eval'd, dynamic wins by

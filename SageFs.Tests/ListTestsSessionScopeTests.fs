@@ -172,7 +172,7 @@ let tests =
         |> step (TuiEvent.SessionSwitched (None, a))
         |> step (TuiEvent.TestsDiscovered (a, reflected ()))
         |> step (TuiEvent.SessionCreated (mkSnap sidB dirB))
-        |> step (TuiEvent.TestLocationsDetected (b, [| loc |]))
+        |> step (TuiEvent.TestLocationsDetected (b, [| loc |], [||]))
       model.LiveTesting.TestState.SourceLocations
       |> Expect.isEmpty "A's cycle did not receive B's locations"
 
