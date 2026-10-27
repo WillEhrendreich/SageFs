@@ -238,6 +238,7 @@
         <Compile Include="DashboardTestStatusGridTests.fs" />
         <Compile Include="DashboardLandingTests.fs" />
         <Compile Include="DashboardHealthVerdictRenderingTests.fs" />
+        <Compile Include="DashboardUxDefectTests.fs" />
         <Compile Include="DashboardWorkflowSwitchTests.fs" />
         <Compile Include="DashboardWorkflowSwitcherRenderTests.fs" />
         <Compile Include="DashboardWorkflowSwitchHandlerTests.fs" />
