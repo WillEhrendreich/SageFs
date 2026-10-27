@@ -85,4 +85,60 @@ let tests =
           pinned
           |> Expect.equal "the six builder shapes parse exactly as they did when pinned" actual
     }
+
+    test "every builder in the matrix produces a SourceCase on its own line" {
+      match TestTreeSitter.availability () with
+      | TestTreeSitter.NativeAvailability.Degraded _ ->
+        failtest (TestTreeSitter.describeAvailability ())
+      | TestTreeSitter.NativeAvailability.Available _ ->
+        let entries = ExpectoCases.discover "Fixture.fs" fixtureSource
+        match entries |> Array.tryFind (fun e -> e.Kind = SourceKind.Binding) with
+        | None -> failtest "the [<Tests>] binding was not discovered"
+        | Some binding ->
+          binding.Line |> Expect.equal "the binding starts on its first line" 1
+          binding.Path |> Expect.equal "the binding carries no name path" []
+        match entries |> Array.tryFind (fun e -> e.Kind = SourceKind.List) with
+        | None -> failtest "the testList was not discovered"
+        | Some list ->
+          list.Path |> Expect.equal "the list carries its own name" [ SourceName.Literal "outer" ]
+        let cases = entries |> Array.filter (fun e -> e.Kind = SourceKind.Case)
+        cases.Length |> Expect.equal "one SourceCase per builder in the matrix" 6
+        let asSegments (c: SourceCase) =
+          c.Line, (c.Path |> List.map (fun s -> match s with SourceName.Literal text -> text | SourceName.Computed -> "<computed>"))
+        cases
+        |> Array.map asSegments
+        |> Array.sortBy fst
+        |> List.ofArray
+        |> Expect.equal "each builder sits on the line it was written on, under the list chain above it"
+          [ 2, [ "outer"; "paren" ]
+            3, [ "outer"; "pipe" ]
+            4, [ "outer"; "task" ]
+            5, [ "outer"; "async" ]
+            6, [ "outer"; "prop" ]
+            7, [ "outer"; "builder" ] ]
+    }
+
+    test "a name the text computes is discovered as Computed, never guessed" {
+      match TestTreeSitter.availability () with
+      | TestTreeSitter.NativeAvailability.Degraded _ ->
+        failtest (TestTreeSitter.describeAvailability ())
+      | TestTreeSitter.NativeAvailability.Available _ ->
+        let source =
+          String.concat "\n" [
+            "[<Tests>]"
+            "let ``computed name`` = testList \"suite\" ["
+            "  testCase (sprintf \"case %d\" 1) (fun () -> ())"
+            "]"
+          ]
+        let cases =
+          ExpectoCases.discover "Fixture.fs" source
+          |> Array.filter (fun e -> e.Kind = SourceKind.Case)
+        match cases with
+        | [| case |] ->
+          case.Path
+          |> Expect.equal "the computed name stays Computed all the way down"
+            [ SourceName.Literal "suite"; SourceName.Computed ]
+          case.Line |> Expect.equal "the case still lands on its own line" 3
+        | other -> failtestf "expected exactly one discovered case, found %d" other.Length
+    }
   ]
