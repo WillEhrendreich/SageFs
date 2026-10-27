@@ -61,6 +61,7 @@
     <Compile Include="TestProviderTypes.fs" />
     <Compile Include="LiveTestingTypes.fs" />
     <Compile Include="LiveTestingRequests.fs" />
+    <Compile Include="LiveTestingCategories.fs" />
     <Compile Include="CoverageProbes.fs" />
     <Compile Include="LiveTestingInstrumentation.fs" />
     <Compile Include="ReflectionDiscovery.fs" />

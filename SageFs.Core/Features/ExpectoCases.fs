@@ -282,3 +282,21 @@ module ExpectoCases =
         List.append (List.append (List.ofArray bindingEntries) listEntries) caseEntries
         |> List.sortBy (fun entry -> entry.Line, entry.Column)
         |> List.toArray
+
+  // ---- step 6: categoryOf ----------------------------------------------------------------
+
+  /// The plan's `ExpectoCases.categoryOf` contract. The rules themselves live in
+  /// `LiveTestingCategories`: the FSI host compiles the live-testing executors and
+  /// its project takes no packages on purpose, so the file holding the TreeSitter
+  /// parse surface cannot join that list, and this re-export keeps the daemon-side
+  /// API exactly where the plan put it.
+  let categoryOf (evidence: CategoryEvidence) : TestCategory * CategoryWhy =
+    LiveTestingCategories.categoryOf evidence
+
+  /// Re-exported so the mutation tests pin the single list of category words.
+  let categoryWords : (string * TestCategory) list =
+    LiveTestingCategories.categoryWords
+
+  /// Re-exported for the same reason: one splitter, one home.
+  let categoryEvidenceTokens (text: string) : Set<string> =
+    LiveTestingCategories.categoryEvidenceTokens text
