@@ -294,6 +294,31 @@ let computedAsEmptyLiteral : Mutant<PlaceInput -> (string * CasePlacement) list>
 
 // --- Tests ---------------------------------------------------------------------------
 
+/// Plan test 7, categoryOf half: the two leading checks with their order reversed.
+/// A test that pins the list winning over the path makes this variant disagree,
+/// so a swap inside categoryOf cannot pass quietly.
+let categoryOfChecksSwapped : Mutant<CategoryEvidence -> TestCategory * CategoryWhy> =
+  { Name = "categoryOf with the list-label check and the file-path check swapped"
+    Description = "the file would win over the list the person filed the case in"
+    Apply =
+      fun f ->
+        fun evidence ->
+          let firstCategory (tokens: Set<string>) =
+            ExpectoCases.categoryWords
+            |> List.tryPick (fun (word, category) -> if tokens.Contains word then Some (word, category) else None)
+          match firstCategory (ExpectoCases.categoryEvidenceTokens evidence.FilePath) with
+          | Some (word, category) -> category, CategoryWhy.FromFilePath word
+          | None ->
+            let nearest =
+              evidence.ListLabels
+              |> List.rev
+              |> List.tryPick (fun label ->
+                firstCategory (ExpectoCases.categoryEvidenceTokens label)
+                |> Option.map (fun (_, category) -> category, label))
+            match nearest with
+            | Some (category, label) -> category, CategoryWhy.FromListLabel label
+            | None -> f { evidence with ListLabels = []; FilePath = "" } }
+
 [<Tests>]
 let tests =
   testList "ExpectoCases" [
@@ -368,4 +393,30 @@ let tests =
       (mutantSource, mutantReflected)
       placeBoth
       hasNearestAncestor
+
+    test "a body that opens a database is Integration, and the row says which pattern said so" {
+      ExpectoCases.categoryOf
+        { ListLabels = []
+          FilePath = "SageFs.Tests/ParserTests.fs"
+          Body = "let connection = new SqliteConnection(\"Data Source=:memory:\")" }
+      |> Expect.equal "the body decides: a database connection is what an integration test does"
+        (TestCategory.Integration, CategoryWhy.FromBodyIo "SqliteConnection")
+    }
+
+    test "a body that only joins paths stays Unit, so it keeps running on every change" {
+      ExpectoCases.categoryOf
+        { ListLabels = []
+          FilePath = "SageFs.Tests/ParserTests.fs"
+          Body = "let path = Path.Combine(root, \"data.txt\")" }
+      |> Expect.equal "Path.Combine is file work, not integration work"
+        (TestCategory.Unit, CategoryWhy.FromDefault)
+    }
+
+    detectsOutputMutant
+      categoryOfChecksSwapped
+      { ListLabels = [ "unit" ]
+        FilePath = "Repo/Integration/FooTests.fs"
+        Body = "" }
+      ExpectoCases.categoryOf
+      (fun result -> result = (TestCategory.Unit, CategoryWhy.FromListLabel "unit"))
   ]

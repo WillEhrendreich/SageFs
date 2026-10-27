@@ -591,6 +591,14 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       CategoryDetection.categorize ["Searching"] "My.Test" TestFramework.NUnit [||] None
       |> Expect.equal "should be Unit: arch sits inside searching, and a whole label never said arch" TestCategory.Unit
     }
+    test "a case titled integration of the parser inside testList unit is Unit, because the title is never consulted" {
+      ExpectoCases.categoryOf
+        { ListLabels = [ "unit" ]
+          FilePath = ""
+          Body = "" }
+      |> Expect.equal "the list the person filed the case in decides, and no rule reads the case title"
+        (TestCategory.Unit, CategoryWhy.FromListLabel "unit")
+    }
     test "Playwright assembly maps to Browser" {
       CategoryDetection.categorize [] "My.Test" TestFramework.XUnit [| "Microsoft.Playwright" |] None
       |> Expect.equal "should be Browser" TestCategory.Browser
