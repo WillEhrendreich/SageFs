@@ -49,6 +49,7 @@ let private mkTest (index: int) : TestCase =
   { Id = TestId.TestId(sprintf "%016x" (index * 7919))
     FullName = sprintf "SageFs.Tests.Module%d.Group%d/nested list %d/case number %d does the thing" (index / 50) (index / 10) (index % 7) index
     DisplayName = sprintf "case number %d does the thing" index
+    NamePath = []
     Origin =
       (match index % 5 with
        | 0 -> TestOrigin.ReflectionOnly

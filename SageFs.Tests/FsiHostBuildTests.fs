@@ -286,4 +286,27 @@ let tests =
             |> Array.filter (fun name -> owned |> List.exists (fun o -> name.Contains o))
           Expect.isEmpty (sprintf "SageFs-owned assemblies in the host: %A" offenders) offenders)
     ]
+
+    // The host's sources are named in three places that must agree: FsiHost.fsproj (what the host build
+    // compiles), hostSourceNames (what the cache copies), and the embeds in this assembly (what the copy
+    // reads). A file named in one and not the others surfaces as an FSC error inside a materialized cache
+    // directory, far from the edit that caused it.
+    Ratchet.register Ratchet.Invariant <|
+      testCase "the host's fsproj, embedded sources and hostSourceNames name the same files" (fun _ ->
+        let fsprojPath = Path.Combine(RepoPaths.repoPathFull [||], "SageFs.FsiHost", "FsiHost.fsproj")
+        let pattern = "<Compile Include=\"([^\"]+)\""
+        let compiled =
+          System.Text.RegularExpressions.Regex.Matches(File.ReadAllText fsprojPath, pattern)
+          |> Seq.cast<System.Text.RegularExpressions.Match>
+          |> Seq.map (fun m -> m.Groups.[1].Value)
+          |> Seq.filter (fun name -> name.EndsWith ".fs")
+          |> Seq.sort
+          |> List.ofSeq
+        let copied = hostSourceNames |> List.filter (fun name -> name.EndsWith ".fs") |> List.sort
+        let embedded =
+          match embeddedSources () with
+          | Ok sources -> sources |> List.filter (fun (name, _) -> name.EndsWith ".fs") |> Seq.map fst |> Seq.sort |> List.ofSeq
+          | Error failure -> failtestf "an embedded host source is missing from SageFs.Core: %A" failure
+        Expect.equal "the cache's copy list matches the host build's compile list" copied compiled
+        embedded |> Expect.equal "every copied source is embedded in SageFs.Core" copied)
   ]

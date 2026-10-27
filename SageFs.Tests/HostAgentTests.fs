@@ -25,6 +25,7 @@ let private unknownTest : TestCase =
   { Id = TestId.create "no.such.test" TestFramework.Expecto
     FullName = "no.such.test"
     DisplayName = "no.such.test"
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto

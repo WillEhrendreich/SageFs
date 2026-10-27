@@ -45,6 +45,7 @@ let private mkCase (name: string) : TestCase =
   { Id = TestId.TestId name
     FullName = name
     DisplayName = name
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto

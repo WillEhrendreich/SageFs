@@ -17,6 +17,7 @@ let private mkTestCase name =
   { Id = tid name
     FullName = sprintf "Ns.%s" name
     DisplayName = name
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.XUnit

@@ -1264,6 +1264,7 @@ module SessionCycleIsolation =
     let collidingId = TestId.create "MyModule.tests" TestFramework.Expecto
     let tc =
       { TestCase.Id = collidingId; FullName = "MyModule.tests"; DisplayName = "tests"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
         Category = TestCategory.Unit }
 
@@ -1329,6 +1330,7 @@ module SessionCycleIsolation =
       let collidingId = TestId.create "MyModule.tests" TestFramework.Expecto
       let tc =
         { TestCase.Id = collidingId; FullName = "MyModule.tests"; DisplayName = "tests"
+          NamePath = []
           Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
           Category = TestCategory.Unit }
       let sidA = WorkerProtocol.SessionId.newId ()
@@ -1398,6 +1400,7 @@ module SessionCycleIsolation =
       let tc =
         { TestCase.Id = TestId.create "RuntimeBugs.Tests.addTest" TestFramework.Expecto
           FullName = "RuntimeBugs.Tests.addTest"; DisplayName = "addTest"
+          NamePath = []
           Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
           Category = TestCategory.Unit }
       let sidA = WorkerProtocol.SessionId.newId ()
@@ -1446,11 +1449,11 @@ module SessionCycleIsolation =
       // the real data owner, so it finds B's discovery in B's own cycle.
       let tcA =
         { TestCase.Id = TestId.create "A.tests" TestFramework.Expecto
-          FullName = "A.tests"; DisplayName = "tests"; Origin = TestOrigin.ReflectionOnly
+          FullName = "A.tests"; DisplayName = "tests"; NamePath = []; Origin = TestOrigin.ReflectionOnly
           Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       let tcB =
         { TestCase.Id = TestId.create "B.tests" TestFramework.Expecto
-          FullName = "B.tests"; DisplayName = "tests"; Origin = TestOrigin.ReflectionOnly
+          FullName = "B.tests"; DisplayName = "tests"; NamePath = []; Origin = TestOrigin.ReflectionOnly
           Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       let sidA = WorkerProtocol.SessionId.newId ()
       let sidB = WorkerProtocol.SessionId.newId ()

@@ -38,6 +38,7 @@ let ts (ms: float) = TimeSpan.FromMilliseconds ms
 let mkTestCase name fw category =
   { Id = TestId.create name fw
     FullName = name; DisplayName = name
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []; Framework = fw; Category = category }
 

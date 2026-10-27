@@ -60,6 +60,7 @@
     <Compile Include="MemberEvaluation.fs" />
     <Compile Include="TestProviderTypes.fs" />
     <Compile Include="LiveTestingTypes.fs" />
+    <Compile Include="LiveTestingRequests.fs" />
     <Compile Include="CoverageProbes.fs" />
     <Compile Include="LiveTestingInstrumentation.fs" />
     <Compile Include="ReflectionDiscovery.fs" />

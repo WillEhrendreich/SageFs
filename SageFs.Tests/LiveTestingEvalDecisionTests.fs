@@ -17,6 +17,7 @@ let mkTest fullName category =
   { Id = TestId.create fullName TestFramework.Expecto
     FullName = fullName
     DisplayName = fullName
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto

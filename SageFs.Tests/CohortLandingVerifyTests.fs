@@ -26,6 +26,7 @@ let private mkTestCase (id: string) : TestCase =
   { Id = TestId.TestId id
     FullName = id
     DisplayName = id
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto

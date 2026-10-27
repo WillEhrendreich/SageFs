@@ -20,6 +20,7 @@ let mkTest (name: string) : TestCase =
   { Id = TestId.create name framework
     FullName = name
     DisplayName = name
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = framework

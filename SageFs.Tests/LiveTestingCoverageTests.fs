@@ -380,6 +380,7 @@ let sourceMappingTests = testList "SourceMapping" [
     let tests = [|
       { Id = TestId.create "Mod.Tests.shouldAdd" TestFramework.XUnit
         FullName = "Mod.Tests.shouldAdd"; DisplayName = "shouldAdd"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.XUnit; Category = TestCategory.Unit }
     |]
@@ -396,10 +397,12 @@ let sourceMappingTests = testList "SourceMapping" [
     let tests = [|
       { Id = TestId.create "Ns.Mod.allMyTests/group/test1" TestFramework.Expecto
         FullName = "Ns.Mod.allMyTests/group/test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       { Id = TestId.create "Ns.Mod.allMyTests/group/test2" TestFramework.Expecto
         FullName = "Ns.Mod.allMyTests/group/test2"; DisplayName = "test2"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -418,6 +421,7 @@ let sourceMappingTests = testList "SourceMapping" [
     let tests = [|
       { Id = TestId.create "Mod.myTests" TestFramework.Expecto
         FullName = "Mod.myTests"; DisplayName = "myTests"
+        NamePath = []
         Origin = TestOrigin.SourceMapped("Old.fs", 42); Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -430,6 +434,7 @@ let sourceMappingTests = testList "SourceMapping" [
     let tests = [|
       { Id = TestId.create "T.x" TestFramework.XUnit
         FullName = "T.x"; DisplayName = "x"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.XUnit; Category = TestCategory.Unit }
     |]
@@ -448,6 +453,7 @@ let sourceMappingTests = testList "SourceMapping" [
     let tests = [|
       { Id = TestId.create "Suite.validate" TestFramework.XUnit
         FullName = "Suite.validate"; DisplayName = "validate"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.XUnit; Category = TestCategory.Unit }
     |]
@@ -461,7 +467,7 @@ let sourceMappingTests = testList "SourceMapping" [
 let annotationTests = testList "Gutter Annotations" [
   let test1 =
     { Id = TestId.create "Module.Tests.test1" TestFramework.Expecto; FullName = "Module.Tests.test1"
-      DisplayName = "test1"; Origin = TestOrigin.SourceMapped ("test.fs", 10)
+      DisplayName = "test1"; NamePath = []; Origin = TestOrigin.SourceMapped ("test.fs", 10)
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let mkResult tid res =
     { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow; Output = None }
@@ -577,11 +583,11 @@ let annotationTests = testList "Gutter Annotations" [
 let coverageProjectionExtendedTests = testList "Coverage Projection Extended" [
   let test1 =
     { Id = TestId.create "Module.Tests.test1" TestFramework.Expecto; FullName = "Module.Tests.test1"
-      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test1"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let test2 =
     { Id = TestId.create "Module.Tests.test2" TestFramework.Expecto; FullName = "Module.Tests.test2"
-      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test2"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let mkResult tid res =
     { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow; Output = None }
@@ -675,11 +681,11 @@ let coverageProjectionExtendedTests = testList "Coverage Projection Extended" [
 let depGraphBfsTests = testList "TestDependencyGraph BFS" [
   let test1 =
     { Id = TestId.create "Module.Tests.test1" TestFramework.Expecto; FullName = "Module.Tests.test1"
-      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test1"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let test2 =
     { Id = TestId.create "Module.Tests.test2" TestFramework.Expecto; FullName = "Module.Tests.test2"
-      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test2"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let depGraph = {
     SymbolToTests = Map.ofList [
@@ -772,9 +778,9 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
     let tid2 = TestId.create "test2" TestFramework.Expecto
     let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.ofList ["MyModule.add", [| tid1; tid2 |]] }
     let tests = [|
-      { Id = tid1; FullName = "Tests.test1"; DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      { Id = tid1; FullName = "Tests.test1"; DisplayName = "test1"; NamePath = []; Origin = TestOrigin.ReflectionOnly
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
-      { Id = tid2; FullName = "Tests.test2"; DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      { Id = tid2; FullName = "Tests.test2"; DisplayName = "test2"; NamePath = []; Origin = TestOrigin.ReflectionOnly
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
     let results = Map.ofList [
@@ -808,7 +814,7 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
     let tid = TestId.create "lineTest" TestFramework.Expecto
     let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.ofList ["Prod.validate", [| tid |]] }
     let annotations = [| { Symbol = "Prod.validate"; FilePath = "prod.fs"; DefinitionLine = 42; Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing); BranchCoverage = BranchCoverage.Unknown } |]
-    let tests = [| { Id = tid; FullName = "Tests.lineTest"; DisplayName = "lineTest"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit } |]
+    let tests = [| { Id = tid; FullName = "Tests.lineTest"; DisplayName = "lineTest"; NamePath = []; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit } |]
     let results = Map.ofList [ tid, { TestId = tid; TestName = "lineTest"; Result = TestResult.Passed FixtureDurations.quickResult; Timestamp = DateTimeOffset.UtcNow; Output = None } ]
     match CoverageCorrelation.testsForLine annotations graph tests results "prod.fs" 42 with
     | CoverageDetail.Covered infos ->
@@ -1106,10 +1112,12 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
     let tid1 = mkTestId "Tests.t1" TestFramework.Expecto
     let tid2 = mkTestId "Tests.t2" TestFramework.Expecto
     let tc1 = { Id = tid1; FullName = "Tests.t1"; DisplayName = "t1"
+                NamePath = []
                 Origin = TestOrigin.ReflectionOnly
                 Labels = []; Framework = TestFramework.Expecto
                 Category = TestCategory.Unit }
     let tc2 = { Id = tid2; FullName = "Tests.t2"; DisplayName = "t2"
+                NamePath = []
                 Origin = TestOrigin.ReflectionOnly
                 Labels = []; Framework = TestFramework.Expecto
                 Category = TestCategory.Unit }
@@ -1483,6 +1491,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
         Activation = LiveTestingActivation.Active
         DiscoveredTests = [|
           { TestCase.Id = tid; FullName = "ns.test1"; DisplayName = "test1"
+            NamePath = []
             Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
             Category = TestCategory.Unit }
         |]
@@ -1518,6 +1527,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
         Activation = LiveTestingActivation.Active
         DiscoveredTests = [|
           { TestCase.Id = tid; FullName = "ns.test2"; DisplayName = "test2"
+            NamePath = []
             Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
             Category = TestCategory.Unit }
         |]

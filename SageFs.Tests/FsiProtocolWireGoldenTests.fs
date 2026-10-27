@@ -81,6 +81,12 @@ type private Sampler() =
 
   member _.Visited = visited
 
+  /// Each variant starts at a different point in the length cycle. The cycle's zero slot
+  /// can otherwise lock a rare list (like DetourReport.Refusals) to empty in every variant
+  /// of one top-level case, so the cases inside it are never sampled and the coverage
+  /// promise below fails no matter how many samples are built.
+  member _.ShiftListCycle() = listCounter <- listCounter + 1
+
   member this.Sample(depth: int, t: Type) : obj =
     if t = typeof<string> then
       textCounter <- textCounter + 1
@@ -177,6 +183,7 @@ let private build () : Sampler * Sample list =
   let sampleCase (topLevel: Type) (case: UnionCaseInfo) (make: string -> obj -> Sample) : Sample list =
     let reach = unionsReachableFrom (case.GetFields() |> Array.map (fun field -> field.PropertyType) |> List.ofArray)
     let rec loop (variant: int) (acc: Sample list) =
+      sampler.ShiftListCycle()
       let value = sampler.OfCase(0, topLevel, case)
       let acc = make (sprintf "%s.%s#%d" topLevel.Name case.Name variant) value :: acc
       match variant + 1 >= mostSamples || (variant + 1 >= fewestSamples && List.forall isCovered reach) with

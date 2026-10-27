@@ -39,6 +39,7 @@ let hostSourceNames =
     "MemberEvaluation.fs"
     "TestProviderTypes.fs"
     "LiveTestingTypes.fs"
+    "LiveTestingRequests.fs"
     "CoverageProbes.fs"
     "LiveTestingInstrumentation.fs"
     "ReflectionDiscovery.fs"

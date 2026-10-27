@@ -155,6 +155,7 @@ module TestDebugSim =
     { Id = TestId.create "sim.test" TestFramework.Expecto
       FullName = "sim.test"
       DisplayName = "sim.test"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly
       Labels = []
       Framework = TestFramework.Expecto

@@ -135,6 +135,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
     test "TestsDiscovered updates DiscoveredTests" {
       let tc : TestCase =
         { Id = mkTestId "myTest" TestFramework.Expecto; DisplayName = "myTest"
+          NamePath = []
           FullName = "MyModule.myTest"; Framework = TestFramework.Expecto
           Origin = TestOrigin.ReflectionOnly; Labels = []
           Category = TestCategory.Unit }
@@ -248,11 +249,11 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
 let stalenessTests = testList "Staleness" [
   let test1 =
     { Id = TestId.create "Module.Tests.test1" TestFramework.Expecto; FullName = "Module.Tests.test1"
-      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test1"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let test2 =
     { Id = TestId.create "Module.Tests.test2" TestFramework.Expecto; FullName = "Module.Tests.test2"
-      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test2"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let mkResult tid res =
     { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow; Output = None }
@@ -372,6 +373,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { Id = TestId.create "T.t1" TestFramework.Expecto
         FullName = "T.t1"
         DisplayName = "t1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly
         Labels = []
         Framework = TestFramework.Expecto
@@ -441,6 +443,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { Id = TestId.create "T.t1" TestFramework.Expecto
         FullName = "T.t1"
         DisplayName = "t1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly
         Labels = []
         Framework = TestFramework.Expecto
@@ -468,6 +471,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { Id = TestId.create "T.t1" TestFramework.Expecto
         FullName = "T.t1"
         DisplayName = "t1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly
         Labels = []
         Framework = TestFramework.Expecto
@@ -509,6 +513,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { Id = TestId.create "T.t1" TestFramework.Expecto
         FullName = "T.t1"
         DisplayName = "t1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly
         Labels = []
         Framework = TestFramework.Expecto
@@ -1010,6 +1015,7 @@ let adaptiveDebounceWiringTests = testList "adaptive debounce wiring" [
 let mkSourceMappedTestCase name fw =
   { Id = TestId.create name fw
     FullName = name; DisplayName = name
+    NamePath = []
     Origin = TestOrigin.SourceMapped ("Foo.fs", 10)
     Labels = []; Framework = fw; Category = TestCategory.Unit }
 
@@ -1392,6 +1398,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let tests = [|
       { Id = TestId.create "t1" (TestFramework.Unknown "test1")
         FullName = "M.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -1409,6 +1416,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let tid = TestId.create "t1" (TestFramework.Unknown "test1")
     let tests = [|
       { Id = tid; FullName = "M.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -1430,6 +1438,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let tests = [|
       { Id = TestId.create "t1" (TestFramework.Unknown "test1")
         FullName = "M.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -1448,6 +1457,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let tid = TestId.create "t1" (TestFramework.Unknown "test1")
     let tests = [|
       { Id = tid; FullName = "M.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -1466,6 +1476,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let tests = [|
       { Id = TestId.create "t1" (TestFramework.Unknown "test1")
         FullName = "M.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -1485,9 +1496,11 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let tid2 = TestId.create "t2" (TestFramework.Unknown "test2")
     let tests = [|
       { Id = tid1; FullName = "M.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       { Id = tid2; FullName = "M.test2"; DisplayName = "test2"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 10)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]

@@ -126,6 +126,7 @@
         <EmbeddedResource Include="Features\MemberEvaluation.fs" LogicalName="FsiHost/MemberEvaluation.fs" />
         <EmbeddedResource Include="TestProviderTypes.fs" LogicalName="FsiHost/TestProviderTypes.fs" />
         <EmbeddedResource Include="Features\LiveTestingTypes.fs" LogicalName="FsiHost/LiveTestingTypes.fs" />
+        <EmbeddedResource Include="Features\LiveTestingRequests.fs" LogicalName="FsiHost/LiveTestingRequests.fs" />
         <EmbeddedResource Include="Features\CoverageProbes.fs" LogicalName="FsiHost/CoverageProbes.fs" />
         <EmbeddedResource Include="Features\LiveTestingInstrumentation.fs" LogicalName="FsiHost/LiveTestingInstrumentation.fs" />
         <EmbeddedResource Include="Features\ReflectionDiscovery.fs" LogicalName="FsiHost/ReflectionDiscovery.fs" />
@@ -229,6 +230,10 @@
         <Compile Include="ErrorMessages.fs" />
         <Compile Include="WorkflowErrorContext.fs" />
         <Compile Include="Features\LiveTestingTypes.fs" />
+        <!-- Debounce, the test-cycle requests and TestCycleEffect, split out of
+             LiveTestingTypes.fs: the god-file budget asks for a split before it
+             absorbs anything new. -->
+        <Compile Include="Features\LiveTestingRequests.fs" />
         <Compile Include="Features\BuildConfirmation.fs" />
         <Compile Include="Features\LiveCheckPump.fs" />
         <Compile Include="Features\LiveTestingCycle.fs" />

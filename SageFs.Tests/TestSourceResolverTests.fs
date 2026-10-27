@@ -12,6 +12,7 @@ let private makeTest (fullName: string) (origin: TestOrigin) : TestCase = {
   Id          = TestId.create fullName TestFramework.Expecto
   FullName    = fullName
   DisplayName = fullName
+  NamePath    = []
   Origin      = origin
   Labels      = []
   Framework   = TestFramework.Expecto

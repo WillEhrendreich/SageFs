@@ -12,6 +12,7 @@ let sampleTestCase id fullName displayName =
   { Id = TestId.TestId id
     FullName = fullName
     DisplayName = displayName
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto

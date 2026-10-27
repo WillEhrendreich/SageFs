@@ -180,6 +180,7 @@ let workerProtocolTests =
           { Id = TestId.TestId "abc123"
             FullName = "MyModule.myTest"
             DisplayName = "myTest"
+            NamePath = []
             Origin = TestOrigin.ReflectionOnly
             Labels = []
             Framework = TestFramework.Expecto
@@ -639,6 +640,7 @@ let workerProtocolTests =
       let sampleTc: SageFs.Features.LiveTesting.TestCase =
         { Id = TestId.TestId "abc123"
           FullName = "M.t"; DisplayName = "t"
+          NamePath = []
           Origin = TestOrigin.ReflectionOnly; Labels = []
           Framework = TestFramework.Expecto; Category = TestCategory.Unit }
 

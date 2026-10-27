@@ -608,10 +608,12 @@ let findAffectedTestsTests = testList "LiveTestingHook.findAffectedTests" [
     let tests = [|
       { Id = TestId.create "Mod.test1" TestFramework.Expecto
         FullName = "Mod.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       { Id = TestId.create "Mod.test2" TestFramework.Expecto
         FullName = "Mod.test2"; DisplayName = "test2"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -625,10 +627,12 @@ let findAffectedTestsTests = testList "LiveTestingHook.findAffectedTests" [
     let tests = [|
       { Id = TestId.create "MyModule.test1" TestFramework.Expecto
         FullName = "MyModule.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       { Id = TestId.create "OtherModule.test2" TestFramework.Expecto
         FullName = "OtherModule.test2"; DisplayName = "test2"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -642,6 +646,7 @@ let findAffectedTestsTests = testList "LiveTestingHook.findAffectedTests" [
     let tests = [|
       { Id = TestId.create "MyModule.test1" TestFramework.Expecto
         FullName = "MyModule.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]

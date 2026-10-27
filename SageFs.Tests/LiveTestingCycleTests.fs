@@ -109,15 +109,15 @@ let TestCycleTimingExtendedTests = testList "TestCycleTiming extended" [
 let orchestratorTests = testList "TestCycleOrchestrator" [
   let test1 =
     { Id = TestId.create "Module.Tests.test1" TestFramework.Expecto; FullName = "Module.Tests.test1"
-      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test1"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let test2 =
     { Id = TestId.create "Module.Tests.test2" TestFramework.Expecto; FullName = "Module.Tests.test2"
-      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test2"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let intTest =
     { Id = TestId.create "Module.Tests.intTest" TestFramework.Expecto; FullName = "Module.Tests.intTest"
-      DisplayName = "intTest"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "intTest"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Integration }
   let depGraph = {
     SymbolToTests = Map.ofList [
@@ -264,11 +264,11 @@ let cycleStatusBarTests = testList "cycle Status Bar" [
 let statusEntryTests = testList "StatusEntry Computation" [
   let test1 =
     { Id = TestId.create "Module.Tests.test1" TestFramework.Expecto; FullName = "Module.Tests.test1"
-      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test1"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let test2 =
     { Id = TestId.create "Module.Tests.test2" TestFramework.Expecto; FullName = "Module.Tests.test2"
-      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      DisplayName = "test2"; NamePath = []; Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
   let mkResult tid res =
     { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow; Output = None }
@@ -653,6 +653,7 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
 
   test "afterTypeCheck with affected tests on keystroke skips rebuild and runs narrowed tests" {
     let tc1 = { Id = TestId.create "test1" TestFramework.XUnit; FullName = "test1"; DisplayName = "test1"
+                NamePath = []
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.XUnit
                 Category = TestCategory.Unit }
     let state = { LiveTestState.empty with DiscoveredTests = [| tc1 |]; Activation = LiveTestingActivation.Active }
@@ -684,6 +685,7 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
 
   test "afterTypeCheck when Running returns None (prevents concurrent test runs)" {
     let tc1 = { Id = TestId.create "test1" TestFramework.XUnit; FullName = "test1"; DisplayName = "test1"
+                NamePath = []
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.XUnit
                 Category = TestCategory.Unit }
     let gen = RunGeneration.RunGeneration 1
@@ -703,6 +705,7 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
 
   test "afterTypeCheck when RunningButEdited returns None (re-trigger handled by completion)" {
     let tc1 = { Id = TestId.create "test1" TestFramework.XUnit; FullName = "test1"; DisplayName = "test1"
+                NamePath = []
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.XUnit
                 Category = TestCategory.Unit }
     let gen = RunGeneration.RunGeneration 1
@@ -722,9 +725,11 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
 
   test "afterTypeCheck filters integration tests on keystroke" {
     let tc1 = { Id = TestId.create "unit1" TestFramework.XUnit; FullName = "unit1"; DisplayName = "unit1"
+                NamePath = []
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.XUnit
                 Category = TestCategory.Unit }
     let tc2 = { Id = TestId.create "integ1" TestFramework.XUnit; FullName = "integ1"; DisplayName = "integ1"
+                NamePath = []
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.XUnit
                 Category = TestCategory.Integration }
     let state = {
@@ -1388,6 +1393,7 @@ let cycleBenchmarkTests = testSequenced <| testList "[Benchmark] cycle Core Benc
     let makeTestCase i =
       { Id = TestId.create (sprintf "Module.Tests.test%d" i) TestFramework.Expecto
         FullName = sprintf "Module.Tests.test%d" i; DisplayName = sprintf "test%d" i
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", i + 1); Labels = []; Framework = TestFramework.Expecto
         Category = if i % 10 = 0 then TestCategory.Integration else TestCategory.Unit }
     let tests = Array.init 200 makeTestCase
@@ -1426,6 +1432,7 @@ let cycleBenchmarkTests = testSequenced <| testList "[Benchmark] cycle Core Benc
     let makeTestCase i =
       { Id = TestId.create (sprintf "M.T.t%d" i) TestFramework.Expecto
         FullName = sprintf "M.T.t%d" i; DisplayName = sprintf "t%d" i
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", i + 1); Labels = []; Framework = TestFramework.Expecto
         Category = TestCategory.Unit }
     let tests = Array.init 1000 makeTestCase
@@ -1469,6 +1476,7 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
     let tid = TestId.TestId "MyModule.myTest should work"
     let testCase = {
       TestCase.Id = tid; DisplayName = "myTest should work"; FullName = "MyModule.myTest should work"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit
     }
     let model0 = (SageFsModel.initial())
@@ -1519,8 +1527,8 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
     // the routing helper's bootstrap fallback for a never-switched-to session.
     let tid1 = TestId.TestId "test.in.session1"
     let tid2 = TestId.TestId "test.in.session2"
-    let tc1 = { TestCase.Id = tid1; FullName = "test.in.session1"; DisplayName = "t1"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
-    let tc2 = { TestCase.Id = tid2; FullName = "test.in.session2"; DisplayName = "t2"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
+    let tc1 = { TestCase.Id = tid1; FullName = "test.in.session1"; DisplayName = "t1"; NamePath = []; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
+    let tc2 = { TestCase.Id = tid2; FullName = "test.in.session2"; DisplayName = "t2"; NamePath = []; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     let s1 = SageFs.WorkerProtocol.SessionId.newId()
     let s2 = SageFs.WorkerProtocol.SessionId.newId()
     let s1Str = SageFs.WorkerProtocol.SessionId.value s1

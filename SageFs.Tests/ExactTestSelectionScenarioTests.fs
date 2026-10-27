@@ -9,6 +9,7 @@ let private mkTestCase fullName displayName category =
   { Id = TestId.TestId fullName
     FullName = fullName
     DisplayName = displayName
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto

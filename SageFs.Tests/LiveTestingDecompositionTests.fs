@@ -48,6 +48,7 @@ let private mkTestId name fw = TestId.create name fw
 let private mkTestCase name fw =
   { Id = TestId.create name fw
     FullName = name; DisplayName = name
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []; Framework = fw; Category = TestCategory.Unit }
 
@@ -484,6 +485,7 @@ module LiveTestStateSubRecordTests =
   let private mkTestCase' name =
     { Id = TestId.create name TestFramework.Expecto
       FullName = name; DisplayName = name
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly
       Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
 

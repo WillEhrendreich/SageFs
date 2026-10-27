@@ -31,6 +31,7 @@ let private mkTest (name: string) (category: TestCategory) : TestCase =
   { Id = TestId.create name TestFramework.Expecto
     FullName = name
     DisplayName = name
+    NamePath = []
     Origin = TestOrigin.SourceMapped ("Tests.fs", 10)
     Labels = []
     Framework = TestFramework.Expecto

@@ -11,6 +11,7 @@ open SageFs.Features.LiveTesting
 let private mkTestCase (name: string) (cat: TestCategory) : TestCase =
   { Id = TestId.TestId name
     DisplayName = name
+    NamePath = []
     FullName = sprintf "Tests.%s" name
     Origin = TestOrigin.SourceMapped ("Tests.fs", 10)
     Labels = []

@@ -8,6 +8,7 @@ let unitTest fullName =
   { Id = TestId.create fullName TestFramework.Expecto
     FullName = fullName
     DisplayName = fullName
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto

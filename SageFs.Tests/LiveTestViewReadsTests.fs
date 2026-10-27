@@ -36,6 +36,7 @@ let private mkTest (session: int) (n: int) : TestCase =
   { TestCase.Id = TestId.create name TestFramework.Expecto
     FullName = name
     DisplayName = name
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto

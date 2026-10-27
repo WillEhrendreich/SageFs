@@ -19,6 +19,7 @@ let private sampleTestCase (id: string) =
   { Id = TestId.TestId id
     FullName = sprintf "SageFs.Tests.Fake.``sample %s``" id
     DisplayName = "sample " + id
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto

@@ -737,10 +737,12 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
       DiscoveredTests = [|
         { Id = TestId.create "Test.add" TestFramework.Expecto
           FullName = "Test.add"; DisplayName = "add"
+          NamePath = []
           Origin = TestOrigin.SourceMapped ("test.fs", 10)
           Labels = ["fast"]; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
         { Id = TestId.create "Test.validate" TestFramework.XUnit
           FullName = "Test.validate"; DisplayName = "validate"
+          NamePath = []
           Origin = TestOrigin.ReflectionOnly
           Labels = []; Framework = TestFramework.XUnit; Category = TestCategory.Integration }
       |]
@@ -765,6 +767,7 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
       DiscoveredTests = [|
         { Id = TestId.create "Mod.test1" TestFramework.Expecto
           FullName = "Mod.test1"; DisplayName = "test1"
+          NamePath = []
           Origin = TestOrigin.SourceMapped ("Mod.fs", 5)
           Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       |]

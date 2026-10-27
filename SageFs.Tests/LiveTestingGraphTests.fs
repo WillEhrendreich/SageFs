@@ -131,12 +131,15 @@ let policyFilterTests = testList "PolicyFilter" [
     ]
     let tests = [|
       { Id = TestId.create "unit1" TestFramework.XUnit; FullName = "unit1"; DisplayName = "unit1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.XUnit
         Category = TestCategory.Unit }
       { Id = TestId.create "int1" TestFramework.XUnit; FullName = "int1"; DisplayName = "int1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.XUnit
         Category = TestCategory.Integration }
       { Id = TestId.create "browser1" TestFramework.XUnit; FullName = "browser1"; DisplayName = "browser1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.XUnit
         Category = TestCategory.Browser }
     |]
@@ -998,6 +1001,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
     let tid = TestId.create "Tests.affected_by_add" TestFramework.Expecto
     let testCase = {
       Id = tid; FullName = "Tests.affected_by_add"; DisplayName = "affected_by_add"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; Labels = [] }
     let graph = {
@@ -1023,6 +1027,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
     let tid = TestId.create "Tests.t1" TestFramework.Expecto
     let testCase = {
       Id = tid; FullName = "Tests.t1"; DisplayName = "t1"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; Labels = [] }
     let pipeState = {
@@ -1044,6 +1049,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
     let tid = TestId.create "Tests.fallback" TestFramework.Expecto
     let testCase = {
       Id = tid; FullName = "Tests.fallback"; DisplayName = "fallback"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; Labels = [] }
     let pipeState = {
@@ -1068,6 +1074,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
     let tid = TestId.create "Tests.disabled" TestFramework.Expecto
     let testCase = {
       Id = tid; FullName = "Tests.disabled"; DisplayName = "disabled"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; Labels = [] }
     let graph = {
@@ -1086,6 +1093,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
     let tid = TestId.create "Tests.no_change" TestFramework.Expecto
     let testCase = {
       Id = tid; FullName = "Tests.no_change"; DisplayName = "no_change"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; Labels = [] }
     let graph = {
@@ -1111,6 +1119,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
     let tid = TestId.create "Tests.optimistic_run" TestFramework.Expecto
     let tests = [|
       { Id = tid; FullName = "Tests.optimistic_run"; DisplayName = "optimistic_run"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -1134,9 +1143,11 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
     let tidB = TestId.create "Tests.unaffected" TestFramework.Expecto
     let tests = [|
       { Id = tidA; FullName = "Tests.affected"; DisplayName = "affected"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       { Id = tidB; FullName = "Tests.unaffected"; DisplayName = "unaffected"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 10)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -1159,6 +1170,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
     let tid = TestId.create "Tests.prev_passed" TestFramework.Expecto
     let tests = [|
       { Id = tid; FullName = "Tests.prev_passed"; DisplayName = "prev_passed"
+        NamePath = []
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
@@ -1194,6 +1206,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
     let tid = TestId.create "Tests.sync_dispatch" TestFramework.Expecto
     let tests = [|
       { Id = tid; FullName = "Tests.sync_dispatch"; DisplayName = "sync_dispatch"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
         Category = TestCategory.Unit; Labels = [] }
     |]
@@ -1217,6 +1230,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let tid = TestId.create "Tests.round_trip" TestFramework.Expecto
     let testCase = {
       Id = tid; FullName = "Tests.round_trip"; DisplayName = "round_trip"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; Labels = [] }
     let dur = roundTripDuration
@@ -1250,6 +1264,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
     let tid = TestId.create "Tests.stale_edit" TestFramework.Expecto
     let testCase = {
       Id = tid; FullName = "Tests.stale_edit"; DisplayName = "stale_edit"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; Labels = [] }
     let phase, gen = TestRunPhase.startRun RunGeneration.zero
@@ -1376,12 +1391,14 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
     let addTestCase = {
       Id = TestId.create "MyApp.Tests.addTest" (TestFramework.Unknown "fcs")
       FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"
+      NamePath = []
       Origin = TestOrigin.SourceMapped ("test.fsx", 5)
       Labels = []; Framework = TestFramework.Unknown "fcs"; Category = TestCategory.Unit
     }
     let otherTestCase = {
       Id = TestId.create "MyApp.Tests.otherTest" (TestFramework.Unknown "fcs")
       FullName = "MyApp.Tests.otherTest"; DisplayName = "otherTest"
+      NamePath = []
       Origin = TestOrigin.SourceMapped ("test.fsx", 8)
       Labels = []; Framework = TestFramework.Unknown "fcs"; Category = TestCategory.Unit
     }
@@ -1604,6 +1621,7 @@ let mergeDiscoveredTestsTests = testList "LiveTesting.mergeDiscoveredTests" [
   test "empty incoming preserves existing tests" {
     let existing = [|
       { Id = TestId.create "test1" TestFramework.Expecto; FullName = "test1"; DisplayName = "t1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
         Category = TestCategory.Unit } |]
     let result = LiveTesting.mergeDiscoveredTests existing [||]
@@ -1613,6 +1631,7 @@ let mergeDiscoveredTestsTests = testList "LiveTesting.mergeDiscoveredTests" [
   test "empty existing uses incoming" {
     let incoming = [|
       { Id = TestId.create "test1" TestFramework.Expecto; FullName = "test1"; DisplayName = "t1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
         Category = TestCategory.Unit } |]
     let result = LiveTesting.mergeDiscoveredTests [||] incoming
@@ -1622,10 +1641,12 @@ let mergeDiscoveredTestsTests = testList "LiveTesting.mergeDiscoveredTests" [
   test "incoming overrides existing with same TestId" {
     let existing = [|
       { Id = TestId.create "test1" TestFramework.Expecto; FullName = "test1"; DisplayName = "old"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
         Category = TestCategory.Unit } |]
     let incoming = [|
       { Id = TestId.create "test1" TestFramework.Expecto; FullName = "test1"; DisplayName = "new"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
         Category = TestCategory.Unit } |]
     let result = LiveTesting.mergeDiscoveredTests existing incoming
@@ -1636,10 +1657,12 @@ let mergeDiscoveredTestsTests = testList "LiveTesting.mergeDiscoveredTests" [
   test "disjoint tests are unioned" {
     let existing = [|
       { Id = TestId.create "test1" TestFramework.Expecto; FullName = "test1"; DisplayName = "t1"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
         Category = TestCategory.Unit } |]
     let incoming = [|
       { Id = TestId.create "test2" TestFramework.Expecto; FullName = "test2"; DisplayName = "t2"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
         Category = TestCategory.Unit } |]
     let result = LiveTesting.mergeDiscoveredTests existing incoming
@@ -1650,10 +1673,10 @@ let mergeDiscoveredTestsTests = testList "LiveTesting.mergeDiscoveredTests" [
     // Simulates: first eval discovers 3454 tests, second eval discovers 0 from FSI
     let projectTests = [|
       { Id = TestId.create "proj.test1" TestFramework.Expecto; FullName = "proj.test1"
-        DisplayName = "t1"; Origin = TestOrigin.ReflectionOnly; Labels = []
+        DisplayName = "t1"; NamePath = []; Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       { Id = TestId.create "proj.test2" TestFramework.Expecto; FullName = "proj.test2"
-        DisplayName = "t2"; Origin = TestOrigin.ReflectionOnly; Labels = []
+        DisplayName = "t2"; NamePath = []; Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = TestFramework.Expecto; Category = TestCategory.Unit } |]
     let afterFirstEval = LiveTesting.mergeDiscoveredTests [||] projectTests
     // Second eval: FSI dynamic assembly has no tests
@@ -1676,18 +1699,21 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
   let tc1 = {
     Id = TestId.create "ns.t1" TestFramework.Expecto
     FullName = "ns.t1"; DisplayName = "t1"
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit
   }
   let tc2 = {
     Id = TestId.create "ns.t2" TestFramework.Expecto
     FullName = "ns.t2"; DisplayName = "t2"
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Integration
   }
   let tc3 = {
     Id = TestId.create "ns.t3" TestFramework.Expecto
     FullName = "ns.t3"; DisplayName = "t3"
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit
   }
@@ -1755,6 +1781,7 @@ let findAffectedTestsFixTests =
   let mkTC id name fw =
     { Id = TestId.create name fw; FullName = name
       DisplayName = name.Split('.').[name.Split('.').Length - 1]
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = fw
       Category = TestCategory.Unit }
   let sampleTests = [|
@@ -1804,6 +1831,7 @@ let findAffectedTestsQualifiedNameBoundaryTests =
   let mkTC id name fw =
     { Id = TestId.create name fw; FullName = name
       DisplayName = name.Split('.').[name.Split('.').Length - 1]
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = fw
       Category = TestCategory.Unit }
   testList "findAffectedTests qualified-name boundaries" [
@@ -1860,6 +1888,7 @@ let findAllTestIdsTests =
   let mkTC id name fw =
     { Id = TestId.create name fw; FullName = name
       DisplayName = name.Split('.').[name.Split('.').Length - 1]
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = fw
       Category = TestCategory.Unit }
   let sampleTests = [|
@@ -1884,6 +1913,7 @@ let filterTestsForExplicitRunTests =
   let mkTC id name fw =
     { Id = TestId.create name fw; FullName = name
       DisplayName = name.Split('.').[name.Split('.').Length - 1]
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = fw
       Category = TestCategory.Unit }
   let sampleTests = [|

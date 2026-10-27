@@ -57,6 +57,7 @@ let mkLiveTestCase
     Id = TestId.TestId id
     FullName = fullName
     DisplayName = displayName
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto
@@ -1873,6 +1874,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       { Id = TestId.create name TestFramework.Expecto
         FullName = name
         DisplayName = name
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly
         Labels = []
         Framework = TestFramework.Expecto
@@ -1922,6 +1924,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       { Id = TestId.create name TestFramework.Expecto
         FullName = name
         DisplayName = name
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly
         Labels = []
         Framework = TestFramework.Expecto
@@ -2054,6 +2057,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let tc : Features.LiveTesting.TestCase =
       { Id = Features.LiveTesting.TestId.create "MyModule.test1" TestFramework.Expecto
         FullName = "MyModule.test1"; DisplayName = "test1"
+        NamePath = []
         Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
         Labels = []; Framework = TestFramework.Expecto
         Category = Features.LiveTesting.TestCategory.Unit }

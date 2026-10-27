@@ -117,6 +117,7 @@ let tests =
         Id = tid
         FullName = "MyModule.myTest"
         DisplayName = "my test"
+        NamePath = []
         Origin = TestOrigin.ReflectionOnly
         Labels = []
         Framework = TestFramework.Expecto

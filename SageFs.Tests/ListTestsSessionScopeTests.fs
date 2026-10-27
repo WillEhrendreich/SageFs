@@ -32,6 +32,7 @@ let private mkSnap (id: WorkerProtocol.SessionId) (dir: string) : SessionSnapsho
 let private mkTest (name: string) (origin: TestOrigin) : TestCase =
   { TestCase.Id = TestId.create name TestFramework.Expecto
     FullName = name; DisplayName = name
+    NamePath = []
     Origin = origin; Labels = []; Framework = TestFramework.Expecto
     Category = TestCategory.Unit }
 

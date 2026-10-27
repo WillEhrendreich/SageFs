@@ -17,6 +17,7 @@ let mkLiveTestCase
     Id = TestId.create fullName TestFramework.Expecto
     FullName = fullName
     DisplayName = displayName
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto
@@ -655,6 +656,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       Id = TestId.create "t" (TestFramework.Unknown "f")
       FullName = "t"
       DisplayName = "t"
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly
       Labels = []
       Framework = TestFramework.XUnit

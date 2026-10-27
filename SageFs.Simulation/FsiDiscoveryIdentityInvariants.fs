@@ -130,6 +130,7 @@ module FsiDiscoveryIdentityInvariants =
     { Id = TestId.create fullName TestFramework.Expecto
       FullName = fullName
       DisplayName = methodName
+      NamePath = []
       Origin = TestOrigin.ReflectionOnly
       Labels = []
       Framework = TestFramework.Expecto

@@ -89,6 +89,7 @@ let private testCase' : Features.LiveTesting.TestCase = {
   Id = Features.LiveTesting.TestId.TestId "t-rebuild-wait"
   FullName = "Sample.Tests.rebuild wait"
   DisplayName = "rebuild wait"
+  NamePath = []
   Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
   Labels = []
   Framework = Features.LiveTesting.TestFramework.Expecto

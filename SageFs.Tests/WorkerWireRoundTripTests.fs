@@ -24,6 +24,7 @@ let sampleTest (name: string) : TestCase =
   { Id = TestId.create name TestFramework.Expecto
     FullName = name
     DisplayName = name
+    NamePath = []
     Origin = TestOrigin.ReflectionOnly
     Labels = []
     Framework = TestFramework.Expecto
