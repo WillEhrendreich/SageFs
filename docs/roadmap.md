@@ -11,7 +11,7 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 6, Later 18, Exploring 20. Already built: 41.
+On the page today: Now 0, Next 6, Later 19, Exploring 20. Already built: 41.
 
 ## Next (6)
 
@@ -35,7 +35,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 - [ ] **More settings editable from the dashboard.** The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime. ([configuration.md](configuration.md), [more-settings-editable.md](plans/more-settings-editable.md))
 - [ ] **Dashboard panels that follow your context.** A panel that is not relevant right now says why, in one line where the panel would have been: hot reload, live testing, cohort and friction each leave the reason behind, so a user can tell the dashboard having nothing to say from the dashboard hiding something. The cohort panel shows only while a cohort is running. The live bindings fold away and open again with one click, and the pin opens the pane when there are no bindings yet. What is not built is the live bindings becoming a real pane in REPL mode, and a pane moving between regions. ([dashboard-follows-context.md](plans/dashboard-follows-context.md))
 
-## Later (18)
+## Later (19)
 
 _I want it and I roughly know how. Months to a year, and the order will move._
 
@@ -71,6 +71,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 
 - [ ] **Hot reload checked on Windows and macOS.** My CI is Linux only, so the hot reload detour has no passing evidence on Windows, macOS or arm64, and the docs say so. The one data point so far is bad: on an Apple Silicon Mac the five real-detour tests for generic functions fail, and I don't know why (issue #149). Until someone with a Mac captures the failures, hot reload on macOS is unproven. ([how-hot-reload-works.md](how-hot-reload-works.md), [Readme.md](../Readme.md), [hot-reload-on-windows-and-macos.md](plans/hot-reload-on-windows-and-macos.md))
 - [ ] **Start on login for Windows.** Linux gets a systemd user unit and macOS a launchd agent, and each starts the daemon for you. Nothing starts it at login on Windows yet. ([progress.md](progress.md), [Readme.md](../Readme.md), [start-on-login-windows.md](plans/start-on-login-windows.md))
+- [ ] **A .NET Framework host for Framework projects.** SageFs refuses a project whose only target is .NET Framework, because its FSI host is a modern .NET process that cannot load Framework assemblies. The host is already built by the project's own SDK behind a process boundary, so a Framework variant is another build of an existing artifact. It would run on Windows only. I want the session to run on the Framework CLR, since driving fsianycpu.exe gives a bare REPL with no hot reload, live testing or coverage. Requested in issue #135. ([ecosystem-compatibility.md](ecosystem-compatibility.md), [how-isolation-works.md](how-isolation-works.md), [dotnet-framework-host.md](plans/dotnet-framework-host.md))
 - [ ] **The getter sandbox beyond Linux x86-64.** Clicking a getter in the live-bindings pane runs it under a syscall filter that stops network use and file writes, on Linux x86-64 only. Elsewhere the getter runs under its deadline alone, and the pane says so. ([decisions.md](decisions.md), [getter-sandbox-beyond-linux.md](plans/getter-sandbox-beyond-linux.md))
 - [ ] **A token for every daemon call.** The daemon binds loopback only and checks Origin so a web page can't drive it, but nothing authenticates a local caller. A minted token the daemon requires would, and it's the same handle agents need for their own identity. ([mcp-tools.md](mcp-tools.md), [a-token-for-every-daemon-call.md](plans/a-token-for-every-daemon-call.md))
 - [ ] **Admit heavy work by measured cost.** Heavy work already takes a lease, and the daemon sheds under memory pressure with a retry hint. It doesn't yet know what a rebuild of your project usually costs, so it reacts instead of predicting. I'd record peak memory and duration per kind of work and admit against the headroom. ([admit-heavy-work-by-measured-cost.md](plans/admit-heavy-work-by-measured-cost.md))

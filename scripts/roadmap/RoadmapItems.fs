@@ -252,6 +252,11 @@ let items : Item list =
       [ "docs/progress.md"; "Readme.md"; "docs/plans/start-on-login-windows.md" ]
       "Linux gets a systemd user unit and macOS a launchd agent, and each starts the daemon for you. Nothing starts it at login on Windows yet."
 
+    item "dotnet-framework-host" "A .NET Framework host for Framework projects" Platform Later
+      NoLandmarkYet
+      [ "docs/ecosystem-compatibility.md"; "docs/how-isolation-works.md"; "docs/plans/dotnet-framework-host.md" ]
+      "SageFs refuses a project whose only target is .NET Framework, because its FSI host is a modern .NET process that cannot load Framework assemblies. The host is already built by the project's own SDK behind a process boundary, so a Framework variant is another build of an existing artifact. It would run on Windows only. I want the session to run on the Framework CLR, since driving fsianycpu.exe gives a bare REPL with no hot reload, live testing or coverage. Requested in issue #135."
+
     item "start-on-login-macos" "The daemon starts at login on macOS" Platform Later
       (landmark "contrib/launchd/io.github.willehrendreich.sagefs.plist" "io.github.willehrendreich.sagefs")
       [ "Readme.md" ]
