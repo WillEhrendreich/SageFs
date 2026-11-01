@@ -99,6 +99,36 @@ await check("Set Run Policy makes its session the active one first", async () =>
   assert.equal(seen[1].body.category, "Unit");
 });
 
+// WHY (#173): with no daemon running, the sessions tree polls on a timer and every failed poll wrote
+// "[warn] listSessions: AggregateError" to the output channel, so a person who had just installed the
+// extension saw a wall of identical lines. A daemon that is down is reported once; the next report is
+// for the next outage, after the daemon has answered again.
+const deadServer = http.createServer();
+await new Promise((resolve) => deadServer.listen(0, resolve));
+const deadPort = deadServer.address().port;
+await new Promise((resolve) => deadServer.close(resolve));
+
+await check("a daemon that is down is reported once, not on every poll (#173)", async () => {
+  const lines = [];
+  const down = Client.create(deadPort, deadPort + 1, (line) => lines.push(line));
+  for (let poll = 0; poll < 5; poll++) await Client.listSessions(down);
+  const warnings = lines.filter((line) => line.includes("listSessions"));
+  assert.equal(warnings.length, 1, `five polls, ${warnings.length} warnings: ${warnings.join(" | ")}`);
+});
+
+await check("a second outage after the daemon answered is reported again", async () => {
+  const lines = [];
+  const flaky = Client.create(deadPort, deadPort + 1, (line) => lines.push(line));
+  await Client.getRaw("probe", "/x", 1000, flaky);
+  await Client.getRaw("probe", "/x", 1000, flaky);
+  flaky.mcpPort = port;
+  await Client.getRaw("probe", "/x", 1000, flaky);
+  flaky.mcpPort = deadPort;
+  await Client.getRaw("probe", "/x", 1000, flaky);
+  const warnings = lines.filter((line) => line.includes("[warn] probe"));
+  assert.equal(warnings.length, 2, `two outages, ${warnings.length} warnings: ${lines.join(" | ")}`);
+});
+
 server.close();
 if (failures > 0) {
   console.log(`${failures} failed`);

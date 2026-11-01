@@ -210,16 +210,36 @@ let postCommand (c: Client) (path: string) (body: string) (timeout: int) : JS.Pr
 
 // ── HTTP helpers (compress repeated GET/POST patterns) ───────────────────
 
+/// The contexts whose last call failed. A daemon that is down fails every poll the same way, and the
+/// output channel gets one line for the outage and not one per poll (#173). A context's next line is
+/// for its next outage, after a call to it has gone through.
+let failing = System.Collections.Generic.HashSet<string>()
+
+/// Write the warning for a failed call, unless this context is already reported as failing.
+let noteFailure (c: Client) (ctx: string) (ex: exn) =
+  match failing.Add ctx with
+  | true -> c.log (sprintf "[warn] %s: %O" ctx ex)
+  | false -> ()
+
+/// A call to this context went through, so its next failure is a new outage and gets a line.
+let noteSuccess (ctx: string) =
+  failing.Remove ctx |> ignore
+
 /// GET from MCP port, parse JSON on 200, None otherwise.
 let getJson<'a> (ctx: string) (path: string) (timeout: int) (parse: obj -> 'a) (c: Client) : JS.Promise<'a option> =
   promise {
     try
       let! resp = httpGet c path timeout
       match resp.statusCode with
-      | 200 -> return jsonParse resp.body |> parse |> Some
-      | _ -> return None
+      | 200 ->
+        let parsed = jsonParse resp.body |> parse |> Some
+        noteSuccess ctx
+        return parsed
+      | _ ->
+        noteSuccess ctx
+        return None
     with ex ->
-      c.log (sprintf "[warn] %s: %O" ctx ex)
+      noteFailure c ctx ex
       return None
   }
 
@@ -228,11 +248,12 @@ let getRaw (ctx: string) (path: string) (timeout: int) (c: Client) : JS.Promise<
   promise {
     try
       let! resp = httpGet c path timeout
+      noteSuccess ctx
       match resp.statusCode with
       | 200 -> return Some resp.body
       | _ -> return None
     with ex ->
-      c.log (sprintf "[warn] %s: %O" ctx ex)
+      noteFailure c ctx ex
       return None
   }
 
@@ -242,10 +263,15 @@ let dashGetJson<'a> (ctx: string) (path: string) (timeout: int) (parse: obj -> '
     try
       let! resp = dashHttpGet c path timeout
       match resp.statusCode with
-      | 200 -> return jsonParse resp.body |> parse |> Some
-      | _ -> return None
+      | 200 ->
+        let parsed = jsonParse resp.body |> parse |> Some
+        noteSuccess ctx
+        return parsed
+      | _ ->
+        noteSuccess ctx
+        return None
     with ex ->
-      c.log (sprintf "[warn] %s: %O" ctx ex)
+      noteFailure c ctx ex
       return None
   }
 
