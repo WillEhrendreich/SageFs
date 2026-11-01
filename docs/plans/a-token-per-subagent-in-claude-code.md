@@ -66,7 +66,7 @@ Where the token comes from is the real design question, and the answer cannot be
 
 1. By hand, for the experiment: the person runs `mint_member` once, exports the variable, starts Claude Code.
 2. From outside the model (the version that scales): a small command, `sagefs member mint --role Analysis --scope src/Foo/ --ttl 60 --print-env`, which calls a daemon HTTP route and prints `export SAGEFS_ANALYST_TOKEN=...` for a launcher script. It needs the daemon to authenticate a human or script as the conductor without the MCP connection that is the conductor today. That is the operator credential in `a-token-for-every-daemon-call`. This plan depends on that item for its second phase.
-3. From `headersHelper`: run at each connection, so at sub-agent start. If it can learn which sub-agent it is serving, it can mint a token for it and print the header, and nothing is exported and nothing is in a transcript. It needs the operator credential too, and the open question above (does it get an identity).
+3. From `headersHelper`: run at each connection, so at sub-agent start. Measured on 2026-11-01: it learns the name of the server it is serving (`CLAUDE_CODE_MCP_SERVER_NAME`), which is unique per sub-agent when the planner generates the names, and that is enough to mint or look up a token for it and print the header. Nothing is exported and nothing is in a transcript. It needs the operator credential too.
 
 Pure core, new file `SageFs.Core/SubagentTokenPlan.fs`: given a list of sub-agent definitions (name, role, scope, ttl) it produces the list of mint requests and the frontmatter snippet, so a launcher is a thin shell. Types:
 
@@ -103,9 +103,9 @@ Simulation: this item adds no new state machine in the daemon, so no DST. The si
 ## Steps
 
 1. Phase 0. Done on 2026-11-01; the results are under "Measure first, results".
-2. Who am I. `get_cohort_status` and `join_cohort` replies start with the caller's member and role (`You are cap:ecd9a0572ceebbed [Observer].`). RED first: a test that the reply names the caller, for a token member and for a plain connection. Nothing else in the plan can be verified from inside a sub-agent without it. It is a reply-text change on a wire-surface file, so first grep `sagefs.nvim` and `sagefs-vscode` for a parser of that text and carry the matching `Plugin:` trailer.
-3. Test 1 and `SubagentTokenPlan.fs` (pure), listed in `SageFs.Core/SageFs.Core.fsproj`, and the `sagefs check` warnings: an agent file that references a server by name, a run under `--strict-mcp-config`, a project-scope agent folder that may be untrusted. Owns those files and `SubagentTokenPlanTests.fs`.
-4. The fallback hook: a `PreToolUse` hook on `mcp__sagefs__.*` that denies the call when the hook input carries an `agent_id`, with a message that says the sub-agent must use its own server. First measure that a sub-agent's hook input carries `agent_id` (below). It extends `tools/agent-hooks` (a compiled program, because it runs before every call).
+2. Who am I. The `get_cohort_status` reply ends with the caller's member and role (`You are cap:ecd9a0572ceebbed [Observer].`), and `join_cohort` says it too. It goes last, never first: the nvim parser (`cohort.parse_status`) anchors on `^Cohort ledger head: v`, and it ignores an unknown line after the `Integration session:` line. RED first: a test that the reply names the caller, for a token member and for a plain connection, and a busted spec in `sagefs.nvim` that `parse_status` still reads the reply with the line present (`Plugin: done`). `sagefs-vscode` does not parse this text. Nothing else in the plan can be verified from inside a sub-agent without it.
+3. Test 1 and `SubagentTokenPlan.fs` (pure), listed in `SageFs.Core/SageFs.Core.fsproj`, and the `sagefs check` warnings: an agent file that references a server by name, a run under `--strict-mcp-config`, a `tools:` list that names an inline server's tools, and a project-scope agent whose exact folder has no `hasTrustDialogAccepted: true` entry in `~/.claude.json` (trust is not inherited from a parent folder). Owns those files and `SubagentTokenPlanTests.fs`.
+4. The fallback hook: a `PreToolUse` hook that denies a SageFs call when the input carries an `agent_id` and its `mcp_server` is not the sub-agent's own (the planner names each own server after the agent), with a message that says the sub-agent must use its own server. Both fields are measured. A deny reaches the sub-agent with its reason. It extends `tools/agent-hooks` (a compiled program, because it runs before every call).
 5. Test 3 in `CapabilityHttpIntegrationTests.fs`. File-disjoint from steps 2 to 4, can run in parallel.
 6. Docs: `docs/agents.md` section on sub-agents, `skills/sagefs/agents.md` (the brief an orchestrator gives, including "your first call is get_cohort_status; if it does not name a `cap:` member, stop"), `docs/mcp-tools.md` member-token section. Carries a `Plugin: n/a` trailer.
 7. Slice 0 of the operator credential (`a-token-for-every-daemon-call`): then the mint route, the CLI verb, the launcher and test 4. Owns `SageFs/Program.fs` (verb only), `SageFs/McpMintRoute.fs` (new), `EndpointContracts.fs` (one line).
@@ -146,11 +146,29 @@ One finding changes the design. When an inline server is dropped (1 or 2), the s
 
 One run reached the maintainer's real daemon through the inherited server: a `leave_cohort` scoped to a scratch path, refused, nothing changed. An experiment needs `--disallowedTools mcp__sagefs` to keep that from happening.
 
-Still to measure:
+### Measure first, second pass
 
-- Whether a sub-agent's `PreToolUse` hook input carries `agent_id`. The hooks page says so and the sub-agents page does not, and this run did not look. It decides step 4.
-- Whether Claude Code records folder trust somewhere `sagefs check` can read (the per-project entries in `~/.claude.json`). It decides how exact the trust warning can be.
-- `headersHelper` and token cost, as in the table above. Neither decides the item now.
+Later the same day, on throwaway daemons (default policy, and `TokenRequired` started in the repo under test and in another one), through `claude -p` and the stdio bridge. One sample each unless a row says otherwise.
+
+| Question | Result |
+|:--|:--|
+| Does a sub-agent's `PreToolUse` hook input carry `agent_id`? | Yes. A sub-agent's calls carry `agent_id` and `agent_type`. The parent's `Agent` call carries neither. MCP calls also carry `mcp_server`. So a hook can tell a sub-agent from its parent and name the server the call went to. |
+| Does a hook `deny` reach the sub-agent? | Yes, with the reason text verbatim. The sub-agent stopped and did not retry. |
+| What does `headersHelper` do on an inline sub-agent server? | It runs, and its header is used: the call was attributed to the token the helper printed. It gets no arguments and runs in `~/.claude`. Its environment has `CLAUDE_CODE_MCP_SERVER_NAME` (the server's name in the agent file), `CLAUDE_CODE_MCP_SERVER_URL` and the parent's `CLAUDE_CODE_SESSION_ID`, and no `agent_id`. A unique server name per sub-agent is enough to choose or mint that sub-agent's token. |
+| Is folder trust readable, and is it inherited? | Readable: `~/.claude.json`, `projects[<path>].hasTrustDialogAccepted`. Not inherited: an agent folder under the trusted `/home/will/Work` was still "not trusted". The doctor check looks up the exact folder. |
+| What does an inline server cost a sub-agent that does not call it? | About 300 cached tokens out of roughly 103,000 for the whole session, with the session cost inside the noise. The MCP tools stay deferred behind `ToolSearch`, so the earlier estimate of about 28,000 undeferred tokens does not apply. One run each, so indicative. |
+| Does a token survive a daemon restart? | No. After a restart the old token gets 0 tools from `tools/list`, and a call is refused with a message that names the restart. Claude Code only sees the empty list, so the sub-agent reported "NO SFX TOOL" and the message never reached the model. |
+| `TokenRequired`: does the call gate admit a token-less conductor? | Yes. `mint_member` called by name succeeded for the conductor in two repos. |
+| `TokenRequired`: does the conductor see its tools? | Conductor of a repo other than the daemon's own: 3 tools before and after joining. Conductor of the daemon's own repo: 3 tools before joining, 72 after. The list filter reads the daemon's own cohort (`cohortOwnerFor mcpCtx None` in `createToolListFilter`), not the caller's. Claude Code fetches the list once at connect, before the join, so a Claude Code conductor had 3 tools in both cases. |
+| Do servers added with `--mcp-config` reach sub-agents? | No. A sub-agent without its own server had no tool from one. Only servers from the settings are inherited, as the maintainer's own `sagefs` is. |
+
+What this changes:
+
+- `TokenRequired` cannot be the setting for an orchestrated Claude Code run today. The call gate would admit the conductor, but the conductor never sees the tools. Two defects, each a candidate issue: the list filter judges the conductor by the daemon's own repo, and a bad or stale token hides every tool, so the refusal that names the cause is never shown. Until both are fixed it stays off, and the fallback is caught by the who-am-I line, the hook and the doctor check.
+- The who-am-I line must be the last line of the `get_cohort_status` reply. The nvim parser anchors on `^Cohort ledger head: v`, so a leading line makes `:SageFsCohort` read nothing.
+- Mechanism 3 works. A launcher exporting variables is not the only way to deliver a token: a `headersHelper` can do it per sub-agent server, with nothing exported.
+
+Still not measured: how Claude Code's HTTP client behaves when the daemon restarts under a live sub-agent (issue #164's report says it stays "not connected"); whether `headersHelper` re-runs on a 401 as the MCP page says; the same wiring under Cursor or Copilot; and `updatedInput` on MCP calls, which no longer decides anything.
 
 ## Risks and dependencies
 
@@ -170,6 +188,7 @@ Proposed on 2026-11-01 after the experiment, waiting for an answer.
 1. Make `TokenRequired` the daemon's default? Recommendation: no, keep `ConnectionsAllowed` and make `TokenRequired` the documented setting for an orchestrated run.
    - The policy is daemon-wide (`SAGEFS_IDENTITY_POLICY`). In a repo where someone else is the conductor, every other token-less MCP connection, a second window for instance, would lose everything but status.
    - It does not catch the fallback (see "Measure first, results"), so flipping it buys no protection against the failure this item is about.
+   - Measured: it is unusable with Claude Code today, because the conductor never sees its tools (see "Measure first, second pass"). It stays off until the list filter and the bad-token behaviour are fixed.
    - What does catch it: the who-am-I line (step 2), the hook (step 4), the `sagefs check` warnings (step 3), and the outcome gate (test 4).
    - A policy that belongs to one cohort scope and is set by its conductor would fit an orchestrated run better than a daemon-wide switch. It would live in the cohort ledger and survive a restart. That is a separate item, worth writing only if the opt-in turns out to be awkward.
 2. How do sub-agents get tokens without the model seeing them? Recommendation: neither an unauthenticated mint route nor waiting for all of `a-token-for-every-daemon-call`. Build slice 0 of the operator credential first (see that plan). Until then, tokens are minted by hand or by a conductor run, as in the experiment.

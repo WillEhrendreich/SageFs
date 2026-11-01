@@ -73,7 +73,7 @@ Edge: a real ASP.NET authentication handler (`AddAuthentication().AddScheme<,>`)
 
 MCP side: keep `createToolListFilter` and `ToolClass` as the only role table. Do not annotate 72 tools with `[Authorize(Roles = ...)]`; that would be a second copy of the table that `MemberRouteGateTests` and `CapabilityTests` guard today. Use the SDK only for the principal. Whether `AddAuthorizationFilters()` can read a role derived from our token table and keep a stable order is an open question (below), and if it can, the filter can shrink to one line later.
 
-Operator identity in the cohort: today the conductor is a connection. The operator credential needs a member id. Add `MemberId.Operator` to `MemberTable.MemberId` (`SageFs.Core/MemberTable.fs:13`). Every exhaustive match then breaks the build until it decides, which is the intent: `ConfirmationPolicy.decide` (a session the operator created is the person's own work, so step 4 decides whether an operator-created session still asks), `authorityOfMember`, display. Seven sites match `MemberId.Mcp` today.
+Operator identity in the cohort: today the conductor is a connection. The operator credential needs a member id. Add `MemberId.Operator` to `MemberTable.MemberId` (`SageFs.Core/MemberTable.fs:13`). Every exhaustive match then breaks the build until it decides, which is the intent: `ConfirmationPolicy.decide` (a session the operator created is the person's own work, so step 4 decides whether an operator-created session still asks), `authorityOfMember`, display. Five exhaustive matches break, and one string-prefix parser (`CohortInspector.fs:111`) does not, so it gets its own test (counted on 2026-11-01).
 
 Confirmation refusal: `ConfirmationRefusal.describe` takes the caller's `CredentialKind`. `wayOut` is printed only for `Operator` (and for `Open` policy, as today). For a member it says the HTTP route is operator-only and the person must confirm. Dropping the sentence for the default policy is a decision for Will (below).
 
@@ -118,7 +118,13 @@ Steps:
 4. The `mintMember` refactor and the route. Owns `McpCapability.fs`, a new `SageFs/McpMintRoute.fs`, the route registration and one `EndpointContracts.fs` entry.
 5. The CLI verb (`Program.fs`, verb only), tests 4 and 5, and the docs.
 
-Measure first (half a day): how the MCP listener registers a route and whether an endpoint filter can read `Authorization` before the body; that the route handler can get the `McpContext` the way `/exec`'s handler does; and the real count of exhaustive matches `MemberId.Operator` breaks (this plan says seven).
+Measured on 2026-11-01, by reading the code:
+
+- Routes are `app.MapPost(path, fun (ctx: HttpContext) -> task { ... })` inside `mapXRoutes app (rctx: RouteContext)` (`McpServer.fs:2484`, `:3513`), and `RouteContext` carries the `McpContext`. A handler reads `Authorization` from `ctx.Request.Headers` as its first statement, before `readJsonBody`. Slice 0 needs no endpoint-filter infrastructure: the check is one call to `EdgeCredential.decide` at the top of the handler.
+- `MemberId` has five exhaustive matches that a new case breaks (`Capability.fs:695`, `ConfirmationPolicy.fs:87`, `MemberTable.fs:78`, `McpCohortTools.fs:351`, `SessionOperations.fs:93`) and one string-prefix parser the compiler does not check (`CohortInspector.fs:111`, which would turn an unknown prefix into `Minted raw`). That parser gets its own RED test: `operator:` round-trips through `display` and back. Earlier this plan said seven sites; that count was wrong.
+- The refusal shape the editors parse is `error`, `message`, `case` and `suggestedAction` (`sagefs-vscode/src/SageFsClient.fs`), so the 401 body uses those names.
+
+Not measured: that `Endpoint.create` and the route scan accept an `OperatorOnly` marker without touching the 64 existing entries (the test that decides it is step 1), and the Windows ACL.
 
 Size: M. The 0600 equivalent on Windows is an ACL that cannot be tested from here. The slice sets it and the docs say so.
 
