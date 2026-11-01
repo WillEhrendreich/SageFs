@@ -195,3 +195,5 @@ Proposed on 2026-11-01 after the experiment, waiting for an answer.
    - An unauthenticated `POST /api/members/mint` lets any local process mint an Implementer token, and an Implementer can run code. It would also let an agent mint itself a second identity, which defeats the accountability tokens exist for.
    - Waiting for the whole item delays the one piece this plan needs by weeks.
 3. Ask Anthropic for a per-call `_meta` hook output? Recommendation: no. Per-sub-agent connections work, so there is nothing to ask for.
+
+Research and the weighed options for all of this: `docs/agent-identity-research-2026-11-01.md`. Where it differs from the text above, the note wins. The main differences: a presented-but-unusable token gets an HTTP `403` with an `invalid_token` body (issue #182), the tool list depends on the presented credential only (issue #181), and a helper that mints on refusal covers a restart without persisting tokens.
