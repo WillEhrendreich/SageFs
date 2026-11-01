@@ -12,7 +12,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Size | L |
 | Branch and worktree | none yet |
 | Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: a route with no declared access cannot be added. Then take the steps below in order. |
+| Next action | If slice 0 is approved (see "Slice 0" and the last decision), take its steps first: they give `a-token-per-subagent-in-claude-code` the one thing it needs. Otherwise run what "Measure first" asks for (it can end the item), then write the first failing test: a route with no declared access cannot be added. Then take the steps below in order. |
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
 | Surprises | none yet |
 
@@ -85,6 +85,45 @@ Wire and clients: the route table gains `access` per endpoint (`Endpoint.create`
 
 Honest limit, which goes in the docs in these words: the operator file is readable by every process running as the same user, so against a hostile same-user process this adds nothing. What it stops is a caller that can reach loopback and cannot read your home directory: a sandboxed agent (bwrap, a container with host networking), another OS user on a shared machine, a forwarded dev-container port. That is the case the confirmation "way out" matters for.
 
+## Slice 0: the operator credential for one route
+
+Added 2026-11-01, proposed and waiting for an answer. `a-token-per-subagent-in-claude-code` needs one thing from this item: a way for a person or a launcher to mint a member token without an MCP connection and without the token passing through a model. The full item is L. This slice is the part of it that does that, built so the rest of the item extends it and nothing is thrown away. It does not depend on the SDK 2.x spike, because the pure core and one route sit on the current SDK.
+
+What it ships:
+
+- `OperatorStore` (`SageFs/OperatorStore.fs`): `<data dir>/operator.token`, created on first need from 32 random bytes as `sfo_` plus 43 base64url characters. It is written to a temp file and renamed into place with owner-only mode (0600), and read on each start. Only its SHA-256 is held in memory. Two daemons starting on one data dir end with one credential, because the loser of the create race reads the winner's file.
+- `SageFs.Core/EdgeCredential.fs`, the pure core: `Presented` (`Nothing | Operator of OperatorHash | Member of TokenHash | Unreadable of reason`), `EdgeAccess` (`Open | OperatorOnly`), and `decide : Presented -> EdgeAccess -> Result<Principal, EdgeRefusal>`. The full item adds `Probe`, `AnyCredential`, `MemberRoute` and a viewer credential. Each new case breaks every exhaustive match until it decides, which is the intent.
+- `MemberId.Operator` in `SageFs.Core/MemberTable.fs`, and the matches it breaks, so a mint's `MintedBy` names who minted.
+- One refactor in `McpCapability.mintMember`. The `Minter` (authority and grant) is passed in instead of being derived from the call context at lines 102 to 108. The MCP tool builds it as today. The route passes `{ Authority = Conductor MemberId.Operator; Grant = Grant.conductorAuthority }`. Everything else the function reads (`cohortOwnerFor ctx`, `commitCohort ctx`, `ctx.ActivityTracker`) comes from the `McpContext` the daemon already builds for its HTTP routes.
+- `POST /api/members/mint` on the MCP listener, `OperatorOnly`, carrying `Authorization: Bearer sfo_...`. A refusal is a 401 or 403 with `error`, `case` and `suggestedAction`, the shape the editors already parse. The route returns the raw token once.
+- `sagefs member mint --role R --scope S --ttl MINUTES --dir D --print-env VAR`: reads `operator.token` from the data dir (`SAGEFS_DATA_DIR` respected), calls the route, and prints `export VAR=<token>` for a launcher to evaluate. The token goes from the daemon into an environment variable and never through a model.
+- Every other route stays as it is today (`Open`). `apiVersion` stays 4 because no existing shape changes. The commit carries `Plugin: n/a, a launcher route that no editor calls`.
+
+What it leaves for the rest of the item: the authentication handler on every route, the viewer credential, the `Required` policy, the dashboard exchange, `sagefs token rotate` (until then, delete the file and restart), client changes and `apiVersion` 5.
+
+Tests, RED first:
+
+1. `EdgeCredentialTests.fs` (pure): an `OperatorOnly` route refuses `Nothing`, a member token and a wrong operator hash, each with its own named case, and admits the right one. Property: `decide` is total and admits nothing but the operator hash on an `OperatorOnly` route.
+2. `OperatorStoreTests.fs`: the file is created with mode 0600 on Unix; a second start reads the same credential; a file with the wrong length or alphabet is refused as corrupt and not used; the credential never appears in a log line or in `get_daemon_status`.
+3. Simulation `SageFs.Simulation/OperatorStoreSim.fs`: seeded interleavings of two daemons creating the file, a crash between the temp write and the rename, and a reader at every step. Invariants: a daemon never holds a hash that differs from the file's final content, and a torn file is never accepted. Twins: `OverwriteRaceTwin` (create without the exclusive rename) and `TornWriteTwin` (write in place). Each must trip its invariant or the invariant has no teeth.
+4. Integration (`--integration-host`), in `CapabilityHttpIntegrationTests.fs`: against a spawned daemon with its own data dir, credential (none, malformed, a member token, a wrong operator token, the right one) by the mint route, asserting status and the named reason in every cell. Then the minted token, sent as `X-SageFs-Member-Token`, is that `cap:` member in `get_cohort_status`, and the token string appears nowhere in the daemon log.
+5. The CLI verb, same tier: it prints an `export` line that works, and it fails with a message that says what to do when the daemon is down or `operator.token` is missing.
+6. Ratchet: the count of routes whose access is `Open` starts at today's number and only goes down.
+
+Steps:
+
+1. Test 1 and `EdgeCredential.fs`. Owns those two files.
+2. `MemberId.Operator` with the matches it breaks (`ConfirmationPolicy.decide`, `authorityOfMember`, display). Owns `MemberTable.fs` and those sites.
+3. `OperatorStore.fs`, tests 2 and 3. Parallel with step 1 once the types exist.
+4. The `mintMember` refactor and the route. Owns `McpCapability.fs`, a new `SageFs/McpMintRoute.fs`, the route registration and one `EndpointContracts.fs` entry.
+5. The CLI verb (`Program.fs`, verb only), tests 4 and 5, and the docs.
+
+Measure first (half a day): how the MCP listener registers a route and whether an endpoint filter can read `Authorization` before the body; that the route handler can get the `McpContext` the way `/exec`'s handler does; and the real count of exhaustive matches `MemberId.Operator` breaks (this plan says seven).
+
+Size: M. The 0600 equivalent on Windows is an ACL that cannot be tested from here. The slice sets it and the docs say so.
+
+The honest limit goes in the docs in the words used above for the full item: the operator file is readable by every process running as the same user. It stops a caller that can reach loopback but cannot read the home directory.
+
 ## Tests
 
 RED first, in order:
@@ -137,3 +176,4 @@ L. Ten steps across the daemon, two editors, a hook and thirty scripts; the daem
 - Persist the operator credential in the data dir? Recommendation: yes. A per-boot secret would break every editor on every daemon update.
 - When does the confirmation "way out" go? Recommendation: print it only to an operator now, and flip the default to `Required` only after the dogfood week. For an agent that can read your home directory the prompt stays advisory either way, and the docs should say so.
 - `MemberId.Operator` as a new case, or map the operator to an existing id? Recommendation: a new case, so the compiler finds every decision.
+- Build slice 0 first (the operator credential for the mint route only) and the rest of the item after it? Recommendation: yes. The alternatives are worse. An unauthenticated mint route lets any local process mint an Implementer token, which can run code, and lets an agent mint itself a second identity. Waiting for the whole item delays the one piece `a-token-per-subagent-in-claude-code` needs by weeks. Slice 0 is M, uses the same credential file, prefix and pure core the full item uses, and leaves every other route as it is.

@@ -102,11 +102,14 @@ Simulation: this item adds no new state machine in the daemon, so no DST. The si
 
 ## Steps
 
-1. Phase 0, no code in the product (a day): run the experiment below by hand and write the results into this plan's "Measure first" table. Everything after depends on what it says.
-2. Test 1 and `SubagentTokenPlan.fs` (pure), listed in `SageFs.Core/SageFs.Core.fsproj`. Owns that file and `SubagentTokenPlanTests.fs`.
-3. Test 3 in `CapabilityHttpIntegrationTests.fs`. File-disjoint from step 2, can run in parallel.
-4. Docs: `docs/agents.md` section on sub-agents, `skills/sagefs/agents.md` (the brief an orchestrator gives), `docs/mcp-tools.md` member-token section. Carries a `Plugin: n/a` trailer.
-5. After `a-token-for-every-daemon-call` lands its operator credential: the mint route, the CLI verb, the launcher, test 4. Owns `SageFs/Program.fs` (verb only), `SageFs/McpMintRoute.fs` (new), `EndpointContracts.fs` (one line).
+1. Phase 0. Done on 2026-11-01; the results are under "Measure first, results".
+2. Who am I. `get_cohort_status` and `join_cohort` replies start with the caller's member and role (`You are cap:ecd9a0572ceebbed [Observer].`). RED first: a test that the reply names the caller, for a token member and for a plain connection. Nothing else in the plan can be verified from inside a sub-agent without it. It is a reply-text change on a wire-surface file, so first grep `sagefs.nvim` and `sagefs-vscode` for a parser of that text and carry the matching `Plugin:` trailer.
+3. Test 1 and `SubagentTokenPlan.fs` (pure), listed in `SageFs.Core/SageFs.Core.fsproj`, and the `sagefs check` warnings: an agent file that references a server by name, a run under `--strict-mcp-config`, a project-scope agent folder that may be untrusted. Owns those files and `SubagentTokenPlanTests.fs`.
+4. The fallback hook: a `PreToolUse` hook on `mcp__sagefs__.*` that denies the call when the hook input carries an `agent_id`, with a message that says the sub-agent must use its own server. First measure that a sub-agent's hook input carries `agent_id` (below). It extends `tools/agent-hooks` (a compiled program, because it runs before every call).
+5. Test 3 in `CapabilityHttpIntegrationTests.fs`. File-disjoint from steps 2 to 4, can run in parallel.
+6. Docs: `docs/agents.md` section on sub-agents, `skills/sagefs/agents.md` (the brief an orchestrator gives, including "your first call is get_cohort_status; if it does not name a `cap:` member, stop"), `docs/mcp-tools.md` member-token section. Carries a `Plugin: n/a` trailer.
+7. Slice 0 of the operator credential (`a-token-for-every-daemon-call`): then the mint route, the CLI verb, the launcher and test 4. Owns `SageFs/Program.fs` (verb only), `SageFs/McpMintRoute.fs` (new), `EndpointContracts.fs` (one line).
+8. Re-count the need for `tokens-survive-a-restart`. A minted token lives in daemon memory, and this repo redeploys the daemon on purpose, so a long orchestrated run loses its tokens at the next install.
 
 ## Measure first
 
@@ -137,9 +140,17 @@ Three things the experiment found that the docs do not say:
 2. A project-scope agent (`.claude/agents/` in a repo) loses its `mcpServers` in a headless run unless the folder was trusted in an interactive session: "the folder its definition file came from is not trusted". A user-scope agent (`~/.claude/agents/`) connects.
 3. A `tools:` allow-list that names an inline server's tool is rejected at spawn ("unrecognized"), because the name is checked before the server connects. Leave `tools:` out and deny what you do not want.
 
-One finding changes the design. When an inline server is dropped (1 or 2), the sub-agent still runs. It falls back to whatever server its parent has and becomes the parent's member, which is the collapse this item exists to prevent. Under `ConnectionsAllowed` nothing shows it. Under `IdentityPolicy.TokenRequired` the same call is refused with a message that names the policy. So the setup to document is one inline server per sub-agent, with the daemon on `TokenRequired`, and `sagefs check` should warn about a `.claude/agents/*.md` file that references a server by name, runs under `--strict-mcp-config`, or sits in a project folder that may be untrusted.
+One finding changes the design. When an inline server is dropped (1 or 2), the sub-agent still runs. It falls back to whatever server its parent has and becomes the parent's member, which is the collapse this item exists to prevent. The daemon cannot see it: the call arrives on the parent's connection with no token, exactly like the parent's own calls.
+
+`IdentityPolicy.TokenRequired` does not catch it either. The first version of this paragraph said it would, and that was wrong. `admitTokenless` (`SageFs.Core/Capability.fs:933`) admits a token-less call from the conductor, the orchestrator is normally the conductor, and a fallen-back sub-agent shares its connection, so it is admitted as the conductor. This is read from the code and was not run. The fallback has to be caught at the agent's end and by letting anyone ask who they are (see "Decisions").
 
 One run reached the maintainer's real daemon through the inherited server: a `leave_cohort` scoped to a scratch path, refused, nothing changed. An experiment needs `--disallowedTools mcp__sagefs` to keep that from happening.
+
+Still to measure:
+
+- Whether a sub-agent's `PreToolUse` hook input carries `agent_id`. The hooks page says so and the sub-agents page does not, and this run did not look. It decides step 4.
+- Whether Claude Code records folder trust somewhere `sagefs check` can read (the per-project entries in `~/.claude.json`). It decides how exact the trust warning can be.
+- `headersHelper` and token cost, as in the table above. Neither decides the item now.
 
 ## Risks and dependencies
 
@@ -154,6 +165,14 @@ S for phase 0 and the pure planner (days). M for phase 2, because it waits on th
 
 ## Decisions for Will
 
-- Run the Phase 0 experiment before any code? Recommendation: yes, today. It costs an afternoon and decides whether this item is real.
-- Ship the launcher and route only after the operator credential, or add a narrow interim route that only the conductor's own connection can call? Recommendation: wait, so the credential is designed once.
-- Ask Anthropic for a per-call `_meta` hook output? Recommendation: write it down as a feature request only if the experiment shows headers do not work in sub-agent frontmatter.
+Proposed on 2026-11-01 after the experiment, waiting for an answer.
+
+1. Make `TokenRequired` the daemon's default? Recommendation: no, keep `ConnectionsAllowed` and make `TokenRequired` the documented setting for an orchestrated run.
+   - The policy is daemon-wide (`SAGEFS_IDENTITY_POLICY`). In a repo where someone else is the conductor, every other token-less MCP connection, a second window for instance, would lose everything but status.
+   - It does not catch the fallback (see "Measure first, results"), so flipping it buys no protection against the failure this item is about.
+   - What does catch it: the who-am-I line (step 2), the hook (step 4), the `sagefs check` warnings (step 3), and the outcome gate (test 4).
+   - A policy that belongs to one cohort scope and is set by its conductor would fit an orchestrated run better than a daemon-wide switch. It would live in the cohort ledger and survive a restart. That is a separate item, worth writing only if the opt-in turns out to be awkward.
+2. How do sub-agents get tokens without the model seeing them? Recommendation: neither an unauthenticated mint route nor waiting for all of `a-token-for-every-daemon-call`. Build slice 0 of the operator credential first (see that plan). Until then, tokens are minted by hand or by a conductor run, as in the experiment.
+   - An unauthenticated `POST /api/members/mint` lets any local process mint an Implementer token, and an Implementer can run code. It would also let an agent mint itself a second identity, which defeats the accountability tokens exist for.
+   - Waiting for the whole item delays the one piece this plan needs by weeks.
+3. Ask Anthropic for a per-call `_meta` hook output? Recommendation: no. Per-sub-agent connections work, so there is nothing to ask for.

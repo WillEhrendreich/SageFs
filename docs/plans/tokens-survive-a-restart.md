@@ -104,5 +104,6 @@ M. The codec and the simulation are small. The owner, the flush timer and the in
 ## Decisions for Will
 
 - Build it at all before someone needs it? Recommendation: no until the count in step 1 shows a real pattern; the roadmap already says so.
+  - Added 2026-11-01: `a-token-per-subagent-in-claude-code` makes the need concrete. A sub-agent holds its token in an environment variable for the length of a run, and this repo reinstalls the daemon on purpose, so a long orchestrated run loses every token at the next install (`Unknown`, and the sub-agent is refused). Count that case in step 1. If orchestrated runs happen weekly, this item comes right after slice 0 of `a-token-for-every-daemon-call`.
 - Accept that "holds nothing to steal" no longer holds? Recommendation: yes only with owner-only mode and, once the operator credential exists, an HMAC keyed by it.
 - Should downtime count against the idle lapse? As planned it does, because `LastSeen` is stored as it was. The alternative (reset `LastSeen` to the restore time) is more forgiving and also lets a stolen token live through a restart. Recommendation: keep it strict.
