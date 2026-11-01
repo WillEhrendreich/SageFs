@@ -99,6 +99,67 @@ module McpBridge =
       | Some id, Some m -> RpcMessage.Request(id, m, raw)
       | _ -> RpcMessage.Unparseable(raw, ex.Message)
 
+  /// The most text a run of unfinished lines may hold before the bridge gives up on them as one message. Large
+  /// enough for any tool call a client sends (a whole source file as a `code` argument), small enough that a
+  /// stream of lines that never finish cannot grow without limit.
+  let maxHeldChars = 4 * 1024 * 1024
+
+  /// Where the stdin reader is between lines. A line that is not JSON may be the first part of a message whose
+  /// string carried a literal newline, so it is held and the next line decides what it was.
+  [<RequireQualifiedAccess>]
+  type LineState =
+    | Idle
+    /// Lines that did not parse, joined with the newlines they were split at.
+    | Holding of text: string
+
+  let private isValidJson (text: string) : bool =
+    try
+      use _doc = JsonDocument.Parse text
+      true
+    with :? JsonException -> false
+
+  /// Take one stdin line (blank ones included) and say what messages it completed.
+  ///
+  /// A client that writes a literal newline inside a JSON string splits ONE message over several stdin lines.
+  /// `parseRpcMessage` can recover the id from a single line only when the id and the method sit on the same
+  /// line, and a client that serializes `id` after `params` puts them on different ones, so every fragment came
+  /// out `Unparseable`, nothing carried an id, and the call hung for good (issue #164). So a fragment that is
+  /// not JSON is held, and each following line that is not a complete message of its own is appended to it.
+  /// Recovery is tried again on the joined text, and the first time it finds an id and a method the message is
+  /// handed on as a `Request`, which the daemon refuses with the reason and the bridge answers by id.
+  ///
+  /// A line that IS valid JSON ends the hold at once and is handled as itself, so a good message is never
+  /// swallowed by an unfinished line in front of it. The held fragment comes out `Unparseable` (logged, since it
+  /// has no id to answer against).
+  let acceptLine (state: LineState) (line: string) : LineState * RpcMessage list =
+    let first (line: string) : LineState * RpcMessage list =
+      match line with
+      | "" -> LineState.Idle, []
+      | _ ->
+        match parseRpcMessage line with
+        | RpcMessage.Unparseable(raw, _) when not (isValidJson raw) -> LineState.Holding raw, []
+        | message -> LineState.Idle, [ message ]
+    match state with
+    | LineState.Idle -> first line
+    | LineState.Holding head ->
+      match line <> "" && isValidJson line with
+      | true ->
+        let next, messages = first line
+        next, RpcMessage.Unparseable(head, "an unfinished line, followed by a message of its own") :: messages
+      | false ->
+        let joined = head + "\n" + line
+        match parseRpcMessage joined with
+        | RpcMessage.Unparseable _ when joined.Length > maxHeldChars ->
+          LineState.Idle, [ RpcMessage.Unparseable(joined, "lines that never became a message") ]
+        | RpcMessage.Unparseable _ -> LineState.Holding joined, []
+        | message -> LineState.Idle, [ message ]
+
+  /// What stdin closing leaves behind: a fragment still being held, which has no id to answer against.
+  let closeInput (state: LineState) : RpcMessage list =
+    match state with
+    | LineState.Idle -> []
+    | LineState.Holding head -> [ RpcMessage.Unparseable(head, "stdin closed inside an unfinished line") ]
+
   /// The `params` object an `initialize` declared, verbatim.
   ///
   /// The daemon reads a client's capabilities out of `initialize`, and they

@@ -563,20 +563,26 @@ let terminateSession (client: HttpClient) (port: int) (sessionId: string) : Task
       Log.warn "[mcp-stdio] session termination request failed: %s" ex.Message
   }
 
-/// Read stdin line by line and post each as an `Event.StdinLine`, then
+/// Read stdin line by line and post each message as an `Event.StdinLine`, then
 /// `Event.StdinClosed` on EOF. A blank line is not a message (JSON-RPC over
-/// stdio never sends one) and is skipped rather than parsed and rejected.
+/// stdio never sends one), so alone it is skipped; inside an unfinished line it is
+/// kept, because a string that carries a literal newline may carry a blank one.
+/// `McpBridge.acceptLine` decides what each line completed (issue #164).
 let pumpStdin (post: Event -> unit) : Task<unit> =
   task {
     let mutable finished = false
+    let mutable state = LineState.Idle
     while not finished do
       let! line = Console.In.ReadLineAsync()
       match line with
       | null ->
+        for message in closeInput state do post (Event.StdinLine message)
         post Event.StdinClosed
         finished <- true
-      | "" -> ()
-      | raw -> post (Event.StdinLine(parseRpcMessage raw))
+      | raw ->
+        let next, messages = acceptLine state raw
+        state <- next
+        for message in messages do post (Event.StdinLine message)
   }
 
 /// Entry point for `sagefs mcp`. Blocks until stdin closes (or the bridge

@@ -48,6 +48,73 @@ let tests =
         | other -> failtestf "expected Unparseable, got %A" other
     ]
 
+    // Issue #164: a tool call whose string carries a literal newline arrives as several stdin lines.
+    testList "stdin lines" [
+      /// Feed lines in order; returns where the reader is afterwards and what it delivered so far.
+      let feed (lines: string list) : LineState * RpcMessage list =
+        lines
+        |> List.fold (fun (state, delivered) line ->
+          let next, messages = acceptLine state line
+          next, delivered @ messages) (LineState.Idle, [])
+
+      /// Feed lines in order and then close stdin, so a held fragment is delivered too.
+      let feedAll (lines: string list) : RpcMessage list =
+        let state, delivered = feed lines
+        delivered @ closeInput state
+
+      let kinds (messages: RpcMessage list) =
+        messages
+        |> List.map (function
+          | RpcMessage.Request(id, _, _) -> sprintf "Request %A" id
+          | RpcMessage.Notification _ -> "Notification"
+          | RpcMessage.Response _ -> "Response"
+          | RpcMessage.Unparseable _ -> "Unparseable")
+
+      // The same tool call written twice: the id before the string with the newline, and the id after it.
+      let idBefore = [ """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"arguments":{"code":"let x = 1"""; """"}}}""" ]
+      let idAfter = [ """{"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"code":"let x = 1"""; """"}},"id":7}""" ]
+
+      testCase "WHY — a request whose id comes after the newline is still answerable, so the caller gets an error and not a hang (#164)" <| fun _ ->
+        feedAll idAfter
+        |> List.choose (function RpcMessage.Request(id, methodName, _) -> Some(id, methodName) | _ -> None)
+        |> Expect.equal "the id and the method are recovered from the joined lines" [ RpcId.N 7L, "tools/call" ]
+
+      testCase "WHY — a request whose id comes before the newline is answered at once, as it was before the lines were joined" <| fun _ ->
+        let _, delivered = feed [ idBefore.[0] ]
+        delivered |> kinds |> Expect.equal "the first line alone is already the request" [ "Request N 7L" ]
+
+      testCase "WHY — the tail of a message already answered is logged and dropped, never read as a second request" <| fun _ ->
+        feedAll idBefore |> kinds |> Expect.equal "one request, then the leftover" [ "Request N 7L"; "Unparseable" ]
+
+      testCase "WHY — a blank line inside an unfinished string is kept with the message, and a blank line on its own is skipped" <| fun _ ->
+        feedAll [ """{"jsonrpc":"2.0","method":"tools/call","params":{"c":"a"""; ""; """b"},"id":4}""" ]
+        |> kinds |> Expect.equal "the blank line joined the fragment" [ "Request N 4L" ]
+        feedAll [ ""; "" ] |> Expect.isEmpty "nothing to deliver"
+
+      testCase "WHY — stdin closing inside a fragment delivers it once as Unparseable, so it is logged and not lost" <| fun _ ->
+        feedAll [ """{"jsonrpc":"2.0","params":{"c":"x""" ]
+        |> kinds |> Expect.equal "the fragment is flushed at close" [ "Unparseable" ]
+
+      testCase "WHY — lines that never finish are given up on at the size bound, so a runaway stream cannot grow without limit" <| fun _ ->
+        let chunk = System.String('x', 1024 * 1024)
+        let lines = """{"jsonrpc":"2.0","params":{"c":"x""" :: List.replicate 5 chunk
+        let _, deliveredBeforeClose = feed lines
+        deliveredBeforeClose |> List.isEmpty |> Expect.isFalse "the held text was flushed before stdin closed"
+        deliveredBeforeClose
+        |> List.forall (function RpcMessage.Unparseable(raw, _) -> raw.Length <= maxHeldChars + chunk.Length | _ -> false)
+        |> Expect.isTrue "each flush is bounded"
+
+      testProperty "WHY — a complete message after an unfinished fragment is delivered as itself, never absorbed into the fragment" <| fun (n: uint16) ->
+        let line = rawOf (req (int n) "tools/list")
+        let fragments =
+          [ """{"jsonrpc":"2.0","params":{"c":"x"""
+            """{"jsonrpc":"2.0","id":"""
+            "not json at all {{{" ]
+        fragments
+        |> List.forall (fun fragment ->
+          feedAll [ fragment; line ] |> List.last = req (int n) "tools/list")
+    ]
+
     testList "the startup race" [
       testCase "Probe from the initial state bumps the probe counter and asks to probe" <| fun _ ->
         let state, actions = decide policy initial Event.Probe
