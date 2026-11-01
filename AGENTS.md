@@ -12,100 +12,17 @@
 
 3. **NEVER treat `Start-Sleep` as "wait for the daemon to be ready" without a follow-up tool call in the same turn.** `Start-Sleep 3` followed by a chat message is the same hang, just shorter. `Start-Sleep 3` followed by a screenshot is fine. The sleep is not the problem. The text after the sleep is the problem.
 
-4. **NEVER re-derive an MCP connection from scratch. Run `dotnet fsi scripts/reconnect-mcp.fsx`.** If every MCP tool answers `404 Session not found`, the connection is LIVE and pointing at a session the daemon no longer has. The session lives in the daemon's MEMORY, and installing a build restarts the daemon on purpose, so the id a client holds dies. A client on Streamable HTTP sends `initialize` once and never again, so the failure repeats until someone reloads the client by hand. `reconnect-mcp.fsx` re-initializes and PROVES it (it first requires a never-minted id to be rejected, so a pass cannot mean "the endpoint merely answers"). If it prints `OK`, you are live; carry on. The durable fix is the stdio bridge, `claude mcp add sagefs -- sagefs mcp`, which owns the handshake itself, so the client never holds an id at all. `scripts/probe-bridge-stdio.fsx` drives that bridge from a script, which is how to dogfood it without a client. Full explanation: "404 Session not found" in `docs/mcp-tools.md`, and the same diagnosis in `skills/sagefs/troubleshooting.md`, which also says to check the daemon's version before believing anything else.
+4. **NEVER re-derive an MCP connection from scratch. Run `dotnet fsi scripts/reconnect-mcp.fsx`.** If every MCP tool answers `404 Session not found`, the connection is live and points at a session the daemon no longer has (installing a build restarts the daemon, so the client's id dies). The script re-initializes and proves it; `OK` means you are live. The durable fix is the stdio bridge, `claude mcp add sagefs -- sagefs mcp`. Details: "404 Session not found" in `docs/mcp-tools.md` and `skills/sagefs/troubleshooting.md` (which also says to check the daemon's version first).
 
-5. **NEVER hand-roll an MCP client over HTTP, and never script an edit with `python3 -c`.** Both were mistakes that cost real time today. The HTTP client looks like it works, `initialize` succeeds, then hangs on `tools/call`, because the bridge writes diagnostics to stderr and an unread pipe fills and BLOCKS it. Drain stderr on its own thread, and read until the response ID you asked for instead of a fixed line count (responses are SSE-framed, so a fixed count deadlocks). For edits, use the exact editor tool; `skills/sagefs/design.md` says so and this file's own rule above says so, and breaking it repeatedly is not a learning curve, it is a choice.
+5. **NEVER hand-roll an MCP client over HTTP, and never script an edit with `python3 -c`.** A hand-rolled client initializes fine, then hangs on `tools/call`, because the bridge writes diagnostics to stderr and an unread pipe fills and blocks it. Drain stderr on its own thread and read until the response ID you asked for, since responses are SSE-framed and a fixed line count deadlocks. For edits use the exact editor tool (`skills/sagefs/design.md`).
 
 6. **A tool that never answers is a BUG in the product, not a timeout to work around.** A scope-colliding `join_cohort` leaves the bridge alive and streaming notifications while producing NO response at all, so the caller's only signal is a hang. An agent that reads that concludes "hard limit, no workaround", which is a wrong conclusion produced by a missing answer. If a tool call you made produced no response, say so and treat it as a defect; do not re-derive the answer from the absence.
 
-## Known red at 2026-10-04: NONE. The list below was cleared.
+7. **A lazy registry's "on create" hook misses everything seeded before it.** `CohortOwners.SetOnOwnerStarted` fires when an owner is created. `DaemonMode.fs` seeded the daemon's own owner about 100 lines before registering the hook, so that cohort had no subscriber and the dashboard's cohort panel froze after its first render. Later scopes worked, which made it read as a stale-count bug. Subscribe anything created before the hook by hand, and if the hook body is more than a line, name it and call it from both places.
 
-Both entries from the 2026-10-03 list are fixed, and how is worth keeping because the first
-was not the bug it looked like:
+8. **A count can measure a different collection than readers assume.** `CohortFrame.MemberIds` holds every member a cohort has ever seen (departed members stay so their claims resolve); `MemberSeat` says who is present. Both renderers counted `MemberIds` and showed "1 member" beside a VACANT conductor. Fixing that broke two other things, pinned in `CohortPanelTests`: `ClaimHolderIndex` indexes `MemberIds`, and the claims list sits inside the "has members" branch. Before changing a count, grep every use of the old collection's length: it is also a loop bound and an index bound.
 
-- **`a function inlined into its caller`**. FIXED (`fix(hot-reload): the inlined-callee
-  fixture is a REAL .dll`). The detour logic was correct; the FIXTURE was not a file. An
-  `AssemblyBuilder` assembly has no `Save` on this runtime and reports an empty `Location`, so
-  the host derived a null search path and never loaded it. The case died on "the fixture
-  assembly loads" before the detour it exists to prove was attempted. The fixture is now
-  written with `Mono.Cecil` (already a test-project dependency) with the identical IL shape.
-- **`real guards on a click whose thread is abandoned`**, no longer appears in a full run.
-
-The lesson recorded for the next person: **"the fixture assembly loads" failing is a
-statement about the FIXTURE, not about the product.** Read the assertion's subject before
-concluding the feature under test is broken.
-
-Do not reintroduce either by touching the `source`/`test_run_completed` work. The earlier
-attempt to establish this by checking out the baseline commit FAILED, and the reason is worth knowing:
-the baseline worktree crashes during Expecto discovery because `SkillLayoutTests`,
-`RetiredToolNameTests` and `ToolSurfaceHonestyTests` located the repo by walking up from
-`Environment.CurrentDirectory`, a defect fixed since. So a baseline worktree can
-only answer questions about suites whose discovery no longer depends on the CWD.
-
-7. **A LAZY REGISTRY'S "on create" HOOK MISSES EVERYTHING SEEDED BEFORE IT.** `CohortOwners.SetOnOwnerStarted`
-   fires when an owner is CREATED. `DaemonMode.fs` seeded the daemon's own owner ~100 lines BEFORE
-   registering the hook, so the daemon's own cohort had **no subscriber at all**, no `CohortChanged`,
-   so the dashboard's cohort panel rendered once and froze. A member could join and leave and nothing
-   on screen moved. Every LATER scope worked, because those owners are created after the hook.
-   The asymmetry is what made this read as a stale-COUNT bug instead of a missing subscription, and
-   why I spent a long time fixing renderers that were already correct. **When a hook means "on create",
-   anything created before the hook is invisible to it: subscribe those by hand, and if the hook's
-   body is more than a line, name it and call it from both places so neither can be forgotten.**
-
-8. **`Some X` counts a DIFFERENT collection than readers assume.** `CohortFrame.MemberIds` holds every
-   member a cohort has EVER seen, a departed member stays so their claims stay resolvable, while
-   `MemberSeat` says who is present. Both renderers counted `MemberIds`, so they reported "1 member"
-   after the last one left, beside a conductor line reading VACANT. Fixing that then broke two other
-   things, both now pinned by tests in `CohortPanelTests`: `ClaimHolderIndex` indexes `MemberIds` (so
-   bounding it by the PRESENT count drops holder names), and the claims/landings list is nested inside
-   the "has members" branch (so gating on members alone hides every claim the moment its holder leaves).
-   **When a count changes, grep for every use of the old collection's length before committing**, a
-   count is also a loop bound and an index bound.
-
-## The Bozzetto fork (Clef): `FidelityFramework/Bozzetto`
-
-It is **public and reachable**, https://github.com/FidelityFramework/Bozzetto. (An earlier
-note here said it 404s; that was my own misspelling, "Bozzett". Corrected.) Not cloned on this
-machine (44 checkouts in `~/Work`, no match), so everything below is from the published repo,
-not from a local build.
-
-**What it is.** A hard fork of this repo, by the Fidelity Framework. Fork point
-`5b685fb5` (2026-02-23), last synced to upstream `v0.6.834` at `c86c3402` on 2026-09-27,
-54 commits, so it has moved a long way past the sync point. Renamed throughout: package
-`Bozzetto`, command `boz`, MCP port **47749**, control listener **47750**, state `~/.bozzetto`.
-SageFs's own 37749/37750 do not collide.
-
-**Where it deliberately diverged from this repo**, the reason it forked, so not a gap to chase:
-
-- **No F# REPL.** Embedded production FSI hosting is retired. Interactive Clef execution is a
-  Composer backend on LLVM ORC; changes to Bozzetto's own F# are validated with `dotnet build`
-  and the unfiltered suite.
-- **The REPL inner loop is gone**, which is the one capability here with no equivalent there.
-  Everything else SageFs does, incremental builds, hot reload, live testing, a dashboard, an
-  MCP surface, has a counterpart, built on Composer's contracts instead of FSI's.
-- **Fable and Falco were dropped**, and PostgreSQL → binary manifests + SQLite (a direction
-  this repo had already moved in).
-
-**"Clef capability from day one" therefore does not mean "port the REPL."** Bozzetto's stated
-horizon is H1: one local compiler workspace, CPU ORC execution, a native host. If you want the
-REPL loop there, that is a design conversation with them, not a doc change here.
-
-**The one concrete defect worth reporting, found 2026-10-03 while inspecting it:**
-
-```
-$ git ls-files '$COMMANDCODE_SCRATCHPAD' | wc -l
-6
-```
-
-Six scratch files are **tracked in Bozzetto**, committed in `d2dc5c8`, and its `.gitignore` has
-no rule for them. This repo hit the identical mistake twice and fixed it here, see the comment
-in `.gitignore` at line 100, including the trap that caused it: the harness path is literally
-`$COMMANDCODE_SCRATCHPAD`, a **shell variable**, so a pattern reading
-`commandcode_scratchpad` looks right and matches nothing. SageFs's working rules are
-`.roastscratch/`, `**/commandcode_scratchpad/` and `**/\$COMMANDCODE_SCRATCHPAD/`.
-
-Worth telling them: scratch is evidence *for* a decision, not a deliverable, and the fix is to
-untrack with `git rm --cached` rather than delete.
+9. **A failing "the fixture assembly loads" assertion describes the fixture.** Read the assertion's subject before concluding the feature under test is broken. The inlined-callee hot-reload case died there because an `AssemblyBuilder` assembly reports an empty `Location`; its fixture is now a real `.dll` written with `Mono.Cecil`.
 
 ## Concrete patterns:
 
@@ -286,80 +203,15 @@ budget table has a budget of zero, and a budget above the real count is itself a
 - Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `style`, `ci`, `build`
 
 ### Writing: no slop
-Will hates AI slop, and these are the shapes that read as machine-made. The full catalogue with
-replacements lives in the `plain-english` skill (`~/.agents/skills/plain-english/SKILL.md`). The
-rules below are the ones that matter while writing, and they apply to every kind of prose an agent
-writes: docs, README and release notes, commit messages, code comments, issue text, PR
-descriptions, chat replies, and what an agent says back to the user.
+Will finds every Claude-ism gross, and none of them outranks another: negative parallelisms,
+staged openers, staged emphasis, closing beats, weasel attribution, fake-insight tails, marketing
+register, stock phrases, transition crutches, filler grammar, hyphenated clichés, business jargon,
+template residue, and the landing beat. The full rules with examples are in `~/.claude/CLAUDE.md`
+under "Writing: no slop", and the catalogue with replacements is the `plain-english` skill
+(`~/.agents/skills/plain-english/SKILL.md`). They apply to every kind of prose an agent writes: docs,
+release notes, commit messages, code comments, issue text, PR descriptions, chat replies.
 
-**No negative parallelisms.** Never build a sentence as a thing-this-is-not followed by a
-thing-this-is. "It's not this, it's that." "This isn't about correctness, it's about trust."
-"Not just X, but Y." "X, not Y." The second clause usually repeats the first clause's meaning in
-more words, so the reader has to undo the setup before reaching the point. Say the thing itself.
-- "This isn't a bug, it's a missing feature." becomes "The feature is missing."
-- "The gate fails on a slow save, not on a broken one." becomes "A slow save fails the gate. A broken save fails at once."
-A plain negative stays fine ("the gate does not retry"). The banned shape is the pair: a rejected
-framing and a preferred one, in the same sentence. When a reader might hold the wrong reading, say
-what it is in one plain sentence and put the other fact in the next one.
 
-**No staged openers.** "In today's fast-paced world", "In an era of", "In a world where", "Ever
-wondered", "Have you ever", "What if I told you", "Did you know", "Picture this", "Imagine a world
-where", "Let's dive in", "Let's explore".
-
-**No staged emphasis.** "the key takeaway", "the real question is", "at its core", "fundamentally
-speaking", "the truth is", "in reality", "the heart of the matter", "let that sink in", "read that
-again", "it's important to note", "it's worth noting", "one thing to consider", "it cannot be
-overstated".
-
-**No closing beats.** "in conclusion", "in summary", "to sum up", "all in all", "and that changes
-everything", "hope this helps", "feel free to reach out", "let me know if you'd like", "if you
-want, I can".
-
-**No weasel attribution.** "experts agree", "studies show", "research suggests", "scientists
-believe", "it is widely believed", "critics note", "observers note". Name the source or drop the
-attribution.
-
-**No fake-insight tails.** ", highlighting", ", reflecting", ", underscoring", ", demonstrating",
-", showcasing", ", paving the way for", ", raising questions about", ", sparking debate",
-", prompting reflection", ", reshaping our understanding". Name the thing itself.
-
-**No marketing register.** delve, tapestry, testament, landscape, realm, synergy, seamless, robust,
-transformative, game-changer, cutting-edge, pivotal, crucial, holistic, multifaceted, comprehensive,
-invaluable, unprecedented, vibrant, innovative, unlock, unleash, elevate, empower, foster,
-streamline, supercharge, revolutionize, amplify, bolster, catalyze, cultivate, showcase, embark,
-enhance, beacon, cornerstone, ecosystem, deep dive, key takeaways, valuable insights, paradigm
-shift, leverage. Some are fine when they name a real action: "end-to-end" for a test that really
-goes end to end, "harness" for a thing that really harnesses, "leverage" only when it names what
-was applied.
-
-**No stock phrases.** "thrilled to announce", "excited to share", "in today's fast-paced world",
-"let's dive in", "picture this", "imagine a world where", "it's important to note", "it's worth
-noting", "at the end of the day", "here's the thing", "make no mistake", "let's be honest", "the
-truth is", "in reality", "at its core", "the real question is", "let that sink in", "hope this
-helps", "great question".
-
-**No transition crutches.** moreover, furthermore, additionally, consequently, hence, nevertheless,
-nonetheless, notably, ultimately, overall, when it comes to, in terms of, generally speaking,
-needless to say, it goes without saying.
-
-**No filler grammar.** in order to, has the ability to, a large number of, in close proximity to,
-prior to the start of, during the course of, on a regular basis, in spite of the fact that, for all
-intents and purposes, with regard to, the fact of the matter is, conduct an investigation, provide
-assistance to, make a decision on.
-
-**No hyphenated clichés.** mission-critical, battle-tested, out-of-the-box, enterprise-grade,
-plug-and-play, turn-key, future-proof, results-driven, customer-centric, next-generation,
-best-of-breed, laser-focused, value-added, tried-and-true, ready-made.
-
-**No business jargon.** unpack, lean into, double down, take a step back, moving forward, circle
-back, on the same page, socialize, bandwidth, low-hanging fruit, move the needle.
-
-**No template residue.** "[Your Name]", "[TODO]", "[insert X]", "[company]", "[date]", "[email]",
-"[url]".
-
-**Nothing to sell, no landing beat.** Rule of three for cadence, em-dash stacks, bolded lead-in
-labels on prose paragraphs, and a closing aphorism ("that's the whole ballgame") are all the same
-kind of tell: shape with nothing in it.
 ### F# Style
 - Favor immutable types, discriminated unions, pattern matching, and pipeline operators (`|>`)
 - Use `Result<'T, 'TError>` for operations that can fail
