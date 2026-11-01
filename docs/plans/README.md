@@ -15,7 +15,7 @@ plan has no block or no valid status, so this cannot quietly rot.
 
 ### Start
 
-1. Open the item's plan and read "Resume here" first. If Status is "In progress" or "Blocked", the branch, the last green commit and
+1. Open the item's plan and read "Resume here" first. If Status is "In progress" or "Blocked", the last green commit (and the branch, if one was taken) and
    the next action are in it. Start from those, not from step 1.
 2. Check the plan against the tree. The date and the master commit it was written against are under the title. Confirm the symbols it
    cites still exist before relying on them. "I could not find X" in a plan means exactly that.
@@ -24,7 +24,9 @@ plan has no block or no valid status, so this cannot quietly rot.
    build after every edit.
 4. Check the daemon runs the build you are working against: `dotnet fsi scripts/install-local.fsx -- --status`. Make your own session in
    your own worktree. A git worktree is a routing boundary, so do not use a session rooted somewhere else.
-5. Work on a branch and a worktree named for the item (`plan/<item-id>`). Write both into "Resume here" straight away.
+5. Work on master and commit to it as each step goes green. Take a temporary branch and worktree (`plan/<item-id>`) only when a cohort or a
+   parallel agent needs its own checkout, merge it back to master as soon as it is green, and delete it. If you took one, write it into
+   "Resume here" straight away.
 6. Read "Measure first" and "Decisions for Will". A measurement that can end the item runs before any code. A decision that blocks a
    step gets an answer from the maintainer before that step.
 
@@ -39,14 +41,14 @@ plan has no block or no valid status, so this cannot quietly rot.
 - Writing (docs, comments, commit messages) is plain English: no em dashes, no "not X, but Y" pairs, no marketing words.
 - Update "Resume here" in the same commit as the work:
   - **Status** is `Not started`, `In progress (step N of M)`, `Blocked (on X)` or `Done`.
-  - **Branch and worktree** and **Last green commit** say where the work is.
+  - **Branch and worktree** (only when you took one) and **Last green commit** say where the work is.
   - **Next action** is stated exactly enough that a stranger could do it.
   - **Decisions made** records each decision with its date and who made it.
   - **Surprises** records what the plan got wrong or missed. A surprise that changes the plan changes the plan, in the same commit.
 
 ### Stopping part-way (a new tool, person or session)
 
-Commit what works on the branch, even if the item is unfinished. Set Status, Last green commit and Next action so someone with no
+Commit what works to master (or to your temporary branch, if you took one), even if the item is unfinished. Set Status, Last green commit and Next action so someone with no
 other context can carry on. Leave nothing running: release leases and stop the sessions you created. Do not write a separate handoff
 file. The block in the plan is the handoff.
 
