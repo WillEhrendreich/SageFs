@@ -2603,8 +2603,8 @@ let activate (context: ExtensionContext) =
   let out = Window.createOutputChannel "SageFs"
   outputChannel <- Some out
 
-  // Log unhandled promise rejections with stack traces to the output channel
-  installRejectionHandler (fun msg -> out.appendLine msg)
+  // Log this extension's own unhandled promise rejections, with stack traces, to the output channel.
+  installRejectionHandler context.extensionPath (fun msg -> out.appendLine msg)
 
   let sb = Window.createStatusBarItem StatusBarAlignment.Left 50.
   sb.command <- Some "sagefs.sessionMenu"

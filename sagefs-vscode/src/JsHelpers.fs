@@ -101,6 +101,7 @@ let jsClearInterval (id: obj) : unit = jsNative
 [<Emit("clearTimeout($0)")>]
 let jsClearTimeout (id: obj) : unit = jsNative
 
-/// Install a global unhandled rejection handler that logs stack traces.
-[<Emit("process.on('unhandledRejection', (reason) => { const msg = reason && reason.stack ? reason.stack : String(reason); $0('[SageFs] Unhandled rejection: ' + msg); })")>]
-let installRejectionHandler (log: string -> unit) : unit = jsNative
+/// Log unhandled rejections whose stack runs through `ownRoot`. The handler is process-wide and the extension
+/// host is shared, so anything else (another extension's failure) is left alone. See rejection-helpers.js.
+[<Import("installRejectionHandler", "./rejection-helpers.js")>]
+let installRejectionHandler (ownRoot: string) (log: string -> unit) : unit = jsNative

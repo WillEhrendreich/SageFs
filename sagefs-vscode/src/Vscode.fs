@@ -140,6 +140,8 @@ module TreeItemCheckboxState =
 
 type [<AllowNullLiteral>] ExtensionContext =
   abstract subscriptions: ResizeArray<Disposable>
+  /// The folder this extension was installed to. A stack that runs through it belongs to this extension.
+  abstract extensionPath: string
 
 type [<AllowNullLiteral>] Progress<'T> =
   abstract report: value: 'T -> unit
