@@ -11,7 +11,11 @@ let private net11 =
 let private net10 =
   """{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}"""
 
-let private frameworkDirs = [ "10.0.12"; "11.0.0-rc.1.26425.128"; "9.0.4" ]
+/// What `dotnet publish -p:PublishAot=true` writes: the runtime is included, so there is no `framework` entry.
+let private nativeAot =
+  """{"runtimeOptions":{"tfm":"net10.0","includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.12"}]}}"""
+
+let private frameworkDirs =[ "10.0.12"; "11.0.0-rc.1.26425.128"; "9.0.4" ]
 
 /// Map an arbitrary byte onto a runtime major in 8..13.
 let private majorOf (raw: byte) = 8 + int raw % 6
@@ -35,6 +39,23 @@ let tests =
 
       testCase "a runtimeconfig that names no framework is NoFrameworkVersion" <| fun _ ->
         parseRuntimeRequirement "{}" |> Expect.equal "no framework" (Result.Error NoFrameworkVersion)
+
+      testCase "WHY — a NativeAOT runtimeconfig names its runtime under includedFrameworks, and a healthy AOT project is not a project with no runtime (#177)" <| fun _ ->
+        parseRuntimeRequirement nativeAot
+        |> Expect.equal "the included runtime is the requirement" (Result.Ok { Major = 10; Stability = Stable })
+
+      testCase "WHY — includedFrameworks is read like frameworks, so an AOT ASP.NET project takes the highest major across both entries" <| fun _ ->
+        parseRuntimeRequirement
+          """{"runtimeOptions":{"includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.12"},{"name":"Microsoft.AspNetCore.App","version":"11.0.0-rc.1.26425.128"}]}}"""
+        |> Expect.equal "highest major wins and carries its stability" (Result.Ok { Major = 11; Stability = Prerelease })
+
+      testCase "WHY — an empty includedFrameworks still names no framework, so the skip is for a runtime that is named and not for any file with the key" <| fun _ ->
+        parseRuntimeRequirement """{"runtimeOptions":{"includedFrameworks":[]}}"""
+        |> Expect.equal "nothing named" (Result.Error NoFrameworkVersion)
+
+      testCase "WHY — an unparseable included version is named in the error, as it is for framework" <| fun _ ->
+        parseRuntimeRequirement """{"runtimeOptions":{"includedFrameworks":[{"name":"x","version":"banana"}]}}"""
+        |> Expect.equal "named" (Result.Error(UnrecognisedFrameworkVersion "banana"))
 
       testCase "an unparseable framework version is named in the error" <| fun _ ->
         parseRuntimeRequirement """{"runtimeOptions":{"framework":{"name":"x","version":"banana"}}}"""

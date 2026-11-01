@@ -75,13 +75,19 @@ let private parseVersionString (text: string) : Result<RuntimeRequirement, Runti
 
 /// Read the runtime a project needs from the text of its `<name>.runtimeconfig.json`.
 /// Takes the highest major across `framework` / `frameworks` (an ASP.NET project lists both
-/// Microsoft.NETCore.App and Microsoft.AspNetCore.App).
+/// Microsoft.NETCore.App and Microsoft.AspNetCore.App) and `includedFrameworks` (a NativeAOT or
+/// self-contained build names the runtime it carries there, and has no `framework` entry).
 let parseRuntimeRequirement (json: string) : Result<RuntimeRequirement, RuntimeConfigError> =
   try
     use document = JsonDocument.Parse json
     let versionsOf (element: JsonElement) =
       match element.TryGetProperty "version" with
       | true, version when version.ValueKind = JsonValueKind.String -> [ version.GetString() ]
+      | _ -> []
+    let versionsOfArray (options: JsonElement) (name: string) =
+      match options.TryGetProperty name with
+      | true, frameworks when frameworks.ValueKind = JsonValueKind.Array ->
+        [ for framework in frameworks.EnumerateArray() do yield! versionsOf framework ]
       | _ -> []
     let frameworkVersions =
       match document.RootElement.TryGetProperty "runtimeOptions" with
@@ -90,12 +96,7 @@ let parseRuntimeRequirement (json: string) : Result<RuntimeRequirement, RuntimeC
           match options.TryGetProperty "framework" with
           | true, framework -> versionsOf framework
           | false, _ -> []
-        let many =
-          match options.TryGetProperty "frameworks" with
-          | true, frameworks when frameworks.ValueKind = JsonValueKind.Array ->
-            [ for framework in frameworks.EnumerateArray() do yield! versionsOf framework ]
-          | _ -> []
-        single @ many
+        single @ versionsOfArray options "frameworks" @ versionsOfArray options "includedFrameworks"
       | false, _ -> []
     match frameworkVersions with
     | [] -> Error NoFrameworkVersion
