@@ -53,6 +53,40 @@ Two things follow. The text of a rejection body reaches the model in every HTTP-
 
 Hook facts (measured): a sub-agent's `PreToolUse` input carries `agent_id`, `agent_type` and, for MCP calls, `mcp_server`. A hook `deny` reaches the sub-agent with its reason verbatim.
 
+### The other clients
+
+Measured on 2026-11-01 against the same stand-in server (`server2.mjs`: switchable mode, token rotated after the first good call, or stale from the first request), one small prompt per cell, static `X-Test-Token` header. Copilot CLI 1.0.92 ran on `claude-haiku-4.5`, opencode 2.1.2 on `glm-5.3-flash-free`. Command Code 1.88.2 could not run a model (the account hit its weekly limit), so only its connection behavior is measured. Cursor's CLI is not logged in, and VS Code is a GUI, so those two are read from documentation and source.
+
+| Cell | Claude Code 2.1.316 | Copilot CLI | opencode | Command Code | VS Code (source) |
+|:--|:--|:--|:--|:--|:--|
+| `403` on a call, static header | body reaches the model | body reaches the model, no retry | body plus `(HTTP 403)` reaches the model, no retry | not measured | treated like `401`, see below |
+| `401` on a call, static header | OAuth registration fails, body reaches the model | OAuth discovery probes, then `Re-authentication required for MCP server "rot". Sign in again through your MCP client's authentication settings.` The body is dropped. | OAuth discovery probes, then `requires a login before it can register a client`. The body is dropped. | not measured | same path as `403` |
+| Refused at connect (any status) | not measured (the table above is mid-run; a stale token from the first request with the real daemon gave 0 tools) | the model sees no tool, `NO TOOL` | the model sees no `rot` server | `401` probes four OAuth metadata URLs, `403` probes none; `mcp list` shows the server as enabled either way | `Error` state |
+| `200` with an empty list | `NO TOOL` | `NO TOOL` | indistinguishable from a refused connect | `mcp list` shows it as enabled | cached as a normal empty list |
+| `200`, in-band refusal on a call | reaches the model | reaches the model | reaches the model | not measured | rethrown |
+| Where a human finds the cause | `/mcp` | the log: a `403` body is in a `server/discover failed` warning, a `401` is logged as `Browser-based OAuth required` | not found | `/mcp` per its docs | `403 status sending message to <url>: <body>` |
+
+Other facts from the same runs and sources:
+
+- Copilot CLI sends `server/discover` first, as Claude Code does, and on a `403` logs `server/discover failed; retrying with legacy initialize`, then stops after the second refusal.
+- opencode reaches MCP tools through a search-and-run `execute` tool, not as listed tools. A prompt that names tool names finds nothing.
+- Command Code's `mcp add` probes the URL once with no headers, which would hit a daemon route that has no token.
+- VS Code (`extHostMcp.ts`, `_fetchWithAuthRetry`): `isAuthStatusCode` is `401 || 403`, so both start OAuth discovery from `WWW-Authenticate` and retry up to three fetches. Configured headers come from an object that is never reassigned, so they are fixed for the life of the connection. The final error includes the response body unparsed. Its server set is global in the files read; custom agent files were not read.
+- Header interpolation: Copilot, Command Code and Claude Code take `${VAR}`; Cursor takes `${env:NAME}` (docs); opencode's schema shows static `headers` only (not tested). None of the five has a helper command except Claude Code. Copilot's binary contains the string `HTTP2_HEADER_REFRESH`, and its error type is named `HeaderRefreshHttpClient`; the setting that drives it was not found.
+
+Sub-agent identity across clients:
+
+| Client | A sub-agent with its own credential | What happens when it fails |
+|:--|:--|:--|
+| Claude Code | inline `mcpServers` in agent frontmatter, measured | silently falls back to the parent's server, so the sub-agent becomes the parent's member |
+| Copilot CLI | `mcp-servers` in `.github/agents/*.agent.md` with `X-Test-Token: ${ROT_TOKEN}`, run through the `task` tool, measured: the server saw the sub-agent's token | a same-named server in the parent loses to the agent's own entry. A refused sub-agent token leaves it with no tool, and the parent's token was never used for its calls. An unset `ROT_TOKEN` sends the literal text `${ROT_TOKEN}` with no warning. |
+| opencode | none: the agent schema has `tools` and `permission` but no `mcp` or `headers` | not applicable |
+| Command Code | none: the sub-agent frontmatter lists no MCP key (docs) | not applicable |
+| Cursor | none: "Subagents inherit all tools from the parent, including MCP tools" (docs) | not applicable |
+| VS Code | none found: the server set is global in the files read | not applicable |
+
+Two clients can give a sub-agent its own identity, and one of them fails closed. In the other four, every sub-agent shares the parent's connection, which is F8 as it stands. Plan C1 therefore covers Claude Code and Copilot CLI, and C4 to C6 are detectors only for Claude Code.
+
 ## Precedent for a local daemon credential
 
 - Jupyter Server authenticates every request with a token, accepted as `Authorization: token ...`, on by default, and runs authorization after authentication. https://jupyter-server.readthedocs.io/en/latest/operators/security.html Its runtime file is written through `secure_write`, which checks for mode 0600. That check failed for users on mounted filesystems (CIFS reported 0o677) and `jupyter_core` 4.6.2 added `JUPYTER_ALLOW_INSECURE_WRITES` for them. https://github.com/jupyter-server/jupyter_server/pull/77 The lesson for an `operator.token` file: verify the mode after writing, and decide in advance what happens when the filesystem cannot hold it.
@@ -71,8 +105,13 @@ Criteria, from how this product is built: C1 follows the standard and its direct
 | A3. `403` with an `invalid_token` JSON body | departs from the MUST (the spec reserves 403 for insufficient scope) | helper refresh and retry works; static header shows the body | model and human: yes | closed | S, same edge | recommended for a presented-but-unusable token |
 | A4. Keep the empty list, add a diagnostic tool | none | the model must know to call it | partial | closed | M | reject |
 | A5. Full list, refuse at the call | allowed (list may vary by credential) | works; refusal text reaches the model | yes | opens the list to a bad token | S | acceptable fallback |
+| A6. A bad token lists exactly one tool, `credential_status`, whose description says the credential is unusable and to call it. Every call, that one included, answers `403` with the `invalid_token` body | allowed (list may vary by credential) | not measured against the daemon; each piece is measured on the stand-in: a `403` body reaches the model in Claude Code, Copilot and opencode, and Claude Code refreshes and retries | model: yes in every client measured. human: yes | closed: no tool but the one that refuses | M | recommended with A3, after measuring |
 
 Reasoning for A3. SageFs is not an OAuth resource server: it publishes no protected-resource metadata and has no authorization server, so a `401` starts a protocol it cannot finish, and measured it also blocks the one behavior that heals the restart case. A `403` with a body in the standard `invalid_token` shape gets the refresh and retry in Claude Code, and the body reaches the model everywhere else. The cost is a departure from "MUST 401", so it goes in one named function with a test that pins the status, and a gate that pins the Claude Code behavior so a client update that changes it fails loudly. A token that is missing under a policy that requires one stays `401`, because there is nothing to refresh and that is exactly what the spec describes.
+
+The other clients support A3 and expose its limit. A `403` is never worse than a `401` in any client measured. In Copilot and opencode a `401` replaces our sentence with an OAuth sign-in message, and a `403` delivers it; Command Code probes OAuth metadata on a `401` and not on a `403`. VS Code treats the two alike, so the status costs nothing there. The limit is a token that is stale from the first request, for example a sub-agent launched after a restart with an environment variable minted before it. Then Copilot and opencode show the model no tool and no cause whatever the status, and the cause is only in a log. A6 closes that gap, because a list with one tool the model can call turns a connect-time refusal into a call-time one.
+
+A related cheap check: Copilot sends the literal text `${ROT_TOKEN}` when the variable is unset. A presented token that begins with `${` or `$` can get its own refusal that names an unset environment variable.
 
 ### B. The tool list depends on connection state (#181)
 
@@ -125,7 +164,7 @@ Restarts come in bursts: 22 `release v` commits in 21 days, up to five a day fro
 ## Recommended order
 
 1. The who-am-I line (last line), the planner, the `sagefs check` warnings and the hook (C4 to C6). No dependencies.
-2. The HTTP-level refusal for a presented-but-unusable credential (A3) in the existing `useMemberToken` edge, with a pin test. This fixes #182 without waiting for anything.
+2. The HTTP-level refusal for a presented-but-unusable credential (A3) in the existing `useMemberToken` edge, with a pin test, plus the one-tool list (A6) once it is measured. This fixes #182 without waiting for anything.
 3. Slice 0 of the operator credential (D3).
 4. The credential-only tool list (B3), which fixes #181 and makes `TokenRequired` usable.
 5. The helper that mints on refusal (E2).
@@ -137,7 +176,14 @@ Restarts come in bursts: 22 `release v` commits in 21 days, up to five a day fro
 2. Accept B3, that the tool list depends on the presented credential only. It drops the conductor-by-connection shortcut for `TokenRequired`, and it is what the stateless revision requires.
 3. If `operator.token` cannot be made owner-only, refuse the route with a message that says how to fix it. No escape hatch until someone asks.
 4. Measure C7 before designing it.
+5. Add A6 beside A3, so a token that is stale from the first request still shows the model a tool and a cause. Measure it against the stand-in in Claude Code, Copilot and opencode first.
 
 ## Not measured
 
-How Cursor, Copilot and VS Code react to a `401` or `403` with this body; Claude Code in an interactive session instead of `-p`; whether the real daemon answers `server/discover`; the orchestrator-on-a-narrow-token option; what a restart orphans in practice; the Windows ACL.
+- Command Code with a model: the account is at its weekly limit, so its mid-run and model-visible behavior is open, and a `403` or `401` mid-run is untested there.
+- Cursor and VS Code were not run. Cursor's CLI is not logged in and approving a server writes to the user's Cursor config. Everything about them comes from documentation and source, and the Cursor docs say nothing about `401` or `403`.
+- Copilot's header refresh: the error type is named `HeaderRefreshHttpClient` and the binary has the string `HTTP2_HEADER_REFRESH`, but no configuration key was found.
+- opencode with a header that changes: `headers` is static in its schema, and `${VAR}` interpolation was not tested.
+- A6 itself, and whether the real daemon answers `server/discover`.
+- Claude Code in an interactive session instead of `-p`; the orchestrator-on-a-narrow-token option; what a restart orphans in practice; the Windows ACL.
+- Each cell above is one run with a small model. They show what each client does with a status code. They do not show how often a model reads the result correctly.
