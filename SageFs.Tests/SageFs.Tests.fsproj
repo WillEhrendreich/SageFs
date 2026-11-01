@@ -56,6 +56,7 @@
         <Compile Include="SourceStateSurfaceTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="ManualProjectParseTests.fs" />
+        <Compile Include="ManagedAssetsTests.fs" />
         <Compile Include="LoadedProjectReportingTests.fs" />
         <Compile Include="SharedGenerators.fs" />
         <Compile Include="McpFormatterPropertyTests.fs" />

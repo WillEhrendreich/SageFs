@@ -416,6 +416,93 @@ module NativeAssets =
     | true -> []
     | false -> value.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) |> Array.toList
 
+/// What reading a restore's managed assemblies found.
+type ManagedAssetsReading =
+  /// The package assemblies the restore lists that the disk holds. Empty is a restore with nothing to reference.
+  | AssembliesRead of string list
+  /// The restore file could not be read as a restore, and why.
+  | RestoreUnreadable of reason: string
+
+/// Reads the managed assemblies a project's restore says its packages carry (`obj/project.assets.json`), for the
+/// manual project fallback. A class library's build output does not copy its packages (only an executable's or a test
+/// project's does), so without this a session loaded through the fallback has the library and none of what it calls.
+[<RequireQualifiedAccess>]
+module ManagedAssets =
+
+  let private tfmOf (target: string) : string =
+    match target.IndexOf '/' with
+    | -1 -> target
+    | at -> target.Substring(0, at)
+
+  /// `net10.0` is (10, 0). `net48`, `netstandard2.0` and `netcoreapp3.1` are not modern .NET and are not a version here.
+  let private netVersion (tfm: string) : (int * int) option =
+    let m = System.Text.RegularExpressions.Regex.Match(tfm, @"^net(\d+)\.(\d+)$")
+    match m.Success with
+    | true -> Some(int m.Groups.[1].Value, int m.Groups.[2].Value)
+    | false -> None
+
+  /// Which of a restore's targets to read: the highest .NET version that can run on `runtimeMajor`, or when every target
+  /// is newer, the closest one. A target without a runtime identifier comes before the same version with one.
+  let chooseTarget (runtimeMajor: int) (targets: string list) : string option =
+    let candidates = targets |> List.choose (fun t -> netVersion (tfmOf t) |> Option.map (fun v -> t, v))
+    let runnable = candidates |> List.filter (fun (_, (major, _)) -> major <= runtimeMajor)
+    match runnable with
+    | [] ->
+      candidates
+      |> List.sortBy (fun (t, (major, minor)) -> major, minor, t.Contains '/')
+      |> List.tryHead
+      |> Option.map fst
+    | _ ->
+      runnable
+      |> List.sortBy (fun (t, (major, minor)) -> -major, -minor, t.Contains '/')
+      |> List.tryHead
+      |> Option.map fst
+
+  /// The absolute paths of every package assembly the chosen target's `runtime` section lists and the disk holds.
+  /// `directoryExists` says which package folder holds the package (a restore may list a fallback folder first) and
+  /// `fileExists` whether the assembly is there. Reference-only (`compile`) assemblies, `_._` placeholders and project
+  /// references are not read: FSI needs the implementation, and a project's own output comes from its `bin`.
+  let read (directoryExists: string -> bool) (fileExists: string -> bool) (runtimeMajor: int) (json: string) : ManagedAssetsReading =
+    try
+      use document = JsonDocument.Parse json
+      let root = document.RootElement
+      let folders = NativeAssets.members (NativeAssets.child root "packageFolders") |> List.map fst
+      let libraries = NativeAssets.members (NativeAssets.child root "libraries") |> Map.ofList
+      let targets = NativeAssets.members (NativeAssets.child root "targets")
+      let folderOf (identity: string) : string =
+        match Map.tryFind identity libraries with
+        | None -> ""
+        | Some library ->
+          match NativeAssets.text library "path" with
+          | "" -> ""
+          | relative ->
+            folders
+            |> List.map (fun folder -> Path.Combine(folder, relative))
+            |> List.tryFind directoryExists
+            |> Option.defaultValue ""
+      match chooseTarget runtimeMajor (targets |> List.map fst) with
+      | None -> AssembliesRead []
+      | Some key ->
+        let target = targets |> List.find (fun (k, _) -> k = key) |> snd
+        [ for identity, package in NativeAssets.members target do
+            match NativeAssets.text package "type", folderOf identity with
+            | "package", folder when folder <> "" ->
+              for path, _ in NativeAssets.members (NativeAssets.child package "runtime") do
+                match path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) with
+                | true ->
+                  let full = Path.GetFullPath(Path.Combine(folder, path))
+                  match fileExists full with
+                  | true -> yield full
+                  | false -> ()
+                | false -> ()
+            | _ -> () ]
+        |> List.distinct
+        |> AssembliesRead
+    with
+    | :? JsonException as ex -> RestoreUnreadable ex.Message
+    // A path with a character the file system rejects, in a restore that parsed.
+    | :? ArgumentException as ex -> RestoreUnreadable ex.Message
+
 /// Says what is wrong when a native library cannot be loaded.
 [<RequireQualifiedAccess>]
 module NativeDiagnosis =

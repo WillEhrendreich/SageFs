@@ -169,13 +169,13 @@ module ManualProjectParse =
   /// directory looking for an ancestor `artifacts/bin/<ProjectName>/` —
   /// bounded (8 levels) so a project with no Arcade layout anywhere in its
   /// ancestry (the common case) doesn't walk to the filesystem root.
-  let arcadeBinDir (projDir: string) (projectFileName: string) : string option =
+  let arcadeDir (kind: string) (projDir: string) (projectFileName: string) : string option =
     let projectName = Path.GetFileNameWithoutExtension projectFileName
     let rec walk (dir: string) (depth: int) =
       match depth > 8 with
       | true -> None
       | false ->
-        let candidate = Path.Combine(dir, "artifacts", "bin", projectName)
+        let candidate = Path.Combine(dir, "artifacts", kind, projectName)
         match Directory.Exists candidate with
         | true -> Some candidate
         | false ->
@@ -185,6 +185,59 @@ module ManualProjectParse =
           | parent when parent = dir -> None
           | parent -> walk parent (depth + 1)
     walk projDir 0
+
+  /// `artifacts/bin/<ProjectName>` of an Arcade-style repo, found from the project's directory (see `arcadeDir`).
+  let arcadeBinDir (projDir: string) (projectFileName: string) : string option =
+    arcadeDir "bin" projDir projectFileName
+
+  /// The restore's `project.assets.json` for `projPath`: the conventional `<projectDir>/obj/` one, or the Arcade-style
+  /// `artifacts/obj/<ProjectName>/` one found in an ancestor directory. `None` when the project was never restored.
+  let assetsFile (projPath: string) : string option =
+    let projDir = Path.GetDirectoryName(Path.GetFullPath projPath)
+    let conventional = Path.Combine(projDir, "obj", "project.assets.json")
+    match File.Exists conventional with
+    | true -> Some conventional
+    | false ->
+      arcadeDir "obj" projDir projPath
+      |> Option.map (fun dir -> Path.Combine(dir, "project.assets.json"))
+      |> Option.filter File.Exists
+
+  /// The package assemblies each project's restore says it carries. A class library's build output does not hold
+  /// them, so the fallback's `bin` collection misses every package of a library (only an executable's or a test
+  /// project's `bin` has copies). A project with no restore, or one whose restore cannot be read, adds nothing and
+  /// says so.
+  let collectPackageReferences (logger: ILogger) (runtimeMajor: int) (projPaths: string list) : DllName list =
+    projPaths
+    |> List.collect (fun projPath ->
+      match assetsFile projPath with
+      | None ->
+        logger.LogWarning (sprintf "  No restore (obj/project.assets.json) for %s, so its packages are not referenced" (Path.GetFileName projPath))
+        []
+      | Some assets ->
+        let reading =
+          try
+            ManagedAssets.read Directory.Exists File.Exists runtimeMajor (File.ReadAllText assets)
+          with
+          | :? IOException as ex -> RestoreUnreadable ex.Message
+          | :? UnauthorizedAccessException as ex -> RestoreUnreadable ex.Message
+        match reading with
+        | AssembliesRead dlls ->
+          logger.LogInfo (sprintf "  Collected %d package assembly(ies) from the restore of %s" (List.length dlls) (Path.GetFileName projPath))
+          dlls
+        | RestoreUnreadable reason ->
+          logger.LogWarning (sprintf "  Could not read the restore of %s (%s), so its packages are not referenced" (Path.GetFileName projPath) reason)
+          [])
+    |> List.distinct
+
+  /// The `bin` references, then the package assemblies the `bin` does not already hold. A copy in `bin` wins by file
+  /// name, so the project's own dependency version is the one FSI loads (the same rule the shared-framework
+  /// assemblies already follow).
+  let mergeReferences (binRefs: DllName list) (packageRefs: DllName list) : DllName list =
+    let held = binRefs |> List.map (fun dll -> (Path.GetFileName dll).ToLowerInvariant()) |> Set.ofList
+    let extra =
+      packageRefs
+      |> List.filter (fun dll -> not (Set.contains ((Path.GetFileName dll).ToLowerInvariant()) held))
+    binRefs @ extra
 
   /// The directory the manual fallback should collect build output from for
   /// `projPath`: the conventional `<projectDir>/bin` when it exists, or the
@@ -957,7 +1010,10 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
         |> List.collect (fun (i, projPath) ->
           onProgress (i + 1) totalManual (sprintf "Parsing %s (manual)" (Path.GetFileName projPath))
           ManualProjectParse.parseFsproj logger projPath)
-      let refs = ManualProjectParse.collectBinReferences logger projects
+      let binRefs = ManualProjectParse.collectBinReferences logger projects
+      // A class library's bin holds its own assembly and none of its packages, so the packages come from the restore.
+      let packageRefs = ManualProjectParse.collectPackageReferences logger Environment.Version.Major projects
+      let refs = ManualProjectParse.mergeReferences binRefs packageRefs
       // LibPaths must lead with the project's bin dir so FSI's assembly probe
       // resolves the project's own dependency versions (Falco, Npgsql, ...)
       // BEFORE the worker process's own copies (SageFs bundles Falco for its
