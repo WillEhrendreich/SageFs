@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress. Phase 0 ran on 2026-11-01 and the mechanism works (see "Measure first, results"). |
 | Size | S for phase 0, M for phase 2 |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: a string-referenced server is reported as sharing the parent. Then take the steps below in order. |
+| Branch and worktree | none, work on master |
+| Last green commit | none yet (the commit that carries this edit is docs only) |
+| Next action | Step 2: the failing test that a string-referenced server is reported as `SharesParent`, then `SubagentTokenPlan.fs`, then the `sagefs check` warning described under "Measure first, results". |
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Surprises | Four, all under "Measure first, results": `--strict-mcp-config` disables the wiring, the trust rule drops it silently in a headless run, a `tools:` allow-list cannot name an inline server's tools, and a dropped server falls back to the parent's. |
 
 ## What done looks like
 
@@ -119,6 +119,27 @@ The experiment, run on this machine with a throwaway repo and a test daemon on i
 | `headersHelper` on an inline sub-agent server that dumps its environment and arguments to a file | Anything that names the sub-agent (name, `agent_id`, session id) | If yes, mechanism 3 is possible. If no, mechanism 3 is dead and only 1 and 2 remain. |
 | PreToolUse hook on `mcp__sagefs__.*` that returns `updatedInput` with an extra key, and a daemon log of the incoming arguments and `_meta` | Whether the arguments arrive changed; whether `_meta` changed | Confirms or removes the last doubt about the hook route. It would still be a tool argument, so even a yes does not change the design. |
 | Cost: tools loaded into the sub-agent | Tokens in the sub-agent's first turn with and without tool search | An inline server adds the SageFs catalog (about 28,000 tokens undeferred) to the sub-agent's context only; tool search is on by default per the harness research, which should cut it. |
+
+### Measure first, results
+
+Run on 2026-11-01 with Claude Code 2.1.316 and the 0.6.929 local build. A throwaway daemon on port 41749 with its own data dir. A headless conductor (`claude -p`) joined the cohort first and minted two Observer tokens. A headless parent then spawned sub-agents, and each called `leave_cohort` once, because the daemon's reply names the caller's member id.
+
+| Experiment | Result |
+|:--|:--|
+| Inline `type: http` server with `headers` and `${VAR}`, two agents, two tokens | Works. The two calls were attributed to `cap:ecd9a0572ceebbed` and `cap:e1372696da61845a`, two members, each refused by the role gate as Observer. The Claude Code debug log shows `X-SageFs-Member-Token` sent on each inline connection. |
+| The parent's inherited server (what a sub-agent without its own server uses) | One member. Three sub-agents all reported `mcp:m-753c5dc5b2657088`, the parent's connection. Finding F8 holds on 2.1.316. |
+| String reference `- name` | A server added with `--mcp-config` was reported "MCP server not found" for a string reference, so a string reference resolves among the servers the settings define. It shares the parent's connection. |
+| `headersHelper`, `updatedInput`, token cost | Not run. The first row works, so these no longer decide the item. |
+
+Three things the experiment found that the docs do not say:
+
+1. `--strict-mcp-config` disables sub-agent `mcpServers`. The debug log says "Skipping frontmatter MCP servers: blocked by --strict-mcp-config".
+2. A project-scope agent (`.claude/agents/` in a repo) loses its `mcpServers` in a headless run unless the folder was trusted in an interactive session: "the folder its definition file came from is not trusted". A user-scope agent (`~/.claude/agents/`) connects.
+3. A `tools:` allow-list that names an inline server's tool is rejected at spawn ("unrecognized"), because the name is checked before the server connects. Leave `tools:` out and deny what you do not want.
+
+One finding changes the design. When an inline server is dropped (1 or 2), the sub-agent still runs. It falls back to whatever server its parent has and becomes the parent's member, which is the collapse this item exists to prevent. Under `ConnectionsAllowed` nothing shows it. Under `IdentityPolicy.TokenRequired` the same call is refused with a message that names the policy. So the setup to document is one inline server per sub-agent, with the daemon on `TokenRequired`, and `sagefs check` should warn about a `.claude/agents/*.md` file that references a server by name, runs under `--strict-mcp-config`, or sits in a project folder that may be untrusted.
+
+One run reached the maintainer's real daemon through the inherited server: a `leave_cohort` scoped to a scratch path, refused, nothing changed. An experiment needs `--disallowedTools mcp__sagefs` to keep that from happening.
 
 ## Risks and dependencies
 
