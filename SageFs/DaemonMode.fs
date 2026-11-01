@@ -1426,13 +1426,18 @@ type LiveTestWatcherManager
         // now defense in depth rather than the only guard.
         let inNestedCheckout =
           directories |> List.exists (fun root -> SageFs.FileWatcher.isInNestedCheckout root path SageFs.FileWatcher.hasCheckoutMarker)
-        let watchedSource =
-          SageFs.FileWatcher.shouldTriggerRebuild
+        let drop =
+          SageFs.FileWatcher.dropReason
             { Directories = directories; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = debounceMs }
             path
-        match watchedSource && not inNestedCheckout with
-        | true -> inbox.Post (Core (LiveTestWatcherCore.FileSaved path))
-        | false -> ()
+          |> Option.orElse (if inNestedCheckout then Some SageFs.FileWatcher.WatchDrop.NestedCheckout else None)
+        // Every event ends in exactly one line, so a save that never reaches a test run says where it
+        // stopped. Silence here means the operating system never raised the event.
+        match drop with
+        | None ->
+          Log.info "[watcher] %s changed, queued for live testing" path
+          inbox.Post (Core (LiveTestWatcherCore.FileSaved path))
+        | Some reason -> Log.info "[watcher] %s changed, dropped: %s" path (SageFs.FileWatcher.WatchDrop.toString reason)
 
       let startWatcher (dir: string) =
         match watchers.ContainsKey dir with
@@ -1477,21 +1482,24 @@ type LiveTestWatcherManager
         // save queued before its dir was removed resolves to a dir no longer in
         // Watched and is dropped here (the old stale-event case). onFileReloaded
         // is attributed only to the sessions that actually claim the dir.
+        let dropped (reason: SageFs.FileWatcher.WatchDrop) =
+          Log.info "[watcher] %s dropped at read: %s" path (SageFs.FileWatcher.WatchDrop.toString reason)
         match LiveTestWatcherCore.isUnderWatchedDir state.Watched path with
-        | false -> ()
+        | false -> dropped SageFs.FileWatcher.WatchDrop.OutsideWatchedDirectory
         | true ->
           try
             let fi = System.IO.FileInfo(path)
-            match fi.Exists && fi.Length < 1_048_576L with
+            match fi.Exists with
+            | false -> dropped SageFs.FileWatcher.WatchDrop.FileGone
+            | true when fi.Length >= 1_048_576L -> dropped SageFs.FileWatcher.WatchDrop.FileTooLarge
             | true ->
               let content = System.IO.File.ReadAllText(path)
               dispatch (SageFsMsg.FileContentChanged(path, content))
               for sessionId in LiveTestWatcherCore.sessionsForPath state.DirSessions path do
                 onFileReloaded sessionId path
-            | false -> ()
           with
-          | :? System.IO.IOException -> ()
-          | :? System.UnauthorizedAccessException -> ()
+          | :? System.IO.IOException -> dropped SageFs.FileWatcher.WatchDrop.Unreadable
+          | :? System.UnauthorizedAccessException -> dropped SageFs.FileWatcher.WatchDrop.Unreadable
 
       /// Apply one pure-core message and run the effects it produces. This is
       /// the only place that mutates the impure edge (watchers dict, timer).

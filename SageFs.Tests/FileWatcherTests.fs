@@ -151,6 +151,38 @@ let fileWatcherTests =
         |> Flip.Expect.isTrue "should match case-insensitively"
     ]
 
+    testList "dropReason" [
+      let config = { defaultWatchConfig ["/r"] with ExcludePatterns = ["**/Generated/**"] }
+
+      testCase "WHY — each filter that drops a saved file names itself, so a log line says which one swallowed a save" <| fun () ->
+        [ "/r/Lib.fs", None
+          "/r/Script.fsx", None
+          "/r/~temp.fs", Some WatchDrop.TemporaryFile
+          "/r/file.fs.tmp", Some WatchDrop.TemporaryFile
+          "/r/obj/Debug/x.fs", Some WatchDrop.BuildOutput
+          "/r/bin/x.fs", Some WatchDrop.BuildOutput
+          "/r/Generated/Types.fs", Some WatchDrop.ExcludedByPattern
+          "/r/readme.md", Some WatchDrop.UnwatchedExtension
+          "/r/noext", Some WatchDrop.UnwatchedExtension ]
+        |> List.iter (fun (path, expected) ->
+          dropReason config path |> Flip.Expect.equal (sprintf "the reason for %s" path) expected)
+
+      testCase "WHY — a change has no reason to drop exactly when it triggers a rebuild, so the log and the decision cannot disagree" <| fun () ->
+        [ "/r/Lib.fs"; "/r/Script.fsx"; "/r/App.fsproj"; "/r/out.dll"; "/r/~temp.fs"; "/r/file.fs.tmp"
+          "/r/obj/x.fs"; "/r/bin/x.fs"; "/r/Generated/Types.fs"; "/r/Upper.FS"; "/r/noext"; "C:\\Code\\Module.fs" ]
+        |> List.iter (fun path ->
+          (dropReason config path |> Option.isNone)
+          |> Flip.Expect.equal (sprintf "agreement for %s" path) (shouldTriggerRebuild config path))
+
+      testCase "WHY — every reason has its own text, so two different drops never read the same in a log" <| fun () ->
+        let cases = Microsoft.FSharp.Reflection.FSharpType.GetUnionCases typeof<WatchDrop>
+        let texts =
+          cases
+          |> Array.map (fun c -> WatchDrop.toString (Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(c, [||]) :?> WatchDrop))
+        texts |> Array.forall (fun t -> t <> "") |> Flip.Expect.isTrue "no reason has empty text"
+        (Array.distinct texts).Length |> Flip.Expect.equal "no two reasons share text" cases.Length
+    ]
+
     testList "shouldTriggerRebuild with ExcludePatterns" [
       testCase "excludes file matching pattern" <| fun () ->
         let config = { defaultWatchConfig [@"C:\Code"] with

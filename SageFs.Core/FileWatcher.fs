@@ -253,18 +253,56 @@ let fileChangeAction (change: FileChange) : FileChangeAction =
       Log.debug "[FileWatcher] Ignoring %s — extension %s not watched" (Path.GetFileName change.FilePath) ext
       FileChangeAction.Ignore
 
-/// Pure: decide if a file change should trigger a rebuild.
-let shouldTriggerRebuild (config: WatchConfig) (filePath: string) : bool =
+/// Every way a saved file can fail to reach live testing. A save that produces no log line and no test
+/// run is indistinguishable from one that never arrived, so each place that drops one names why with
+/// one of these.
+[<RequireQualifiedAccess>]
+type WatchDrop =
+  /// A `~name` or `name.tmp` file: an editor's scratch file, not a source.
+  | TemporaryFile
+  /// Anything under a `bin` or `obj` folder.
+  | BuildOutput
+  | ExcludedByPattern
+  | UnwatchedExtension
+  /// Inside a different checkout nested under the watched folder, such as a git worktree.
+  | NestedCheckout
+  | OutsideWatchedDirectory
+  /// Absent when the daemon went to read it. A save that writes a temp file and renames it over the
+  /// source looks like this if the read lands between the two steps.
+  | FileGone
+  | FileTooLarge
+  | Unreadable
+
+module WatchDrop =
+  let toString (drop: WatchDrop) : string =
+    match drop with
+    | WatchDrop.TemporaryFile -> "a temporary file (~name or name.tmp)"
+    | WatchDrop.BuildOutput -> "under a bin or obj folder"
+    | WatchDrop.ExcludedByPattern -> "matches an exclude pattern"
+    | WatchDrop.UnwatchedExtension -> "not a watched file type"
+    | WatchDrop.NestedCheckout -> "inside another checkout nested under the watched folder"
+    | WatchDrop.OutsideWatchedDirectory -> "outside every watched directory"
+    | WatchDrop.FileGone -> "gone by the time it was read"
+    | WatchDrop.FileTooLarge -> "over the read size limit"
+    | WatchDrop.Unreadable -> "could not be read"
+
+/// Pure: why a file change does not trigger a rebuild, or None when it does. The first filter that
+/// applies is the answer, in the order a human would check them.
+let dropReason (config: WatchConfig) (filePath: string) : WatchDrop option =
   let normalized = filePath.Replace('\\', '/')
   let ext = Path.GetExtension(normalized).ToLowerInvariant()
   let fileName = Path.GetFileName(normalized)
-  let isTemp =
-    fileName.StartsWith("~", System.StringComparison.Ordinal)
-    || fileName.EndsWith(".tmp", System.StringComparison.Ordinal)
-    || normalized.Contains("/obj/")
-    || normalized.Contains("/bin/")
-  let isExcluded = shouldExcludeFile config.ExcludePatterns filePath
-  not isTemp && not isExcluded && List.contains ext config.Extensions
+  match () with
+  | _ when fileName.StartsWith("~", System.StringComparison.Ordinal) || fileName.EndsWith(".tmp", System.StringComparison.Ordinal) ->
+    Some WatchDrop.TemporaryFile
+  | _ when normalized.Contains("/obj/") || normalized.Contains("/bin/") -> Some WatchDrop.BuildOutput
+  | _ when shouldExcludeFile config.ExcludePatterns filePath -> Some WatchDrop.ExcludedByPattern
+  | _ when not (List.contains ext config.Extensions) -> Some WatchDrop.UnwatchedExtension
+  | _ -> None
+
+/// Pure: decide if a file change should trigger a rebuild.
+let shouldTriggerRebuild (config: WatchConfig) (filePath: string) : bool =
+  dropReason config filePath |> Option.isNone
 
 /// Pure: decide if a file change should be suppressed because the same
 /// file was compiled too recently. Prevents double-compilation when
