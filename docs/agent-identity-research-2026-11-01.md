@@ -105,7 +105,7 @@ Criteria, from how this product is built: C1 follows the standard and its direct
 | A3. `403` with an `invalid_token` JSON body | departs from the MUST (the spec reserves 403 for insufficient scope) | helper refresh and retry works; static header shows the body | model and human: yes | closed | S, same edge | recommended for a presented-but-unusable token |
 | A4. Keep the empty list, add a diagnostic tool | none | the model must know to call it | partial | closed | M | reject |
 | A5. Full list, refuse at the call | allowed (list may vary by credential) | works; refusal text reaches the model | yes | opens the list to a bad token | S | acceptable fallback |
-| A6. A bad token lists exactly one tool, `credential_status`, whose description says the credential is unusable and to call it. Every call, that one included, answers `403` with the `invalid_token` body | allowed (list may vary by credential) | not measured against the daemon; each piece is measured on the stand-in: a `403` body reaches the model in Claude Code, Copilot and opencode, and Claude Code refreshes and retries | model: yes in every client measured. human: yes | closed: no tool but the one that refuses | M | recommended with A3, after measuring |
+| A6. A bad token lists exactly one tool, `credential_status`, whose description says the credential is unusable and to call it. Every call, that one included, answers `403` with the `invalid_token` body | allowed (list may vary by credential) | measured against the daemon (0.6.929 plus the #182 commits, a stale token from the first request, one run each): Claude Code 2.1.316 (`haiku`), Copilot CLI 1.0.92 (`claude-haiku-4.5`) and opencode 2.1.2 (`glm-5.3-flash-free`) all listed `credential_status` and the model quoted its description, which holds the cause and the fix. Before, Copilot and opencode gave the model no tool and no cause. A call to the tool answered `403` with the body (curl) | model: yes in every client measured. human: yes | closed: no tool but the one that refuses | M | built, see below |
 
 Reasoning for A3. SageFs is not an OAuth resource server: it publishes no protected-resource metadata and has no authorization server, so a `401` starts a protocol it cannot finish, and measured it also blocks the one behavior that heals the restart case. A `403` with a body in the standard `invalid_token` shape gets the refresh and retry in Claude Code, and the body reaches the model everywhere else. The cost is a departure from "MUST 401", so it goes in one named function with a test that pins the status, and a gate that pins the Claude Code behavior so a client update that changes it fails loudly. A token that is missing under a policy that requires one stays `401`, because there is nothing to refresh and that is exactly what the spec describes.
 
@@ -164,7 +164,7 @@ Restarts come in bursts: 22 `release v` commits in 21 days, up to five a day fro
 ## Recommended order
 
 1. The who-am-I line (last line), the planner, the `sagefs check` warnings and the hook (C4 to C6). No dependencies.
-2. The HTTP-level refusal for a presented-but-unusable credential (A3) in the existing `useMemberToken` edge, with a pin test, plus the one-tool list (A6) once it is measured. This fixes #182 without waiting for anything.
+2. The HTTP-level refusal for a presented-but-unusable credential (A3) in the existing `useMemberToken` edge, with a pin test, plus the one-tool list (A6) once it is measured. Built on 2026-11-01 (`edgeAnswer`, `credentialStatusTool` in `SageFs/McpCapability.fs`); #182 is fixed on master and waits for a release.
 3. Slice 0 of the operator credential (D3).
 4. The credential-only tool list (B3), which fixes #181 and makes `TokenRequired` usable.
 5. The helper that mints on refusal (E2).
@@ -184,6 +184,6 @@ Restarts come in bursts: 22 `release v` commits in 21 days, up to five a day fro
 - Cursor and VS Code were not run. Cursor's CLI is not logged in and approving a server writes to the user's Cursor config. Everything about them comes from documentation and source, and the Cursor docs say nothing about `401` or `403`.
 - Copilot's header refresh: the error type is named `HeaderRefreshHttpClient` and the binary has the string `HTTP2_HEADER_REFRESH`, but no configuration key was found.
 - opencode with a header that changes: `headers` is static in its schema, and `${VAR}` interpolation was not tested.
-- A6 itself, and whether the real daemon answers `server/discover`.
+- A6 was measured with a stale token and the model asked to say why it could not call a tool. The models read the description in all three clients; no run had the model call `credential_status` itself, so the retry path through Claude Code's `headersHelper` against the real daemon is still only measured on the stand-in. Whether the real daemon answers `server/discover` is open.
 - Claude Code in an interactive session instead of `-p`; the orchestrator-on-a-narrow-token option; what a restart orphans in practice; the Windows ACL.
 - Each cell above is one run with a small model. They show what each client does with a status code. They do not show how often a model reads the result correctly.
