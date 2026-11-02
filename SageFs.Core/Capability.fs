@@ -986,6 +986,11 @@ module Capability =
     let metaKey = "sagefs/memberToken"
     /// The environment variable `sagefs mcp` (the stdio bridge) reads and sends as `headerName`.
     let bridgeEnvVar = "SAGEFS_MEMBER_TOKEN"
+    /// The environment variable `sagefs mcp` reads for the daemon's operator credential (the contents of
+    /// `operator.token`), sent as `Authorization: Bearer` so `tools/list` shows the full list (#181).
+    let operatorEnvVar = "SAGEFS_OPERATOR_TOKEN"
+    /// The standard header the operator credential travels in.
+    let authorizationHeaderName = "Authorization"
     /// The environment variable that sets the daemon's `IdentityPolicy`.
     let policyEnvVar = "SAGEFS_IDENTITY_POLICY"
     /// The claim the daemon's HTTP edge puts the token's HASH in, for the MCP request filter to read.
@@ -1009,6 +1014,13 @@ module Capability =
     let headerFromEnvironment (getEnv: string -> string) : (string * string) option =
       match getEnv bridgeEnvVar with
       | value when hasText value -> Some(headerName, value.Trim())
+      | _ -> None
+
+    /// The header the stdio bridge sends for the operator credential, when its environment names one. The value is
+    /// sent as given apart from its edges: the daemon's edge judges its shape and refuses one that is cut short.
+    let operatorHeaderFromEnvironment (getEnv: string -> string) : (string * string) option =
+      match getEnv operatorEnvVar with
+      | value when hasText value -> Some(authorizationHeaderName, sprintf "Bearer %s" (value.Trim()))
       | _ -> None
 
     /// Which token a call presents. `_meta` is per call and wins over the per-connection header, so

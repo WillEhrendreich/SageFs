@@ -17,11 +17,15 @@ reports `send_fsharp_code` as not yet available, even though the tool is
 still listed. I went back and forth on filtering the list by session state.
 For now the call-time gate is what's wired up for that.
 
-There are two exceptions, and both are about who is calling, not about the
-session. A caller that presents a [member token](#member-tokens-one-identity-per-agent-run)
+There are two exceptions, and both depend on the credential a request presents,
+and on nothing else. A caller that presents a [member token](#member-tokens-one-identity-per-agent-run)
 sees only the tools its role allows. And a daemon started with
-`SAGEFS_IDENTITY_POLICY=TokenRequired` shows a connection with no token only
-the status tools, unless that connection is the conductor.
+`SAGEFS_IDENTITY_POLICY=TokenRequired` shows a caller that presents no credential
+the status tools and `join_cohort`, and shows the caller that presents the daemon's
+operator credential everything. The list does not change when a connection joins
+the cohort or takes the conductor seat. The MCP revision of 2026-07-28 says a tool
+list must not vary per connection or as a side effect of another request, and may
+vary by the authorization presented, so that is the only input.
 
 Every tool in the catalog also says what calling it does to your work.
 Eighteen of them stop, reset, discard or land something you already have, and
@@ -676,6 +680,17 @@ queue a landing. `tools/list` shows a token only the tools its role allows. The
 role says which tools a token may call and the route (below) says where it may call
 them, and a call must pass both.
 
+**The operator credential in `tools/list`.** A request that carries the contents of
+`operator.token` as `Authorization: Bearer sfo_...` is listed every tool, `mint_member`
+included. `sagefs mcp` reads `SAGEFS_OPERATOR_TOKEN` from its environment and sends it
+that way on every request. A member token on the same request narrows the list to its
+role, so a launcher that holds both is listed as the member. The credential changes
+the list only. A call is still judged by the seat and the role: presenting it does not
+make a connection the conductor. An operator-shaped credential that is not the
+daemon's (an old file, another daemon's) is refused like a bad member token: the list
+holds `credential_status`, and a call gets HTTP `403` with `invalid_token`. Any other
+`Authorization` header, such as another system's bearer token, is left alone.
+
 **A token the daemon cannot use.** A token that is unknown (minted before a daemon
 restart, since tokens live in memory), expired, revoked or lapsed gets one tool in
 `tools/list`, `credential_status`, whose description is the refusal and what to do
@@ -712,7 +727,12 @@ connection with no token is. `ConnectionsAllowed` (the default, and what happens
 when it is unset) leaves it a plain member, exactly as before tokens existed.
 `TokenRequired` lets it read `get_cohort_status` and `get_daemon_status`, and lets
 the conductor act (so it can mint); everything else is refused with a message that
-says how to get a token. The first member to `join_cohort` is still the conductor,
+says how to get a token. The call and the list answer different questions. A call
+is judged by who holds the conductor seat, so the conductor on its own connection
+can call `mint_member` by name. The list is judged by the credential presented, so
+that same conductor, presenting none, is listed only status and `join_cohort`,
+before and after it joins. To see the full list, present the daemon's operator
+credential (below). The first member to `join_cohort` is still the conductor,
 and a connection with no token may call `join_cohort` until there is one, so the
 orchestrator starts the daemon, joins first, then mints. A value that is set but not one of the two fails closed,
 as `TokenRequired`. Without `TokenRequired` the narrow roles sit beside an

@@ -291,6 +291,69 @@ let tests =
         SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
     }
 
+    testTask "WHY - under TokenRequired tools/list depends on the credential presented and not on a join, a seat or the repo (#181)" {
+      let dataDir = freshDataDir ()
+      let! proc, port =
+        SageFs.Tests.CohortMcpToolsIntegrationTests.startIsolatedDaemonWith [ "SAGEFS_DATA_DIR", dataDir; CapabilityTransport.policyEnvVar, "TokenRequired" ]
+      try
+        let operator = operatorCredentialIn dataDir
+        let authorization (credential: string) = "Authorization", sprintf "Bearer %s" credential
+        let threeTools = [ "get_cohort_status"; "get_daemon_status"; "join_cohort" ]
+
+        // A conductor with no credential, in the daemon's own repo: the list it saw grew from 3 to 72 after it joined.
+        use! gateway = connectWith port []
+        let! before = listTools gateway []
+        before |> List.sort |> Expect.equal "before any join: status and the join tool" threeTools
+        let! joinError, joined = call gateway "join_cohort" [ "agentName", box "gateway"; "role", box "Implementer" ] []
+        joinError |> Expect.isFalse (sprintf "the conductor joins: %s" joined)
+        let! after = listTools gateway []
+        after |> List.sort |> Expect.equal "after the join the list is the same three, so a join is not a side effect on the list" threeTools
+
+        // The seat is still judged at the call: the conductor, with no credential, mints by name.
+        let! mintError, minted =
+          call gateway "mint_member" [ "agentName", box "gateway"; "role", box "Analysis"; "scope", box "src/Foo/"; "ttl_minutes", box 30; "working_directory", box daemonRepo ] []
+        mintError |> Expect.isFalse (sprintf "the call gate still admits the seat: %s" minted)
+        let token = tokenOf minted
+
+        // Another connection with no credential sees the same three, whoever joined.
+        use! stranger = connectWith port []
+        let! strangerList = listTools stranger []
+        strangerList |> List.sort |> Expect.equal "a second connection sees the same list" threeTools
+
+        // The operator credential lists everything, the minting tool included.
+        use! viaOperator = connectWith port [ authorization operator ]
+        let! operatorList = listTools viaOperator []
+        operatorList |> List.contains "mint_member" |> Expect.isTrue "the operator is listed mint_member"
+        operatorList |> List.contains "send_fsharp_code" |> Expect.isTrue "and eval"
+        (operatorList.Length > threeTools.Length) |> Expect.isTrue "far more than the three"
+
+        // A member token lists its role, and outranks an operator credential on the same request.
+        use! viaMember = connectWith port [ CapabilityTransport.headerName, token ]
+        let! memberList = listTools viaMember []
+        memberList |> List.contains "diagnose" |> Expect.isTrue "an Analysis token keeps diagnose"
+        memberList |> List.contains "send_fsharp_code" |> Expect.isFalse "and loses eval"
+        use! both = connectWith port [ CapabilityTransport.headerName, token; authorization operator ]
+        let! bothList = listTools both []
+        bothList |> Expect.equal "the member token narrows the list even beside the operator credential" memberList
+
+        // An operator-shaped credential that is not this daemon's is refused, never downgraded to nothing.
+        let wrong = OperatorCredential.ofEntropy (Array.create OperatorCredential.entropyBytes 9uy)
+        use! viaWrong = connectWith port [ authorization wrong ]
+        let! wrongList = listTools viaWrong []
+        wrongList |> Expect.equal "the one tool that says why" [ "credential_status" ]
+        let! refused = callRefusedByEdge viaWrong "get_cohort_status" []
+        refused |> Expect.stringContains "a call gets the 403" "403"
+        refused |> Expect.stringContains "as invalid_token" "invalid_token"
+        refused |> Expect.stringContains "naming the operator credential" "operator credential"
+
+        // Another system's bearer token on the same header is nobody's business here.
+        use! viaOther = connectWith port [ authorization "some-other-systems-token" ]
+        let! otherList = listTools viaOther []
+        otherList |> List.sort |> Expect.equal "it presents nothing, so it sees the three" threeTools
+      finally
+        SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
+    }
+
     testTask "WHY - sagefs member mint prints an export line that works, and says what to do when it cannot" {
       let dataDir = freshDataDir ()
       let! proc, port =

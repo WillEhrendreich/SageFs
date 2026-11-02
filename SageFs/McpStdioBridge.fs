@@ -598,6 +598,11 @@ let runMcpStdio (mcpPort: int) : Task<int> =
     match Capability.CapabilityTransport.headerFromEnvironment Environment.GetEnvironmentVariable with
     | Some(name, value) -> client.DefaultRequestHeaders.Add(name, value)
     | None -> ()
+    // The daemon's operator credential, when the process that started `sagefs mcp` set one (#181). It goes in the standard
+    // Authorization header the same way, so a conductor that holds it is listed the full tool list under TokenRequired.
+    match Capability.CapabilityTransport.operatorHeaderFromEnvironment Environment.GetEnvironmentVariable with
+    | Some(name, value) -> client.DefaultRequestHeaders.Add(name, value)
+    | None -> ()
     // What the CLIENT declared in its own `initialize`. The bridge forwards
     // that message once; every later heal re-declares it, because the daemon
     // reads capabilities out of `initialize`, and a fresh session that omitted

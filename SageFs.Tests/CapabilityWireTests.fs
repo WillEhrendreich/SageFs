@@ -116,6 +116,15 @@ let transportTests =
       CapabilityTransport.headerFromEnvironment (fun _ -> "   ") |> Expect.equal "blank" None
       CapabilityTransport.bridgeEnvVar |> Expect.equal "the variable the doc names" "SAGEFS_MEMBER_TOKEN"
 
+    testCase "WHY - the stdio bridge sends the operator credential as a Bearer header when its environment names one (#181)" <| fun () ->
+      let env = function "SAGEFS_OPERATOR_TOKEN" -> " sfo_abc " | _ -> null
+      CapabilityTransport.operatorHeaderFromEnvironment env
+      |> Expect.equal "the standard header, the Bearer scheme, the value trimmed" (Some("Authorization", "Bearer sfo_abc"))
+      CapabilityTransport.operatorHeaderFromEnvironment (fun _ -> null) |> Expect.equal "unset" None
+      CapabilityTransport.operatorHeaderFromEnvironment (fun _ -> "   ") |> Expect.equal "blank" None
+      CapabilityTransport.operatorEnvVar |> Expect.equal "the variable the doc names" "SAGEFS_OPERATOR_TOKEN"
+      CapabilityTransport.operatorEnvVar |> Expect.notEqual "and not the member token's" CapabilityTransport.bridgeEnvVar
+
     testCase "WHY - the identity policy comes from the environment: unset is the default, unreadable fails closed" <| fun () ->
       CapabilityTransport.policyFromEnvironment (fun _ -> null) |> Expect.equal "unset" IdentityPolicy.ConnectionsAllowed
       CapabilityTransport.policyFromEnvironment (fun _ -> "TokenRequired") |> Expect.equal "set" IdentityPolicy.TokenRequired
