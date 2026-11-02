@@ -188,6 +188,29 @@ let tests =
           System.IO.Directory.Delete(root, true)
     ]
 
+    testList "what get_daemon_status says about the skill" [
+      testCase "WHY — only an installed copy that is wrong gets a line: missing fails visibly and current has nothing to say" <| fun _ ->
+        let v = version shipped
+        SkillAttention.lines v SkillStatus.NotInstalled |> Expect.isEmpty "not installed: the agent's own load fails, so no line on every status call"
+        SkillAttention.lines v (SkillStatus.UpToDate v) |> Expect.isEmpty "current"
+        SkillAttention.lines v (SkillStatus.Differs("old", [ "SKILL.md" ], [], [])) |> List.length |> Expect.equal "stale: one line" 1
+        SkillAttention.lines v (SkillStatus.NotThisSkill "x") |> List.length |> Expect.equal "another skill: one line" 1
+
+      testCase "the line names the fix" <| fun _ ->
+        SkillAttention.lines (version shipped) (SkillStatus.Differs("old", [ "SKILL.md" ], [], []))
+        |> String.concat "\n"
+        |> Expect.stringContains "the command" "sagefs install-skill"
+
+      testCase "WHY — the status reply gains an agentSkill field when there is a line, and is untouched when there is none or it is not an object" <| fun _ ->
+        let reply = """{"version":"0.6.1"}"""
+        SageFs.McpHygiene.withTextField "agentSkill" [] reply |> Expect.equal "no lines, no field" reply
+        let withLine = SageFs.McpHygiene.withTextField "agentSkill" [ "line one"; "line two" ] reply
+        let parsed = System.Text.Json.JsonDocument.Parse withLine
+        parsed.RootElement.GetProperty("agentSkill").GetString() |> Expect.equal "the lines, one per row" "line one\nline two"
+        parsed.RootElement.GetProperty("version").GetString() |> Expect.equal "the rest of the reply is kept" "0.6.1"
+        SageFs.McpHygiene.withTextField "agentSkill" [ "x" ] "not json" |> Expect.equal "a reply that is not an object is left as it was" "not json"
+    ]
+
     testList "install-skill arguments" [
       testCase "WHY — --force and --dir are read wherever they sit, and no flags means the defaults" <| fun _ ->
         SageFs.SkillInstallCommand.parseArgs []

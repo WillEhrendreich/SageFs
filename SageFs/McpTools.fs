@@ -926,7 +926,9 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
     member _.get_daemon_status() : Task<string> =
         task {
           let! json = getDaemonStatus ctx
-          return! SageFs.McpHygiene.withHygieneForDaemon ctx json
+          let! withHygiene = SageFs.McpHygiene.withHygieneForDaemon ctx json
+          // An installed `sagefs` skill that is stale or another skill sends an agent to the wrong instructions (#161).
+          return SageFs.McpHygiene.withTextField "agentSkill" (SageFs.SkillFiles.attentionNow ()) withHygiene
         } |> withEcho ctx "get_daemon_status"
 
     [<McpServerTool>]

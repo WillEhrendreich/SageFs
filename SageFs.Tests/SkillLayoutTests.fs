@@ -85,7 +85,8 @@ let installBlock (agentsDoc: string) : string =
       | close' -> agentsDoc.Substring(open', close' - open')
 
 /// The skill files an install block puts on the user's disk. A `for f in a b c; do ... $f.md` loop copies exactly
-/// those names. A copy of the folder (a `cp -r` of `skills/sagefs`) copies every file in it. Anything else copies none.
+/// those names. A copy of the folder (a `cp -r` of `skills/sagefs`) copies every file in it, and so does `sagefs install-skill`,
+/// which writes the files embedded from that folder (the test below holds the embed to the folder). Anything else copies none.
 let copiedBy (skillFiles: string list) (block: string) : string list =
   let loop = Regex.Match(block, @"for\s+f\s+in\s+([^;\r\n]+);\s*do")
   match loop.Success with
@@ -94,7 +95,9 @@ let copiedBy (skillFiles: string list) (block: string) : string list =
     |> Array.map (fun name -> name + ".md")
     |> Array.toList
   | false ->
-    match Regex.IsMatch(block, @"cp\s+-[a-zA-Z]*r[a-zA-Z]*\s+\S*skills/sagefs\S*\s") with
+    let copiesFolder = Regex.IsMatch(block, @"cp\s+-[a-zA-Z]*r[a-zA-Z]*\s+\S*skills/sagefs\S*\s")
+    let installsEmbedded = Regex.IsMatch(block, @"sagefs\s+install-skill")
+    match copiesFolder || installsEmbedded with
     | true -> skillFiles
     | false -> []
 
@@ -125,6 +128,17 @@ let skillInstallTests =
       |> List.filter (fun name -> not (List.contains name copied))
       |> Expect.isEmpty "files in skills/sagefs that docs/agents.md does not copy"
 
+    // `sagefs install-skill` is only as complete as what the build embeds (a glob in SageFs.Core.fsproj). A file the glob misses, such as a
+    // script that is not Markdown, would be copied by the old shell loop and silently left out by the command.
+    testCase "WHY - the skill embedded in the tool is every file in skills/sagefs, so install-skill leaves nothing behind" <| fun _ ->
+      let onDisk =
+        Directory.GetFiles(skillDir, "*", SearchOption.AllDirectories)
+        |> Array.map (fun path -> Path.GetRelativePath(skillDir, path).Replace('\\', '/'))
+        |> Array.sort
+        |> Array.toList
+      SageFs.SkillFiles.shipped () |> List.map (fun f -> f.Path) |> List.sort
+      |> Expect.equal "the embedded paths are the folder's paths" onDisk
+
     testCase "WHY - the install block is found and the folder has files, so the checks cannot pass by reading nothing" <| fun _ ->
       installBlock agentsDoc |> Expect.isNotEmpty "the Claude Code install block in docs/agents.md"
       (List.length skillFiles >= 12) |> Expect.isTrue "the skill folder has its twelve files"
@@ -133,6 +147,7 @@ let skillInstallTests =
       let files = [ "SKILL.md"; "design.md"; "loop.md" ]
       copiedBy files "for f in SKILL loop; do\n  curl x -o $f.md\ndone" |> Expect.equal "a loop copies its names" [ "SKILL.md"; "loop.md" ]
       copiedBy files "git clone x t\ncp -r t/skills/sagefs ~/.claude/skills/" |> Expect.equal "a cp -r of the folder copies all" files
+      copiedBy files "sagefs install-skill" |> Expect.equal "install-skill writes the embedded folder, all of it" files
       copiedBy files "echo nothing" |> Expect.isEmpty "anything else copies none"
       filesNamedBy files "Read `design.md`, then loop.md, never other.md" |> Expect.equal "only files in the folder count" [ "design.md"; "loop.md" ]
   ]

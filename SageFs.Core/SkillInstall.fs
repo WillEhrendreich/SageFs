@@ -127,6 +127,19 @@ module SkillInstall =
     | SkillStatus.NotThisSkill reason ->
       sprintf "A '%s' folder is installed but it is not this skill: %s. Run `sagefs install-skill --force` to replace it." SkillName reason
 
+/// What `get_daemon_status` says about the skill. Only an installed copy that is wrong gets a line: an agent that loads a stale
+/// or a different `sagefs` skill reads the wrong instructions and nothing tells it. A missing skill fails visibly when the agent
+/// tries to load it, and a line for it would ride along on every status call from agents that read the skill by path.
+module SkillAttention =
+
+  /// The lines to add to a status reply for this status: none unless an installed copy differs or is another skill.
+  let lines (shippedVersion: string) (status: SkillInstall.SkillStatus) : string list =
+    match status with
+    | SkillInstall.SkillStatus.NotInstalled
+    | SkillInstall.SkillStatus.UpToDate _ -> []
+    | SkillInstall.SkillStatus.Differs _
+    | SkillInstall.SkillStatus.NotThisSkill _ -> [ SkillInstall.describe shippedVersion status ]
+
 /// The edges of `SkillInstall`: the files that ship inside the tool, the folder an agent reads, and the write.
 module SkillFiles =
   open System.IO
@@ -187,3 +200,11 @@ module SkillFiles =
       let path = Path.Combine(directory, file.Path.Replace('/', Path.DirectorySeparatorChar))
       Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
       File.WriteAllText(path, file.Content)
+
+  /// The lines `get_daemon_status` adds about the skill in the user's skills folder, read now. Empty when it is fine or absent.
+  let attentionNow () : string list =
+    match shipped () with
+    | [] -> []
+    | files ->
+      let installed = readInstalled (skillDirectory (defaultRoot ()))
+      SkillAttention.lines (SkillInstall.version files) (SkillInstall.classify files installed)

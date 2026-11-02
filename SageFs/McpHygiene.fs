@@ -127,19 +127,21 @@ let withHygieneLine (ctx: McpContext) (workingDirectory: string) (reply: string)
   | Some line -> reply + "\n\n" + line
   | None -> reply
 
-/// A JSON reply with a `workspace` field carrying the lines, when there are any. A reply that is not a JSON object
+/// A JSON reply with a text field carrying the lines, when there are any. A reply that is not a JSON object
 /// is left exactly as it was.
-let private withWorkspaceField (lines: string list) (json: string) : string =
+let withTextField (field: string) (lines: string list) (json: string) : string =
   match lines with
   | [] -> json
   | _ ->
     try
       match System.Text.Json.Nodes.JsonNode.Parse json with
       | :? System.Text.Json.Nodes.JsonObject as o ->
-        o.["workspace"] <- System.Text.Json.Nodes.JsonValue.Create(String.Join("\n", lines))
+        o.[field] <- System.Text.Json.Nodes.JsonValue.Create(String.Join("\n", lines))
         o.ToJsonString()
       | _ -> json
     with _ -> json
+
+let private withWorkspaceField (lines: string list) (json: string) : string = withTextField "workspace" lines json
 
 /// `get_session_status` with the line for the repository that session is in.
 let withHygieneForSession (ctx: McpContext) (sessionId: string) (workingDirectory: string) (json: string) : Task<string> =
