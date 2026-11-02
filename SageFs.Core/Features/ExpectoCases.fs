@@ -233,7 +233,13 @@ module ExpectoCases =
                 known
                 |> List.filter (fun (node, _) -> spanHolds node (int expression.StartIndex) (int expression.EndIndex))
                 |> List.sortBy (fun (node, _) -> int node.EndIndex - int node.StartIndex)
-              let path = (enclosing |> List.collect snd) @ [ nameArgument code inner ]
+              // Every known path already holds its own ancestors, so the innermost
+              // enclosing list is the whole chain above this one.
+              let parentPath =
+                match List.tryHead enclosing with
+                | Some (_, path) -> path
+                | None -> []
+              let path = parentPath @ [ nameArgument code inner ]
               (expression, path), known @ [ (expression, path) ])
             []
         let listEntries =
@@ -255,7 +261,7 @@ module ExpectoCases =
               |> List.filter (fun (node, _) -> spanHolds node (int expression.StartIndex) (int expression.EndIndex))
               |> List.sortBy (fun (node, _) -> int node.EndIndex - int node.StartIndex)
             let parentPath =
-              match List.tryLast enclosing with
+              match List.tryHead enclosing with
               | Some (_, path) -> path
               | None -> []
             { Kind = SourceKind.Case

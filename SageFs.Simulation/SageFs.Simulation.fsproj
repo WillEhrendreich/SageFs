@@ -74,6 +74,7 @@
         <Compile Include="EvalActorSim.fs" />
         <Compile Include="EvalActorInvariants.fs" />
         <Compile Include="EvalActorGenerators.fs" />
+        <Compile Include="ExpectoCasesSim.fs" />
         <!-- Workflow-switch DST (outcome-gate-sweep.md Gap F): folds the real
              WorkerEventGuard pid-classification inside a faithful miniature
              model of SwitchWorkflow/spawnFirst; twin stop-before-spawn opens

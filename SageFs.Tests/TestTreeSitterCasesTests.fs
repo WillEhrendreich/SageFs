@@ -141,4 +141,39 @@ let tests =
           case.Line |> Expect.equal "the case still lands on its own line" 3
         | other -> failtestf "expected exactly one discovered case, found %d" other.Length
     }
+
+    test "a list nested in lists names each ancestor once, and so does the case inside it" {
+      match TestTreeSitter.availability () with
+      | TestTreeSitter.NativeAvailability.Degraded _ ->
+        failtest (TestTreeSitter.describeAvailability ())
+      | TestTreeSitter.NativeAvailability.Available _ ->
+        let source =
+          String.concat "\n" [
+            "[<Tests>]"
+            "let ``nested`` = testList \"outer\" ["
+            "  testList \"alpha\" ["
+            "    testList \"gamma\" ["
+            "      testCase \"g1\" (fun () -> ())"
+            "    ]"
+            "  ]"
+            "]"
+          ]
+        let asNames (path: SourceName list) =
+          path |> List.map (fun s -> match s with SourceName.Literal text -> text | SourceName.Computed -> "<computed>")
+        let entries = ExpectoCases.discover "Fixture.fs" source
+        let lists = entries |> Array.filter (fun e -> e.Kind = SourceKind.List)
+        lists
+        |> Array.map (fun e -> e.Line, asNames e.Path)
+        |> List.ofArray
+        |> Expect.equal "each list carries the lists above it once, then its own name"
+          [ 2, [ "outer" ]
+            3, [ "outer"; "alpha" ]
+            4, [ "outer"; "alpha"; "gamma" ] ]
+        entries
+        |> Array.filter (fun e -> e.Kind = SourceKind.Case)
+        |> Array.map (fun e -> e.Line, asNames e.Path)
+        |> List.ofArray
+        |> Expect.equal "the case sits under the full chain of lists around it"
+          [ 5, [ "outer"; "alpha"; "gamma"; "g1" ] ]
+    }
   ]
