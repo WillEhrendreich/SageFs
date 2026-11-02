@@ -134,13 +134,9 @@ module McpTools =
   let releaseSessionOwner (sessionId: string) =
     sessionOwners.TryRemove sessionId |> ignore
 
-  let ownsMcpSession sessionId =
-    match currentTransportSessionId.Value with
-    | None -> None
-    | Some _ ->
-      match sessionOwners.TryGetValue sessionId with
-      | true, owner when owner = memberIdFor "mcp" -> Some true
-      | _ -> Some false
+  let sessionOwnership sessionId : ConfirmationPolicy.SessionOwnership =
+    let recorded = match sessionOwners.TryGetValue sessionId with | true, owner -> Some owner | _ -> None
+    ConfirmationPolicy.SessionOwnership.decide (Option.isSome currentTransportSessionId.Value) recorded (memberIdFor "mcp")
 
   /// Get the active session ID for a specific agent/client.
   let activeSessionId (ctx: McpContext) (agent: string) =
@@ -2278,12 +2274,13 @@ module McpTools =
 
   let stopSessionOwned (ctx: McpContext) (sessionId: string) : Task<string> =
     task {
-      match ownsMcpSession sessionId with
-      | Some false ->
+      match sessionOwnership sessionId with
+      | ConfirmationPolicy.SessionOwnership.RecordedToAnother ->
         return SageFsError.describeForAgent (
           SageFsError.SessionStopFailed (sessionId, "the session is owned by another bound MCP connection; use the connection that created it or stop it through a privileged daemon control"))
-      | Some true
-      | None -> return! stopSession ctx sessionId
+      | ConfirmationPolicy.SessionOwnership.RecordedToCaller
+      | ConfirmationPolicy.SessionOwnership.NoRecord
+      | ConfirmationPolicy.SessionOwnership.NotOnAConnection -> return! stopSession ctx sessionId
     }
 
   /// Switch the active session for a specific agent. Validates the target exists.

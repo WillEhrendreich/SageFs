@@ -246,3 +246,65 @@ let gateTests =
           SageFs.McpTools.releaseSessionOwner sessionId
     }
   ]
+
+/// #184: `stop_session` refused "owned by another bound MCP connection" for a session that no connection had a record for.
+/// The record (`McpTools.sessionOwners`) lives in memory and is written when a connection creates a session, so a daemon
+/// restart empties it, and so does a session made from the dashboard or the CLI. Nothing could ever satisfy the check for a
+/// session the restart resumed. Only a session recorded to a DIFFERENT connection is another connection's to stop; one with
+/// no record is stoppable, and the confirmation gate (`SessionCreator.Unrecorded`) still asks a person first.
+[<Tests>]
+let stopSessionOwnershipTests =
+  testList "stop_session ownership" [
+    let refusal = "owned by another bound MCP connection"
+
+    let onConnection (handle: string) (body: unit -> Task<string>) : Task<string> =
+      task {
+        let previous = SageFs.McpTools.currentTransportSessionId.Value
+        SageFs.McpTools.currentTransportSessionId.Value <- Some handle
+        try
+          return! body ()
+        finally
+          SageFs.McpTools.currentTransportSessionId.Value <- previous
+      }
+
+    let stopOn (handle: string) (sessionId: string) : Task<string> =
+      onConnection handle (fun () -> SageFs.McpTools.stopSessionOwned (SageFs.Tests.TestInfrastructure.sharedCtx ()) sessionId)
+
+    let ownerOn (handle: string) : MemberId =
+      SageFs.MemberTable.MemberId.ofConnectionHandle handle
+
+    testCase "WHY — only a session recorded to a different member is refused; no record is not an owner" <| fun _ ->
+      let who = MemberId.Mcp "m-1111111111111111"
+      let other = MemberId.Mcp "m-2222222222222222"
+      SessionOwnership.decide true None who |> Expect.equal "no record" SessionOwnership.NoRecord
+      SessionOwnership.decide true (Some who) who |> Expect.equal "the caller's own" SessionOwnership.RecordedToCaller
+      SessionOwnership.decide true (Some other) who |> Expect.equal "someone else's" SessionOwnership.RecordedToAnother
+      SessionOwnership.decide false (Some other) who |> Expect.equal "off a connection there is no one to compare" SessionOwnership.NotOnAConnection
+
+    testTask "WHY — a session with no owner on record can be stopped from a new connection, because a restart empties the record" {
+      let sessionId = "no-owner-on-record-184"
+      SageFs.McpTools.sessionOwners.ContainsKey sessionId |> Expect.isFalse "the fixture has no record"
+      let! (reply: string) = stopOn "a-connection-that-came-after-the-restart" sessionId
+      reply.Contains refusal |> Expect.isFalse (sprintf "no one else owns it, so the answer is not a refusal over ownership: %s" reply)
+    }
+
+    testTask "WHY — a session another connection created is still its creator's to stop" {
+      let sessionId = "made-by-someone-else-184"
+      SageFs.McpTools.claimSessionOwner (ownerOn "the-creating-connection") sessionId
+      try
+        let! reply = stopOn "a-different-connection" sessionId
+        reply |> Expect.stringContains "refused, and says whose it is" refusal
+      finally
+        SageFs.McpTools.releaseSessionOwner sessionId
+    }
+
+    testTask "WHY — the connection that created a session can stop it" {
+      let sessionId = "made-by-me-184"
+      SageFs.McpTools.claimSessionOwner (ownerOn "the-creating-connection") sessionId
+      try
+        let! (reply: string) = stopOn "the-creating-connection" sessionId
+        reply.Contains refusal |> Expect.isFalse (sprintf "the creator is not refused: %s" reply)
+      finally
+        SageFs.McpTools.releaseSessionOwner sessionId
+    }
+  ]

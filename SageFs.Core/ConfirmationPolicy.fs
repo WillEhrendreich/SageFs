@@ -26,6 +26,27 @@ type SessionCreator =
   /// An MCP connection or a member token made it.
   | Recorded of MemberId
 
+/// Whose a session is to stop, as far as the daemon remembers (#184). Only `RecordedToAnother` is a refusal: a session with no
+/// record (made from the dashboard or the CLI, or by a connection of a daemon that has since restarted, which empties the
+/// record) has no other owner to wait for, and the confirmation gate still asks a person about it (`SessionCreator.Unrecorded`).
+[<RequireQualifiedAccess>]
+type SessionOwnership =
+  /// The call is not on a bound MCP connection, so there is no connection to compare.
+  | NotOnAConnection
+  | RecordedToCaller
+  | RecordedToAnother
+  | NoRecord
+
+module SessionOwnership =
+  /// Pure: how a session stands to the caller, from whether the call is on a bound connection, who the daemon recorded as its
+  /// maker, and who is calling.
+  let decide (onAConnection: bool) (recorded: MemberId option) (caller: MemberId) : SessionOwnership =
+    match onAConnection, recorded with
+    | false, _ -> SessionOwnership.NotOnAConnection
+    | true, None -> SessionOwnership.NoRecord
+    | true, Some owner when owner = caller -> SessionOwnership.RecordedToCaller
+    | true, Some _ -> SessionOwnership.RecordedToAnother
+
 /// The session a call acts on, as the gate resolved it.
 [<RequireQualifiedAccess>]
 type TargetSession =

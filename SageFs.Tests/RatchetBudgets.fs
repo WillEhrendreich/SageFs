@@ -135,7 +135,7 @@ let fileSize : (string * int) list =
     // remains is a one-line field, a forwarding call, and the comments saying WHY each site
     // passes the directory it does — including the one that reads no directory at all,
     // because `commitCohort`'s command already carries its scope.
-    "SageFs/Mcp.fs", 3204 // 3273 -> 3204: the completions routes moved to McpCompletions.fs
+    "SageFs/Mcp.fs", 3201 // 3273 -> 3204: the completions routes moved to McpCompletions.fs
     // 850 -> 830: ratcheted DOWN (never up) after moving the
     // session-path-containment validator (resolveRealSessionPath/
     // isUncPath/validateSessionCreateRequest) out into its own
