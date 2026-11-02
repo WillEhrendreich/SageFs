@@ -122,6 +122,18 @@ module OperatorStore =
       | _, Some pending -> drive (next (RandomNumberGenerator.GetBytes OperatorCredential.entropyBytes) state (world.Run pending))
     drive start
 
+  /// What the daemon holds after it tried to make the credential: its hash, or why it has none. A daemon with none
+  /// still answers the routes that need it, with the fix, and every other route is unaffected.
+  [<RequireQualifiedAccess>]
+  type OperatorAccess =
+    | Ready of OperatorHash
+    | Unavailable of Refusal
+
+  let accessOf (result: Result<OperatorHash, Refusal>) : OperatorAccess =
+    match result with
+    | Ok hash -> OperatorAccess.Ready hash
+    | Error refusal -> OperatorAccess.Unavailable refusal
+
   /// Why the person's own tools cannot get the credential.
   [<RequireQualifiedAccess>]
   type ReadRefusal =

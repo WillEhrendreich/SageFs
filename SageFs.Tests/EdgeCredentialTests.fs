@@ -151,6 +151,13 @@ let tests =
         |> List.iter (fun refusal -> EdgeRefusal.statusOf refusal |> Expect.equal "presented but unusable is forbidden" EdgeStatus.Forbidden)
       }
 
+      test "WHY - the error code is OAuth's own name where one fits, so a client that knows the vocabulary reads it" {
+        EdgeRefusal.errorCode EdgeRefusal.NoCredential |> Expect.equal "missing" "unauthorized"
+        EdgeRefusal.errorCode EdgeRefusal.MemberNotAllowed |> Expect.equal "authenticated, not allowed" "insufficient_scope"
+        EdgeRefusal.errorCode EdgeRefusal.OperatorNotRecognized |> Expect.equal "presented, not usable" "invalid_token"
+        EdgeRefusal.errorCode (EdgeRefusal.UnreadableCredential Unreadability.NotBearer) |> Expect.equal "unreadable" "invalid_token"
+      }
+
       test "WHY - each refusal has its own case name, a message and a suggested action" {
         let all =
           [ EdgeRefusal.NoCredential

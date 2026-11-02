@@ -180,6 +180,10 @@ module Timeouts =
   let statusWaitCap = TimeSpan.FromSeconds(60.0)
   let healthCheck = forMachine (TimeSpan.FromSeconds(2.0))
   let shutdownHttpClient = forMachine (TimeSpan.FromSeconds(5.0))
+
+  /// The longest `sagefs member mint` waits for the daemon. A mint reads the cohort, seats the member and answers,
+  /// which takes well under a second, so a daemon silent for this long is not coming back for this call.
+  let memberMintRequest = forMachine (TimeSpan.FromSeconds(30.0))
   let sseKeepAlive = TimeSpan.FromHours(24.0)
 
   /// Hard timeout on a short GET to the local daemon's `/api/sessions` from the

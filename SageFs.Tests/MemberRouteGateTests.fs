@@ -209,7 +209,7 @@ let conductorMintsForA (ctx: McpContext) (store: CapabilityStore) (role: string)
   task {
     let! joined = asCaller "conductor-conn" None (fun () -> McpCohortTools.joinCohort ctx "gateway" "Implementer" (Some dirA))
     joined |> Result.mapError SageFsError.describeForAgent |> Expect.wantOk "the conductor joins checkout A's cohort" |> ignore
-    let! minted = asCaller "conductor-conn" None (fun () -> McpCapability.mintMember ctx store now "gateway" role "" 60 (Some dirA) None)
+    let! minted = asCaller "conductor-conn" None (fun () -> McpCapability.mintMember ctx store now "gateway" (McpCapability.callerMinter "gateway") role "" 60 (Some dirA) None)
     let minted = minted |> Result.mapError SageFsError.describeForAgent |> Expect.wantOk "the conductor mints a token for checkout A"
     return store.Present(now, TokenHash.ofToken minted.Token) |> Result.mapError (sprintf "%A") |> Expect.wantOk "the minted token resolves"
   }
@@ -573,7 +573,7 @@ let worktreeTests =
 // ── mint_member: a token names where it routes ──────────────────────────
 
 let mintBy (ctx: McpContext) (store: CapabilityStore) (workingDirectory: string option) (sessionId: string option) : Task<Result<McpCapability.MintedMember, SageFsError>> =
-  asCaller "conductor-conn" None (fun () -> McpCapability.mintMember ctx store now "gateway" "Analysis" "" 60 workingDirectory sessionId)
+  asCaller "conductor-conn" None (fun () -> McpCapability.mintMember ctx store now "gateway" (McpCapability.callerMinter "gateway") "Analysis" "" 60 workingDirectory sessionId)
 
 /// The minted member, or the refusal as the agent would read it. Annotated, so a test body can read its fields.
 let mintedOrFail (message: string) (result: Result<McpCapability.MintedMember, SageFsError>) : McpCapability.MintedMember =
@@ -663,7 +663,7 @@ let mintToolTests =
       let ctx = mkCtx ()
       let store = newStore ()
       do! conductorOf ctx dirA
-      let! minted = asCaller "other-conn" None (fun () -> McpCapability.mintMember ctx store now "other" "Analysis" "" 60 (Some dirA) None)
+      let! minted = asCaller "other-conn" None (fun () -> McpCapability.mintMember ctx store now "other" (McpCapability.callerMinter "other") "Analysis" "" 60 (Some dirA) None)
       minted |> Result.isError |> Expect.isTrue "refused"
       store.Records |> Expect.isEmpty "no token was minted"
     }

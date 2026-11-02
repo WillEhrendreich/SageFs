@@ -930,6 +930,9 @@
         <Compile Include="EdgeCredentialTests.fs" />
         <Compile Include="OperatorStoreTests.fs" />
         <Compile Include="OperatorStoreSimTests.fs" />
+        <Compile Include="McpMintRouteTests.fs" />
+        <Compile Include="MemberMintCommandTests.fs" />
+        <Compile Include="EdgeAccessBudgetTests.fs" />
         <Compile Include="CapabilityWireTests.fs" />
         <Compile Include="AgentGuidanceIntegrationTests.fs" />
         <Compile Include="ProjectPinFixtures.fs" />

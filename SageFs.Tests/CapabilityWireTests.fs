@@ -78,7 +78,7 @@ let private withCohort (body: McpContext -> Features.CohortOwner.Handle -> Featu
 let private mintCheckout = Environment.CurrentDirectory
 
 let private mintAs (ctx: McpContext) (store: CapabilityStore) (handle: string) (role: string) (scope: string) (ttl: int) =
-  asConnection handle (fun () -> mintMember ctx store now "gateway" role scope ttl (Some mintCheckout) None)
+  asConnection handle (fun () -> mintMember ctx store now "gateway" (callerMinter "gateway") role scope ttl (Some mintCheckout) None)
 
 let private okOrFail (result: Result<'a, SageFsError>) : 'a =
   match result with

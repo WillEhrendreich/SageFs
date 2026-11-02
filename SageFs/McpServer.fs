@@ -3389,6 +3389,43 @@ let mapHatchRoutes (record: SageFs.HatchUse -> unit) (app: WebApplication) =
     } :> Task
   ) |> ignore
 
+/// Mint a member token with the operator credential (`sagefs member mint`), for the person who runs the daemon or a
+/// launcher they trust: the token goes from here into an environment variable and never through a model. The decision
+/// of who may call is `McpMintRoute.verdictOf`; the mint is the one `mint_member` does, made under the operator.
+let mapMemberRoutes (operatorAccess: SageFs.OperatorStore.OperatorAccess) (app: WebApplication) (rctx: RouteContext) =
+  app.MapPost("/api/members/mint", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let authorization =
+        match ctx.Request.Headers.TryGetValue "Authorization" with
+        | true, values when values.Count > 0 -> Some(string values.[0])
+        | _ -> None
+      match SageFs.McpMintRoute.verdictOf operatorAccess authorization with
+      | SageFs.McpMintRoute.Verdict.Refused(status, body) ->
+        ctx.Response.StatusCode <- status
+        do! rawJsonResponse ctx (Json.serialize Json.camelCase body)
+      | SageFs.McpMintRoute.Verdict.Admitted ->
+        use! doc = readJsonBody ctx
+        match SageFs.McpMintRoute.parseRequest (doc.RootElement.GetRawText()) with
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+        | Ok request ->
+          let! minted =
+            SageFs.McpCapability.mintMember
+              rctx.McpContext
+              SageFs.McpTools.capabilityStore
+              DateTime.UtcNow
+              SageFs.McpMintRoute.AgentName
+              (fun _ -> SageFs.McpMintRoute.operatorMinter)
+              request.Role
+              request.Scope
+              request.TtlMinutes
+              (SageFs.McpMintRoute.given request.WorkingDirectory)
+              (SageFs.McpMintRoute.given request.SessionId)
+          match minted with
+          | Ok issued -> do! rawJsonResponse ctx (Json.serialize Json.camelCase (SageFs.McpMintRoute.replyOf issued))
+          | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+    } :> Task
+  ) |> ignore
+
 let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
@@ -4514,6 +4551,14 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       mapStatusRoutes app rctx
       mapSessionRoutes app rctx
       mapHatchRoutes SageFs.Features.HatchWatch.record app
+      // The operator credential is made (or read back) before the route is open to anyone. A daemon that cannot make it
+      // says why in its log and answers the route with the fix.
+      let operatorAccess = SageFs.OperatorStore.accessOf (SageFs.OperatorStore.load SageFs.DaemonState.SageFsDir)
+      match operatorAccess with
+      | SageFs.OperatorStore.OperatorAccess.Ready _ -> ()
+      | SageFs.OperatorStore.OperatorAccess.Unavailable refusal ->
+        Log.warn "operator.token is unavailable, so POST /api/members/mint refuses every caller: %s" (SageFs.OperatorFile.describe refusal)
+      mapMemberRoutes operatorAccess app rctx
       mapLiveBindingsRoutes app rctx
       mapLiveTestingRoutes app rctx
       mapAnalysisRoutes app rctx

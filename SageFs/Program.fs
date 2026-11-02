@@ -109,6 +109,8 @@ type CliCommand =
   | Status
   | Check
   | InstallSkill of args: string list
+  /// `sagefs member ...`: the arguments after `member`, with `--mcp-port` still among them.
+  | Member of args: string list
   | Sweep of kill: bool
   | Hygiene of tidy: bool * repo: string
   | DeprecatedClient of name: string
@@ -128,6 +130,7 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "status" -> Status
     | _ when args.Length > 0 && args.[0] = "check" -> Check
     | _ when args.Length > 0 && args.[0] = "install-skill" -> InstallSkill(args |> Array.skip 1 |> List.ofArray)
+    | _ when args.Length > 0 && args.[0] = "member" -> Member(args |> Array.skip 1 |> List.ofArray)
     | _ when args.Length > 0 && args.[0] = "sweep" -> Sweep (hasFlag "--kill")
     | _ when args.Length > 0 && args.[0] = "hygiene" ->
       let repo =
@@ -603,6 +606,8 @@ let main args =
     printfn "Usage: SageFs [options]                Start daemon (default mode)"
     printfn "       SageFs check                    Check environment before first run"
     printfn "       SageFs install-skill [--force]  Install the sagefs agent skill (~/.claude/skills; --dir <folder>)"
+    printfn "       SageFs member mint --role R (--dir D | --session ID) [--scope S] [--ttl MINUTES] [--print-env VAR]"
+    printfn "                                       Mint a member token with the operator credential (operator.token); --print-env prints an export line"
     printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
     printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
     printfn "       SageFs mcp                      Speak MCP over stdio (spawns the daemon if needed)"
@@ -701,6 +706,27 @@ let main args =
 
   | InstallSkill skillArgs ->
     SkillInstallCommand.run (SkillInstallCommand.parseArgs skillArgs)
+
+  | Member memberArgs ->
+    // `--mcp-port` names the daemon to ask; the verb's own parser takes only the verb's flags.
+    let port = resolveMcpPort (Array.ofList memberArgs)
+    let verbArgs =
+      memberArgs
+      |> List.fold
+        (fun (kept, skipNext) arg ->
+          match skipNext, arg with
+          | true, _ -> kept, false
+          | false, "--mcp-port" -> kept, true
+          | false, _ -> arg :: kept, false)
+        ([], false)
+      |> fst
+      |> List.rev
+    match MemberMintCommand.parseArgs verbArgs with
+    | Ok mintArgs -> MemberMintCommand.run port (DataDirChoice.dataDirectory ()) mintArgs |> awaitAtEntryPoint
+    | Error refusal ->
+      eprintfn "sagefs member: %s" (MemberMintCommand.UsageRefusal.describe refusal)
+      eprintfn "%s" MemberMintCommand.usage
+      2
 
   | Sweep kill ->
     sweepCommand kill

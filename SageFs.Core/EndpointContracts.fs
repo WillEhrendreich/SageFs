@@ -7,21 +7,28 @@ module EndpointContracts =
   /// HTTP method for an endpoint.
   type HttpMethod = GET | POST
 
-  /// An endpoint definition with method, path template, and description.
+  /// An endpoint definition with method, path template, description, and who the edge lets call it.
   type Endpoint = {
     method: HttpMethod
     path: string
     description: string
     category: string
+    access: EdgeCredential.EdgeAccess
   }
 
   module Endpoint =
+    /// A route every caller may use, as every route was before the operator credential. A ratchet counts these.
     let create method path category description = {
       method = method
       path = path
       description = description
       category = category
+      access = EdgeCredential.EdgeAccess.Open
     }
+
+    /// A route that needs the operator credential (`Authorization: Bearer sfo_...`).
+    let createOperatorOnly method path category description =
+      { create method path category description with access = EdgeCredential.EdgeAccess.OperatorOnly }
 
   /// API contract version. Increment when endpoints are added, removed, or
   /// have breaking changes to request/response shapes. Plugins can check this
@@ -62,6 +69,11 @@ module EndpointContracts =
   let leaseEndpoints = [
     Endpoint.create POST "/api/lease/request" "Leases" "Ask for permission to run expensive work"
     Endpoint.create POST "/api/lease/release" "Leases" "Give a lease back"
+  ]
+
+  /// Minting a member token from outside an MCP connection, for the person who runs the daemon or a launcher they trust.
+  let memberEndpoints = [
+    Endpoint.createOperatorOnly POST "/api/members/mint" "Members" "Mint a member token with the operator credential (sagefs member mint)"
   ]
 
   /// The escape hatch's count: the agent hook reports each dotnet build, test, run or fsi it let through, and get_daemon_status reads the count.
@@ -130,6 +142,7 @@ module EndpointContracts =
     coreEndpoints
     @ sessionEndpoints
     @ leaseEndpoints
+    @ memberEndpoints
     @ hatchEndpoints
     @ clientStateEndpoints
     @ liveTestingEndpoints

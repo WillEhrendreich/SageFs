@@ -162,6 +162,15 @@ module EdgeCredential =
       | EdgeRefusal.OperatorNotRecognized
       | EdgeRefusal.UnreadableCredential _ -> EdgeStatus.Forbidden
 
+    /// The `error` field of a refusal body: OAuth's own names where they fit (RFC 6750), so a client that reads the
+    /// vocabulary reads it here.
+    let errorCode (refusal: EdgeRefusal) : string =
+      match refusal with
+      | EdgeRefusal.NoCredential -> "unauthorized"
+      | EdgeRefusal.MemberNotAllowed -> "insufficient_scope"
+      | EdgeRefusal.OperatorNotRecognized
+      | EdgeRefusal.UnreadableCredential _ -> "invalid_token"
+
     let unreadableName (why: Unreadability) : string =
       match why with
       | Unreadability.NotBearer -> "not_bearer"

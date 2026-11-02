@@ -50,14 +50,25 @@ module McpCapability =
   let private authorityOf (owner: Features.CohortOwner.Handle) (who: MemberTable.MemberId) =
     Affordances.authorityOfMember who (owner.ReadFrame())
 
+  /// The minter an MCP caller is: the authority it holds in the cohort it mints into, and the grant it holds
+  /// (a conductor acting under a token mints under that token's grant; otherwise it holds the conductor's authority).
+  let callerMinter (agentName: string) (owner: Features.CohortOwner.Handle) : Minter =
+    { Authority = authorityOf owner (memberIdFor agentName)
+      Grant =
+        match currentCapability.Value with
+        | Some capability -> capability.Grant
+        | None -> Grant.conductorAuthority }
+
   /// Mint a token. Conductor only, narrower than the minter, and the member is seated in the cohort
   /// as the preset's role. The raw token is drawn here, hashed here, and returned once: the table
-  /// and the cohort command carry only the hash and the public id.
+  /// and the cohort command carry only the hash and the public id. `minterFor` says who is minting once the
+  /// caller's cohort is known: an MCP call is `callerMinter agentName`, and the operator route is the operator.
   let mintMember
     (ctx: McpContext)
     (store: CapabilityStore)
     (now: DateTime)
     (agentName: string)
+    (minterFor: Features.CohortOwner.Handle -> Minter)
     (role: string)
     (scope: string)
     (ttlMinutes: int)
@@ -99,13 +110,7 @@ module McpCapability =
         match cohortOwnerFor ctx workingDirectory with
         | None -> return Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
         | Some owner ->
-          let minter =
-            { Authority = authorityOf owner (memberIdFor agentName)
-              // A conductor acting under a token mints under that token's grant; otherwise it holds the conductor's authority.
-              Grant =
-                match currentCapability.Value with
-                | Some capability -> capability.Grant
-                | None -> Grant.conductorAuthority }
+          let minter = minterFor owner
           let requested = { Preset = preset; Scope = prefix; Route = route; NotAfter = now + lifetime }
           let rawToken = Token.ofEntropy (RandomNumberGenerator.GetBytes Token.entropyBytes)
           match store.Mint(now, minter, requested, TokenHash.ofToken rawToken) with

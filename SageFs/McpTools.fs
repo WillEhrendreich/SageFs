@@ -2977,7 +2977,7 @@ OUTPUT: The member id (cap:<id>), the grant, the token (once), and how to presen
         let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: mint_member called by {AgentName}, role={Role}, scope={Scope}, ttl={Ttl}", agentName, role, scope, ttl_minutes)
         task {
-          let! result = SageFs.McpCapability.mintMember ctx SageFs.McpTools.capabilityStore System.DateTime.UtcNow agentName role scope ttl_minutes wd sid
+          let! result = SageFs.McpCapability.mintMember ctx SageFs.McpTools.capabilityStore System.DateTime.UtcNow agentName (SageFs.McpCapability.callerMinter agentName) role scope ttl_minutes wd sid
           return
             match result with
             | Ok minted -> SageFs.McpCapability.describeMinted minted, SageFs.McpCapability.describeMintedForLog minted, None
