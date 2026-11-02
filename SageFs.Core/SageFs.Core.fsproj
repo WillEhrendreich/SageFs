@@ -471,6 +471,10 @@
         <!-- A stopped session's workers leave on a side thread and are tracked until they are gone, so a stop never holds
              the session manager's mailbox (roast R-SERVER-3). -->
         <Compile Include="WorkerReaper.fs" />
+        <!-- A session whose startup profile runs at load needs its old worker gone before the replacement starts. Before
+             SessionManager, and StartupProfile moved up with it, since it only reads the disk (#179). -->
+        <Compile Include="StartupProfile.fs" />
+        <Compile Include="RespawnAfterReap.fs" />
         <Compile Include="WorkerPostReady.fs" />
         <!-- Tells somebody when the session manager's own loop is wedged,
              restarted or failing a command. -->
@@ -494,7 +498,6 @@
         <Compile Include="WarmupContext.fs" />
         <Compile Include="SessionHealth.fs" />
         <Compile Include="WarmupReplayCache.fs" />
-        <Compile Include="StartupProfile.fs" />
         <Compile Include="HotReloadState.fs" />
         <Compile Include="HttpOriginGuard.fs" />
         <Compile Include="DevReload.fs" />

@@ -145,6 +145,8 @@ module SessionManager =
     /// Stopped sessions whose workers are still leaving. Not in `Sessions` (a stopped session is not listed); a pid stays
     /// here until its process is seen gone.
     Reaping: WorkerReaper.Book<AsyncReplyChannel<WorkerReaper.Settled>>
+    /// Replacements held back until their old worker is gone: a session whose startup profile runs at load (#179).
+    Respawns: RespawnAfterReap.Book<ManagedSession>
   }
 
   module ManagerState =
@@ -156,6 +158,7 @@ module SessionManager =
       PendingSwap = Map.empty
       ReadyWaiters = Map.empty
       Reaping = WorkerReaper.empty
+      Respawns = RespawnAfterReap.empty
     }
 
     let addSession id session state =
@@ -166,7 +169,8 @@ module SessionManager =
           Sessions = Map.remove id state.Sessions
           WarmupProgress = Map.remove id state.WarmupProgress
           RebuildsInFlight = Map.remove id state.RebuildsInFlight
-          PendingSwap = Map.remove id state.PendingSwap }
+          PendingSwap = Map.remove id state.PendingSwap
+          Respawns = RespawnAfterReap.drop id state.Respawns }
 
     let tryGetSession id state =
       Map.tryFind id state.Sessions
@@ -442,6 +446,14 @@ module SessionManager =
     let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let publishSnapshot (state: ManagerState) =
         System.Threading.Interlocked.Exchange(snapshotRef, { QuerySnapshot.fromManagerState state with SupervisorHealth = beat.Health }) |> ignore
+      // Hand `workers` to the reaper (a dedicated thread each) and note their pids in the book. Nothing here waits for a
+      // worker: the loop returns as soon as the threads are started, and each worker's fate comes back as WorkerReaped.
+      let reapAside (id: SessionId) (workers: ManagedSession list) (state: ManagerState) : ManagerState =
+        let targets = workers |> List.map (fun w -> WorkerReaper.targetOf w.Process (runtime.StopWorker w))
+        WorkerReaper.reapOnDedicatedThreads id (fun pid fate -> inbox.Post(SessionCommand.WorkerReaped(id, pid, fate))) targets
+        { state with Reaping = WorkerReaper.start id (targets |> List.map (fun t -> t.Pid)) state.Reaping }
+      let workerExited (id: SessionId) workerPid exitCode = inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
+
       /// Single dispatch step of the mailbox loop, wrapped in the supervise step.
       /// Keeps the giant existing match; callers must end with `return state` for
       /// the untouched case and `return nextState` after a transition.
@@ -460,12 +472,25 @@ module SessionManager =
         (acceptedMessage: string)
         (span: Activity)
         : ManagerState * Result<unit, SageFsError> =
-        match isNull span with
-        | false -> span.SetTag("restart.decision", "spawn_first") |> ignore
-        | true -> ()
-        let onExited workerPid exitCode =
-          inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-        match runtime.StartWorkerProcess id session.Targets session.WorkingDir session.AutoOpenNamespaces workflow onExited with
+        // A startup profile may bind the app's port at load, so its old worker leaves first and the replacement is
+        // parked until the reaper reports it gone (RespawnAfterReap, #179).
+        match RespawnAfterReap.sequencingFor session.Targets session.WorkingDir with
+        | RespawnAfterReap.Sequencing.ReapThenSpawn script ->
+          Log.info "[SessionManager] session %s runs %s at load: its old worker leaves before the replacement starts" (SessionId.value id) script
+          let restarting =
+            { session with
+                Proxy = pendingProxy
+                WorkerBaseUrl = ""
+                Workflow = workflow
+                Info = { session.Info with Status = SessionLifecycleStatus.Restarting PreviousWorker.ColdStart; Workflow = workflow; LastActivity = DateTime.UtcNow } }
+          reply.Reply(Ok acceptedMessage)
+          Instrumentation.succeedSpan span
+          let leaving = session :: (ManagerState.tryGetPendingSwap id state |> Option.toList)
+          let parked = reapAside id leaving (ManagerState.clearPendingSwap id state) |> ManagerState.addSession id restarting
+          { parked with WarmupProgress = Map.remove id state.WarmupProgress; Respawns = RespawnAfterReap.park id restarting state.Respawns }, Ok ()
+        | RespawnAfterReap.Sequencing.SpawnFirst ->
+        Instrumentation.tagSpan span [ "restart.decision", box "spawn_first" ]
+        match runtime.StartWorkerProcess id session.Targets session.WorkingDir session.AutoOpenNamespaces workflow (workerExited id) with
         | Error err ->
           Log.warn "[SessionManager] replacement worker for session %s could not start; the current worker keeps serving: %s" (SessionId.value id) (SageFsError.describe err)
           reply.Reply(Error err)
@@ -508,13 +533,6 @@ module SessionManager =
           Instrumentation.sessionsRestarted.Add(1L)
           Instrumentation.succeedSpan span
           newState, Ok ()
-
-      // Hand `workers` to the reaper (a dedicated thread each) and note their pids in the book. Nothing here waits for a
-      // worker: the loop returns as soon as the threads are started, and each worker's fate comes back as WorkerReaped.
-      let reapAside (id: SessionId) (workers: ManagedSession list) (state: ManagerState) : ManagerState =
-        let targets = workers |> List.map (fun w -> WorkerReaper.targetOf w.Process (runtime.StopWorker w))
-        WorkerReaper.reapOnDedicatedThreads id (fun pid fate -> inbox.Post(SessionCommand.WorkerReaped(id, pid, fate))) targets
-        { state with Reaping = WorkerReaper.start id (targets |> List.map (fun t -> t.Pid)) state.Reaping }
 
       // Start the ready-poll watchdog and the two post-ready fetches for a
       // worker whose transport was just installed (see WorkerPostReady).
@@ -632,9 +650,7 @@ module SessionManager =
               let sessionId = SessionId.newId()
               let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
                            [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
-              let onExited workerPid exitCode =
-                inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
-              match runtime.StartWorkerProcess sessionId targets workingDir autoOpenNamespaces workflow onExited with
+              match runtime.StartWorkerProcess sessionId targets workingDir autoOpenNamespaces workflow (workerExited sessionId) with
               | Ok spawned ->
                 let proc = spawned.Process
                 // Register session immediately with pending proxy — don't block
@@ -708,7 +724,17 @@ module SessionManager =
         | SessionCommand.WorkerReaped(id, workerPid, fate) ->
           let reaping, answers = WorkerReaper.finish id workerPid fate state.Reaping
           WorkerReaper.answerAll answers
-          return { state with Reaping = reaping }
+          let reaped = { state with Reaping = reaping }
+          // The last old worker of a session whose replacement is parked has left: the replacement starts now.
+          let respawn (session: ManagedSession) (book: RespawnAfterReap.Book<ManagedSession>) =
+            fst (spawnColdReplacement id session inbox (Instrumentation.startSpan Instrumentation.sessionSource "session.respawn_after_reap" [("session.id", box id)]) { reaped with Respawns = book } (StartTimeoutDecision.firstStartBudget runtime.Ledger))
+          match RespawnAfterReap.verdict id (WorkerReaper.standing id reaping) reaped.Respawns with
+          | RespawnAfterReap.Verdict.NothingParked, _
+          | RespawnAfterReap.Verdict.StillWaiting _, _ -> return reaped
+          | RespawnAfterReap.Verdict.SpawnNow session, book -> return respawn session book
+          | RespawnAfterReap.Verdict.SpawnDespiteSurvivors (session, pids), book ->
+            Log.warn "[SessionManager] session %s: old worker pid%s %A outlived its kill and may still hold the app's port; starting the replacement anyway" (SessionId.value id) (match pids with [ _ ] -> "" | _ -> "s") pids
+            return respawn session book
 
         | SessionCommand.AwaitWorkersGone(id, reply) ->
           let reaping, standing = WorkerReaper.await id reply state.Reaping
@@ -719,7 +745,7 @@ module SessionManager =
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.restart"
                        [("session.id", box id); ("restart.plan", box plan)]
           match ManagerState.tryGetSession id state with
-          | Some session when ManagerState.tryGetRebuildChannel id state |> Option.isSome ->
+          | Some session when ManagerState.tryGetRebuildChannel id state |> Option.isSome || RespawnAfterReap.isParked id state.Respawns ->
             // Reject another hard reset while a cold rebuild of this session is
             // still in flight (started by a previous RestartSession). The
             // RebuildCompleted handler is the single respawn point, so an
@@ -760,16 +786,12 @@ module SessionManager =
                 // never costs the user a working session. Only a good build swaps
                 // in the replacement, spawn-first. The worker loads shadow
                 // copies, so the build never fights it for file locks.
-                match isNull span with
-                | false -> span.SetTag("restart.decision", "build_first") |> ignore
-                | true -> ()
+                Instrumentation.tagSpan span [ "restart.decision", box "build_first" ]
                 Instrumentation.succeedSpan span
                 return buildInBackground (ManagerState.recordRebuild id (RebuildOutcome.InProgress DateTime.UtcNow) (ManagerState.setRebuildInFlight id reply state))
               | None ->
               // No live worker (faulted or stopped): nothing to keep serving.
-              match isNull span with
-              | false -> span.SetTag("restart.decision", "cold_restart") |> ignore
-              | true -> ()
+              Instrumentation.tagSpan span [ "restart.decision", box "cold_restart" ]
               // The old worker leaves on a side thread while the build runs: nothing here waits for it.
               // INVARIANT (registry preservation): a session undergoing a hard reset
               // stays registered for the whole restart, marked `Restarting`, so no
@@ -1048,9 +1070,7 @@ module SessionManager =
               ManagerState.tryGetPendingSwap id state
               |> Option.bind (fun oldSession -> SessionLifecycleStatus.workerPid oldSession.Info.Status)
             let markStaleSpan () =
-              match isNull span with
-              | false -> span.SetTag("stale_event", true) |> ignore
-              | true -> ()
+              Instrumentation.tagSpan span [ "stale_event", box true ]
               Instrumentation.succeedSpan span
             match WorkerEventGuard.classifyExited currentPid pendingSwapPid workerPid with
             | WorkerEventGuard.ExitDecision.IgnoreRetired ->
@@ -1071,17 +1091,13 @@ module SessionManager =
             let newStatus = SessionLifecycle.statusAfterExit (Some workerPid) outcome
             match outcome with
             | SessionLifecycle.ExitOutcome.Graceful ->
-              match isNull span with
-              | false -> span.SetTag("outcome", "graceful") |> ignore
-              | true -> ()
+              Instrumentation.tagSpan span [ "outcome", box "graceful" ]
               Instrumentation.activeSessions.Add(-1L)
               Instrumentation.succeedSpan span
               let newState = ManagerState.removeSession id state
               return newState
             | SessionLifecycle.ExitOutcome.Abandoned _ ->
-              match isNull span with
-              | false -> span.SetTag("outcome", "abandoned") |> ignore
-              | true -> ()
+              Instrumentation.tagSpan span [ "outcome", box "abandoned" ]
               Instrumentation.activeSessions.Add(-1L)
               Instrumentation.succeedSpan span
               let reason = sprintf "Worker process exited with code %d (abandoned after max retries)" exitCode
@@ -1091,11 +1107,7 @@ module SessionManager =
               onSessionFaulted id reason
               return newState
             | SessionLifecycle.ExitOutcome.RestartAfter(delay, newRestartState) ->
-              match isNull span with
-              | false ->
-                span.SetTag("outcome", "restart_scheduled") |> ignore
-                span.SetTag("restart.delay_ms", delay.TotalMilliseconds) |> ignore
-              | true -> ()
+              Instrumentation.tagSpan span [ "outcome", box "restart_scheduled"; "restart.delay_ms", box delay.TotalMilliseconds ]
               Instrumentation.succeedSpan span
               let updated =
                 { session with
@@ -1123,19 +1135,15 @@ module SessionManager =
           // respawn point, and a worker spawned here would be orphaned/raced by
           // the rebuild's own replacement.
           | Some session when isRestarting session.Info.Status
-                              && (ManagerState.tryGetRebuildChannel id state |> Option.isSome) ->
+                              && (ManagerState.tryGetRebuildChannel id state |> Option.isSome || RespawnAfterReap.isParked id state.Respawns) ->
             // Rebuild in flight: do nothing. The off-mailbox build completion
             // owns the respawn. The timer that fired us will not re-fire (the
             // WorkerExited that scheduled it belonged to the pre-rebuild worker).
-            match isNull recoverySpan with
-            | false -> recoverySpan.SetTag("recovery.outcome", "deferred_to_rebuild") |> ignore
-            | true -> ()
+            Instrumentation.tagSpan recoverySpan [ "recovery.outcome", box "deferred_to_rebuild" ]
             Instrumentation.succeedSpan recoverySpan
             return state
           | Some session when isRestarting session.Info.Status ->
-            let onExited workerPid exitCode =
-              inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-            match runtime.StartWorkerProcess id session.Targets session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
+            match runtime.StartWorkerProcess id session.Targets session.WorkingDir session.AutoOpenNamespaces session.Workflow (workerExited id) with
             | Ok spawned ->
               let proc = spawned.Process
               let restarted =
@@ -1150,9 +1158,7 @@ module SessionManager =
                           LastActivity = DateTime.UtcNow } }
               let newState = ManagerState.addSession id restarted state
               runtime.AwaitWorkerPort id proc inbox ct (StartTimeoutDecision.firstStartBudget runtime.Ledger)
-              match isNull recoverySpan with
-              | false -> recoverySpan.SetTag("recovery.outcome", "restarted") |> ignore
-              | true -> ()
+              Instrumentation.tagSpan recoverySpan [ "recovery.outcome", box "restarted" ]
               Instrumentation.succeedSpan recoverySpan
               return newState
             | Error err ->
@@ -1166,9 +1172,7 @@ module SessionManager =
                   DateTime.UtcNow
               match outcome with
               | SessionLifecycle.ExitOutcome.Abandoned _ ->
-                match isNull recoverySpan with
-                | false -> recoverySpan.SetTag("recovery.outcome", "abandoned") |> ignore
-                | true -> ()
+                Instrumentation.tagSpan recoverySpan [ "recovery.outcome", box "abandoned" ]
                 Instrumentation.succeedSpan recoverySpan
                 let reason = SageFsError.describe err
                 let tombstone = faultedTombstone reason session
@@ -1177,18 +1181,12 @@ module SessionManager =
                 onSessionFaulted id reason
                 return newState
               | SessionLifecycle.ExitOutcome.Graceful ->
-                match isNull recoverySpan with
-                | false -> recoverySpan.SetTag("recovery.outcome", "graceful") |> ignore
-                | true -> ()
+                Instrumentation.tagSpan recoverySpan [ "recovery.outcome", box "graceful" ]
                 Instrumentation.succeedSpan recoverySpan
                 let newState = ManagerState.removeSession id state
                 return newState
               | SessionLifecycle.ExitOutcome.RestartAfter(delay, newRestartState) ->
-                match isNull recoverySpan with
-                | false ->
-                  recoverySpan.SetTag("recovery.outcome", "retry_scheduled") |> ignore
-                  recoverySpan.SetTag("recovery.retry_delay_ms", delay.TotalMilliseconds) |> ignore
-                | true -> ()
+                Instrumentation.tagSpan recoverySpan [ "recovery.outcome", box "retry_scheduled"; "recovery.retry_delay_ms", box delay.TotalMilliseconds ]
                 Instrumentation.succeedSpan recoverySpan
                 let updated =
                   { session with

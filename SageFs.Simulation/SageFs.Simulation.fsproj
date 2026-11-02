@@ -82,6 +82,10 @@
         <Compile Include="WorkflowSwitchSim.fs" />
         <Compile Include="WorkflowSwitchInvariants.fs" />
         <Compile Include="WorkflowSwitchGenerators.fs" />
+        <!-- Hard reset of a session whose startup profile binds a fixed port (#179): folds the real
+             RespawnAfterReap.verdict and WorkerReaper over every order the old workers can leave in; twins spawn
+             first, spawn on the first leaver, and ignore a Stop. -->
+        <Compile Include="RespawnAfterReapSim.fs" />
         <!-- File-reload claim-routing DST: folds the real LiveTestWatcherCore
              routing; twins broadcast-to-all / double-fire. -->
         <Compile Include="FileReloadRoutingSim.fs" />

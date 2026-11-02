@@ -428,6 +428,8 @@
          <Compile Include="SessionManagerCqrsTests.fs" />
          <Compile Include="SessionManagerRestartTombstoneTests.fs" />
          <Compile Include="SessionManagerSpawnFirstRestartTests.fs" />
+         <Compile Include="RespawnAfterReapTests.fs" />
+         <Compile Include="SessionManagerRespawnAfterReapTests.fs" />
          <Compile Include="SessionManagerEarnedReadyTests.fs" />
          <Compile Include="SessionManagerRebuildOutcomeTests.fs" />
          <Compile Include="WorkerPostReadyRefetchTests.fs" />
@@ -632,6 +634,7 @@
         <Compile Include="SseGoldenFixtureGenerationTests.fs" />
         <Compile Include="SupervisorSimTests.fs" />
         <Compile Include="WorkflowSwitchSimTests.fs" />
+        <Compile Include="RespawnAfterReapSimTests.fs" />
         <Compile Include="DstCoverageTests.fs" />
         <Compile Include="McpToolOutcomeTests.fs" />
         <Compile Include="ExpectoPendingOutcomeTests.fs" />
@@ -920,6 +923,7 @@
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="CapabilityHttpIntegrationTests.fs" />
+        <Compile Include="HardResetStartupProfileIntegrationTests.fs" />
         <Compile Include="CohortIdentityLeakTests.fs" />
         <Compile Include="ClaimPathTests.fs" />
         <Compile Include="CapabilityTests.fs" />

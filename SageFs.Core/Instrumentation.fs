@@ -376,6 +376,14 @@ module Instrumentation =
     | true -> ()
     activity
 
+  /// Add tags to an activity that is still open. A null activity (nobody is listening) takes none.
+  let tagSpan (activity: Activity) (tags: (string * obj) list) =
+    match isNull activity with
+    | false ->
+      for (k, v) in tags do
+        activity.SetTag(k, v) |> ignore
+    | true -> ()
+
   /// Stop an activity with success status.
   let succeedSpan (activity: Activity) =
     match isNull activity with

@@ -287,7 +287,7 @@ let fileSize : (string * int) list =
     // book field and the two commands a stop needs now that it no longer waits for its worker inside the loop.
     // 1579 -> 1554: TestDiscoveryReport and SessionManagerCallbacks moved to SessionManagerCallbacks.fs (about 45 lines
     // net), below, which compiles before this file does.
-    "SageFs.Core/SessionManager.fs", 1554
+    "SageFs.Core/SessionManager.fs", 1552
     // Added 2026-10-23 with the split of SessionManager.fs: TestDiscoveryReport and
     // SessionManagerCallbacks are the seam between the loop and its callers — what a worker said
     // about its tests, and every event the manager tells the outside world — and neither reaches
