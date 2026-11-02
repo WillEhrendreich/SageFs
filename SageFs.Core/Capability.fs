@@ -945,6 +945,33 @@ module Capability =
         | ConductorSeat.NotBoundYet, false
         | ConductorSeat.Bound, false -> Error(PolicyRefusal.TokenRequired toolName)
 
+  /// What a `tools/list` request presented, and nothing about where it came from. The list is judged by this alone:
+  /// the MCP 2026-07-28 Tools page says it "MUST NOT vary per-connection or as a side effect of other requests on the
+  /// connection" and "MAY vary by the authorization presented on the request" (#181). The conductor seat and the
+  /// caller's cohort authority are not here on purpose: they are judged when a tool is called.
+  [<RequireQualifiedAccess>]
+  type ListedFor =
+    /// The daemon's own operator credential: the person, or a launcher acting for them.
+    | Operator
+    /// A member token that resolved, held to its grant.
+    | Member of Grant
+    /// Nothing was presented.
+    | NoCredential
+
+  /// The tools a request is shown. Under `TokenRequired` a caller that presented nothing sees status and the join tool
+  /// whether or not a conductor has joined since, so a join cannot change what the next list holds. Order is the
+  /// registered order.
+  let listedTools (policy: IdentityPolicy) (listedFor: ListedFor) (registered: string list) : string list =
+    match listedFor with
+    | ListedFor.Operator -> registered
+    | ListedFor.Member grant -> visibleTools grant registered
+    | ListedFor.NoCredential ->
+      match policy with
+      | IdentityPolicy.ConnectionsAllowed -> registered
+      | IdentityPolicy.TokenRequired ->
+        registered
+        |> List.filter (fun tool -> tool = IdentityPolicy.bootstrapTool || List.contains tool IdentityPolicy.tokenlessReadable)
+
   // ── Transport: how a token reaches the daemon ─────────────────────────────
 
   /// A token travels in an HTTP header or in MCP `_meta`, set by whatever sits

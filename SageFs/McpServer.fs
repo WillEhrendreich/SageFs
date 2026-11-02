@@ -774,12 +774,14 @@ let applyDestructiveHints (tools: IList<Tool>) =
       tool.Annotations.DestructiveHint <- Nullable true
     | _ -> ()
 
-/// ListToolsFilter: `tools/list` shows each caller only what it can call. A caller that presented
-/// a member token sees its role's tools; a caller with no token sees everything under
-/// `ConnectionsAllowed`, and under `TokenRequired` only status unless it is the conductor; a caller
-/// whose token is bad sees one tool, `credential_status`, whose description is the refusal. Every call it
-/// made would be refused, and an empty list hid the reason from the model (#182).
-let createToolListFilter (mcpCtx: McpContext) =
+/// ListToolsFilter: `tools/list` is a function of the credential the request presents and of nothing else (#181), because
+/// the MCP 2026-07-28 Tools page says a list MUST NOT vary per connection or as a side effect of another request, and
+/// MAY vary by the authorization presented. A member token lists its role's tools; the daemon's operator credential lists
+/// everything; nothing presented lists everything under `ConnectionsAllowed` and status plus the join tool under
+/// `TokenRequired`, before and after any join. Who holds the conductor seat is judged when a tool is called, not here.
+/// A caller whose member token or operator credential is bad sees one tool, `credential_status`, whose description is
+/// the refusal. Every call it made would be refused, and an empty list hid the reason from the model (#182).
+let createToolListFilter () =
   McpRequestFilter<ListToolsRequestParams, ListToolsResult>(fun next ->
     McpRequestHandler<ListToolsRequestParams, ListToolsResult>(fun ctx ct ->
       ValueTask<ListToolsResult>(
@@ -788,27 +790,27 @@ let createToolListFilter (mcpCtx: McpContext) =
           let store = SageFs.McpTools.capabilityStore
           let meta = match box ctx.Params with | null -> null | _ -> ctx.Params.Meta
           let presentation = SageFs.McpCapability.presentToken store DateTime.UtcNow (SageFs.McpCapability.presentationFrom ctx.User meta)
-          let visible =
-            match presentation with
-            | Error _ -> Set.empty
-            | Ok presented ->
-              let authority, seat =
-                match SageFs.McpTools.cohortOwnerFor mcpCtx None with
-                | Some owner ->
-                  let frame = owner.ReadFrame()
-                  let seat = match frame.Conductor with | SageFs.Cohort.ConductorBinding.NeverBound -> SageFs.Capability.ConductorSeat.NotBoundYet | _ -> SageFs.Capability.ConductorSeat.Bound
-                  SageFs.Affordances.authorityOfMember (SageFs.MemberTable.MemberId.ofConnectionHandle ctx.Server.SessionId) frame, seat
-                | None -> SageFs.Cohort.Authority.Anonymous, SageFs.Capability.ConductorSeat.Bound
+          let operatorClaim = SageFs.McpCapability.operatorClaimOf ctx.User
+          let refusedAs : ModelContextProtocol.Protocol.Tool option =
+            match presentation, operatorClaim with
+            | Error refusal, _ -> Some(SageFs.McpCapability.credentialStatusTool refusal)
+            | Ok _, Some SageFs.EdgeCredential.OperatorClaim.Refused -> Some(SageFs.McpCapability.operatorStatusTool (SageFs.McpCapability.operatorRefusalOf ctx.User))
+            | Ok _, Some SageFs.EdgeCredential.OperatorClaim.Recognized
+            | Ok _, None -> None
+          match refusedAs, presentation with
+          | Some statusTool, _ ->
+            result.Tools.Clear()
+            result.Tools.Add statusTool
+          | None, Error _ -> ()
+          | None, Ok presented ->
+            let listed =
               result.Tools
               |> Seq.map (fun tool -> tool.Name)
               |> List.ofSeq
-              |> SageFs.McpCapability.visibleToolNames store.Policy seat authority presented
+              |> SageFs.Capability.listedTools store.Policy (SageFs.McpCapability.listedForOf operatorClaim presented)
               |> Set.ofList
-          for i in result.Tools.Count - 1 .. -1 .. 0 do
-            if not (Set.contains result.Tools.[i].Name visible) then result.Tools.RemoveAt i
-          match presentation with
-          | Error refusal -> result.Tools.Add(SageFs.McpCapability.credentialStatusTool refusal)
-          | Ok _ -> ()
+            for i in result.Tools.Count - 1 .. -1 .. 0 do
+              if not (Set.contains result.Tools.[i].Name listed) then result.Tools.RemoveAt i
           applyDestructiveHints result.Tools
           return result
         })))
@@ -881,6 +883,42 @@ let useMemberToken (app: WebApplication) : unit =
         }
         :> Task
     | _ -> next.Invoke())) |> ignore
+
+/// The operator credential, read at the HTTP edge (#181). A request whose `Authorization` header carries the daemon's own
+/// credential gets an authenticated identity holding the operator claim, which `tools/list` reads to list everything.
+/// An operator-shaped credential that is not the daemon's is refused when the request is a call, with the 403 and
+/// `invalid_token` body a refused member token gets, and marked refused so the list shows `credential_status`. Any other
+/// `Authorization` header is not read here. A daemon that could not make its credential reads none, and says so in its log.
+/// Installed after `useMemberToken` and ahead of `MapMcp`.
+let useOperatorCredential (access: SageFs.OperatorStore.OperatorAccess) (app: WebApplication) : unit =
+  match access with
+  | SageFs.OperatorStore.OperatorAccess.Unavailable _ -> ()
+  | SageFs.OperatorStore.OperatorAccess.Ready expected ->
+    app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
+      let header =
+        match ctx.Request.Headers.TryGetValue Microsoft.Net.Http.Headers.HeaderNames.Authorization with
+        | true, values when values.Count > 0 -> Some(string values.[0])
+        | _ -> None
+      let presentation = SageFs.EdgeCredential.OperatorPresentation.ofAuthorization expected header
+      ctx.User <- SageFs.McpCapability.withOperatorPresentation presentation ctx.User
+      match presentation with
+      | SageFs.EdgeCredential.OperatorPresentation.Refused refusal ->
+        task {
+          let! purpose = purposeOfRequest ctx.Request
+          match purpose with
+          | SageFs.McpCapability.RpcPurpose.NotACall -> return! next.Invoke()
+          | SageFs.McpCapability.RpcPurpose.Call ->
+            ctx.Response.StatusCode <- SageFs.McpCapability.unusableTokenStatus
+            ctx.Response.ContentType <- "application/json"
+            let body =
+              Json.serialize
+                Json.snakeCase
+                ({ Error = "invalid_token"; ErrorDescription = SageFs.EdgeCredential.EdgeRefusal.message refusal }: SageFs.McpCapability.InvalidTokenBody)
+            do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes body)
+        }
+        :> Task
+      | SageFs.EdgeCredential.OperatorPresentation.NotPresented
+      | SageFs.EdgeCredential.OperatorPresentation.Recognized -> next.Invoke())) |> ignore
 
 /// Raised when a request body exceeds the 4 MB hard limit.
 /// errorHandlingMiddleware catches this and swallows it (413 already committed).
@@ -2402,7 +2440,7 @@ let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContex
       ValueTask<EmptyResult>(EmptyResult()))
     .WithRequestFilters(fun filters ->
       filters.AddCallToolFilter(createServerCaptureFilter mcpContext serverTracker) |> ignore
-      filters.AddListToolsFilter(createToolListFilter mcpContext) |> ignore
+      filters.AddListToolsFilter(createToolListFilter ()) |> ignore
       filters.AddReadResourceFilter(createReadResourceFilter ()) |> ignore
     )
   |> ignore
@@ -4495,6 +4533,14 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
         errorHandlingMiddleware ctx next :> Task)) |> ignore
       useOriginGuard cfg.OwnOrigins app
       useMemberToken app
+      // The operator credential is made (or read back) before the first request can present it. A daemon that cannot make
+      // it says why in its log and answers the mint route with the fix.
+      let operatorAccess = SageFs.OperatorStore.accessOf (SageFs.OperatorStore.load SageFs.DaemonState.SageFsDir)
+      match operatorAccess with
+      | SageFs.OperatorStore.OperatorAccess.Ready _ -> ()
+      | SageFs.OperatorStore.OperatorAccess.Unavailable refusal ->
+        Log.warn "operator.token is unavailable, so POST /api/members/mint refuses every caller: %s" (SageFs.OperatorFile.describe refusal)
+      useOperatorCredential operatorAccess app
       app.MapMcp() |> ignore
 
       // Phase 3: Route context + routes
@@ -4551,13 +4597,6 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       mapStatusRoutes app rctx
       mapSessionRoutes app rctx
       mapHatchRoutes SageFs.Features.HatchWatch.record app
-      // The operator credential is made (or read back) before the route is open to anyone. A daemon that cannot make it
-      // says why in its log and answers the route with the fix.
-      let operatorAccess = SageFs.OperatorStore.accessOf (SageFs.OperatorStore.load SageFs.DaemonState.SageFsDir)
-      match operatorAccess with
-      | SageFs.OperatorStore.OperatorAccess.Ready _ -> ()
-      | SageFs.OperatorStore.OperatorAccess.Unavailable refusal ->
-        Log.warn "operator.token is unavailable, so POST /api/members/mint refuses every caller: %s" (SageFs.OperatorFile.describe refusal)
       mapMemberRoutes operatorAccess app rctx
       mapLiveBindingsRoutes app rctx
       mapLiveTestingRoutes app rctx

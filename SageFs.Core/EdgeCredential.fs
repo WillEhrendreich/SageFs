@@ -206,3 +206,55 @@ module EdgeCredential =
         "Send the contents of operator.token from the daemon's data directory as 'Authorization: Bearer <credential>', or run 'sagefs member mint' on the machine the daemon runs on."
       | EdgeRefusal.MemberNotAllowed ->
         "Ask the person running the daemon to mint the token with 'sagefs member mint', which reads operator.token."
+
+  /// What the edge writes on a request's principal about the operator credential, for the MCP request filters to
+  /// read. A request that presented none carries no claim.
+  [<RequireQualifiedAccess>]
+  type OperatorClaim =
+    | Recognized
+    | Refused
+
+  module OperatorClaim =
+    /// The claim that holds the kind. The credential itself goes no further than the edge.
+    let claimType = "urn:sagefs:operator-credential"
+
+    /// The claim that holds the sentence naming why a credential was refused, for the one tool a refused caller is shown.
+    let refusalClaimType = "urn:sagefs:operator-credential-refusal"
+
+    let all : OperatorClaim list = [ OperatorClaim.Recognized; OperatorClaim.Refused ]
+
+    let toValue (claim: OperatorClaim) : string =
+      match claim with
+      | OperatorClaim.Recognized -> "recognized"
+      | OperatorClaim.Refused -> "refused"
+
+    let tryOfValue (value: string) : OperatorClaim option =
+      all |> List.tryFind (fun claim -> toValue claim = value)
+
+  /// What a request's `Authorization` header says about the operator door. Only a credential that is shaped like an
+  /// operator's can be refused here: a header that is another scheme, another system's bearer token or a member token
+  /// belongs to someone else, and a refusal would break a client that sends it for its own reasons.
+  [<RequireQualifiedAccess>]
+  type OperatorPresentation =
+    | NotPresented
+    | Recognized
+    | Refused of EdgeRefusal
+
+  module OperatorPresentation =
+    let ofAuthorization (expected: OperatorHash) (header: string option) : OperatorPresentation =
+      match Presented.ofAuthorization header with
+      | Presented.Operator hash when hash = expected -> OperatorPresentation.Recognized
+      | Presented.Operator _ -> OperatorPresentation.Refused EdgeRefusal.OperatorNotRecognized
+      | Presented.Unreadable Unreadability.MalformedOperator ->
+        OperatorPresentation.Refused(EdgeRefusal.UnreadableCredential Unreadability.MalformedOperator)
+      | Presented.Nothing
+      | Presented.Member _
+      | Presented.Unreadable Unreadability.NotBearer
+      | Presented.Unreadable Unreadability.EmptyCredential
+      | Presented.Unreadable Unreadability.UnknownPrefix -> OperatorPresentation.NotPresented
+
+    let claimOf (presentation: OperatorPresentation) : OperatorClaim option =
+      match presentation with
+      | OperatorPresentation.NotPresented -> None
+      | OperatorPresentation.Recognized -> Some OperatorClaim.Recognized
+      | OperatorPresentation.Refused _ -> Some OperatorClaim.Refused

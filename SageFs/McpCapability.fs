@@ -183,18 +183,16 @@ module McpCapability =
                 (MemberTable.MemberId.display (CapabilityId.memberId target)))
     }
 
-  /// The tool names `tools/list` should show this caller: what its token's role may call, or, for a
-  /// caller with no token, what the identity policy lets it call.
-  let visibleToolNames
-    (policy: IdentityPolicy)
-    (seat: ConductorSeat)
-    (authority: Cohort.Authority<MemberTable.MemberId>)
-    (presented: ResolvedCapability option)
-    (registered: string list)
-    : string list =
-    match presented with
-    | Some capability -> visibleTools capability.Grant registered
-    | None -> registered |> List.filter (fun tool -> Result.isOk (admitTokenless policy seat authority tool))
+  /// What a `tools/list` request presented. A member token that resolved narrows the list to its role, so it outranks
+  /// an operator credential on the same request: a launcher that holds both asked to be listed as the member. The
+  /// operator credential lists everything, and nothing presented lists what the policy allows. `Refused` operator
+  /// credentials never get here: they are answered with `credential_status` instead.
+  let listedForOf (operator: EdgeCredential.OperatorClaim option) (presented: ResolvedCapability option) : ListedFor =
+    match presented, operator with
+    | Some capability, _ -> ListedFor.Member capability.Grant
+    | None, Some EdgeCredential.OperatorClaim.Recognized -> ListedFor.Operator
+    | None, Some EdgeCredential.OperatorClaim.Refused
+    | None, None -> ListedFor.NoCredential
 
   /// The marker the edge puts in the principal when the header holds something that cannot be a token.
   let private unreadableHeader = "unreadable"
@@ -215,6 +213,45 @@ module McpCapability =
     let identity = ClaimsIdentity(authenticationType)
     identity.AddClaim(Claim(CapabilityTransport.hashClaimType, claimValue))
     ClaimsPrincipal(identity)
+
+  /// The request's principal with what the edge decided about its `Authorization` header: a second authenticated
+  /// identity holding the operator claim. A request that presented nothing for the operator door keeps its principal.
+  /// The identities that were not authenticated are dropped, because the SDK carries a principal only when its
+  /// primary identity is authenticated, and the default one is not.
+  let withOperatorPresentation (presentation: EdgeCredential.OperatorPresentation) (user: ClaimsPrincipal) : ClaimsPrincipal =
+    match EdgeCredential.OperatorPresentation.claimOf presentation with
+    | None -> user
+    | Some claim ->
+      let identity = ClaimsIdentity(authenticationType)
+      identity.AddClaim(Claim(EdgeCredential.OperatorClaim.claimType, EdgeCredential.OperatorClaim.toValue claim))
+      match presentation with
+      | EdgeCredential.OperatorPresentation.Refused refusal ->
+        identity.AddClaim(Claim(EdgeCredential.OperatorClaim.refusalClaimType, EdgeCredential.EdgeRefusal.message refusal))
+      | EdgeCredential.OperatorPresentation.NotPresented
+      | EdgeCredential.OperatorPresentation.Recognized -> ()
+      let kept =
+        match user with
+        | null -> []
+        | principal -> principal.Identities |> Seq.filter (fun existing -> existing.IsAuthenticated) |> List.ofSeq
+      ClaimsPrincipal(kept @ [ identity ])
+
+  /// What the edge decided about the operator credential on this request, if it was presented.
+  let operatorClaimOf (user: ClaimsPrincipal) : EdgeCredential.OperatorClaim option =
+    match user with
+    | null -> None
+    | principal ->
+      match principal.FindFirst EdgeCredential.OperatorClaim.claimType with
+      | null -> None
+      | claim -> EdgeCredential.OperatorClaim.tryOfValue claim.Value
+
+  /// Why the edge refused the operator credential on this request, in the words it chose.
+  let operatorRefusalOf (user: ClaimsPrincipal) : string =
+    match user with
+    | null -> ""
+    | principal ->
+      match principal.FindFirst EdgeCredential.OperatorClaim.refusalClaimType with
+      | null -> ""
+      | claim -> claim.Value
 
   let private metaToken (meta: JsonObject) : string option =
     match meta with
@@ -286,6 +323,18 @@ module McpCapability =
         sprintf
           "The member token this connection presents cannot be used. No other SageFs tool is listed until it is replaced. %s Calling this tool returns the same refusal."
           (SageFsError.describeForAgent refusal),
+      InputSchema = schema
+    )
+
+  /// The same one tool for an operator credential the daemon refused (#181). `reason` is the edge's own sentence.
+  let operatorStatusTool (reason: string) : ModelContextProtocol.Protocol.Tool =
+    let schema = System.Text.Json.JsonDocument.Parse("""{"type":"object"}""").RootElement.Clone()
+    ModelContextProtocol.Protocol.Tool(
+      Name = credentialStatusToolName,
+      Description =
+        sprintf
+          "The operator credential this connection presents cannot be used. No other SageFs tool is listed until it is replaced. %s Calling this tool returns the same refusal."
+          reason,
       InputSchema = schema
     )
 

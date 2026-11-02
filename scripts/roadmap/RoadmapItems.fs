@@ -156,7 +156,7 @@ let items : Item list =
       "Sub-agents of one Claude Code session share one MCP connection, so SageFs saw them as a single member and the build and test leases collided. The conductor now mints a token per run with `mint_member`, each token is its own member with its own claims and leases, and a token outranks the connection it arrives on. A platform sets it in a header or in MCP `_meta`, never as a tool argument. Tokens live in memory, so a daemon restart means minting new ones."
 
     item "member-roles-and-tool-lists" "A member's role says which tools it can call" Agents Now
-      (landmark "SageFs/McpCapability.fs" "visibleToolNames")
+      (landmark "SageFs.Core/Capability.fs" "listedTools")
       [ "docs/mcp-tools.md"; "docs/decisions.md" ]
       "An Observer used to be able to call send_fsharp_code, because authority only gated the cohort's own tools. A member token now has one of four roles (Observer, Analysis, Verifier, Implementer), each a set of tool classes, and a call outside the role is refused with the role, the tool and what to do. `tools/list` shows a token only what it can call, and `SAGEFS_IDENTITY_POLICY=TokenRequired` makes a connection with no token read-only."
 

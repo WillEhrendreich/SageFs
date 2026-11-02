@@ -347,21 +347,15 @@ let gateTests =
         { Id = CapabilityId "0123456789abcdef"
           Hash = TokenHash.ofToken "sfm_x"
           Grant = { Preset = preset; Scope = ScopePrefix.repoRoot; Route = RouteBinding.BoundToSession "session-1"; NotAfter = now.AddHours 1.0 } }
-      let visibleFor preset = visibleToolNames IdentityPolicy.ConnectionsAllowed ConductorSeat.Bound Authority.Anonymous (Some(grant preset)) registered
+      let visibleFor preset = listedTools IdentityPolicy.ConnectionsAllowed (ListedFor.Member (grant preset).Grant) registered
       visibleFor RolePreset.Analysis |> List.contains "diagnose" |> Expect.isTrue "analysis stays"
       visibleFor RolePreset.Analysis |> List.contains "send_fsharp_code" |> Expect.isFalse "eval goes"
       visibleFor RolePreset.Implementer |> List.contains "send_fsharp_code" |> Expect.isTrue "an Implementer keeps eval"
       visibleFor RolePreset.Implementer |> List.contains "mint_member" |> Expect.isFalse "but never minting"
-      visibleToolNames IdentityPolicy.ConnectionsAllowed ConductorSeat.Bound Authority.Anonymous None registered
+      listedTools IdentityPolicy.ConnectionsAllowed ListedFor.NoCredential registered
       |> Expect.equal "a plain connection under the default policy sees everything" registered
-      visibleToolNames IdentityPolicy.TokenRequired ConductorSeat.NotBoundYet Authority.Anonymous None registered
-      |> List.contains "join_cohort"
-      |> Expect.isTrue "while there is no conductor the first joiner must be able to join"
-      visibleToolNames IdentityPolicy.TokenRequired ConductorSeat.Bound Authority.Anonymous None registered
-      |> List.sort
-      |> Expect.equal "a plain connection when a token is required sees status only" (IdentityPolicy.tokenlessReadable |> List.filter (fun t -> List.contains t registered) |> List.sort)
-      visibleToolNames IdentityPolicy.TokenRequired ConductorSeat.Bound (Authority.Conductor(MemberId.Minted "gateway")) None registered
-      |> Expect.equal "the conductor sees everything" registered
+      // The conductor seat and the caller's authority are not inputs to the list any more (#181): the three-tool list a
+      // caller with no credential sees under TokenRequired is pinned in ToolListByCredentialTests.
   ]
 
 [<Tests>]
