@@ -10,6 +10,7 @@ module SageFs.Tests.CapabilityHttpIntegrationTests
 
 open System
 open System.Collections.Generic
+open System.IO
 open System.Text.RegularExpressions
 open System.Text.Json.Nodes
 open System.Threading
@@ -20,6 +21,7 @@ open ModelContextProtocol.Client
 open ModelContextProtocol.Protocol
 open SageFs
 open SageFs.Capability
+open SageFs.EdgeCredential
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
@@ -91,6 +93,68 @@ let private memberIdOf (mintText: string) : string =
   | true -> m.Value
   | false -> failtestf "mint_member did not name the member: %s" mintText
 
+/// A data directory of this test's own, so the test can read the `operator.token` its daemon makes there.
+let private freshDataDir () : string =
+  Path.Combine(Path.GetTempPath(), "sagefs-test-operator", Guid.NewGuid().ToString "N")
+
+let private operatorCredentialIn (dataDir: string) : string =
+  match OperatorStore.readCredential dataDir with
+  | Ok credential -> credential
+  | Error refusal -> failtestf "the daemon did not make operator.token: %s" (OperatorStore.ReadRefusal.describe refusal)
+
+/// One POST to the mint route with `authorization` as the Authorization header (none for None): the status and the body.
+let private postMint (port: int) (authorization: string option) (body: string) : Task<int * string> =
+  task {
+    use client = new System.Net.Http.HttpClient(Timeout = TestTimeouts.patience)
+    use request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, sprintf "http://localhost:%d%s" port McpMintRoute.Path)
+    authorization |> Option.iter (fun value -> request.Headers.TryAddWithoutValidation("Authorization", value) |> ignore)
+    request.Content <- new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json")
+    use! response = client.SendAsync request
+    let! text = response.Content.ReadAsStringAsync()
+    return int response.StatusCode, text
+  }
+
+let private caseOf (body: string) : string =
+  use document = System.Text.Json.JsonDocument.Parse body
+  McpMintRoute.textField document.RootElement "case"
+
+/// Every text file under `dataDir`: the daemon's log and everything else it wrote, read while it runs.
+let private everythingWrittenIn (dataDir: string) : string =
+  Directory.GetFiles(dataDir, "*", SearchOption.AllDirectories)
+  |> Array.filter (fun path -> not (path.EndsWith OperatorStore.FileName))
+  |> Array.map (fun path ->
+    try
+      use stream = new FileStream(path, System.IO.FileMode.Open, FileAccess.Read, FileShare.ReadWrite ||| FileShare.Delete)
+      use reader = new StreamReader(stream)
+      reader.ReadToEnd()
+    with :? IOException -> "")
+  |> String.concat "\n"
+
+let private mintBody (role: string) : string =
+  Json.serialize Json.snakeCase { McpMintRoute.requestFor role with Scope = "src/Foo/"; TtlMinutes = 30; WorkingDirectory = daemonRepo }
+
+type private CliRun = { ExitCode: int; Out: string; Err: string }
+
+/// Run `sagefs <args>` as a process, with `dataDir` as its data directory.
+let private runCli (dataDir: string) (args: string list) : Task<CliRun> =
+  task {
+    let psi = Diagnostics.ProcessStartInfo(SageFs.Tests.TestInfrastructure.SageFsBinary.path ())
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.UseShellExecute <- false
+    psi.WorkingDirectory <- daemonRepo
+    psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+    for arg in args do psi.ArgumentList.Add arg
+    use proc = Diagnostics.Process.Start psi
+    let out = proc.StandardOutput.ReadToEndAsync()
+    let err = proc.StandardError.ReadToEndAsync()
+    use bound = new CancellationTokenSource(TestTimeouts.patience)
+    do! proc.WaitForExitAsync bound.Token
+    let! o = out
+    let! e = err
+    return { ExitCode = proc.ExitCode; Out = o; Err = e }
+  }
+
 [<Tests>]
 let tests =
   Integration.hostList "Capability tokens over HTTP" [
@@ -161,5 +225,111 @@ let tests =
         metaRevokeError |> Expect.isTrue "and so is the _meta token"
       finally
         SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
+    }
+
+    testTask "WHY - the operator credential mints over HTTP, every other caller is refused with a named reason, and no secret reaches the log or the status" {
+      let dataDir = freshDataDir ()
+      let! proc, port =
+        SageFs.Tests.CohortMcpToolsIntegrationTests.startIsolatedDaemonWith [ "SAGEFS_DATA_DIR", dataDir; CapabilityTransport.policyEnvVar, "TokenRequired" ]
+      try
+        let operator = operatorCredentialIn dataDir
+        OperatorCredential.isWellFormed operator |> Expect.isTrue "the daemon made a well formed credential"
+        let body = mintBody "Analysis"
+
+        // A member token from the conductor's own connection, to show a real token is refused on this route.
+        use! gateway = connectWith port []
+        let! joinError, joined = call gateway "join_cohort" [ "agentName", box "gateway"; "role", box "Implementer" ] []
+        joinError |> Expect.isFalse (sprintf "the conductor joins: %s" joined)
+        let! mintError, minted = call gateway "mint_member" [ "agentName", box "gateway"; "role", box "Analysis"; "scope", box "src/Foo/"; "ttl_minutes", box 30; "working_directory", box daemonRepo ] []
+        mintError |> Expect.isFalse (sprintf "the conductor mints: %s" minted)
+        let memberToken = tokenOf minted
+
+        let! noStatus, noBody = postMint port None body
+        noStatus |> Expect.equal "no credential is unauthorized" 401
+        caseOf noBody |> Expect.equal "named" "no_credential"
+
+        let! junkStatus, junkBody = postMint port (Some "Bearer sfo_short") body
+        junkStatus |> Expect.equal "a cut-short credential is forbidden" 403
+        caseOf junkBody |> Expect.equal "named" "unreadable_malformed_operator"
+
+        let! memberStatus, memberBody = postMint port (Some(sprintf "Bearer %s" memberToken)) body
+        memberStatus |> Expect.equal "a member token is forbidden" 403
+        caseOf memberBody |> Expect.equal "named" "member_not_allowed"
+
+        let otherOperator = OperatorCredential.ofEntropy (Array.create OperatorCredential.entropyBytes 7uy)
+        let! wrongStatus, wrongBody = postMint port (Some(sprintf "Bearer %s" otherOperator)) body
+        wrongStatus |> Expect.equal "another daemon's credential is forbidden" 403
+        caseOf wrongBody |> Expect.equal "named" "operator_not_recognized"
+
+        let! okStatus, okBody = postMint port (Some(sprintf "Bearer %s" operator)) body
+        okStatus |> Expect.equal (sprintf "the operator mints: %s" okBody) 200
+        let reply =
+          Json.deserialize<McpMintRoute.MintReply> Json.camelCase okBody
+          |> Result.defaultWith (fun failure -> failtestf "the reply could not be read: %A" failure)
+        reply.Token |> Expect.stringStarts "a member token" Token.prefix
+        reply.MemberId |> Expect.stringStarts "that is a cap: member" "cap:"
+        reply.Role |> Expect.equal "with the role asked for" "Analysis"
+
+        // The minted token is that member: sent as the member header it reads the cohort and is named in it.
+        use! asMember = connectWith port [ CapabilityTransport.headerName, reply.Token ]
+        let! statusError, status = call asMember "get_cohort_status" [ "working_directory", box daemonRepo ] []
+        statusError |> Expect.isFalse "the minted token reads the cohort"
+        status |> Expect.stringContains "and is that member" reply.MemberId
+
+        // The ledger names the operator as the minter; the status never shows a token.
+        let! daemonStatusError, daemonStatus = call gateway "get_daemon_status" [] []
+        daemonStatusError |> Expect.isFalse "status reads"
+        let statusText : string = daemonStatus
+        statusText.Contains(operator: string) |> Expect.isFalse "get_daemon_status never shows the operator credential"
+        statusText.Contains(reply.Token: string) |> Expect.isFalse "or a minted token"
+
+        // Nothing the daemon wrote holds either secret.
+        let written = everythingWrittenIn dataDir
+        written.Contains operator |> Expect.isFalse "the operator credential is in no file but operator.token"
+        written.Contains reply.Token |> Expect.isFalse "and the minted token is in no file at all"
+      finally
+        SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
+    }
+
+    testTask "WHY - sagefs member mint prints an export line that works, and says what to do when it cannot" {
+      let dataDir = freshDataDir ()
+      let! proc, port =
+        SageFs.Tests.CohortMcpToolsIntegrationTests.startIsolatedDaemonWith [ "SAGEFS_DATA_DIR", dataDir ]
+      try
+        let! run =
+          runCli dataDir
+            [ "member"; "mint"; "--mcp-port"; string port; "--role"; "Analysis"; "--scope"; "src/Foo/"; "--ttl"; "30"; "--dir"; daemonRepo; "--print-env"; "SAGEFS_ANALYST_TOKEN" ]
+        run.ExitCode |> Expect.equal (sprintf "it succeeds: %s" run.Err) 0
+        let exportLine = run.Out.Trim()
+        Regex.IsMatch(exportLine, @"^export SAGEFS_ANALYST_TOKEN=sfm_[A-Za-z0-9_\-]+$") |> Expect.isTrue (sprintf "stdout is one export line: %s" run.Out)
+        let token = exportLine.Substring("export SAGEFS_ANALYST_TOKEN=".Length)
+        run.Err |> Expect.stringContains "the summary on stderr names the member" "cap:"
+        run.Err.Contains token |> Expect.isFalse "and holds no token"
+
+        use! asMember = connectWith port [ CapabilityTransport.headerName, token ]
+        let! statusError, status = call asMember "get_cohort_status" [ "working_directory", box daemonRepo ] []
+        statusError |> Expect.isFalse "the printed token works"
+        status |> Expect.stringContains "as a cap: member" "cap:"
+
+        let emptyDir = freshDataDir ()
+        Directory.CreateDirectory emptyDir |> ignore
+        let! noFile = runCli emptyDir [ "member"; "mint"; "--mcp-port"; string port; "--role"; "Analysis"; "--dir"; daemonRepo ]
+        noFile.ExitCode |> Expect.equal "no operator.token fails" 1
+        noFile.Err |> Expect.stringContains "and says where the file should be" OperatorStore.FileName
+        noFile.Err |> Expect.stringContains "and what to do" "Start the daemon"
+        Directory.Delete(emptyDir, true)
+      finally
+        SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
+
+      // A daemon that is not there: a credential on disk, nothing listening on the port.
+      let downDir = freshDataDir ()
+      Directory.CreateDirectory downDir |> ignore
+      File.WriteAllText(OperatorStore.pathIn downDir, OperatorCredential.ofEntropy (Array.create OperatorCredential.entropyBytes 5uy))
+      let freePort = fst (SageFs.Tests.TestInfrastructure.TestPorts.reservePair ())
+      let! down = runCli downDir [ "member"; "mint"; "--mcp-port"; string freePort; "--role"; "Analysis"; "--dir"; daemonRepo ]
+      down.ExitCode |> Expect.equal "a missing daemon fails" 1
+      down.Err |> Expect.stringContains "names the port" (string freePort)
+      down.Err |> Expect.stringContains "and says how to start one" "Start it with 'sagefs'"
+      Directory.Delete(downDir, true)
     }
   ]

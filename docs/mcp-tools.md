@@ -559,6 +559,55 @@ and nothing to migrate. Only the conductor mints, and a token can only be
 narrower than whoever mints it: a wider role, a wider scope, another route or a
 later expiry is refused with the widenings named, never clamped.
 
+**Mint without an MCP connection.** A person or a launcher script can mint with the
+operator credential instead of a conductor's connection, so the token goes from the
+daemon into an environment variable and never through a model:
+
+```sh
+eval "$(sagefs member mint --role Analysis --scope src/Foo/ --ttl 60 \
+  --dir /abs/path/to/checkout --print-env SAGEFS_MEMBER_TOKEN)"
+```
+
+The command reads `operator.token` from the data directory (`SAGEFS_DATA_DIR` when
+set, `~/.SageFs` otherwise), calls `POST /api/members/mint` with
+`Authorization: Bearer sfo_...`, and prints one `export` line on stdout. A summary of
+who was minted goes to stderr, without the token. Without `--print-env` it prints the
+member, the grant and the token for a person to read. `--dir` or `--session` names the
+route, exactly one of them, as for `mint_member`. The route takes the same limits as
+the tool, and the member it seats is `cap:<id>` as usual. The ledger and the capability
+record name the minter as `operator:`.
+
+The operator credential is `sfo_` and 43 base64url characters. The daemon makes it the
+first time it needs one: it writes a temporary file with mode 0600, reads the mode back,
+and publishes it with an atomic create-if-absent, so two daemons that start on one data
+directory end with the same credential and nobody ever reads half of it. The daemon
+holds only its SHA-256. To replace it, delete `operator.token` and restart the daemon.
+If the file cannot be made owner-only (a mounted share that ignores Unix modes, say) or
+is not a credential, the route answers `503` to every caller with the fix in the
+message, and no other route changes.
+
+The route refuses with a JSON body of `error`, `message`, `case` and `suggestedAction`:
+
+| Request carries | Status | `case` |
+|:--|:--|:--|
+| no `Authorization` header | 401 | `no_credential` |
+| a member token (`sfm_...`) | 403 | `member_not_allowed` |
+| an operator credential that is not this daemon's | 403 | `operator_not_recognized` |
+| a header that is not `Bearer`, is blank, has an unknown prefix or a cut-short `sfo_` | 403 | `unreadable_...` |
+| the daemon could not make `operator.token` | 503 | `operator_credential_unavailable` |
+
+A credential that was presented and cannot be used is a 403, like a member token the
+daemon cannot resolve, because that is the status that makes a client's header helper
+run again. Every other route still takes no credential.
+
+The limit, in plain words: the operator file is readable by every process running as
+the same user, so against a hostile process of your own user this adds nothing. What it
+stops is a caller that can reach loopback and cannot read your home directory: a
+sandboxed agent (bwrap, a container with host networking), another OS user on a shared
+machine, a forwarded dev-container port. The file's owner-only mode is set and read
+back on Unix. On Windows the file gets an ACL for the current user alone when it is
+made, and that is not read back, because it has not been run there.
+
 **Route.** Every token names the one place it may act, and you say where with
 exactly one of two parameters:
 

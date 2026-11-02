@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
-| Size | L |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | If slice 0 is approved (see "Slice 0" and the last decision), take its steps first: they give `a-token-per-subagent-in-claude-code` the one thing it needs. Otherwise run what "Measure first" asks for (it can end the item), then write the first failing test: a route with no declared access cannot be added. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Status | In progress. Slice 0 is built (2026-11-02): `POST /api/members/mint`, `operator.token`, `sagefs member mint`. It is not merged to master and not pushed. The rest of the item is not started. |
+| Size | L (slice 0 was M) |
+| Branch and worktree | branch `worktree-agent-aa99bd3d57ca4a7ef`, worktree `.claude/worktrees/agent-aa99bd3d57ca4a7ef`, five commits from `d3c00f22` |
+| Last green commit | the last commit on that branch; its gate results are in the commit message |
+| Next action | Merge the branch. Then #181 (the tool list depends on the presented credential only), which needs nothing more from this item. After that the full item, starting at "Steps" 1: the SDK spike, then `EdgeAccess` on every route (slice 0 added the field with `Open` as the default and `OperatorOnly` for the mint). |
+| Decisions made | `operator.token` lives in the data directory, mode 0600, set when the file is made and read back before it is published; a filesystem that cannot hold it refuses the route with the fix (503). `MemberId.Operator` is its own case, printed `operator:`. A credential that was presented and cannot be used is a 403 (like #182), none at all is a 401. `apiVersion` stays 4. |
+| Surprises | `File.Move(src, dst, overwrite = false)` is not exclusive on this runtime: eight threads moving to one target had several succeed in one run, so the file is published with `link(2)` on Unix (`SageFs/OperatorStore.fs`). The test that found it is "eight daemons starting on one directory at once". The ratchet scans every `.fs` under a project folder, not only the compiled ones, so a file waiting to be added to the project still counts. |
 
 ## What done looks like
 
@@ -87,7 +87,7 @@ Honest limit, which goes in the docs in these words: the operator file is readab
 
 ## Slice 0: the operator credential for one route
 
-Added 2026-11-01, proposed and waiting for an answer. `a-token-per-subagent-in-claude-code` needs one thing from this item: a way for a person or a launcher to mint a member token without an MCP connection and without the token passing through a model. The full item is L. This slice is the part of it that does that, built so the rest of the item extends it and nothing is thrown away. It does not depend on the SDK 2.x spike, because the pure core and one route sit on the current SDK.
+Added 2026-11-01, built 2026-11-02 (see "Resume here" for the branch). `a-token-per-subagent-in-claude-code` needs one thing from this item: a way for a person or a launcher to mint a member token without an MCP connection and without the token passing through a model. The full item is L. This slice is the part of it that does that, built so the rest of the item extends it and nothing is thrown away. It does not depend on the SDK 2.x spike, because the pure core and one route sit on the current SDK.
 
 What it ships:
 
