@@ -52,6 +52,17 @@ let private call (client: McpClient) (name: string) (args: (string * obj) list) 
     return (result.IsError |> Option.ofNullable |> Option.defaultValue false), textOf result
   }
 
+/// A call the edge refuses before any tool runs. A header token the daemon cannot use gets a 403 whose body names
+/// the cause (#182), and the client raises on a 403, so the refusal comes back as the exception's message, body included.
+let private callRefusedByEdge (client: McpClient) (name: string) (args: (string * obj) list) : Task<string> =
+  task {
+    try
+      let! _, text = call client name args []
+      return failtestf "the edge should have refused %s, but it answered: %s" name text
+    with :? System.Net.Http.HttpRequestException as refused ->
+      return refused.Message
+  }
+
 let private listTools (client: McpClient) (meta: (string * string) list) : Task<string list> =
   task {
     let request = ListToolsRequestParams()
@@ -142,9 +153,10 @@ let tests =
         // Revoking cuts the token off on the next call, on both channels.
         let! revokeError, revoked = call gateway "revoke_member" [ "agentName", box "gateway"; "member_id", box memberId ] []
         revokeError |> Expect.isFalse (sprintf "the conductor revokes: %s" revoked)
-        let! afterRevokeError, afterRevoke = call viaHeader "get_cohort_status" [] []
-        afterRevokeError |> Expect.isTrue "the header token is refused"
-        afterRevoke |> Expect.stringContains "as revoked" "revoked"
+        let! afterRevoke = callRefusedByEdge viaHeader "get_cohort_status" []
+        afterRevoke |> Expect.stringContains "the header token is refused with a 403" "403"
+        afterRevoke |> Expect.stringContains "as invalid_token" "invalid_token"
+        afterRevoke |> Expect.stringContains "naming it as revoked" "revoked"
         let! metaRevokeError, _ = call plain "get_cohort_status" [] [ CapabilityTransport.metaKey, token ]
         metaRevokeError |> Expect.isTrue "and so is the _meta token"
       finally
