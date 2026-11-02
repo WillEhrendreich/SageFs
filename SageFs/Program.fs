@@ -108,6 +108,7 @@ type CliCommand =
   | Stop
   | Status
   | Check
+  | InstallSkill of args: string list
   | Sweep of kill: bool
   | Hygiene of tidy: bool * repo: string
   | DeprecatedClient of name: string
@@ -126,6 +127,7 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "stop" -> Stop
     | _ when args.Length > 0 && args.[0] = "status" -> Status
     | _ when args.Length > 0 && args.[0] = "check" -> Check
+    | _ when args.Length > 0 && args.[0] = "install-skill" -> InstallSkill(args |> Array.skip 1 |> List.ofArray)
     | _ when args.Length > 0 && args.[0] = "sweep" -> Sweep (hasFlag "--kill")
     | _ when args.Length > 0 && args.[0] = "hygiene" ->
       let repo =
@@ -600,6 +602,7 @@ let main args =
     printfn ""
     printfn "Usage: SageFs [options]                Start daemon (default mode)"
     printfn "       SageFs check                    Check environment before first run"
+    printfn "       SageFs install-skill [--force]  Install the sagefs agent skill (~/.claude/skills; --dir <folder>)"
     printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
     printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
     printfn "       SageFs mcp                      Speak MCP over stdio (spawns the daemon if needed)"
@@ -668,6 +671,7 @@ let main args =
     printfn "  SageFs --jupyter conn.json          Run as Jupyter kernel"
     printfn "  SageFs status                       Show daemon status"
     printfn "  SageFs check                        Check environment before first run"
+    printfn "  SageFs install-skill [--force]      Install the sagefs agent skill (--dir <folder> for another skills folder)"
     printfn ""
     0
 
@@ -694,6 +698,9 @@ let main args =
     match failures with
     | 0 -> 0
     | _ -> 1
+
+  | InstallSkill skillArgs ->
+    SkillInstallCommand.run (SkillInstallCommand.parseArgs skillArgs)
 
   | Sweep kill ->
     sweepCommand kill

@@ -805,6 +805,7 @@
         <Compile Include="TestsPaneTests.fs" />
         <Compile Include="TimeoutsTests.fs" />
         <Compile Include="EnvCheckTests.fs" />
+        <Compile Include="SkillInstallTests.fs" />
         <Compile Include="DaemonPresenceTests.fs" />
         <Compile Include="CustomPortOwnershipTests.fs" />
         <Compile Include="CliStopExitCodeTests.fs" />

@@ -49,6 +49,7 @@
         <Compile Include="NativeResolution.fs" />
         <Compile Include="AppOutput.fs" />
         <Compile Include="Checkout.fs" />
+        <Compile Include="SkillInstall.fs" />
         <Compile Include="WorkspaceHygiene.fs" />
         <Compile Include="WorkspaceHygieneRender.fs" />
         <Compile Include="HygieneFs.fs" />
@@ -102,6 +103,9 @@
         <!-- Who lets the guards go when a click and its thread part ways: one pure function, also folded by the guard simulation. -->
         <Compile Include="Features\ClickLifecycle.fs" />
         <Compile Include="Features\MemberEvaluation.fs" />
+        <!-- The `sagefs` agent skill ships inside this assembly too (#161). `sagefs install-skill` writes it to the user's skills
+             folder and `sagefs check` compares an installed copy with it. SkillInstall.version hashes these files. -->
+        <EmbeddedResource Include="../skills/sagefs/**/*.md" LogicalName="skill/%(RecursiveDir)%(Filename)%(Extension)" />
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
         <EmbeddedResource Include="../SageFs.FsiHost/FsiHost.fsproj" LogicalName="FsiHost/FsiHost.fsproj" />

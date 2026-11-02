@@ -47,16 +47,20 @@ The other files in the folder are read only when their trigger comes up:
 
 **Claude Code:**
 ```bash
-tmp="$(mktemp -d)"
-git clone --depth 1 --filter=blob:none --sparse https://github.com/WillEhrendreich/SageFs.git "$tmp/SageFs"
-git -C "$tmp/SageFs" sparse-checkout set skills/sagefs
-mkdir -p ~/.claude/skills
-cp -r "$tmp/SageFs/skills/sagefs" ~/.claude/skills/
-rm -rf "$tmp"
+sagefs install-skill
 ```
-That copies the whole folder, so a file added to it later comes along on the next copy.
-For one repo only, put the folder in that repo's `.claude/skills/sagefs/`
-instead.
+The skill ships inside the tool, so the copy always matches the daemon you have. It writes
+`~/.claude/skills/sagefs/` and replaces an older copy of itself whole, so a file that a later
+build drops does not linger. A different skill that already uses the name `sagefs` is left
+alone until you pass `--force`. A folder that is a link, for instance into a checkout of this
+repo, is also left alone and follows its target. `--dir <folder>` installs into another skills
+folder, for an agent that reads skills from somewhere else, or for one repo only
+(`.claude/skills/` in that repo).
+
+`sagefs check` has a row for it. It says whether the skill is installed, whether it is this
+build's, and the one command that fixes it. The skill's version is a hash of its files, so
+there is no number to forget to bump, and two copies have the same version exactly when
+they hold the same files. Run `sagefs install-skill` again after you update SageFs.
 
 **Other agents (Codex, Copilot, Cursor, OpenCode and so on):** most of them read
 an `AGENTS.md` at the repo root. Add this to yours:

@@ -669,6 +669,18 @@ let checkMachineTier () : CheckResult =
   | MachineStartup.Established.NotYet ->
     pass "Machine tier" (sprintf "Machine tier %s. Waits for the machine are scaled %gx." (MachineTier.toString Timeouts.machineTier) factor)
 
+/// Whether the `sagefs` agent skill in the user's skills folder is the one this build ships (#161). A missing or older skill
+/// sends agents to the wrong instructions, so it is a warning that names the one command that fixes it, not a failure.
+let checkAgentSkill () : CheckResult =
+  let shipped = SkillFiles.shipped ()
+  let shippedVersion = SkillInstall.version shipped
+  let installed = SkillFiles.readInstalled (SkillFiles.skillDirectory (SkillFiles.defaultRoot ()))
+  let status = SkillInstall.classify shipped installed
+  let line = SkillInstall.describe shippedVersion status
+  match status with
+  | SkillInstall.SkillStatus.UpToDate _ -> pass "Agent skill" line
+  | _ -> warn "Agent skill" line "The skill is what tells an agent to use the REPL as its inner loop. Other agents can read skills/sagefs/SKILL.md by path."
+
 let runAll (dir: string) (mcpPort: int) (dashPort: int) =
   // One probe, shared by both port checks and the daemon row — a port held
   // by THIS daemon is reported as expected on both, not as a conflict.
@@ -676,6 +688,7 @@ let runAll (dir: string) (mcpPort: int) (dashPort: int) =
   [ checkDotnetSdk ()
     checkFsiAvailable ()
     checkMachineTier ()
+    checkAgentSkill ()
     checkFsproj dir
     checkDirectoryConfig dir
     checkBindHost ()
