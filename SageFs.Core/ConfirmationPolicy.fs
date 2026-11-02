@@ -108,7 +108,8 @@ let decide (tool: ToolName) (target: TargetSession) (creator: SessionCreator) (c
       | MemberId.Browser _
       | MemberId.Minted _ -> Confirmation.Required ConfirmationReason.CallerNotBound
       | MemberId.Mcp _
-      | MemberId.Capability _ ->
+      | MemberId.Capability _
+      | MemberId.Operator ->
         match creator with
         | SessionCreator.Unrecorded -> Confirmation.Required ConfirmationReason.CreatorNotRecorded
         | SessionCreator.Recorded maker when maker = caller ->

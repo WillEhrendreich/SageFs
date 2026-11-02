@@ -127,6 +127,16 @@ let cohortInspectorTests =
           fields |> fieldValue "Session" |> Expect.equal "session" "sess-1"
         | other -> failwithf "expected Found for alice, got %A" other
 
+      testCase "WHY - the operator's member page is found by the same text the cohort prints for it, not taken for a name" <| fun _ ->
+        let operator = MemberId.Operator
+        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(operator, JoinableRole.Implementer, None, machine) ]
+        let shown = MemberId.display operator
+        match inspect EntityKind.Member shown emptyFrame ledger [] with
+        | InspectorModel.Found(EntityKind.Member, _, _, fields) ->
+          fields |> fieldValue "Id" |> Expect.equal "the page names the operator" shown
+          fields |> fieldValue "Role" |> Expect.equal "role" "Implementer"
+        | other -> failwithf "expected Found for the operator, got %A" other
+
       testCase "an unknown member id is a clean not-found" <| fun _ ->
         match inspect EntityKind.Member "ghost" emptyFrame [] [] with
         | InspectorModel.NotFound(Some EntityKind.Member, "ghost") -> ()

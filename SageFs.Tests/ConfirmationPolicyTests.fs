@@ -43,6 +43,14 @@ let tests =
       decide ToolName.StopSession mine (SessionCreator.Recorded token) token
       |> Expect.equal "own session by token" (Confirmation.NotRequired(OwnSession.CreatedByThisCaller "s-1"))
 
+    testCase "WHY — the operator is bound like a token, so a session it made is its own and another caller's is not" <| fun _ ->
+      decide ToolName.StopSession mine (SessionCreator.Recorded MemberId.Operator) MemberId.Operator
+      |> Expect.equal "own session by operator" (Confirmation.NotRequired(OwnSession.CreatedByThisCaller "s-1"))
+      decide ToolName.StopSession mine (SessionCreator.Recorded alice) MemberId.Operator
+      |> Expect.equal "a connection made it" (Confirmation.Required ConfirmationReason.CreatedBySomeoneElse)
+      decide ToolName.StopSession mine (SessionCreator.Recorded MemberId.Operator) alice
+      |> Expect.equal "the operator made it, a connection calls" (Confirmation.Required ConfirmationReason.CreatedBySomeoneElse)
+
     testCase "WHY — a session a person made (no record) still asks" <| fun _ ->
       decide ToolName.HardResetFsiSession mine SessionCreator.Unrecorded alice
       |> Expect.equal "no record" (Confirmation.Required ConfirmationReason.CreatorNotRecorded)
@@ -206,7 +214,7 @@ let gateTests =
     // ── the daemon's own creator record, read the way the live gate reads it ───────────────────────
 
     testCase "WHY — the record keeps the identity it was given, so only that identity skips the prompt on its own session" <| fun _ ->
-      let everyone = [ alice; bob; token; otherToken; tab; unbound ]
+      let everyone = [ alice; bob; token; otherToken; tab; unbound; MemberId.Operator ]
       for owner in everyone do
         let sessionId = sprintf "owner-record-%s" (MemberId.display owner)
         SageFs.McpTools.claimSessionOwner owner sessionId
@@ -219,9 +227,11 @@ let gateTests =
               | MemberId.Browser _, _
               | MemberId.Minted _, _ -> Confirmation.Required ConfirmationReason.CallerNotBound
               | MemberId.Mcp _, true
-              | MemberId.Capability _, true -> Confirmation.NotRequired(OwnSession.CreatedByThisCaller sessionId)
+              | MemberId.Capability _, true
+              | MemberId.Operator, true -> Confirmation.NotRequired(OwnSession.CreatedByThisCaller sessionId)
               | MemberId.Mcp _, false
-              | MemberId.Capability _, false -> Confirmation.Required ConfirmationReason.CreatedBySomeoneElse
+              | MemberId.Capability _, false
+              | MemberId.Operator, false -> Confirmation.Required ConfirmationReason.CreatedBySomeoneElse
             confirmationFor creatorOfSession caller (resolved sessionId) "hard_reset_fsi_session"
             |> Expect.equal (sprintf "made by %s, called by %s" (MemberId.display owner) (MemberId.display caller)) expected
         finally

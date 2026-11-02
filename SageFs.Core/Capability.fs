@@ -695,6 +695,7 @@ module Capability =
       | MemberId.Capability fingerprint -> Some(CapabilityId fingerprint)
       | MemberId.Browser _
       | MemberId.Mcp _
+      | MemberId.Operator
       | MemberId.Minted _ -> None
 
   /// The member a capability is, and the text of its public id. Plain functions beside the module

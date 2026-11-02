@@ -281,6 +281,11 @@ let formatSessionListTests = testList "formatSessionList" [
 ]
 
 let occupancyTests = testList "SessionOccupancy" [
+  test "WHY - the operator acts, so it occupies a session as a Worker, not as an Observer" {
+    OccupantRole.ofMemberId SageFs.MemberTable.MemberId.Operator
+    |> Expect.equal "operator is Worker" OccupantRole.Worker
+  }
+
   test "classify MCP agents as Worker" {
     OccupantRole.classify "mcp"
     |> Expect.equal "mcp is Worker" OccupantRole.Worker

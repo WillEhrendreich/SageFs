@@ -101,21 +101,6 @@ type InspectorModel =
 
 type SearchResult = { Kind: EntityKind; Id: string; Label: string }
 
-// ── id <-> MemberId — the exact inverse of `MemberId.display`
-// (`MemberTable.fs:37-40`), never redefined there since that file is
-// owned by other work in this campaign. `Minted` renders verbatim in
-// `display`, so anything without a recognized prefix round-trips as
-// `Minted` — total, no parse failure. ─────────────────────────────────
-let private parseMemberId (raw: string) : MemberId =
-  if raw.StartsWith("browser:", StringComparison.Ordinal) then
-    MemberId.Browser(raw.Substring 8)
-  elif raw.StartsWith("mcp:", StringComparison.Ordinal) then
-    MemberId.Mcp(raw.Substring 4)
-  elif raw.StartsWith("cap:", StringComparison.Ordinal) then
-    MemberId.Capability(raw.Substring 4)
-  else
-    MemberId.Minted raw
-
 // ── Exhaustive label functions — closed DUs, one to-string each, no
 // magic strings and no `%A` (a case rename becomes a compile error at
 // exactly the match this file needs to update, never a silent label
@@ -287,7 +272,7 @@ let inspect
   : InspectorModel =
   let fieldsOpt =
     match kind with
-    | EntityKind.Member -> memberFields (parseMemberId id) (replay ledgerEntries)
+    | EntityKind.Member -> memberFields (MemberId.ofDisplay id) (replay ledgerEntries)
     | EntityKind.Claim -> claimFields (ClaimId id) (replay ledgerEntries)
     | EntityKind.Landing -> landingFields (LandingId id) (replay ledgerEntries)
     | EntityKind.Test -> testFields (TestId id) frame

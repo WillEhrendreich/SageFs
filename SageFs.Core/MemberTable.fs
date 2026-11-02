@@ -33,6 +33,9 @@ module MemberTable =
     /// on: sub-agents sharing one connection are one `Mcp` member but as many
     /// `Capability` members as there are tokens.
     | Capability of fingerprint: string
+    /// The person who runs the daemon, acting through the operator credential (EdgeCredential.fs). There is
+    /// one per daemon, so the case has no payload. It names who minted a token when no agent did.
+    | Operator
 
   module MemberId =
     /// A connection's public id is a one-way fingerprint of its bearer handle,
@@ -67,6 +70,9 @@ module MemberTable =
     /// listing carry.
     let ofConnectionHandle (handle: string) : MemberId = MemberId.Mcp (fingerprintOfHandle handle)
 
+    /// What the operator prints as. The colon makes it the prefix form of the other kinds, with nothing after it.
+    let operatorDisplay = "operator:"
+
     /// Canonical string form used as the routing/presence key. `Minted`
     /// renders VERBATIM (no prefix) so an unbound caller's resolved key is
     /// byte-identical to its plain name — every existing name-keyed
@@ -78,4 +84,17 @@ module MemberTable =
       | MemberId.Browser clientId -> sprintf "browser:%s" clientId
       | MemberId.Mcp connection -> sprintf "mcp:%s" (publicConnectionId connection)
       | MemberId.Capability fingerprint -> sprintf "cap:%s" fingerprint
+      | MemberId.Operator -> operatorDisplay
       | MemberId.Minted id -> id
+
+    /// The exact inverse of `display`. `Minted` renders verbatim, so anything without a recognized prefix
+    /// reads back as `Minted`: total, no parse failure. The operator is the whole text `operator:` and
+    /// nothing after it, so a name that merely starts with it is a name.
+    let ofDisplay (raw: string) : MemberId =
+      let after (prefix: string) = raw.Substring prefix.Length
+      match raw with
+      | _ when raw = operatorDisplay -> MemberId.Operator
+      | _ when raw.StartsWith("browser:", System.StringComparison.Ordinal) -> MemberId.Browser(after "browser:")
+      | _ when raw.StartsWith("mcp:", System.StringComparison.Ordinal) -> MemberId.Mcp(after "mcp:")
+      | _ when raw.StartsWith("cap:", System.StringComparison.Ordinal) -> MemberId.Capability(after "cap:")
+      | _ -> MemberId.Minted raw

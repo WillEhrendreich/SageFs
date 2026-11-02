@@ -38,4 +38,25 @@ let tests = testList "MemberTable.MemberId" [
   testCase "WHY — MemberId equality is structural (two Minted with the same name are the SAME member)" <| fun () ->
     (MemberId.Minted "claude" = MemberId.Minted "claude")
     |> Expect.isTrue "an unbound caller using the same name twice IS the same member — no ambient connection to distinguish them"
+
+  testCase "WHY — the operator is its own member, printed with its own prefix so no connection or name can be mistaken for it" <| fun () ->
+    MemberId.display MemberId.Operator |> Expect.stringStarts "operator prefix" "operator:"
+    (MemberId.display MemberId.Operator <> MemberId.display (MemberId.Minted "operator"))
+    |> Expect.isTrue "an agent that calls itself 'operator' is a different member from the operator"
+    MemberId.Minted(MemberId.display MemberId.Operator)
+    |> Expect.notEqual "a Minted value spelled like the operator is a different value" MemberId.Operator
+
+  testCase "WHY — ofDisplay is the exact inverse of display, for every kind of member, the operator included" <| fun () ->
+    for who in
+      [ MemberId.Browser "tab-1"
+        MemberId.ofConnectionHandle "conn-123"
+        MemberId.Capability "0123456789abcdef"
+        MemberId.Operator
+        MemberId.Minted "claude" ] do
+      MemberId.ofDisplay (MemberId.display who)
+      |> Expect.equal (sprintf "%s reads back as itself" (MemberId.display who)) who
+
+  testCase "WHY — text with no recognized prefix reads back as a Minted name, never as an error" <| fun () ->
+    MemberId.ofDisplay "plain-name" |> Expect.equal "verbatim" (MemberId.Minted "plain-name")
+    MemberId.ofDisplay "operator:somebody-else" |> Expect.equal "the operator has no payload, so this is a name" (MemberId.Minted "operator:somebody-else")
 ]

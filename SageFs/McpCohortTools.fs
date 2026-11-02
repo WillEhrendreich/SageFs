@@ -352,6 +352,7 @@ module McpCohortTools =
         return Error (CohortErrorMapping.delegationRefusalToSageFsError (CohortErrorMapping.DelegationRefusal.TargetHoldsToken target))
       | MemberTable.MemberId.Mcp _
       | MemberTable.MemberId.Minted _
+      | MemberTable.MemberId.Operator
       | MemberTable.MemberId.Browser _ ->
         let! result = commitCohort ctx (Cohort.CohortCommand.DelegateConductor(by, target, scopeOf workingDirectory))
         return
