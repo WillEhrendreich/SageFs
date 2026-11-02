@@ -251,6 +251,70 @@ module McpCapability =
       |> Result.map Some
       |> Result.mapError CohortErrorMapping.presentRefusalToSageFsError
 
+  /// The body of an HTTP refusal for a token that cannot be used: the OAuth error code a client recognises and the
+  /// sentence `describeForAgent` already gives, so what reaches the model is the cause and the fix.
+  type InvalidTokenBody = { Error: string; ErrorDescription: string }
+
+  /// What the HTTP edge does with a request whose header names a token.
+  [<RequireQualifiedAccess>]
+  type EdgeAnswer =
+    | Admit
+    | Refuse of status: int * body: string
+
+  /// The status for a token the daemon cannot use. A 401 is worse in every client measured (Claude Code starts an OAuth
+  /// registration it cannot finish, Copilot CLI and opencode swap the body for a sign-in message), and only a 403 makes
+  /// Claude Code re-run its `headersHelper` and retry the call. `docs/agent-identity-research-2026-11-01.md` has the runs.
+  /// MCP 2026-07-28 says an invalid token MUST get a 401; SageFs is not an OAuth resource server, so it departs on purpose.
+  let unusableTokenStatus = 403
+
+  /// What a request asks of the server, as far as the edge cares. A call is a JSON-RPC request that acts. Everything else
+  /// is not a call: the messages a client uses to connect and list (`initialize`, `ping`, `tools/list`, notifications) and
+  /// any request that is not a JSON-RPC message at all. Copilot CLI and opencode drop a server whose connect is refused and
+  /// leave the model with no tool and no cause, so a bad token has to get through the connect and the list and be refused
+  /// when it tries to act. The edge only chooses the status; the call filters still judge every call that reaches them.
+  [<RequireQualifiedAccess>]
+  type RpcPurpose =
+    | NotACall
+    | Call
+
+  /// The two fields that make a body a JSON-RPC request.
+  type RpcEnvelope = { Jsonrpc: string; Method: string }
+
+  let private notificationPrefix = "notifications/"
+
+  let private purposeOfMethod (methodName: string) : RpcPurpose =
+    match methodName with
+    | name when name = ModelContextProtocol.Protocol.RequestMethods.Initialize -> RpcPurpose.NotACall
+    | name when name = ModelContextProtocol.Protocol.RequestMethods.Ping -> RpcPurpose.NotACall
+    | name when name = ModelContextProtocol.Protocol.RequestMethods.ToolsList -> RpcPurpose.NotACall
+    | name when name.StartsWith(notificationPrefix, StringComparison.Ordinal) -> RpcPurpose.NotACall
+    | _ -> RpcPurpose.Call
+
+  /// The purpose of a request body. A JSON-RPC request is judged by its method. A body that is not one (other routes,
+  /// a reply, an unreadable text, a batch) is not a call here, because the edge only picks the status for the calls it can
+  /// read and the filters refuse any call that gets past it.
+  let purposeOfBody (body: string) : RpcPurpose =
+    match Json.deserialize<RpcEnvelope> Json.camelCase body with
+    | Ok envelope when not (isNull envelope.Jsonrpc) && not (isNull envelope.Method) -> purposeOfMethod envelope.Method
+    | _ -> RpcPurpose.NotACall
+
+  /// Decide, before MCP is spoken, whether a request that presented a token may go on. A request with no token is not
+  /// decided here: the identity policy answers per tool. A token that is presented and unusable is refused with the status
+  /// and body above when the request is a call, so a client sees the cause where it used to see nothing.
+  let edgeAnswer (store: CapabilityStore) (now: DateTime) (purpose: RpcPurpose) (presentation: CapabilityTransport.Presentation) : EdgeAnswer =
+    match presentation, purpose with
+    | CapabilityTransport.Presentation.NoToken, _ -> EdgeAnswer.Admit
+    | _, RpcPurpose.NotACall -> EdgeAnswer.Admit
+    | (CapabilityTransport.Presentation.Unreadable _ | CapabilityTransport.Presentation.Presented _), RpcPurpose.Call ->
+      match presentToken store now presentation with
+      | Ok _ -> EdgeAnswer.Admit
+      | Error refusal ->
+        let body =
+          Json.serialize
+            Json.snakeCase
+            { Error = "invalid_token"; ErrorDescription = SageFsError.describeForAgent refusal }
+        EdgeAnswer.Refuse(unusableTokenStatus, body)
+
   /// The text the conductor reads once: the token, who it is for, what it may do, and how to present it.
   let private describe (minted: MintedMember) (tokenLine: string) : string =
     let record = minted.Record

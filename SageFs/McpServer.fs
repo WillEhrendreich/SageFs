@@ -829,13 +829,52 @@ let createReadResourceFilter () =
 
 /// The member-token header, read at the HTTP edge. The token is hashed here and only the hash goes
 /// on the request's principal, for the MCP request filters to read; the raw value goes no further.
-/// Installed ahead of `MapMcp`.
+/// The largest request body the edge will read to learn what a refused-token request asks for. A handshake or a tool list
+/// is a few hundred bytes; a bigger body is a call, because a tool call can carry a whole file.
+let private maxPurposeBodyBytes = 1_048_576L
+
+/// What an HTTP request asks of the server, read only for a request whose token is already known to be unusable. Only a
+/// POST carries a JSON-RPC message; the stream a GET opens and the DELETE that closes a session act on nothing, so they
+/// pass, and so does a POST to a route that speaks no JSON-RPC. The body is buffered and rewound, so the MCP transport reads it afterwards as if nobody had.
+let purposeOfRequest (request: Microsoft.AspNetCore.Http.HttpRequest) : Task<SageFs.McpCapability.RpcPurpose> =
+  task {
+    match Microsoft.AspNetCore.Http.HttpMethods.IsPost request.Method with
+    | false -> return SageFs.McpCapability.RpcPurpose.NotACall
+    | true ->
+      match request.ContentLength.HasValue && request.ContentLength.Value > maxPurposeBodyBytes with
+      | true -> return SageFs.McpCapability.RpcPurpose.Call
+      | false ->
+        Microsoft.AspNetCore.Http.HttpRequestRewindExtensions.EnableBuffering request
+        use reader = new System.IO.StreamReader(request.Body, System.Text.Encoding.UTF8, false, 4096, true)
+        let! text = reader.ReadToEndAsync()
+        request.Body.Position <- 0L
+        return SageFs.McpCapability.purposeOfBody text
+  }
+
+/// A header that names a token the daemon cannot use gets `edgeAnswer`'s 403 and `invalid_token` body (#182) when the
+/// request is a call, so the client reads the cause where it used to read an empty tool list. The handshake and the tool
+/// list pass, so the client connects and can be shown the one tool that explains the refusal. A token in `_meta` is inside
+/// the JSON-RPC body and is refused per call by the filters instead. Installed ahead of `MapMcp`.
 let useMemberToken (app: WebApplication) : unit =
   app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
     match ctx.Request.Headers.TryGetValue SageFs.Capability.CapabilityTransport.headerName with
     | true, values when values.Count > 0 ->
       ctx.User <- SageFs.McpCapability.principalOfHeader values.[0]
-      next.Invoke()
+      let store = SageFs.McpTools.capabilityStore
+      let presentation = SageFs.McpCapability.presentationFrom ctx.User null
+      match SageFs.McpCapability.edgeAnswer store DateTime.UtcNow SageFs.McpCapability.RpcPurpose.Call presentation with
+      | SageFs.McpCapability.EdgeAnswer.Admit -> next.Invoke()
+      | SageFs.McpCapability.EdgeAnswer.Refuse(status, body) ->
+        task {
+          let! purpose = purposeOfRequest ctx.Request
+          match SageFs.McpCapability.edgeAnswer store DateTime.UtcNow purpose presentation with
+          | SageFs.McpCapability.EdgeAnswer.Admit -> return! next.Invoke()
+          | SageFs.McpCapability.EdgeAnswer.Refuse _ ->
+            ctx.Response.StatusCode <- status
+            ctx.Response.ContentType <- "application/json"
+            do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes body)
+        }
+        :> Task
     | _ -> next.Invoke())) |> ignore
 
 /// Raised when a request body exceeds the 4 MB hard limit.

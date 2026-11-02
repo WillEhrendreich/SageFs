@@ -159,6 +159,57 @@ let transportTests =
       | Error _ -> ()
       | Ok _ -> failtest "an unreadable token must be refused"
     }
+
+    // #182: an HTTP 401 starts an OAuth flow in Claude Code, Copilot CLI and opencode and hides our sentence. Only a 403 lets
+    // Claude Code re-run its headersHelper and retry, and it delivers the body to the model in the other clients. Measured in
+    // docs/agent-identity-research-2026-11-01.md.
+    testCase "WHY - a token the daemon cannot use is answered with HTTP 403 and a body that says what to do, never 401" <| fun () ->
+      let store = newStore ()
+      let stale = CapabilityTransport.Presentation.Presented(TokenHash.ofToken "sfm_minted-before-the-restart")
+      match edgeAnswer store now RpcPurpose.Call stale with
+      | EdgeAnswer.Refuse(status, body) ->
+        status |> Expect.equal "403: a 401 would start an OAuth flow the daemon cannot finish" 403
+        let parsed = System.Text.Json.JsonDocument.Parse body
+        parsed.RootElement.GetProperty("error").GetString() |> Expect.equal "the OAuth error code a client recognises" "invalid_token"
+        let description = parsed.RootElement.GetProperty("error_description").GetString()
+        description |> Expect.stringContains "says what happened" "not known to this daemon"
+        description |> Expect.stringContains "names the tool that fixes it" "mint_member"
+      | EdgeAnswer.Admit -> failtest "an unknown token must be refused at the edge"
+
+    testCase "WHY - a header that cannot be a token is refused the same way, and no token is let through to the tool filter" <| fun () ->
+      let store = newStore ()
+      (match edgeAnswer store now RpcPurpose.Call (CapabilityTransport.Presentation.Unreadable "blank") with
+       | EdgeAnswer.Refuse(status, _) -> status |> Expect.equal "403" 403
+       | EdgeAnswer.Admit -> failtest "an unreadable token must be refused at the edge")
+      edgeAnswer store now RpcPurpose.Call CapabilityTransport.Presentation.NoToken
+      |> Expect.equal "no token is not the edge's business: the identity policy decides it per tool" EdgeAnswer.Admit
+
+    // Copilot CLI and opencode drop a server whose connect is refused, and the model then has no tool and no cause (measured,
+    // whatever the status). A bad token must therefore get through connect and the tool list so the one tool that
+    // explains it can be offered, and be refused only when it tries to act.
+    testCase "WHY - a bad token still gets through connect and tools/list, and is refused when it calls" <| fun () ->
+      let store = newStore ()
+      let stale = CapabilityTransport.Presentation.Presented(TokenHash.ofToken "sfm_minted-before-the-restart")
+      edgeAnswer store now RpcPurpose.NotACall stale
+      |> Expect.equal "connecting and listing are admitted, so the client connects and can be shown why" EdgeAnswer.Admit
+      (match edgeAnswer store now RpcPurpose.Call stale with
+       | EdgeAnswer.Refuse(403, _) -> ()
+       | other -> failtestf "a call must be refused with 403, got %A" other)
+
+    testCase "WHY - a JSON-RPC request is a call unless it is one of the methods a client uses to connect and list" <| fun () ->
+      let purpose (body: string) = purposeOfBody body
+      for methodName in [ "initialize"; "notifications/initialized"; "notifications/cancelled"; "ping"; "tools/list" ] do
+        purpose (sprintf """{"jsonrpc":"2.0","id":1,"method":"%s"}""" methodName)
+        |> Expect.equal (sprintf "%s connects or lists" methodName) RpcPurpose.NotACall
+      for methodName in [ "tools/call"; "resources/read"; "prompts/get"; "resources/list"; "completion/complete" ] do
+        purpose (sprintf """{"jsonrpc":"2.0","id":1,"method":"%s"}""" methodName)
+        |> Expect.equal (sprintf "%s acts" methodName) RpcPurpose.Call
+
+    // The plugin and the stdio bridge send the header only to the MCP endpoint, but the edge is installed for every route, so
+    // a body that is not a JSON-RPC request must pass: the call filters refuse any call that reaches them.
+    testCase "WHY - a body that is not a JSON-RPC request is left alone, so no other route is locked out by a stale header" <| fun () ->
+      for body in [ """{ not json"""; ""; """{"jsonrpc":"2.0","id":1,"result":{}}"""; """{"method":"tools/call"}"""; """{"filter":"all"}"""; "[1,2]" ] do
+        purposeOfBody body |> Expect.equal (sprintf "%A is not a call" body) RpcPurpose.NotACall
   ]
 
 [<Tests>]
@@ -344,6 +395,24 @@ let mintTests =
         let! stranger = mintAs ctx store "a-handle-that-never-joined" "Analysis" "" 60
         errorText stranger |> Expect.stringContains "an outsider is refused too" "conductor"
         store.Records |> Expect.isEmpty "nothing was minted"
+      })
+    }
+
+    testTask "WHY - the edge admits a live token and refuses it with 403 the moment it is revoked" {
+      let store = newStore ()
+      do! withCohort (fun ctx _ _ -> task {
+        do! joinedAsConductor ctx
+        let! result = mintAs ctx store handleConductor "Analysis" "" 60
+        let minted = okOrFail result
+        let presented = CapabilityTransport.Presentation.Presented(TokenHash.ofToken minted.Token)
+        edgeAnswer store now RpcPurpose.Call presented |> Expect.equal "a live token passes the edge" EdgeAnswer.Admit
+        let! revoked = asConnection handleConductor (fun () -> revokeMember ctx store now "gateway" (CapabilityId.value minted.Record.Id))
+        revoked |> okOrFail |> ignore
+        match edgeAnswer store now RpcPurpose.Call presented with
+        | EdgeAnswer.Refuse(status, body) ->
+          status |> Expect.equal "a revoked token is a 403 too" 403
+          body |> Expect.stringContains "and the body says it was revoked" "revoked"
+        | EdgeAnswer.Admit -> failtest "a revoked token must not pass the edge"
       })
     }
 
