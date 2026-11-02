@@ -267,6 +267,19 @@ module HostRuntimeConfig =
           tieredPgo (File.ReadLines config |> String.concat "\n")
           |> Expect.equal (sprintf "%s: SageFs.Host.runtimeconfig.json must turn tiered PGO off (<TieredPGO> in SageFs.Host.fsproj)" tfm) (Some false)
 
+      // #180: InvariantGlobalization in the host project gave user code in a session different `Normalize` and culture results from `dotnet fsi`.
+      // The host is the user's process and starts with the daemon's environment, so a machine that has to run invariant says so once, with
+      // DOTNET_SYSTEM_GLOBALIZATION_INVARIANT, and the host follows. A property here would override that choice for everyone.
+      testCase "WHY — the FSI host project sets no InvariantGlobalization, so user code gets the globalization its parent has" <| fun _ ->
+        match FsiHostBuild.embeddedSources () with
+        | Result.Error reason -> failtest (FsiHostBuild.describeBuildError reason)
+        | Result.Ok sources ->
+          let project = sources |> List.find (fun (name, _) -> name = "FsiHost.fsproj") |> snd
+          System.Xml.Linq.XDocument.Parse(project).Descendants(System.Xml.Linq.XName.Get "InvariantGlobalization")
+          |> Seq.map (fun e -> e.Value.Trim())
+          |> List.ofSeq
+          |> Expect.isEmpty "FsiHost.fsproj must not set <InvariantGlobalization>"
+
       testCase "the FSI host project turns tiered PGO off" <| fun _ ->
         match FsiHostBuild.embeddedSources () with
         | Result.Error reason -> failtest (FsiHostBuild.describeBuildError reason)

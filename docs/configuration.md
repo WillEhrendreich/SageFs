@@ -59,6 +59,14 @@ isn't a slow machine, tell me, because then the default is the bug.
 and `OTEL_SERVICE_NAME` (`sagefs` by default) are the standard OpenTelemetry
 variables, and setting the endpoint turns telemetry export on.
 
+### Culture and Unicode in a session
+
+Code in a session runs in the FSI host, and the host takes the globalization of the process that started it. On a machine with ICU that is the full
+.NET behavior: `"é".Normalize(NormalizationForm.FormD)` splits the accent off and `CultureInfo "de-DE"` exists, the same as under `dotnet fsi` and
+`dotnet test`. Older builds compiled the host with `InvariantGlobalization`, so both differed ([#180](https://github.com/WillEhrendreich/SageFs/issues/180)).
+A machine without ICU, for instance a slim container, sets `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` in the daemon's environment and the host follows.
+The daemon needs that variable too on such a machine, since .NET refuses to start without ICU or the variable.
+
 ### Set by SageFs, not by you
 
 SageFs writes these into the processes it starts. Setting one yourself in the

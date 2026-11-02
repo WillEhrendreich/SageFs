@@ -383,6 +383,26 @@ let tests =
       // The whole contract runs against the isolated host, agent included. No case is excused.
       contract "RemoteFsiSession" newRemote
 
+      // #180: the host used to be built with InvariantGlobalization, so user code in a session saw `Normalize(FormD)` leave "é" whole and
+      // `CultureInfo "de-DE"` throw, while the same code passes under `dotnet fsi` and `dotnet test`. The host is the user's process, so it takes
+      // the mode its parent has: the same ICU, or the same invariant fallback an operator chose with DOTNET_SYSTEM_GLOBALIZATION_INVARIANT.
+      testAsync "WHY — user code in a session gets the globalization its parent has, so Normalize and named cultures match dotnet fsi" {
+        let switchOf () =
+          match System.AppContext.TryGetSwitch "System.Globalization.Invariant" with
+          | true, value -> value
+          | _ -> false
+        do!
+          withSession newRemote (fun session ->
+            mustSucceed session "let invariantSwitch = (match System.AppContext.TryGetSwitch \"System.Globalization.Invariant\" with | true, v -> v | _ -> false)"
+            mustSucceed session "let decomposedLength = \"Café\".Normalize(System.Text.NormalizationForm.FormD).Length"
+            mustSucceed session "let germanNumber = try (1234.5).ToString(\"N1\", System.Globalization.CultureInfo \"de-DE\") with e -> e.GetType().Name"
+            string (session.BoundValue "invariantSwitch")
+            |> Expect.equal "the host runs in the same globalization mode as the process that started it" (string (switchOf ()))
+            if not (switchOf ()) then
+              string (session.BoundValue "decomposedLength") |> Expect.equal "é splits into e and a combining mark, as under dotnet fsi" "5"
+              string (session.BoundValue "germanNumber") |> Expect.equal "de-DE exists and groups with a dot" "1.234,5")
+      }
+
       testAsync "a click runs the getter in the host and answers with the binding walked again" {
         do!
           withSession newRemote (fun session ->

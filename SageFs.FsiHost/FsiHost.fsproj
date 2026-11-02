@@ -13,7 +13,9 @@
     <RestoreEnableSdkReferences>false</RestoreEnableSdkReferences>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- No InvariantGlobalization here, on purpose (#180). The user's code runs in this process, and with the setting on, Normalize(FormD)
+         left "é" whole and CultureInfo "de-DE" threw, where `dotnet fsi` and `dotnet test` do both. The host starts with the daemon's
+         environment, so a machine without ICU sets DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 once and the host follows. -->
     <!-- Tiered PGO instruments first-tier code and recompiles hot methods from the profile. FCS's work here is bursty and the process
          lives for minutes, so the instrumentation costs more than the profile earns (see SageFs.Host.fsproj, and HostRuntimeConfig in
          the tests). It also applies to the user's code, which runs in this process: a long compute-bound app loses at most the profile's
