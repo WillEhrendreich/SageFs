@@ -41,6 +41,8 @@ jobs:
     permissions:
       actions: read
       contents: write
+      # NuGet trusted publishing: the job's OIDC token is traded for a one-hour NuGet key, so no long-lived key is stored.
+      id-token: write
     env:
       SOURCE_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_run_id || github.event.workflow_run.id }}
 
@@ -136,10 +138,19 @@ jobs:
         OVSX_PAT: ${{ secrets.OVSX_PAT }}
       run: npx ovsx publish "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --pat "$OVSX_PAT" --skip-duplicate
 
+    # The key lasts an hour and works once, so it is asked for right before the push. The policy that allows this is
+    # on nuget.org (Trusted Publishing): repository WillEhrendreich/SageFs, workflow file publish.yml. `user` is the
+    # nuget.org profile name, not an email.
+    - name: NuGet login (OIDC to a short-lived key)
+      id: nuget_login
+      uses: NuGet/login@v1
+      with:
+        user: ${{ secrets.NUGET_USER }}
+
     - name: Push to NuGet
       shell: bash
       env:
-        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
       run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
 
     - name: Generate release notes
