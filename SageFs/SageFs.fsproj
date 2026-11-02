@@ -140,6 +140,7 @@
         <Compile Include="SessionStatusPayload.fs" />
         <Compile Include="CohortErrorMapping.fs" />
         <Compile Include="CapabilityStore.fs" />
+        <Compile Include="OperatorStore.fs" />
         <Compile Include="LiveTestStatusView.fs" />
         <Compile Include="McpAnalysisViews.fs" />
         <Compile Include="McpLeaseWire.fs" />

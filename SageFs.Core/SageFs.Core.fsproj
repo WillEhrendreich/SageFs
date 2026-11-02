@@ -58,6 +58,7 @@
         <Compile Include="MemberTable.fs" />
         <Compile Include="Capability.fs" />
         <Compile Include="EdgeCredential.fs" />
+        <Compile Include="OperatorFile.fs" />
         <Compile Include="Tutorial.fs" />
         <Compile Include="SageFsConfig.fs" />
         <Compile Include="Json.fs" />

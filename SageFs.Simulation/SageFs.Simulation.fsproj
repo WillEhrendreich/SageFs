@@ -296,6 +296,7 @@
              revoked hash, never-expiring token, bad token that falls back) prove the invariants' teeth. -->
         <Compile Include="CapabilitySim.fs" />
         <Compile Include="CapabilitySimInvariants.fs" />
+        <Compile Include="OperatorStoreSim.fs" />
         <!-- Debugging one test DST: holds, expiries, debugger attach, release, finish and a dying host, folded
              through the REAL TestDebug.step; two twins (never expires, runs unattached) prove the teeth. -->
         <Compile Include="TestDebugSim.fs" />
