@@ -267,6 +267,23 @@ module McpCapability =
   /// MCP 2026-07-28 says an invalid token MUST get a 401; SageFs is not an OAuth resource server, so it departs on purpose.
   let unusableTokenStatus = 403
 
+  /// The name of the one tool a caller with an unusable token is shown.
+  let credentialStatusToolName = "credential_status"
+
+  /// The one tool `tools/list` holds for a caller whose token is unusable (#182). A host shows the model only what the
+  /// list returned, so an empty list hides why. The description carries the refusal, which a model reads without calling
+  /// the tool, and a call to it is refused at the edge with the same `invalid_token` body.
+  let credentialStatusTool (refusal: SageFsError) : ModelContextProtocol.Protocol.Tool =
+    let schema = System.Text.Json.JsonDocument.Parse("""{"type":"object"}""").RootElement.Clone()
+    ModelContextProtocol.Protocol.Tool(
+      Name = credentialStatusToolName,
+      Description =
+        sprintf
+          "The member token this connection presents cannot be used. No other SageFs tool is listed until it is replaced. %s Calling this tool returns the same refusal."
+          (SageFsError.describeForAgent refusal),
+      InputSchema = schema
+    )
+
   /// What a request asks of the server, as far as the edge cares. A call is a JSON-RPC request that acts. Everything else
   /// is not a call: the messages a client uses to connect and list (`initialize`, `ping`, `tools/list`, notifications) and
   /// any request that is not a JSON-RPC message at all. Copilot CLI and opencode drop a server whose connect is refused and

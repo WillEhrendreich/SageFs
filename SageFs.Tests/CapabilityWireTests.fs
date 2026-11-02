@@ -196,6 +196,22 @@ let transportTests =
        | EdgeAnswer.Refuse(403, _) -> ()
        | other -> failtestf "a call must be refused with 403, got %A" other)
 
+    // A host shows the model only what tools/list returned, so an empty list hides the refusal (#182). The one tool a bad
+    // token is shown carries the cause in its description, which the model reads without calling it, and any call to it is
+    // refused at the edge with the same 403 body.
+    testCase "WHY - the tool list for a bad token is one tool whose description is the cause and the fix" <| fun () ->
+      let store = newStore ()
+      match presentToken store now (CapabilityTransport.Presentation.Presented(TokenHash.ofToken "sfm_minted-before-the-restart")) with
+      | Ok _ -> failtest "an unknown token must be refused"
+      | Error refusal ->
+        let tool = credentialStatusTool refusal
+        tool.Name |> Expect.equal "named for what it reports" credentialStatusToolName
+        credentialStatusToolName |> Expect.equal "the name the research note and the issue use" "credential_status"
+        tool.Description |> Expect.stringContains "carries the cause" "not known to this daemon"
+        tool.Description |> Expect.stringContains "and the fix" "mint_member"
+        tool.Description |> Expect.stringContains "and says why nothing else is listed" "No other SageFs tool is listed"
+        tool.InputSchema.GetProperty("type").GetString() |> Expect.equal "takes no arguments" "object"
+
     testCase "WHY - a JSON-RPC request is a call unless it is one of the methods a client uses to connect and list" <| fun () ->
       let purpose (body: string) = purposeOfBody body
       for methodName in [ "initialize"; "notifications/initialized"; "notifications/cancelled"; "ping"; "tools/list" ] do

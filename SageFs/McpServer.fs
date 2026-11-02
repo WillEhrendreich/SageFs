@@ -777,7 +777,8 @@ let applyDestructiveHints (tools: IList<Tool>) =
 /// ListToolsFilter: `tools/list` shows each caller only what it can call. A caller that presented
 /// a member token sees its role's tools; a caller with no token sees everything under
 /// `ConnectionsAllowed`, and under `TokenRequired` only status unless it is the conductor; a caller
-/// whose token is bad sees nothing, because every call it made would be refused.
+/// whose token is bad sees one tool, `credential_status`, whose description is the refusal. Every call it
+/// made would be refused, and an empty list hid the reason from the model (#182).
 let createToolListFilter (mcpCtx: McpContext) =
   McpRequestFilter<ListToolsRequestParams, ListToolsResult>(fun next ->
     McpRequestHandler<ListToolsRequestParams, ListToolsResult>(fun ctx ct ->
@@ -786,8 +787,9 @@ let createToolListFilter (mcpCtx: McpContext) =
           let! result = next.Invoke(ctx, ct).AsTask()
           let store = SageFs.McpTools.capabilityStore
           let meta = match box ctx.Params with | null -> null | _ -> ctx.Params.Meta
+          let presentation = SageFs.McpCapability.presentToken store DateTime.UtcNow (SageFs.McpCapability.presentationFrom ctx.User meta)
           let visible =
-            match SageFs.McpCapability.presentToken store DateTime.UtcNow (SageFs.McpCapability.presentationFrom ctx.User meta) with
+            match presentation with
             | Error _ -> Set.empty
             | Ok presented ->
               let authority, seat =
@@ -804,6 +806,9 @@ let createToolListFilter (mcpCtx: McpContext) =
               |> Set.ofList
           for i in result.Tools.Count - 1 .. -1 .. 0 do
             if not (Set.contains result.Tools.[i].Name visible) then result.Tools.RemoveAt i
+          match presentation with
+          | Error refusal -> result.Tools.Add(SageFs.McpCapability.credentialStatusTool refusal)
+          | Ok _ -> ()
           applyDestructiveHints result.Tools
           return result
         })))

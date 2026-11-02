@@ -627,6 +627,20 @@ queue a landing. `tools/list` shows a token only the tools its role allows. The
 role says which tools a token may call and the route (below) says where it may call
 them, and a call must pass both.
 
+**A token the daemon cannot use.** A token that is unknown (minted before a daemon
+restart, since tokens live in memory), expired, revoked or lapsed gets one tool in
+`tools/list`, `credential_status`, whose description is the refusal and what to do
+about it. Connecting, `ping` and `tools/list` still succeed, so the client keeps the
+server and the model can read why. Any call, including one to `credential_status`,
+is answered with HTTP `403` and `{"error":"invalid_token","error_description":"..."}`.
+The status is `403` on purpose: a `401` starts an OAuth sign-in in Claude Code,
+Copilot CLI and opencode that the daemon cannot finish, and only a `403` makes
+Claude Code run its `headersHelper` again and retry the call. MCP's authorization
+spec says an invalid token must get a `401`; SageFs is not an OAuth resource server,
+so it departs from that, in one function with a test that pins the status. The
+refusal applies to a token in the `X-SageFs-Member-Token` header. A token in
+`_meta` is refused per call inside the JSON-RPC reply.
+
 **Scope.** A prefix such as `src/Foo/`. The token can claim only inside it, and
 the path is canonicalized first, so `src/Foo/../Bar` counts as `src/Bar`. This is
 policy, not a sandbox: it refuses claims, and it does not stop a process from
