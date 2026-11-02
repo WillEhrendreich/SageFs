@@ -256,6 +256,39 @@ let lastSessionTests =
   ]
 
 [<Tests>]
+let switchTests =
+  testList "switching to a session" [
+
+    testTask "WHY — the output panel the switch patches names the session it shows, because a panel with no id waits for a stream push to learn whose output it holds" {
+      let viewed, target = sid 1, sid 2
+      let outputRegion: RenderRegion =
+        { Id = "output"
+          Flags = RegionFlags.None
+          Content = "switchedtotarget"
+          Affordances = []
+          Cursor = None
+          Completions = None
+          LineAnnotations = [||] }
+      let queries =
+        { mkQueries (ref 0) [] with
+            GetAllSessions = fun () -> Task.FromResult [ infoOf viewed; infoOf target ]
+            GetElmRegionsForSession = fun id -> if id = target then Some [ outputRegion ] else None
+            GetSessionEvalCounts = fun () -> Map.ofList [ target, 7 ] }
+      let switch (_: WorkerProtocol.SessionId) : Task<Result<string, string>> = Task.FromResult (Result.Ok "switched")
+      let out = new CaptureStream()
+      let body = sprintf "{\"%s\":\"%s\"}" Signals.ViewingSessionId (raw viewed)
+      do! createSessionActionHandler queries (mkInfra ()) switch SessionActionKind.Show target (contextWith body out CancellationToken.None)
+      let text = out.Text
+      let panelAt = text.IndexOf(sprintf "id=\"%s\"" DomIds.OutputPanel)
+      (panelAt, -1) |> Expect.isGreaterThan "the output panel was patched"
+      let panelTag = text.Substring(text.LastIndexOf('<', panelAt), text.IndexOf('>', panelAt) - text.LastIndexOf('<', panelAt) + 1)
+      panelTag |> Expect.stringContains "and it names the session it shows" (sprintf "data-session-id=\"%s\"" (raw target))
+      panelTag |> Expect.stringContains "and it carries that session's finished-eval count" "_output-feed-evals=\"7\""
+      text |> Expect.stringContains "with that session's lines in it" "switchedtotarget"
+    }
+  ]
+
+[<Tests>]
 let registryTests =
   let a = sid 1
   testList "the teardown registry" [

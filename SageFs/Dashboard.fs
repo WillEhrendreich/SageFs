@@ -2545,7 +2545,10 @@ let createSessionActionHandler
         | Some regions ->
           match regions |> List.tryFind (fun r -> r.Id = "output") with
           | Some outputRegion ->
-            do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content) "No output yet")
+            // The panel names the session it now shows. Without the id it would be the "no session" panel until a
+            // stream push replaced it, and the follow logic keys on that id and on the finished-eval count.
+            let evalsFinished = q.GetSessionEvalCounts () |> Map.tryFind target |> Option.defaultValue 0
+            do! ssePatchNode ctx (renderOutputForSession (WorkerProtocol.SessionId.value target) evalsFinished (parseOutputLines outputRegion.Content) "No output yet")
           | None -> ()
         | None -> ()
         let! cards = buildSessionCards q infra
