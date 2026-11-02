@@ -474,7 +474,7 @@ module SessionManager =
         : ManagerState * Result<unit, SageFsError> =
         // A startup profile may bind the app's port at load, so its old worker leaves first and the replacement is
         // parked until the reaper reports it gone (RespawnAfterReap, #179).
-        match RespawnAfterReap.sequencingFor session.Targets session.WorkingDir with
+        match RespawnAfterReap.sequencingFor session.Targets session.WorkingDir session.ProjectRoles with
         | RespawnAfterReap.Sequencing.ReapThenSpawn script ->
           Log.info "[SessionManager] session %s runs %s at load: its old worker leaves before the replacement starts" (SessionId.value id) script
           let restarting =

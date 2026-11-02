@@ -34,6 +34,19 @@ let private projectIn (folder: string) : SessionProjectTarget list =
 let private scriptPath (script: StartupProfile.InitScript option) : string option =
   script |> Option.map (fun s -> s.Path)
 
+/// A project the worker reported loaded, the way `classifiedProjectsOf` lists it: in the order of its `Solution.Projects`.
+let private loadedProject (path: string) (mode: ProjectLoading.LoadMode) : ProjectLoading.ClassifiedProject =
+  { Path = path
+    Role = ProjectLoading.ProjectRole.Library
+    PackageRefs = []
+    LoadMode = mode
+    Build = BuildOptimization.Unknown "a fixture" }
+
+let private evaluated (path: string) = loadedProject path ProjectLoading.LoadMode.Evaluated
+
+let private solutionIn (folder: string) : SessionProjectTarget list =
+  [ SessionProjectTarget.Solution (Path.Combine(folder, "All.slnx")) ]
+
 [<Tests>]
 let respawnAfterReapTests =
   testList "RespawnAfterReap" [
@@ -44,7 +57,7 @@ let respawnAfterReapTests =
         withFolder (fun root ->
           let projectDir = Path.Combine(root, "proj")
           let profile = writeProfile projectDir
-          RespawnAfterReap.sequencingFor (projectIn projectDir) root
+          RespawnAfterReap.sequencingFor (projectIn projectDir) root []
           |> Expect.equal "the profile's path travels with the decision" (RespawnAfterReap.Sequencing.ReapThenSpawn profile))
 
       testCase "WHY — an init.fsx in the session's working directory counts when the project folder has none" <| fun _ ->
@@ -52,7 +65,7 @@ let respawnAfterReapTests =
           let projectDir = Path.Combine(root, "proj")
           Directory.CreateDirectory projectDir |> ignore
           let profile = writeProfile root
-          RespawnAfterReap.tryFindStartupScript (projectIn projectDir) root
+          RespawnAfterReap.tryFindStartupScript (projectIn projectDir) root []
           |> scriptPath
           |> Expect.equal "found beside the working directory" (Some profile))
 
@@ -60,20 +73,66 @@ let respawnAfterReapTests =
         withFolder (fun root ->
           let rc = Path.Combine(root, ".SageFsrc")
           File.WriteAllText(rc, "let x = 1")
-          RespawnAfterReap.tryFindStartupScript [ SessionProjectTarget.Bare ] root
+          RespawnAfterReap.tryFindStartupScript [ SessionProjectTarget.Bare ] root []
           |> scriptPath
           |> Expect.equal "the rc file is found" (Some rc))
 
-      testCase "WHY — a solution target looks in the solution's folder, since the worker's primary project is not known here" <| fun _ ->
+      testCase "WHY — a solution session sees a profile kept only in the first loaded project's folder, where the worker looks first" <| fun _ ->
+        withFolder (fun root ->
+          let first = Path.Combine(root, "src", "First")
+          let second = Path.Combine(root, "src", "Second")
+          Directory.CreateDirectory second |> ignore
+          let profile = writeProfile first
+          let loaded = [ evaluated (Path.Combine(first, "First.fsproj")); evaluated (Path.Combine(second, "Second.fsproj")) ]
+          RespawnAfterReap.sequencingFor (solutionIn root) root loaded
+          |> Expect.equal "the replacement waits for the old worker" (RespawnAfterReap.Sequencing.ReapThenSpawn profile))
+
+      testCase "WHY — a profile kept only in a later project's folder is one the worker never loads, so the session keeps spawn-first" <| fun _ ->
+        withFolder (fun root ->
+          let first = Path.Combine(root, "src", "First")
+          let second = Path.Combine(root, "src", "Second")
+          Directory.CreateDirectory first |> ignore
+          writeProfile second |> ignore
+          let loaded = [ evaluated (Path.Combine(first, "First.fsproj")); evaluated (Path.Combine(second, "Second.fsproj")) ]
+          RespawnAfterReap.sequencingFor (solutionIn root) root loaded
+          |> Expect.equal "the worker looks in the first project and the session directory only" RespawnAfterReap.Sequencing.SpawnFirst)
+
+      testCase "WHY — a solution session with no profile anywhere keeps spawn-first" <| fun _ ->
+        withFolder (fun root ->
+          let first = Path.Combine(root, "src", "First")
+          Directory.CreateDirectory first |> ignore
+          RespawnAfterReap.sequencingFor (solutionIn root) root [ evaluated (Path.Combine(first, "First.fsproj")) ]
+          |> Expect.equal "nothing to wait for" RespawnAfterReap.Sequencing.SpawnFirst)
+
+      testCase "WHY — a solution session's profile in its working directory counts, as it does for the worker" <| fun _ ->
+        withFolder (fun root ->
+          let first = Path.Combine(root, "src", "First")
+          Directory.CreateDirectory first |> ignore
+          let profile = writeProfile root
+          RespawnAfterReap.tryFindStartupScript (solutionIn root) root [ evaluated (Path.Combine(first, "First.fsproj")) ]
+          |> scriptPath
+          |> Expect.equal "found in the session directory" (Some profile))
+
+      testCase "WHY — a project the loader parsed by hand is not the worker's primary project, because Solution.Projects does not hold it" <| fun _ ->
+        withFolder (fun root ->
+          let handParsed = Path.Combine(root, "src", "Hand")
+          Directory.CreateDirectory handParsed |> ignore
+          writeProfile handParsed |> ignore
+          let cause = ProjectLoading.FallbackCause.Threw "boom"
+          let loaded = [ loadedProject (Path.Combine(handParsed, "Hand.fsproj")) (ProjectLoading.LoadMode.ManualFallback cause) ]
+          RespawnAfterReap.sequencingFor (solutionIn root) root loaded
+          |> Expect.equal "only the session directory is searched" RespawnAfterReap.Sequencing.SpawnFirst)
+
+      testCase "WHY — before a worker has reported its projects, a solution is looked for in its own folder, the nearest the manager can know" <| fun _ ->
         withFolder (fun root ->
           let profile = writeProfile root
-          RespawnAfterReap.tryFindStartupScript [ SessionProjectTarget.Solution (Path.Combine(root, "All.slnx")) ] (Path.Combine(root, "elsewhere"))
+          RespawnAfterReap.tryFindStartupScript (solutionIn root) (Path.Combine(root, "elsewhere")) []
           |> scriptPath
           |> Expect.equal "found beside the solution" (Some profile))
 
       testCase "WHY — a session with no startup profile keeps spawn-first, so its old worker serves until the new one is Ready" <| fun _ ->
         withFolder (fun root ->
-          RespawnAfterReap.sequencingFor (projectIn root) root
+          RespawnAfterReap.sequencingFor (projectIn root) root []
           |> Expect.equal "no profile, no change in order" RespawnAfterReap.Sequencing.SpawnFirst)
 
       testCase "WHY — the decision is a plain function of whether a profile was found" <| fun _ ->

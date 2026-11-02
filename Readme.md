@@ -602,7 +602,7 @@ Erlang-style supervisor with exponential backoff (1s → 2s → 4s → max 30s, 
 
 A hard reset spawns the replacement worker *first* and only retires the old one once the new one is ready, so the session is never left without a live worker mid-swap. (`rebuild=true` still runs a `dotnet build` before the swap; `rebuild=false` reuses the current build.)
 
-One case goes the other way round. A session with a startup profile (`.SageFs/init.fsx`, or a `.SageFsrc`) may start an app on a fixed port at load, and the old worker still holds that port while the replacement loads the profile. So for those sessions the old worker leaves first, and the replacement starts once it is gone. The session shows `Restarting` for that stretch, and `get_session_status` with `wait_seconds` waits it out. The profile is looked for in the project's folder and the working directory; for a solution, in the solution's own folder.
+One case goes the other way round. A session with a startup profile (`.SageFs/init.fsx`, or a `.SageFsrc`) may start an app on a fixed port at load, and the old worker still holds that port while the replacement loads the profile. So for those sessions the old worker leaves first, and the replacement starts once it is gone. The session shows `Restarting` for that stretch, and `get_session_status` with `wait_seconds` waits it out. The profile is looked for where the worker looks: the folder of the first project it loaded (for a solution, the first project of the solution, as the worker reports it), then the working directory.
 
 </details>
 

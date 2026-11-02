@@ -121,6 +121,26 @@ let private createSession (harness: Harness) (root: string) : SessionInfo =
   | Ok info -> info
   | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
 
+/// A solution under a scratch folder, two projects deep. `profileIn` names the project folder that holds the startup
+/// profile, or none. The working directory is the folder the solution is in, which has no profile of its own.
+let private withSolution (profileIn: string option) (run: string -> Task) : Task =
+  task {
+    let root = Path.Combine(Path.GetTempPath(), "respawn-sln-" + Guid.NewGuid().ToString "N")
+    for project in [ "First"; "Second" ] do
+      Directory.CreateDirectory(Path.Combine(root, "src", project, ".SageFs")) |> ignore
+    match profileIn with
+    | Some project -> File.WriteAllText(Path.Combine(root, "src", project, ".SageFs", "init.fsx"), "let app = 1")
+    | None -> ()
+    try do! run root
+    finally try Directory.Delete(root, true) with _ -> ()
+  }
+
+let private createSolutionSession (harness: Harness) (root: string) : SessionInfo =
+  match harness.Mailbox.PostAndReply(fun reply ->
+    SessionCommand.CreateSession([ SessionProjectTarget.Solution (Path.Combine(root, "All.slnx")) ], root, true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
+  | Ok info -> info
+  | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
+
 let private managed (harness: Harness) (id: SessionId) : ManagedSession =
   match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(id, reply)) with
   | Some session -> session
@@ -150,6 +170,26 @@ let private makeReady (harness: Harness) (info: SessionInfo) : unit =
   harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply)) |> ignore
   harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionLifecycleStatus.Ready { Pid = pid; Port = Some 4123 }))
   harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply)) |> ignore
+
+/// Ready the way a real worker gets there: its transport, then its own report of the projects it loaded, in order.
+let private makeReadyReporting (harness: Harness) (info: SessionInfo) (loaded: string list) : unit =
+  let pid = SessionLifecycleStatus.workerPid (managed harness info.Id).Info.Status |> Option.defaultWith (fun () -> failtest "expected worker pid")
+  let roles : ProjectLoading.ClassifiedProject list =
+    loaded
+    |> List.map (fun path ->
+      { Path = path
+        Role = ProjectLoading.ProjectRole.Library
+        PackageRefs = []
+        LoadMode = ProjectLoading.LoadMode.Evaluated
+        Build = BuildOptimization.Unknown "a fixture" })
+  harness.Mailbox.Post(SessionCommand.WorkerReady(info.Id, pid, "http://localhost:4123", readyProxy))
+  harness.Mailbox.Post(SessionCommand.WorkerReportedReady(info.Id, pid, roles))
+  match (managed harness info.Id).ProjectRoles |> List.length = roles.Length with
+  | true -> ()
+  | false -> failtest "the worker's project list was not recorded on the session"
+
+let private switchTo (harness: Harness) (id: SessionId) (workflow: WorkflowTypes.SessionWorkflow) : Result<string, SageFsError> =
+  harness.Mailbox.PostAndReply(fun reply -> SessionCommand.SwitchWorkflow(id, workflow, reply))
 
 let private hardReset (harness: Harness) (id: SessionId) (plan: RestartPlan) : Result<string, SageFsError> =
   harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(id, plan, reply))
@@ -272,6 +312,81 @@ let respawnAfterReapTests =
             lock harness.FaultedEvents (fun () -> harness.FaultedEvents |> Seq.map snd |> List.ofSeq)
             |> List.exists (fun reason -> reason.Contains "spawn boom")
             |> Expect.isTrue "the fault callback carries the spawn failure"
+          }))
+    }
+
+    testTask "WHY — a solution session whose profile is only in the first project's folder waits for the old worker, as the worker's own lookup would find it" {
+      let rig = mkRig true (fun _ -> false)
+      do! withSolution (Some "First") (fun root ->
+        withHarness rig (fun harness ->
+          task {
+            let info = createSolutionSession harness root
+            makeReadyReporting harness info [ Path.Combine(root, "src", "First", "First.fsproj"); Path.Combine(root, "src", "Second", "Second.fsproj") ]
+            hardReset harness info.Id RestartPlan.RespawnOnly |> Result.isOk |> Expect.isTrue "accepted"
+            rig.StartCalls () |> Expect.equal "the replacement is held back" 1
+            rig.LetOldWorkersLeave ()
+            do! within "the replacement to start once the old worker left" (rig.Started 2)
+            rig.Verbs () |> Expect.equal "the old worker is stopped, and only then is the replacement started" [ Verb.Start; Verb.Stop; Verb.Start ]
+          }))
+    }
+
+    testTask "WHY — a solution session with no profile anywhere keeps spawn-first" {
+      let rig = mkRig true (fun _ -> false)
+      do! withSolution None (fun root ->
+        withHarness rig (fun harness ->
+          task {
+            let info = createSolutionSession harness root
+            makeReadyReporting harness info [ Path.Combine(root, "src", "First", "First.fsproj"); Path.Combine(root, "src", "Second", "Second.fsproj") ]
+            hardReset harness info.Id RestartPlan.RespawnOnly |> Result.isOk |> Expect.isTrue "accepted"
+            rig.StartCalls () |> Expect.equal "the replacement starts at once" 2
+            rig.Verbs () |> Expect.equal "and the old worker is not stopped" [ Verb.Start; Verb.Start ]
+          }))
+    }
+
+    testTask "WHY — a solution session whose profile is only in a later project's folder keeps spawn-first, since the worker never loads it" {
+      let rig = mkRig true (fun _ -> false)
+      do! withSolution (Some "Second") (fun root ->
+        withHarness rig (fun harness ->
+          task {
+            let info = createSolutionSession harness root
+            makeReadyReporting harness info [ Path.Combine(root, "src", "First", "First.fsproj"); Path.Combine(root, "src", "Second", "Second.fsproj") ]
+            hardReset harness info.Id RestartPlan.RespawnOnly |> Result.isOk |> Expect.isTrue "accepted"
+            rig.StartCalls () |> Expect.equal "the replacement starts at once" 2
+          }))
+    }
+
+    testTask "WHY — switch_workflow on a session with a startup profile does not start the replacement until the old worker is reaped, then starts it in the new workflow" {
+      let rig = mkRig true (fun _ -> false)
+      do! withProject true (fun root ->
+        withHarness rig (fun harness ->
+          task {
+            let info = createSession harness root
+            makeReady harness info
+            match switchTo harness info.Id WorkflowTypes.SessionWorkflow.LiveTesting with
+            | Ok _ -> ()
+            | Error err -> failtestf "the switch was refused: %s" (SageFsError.describe err)
+            rig.StartCalls () |> Expect.equal "the replacement is held back while the old worker is still leaving" 1
+            (managed harness info.Id).Info.Status |> isRestarting |> Expect.isTrue "the session stays registered, Restarting"
+            rig.LetOldWorkersLeave ()
+            do! within "the replacement to start once the old worker left" (rig.Started 2)
+            rig.Verbs () |> Expect.equal "the old worker is stopped, and only then is the replacement started" [ Verb.Start; Verb.Stop; Verb.Start ]
+            let! _ = workersGone harness info.Id
+            (managed harness info.Id).Workflow |> Expect.equal "the replacement is in the workflow that was asked for" WorkflowTypes.SessionWorkflow.LiveTesting
+          }))
+    }
+
+    testTask "WHY — switch_workflow on a session with no startup profile starts the replacement at once and leaves the old worker serving" {
+      let rig = mkRig true (fun _ -> false)
+      do! withProject false (fun root ->
+        withHarness rig (fun harness ->
+          task {
+            let info = createSession harness root
+            makeReady harness info
+            match switchTo harness info.Id WorkflowTypes.SessionWorkflow.LiveTesting with
+            | Ok _ -> ()
+            | Error err -> failtestf "the switch was refused: %s" (SageFsError.describe err)
+            rig.StartCalls () |> Expect.equal "the replacement starts at once" 2
+            rig.Verbs () |> Expect.equal "and the old worker is not stopped" [ Verb.Start; Verb.Start ]
           }))
     }
 
