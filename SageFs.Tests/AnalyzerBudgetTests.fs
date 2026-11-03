@@ -97,12 +97,22 @@ let commandTests =
       environment |> Expect.contains "prerelease roll-forward" ("DOTNET_ROLL_FORWARD_TO_PRERELEASE", "1")
   ]
 
-/// The last green gate's counts, for `--ratchets --tighten` to lower the table to. A machine with no gate pass that
-/// recorded them has nothing to compare, so it reports the table itself and a tighten changes nothing.
-let private lastGateCounts () : (string * int) list =
-  match GatePassedRecord.newestText reportFileName with
-  | None -> RatchetBudgets.analyzerFindings
-  | Some text -> parseReport text
+/// The newest counts there are, for `--ratchets --tighten` to lower the table to: the last passed gate's record, or the
+/// file `scripts/analyzer-counts.fsx` wrote in this checkout, whichever is newer. The second is what makes a lowering
+/// possible when the pack gets better: the gate fails on a budget that is now too high, so no passed gate ever holds the
+/// new numbers, but the script writes them before it judges. A machine with neither has nothing to compare, so it reports
+/// the table itself and a tighten changes nothing.
+let private lastCounts () : (string * int) list =
+  let local = Path.Combine(repoRoot, "test-results", reportFileName)
+  [ GatePassedRecord.newestPath reportFileName
+    (match File.Exists local with
+     | true -> Some local
+     | false -> None) ]
+  |> List.choose id
+  |> List.sortByDescending File.GetLastWriteTimeUtc
+  |> List.tryHead
+  |> Option.map (File.ReadAllText >> parseReport)
+  |> Option.defaultValue RatchetBudgets.analyzerFindings
 
 /// The budget table as data, so `--ratchets --tighten` can lower it.
 let private budgetTable =
@@ -110,12 +120,13 @@ let private budgetTable =
     { Name = "analyzer findings"
       SourceFile = RatchetBudgets.sourceFile
       Budgets = RatchetBudgets.analyzerFindings
-      Actual = lastGateCounts }
+      Actual = lastCounts }
 
 /// The budget table and its place in the gate.
 let analyzerBudgetRatchets =
   let pipeline = lazy (File.ReadAllText(Path.Combine(repoRoot, "ci-pipeline.fsx")))
   let localGate = lazy (File.ReadAllText(Path.Combine(repoRoot, "scripts", "local-gate.fsx")))
+  let script = lazy (File.ReadAllText(Path.Combine(repoRoot, "scripts", "analyzer-counts.fsx")))
   let keyShape = System.Text.RegularExpressions.Regex(@"^(?<project>[A-Za-z.]+)/SAGE-\d{3}$")
 
   testList "Analyzer budget table and wiring" [
@@ -142,16 +153,22 @@ let analyzerBudgetRatchets =
       File.ReadAllText(Path.Combine(repoRoot, "dotnet-tools.json"))
       |> Expect.stringContains "fsharp-analyzers is pinned to the SDK version the pack was built against" "\"version\": \"0.41.0\""
 
-    testCase "WHY — the pipeline judges the analyzer counts over the budget table and a failing standing is a red stage" <| fun _ ->
+    testCase "WHY — the pipeline has an analyzers stage that runs the script, so there is one home for what the stage does" <| fun _ ->
       let text = pipeline.Value
-      text |> Expect.stringContains "the module is loaded" "#load \"build/AnalyzerBudget.fs\""
       text |> Expect.stringContains "the stage exists" "stage \"analyzers\""
-      text |> Expect.stringContains "the CLI is restored from the manifest first" "\"dotnet\"; \"tool\"; \"restore\""
+      text |> Expect.stringContains "and runs the script" "dotnet fsi scripts/analyzer-counts.fsx"
+      text |> Expect.stringContains "before the tiers, so a finding fails in minutes" "stage \"test tiers\""
+      (text.IndexOf "stage \"analyzers\"" < text.IndexOf "stage \"test tiers\"") |> Expect.isTrue "the stage comes before the tiers"
+
+    testCase "WHY — the script restores the pinned CLI, runs each project with the shared arguments, writes the counts BEFORE it judges, and fails on a non-within standing" <| fun _ ->
+      let text = script.Value
+      text |> Expect.stringContains "the CLI is restored from the manifest first" "[ \"tool\"; \"restore\" ]"
       text |> Expect.stringContains "each project is run with the shared arguments" "AnalyzerBudget.cliArguments"
       text |> Expect.stringContains "with the shared environment" "AnalyzerBudget.environment"
       text |> Expect.stringContains "the counts are judged over the table" "AnalyzerBudget.judge SageFs.Tests.RatchetBudgets.analyzerFindings"
-      text |> Expect.stringContains "a failing standing fails the stage" "AnalyzerBudget.fails"
-      text |> Expect.stringContains "the counts are recorded for the passed record" "AnalyzerBudget.reportFileName"
+      text |> Expect.stringContains "a failing standing fails the run" "AnalyzerBudget.fails"
+      text |> Expect.stringContains "the counts are written under the shared file name" "AnalyzerBudget.reportFileName"
+      (text.IndexOf "File.WriteAllText(reportFile" < text.IndexOf "let failing =") |> Expect.isTrue "the report is written before the verdict"
 
     testCase "WHY — a passed gate keeps the counts, because `--tighten` reads them from there" <| fun _ ->
       localGate.Value |> Expect.stringContains "the local gate copies the report beside the ledger" reportFileName

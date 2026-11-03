@@ -386,24 +386,25 @@ let ignoredPerTier : (string * int) list =
 /// analyzer that could not finish a file) is never listed: an unchecked file is a failure, not debt.
 /// The rules: 001 a Result passed to `ignore`; 003 an Async or Task passed to `ignore`; 004 `raise`/`failwith`/`reraise` in a
 /// domain module; 005 swappable primitive parameters; 006 `try`/`with` mixed with Result; 007 `let mutable` in a domain
-/// function; 009 a ref cell. SAGE-004 still counts some compiler-generated `reraise` (a known false positive in the pack);
-/// the number is the debt as measured, not a judgement that each is a real throw.
-/// Measured 2026-11-03 over the Debug build, pack built against SDK 0.41.0, no faults in any project.
+/// function; 009 a ref cell. SAGE-004 counts only a `raise`, `failwith` or `reraise` the programmer wrote: the pack checks the
+/// source text at the call and ignores the rethrow and the match-failure stub the compiler adds (every remaining hit was
+/// checked to sit on a line that spells the function it names).
+/// Measured 2026-11-03 with `scripts/analyzer-counts.fsx`, pack built against SDK 0.41.0, no faults in any project.
 let analyzerFindings : (string * int) list =
   [ "SageFs.Core/SAGE-003", 1
-    "SageFs.Core/SAGE-004", 109
+    "SageFs.Core/SAGE-004", 65
     "SageFs.Core/SAGE-005", 179
     "SageFs.Core/SAGE-006", 4
     "SageFs.Core/SAGE-007", 337
     "SageFs.Core/SAGE-009", 32
-    "SageFs.Host/SAGE-004", 6
+    "SageFs.Host/SAGE-004", 2
     "SageFs.Host/SAGE-005", 3
     "SageFs.Host/SAGE-006", 1
     "SageFs.Host/SAGE-007", 11
     "SageFs.Host/SAGE-009", 16
     "SageFs/SAGE-001", 7
     "SageFs/SAGE-003", 13
-    "SageFs/SAGE-004", 76
+    "SageFs/SAGE-004", 40
     "SageFs/SAGE-005", 217
     "SageFs/SAGE-006", 3
     "SageFs/SAGE-007", 227

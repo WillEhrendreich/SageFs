@@ -349,6 +349,11 @@ judges the counts against `RatchetBudgets.analyzerFindings`. A new finding fails
 count, and lowering it is `--ratchets --tighten`, never by hand. `SAGE-000` means an analyzer threw on a file and that file
 went unchecked, so it has no budget and always fails.
 
+The stage is `dotnet fsi scripts/analyzer-counts.fsx` (the logic is `build/AnalyzerBudget.fs`; the script is the glue). It
+writes `test-results/analyzer-counts.txt` before it judges, so when a finding is fixed or the pack improves and a budget is
+now too high, run the script, let it fail on the slack, then run `--ratchets --tighten`: it reads that file, or the last
+passed gate's copy, whichever is newer.
+
 To run it by hand, with the CLI that `dotnet-tools.json` pins (the two environment variables are for a machine whose newest
 runtime is a release candidate):
 

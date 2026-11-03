@@ -251,7 +251,6 @@ let writeReleaseManifest () =
 #load "build/CaseHistory.fs"
 #load "build/IgnoredBudget.fs"
 #load "SageFs.Tests/RatchetBudgets.fs"
-#load "build/AnalyzerBudget.fs"
 #load "build/TierSchedule.fs"
 #load "build/HostListing.fs"
 #load "build/BuildStamps.fs"
@@ -1696,51 +1695,6 @@ let runnerFor (ctx: Internal.StageContext) : string -> Async<Result<unit, string
                 | ValueSome dir -> dir
                 | ValueNone -> rootDir)
 
-/// Where each project's analyzer output is kept, for the "analyzers" stage to count and for a reader to open.
-let analyzerOutputDir = Path.Combine(rootDir, "test-results", "analyzers")
-
-/// The "analyzers" stage (build/AnalyzerBudget.fs): the pinned CLI is restored from the tool manifest, run on each product
-/// project in turn with the one pack in `analyzers/`, and the findings are counted per rule and judged over
-/// `RatchetBudgets.analyzerFindings`. The counts are written beside the trust ledger, which is what a passed gate keeps and
-/// what `--ratchets --tighten` reads. A CLI that exits non-zero fails the stage with the tail of its output. A project's
-/// output goes to a file, not the console: a project has hundreds of findings, and the budget says which ones matter.
-let runAnalyzerStage (run: string -> Async<Result<unit, string>>) : Async<Result<unit, string>> =
-  async {
-    if Directory.Exists analyzerOutputDir then Directory.Delete(analyzerOutputDir, true)
-    Directory.CreateDirectory analyzerOutputDir |> ignore
-    let outputOf (project: string) = Path.Combine(analyzerOutputDir, project + ".txt")
-    let environment = AnalyzerBudget.environment |> List.map (fun (name, value) -> sprintf "%s=%s" name value) |> String.concat " "
-    let rec analyze (remaining: string list) =
-      async {
-        match remaining with
-        | [] -> return Ok ()
-        | project :: rest ->
-          let arguments = AnalyzerBudget.cliArguments "analyzers" "Release" "net11.0" project |> String.concat " "
-          match! run (sprintf "%s dotnet %s > \"%s\" 2>&1" environment arguments (outputOf project)) with
-          | Error why -> return Error (sprintf "analyzers on %s: %s\n%s" project why (tailOfLog (outputOf project) backgroundTailLines))
-          | Ok () -> return! analyze rest
-      }
-    match! run "dotnet tool restore" with
-    | Error why -> return Error (sprintf "analyzers: the CLI could not be restored from dotnet-tools.json: %s" why)
-    | Ok () ->
-      match! analyze AnalyzerBudget.projects with
-      | Error why -> return Error why
-      | Ok () ->
-        let counts =
-          AnalyzerBudget.projects
-          |> List.collect (fun project -> AnalyzerBudget.keyed project (AnalyzerBudget.countByRule (File.ReadAllText (outputOf project))))
-        File.WriteAllText(Path.Combine(Path.GetDirectoryName trustLedger, AnalyzerBudget.reportFileName), AnalyzerBudget.renderReport counts)
-        let failing =
-          AnalyzerBudget.judge SageFs.Tests.RatchetBudgets.analyzerFindings counts
-          |> List.filter (fun (_, standing) -> AnalyzerBudget.fails standing)
-        match failing with
-        | [] ->
-          printfn "analyzers: %d rule counts over %d projects, every one within its budget" counts.Length AnalyzerBudget.projects.Length
-          return Ok ()
-        | _ ->
-          return Error (failing |> List.map (fun (key, standing) -> AnalyzerBudget.describe key standing) |> String.concat "\n")
-  }
-
 let sagefsPipeline = pipeline "sagefs" {
   description
     "SageFs CI as one typed F# pipeline: restore the forked MCP SDK, build once \
@@ -1983,13 +1937,15 @@ let sagefsPipeline = pipeline "sagefs" {
 
   stage "analyzers" {
     // The custom analyzer pack over the product projects, judged against a budget that only goes down
-    // (build/AnalyzerBudget.fs, RatchetBudgets.analyzerFindings). It sits before the tiers so a new finding fails in
-    // minutes and not after the forty the tiers take, and it runs alone: the CLI evaluates each project with MSBuild
-    // and, by here, nothing else is building in this tree. The Linux leg only: the counts are of source, so the
-    // Windows leg would only repeat them.
+    // (scripts/analyzer-counts.fsx over build/AnalyzerBudget.fs and RatchetBudgets.analyzerFindings). It sits before the
+    // tiers so a new finding fails in minutes and not after the forty the tiers take, and it runs alone: the CLI
+    // evaluates each project with MSBuild and, by here, nothing else is building in this tree. The script writes
+    // test-results/analyzer-counts.txt before it judges; the local gate keeps that file in the passed record, which is
+    // what `--ratchets --tighten` reads. The Linux leg only: the counts are of source, so the Windows leg would only
+    // repeat them.
     when' (not (OperatingSystem.IsWindows()))
     timeoutForStep 1200
-    run (fun ctx -> runAnalyzerStage (runnerFor ctx))
+    run (fun ctx -> runnerFor ctx "dotnet fsi scripts/analyzer-counts.fsx")
   }
 
   stage "test tiers" {

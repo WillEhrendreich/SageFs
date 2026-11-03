@@ -16,9 +16,9 @@ let gateHome () : string =
   | "" -> Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, ".local", "share", "sagefs-gate")
   | path -> path
 
-/// The text of `fileName` in the newest passed record that has it. None on a machine with no gate pass yet, or one
+/// The path of `fileName` in the newest passed record that has it. None on a machine with no gate pass yet, or one
 /// whose passes predate the file.
-let newestText (fileName: string) : string option =
+let newestPath (fileName: string) : string option =
   let passed = Path.Combine(gateHome (), "passed")
   match Directory.Exists passed with
   | false -> None
@@ -28,4 +28,6 @@ let newestText (fileName: string) : string option =
     |> Array.filter File.Exists
     |> Array.sortByDescending File.GetLastWriteTimeUtc
     |> Array.tryHead
-    |> Option.map File.ReadAllText
+
+/// The text of `fileName` in the newest passed record that has it.
+let newestText (fileName: string) : string option = newestPath fileName |> Option.map File.ReadAllText
