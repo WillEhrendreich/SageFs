@@ -1988,9 +1988,13 @@ let sagefsPipeline = pipeline "sagefs" {
             // Admission, never a longer timeout.
             testTierExclusive "--integration-browser --summary" "asserting wall-clock rendering" "while asserting wall-clock rendering"
             testTierExclusive "--integration-hr --summary" "asserting wall-clock rendering" "while asserting wall-clock rendering"
-            // --integration-hr-restart has no browser case, so it stays Ordinary and runs
-            // concurrently: a timeout there is not a claim about the machine.
-            testTier "--integration-hr-restart --summary"
+            // --integration-hr-restart has no browser case, but it ASSERTS a p95 bound on save-to-served
+            // (HotReloadLatencyTests.reportAndGate), so it is a measuring tier like the two below. It was
+            // Ordinary on the argument that a timeout is not a claim about the machine; a p95 is. Run beside
+            // the other tiers it read 66.7 s against a bound of 60 s (saves of 91 s in the middle of the
+            // series, 15 s at its end), over a bound set at four times the worst figure measured quietly.
+            // Admission, never a longer timeout.
+            testTierExclusive "--integration-hr-restart --summary" "measuring the product's latency" "measured"
             // The measuring tier: it ASSERTS p50/p95, so it is declared exclusive and
             // runs exclusively — everything concurrent with it would be what it measured.
             testTierExclusive "--integration-hr-delta --summary" "measuring the product's latency" "measured"

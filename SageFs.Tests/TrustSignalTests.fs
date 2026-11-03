@@ -126,9 +126,15 @@ let ciWiringTests =
     // the declaration (TierPlan.Demand): the hold line and the failure report both say it.
     // Two claims qualify: a tier that MEASURES the product, and a tier that asserts wall clock
     // against a real renderer. A tier that merely times out claims nothing and must stay declared
-    // with plain `testTier` — `--integration-hr-restart` is named below so it cannot quietly be
-    // promoted (that would serialize the gate for no claim) nor dropped (a timeout under load is
-    // not a machine claim either).
+    // with plain `testTier`.
+    //
+    // `--integration-hr-restart` used to be the named example of a tier that only times out. It is not:
+    // its case asserts a p95 bound on save-to-served (`reportAndGate`), which is a latency claim.
+    // Concurrent with the other tiers it measured their load: the gate that shipped 0.6.932's
+    // fixes read p95 66.7 s against the bound of 60 s, with the series' own saves running 91 s in
+    // the middle and settling at 15 s, over a bound that is four times the worst figure measured
+    // on a quiet machine. It is declared exclusive like its siblings `--integration-hr-delta` and
+    // `--integration-hr-growth`: admission, never a longer timeout.
     testCase "the tiers that take the machine alone declare their reason, and only they" <| fun _ ->
       // `\$?` because a sharded tier declares itself interpolated: `testTierExclusive $"--integration-lt
       // --shard {k}/{ltShards} --summary"`. Without it the regex silently skips every interpolated
@@ -147,6 +153,7 @@ let ciWiringTests =
              "--integration-hr --summary"
              "--integration-hr-delta --summary"
              "--integration-hr-growth --summary"
+             "--integration-hr-restart --summary"
              "--integration-lt --shard {k}/{ltShards} --summary" ]
       // Every browser-bearing tier carries the rendering reason, not the measuring one: the class
       // is what failed (four different cases across four runs), so the class is what is declared.
@@ -161,9 +168,12 @@ let ciWiringTests =
         Regex.Matches(pipeline.Value, "testTier \"([^\"]+)\"")
         |> Seq.map (fun m -> m.Groups[1].Value)
         |> Set.ofSeq
-      [ "--integration-hr-restart --summary" ]
-      |> List.filter (fun args -> not (plain.Contains args))
-      |> Expect.isEmpty "a tier that only times out stays Ordinary: declared with plain testTier"
+      plain.Contains "--integration-hr-restart --summary"
+      |> Expect.isFalse "the restart series asserts a p95 bound, so it is not declared as a tier that only times out"
+      exclusive
+      |> List.filter (fun (args, _, _) -> args.StartsWith "--integration-hr-delta" || args.StartsWith "--integration-hr-growth" || args.StartsWith "--integration-hr-restart")
+      |> List.iter (fun (args, hold, _) ->
+          hold |> Expect.equal (sprintf "%s asserts a measured bound, and says so" args) "measuring the product's latency")
   ]
 
 /// The default suite has to run on every framework the tool ships for. It ran
