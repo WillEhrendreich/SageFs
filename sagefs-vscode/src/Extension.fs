@@ -3287,12 +3287,19 @@ let activate (context: ExtensionContext) =
         OnTimeline = fun stats -> updateEvalPerfBar stats
       }
       OnEvalResult = fun filePath blockStartLine output durationMs ->
-        let line = blockStartLine - 1 // server is 1-based, VS Code is 0-based
+        let startLine = blockStartLine - 1 // server is 1-based, VS Code is 0-based
         Window.getVisibleTextEditors ()
         |> Array.tryFind (fun ed -> ed.document.fileName = filePath)
         |> Option.iter (fun ed ->
           InlineDeco.clearEvalInProgress ed
-          InlineDeco.showInlineResult ed output (Some durationMs) (Some line))
+          // The result goes at the block's LAST line, where the eval's own reply puts it (`evalSelection` shows it at
+          // `blockEnd`). The daemon sends this event for every eval that names a file and a block, this editor's
+          // own included, so painting it at the block's FIRST line gave one eval two ghost texts (issue #132's GIF).
+          // Both writers on one line means the second replaces the first.
+          let lastLine = int ed.document.lineCount - 1
+          let line = max 0 (min startLine lastLine)
+          let _, blockEnd = Blocks.getBlockBounds ed.document line
+          InlineDeco.showInlineResult ed output (Some durationMs) (Some blockEnd))
       OnEvalStarted = fun filePath blockStartLine ->
         let line = blockStartLine - 1
         Window.getVisibleTextEditors ()
