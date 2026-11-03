@@ -306,7 +306,7 @@ let fileSize : (string * int) list =
     "SageFs/McpMemberPage.fs", 87
     // Added when list_members took the worker's real kinds (the name-shape guess is gone): the
     // drillable/leaf split and the count-line nouns, one exhaustive match each. Set at the true size.
-    "SageFs/McpMemberKinds.fs", 83
+    "SageFs/McpMemberKinds.fs", 50
     // Added with the same change: why a name that lists nothing lists nothing, and how each reason reads.
     "SageFs/McpNoMembers.fs", 55
     // Added with the same change: the session-routed half of list_members, split out of McpListMembers.fs.

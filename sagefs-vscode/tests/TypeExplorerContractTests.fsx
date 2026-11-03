@@ -5,6 +5,7 @@
 //
 // Runs under plain `dotnet fsi` (no Fable), mirroring WorkflowPickContractTests.fsx.
 #r "nuget: Expecto, 11.0.0-alpha8"
+#load "../../SageFs.Core/LadderContract.fs"
 #load "../src/TypeExplorerPure.fs"
 
 open Expecto

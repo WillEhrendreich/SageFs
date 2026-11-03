@@ -36,7 +36,7 @@ module McpMemberPage =
   /// The order a page lists in: drillable kinds first (the next rung of the walk is one of them), then by
   /// kind, then by name, so the same set pages the same way on every call.
   let sortKey (entry: CompletionEntry) : int * string * string =
-    (match rungOf entry.Kind with | Rung.Drillable -> 0 | Rung.Leaf -> 1), CompletionKind.label entry.Kind, entry.DisplayText
+    (match rungOf entry.Kind with | LadderRung.Drillable -> 0 | LadderRung.Leaf -> 1), CompletionKind.label entry.Kind, entry.DisplayText
 
   let pageMembers (qualifiedName: string) (maxItems: int) (offset: int) (total: CompletionTotal) (members: CompletionEntry list) : MemberPage =
     let ordered = members |> List.sortBy sortKey
@@ -72,7 +72,7 @@ module McpMemberPage =
       | [] -> "By kind: none."
       | counts ->
         let phrases = counts |> List.map (fun c -> kindCountPhrase c.Kind c.Count) |> String.concat ", "
-        let drillable = counts |> List.sumBy (fun c -> match rungOf c.Kind with | Rung.Drillable -> c.Count | Rung.Leaf -> 0)
+        let drillable = counts |> List.sumBy (fun c -> match rungOf c.Kind with | LadderRung.Drillable -> c.Count | LadderRung.Leaf -> 0)
         sprintf "By kind: %s. Drillable: %d of %d." phrases drillable page.Fetched
     let body =
       page.Groups

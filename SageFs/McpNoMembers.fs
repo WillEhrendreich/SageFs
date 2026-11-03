@@ -43,8 +43,8 @@ module McpNoMembers =
       | None -> NoMembersBecause.NoParentToAsk
       | Some(parent, _) ->
         match rungOf kind with
-        | Rung.Leaf -> NoMembersBecause.IsLeaf(kind, parent)
-        | Rung.Drillable -> NoMembersBecause.EmptyContainer(kind, parent)
+        | LadderRung.Leaf -> NoMembersBecause.IsLeaf(kind, parent)
+        | LadderRung.Drillable -> NoMembersBecause.EmptyContainer(kind, parent)
     | NamePathResolution.ResolvedRoot -> NoMembersBecause.ListedWhenAskedAgain
     | NamePathResolution.StopsAt(resolvedPrefix, missing, nearest) -> NoMembersBecause.StopsAt(resolvedPrefix, missing, nearest)
     | NamePathResolution.StopsAtCutList(resolvedPrefix, missing, nearest) -> NoMembersBecause.StopsAtCutList(resolvedPrefix, missing, nearest)

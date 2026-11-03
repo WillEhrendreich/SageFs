@@ -36,8 +36,16 @@ let private kindIcon (kind: string) =
   | "Keyword" -> "symbol-keyword"
   | _ -> "symbol-misc"
 
-let private drillableKinds =
-  Set [ "Namespace"; "Module"; "Class"; "Struct"; "Interface"; "Enum"; "Union"; "Type" ]
+/// Whether the daemon's `kind` word can be expanded. The split is `LadderKind.rung`, the one the daemon's
+/// `list_members` uses (LadderContract.fs, compiled into this project). A word the contract does not know is a
+/// leaf, which is what the old set did with it.
+let private isDrillable (kind: string) : bool =
+  match SageFs.LadderKind.tryParse kind with
+  | Result.Error _ -> false
+  | Result.Ok known ->
+    match SageFs.LadderKind.rung known with
+    | SageFs.LadderRung.Drillable -> true
+    | SageFs.LadderRung.Leaf -> false
 
 // ── Tree item builders───────────────────────────────────────────
 
@@ -84,7 +92,7 @@ let private parseCompletionsJson (parentContext: string) (json: string) : obj ar
             match parentContext with
             | "" | null -> insertText
             | p -> sprintf "%s.%s" p insertText
-          match drillableKinds.Contains kind with
+          match isDrillable kind with
           | true ->
             let desc = match kind with "" -> "" | k -> k
             expandableItem label desc icon (sprintf "explore:%s" fullName) :> obj

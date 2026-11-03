@@ -282,6 +282,8 @@
         <Compile Include="Features\TestLocationsApplied.fs" />
         <Compile Include="Features\LiveTestingExecutors.fs" />
         <Compile Include="Features\TestDiscoveryMerge.fs" />
+        <!-- LadderContract.fs depends on nothing past FSharp.Core because the VS Code extension (Fable) compiles the same file. -->
+        <Compile Include="LadderContract.fs" />
         <Compile Include="Features\AutoCompletion.fs" />
         <Compile Include="Features\Diagnostics.fs" />
         <Compile Include="Features\DiagnosticsStore.fs" />

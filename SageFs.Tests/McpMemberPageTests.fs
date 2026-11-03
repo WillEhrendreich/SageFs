@@ -6,7 +6,6 @@ module SageFs.Tests.McpMemberPageTests
 /// whenever a name lists nothing. Default tier, no session.
 open System
 open System.IO
-open System.Text.RegularExpressions
 open Expecto
 open Expecto.Flip
 open FsCheck
@@ -35,14 +34,6 @@ let private entriesFromSeeds (seeds: (string * int) list) : CompletionEntry list
   seeds
   |> List.map (fun (name, seed) ->
     entry allKinds.[abs (seed % allKinds.Length)] (if isNull name then "" else name))
-
-/// The kinds the VS Code Type Explorer treats as expandable, read from its source.
-let private editorDrillableLabels : Set<string> =
-  let source = File.ReadAllText(Path.Combine(repoRoot, "sagefs-vscode", "src", "TypeExplorerProvider.fs"))
-  let setLiteral = Regex.Match(source, @"let private drillableKinds =\s*Set \[([^\]]*)\]")
-  Regex.Matches(setLiteral.Groups.[1].Value, "\"([A-Za-z]+)\"")
-  |> Seq.map (fun m -> m.Groups.[1].Value)
-  |> Set.ofSeq
 
 let private skillText : (string * string) list =
   Directory.GetFiles(Path.Combine(repoRoot, "skills", "sagefs"), "*.md")
@@ -92,7 +83,7 @@ let tests =
         @ entriesOf CompletionKind.Method [ "map"; "filter" ]
       let page = pageMembers "List" 100 0 (CompletionTotal.Exact 4) list
       page.Counts
-      |> List.exists (fun c -> rungOf c.Kind = Rung.Drillable)
+      |> List.exists (fun c -> rungOf c.Kind = LadderRung.Drillable)
       |> Expect.isFalse "nothing under List is drillable"
       render page |> Expect.stringContains "and the reply says so" "Drillable: 0 of 4."
 
@@ -101,7 +92,7 @@ let tests =
       page.Groups
       |> List.map (fun (kind, _) -> rungOf kind)
       |> List.distinct
-      |> Expect.equal "drillable group first, then leaf" [ Rung.Drillable; Rung.Leaf ]
+      |> Expect.equal "drillable group first, then leaf" [ LadderRung.Drillable; LadderRung.Leaf ]
 
     testCase "WHY — a set with one kind counts only that kind, because an empty group is noise" <| fun _ ->
       (pageMembers "X" 100 0 (CompletionTotal.Exact 4) (entriesOf CompletionKind.Module [ "A"; "B"; "C"; "D" ])).Counts
@@ -133,21 +124,6 @@ let tests =
       |> List.length
       |> Expect.equal "names shown are the cap" max
       (text.Length < 4000) |> Expect.isTrue "one page stays under the house reply ceiling"
-
-    testCase "WHY — the kinds list_members calls drillable are the kinds the editor's Type Explorer expands, so a name that opens in the tree opens here" <| fun _ ->
-      allKinds
-      |> List.filter (fun k -> rungOf k = Rung.Drillable)
-      |> List.map CompletionKind.label
-      |> Set.ofList
-      |> Expect.equal "TypeExplorerProvider.drillableKinds equals the Drillable kinds" editorDrillableLabels
-      (editorDrillableLabels.IsEmpty)
-      |> Expect.isFalse "the set literal was found in the editor source"
-
-    testCase "WHY — the words the Type Explorer reads for the size of a set are the words the daemon writes, so a partial listing is never mistaken for a complete one" <| fun _ ->
-      let source = File.ReadAllText(Path.Combine(repoRoot, "sagefs-vscode", "src", "TypeExplorerPure.fs"))
-      let literalOf (name: string) = Regex.Match(source, sprintf "let %s = \"([A-Za-z]+)\"" name).Groups.[1].Value
-      literalOf "ExactWord" |> Expect.equal "exact word" (CompletionTotal.label (CompletionTotal.Exact 0))
-      literalOf "AtLeastWord" |> Expect.equal "floor word" (CompletionTotal.label (CompletionTotal.AtLeast 0))
 
     testCase "WHY — every kind has its own plural noun, so a count line never reads '3 values' for properties" <| fun _ ->
       allKinds

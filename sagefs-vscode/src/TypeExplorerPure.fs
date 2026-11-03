@@ -25,17 +25,12 @@ type ListingTail =
 [<Literal>]
 let RowsRequested = 200
 
-/// The wire words of `totalKind`, pinned to the daemon's `CompletionTotal.label` by a default-tier test that reads this file.
-[<Literal>]
-let ExactWord = "exact"
-
-[<Literal>]
-let AtLeastWord = "atLeast"
-
+/// The words of `totalKind` are `LadderSizeKind`'s (SageFs.Core/LadderContract.fs, compiled into this project), the
+/// same ones the daemon's `CompletionTotal.label` writes. A word the contract does not know states no size.
 let parseSetSize (total: int option) (totalKind: string) : SetSize =
-  match total, totalKind with
-  | Some n, ExactWord -> ExactSize n
-  | Some n, AtLeastWord -> AtLeastSize n
+  match total, SageFs.LadderSizeKind.tryParse totalKind with
+  | Some n, Some SageFs.LadderSizeKind.Exact -> ExactSize n
+  | Some n, Some SageFs.LadderSizeKind.AtLeast -> AtLeastSize n
   | _ -> SizeNotStated
 
 /// A floor always means more may exist; an exact size means more exists only when it exceeds the rows shown.

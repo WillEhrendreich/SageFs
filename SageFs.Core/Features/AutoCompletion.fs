@@ -1,5 +1,6 @@
 module SageFs.Features.AutoCompletion
 
+open SageFs
 open FSharp.Compiler.EditorServices
 open FSharp.Compiler.Interactive
 open FSharp.Compiler.Text
@@ -33,31 +34,38 @@ type CompletionKind =
   | File
 
 module CompletionKind =
-  let label = function
-    | CompletionKind.Class -> "Class"
-    | CompletionKind.Constant -> "Constant"
-    | CompletionKind.Delegate -> "Delegate"
-    | CompletionKind.Enum -> "Enum"
-    | CompletionKind.EnumMember -> "EnumMember"
-    | CompletionKind.Event -> "Event"
-    | CompletionKind.Exception -> "Exception"
-    | CompletionKind.Field -> "Field"
-    | CompletionKind.Interface -> "Interface"
-    | CompletionKind.Method -> "Method"
-    | CompletionKind.OverriddenMethod -> "OverriddenMethod"
-    | CompletionKind.Module -> "Module"
-    | CompletionKind.Namespace -> "Namespace"
-    | CompletionKind.Property -> "Property"
-    | CompletionKind.Struct -> "Struct"
-    | CompletionKind.Typedef -> "Typedef"
-    | CompletionKind.Type -> "Type"
-    | CompletionKind.Union -> "Union"
-    | CompletionKind.Variable -> "Variable"
-    | CompletionKind.ExtensionMethod -> "ExtensionMethod"
-    | CompletionKind.TypeParameter -> "TypeParameter"
-    | CompletionKind.Keyword -> "Keyword"
-    | CompletionKind.Folder -> "Folder"
-    | CompletionKind.File -> "File"
+  /// The kind as the ladder's shared contract (LadderContract.fs) names it. Exhaustive on purpose: a new
+  /// `CompletionKind` breaks the build here until someone decides what the extension and the daemon call it
+  /// and which side of the ladder it sits on.
+  let toLadder (kind: CompletionKind) : LadderKind =
+    match kind with
+    | CompletionKind.Class -> LadderKind.Class
+    | CompletionKind.Constant -> LadderKind.Constant
+    | CompletionKind.Delegate -> LadderKind.Delegate
+    | CompletionKind.Enum -> LadderKind.Enum
+    | CompletionKind.EnumMember -> LadderKind.EnumMember
+    | CompletionKind.Event -> LadderKind.Event
+    | CompletionKind.Exception -> LadderKind.Exception
+    | CompletionKind.Field -> LadderKind.Field
+    | CompletionKind.Interface -> LadderKind.Interface
+    | CompletionKind.Method -> LadderKind.Method
+    | CompletionKind.OverriddenMethod -> LadderKind.OverriddenMethod
+    | CompletionKind.Module -> LadderKind.Module
+    | CompletionKind.Namespace -> LadderKind.Namespace
+    | CompletionKind.Property -> LadderKind.Property
+    | CompletionKind.Struct -> LadderKind.Struct
+    | CompletionKind.Typedef -> LadderKind.Typedef
+    | CompletionKind.Type -> LadderKind.Type
+    | CompletionKind.Union -> LadderKind.Union
+    | CompletionKind.Variable -> LadderKind.Variable
+    | CompletionKind.ExtensionMethod -> LadderKind.ExtensionMethod
+    | CompletionKind.TypeParameter -> LadderKind.TypeParameter
+    | CompletionKind.Keyword -> LadderKind.Keyword
+    | CompletionKind.Folder -> LadderKind.Folder
+    | CompletionKind.File -> LadderKind.File
+
+  /// The wire word. One home: `LadderKind.label`, which the extension compiles too.
+  let label (kind: CompletionKind) : string = kind |> toLadder |> LadderKind.label
 
   let ofGlyph (glyph: FSharpGlyph) : CompletionKind =
     match glyph with
@@ -171,8 +179,8 @@ module CompletionTotal =
   /// The wire word for each case, matching `CompletionTotal.count`.
   let label (total: CompletionTotal) : string =
     match total with
-    | CompletionTotal.Exact _ -> "exact"
-    | CompletionTotal.AtLeast _ -> "atLeast"
+    | CompletionTotal.Exact _ -> LadderSizeKind.label LadderSizeKind.Exact
+    | CompletionTotal.AtLeast _ -> LadderSizeKind.label LadderSizeKind.AtLeast
 
   let count (total: CompletionTotal) : int =
     match total with
