@@ -36,27 +36,6 @@
     <RestoreLockedMode Condition="'$(CI)' == 'true' or '$(GITHUB_ACTIONS)' == 'true'">true</RestoreLockedMode>
   </PropertyGroup>
 
-  <!-- A build that must share nothing with any other build of this checkout passes
-       `-p:SageFsPrivateBuildRoot=<an empty directory it owns>`. Every project this file
-       governs then restores and builds into that directory: its obj (assets file, generated
-       props, intermediate output), its bin, and its lock file. Nothing is left set when the
-       property is empty, so no other build changes.
-
-       The app-runner test builds a small harness that references SageFs.Core and SageFs.Host
-       from source, in the middle of a test run, while the gate's other tiers build and restore
-       projects of the same checkout (sessions on samples, `BuildSageFsCoreFirst`). Two restores or
-       builds of one project race on its obj, and the loser dies with "Determining projects to
-       restore... Build FAILED, 0 Error(s)", which passes every rerun alone. A lock between test
-       cases could never cover a build another tier starts, so the harness stopped sharing instead.
-       The lock file is moved too, because restore rewrites packages.lock.json beside the project
-       whenever it differs, and that file is shared as well. -->
-  <PropertyGroup Condition="'$(SageFsPrivateBuildRoot)' != ''">
-    <BaseIntermediateOutputPath>$(SageFsPrivateBuildRoot)/obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
-    <OutputPath>$(SageFsPrivateBuildRoot)/bin/$(MSBuildProjectName)/</OutputPath>
-    <NuGetLockFilePath>$(SageFsPrivateBuildRoot)/lock/$(MSBuildProjectName).packages.lock.json</NuGetLockFilePath>
-    <RestoreLockedMode>false</RestoreLockedMode>
-  </PropertyGroup>
-
   <!-- Build identity that does not move with HEAD (see Directory.Build.targets, SageFsContentRevision). The
        SDK's own revision stamp and SourceLink both embed the HEAD commit, which made every commit rebuild
        every project. -->

@@ -510,8 +510,6 @@ let managedDependencyResolutionIntegrationTests =
       | Result.Error why -> failtest why
       | Result.Ok fsharpCoreVersion ->
           let harnessDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-apprunner-harness-%s" (Guid.NewGuid().ToString("N").[..7]))
-          // Beside the harness and not inside it: the harness project globs its own directory.
-          let privateBuildRoot = harnessDir + "-private"
           Directory.CreateDirectory harnessDir |> ignore
           try
             let harnessFsproj = Path.Combine(harnessDir, "Harness.fsproj")
@@ -558,18 +556,21 @@ let managedDependencyResolutionIntegrationTests =
               ]
             File.WriteAllText(harnessFsproj, harnessFsprojContent)
             File.WriteAllText(Path.Combine(harnessDir, "Program.fs"), harnessProgramContent)
-            // The harness references SageFs.Core and SageFs.Host, so building it builds those two projects. In
-            // THIS checkout's own obj directories that is state every other tier of the gate also restores and
-            // builds (sessions on samples, the samples' `BuildSageFsCoreFirst`), and a lock between test cases
-            // cannot cover a build another tier starts: the loser died in restore with "Build FAILED, 0 Error(s)"
-            // and passed every rerun alone. So the harness shares nothing. `SageFsPrivateBuildRoot`
-            // (Directory.Build.props) moves the obj, bin and lock file of every project in the build into a
-            // directory this case owns, deleted below with the harness. No lock and no retry are needed, because
-            // no other build can reach what this one writes.
+            // The harness is a fresh directory, but it references SageFs.Core and SageFs.Host, so building it
+            // rebuilds those two projects in THIS checkout's shared obj directories, the same state every
+            // other shard of the checkout touches. One build at a time, under the lock that sits beside the
+            // test assembly (see `acquireBuildLock`). There is no retry: a build that fails under the lock
+            // has failed for a reason, and the failure prints that reason.
+            let! (gate: FileStream option) = acquireBuildLock sampleBuildLockName (DateTime.UtcNow + TestTimeouts.buildLockQueue)
+            if gate.IsNone then
+              failtestf "the harness build lock was not taken within %O" TestTimeouts.buildLockQueue
             let! built =
-              runDotnet
-                [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo"; sprintf "-p:SageFsPrivateBuildRoot=%s" privateBuildRoot ]
-                TestTimeouts.workerSessionReady
+              task {
+                try
+                  return! runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
+                finally
+                  releaseBuildLock gate
+              }
             match built with
             | Error msg -> failtest msg
             | Ok (buildExit, buildOut, buildErr) when buildExit <> 0 ->
@@ -583,8 +584,7 @@ let managedDependencyResolutionIntegrationTests =
                 out
                 |> Expect.stringContains (sprintf "expected the fix to resolve Falco in a clean process (stderr=%s)" err) "RESOLVED_FALCO:"
           finally
-            for dir in [ harnessDir; privateBuildRoot ] do
-              try Directory.Delete(dir, true) with _ -> ()
+            try Directory.Delete(harnessDir, true) with _ -> ()
     }
   ]
 

@@ -921,7 +921,6 @@
         <Compile Include="HatchRouteHttpTests.fs" />
         <Compile Include="../scripts/ReleaseRules.fs" Link="Scripts/ReleaseRules.fs" />
         <Compile Include="ReleaseRulesTests.fs" />
-        <Compile Include="PrivateBuildRootTests.fs" />
         <Compile Include="ReleaseFreshTests.fs" />
         <Compile Include="../scripts/SmokeRules.fs" Link="Scripts/SmokeRules.fs" />
         <Compile Include="SmokeRulesTests.fs" />
