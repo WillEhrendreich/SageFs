@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress, 2026-11-03. Slice 4 (steps 1 to 3) and the reply-size table of slice 5 are built and committed on master, not pushed. Not started: the shared `LadderContract` (step 5), the Readme cell and its test, and the 10-cell outcome gate (step 6). "Measure first" was not run. |
 | Size | S, M with the shared contract |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: a name that stops at its parent names the nearest candidates. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | none, work on master |
+| Last green commit | `7c520eac` (ratchets 498/498 Trusted; the new lists pass filtered; no unfiltered default run yet, which is the ship gate's job) |
+| Next action | Step 5: `SageFs.Core/LadderContract.fs` and the Fable rewire (the decisions under "Decisions for Will" have recommendations: leave the freshness receipt out, link the file like `HatchUse.fs`). Then step 6. Run "Measure first" against a live session before the outcome gate fixes the fixtures: the per-segment latency of `GetCompletions` with `EveryMember`, and whether a list at the 2,000 wire ceiling hides the segment being looked for (the `StopsAtCutList` case exists for it but has only been exercised with a fake lister). |
+| Decisions made | `list_references` answers `StopsAt` and `NothingResolves` at once and never asks the compiler. `StopsAtCutList` and `Unknown` still go to the compiler, because neither shows the name is absent. The plan's `ReferenceUnavailable.NameDoesNotResolve` became two cases on `McpReferencesPage.Page` (`NameStopsAt`, `NameNotListed`), because `ReferenceUnavailable` is in Core and `NamePathResolution` is in the SageFs project. `ParentProbe` and `probeParent` are gone: `classifyEmpty` takes the walk's result, and rendering moved to `McpNoMembersText.fs` when the `McpNoMembers.fs` size ratchet asked. Nearest names: at most `SageFsConfig.NearestNamesMax` (5), ratio at least `NearestNameFloor` (50), so a typo that resembles nothing names nothing. The reply-size table measures 6439 characters for `list_members` and 4225 for `list_references` on the worst-case fixtures. |
+| Surprises | `McpNamePath.resolve` is a Task fold, and the blocking-call ratchet (24 `GetAwaiter().GetResult()` in test bodies) counts every blocking wait, so the tests are `testTask` cases and the plan's property test is a seeded loop (300 seeds, the seed in the failure message) and not FsCheck. A test whose name calls itself a ratchet must sit in a registered list, or the registry test fails. A `--filter-test-list` for a name that is not a list name runs zero tests and exits 0 (hit once, caught by reading `ran=`). |
 
 ## What done looks like
 
