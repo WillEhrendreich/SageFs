@@ -278,6 +278,23 @@ module TestPorts =
             (listener :> IDisposable).Dispose()
           raise ex)
 
+/// Releasing the SQLite files a test wrote before it deletes their directory.
+///
+/// `SqliteConnection.ClearAllPools()` does that job for one test by disposing EVERY pooled connection in
+/// the process, including the ones another test is in the middle of a query on, which then fails with
+/// "Cannot access a disposed object. Object name: 'SQLitePCL.sqlite3'". The suite runs its cases in
+/// parallel in one process, so whichever test finished first broke a neighbour (seen once in a gate run
+/// on default-net10, passing 3 of 3 reruns alone). A pool is keyed by connection string, and every store
+/// here opens `Data Source=<path>`, so clearing the pool of each file under the test's own directory
+/// releases exactly that test's handles and nobody else's. `ClearPool` only looks the pool up: it never
+/// opens the file, so it is safe on a file that is not a database.
+module SqlitePools =
+  let releaseFilesIn (directory: string) : unit =
+    if System.IO.Directory.Exists directory then
+      for file in System.IO.Directory.EnumerateFiles(directory, "*", System.IO.SearchOption.AllDirectories) do
+        use connection = new Microsoft.Data.Sqlite.SqliteConnection(sprintf "Data Source=%s" file)
+        Microsoft.Data.Sqlite.SqliteConnection.ClearPool connection
+
 /// Structural registry of [Integration] suites. Every integration suite is
 /// registered here together with the runner that owns it, so:
 ///  - the default run excludes registered suites by the IDENTITY of their test

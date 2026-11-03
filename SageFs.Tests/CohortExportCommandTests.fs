@@ -53,7 +53,7 @@ let private withDataDir (ledgers: LedgerEntry<MemberId> list list) (body: string
       ledgers |> List.iter (List.iter port.Append)
     body dir
   finally
-    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
+    SageFs.Tests.TestInfrastructure.SqlitePools.releaseFilesIn dir
     try Directory.Delete(dir, true) with _ -> ()
 
 let private outPath (dir: string) = Path.Combine(dir, "exported.ledger.jsonl")

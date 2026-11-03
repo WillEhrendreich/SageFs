@@ -50,7 +50,7 @@ let private withTempDir (f: string -> unit) =
   Directory.CreateDirectory dir |> ignore
   try f dir
   finally
-    SqliteConnection.ClearAllPools()
+    SageFs.Tests.TestInfrastructure.SqlitePools.releaseFilesIn dir
     try Directory.Delete(dir, true) with _ -> ()
 
 let private aggregateRows (dbPath: string) =
@@ -277,3 +277,30 @@ let localDataSqliteTests =
              [ LocalDataRetention.LedgerDecision.Cleared(machine, departEntry.Clock, 2) ]
         port.ReadAll machine |> Expect.isEmpty "and its rows go")
   ]
+
+/// Nothing may clear every SQLite pool in the process. The suite runs its cases in parallel in one process, and
+/// `SqliteConnection.ClearAllPools()` disposes pooled connections while another thread is taking one, so a case
+/// next door fails with "Cannot access a disposed object. Object name: 'SQLitePCL.sqlite3'". Measured: one such
+/// failure in about 57,000 pooled operations beside a looping clear, and none in 169,000 beside a clear of one
+/// unrelated pool. A test that must release its own files calls `SqlitePools.releaseFilesIn`.
+[<Tests>]
+let sqlitePoolHygieneTests =
+  testList "SQLite pools in tests" [
+    testCase "WHY - no source clears every SQLite pool in the process, because a case running beside it loses its connection mid-query" <| fun _ ->
+      let root = RepoPaths.requireRepoRoot ()
+      let banned = "Clear" + "AllPools("
+      let offenders =
+        [ for folder in [ "SageFs"; "SageFs.Core"; "SageFs.Tests" ] do
+            for file in Directory.EnumerateFiles(Path.Combine(root, folder), "*.fs", SearchOption.AllDirectories) do
+              let parts = file.Split([| '/'; '\\' |])
+              if not (Array.contains "obj" parts || Array.contains "bin" parts) then
+                File.ReadAllLines file
+                |> Array.indexed
+                |> Array.filter (fun (_, line) -> not (line.TrimStart().StartsWith "//") && line.Contains banned)
+                |> Array.map (fun (index, _) -> sprintf "%s:%d" (Path.GetRelativePath(root, file)) (index + 1))
+                |> List.ofArray ]
+        |> List.concat
+      offenders |> Expect.isEmpty "no call clears every pool: use SqlitePools.releaseFilesIn for the files a test wrote"
+  ]
+
+do SageFs.Tests.TestInfrastructure.Ratchet.register SageFs.Tests.TestInfrastructure.Ratchet.Invariant sqlitePoolHygieneTests |> ignore
