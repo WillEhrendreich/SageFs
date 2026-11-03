@@ -121,6 +121,14 @@ let evalInProgressLabel (elapsedMs: int64 option) : string =
 let staleTransition (blockLines: int list) (alreadyStaleLines: Set<int>) : int list =
   blockLines |> List.filter (fun line -> not (Set.contains line alreadyStaleLines))
 
+/// The decorated lines an eval that is starting makes stale: the ones inside the block it re-evaluates, bounds
+/// included. The daemon announces EVERY eval of the file, and marking every result stale on each announcement
+/// flipped other blocks' results to "stale" with no edit anywhere, so which block showed a result followed
+/// the cursor (issue #132). A result goes stale when its own source changes, which the document-change path
+/// already handles for the whole file; an eval somewhere else changes nothing about it.
+let linesStaledByEval (blockLines: int list) (evalStartLine: int) (evalEndLine: int) : int list =
+  blockLines |> List.filter (fun line -> line >= evalStartLine && line <= evalEndLine)
+
 // ── Binding-value ghost text targeting ────────────────────────────
 
 /// A binding is a candidate for positioned ghost text only when it is not

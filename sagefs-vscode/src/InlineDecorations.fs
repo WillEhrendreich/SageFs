@@ -170,8 +170,9 @@ let updateEvalInProgressElapsed (editor: TextEditor) (line: int) (elapsedMs: int
     editor.setDecorations(deco, ResizeArray [| box range |])
     evalInProgressDecorations <- Map.add line deco evalInProgressDecorations
 
-let markDecorationsStale (editor: TextEditor) =
-  let lines = blockDecorations |> Map.toList |> List.map fst
+/// Mark stale the block results whose lines `choose` picks out of all of them.
+let markStaleWhere (editor: TextEditor) (choose: int list -> int list) =
+  let lines = blockDecorations |> Map.toList |> List.map fst |> choose
   let alreadyStale = staleDecorations |> Map.toList |> List.map fst |> Set.ofList
   let newlyStale = InlineDecorationsPure.staleTransition lines alreadyStale |> Set.ofList
   for line in lines do
@@ -194,6 +195,13 @@ let markDecorationsStale (editor: TextEditor) =
       let range = newRange line endCol line endCol
       editor.setDecorations(staleDeco, ResizeArray [| box range |])
       staleDecorations <- Map.add line staleDeco staleDecorations
+
+/// Every result in the file goes stale: the document was really edited.
+let markDecorationsStale (editor: TextEditor) = markStaleWhere editor id
+
+/// Only the results inside the block that is being evaluated go stale (see `linesStaledByEval`).
+let markBlockStale (editor: TextEditor) (startLine: int) (endLine: int) =
+  markStaleWhere editor (fun lines -> InlineDecorationsPure.linesStaledByEval lines startLine endLine)
 
 /// Get the line number for inline decoration placement.
 let private getEditorLine (editor: TextEditor) =

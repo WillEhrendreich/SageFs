@@ -140,6 +140,30 @@ let staleTransitionTests =
       staleTransition [ 10; 3; 7 ] Set.empty |> Expect.equal "input order kept" [ 10; 3; 7 ]
   ]
 
+// ── linesStaledByEval ─────────────────────────────────────────────
+//
+// WHY: issue #132's GIF. The daemon says "an eval started" for ANY eval of the file, and the extension marked
+// EVERY result in the file stale and then painted only the block that evaluated. Evaluate the block under the
+// cursor and every other block's result flipped to "stale" with no edit anywhere, so which block showed a result
+// followed the cursor. A result is stale when ITS source changed; an eval somewhere else does not change it.
+
+let linesStaledByEvalTests =
+  testList "linesStaledByEval" [
+    testCase "WHY — evaluating block 2 leaves block 1's result alone" <| fun _ ->
+      // block 1 = lines 0-1 (result at 1), block 2 = lines 3-4 (result at 4)
+      linesStaledByEval [ 1; 4 ] 3 4 |> Expect.equal "only block 2's result" [ 4 ]
+      linesStaledByEval [ 1; 4 ] 0 1 |> Expect.equal "only block 1's result" [ 1 ]
+
+    testCase "a result inside the block being re-evaluated is staled, wherever in the block it sits" <| fun _ ->
+      linesStaledByEval [ 0; 2 ] 0 2 |> Expect.equal "both bounds are inside" [ 0; 2 ]
+
+    testCase "an eval of a block with no result yet stales nothing" <| fun _ ->
+      linesStaledByEval [ 1 ] 3 4 |> Expect.isEmpty "nothing in that block"
+
+    testCase "no decorations, nothing to stale" <| fun _ ->
+      linesStaledByEval [] 0 10 |> Expect.isEmpty "empty in, empty out"
+  ]
+
 // ── isVisibleBinding / bindingTargetLine ─────────────────────────────
 //
 // The roast names this "a second uncentralised off-by-one" — the exact
@@ -266,6 +290,7 @@ let tests =
     inlineDiagnosticRendering
     evalInProgressLabelling
     staleTransitionTests
+    linesStaledByEvalTests
     bindingVisibility
     bindingTargeting
     codeLensTitleExamples

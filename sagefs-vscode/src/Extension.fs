@@ -3305,7 +3305,12 @@ let activate (context: ExtensionContext) =
         Window.getVisibleTextEditors ()
         |> Array.tryFind (fun ed -> ed.document.fileName = filePath)
         |> Option.iter (fun ed ->
-          InlineDeco.markDecorationsStale ed
+          // Only the block that is being evaluated has a result that is about to be replaced. This used to mark every
+          // result in the file stale, so evaluating at the cursor flipped the other blocks' results to "stale" with
+          // no edit anywhere, and which block showed a result followed the cursor (issue #132).
+          let inDocument = max 0 (min line (int ed.document.lineCount - 1))
+          let blockStart, blockEnd = Blocks.getBlockBounds ed.document inDocument
+          InlineDeco.markBlockStale ed blockStart blockEnd
           InlineDeco.showEvalInProgress ed line)
       OnEvalHeartbeat = fun filePath blockStartLine elapsedMs ->
         let line = blockStartLine - 1
