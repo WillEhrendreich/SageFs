@@ -19,8 +19,8 @@ open SageFs.WorkerProtocol
 let sessionManagerBuildPathTests =
   testList "SessionManager build path resolution" [
     testCase "relative project path resolves under working directory" <| fun _ ->
-      let workingDir = @"C:\Code\Repos\SageFs\viz-output\code-city"
-      let project = "CodeCity.fsproj"
+      let workingDir = Path.Combine(Path.GetTempPath(), "MyApp")
+      let project = "MyApp.fsproj"
       resolveBuildProjectPath workingDir project
       |> Expect.equal "relative project should resolve under the session working directory" (Path.Combine(workingDir, project))
 
