@@ -888,6 +888,9 @@ let private startSeriesDaemon (series: Series) : Task<SeriesDaemon> =
     psi.WorkingDirectory <- repoRoot
     for arg in [ "--mcp-port"; string mcpPort; "--owner-pid"; string self.Id; "--owner-start"; string (self.StartTime.ToUniversalTime().Ticks); "--no-resume" ] do
       psi.ArgumentList.Add arg
+    // First: the series sets and clears the daemon's own variables (DOTNET_MODIFIABLE_ASSEMBLIES among them), which
+    // apply would strip.
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
     psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
     for change in Series.daemonEnvironment series do
@@ -896,7 +899,6 @@ let private startSeriesDaemon (series: Series) : Task<SeriesDaemon> =
       | DaemonEnvironment.Clear name -> psi.Environment.Remove name |> ignore
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
-    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let daemon = Process.Start psi
     // Files drained by async readers: a redirected pipe nobody reads fills and stalls the child.
     let drainTo (reader: StreamReader) (file: string) =

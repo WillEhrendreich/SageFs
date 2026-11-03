@@ -111,11 +111,12 @@ let private startDaemonOnDataDir (port: int) (dataDir: string) (envOverrides: (s
   psi.ArgumentList.Add(string (self.StartTime.ToUniversalTime().Ticks))
   psi.ArgumentList.Add("--ttl")
   psi.ArgumentList.Add("10m")
+  // First: `envOverrides` is what the caller wants the daemon to have, and apply would strip a pinned variable among it.
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   for name, value in envOverrides do
     psi.Environment[name] <- value
 
-  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start(psi)
   let client = new HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)

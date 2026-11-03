@@ -75,11 +75,12 @@ let startIsolatedDaemonWith (extraEnv: (string * string) list) : Task<Process * 
   psi.ArgumentList.Add "--ttl"
   psi.ArgumentList.Add "10m"
   let dataDir = IO.Path.Combine(IO.Path.GetTempPath(), "sagefs-test-cohort", Guid.NewGuid().ToString "N")
+  // First: `extraEnv` is what the caller wants the daemon to have, and apply would strip a pinned variable among it.
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   for name, value in extraEnv do
     psi.Environment[name] <- value
 
-  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start psi
   use client = new Net.Http.HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)

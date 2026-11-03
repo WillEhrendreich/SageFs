@@ -123,12 +123,13 @@ let private spawnHost (sessionId: string) (hostLog: StringBuilder) : Task<Proces
     let fDir = fixtureDir ()
     psi.WorkingDirectory <- fDir
     let fixtureProj = Path.Combine(fDir, "WebAppFixture.fsproj")
+    // First: the worker's own variables below include DOTNET_MODIFIABLE_ASSEMBLIES, which apply would strip.
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     for k, v in envVars do
       if k = SageFs.Args.WorkerConfig.envVar then
         psi.EnvironmentVariables[k] <- fixtureProj
       else
         psi.EnvironmentVariables[k] <- v
-    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Process.Start(psi)
     // Drain stdout AND stderr with async readers so neither pipe ever fills
     // (an undrained redirect pipe deadlocks the host before WORKER_PORT prints), and neither drain parks a

@@ -243,6 +243,7 @@ let processEnvironmentHygieneTests =
       let insideString (line: string) (index: int) =
         (line.Substring(0, index) |> Seq.filter ((=) '"') |> Seq.length) % 2 = 1
       // A whole word: `ownerProcess.StartTime` is not a spawn, and neither is `Process.StartInfo`.
+      let dynamicWrite = System.Text.RegularExpressions.Regex(@"\.(Environment|EnvironmentVariables)\.?\[[A-Za-z_]")
       let isWordChar (c: char) = Char.IsLetterOrDigit c || c = '_'
       let wholeWord (line: string) (at: int) (needle: string) =
         (at = 0 || not (isWordChar line.[at - 1]))
@@ -258,9 +259,24 @@ let processEnvironmentHygieneTests =
                   let at = line.IndexOf needle
                   at >= 0 && not (insideString line at) && wholeWord line at needle)
               if isSpawn then
-                let window = [ for back in max 0 (index - 12) .. index -> lines.[back] ]
-                let stripped = window |> List.exists (fun w -> strips |> List.exists (fun s -> w.Contains s))
-                if not stripped then yield sprintf "%s:%d" (Path.GetFileName file) (index + 1) ]
+                let first = max 0 (index - 12)
+                let stripAt =
+                  [ first .. index ]
+                  |> List.tryFindBack (fun back -> strips |> List.exists (fun s -> lines.[back].Contains s))
+                match stripAt with
+                | None -> yield sprintf "%s:%d (no strip)" (Path.GetFileName file) (index + 1)
+                | Some at ->
+                  // Variables written under a name that is not a literal (a list copied onto the child) must come
+                  // AFTER the strip: the strip removes the pins, and the worker's own DOTNET_MODIFIABLE_ASSEMBLIES is
+                  // among what such a list carries. A strip placed after the copy removed it (the metadata-delta
+                  // host never came up). The cases of this file poison a child on purpose first and are exempt.
+                  let writesBefore =
+                    [ first .. at - 1 ]
+                    |> List.filter (fun back -> dynamicWrite.IsMatch lines.[back])
+                  match writesBefore, Path.GetFileName file with
+                  | _ :: _, name when name <> "ProcessEnvironmentTests.fs" ->
+                    yield sprintf "%s:%d (variables copied onto the child at line %d, before the strip at line %d)" name (index + 1) (writesBefore.Head + 1) (at + 1)
+                  | _ -> () ]
       offenders |> Expect.isEmpty (sprintf "call SpawnEnvironment.apply on the ProcessStartInfo before starting it: %s" (String.concat ", " offenders))
   ]
 

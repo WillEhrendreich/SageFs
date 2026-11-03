@@ -249,11 +249,12 @@ let private spawnHost (runtime: HostRuntime) (runDir: string) (project: string) 
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
   psi.WorkingDirectory <- runDir
+  // First: the worker's own variables below include DOTNET_MODIFIABLE_ASSEMBLIES, which apply would strip.
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   for k, v in envVars do
     match k = Args.WorkerConfig.envVar with
     | true -> psi.EnvironmentVariables[k] <- project
     | false -> psi.EnvironmentVariables[k] <- v
-  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start psi
   let port = TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously)
   let drain (reader: StreamReader) =
