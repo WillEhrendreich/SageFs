@@ -261,7 +261,10 @@ let private runCases (twin: Twin) (probing: Probing) (probes: ProbeStripping) (i
           try
             return! runCase twin probing probes instrument case
           with e ->
-            return { Seed = fst case; Problems = [ e.Message ]; ProbesChecked = 0; Program = "" }
+            // The whole exception, not its message: a message can be a bare path (the gate once recorded only the path of
+            // System.Private.CoreLib.dll for seed 3004), and then neither the type nor the throwing frame is left to read.
+            let whole = e.ToString()
+            return { Seed = fst case; Problems = [ whole.Substring(0, min 2400 whole.Length) ]; ProbesChecked = 0; Program = "" }
         finally
           gate.Release() |> ignore
       }
