@@ -30,7 +30,7 @@ What already crosses a network cleanly:
 - Commands, events and ledger entries serialise whole: `CohortLedgerExport.toJsonl` writes them with entropy, and `sagefs cohort-export`/`play` round-trip them.
 - The owner is a single mailbox: `Handle.Commit` returns a `Task` of the result, `Handle.Post` takes a callback, `ReadFrame` is wait-free.
 - A member token is a handle that does not depend on the socket it arrives on. `MemberId.Capability <fingerprint>` is independent of the connection (`SageFs.Core/MemberTable.fs`), tokens travel in `X-SageFs-Member-Token` or `_meta["sagefs/memberToken"]` (`Capability.CapabilityTransport`), and a grant carries role, scope prefix, route and expiry.
-- The frame is versioned by ledger sequence number, and the SSE side has a sequenced replay buffer with gap detection (`SageFs.Core/SseReplayBuffer.fs`, `ReplayResult.Replayed | GapDetected`).
+- The frame is versioned by ledger sequence number, and the SSE side numbers every broadcast frame by epoch and seq and replays what a reconnecting client missed (`SageFs.Core/SseReplay.fs`, `SseReplay.CatchUp.Replay | Resync`).
 
 What does not, with the file that shows it:
 

@@ -15,7 +15,7 @@ GET /api/live-testing/entries?session=<id> → the test rows `test_results_batch
 GET /diagnostics                 → SSE stream (compiler diagnostics only — separate endpoint)
 ```
 
-The daemon sends a `retry:` hint at connection time so clients reconnect automatically.
+The daemon sends a `retry:` hint once a connection is caught up, so clients reconnect automatically. A client that reconnects names the last frame it saw and is sent what it missed (see "Resuming after a drop" below).
 
 ### Narrowing a connection to one session
 
@@ -28,6 +28,25 @@ With `?sessionId=<id>` the daemon does the filtering, so a client that only care
 - A malformed id is a `400` and an id the daemon does not hold is a `404`. Both bodies say what to do next. A bad id is never read as "no id", because that would quietly widen the stream to everything.
 
 One limit worth knowing: the daemon keeps one catch-up slot per feature (`eval_diff`, `cell_dependencies`, `binding_scope_map`, `eval_timeline`), not one per session. Each slot remembers which session it was built for, so a stream for A is never handed B's, but if B evaluated last, A's connect-time replay of those four is empty until A evaluates again.
+
+### Resuming after a drop
+
+Every frame that arrives through the daemon's broadcasts is numbered `<epoch>:<seq>` and written with an `id:` line. The epoch is new each time the daemon starts, because the seqs start again at 1 then. The snapshots written on connect, the keepalive comments and the `/diagnostics` stream carry no id. The daemon keeps the most recent numbered frames, up to 2,000 or 16 MiB, whichever is reached first (`SseLog.productionLimits` in `SageFs.Core/SseLog.fs`).
+
+A client that reconnects with `Last-Event-ID: <the last id it saw>` is sent, in this order:
+
+1. The frames it missed, oldest first, limited to what its stream may see: a connection narrowed to one session is not replayed another session's frames.
+2. The snapshots a first connection gets (session state, cached test results, the cohort matrix, health, the bindings map and the four per-feature slots). A snapshot is current, and a replay carries what a snapshot cannot, such as `eval_started` and `eval_result`.
+3. An id-only frame: `id: <epoch>:<seq>` and no event. It names the newest id at the moment the connection attached, and a client reads it as "caught up through here". A connection cut off in the middle of the snapshots has not read it, so its next reconnect asks again from the last id it had in full.
+4. The `retry:` hint.
+
+With no `Last-Event-ID`, or one the daemon cannot replay from, the connection gets steps 2 to 4 and no replayed frames. That is the case when the header is absent, is not `<epoch>:<seq>`, names a different run of the daemon, is ahead of anything this run has sent, or asks for a frame that was dropped to stay inside the limits (`SseReplay.ResyncReason` in `SageFs.Core/SseReplay.fs`). None of these is an error, and the daemon logs which one it was at debug level.
+
+On one connection a frame is never delivered twice and never out of order. The daemon attaches the connection to its log before it writes anything, in the same step as it works out what was missed (`SseLog.Attach` in `SageFs.Core/SseLog.fs`), so a frame pushed while the catch-up is being written is queued behind it and arrives once. A snapshot can describe state that a later queued frame also describes, so the same change can reach a client once in each form.
+
+A client that falls behind is disconnected, not trimmed: when its queue of 1,024 frames fills, the connection closes and the client resumes from its last id (`SseOutbox` in `SageFs.Core/SseOutbox.fs`). Before this, the queue dropped its oldest frame without telling the client.
+
+`SageFs.Simulation/SseReplaySim.fs` folds seeded connects, drops, publishes and daemon restarts through the real replay and checks three things: nothing visible is missed after a reconnect, nothing arrives twice or out of order, and a stream narrowed to one session never receives another's frame. Each check has a twin that breaks exactly that guarantee and is caught.
 
 ---
 

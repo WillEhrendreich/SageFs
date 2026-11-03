@@ -185,6 +185,10 @@ module Timeouts =
   /// which takes well under a second, so a daemon silent for this long is not coming back for this call.
   let memberMintRequest = forMachine (TimeSpan.FromSeconds(30.0))
   let sseKeepAlive = TimeSpan.FromHours(24.0)
+  /// How long an `/events` connection may sit idle before a keepalive comment is written, and the
+  /// reconnect delay a client is told to wait (`retry:`). A half-open socket or a proxy that drops idle
+  /// connections is noticed within about this long, and a comment line every 15 seconds costs nothing.
+  let sseHeartbeat = TimeSpan.FromSeconds(15.0)
 
   /// Hard timeout on a short GET to the local daemon's `/api/sessions` from the
   /// CLI (`sagefs status` and the environment check). The daemon is on this

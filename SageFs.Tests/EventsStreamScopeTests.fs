@@ -215,6 +215,7 @@ let startServer (staleSlot: SseFrame option) = task {
       SseJsonOpts = JsonSerializerOptions()
       TestEventBroadcast = test
       SessionEventBroadcast = session
+      Log = SseLog.startNew ()
       ServerTracker = McpServer.McpServerTracker()
       CohortOwner = None }
 

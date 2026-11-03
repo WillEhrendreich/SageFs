@@ -35,7 +35,7 @@ What a thin client can already do with the existing wire, all verified as routes
 
 Gaps in that picture.
 - No documented request and response shapes, so a third client author reads F# handlers.
-- The reconnect story is thinner than the code suggests. `SseWriter.formatSseEvent` stamps sequence ids "for Last-Event-Id replay" and `SageFs.Core/SseReplayBuffer.fs` implements `ReplayResult.Replayed | GapDetected`, but nothing in the daemon project references the buffer (I grepped `SageFs/` and `SageFs.Core/`: only its own file and `SseReplayTests.fs` do) and the `/events` handler (`McpServer.fs:3205`) reads no `Last-Event-ID` header. A client has to rehydrate after a drop, as `sagefs.nvim`'s `batch_hydration.lua` does against `/api/live-testing/entries`.
+- The reconnect story was thinner than the code suggested when this plan was written: the replay buffer had no caller and the `/events` handler read no `Last-Event-ID` header, so a client rehydrated after a drop, as `sagefs.nvim`'s `batch_hydration.lua` does against `/api/live-testing/entries`. It is wired now. The daemon numbers every broadcast frame `<epoch>:<seq>`, replays what a reconnecting client missed, and sends the snapshots either way (`docs/sse-events.md`, "Resuming after a drop"). `sagefs.nvim` and the VS Code extension send the header, and a new client should too.
 - There is no command-line client. `Program.fs` has `stop`, `status`, `check`, `sweep`, `hygiene`, `play`, `mcp`, `--jupyter` (`CliCommand`, line 105 on). Nothing evaluates code or streams events from a shell.
 - No LSP server of ours (`grep -i "language server"` over the docs and daemon code finds only `docs/live-testing-as-you-type.md`, which is about live testing).
 - The MCP stdio bridge (`sagefs mcp`, `SageFs/McpStdioBridge.fs`) already makes the tool catalogue available to any editor with an agent panel that speaks MCP. That is the zero-code path for agent-driven use. It carries the catalogue's roughly 28,000 tokens into that agent's context, which suits an agent and does not suit a human who wants "run this block".
@@ -48,7 +48,7 @@ I checked nothing about the four editors beyond our own repo. Everything below a
 The seam is a small, documented, tested protocol that any editor can speak. Three rungs, each useful alone.
 
 Rung 0, the contract as a document and a test.
-- `docs/editor-protocol.md` (new): for each call in a `thinEditorContract` list, the request body, the response body, the status codes, and the structured error (`errorDetails.case` and `fields`). Derived from the handlers, not from memory. Plus the event list a thin client may subscribe to, the compat rule (`apiVersion`), and the reconnect rule (rehydrate; no replay).
+- `docs/editor-protocol.md` (new): for each call in a `thinEditorContract` list, the request body, the response body, the status codes, and the structured error (`errorDetails.case` and `fields`). Derived from the handlers, not from memory. Plus the event list a thin client may subscribe to, the compat rule (`apiVersion`), and the reconnect rule (resume by `Last-Event-ID`; the daemon sends the snapshots either way).
 - `EndpointContracts.thinEditorContract` beside the other two, and a test list in `EndpointContractTests.fs` shaped like the existing ones (exist, really mapped). The list: `GET /health`, `GET /api/sessions`, `POST /api/sessions/create`, `POST /exec`, `POST /api/cancel-eval`, `POST /api/completions`, `GET /events`, `GET /api/live-testing/file-annotations`, `GET /api/live-testing/status`. This touches `EndpointContracts.fs`, which is on the wire-surface list, so the commit carries `Plugin: n/a adds a contract list, no endpoint changes`.
 - Because shapes are only in handlers, the conformance suite below checks the doc against the daemon.
 
@@ -96,10 +96,10 @@ RED first.
 2. `DaemonClientTests.fs` (new): pure cases of `SessionPick` from a `/api/sessions` payload: zero sessions gives `NoSessionYet NoSession`, one Ready gives `OnlySession`, one warming gives `NoSessionYet Warming`, two with none named gives `Several` and never picks. Property: `Several` is returned for every list of two or more when no id is named.
 3. Same file: `DaemonReach` from a health payload: older `apiVersion` gives `RunningOldApi`; connection refused gives `NotRunning` with the port.
 4. `SseLineReaderTests.fs`: framing properties (an event split across chunk boundaries at every byte offset parses identically; comment lines and `retry:` are ignored; `id:` is carried).
-5. `EventPump` reducer: after a drop the next action is `Rehydrate`, because the daemon does not replay and resuming from an id would miss events. Property: a frame is applied at most once.
+5. `EventPump` reducer: after a drop the next action is `Resume lastId` when the client holds an id and `Rehydrate` when it holds none. The daemon replays what it still has and sends the snapshots either way. Property: a frame is applied at most once.
 6. CLI: `sagefs eval` exit codes for a success, a failed type-check (HTTP 200, `success=false`), and a refusal, using a fake daemon over the same `PostJson` function type `JupyterDaemonBridge` uses.
 
-Simulation (`SageFs.Simulation/EventPumpSim.fs`, Generators, Invariants). Real code as subject: the `EventPump` reducer and `SessionPick`. Pool: two sessions, event frames with sequence ids. Ops as seeded data: Frame, Drop, Reconnect, DaemonRestart (ids restart), DuplicateFrame, ReorderAcrossSessions, SessionStopped. Invariants: (P1) no frame applied twice; (P2) after Reconnect and Rehydrate the client's view equals the daemon's; (P3) a client narrowed to a session never applies another session's frame; (P4) after DaemonRestart the client does not trust an old `lastSeq`. Twin: a client that resumes from `lastSeq` against a daemon that does not replay must violate P2 (this is today's real mismatch), and one that ignores session ids must violate P3.
+Simulation (`SageFs.Simulation/EventPumpSim.fs`, Generators, Invariants). Real code as subject: the `EventPump` reducer and `SessionPick`. Pool: two sessions, event frames with sequence ids. Ops as seeded data: Frame, Drop, Reconnect, DaemonRestart (ids restart), DuplicateFrame, ReorderAcrossSessions, SessionStopped. Invariants: (P1) no frame applied twice; (P2) after Reconnect and Rehydrate the client's view equals the daemon's; (P3) a client narrowed to a session never applies another session's frame; (P4) after DaemonRestart the client does not trust an old `lastSeq`. Twin: a client that resumes from an old run's `lastSeq` after a restart must violate P2 (`SageFs.Simulation/SseReplaySim.fs` has the daemon-side version of that bug as `IgnoresEpochTwin`), and one that ignores session ids must violate P3.
 
 Outcome gate: `SageFs.Tests/EditorProtocolConformanceTests.fs`, a host-tier suite (`Integration.hostList`) using a real daemon on a reserved port pair with its own data dir (follow `HttpApiIntegrationTests` and the harness in `JupyterKernelSocketTests.fs`: `startDaemonWithArgs`, `TestPorts.reservePair`, `--no-resume`). Sessions target the small sample projects, not `SageFs.Tests.fsproj`. The matrix is in the first paragraph. Waits: session Ready by the ready-wait path, events by awaiting the specific frame; the drop-and-resume cell kills the connection from the client side and waits for the rehydrate to complete, no sleeps.
 
@@ -124,7 +124,7 @@ b. The thinnest useful client. After step 6, give yourself two hours per editor 
 
 c. Whether a Rider plugin can run its tests in CI on this repo's runners without a 1 GB IDE download per run. If not, its test cost changes the size from L to larger.
 
-d. Time cost of the rehydrate on a big session (`GET /api/live-testing/entries` for a session with thousands of tests), because a reconnecting client depends on it. If it is slow, the daemon needs the replay buffer wired in, which is a daemon change and a wire change (an `id`-honouring `/events`) and then belongs to a separate plan.
+d. Time cost of the rehydrate on a big session (`GET /api/live-testing/entries` for a session with thousands of tests), because a client with no id (a first connection) or one the daemon could not replay for depends on it. A reconnecting client that holds an id no longer does: the daemon replays what it missed.
 
 ## Risks and dependencies
 
@@ -141,5 +141,5 @@ S for Rungs 0 and 1 together if the extraction in step 4 stays mechanical (about
 
 1. Is a CLI (`sagefs eval`, `events`, `sessions`) acceptable as a supported surface? Recommendation: yes. It is the cheapest way to cover Helix and Emacs and it doubles as the conformance harness.
 2. First real client: Rider or Emacs? Recommendation: Rider only if the request count supports it and you accept a Kotlin repo; otherwise Emacs first, because its test story (ERT in batch mode) is the cheapest to keep honest.
-3. Wire the SSE replay buffer into `/events`, or keep rehydrate-on-reconnect as the documented rule? Recommendation: keep rehydrate for now and write down that ids are advisory; wire replay only if Measure first (d) says rehydrate is slow.
+3. Settled: the replay is wired into `/events`. A client resumes by `Last-Event-ID` and rehydrates when it has no id or the daemon says it cannot replay.
 4. LSP server: yes or later? Recommendation: later, after the CLI shows which half it cannot cover.

@@ -96,6 +96,7 @@ let private startFakeApiServer (ops: SessionManagementOps) = task {
       SseJsonOpts = Text.Json.JsonSerializerOptions()
       TestEventBroadcast = Event<SseFrame>()
       SessionEventBroadcast = Event<SseFrame>()
+      Log = SseLog.startNew ()
       ServerTracker = SageFs.Server.McpServer.McpServerTracker()
       CohortOwner = None }
 

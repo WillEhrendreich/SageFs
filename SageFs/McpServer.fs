@@ -1287,34 +1287,14 @@ let runSseWriteLoop
   (sources: IObservable<string> list)
   (heartbeatMs: int) =
   task {
-    let opts = BoundedChannelOptions(512, FullMode = BoundedChannelFullMode.DropOldest)
-    let ch = Channel.CreateBounded<string>(opts)
-    let subs = ResizeArray<IDisposable>()
+    let outbox = SseOutbox SseOutbox.capacity
+    let subs = sources |> List.map (fun src -> src.Subscribe(fun frame -> outbox.Offer frame))
     try
-      for src in sources do
-        src.Subscribe(fun frame ->
-          match ch.Writer.TryWrite(frame) with
-          | true -> ()
-          | false ->
-            SageFs.Instrumentation.sseEventsDropped.Add(1L)
-            Log.debug "[SSE] Event dropped (buffer full)")
-        |> subs.Add
-      use _heartbeat =
-        new Timer((fun _ -> ch.Writer.TryWrite(": keepalive\n\n") |> ignore), null, heartbeatMs, heartbeatMs)
+      use _heartbeat = new Timer((fun _ -> outbox.Keepalive ()), null, heartbeatMs, heartbeatMs)
       // Send retry hint as first frame — tells client reconnection interval per SSE spec
       do! writeSseFrame body (SageFs.SseWriter.formatRetryHint heartbeatMs)
-      try
-        while not ct.IsCancellationRequested do
-          let! frame = ch.Reader.ReadAsync(ct)
-          do! writeSseFrame body frame
-      with
-      | :? OperationCanceledException -> ()
-      | :? System.IO.IOException as ex ->
-        SageFs.Instrumentation.sseWriteErrors.Add(1L)
-        Log.debug "[SSE] Client disconnected (IOException): %s" ex.Message
-      | :? ObjectDisposedException as ex ->
-        SageFs.Instrumentation.sseWriteErrors.Add(1L)
-        Log.debug "[SSE] Client disconnected (ObjectDisposed): %s" ex.Message
+      let! _ = SseOutbox.drain outbox (fun frame -> writeSseFrame body frame :> Task) ct
+      ()
     finally
       for sub in subs do sub.Dispose()
   }
@@ -1377,6 +1357,10 @@ type SseContext = {
   /// what it asked for (`SseFrame.visibleTo`). A pre-formatted string cannot be filtered.
   TestEventBroadcast: Event<SseFrame>
   SessionEventBroadcast: Event<SseFrame>
+  /// Numbers every frame the daemon pushes and keeps the recent ones, so a client that reconnects
+  /// with `Last-Event-ID` is replayed what it missed. Fed from the two broadcasts above and the
+  /// model-change stream when the `/events` route is mapped (`wireSseLog`).
+  Log: SseLog
   ServerTracker: McpServerTracker
   /// The single per-daemon cohort owner (item 15a). `None` when the caller
   /// wires no cohort support — the cohort_matrix/claim_changed/
@@ -3217,6 +3201,57 @@ let resolveStreamScope
       | None -> return Result.Error (StreamScopeRefusal.UnknownSession id)
   }
 
+/// A model change as the frame `/events` carries it, with whose news it is.
+let stateFrameOf (change: SseEvent) : SseFrame =
+  { Scope = SseEvent.scope change
+    Wire = change |> SseEvent.toJson |> SageFs.SseWriter.formatSseEvent "state" }
+
+/// Feeds the daemon's one log from the three places a frame comes from, so each frame is numbered
+/// once, in one order, whichever connections are listening. Called once, when the route is mapped.
+let wireSseLog (rctx: RouteContext) : IDisposable list =
+  let publish (frame: SseFrame) = rctx.SseContext.Log.Publish frame |> ignore
+  [ rctx.SseContext.TestEventBroadcast.Publish |> Observable.subscribe publish
+    rctx.SseContext.SessionEventBroadcast.Publish |> Observable.subscribe publish ]
+  @ (rctx.Config.StateChanged
+     |> Option.map (fun evt -> evt |> Observable.map stateFrameOf |> Observable.subscribe publish)
+     |> Option.toList)
+
+/// The id a reconnecting client says it last saw, or none for a first connection.
+let lastEventIdOf (ctx: Microsoft.AspNetCore.Http.HttpContext) : string option =
+  match ctx.Request.Headers["Last-Event-ID"].ToString() with
+  | raw when String.IsNullOrWhiteSpace raw -> None
+  | raw -> Some (raw.Trim())
+
+/// The state a connection is caught up on, written whether or not it also replays missed frames:
+/// a snapshot is current by construction, and a replay adds what a snapshot cannot carry.
+let writeCatchUpSnapshots (rctx: RouteContext) (stream: StreamScope) (body: System.IO.Stream) : Task =
+  task {
+    let target = SseContext.replayTarget rctx.SseContext stream
+    do! replaySessionSnapshot rctx.SseContext target body
+    do! replayCachedTestState rctx.SseContext target body
+    do! replayCohortMatrix rctx.SseContext body
+    do! replayHealthSnapshot rctx.SseContext stream rctx.Config.SessionOps.GetAllSessions body
+    // The bindings map is the ACTIVE session's, so it is only replayed to a connection
+    // that is catching up on that session.
+    match rctx.FsiBindings.Value.Count, target, SseContext.activeSessionId rctx.SseContext with
+    | count, Some sid, Some active when count > 0 && sid = active ->
+      let frame =
+        rctx.FsiBindings.Value |> Map.values |> Array.ofSeq
+        |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid) [] 0 None
+      do! writeSseFrame body frame
+    | _ -> ()
+    // One slot per feature for the whole daemon, each remembering whose it is.
+    let replayed =
+      [ rctx.FeaturePushState.Value.LastEvalDiffSse
+        rctx.FeaturePushState.Value.LastCellDepsSse
+        rctx.FeaturePushState.Value.LastBindingScopeSse
+        rctx.FeaturePushState.Value.LastEvalTimelineSse ]
+      |> List.choose id
+      |> List.filter (SseFrame.visibleTo stream)
+    for frame in replayed do
+      do! writeSseFrame body frame.Wire
+  } :> Task
+
 /// One `/events` connection: catch it up on what it asked for, then stream what it asked for.
 let serveEvents (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNetCore.Http.HttpContext) : Task =
   task {
@@ -3229,42 +3264,38 @@ let serveEvents (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNe
         [("sse.endpoint", box "/events")]
     setSseHeaders ctx
     match rctx.Config.StateChanged with
-    | Some evt ->
-      let target = SseContext.replayTarget rctx.SseContext stream
-      do! replaySessionSnapshot rctx.SseContext target ctx.Response.Body
-      do! replayCachedTestState rctx.SseContext target ctx.Response.Body
-      do! replayCohortMatrix rctx.SseContext ctx.Response.Body
-      do! replayHealthSnapshot rctx.SseContext stream rctx.Config.SessionOps.GetAllSessions ctx.Response.Body
-      // The bindings map is the ACTIVE session's, so it is only replayed to a connection
-      // that is catching up on that session.
-      match rctx.FsiBindings.Value.Count, target, SseContext.activeSessionId rctx.SseContext with
-      | count, Some sid, Some active when count > 0 && sid = active ->
-        let frame =
-          rctx.FsiBindings.Value |> Map.values |> Array.ofSeq
-          |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid) [] 0 None
-        do! writeSseFrame ctx.Response.Body frame
-      | _ -> ()
-      // One slot per feature for the whole daemon, each remembering whose it is.
-      let replayed =
-        [ rctx.FeaturePushState.Value.LastEvalDiffSse
-          rctx.FeaturePushState.Value.LastCellDepsSse
-          rctx.FeaturePushState.Value.LastBindingScopeSse
-          rctx.FeaturePushState.Value.LastEvalTimelineSse ]
-        |> List.choose id
-        |> List.filter (SseFrame.visibleTo stream)
-      for frame in replayed do
-        do! writeSseFrame ctx.Response.Body frame.Wire
-      let stateSource =
-        evt |> Observable.map (fun change ->
-          { Scope = SseEvent.scope change
-            Wire = change |> SseEvent.toJson |> SageFs.SseWriter.formatSseEvent "state" })
-      let sources =
-        [ stateSource; rctx.SseContext.TestEventBroadcast.Publish; rctx.SseContext.SessionEventBroadcast.Publish ]
-        |> List.map (fun src ->
-          src
-          |> Observable.filter (SseFrame.visibleTo stream)
-          |> Observable.map (fun frame -> frame.Wire))
-      do! runSseWriteLoop ctx.Response.Body ctx.RequestAborted sources 15000
+    | Some _ ->
+      let body = ctx.Response.Body
+      let heartbeatMs = int SageFs.Timeouts.sseHeartbeat.TotalMilliseconds
+      let outbox = SseOutbox SseOutbox.capacity
+      // Attach before anything is written: from this moment every frame this connection may see is
+      // either in `CatchUp` or queued behind it, so nothing published while the snapshots are
+      // being built is lost. The one cost is that a frame can arrive both in a snapshot and after
+      // it, which every frame is built to survive (a snapshot is a set, not an append).
+      let attachment =
+        rctx.SseContext.Log.Attach(stream, lastEventIdOf ctx, fun item -> outbox.Offer (Replayable.toWire item))
+      try
+        use _heartbeat = new Timer((fun _ -> outbox.Keepalive ()), null, heartbeatMs, heartbeatMs)
+        match attachment.CatchUp with
+        | SseReplay.CatchUp.Replay missed ->
+          for item in missed do
+            do! writeSseFrame body (Replayable.toWire item)
+        | SseReplay.CatchUp.Resync reason -> Log.debug "[SSE] /events resync: %A" reason
+        do! writeCatchUpSnapshots rctx stream body
+        // Said last, so a connection cut mid-snapshot resumes from the id it last had in full.
+        match attachment.Position with
+        | LogPosition.At position -> do! writeSseFrame body (EventId.toIdOnlyFrame position)
+        | LogPosition.Empty -> ()
+        // The retry hint comes once the client is caught up, as it always did: a client (and a test)
+        // that reads up to it has the whole catch-up, and has been attached since before it began.
+        do! writeSseFrame body (SageFs.SseWriter.formatRetryHint heartbeatMs)
+        let! ended = SseOutbox.drain outbox (fun frame -> writeSseFrame body frame :> Task) ctx.RequestAborted
+        match ended with
+        | SseOutbox.DrainEnd.Overflowed -> Log.debug "[SSE] /events client fell behind; closed so it resumes by id"
+        | SseOutbox.DrainEnd.Closed
+        | SseOutbox.DrainEnd.ClientLeft -> ()
+      finally
+        attachment.Detach ()
       connSw.Stop()
       SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
       SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
@@ -3279,6 +3310,8 @@ let serveEvents (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNe
   }
 
 let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
+  // From here every frame the daemon pushes is numbered and kept for replay.
+  wireSseLog rctx |> ignore
   // The entries `test_results_batch` used to carry on the wire, over HTTP: a 2,604-case run reaches a
   // client as one ~990 KB `data:` line today, and the client materialises the whole string before it
   // parses it. This is the read side of the split — a summary on the stream, the list from here.
@@ -4568,6 +4601,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
         SseJsonOpts = sseJsonOpts
         TestEventBroadcast = testEventBroadcast
         SessionEventBroadcast = sessionEventBroadcast
+        Log = SseLog.startNew ()
         ServerTracker = serverTracker
         // The SSE context is about the DAEMON's own cohort — it replays the cohort matrix
         // to a connecting client and pushes that cohort's events. A per-caller cohort is

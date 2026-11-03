@@ -8,6 +8,11 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
   let req;
   let buffer = '';
   let currentEvent = 'message';
+  // The daemon puts `id: <epoch>:<seq>` on every frame, and replays what a client missed when it comes
+  // back with `Last-Event-ID`. `lastEventId` is the newest id that frame-by-frame reading has SEEN, and
+  // survives a drop. `pendingId` is an id read on a line whose frame has not been delivered yet.
+  let lastEventId;
+  let pendingId;
   let retryDelay = 1000;
   let inactivityTimer;
   const maxDelay = 30000;
@@ -45,7 +50,10 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
     // That is what a 990 KB discovery event looked like from the editor.
     buffer = '';
     currentEvent = 'message';
-    req = http.get(url, { timeout: 0, headers: { 'Accept-Encoding': 'br, gzip, deflate' } }, (res) => {
+    pendingId = undefined;
+    const headers = { 'Accept-Encoding': 'br, gzip, deflate' };
+    if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+    req = http.get(url, { timeout: 0, headers }, (res) => {
       // Reconnect truth: announce "connected" only once the replacement
       // connection has SUCCEEDED (HTTP response received). Previously
       // onReconnect fired before startListening, so the UI could show
@@ -71,8 +79,17 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
         buffer += chunk.toString();
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
+        // An id counts as seen once its frame is delivered, or at the blank line for a frame that
+        // carries only an id. One that dies before either was not seen, and the reconnect asks for it.
+        const commitId = () => {
+          if (pendingId) { lastEventId = pendingId; pendingId = undefined; }
+        };
         for (const line of lines) {
-          if (line.startsWith('event: ')) {
+          if (line.startsWith('id:')) {
+            // One optional space after the colon belongs to the format. An empty id says nothing.
+            const value = line.slice(3).replace(/^ /, '').replace(/\r$/, '');
+            if (value !== '') pendingId = value;
+          } else if (line.startsWith('event: ')) {
             currentEvent = line.slice(7).trim();
           } else if (line.startsWith('data: ')) {
             let data;
@@ -81,6 +98,7 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
             } catch (e) {
               log(`JSON parse error: ${e.message} raw: ${line.slice(6, 200)}`);
               currentEvent = 'message';
+              commitId();
               continue;
             }
             try {
@@ -89,8 +107,10 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
               log(`Event handler error for ${currentEvent}: ${appErr.message}\n${appErr.stack}`);
             }
             currentEvent = 'message';
+            commitId();
           } else if (line.trim() === '') {
             currentEvent = 'message';
+            commitId();
           }
         }
       });

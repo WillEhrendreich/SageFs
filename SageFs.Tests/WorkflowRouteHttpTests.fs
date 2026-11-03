@@ -100,6 +100,7 @@ let private startTestServer (ops: SessionManagementOps) = task {
       SseJsonOpts = JsonSerializerOptions()
       TestEventBroadcast = Event<SseFrame>()
       SessionEventBroadcast = Event<SseFrame>()
+      Log = SseLog.startNew ()
       ServerTracker = SageFs.Server.McpServer.McpServerTracker()
       CohortOwner = None }
 

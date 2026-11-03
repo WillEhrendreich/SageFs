@@ -78,6 +78,7 @@ let private mkSseContext (getWarmup: string -> Task<WarmupContext option>) (broa
     SseJsonOpts = JsonSerializerOptions()
     TestEventBroadcast = Event<SseFrame>()
     SessionEventBroadcast = broadcast
+    Log = SseLog.startNew ()
     ServerTracker = McpServerTracker()
     CohortOwner = None }
 

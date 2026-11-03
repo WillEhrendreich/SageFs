@@ -15,6 +15,11 @@ type EventIdRefusal =
 module EventId =
   let toWire (id: EventId) : string = sprintf "%s:%d" id.Epoch id.Seq
 
+  /// A frame with an id and no event: a client that reads it moves its last id and dispatches
+  /// nothing. The daemon writes one after a snapshot or a replay, so a client that is current
+  /// through seq N says so, whether or not a frame it may see had that number.
+  let toIdOnlyFrame (id: EventId) : string = sprintf "id: %s\n\n" (toWire id)
+
   /// The seq is whatever follows the LAST colon, so an epoch may contain colons itself.
   /// Seqs start at 1, so `0` and negatives are refused: a client that has seen nothing sends no header.
   let tryParse (raw: string) : Result<EventId, EventIdRefusal> =
@@ -30,6 +35,19 @@ module EventId =
 
 /// A frame the buffer kept, with the id it was sent under and its size on the wire.
 type Replayable = { Id: EventId; Frame: SseFrame; Bytes: int }
+
+module Replayable =
+  /// The frame as a client reads it: its id on the line before its own text, which the
+  /// EventSource format allows in any order and which leaves the frame's text whole.
+  let toWire (item: Replayable) : string = sprintf "id: %s\n%s" (EventId.toWire item.Id) item.Frame.Wire
+
+/// How far the daemon's numbering has got, and the id to name it by.
+[<RequireQualifiedAccess>]
+type LogPosition =
+  /// No frame has been published on this run yet, so there is no id to name.
+  | Empty
+  /// The newest id issued.
+  | At of EventId
 
 /// How much history to keep. Both bounds apply: a frame can be a megabyte, so a count alone
 /// would let a hundred of them hold a hundred megabytes.
@@ -86,6 +104,12 @@ module SseReplay =
         Frame = frame
         Bytes = System.Text.Encoding.UTF8.GetByteCount frame.Wire }
     item, trim { buffer with Frames = Map.add seq item buffer.Frames; Bytes = buffer.Bytes + item.Bytes; Latest = seq }
+
+  /// The newest id issued, or `Empty` before the first frame.
+  let position (buffer: Buffer) : LogPosition =
+    match buffer.Latest with
+    | 0L -> LogPosition.Empty
+    | latest -> LogPosition.At { Epoch = buffer.Epoch; Seq = latest }
 
   /// The oldest seq still held, or the next one to be issued when nothing is.
   let firstAvailable (buffer: Buffer) : int64 =

@@ -141,6 +141,7 @@ let private startServer (worker: Worker) (discovered: TestCase list) = task {
       SseJsonOpts = JsonSerializerOptions()
       TestEventBroadcast = Event<SseFrame>()
       SessionEventBroadcast = Event<SseFrame>()
+      Log = SseLog.startNew ()
       ServerTracker = SageFs.Server.McpServer.McpServerTracker()
       CohortOwner = None }
 
