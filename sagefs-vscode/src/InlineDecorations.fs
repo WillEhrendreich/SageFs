@@ -108,7 +108,7 @@ let clearAllDecorations () =
 let private ghostTextDeco (line: int) (endCol: int) (color: string) (contentText: string) (hoverText: string) =
   let opts = createObj [
     "after" ==> createObj [
-      "contentText" ==> contentText
+      "contentText" ==> InlineDecorationsPure.asOneLine contentText
       "color" ==> newThemeColor color
       "fontStyle" ==> "italic"
     ]
@@ -283,7 +283,7 @@ let showBindingValues
           "range" ==> box (newRange lineIdx endCol lineIdx endCol)
           "renderOptions" ==> createObj [
             "after" ==> createObj [
-              "contentText" ==> contentText
+              "contentText" ==> InlineDecorationsPure.asOneLine contentText
             ]
           ]
         ]

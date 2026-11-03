@@ -164,6 +164,66 @@ let linesStaledByEvalTests =
       linesStaledByEval [] 0 10 |> Expect.isEmpty "empty in, empty out"
   ]
 
+// ── one line of ghost text ────────────────────────────────────────
+//
+// WHY: issue #132's GIF. VS Code keeps only the FIRST LINE of a decoration's `contentText`: its decoration CSS code
+// is `contentText.match(/^.*$/m)[0]` (VS Code 1.142, workbench.desktop.main.js), and `.` stops at \n, \r,
+// and the two Unicode separators (code points 0x2028 and 0x2029). A Windows daemon ends FSI's lines with \r\n. The
+// renderer split on \n only, so every line kept its
+// trailing \r and the ghost text was cut after the first binding: a two-binding block showed `val a: int = 3` and
+// never `val b: int = 5`, while a one-line result (the printf block) showed in full. The reply was never wrong.
+
+let lineSeparator = string (char 0x2028)
+let paragraphSeparator = string (char 0x2029)
+let terminators = [| '\r'; '\n'; char 0x2028; char 0x2029 |]
+let hasTerminator (s: string) = s.IndexOfAny terminators >= 0
+
+let oneLineGhostTextTests =
+  testList "ghost text is one line" [
+    testCase "WHY — a Windows reply with two bindings keeps both, and nothing VS Code would cut at" <| fun _ ->
+      match renderInlineResult None "Result: val a: int = 3\r\nval b: int = 5\r\n" with
+      | None -> failtest "a result with text renders"
+      | Some rendered ->
+        rendered.ContentText |> Expect.stringContains "the first binding" "val a: int = 3"
+        rendered.ContentText |> Expect.stringContains "and the second one, which was cut off" "val b: int = 5"
+        hasTerminator rendered.ContentText |> Expect.isFalse "no line terminator is left in the ghost text"
+        rendered.HoverText |> Expect.stringContains "the hover still has the whole reply" "val b: int = 5"
+
+    testCase "a Unix reply renders as it always did" <| fun _ ->
+      match renderInlineResult None "Result: val a: int = 3\nval b: int = 5\n" with
+      | None -> failtest "a result with text renders"
+      | Some rendered -> rendered.ContentText |> Expect.equal "joined with the bar" "  // → Result: val a: int = 3  │  val b: int = 5"
+
+    testCase "a diagnostic whose first line ends in \\r\\n renders that line alone" <| fun _ ->
+      match renderInlineDiagnostic "error FS0001: bad\r\nmore detail\r\n" with
+      | None -> failtest "a diagnostic with text renders"
+      | Some rendered ->
+        rendered.ContentText |> Expect.equal "only the first line" "  // ❌ error FS0001: bad"
+        hasTerminator rendered.ContentText |> Expect.isFalse "no terminator"
+
+    testCase "ghostLine turns every kind of line break into one space and trims the ends" <| fun _ ->
+      ghostLine ("a\r\nb\nc\rd" + lineSeparator + "e" + paragraphSeparator + "f") |> Expect.equal "one line" "a b c d e f"
+      ghostLine "  \r\n x \r\n " |> Expect.equal "trimmed, runs collapsed" "x"
+
+    testCase "asOneLine replaces line breaks and keeps the leading spaces a ghost text starts with" <| fun _ ->
+      asOneLine "  // → a\r\nb" |> Expect.equal "break became a space, indent kept" "  // → a b"
+      asOneLine "  x" |> Expect.equal "no break, unchanged" "  x"
+
+    testProperty "asOneLine never leaves a line terminator, whatever it is given" <|
+      Prop.forAll (Arb.fromGen (Gen.elements [ "a"; "\r"; "\n"; "\r\n"; lineSeparator; paragraphSeparator; " " ] |> Gen.listOf |> Gen.map (String.concat ""))) (fun text ->
+        not (hasTerminator (asOneLine text)))
+
+    testProperty "WHY — whatever a result or a diagnostic says, no ghost text holds a line terminator" <|
+      Prop.forAll (Arb.fromGen (Gen.elements [ "a"; "b b"; "\r"; "\n"; "\r\n"; lineSeparator; paragraphSeparator; " "; "→"; "val x: int = 1" ] |> Gen.listOf |> Gen.map (String.concat ""))) (fun text ->
+        let result = renderInlineResult (Some 12.0) text
+        let diagnostic = renderInlineDiagnostic text
+        let clean (rendered: InlineResultRender option) =
+          match rendered with
+          | None -> true
+          | Some r -> not (hasTerminator r.ContentText)
+        clean result && clean diagnostic)
+  ]
+
 // ── isVisibleBinding / bindingTargetLine ─────────────────────────────
 //
 // The roast names this "a second uncentralised off-by-one" — the exact
@@ -291,6 +351,7 @@ let tests =
     evalInProgressLabelling
     staleTransitionTests
     linesStaledByEvalTests
+    oneLineGhostTextTests
     bindingVisibility
     bindingTargeting
     codeLensTitleExamples

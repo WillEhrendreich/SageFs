@@ -55,6 +55,31 @@ type InlineResultRender = {
 /// pre-extraction constant exactly (`InlineDecorations.fs` used a bare `4`).
 let [<Literal>] MaxInlineLines = 4
 
+/// The line terminators JavaScript's `.` does not match. VS Code builds a decoration's CSS content from
+/// `contentText.match(/^.*$/m)[0]` (workbench.desktop.main.js, VS Code 1.142), so everything from the first of these
+/// on is dropped: ghost text is ONE line, whatever the text it was made from.
+let lineTerminators = [| "\r\n"; "\n"; "\r"; string (char 0x2028); string (char 0x2029) |]
+
+/// The lines of a text, whichever terminator ends them. A Windows daemon ends FSI's lines with \r\n; splitting on \n
+/// alone left a \r on every line, and VS Code cut the ghost text after the first one (issue #132: a two-binding block
+/// showed `val a: int = 3` and never `val b: int = 5`).
+let splitLines (text: string) : string[] =
+  text.Split(lineTerminators, System.StringSplitOptions.None)
+
+/// The text with every kind of line break replaced by one space, and nothing else touched (the leading spaces a
+/// ghost text starts with stay). The last stop before VS Code: every `contentText` the extension hands it goes
+/// through this, so a line break that slipped past the renderers can never cut a ghost text short.
+let asOneLine (text: string) : string =
+  splitLines text |> String.concat " "
+
+/// The text as one line: every kind of line break becomes a single space, and each piece is trimmed. For the PARTS
+/// a ghost text is made from (a result's summary, a diagnostic's first line).
+let ghostLine (text: string) : string =
+  splitLines text
+  |> Array.map (fun piece -> piece.Trim())
+  |> Array.filter (fun piece -> piece <> "")
+  |> String.concat " "
+
 /// The inline "// → ..." ghost text and its full-text hover companion for
 /// one eval result, or `None` when there is nothing to show (blank/
 /// whitespace-only output — the pre-extraction early return). `durationMs`
@@ -66,7 +91,7 @@ let renderInlineResult (durationMs: float option) (text: string) : InlineResultR
   match trimmed with
   | "" -> None
   | _ ->
-    let lines = trimmed.Split('\n')
+    let lines = splitLines trimmed |> Array.map (fun line -> line.TrimEnd())
     let firstLine = match lines.Length with 0 -> "" | _ -> lines.[0]
     let durSuffix =
       match durationMs with
@@ -78,7 +103,7 @@ let renderInlineResult (durationMs: float option) (text: string) : InlineResultR
       | n when n <= MaxInlineLines -> lines |> String.concat "  │  "
       | n -> sprintf "%s  │  ... (%d lines)" firstLine n
     Some {
-      ContentText = sprintf "  // → %s%s" summary durSuffix
+      ContentText = sprintf "  // → %s%s" (ghostLine summary) durSuffix
       HoverText = trimmed
     }
 
@@ -90,8 +115,8 @@ let renderInlineResult (durationMs: float option) (text: string) : InlineResultR
 /// the hover carries every line, so the truncated remainder stays
 /// reachable.
 let renderInlineDiagnostic (text: string) : InlineResultRender option =
-  let parts = text.Split('\n')
-  let firstLine = match parts.Length with 0 -> "" | _ -> parts.[0].Trim()
+  let parts = splitLines text
+  let firstLine = match parts.Length with 0 -> "" | _ -> ghostLine parts.[0]
   match firstLine with
   | "" -> None
   | _ ->

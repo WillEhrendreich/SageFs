@@ -351,7 +351,7 @@ let applyFileAnnotationsToEditor (editor: TextEditor) =
         ranges.Add (createObj [
           "range" ==> range
           "renderOptions" ==> createObj [
-            "after" ==> createObj [ "contentText" ==> text ]
+            "after" ==> createObj [ "contentText" ==> InlineDecorationsPure.asOneLine text ]
           ]
         ])
       editor.setDecorations(deco, ranges)
