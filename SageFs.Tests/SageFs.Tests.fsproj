@@ -19,6 +19,7 @@
         <Compile Include="../build/FlakeClassification.fs" Link="Build/FlakeClassification.fs" />
         <Compile Include="../build/CaseHistory.fs" Link="Build/CaseHistory.fs" />
         <Compile Include="../build/IgnoredBudget.fs" Link="Build/IgnoredBudget.fs" />
+        <Compile Include="../build/AnalyzerBudget.fs" Link="Build/AnalyzerBudget.fs" />
         <Compile Include="../build/TierSchedule.fs" Link="Build/TierSchedule.fs" />
         <Compile Include="../build/BuildStamps.fs" Link="Build/BuildStamps.fs" />
         <!-- Before TestInfrastructure: the listing process prints the host tier's case count with this marker, and
@@ -744,7 +745,9 @@
         <Compile Include="FailureReportTests.fs" />
         <Compile Include="FlakeClassificationTests.fs" />
         <Compile Include="FlakeClassificationWiringTests.fs" />
+        <Compile Include="GatePassedRecord.fs" />
         <Compile Include="IgnoredBudgetTests.fs" />
+        <Compile Include="AnalyzerBudgetTests.fs" />
         <Compile Include="TestPortsTests.fs" />
         <Compile Include="TrustSignalTests.fs" />
         <Compile Include="PackagedToolSmokeWiringTests.fs" />

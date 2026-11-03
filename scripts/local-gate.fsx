@@ -451,7 +451,7 @@ let gate (sha: string) (force: bool) : int =
           let dest = passedDir sha
           (try Directory.Delete(dest, true) with :? DirectoryNotFoundException -> ())
           copyFiles (Path.Combine(wt, "release")) (Path.Combine(dest, "release"))
-          for (name, source) in [ "trust-ledger.jsonl", Path.Combine(wt, "test-results", "trust-ledger.jsonl"); "trust-report.md", Path.Combine(wt, "test-results", "trust-report.md") ] do
+          for (name, source) in [ "trust-ledger.jsonl", Path.Combine(wt, "test-results", "trust-ledger.jsonl"); "trust-report.md", Path.Combine(wt, "test-results", "trust-report.md"); "analyzer-counts.txt", Path.Combine(wt, "test-results", "analyzer-counts.txt") ] do
             if File.Exists source then File.Copy(source, Path.Combine(dest, name), true)
           File.WriteAllText(Path.Combine(dest, "ok"), ReleaseRules.passRecord (isoNow ()) clock.Elapsed + "\n")
           printfn "=== local gate PASSED for %s in %s ===" short elapsed

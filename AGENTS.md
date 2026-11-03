@@ -339,6 +339,30 @@ files. `dotnet fsi scripts/gate-tail.fsx -- --status` prints each tier, running 
 with its size and its last line; with no arguments it follows every tier live; a tier name
 follows one. It only reads, so Ctrl-C ends the viewer and never the gate.
 
+### The analyzers
+
+`analyzers/sageAnalyzers.dll` is a custom analyzer pack (source: `WillEhrendreich/SageAnalyzers`) that checks the house
+rules by machine: a `Result` or `Async` passed to `ignore` (SAGE-001, 003), `raise` in a domain module (004), swappable
+primitive parameters (005), `try`/`with` mixed with `Result` (006), `let mutable` in a domain function (007), ref cells
+(009). The gate's `analyzers` stage runs it over `SageFs.Core`, `SageFs` and `SageFs.Host` (about two and a half minutes) and
+judges the counts against `RatchetBudgets.analyzerFindings`. A new finding fails the gate. So does a budget above the real
+count, and lowering it is `--ratchets --tighten`, never by hand. `SAGE-000` means an analyzer threw on a file and that file
+went unchecked, so it has no budget and always fails.
+
+To run it by hand, with the CLI that `dotnet-tools.json` pins (the two environment variables are for a machine whose newest
+runtime is a release candidate):
+
+```bash
+dotnet tool restore
+DOTNET_ROLL_FORWARD=LatestMajor DOTNET_ROLL_FORWARD_TO_PRERELEASE=1 \
+  dotnet fsharp-analyzers --project SageFs.Core/SageFs.Core.fsproj --analyzers-path analyzers \
+  -c Release -p TargetFramework=net11.0
+```
+
+`analyzers/` holds exactly one DLL: the CLI loads every DLL under the folder, so a second build counts each finding twice.
+When the pack changes, rebuild it in the SageAnalyzers repo, copy the one DLL here, and the SDK version in its project must
+match the CLI version in `dotnet-tools.json`.
+
 ## Multi-agent / worktree sessions
 
 - **Sessions are checkout-aware.** A session's working directory is classified against the filesystem (`SageFs.Checkout.classify`, no `git` subprocess): a plain repository, a git **worktree** (its own root and branch, worktrees have a `.git` FILE, not a directory, pointing at the main checkout's `.git/worktrees/<name>` admin dir), or not a git checkout at all. `list_sessions` and the dashboard show a worktree session's branch.

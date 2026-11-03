@@ -27,23 +27,10 @@ let private tally passed failed errored ignored : Tally =
 /// The last green gate's ignored count per tier, for `--ratchets --tighten` to lower the table to. A machine with no
 /// gate pass yet has nothing to compare, so it reports the table itself and a tighten changes nothing.
 let private lastGateIgnored () : (string * int) list =
-  let home =
-    match Environment.GetEnvironmentVariable "SAGEFS_GATE_HOME" with
-    | null | "" -> Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, ".local", "share", "sagefs-gate")
-    | path -> path
-  let ledgers =
-    match Directory.Exists(Path.Combine(home, "passed")) with
-    | false -> []
-    | true ->
-      Directory.GetDirectories(Path.Combine(home, "passed"))
-      |> Array.map (fun d -> Path.Combine(d, "trust-ledger.jsonl"))
-      |> Array.filter File.Exists
-      |> Array.sortByDescending File.GetLastWriteTimeUtc
-      |> List.ofArray
-  match ledgers with
-  | [] -> RatchetBudgets.ignoredPerTier
-  | newest :: _ ->
-    File.ReadAllLines newest
+  match GatePassedRecord.newestText "trust-ledger.jsonl" with
+  | None -> RatchetBudgets.ignoredPerTier
+  | Some ledger ->
+    ledger.Split('\n')
     |> Array.filter (fun l -> not (String.IsNullOrWhiteSpace l))
     |> Array.map (fun l ->
       use doc = Text.Json.JsonDocument.Parse l

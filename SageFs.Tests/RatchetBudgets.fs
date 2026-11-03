@@ -379,6 +379,36 @@ let ignoredPerTier : (string * int) list =
     "default-net10", 0
     "--integration-host", 0 ]
 
+/// What the custom analyzer pack (analyzers/sageAnalyzers.dll) finds in each product project, per rule, judged by the
+/// gate's "analyzers" stage (build/AnalyzerBudget.fs). Keyed `<project>/<rule>`. A new finding fails the gate, and so does
+/// a budget above the real count (lower it with `--ratchets --tighten`, which reads the last passed gate's record). A rule
+/// that is not listed for a project has a budget of ZERO, so a new kind of finding fails at once, and `SAGE-000` (an
+/// analyzer that could not finish a file) is never listed: an unchecked file is a failure, not debt.
+/// The rules: 001 a Result passed to `ignore`; 003 an Async or Task passed to `ignore`; 004 `raise`/`failwith`/`reraise` in a
+/// domain module; 005 swappable primitive parameters; 006 `try`/`with` mixed with Result; 007 `let mutable` in a domain
+/// function; 009 a ref cell. SAGE-004 still counts some compiler-generated `reraise` (a known false positive in the pack);
+/// the number is the debt as measured, not a judgement that each is a real throw.
+/// Measured 2026-11-03 over the Debug build, pack built against SDK 0.41.0, no faults in any project.
+let analyzerFindings : (string * int) list =
+  [ "SageFs.Core/SAGE-003", 1
+    "SageFs.Core/SAGE-004", 109
+    "SageFs.Core/SAGE-005", 179
+    "SageFs.Core/SAGE-006", 4
+    "SageFs.Core/SAGE-007", 337
+    "SageFs.Core/SAGE-009", 32
+    "SageFs.Host/SAGE-004", 6
+    "SageFs.Host/SAGE-005", 3
+    "SageFs.Host/SAGE-006", 1
+    "SageFs.Host/SAGE-007", 11
+    "SageFs.Host/SAGE-009", 16
+    "SageFs/SAGE-001", 7
+    "SageFs/SAGE-003", 13
+    "SageFs/SAGE-004", 76
+    "SageFs/SAGE-005", 217
+    "SageFs/SAGE-006", 3
+    "SageFs/SAGE-007", 227
+    "SageFs/SAGE-009", 42 ]
+
 let lineCount (repoRoot: string) (rel: string) : int =
   File.ReadAllLines(Path.Combine(repoRoot, rel)).Length
 

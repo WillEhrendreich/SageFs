@@ -215,7 +215,7 @@ let registryTests =
     testCase "every budget table is registered, found in its own file, and its literals are each written once" <| fun _ ->
       let tables = Ratchet.tables ()
       tables |> List.map (fun t -> t.Name) |> List.sort
-      |> Expect.equal "the ten budget tables" [ "JSON centralization"; "blocking process readers"; "blocking-call budgets"; "domain budgets"; "edge access budgets"; "file-size budgets"; "ignored tests per tier"; "ladder reply size"; "skip sites"; "timeout literals" ]
+      |> Expect.equal "the eleven budget tables" [ "JSON centralization"; "analyzer findings"; "blocking process readers"; "blocking-call budgets"; "domain budgets"; "edge access budgets"; "file-size budgets"; "ignored tests per tier"; "ladder reply size"; "skip sites"; "timeout literals" ]
       let problems =
         tables
         |> List.choose (fun table ->
