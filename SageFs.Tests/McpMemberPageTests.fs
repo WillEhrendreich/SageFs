@@ -16,6 +16,7 @@ open SageFs.Features.AutoCompletion
 open SageFs.McpListMembers
 open SageFs.McpMemberKinds
 open SageFs.McpMemberPage
+open SageFs.McpNamePath
 open SageFs.McpNoMembers
 open SageFs.Tests.CompletionFixtures
 
@@ -59,8 +60,10 @@ let private walk (cap: int) (total: CompletionTotal) (members: CompletionEntry l
     | CutShort _ -> List.rev (page :: acc)
   go 0 []
 
+/// A reply whose answer is not empty, so the walk of the name is never consulted. `ResolvedRoot` is the walk's answer
+/// when there is nothing to explain.
 let private reply (name: string) (cap: int) (offset: int) (answer: CompletionAnswer<CompletionEntry>) : string =
-  formatListMembers name cap offset answer ParentProbe.NoParent
+  formatListMembers name cap offset answer NamePathResolution.ResolvedRoot
 
 /// The fixture the roast named: a module with functions, types and nested modules.
 let private mixed : CompletionEntry list =
@@ -193,31 +196,48 @@ let tests =
 
     testList "a name that lists nothing says why" [
       testCase "WHY — a method has no members, and the reply says it is a leaf its parent lists, not '0 total'" <| fun _ ->
-        let probe = ParentProbe.Listed("System.IO.Path", entriesOf CompletionKind.Method [ "Combine"; "Join" ])
-        let text = formatListMembers "System.IO.Path.Combine" 100 0 (exactly []) probe
+        let text = formatListMembers "System.IO.Path.Combine" 100 0 (exactly []) (NamePathResolution.Resolved CompletionKind.Method)
         text |> Expect.stringContains "names the kind" "method"
         text |> Expect.stringContains "says it is a leaf" "leaf"
         text |> Expect.stringContains "points at the parent that lists its siblings" "System.IO.Path"
         text.Contains "total" |> Expect.isFalse "and never reports a total for a thing with no members"
 
       testCase "WHY — a name its parent does not list is reported as not resolving, with the parent to look at" <| fun _ ->
-        let probe = ParentProbe.Listed("System.IO", entriesOf CompletionKind.Class [ "Path"; "File" ])
-        let text = formatListMembers "System.IO.Pathh" 100 0 (exactly []) probe
+        let resolution = NamePathResolution.StopsAt("System.IO", "Pathh", [ "Path" ])
+        let text = formatListMembers "System.IO.Pathh" 100 0 (exactly []) resolution
         text |> Expect.stringContains "says it does not resolve" "does not resolve"
         text |> Expect.stringContains "names the parent" "System.IO"
+        text |> Expect.stringContains "offers the near name" "Path"
+
+      testCase "WHY — a deep path that stops several segments up says where it stops, not just that the last name is missing" <| fun _ ->
+        let resolution = NamePathResolution.StopsAt("MyApp.Core", "Sesion", [ "Session" ])
+        let text = formatListMembers "MyApp.Core.Sesion.Create" 100 0 (exactly []) resolution
+        text |> Expect.stringContains "names the prefix that lists" "MyApp.Core"
+        text |> Expect.stringContains "names the segment it cannot find" "Sesion"
+        text |> Expect.stringContains "offers the near name" "Session"
+
+      testCase "WHY — a list cut at the wire ceiling does not tell the reader the name is absent" <| fun _ ->
+        let resolution = NamePathResolution.StopsAtCutList("System", "Zed", [])
+        let text = formatListMembers "System.Zed" 100 0 (exactly []) resolution
+        text |> Expect.stringContains "says it may be past the cut" "may be past"
+        text.Contains "does not resolve" |> Expect.isFalse "and never says the name does not resolve"
 
       testCase "WHY — a drillable name with no members is an empty container, not a leaf" <| fun _ ->
-        let probe = ParentProbe.Listed("MyApp", entriesOf CompletionKind.Module [ "Empty" ])
-        classifyEmpty "MyApp.Empty" probe
+        classifyEmpty "MyApp.Empty" (NamePathResolution.Resolved CompletionKind.Module)
         |> Expect.equal "an empty module" (NoMembersBecause.EmptyContainer(CompletionKind.Module, "MyApp"))
 
       testCase "WHY — a one-segment name cannot be checked against a parent, and the reply says that" <| fun _ ->
-        classifyEmpty "Nope" ParentProbe.NoParent
+        classifyEmpty "Nope" (NamePathResolution.NothingResolves "Nope")
         |> Expect.equal "no parent to ask" NoMembersBecause.NoParentToAsk
 
-      testCase "WHY — when the parent could not be asked either, the reply says leaf-ness is not known and why" <| fun _ ->
-        let probe = ParentProbe.Unavailable("System.IO", CompletionUnavailable.SessionNotActive)
-        let text = formatListMembers "System.IO.Path" 100 0 (exactly []) probe
+      testCase "WHY — a first segment that lists nothing in a longer name is named, because the whole path hangs on it" <| fun _ ->
+        let text = formatListMembers "Sytem.IO.Path" 100 0 (exactly []) (NamePathResolution.NothingResolves "Sytem")
+        text |> Expect.stringContains "names the first segment" "Sytem"
+        text |> Expect.stringContains "says nothing is listed under it" "Nothing named Sytem"
+
+      testCase "WHY — when the walk could not ask, the reply says leaf-ness is not known and why" <| fun _ ->
+        let resolution = NamePathResolution.Unknown("System.IO", CompletionUnavailable.SessionNotActive)
+        let text = formatListMembers "System.IO.Path" 100 0 (exactly []) resolution
         text |> Expect.stringContains "says it is not known" "not known"
         text |> Expect.stringContains "gives the reason's remedy" (CompletionUnavailable.describe CompletionUnavailable.SessionNotActive)
 
@@ -237,8 +257,8 @@ let tests =
           | true -> true
           | false ->
             let qualified = parentName + "." + leafName
-            let probe = ParentProbe.Listed(parentName, [ entry CompletionKind.Property leafName ])
-            classifyEmpty qualified probe = NoMembersBecause.IsLeaf(CompletionKind.Property, parentName)
+            classifyEmpty qualified (NamePathResolution.Resolved CompletionKind.Property)
+            = NoMembersBecause.IsLeaf(CompletionKind.Property, parentName)
     ]
 
     testCase "WHY — the skill teaches the ladder: some skill file names list_members, so an agent that reads it knows the first rung exists" <| fun _ ->

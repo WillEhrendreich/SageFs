@@ -308,9 +308,9 @@ let fileSize : (string * int) list =
     // drillable/leaf split and the count-line nouns, one exhaustive match each. Set at the true size.
     "SageFs/McpMemberKinds.fs", 83
     // Added with the same change: why a name that lists nothing lists nothing, and how each reason reads.
-    "SageFs/McpNoMembers.fs", 66
+    "SageFs/McpNoMembers.fs", 55
     // Added with the same change: the session-routed half of list_members, split out of McpListMembers.fs.
-    "SageFs/McpMembersRoute.fs", 47
+    "SageFs/McpMembersRoute.fs", 38
     // Added with the same change: the completions routes and their JSON, out of Mcp.fs (3273 -> 3204) and
     // McpAdapter.fs (676 -> 656). Set at the true size.
     "SageFs/McpCompletions.fs", 143 ]

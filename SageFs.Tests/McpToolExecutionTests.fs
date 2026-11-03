@@ -31,7 +31,7 @@ let tests =
       let max = SageFsConfig.ListMembersMax
       let members =
         CompletionFixtures.namesOf SageFs.Features.AutoCompletion.CompletionKind.Method [ for i in 1 .. total -> sprintf "member_%03d" i ]
-      let formatListMembers name max offset members = formatListMembers name max offset members McpNoMembers.ParentProbe.NoParent
+      let formatListMembers name max offset members = formatListMembers name max offset members McpNamePath.NamePathResolution.ResolvedRoot
       let reply = formatListMembers "SageFs.SessionManager" max 0 members
       (reply.Length < 4000) |> Expect.isTrue "one page stays under the house reply ceiling"
       reply |> Expect.stringContains "the total is the real size" (sprintf "%d total" total)

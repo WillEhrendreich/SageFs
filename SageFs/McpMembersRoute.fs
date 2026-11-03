@@ -12,18 +12,13 @@ open SageFs.McpTools
 /// handles would not), so the reply carries names, the total, and the next offset, and nothing else.
 module McpMembersRoute =
 
-  /// When a name lists nothing, ask its parent whether it knows the name and what kind it is.
-  let probeParent (ctx: McpContext) (sid: string) (name: string) : Task<ParentProbe> =
-    task {
-      match splitParent name with
-      | None -> return ParentProbe.NoParent
-      | Some(parent, _) ->
-        let! parentAnswer = membersOf ctx sid parent
-        return
-          match parentAnswer with
-          | CompletionAnswer.Answered(entries, _) -> ParentProbe.Listed(parent, entries)
-          | CompletionAnswer.Unavailable reason -> ParentProbe.Unavailable(parent, reason)
-    }
+  /// When a name lists nothing, walk its path to see where it stops resolving. A non-empty or unavailable answer
+  /// has nothing to explain, so the walk is not run and `ResolvedRoot` stands for that.
+  let walkWhenEmpty (ctx: McpContext) (sid: string) (name: string) (answer: CompletionAnswer<CompletionEntry>) : Task<McpNamePath.NamePathResolution> =
+    match answer with
+    | CompletionAnswer.Answered([], _) -> McpNamePath.resolve SageFsConfig.NearestNamesMax (membersOf ctx sid) name
+    | CompletionAnswer.Answered(_ :: _, _)
+    | CompletionAnswer.Unavailable _ -> Task.FromResult McpNamePath.NamePathResolution.ResolvedRoot
 
   let listMembers
     (ctx: McpContext)
@@ -38,10 +33,6 @@ module McpMembersRoute =
       let name = qualifiedName.TrimEnd '.'
       withSessionWd ctx agent workingDirectory (fun sid -> task {
         let! answer = membersOf ctx sid name
-        let! probe =
-          match answer with
-          | CompletionAnswer.Answered([], _) -> probeParent ctx sid name
-          | CompletionAnswer.Answered(_ :: _, _)
-          | CompletionAnswer.Unavailable _ -> Task.FromResult ParentProbe.NoParent
-        return formatListMembers name SageFsConfig.ListMembersMax offset answer probe
+        let! resolution = walkWhenEmpty ctx sid name answer
+        return formatListMembers name SageFsConfig.ListMembersMax offset answer resolution
       })

@@ -68,6 +68,30 @@ let tests =
       | other -> failtestf "expected StopsAt, got %A" other
     }
 
+    testTask "WHY - for any path with one segment replaced by an unlisted name, resolve stops exactly there and never says Resolved" {
+      // A chain of prefixes, each listing the next segment and two decoys. Seeds 1 to 300 each draw a path, and the
+      // seed is in the failure message, so a failure replays by running that seed alone.
+      for seed in 1 .. 300 do
+        let rng = System.Random seed
+        let segments = [ for _ in 1 .. rng.Next(1, 7) -> sprintf "n%d" (rng.Next 7) ]
+        let prefixOf (count: int) = segments |> List.truncate count |> String.concat "."
+        let tree =
+          Map.ofList
+            [ for count in 1 .. segments.Length ->
+                let next = segments |> List.tryItem count |> Option.toList
+                prefixOf count, entriesOf CompletionKind.Module (next @ [ "decoyOne"; "decoyTwo" ]) ]
+        let at = rng.Next segments.Length
+        let replaced = "Zx" + segments.[at]
+        let mutated = segments |> List.mapi (fun i s -> if i = at then replaced else s) |> String.concat "."
+        let! resolution = resolveIn tree mutated
+        match at, resolution with
+        | 0, NamePathResolution.NothingResolves first -> first |> Expect.equal (sprintf "seed %d: the first segment" seed) replaced
+        | _, NamePathResolution.StopsAt(prefix, missing, _) when at > 0 ->
+          prefix |> Expect.equal (sprintf "seed %d: the longest true prefix of %s" seed mutated) (prefixOf at)
+          missing |> Expect.equal (sprintf "seed %d: the segment replaced" seed) replaced
+        | _, other -> failtestf "seed %d: %s with segment %d replaced resolved as %A" seed mutated at other
+    }
+
     testTask "a list cut at the wire ceiling does not claim the name is absent" {
       let cut _ =
         task { return CompletionAnswer.Answered(entriesOf CompletionKind.Class [ "Path" ], CompletionTotal.AtLeast 2000) }
