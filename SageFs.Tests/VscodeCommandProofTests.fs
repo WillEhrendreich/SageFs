@@ -119,6 +119,7 @@ let private startVirtualDisplay (xvfb: string) : Task<Process * string> = task {
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let server = Process.Start psi
   server.ErrorDataReceived.Add ignore
   server.BeginErrorReadLine()
@@ -153,6 +154,7 @@ let private runCaptured
   psi.CreateNoWindow <- true
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let output = StringBuilder()
   use proc = new Process(StartInfo = psi)
   proc.OutputDataReceived.Add(fun e -> if not (isNull e.Data) then output.AppendLine(e.Data) |> ignore)
@@ -296,6 +298,7 @@ let private startDaemonWithWebLiveSession () : Fixture =
   psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let daemon = Process.Start(psi)
   daemon.BeginOutputReadLine()
   daemon.BeginErrorReadLine()
@@ -424,6 +427,7 @@ let private runProofSuite (f: Fixture) : Task<int * string> = task {
     psi.Environment.Remove("XDG_SESSION_TYPE") |> ignore
   | None -> ()
 
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let output = Text.StringBuilder()
   use proc = new Process(StartInfo = psi)
   proc.OutputDataReceived.Add(fun e -> if not (isNull e.Data) then output.AppendLine(e.Data) |> ignore)

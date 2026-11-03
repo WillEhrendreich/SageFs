@@ -32,6 +32,7 @@ let private firstOutcome (printed: string) : Task<StartOutcome> =
     psi.UseShellExecute <- false
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Process.Start psi
     try
       let first = TaskCompletionSource<StartOutcome>()

@@ -115,6 +115,7 @@ let private startDaemonOnDataDir (port: int) (dataDir: string) (envOverrides: (s
   for name, value in envOverrides do
     psi.Environment[name] <- value
 
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start(psi)
   let client = new HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)

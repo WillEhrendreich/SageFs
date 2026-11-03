@@ -22,6 +22,7 @@ let run(workingDirectory: string) (file: string) (args: string list) : Threading
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
     args |> List.iter psi.ArgumentList.Add
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use p = Process.Start psi
     let out = p.StandardOutput.ReadToEndAsync()
     let err = p.StandardError.ReadToEndAsync()

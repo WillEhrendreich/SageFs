@@ -39,6 +39,7 @@ let private runBridgeSmokeTest () : Task<unit> =
     psi.StandardInputEncoding <- Encoding.UTF8
     psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
 
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use proc = Process.Start(psi)
     let stderrBuf = Text.StringBuilder()
     proc.ErrorDataReceived.Add(fun e -> match e.Data with null -> () | line -> stderrBuf.AppendLine(line) |> ignore)
@@ -165,6 +166,7 @@ let private runPipelinedBatchReproTest () : Task<unit> =
     psi.StandardInputEncoding <- Encoding.UTF8
     psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
 
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use proc = Process.Start(psi)
     let stderrBuf = Text.StringBuilder()
     proc.ErrorDataReceived.Add(fun e -> match e.Data with null -> () | line -> stderrBuf.AppendLine(line) |> ignore)

@@ -37,6 +37,7 @@ module OwnedChild =
     let psi = ProcessStartInfo(program, arguments)
     psi.UseShellExecute <- false
     psi.RedirectStandardInput <- true
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     { Process = Process.Start psi }
 
 type private Harness = {

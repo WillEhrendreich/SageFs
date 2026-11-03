@@ -178,6 +178,7 @@ let private startSilentChild () : Process =
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   Process.Start psi
 
 /// A process that says the worker port at once.
@@ -188,6 +189,7 @@ let private startPortChild () : Process =
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   Process.Start psi
 
 /// A mailbox that hands the first command of interest to a task.

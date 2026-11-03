@@ -146,6 +146,7 @@ let private gitAvailable () : bool =
         RedirectStandardOutput = true,
         RedirectStandardError = true,
         UseShellExecute = false)
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use proc = Process.Start psi
     proc.WaitForExit(TestTimeouts.childExit) |> ignore
     proc.HasExited && proc.ExitCode = 0
@@ -165,6 +166,7 @@ let private git (dir: string) (args: string list) : Task<string> =
         UseShellExecute = false,
         WorkingDirectory = dir)
     for a in args do psi.ArgumentList.Add a
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use proc = new Process(StartInfo = psi)
     proc.Start() |> ignore
     let! stdout = proc.StandardOutput.ReadToEndAsync()
@@ -215,6 +217,7 @@ let private startIsolatedDaemon (workingDir: string) (dataDir: string) : Task<Pr
   psi.ArgumentList.Add "10m"
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
 
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start psi
   use client = new Net.Http.HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
@@ -606,6 +609,7 @@ let tests =
               RedirectStandardOutput = true,
               RedirectStandardError = true,
               UseShellExecute = false)
+          SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply pgrepPsi
           let pgrepProc = Process.Start pgrepPsi
           let! (leftovers: string) = pgrepProc.StandardOutput.ReadToEndAsync()
           pgrepProc.WaitForExit TestTimeouts.patience |> ignore

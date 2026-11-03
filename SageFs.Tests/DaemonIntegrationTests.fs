@@ -246,6 +246,7 @@ let daemonCliTests =
       psi.CreateNoWindow <- true
       psi.Environment.["SAGEFS_DATA_DIR"] <- isolatedDataDir ()
 
+      SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
       use proc = Process.Start(psi)
       let output = proc.StandardOutput.ReadToEnd()
       proc.WaitForExit(TestTimeouts.childExit) |> ignore
@@ -305,6 +306,7 @@ let daemonStartupFailsClosedTests =
       psi.RedirectStandardOutput <- true
       psi.RedirectStandardError <- true
 
+      SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
       use daemonProc = new Process(StartInfo = psi)
       use logWriter = new StreamWriter(outLog, append = false)
       let logLock = obj ()
@@ -384,6 +386,7 @@ let daemonMachineTierTests =
       psi.RedirectStandardOutput <- true
       psi.RedirectStandardError <- true
 
+      SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
       use daemonProc = new Process(StartInfo = psi)
       let captured = System.Text.StringBuilder()
       let logLock = obj ()
@@ -438,6 +441,7 @@ let daemonLifecycleTests =
       let dataDir = isolatedDataDir ()
       psi.Environment.["SAGEFS_DATA_DIR"] <- dataDir
 
+      SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
       let daemonProc = Process.Start(psi)
       try
         // Wait for daemon to respond on HTTP — event-driven, no sleep-poll.
@@ -461,6 +465,7 @@ let daemonLifecycleTests =
         statusPsi.CreateNoWindow <- true
         statusPsi.Environment.["SAGEFS_DATA_DIR"] <- dataDir
 
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply statusPsi
         use statusProc = Process.Start(statusPsi)
         let statusOutput = statusProc.StandardOutput.ReadToEnd()
         statusProc.WaitForExit(TestTimeouts.childExit) |> ignore
@@ -479,6 +484,7 @@ let daemonLifecycleTests =
         stopPsi.CreateNoWindow <- true
         stopPsi.Environment.["SAGEFS_DATA_DIR"] <- dataDir
 
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply stopPsi
         use stopProc = Process.Start(stopPsi)
         let stopOutput = stopProc.StandardOutput.ReadToEnd()
         stopProc.WaitForExit(TestTimeouts.childExit) |> ignore

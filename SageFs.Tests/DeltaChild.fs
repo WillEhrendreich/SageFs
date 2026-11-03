@@ -412,6 +412,9 @@ let private startInfo (directory: string) (modifiable: ModifiableAssemblies) : P
   info.RedirectStandardError <- true
   info.UseShellExecute <- false
   info.CreateNoWindow <- true
+  // The shared environment first (without the MSBuild pins another case's project load left on the process), then
+  // the one variable this child is about: DOTNET_MODIFIABLE_ASSEMBLIES is in the stripped set, so it is set AFTER.
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply info
   match modifiable with
   | ModifiableAssemblies.Debug -> info.Environment["DOTNET_MODIFIABLE_ASSEMBLIES"] <- "debug"
   | ModifiableAssemblies.NotSet -> info.Environment.Remove "DOTNET_MODIFIABLE_ASSEMBLIES" |> ignore
@@ -426,6 +429,7 @@ let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAsse
     let stderrPath = Path.Combine(directory, "stderr.txt")
     use stdoutFile = new StreamWriter(stdoutPath)
     use stderrFile = new StreamWriter(stderrPath)
+    // `startInfo` above calls SpawnEnvironment.apply before it sets the one variable this child is about.
     use child = new Process(StartInfo = startInfo directory modifiable)
     child.OutputDataReceived.Add(fun e -> lock stdoutFile (fun () -> match e.Data with | null -> () | line -> stdoutFile.WriteLine line))
     child.ErrorDataReceived.Add(fun e -> lock stderrFile (fun () -> match e.Data with | null -> () | line -> stderrFile.WriteLine line))

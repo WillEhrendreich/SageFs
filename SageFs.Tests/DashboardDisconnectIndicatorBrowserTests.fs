@@ -148,6 +148,7 @@ module private IsolatedDaemon =
     psi.Environment["SAGEFS_DASHBOARD_STALE_AFTER_SECONDS"] <- TestTiming.staleAfterSeconds
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Diagnostics.Process.Start(psi)
     let outLog = Path.Combine(dataDir, sprintf "daemon.stdout.%d.log" proc.Id)
     let errLog = Path.Combine(dataDir, sprintf "daemon.stderr.%d.log" proc.Id)

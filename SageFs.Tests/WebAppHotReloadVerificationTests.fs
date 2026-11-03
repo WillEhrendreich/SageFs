@@ -89,6 +89,7 @@ let private buildFixtureAsSageFsDoes () : Task<unit> =
       psi.ArgumentList.Add a
     psi.WorkingDirectory <- fDir
     psi.UseShellExecute <- false
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use p = Process.Start psi
     do! p.WaitForExitAsync()
     p.ExitCode
@@ -127,6 +128,7 @@ let private spawnHost (sessionId: string) (hostLog: StringBuilder) : Task<Proces
         psi.EnvironmentVariables[k] <- fixtureProj
       else
         psi.EnvironmentVariables[k] <- v
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Process.Start(psi)
     // Drain stdout AND stderr with async readers so neither pipe ever fills
     // (an undrained redirect pipe deadlocks the host before WORKER_PORT prints), and neither drain parks a

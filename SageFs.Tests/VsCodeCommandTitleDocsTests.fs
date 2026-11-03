@@ -109,6 +109,7 @@ let trackedMarkdown() : Result<string list, ReadRefusal> =
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
   psi.UseShellExecute <- false
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   match Process.Start psi with
   | null -> Result.Error (GitCouldNotListFiles "the process did not start")
   | p ->

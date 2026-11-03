@@ -53,6 +53,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
 
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let daemon = Diagnostics.Process.Start(psi)
   // Drain the daemon's stdout/stderr asynchronously into the log files so the
   // pipes never fill regardless of log volume.
@@ -294,6 +295,7 @@ let prebuildCopy (dest: string) (projectFile: string) : unit =
   psi.ArgumentList.Add("q")
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use build = Diagnostics.Process.Start(psi)
   // Drain to files (never undrained pipes): files can't deadlock the child.
   let buildOut = Path.Combine(dest, "build.stdout.log")
@@ -440,6 +442,7 @@ let runHotReloadRunner (kind: HotReloadRunnerKind) (cliArgs: string array) : int
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
 
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let daemon = Diagnostics.Process.Start(psi)
   let drain (stream: System.IO.StreamReader) (path: string) =
     let writer = new System.IO.StreamWriter(path, append = true)
@@ -707,6 +710,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
 
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let daemon = Diagnostics.Process.Start(psi)
   let drain (stream: System.IO.StreamReader) (path: string) =
     let writer = new System.IO.StreamWriter(path, append = true)

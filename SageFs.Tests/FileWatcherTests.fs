@@ -504,6 +504,7 @@ let private inotifyCases : Test list =
               System.Diagnostics.ProcessStartInfo(
                 "bash", sprintf "-c \"ls -la /proc/%d/fd 2>/dev/null | grep -ci inotify\"" pid,
                 RedirectStandardOutput = true, UseShellExecute = false)
+            SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
             use p = System.Diagnostics.Process.Start psi
             let out = p.StandardOutput.ReadToEnd()
             p.WaitForExit()

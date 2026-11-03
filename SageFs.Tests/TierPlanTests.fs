@@ -222,6 +222,7 @@ let private userNamespaceMountsWork () : bool =
           psi.ArgumentList.Add arg
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError <- true
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
         use p = Diagnostics.Process.Start psi
         p.StandardOutput.ReadToEnd() |> ignore
         p.StandardError.ReadToEnd() |> ignore
@@ -266,6 +267,7 @@ let private isolationCases : Test list =
           List.tail argv |> List.iter psi.ArgumentList.Add
           psi.RedirectStandardOutput <- true
           psi.RedirectStandardError <- true
+          SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
           use p = Diagnostics.Process.Start psi
           let out = p.StandardOutput.ReadToEnd()
           let err = p.StandardError.ReadToEnd()

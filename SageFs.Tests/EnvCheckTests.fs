@@ -54,6 +54,7 @@ let private withBoundPort (action: int -> unit) =
 
 let private runProcess (psi: ProcessStartInfo) : Task<int * string * string> =
   Async.StartAsTask(async {
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use proc = Process.Start psi
     let! stdout = proc.StandardOutput.ReadToEndAsync() |> Async.AwaitTask
     let! stderr = proc.StandardError.ReadToEndAsync() |> Async.AwaitTask

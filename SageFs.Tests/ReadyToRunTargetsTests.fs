@@ -99,6 +99,7 @@ let tests =
         psi.UseShellExecute <- false
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError <- true
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
         let proc = Process.Start psi
         try
           let output = proc.StandardOutput.ReadToEndAsync()

@@ -145,6 +145,7 @@ let private runCli (dataDir: string) (args: string list) : Task<CliRun> =
     psi.WorkingDirectory <- daemonRepo
     psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
     for arg in args do psi.ArgumentList.Add arg
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use proc = Diagnostics.Process.Start psi
     let out = proc.StandardOutput.ReadToEndAsync()
     let err = proc.StandardError.ReadToEndAsync()

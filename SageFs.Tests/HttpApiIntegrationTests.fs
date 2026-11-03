@@ -85,7 +85,7 @@ let runProcessExpectSuccess (fileName: string) (workingDir: string) (args: strin
   for arg in args do
     psi.ArgumentList.Add(arg)
   // Without the MSBuild resolution variables this process may hold from a project another case loaded (#185).
-  SageFs.ProcessEnvironment.applyTo psi []
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
 
   use proc = Process.Start(psi)
   let stdout = proc.StandardOutput.ReadToEnd()
@@ -135,6 +135,7 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
   let dataDir = Path.Combine(Path.GetTempPath(), "sagefs-test", Guid.NewGuid().ToString("N"))
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
 
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start(psi)
   let client = new HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)

@@ -14,6 +14,7 @@ open SageFs.HygieneEdge
 let gitExit (dir: string) (args: string list) : int * string * string =
   let psi = System.Diagnostics.ProcessStartInfo("git", WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
   for a in args do psi.ArgumentList.Add a
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use proc = System.Diagnostics.Process.Start psi
   let out = proc.StandardOutput.ReadToEnd()
   let err = proc.StandardError.ReadToEnd()

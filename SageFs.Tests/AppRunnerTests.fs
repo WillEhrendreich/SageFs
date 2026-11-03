@@ -351,7 +351,7 @@ let private runDotnet (args: string list) (patience: TimeSpan) : Task<Result<int
   // Like every place SageFs starts a build: without MSBuild's own resolution variables, which a child inherits from
   // THIS process. Other cases of the shard run beside this one, and a variable one of them leaves set for a moment
   // (MSBuildSDKsPath, once) made this build die in restore with "Build FAILED, 0 Error(s)" (#185).
-  ProcessEnvironment.applyTo psi []
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use p = Process.Start psi
   let stdout = p.StandardOutput.ReadToEndAsync()
   let stderr = p.StandardError.ReadToEndAsync()

@@ -266,6 +266,7 @@ let startDaemon (owner: Owner) (supervision: Supervision) : Task<Daemon> = task 
   for arg in args do
     psi.ArgumentList.Add arg
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let spawned = Process.Start psi
 
   // Ready means a daemon of OURS answers: its own pid, read from its own dashboard.
@@ -437,6 +438,7 @@ let signalExact (signal: string) (id: ProcId) : Task<unit> = task {
   | false ->
     let psi = ProcessStartInfo("kill", [ sprintf "-%s" signal; string id.Pid ])
     psi.UseShellExecute <- false
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use sender = Process.Start psi
     do! sender.WaitForExitAsync()
 }
@@ -548,6 +550,7 @@ let hardKillOutcomeTests =
         // `exec` so the pid we kill is the sleep itself and not a shell that left it behind.
         let psi = ProcessStartInfo("/bin/sh", [ "-c"; "exec sleep 600" ])
         psi.UseShellExecute <- false
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
         use standIn = Process.Start psi
         try
           do! withDaemon (Owner.StandIn standIn) Supervision.Plain (fun daemon -> task {
@@ -613,6 +616,7 @@ let hardKillOutcomeTests =
       do! linuxOnly (fun () -> task {
         let psi = ProcessStartInfo("/bin/sh", [ "-c"; "exec sleep 600" ])
         psi.UseShellExecute <- false
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
         use standIn = Process.Start psi
         try
           do! withDaemon (Owner.StandIn standIn) Supervision.Supervised (fun daemon -> task {

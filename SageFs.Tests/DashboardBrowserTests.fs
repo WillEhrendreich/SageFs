@@ -586,6 +586,7 @@ module private NoSessionLanding =
     // the daemon once its log buffer fills, freezing warmup before Ready.
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Diagnostics.Process.Start(psi)
     let outLog = Path.Combine(dataDir, "daemon.stdout.log")
     let errLog = Path.Combine(dataDir, "daemon.stderr.log")

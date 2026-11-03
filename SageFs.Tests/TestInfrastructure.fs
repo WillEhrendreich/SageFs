@@ -295,6 +295,31 @@ module SqlitePools =
         use connection = new Microsoft.Data.Sqlite.SqliteConnection(sprintf "Data Source=%s" file)
         Microsoft.Data.Sqlite.SqliteConnection.ClearPool connection
 
+/// The environment a child process starts with, when a test starts one.
+///
+/// A test process runs its cases in parallel, and some of them load a project through Ionide.ProjInfo, which pins
+/// MSBUILD_EXE_PATH, MSBuildSDKsPath, MSBuildExtensionsPath and DOTNET_ROOT on the PROCESS to the SDK it found
+/// (`ProcessEnvironment` documents it). Every child another case starts afterwards inherits those pins, so its
+/// `dotnet build` runs under a different SDK's MSBuild and fails with nothing printed: the app-runner harness, red
+/// in nine gate runs, always in the shard that held a project-loading case, green alone (#185). The product drops
+/// the pins at every place it starts a build (`ProcessEnvironment.applyTo`); a test does the same through this.
+///
+/// DOTNET_ROOT is not simply dropped: an apphost launcher (the daemon's `SageFs`) finds its runtime through it
+/// where .NET is not installed in a default location. It is set from the installation that hosts THIS process,
+/// which does not depend on what the environment holds at the moment.
+module SpawnEnvironment =
+  let private parentOf (path: string) : string = System.IO.Path.GetDirectoryName path
+
+  /// `<root>/shared/Microsoft.NETCore.App/<version>/` is the runtime's directory; the root is three above it.
+  let private dotnetRoot : string =
+    System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory().TrimEnd('/', '\\')
+    |> parentOf
+    |> parentOf
+    |> parentOf
+
+  let apply (psi: System.Diagnostics.ProcessStartInfo) : unit =
+    SageFs.ProcessEnvironment.applyTo psi [ "DOTNET_ROOT", dotnetRoot ]
+
 /// Structural registry of [Integration] suites. Every integration suite is
 /// registered here together with the runner that owns it, so:
 ///  - the default run excludes registered suites by the IDENTITY of their test

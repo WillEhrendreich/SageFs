@@ -71,6 +71,7 @@ module VscodeFixture =
               RedirectStandardOutput = true,
               UseShellExecute = false,
               CreateNoWindow = true)
+          SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
           use p = Process.Start(psi)
           let line = p.StandardOutput.ReadLine()
           p.WaitForExit(TestTimeouts.shimLookupExit) |> ignore
@@ -166,6 +167,7 @@ module VscodeFixture =
 
     let psi = ProcessStartInfo(codeExe (), args)
     psi.UseShellExecute <- true
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Process.Start(psi)
     codePid <- Some proc.Id
     proc.Id

@@ -77,6 +77,7 @@ let private fixtureProject () : string =
 let private gitAvailable () : bool =
   try
     let psi = ProcessStartInfo("git", "--version", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use proc = Process.Start psi
     proc.WaitForExit(TestTimeouts.childExit) |> ignore
     proc.HasExited && proc.ExitCode = 0
@@ -144,6 +145,7 @@ let private startIsolatedDaemon (workingDir: string) (dataDir: string) : Task<Pr
   psi.ArgumentList.Add "--ttl"
   psi.ArgumentList.Add "30m"
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start psi
   use client = new HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)

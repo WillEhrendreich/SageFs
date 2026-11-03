@@ -152,6 +152,7 @@ let jupyterKernelSocketTests =
       kernel.WorkingDirectory <- workDir
       kernel.RedirectStandardOutput <- true
       kernel.RedirectStandardError <- true
+      SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply kernel
       let kernelProc = Process.Start(kernel)
       let kernelErr = kernelProc.StandardError.ReadToEndAsync()
 

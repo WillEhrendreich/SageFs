@@ -133,6 +133,7 @@ let sdkPin (runtime: HostRuntime) : string option =
     psi.RedirectStandardOutput <- true
     psi.UseShellExecute <- false
     psi.WorkingDirectory <- Path.GetTempPath()
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use p = Process.Start psi
     let listed = p.StandardOutput.ReadToEnd()
     p.WaitForExit()
@@ -172,6 +173,7 @@ let buildOutcome (runDir: string) (project: string) : Task<Result<unit, string>>
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use p = Process.Start psi
   let out = p.StandardOutput.ReadToEndAsync()
   let err = p.StandardError.ReadToEndAsync()
@@ -200,6 +202,7 @@ let sdkVersionIn (runtime: HostRuntime) (runDir: string) : Task<string> =
     psi.RedirectStandardOutput <- true
     psi.UseShellExecute <- false
     psi.WorkingDirectory <- runDir
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use p = Process.Start psi
     let version = p.StandardOutput.ReadToEndAsync()
     do! p.WaitForExitAsync()
@@ -250,6 +253,7 @@ let private spawnHost (runtime: HostRuntime) (runDir: string) (project: string) 
     match k = Args.WorkerConfig.envVar with
     | true -> psi.EnvironmentVariables[k] <- project
     | false -> psi.EnvironmentVariables[k] <- v
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start psi
   let port = TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously)
   let drain (reader: StreamReader) =

@@ -511,13 +511,15 @@ let architectureTests =
       // "docs" link from memory.
       testCase "WHY — no tracked file references the retired GitHub Pages docs site, because a link to it sends users to a different product" <| fun _ ->
         let offenders =
-          System.Diagnostics.Process.Start(
+          let psi =
             System.Diagnostics.ProcessStartInfo(
               FileName = "git",
               Arguments = "ls-files",
               WorkingDirectory = repoRoot,
               RedirectStandardOutput = true,
-              UseShellExecute = false))
+              UseShellExecute = false)
+          SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
+          System.Diagnostics.Process.Start psi
           |> fun p ->
             let out = p.StandardOutput.ReadToEnd()
             p.WaitForExit()

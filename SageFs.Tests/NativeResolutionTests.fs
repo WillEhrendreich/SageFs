@@ -106,6 +106,7 @@ let tests = testList "NativeResolution" [
       for arg in [ "restore"; sample; "--nologo"; "-v:q" ] do psi.ArgumentList.Add arg
       psi.RedirectStandardOutput <- true
       psi.RedirectStandardError <- true
+      SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
       use restore = Diagnostics.Process.Start psi
       let output = restore.StandardOutput.ReadToEndAsync()
       let errors = restore.StandardError.ReadToEndAsync()

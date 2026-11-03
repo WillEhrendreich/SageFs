@@ -92,6 +92,7 @@ let tests =
             FileName = (if OperatingSystem.IsWindows() then "cmd.exe" else "true"),
             UseShellExecute = false)
         if OperatingSystem.IsWindows() then psi.Arguments <- "/c exit 0"
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
         use p = Process.Start psi
         p.WaitForExit(TestTimeouts.childExit) |> ignore
         HostCoreAdoption.markAdoptedRootOwner dir p.Id

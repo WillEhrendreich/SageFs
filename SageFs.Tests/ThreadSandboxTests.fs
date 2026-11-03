@@ -599,6 +599,7 @@ let realThreadTests =
     realFilterCase "WHY — starting a process is refused on the filtered thread and works on a normal one" <| fun () -> task {
       let start () =
         let info = Diagnostics.ProcessStartInfo(Environment.ProcessPath, "--version", RedirectStandardOutput = true)
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply info
         use p = Diagnostics.Process.Start info
         p.WaitForExit()
       let! outcome = runSandboxed NoNetworkNoWritesNoSpawn start

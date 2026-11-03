@@ -41,6 +41,7 @@ let childStartInfo (dll: string) (arguments: string list) : ProcessStartInfo =
 let private runWithoutPlugin (arguments: string list) : Task<int * string> =
   task {
     let psi = childStartInfo (typeof<Marker>.Assembly.Location) arguments
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Process.Start psi
     try
       let output = proc.StandardOutput.ReadToEndAsync()

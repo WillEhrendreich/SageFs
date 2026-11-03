@@ -79,6 +79,7 @@ let startIsolatedDaemonWith (extraEnv: (string * string) list) : Task<Process * 
   for name, value in extraEnv do
     psi.Environment[name] <- value
 
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start psi
   use client = new Net.Http.HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)

@@ -37,6 +37,7 @@ let tests =
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false)
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
         use proc = Process.Start psi
         proc.WaitForExit(TestTimeouts.childExit) |> ignore
         proc.HasExited && proc.ExitCode = 0
@@ -57,6 +58,7 @@ let tests =
             UseShellExecute = false,
             WorkingDirectory = dir)
         for a in args do psi.ArgumentList.Add a
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
         use proc = new Process(StartInfo = psi)
         proc.Start() |> ignore
         let! stdout = proc.StandardOutput.ReadToEndAsync() |> Async.AwaitTask

@@ -300,7 +300,7 @@ let sqlitePoolHygieneTests =
                 |> Array.map (fun (index, _) -> sprintf "%s:%d" (Path.GetRelativePath(root, file)) (index + 1))
                 |> List.ofArray ]
         |> List.concat
-      offenders |> Expect.isEmpty "no call clears every pool: use SqlitePools.releaseFilesIn for the files a test wrote"
+      offenders |> Expect.isEmpty (sprintf "no call clears every pool: use SqlitePools.releaseFilesIn for the files a test wrote: %s" (String.concat ", " offenders))
   ]
 
 do SageFs.Tests.TestInfrastructure.Ratchet.register SageFs.Tests.TestInfrastructure.Ratchet.Invariant sqlitePoolHygieneTests |> ignore

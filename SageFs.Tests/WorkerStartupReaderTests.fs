@@ -32,6 +32,7 @@ let private runFakeWorker (script: string) (goFile: string) : Task<(AppOutput.St
     psi.UseShellExecute <- false
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Process.Start psi
     try
       let received = ConcurrentQueue<AppOutput.Stream * string>()

@@ -59,6 +59,7 @@ let private buildWebAppFixture () : string =
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use p = Diagnostics.Process.Start psi
   let stdout = p.StandardOutput.ReadToEndAsync()
   let stderr = p.StandardError.ReadToEndAsync()

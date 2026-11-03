@@ -896,6 +896,7 @@ let private startSeriesDaemon (series: Series) : Task<SeriesDaemon> =
       | DaemonEnvironment.Clear name -> psi.Environment.Remove name |> ignore
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let daemon = Process.Start psi
     // Files drained by async readers: a redirected pipe nobody reads fills and stalls the child.
     let drainTo (reader: StreamReader) (file: string) =

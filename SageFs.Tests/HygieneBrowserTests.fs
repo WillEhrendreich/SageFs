@@ -63,6 +63,7 @@ let private startDaemon (sb: Sandbox) : Daemon =
   psi.Environment["TMPDIR"] <- loc.TempDir
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Diagnostics.Process.Start psi
   let outLog = Path.Combine(sb.Root, "daemon.stdout.log")
   let errLog = Path.Combine(sb.Root, "daemon.stderr.log")

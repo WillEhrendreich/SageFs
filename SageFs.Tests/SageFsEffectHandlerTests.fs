@@ -208,6 +208,7 @@ let private git (args: string list) : string =
   psi.RedirectStandardError <- true
   psi.UseShellExecute <- false
   for arg in args do psi.ArgumentList.Add arg
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use proc = System.Diagnostics.Process.Start psi
   let output = proc.StandardOutput.ReadToEnd().Trim()
   proc.WaitForExit TestTimeouts.childExit |> ignore
@@ -227,13 +228,14 @@ let private gitBlobOf (text: string) : string =
 /// Is a real `git` on PATH?
 let private gitAvailable () =
   try
-    use proc =
-      System.Diagnostics.Process.Start (
-        System.Diagnostics.ProcessStartInfo(
-          "git", "--version",
-          RedirectStandardOutput = true,
-          RedirectStandardError = true,
-          UseShellExecute = false))
+    let psi =
+      System.Diagnostics.ProcessStartInfo(
+        "git", "--version",
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false)
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
+    use proc = System.Diagnostics.Process.Start psi
     proc.WaitForExit TestTimeouts.childExit |> ignore
     proc.HasExited && proc.ExitCode = 0
   with _ -> false

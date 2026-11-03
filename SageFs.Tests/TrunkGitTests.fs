@@ -15,6 +15,7 @@ let private git (dir: string) (args: string list) : Task<string> =
   task {
     let psi = ProcessStartInfo("git", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = dir)
     for a in args do psi.ArgumentList.Add a
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use proc = new Process(StartInfo = psi)
     proc.Start() |> ignore
     let! stdout = proc.StandardOutput.ReadToEndAsync()

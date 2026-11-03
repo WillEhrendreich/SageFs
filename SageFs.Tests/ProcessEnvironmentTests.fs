@@ -229,7 +229,39 @@ let processEnvironmentHygieneTests =
             |> Array.map (fun (index, _) -> sprintf "%s:%d" (Path.GetFileName file) (index + 1))
             |> List.ofArray ]
         |> List.concat
-      offenders |> Expect.isEmpty "poison a child's ProcessStartInfo.Environment instead of the process"
+      offenders |> Expect.isEmpty (sprintf "poison a child's ProcessStartInfo.Environment instead of the process: %s" (String.concat ", " offenders))
+
+    // The other half of the same rule: a child must not INHERIT what a neighbouring case pinned. Every place a test
+    // starts a process (`Process.Start psi`, or `new Process(StartInfo = psi)` then `.Start()`) is preceded, within a
+    // few lines, by `SpawnEnvironment.apply psi` or `ProcessEnvironment.applyTo psi`. There is no allow-list: a git
+    // child costs one line and a build child needs it, so no site has to be judged. A mock `new Process()` that is
+    // never started is not a spawn and is not matched.
+    testCase "WHY - every place a test starts a child process strips the MSBuild pins first, because a neighbouring case may have pinned another SDK's on the shared process" <| fun _ ->
+      let root = RepoPaths.requireRepoRoot ()
+      let spawns = [ "Process" + ".Start"; "new Process(" + "StartInfo" ]
+      let strips = [ "SpawnEnvironment" + ".apply"; "ProcessEnvironment" + ".applyTo" ]
+      let insideString (line: string) (index: int) =
+        (line.Substring(0, index) |> Seq.filter ((=) '"') |> Seq.length) % 2 = 1
+      // A whole word: `ownerProcess.StartTime` is not a spawn, and neither is `Process.StartInfo`.
+      let isWordChar (c: char) = Char.IsLetterOrDigit c || c = '_'
+      let wholeWord (line: string) (at: int) (needle: string) =
+        (at = 0 || not (isWordChar line.[at - 1]))
+        && (at + needle.Length >= line.Length || not (isWordChar line.[at + needle.Length]))
+      let offenders =
+        [ for file in Directory.EnumerateFiles(Path.Combine(root, "SageFs.Tests"), "*.fs", SearchOption.TopDirectoryOnly) do
+            let lines = File.ReadAllLines file
+            for index in 0 .. lines.Length - 1 do
+              let line = lines.[index]
+              let isSpawn =
+                not (line.TrimStart().StartsWith "//")
+                && spawns |> List.exists (fun needle ->
+                  let at = line.IndexOf needle
+                  at >= 0 && not (insideString line at) && wholeWord line at needle)
+              if isSpawn then
+                let window = [ for back in max 0 (index - 12) .. index -> lines.[back] ]
+                let stripped = window |> List.exists (fun w -> strips |> List.exists (fun s -> w.Contains s))
+                if not stripped then yield sprintf "%s:%d" (Path.GetFileName file) (index + 1) ]
+      offenders |> Expect.isEmpty (sprintf "call SpawnEnvironment.apply on the ProcessStartInfo before starting it: %s" (String.concat ", " offenders))
   ]
 
 do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant processEnvironmentHygieneTests |> ignore

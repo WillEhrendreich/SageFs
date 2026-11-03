@@ -115,6 +115,7 @@ let private attach (executable: string) (pid: int) : Attached =
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
   let said = StringBuilder()
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start psi
   let drain (reader: StreamReader) =
     Task.Run(fun () ->

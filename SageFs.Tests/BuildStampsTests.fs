@@ -66,6 +66,7 @@ let runShell(dir: string) (bin: string) (script: string) : Threading.Tasks.Task<
     psi.ArgumentList.Add "-c"
     psi.ArgumentList.Add script
     psi.Environment["PATH"] <- bin + ":" + Environment.GetEnvironmentVariable "PATH"
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use p = Process.Start psi
     let out = p.StandardOutput.ReadToEndAsync()
     let err = p.StandardError.ReadToEndAsync()

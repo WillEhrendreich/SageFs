@@ -163,6 +163,7 @@ let private commonRootAccordingToGit (dir: string) : string option =
   let psi = System.Diagnostics.ProcessStartInfo("git", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = dir)
   for a in [ "rev-parse"; "--path-format=absolute"; "--git-common-dir" ] do
     psi.ArgumentList.Add a
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use proc = System.Diagnostics.Process.Start psi
   let out = proc.StandardOutput.ReadToEnd()
   proc.WaitForExit()
@@ -178,6 +179,7 @@ let private runGit (dir: string) (args: string list) : unit =
   let psi = System.Diagnostics.ProcessStartInfo("git", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = dir)
   for a in args do
     psi.ArgumentList.Add a
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use proc = System.Diagnostics.Process.Start psi
   proc.StandardOutput.ReadToEnd() |> ignore
   proc.StandardError.ReadToEnd() |> ignore

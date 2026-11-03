@@ -38,6 +38,7 @@ let private makeRunCopy () : Task<string> = task {
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
   psi.UseShellExecute <- false
+  SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use proc = Diagnostics.Process.Start psi
   let output = proc.StandardOutput.ReadToEndAsync()
   let errors = proc.StandardError.ReadToEndAsync()

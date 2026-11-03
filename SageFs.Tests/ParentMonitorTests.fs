@@ -32,6 +32,7 @@ let parentMonitorAliveTests = testList "ParentMonitor.isDaemonAlive" [
       UseShellExecute = false,
       CreateNoWindow = true)
     psi.ArgumentList.Add("--help")
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use p = Process.Start(psi)
     p.WaitForExit(TestTimeouts.shortPatience) |> ignore
     ParentMonitor.isDaemonAlive (fun _ -> Some p) p.Id

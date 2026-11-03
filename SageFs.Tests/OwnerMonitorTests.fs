@@ -34,6 +34,7 @@ let isAliveTests = testList "OwnerMonitor.isAlive" [
       UseShellExecute = false,
       CreateNoWindow = true)
     psi.ArgumentList.Add("--help")
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     use p = Process.Start(psi)
     p.WaitForExit(TestTimeouts.shortPatience) |> ignore
     isAlive (fun _ -> Some p) (Owner.ofPid p.Id)

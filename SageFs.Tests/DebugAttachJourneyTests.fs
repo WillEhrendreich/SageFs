@@ -55,6 +55,7 @@ let private attachAndAsk (debugger: string) (pid: int) : Task<Process * string *
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
     psi.UseShellExecute <- false
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
     let proc = Process.Start psi
     // The debugger stays attached until it is told to leave, so its streams never close. Read
     // them on their own threads and watch what arrives.

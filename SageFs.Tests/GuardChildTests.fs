@@ -73,6 +73,7 @@ let private runChild (scenario: GuardScenario) : Task<ChildResult> =
       info.CreateNoWindow <- true
       use stdoutFile = new StreamWriter(stdoutPath)
       use stderrFile = new StreamWriter(stderrPath)
+      SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply info
       use child = new Process(StartInfo = info)
       child.OutputDataReceived.Add(fun e -> lock stdoutFile (fun () -> match e.Data with | null -> () | line -> stdoutFile.WriteLine line))
       child.ErrorDataReceived.Add(fun e -> lock stderrFile (fun () -> match e.Data with | null -> () | line -> stderrFile.WriteLine line))

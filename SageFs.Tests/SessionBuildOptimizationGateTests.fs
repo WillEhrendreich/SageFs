@@ -237,6 +237,7 @@ let private referencesFor (assemblyName: string) : System.Threading.Tasks.Task<s
         psi.ArgumentList.Add arg
       psi.RedirectStandardOutput <- true
       psi.RedirectStandardError <- true
+      SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
       use p = System.Diagnostics.Process.Start psi
       let! output = p.StandardOutput.ReadToEndAsync()
       let! error = p.StandardError.ReadToEndAsync()

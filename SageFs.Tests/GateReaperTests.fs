@@ -228,6 +228,7 @@ let realTests =
         // The gate script has already written its own (live) pid into `current` when it reaps; that must not stop the reap.
         write (Path.Combine(gateDir, Names.currentFile)) (sprintf "%d abc" Environment.ProcessId)
         for a in [ "fsi"; script; gateDir; repo; string Environment.ProcessId ] do psi.ArgumentList.Add a
+        SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
         use p = Process.Start psi
         let out = p.StandardOutput.ReadToEndAsync()
         let err = p.StandardError.ReadToEndAsync()

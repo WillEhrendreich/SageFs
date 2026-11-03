@@ -81,6 +81,7 @@ let private markdownFiles () =
     psi.RedirectStandardError <- true
     psi.UseShellExecute <- false
     try
+      SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
       use p = System.Diagnostics.Process.Start psi
       let out = p.StandardOutput.ReadToEnd()
       p.WaitForExit()
