@@ -129,6 +129,43 @@ await check("a second outage after the daemon answered is reported again", async
   assert.equal(warnings.length, 2, `two outages, ${warnings.length} warnings: ${lines.join(" | ")}`);
 });
 
+// WHY (#173, second report): the guard above covered the GET helpers only. getCompletions, explore and
+// exploreCompletions log their own "[warn]" line, so with no daemon running every keystroke in a .fsx file
+// wrote "[warn] getCompletions: AggregateError". Every call that can fail while the daemon is down goes
+// through the same once-per-outage report.
+const postCalls = [
+  ["getCompletions", (c) => Client.getCompletions("List.", 5, undefined, c)],
+  ["explore", (c) => Client.explore("List", c)],
+  ["exploreCompletions", (c) => Client.exploreCompletions("List", "sid", c)],
+];
+
+for (const [name, call] of postCalls) {
+  await check(`${name} against a daemon that is down is reported once, not on every call (#173)`, async () => {
+    const lines = [];
+    const down = Client.create(deadPort, deadPort + 1, (line) => lines.push(line));
+    for (let keystroke = 0; keystroke < 5; keystroke++) await call(down);
+    const warnings = lines.filter((line) => line.includes(`[warn] ${name}`));
+    assert.equal(warnings.length, 1, `five calls, ${warnings.length} warnings: ${lines.join(" | ")}`);
+  });
+
+  await check(`${name} reports a second outage after the daemon answered`, async () => {
+    const lines = [];
+    // The daemon is up, goes down for two calls, comes back, and goes down again. The record of which calls
+    // are failing is per process, so the sequence starts with an answer and does not inherit the last test's outage.
+    const flaky = Client.create(port, deadPort + 1, (line) => lines.push(line));
+    await call(flaky);
+    flaky.mcpPort = deadPort;
+    await call(flaky);
+    await call(flaky);
+    flaky.mcpPort = port;
+    await call(flaky);
+    flaky.mcpPort = deadPort;
+    await call(flaky);
+    const warnings = lines.filter((line) => line.includes(`[warn] ${name}`));
+    assert.equal(warnings.length, 2, `two outages, ${warnings.length} warnings: ${lines.join(" | ")}`);
+  });
+}
+
 server.close();
 if (failures > 0) {
   console.log(`${failures} failed`);

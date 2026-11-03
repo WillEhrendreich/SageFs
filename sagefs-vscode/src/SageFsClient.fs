@@ -712,6 +712,7 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
       // The dashboard endpoint is SSE for its live dropdown. Editor clients
       // need the JSON contract exposed by the MCP HTTP API.
       let! resp = httpPost c "/api/completions" (jsonStringify payload) 10000
+      noteSuccess "getCompletions"
       match resp.statusCode with
       | 200 ->
         let parsed = jsonParse resp.body
@@ -726,7 +727,7 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
       | _ ->
         return [||]
     with ex ->
-      c.log (sprintf "[warn] getCompletions: %O" ex)
+      noteFailure c "getCompletions" ex
       return [||]
   }
 
@@ -799,11 +800,12 @@ let explore (name: string) (c: Client) =
   promise {
     try
       let! resp = httpPost c "/api/explore" (jsonStringify {| name = name |}) 10000
+      noteSuccess "explore"
       match resp.statusCode with
       | 200 -> return Some resp.body
       | _ -> return None
     with ex ->
-      c.log (sprintf "[warn] explore: %O" ex)
+      noteFailure c "explore" ex
       return None
   }
 
@@ -818,13 +820,14 @@ let exploreCompletions (qualifiedName: string) (sessionId: string) (c: Client) =
       // `limit` asks for as many members as the tree shows; the reply's `total` says whether that was all of them.
       let body = jsonStringify {| code = code; cursor_position = code.Length; sessionId = sessionId; limit = TypeExplorerPure.RowsRequested |}
       let! resp = httpPost c "/api/completions" body 10000
+      noteSuccess "exploreCompletions"
       match resp.statusCode with
       | 200 -> return Some resp.body
       | _ ->
         c.log (sprintf "[warn] exploreCompletions %s: status %d" qualifiedName resp.statusCode)
         return None
     with ex ->
-      c.log (sprintf "[warn] exploreCompletions: %O" ex)
+      noteFailure c "exploreCompletions" ex
       return None
   }
 
