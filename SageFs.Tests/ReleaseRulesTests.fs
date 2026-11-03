@@ -432,6 +432,19 @@ let wiringTests =
       ship |> Expect.stringContains "ship runs the gate script" "\"local-gate.fsx\""
       ship |> Expect.stringContains "ship runs the bump script" "\"bump-version.fsx\""
 
+    testCase "WHY - install-local starts the daemon in a directory that outlives the checkout it runs from" <| fun _ ->
+      // The ship runs from a throwaway worktree, and the daemon it starts kept that worktree as its working
+      // directory. When the worktree was removed, the daemon could no longer start `dotnet build` (a hard reset with
+      // rebuild failed with "Unable to find the specified file"). The daemon starts in the install state directory.
+      let startLine =
+        read "scripts/install-local.fsx"
+        |> fun text -> text.Split('\n')
+        |> Array.tryFind (fun line -> line.Contains "\"setsid\"" && line.Contains "exec sagefs")
+      match startLine with
+      | None -> failtest "scripts/install-local.fsx no longer starts the daemon with setsid"
+      | Some line ->
+        line.TrimEnd().EndsWith "markDir |> ignore" |> Expect.isTrue (sprintf "the daemon starts in markDir, not in the repo: %s" (line.Trim()))
+
     testCase "no script, workflow or instruction file still names the deleted bash scripts" <| fun _ ->
       let stale = Regex(@"scripts/(local-gate|bump-version|ship|install-local)(?![\w.-])", RegexOptions.Compiled)
       let files =

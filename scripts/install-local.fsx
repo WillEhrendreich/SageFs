@@ -218,10 +218,12 @@ let install (repo: string) (shaArg: string option) (build: bool) (force: bool) =
     if not (waitUntil daemonStopTimeout (fun () -> not (daemonUp ()))) then fail OldDaemonStillUp
 
   // 5. Start the new one, detached from this process (setsid), with its output in a log. The one-line sh
-  //    only redirects the daemon's output to the log; it does no scripting.
+  //    only redirects the daemon's output to the log; it does no scripting. The daemon starts in markDir and not in
+  //    the repo: the ship runs from a throwaway worktree, and a daemon that keeps a removed worktree as its working
+  //    directory can no longer start `dotnet build` (a hard reset with rebuild fails with a misleading PATH message).
   say "starting the new daemon"
   let log = Path.Combine(markDir, sprintf "daemon-%s.log" short)
-  run "setsid" [ "--fork"; "sh"; "-c"; sprintf "exec sagefs --no-resume > '%s' 2>&1 < /dev/null" log ] repo |> ignore
+  run "setsid" [ "--fork"; "sh"; "-c"; sprintf "exec sagefs --no-resume > '%s' 2>&1 < /dev/null" log ] markDir |> ignore
   if not (waitUntil daemonStartTimeout daemonUp) then fail (NewDaemonNotUp log)
 
   // 6. Read the version back from the daemon that answered.
