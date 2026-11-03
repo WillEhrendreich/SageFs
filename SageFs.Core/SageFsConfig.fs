@@ -87,6 +87,16 @@ let SessionManagerQueueCapacity : int =
 let ListMembersMax : int =
   envInt "SAGEFS_LIST_MEMBERS_MAX" 100
 
+/// Names a "does not resolve" reply offers as the nearest candidates, best first. Five is a line an agent reads at a
+/// glance; the reply is a hint toward the spelling, and a longer list is the member list the agent can ask for.
+[<Literal>]
+let NearestNamesMax : int = 5
+
+/// The FuzzySharp ratio (0 to 100) under which a name is not offered as near the one asked for. Below it the
+/// candidates resemble the typo only by sharing a few letters, and naming them would send the agent after noise.
+[<Literal>]
+let NearestNameFloor : int = 50
+
 /// Projects the compiler keeps checked for `list_references`, so a second ask after a run that ran out of budget goes
 /// further instead of starting over. Sized above the project count of the largest session measured (eight, the test
 /// project's session); each cached project holds its typed trees, so raise it only with memory to spare.

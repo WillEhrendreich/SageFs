@@ -167,6 +167,7 @@
         <Compile Include="McpCompletions.fs" />
         <Compile Include="McpMemberKinds.fs" />
         <Compile Include="McpMemberPage.fs" />
+        <Compile Include="McpNamePath.fs" />
         <Compile Include="McpNoMembers.fs" />
         <Compile Include="McpListMembers.fs" />
         <Compile Include="McpMembersRoute.fs" />

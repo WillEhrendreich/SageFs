@@ -48,6 +48,7 @@
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpToolExecutionTests.fs" />
         <Compile Include="McpMemberPageTests.fs" />
+        <Compile Include="McpNamePathTests.fs" />
         <Compile Include="SymbolReferencesTests.fs" />
         <Compile Include="ReferenceCacheRetentionTests.fs" />
         <Compile Include="CompletionAnswerTests.fs" />
