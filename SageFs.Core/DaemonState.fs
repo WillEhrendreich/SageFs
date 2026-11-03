@@ -248,24 +248,34 @@ module DaemonState =
     | true -> ProbeFailure.Refused
     | false -> ProbeFailure.Unexpected ex.Message
 
+  /// What one GET to the daemon said: whether the status was a success, and how to read the body (only the
+  /// daemon-info page's body is ever read).
+  type ProbeReply = { Success: bool; ReadBody: unit -> Async<string> }
+
+  /// The real transport: `httpClient`, whose deadline is `Timeouts.healthCheck`.
+  let httpGet (url: string) : Async<ProbeReply> = async {
+    let! resp = httpClient.GetAsync url |> Async.AwaitTask
+    return { Success = resp.IsSuccessStatusCode; ReadBody = fun () -> resp.Content.ReadAsStringAsync() |> Async.AwaitTask }
+  }
+
   /// Probe the daemon's /api/daemon-info endpoint on the dashboard port.
   /// Falls back to probing /dashboard if /api/daemon-info isn't available
   /// (e.g. older daemon versions).
-  let probeDaemonHttpAsync (mcpPort: int) : Async<DaemonInfo option> = async {
+  ///
+  /// The transport is an argument so the decisions below (which page to ask, when a failure is final, when to
+  /// fall back) can be proven without a socket. A test that stands up a listener and reads it back through
+  /// `httpClient` is racing `Timeouts.healthCheck` against whatever else its process is running.
+  let probeDaemonWith (get: string -> Async<ProbeReply>) (mcpPort: int) : Async<DaemonInfo option> = async {
     let dashboardPort = mcpPort + 1
     try
-      let! resp =
-        httpClient.GetAsync(sprintf "http://localhost:%d/api/daemon-info" dashboardPort)
-        |> Async.AwaitTask
-      match resp.IsSuccessStatusCode with
+      let! resp = get (sprintf "http://localhost:%d/api/daemon-info" dashboardPort)
+      match resp.Success with
       | true ->
-        let! json = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+        let! json = resp.ReadBody ()
         return tryParseDaemonInfoJson mcpPort json
       | false ->
-        let! fallbackResp =
-          httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
-          |> Async.AwaitTask
-        match fallbackResp.IsSuccessStatusCode with
+        let! fallbackResp = get (sprintf "http://localhost:%d/dashboard" dashboardPort)
+        match fallbackResp.Success with
         | true ->
           return Some (fallbackInfo mcpPort dashboardPort)
         | false -> return None
@@ -278,10 +288,8 @@ module DaemonState =
       | ProbeFailure.Unexpected message ->
         Utils.Log.warn "[DaemonState] MCP status probe failed on port %d: %s" mcpPort message
         try
-          let! fallbackResp =
-            httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
-            |> Async.AwaitTask
-          match fallbackResp.IsSuccessStatusCode with
+          let! fallbackResp = get (sprintf "http://localhost:%d/dashboard" dashboardPort)
+          match fallbackResp.Success with
           | true ->
             return Some (fallbackInfo mcpPort dashboardPort)
           | false -> return None
@@ -292,6 +300,8 @@ module DaemonState =
             Utils.Log.warn "[DaemonState] Dashboard fallback also failed on port %d: %s" dashboardPort message2
             return None
   }
+
+  let probeDaemonHttpAsync (mcpPort: int) : Async<DaemonInfo option> = probeDaemonWith httpGet mcpPort
 
   /// Synchronous wrapper for the CLI commands, whose `main` has nothing else running on the pool to starve; the daemon
   /// and every other async caller use `probeDaemonHttpAsync`.
