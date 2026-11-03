@@ -30,7 +30,7 @@ This item is gated on a need. The roadmap says it waits until someone needs it, 
 - The cohort ledger (`~/.SageFs/cohort.ledger.db`) replays the seat of a member across a restart. After a restart a `cap:<id>` seat can exist with no token behind it. `docs/mcp-tools.md` says "Because no token outlives a restart, there are no tokens from before the route binding existed and nothing to migrate." That sentence stops being true here.
 - Single-writer persistence precedent: `SageFs.Core/Features/ManifestOwner.fs` owns `daemon.sagefm`: a mutation is applied in order, written atomically, and the reply means it is durable; a corrupt file is renamed aside by its owner (`QuarantineCorrupt`, used in `DaemonMode.resumePreviousSessions`). Format primitives: `SageFs.Core/BinaryFormat.fs` (`Crc32`, `BinaryPrimitives.writeLpString` and the bounded readers), spec in `docs/binary-format-spec.md`. The data dir is made owner-only by `DaemonState.ensureDataDir`.
 - Session ids do not survive a restart. `resumePreviousSessions` (`SageFs/DaemonMode.fs:1694`) calls `sessionOps.CreateSession` for each previous entry and logs "Resumed session ... (retired old id ...)" (line 1852). A `RouteBinding.BoundToSession id` token therefore points at an id that no longer exists. `RouteBinding.BoundToCheckout` survives, because a checkout is a path.
-- `McpTools.sessionOwners` (who created a session) is also in memory and is forgotten on restart; `docs/mcp-tools.md` says so ("a daemon restart forgets who made what").
+- `SessionOwners` (who created a session) is also in memory and is forgotten on restart; `docs/mcp-tools.md` says so ("a daemon restart forgets who made what").
 
 ## Design
 

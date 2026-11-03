@@ -255,9 +255,6 @@ module SessionManager =
       { Sessions = sessions; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls; AdoptedCore = adoptedCore
         SupervisorHealth = SupervisorHealth.Healthy }
 
-    let fromManagerState (state: ManagerState) : QuerySnapshot =
-      fromState state
-
     let tryGetSession (id: SessionId) (snap: QuerySnapshot) : SessionInfo option =
       snap.Sessions |> Map.tryFind id
 
@@ -445,7 +442,7 @@ module SessionManager =
         (newState, Error err)
     let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let publishSnapshot (state: ManagerState) =
-        System.Threading.Interlocked.Exchange(snapshotRef, { QuerySnapshot.fromManagerState state with SupervisorHealth = beat.Health }) |> ignore
+        System.Threading.Interlocked.Exchange(snapshotRef, { QuerySnapshot.fromState state with SupervisorHealth = beat.Health }) |> ignore
       // Hand `workers` to the reaper (a dedicated thread each) and note their pids in the book. Nothing here waits for a
       // worker: the loop returns as soon as the threads are started, and each worker's fate comes back as WorkerReaped.
       let reapAside (id: SessionId) (workers: ManagedSession list) (state: ManagerState) : ManagerState =
@@ -612,6 +609,7 @@ module SessionManager =
         beat.BeginCommand (cmd.GetType().Name)
         callbacks.OnCommandStart (cmd.GetType().Name)
         let! state' = superviseStep state cmd
+        SessionRemoval.report callbacks.OnSessionRemoved state.Sessions state'.Sessions
         let settled = settleReadyWaitersSafe state'
         publishSnapshotSafe settled // BEFORE anyone is woken: a caller woken by a failed rebuild must find the failure on the record
         ReadyWait.deliver readyAnswers (fun waiter result -> waiter.Reply result) (fun ex -> Log.warn "[SessionManager] a parked caller could not be answered (continuing): %s" ex.Message)

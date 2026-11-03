@@ -479,6 +479,7 @@
          <Compile Include="CreateSessionDedupeTests.fs" />
          <Compile Include="SessionManagerMailboxSupervisionTests.fs" />
          <Compile Include="SessionManagerStopOffMailboxTests.fs" />
+         <Compile Include="SessionManagerRemovedTests.fs" />
          <Compile Include="WorkerReaperTests.fs" />
          <Compile Include="SessionActivityTouchTests.fs" />
          <Compile Include="AutoCompletionAndEventsTests.fs" />

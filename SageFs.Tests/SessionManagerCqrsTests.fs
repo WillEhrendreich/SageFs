@@ -161,20 +161,20 @@ let querySnapshotTests = testList "QuerySnapshot projection" [
 // ── Warmup progress tests ─────────────────────────────────────
 
 let warmupProgressTests = testList "Warmup progress in QuerySnapshot" [
-  test "fromManagerState propagates warmup progress" {
+  test "fromState propagates warmup progress" {
     let idS1 = testSessionId "aa000010"
     let state = {
       ManagerState.empty with
         WarmupProgress = Map.ofList [ idS1, "2/4 Scanned 12 files" ]
     }
-    let snap = QuerySnapshot.fromManagerState state
+    let snap = QuerySnapshot.fromState state
     snap.WarmupProgress
     |> Map.tryFind idS1
     |> Expect.isSome "should have warmup progress for s1"
   }
 
   test "empty state has no warmup progress" {
-    let snap = QuerySnapshot.fromManagerState ManagerState.empty
+    let snap = QuerySnapshot.fromState ManagerState.empty
     snap.WarmupProgress
     |> Map.isEmpty
     |> Expect.isTrue "should be empty"
@@ -187,7 +187,7 @@ let warmupProgressTests = testList "Warmup progress in QuerySnapshot" [
         WarmupProgress = Map.ofList [ idS1, "2/4 Scanned 12 files" ]
     }
     let afterRemove = ManagerState.removeSession idS1 state
-    let snap = QuerySnapshot.fromManagerState afterRemove
+    let snap = QuerySnapshot.fromState afterRemove
     snap.WarmupProgress
     |> Map.containsKey idS1
     |> Expect.isFalse "should not have warmup progress after session removed"
@@ -203,7 +203,7 @@ let warmupProgressTests = testList "Warmup progress in QuerySnapshot" [
           idS2, "3/4 Opening namespaces"
         ]
     }
-    let snap = QuerySnapshot.fromManagerState state
+    let snap = QuerySnapshot.fromState state
     snap.WarmupProgress |> Map.count
     |> Expect.equal "should have 2 entries" 2
     snap.WarmupProgress |> Map.find idS1
@@ -296,7 +296,7 @@ let snapshotDashboardTests = testList "Snapshot dashboard helpers" [
       ManagerState.empty with
         WarmupProgress = Map.ofList [ idS1, "2/4 Loading assemblies" ]
     }
-    let snap = QuerySnapshot.fromManagerState state
+    let snap = QuerySnapshot.fromState state
     let msg = snap.WarmupProgress |> Map.tryFind idS1
     msg |> Expect.equal "should have warmup msg" (Some "2/4 Loading assemblies")
   }

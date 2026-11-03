@@ -732,6 +732,13 @@ module RegisteredTools =
       tool)
     |> Array.toList
 
+  /// The registered tools that declare a parameter with this wire name.
+  let takingParameter (toolsType: System.Type) (parameterName: string) : Set<string> =
+    toolsType.GetMethods flags
+    |> Array.filter (fun m -> isTool m && (m.GetParameters() |> Array.exists (fun p -> p.Name = parameterName)))
+    |> Array.map (fun m -> m.Name)
+    |> Set.ofArray
+
 type SageFsTools(ctx: McpContext, logger: ILogger<SageFsTools>) =
     [<McpServerTool>]
     [<Description("""Send F# code to the FSI REPL session. Each ';;' marks a transaction boundary.

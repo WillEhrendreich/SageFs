@@ -48,19 +48,27 @@ unattended agent runs in where nobody is sitting there to click, and `run_app`
 is listed as destructive but not asked about, because running the app is what
 you asked for and the REPL loss is written on the tool itself.
 
-A session the calling agent created itself does not ask. If your connection
-(or your member token, which outranks the connection) made the session, then
-`stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`, `switch_workflow`
-and `stop_app` run at once on it, because nobody else put anything in it. Those
-five act on one session. `manage_local_data` acts on your machine's stores, so
-it asks every time. Everything else asks as before: a session you made through
-the dashboard, the CLI or an editor, a session another connection or token
-made, a session the daemon has no record of (a daemon restart forgets who made
-what), and any call that names no session it can find. The match uses the
-connection or token the daemon bound to the call. The `agentName` a caller
-passes plays no part. Sub-agents that share one connection and use no tokens count as
-one caller, so they can reset each other's sessions without a prompt; give each
-its own token if that matters.
+A session the calling agent created itself, and is alone in, does not ask. If
+your connection (or your member token, which outranks the connection) made the
+session, every eval it has had came from you, and no other agent is in it now,
+then `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session` and
+`switch_workflow` run at once on it, because nobody else put anything in it.
+That lets an agent clean up after itself from a host that never shows the
+prompt (a phone on Remote Control, a headless run). A dashboard tab that only
+watches the session does not count. One that has run code in it does, and so
+does an editor that sent code over `/exec` (VS Code, Neovim, Jupyter), the
+deprecated TUI, and another agent that ran code there and has since moved on.
+`manage_local_data` acts on your machine's stores and `stop_app` stops an app
+people may be using from outside SageFs (a browser on its port, a game window),
+so both ask every time. Everything else asks as before: a session you made
+through the dashboard, the CLI or an editor, a session another connection or
+token made, one anyone else has run code in or another agent is in, a session
+the daemon has no record of (a daemon restart forgets who made what), and any
+call that names no session it can find. The match uses the connection or token
+the daemon bound to the call. The `agentName` a caller passes plays no part.
+Sub-agents that share one connection and use no tokens count as one caller, so
+they can reset each other's sessions without a prompt; give each its own
+[member token](#member-tokens-one-identity-per-agent-run) if that matters.
 
 The part worth knowing: a client that never advertised elicitation is neither
 prompted nor refused. The prompt is skipped, and the four gates ahead of it

@@ -120,7 +120,7 @@ let lifecyclePropertyTests = testList "SessionLifecycle properties" [
 let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
   test "empty state produces empty snapshot" {
-    let snap = QuerySnapshot.fromManagerState ManagerState.empty
+    let snap = QuerySnapshot.fromState ManagerState.empty
     snap.Sessions |> Map.isEmpty |> Expect.isTrue "no sessions"
     snap.WarmupProgress |> Map.isEmpty |> Expect.isTrue "no warmup"
     snap.WorkerBaseUrls |> Map.isEmpty |> Expect.isTrue "no urls"
@@ -162,7 +162,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
         }
         state <- ManagerState.addSession id managed state
-      let snap = QuerySnapshot.fromManagerState state
+      let snap = QuerySnapshot.fromState state
       snap.Sessions.Count |> Expect.equal "session count matches" state.Sessions.Count
 
   testPropertyWithConfig propConfig "snapshot preserves session status" <|
@@ -199,7 +199,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
       }
       let state = ManagerState.addSession id managed ManagerState.empty
-      let snap = QuerySnapshot.fromManagerState state
+      let snap = QuerySnapshot.fromState state
       let snapInfo = snap.Sessions |> Map.find id
       snapInfo.Status |> Expect.equal "status preserved" status
 
@@ -239,7 +239,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
       ManagerState.empty
       |> ManagerState.addSession id1 (mkManaged "http://localhost:5000")
       |> ManagerState.addSession id2 { mkManaged "" with Info = { (mkManaged "").Info with Id = id2 } }
-    let snap = QuerySnapshot.fromManagerState state
+    let snap = QuerySnapshot.fromState state
     snap.WorkerBaseUrls |> Map.containsKey id1 |> Expect.isTrue "has url for id1"
     snap.WorkerBaseUrls |> Map.containsKey id2 |> Expect.isFalse "no url for id2"
   }

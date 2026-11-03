@@ -486,18 +486,41 @@ let targetSessionOf (admission: SageFs.McpTools.GateAdmission) : SageFs.Confirma
     | None -> SageFs.ConfirmationPolicy.TargetSession.NoSession
 
 /// Who the daemon recorded as the maker of a session: the same record `stop_session` already uses to refuse a
-/// session another bound connection created (`McpTools.sessionOwners`, written when a connection creates one).
+/// session another bound connection created (`SessionOwners`, written when a connection creates one).
 /// The record holds the identity itself, so the lookup compares nothing but identities.
 let creatorOfSession (sessionId: string) : SageFs.ConfirmationPolicy.SessionCreator =
-  match SageFs.McpTools.sessionOwners.TryGetValue sessionId with
-  | true, owner -> SageFs.ConfirmationPolicy.SessionCreator.Recorded owner
-  | false, _ -> SageFs.ConfirmationPolicy.SessionCreator.Unrecorded
+  match SessionOwners.ownerOf sessionId with
+  | Some owner -> SageFs.ConfirmationPolicy.SessionCreator.Recorded owner
+  | None -> SageFs.ConfirmationPolicy.SessionCreator.Unrecorded
+
+/// Who else has been in a session, from the record of who ran code in it (`SessionEvaluators`) and the occupancy
+/// table. Presence is recorded per connection for its latest session alone, and a dashboard tab is an Observer even
+/// while it runs code, so who ran code decides it and presence only adds to that. Occupancy names a member by
+/// `MemberId.display`, so the caller is compared in that form. Sub-agents that share their parent's connection are the
+/// caller: identity is the connection, and a sub-agent that needs to be told apart presents its own member token.
+let activityOfSession
+  (mcpCtx: McpContext)
+  (caller: SageFs.MemberTable.MemberId)
+  (sessionId: string)
+  : SageFs.ConfirmationPolicy.SessionActivity =
+  { RanCode = SessionEvaluators.ofSession sessionId
+    Presence =
+      match
+        SessionOperations.SessionOccupancy.hasWorkerOtherThan
+          (SageFs.MemberTable.MemberId.display caller)
+          (occupantsForSession mcpCtx sessionId)
+      with
+      | true -> SageFs.ConfirmationPolicy.Presence.AnotherAgentIsIn
+      | false -> SageFs.ConfirmationPolicy.Presence.CallerOnly }
 
 /// Whether this call still has to ask a person: the pure `ConfirmationPolicy.decide`, fed from the gate's admission.
-/// Fails closed. Anything the gate did not resolve to a session, a tool outside the one-session set and a
-/// session with no creator on record all come out `Required`.
+/// Fails closed. Anything the gate did not resolve to a session, a tool outside the one-session set, a
+/// session with no creator on record and one someone else has been in all come out `Required`. `activityOf` is
+/// read only when every other fact says the session is the caller's own (`ConfirmationPolicy.readsActivity`),
+/// because every admitted call passes through here, evals included.
 let confirmationFor
   (creatorOf: string -> SageFs.ConfirmationPolicy.SessionCreator)
+  (activityOf: string -> SageFs.ConfirmationPolicy.SessionActivity)
   (caller: SageFs.MemberTable.MemberId)
   (admission: SageFs.McpTools.GateAdmission)
   (toolName: string)
@@ -511,27 +534,34 @@ let confirmationFor
       | SageFs.ConfirmationPolicy.TargetSession.Session sessionId when not (String.IsNullOrWhiteSpace sessionId) -> creatorOf sessionId
       | SageFs.ConfirmationPolicy.TargetSession.Session _
       | SageFs.ConfirmationPolicy.TargetSession.NoSession -> SageFs.ConfirmationPolicy.SessionCreator.Unrecorded
-    SageFs.ConfirmationPolicy.decide tool target creator caller
+    let activity =
+      match target, SageFs.ConfirmationPolicy.readsActivity tool target creator caller with
+      | SageFs.ConfirmationPolicy.TargetSession.Session sessionId, true -> activityOf sessionId
+      | SageFs.ConfirmationPolicy.TargetSession.Session _, false
+      | SageFs.ConfirmationPolicy.TargetSession.NoSession, _ -> SageFs.ConfirmationPolicy.SessionActivity.quiet
+    SageFs.ConfirmationPolicy.decide tool target creator activity caller
 
-/// The confirmation step of the gate: a call on a session its caller created itself runs without any
-/// elicitation request, and every other call goes through `confirmWithin` exactly as before.
+/// The confirmation step of the gate: a call on a session its caller created itself and nobody else has been in
+/// runs without any elicitation request, and every other call goes through `confirmWithin` exactly as before.
 let confirmCallWithin
   (budget: TimeSpan)
   (caps: ClientCapabilities)
   (ask: ElicitRequestParams -> CancellationToken -> Task<ElicitResult>)
   (creatorOf: string -> SageFs.ConfirmationPolicy.SessionCreator)
+  (activityOf: string -> SageFs.ConfirmationPolicy.SessionActivity)
   (caller: SageFs.MemberTable.MemberId)
   (admission: SageFs.McpTools.GateAdmission)
   (toolName: string)
   (ct: CancellationToken)
   : Task<Result<unit, ConfirmationRefusal>> =
-  match confirmationFor creatorOf caller admission toolName with
+  match confirmationFor creatorOf activityOf caller admission toolName with
   | SageFs.ConfirmationPolicy.Confirmation.NotRequired _ -> Task.FromResult(Ok())
   | SageFs.ConfirmationPolicy.Confirmation.Required _ -> confirmWithin budget caps ask toolName ct
 
 /// `confirmCallWithin` against the live client, for the identity this call is bound to (a member token if it
-/// presented one, else its connection) and the daemon's own creator record.
+/// presented one, else its connection), the daemon's own creator record, and who else has been in the session.
 let confirmCall
+  (mcpCtx: McpContext)
   (server: ModelContextProtocol.Server.McpServer)
   (admission: SageFs.McpTools.GateAdmission)
   (toolName: string)
@@ -540,18 +570,32 @@ let confirmCall
   task {
     let ask (parameters: ElicitRequestParams) (token: CancellationToken) =
       server.ElicitAsync(parameters, token).AsTask()
+    let caller = SageFs.McpTools.memberIdFor "mcp"
     let! outcome =
       confirmCallWithin
         SageFs.Timeouts.confirmationAnswer
         server.ClientCapabilities
         ask
         creatorOfSession
-        (SageFs.McpTools.memberIdFor "mcp")
+        (activityOfSession mcpCtx caller)
+        caller
         admission
         toolName
         ct
     return outcome |> Result.mapError (ConfirmationRefusal.describe toolName)
   }
+
+/// The tools whose body reads a `session_id` argument. The gate reads one only from these: a client may send any
+/// argument with any call, and a `session_id` the body ignores would have the gate, and the prompt, judge a different
+/// session from the one the body acts on.
+let toolsTakingSessionId : Set<string> =
+  SageFs.Server.McpTools.RegisteredTools.takingParameter typeof<SageFs.Server.McpTools.SageFsTools> "session_id"
+
+/// The `session_id` argument the gate should route by: the one the call sent, when the tool declares it.
+let routingSessionId (toolName: string) (sent: string option) : string option =
+  match Set.contains toolName toolsTakingSessionId with
+  | true -> sent
+  | false -> None
 
 /// CallToolFilter that captures the McpServer and appends accumulated events
 /// to tool responses. This ensures the LLM sees events even if the client
@@ -695,7 +739,8 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
         task {
           // MCP tool handlers all route as agent "mcp". The routing arguments
           // are working_directory and, on the tools that take it, session_id:
-          // the gate must look at the same session the tool body will.
+          // the gate must look at the same session the tool body will, so a
+          // session_id sent to a tool that has no such parameter is dropped.
           let stringArg (name: string) =
             match ctx.Params.Arguments with
             | null -> None
@@ -710,7 +755,7 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
           return!
             SageFs.McpTools.admitToolCallWithin
               SageFs.Timeouts.gateStatusProbe
-              mcpCtx "mcp" (stringArg "session_id") (stringArg "working_directory") toolName
+              mcpCtx "mcp" (routingSessionId toolName (stringArg "session_id")) (stringArg "working_directory") toolName
         }
 
       let buildGateErrorResult (toolName: string) (gateError: string) =
@@ -744,8 +789,9 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
                 // Confirmation sits AFTER the four gates and BEFORE the body:
                 // a caller that would be refused anyway never gets to prompt a
                 // human about it, and a decline stops the body exactly the way
-                // a gate rejection does.
-                let! confirmation = confirmCall ctx.Server admission requestName ct
+                // a gate rejection does. Who else has been in the session is
+                // read only for a call on the caller's own session.
+                let! confirmation = confirmCall mcpCtx ctx.Server admission requestName ct
                 match confirmation with
                 | Result.Error confirmError -> return buildGateErrorResult requestName confirmError
                 | Ok () ->
