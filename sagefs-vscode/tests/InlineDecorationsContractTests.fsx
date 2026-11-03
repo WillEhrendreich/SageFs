@@ -162,6 +162,27 @@ let linesStaledByEvalTests =
 
     testCase "no decorations, nothing to stale" <| fun _ ->
       linesStaledByEval [] 0 10 |> Expect.isEmpty "empty in, empty out"
+
+    // The reporter's GIF as a sequence. check.fsx has two blocks, lines 0-1 and 3-4. Shift+Enter evaluates a block
+    // and moves on, so the session was: block 1, block 2, block 1, block 2, about two seconds apart. Frame by frame,
+    // each fresh result coincided with the OTHER block going stale. This replays the sequence through the same
+    // pure decisions the extension runs (`linesStaledByEval` when an eval starts, a fresh result on the block's
+    // last line when it ends) and asks what is on screen after each step.
+    testCase "WHY — evaluating block 1, block 2, block 1, block 2 leaves both results fresh, where it used to leave the last one alone" <| fun _ ->
+      let blocks = [ 0, 1; 3, 4 ]
+      // line -> fresh? (true = a result, false = a stale marker); only decorated lines are present
+      let evalBlock (screen: Map<int, bool>) (start: int, last: int) =
+        let staled = linesStaledByEval (screen |> Map.toList |> List.map fst) start last
+        let afterStart = staled |> List.fold (fun m line -> Map.add line false m) screen
+        Map.add last true afterStart
+      let oldEvalBlock (screen: Map<int, bool>) (_, last: int) =
+        // the old rule: everything on screen goes stale when an eval starts
+        let allStale = screen |> Map.map (fun _ _ -> false)
+        Map.add last true allStale
+      let run step = [ 0; 1; 0; 1 ] |> List.map (fun i -> List.item i blocks) |> List.fold step Map.empty
+      let freshLines (screen: Map<int, bool>) = screen |> Map.toList |> List.filter snd |> List.map fst
+      run evalBlock |> freshLines |> Expect.equal "both blocks keep their results" [ 1; 4 ]
+      run oldEvalBlock |> freshLines |> Expect.equal "the old rule left only the block evaluated last" [ 4 ]
   ]
 
 // ── one line of ghost text ────────────────────────────────────────
