@@ -3,305 +3,197 @@ module SageFs.Tests.SseReplayTests
 open Expecto
 open Expecto.Flip
 open FsCheck
+open FsCheck.FSharp
 open SageFs
-open SageFs.SseReplayBuffer
-open SageFs.SseWriter
 
-// ── Helpers ──
+// ── Fixtures ──
 
-let pushN (n: int) (buf: Buffer) : Buffer =
-  [ 1 .. n ]
-  |> List.fold (fun b i ->
-    push "test" (sprintf "data_%d" i) b |> snd
-  ) buf
+let epoch = "run-1"
+/// More bytes than any test frame adds up to, so only the frame count ever bites.
+let plentyOfBytes = 1 <<< 20
+let roomy = { MaxFrames = 100; MaxBytes = plentyOfBytes }
+
+let frameOf (scope: FrameScope) (wire: string) : SseFrame = { Scope = scope; Wire = wire }
+
+let fill (buffer: SseReplay.Buffer) (frames: SseFrame list) : SseReplay.Buffer =
+  frames |> List.fold (fun b f -> SseReplay.record f b |> snd) buffer
+
+let seqsOf (catchUp: SseReplay.CatchUp) : int64 list option =
+  match catchUp with
+  | SseReplay.CatchUp.Replay got -> got |> List.map (fun r -> r.Id.Seq) |> Some
+  | SseReplay.CatchUp.Resync _ -> None
+
+let idAt (n: int64) : string option = Some (EventId.toWire { Epoch = epoch; Seq = n })
+
+let daemonFrames (n: int) : SseFrame list =
+  [ for i in 1 .. n -> frameOf FrameScope.Daemon (sprintf "d%d" i) ]
+
+// ── Generators for the model check ──
+
+let scopes = [| FrameScope.Daemon; FrameScope.Session "aaaaaaaa"; FrameScope.Session "bbbbbbbb" |]
+let streams = [| StreamScope.EverySession; StreamScope.OnlySession "aaaaaaaa"; StreamScope.OnlySession "bbbbbbbb" |]
+
+/// frames as (scope index, payload length); limits; the seq the client last saw; which stream it asked for.
+/// lastSeen starts at 1: the first id a daemon issues is 1, and a client that has seen nothing sends no header.
+let scenarioGen =
+  gen {
+    let! frames = Gen.listOf (gen { let! s = Gen.choose (0, 2) in let! n = Gen.choose (0, 120) in return s, n })
+    let! maxFrames = Gen.choose (1, 12)
+    let! maxBytes = Gen.choose (20, 600)
+    let! lastSeen = Gen.choose (1, 40)
+    let! stream = Gen.choose (0, 2)
+    return frames, { MaxFrames = maxFrames; MaxBytes = maxBytes }, lastSeen, stream
+  }
+
+let materialize (frames: (int * int) list, limits: ReplayLimits, lastSeen: int, stream: int) =
+  let all = frames |> List.map (fun (s, n) -> frameOf scopes.[s] (String.replicate n "z"))
+  let buffer = fill (SseReplay.create epoch limits) all
+  let model = all |> List.mapi (fun i f -> int64 (i + 1), f)
+  buffer, model, streams.[stream], int64 lastSeen
+
+let check (name: string) (property: (int * int) list * ReplayLimits * int * int -> bool) : Test =
+  testProperty name (Prop.forAll (Arb.fromGen scenarioGen) property)
 
 // ── Tests ──
 
 [<Tests>]
 let sseReplayTests =
-  testList "SSE Replay" [
+  testList "SSE replay" [
 
-    testList "Buffer mechanics" [
-      test "fresh empty buffer replayFrom 0 returns Replayed empty" {
-        let buf = create 16
-        buf
-        |> replayFrom 0L
-        |> Expect.equal "should return empty replay" (ReplayResult.Replayed [])
+    testList "event ids" [
+      test "an id round-trips through its wire form" {
+        let id = { Epoch = epoch; Seq = 42L }
+        id |> EventId.toWire |> EventId.tryParse |> Expect.equal "same id back" (Ok id)
       }
 
-      test "push increments SeqId monotonically" {
-        let buf = create 16
-        let (id1, buf) = push "a" "1" buf
-        let (id2, buf) = push "b" "2" buf
-        let (id3, _) = push "c" "3" buf
-        id1 |> Expect.equal "first id" 1L
-        id2 |> Expect.equal "second id" 2L
-        id3 |> Expect.equal "third id" 3L
+      test "an epoch that contains colons still round-trips" {
+        let id = { Epoch = "host:37749:7"; Seq = 9L }
+        id |> EventId.toWire |> EventId.tryParse |> Expect.equal "same id back" (Ok id)
       }
 
-      test "push returns correct SeqId matching currentSeqId" {
-        let buf = create 8
-        let (id1, buf1) = push "x" "payload" buf
-        id1 |> Expect.equal "seqId matches currentSeqId" (currentSeqId buf1)
+      test "a blank id is refused as Blank" {
+        EventId.tryParse "  " |> Expect.equal "blank" (Result.Error EventIdRefusal.Blank)
       }
 
-      test "buffer wraps correctly at capacity" {
-        let buf = create 3 |> pushN 5
-        count buf |> Expect.equal "count at capacity" 3
-        currentSeqId buf |> Expect.equal "totalPushed" 5L
-      }
-
-      test "evicted events are not replayable" {
-        let buf = create 3 |> pushN 10
-        match replayFrom 5L buf with
-        | ReplayResult.GapDetected first ->
-          first |> Expect.equal "first available" 8L
-        | ReplayResult.Replayed _ ->
-          failtest "should have returned GapDetected"
+      test "text with no epoch and seq is refused with the raw text" {
+        [ "nonsense"; ":5"; "run-1:"; "run-1:abc"; "run-1:0"; "run-1:-3" ]
+        |> List.iter (fun raw ->
+          EventId.tryParse raw
+          |> Expect.equal (sprintf "'%s' is unreadable" raw) (Result.Error (EventIdRefusal.NotEpochColonSeq raw)))
       }
     ]
 
-    testList "Replay logic" [
-      test "replayFrom with valid recent ID returns correct events" {
-        let buf = create 16
-        let (_, buf) = push "a" "data_a" buf
-        let (_, buf) = push "b" "data_b" buf
-        let (_, buf) = push "c" "data_c" buf
-        match replayFrom 1L buf with
-        | ReplayResult.Replayed events ->
-          events |> List.length |> Expect.equal "should have 2 events" 2
-          events.[0].EventType |> Expect.equal "first replayed" "b"
-          events.[1].EventType |> Expect.equal "second replayed" "c"
-        | ReplayResult.GapDetected _ ->
-          failtest "should have returned Replayed"
+    testList "recording" [
+      test "record numbers frames from 1, one apart" {
+        let buffer = fill (SseReplay.create epoch roomy) (daemonFrames 3)
+        buffer.Latest |> Expect.equal "three recorded" 3L
+        buffer.Frames |> Map.toList |> List.map fst |> Expect.equal "seqs" [ 1L; 2L; 3L ]
       }
 
-      test "replayFrom with evicted ID returns GapDetected" {
-        let buf = create 3 |> pushN 10
-        match replayFrom 2L buf with
-        | ReplayResult.GapDetected firstAvail ->
-          firstAvail |> Expect.equal "oldest available" 8L
-        | ReplayResult.Replayed _ ->
-          failtest "should have returned GapDetected"
+      test "record hands back the frame's own id" {
+        let item, _ = SseReplay.record (frameOf FrameScope.Daemon "x") (SseReplay.create epoch roomy)
+        item.Id |> Expect.equal "epoch and first seq" { Epoch = epoch; Seq = 1L }
       }
 
-      test "replayFrom with future ID returns empty Replayed" {
-        let buf = create 16 |> pushN 5
-        buf
-        |> replayFrom 100L
-        |> Expect.equal "future ID" (ReplayResult.Replayed [])
+      test "a frame bigger than the byte bound evicts itself, and its seq is still spent" {
+        let big = frameOf FrameScope.Daemon (String.replicate 200 "z")
+        let _, buffer = SseReplay.record big (SseReplay.create epoch { MaxFrames = 10; MaxBytes = 50 })
+        buffer.Frames |> Map.count |> Expect.equal "nothing kept" 0
+        buffer.Latest |> Expect.equal "seq still advanced" 1L
+        buffer.Bytes |> Expect.equal "no bytes held" 0
       }
 
-      test "replayFrom with exact last ID returns empty Replayed" {
-        let buf = create 16 |> pushN 5
-        buf
-        |> replayFrom 5L
-        |> Expect.equal "exact last" (ReplayResult.Replayed [])
-      }
-
-      test "replay preserves event order oldest first" {
-        let buf = create 16
-        let (_, buf) = push "e1" "p1" buf
-        let (_, buf) = push "e2" "p2" buf
-        let (_, buf) = push "e3" "p3" buf
-        let (_, buf) = push "e4" "p4" buf
-        match replayFrom 1L buf with
-        | ReplayResult.Replayed events ->
-          events
-          |> List.map (fun e -> e.SeqId)
-          |> Expect.equal "ascending order" [ 2L; 3L; 4L ]
-        | ReplayResult.GapDetected _ ->
-          failtest "should have returned Replayed"
+      test "the oldest frames go first when the count bound is hit" {
+        let buffer = fill (SseReplay.create epoch { MaxFrames = 2; MaxBytes = plentyOfBytes }) (daemonFrames 5)
+        buffer.Frames |> Map.toList |> List.map fst |> Expect.equal "newest two" [ 4L; 5L ]
       }
     ]
 
-    testList "SSE format" [
-      test "formatWithId produces correct SSE id line" {
-        let frame = formatSseEvent "test" "hello"
-        let withId = formatWithId 42L frame
-        withId.StartsWith("id: 42\n")
-        |> Expect.isTrue "should start with id: 42"
+    testList "catching up" [
+      test "no Last-Event-ID is a first connection" {
+        SseReplay.create epoch roomy
+        |> SseReplay.catchUp StreamScope.EverySession None
+        |> Expect.equal "resync" (SseReplay.CatchUp.Resync SseReplay.ResyncReason.FirstConnection)
       }
 
-      test "formatWithId works with multiline data" {
-        let frame = formatSseEvent "update" "line1\nline2"
-        let withId = formatWithId 7L frame
-        withId.StartsWith("id: 7\n")
-        |> Expect.isTrue "should start with id: 7"
-        withId.Contains("event: update")
-        |> Expect.isTrue "should contain event type"
-        withId.Contains("data: line1")
-        |> Expect.isTrue "should contain first data line"
-        withId.Contains("data: line2")
-        |> Expect.isTrue "should contain second data line"
+      test "a client that is current gets an empty replay" {
+        let buffer = fill (SseReplay.create epoch roomy) (daemonFrames 3)
+        SseReplay.catchUp StreamScope.EverySession (idAt 3L) buffer
+        |> seqsOf
+        |> Expect.equal "nothing missed" (Some [])
       }
 
-      test "id field appears before event field per SSE spec" {
-        let frame = formatSseEvent "ping" "pong"
-        let withId = formatWithId 99L frame
-        let idIdx = withId.IndexOf("id:")
-        let eventIdx = withId.IndexOf("event:")
-        (idIdx < eventIdx)
-        |> Expect.isTrue "id should precede event"
+      test "a client behind gets exactly the frames after its id, in order" {
+        let buffer = fill (SseReplay.create epoch roomy) (daemonFrames 5)
+        SseReplay.catchUp StreamScope.EverySession (idAt 2L) buffer
+        |> seqsOf
+        |> Expect.equal "3,4,5" (Some [ 3L; 4L; 5L ])
       }
 
-      test "formatSseEventWithId produces complete SSE frame with id" {
-        let result = formatSseEventWithId 42L "test_summary" """{"total":100}"""
-        result
-        |> Expect.equal "full frame"
-          "id: 42\nevent: test_summary\ndata: {\"total\":100}\n\n"
-      }
-    ]
-
-    testList "Integration-style" [
-      test "1000 events pushed, replay last 10 works" {
-        let buf =
-          [ 1 .. 1000 ]
-          |> List.fold (fun b i ->
-            push "evt" (sprintf "payload_%d" i) b |> snd
-          ) (create 512)
-        match replayFrom 990L buf with
-        | ReplayResult.Replayed events ->
-          events |> List.length |> Expect.equal "should have 10 events" 10
-          events |> List.head |> fun e -> e.SeqId |> Expect.equal "first replayed" 991L
-          events |> List.last |> fun e -> e.SeqId |> Expect.equal "last replayed" 1000L
-        | ReplayResult.GapDetected _ ->
-          failtest "should have returned Replayed"
+      test "a session-scoped client is replayed its session's frames and the daemon's, and no other session's" {
+        let buffer =
+          fill (SseReplay.create epoch roomy)
+            [ frameOf (FrameScope.Session "aaaaaaaa") "a1"
+              frameOf (FrameScope.Session "bbbbbbbb") "b1"
+              frameOf FrameScope.Daemon "d1"
+              frameOf (FrameScope.Session "aaaaaaaa") "a2" ]
+        SseReplay.catchUp (StreamScope.OnlySession "aaaaaaaa") (idAt 1L) buffer
+        |> seqsOf
+        |> Expect.equal "skips b1" (Some [ 3L; 4L ])
       }
 
-      test "buffer at capacity, replay full buffer works" {
-        let cap = 64
-        let buf =
-          [ 1 .. cap ]
-          |> List.fold (fun b i ->
-            push "evt" (sprintf "p%d" i) b |> snd
-          ) (create cap)
-        match replayFrom 0L buf with
-        | ReplayResult.Replayed events ->
-          events |> List.length |> Expect.equal "full buffer replay" cap
-        | ReplayResult.GapDetected _ ->
-          failtest "should have returned Replayed"
+      test "an id from another run is a restarted daemon, naming the old epoch" {
+        let buffer = fill (SseReplay.create epoch roomy) (daemonFrames 3)
+        SseReplay.catchUp StreamScope.EverySession (Some "run-0:2") buffer
+        |> Expect.equal "restarted" (SseReplay.CatchUp.Resync (SseReplay.ResyncReason.DaemonRestarted "run-0"))
       }
 
-      test "buffer overflow, GapDetected has correct firstAvailable" {
-        let buf =
-          [ 1 .. 100 ]
-          |> List.fold (fun b i ->
-            push "evt" (sprintf "p%d" i) b |> snd
-          ) (create 10)
-        match replayFrom 50L buf with
-        | ReplayResult.GapDetected firstAvail ->
-          firstAvail |> Expect.equal "first available" 91L
-        | ReplayResult.Replayed _ ->
-          failtest "should have returned GapDetected"
+      test "an id past this run's newest is ahead of this run" {
+        let buffer = fill (SseReplay.create epoch roomy) (daemonFrames 3)
+        SseReplay.catchUp StreamScope.EverySession (idAt 9L) buffer
+        |> Expect.equal "ahead" (SseReplay.CatchUp.Resync (SseReplay.ResyncReason.AheadOfThisRun (9L, 3L)))
+      }
+
+      test "an id whose next frame was evicted is a resync saying what was wanted and what is left" {
+        let buffer = fill (SseReplay.create epoch { MaxFrames = 2; MaxBytes = plentyOfBytes }) (daemonFrames 5)
+        SseReplay.catchUp StreamScope.EverySession (idAt 1L) buffer
+        |> Expect.equal "evicted" (SseReplay.CatchUp.Resync (SseReplay.ResyncReason.Evicted (2L, 4L)))
+      }
+
+      test "unreadable text is a resync carrying the refusal" {
+        SseReplay.create epoch roomy
+        |> SseReplay.catchUp StreamScope.EverySession (Some "garbage")
+        |> Expect.equal "unreadable"
+             (SseReplay.CatchUp.Resync (SseReplay.ResyncReason.IdUnreadable (EventIdRefusal.NotEpochColonSeq "garbage")))
       }
     ]
 
-    testList "Property-based" [
-      testProperty "all pushed events are replayable until evicted"
-        (fun (PositiveInt cap) ->
-          let c = min cap 100
-          let n = c + 5
-          let buf =
-            [ 1 .. n ]
-            |> List.fold (fun b i ->
-              push "evt" (sprintf "p%d" i) b |> snd
-            ) (create c)
-          let oldestAvailable = int64 n - int64 c + 1L
-          match replayFrom (oldestAvailable - 1L) buf with
-          | ReplayResult.Replayed events -> events |> List.length = c
-          | ReplayResult.GapDetected _ -> false
-        )
+    testList "against a naive model" [
+      check "an answered replay is exactly the model's missed, visible frames; a refusal names the true reason" (fun scenario ->
+        let buffer, model, stream, lastSeen = materialize scenario
+        let latest = int64 (List.length model)
+        match SseReplay.catchUp stream (Some (EventId.toWire { Epoch = epoch; Seq = lastSeen })) buffer with
+        | SseReplay.CatchUp.Replay got ->
+          lastSeen <= latest
+          && (got |> List.map (fun r -> r.Id.Seq))
+             = (model |> List.filter (fun (seq, f) -> seq > lastSeen && SseFrame.visibleTo stream f) |> List.map fst)
+        | SseReplay.CatchUp.Resync (SseReplay.ResyncReason.Evicted (wanted, first)) ->
+          wanted = lastSeen + 1L && first > wanted && first <= latest + 1L
+        | SseReplay.CatchUp.Resync (SseReplay.ResyncReason.AheadOfThisRun (theirs, l)) ->
+          theirs = lastSeen && lastSeen > latest && l = latest
+        | SseReplay.CatchUp.Resync _ -> false)
 
-      testProperty "SeqId is strictly monotonic across pushes"
-        (fun (items: NonEmptyArray<string>) ->
-          let items = items.Get |> Array.truncate 50
-          let (ids, _) =
-            items
-            |> Array.fold (fun (acc, b) item ->
-              let (id, newBuf) = push "evt" item b
-              (acc @ [id], newBuf)
-            ) ([], create 100)
-          ids |> List.pairwise |> List.forall (fun (a, b) -> b = a + 1L)
-        )
+      check "the frame and byte bounds hold, and the byte total is the sum of what is kept" (fun scenario ->
+        let buffer, model, _, _ = materialize scenario
+        Map.count buffer.Frames <= buffer.Limits.MaxFrames
+        && buffer.Bytes <= buffer.Limits.MaxBytes
+        && buffer.Bytes = (buffer.Frames |> Map.toList |> List.sumBy (fun (_, r) -> r.Bytes))
+        && buffer.Latest = int64 (List.length model))
 
-      testProperty "replayFrom lastSeqId always returns empty Replayed"
-        (fun (PositiveInt n) ->
-          let n = min n 100
-          let buf =
-            [ 1 .. n ]
-            |> List.fold (fun b i ->
-              push "evt" (sprintf "p%d" i) b |> snd
-            ) (create 50)
-          let lastId = currentSeqId buf
-          match replayFrom lastId buf with
-          | ReplayResult.Replayed events -> events.IsEmpty
-          | ReplayResult.GapDetected _ -> false
-        )
-
-      testProperty "replayed events preserve insertion order"
-        (fun (PositiveInt cap) (PositiveInt n) ->
-          let c = max 2 (min cap 50)
-          let total = min n 100
-          let buf =
-            [ 1 .. total ]
-            |> List.fold (fun b i ->
-              push "evt" (sprintf "p%d" i) b |> snd
-            ) (create c)
-          let replayPoint = max 0L (currentSeqId buf - int64 (min c total) / 2L)
-          match replayFrom replayPoint buf with
-          | ReplayResult.Replayed events ->
-            let seqIds = events |> List.map (fun e -> e.SeqId)
-            seqIds = List.sort seqIds
-          | ReplayResult.GapDetected _ -> true
-        )
-    ]
-
-    testList "Edge cases" [
-      test "replayFrom 0 on populated buffer returns all events" {
-        let buf = create 16
-        let (_, buf) = push "a" "1" buf
-        let (_, buf) = push "b" "2" buf
-        let (_, buf) = push "c" "3" buf
-        match replayFrom 0L buf with
-        | ReplayResult.Replayed events ->
-          events |> List.length |> Expect.equal "all events" 3
-        | ReplayResult.GapDetected _ ->
-          failtest "should have returned Replayed"
-      }
-
-      test "capacity 1 buffer replays correctly" {
-        let buf = create 1
-        let (_, buf) = push "only" "data" buf
-        match replayFrom 0L buf with
-        | ReplayResult.Replayed events ->
-          events |> List.length |> Expect.equal "single event" 1
-          events.[0].EventType |> Expect.equal "event type" "only"
-        | ReplayResult.GapDetected _ ->
-          failtest "should have returned Replayed"
-      }
-
-      test "capacity 1 buffer evicts previous on second push" {
-        let buf = create 1
-        let (_, buf) = push "first" "1" buf
-        let (_, buf) = push "second" "2" buf
-        match replayFrom 0L buf with
-        | ReplayResult.GapDetected first ->
-          first |> Expect.equal "only second available" 2L
-        | ReplayResult.Replayed _ ->
-          failtest "should have returned GapDetected"
-      }
-
-      test "sequenced events have correct timestamps" {
-        let before = System.DateTimeOffset.UtcNow
-        let buf = create 16
-        let (_, buf) = push "evt" "data" buf
-        let after = System.DateTimeOffset.UtcNow
-        match replayFrom 0L buf with
-        | ReplayResult.Replayed [ evt ] ->
-          (evt.Timestamp >= before) |> Expect.isTrue "timestamp >= before"
-          (evt.Timestamp <= after) |> Expect.isTrue "timestamp <= after"
-        | _ -> failtest "expected single event"
-      }
+      check "an id from another run never replays" (fun scenario ->
+        let buffer, _, stream, lastSeen = materialize scenario
+        match SseReplay.catchUp stream (Some (EventId.toWire { Epoch = "run-0"; Seq = lastSeen })) buffer with
+        | SseReplay.CatchUp.Resync (SseReplay.ResyncReason.DaemonRestarted "run-0") -> true
+        | _ -> false)
     ]
   ]
