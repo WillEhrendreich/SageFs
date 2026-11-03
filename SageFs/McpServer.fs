@@ -378,7 +378,18 @@ module ConfirmationRefusal =
 /// folding decline, cancel and silence into one vague failure.
 let answerVerdict (answer: ElicitResult) : Result<unit, ConfirmationRefusal> =
   if answer.IsAccepted then
-    Ok()
+    // Accept is the answer. The one thing that overrides it is a person who took the tick OUT of the box and
+    // then pressed Accept: they did not say yes, and a prompt that cannot be read must never become permission.
+    let untickedOnPurpose =
+      match answer.Content with
+      | null -> false
+      | content ->
+        match content.TryGetValue "confirmed" with
+        | true, value -> value.ValueKind = System.Text.Json.JsonValueKind.False
+        | false, _ -> false
+    match untickedOnPurpose with
+    | true -> Result.Error Declined
+    | false -> Ok()
   else
     match answer.Action with
     | "decline" -> Result.Error Declined
@@ -455,8 +466,11 @@ let confirmWithin
         let schema = ElicitRequestParams.RequestSchema()
         let flag = ElicitRequestParams.BooleanSchema()
         flag.Description <- "Allow this call to run?"
+        // Ticked already and NOT required. A form with a required field cannot be submitted until the field is
+        // set, so Accept did nothing until a person found Space to tick the box, and the server never read the
+        // box anyway: Accept is the answer, and only an explicit untick overrides it (see `answerVerdict`).
+        flag.Default <- System.Nullable true
         schema.Properties <- dict [ "confirmed", flag ]
-        schema.Required <- ResizeArray<string>([ "confirmed" ])
         let parameters = ElicitRequestParams(Message = confirmationMessage asking loss, RequestedSchema = schema)
         use window = CancellationTokenSource.CreateLinkedTokenSource(ct)
         window.CancelAfter(budget)

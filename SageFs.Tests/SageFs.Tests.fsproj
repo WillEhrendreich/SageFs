@@ -94,6 +94,7 @@
         <Compile Include="McpAffordanceHardeningTests.fs" />
         <Compile Include="McpToolGateTests.fs" />
         <Compile Include="ConfirmationUnansweredTests.fs" />
+        <Compile Include="ConfirmationPromptTests.fs" />
         <Compile Include="ConfirmationPolicyTests.fs" />
         <Compile Include="WorkerMainTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
