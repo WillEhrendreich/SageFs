@@ -179,7 +179,9 @@ let tests =
               (match c.Continuation with
                | NextPage(next, _) -> walk next seen'
                | LastPage -> seen')
-            | Page.Uncounted _ -> seen
+            | Page.Uncounted _
+            | Page.NameStopsAt _
+            | Page.NameNotListed _ -> seen
           walk 0 [] = [ 1 .. n ]
 
       testCase "WHY — a name with no references says none were found in the checked projects and says where to look next" <| fun _ ->

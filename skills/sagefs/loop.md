@@ -58,5 +58,9 @@ Useful tools while you're in the loop:
   project-wide` means every project of the session was checked, `Scope:
   partial` names the projects it did not reach (one budget covers them all, and
   the line states how much of it was spent), and `Scope: unavailable` carries no
-  count at all, which is not an answer that nothing references the name. Files
-  that did not check cleanly are named, since a use inside one may be missing.
+  count at all, which is not an answer that nothing references the name. A name
+  that stops resolving gets that line at once: `Scope: unavailable, the name
+  does not resolve past System.IO.`, with the member it could not find and the
+  nearest names listed there, and the compiler is not asked, so a typo costs no
+  budget. Files that did not check cleanly are named, since a use inside one
+  may be missing.

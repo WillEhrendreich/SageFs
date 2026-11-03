@@ -30,6 +30,37 @@ module McpReferencesRoute =
       return replyOf routeResult
     }
 
+  /// The page for a name. The name path is walked first, so a name that stops resolving is answered at once with where
+  /// it stops, and the compiler (whose budget covers every project) is asked only for a name that may resolve. A
+  /// member list that was cut at the wire ceiling, or that could not be fetched, does not show the name is absent, so
+  /// those still go to the compiler.
+  let referencesPage
+    (membersOf: string -> Task<Features.AutoCompletion.CompletionAnswer<Features.AutoCompletion.CompletionEntry>>)
+    (referencesOf: string -> Task<ReferenceReply>)
+    (name: string)
+    (maxItems: int)
+    (offset: int)
+    : Task<McpReferencesPage.Page> =
+    task {
+      let! resolution = McpNamePath.resolve SageFsConfig.NearestNamesMax membersOf name
+      let counted (nameCheck: McpReferencesPage.NameCheck) = task {
+        let! reply = referencesOf name
+        return
+          match McpReferencesPage.build name maxItems offset reply with
+          | McpReferencesPage.Page.Counted c -> McpReferencesPage.Page.Counted { c with NameCheck = nameCheck }
+          | other -> other
+      }
+      match resolution with
+      | McpNamePath.NamePathResolution.StopsAt(resolvedPrefix, missing, nearest) ->
+        return McpReferencesPage.Page.NameStopsAt(name, resolvedPrefix, missing, nearest)
+      | McpNamePath.NamePathResolution.NothingResolves first ->
+        return McpReferencesPage.Page.NameNotListed(name, first)
+      | McpNamePath.NamePathResolution.Resolved _
+      | McpNamePath.NamePathResolution.ResolvedRoot -> return! counted McpReferencesPage.NameCheck.Resolves
+      | McpNamePath.NamePathResolution.StopsAtCutList _
+      | McpNamePath.NamePathResolution.Unknown _ -> return! counted McpReferencesPage.NameCheck.NotChecked
+    }
+
   let listReferences
     (ctx: McpContext)
     (agent: string)
@@ -42,6 +73,7 @@ module McpReferencesRoute =
     else
       let name = qualifiedName.Trim().TrimEnd '.'
       withSessionWd ctx agent workingDirectory (fun sid -> task {
-        let! reply = referencesOf ctx sid name
-        return McpReferencesPage.build name SageFsConfig.ListReferencesMax offset reply |> McpReferencesPage.render
+        let! page =
+          referencesPage (McpCompletions.membersOf ctx sid) (referencesOf ctx sid) name SageFsConfig.ListReferencesMax offset
+        return McpReferencesPage.render page
       })
