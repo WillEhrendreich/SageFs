@@ -57,11 +57,12 @@ Live testing is also a workflow, not only a toggle. See [Workflow Modes](workflo
 | Domain model and pipeline analysis | Shared | Shared | Partial | Supported |
 
 Completions and CodeLens are editor features backed by FSharp.Compiler.Service; they are not MCP tools. Neither
-is the type explorer, the tests covering a symbol, the test-run policy control, or the test trace. Those are HTTP endpoints
+is the tests covering a symbol, the test-run policy control, or the test trace. Those are HTTP endpoints
 the editors and the dashboard call (`GET /api/dependency-graph`, `POST /api/live-testing/policy`,
-`GET /api/live-testing/test-trace`). Completions and the type explorer have routes (`POST /api/completions`,
-`POST /api/explore`) and no MCP tool; I deleted the unregistered `get_completions` and `explore_type` members
-that used to suggest otherwise. There is neither a tool nor an HTTP route for a domain-model diagram. In the
+`GET /api/live-testing/test-trace`). Completions have a route (`POST /api/completions`) and no MCP tool; I deleted
+the unregistered `get_completions` and `explore_type` members that used to suggest otherwise. The type explorer
+is a tool now: `list_members` lists what a namespace, module or type holds, one level per call, and the editors
+keep their own route (`POST /api/explore`). There is neither a tool nor an HTTP route for a domain-model diagram. In the
 domain model and pipeline row, the MCP cell is `decompose_pipeline`. I checked, this table isn't guessing. [`LIVE_TESTING_GUIDE.md`](LIVE_TESTING_GUIDE.md) is the
 authoritative list of what is and isn't an MCP tool.
 

@@ -399,12 +399,12 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | **Debug a failing test** | ✅ | ✅ | no | no |
 | Test panel | ✅ | ✅ | ✅ | ✅ |
 | Test policy controls | ✅ | ✅ | ✅ | HTTP |
-| Type explorer | ✅ | ✅ | no | HTTP |
+| Type explorer | ✅ | ✅ | no | ✅ |
 | Tests covering a symbol | ✅ | ✅ | no | HTTP |
 | History browser | ✅ | ✅ | ✅ | ✅ |
 | Test trace | ✅ | ✅ | ✅ | no |
 
-A ✅ in the MCP column means a tool in the [72-tool surface](docs/mcp-tools.md) does it. `HTTP` means the editors reach it through a daemon route and no tool does, and `no` means nothing does. Five of the rows are not MCP tools at all, and I'd rather the table said so than claimed a tool that isn't there: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (`POST /api/completions` and `POST /api/explore`); the call graph is `GET /api/dependency-graph`, since the `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells* rather than source symbols; run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
+A ✅ in the MCP column means a tool in the [72-tool surface](docs/mcp-tools.md) does it. `HTTP` means the editors reach it through a daemon route and no tool does, and `no` means nothing does. Four of the rows are not MCP tools at all, and I'd rather the table said so than claimed a tool that isn't there: completions are an FSharp.Compiler.Service feature the editors call over HTTP (`POST /api/completions`); the call graph is `GET /api/dependency-graph`, since the `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells* rather than source symbols; run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. The type explorer used to be on that list. `list_members` now walks the same tree for an agent, one level per call, and the editors keep using their HTTP route. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
 
 <details>
 <summary><strong>Editor setup guides</strong></summary>

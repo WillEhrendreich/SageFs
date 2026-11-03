@@ -52,6 +52,7 @@
         <Compile Include="McpReferencesNameTests.fs" />
         <Compile Include="LadderReplySizeTests.fs" />
         <Compile Include="LadderContractTests.fs" />
+        <Compile Include="LadderOutcomeTests.fs" />
         <Compile Include="SymbolReferencesTests.fs" />
         <Compile Include="ReferenceCacheRetentionTests.fs" />
         <Compile Include="CompletionAnswerTests.fs" />

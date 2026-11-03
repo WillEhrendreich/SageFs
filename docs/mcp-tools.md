@@ -363,9 +363,10 @@ never read another session's data, and they never fall back to the primary sessi
 one bound. It does not measure the blast radius of a change to your source files and it does not say which tests a change
 affects, so do not gate a change on it. `run_tests` is the tool that answers about tests.
 
-Completions, the type explorer, per-file coverage, the symbol-to-tests lookup and the domain-model diagram are not MCP tools.
-The editors reach the first, second and third over the daemon's HTTP API (`/api/completions`, `/api/explore`,
-`/api/live-testing/file-annotations`), and `discover_features` does not list them.
+Completions, per-file coverage, the symbol-to-tests lookup and the domain-model diagram are not MCP tools.
+The editors reach the first and second over the daemon's HTTP API (`/api/completions`,
+`/api/live-testing/file-annotations`), and `discover_features` does not list them. The type explorer is the tool
+`list_members`; the editors keep their own route for it (`/api/explore`).
 
 `POST /api/completions` answers `{ completions: [{ label, kind, insertText, detail? }], count, total, totalKind }`.
 `kind` is the compiler's own (`Method`, `Module`, `EnumMember`, ...), `count` is the items in the reply, and `total` with

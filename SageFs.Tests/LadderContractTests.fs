@@ -87,6 +87,23 @@ let tests =
 [<Tests>]
 let ladderWiringTests =
   testList "LadderContract wiring" [
+    testCase "WHY - the Readme's MCP column says the Type explorer is a tool exactly when list_members is registered, so the table never claims or denies it by stale prose" <| fun _ ->
+      let rows =
+        File.ReadAllLines(Path.Combine(repoRoot, "Readme.md"))
+        |> Array.filter (fun line -> line.TrimStart().StartsWith "|")
+        |> Array.map (fun line -> line.Trim().Trim('|').Split('|') |> Array.map (fun cell -> cell.Trim().Trim('*').Trim()))
+      let header = rows |> Array.find (fun cells -> cells.Length > 0 && cells.[0] = "Capability" && Array.contains "MCP" cells)
+      let mcpColumn = Array.findIndex ((=) "MCP") header
+      let cell =
+        rows
+        |> Array.find (fun cells -> cells.Length > mcpColumn && cells.[0] = "Type explorer")
+        |> fun cells -> cells.[mcpColumn]
+      let registered =
+        SageFs.Server.McpTools.RegisteredTools.describe typeof<SageFs.Server.McpTools.SageFsTools>
+        |> List.exists (fun tool -> tool.Name = "list_members")
+      registered |> Expect.isTrue "list_members is a registered tool"
+      cell |> Expect.equal "the Type explorer's MCP cell is a tick when the tool exists" "✅"
+
     testCase "WHY - both projects compile the contract before the files that use it, because the extension cannot reference the daemon's assembly" <| fun _ ->
       let core = compiledFiles "SageFs.Core/SageFs.Core.fsproj"
       let extension = compiledFiles "sagefs-vscode/src/SageFs.Vscode.fsproj"
