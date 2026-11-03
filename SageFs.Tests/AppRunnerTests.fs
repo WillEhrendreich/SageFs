@@ -374,6 +374,41 @@ let private contentionNote () =
     else ""
   with _ -> ""
 
+/// What a build that failed with no message of its own leaves to read (#185: "Determining projects to restore...
+/// Build FAILED, 0 Error(s)" within a second, red in eight gate runs and green on all three reruns alone, so the
+/// output of the failing run is the only evidence there is). The tail of MSBuild's own diagnostic-level log, the
+/// limits this process runs under, and every dotnet or MSBuild process alive at that moment, which is what a
+/// neighbour that starved it or raced it would look like.
+let silentFailureEvidence (msbuildLog: string) : string =
+  let tail =
+    try File.ReadAllLines msbuildLog |> Array.rev |> Array.truncate 80 |> Array.rev |> String.concat "\n"
+    with ex -> sprintf "(no msbuild log: %s)" ex.Message
+  let limits =
+    try
+      File.ReadAllLines "/proc/self/limits"
+      |> Array.filter (fun line -> line.StartsWith "Max processes" || line.StartsWith "Max open files")
+      |> String.concat "\n"
+    with _ -> "(limits unreadable)"
+  let inotify =
+    try (File.ReadAllText "/proc/sys/fs/inotify/max_user_instances").Trim() with _ -> "?"
+  let neighbours =
+    try
+      Directory.GetDirectories "/proc"
+      |> Array.choose (fun dir ->
+        let pid = Path.GetFileName dir
+        match pid |> Seq.forall Char.IsDigit with
+        | false -> None
+        | true ->
+          try
+            let command = (File.ReadAllText(Path.Combine(dir, "cmdline"))).Replace('\000', ' ').Trim()
+            match command.Contains "dotnet" || command.Contains "MSBuild" with
+            | true -> Some (sprintf "%s %s" pid (command.Substring(0, min 170 command.Length)))
+            | false -> None
+          with _ -> None)
+      |> String.concat "\n"
+    with _ -> "(processes unreadable)"
+  sprintf "\n--- msbuild diagnostic log, last 80 lines:\n%s\n--- limits of this process:\n%s\ninotify max_user_instances=%s\n--- dotnet and MSBuild processes right now:\n%s" tail limits inotify neighbours
+
 /// One process at a time builds these projects, and the lock has to survive two facts about this
 /// suite. The gate runs five shards, each its own process, and on a clean tree each one decides the
 /// sample is unbuilt and builds it: concurrent `dotnet build`s of one project race on its obj, the
@@ -510,6 +545,8 @@ let managedDependencyResolutionIntegrationTests =
       | Result.Error why -> failtest why
       | Result.Ok fsharpCoreVersion ->
           let harnessDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-apprunner-harness-%s" (Guid.NewGuid().ToString("N").[..7]))
+          // Beside the harness and not inside it: the harness project globs its own directory.
+          let msbuildLog = harnessDir + ".msbuild.log"
           Directory.CreateDirectory harnessDir |> ignore
           try
             let harnessFsproj = Path.Combine(harnessDir, "Harness.fsproj")
@@ -567,14 +604,17 @@ let managedDependencyResolutionIntegrationTests =
             let! built =
               task {
                 try
-                  return! runDotnet [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo" ] TestTimeouts.workerSessionReady
+                  return!
+                    runDotnet
+                      [ "build"; harnessFsproj; "-c"; "Debug"; "--nologo"; sprintf "-flp:LogFile=%s;Verbosity=diagnostic" msbuildLog ]
+                      TestTimeouts.workerSessionReady
                 finally
                   releaseBuildLock gate
               }
             match built with
             | Error msg -> failtest msg
             | Ok (buildExit, buildOut, buildErr) when buildExit <> 0 ->
-              failtestf "harness build failed (exit=%d)%s:\n%s\n%s" buildExit (contentionNote ()) buildOut buildErr
+              failtestf "harness build failed (exit=%d)%s:\n%s\n%s%s" buildExit (contentionNote ()) buildOut buildErr (silentFailureEvidence msbuildLog)
             | Ok _ ->
               let harnessDll = Path.Combine(harnessDir, "bin", "Debug", runtimeMoniker, "Harness.dll")
               let! ran = runDotnet [ "exec"; harnessDll; sampleBinDir ] TestTimeouts.patienceInProcess
@@ -585,6 +625,7 @@ let managedDependencyResolutionIntegrationTests =
                 |> Expect.stringContains (sprintf "expected the fix to resolve Falco in a clean process (stderr=%s)" err) "RESOLVED_FALCO:"
           finally
             try Directory.Delete(harnessDir, true) with _ -> ()
+            try File.Delete msbuildLog with _ -> ()
     }
   ]
 
@@ -609,4 +650,25 @@ let projectNotLoadedRefusalTests =
       | Ok _ -> failtest "an empty session cannot resolve anything"
       | Error reason ->
         reason |> Expect.stringContains "the empty case is stated in words" "no projects"
+  ]
+
+[<Tests>]
+let silentFailureEvidenceTests =
+  testList "AppRunner harness build evidence" [
+    testCase "WHY - a build that fails with no message of its own still leaves its log tail, its limits and a process listing, so the next red names its cause" <| fun _ ->
+      let log = Path.GetTempFileName()
+      try
+        File.WriteAllLines(log, [ for i in 1 .. 100 -> sprintf "line %d" i ])
+        let evidence = silentFailureEvidence log
+        evidence |> Expect.stringContains "the last line of the log is there" "line 100"
+        evidence |> Expect.stringContains "and the first line kept" "line 21\n"
+        evidence.Contains "line 20\n" |> Expect.isFalse "and nothing before the last 80"
+        evidence |> Expect.stringContains "the limits the test process runs under" "Max open files"
+        evidence |> Expect.stringContains "the process listing is there" "dotnet and MSBuild processes right now"
+      finally
+        File.Delete log
+
+    testCase "a log that was never written is said so, instead of throwing while a failure is being explained" <| fun _ ->
+      silentFailureEvidence (Path.Combine(Path.GetTempPath(), "no-such-msbuild-log-" + Guid.NewGuid().ToString "N"))
+      |> Expect.stringContains "the missing log is named as missing" "no msbuild log"
   ]
