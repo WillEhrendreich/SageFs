@@ -10,6 +10,8 @@ module SageFs.Tests.ProcessEnvironmentTests
 open System
 open System.Diagnostics
 open System.IO
+open System.Threading
+open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs
@@ -82,6 +84,60 @@ let private echoVariable (variable: string) : ProcessStartInfo =
     psi.ArgumentList.Add(sprintf "echo \"$%s\"" variable)
     psi
 
+/// A throwaway fixture project for the current SDK, built by a real `dotnet` whose environment the case sets for
+/// that CHILD only: the shared test process is never written to.
+module FixtureBuild =
+  let private currentMajor = Environment.Version.Major
+
+  let private capture (workDir: string) (arguments: string list) (poison: (string * string) list) (stripFirst: bool) : Task<int * string> =
+    task {
+      let psi = ProcessStartInfo("dotnet", WorkingDirectory = workDir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
+      for argument in arguments do psi.ArgumentList.Add argument
+      for key, value in poison do psi.Environment.[key] <- value
+      if stripFirst then ProcessEnvironment.applyTo psi []
+      use proc = Process.Start psi
+      let output = proc.StandardOutput.ReadToEndAsync()
+      let errors = proc.StandardError.ReadToEndAsync()
+      use cts = new CancellationTokenSource(TestTimeouts.workerSessionReady)
+      do! proc.WaitForExitAsync cts.Token
+      let! out = output
+      let! err = errors
+      return proc.ExitCode, out + err
+    }
+
+  let create () : Task<string> =
+    task {
+      let workDir = Directory.CreateTempSubdirectory("sagefs-procenv-").FullName
+      File.WriteAllText(
+        Path.Combine(workDir, "Fixture.fsproj"),
+        sprintf """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net%d.0</TargetFramework></PropertyGroup>
+  <ItemGroup><Compile Include="Lib.fs" /></ItemGroup>
+</Project>""" currentMajor)
+      File.WriteAllText(Path.Combine(workDir, "Lib.fs"), "module Fixture.Lib\nlet ok = 1\n")
+      return workDir
+    }
+
+  let run (workDir: string) (poison: (string * string) list) (stripFirst: bool) : Task<int * string> =
+    capture workDir [ "build"; "Fixture.fsproj"; "--nologo" ] poison stripFirst
+
+  let delete (workDir: string) = try Directory.Delete(workDir, true) with _ -> ()
+
+  /// The directory of an installed SDK whose major version is not the current one, if any (`dotnet --list-sdks`
+  /// prints `<version> [<sdk root>]`).
+  let anotherSdk () : Task<string option> =
+    task {
+      let! _, listing = capture (Path.GetTempPath()) [ "--list-sdks" ] [] false
+      return
+        listing.Split('\n')
+        |> Array.choose (fun line ->
+          let m = System.Text.RegularExpressions.Regex.Match(line, @"^(\d+)\.\S+ \[(.+)\]\s*$")
+          match m.Success && int m.Groups.[1].Value <> currentMajor with
+          | true -> Some (Path.Combine(m.Groups.[2].Value, (line.Split(' ').[0])))
+          | false -> None)
+        |> Array.tryHead
+    }
+
 [<Tests>]
 let realSpawnTests =
   Integration.hostList "ProcessEnvironment (real spawned process)" [
@@ -105,31 +161,78 @@ let realSpawnTests =
     // exactly that poisoning, reproducing the shape of the MSB4242 a user hit
     // building a fixture from inside a session.
     //
-    // Mutates the real process environment for its duration — safe here only
-    // because --integration-host runs this whole tree with testSequenced, so
-    // no other test's `dotnet build` can observe it mid-flight; no other test
-    // touches MSBuildSDKsPath.
-    testAsync "WHY — a session's own dotnet build resolves its own project's SDK, not a poisoned MSBuild resolver this process (daemon or worker) may have picked up from Ionide.ProjInfo" {
-      let workDir = Directory.CreateTempSubdirectory("sagefs-procenv-").FullName
-      let original = Environment.GetEnvironmentVariable "MSBuildSDKsPath"
+    // The poison goes into the CHILD's environment and nowhere else. This case used to set MSBuildSDKsPath on the
+    // whole test process, "safe because this tree is testSequenced, so no other test's `dotnet build` can observe it".
+    // testSequenced orders the cases of ONE list; every other list of the shard keeps running in the same process,
+    // so a `dotnet build` another case started inside that window inherited the bogus path. The production call site
+    // is covered without a real build by `buildStartInfo`'s own case below; this one proves the end result against
+    // the real dotnet, and that the poison is real (the same build fails without `applyTo`), so it has teeth.
+    testTask "WHY — a real dotnet build resolves its own project's SDK once applyTo has run, and fails on the same poison without it" {
+      let! fixture = FixtureBuild.create ()
       try
-        File.WriteAllText(
-          Path.Combine(workDir, "Fixture.fsproj"),
-          """<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
-  <ItemGroup><Compile Include="Lib.fs" /></ItemGroup>
-</Project>""")
-        File.WriteAllText(Path.Combine(workDir, "Lib.fs"), "module Fixture.Lib\nlet ok = 1\n")
-        Environment.SetEnvironmentVariable("MSBuildSDKsPath", "/nonexistent/sagefs-test-bogus/Sdks")
-        let! result = SessionBuild.runBuildAsync [ "Fixture.fsproj" ] workDir
-        match result with
-        | Error err -> failtestf "expected the fixture to build despite this process's own poisoned MSBuildSDKsPath: %A" err
-        | Ok _ -> ()
+        let poison = [ "MSBuildSDKsPath", "/nonexistent/sagefs-test-bogus/Sdks" ]
+        let! stripped, strippedOutput = FixtureBuild.run fixture poison true
+        stripped |> Expect.equal (sprintf "the build resolves its SDK once applyTo dropped the poison: %s" strippedOutput) 0
+        let! poisoned, _ = FixtureBuild.run fixture poison false
+        poisoned |> Expect.notEqual "and the same poison fails the build when nothing drops it, so the case above proves something" 0
       finally
-        Environment.SetEnvironmentVariable("MSBuildSDKsPath", original)
-        try Directory.Delete(workDir, true) with _ -> ()
+        FixtureBuild.delete fixture
+    }
+
+    // The failure the gate showed nine times (#185): "Determining projects to restore... Build FAILED, 0 Error(s)"
+    // in a second, only in the host shard that also held a case loading a project through Ionide.ProjInfo, and green
+    // on every rerun alone. ProjInfo pins MSBuild's variables on its own process to the SDK it found, and every
+    // `dotnet build` a neighbouring case starts inherits them: the build then runs under ANOTHER SDK's MSBuild
+    // (the gate's log showed sdk/10.0.402 for a net11.0 harness) and fails with nothing printed. This pins another
+    // installed SDK's MSBuild into the child the way ProjInfo pins it into a process, and builds a fixture for the
+    // current SDK. The tool ships for net10.0 and net11.0, so every machine that gates it has both SDKs.
+    testTask "WHY — a build whose environment pins another SDK's MSBuild, as Ionide.ProjInfo does to a process, builds under its own SDK once applyTo has run, and fails silently without it" {
+      let! other = FixtureBuild.anotherSdk ()
+      match other with
+      | None -> failtest "this machine has one SDK, so the failure cannot be reproduced; install .NET SDK 10 beside 11, as the tool ships for both"
+      | Some (otherSdkDirectory: string) ->
+        let! fixture = FixtureBuild.create ()
+        try
+          let dotnetRoot = Path.GetDirectoryName(Path.GetDirectoryName otherSdkDirectory: string)
+          let pinned =
+            [ "MSBUILD_EXE_PATH", Path.Combine(otherSdkDirectory, "MSBuild.dll")
+              "MSBuildSDKsPath", Path.Combine(otherSdkDirectory, "Sdks")
+              "MSBuildExtensionsPath", otherSdkDirectory
+              "DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR", dotnetRoot ]
+          let! stripped, strippedOutput = FixtureBuild.run fixture pinned true
+          stripped |> Expect.equal (sprintf "built under its own SDK once applyTo dropped %s's pins: %s" otherSdkDirectory strippedOutput) 0
+          let! pinnedExit, pinnedOutput = FixtureBuild.run fixture pinned false
+          pinnedExit |> Expect.notEqual (sprintf "and under %s's MSBuild the same build fails: %s" otherSdkDirectory pinnedOutput) 0
+        finally
+          FixtureBuild.delete fixture
     }
   ]
+
+/// A test must not put an MSBuild-resolution variable into the PROCESS environment. The shard's cases run in
+/// parallel in one process, and every child any of them starts inherits what the process holds: with
+/// MSBuildSDKsPath set to a bogus path for a moment, whichever case started a `dotnet build` in that moment
+/// failed with no message (#185). Poison a child's own `ProcessStartInfo.Environment`, never the process.
+[<Tests>]
+let processEnvironmentHygieneTests =
+  testList "Process environment in tests" [
+    testCase "WHY - no test sets an MSBuild-resolution variable on the shared process, because every case beside it would inherit it into its own dotnet build" <| fun _ ->
+      let root = RepoPaths.requireRepoRoot ()
+      let setter = "SetEnvironment" + "Variable"
+      let offenders =
+        [ for file in Directory.EnumerateFiles(Path.Combine(root, "SageFs.Tests"), "*.fs", SearchOption.TopDirectoryOnly) do
+            File.ReadAllLines file
+            |> Array.indexed
+            |> Array.filter (fun (_, line) ->
+              not (line.TrimStart().StartsWith "//")
+              && line.Contains setter
+              && ProcessEnvironment.poisonedVariables |> List.exists (fun name -> line.Contains("\"" + name + "\"")))
+            |> Array.map (fun (index, _) -> sprintf "%s:%d" (Path.GetFileName file) (index + 1))
+            |> List.ofArray ]
+        |> List.concat
+      offenders |> Expect.isEmpty "poison a child's ProcessStartInfo.Environment instead of the process"
+  ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant processEnvironmentHygieneTests |> ignore
 
 /// A seam for tools that must reach a worker they do not launch.
 ///

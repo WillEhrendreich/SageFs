@@ -84,6 +84,8 @@ let runProcessExpectSuccess (fileName: string) (workingDir: string) (args: strin
 
   for arg in args do
     psi.ArgumentList.Add(arg)
+  // Without the MSBuild resolution variables this process may hold from a project another case loaded (#185).
+  SageFs.ProcessEnvironment.applyTo psi []
 
   use proc = Process.Start(psi)
   let stdout = proc.StandardOutput.ReadToEnd()

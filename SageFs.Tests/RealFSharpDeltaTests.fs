@@ -58,6 +58,8 @@ let private build (directory: string) : Task<string> =
     info.RedirectStandardOutput <- true
     info.RedirectStandardError <- true
     info.UseShellExecute <- false
+    // Without the MSBuild resolution variables this process may hold from a project another case loaded (#185).
+    SageFs.ProcessEnvironment.applyTo info []
     use child = Process.Start info
     let output = child.StandardOutput.ReadToEndAsync()
     let errors = child.StandardError.ReadToEndAsync()

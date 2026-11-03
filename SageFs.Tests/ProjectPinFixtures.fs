@@ -46,6 +46,9 @@ let runCapture (fileName: string) (workingDir: string) (args: string list) : Tas
   psi.RedirectStandardError <- true
   for arg in args do
     psi.ArgumentList.Add arg
+  // Without the MSBuild resolution variables this process may hold: a case beside this one that loaded a project
+  // through Ionide.ProjInfo pinned them to ITS SDK, and a `dotnet build` here would run under that SDK (#185).
+  SageFs.ProcessEnvironment.applyTo psi []
   use proc = Process.Start psi
   let stderrTask = proc.StandardError.ReadToEndAsync()
   let! stdout = proc.StandardOutput.ReadToEndAsync()
