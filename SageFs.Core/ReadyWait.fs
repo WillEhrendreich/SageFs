@@ -98,8 +98,7 @@ module ReadyWait =
     (onFailure: exn -> unit)
     : unit =
     for waiter, result in answers do
-      try wake waiter result
-      with ex -> onFailure ex
+      Guarded.call onFailure (fun () -> wake waiter result)
 
   /// Answers the callers parked on one session through a rebuild that has just ended, when it ended
   /// badly, with the build's own error. Returns the callers still parked.

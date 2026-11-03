@@ -466,6 +466,8 @@
         <Compile Include="SessionBuild.fs" />
         <!-- What a caller waiting on a session is told, and when. After WorkerProtocol and RebuildOutcome; the session
              manager settles its parked callers with it and the status tool decides to park with it. -->
+        <!-- Guarded before ReadyWait and SessionRemoval: both hand the session manager's loop to a callback through it. -->
+        <Compile Include="Guarded.fs" />
         <Compile Include="ReadyWait.fs" />
         <Compile Include="ProjectResolution.fs" />
         <Compile Include="WorkerSpawn.fs" />
@@ -485,7 +487,9 @@
         <!-- Tells somebody when the session manager's own loop is wedged,
              restarted or failing a command. -->
         <Compile Include="SupervisorWatchdog.fs" />
+        <Compile Include="TestDiscoveryReport.fs" />
         <Compile Include="SessionManagerCallbacks.fs" />
+        <Compile Include="SessionRemoval.fs" />
         <Compile Include="SessionManager.fs" />
         <!-- After SessionManager: posts the one refetch every daemon-side caller of an in-worker
              reset makes once the reset resolves Ok (SessionCommand.RefetchLiveTestingState). -->

@@ -5,7 +5,8 @@ open Expecto.Flip
 open SageFs.Simulation
 open SageFs.Simulation.ConfirmationGateSim
 
-/// DST for the claim "a confirm-tier tool asks a person unless the caller created that very session itself". See
+/// DST for the claim "a confirm-tier tool asks a person unless the caller created that very session itself and nobody
+/// else has run code in it". See
 /// `SageFs.Simulation/ConfirmationGateSim.fs` for the fold (the real `ConfirmationPolicy.decide`), the independent truth it is
 /// checked against, and the twins.
 
@@ -29,6 +30,7 @@ let askedPerCall (t: Trace) : bool list =
     | Op.Calls _ -> Some s.Asked
     | Op.Creates _
     | Op.PersonCreates _
+    | Op.RunsCode _
     | Op.Stops _
     | Op.Restarts -> None)
 
@@ -38,7 +40,7 @@ let tests =
 
     testList "the real decision holds the invariants" [
       testPropertyWithConfig simConfig
-        "seeded histories of creates, stops, restarts and calls — a person is asked exactly unless a one-session tool runs on a remembered session its caller made"
+        "seeded histories of creates, evals, stops, restarts and calls — a person is asked exactly unless a one-session tool runs on a remembered session its caller made and alone ran code in"
         <| fun (seed: int) -> assertHolds (run (ConfirmationGateGenerators.fromSeed seed))
 
       testCase "ownSession: the caller that made the session is not asked" <| fun _ ->
@@ -65,6 +67,31 @@ let tests =
         let t = run ConfirmationGateGenerators.localDataIsNeverSpared
         askedPerCall t |> Expect.equal "asked" [ true ]
         assertHolds t
+
+      testCase "stopAppIsNeverSpared: stop_app asks even on the caller's own session, since its app may have users SageFs cannot see" <| fun _ ->
+        let t = run ConfirmationGateGenerators.stopAppIsNeverSpared
+        askedPerCall t |> Expect.equal "asked" [ true ]
+        assertHolds t
+
+      testCase "ownCodeOnly: the caller's own evals do not bring the prompt back" <| fun _ ->
+        let t = run ConfirmationGateGenerators.ownCodeOnly
+        askedPerCall t |> Expect.equal "nobody asked" [ false ]
+        assertHolds t
+
+      testCase "aPersonRanCodeInIt: code from the dashboard in the caller's own session brings the prompt back" <| fun _ ->
+        let t = run ConfirmationGateGenerators.aPersonRanCodeInIt
+        askedPerCall t |> Expect.equal "asked" [ true ]
+        assertHolds t
+
+      testCase "anotherCallerRanCodeInIt: another agent's code in the caller's own session brings the prompt back" <| fun _ ->
+        let t = run ConfirmationGateGenerators.anotherCallerRanCodeInIt
+        askedPerCall t |> Expect.equal "asked" [ true ]
+        assertHolds t
+
+      testCase "aStoppedSessionForgetsWhoRanCode: a session made again under the same id starts with nobody else in it" <| fun _ ->
+        let t = run ConfirmationGateGenerators.aStoppedSessionForgetsWhoRanCode
+        askedPerCall t |> Expect.equal "nobody asked" [ false ]
+        assertHolds t
     ]
 
     testList "the twins reproduce the bugs the invariants exist for" [
@@ -80,6 +107,10 @@ let tests =
         let t = runTreatsEveryToolAsOneSession ConfirmationGateGenerators.localDataIsNeverSpared
         violatedIds t |> Expect.contains "sparing local data must be caught" "nobody-is-spared-a-session-they-did-not-make"
 
+      testCase "REPRODUCED — the ignores-who-ran-code twin spares a session a person worked in" <| fun _ ->
+        let t = runIgnoresWhoRanCode ConfirmationGateGenerators.aPersonRanCodeInIt
+        violatedIds t |> Expect.contains "sparing a session someone else worked in must be caught" "nobody-is-spared-a-session-someone-else-worked-in"
+
       testCase "the invariants have teeth: some seeded history violates them under each twin" <| fun _ ->
         let seeds = [ 1 .. 300 ]
         let anyViolates runTwin =
@@ -87,6 +118,7 @@ let tests =
         anyViolates runSkipsEverySession |> Expect.isTrue "skipping the confirmation for every session is caught by a generated history"
         anyViolates runTreatsNoRecordAsOwn |> Expect.isTrue "taking an unrecorded session as the caller's own is caught by a generated history"
         anyViolates runTreatsEveryToolAsOneSession |> Expect.isTrue "treating every tool as one-session is caught by a generated history"
+        anyViolates runIgnoresWhoRanCode |> Expect.isTrue "ignoring who ran code is caught by a generated history"
     ]
 
     testList "determinism / replay" [

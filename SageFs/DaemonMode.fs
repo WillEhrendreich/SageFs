@@ -2233,6 +2233,8 @@ let run
           OnSessionReady = fun sid -> stateChangedEvent.Trigger (SessionReady sid); onSessionReadyExtra sid
           OnWarmupProgress = fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress
           OnSessionFaulted = fun sid error -> stateChangedEvent.Trigger (SessionFaulted (sid, error))
+          // Every route that stops a session (MCP, HTTP, the dashboard, the reaper, memory pressure) ends here.
+          OnSessionRemoved = fun sid -> SessionOwners.release (WorkerProtocol.SessionId.value sid)
           OnAppOutput = fun sid stream line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) stream line
           OnSupervisorAlarm = fun alarm -> Log.warn "[SessionManager] %s" (SupervisorWatchdog.describe alarm)
           OnSupervisorHealth = SupervisorHealthWatch.report }
@@ -3701,7 +3703,6 @@ let run
             task {
               let! result = sessionOps.StopSession sid
               elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
-              McpTools.releaseSessionOwner sid
               return result
             }
           let! outcome =
@@ -4401,6 +4402,7 @@ let run
   let dashboardActions : DashboardActions = {
     EvalCode = fun sid code -> task {
       let sidStr = WorkerProtocol.SessionId.value sid
+      SessionEvaluators.record sidStr ConfirmationPolicy.EvalSource.Dashboard
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
       match result with
       | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _metadata)) ->

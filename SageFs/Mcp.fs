@@ -122,21 +122,10 @@ module McpTools =
   let resolvedKey (agentName: string) : string =
     MemberTable.MemberId.display (memberIdFor agentName)
 
-  /// Sessions created by MCP, keyed by session id and owned by the bound
-  /// transport MemberId. This is separate from SessionMap: switching a
-  /// connection to an existing session must not transfer ownership. The value is the identity itself,
-  /// never its display text: the confirmation gate compares it with the caller's identity.
-  let sessionOwners = Collections.Concurrent.ConcurrentDictionary<string, MemberTable.MemberId>()
-
-  let claimSessionOwner (owner: MemberTable.MemberId) (sessionId: string) =
-    sessionOwners.TryAdd(sessionId, owner) |> ignore
-
-  let releaseSessionOwner (sessionId: string) =
-    sessionOwners.TryRemove sessionId |> ignore
-
+  /// Whose a session is to stop, from the creator record (`SessionOwners`, in SessionStakeholders.fs).
   let sessionOwnership sessionId : ConfirmationPolicy.SessionOwnership =
-    let recorded = match sessionOwners.TryGetValue sessionId with | true, owner -> Some owner | _ -> None
-    ConfirmationPolicy.SessionOwnership.decide (Option.isSome currentTransportSessionId.Value) recorded (memberIdFor "mcp")
+    ConfirmationPolicy.SessionOwnership.decide
+      (Option.isSome currentTransportSessionId.Value) (SessionOwners.ownerOf sessionId) (memberIdFor "mcp")
 
   /// Get the active session ID for a specific agent/client.
   let activeSessionId (ctx: McpContext) (agent: string) =
@@ -1168,6 +1157,7 @@ module McpTools =
           // the MemberId case itself, never by re-classifying the resolved
           // key's text (Phase 0 item 4 of sagefs-multiagent-vision.md §10).
           AgentActivityTracker.recordMemberActivity ctx.ActivityTracker (memberIdFor agentName) sid filePath intent DateTime.UtcNow
+          SessionEvaluators.record sid (ConfirmationPolicy.EvalSource.Member(memberIdFor agentName))
 
           let evalSw = System.Diagnostics.Stopwatch.StartNew()
           let mutable allOutputs = []
@@ -2209,7 +2199,7 @@ module McpTools =
       match result with
       | Result.Ok sid ->
         setActiveSessionId ctx agent sid
-        claimSessionOwner (memberIdFor agent) sid
+        SessionOwners.claim (memberIdFor agent) sid
         // So a worktree left behind can say which connection made it (the connection is the identity).
         HygieneService.OwnerLedger.recordCreation DaemonState.SageFsDir ctx.ActivityTracker (resolvedKey agent) agent sid workingDir
         let perProject =
@@ -2267,7 +2257,6 @@ module McpTools =
         // The session is gone from the registry — release every agent that
         // was routed to it so it no longer claims occupancy.
         evictSessionEntries ctx sessionId
-        releaseSessionOwner sessionId
         return msg
       | Result.Error err -> return SageFsError.describeForAgent err
     }

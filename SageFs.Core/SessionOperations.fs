@@ -121,6 +121,10 @@ module SessionOperations =
     let hasWorker (occupants: SessionOccupancy list) =
       occupants |> List.exists (fun o -> o.Role = OccupantRole.Worker)
 
+    /// True if a worker other than `caller` (an occupant key) is occupying this session.
+    let hasWorkerOtherThan (caller: string) (occupants: SessionOccupancy list) =
+      occupants |> List.filter (fun o -> o.AgentName <> caller) |> hasWorker
+
     /// Format occupancy for display.
     let format (occupants: SessionOccupancy list) =
       match occupants with

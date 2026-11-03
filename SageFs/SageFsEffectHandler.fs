@@ -420,6 +420,7 @@ module SageFsEffectHandler =
       | EditorEffect.RequestEval code ->
         withSession deps dispatch None (fun sid proxy ->
           async {
+            SessionEvaluators.record (SessionId.value sid) ConfirmationPolicy.EvalSource.Tui
             let replyId = newReplyId ()
             let! response =
               proxy (WorkerMessage.EvalCode (code, replyId))

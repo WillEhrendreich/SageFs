@@ -135,7 +135,9 @@ let fileSize : (string * int) list =
     // remains is a one-line field, a forwarding call, and the comments saying WHY each site
     // passes the directory it does — including the one that reads no directory at all,
     // because `commitCohort`'s command already carries its scope.
-    "SageFs/Mcp.fs", 3201 // 3273 -> 3204: the completions routes moved to McpCompletions.fs
+    // 3201 -> 3190: the session owner record moved to SessionStakeholders.fs, beside the record of who ran code in
+    // each session, and the session manager releases a removed session itself (OnSessionRemoved).
+    "SageFs/Mcp.fs", 3190 // 3273 -> 3204: the completions routes moved to McpCompletions.fs
     // 850 -> 830: ratcheted DOWN (never up) after moving the
     // session-path-containment validator (resolveRealSessionPath/
     // isUncPath/validateSessionCreateRequest) out into its own
@@ -287,13 +289,15 @@ let fileSize : (string * int) list =
     // book field and the two commands a stop needs now that it no longer waits for its worker inside the loop.
     // 1579 -> 1554: TestDiscoveryReport and SessionManagerCallbacks moved to SessionManagerCallbacks.fs (about 45 lines
     // net), below, which compiles before this file does.
-    "SageFs.Core/SessionManager.fs", 1552
-    // Added 2026-10-23 with the split of SessionManager.fs: TestDiscoveryReport and
-    // SessionManagerCallbacks are the seam between the loop and its callers — what a worker said
-    // about its tests, and every event the manager tells the outside world — and neither reaches
-    // into the loop, so they compile before it. Set at the file's true size (measured after the
-    // WorkerProtocol open it needs, which is what the first count missed).
-    "SageFs.Core/SessionManagerCallbacks.fs", 50
+    // 1552 -> 1550: the loop reports each session a command removed (SessionRemoval.fs, one call), and the
+    // QuerySnapshot.fromManagerState alias of fromState went.
+    "SageFs.Core/SessionManager.fs", 1550
+    // Added 2026-10-23 with the split of SessionManager.fs: SessionManagerCallbacks is the seam
+    // between the loop and its callers, every event the manager tells the outside world, and it
+    // does not reach into the loop, so it compiles before it. Set at the file's true size (measured
+    // after the WorkerProtocol open it needs, which is what the first count missed).
+    // 50 -> 39: TestDiscoveryReport moved to its own file, net of the OnSessionRemoved hook.
+    "SageFs.Core/SessionManagerCallbacks.fs", 39
     // Added with the Mcp.fs split (the file-size ratchet asked for it, as it did for SessionManager):
     // the bounded member-listing rung of the progressive map, pure formatter plus its session-routed
     // half. Set at the file's true size.

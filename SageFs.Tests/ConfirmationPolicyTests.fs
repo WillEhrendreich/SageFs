@@ -27,7 +27,13 @@ let unbound = MemberId.Minted "mcp"
 
 let oneSessionTools = singleSessionConfirmTools |> Set.toList
 
-let decide tool target creator caller = ConfirmationPolicy.decide tool target creator caller
+/// The decision for a session nobody else has been in, which every case about the creator record is about.
+let decide tool target creator caller = ConfirmationPolicy.decide tool target creator SessionActivity.quiet caller
+
+/// The decision with who else has been in the session.
+let decideWith activity tool target creator caller = ConfirmationPolicy.decide tool target creator activity caller
+
+let ranCode (sources: EvalSource list) : SessionActivity = { SessionActivity.quiet with RanCode = Set.ofList sources }
 
 let mine = TargetSession.Session "s-1"
 
@@ -90,6 +96,8 @@ let tests =
         ConfirmationReason.NoSessionToJudge
         ConfirmationReason.CreatorNotRecorded
         ConfirmationReason.CreatedBySomeoneElse
+        ConfirmationReason.SomeoneElseRanCode
+        ConfirmationReason.AnotherAgentIsWorkingInIt
         ConfirmationReason.CallerNotBound ]
       |> List.map ConfirmationReason.describe
       |> List.filter String.IsNullOrWhiteSpace
@@ -98,7 +106,7 @@ let tests =
     testCase "WHY — the tools that skip the prompt on an own session are exactly the ones that act on one session, and all are on the confirm tier" <| fun _ ->
       singleSessionConfirmTools
       |> Expect.equal "the one-session confirm tools"
-           (set [ ToolName.StopSession; ToolName.ResetFsiSession; ToolName.HardResetFsiSession; ToolName.SwitchWorkflow; ToolName.StopApp ])
+           (set [ ToolName.StopSession; ToolName.ResetFsiSession; ToolName.HardResetFsiSession; ToolName.SwitchWorkflow ])
       singleSessionConfirmTools
       |> Set.filter (fun tool -> not (Map.containsKey tool confirmationLosses))
       |> Expect.isEmpty "every one-session tool is on the confirm tier"
@@ -136,6 +144,101 @@ let tests =
         decide tool mine (SessionCreator.Recorded caller) caller = Confirmation.NotRequired(OwnSession.CreatedByThisCaller "s-1"))
   ]
 
+/// #176 as the PR first framed it: a session the caller made is only the caller's to lose while nobody else has worked
+/// in it. Someone else's code in it, or another agent in it now, brings the prompt back.
+[<Tests>]
+let activityTests =
+  testList "Confirmation when someone else has been in the caller's session" [
+    let own = SessionCreator.Recorded alice
+
+    testCase "WHY — the caller's own evals leave the session its own" <| fun _ ->
+      decideWith (ranCode [ EvalSource.Member alice ]) ToolName.HardResetFsiSession mine own alice
+      |> Expect.equal "only the caller ran code" (Confirmation.NotRequired(OwnSession.CreatedByThisCaller "s-1"))
+
+    testCase "WHY — code from the dashboard keeps the prompt, though the occupancy table calls a tab an Observer" <| fun _ ->
+      decideWith (ranCode [ EvalSource.Member alice; EvalSource.Dashboard ]) ToolName.StopSession mine own alice
+      |> Expect.equal "a person's definitions from the dashboard are at stake" (Confirmation.Required ConfirmationReason.SomeoneElseRanCode)
+
+    testCase "WHY — code an editor sent over /exec keeps the prompt, though an editor records no worker presence" <| fun _ ->
+      decideWith (ranCode [ EvalSource.Member alice; EvalSource.Member(MemberId.Minted "cli-integrated") ]) ToolName.StopSession mine own alice
+      |> Expect.equal "a person's definitions from VS Code or Neovim are at stake" (Confirmation.Required ConfirmationReason.SomeoneElseRanCode)
+
+    testCase "WHY — code from the deprecated TUI keeps the prompt, though its route names no caller" <| fun _ ->
+      decideWith (ranCode [ EvalSource.Tui ]) ToolName.ResetFsiSession mine own alice
+      |> Expect.equal "a person's definitions from the TUI are at stake" (Confirmation.Required ConfirmationReason.SomeoneElseRanCode)
+
+    testCase "WHY — an agent that ran code here and then moved to another session keeps the prompt, though presence forgot it" <| fun _ ->
+      decideWith (ranCode [ EvalSource.Member alice; EvalSource.Member bob ]) ToolName.SwitchWorkflow mine own alice
+      |> Expect.equal "its definitions are still in the session" (Confirmation.Required ConfirmationReason.SomeoneElseRanCode)
+
+    testCase "WHY — another agent in the caller's own session keeps the prompt, since its work would go too" <| fun _ ->
+      decideWith { SessionActivity.quiet with Presence = Presence.AnotherAgentIsIn } ToolName.HardResetFsiSession mine own alice
+      |> Expect.equal "another worker is in it" (Confirmation.Required ConfirmationReason.AnotherAgentIsWorkingInIt)
+
+    testCase "WHY — stop_app asks on the caller's own, quiet session, since its app may have users SageFs cannot see" <| fun _ ->
+      decide ToolName.StopApp mine own alice
+      |> Expect.equal "a browser on its port or a game window is invisible here" (Confirmation.Required ConfirmationReason.ToolSpansMoreThanOneSession)
+
+    testCase "WHY — activity only ever adds a prompt: on a session that already asks, it does not change the reason" <| fun _ ->
+      let busy = { RanCode = Set.ofList [ EvalSource.Dashboard ]; Presence = Presence.AnotherAgentIsIn }
+      decideWith busy ToolName.StopSession mine (SessionCreator.Recorded bob) alice
+      |> Expect.equal "someone else made it" (Confirmation.Required ConfirmationReason.CreatedBySomeoneElse)
+      decideWith busy ToolName.StopSession mine SessionCreator.Unrecorded alice
+      |> Expect.equal "no record" (Confirmation.Required ConfirmationReason.CreatorNotRecorded)
+
+    testProperty "WHY — any source of code besides the caller brings the prompt back" <| fun (other: string) (pick: byte) ->
+      let foreign =
+        match pick % 4uy with
+        | 0uy -> EvalSource.Dashboard
+        | 1uy -> EvalSource.Tui
+        | 2uy -> EvalSource.Member(MemberId.Mcp other)
+        | _ -> EvalSource.Member(MemberId.Minted other)
+      foreign = EvalSource.Member alice
+      || decideWith (ranCode [ EvalSource.Member alice; foreign ]) ToolName.StopSession mine own alice
+         = Confirmation.Required ConfirmationReason.SomeoneElseRanCode
+
+    testProperty "WHY — activity is read exactly when the session is otherwise the caller's own, so skipping the read never changes the answer" <| fun () ->
+      let tools = ToolName.all |> Gen.elements
+      let identities = [ alice; bob; token; tab; unbound ] |> Gen.elements
+      let creators = Gen.oneof [ Gen.constant SessionCreator.Unrecorded; identities |> Gen.map SessionCreator.Recorded ]
+      let targets = Gen.oneof [ Gen.constant TargetSession.NoSession; Gen.elements [ "s-1"; "" ] |> Gen.map TargetSession.Session ]
+      let busy = { RanCode = Set.ofList [ EvalSource.Dashboard ]; Presence = Presence.AnotherAgentIsIn }
+      let scenario = gen {
+        let! tool = tools
+        let! target = targets
+        let! creator = creators
+        let! caller = identities
+        return tool, target, creator, caller }
+      Prop.forAll (Arb.fromGen scenario) (fun (tool, target, creator, caller) ->
+        readsActivity tool target creator caller
+        || decideWith busy tool target creator caller = decideWith SessionActivity.quiet tool target creator caller)
+
+    testCase "WHY — a watching dashboard tab is not another worker, or an open dashboard would undo the fix" <| fun _ ->
+      let worker name : SessionOperations.SessionOccupancy = { AgentName = name; Role = SessionOperations.OccupantRole.Worker }
+      let observer name : SessionOperations.SessionOccupancy = { AgentName = name; Role = SessionOperations.OccupantRole.Observer }
+      let me = MemberId.display alice
+      SessionOperations.SessionOccupancy.hasWorkerOtherThan me [ worker me ] |> Expect.isFalse "the caller alone"
+      SessionOperations.SessionOccupancy.hasWorkerOtherThan me [ worker me; observer "browser:tab-1" ] |> Expect.isFalse "a tab that watches"
+      SessionOperations.SessionOccupancy.hasWorkerOtherThan me [ worker me; worker (MemberId.display bob) ] |> Expect.isTrue "another agent"
+
+    testCase "WHY — a session's record of who ran code goes with its creator record, so a stopped session leaves nothing behind" <| fun _ ->
+      let session = Guid.NewGuid().ToString "N"
+      SessionOwners.claim alice session
+      SessionEvaluators.record session (EvalSource.Member alice)
+      SessionEvaluators.record session EvalSource.Dashboard
+      SessionEvaluators.record session (EvalSource.Member alice)
+      SessionEvaluators.ofSession session |> Expect.equal "each source once" (Set.ofList [ EvalSource.Member alice; EvalSource.Dashboard ])
+      SessionOwners.release session
+      SessionEvaluators.ofSession session |> Expect.isEmpty "released with the owner"
+      creatorOfSession session |> Expect.equal "and the owner is gone" SessionCreator.Unrecorded
+
+    testCase "WHY — the gate reads session_id only from a tool that declares it, so the prompt judges the session the body acts on" <| fun _ ->
+      routingSessionId "stop_session" (Some "named") |> Expect.equal "stop_session takes session_id" (Some "named")
+      routingSessionId "hard_reset_fsi_session" (Some "named") |> Expect.equal "hard_reset_fsi_session takes it" (Some "named")
+      routingSessionId "reset_fsi_session" (Some "named") |> Expect.equal "reset_fsi_session takes it" (Some "named")
+      routingSessionId "switch_workflow" (Some "named") |> Expect.equal "switch_workflow has no session_id, so one sent is dropped" None
+  ]
+
 // ── The gate in McpServer.fs ────────────────────────────────────────────────────────────────────────
 
 let canAsk = ClientCapabilities(Elicitation = ElicitationCapability())
@@ -151,6 +254,9 @@ let madeBy (maker: MemberId) (sid: string) : string -> SessionCreator =
     match asked = sid with
     | true -> SessionCreator.Recorded maker
     | false -> SessionCreator.Unrecorded
+
+/// Nobody but the caller has been in any session.
+let nobodyElse : string -> SessionActivity = fun _ -> SessionActivity.quiet
 
 let counting () : (ElicitRequestParams -> CancellationToken -> Task<ElicitResult>) * (unit -> int) =
   let mutable asked = 0
@@ -176,7 +282,7 @@ let gateTests =
     testTask "WHY — a call by the connection that made the session makes no elicitation request" {
       let ask, asked = counting ()
       let! outcome =
-        confirmCallWithin TestTimeouts.confirmationBudget canAsk ask (madeBy alice "s-1") alice (resolved "s-1") "hard_reset_fsi_session" CancellationToken.None
+        confirmCallWithin TestTimeouts.confirmationBudget canAsk ask (madeBy alice "s-1") nobodyElse alice (resolved "s-1") "hard_reset_fsi_session" CancellationToken.None
       outcome |> Expect.isOk "the call runs"
       asked () |> Expect.equal "nobody was asked" 0
     }
@@ -184,29 +290,51 @@ let gateTests =
     testTask "WHY — a call by another connection on the same session still makes an elicitation request" {
       let ask, asked = counting ()
       let! outcome =
-        confirmCallWithin TestTimeouts.confirmationBudget canAsk ask (madeBy alice "s-1") bob (resolved "s-1") "hard_reset_fsi_session" CancellationToken.None
+        confirmCallWithin TestTimeouts.confirmationBudget canAsk ask (madeBy alice "s-1") nobodyElse bob (resolved "s-1") "hard_reset_fsi_session" CancellationToken.None
       outcome |> Expect.isOk "the prompt was accepted"
       asked () |> Expect.equal "one person was asked" 1
     }
 
+    testTask "WHY — a call by the connection that made the session still asks once a person has run code in it" {
+      let ask, asked = counting ()
+      let aPersonWorkedHere (_: string) = { SessionActivity.quiet with RanCode = Set.ofList [ EvalSource.Dashboard ] }
+      let! outcome =
+        confirmCallWithin TestTimeouts.confirmationBudget canAsk ask (madeBy alice "s-1") aPersonWorkedHere alice (resolved "s-1") "stop_session" CancellationToken.None
+      outcome |> Expect.isOk "the prompt was accepted"
+      asked () |> Expect.equal "one person was asked" 1
+    }
+
+    testCase "WHY — who else has been in a session is read only for a call on the caller's own session, so an eval does not pay for an occupancy scan" <| fun _ ->
+      let mutable reads = 0
+      let counted (_: string) =
+        reads <- reads + 1
+        SessionActivity.quiet
+      for tool in [ "send_fsharp_code"; "list_sessions"; "stop_app"; "manage_local_data"; "frobnicate" ] do
+        confirmationFor (madeBy alice "s-1") counted alice (resolved "s-1") tool |> ignore
+      confirmationFor (madeBy bob "s-1") counted alice (resolved "s-1") "stop_session" |> ignore
+      confirmationFor (madeBy alice "s-1") counted alice (admissionFor "stop_session" None SageFs.McpTools.GateResolution.NotResolved) "stop_session" |> ignore
+      reads |> Expect.equal "nothing that already asks, or never asks, read it" 0
+      confirmationFor (madeBy alice "s-1") counted alice (resolved "s-1") "stop_session" |> ignore
+      reads |> Expect.equal "a call on the caller's own session reads it once" 1
+
     testTask "WHY — a session with no creator record still asks, and a decline still refuses it" {
       let declines (_: ElicitRequestParams) (_: CancellationToken) = Task.FromResult(ElicitResult(Action = "decline"))
       let! outcome =
-        confirmCallWithin TestTimeouts.confirmationBudget canAsk declines (fun _ -> SessionCreator.Unrecorded) alice (resolved "s-1") "stop_session" CancellationToken.None
+        confirmCallWithin TestTimeouts.confirmationBudget canAsk declines (fun _ -> SessionCreator.Unrecorded) nobodyElse alice (resolved "s-1") "stop_session" CancellationToken.None
       outcome |> Expect.equal "declined" (Result.Error Declined)
     }
 
     testTask "WHY — manage_local_data asks even when the caller made the session in its resolution" {
       let ask, asked = counting ()
       let admission = admissionFor "manage_local_data" None (SageFs.McpTools.GateResolution.Resolved(Routable "s-1"))
-      let! _ = confirmCallWithin TestTimeouts.confirmationBudget canAsk ask (madeBy alice "s-1") alice admission "manage_local_data" CancellationToken.None
+      let! _ = confirmCallWithin TestTimeouts.confirmationBudget canAsk ask (madeBy alice "s-1") nobodyElse alice admission "manage_local_data" CancellationToken.None
       asked () |> Expect.equal "asked once" 1
     }
 
     testTask "WHY — a client that cannot be asked is still not asked, and an own session needs no ask in the first place" {
       let ask, asked = counting ()
       let! outcome =
-        confirmCallWithin TestTimeouts.confirmationBudget (ClientCapabilities()) ask (madeBy bob "s-1") alice (resolved "s-1") "hard_reset_fsi_session" CancellationToken.None
+        confirmCallWithin TestTimeouts.confirmationBudget (ClientCapabilities()) ask (madeBy bob "s-1") nobodyElse alice (resolved "s-1") "hard_reset_fsi_session" CancellationToken.None
       outcome |> Expect.isOk "skipped as before"
       asked () |> Expect.equal "no request" 0
     }
@@ -217,7 +345,7 @@ let gateTests =
       let everyone = [ alice; bob; token; otherToken; tab; unbound; MemberId.Operator ]
       for owner in everyone do
         let sessionId = sprintf "owner-record-%s" (MemberId.display owner)
-        SageFs.McpTools.claimSessionOwner owner sessionId
+        SessionOwners.claim owner sessionId
         try
           creatorOfSession sessionId
           |> Expect.equal (sprintf "%s is read back as itself" (MemberId.display owner)) (SessionCreator.Recorded owner)
@@ -232,13 +360,13 @@ let gateTests =
               | MemberId.Mcp _, false
               | MemberId.Capability _, false
               | MemberId.Operator, false -> Confirmation.Required ConfirmationReason.CreatedBySomeoneElse
-            confirmationFor creatorOfSession caller (resolved sessionId) "hard_reset_fsi_session"
+            confirmationFor creatorOfSession nobodyElse caller (resolved sessionId) "hard_reset_fsi_session"
             |> Expect.equal (sprintf "made by %s, called by %s" (MemberId.display owner) (MemberId.display caller)) expected
         finally
-          SageFs.McpTools.releaseSessionOwner sessionId
+          SessionOwners.release sessionId
 
     testCase "WHY — a session nobody recorded reads back as unrecorded, and releasing a record that is not there does nothing" <| fun _ ->
-      SageFs.McpTools.releaseSessionOwner "owner-never-recorded"
+      SessionOwners.release "owner-never-recorded"
       creatorOfSession "owner-never-recorded" |> Expect.equal "no record" SessionCreator.Unrecorded
 
     testTask "WHY — an unbound agent that names itself with another identity's display text is still an unbound agent, so that identity is asked" {
@@ -246,19 +374,19 @@ let gateTests =
         let sessionId = sprintf "owner-lookalike-%s" (MemberId.display who)
         let ask, asked = counting ()
         // No connection is bound in a test, so the agent name is the identity: `Minted` text that looks like `who`.
-        SageFs.McpTools.claimSessionOwner (SageFs.McpTools.memberIdFor (MemberId.display who)) sessionId
+        SessionOwners.claim (SageFs.McpTools.memberIdFor (MemberId.display who)) sessionId
         try
           let! outcome =
-            confirmCallWithin TestTimeouts.confirmationBudget canAsk ask creatorOfSession who (resolved sessionId) "hard_reset_fsi_session" CancellationToken.None
+            confirmCallWithin TestTimeouts.confirmationBudget canAsk ask creatorOfSession nobodyElse who (resolved sessionId) "hard_reset_fsi_session" CancellationToken.None
           outcome |> Expect.isOk (sprintf "%s: the prompt was accepted" (MemberId.display who))
           asked () |> Expect.equal (sprintf "%s did not make that session, so one person was asked" (MemberId.display who)) 1
         finally
-          SageFs.McpTools.releaseSessionOwner sessionId
+          SessionOwners.release sessionId
     }
   ]
 
 /// #184: `stop_session` refused "owned by another bound MCP connection" for a session that no connection had a record for.
-/// The record (`McpTools.sessionOwners`) lives in memory and is written when a connection creates a session, so a daemon
+/// The record (`SessionOwners`) lives in memory and is written when a connection creates a session, so a daemon
 /// restart empties it, and so does a session made from the dashboard or the CLI. Nothing could ever satisfy the check for a
 /// session the restart resumed. Only a session recorded to a DIFFERENT connection is another connection's to stop; one with
 /// no record is stoppable, and the confirmation gate (`SessionCreator.Unrecorded`) still asks a person first.
@@ -293,28 +421,28 @@ let stopSessionOwnershipTests =
 
     testTask "WHY — a session with no owner on record can be stopped from a new connection, because a restart empties the record" {
       let sessionId = "no-owner-on-record-184"
-      SageFs.McpTools.sessionOwners.ContainsKey sessionId |> Expect.isFalse "the fixture has no record"
+      SessionOwners.ownerOf sessionId |> Expect.isNone "the fixture has no record"
       let! (reply: string) = stopOn "a-connection-that-came-after-the-restart" sessionId
       reply.Contains refusal |> Expect.isFalse (sprintf "no one else owns it, so the answer is not a refusal over ownership: %s" reply)
     }
 
     testTask "WHY — a session another connection created is still its creator's to stop" {
       let sessionId = "made-by-someone-else-184"
-      SageFs.McpTools.claimSessionOwner (ownerOn "the-creating-connection") sessionId
+      SessionOwners.claim (ownerOn "the-creating-connection") sessionId
       try
         let! reply = stopOn "a-different-connection" sessionId
         reply |> Expect.stringContains "refused, and says whose it is" refusal
       finally
-        SageFs.McpTools.releaseSessionOwner sessionId
+        SessionOwners.release sessionId
     }
 
     testTask "WHY — the connection that created a session can stop it" {
       let sessionId = "made-by-me-184"
-      SageFs.McpTools.claimSessionOwner (ownerOn "the-creating-connection") sessionId
+      SessionOwners.claim (ownerOn "the-creating-connection") sessionId
       try
         let! (reply: string) = stopOn "the-creating-connection" sessionId
         reply.Contains refusal |> Expect.isFalse (sprintf "the creator is not refused: %s" reply)
       finally
-        SageFs.McpTools.releaseSessionOwner sessionId
+        SessionOwners.release sessionId
     }
   ]
