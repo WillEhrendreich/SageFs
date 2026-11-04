@@ -388,6 +388,9 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
   // Which list fetch may still deliver: each batch frame that owes one takes a ticket, and an answer
   // whose ticket is no longer the newest for its session is dropped (HydrationGatePure).
   let mutable hydrationGate = SageFs.Vscode.HydrationGatePure.empty
+  // The files the daemon last said have annotations, with the session they are for: a window asks for the
+  // ones it has open, and for an editor that opens afterwards (AnnotationsFetchPure).
+  let mutable availableAnnotations : (string * string list) option = None
   let mutable bindings: obj array = [||]
   let mutable TestTrace: obj option = None
   let mutable evalDiff: VscEvalDiff option = None
@@ -457,6 +460,46 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     | "state" | "session" | "domain_model" | "warmup_completed" -> true
     | _ -> false
 
+  let originOf (sseUrl: string) : string =
+    let noQuery = sseUrl.Split([| '?' |]).[0]
+    noQuery.Substring(0, noQuery.LastIndexOf '/')
+
+  /// Ask for one file's annotations, and hand the answer to the handlers the `file_annotations` and
+  /// `coverage_view` frames use: the answer is the file's annotations with its `CoverageViews`, each the
+  /// data of a `coverage_view` frame. An answer for a request a newer one has superseded is dropped.
+  let fetchAnnotationsFile (sseUrl: string) (deliver: string -> obj -> unit) (sid: string) (file: string) : unit =
+    let key = sid + "|" + file
+    let ticket, gate' = SageFs.Vscode.HydrationGatePure.take key hydrationGate
+    hydrationGate <- gate'
+    httpGetRaw (SageFs.Vscode.AnnotationsFetchPure.url (originOf sseUrl) sid file) 15000
+    |> Promise.map (fun resp ->
+      if resp.statusCode = 200 && resp.body <> "" && SageFs.Vscode.HydrationGatePure.isCurrent key ticket hydrationGate then
+        let answer = jsonParse resp.body
+        // A frame names its session and the route's answer does not; the request's session is the file's.
+        answer?SessionId <- sid
+        let views = fieldArray "CoverageViews" answer |> Option.defaultValue [||]
+        deliver "file_annotations" answer
+        for view in views do
+          deliver "coverage_view" view)
+    |> ignore
+
+  /// Ask for the listed files that an editor has open.
+  let fetchAvailableForEditors (sseUrl: string) (deliver: string -> obj -> unit) : unit =
+    match availableAnnotations with
+    | None -> ()
+    | Some (sid, files) ->
+      let openPaths = Window.getVisibleTextEditors () |> Array.map (fun editor -> editor.document.fileName) |> List.ofArray
+      SageFs.Vscode.AnnotationsFetchPure.filesToFetch files openPaths
+      |> List.iter (fetchAnnotationsFile sseUrl deliver sid)
+
+  /// The daemon listed the files that have annotations: remember them, and ask for the open ones.
+  let noteAnnotationsAvailable (sseUrl: string) (deliver: string -> obj -> unit) (data: obj) : unit =
+    match passesSessionFilter data, fieldString "SessionId" data with
+    | true, Some sid when sid <> "" ->
+      availableAnnotations <- Some (sid, fieldArray "Files" data |> Option.defaultValue [||] |> Array.choose tryCastString |> List.ofArray)
+      fetchAvailableForEditors sseUrl deliver
+    | _ -> ()
+
   /// Deliver a frame, and go and get its list when the frame carries a tally and no list. The stream
   /// sends a summary now and the list lives behind GET /api/live-testing/entries, so a discovery can
   /// arrive with nothing to render. The frame is delivered first (the tally and the verdict do not
@@ -465,6 +508,7 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
   /// mutable hook to find it.
   let hydrateFrame (sseUrl: string) (deliver: string -> obj -> unit) (eventType: string) (data: obj) : unit =
     deliver eventType data
+    if eventType = "annotations_available" then noteAnnotationsAvailable sseUrl deliver data else
     if eventType <> "test_results_batch" && eventType <> "test_run_completed" then () else
     if not (List.isEmpty (parseResultsBatch discoveryGen data)) then () else
     match fieldString "sessionId" data with
@@ -691,6 +735,9 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       ) disconnectFn (fun msg -> try printfn "[SageFs SSE] %s" msg with _ -> ())
     | _ -> subscribeTypedSse url (hydrateFrame url processEvent)
 
+  // An editor that becomes visible after the list arrived has not been asked for yet.
+  let editorWatch = Window.onDidChangeVisibleTextEditors (fun _ -> fetchAvailableForEditors url processEvent)
+
   { State = fun () -> state
     Summary = fun () -> VscLiveTestState.summary state
     Bindings = fun () -> bindings
@@ -701,4 +748,6 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     Timeline = fun () -> timeline
     SetEventFilter = setEventFilter
     CoverageViews = fun () -> coverageViews
-    Dispose = fun () -> disposable.dispose () |> ignore }
+    Dispose = fun () ->
+      editorWatch.dispose () |> ignore
+      disposable.dispose () |> ignore }
