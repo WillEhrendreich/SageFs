@@ -198,7 +198,10 @@ let controlTests =
         match control with
         | Control.NoControl ->
           let html = strip { rowOf state control with Place = PlaceOf.ofFacts source }
-          not (html.Contains "<input") && html.Contains (describe state).Label
+          // A binding no file holds is said once in the title bar, so its row is a marker with no words and no input.
+          match stripShown state with
+          | StripShown.Marker -> not (html.Contains "<input") && not (html.Contains "live-state")
+          | StripShown.Strip -> not (html.Contains "<input") && html.Contains (describe state).Label
         | _ -> true))
 
     testCase "undo and redo are per row: the pair appears once there is history, a later write in the file disables an earlier row's undo and says whose turn it is" <| fun _ ->
@@ -219,12 +222,35 @@ let controlTests =
 
     testCase "a value that is simply in its file keeps its sentence in the tooltip, and anything a person must act on or understand keeps it on the row" <| fun _ ->
       strip (rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))) |> fun html -> html.Contains "tweak-detail" |> Expect.isFalse "in source: no wall of text"
-      strip (rowOf (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl) |> Expect.stringContains "REPL only says why on the row" "data-testid=\"tweak-detail\""
+      strip (rowOf (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl) |> fun html -> html.Contains "tweak-detail" |> Expect.isFalse "REPL only is said once in the title bar, not on every row"
       for state in states do
         match state with
         | PersistenceState.InSource _
         | PersistenceState.Derived(_, DerivedWhy.AContainer) -> ()
         | other -> detailShown other |> Expect.equal (sprintf "%s explains itself on the row" (PersistenceState.token other)) DetailShown.OnTheRow
+
+    testCase "WHY — a REPL-only row draws a marker with its state and nothing visible, because the title bar says it once and ten rows saying it again cost ten lines" <| fun _ ->
+      for state in states do
+        match state with
+        | PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt -> stripShown state |> Expect.equal "a marker" StripShown.Marker
+        | other -> stripShown other |> Expect.equal (sprintf "%s draws its strip" (PersistenceState.token other)) StripShown.Strip
+      let html = strip (rowOf (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl)
+      html |> Expect.stringContains "the state is still readable by a browser or an editor" "data-state=\"NotInAFile\""
+      html |> Expect.stringContains "under the row's own test id" "data-testid=\"tweak-row\""
+      html |> Expect.stringContains "and the morph can still find it by its id" (sprintf "id=\"%s\"" (TweakSignals.stripId key))
+      html.Contains "live-state" |> Expect.isFalse "no chip"
+      html.Contains "REPL only" |> Expect.isFalse "no words on the row"
+
+    testCase "TweakView.replOnlyCount counts the top-level bindings no file holds, and nothing else" <| fun _ ->
+      let view : TweakView =
+        { Rows =
+            Map.ofList
+              [ RowKey.top "speed", rowOf (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl
+                RowKey.top "scores", rowOf (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl
+                RowKey.top "gravity", rowOf (PersistenceState.InSource gravity) Control.NoControl
+                RowKey.field (RowKey.top "scores") "x", rowOf (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl ] }
+      TweakView.replOnlyCount view [ "speed"; "scores"; "gravity"; "unlisted" ] |> Expect.equal "two bindings, not the field, not the file-held one" 2
+      TweakView.replOnlyCount TweakView.none [ "speed" ] |> Expect.equal "a session whose files were not asked says nothing" 0
 
     testCase "a row in a summary (a record, a list) shows its state in words but never a control: a click there would toggle the details" <| fun _ ->
       let html = renderStrip key (rowOf (PersistenceState.Derived(gravity, DerivedWhy.AContainer)) Control.NoControl) Placement.InsideSummary |> decoded

@@ -179,6 +179,28 @@ let detailShown (state: PersistenceState) : DetailShown =
   | PersistenceState.Refused _
   | PersistenceState.Writing _ -> DetailShown.OnTheRow
 
+/// Whether a row draws a strip under it, or only a marker. A binding no file holds is the common case in a REPL session, and the
+/// title bar says it once with a count, so a strip saying it on every row would cost a line each. The marker keeps the state
+/// readable (`data-state`) for a browser test or an editor, and keeps the id the morph finds the row by when the state changes.
+[<RequireQualifiedAccess>]
+type StripShown =
+  | Strip
+  | Marker
+
+let stripShown (state: PersistenceState) : StripShown =
+  match state with
+  | PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt -> StripShown.Marker
+  | PersistenceState.InSource _
+  | PersistenceState.NotInAFile(NotInFileWhy.OwnedFilesUnknown _)
+  | PersistenceState.NotInAFile(NotInFileWhy.NotSpelledInTheFile _)
+  | PersistenceState.Held
+  | PersistenceState.Derived _
+  | PersistenceState.Ambiguous _
+  | PersistenceState.DiffersFromFile _
+  | PersistenceState.StaleAddress _
+  | PersistenceState.Refused _
+  | PersistenceState.Writing _ -> StripShown.Strip
+
 [<RequireQualifiedAccess>]
 type ReloadLine =
   | NoLine
@@ -462,21 +484,25 @@ let renderStrip (key: RowKey) (view: RowView) (placement: Placement) : XmlNode =
     match placement with
     | Placement.OnLeafRow -> reloadNodes view
     | Placement.InsideSummary -> []
+  let shown = stripShown view.State
   Elem.div
     [ Attr.id (TweakSignals.stripId key)
-      Attr.class' "live-tweak"
+      Attr.class' (match shown with StripShown.Strip -> "live-tweak" | StripShown.Marker -> "live-tweak live-tweak-marker")
       testid "tweak-row"
       Attr.create "data-state" (PersistenceState.token view.State)
       Attr.create "data-row" (attrEnc (RowKey.text key)) ]
-    [ yield
-        Elem.span
-          [ Attr.class' (sprintf "live-state %s" (Tone.cssClass described.Tone))
-            testid "tweak-state"
-            Attr.title (attrEnc described.Detail) ]
-          [ textEnc described.Label ]
-      yield! whereChip
-      yield! controls
-      yield! reload
-      match detailShown view.State with
-      | DetailShown.OnTheRow -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-detail" ] [ textEnc described.Detail ]
-      | DetailShown.InTheTooltipOnly -> () ]
+    (match shown with
+     | StripShown.Marker -> []
+     | StripShown.Strip ->
+       [ yield
+           Elem.span
+             [ Attr.class' (sprintf "live-state %s" (Tone.cssClass described.Tone))
+               testid "tweak-state"
+               Attr.title (attrEnc described.Detail) ]
+             [ textEnc described.Label ]
+         yield! whereChip
+         yield! controls
+         yield! reload
+         match detailShown view.State with
+         | DetailShown.OnTheRow -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-detail" ] [ textEnc described.Detail ]
+         | DetailShown.InTheTooltipOnly -> () ])

@@ -31,6 +31,10 @@
   --color-fail: #ff5d62;
   --color-warn: #e6c384;
   --color-info: #7fb4ca;
+  /* Kanagawa syntax fallbacks, so a row's name and value are coloured before the theme's own tokens arrive. */
+  --syn-property: #7fb4ca;
+  --syn-string: #98bb6c;
+  --syn-number: #d27e99;
   --font-size: 14px;
   --sidebar-width: 320px;
   /* The bottom dock is a SECONDARY surface: the transcript above it is what a session is
@@ -1316,9 +1320,19 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+/* A panel's title is the heading colour every other panel uses (`.panel h2`). Red is for failure, and this pane is working. */
 .live-pane-title {
-  color: var(--fg-red);
+  color: var(--fg-blue);
   font-weight: 700;
+  white-space: nowrap;
+}
+
+/* A binding no file holds, said once in the title bar. The reason is on hover. */
+.live-repl-chip {
+  padding: 0 6px;
+  border: 1px solid var(--border-normal);
+  color: var(--fg-dim);
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -1422,23 +1436,70 @@ h2 {
   font-size: 0.75rem;
 }
 
-/* A top-level binding: a square pin button, and the tree beside it. A pinned one rides to the top of the column. */
+/* A top-level binding: one column, with the pin a small icon at the end of its first row. It shows on hover or focus and while pinned,
+   so it costs no width and no height. A pinned one rides to the top of the column, marked with the focus colour. Yellow is the
+   warning colour, and choosing a row is not a warning. */
 .live-binding {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 0 6px;
-  align-items: start;
-  padding: 2px 0;
+  position: relative;
+  padding: 0;
   border-bottom: 1px solid var(--border-normal);
+}
 
-  &.live-pinned {
-    order: -1;
-    background: color-mix(in oklch, var(--fg-yellow) 8%, transparent);
-  }
+.live-binding.live-pinned {
+  order: -1;
+  background: color-mix(in oklch, var(--border-focus) 10%, transparent);
 }
 
 .live-binding-tree {
   min-width: 0;
+  padding-right: 20px;
+}
+
+/* `.live-binding >` is there for specificity: the aria-label tooltip rule further down sets `position: relative` on anything with an
+   aria-label, and it outranks a bare class. Without it the pin sat in the flow and made every row two lines tall. */
+.live-binding > .live-binding-pin {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  z-index: 1;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  opacity: 0;
+}
+
+.live-binding:hover .live-binding-pin,
+.live-binding:focus-within .live-binding-pin,
+.live-binding-pin:focus-visible,
+.live-binding-pin.session-btn-on {
+  opacity: 1;
+}
+
+.live-binding-pin.session-btn-on {
+  background: transparent;
+  color: var(--border-focus);
+}
+
+.live-pane-pin.session-btn-on {
+  background: var(--border-focus);
+  color: var(--bg-default);
+}
+
+@media (hover: none) {
+  .live-binding > .live-binding-pin {
+    opacity: 0.7;
+  }
+}
+
+/* A REPL-only row draws a marker and nothing visible: the title bar says it once. The marker also carries `.live-tweak`, whose
+   rule comes later and sets `display: flex`, so this selector is the more specific one: order alone would let the strip win. */
+.live-tweak.live-tweak-marker {
+  display: none;
 }
 
 .live-empty {
@@ -1477,22 +1538,25 @@ h2 {
 }
 
 .live-name {
-  color: var(--fg-cyan);
+  color: var(--syn-property);
   font-weight: 700;
   white-space: nowrap;
 }
 
-.live-kind {
-  padding: 0 0.4em;
-  border: 1px solid var(--border-normal);
+/* A node's kind: a small glyph, with the word on hover and in the accessible name. The shape says what the node is, so the glyph takes
+   no colour of its own: every theme has a syntax colour that equals a meaning colour. */
+.live-glyph {
+  flex: none;
+  width: 1.5em;
   color: var(--fg-dim);
-  font-size: 0.6rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  white-space: nowrap;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
 }
 
 .live-type {
+  flex: 0 1 auto;
+  max-width: 30%;
   color: var(--fg-dim);
   font-size: 0.7rem;
 }
@@ -1527,8 +1591,20 @@ h2 {
 
 .live-binding-node > .live-preview {
   flex: 1 1 0;
-  color: var(--fg-green);
   font-size: 0.7rem;
+}
+
+/* A value takes the theme's syntax colour for what it is, so it changes with the editor's. Anything else keeps the default. */
+.live-preview {
+  color: var(--fg-default);
+}
+
+.live-v-string {
+  color: var(--syn-string);
+}
+
+.live-v-number {
+  color: var(--syn-number);
 }
 
 .live-closure-badge {

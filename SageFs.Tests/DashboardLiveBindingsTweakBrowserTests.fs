@@ -203,8 +203,13 @@ let journey () : Task<unit> = task {
     do! waitState page "feel" "Derived"
     do! waitState page "speed" "NotInAFile"
     do! waitState page "scores" "NotInAFile"
+    // A REPL-only value says nothing on its row. The title bar says it once, with a count, and its reason is on hover.
     let! speedText = textIn page (row "speed")
-    speedText |> Expect.stringContains "a REPL-only value says there is nothing to save it to" "nothing to save it to"
+    speedText.Trim() |> Expect.equal "a REPL-only row has no words of its own" ""
+    let! chipText = textIn page "[data-testid=live-repl-only]"
+    chipText |> Expect.stringContains "the title bar counts the REPL-only bindings" "REPL only"
+    let! chipReason = page.Locator("[data-testid=live-repl-only]").GetAttributeAsync("title")
+    chipReason |> Expect.stringContains "and its reason is on hover" "nothing to save it to"
     let! jumpControl = page.Locator(sprintf "%s [data-testid=tweak-expression]" (row "jump")).CountAsync()
     jumpControl |> Expect.equal "a formula is edited as an expression" 1
     let! speedControls = page.Locator(sprintf "%s input, %s button" (row "speed") (row "speed")).CountAsync()

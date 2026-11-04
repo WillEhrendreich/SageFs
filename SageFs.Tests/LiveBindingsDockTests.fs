@@ -13,6 +13,9 @@ open SageFs
 open SageFs.Features
 open SageFs.Features.LiveBindingsPane
 open SageFs.Features.LiveValueTree
+open SageFs.Features.Tweak.Nudge
+open SageFs.Features.Tweak.BindingTweak
+open SageFs.Features.Tweak.BindingTweakRows
 open SageFs.Server
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DockPanes
@@ -109,14 +112,57 @@ let dockStateTests =
 let dockTreeTests =
   testList "the dock's tree: kind, filter, pin" [
 
-    testCase "every row shows its kind in a word, from one exhaustive function" <| fun _ ->
+    testCase "WHY — a row's kind is a small glyph with the word on hover and as its accessible name, because the shape says what a node is and a boxed word on every row costs width" <| fun _ ->
       let html = dock (WalkedBindings(view [ person; scores ]))
-      (count "live-kind" html, 5) |> Expect.isGreaterThanOrEqual "a kind on every row"
-      html |> Expect.stringContains "a record" ">record<"
-      html |> Expect.stringContains "a list" ">list<"
-      html |> Expect.stringContains "a leaf" ">value<"
+      (count "live-glyph" html, 5) |> Expect.isGreaterThanOrEqual "a glyph on every row"
+      html |> Expect.stringContains "a record's word on hover" "title=\"record\""
+      html |> Expect.stringContains "and as its name" "aria-label=\"record\""
+      html |> Expect.stringContains "a list" "title=\"list\""
+      html |> Expect.stringContains "a leaf" "title=\"value\""
+      html.Contains "live-kind" |> Expect.isFalse "no boxed word"
       kindLabel NodeKind.Class |> Expect.equal "class" "class"
       kindLabel (NodeKind.NotEvaluated NotEvaluatedReason.GetterLoops) |> Expect.equal "held" "held"
+
+    testCase "every kind of node has a glyph, and a leaf's glyph says whether it is text or a number" <| fun _ ->
+      let kinds =
+        [ NodeKind.Leaf; NodeKind.NotEvaluated NotEvaluatedReason.GetterLoops; NodeKind.Record; NodeKind.List; NodeKind.Map; NodeKind.Option
+          NodeKind.Union; NodeKind.Tuple; NodeKind.Array; NodeKind.Class; NodeKind.Closure; NodeKind.Cycle; NodeKind.Truncated ]
+      for kind in kinds do
+        (String.IsNullOrWhiteSpace(kindGlyph kind "T")) |> Expect.isFalse (sprintf "%s has a glyph" (kindLabel kind))
+      kindGlyph NodeKind.Leaf "String" |> Expect.equal "text" "ab"
+      for number in [ "Int32"; "Int64"; "Double"; "Single"; "Decimal"; "Byte" ] do
+        kindGlyph NodeKind.Leaf number |> Expect.equal (sprintf "%s is a number" number) "#"
+      kindGlyph NodeKind.Leaf "Person" |> Expect.equal "anything else" "·"
+      kindGlyph NodeKind.Record "Person" |> Expect.equal "a record" "{}"
+
+    testCase "WHY — a row reads glyph, name, value, then type, because the value belongs next to its name and the type is the quietest part" <| fun _ ->
+      let html = dock (WalkedBindings(view [ person ]))
+      let at (needle: string) = html.IndexOf(needle, StringComparison.Ordinal)
+      (at "live-glyph" < at "class=\"live-name\"") |> Expect.isTrue "glyph before name"
+      (at "class=\"live-name\"" < at "live-preview") |> Expect.isTrue "name before value"
+      (at "live-preview" < at "class=\"live-type\"") |> Expect.isTrue "value before type"
+
+    testCase "WHY — the title is a panel heading with no red circle, because red means failure everywhere else and this pane is working" <| fun _ ->
+      for html in [ dock (WalkedBindings(view [ person ])); dock NothingBound ] do
+        html.Contains "🔴" |> Expect.isFalse "no red circle in either state of the pane"
+        html |> Expect.stringContains "the title" "Live bindings"
+
+    testCase "WHY — REPL only is said once in the title bar with its reason on hover, and a count, because ten rows saying it again cost ten lines" <| fun _ ->
+      let replOnly : RowView =
+        { State = PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt
+          Control = Control.NoControl
+          Place = PlaceOf.NotPlaced
+          Watching = WatchStatus.Watched
+          Reload = RowReload.NoWriteYet
+          Undo = HistoryStep.NothingToStep
+          Redo = HistoryStep.NothingToStep }
+      let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
+      let html = renderDockWith tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
+      html |> Expect.stringContains "the count, in the bar" "2 REPL only"
+      html |> Expect.stringContains "the chip's own test id" "data-testid=\"live-repl-only\""
+      html |> Expect.stringContains "the reason on hover" "nothing to save it to"
+      count "Bound in the REPL" html |> Expect.equal "the sentence appears once, in the chip, and not on each row" 1
+      (dock (WalkedBindings(view [ person; scores ]))).Contains "REPL only" |> Expect.isFalse "no chip when the files were not asked about"
 
     testCase "the filter is a typed signal binding, and each binding hides itself by name through a typed class toggle" <| fun _ ->
       let html = dock (WalkedBindings(view [ person; scores ]))
@@ -177,4 +223,43 @@ let dockTreeTests =
     testCase "nothing is hand-written: no raw onclick or data-on attribute strings" <| fun _ ->
       let html = dock (WalkedBindings(view [ person ]))
       html.Contains " onclick=" |> Expect.isFalse "no raw onclick"
+  ]
+
+/// The bodies of every stylesheet rule that ends its selector list with exactly `selector`, joined. A selector can be the last of a group
+/// as well as a rule of its own, and both are what the stylesheet says about it.
+let private ruleBody (selector: string) : string =
+  let matches = Text.RegularExpressions.Regex.Matches(Dashboard.dashboardCss, sprintf @"(?m)^\s*%s\s*\{([^}]*)\}" (Text.RegularExpressions.Regex.Escape selector))
+  match matches.Count with
+  | 0 -> failtestf "the stylesheet has no rule for %s" selector
+  | _ -> matches |> Seq.map (fun m -> m.Groups.[1].Value) |> String.concat "\n"
+
+[<Tests>]
+let dockColourTests =
+  testList "the dock's colours follow the theme's meanings" [
+
+    testCase "WHY — the pane title is the panel heading colour, because red means failure everywhere else and this pane is working" <| fun _ ->
+      let body = ruleBody ".live-pane-title"
+      body |> Expect.stringContains "the heading colour every other panel uses" "var(--fg-blue)"
+      body.Contains "--fg-red" |> Expect.isFalse "never red"
+
+    testCase "WHY — a pinned row is marked with the focus colour and never the warning yellow, because choosing a row is not a warning" <| fun _ ->
+      for selector in [ ".live-binding.live-pinned"; ".live-binding-pin.session-btn-on" ] do
+        let body = ruleBody selector
+        body |> Expect.stringContains (sprintf "%s uses the focus colour" selector) "--border-focus"
+        body.Contains "--fg-yellow" |> Expect.isFalse (sprintf "%s is not the warning colour" selector)
+
+    testCase "a name and a value take their syntax tokens, so a theme changes them with the editor, and the stylesheet declares a fallback for each" <| fun _ ->
+      ruleBody ".live-name" |> Expect.stringContains "names are properties" "var(--syn-property)"
+      ruleBody ".live-v-string" |> Expect.stringContains "text" "var(--syn-string)"
+      ruleBody ".live-v-number" |> Expect.stringContains "numbers" "var(--syn-number)"
+      for token in [ "--syn-property"; "--syn-string"; "--syn-number" ] do
+        Text.RegularExpressions.Regex.IsMatch(Dashboard.dashboardCss, sprintf @"%s:\s*#[0-9a-fA-F]{6}" token)
+        |> Expect.isTrue (sprintf "%s has a declared fallback until the theme's own arrives" token)
+
+    testCase "a leaf's value is drawn in the colour of what it is, text or number, and anything else keeps the default" <| fun _ ->
+      let leaf typeName = { node "x" NodeKind.Leaf "1" [] with TypeName = typeName }
+      let html typeName = dock (WalkedBindings(view [ { Name = "x"; TypeSignature = typeName; Root = leaf typeName } ]))
+      html "String" |> Expect.stringContains "text" "live-v-string"
+      html "Int32" |> Expect.stringContains "number" "live-v-number"
+      (html "Person").Contains "live-v-" |> Expect.isFalse "nothing for anything else"
   ]

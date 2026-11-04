@@ -28,7 +28,7 @@
           if (!replaced || !node || !node.closest || !node.closest(dock)) return;
           var preview = node.closest(cell);
           if (!preview || !preview.animate) return;
-          var accent = getComputedStyle(document.documentElement).getPropertyValue('--fg-yellow') || '#e5c07b';
+          var accent = getComputedStyle(document.documentElement).getPropertyValue('--color-info') || '#7fb4ca';
           preview.getAnimations().forEach(function(running) { running.cancel(); });
           preview.animate([{ backgroundColor: accent }, { backgroundColor: 'transparent' }], { duration: 1000, easing: 'ease-out' });
         });

@@ -43,16 +43,14 @@ let private renderLine (line: AppOutputLine) : XmlNode =
     textEnc line.Text
   ]
 
-/// Why the pane is not showing: one line, and it says what to do about it.
+/// A pane with nothing to show draws nothing a person can see. It used to draw a bar saying there was no app output and how to make
+/// some, which cost a row of a dock that is short, for a fact that has nothing to act on until an app runs. What is left is a hidden
+/// placeholder with the pane's id, so the morph has something to replace when the first line arrives.
 ///
-/// Its own bar class, not `live-dock-bar`: two panes share one dock, so a generic "collapsed bar" class
-/// makes an open live-bindings pane next to a collapsed output pane look like a collapsed bindings pane —
-/// which is exactly how it failed "a session with bindings … no collapsed bar".
-let renderCollapsedBar (why: CollapsedBecause) : XmlNode =
-  Elem.div [ Attr.id AppOutputIds.CollapsedBar; Attr.create "role" "status"; Attr.class' "app-output-bar" ] [
-    Elem.span [ Attr.class' "live-pane-title" ] [ textEnc "App output" ]
-    Elem.span [ Attr.class' "live-dock-reason" ] [ textEnc (CollapsedBecause.text why) ]
-  ]
+/// Its own id and class, not `live-dock-bar`: two panes share one dock, so a generic bar class would make an open live-bindings pane
+/// next to this one look like a collapsed bindings pane.
+let private renderPlaceholder : XmlNode =
+  Elem.div [ Attr.id AppOutputIds.CollapsedBar; Attr.class' "app-output-bar live-hidden" ] []
 
 /// The four controls the roadmap asks for: follow, pause, search and the stream filter.
 ///
@@ -130,8 +128,11 @@ let renderBody (pane: AppOutputPane) (because: OpenBecause) : XmlNode =
   ]
 
 /// The pane, decided and drawn: `DockPanes` has already answered, so this is only which of the two shapes
-/// to draw, and a collapsed pane never renders an empty body.
+/// to draw, and a collapsed pane never renders an empty body. Both reasons it can be collapsed (no session, no output yet) draw the
+/// same nothing: the bindings pane already says there is no session, and an app that has written nothing has nothing to show.
 let render (state: PaneState) (pane: AppOutputPane) : XmlNode =
   match state with
   | PaneOpen because -> renderBody pane because
-  | PaneCollapsed why -> renderCollapsedBar why
+  | PaneCollapsed NoSessionOpen
+  | PaneCollapsed NoAppOutputYet
+  | PaneCollapsed NothingBoundYet -> renderPlaceholder

@@ -556,3 +556,28 @@ type TweakView = { Rows: Map<RowKey, RowView> }
 module TweakView =
   let none : TweakView = { Rows = Map.empty }
   let tryRow (view: TweakView) (key: RowKey) : RowView option = Map.tryFind key view.Rows
+
+  /// Whether no file of the session holds the value. Every state says which it is, so a new state cannot go unanswered.
+  let isReplOnly (state: PersistenceState) : bool =
+    match state with
+    | PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt -> true
+    | PersistenceState.NotInAFile(NotInFileWhy.OwnedFilesUnknown _)
+    | PersistenceState.NotInAFile(NotInFileWhy.NotSpelledInTheFile _)
+    | PersistenceState.InSource _
+    | PersistenceState.Held
+    | PersistenceState.Derived _
+    | PersistenceState.Ambiguous _
+    | PersistenceState.DiffersFromFile _
+    | PersistenceState.StaleAddress _
+    | PersistenceState.Refused _
+    | PersistenceState.Writing _ -> false
+
+  /// How many of these top-level bindings no file of the session holds. The title bar says it once with this count, so no row has
+  /// to. A session whose files were not asked about has no row for any binding, so the count is 0 and nothing is claimed.
+  let replOnlyCount (view: TweakView) (bindingNames: string list) : int =
+    bindingNames
+    |> List.filter (fun name ->
+      match tryRow view { Binding = name; Labels = [] } with
+      | Some row -> isReplOnly row.State
+      | None -> false)
+    |> List.length

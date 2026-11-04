@@ -235,11 +235,52 @@ let journey () : Task<unit> = task {
     let! paneText = textOf page "#bindings-panel"
     paneText |> Expect.stringContains "the pane counts the user's bindings" "bindings"
     paneText.Contains "_SageFs" |> Expect.isFalse "the tooling's own bindings are not listed"
-    paneText.ToLowerInvariant() |> Expect.stringContains "a record row says it is a record" "record"
-    paneText.ToLowerInvariant() |> Expect.stringContains "a list row says it is a list" "list"
+    // A row's kind is a glyph with the word on hover and as its accessible name, and not a boxed word on every row.
+    let! recordGlyphs = page.Locator("#bindings-panel .live-glyph[title=record][aria-label=record]").CountAsync()
+    (recordGlyphs >= 1) |> Expect.isTrue "a record row carries a record glyph with the word as its name"
+    let! listGlyphs = page.Locator("#bindings-panel .live-glyph[title=list][aria-label=list]").CountAsync()
+    (listGlyphs >= 1) |> Expect.isTrue "a list row carries a list glyph with the word as its name"
+    let! boxedKinds = page.Locator("#bindings-panel .live-kind").CountAsync()
+    boxedKinds |> Expect.equal "no boxed kind word on any row" 0
+    // The title is a panel heading: its words, and the heading colour every other panel uses, never red.
+    let! titleText = textOf page "#bindings-panel .live-pane-title"
+    titleText.Trim() |> Expect.equal "the title is its words and no red circle" "Live bindings"
+    let! titleIsHeadingColour =
+      page.EvaluateAsync<bool>(
+        """() => {
+          const title = document.querySelector('#bindings-panel .live-pane-title');
+          const probe = document.createElement('span');
+          probe.style.color = 'var(--fg-blue)';
+          document.body.appendChild(probe);
+          const heading = getComputedStyle(probe).color;
+          probe.remove();
+          return getComputedStyle(title).color === heading;
+        }""")
+    titleIsHeadingColour |> Expect.isTrue "the title is --fg-blue, the heading colour"
+    // With no app running the output pane draws nothing visible.
+    let! outputBar = page.EvaluateAsync<float>("() => { const e = document.querySelector('#app-output-bar'); return e ? e.getBoundingClientRect().height : 0; }")
+    outputBar |> Expect.equal "the app-output pane takes no height when no app has written" 0.0
     do! waitHidden page "#live-dock-bar"
     // The popover stays out of the way: close it, and the bindings are what is left at the bottom.
+    // Ten bindings in the dock at its default ceiling show at least eight rows: one line a row, and nothing under a REPL-only row.
+    do! evaluateThroughPopover page (sprintf "let a1 = 1\nlet a2 = 2\nlet a3 = 3\nlet a4 = 4\nlet a5 = 5\nlet a6 = 6\nlet a7 = 7\nprintfn \"DOCKPROBE-%s-ten\";;" tag) (sprintf "DOCKPROBE-%s-ten" tag)
     do! closePopoverWithButton page
+    do! waitText page "#bindings-panel" "a7"
+    let! geometry =
+      page.EvaluateAsync<string>(
+        """() => {
+          const tree = document.querySelector('#live-tree').getBoundingClientRect();
+          const rows = [...document.querySelectorAll('#live-tree > .live-binding')];
+          const inView = rows.filter(e => { const r = e.getBoundingClientRect(); return r.height > 0 && r.top >= tree.top - 1 && r.bottom <= tree.bottom + 1; }).length;
+          const heights = rows.map(e => (e.id || e.className) + '=' + Math.round(e.getBoundingClientRect().height)).join(' ');
+          return inView + '|tree=' + Math.round(tree.height) + '|rows=' + rows.length + '|' + heights;
+        }""")
+    let! shownMarkers = page.EvaluateAsync<int>("() => [...document.querySelectorAll('#live-tree .live-tweak-marker')].filter(e => getComputedStyle(e).display !== 'none').length")
+    shownMarkers |> Expect.equal "a REPL-only marker takes no space (the later .live-tweak rule must not win)" 0
+    let! flowPins = page.EvaluateAsync<int>("() => [...document.querySelectorAll('#live-tree .live-binding-pin')].filter(e => getComputedStyle(e).position !== 'absolute').length")
+    flowPins |> Expect.equal "every row's pin is out of the flow (the aria-label tooltip rule must not win)" 0
+    let rowsInView = geometry.Split('|').[0] |> int
+    (rowsInView >= 8) |> Expect.isTrue (sprintf "ten collapsed bindings show at least eight rows in the dock, got %d (%s)" rowsInView geometry)
     do! shot page "3-bindings"
 
     // The pane folds its own tree away: the tree can be taller than the dock's ceiling, and the

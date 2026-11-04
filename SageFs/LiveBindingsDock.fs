@@ -123,6 +123,71 @@ let kindLabel (kind: LiveValueTree.NodeKind) : string =
   | LiveValueTree.NodeKind.Cycle -> "cycle"
   | LiveValueTree.NodeKind.Truncated -> "truncated"
 
+/// The .NET names of the types a leaf is drawn as a number for.
+let numericTypeNames : Set<string> =
+  set [ "Byte"; "SByte"; "Int16"; "UInt16"; "Int32"; "UInt32"; "Int64"; "UInt64"; "Single"; "Double"; "Decimal"; "BigInteger" ]
+
+/// What a leaf's value is, for the colour it is drawn in and the glyph it carries. Anything that is neither text nor a number keeps
+/// the default colour, so a colour always means something.
+[<RequireQualifiedAccess>]
+type ValueTone =
+  | TextTone
+  | NumberTone
+  | PlainTone
+
+let valueToneOf (kind: LiveValueTree.NodeKind) (typeName: string) : ValueTone =
+  match kind with
+  | LiveValueTree.NodeKind.Leaf ->
+    match typeName = "String", numericTypeNames.Contains typeName with
+    | true, _ -> ValueTone.TextTone
+    | false, true -> ValueTone.NumberTone
+    | false, false -> ValueTone.PlainTone
+  | LiveValueTree.NodeKind.NotEvaluated _
+  | LiveValueTree.NodeKind.Record
+  | LiveValueTree.NodeKind.List
+  | LiveValueTree.NodeKind.Map
+  | LiveValueTree.NodeKind.Option
+  | LiveValueTree.NodeKind.Union
+  | LiveValueTree.NodeKind.Tuple
+  | LiveValueTree.NodeKind.Array
+  | LiveValueTree.NodeKind.Class
+  | LiveValueTree.NodeKind.Closure
+  | LiveValueTree.NodeKind.Cycle
+  | LiveValueTree.NodeKind.Truncated -> ValueTone.PlainTone
+
+/// The extra class a value is drawn with, from the theme's syntax tokens (`--syn-string`, `--syn-number`).
+let valueToneClass (tone: ValueTone) : string =
+  match tone with
+  | ValueTone.TextTone -> " live-v-string"
+  | ValueTone.NumberTone -> " live-v-number"
+  | ValueTone.PlainTone -> ""
+
+/// A node's kind as a glyph of one or two characters. The shape says what the node is, the word is on hover and in the accessible
+/// name (`kindLabel`), and the glyph takes no colour of its own, because every theme has a syntax colour that equals a meaning colour.
+let kindGlyph (kind: LiveValueTree.NodeKind) (typeName: string) : string =
+  match kind with
+  | LiveValueTree.NodeKind.Leaf ->
+    match valueToneOf kind typeName with
+    | ValueTone.TextTone -> "ab"
+    | ValueTone.NumberTone -> "#"
+    | ValueTone.PlainTone -> "·"
+  | LiveValueTree.NodeKind.NotEvaluated _ -> "…"
+  | LiveValueTree.NodeKind.Record -> "{}"
+  | LiveValueTree.NodeKind.List -> "[]"
+  | LiveValueTree.NodeKind.Map -> "⇄"
+  | LiveValueTree.NodeKind.Option -> "?"
+  | LiveValueTree.NodeKind.Union -> "∪"
+  | LiveValueTree.NodeKind.Tuple -> "()"
+  | LiveValueTree.NodeKind.Array -> "[]"
+  | LiveValueTree.NodeKind.Class -> "◇"
+  | LiveValueTree.NodeKind.Closure -> "ƒ"
+  | LiveValueTree.NodeKind.Cycle -> "↩"
+  | LiveValueTree.NodeKind.Truncated -> "…"
+
+/// A pin, drawn in the text's own colour so a theme and the pressed state reach it.
+let private pinIcon : XmlNode =
+  Text.raw "<svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" aria-hidden=\"true\"><path d=\"M9.5 1.5l5 5-1.6.6-2.4 2.4.3 3.1-1.1 1.1-2.6-2.6-4 4-.7-.7 4-4L3.8 7.2l1.1-1.1 3.1.3 2.4-2.4z\" fill=\"currentColor\"/></svg>"
+
 let private hexOf (text: string) : string = Convert.ToHexStringLower(Text.Encoding.UTF8.GetBytes text)
 
 /// The class the filter and the pins toggle on a top-level binding. Both are written with `Ds.class'`, and the morph is told to
@@ -161,7 +226,7 @@ let private panePinButton (id: string) : XmlNode =
       Ds.class' ("session-btn-on", sprintf "$%s" DockSignals.LivePanePinned)
       Ds.preserveAttr "class aria-pressed"
       Ds.onClick (sprintf "$%s = !$%s" DockSignals.LivePanePinned DockSignals.LivePanePinned) ]
-    [ Text.raw "📌" ]
+    [ pinIcon ]
 
 /// Fold the pane's tree away, or open it again.
 ///
@@ -199,7 +264,7 @@ let private followPin (display: PinDisplay) (baseClass: string) : XmlAttribute l
 /// The one-line pane: says why there is nothing to show, and offers the pin when a pin can help.
 let renderCollapsedBar (why: CollapsedBecause) (display: PinDisplay) : XmlNode =
   Elem.div (Attr.id DockIds.CollapsedBar :: Attr.create "role" "status" :: followPin display "live-dock-bar") [
-    Elem.span [ Attr.class' "live-pane-title" ] [ Text.raw "🔴 Live bindings" ]
+    Elem.span [ Attr.class' "live-pane-title" ] [ Text.raw "Live bindings" ]
     Elem.span [ Attr.class' "live-dock-reason" ] [ textEnc (CollapsedBecause.text why) ]
     match CollapsedBecause.pin why with
     | PinOffered -> panePinButton DockIds.BarPin
@@ -240,7 +305,14 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
     let stagedPath = path |> List.map jsStringLiteral |> String.concat ", "
     attrEnc (sprintf "$binding = %s; $path = [%s]; " (jsStringLiteral binding) stagedPath + Ds.post evaluateEndpoint)
   let nameCell (node: LiveValueTree.LiveValueNode) = Elem.code [ Attr.class' "live-name" ] [ textEnc node.Label ]
-  let kindCell (node: LiveValueTree.LiveValueNode) = Elem.span [ Attr.class' "live-kind" ] [ textEnc (kindLabel node.Kind) ]
+  let glyphCell (node: LiveValueTree.LiveValueNode) =
+    let word = kindLabel node.Kind
+    Elem.span
+      [ Attr.class' "live-glyph"
+        Attr.create "title" word
+        Attr.create "role" "img"
+        Attr.create "aria-label" word ]
+      [ textEnc (kindGlyph node.Kind node.TypeName) ]
   let typeCell (node: LiveValueTree.LiveValueNode) = Elem.span [ Attr.class' "live-type" ] [ textEnc node.TypeName ]
   let heldRow (binding: string) (path: string list) (node: LiveValueTree.LiveValueNode) (reason: LiveValueTree.NotEvaluatedReason) =
     let action = LiveBindingsPane.rowActionOf reason
@@ -251,9 +323,8 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
       | LiveBindingsPane.ClickFailed -> "live-binding-node live-held-row live-held-unknown"
     let indicator = liveEvaluatingSignal binding path
     Elem.div [ Attr.class' rowClass ] [
+      glyphCell node
       nameCell node
-      kindCell node
-      typeCell node
       Elem.span [ Attr.class' "live-held-reason" ] [
         match action with
         | LiveBindingsPane.ClickFailed -> textEnc (sprintf "unknown: %s" node.Preview)
@@ -273,6 +344,7 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
         Elem.span [ Attr.class' "live-held-evaluating"; Ds.show (sprintf "$%s" indicator) ] [ Text.raw "⏳ evaluating…" ]
       | LiveBindingsPane.NothingToClick
       | LiveBindingsPane.ClickFailed -> ()
+      typeCell node
     ]
   // The open state of a node's <details> is its own signal, named from the binding and every label down to the node, each
   // written as hex, so two nodes that share a label never share a signal.
@@ -287,10 +359,10 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
       // Text.create escapes: labels, type names and previews are FSI-derived DATA, not trusted markup. A string
       // preview holding <script> must never inject into the dashboard DOM.
       Elem.div [ Attr.class' "live-binding-node" ] [
+        glyphCell node
         nameCell node
-        kindCell node
+        Elem.span [ Attr.class' ("live-preview" + valueToneClass (valueToneOf node.Kind node.TypeName)) ] [ textEnc (sprintf "= %s" node.Preview) ]
         typeCell node
-        Elem.span [ Attr.class' "live-preview" ] [ textEnc (sprintf "= %s" node.Preview) ]
         yield! kindBadge node
       ]
     // What the files say about this row and what can be done about it (LiveBindingsTweakView): one strip under a row the pane
@@ -365,7 +437,7 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
                     Ds.class' ("session-btn-on", isPinnedExpr b.Name)
                     Ds.preserveAttr "class aria-pressed"
                     Ds.onClick (attrEnc (togglePinExpr b.Name)) ]
-                  [ Text.raw "📌" ]
+                  [ pinIcon ]
                 Elem.div [ Attr.class' "live-binding-tree" ] [ renderNode b.Name [] b.Root ] ])
         Elem.div
           [ Attr.id DockIds.NoMatch
@@ -398,9 +470,22 @@ let renderPaneWith (tweaks: TweakView) (sessionId: string) (source: BindingsSour
     | NothingBound -> DomIds.BindingsPanel
   Elem.div (Attr.id paneId :: followPin display "panel live-pane") [
     Elem.div [ Attr.class' "live-pane-bar" ] [
-      Elem.span [ Attr.class' "live-pane-title" ] [ Text.raw "🔴 Live bindings" ]
+      Elem.span [ Attr.class' "live-pane-title" ] [ Text.raw "Live bindings" ]
       Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
       Elem.span [ Attr.class' "live-pane-stamp" ] [ textEnc stamp ]
+      // A binding no file holds is said once here, with its reason on hover, and not on every row.
+      match source with
+      | WalkedBindings view ->
+        match TweakView.replOnlyCount tweaks (view.Snapshot.Bindings |> List.map (fun b -> b.Name)) with
+        | 0 -> ()
+        | count ->
+          Elem.span
+            [ Attr.class' "live-repl-chip"
+              testid "live-repl-only"
+              Attr.title (attrEnc (describe (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt)).Detail) ]
+            [ textEnc (sprintf "%d REPL only" count) ]
+      | PrintedBindings _
+      | NothingBound -> ()
       Elem.input
         [ Attr.id DockIds.Filter
           Attr.class' "live-filter"
@@ -486,7 +571,7 @@ let flashScript () : XmlNode =
           if (!replaced || !node || !node.closest || !node.closest(dock)) return;
           var preview = node.closest(cell);
           if (!preview || !preview.animate) return;
-          var accent = getComputedStyle(document.documentElement).getPropertyValue('--fg-yellow') || '#e5c07b';
+          var accent = getComputedStyle(document.documentElement).getPropertyValue('--color-info') || '#7fb4ca';
           preview.getAnimations().forEach(function(running) { running.cancel(); });
           preview.animate([{ backgroundColor: accent }, { backgroundColor: 'transparent' }], { duration: 1000, easing: 'ease-out' });
         });

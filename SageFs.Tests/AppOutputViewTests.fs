@@ -45,19 +45,22 @@ let appOutputViewTests =
       html |> Expect.stringContains "stderr text is present" "boom"
       html |> Expect.stringContains "stdout text is present" "hello"
 
-    testCase "WHY — no output collapses to ONE line that says how to make some, rather than an empty box" <| fun _ ->
+    testCase "WHY — no output draws nothing visible, because a line saying there is no output costs a row of a dock that is short, and there is nothing to act on" <| fun _ ->
       let html = draw paneWithBothLines NoAppOutput SessionInView
-      html |> Expect.stringContains "collapses to the bar" "app-output-bar"
-      html |> Expect.stringContains "it is a status, not a silent box" "role=\"status\""
-      html |> Expect.stringContains "says what to do" "run_app"
+      html |> Expect.stringContains "a hidden placeholder keeps the id, so the morph can find it when output arrives" "app-output-bar"
+      html |> Expect.stringContains "hidden" "live-hidden"
+      html.Contains "run_app" |> Expect.isFalse "no instruction row"
+      html.Contains "role=\"status\"" |> Expect.isFalse "nothing announced for an empty pane"
+      html.Contains "App output" |> Expect.isFalse "no title for a pane with nothing in it"
       // The lines the pane still holds are NOT drawn while it has nothing to show — that would be a
       // contradiction: presence decided "none", so drawing output here would disagree with the decision.
       html.Contains "app-output-lines" |> Expect.isFalse "no line list when there is none"
 
-    testCase "WHY — with no session the pane says so, because the fix is opening a session and not starting an app" <| fun _ ->
+    testCase "WHY — with no session the pane draws nothing, because the live bindings bar above it already says there is no session and a second bar would repeat it" <| fun _ ->
       let html = draw AppOutputPane.create NoAppOutput NoSessionInView
-      html |> Expect.stringContains "names the missing session" "no session is open"
+      html.Contains "no session is open" |> Expect.isFalse "said once, by the bindings bar"
       html.Contains "run_app" |> Expect.isFalse "does not blame an app that was never started"
+      html |> Expect.stringContains "the placeholder is hidden" "live-hidden"
 
     testCase "WHY — a search matching nothing says it, because an empty pane and an unmatched search are different facts with different fixes" <| fun _ ->
       let searching = { paneWithBothLines with Search = "zzzz" }
@@ -78,7 +81,8 @@ let appOutputViewTests =
       let closedHtml = draw paneWithBothLines NoAppOutput SessionInView
       (openHtml <> closedHtml) |> Expect.isTrue "open and collapsed are not the same drawing"
       openHtml |> Expect.stringContains "open draws the body" "app-output-lines"
-      closedHtml |> Expect.stringContains "collapsed draws the bar" "app-output-bar"
+      closedHtml |> Expect.stringContains "collapsed draws only the hidden placeholder" "app-output-bar"
+      closedHtml.Contains "app-output-lines" |> Expect.isFalse "and never the body"
 
     // ── the controls, and why they are POSTs ──────────────────────────────────────────────────────
 
