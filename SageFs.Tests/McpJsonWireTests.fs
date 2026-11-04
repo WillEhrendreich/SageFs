@@ -354,15 +354,15 @@ let tests =
       use body = new MemoryStream()
       http.Response.Body <- body
       let cycle = SageFs.Features.LiveTesting.LiveTestCycleState.empty
-      do! SageFs.Server.McpServer.writeFileAnnotations http cycle "NoSuch.fs"
+      do! SageFs.Server.McpServer.writeFileAnnotations http cycle None "NoSuch.fs"
       let written = System.Text.Encoding.UTF8.GetString(body.ToArray())
       let rootKind =
         use parsed = System.Text.Json.JsonDocument.Parse written
         parsed.RootElement.ValueKind
       rootKind |> Expect.equal "a client reads an object straight off the wire" System.Text.Json.JsonValueKind.Object
       written
-      |> Expect.equal "the body is exactly what the annotations serialize to"
-           (Json.serialize Json.standard (SageFs.Features.LiveTesting.FileAnnotations.empty "NoSuch.fs"))
+      |> Expect.equal "the body is what the annotations serialize to, with the file's (here no) coverage views"
+           (SageFs.SseWriter.withCoverageViews (Json.serialize Json.standard (SageFs.Features.LiveTesting.FileAnnotations.empty "NoSuch.fs")) [||])
       http.Response.ContentType |> Expect.equal "it says it is JSON" "application/json"
     }
 

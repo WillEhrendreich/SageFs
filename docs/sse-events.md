@@ -141,7 +141,7 @@ in-memory effect. The same is true of a getter a click runs on an OS with no fil
 | `test_source_locations` | `Locations[]` (testId, filePath, lineNumber) | Maps test names to source locations for jump-to-definition. |
 | `file_annotations` | `testAnnotations[]`, `codeLenses[]`, `coverageAnnotations[]`, `inlineFailures[]` | Per-file test decorations, coverage data, and inline failure markers. |
 | `failure_narratives` | Map of test → `{LastPassedAt, TimeSinceLastPass, CausalChanges[], PropertyViolation, Summary}` | Causal analysis for Passed→Failed transitions: what changed and when. |
-| `coverage_view` | `Generation`, `Symbol`, `FilePath`, `DefinitionLine`, `TotalCount`, `Overflow`, `InlineBadgeText`, `Health` | Per-symbol coverage badge for inline display. Version-gated: an unchanged frame emits nothing. |
+| `coverage_view` | `Generation`, `Symbol`, `FilePath`, `DefinitionLine`, `TotalCount`, `Overflow`, `InlineBadgeText`, `Health` | Per-symbol coverage badge for inline display. Version-gated: an unchanged frame emits nothing. The same data for one file is on `GET /api/live-testing/file-annotations?session=<id>&file=<path>`: the answer is that file's `file_annotations` object plus a `CoverageViews` array whose elements are exactly the `data:` of these frames, so a client's handlers take it unchanged. |
 
 ### Analysis
 

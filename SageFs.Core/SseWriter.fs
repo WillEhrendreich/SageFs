@@ -246,7 +246,7 @@ let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string 
 /// a heavily-tested function — only the aggregate badge.
 /// Performance: a single serialize call per view. The
 /// caller (SsePublisher) is expected to throttle / batch across files.
-let formatCoverageViewEvent
+let coverageViewJson
   (opts: JsonSerializerOptions)
   (sessionId: string option)
   (generation: int)
@@ -261,8 +261,26 @@ let formatCoverageViewEvent
        Overflow = view.Overflow
        InlineBadgeText = view.InlineBadgeText
        Health = view.Health |}
-  let json = writeWith(payload, opts) |> injectSessionId sessionId
-  formatSseEvent "coverage_view" json
+  writeWith(payload, opts) |> injectSessionId sessionId
+
+/// An annotations object with the views of the same file added as `CoverageViews`: the object's own text
+/// with one more member before its closing brace, each view being the text `coverageViewJson` gave. A value
+/// that is not an object is returned as it was.
+let withCoverageViews (annotationsJson: string) (viewJsons: string array) : string =
+  match annotationsJson.EndsWith "}" with
+  | false -> annotationsJson
+  | true ->
+    let members = annotationsJson.Substring(0, annotationsJson.Length - 1)
+    let separator = if members.TrimEnd().EndsWith "{" then "" else ","
+    sprintf """%s%s"CoverageViews":[%s]}""" members separator (String.concat "," viewJsons)
+
+let formatCoverageViewEvent
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (generation: int)
+  (view: Features.LiveTesting.CoverageView)
+  : string =
+  formatSseEvent "coverage_view" (coverageViewJson opts sessionId generation view)
 
 /// Format failure narratives as an SSE event string
 let formatFailureNarrativesEvent (opts: JsonSerializerOptions) (sessionId: string option) (narratives: Map<Features.LiveTesting.TestId, Features.LiveTesting.FailureNarrative>) : string =

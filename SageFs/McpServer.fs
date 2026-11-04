@@ -1000,21 +1000,31 @@ let rawJsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (json: string) 
   do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(json))
 }
 
-/// Answer GET /api/live-testing/file-annotations: the file's gutter annotations
-/// as a JSON object. A file the cycle knows nothing about gets the empty set
-/// for that path, so a client can always read an object off the wire.
+/// Answer GET /api/live-testing/file-annotations: the file's gutter annotations as a JSON object, and with
+/// them its `CoverageViews`, an array whose elements are exactly the `data:` of the `coverage_view` frames
+/// for that file. A client's handlers for the `file_annotations` and `coverage_view` frames take the answer
+/// unchanged, so an editor asks for the files it has open, one request each, instead of being sent every
+/// file's annotations and views on connect. A file the cycle knows nothing about gets the empty set for that
+/// path and no views, so a client can always read an object off the wire.
 let writeFileAnnotations
   (ctx: Microsoft.AspNetCore.Http.HttpContext)
   (cycle: SageFs.Features.LiveTesting.LiveTestCycleState)
+  (sessionId: string option)
   (fileParam: string)
   : Task =
   let entries = SageFs.Features.LiveTesting.LiveTestState.statusEntriesForSession "" cycle.TestState
-  let annotations =
+  let annotations, views =
     match SageFs.Features.LiveTesting.FileAnnotations.resolveFilePath fileParam entries cycle.InstrumentationMaps with
-    | Some fullPath -> SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage fullPath cycle
-    | None -> SageFs.Features.LiveTesting.FileAnnotations.empty fileParam
+    | Some fullPath ->
+      SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage fullPath cycle,
+      SageFs.Features.LiveTesting.FileAnnotationsInternals.projectViewsForFile
+        SageFs.Features.LiveTesting.CoverageViewMode.defaults fullPath cycle.DepGraph cycle.TestState
+    | None -> SageFs.Features.LiveTesting.FileAnnotations.empty fileParam, [||]
+  let generation = RunGeneration.value cycle.TestState.LastGeneration
+  let opts = Json.optionsOf Json.standard
+  let viewJsons = views |> Array.map (SageFs.SseWriter.coverageViewJson opts sessionId generation)
   ctx.Response.StatusCode <- 200
-  rawJsonResponse ctx (Json.serialize Json.standard annotations) :> Task
+  rawJsonResponse ctx (SageFs.SseWriter.withCoverageViews (Json.serialize Json.standard annotations) viewJsons) :> Task
 
 /// Standard error body: `error` stays a client-compatible string (VS Code's
 /// parseOutcome reads it via fieldString), `errorDetails` carries the full
@@ -4567,7 +4577,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       match rctx.SseContext.GetElmModel, resolved with
       | None, _ -> do! jsonResponse ctx 503 {| error = "Elm loop not started" |}
       | Some getModel, SageFs.Server.DashboardTypes.SessionRouteTarget.Target (sid, _) ->
-        do! writeFileAnnotations ctx (SageFsModel.cycleForSession sid (getModel())) fileParam
+        do! writeFileAnnotations ctx (SageFsModel.cycleForSession sid (getModel())) (Some sid) fileParam
       | Some _, refused ->
         match SageFs.Server.DashboardTypes.SessionRouting.toRefusal refused with
         | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
