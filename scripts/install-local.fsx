@@ -17,7 +17,10 @@
 //
 // Every step is fatal on failure, and success is only reported after the daemon that answers has been read
 // back and reports the version that was asked for.
+#load "../build/DaemonStatus.fs"
+
 open System
+open SageFs.Build
 open System.Diagnostics
 open System.IO
 open System.Net.Http
@@ -156,8 +159,9 @@ let parse (argv: string list) : Mode =
 let status (repo: string) =
   let read name = let p = Path.Combine(markDir, name) in if File.Exists p then File.ReadAllText(p).Trim() else ""
   let sha = read "sha"
-  let running = match run "sagefs" [ "status" ] repo with | 0, o -> versionIn o | _ -> ""
-  let running = if running = "" then "not running" else running
+  // `sagefs status` exits 1 for a degraded or wedged daemon as well as for none, so the exit code says nothing about whether the
+  // daemon is up. Its first line does, and DaemonStatusTests holds the classifier to what the real command prints.
+  let running = DaemonStatus.describe (DaemonStatus.classify (snd (run "sagefs" [ "status" ] repo)))
   if sha = "" then
     say (sprintf "no install recorded. Running daemon: %s. Master is at %s." running (versionAt repo "master"))
     2
