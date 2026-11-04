@@ -789,6 +789,7 @@
         <Compile Include="SseLogTests.fs" />
         <Compile Include="SseOutboxTests.fs" />
         <Compile Include="ChangeCoalescerTests.fs" />
+        <Compile Include="FileAnnotationsRouteViewsTests.fs" />
         <Compile Include="SessionLifecycleTests.fs" />
         <Compile Include="FileAnnotationsBasisTests.fs" />
         <Compile Include="ModelChangePushTests.fs" />
