@@ -78,7 +78,10 @@ Working on SageFs itself has two extra catches:
   session then never reached Ready, and the only trace was a stack trace in a
   worker log: a 120-second timeout with nothing to read. The daemon now
   refuses that candidate with a message that says which file to rebuild, and it
-  refuses it in seconds. If a session on this repo hangs in warmup, check the
+  refuses it in seconds. Creating a session now goes one step further: it removes
+  such a stale copy (same version, different bytes, older than the daemon's build)
+  and rebuilds the project before the spawn (`HostCoreAdoption.removeStaleCopiesFor`),
+  so the refusal is left for a copy the rebuild could not replace. If a session on this repo hangs in warmup, check the
   timestamp on the project's `bin/**/SageFs.Core.dll` against the tree's before
   you read anything else.
 

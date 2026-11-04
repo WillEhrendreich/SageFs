@@ -284,7 +284,7 @@ File.WriteAllText(
 /// fallback resolves Debug<->Release at the same TFM), so a session's warmup loads an already-built project. Fails
 /// loudly with the build log if the project cannot build on this machine. The build's logs go to `logDir`, so building a
 /// sample that lives in the repo leaves nothing in it.
-let prebuildCopy (dest: string) (logDir: string) (projectFile: string) : unit =
+let prebuildCopyWith (extraArgs: string list) (dest: string) (logDir: string) (projectFile: string) : unit =
   let psi = Diagnostics.ProcessStartInfo()
   psi.FileName <- "dotnet"
   psi.UseShellExecute <- false
@@ -294,6 +294,8 @@ let prebuildCopy (dest: string) (logDir: string) (projectFile: string) : unit =
   psi.ArgumentList.Add(projectFile)
   psi.ArgumentList.Add("-v")
   psi.ArgumentList.Add("q")
+  for arg in extraArgs do
+    psi.ArgumentList.Add arg
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
   SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
@@ -325,18 +327,28 @@ let prebuildCopy (dest: string) (logDir: string) (projectFile: string) : unit =
     failwithf "runner: pre-build of %s in %s failed (exit %d).\n%s\n%s"
       projectFile dest build.ExitCode out err
 
-/// Build the two sample projects the browser journeys start sessions on. Each carries a copy of `SageFs.Core.dll` in its own
-/// `bin`, and the daemon refuses a session whose project holds a Core older than its own (a worker that loaded it would die on a
-/// method the daemon calls), so a journey run after any `SageFs.Core` change failed at session creation until someone rebuilt the
-/// samples by hand. Building them here, once, before the daemon starts, makes the tier start from samples that match the build
-/// under test. An up-to-date sample costs a few seconds.
+let prebuildCopy (dest: string) (logDir: string) (projectFile: string) : unit = prebuildCopyWith [] dest logDir projectFile
+
+/// The configuration the daemon under test was built in, read from where its executable sits.
+let daemonConfiguration () : string =
+  match (SageFs.Tests.TestInfrastructure.SageFsBinary.path ()).Replace('\\', '/').Contains "/Release/" with
+  | true -> "Release"
+  | false -> "Debug"
+
+/// Build the two sample projects the browser journeys start sessions on, in the configuration the daemon was built in. Each carries a
+/// copy of `SageFs.Core.dll` in its own `bin`, taken from the Core output of the configuration it is built in, and the daemon refuses
+/// a session whose project holds a Core older than its own (a worker that loaded it would die on a method the daemon calls). A
+/// Debug sample under a Release daemon never has the daemon's bytes, so the clock decides and whichever configuration was built last
+/// wins. Built in the daemon's configuration the copy IS the daemon's build, and the daemon adopts it by its bytes. Building here,
+/// once, before the daemon starts, also means a journey run after any `SageFs.Core` change no longer fails at session creation
+/// until someone rebuilds the samples by hand. An up-to-date sample costs a few seconds.
 let prebuildJourneySamples () : unit =
   let logDir = SageFs.Tests.RunnerDirs.create SageFs.Tests.RunnerDirs.Family.BrowserRuns
   try
     for project in
       [ DashboardSessionSwitchOutputBrowserTests.projectA
         DashboardSessionSwitchOutputBrowserTests.projectB ] do
-      prebuildCopy (Path.GetDirectoryName project) logDir project
+      prebuildCopyWith [ "-c"; daemonConfiguration () ] (Path.GetDirectoryName project) logDir project
   finally
     SageFs.Tests.RunnerDirs.remove logDir
 

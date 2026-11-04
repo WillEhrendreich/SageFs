@@ -557,6 +557,9 @@ let createSessionOpsWithRecovery
         | Some(project, targetFrameworks, reason) ->
           return Result.Error(SageFsError.ProjectFrameworkNotHostable(project, targetFrameworks, reason))
         | None ->
+          // A project's own copy of SageFs.Core that is an older build of this daemon's is removed here, so the rebuild below
+          // writes back a matching one. The spawn would otherwise refuse the session and leave the rebuild to the caller.
+          let removedStale = HostCoreAdoption.removeStaleCopiesFor (SessionProjectTarget.projects targets)
           let missing =
             targets
             |> List.collect (fun target ->
@@ -564,6 +567,7 @@ let createSessionOpsWithRecovery
               | BuildPreflight.NeedsRebuild missing -> missing
               | BuildPreflight.Ready
               | BuildPreflight.Unknown _ -> [])
+            |> List.append removedStale
             |> List.distinct
           match missing with
           | _ :: _ ->

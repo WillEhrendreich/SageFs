@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Reflection
 open System.Security.Cryptography
+open SageFs.Utils
 
 /// roast-4 #0(a): adopt a session project's own build of SageFs.Core into
 /// the worker process the daemon is about to spawn.
@@ -184,6 +185,87 @@ module HostCoreAdoption =
           "The session project's own build of SageFs.Core (read from %s) could not be read, so the daemon cannot say whether it is the same build the daemon was made from: %s"
           (Path.GetFullPath candidatePath)
           reason)
+
+  /// Whether a project's copy of the Core is a STALE one: the same version as the daemon's, different bytes, written before the
+  /// daemon's build. It is the case `decide` refuses as an "OLDER build" (a property test holds the two together), named here so the
+  /// daemon can act on it before it comes to a refusal. An unreadable build is not stale: the refusal for that says why, and a
+  /// rebuild would not help.
+  let isStaleCopy (host: BuildFacts) (candidate: BuildFacts) : bool =
+    match host, candidate with
+    | Known(hostVersion, hostBuildId, hostBuiltAt), Known(candidateVersion, candidateBuildId, candidateBuiltAt) ->
+      candidateVersion = hostVersion && candidateBuildId <> hostBuildId && candidateBuiltAt < hostBuiltAt
+    | Known _, Unreadable _
+    | Unreadable _, Known _
+    | Unreadable _, Unreadable _ -> false
+
+  /// The files among `candidates` that are stale copies. `versionOf` reads a file's assembly version, and a file whose version
+  /// cannot be read is left out, because removing it would be a guess.
+  let staleCopies (versionOf: string -> Version option) (host: BuildFacts) (candidates: string list) : string list =
+    candidates
+    |> List.filter (fun path ->
+      match versionOf path with
+      | Some version -> isStaleCopy host (factsOf path version)
+      | None -> false)
+
+  /// The stale copies among `candidates` (newest first), but only when the NEWEST one is stale, because that is the copy a spawn
+  /// judges. An older stale copy beside a good newest one is left where it is: a build that regenerates it would make every create
+  /// remove it and rebuild the project for nothing.
+  let staleCopiesWhenNewestIs (versionOf: string -> Version option) (host: BuildFacts) (candidates: string list) : string list =
+    match candidates with
+    | [] -> []
+    | newest :: _ ->
+      match staleCopies versionOf host [ newest ] with
+      | [] -> []
+      | _ :: _ -> staleCopies versionOf host candidates
+
+  /// What happened to one stale copy.
+  [<RequireQualifiedAccess>]
+  type Removal =
+    | Removed
+    | NotRemoved of reason: string
+
+  /// Removes the given files, each reported with whether it went. A file that is already gone counts as removed. A copy that
+  /// cannot be removed (a lock, a permission) is reported with its reason and left, and the session's own refusal then names it.
+  let removeCopies (paths: string list) : (string * Removal) list =
+    paths
+    |> List.map (fun path ->
+      try
+        File.Delete path
+        path, Removal.Removed
+      with
+      // File.Delete is silent about a missing file but throws when the whole directory is gone; both mean "nothing left to remove".
+      | :? DirectoryNotFoundException -> path, Removal.Removed
+      | :? IOException as ex -> path, Removal.NotRemoved ex.Message
+      | :? UnauthorizedAccessException as ex -> path, Removal.NotRemoved ex.Message)
+
+  /// The stale copies of the Core under these projects' `bin` trees, measured against the running daemon's own build.
+  let daemonStaleCopies (sharedDaemonBaseDir: string) (hostVersion: Version) (projects: string list) : string list =
+    let host = factsOf (Path.Combine(sharedDaemonBaseDir, assemblyName + ".dll")) hostVersion
+    // A file that is not a readable assembly has no version to compare, and is left alone.
+    let versionOf (path: string) : Version option =
+      try Some(AssemblyName.GetAssemblyName(path).Version)
+      with
+      | :? BadImageFormatException
+      | :? IOException
+      | :? UnauthorizedAccessException -> None
+    staleCopiesWhenNewestIs versionOf host (findCandidates (projectDirsOf projects))
+
+  /// Before a session is created: remove the stale copies of the Core under its projects and return the paths removed, so the
+  /// caller rebuilds those projects (the build writes back a copy that matches the daemon). The daemon's own build and version are
+  /// the ones this assembly is running as, the same pair the worker spawn measures against. A copy that could not be removed is
+  /// logged and left, and the spawn's refusal then names it.
+  let removeStaleCopiesFor (projects: string list) : string list =
+    let hostVersion = Assembly.GetExecutingAssembly().GetName().Version
+    let stale = daemonStaleCopies AppContext.BaseDirectory hostVersion projects
+    removeCopies stale
+    |> List.choose (fun (path, outcome) ->
+      match outcome with
+      | Removal.Removed ->
+        Log.info "[HostCoreAdoption] removed %s, an older build of this daemon's SageFs.Core; the project is rebuilt so it carries the daemon's" path
+        Some path
+      | Removal.NotRemoved why ->
+        Log.warn "[HostCoreAdoption] %s is an older build of this daemon's SageFs.Core and could not be removed: %s" path why
+        None)
 
   /// Copies `sharedHostDir` into a fresh `<privateRoot>/host/` directory and
   /// substitutes `SageFs.Core.dll` (+ `.pdb`, if either side has one) with

@@ -278,3 +278,116 @@ let tests =
           reason |> Expect.stringContains "an unreadable candidate is reported, not silently ignored" "SageFs.Core"
         | Ok _ -> failtest "a non-PE stub file must not be silently treated as a valid candidate")
   ]
+
+/// A project's own copy of SageFs.Core that is older than the daemon's is a build output, so the daemon removes it and rebuilds the
+/// project instead of refusing the session and leaving the rebuild to whoever hit it.
+[<Tests>]
+let staleCopyTests =
+  let build (version: System.Version) (buildId: string) (offsetSeconds: int) : HostCoreAdoption.BuildFacts =
+    HostCoreAdoption.BuildFacts.Known(version, buildId, DateTime(2026, 10, 20, 12, 0, 0, DateTimeKind.Utc).AddSeconds(float offsetSeconds))
+  let v1 = System.Version(1, 2, 3)
+  let v2 = System.Version(1, 2, 4)
+  testList "stale SageFs.Core copies" [
+
+    testProperty "WHY — a copy is stale exactly when decide would refuse it as an older build of the same version" <| fun (sameVersion: bool) (sameBytes: bool) (offset: int) ->
+      let host = build v1 "host" 0
+      let candidate = build (if sameVersion then v1 else v2) (if sameBytes then "host" else "other") offset
+      let refusedAsOlder =
+        match HostCoreAdoption.decide host "/p/bin/SageFs.Core.dll" candidate with
+        | HostCoreAdoption.Adoption.Refused reason -> reason.Contains "OLDER build"
+        | HostCoreAdoption.Adoption.Adopted _ -> false
+      HostCoreAdoption.isStaleCopy host candidate = refusedAsOlder
+
+    testCase "WHY — a copy that cannot be read is not called stale, because the refusal for it says so and a rebuild would not help" <| fun _ ->
+      let host = build v1 "host" 0
+      HostCoreAdoption.isStaleCopy host (HostCoreAdoption.BuildFacts.Unreadable "denied") |> Expect.isFalse "unreadable candidate"
+      HostCoreAdoption.isStaleCopy (HostCoreAdoption.BuildFacts.Unreadable "denied") (build v1 "x" -5) |> Expect.isFalse "unreadable daemon build"
+
+    testCase "WHY — only the stale copies among a project's builds are named, newer and identical ones are left alone" <| fun _ ->
+      withTempDir (fun root ->
+        let sharedRoot = Path.Combine(root, "shared")
+        Directory.CreateDirectory sharedRoot |> ignore
+        let hostCore = Path.Combine(sharedRoot, "SageFs.Core.dll")
+        File.WriteAllBytes(hostCore, [| 9uy |])
+        let hostTime = DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc)
+        File.SetLastWriteTimeUtc(hostCore, hostTime)
+        let projectDir = Path.Combine(root, "project")
+        let write (name: string) (bytes: byte[]) (time: DateTime) =
+          let path = Path.Combine(projectDir, "bin", name, "SageFs.Core.dll")
+          Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
+          File.WriteAllBytes(path, bytes)
+          File.SetLastWriteTimeUtc(path, time)
+          path
+        let stale = write "Debug" [| 1uy |] (hostTime.AddHours -3.0)
+        write "Release" [| 2uy |] (hostTime.AddHours 1.0) |> ignore
+        write "Other" [| 9uy |] (hostTime.AddHours -9.0) |> ignore
+        let versionOf (_: string) = Some v1
+        HostCoreAdoption.staleCopies versionOf (HostCoreAdoption.factsOf hostCore v1) (HostCoreAdoption.findCandidates [ projectDir ])
+        |> Expect.equal "just the older, different build" [ stale ])
+
+    testCase "WHY — a file whose version cannot be read is left alone, not removed on a guess" <| fun _ ->
+      withTempDir (fun root ->
+        let sharedRoot = Path.Combine(root, "shared")
+        Directory.CreateDirectory sharedRoot |> ignore
+        let hostCore = Path.Combine(sharedRoot, "SageFs.Core.dll")
+        File.WriteAllBytes(hostCore, [| 9uy |])
+        let projectDir = Path.Combine(root, "project")
+        let path = Path.Combine(projectDir, "bin", "Debug", "SageFs.Core.dll")
+        touch path (DateTime.UtcNow.AddDays -2.0)
+        HostCoreAdoption.staleCopies (fun _ -> None) (HostCoreAdoption.factsOf hostCore v1) [ path ]
+        |> Expect.isEmpty "nothing named when the version is unknown")
+
+    testCase "WHY — removing stale copies deletes them, reports each, and says why one stayed" <| fun _ ->
+      withTempDir (fun root ->
+        let gone = Path.Combine(root, "a", "SageFs.Core.dll")
+        touch gone DateTime.UtcNow
+        let missing = Path.Combine(root, "b", "SageFs.Core.dll")
+        let results = HostCoreAdoption.removeCopies [ gone; missing ]
+        File.Exists gone |> Expect.isFalse "the stale copy is gone"
+        results |> List.map fst |> Expect.equal "each path is reported once, in order" [ gone; missing ]
+        results |> List.map snd |> Expect.equal "a copy already gone is not a failure" [ HostCoreAdoption.Removal.Removed; HostCoreAdoption.Removal.Removed ])
+  ]
+
+/// Only the copy a spawn would judge (the newest) decides whether anything is removed, so a leftover older copy that every build
+/// regenerates cannot make each create rebuild the project.
+[<Tests>]
+let staleCopyScopeTests =
+  let v1 = System.Version(1, 2, 3)
+  let hostTime = DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc)
+  let setup (root: string) (copies: (string * byte[] * DateTime) list) =
+    let sharedRoot = Path.Combine(root, "shared")
+    Directory.CreateDirectory sharedRoot |> ignore
+    let hostCore = Path.Combine(sharedRoot, "SageFs.Core.dll")
+    File.WriteAllBytes(hostCore, [| 9uy |])
+    File.SetLastWriteTimeUtc(hostCore, hostTime)
+    let projectDir = Path.Combine(root, "project")
+    for (name, bytes, time) in copies do
+      let path = Path.Combine(projectDir, "bin", name, "SageFs.Core.dll")
+      Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
+      File.WriteAllBytes(path, bytes)
+      File.SetLastWriteTimeUtc(path, time)
+    HostCoreAdoption.factsOf hostCore v1, HostCoreAdoption.findCandidates [ projectDir ]
+  testList "stale copies, scoped to the copy that decides" [
+
+    testCase "WHY — when the newest copy is fine, an older stale one is left alone, because removing it would only be rebuilt" <| fun _ ->
+      withTempDir (fun root ->
+        let host, candidates =
+          setup root [ "Release", [| 9uy |], hostTime.AddHours -1.0   // the daemon's own bytes, newest of the two
+                       "Debug", [| 1uy |], hostTime.AddHours -5.0 ]    // older and different: stale, but not the one a spawn judges
+        HostCoreAdoption.staleCopiesWhenNewestIs (fun _ -> Some v1) host candidates
+        |> Expect.isEmpty "nothing to remove")
+
+    testCase "WHY — when the newest copy is stale, every stale copy is named" <| fun _ ->
+      withTempDir (fun root ->
+        let host, candidates =
+          setup root [ "Debug", [| 1uy |], hostTime.AddHours -2.0
+                       "Other", [| 2uy |], hostTime.AddHours -6.0 ]
+        HostCoreAdoption.staleCopiesWhenNewestIs (fun _ -> Some v1) host candidates
+        |> List.length
+        |> Expect.equal "both are stale and both go" 2)
+
+    testCase "WHY — a project with no copy has nothing to remove" <| fun _ ->
+      withTempDir (fun root ->
+        let host, candidates = setup root []
+        HostCoreAdoption.staleCopiesWhenNewestIs (fun _ -> Some v1) host candidates |> Expect.isEmpty "no copies")
+  ]

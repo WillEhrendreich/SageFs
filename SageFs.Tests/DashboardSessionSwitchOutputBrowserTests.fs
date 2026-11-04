@@ -325,10 +325,55 @@ let journey () : Task<unit> = task {
   | None -> ()
 }
 
+/// A sample project whose `bin` holds a SageFs.Core that is an older build of the daemon's (the same version, different bytes,
+/// written before the daemon's). Creating a session on it rebuilds the project and the session reaches Ready, where the daemon used
+/// to refuse the create and leave the rebuild to the caller.
+let private staleCoreRecovery () : Task<unit> = task {
+  let daemon = startDaemon ()
+  try
+    let! healthy = waitHealthy daemon
+    if not healthy then
+      dumpLogs daemon
+      Tests.failtestf "the daemon on port %d never became healthy" daemon.McpPort
+    let hostCore = Path.Combine(Path.GetDirectoryName(SageFs.Tests.TestInfrastructure.SageFsBinary.path ()), "SageFs.Core.dll")
+    let copy = Path.Combine(sampleA, "bin", "Debug", "net11.0", "SageFs.Core.dll")
+    // The only copy of the Core the sample has is the stale one: the daemon judges the newest copy, so a good one beside it would
+    // leave nothing to remove.
+    for existing in Directory.GetFiles(Path.Combine(sampleA, "bin"), "SageFs.Core.dll", SearchOption.AllDirectories) do
+      File.Delete existing
+    Directory.CreateDirectory(Path.GetDirectoryName copy) |> ignore
+    // The rebuild writes back a copy of the Debug Core output. Mark that output as built after the daemon, which is what it is when
+    // someone rebuilds SageFs.Core after installing, so the copy the build writes is a newer build and not an older one. Where there
+    // is no Debug output yet the sample's build makes one, and it is new.
+    let debugCore = Path.Combine(repoRoot, "SageFs.Core", "bin", "Debug", "net11.0", "SageFs.Core.dll")
+    if File.Exists debugCore then File.SetLastWriteTimeUtc(debugCore, DateTime.UtcNow)
+    let planted = Array.append (File.ReadAllBytes hostCore) [| 0uy |]
+    File.WriteAllBytes(copy, planted)
+    File.SetLastWriteTimeUtc(copy, (File.GetLastWriteTimeUtc hostCore).AddDays -1.0)
+    do! createSession daemon projectA sampleA
+    let! ready =
+      waitUntil (TestTimeouts.asMs SageFs.Timeouts.browserJourneyWarmup) (fun () -> task {
+        try
+          let! now = sessionsNow daemon
+          return now.Length >= 1 && now |> List.forall (fun (_, status, _) -> status = "Ready")
+        with _ -> return false
+      })
+    if not ready then dumpLogs daemon
+    ready |> Expect.isTrue "the session on a project with an older SageFs.Core reached Ready"
+    (File.ReadAllBytes copy).Length |> Expect.notEqual "the stale copy was replaced by the rebuild" planted.Length
+  finally
+    killDaemon daemon
+}
+
 [<Tests>]
 let tests =
   testSequenced <|
   testList "Dashboard session switch output browser tests" [
+
+    testTask "[Integration] a project whose SageFs.Core is an older build of the daemon's is rebuilt on create, and its session reaches Ready" {
+      do! staleCoreRecovery () }
+    |> Integration.register (Integration.Dedicated "--integration-browser")
+
 
     testTask "[Integration] Dashboard browser: clicking a session moves the output panel to it and the other session's output never shows, both ways" {
       do! journey () }
