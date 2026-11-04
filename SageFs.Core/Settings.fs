@@ -170,6 +170,8 @@ type SettingCategory =
   | Appearance
   | SessionSettings
   | LiveTesting
+  /// The Live Bindings view: which columns, grouping, strip, inspector, value printing and row height, for each workflow.
+  | LiveBindingsView
   | DaemonSettings
 
 [<RequireQualifiedAccess>]
@@ -179,11 +181,12 @@ module SettingCategory =
     | Appearance -> "Appearance"
     | SessionSettings -> "Session"
     | LiveTesting -> "Live testing"
+    | LiveBindingsView -> "Live bindings view"
     | DaemonSettings -> "Daemon"
 
   /// Display order for the panel — exhaustive over the DU.
   let displayOrder : SettingCategory list =
-    [ Appearance; SessionSettings; LiveTesting; DaemonSettings ]
+    [ Appearance; SessionSettings; LiveTesting; LiveBindingsView; DaemonSettings ]
 
 /// Where a setting may be set.
 type SettingScope =
