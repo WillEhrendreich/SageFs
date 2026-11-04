@@ -262,6 +262,17 @@ type StateEventAction =
   /// `reloadReported` object, read by `parseReportWire`. Added after `StateUnknown` so the tags above held.
   | StateReloadReported of sessionId: string * payload: obj
 
+/// Which "session" envelope subtypes mean the window should re-poll. The window's session list and
+/// status come from `GET /api/sessions`; these frames say it is out of date. `session_created` and
+/// `session_stopped` are the daemon saying the list moved (they are numbered in the replay log, so a
+/// window that was away is told in order); `session_activated` and `warmup_context_snapshot` name any
+/// session on the daemon and say nothing about this window's.
+let sessionEventRefreshes (subtype: string) : bool =
+  match subtype with
+  | "hotreload_snapshot" | "hotreload_file_toggled" | "workflow_switching"
+  | "session_created" | "session_stopped" -> true
+  | _ -> false
+
 /// Map a decoded "state" SSE payload to its action by inspecting which field is
 /// present. Order matters only where a payload could carry more than one marker
 /// (it does not today); the discriminants are mutually exclusive on the wire.
@@ -526,18 +537,17 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         | StateHeartbeat -> ()
       | "session" ->
         // "session" envelope: the inner "type" field is the discriminant. The
-        // server injects sessionId (lowercase) on these frames. NOTE: the 0.6
-        // daemon does NOT emit session_created/session_stopped/session_activated
-        // over SSE — session-list freshness comes from polling GET /api/sessions
-        // (see the sessions tree provider), not from these events.
+        // server injects sessionId (lowercase) on these frames. The session list itself is read
+        // from GET /api/sessions (see the sessions tree provider); session_created and
+        // session_stopped say it moved, so the window re-polls (`sessionEventRefreshes`).
         let subtype = fieldString "type" data |> Option.defaultValue ""
         match subtype with
         // These used to re-point the listener at whichever session they named. They name any session on
         // the daemon, so another agent's warmup moved this window's filter onto their session. The window
-        // chooses its session (SetEventFilter); these just mean "re-poll".
+        // chooses its session (SetEventFilter).
         | "warmup_context_snapshot" | "session_activated" -> ()
-        | "hotreload_snapshot" | "hotreload_file_toggled" | "workflow_switching" ->
-          // Hot-reload watch set changed, or a workflow switch began — re-poll so
+        | _ when sessionEventRefreshes subtype ->
+          // The session list or the hot-reload watch set changed, or a workflow switch began: re-poll so
           // the tree/status views reflect the new state.
           callbacks.OnStatusRefresh ()
         | "workflow_switched" ->

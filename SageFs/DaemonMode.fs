@@ -1896,14 +1896,22 @@ let createElmRuntime
   let mutable lastStateJson = ""
   let mutable lastLoggedOutputCount = 0
   let mutable lastLoggedDiagCount = 0
+  let mutable lifecycleSeen : SessionsAnnounced option = None
   // Subscribers run on the pool, one delivery at a time, and a change that lands while one is running
   // replaces any waiting behind it. Every handler reads the model when it runs, so the changes in between
   // had nothing to add. This was one pool work item per change, which let a second pass over every file of
-  // a big session start beside the first and wrote the handlers' `ref` state from both.
+  // a big session start beside the first and wrote the handlers' `ref` state from both. The session
+  // lifecycle events are the exception: a session that stopped is no longer in the model, so they ride
+  // along through the merge and are all delivered, in order, ahead of the model change.
   let modelChanges =
-    Coalescer<int * int>(
-      (fun (outputCount, diagCount) -> stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))),
-      fun work -> System.Threading.ThreadPool.QueueUserWorkItem(fun _ -> work ()) |> ignore)
+    Coalescer<ModelChangeDelivery>(
+      (fun delivery ->
+        delivery.Lifecycle |> List.iter stateChangedEvent.Trigger
+        match delivery.Counts with
+        | ChangeCounts.Counted (outputCount, diagCount) -> stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))
+        | ChangeCounts.SessionListOnly -> ()),
+      (fun work -> System.Threading.ThreadPool.QueueUserWorkItem(fun _ -> work ()) |> ignore),
+      ModelChangeDelivery.merge)
   let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
     async {
       try
@@ -2028,6 +2036,10 @@ let createElmRuntime
         let diagCount =
           model.Diagnostics |> Map.values |> Seq.sumBy List.length
         try
+          // What happened to the session list since the last look. It is read before the model-JSON
+          // dedupe below, because a session starting or stopping may leave that key as it was.
+          let announced, lifecycle = SessionLifecycle.observe lifecycleSeen model.Sessions
+          lifecycleSeen <- Some announced
           let json = SseDedupKey.fromModel model
           match json <> lastStateJson with
           | true ->
@@ -2054,8 +2066,12 @@ let createElmRuntime
             // inside the thread-pool work item so it reflects when the
             // change was decided, not when the work item happened to run.
             EvalLatencyTrace.shared.StampModelChanged()
-            modelChanges.Post (outputCount, diagCount)
-          | false -> ()
+            modelChanges.Post { Counts = ChangeCounts.Counted (outputCount, diagCount); Lifecycle = lifecycle }
+          | false ->
+            // The model looks unchanged to subscribers, but the session list moved.
+            match lifecycle with
+            | [] -> ()
+            | _ -> modelChanges.Post { Counts = ChangeCounts.SessionListOnly; Lifecycle = lifecycle }
         with ex -> Log.error "[elm] State change propagation error: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
       (fun phase msg ->
         Log.warn "[elm] 🚨 System alarm [%s]: %s" phase msg

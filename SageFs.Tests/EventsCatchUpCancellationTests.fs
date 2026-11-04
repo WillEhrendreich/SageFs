@@ -80,6 +80,9 @@ type private RecordingStream(onFrame: string -> unit) =
     onFrame text
     ValueTask()
 
+/// For a catch-up whose queue nobody lets out.
+let private noBetween () : Task = Task.CompletedTask
+
 let private framesOf (kind: string) (stream: RecordingStream) : int =
   stream.Frames |> Seq.filter (fun f -> f.StartsWith(sprintf "event: %s" kind)) |> Seq.length
 
@@ -88,7 +91,7 @@ let private caughtUpUntilLeavingAt (kind: string) : Task<RecordingStream> =
   task {
     let gone = new CancellationTokenSource()
     let stream = new RecordingStream(fun frame -> if frame.StartsWith(sprintf "event: %s" kind) then gone.Cancel())
-    do! replayCachedTestState context (Some sessionId) gone.Token stream
+    do! replayCachedTestState context (Some sessionId) gone.Token noBetween stream
     return stream
   }
 
@@ -98,14 +101,14 @@ let tests =
 
     testTask "a client that stays is caught up on every file, with its views" {
       let stream = new RecordingStream(ignore)
-      do! replayCachedTestState context (Some sessionId) CancellationToken.None stream
+      do! replayCachedTestState context (Some sessionId) CancellationToken.None noBetween stream
       stream |> framesOf "file_annotations" |> Expect.equal "every file was sent" fileCount
       stream |> framesOf "coverage_view" |> fun views -> Expect.isTrue "the views were sent" (views > 0)
     }
 
     testTask "a client that left before the catch-up began costs no file at all" {
       let stream = new RecordingStream(ignore)
-      do! replayCachedTestState context (Some sessionId) (new CancellationToken(true)) stream
+      do! replayCachedTestState context (Some sessionId) (new CancellationToken(true)) noBetween stream
       stream |> framesOf "file_annotations" |> Expect.equal "no file was projected" 0
     }
 
@@ -118,5 +121,25 @@ let tests =
       let! stream = caughtUpUntilLeavingAt "file_annotations"
       stream |> framesOf "file_annotations" |> Expect.equal "one file went out" 1
       stream |> framesOf "coverage_view" |> Expect.equal "and no view behind it" 0
+    }
+
+    // The queue behind a connection fills while a long catch-up writes straight to the socket. The catch-up
+    // calls `between` at every file and view so whoever owns the queue can let it out.
+    testTask "WHY — the catch-up gives the queue a turn at every file and after every view, so a long one cannot fill it" {
+      let stream = new RecordingStream(ignore)
+      let turns = ref 0
+      let between () : Task =
+        task {
+          turns.Value <- turns.Value + 1
+          // What a connection does with its turn: write what is queued, here a marker frame.
+          do! stream.WriteAsync(ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes "event: queued\ndata: {}\n\n")).AsTask()
+        } :> Task
+      do! replayCachedTestState context (Some sessionId) CancellationToken.None between stream
+      let views = stream |> framesOf "coverage_view"
+      Expect.isTrue "a turn at every file and one after every view" (turns.Value >= fileCount + views)
+      let order = stream.Frames |> Seq.map (fun f -> f.Split('\n').[0]) |> List.ofSeq
+      let firstQueued = order |> List.findIndex ((=) "event: queued")
+      let lastFile = order |> List.findIndexBack ((=) "event: file_annotations")
+      Expect.isTrue "queued frames were written while files were still being sent, not after them" (firstQueued < lastFile)
     }
   ]

@@ -91,6 +91,16 @@ type SseOutbox(capacity: int, maxBytes: int) =
 
   member _.Overflowed : bool = Volatile.Read(&overflowed) = 1
 
+  /// The next queued entry if there is one, without waiting. Taking it gives its room back. For the reader
+  /// that owns this outbox only: it is a single-reader channel, and the catch-up and the drain that follows
+  /// it run on one request, one after the other.
+  member _.TryTake() : OutboxEntry option =
+    match channel.Reader.TryRead() with
+    | true, entry ->
+      release (OutboxEntry.weight entry)
+      Some entry
+    | false, _ -> None
+
   /// The next frame's text, waiting for one. Reading gives its room back. Throws
   /// `ChannelClosedException` once the outbox is closed and empty.
   member _.ReadAsync(ct: CancellationToken) : Task<string> =
@@ -116,6 +126,30 @@ module SseOutbox =
     | Overflowed
     /// The client went away: cancelled, or a write failed.
     | ClientLeft
+
+  /// Writes what is queued RIGHT NOW, in order, and does not wait for more. A catch-up calls this between
+  /// the files it projects, so a daemon that keeps publishing while a long catch-up writes does not fill
+  /// the queue and have the connection cut the moment the catch-up ends (the reconnect then wrote the
+  /// same catch-up again).
+  ///
+  /// A logged frame goes out as its own text with no `id:` line. The client's last id must not move past
+  /// frames it has not got the snapshot for: a connection cut in the middle of the catch-up resumes from
+  /// the id it last had in full, is replayed these frames again, and is sent the snapshots again. The
+  /// newest id written is returned so the id-only frame at the end of the catch-up can name it
+  /// (`SseReplay.announcedAfterCatchUp`).
+  let drainQueued (outbox: SseOutbox) (write: string -> Task) : Task<EventId option> =
+    task {
+      let mutable newest = None
+      let mutable more = true
+      while more do
+        match outbox.TryTake() with
+        | None -> more <- false
+        | Some (OutboxEntry.Logged item) ->
+          do! write item.Frame.Wire
+          newest <- Some item.Id
+        | Some (OutboxEntry.Text text) -> do! write text
+      return newest
+    }
 
   /// Writes queued frames, in order, until the outbox ends or the client leaves.
   let drain (outbox: SseOutbox) (write: string -> Task) (ct: CancellationToken) : Task<DrainEnd> =

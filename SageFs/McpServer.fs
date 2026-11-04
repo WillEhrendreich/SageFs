@@ -1476,7 +1476,12 @@ let replaySessionSnapshot (ctx: SseContext) (target: string option) (body: Syste
 /// write to a connection that has closed is a no-op that never throws, so nothing in the loop
 /// learns the client left. `gone` is how it learns: it stops at the next file, and costs the
 /// daemon nothing more.
-let replayCachedTestState (ctx: SseContext) (target: string option) (gone: CancellationToken) (body: System.IO.Stream) =
+let replayCachedTestState
+  (ctx: SseContext)
+  (target: string option)
+  (gone: CancellationToken)
+  (between: unit -> Task)
+  (body: System.IO.Stream) =
   SseContext.withModelAsync ctx (fun model -> task {
     try
       gone.ThrowIfCancellationRequested()
@@ -1536,6 +1541,9 @@ let replayCachedTestState (ctx: SseContext) (target: string option) (gone: Cance
         let ltState = model.LiveTesting
         for file in files do
           gone.ThrowIfCancellationRequested()
+          // Projecting a file takes a while on a big session, and the daemon keeps publishing into this
+          // connection's queue meanwhile; `between` lets what has queued out so the queue cannot fill.
+          do! between ()
           let fa = FileAnnotations.projectWithCoverage file ltState
           match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 || fa.InlineFailures.Length > 0 with
           | true ->
@@ -1551,6 +1559,7 @@ let replayCachedTestState (ctx: SseContext) (target: string option) (gone: Cance
               gone.ThrowIfCancellationRequested()
               do! SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) gen view
                   |> writeSseFrame body
+              do! between ()
           | false -> ()
       | false -> ()
     with
@@ -1710,16 +1719,20 @@ let wireSessionEventSubscription
       | SseEvent.SessionSwitched _
       // MCP clients get cohort changes from wireCohortEventSubscription.
       | SseEvent.CohortChanged _ -> ()
-      // Session-channel cases never arrive on this stream — DaemonMode.fs
-      // only ever triggers the nine "state" channel cases above — but the
-      // match stays exhaustive (no wildcard) so a future emitter of one of
-      // these through stateChangedEvent is forced to decide its handling here.
+      // A session starting, stopping or becoming the active one. DaemonMode derives these from the
+      // session registry (`SessionLifecycle.observe`) and sends them here, and they go out as
+      // `session` frames, so they are numbered in the replay log: a client that was away is told, in
+      // order, what happened to the session list while it was gone.
+      | SseEvent.SessionActivated _
+      | SseEvent.SessionCreated _
+      | SseEvent.SessionStopped _ as lifecycle -> ctx.SessionEventBroadcast.Trigger(SseEvent.frame lifecycle)
+      // The other session-channel cases never arrive on this stream — DaemonMode.fs triggers the nine
+      // "state" channel cases above and the three lifecycle cases — but the match stays exhaustive (no
+      // wildcard) so a future emitter of one of these through stateChangedEvent is forced to decide its
+      // handling here.
       | SseEvent.WarmupContextSnapshot _
       | SseEvent.HotReloadSnapshot _
       | SseEvent.HotReloadFileToggled _
-      | SseEvent.SessionActivated _
-      | SseEvent.SessionCreated _
-      | SseEvent.SessionStopped _
       | SseEvent.WorkflowSwitching _
       | SseEvent.WorkflowSwitched _
       | SseEvent.SessionHealthChanged _ -> ()) |> ignore
@@ -3353,7 +3366,14 @@ let wireSseLog (rctx: RouteContext) : IDisposable list =
   [ rctx.SseContext.TestEventBroadcast.Publish |> Observable.subscribe publish
     rctx.SseContext.SessionEventBroadcast.Publish |> Observable.subscribe publish ]
   @ (rctx.Config.StateChanged
-     |> Option.map (fun evt -> evt |> Observable.map stateFrameOf |> Observable.subscribe publish)
+     // Only the state channel is a `state` frame. The session lifecycle events arrive on the same event and
+     // are sent as `session` frames by `wireSessionEventSubscription`; mapping them here too would log each
+     // one a second time under the wrong event name.
+     |> Option.map (fun evt ->
+       evt
+       |> Observable.filter (fun change -> SseEvent.channel change = SseChannel.State)
+       |> Observable.map stateFrameOf
+       |> Observable.subscribe publish)
      |> Option.toList)
 
 /// The id a reconnecting client says it last saw, or none for a first connection.
@@ -3364,11 +3384,16 @@ let lastEventIdOf (ctx: Microsoft.AspNetCore.Http.HttpContext) : string option =
 
 /// The state a connection is caught up on, written whether or not it also replays missed frames:
 /// a snapshot is current by construction, and a replay adds what a snapshot cannot carry.
-let writeCatchUpSnapshots (rctx: RouteContext) (stream: StreamScope) (gone: CancellationToken) (body: System.IO.Stream) : Task =
+let writeCatchUpSnapshots
+  (rctx: RouteContext)
+  (stream: StreamScope)
+  (gone: CancellationToken)
+  (between: unit -> Task)
+  (body: System.IO.Stream) : Task =
   task {
     let target = SseContext.replayTarget rctx.SseContext stream
     do! replaySessionSnapshot rctx.SseContext target body
-    do! replayCachedTestState rctx.SseContext target gone body
+    do! replayCachedTestState rctx.SseContext target gone between body
     do! replayCohortMatrix rctx.SseContext body
     do! replayOtherCohortMatrices rctx.Config.CohortSupport rctx.SseContext body
     do! replayHealthSnapshot rctx.SseContext stream rctx.Config.SessionOps.GetAllSessions body
@@ -3477,20 +3502,33 @@ let serveEventsWork (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.A
           | LogPosition.At _
           | LogPosition.Empty -> outbox.Keepalive ())
       try
-        use _heartbeat = new Timer((fun _ -> heartbeat ()), null, heartbeatMs, heartbeatMs)
         match attachment.CatchUp with
         | SseReplay.CatchUp.Replay missed ->
           for item in missed do
             do! writeSseFrame body (Replayable.toWire item)
         | SseReplay.CatchUp.Resync reason -> Log.debug "[SSE] /events resync: %A" reason
-        do! writeCatchUpSnapshots rctx stream ctx.RequestAborted body
+        // A long catch-up writes straight to the socket while the daemon keeps publishing into the queue.
+        // Between its files it lets the queue out, so the queue cannot fill and cut the connection the
+        // moment the catch-up ends, which made the reconnect write the same catch-up again. Those frames
+        // go out without ids, and the newest is named below, once the snapshots are whole.
+        let writtenAhead = ref None
+        let letQueueOut () : Task =
+          task {
+            let! newest = SseOutbox.drainQueued outbox (fun frame -> writeSseFrame body frame :> Task)
+            newest |> Option.iter (fun id -> writtenAhead.Value <- Some id)
+          } :> Task
+        do! writeCatchUpSnapshots rctx stream ctx.RequestAborted letQueueOut body
         // Said last, so a connection cut mid-snapshot resumes from the id it last had in full.
-        match attachment.Position with
+        match SseReplay.announcedAfterCatchUp attachment.Position writtenAhead.Value with
         | LogPosition.At position -> do! writeSseFrame body (EventId.toIdOnlyFrame position)
         | LogPosition.Empty -> ()
         // The retry hint comes once the client is caught up, as it always did: a client (and a test)
         // that reads up to it has the whole catch-up, and has been attached since before it began.
         do! writeSseFrame body (SageFs.SseWriter.formatRetryHint heartbeatMs)
+        // The connection is not idle while it is being caught up, so the heartbeat starts here. Started
+        // earlier, its id-only frame would sit in the queue and be let out by `letQueueOut`, moving the
+        // client's last id before the snapshots were whole.
+        use _heartbeat = new Timer((fun _ -> heartbeat ()), null, heartbeatMs, heartbeatMs)
         let! ended = SseOutbox.drain outbox (fun frame -> writeSseFrame body frame :> Task) ctx.RequestAborted
         match ended with
         | SseOutbox.DrainEnd.Overflowed -> Log.debug "[SSE] /events client fell behind; closed so it resumes by id"
