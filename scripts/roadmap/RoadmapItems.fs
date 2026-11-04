@@ -185,6 +185,11 @@ let items : Item list =
       [ "docs/configuration.md"; "docs/plans/more-settings-editable.md" ]
       "The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime."
 
+    item "live-bindings-watch-view" "A live bindings view you can switch and keep" Dashboard Next
+      NoLandmarkYet
+      [ "docs/plans/live-bindings-watch-view.md"; "docs/plans/more-settings-editable.md" ]
+      "The Live Bindings pane draws a badge, a type, a wide pin and the same sentence on every row, so at the default dock two of ten bindings show, and it looks the same in every workflow. It is becoming one configurable watch view with presets, a recommended preset for each workflow, and a choice kept for each app and workflow through the settings layers. A value's relation to its source is one word, and Save says what it writes: a tweak is saved to its literal, a value the program has changed is reset or taken as the new initial value after a confirmation, and a value built by a call points at the literal inside the function that builds it. Watch tabs with expression rows and per-row views follow, and so does what the pane shows while the test loop runs."
+
     item "dashboard-follows-context" "Dashboard panels that follow your context" Dashboard Next
       NoLandmarkYet
       [ "docs/plans/dashboard-follows-context.md" ]

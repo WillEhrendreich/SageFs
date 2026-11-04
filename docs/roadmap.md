@@ -11,9 +11,9 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 5, Later 19, Exploring 20. Already built: 43.
+On the page today: Now 0, Next 6, Later 19, Exploring 20. Already built: 43.
 
-## Next (5)
+## Next (6)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -29,6 +29,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 ### Dashboard
 
 - [ ] **More settings editable from the dashboard.** The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime. ([configuration.md](configuration.md), [more-settings-editable.md](plans/more-settings-editable.md))
+- [ ] **A live bindings view you can switch and keep.** The Live Bindings pane draws a badge, a type, a wide pin and the same sentence on every row, so at the default dock two of ten bindings show, and it looks the same in every workflow. It is becoming one configurable watch view with presets, a recommended preset for each workflow, and a choice kept for each app and workflow through the settings layers. A value's relation to its source is one word, and Save says what it writes: a tweak is saved to its literal, a value the program has changed is reset or taken as the new initial value after a confirmation, and a value built by a call points at the literal inside the function that builds it. Watch tabs with expression rows and per-row views follow, and so does what the pane shows while the test loop runs. ([live-bindings-watch-view.md](plans/live-bindings-watch-view.md), [more-settings-editable.md](plans/more-settings-editable.md))
 - [ ] **Dashboard panels that follow your context.** A panel that is not relevant right now says why, in one line where the panel would have been: hot reload, live testing, cohort and friction each leave the reason behind, so a user can tell the dashboard having nothing to say from the dashboard hiding something. The cohort panel shows only while a cohort is running. The live bindings fold away and open again with one click, and the pin opens the pane when there are no bindings yet. What is not built is the live bindings becoming a real pane in REPL mode, and a pane moving between regions. ([dashboard-follows-context.md](plans/dashboard-follows-context.md))
 
 ## Later (19)
