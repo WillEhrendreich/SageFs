@@ -128,6 +128,21 @@ let sseReplayTests =
         tight.Count |> Expect.equal "over an 8-byte bound by bytes though inside it by chars, so it evicts itself" 0
       }
 
+      test "WHY — the position a catch-up announces never moves a client's last id backwards" {
+        let at (n: int64) = LogPosition.At { Epoch = epoch; Seq = n }
+        let id (n: int64) : EventId = { Epoch = epoch; Seq = n }
+        SseReplay.announcedAfterCatchUp (at 5L) None
+        |> Expect.equal "nothing written ahead: the attach position" (at 5L)
+        SseReplay.announcedAfterCatchUp (at 5L) (Some (id 9L))
+        |> Expect.equal "frames to 9 went out during the catch-up: 9, not 5" (at 9L)
+        SseReplay.announcedAfterCatchUp (at 5L) (Some (id 5L))
+        |> Expect.equal "written ahead only to the position itself: unchanged" (at 5L)
+        SseReplay.announcedAfterCatchUp LogPosition.Empty (Some (id 2L))
+        |> Expect.equal "the log was empty when attached, then frames came: 2" (at 2L)
+        SseReplay.announcedAfterCatchUp LogPosition.Empty None
+        |> Expect.equal "still nothing to name" LogPosition.Empty
+      }
+
       test "the count of kept frames is kept, not recounted" {
         let buffer = fill (SseReplay.create epoch { MaxFrames = 3; MaxBytes = plentyOfBytes }) (daemonFrames 5)
         buffer.Count |> Expect.equal "three kept" 3

@@ -127,4 +127,59 @@ let sseOutboxTests =
       outbox.OfferLogged { item with Id = { item.Id with Seq = 2L } }
       outbox.Overflowed |> Expect.isTrue "120 queued is over 100"
     }
+
+    // A catch-up writes straight to the socket and can take a long while on a big session, while the daemon
+    // keeps publishing into this queue. Nothing read the queue until the catch-up ended, so a busy daemon
+    // filled it, the connection was cut the moment the catch-up finished, and the reconnect wrote the same
+    // catch-up again. The catch-up now lets what is queued out as it goes.
+    testList "letting the queue out during a catch-up" [
+
+      let logged (seq: int64) (wire: string) : Replayable =
+        { Id = { Epoch = "e1"; Seq = seq }; Frame = { Scope = FrameScope.Daemon; Wire = wire }; Bytes = wire.Length }
+
+      testTask "writes what is queued without ids, in order, and reports the newest id it wrote" {
+        let outbox = SseOutbox 8
+        let written, write = collecting ()
+        outbox.OfferLogged (logged 5L "event: a\ndata: 1\n\n")
+        outbox.Offer ": a comment\n\n"
+        outbox.OfferLogged (logged 6L "event: b\ndata: 2\n\n")
+        let! newest = SseOutbox.drainQueued outbox write
+        List.ofSeq written
+        |> Expect.equal "the frames' own text, no id line, nothing reordered" [ "event: a\ndata: 1\n\n"; ": a comment\n\n"; "event: b\ndata: 2\n\n" ]
+        newest |> Expect.equal "seq 6 is the newest that went out" (Some { Epoch = "e1"; Seq = 6L })
+      }
+
+      testTask "an empty queue writes nothing and reports no id" {
+        let written, write = collecting ()
+        let! newest = SseOutbox.drainQueued (SseOutbox 8) write
+        written.Count |> Expect.equal "nothing written" 0
+        newest |> Expect.isNone "no id"
+      }
+
+      testTask "WHY — letting the queue out gives its room back, so a catch-up longer than the queue is deep does not overflow it" {
+        // Room for two 40-byte frames. Without letting it out, the third offer overflows.
+        let outbox = SseOutbox(1000, 100)
+        let frame = System.String('x', 20)
+        let written, write = collecting ()
+        for _ in 1 .. 6 do
+          outbox.Offer frame
+          outbox.Offer frame
+          let! _ = SseOutbox.drainQueued outbox write
+          ()
+        outbox.Overflowed |> Expect.isFalse "twelve frames went through a queue that holds two"
+        written.Count |> Expect.equal "all twelve were written" 12
+      }
+
+      testTask "the rest of the queue is still there to drain normally once the catch-up is over" {
+        let outbox = SseOutbox 8
+        let written, write = collecting ()
+        outbox.Offer "a"
+        let! _ = SseOutbox.drainQueued outbox write
+        outbox.Offer "b"
+        outbox.Close ()
+        let! ended = SseOutbox.drain outbox write CancellationToken.None
+        ended |> Expect.equal "closed, not overflowed" SseOutbox.DrainEnd.Closed
+        List.ofSeq written |> Expect.equal "a during the catch-up, b after" [ "a"; "b" ]
+      }
+    ]
   ]
