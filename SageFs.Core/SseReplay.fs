@@ -132,7 +132,9 @@ module SseReplay =
     match position, writtenAhead with
     | LogPosition.At at, Some ahead when ahead.Seq > at.Seq -> LogPosition.At ahead
     | LogPosition.Empty, Some ahead -> LogPosition.At ahead
-    | _ -> position
+    | LogPosition.At _, Some _
+    | LogPosition.At _, None
+    | LogPosition.Empty, None -> position
 
   /// The oldest seq still held, or the next one to be issued when nothing is.
   let firstAvailable (buffer: Buffer) : int64 =

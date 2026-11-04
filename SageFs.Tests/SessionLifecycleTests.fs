@@ -202,12 +202,12 @@ let tests =
     test "WHY — deliveries that pile up keep the newest counts and every lifecycle event, in order" {
       let stop = SseEvent.SessionStopped (SessionId.value a)
       let create = SseEvent.SessionCreated (SessionId.value b, [ "App" ])
-      let older = { Counts = Some (1, 1); Lifecycle = [ stop ] }
-      let newer = { Counts = Some (2, 3); Lifecycle = [ create ] }
+      let older = { Counts = ChangeCounts.Counted (1, 1); Lifecycle = [ stop ] }
+      let newer = { Counts = ChangeCounts.Counted (2, 3); Lifecycle = [ create ] }
       ModelChangeDelivery.merge older newer
-      |> Expect.equal "newest counts, both events" { Counts = Some (2, 3); Lifecycle = [ stop; create ] }
-      ModelChangeDelivery.merge older { Counts = None; Lifecycle = [] }
-      |> Expect.equal "a lifecycle-only delivery does not erase the counts waiting" { Counts = Some (1, 1); Lifecycle = [ stop ] }
+      |> Expect.equal "newest counts, both events" { Counts = ChangeCounts.Counted (2, 3); Lifecycle = [ stop; create ] }
+      ModelChangeDelivery.merge older { Counts = ChangeCounts.SessionListOnly; Lifecycle = [] }
+      |> Expect.equal "a lifecycle-only delivery does not erase the counts waiting" { Counts = ChangeCounts.Counted (1, 1); Lifecycle = [ stop ] }
     }
 
     test "WHY — the active session a client is told of is the registry's, whenever the registry has one" {
@@ -215,8 +215,6 @@ let tests =
         for second in everyRegistry do
           let announced1, _ = SessionLifecycle.observe None first
           let announced2, _ = SessionLifecycle.observe (Some announced1) second
-          match ActiveSession.sessionId second.ActiveSessionId with
-          | Some active -> announced2.Active |> Expect.equal "remembered as active" (Some (SessionId.value active))
-          | None -> ()
+          announced2.Active |> Expect.equal "the registry's active session is the one remembered" second.ActiveSessionId
     }
   ]

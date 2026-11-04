@@ -1907,7 +1907,9 @@ let createElmRuntime
     Coalescer<ModelChangeDelivery>(
       (fun delivery ->
         delivery.Lifecycle |> List.iter stateChangedEvent.Trigger
-        delivery.Counts |> Option.iter (fun (outputCount, diagCount) -> stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount)))),
+        match delivery.Counts with
+        | ChangeCounts.Counted (outputCount, diagCount) -> stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))
+        | ChangeCounts.SessionListOnly -> ()),
       (fun work -> System.Threading.ThreadPool.QueueUserWorkItem(fun _ -> work ()) |> ignore),
       ModelChangeDelivery.merge)
   let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
@@ -2064,12 +2066,12 @@ let createElmRuntime
             // inside the thread-pool work item so it reflects when the
             // change was decided, not when the work item happened to run.
             EvalLatencyTrace.shared.StampModelChanged()
-            modelChanges.Post { Counts = Some (outputCount, diagCount); Lifecycle = lifecycle }
+            modelChanges.Post { Counts = ChangeCounts.Counted (outputCount, diagCount); Lifecycle = lifecycle }
           | false ->
             // The model looks unchanged to subscribers, but the session list moved.
             match lifecycle with
             | [] -> ()
-            | _ -> modelChanges.Post { Counts = None; Lifecycle = lifecycle }
+            | _ -> modelChanges.Post { Counts = ChangeCounts.SessionListOnly; Lifecycle = lifecycle }
         with ex -> Log.error "[elm] State change propagation error: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
       (fun phase msg ->
         Log.warn "[elm] 🚨 System alarm [%s]: %s" phase msg
