@@ -1015,6 +1015,17 @@ let private panelFactsFor
       | null | "" -> FrictionPanelOptIn.NotOptedIn
       | id -> frictionOptInByClient.Find(id, FrictionPanelOptIn.NotOptedIn) }
 
+/// The Live Bindings view this session shows: its workflow's axes, resolved across the global settings and the app's own
+/// `.SageFs/settings.json` (the session's working directory is "this app"). A session with no working directory has only the
+/// global layer.
+let private liveBindingsLook (workflow: WorkflowTypes.SessionWorkflow) (workingDir: string) : SageFs.View =
+  let repo =
+    match System.String.IsNullOrWhiteSpace workingDir with
+    | true -> SageFs.NoRepoCheckout
+    | false -> SageFs.RepoRootAt workingDir
+  let paths : SageFs.ConfigPaths = { GlobalDir = DaemonState.SageFsDir; Repo = repo }
+  (SageFs.SettingsCatalog.viewFor paths (SageFs.ViewWorkflow.ofSessionWorkflow workflow)).View
+
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
 /// and each SSE push. Returns the snapshot, the resolved session ID, and the
@@ -1168,6 +1179,7 @@ let buildDashboardSnapshotWithSessions
         | true -> DockPanes.SessionInView
         | false -> DockPanes.NoSessionInView
       LiveBindingsDock.renderDockWith
+        (liveBindingsLook (q.GetSessionWorkflow sessionId) workingDir)
         tweakView
         session
         (WorkerProtocol.SessionId.value sessionId)

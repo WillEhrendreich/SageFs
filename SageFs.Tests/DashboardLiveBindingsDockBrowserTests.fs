@@ -283,6 +283,38 @@ let journey () : Task<unit> = task {
     (rowsInView >= 8) |> Expect.isTrue (sprintf "ten collapsed bindings show at least eight rows in the dock, got %d (%s)" rowsInView geometry)
     do! shot page "3-bindings"
 
+    // The view is a setting: a choice saved for this app (its own .SageFs/settings.json) reaches the page that is already open on the
+    // next push, and clearing it brings the workflow's recommendation back. The file is restored to what it was.
+    let appSettings = System.IO.Path.Combine(Sw.sampleA, ".SageFs", "settings.json")
+    let settingsBefore = match System.IO.File.Exists appSettings with | true -> Some(System.IO.File.ReadAllText appSettings) | false -> None
+    try
+      let paths : SageFs.ConfigPaths =
+        { GlobalDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-viewjourney-%s" runTag)
+          Repo = SageFs.RepoRootAt Sw.sampleA }
+      let descriptorOf (value: SageFs.AxisValue) = SageFs.ViewSettings.descriptor SageFs.ViewWorkflow.Repl (SageFs.AxisValue.axisOf value)
+      let chosen =
+        [ SageFs.AxisValue.TypeColumn SageFs.Off
+          SageFs.AxisValue.ValueMode SageFs.ValueMode.Full
+          SageFs.AxisValue.RowHeight SageFs.RowHeight.Roomy ]
+      for value in chosen do
+        match SageFs.SettingsCatalog.edit paths SageFs.LRepo (SageFs.AxisValue.token value) (descriptorOf value) with
+        | Result.Ok _ -> ()
+        | Result.Error e -> Tests.failtestf "saving the view for this app should persist: %A" e
+      do! push "view-set"
+      do! waitJs page "the open page to take the saved view" BrowserWaits.panelUpdates
+            "() => { const t = document.querySelector('#live-tree'); return !!t && t.dataset.values === 'full' && t.dataset.row === 'roomy' && t.querySelectorAll('.live-type').length === 0; }" null
+      for value in chosen do
+        match SageFs.SettingsCatalog.clear paths SageFs.LRepo (descriptorOf value) with
+        | Result.Ok _ -> ()
+        | Result.Error e -> Tests.failtestf "resetting the view for this app should work: %A" e
+      do! push "view-cleared"
+      do! waitJs page "the open page to take the recommended view back" BrowserWaits.panelUpdates
+            "() => { const t = document.querySelector('#live-tree'); return !!t && t.dataset.values === 'clipped' && t.dataset.row === 'compact' && t.querySelectorAll('.live-type').length > 0; }" null
+    finally
+      match settingsBefore with
+      | Some text -> System.IO.File.WriteAllText(appSettings, text)
+      | None -> (try System.IO.File.Delete appSettings with _ -> ())
+
     // The pane folds its own tree away: the tree can be taller than the dock's ceiling, and the
     // drag handle that changes the ceiling is a thin line to find. The fold is the user's, so it
     // survives a push.

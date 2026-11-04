@@ -280,15 +280,20 @@ let private renderEmptyState : XmlNode =
 /// One place, so the fold works for the walked tree and for the printed bindings that stand in
 /// for it while no walk has come back. The class is preserved, so the morph leaves the fold alone:
 /// it is the user's, and a push must not take it back.
-let private treeElement (children: XmlNode list) : XmlNode =
+/// The view's two row-shaping axes are attributes, not classes: the tree's `class` is the user's fold and is preserved across a
+/// morph, so a class written here would never change once drawn. An attribute is rewritten by every push, which is how a changed
+/// setting reaches a page that is already open.
+let private treeElement (look: View) (children: XmlNode list) : XmlNode =
   Elem.div
     [ Attr.id DockIds.Tree
       Attr.class' "live-tree"
+      Attr.create "data-values" (AxisValue.token (AxisValue.ValueMode look.Values))
+      Attr.create "data-row" (AxisValue.token (AxisValue.RowHeight look.Row))
       Ds.class' ("live-hidden", sprintf "$%s" DockSignals.LivePaneCollapsed)
       Ds.preserveAttr "class" ]
     children
 
-let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindingsPane.PaneView) : XmlNode list =
+let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (view: LiveBindingsPane.PaneView) : XmlNode list =
   let evaluateEndpoint = sprintf "/api/sessions/%s/live-values/evaluate" (Uri.EscapeDataString sessionId)
   let modeEndpoint = sprintf "/api/sessions/%s/live-values/mode" (Uri.EscapeDataString sessionId)
   let kindBadge (node: LiveValueTree.LiveValueNode) =
@@ -313,7 +318,11 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
         Attr.create "role" "img"
         Attr.create "aria-label" word ]
       [ textEnc (kindGlyph node.Kind node.TypeName) ]
-  let typeCell (node: LiveValueTree.LiveValueNode) = Elem.span [ Attr.class' "live-type" ] [ textEnc node.TypeName ]
+  // The Type column is a view axis: off, the cell is not drawn at all (and is not a hidden node a screen reader would still read).
+  let typeCells (node: LiveValueTree.LiveValueNode) : XmlNode list =
+    match look.Layout.Type with
+    | On -> [ Elem.span [ Attr.class' "live-type" ] [ textEnc node.TypeName ] ]
+    | Off -> []
   let heldRow (binding: string) (path: string list) (node: LiveValueTree.LiveValueNode) (reason: LiveValueTree.NotEvaluatedReason) =
     let action = LiveBindingsPane.rowActionOf reason
     let rowClass =
@@ -344,7 +353,7 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
         Elem.span [ Attr.class' "live-held-evaluating"; Ds.show (sprintf "$%s" indicator) ] [ Text.raw "⏳ evaluating…" ]
       | LiveBindingsPane.NothingToClick
       | LiveBindingsPane.ClickFailed -> ()
-      typeCell node
+      yield! typeCells node
     ]
   // The open state of a node's <details> is its own signal, named from the binding and every label down to the node, each
   // written as hex, so two nodes that share a label never share a signal.
@@ -362,7 +371,7 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
         glyphCell node
         nameCell node
         Elem.span [ Attr.class' ("live-preview" + valueToneClass (valueToneOf node.Kind node.TypeName)) ] [ textEnc (sprintf "= %s" node.Preview) ]
-        typeCell node
+        yield! typeCells node
         yield! kindBadge node
       ]
     // What the files say about this row and what can be done about it (LiveBindingsTweakView): one strip under a row the pane
@@ -416,7 +425,7 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
       | LiveBindingsPane.NothingClickedYet -> ()
       | LiveBindingsPane.LineSays text -> Elem.div [ Attr.class' "live-containment" ] [ textEnc (sprintf "last click: %s" text) ]
     ]
-    treeElement [
+    treeElement look [
       match view.Snapshot.Bindings with
       | [] -> renderEmptyState
       | bindings ->
@@ -451,7 +460,7 @@ let private renderTree (sessionId: string) (tweaks: TweakView) (view: LiveBindin
     ] ]
 
 /// The open pane: a header (what opened it, when it was read, a filter, the pin), then the tree.
-let renderPaneWith (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
+let renderPaneWith (look: View) (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
   let stamp =
     match source with
     | WalkedBindings view -> sprintf "gen %d · %s" view.Snapshot.Generation (view.Snapshot.CapturedAt.ToLocalTime().ToString("HH:mm:ss"))
@@ -459,9 +468,9 @@ let renderPaneWith (tweaks: TweakView) (sessionId: string) (source: BindingsSour
     | NothingBound -> ""
   let body =
     match source with
-    | WalkedBindings view -> renderTree sessionId tweaks view
-    | PrintedBindings scope -> [ treeElement [ renderBindingsPanel (Some scope) ] ]
-    | NothingBound -> [ treeElement [ renderEmptyState ] ]
+    | WalkedBindings view -> renderTree look sessionId tweaks view
+    | PrintedBindings scope -> [ treeElement look [ renderBindingsPanel (Some scope) ] ]
+    | NothingBound -> [ treeElement look [ renderEmptyState ] ]
   // The text panel carries `bindings-panel` itself, so the wrapper must not repeat it.
   let paneId =
     match source with
@@ -501,14 +510,17 @@ let renderPaneWith (tweaks: TweakView) (sessionId: string) (source: BindingsSour
     yield! body
   ]
 
-/// The open pane with no knob: what a session whose files have not been asked about shows.
+/// The open pane with no knob, in the REPL workflow's recommended view: what a session whose files have not been asked about shows.
 let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
-  renderPaneWith TweakView.none sessionId source because display
+  renderPaneWith (View.recommended ViewWorkflow.Repl) TweakView.none sessionId source because display
 
 /// The dock, decided and drawn. Both answers of the pin are rendered when the pin can matter (the signal picks between them);
 /// when a session has bindings, or there is no session to pin on, only the one answer exists. `tweaks` is what the session's files
-/// say about each row (the persistence state and the knob): rows it has nothing for are drawn as they always were.
+/// say about each row (the persistence state and the knob): rows it has nothing for are drawn as they always were. `look` is the
+/// view the session's workflow and app resolved to (`SettingsCatalog.viewFor`): which columns a row has, how much of a value
+/// prints, how tall a row is.
 let renderDockWith
+  (look: View)
   (tweaks: TweakView)
   (session: SessionInView)
   (sessionId: string)
@@ -532,14 +544,14 @@ let renderDockWith
 
   let liveBindings =
     match PaneState.decide facts DockPane.LiveBindings with
-    | PaneOpen because -> [ renderPaneWith tweaks sessionId source because ShownAlways ]
+    | PaneOpen because -> [ renderPaneWith look tweaks sessionId source because ShownAlways ]
     | PaneCollapsed why ->
       match CollapsedBecause.pin why with
       | PinNotOffered -> [ renderCollapsedBar why ShownAlways ]
       | PinOffered ->
         match PaneState.decide { facts with Pin = Pinned } DockPane.LiveBindings with
         | PaneOpen pinnedBecause ->
-          [ renderCollapsedBar why ShownUnlessPinned; renderPaneWith tweaks sessionId source pinnedBecause ShownOnlyWhilePinned ]
+          [ renderCollapsedBar why ShownUnlessPinned; renderPaneWith look tweaks sessionId source pinnedBecause ShownOnlyWhilePinned ]
         | PaneCollapsed _ -> [ renderCollapsedBar why ShownAlways ]
 
   // Qualified rather than `open`: AppOutputView has its own `renderCollapsedBar`, and opening it here
@@ -552,7 +564,7 @@ let renderDockWith
 
 /// The dock with no knob (a session whose files have not been asked about, and the no-session page).
 let renderDock (session: SessionInView) (sessionId: string) (source: BindingsSource) : XmlNode =
-  renderDockWith TweakView.none session sessionId source None
+  renderDockWith (View.recommended ViewWorkflow.Repl) TweakView.none session sessionId source None
 
 /// A brief highlight on a value that changed. It is drawn from what the SSE morph really rewrote, so only a changed value
 /// flashes and nothing polls: the browser's own mutation record says a `.live-preview` text node was replaced, and that cell

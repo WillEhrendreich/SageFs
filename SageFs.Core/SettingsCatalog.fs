@@ -234,6 +234,18 @@ module SettingsCatalog =
   let pilots : SettingDescriptor list =
     [ sessionDefaultWorkingDir; perTestTimeout; globalTestRunTimeout; mcpPort; bindHost ]
 
+  /// The Live Bindings view a workflow shows for the app at `paths`: each axis resolved across the layers, and an axis nobody set
+  /// follows the workflow's recommended view. An axis whose stored value will not parse (a layer file edited by hand) also falls
+  /// back to the recommendation and says its source is the default, because a page that cannot draw its bindings over a typo is
+  /// worse than one that draws the recommended view. The Settings panel still surfaces the bad value for the pilots.
+  let viewFor (paths: ConfigPaths) (workflow: ViewWorkflow) : ResolvedView =
+    let provenanceOf (axis: ViewAxis) : Provenance =
+      let descriptor = ViewSettings.descriptor workflow axis
+      match resolve paths descriptor with
+      | Ok provenance -> provenance
+      | Error _ -> { Effective = descriptor.Default; Source = LDefault; PerLayer = [] }
+    ViewSettings.resolveView workflow provenanceOf
+
   /// The MCP port the persisted layers hold, if they hold one that parses. The
   /// Settings panel writes this value and its row says it applies on the next
   /// daemon restart; until the daemon read it, nothing did, and the row's promise

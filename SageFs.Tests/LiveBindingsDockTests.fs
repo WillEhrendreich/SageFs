@@ -157,7 +157,7 @@ let dockTreeTests =
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep }
       let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
-      let html = renderDockWith tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
+      let html = renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
       html |> Expect.stringContains "the count, in the bar" "2 REPL only"
       html |> Expect.stringContains "the chip's own test id" "data-testid=\"live-repl-only\""
       html |> Expect.stringContains "the reason on hover" "nothing to save it to"
@@ -262,4 +262,52 @@ let dockColourTests =
       html "String" |> Expect.stringContains "text" "live-v-string"
       html "Int32" |> Expect.stringContains "number" "live-v-number"
       (html "Person").Contains "live-v-" |> Expect.isFalse "nothing for anything else"
+  ]
+
+/// The dock draws from the view it is handed (docs/plans/live-bindings-watch-view.md, phase 1, step 2b).
+[<Tests>]
+let dockViewTests =
+  let recommended = View.recommended ViewWorkflow.Repl
+  let drawn (look: View) =
+    renderDockWith look TweakView.none SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
+  let attribute (name: string) (html: string) : string =
+    let m = Text.RegularExpressions.Regex.Match(html, sprintf "<div id=\"live-tree\"[^>]*%s=\"([^\"]*)\"" name)
+    match m.Success with
+    | true -> m.Groups.[1].Value
+    | false -> ""
+  testList "the dock draws from the view" [
+
+    testCase "WHY — with the Type column on every node has a type cell, and with it off no node has one and the cell is not merely hidden" <| fun _ ->
+      let on = drawn { recommended with Layout = { recommended.Layout with Type = On } }
+      let off = drawn { recommended with Layout = { recommended.Layout with Type = Off } }
+      (count "class=\"live-type\"" on > 0) |> Expect.isTrue "type cells are drawn when asked for"
+      count "class=\"live-type\"" off |> Expect.equal "no type cell when the column is off" 0
+      off |> Expect.stringContains "the rest of the row is still there" "live-preview"
+
+    testCase "WHY — how much of a value prints and how tall a row is are attributes of the tree, because a morph rewrites an attribute and keeps a class" <| fun _ ->
+      for values in [ ValueMode.Clipped; ValueMode.Full ] do
+        for row in [ RowHeight.Compact; RowHeight.Roomy ] do
+          let html = drawn { recommended with Values = values; Row = row }
+          attribute "data-values" html |> Expect.equal "the value mode" (AxisValue.token (AxisValue.ValueMode values))
+          attribute "data-row" html |> Expect.equal "the row height" (AxisValue.token (AxisValue.RowHeight row))
+
+    testCase "WHY — the tree with nothing in it carries the same attributes, so the empty page and the full page agree" <| fun _ ->
+      let html = renderDockWith { recommended with Values = ValueMode.Full } TweakView.none SessionInView "abcd1234" NothingBound None |> decoded
+      attribute "data-values" html |> Expect.equal "the empty tree says the mode too" "full"
+
+    testCase "WHY — a column gives way at the width the pure fit says, because the stylesheet's thresholds are the fit's numbers" <| fun _ ->
+      // Only the Type column is drawn so far, so the threshold is the width Name, Value and Type need together, less one.
+      let thresholdIn (mode: string) : int option =
+        let m = Text.RegularExpressions.Regex.Match(Dashboard.dashboardCss, sprintf @"@container \(max-width: (\d+)px\)\s*\{\s*\.live-tree\[data-values=""%s""\] \.live-type" mode)
+        match m.Success with
+        | true -> Some(int m.Groups.[1].Value)
+        | false -> None
+      for values in [ ValueMode.Clipped; ValueMode.Full ] do
+        let mode = AxisValue.token (AxisValue.ValueMode values)
+        let hidesAt = ViewColumns.needed values [ OptionalColumn.Type ] - 1
+        thresholdIn mode |> Expect.equal (sprintf "%s: Type hides one pixel below what the three columns need" mode) (Some hidesAt)
+        // And the pure fit agrees: at that width Type is hidden, one pixel wider it is shown.
+        let layout = { recommended.Layout with Type = On; State = Off; Source = Off }
+        (ViewColumns.fit values layout hidesAt).Hidden |> Expect.equal "hidden at the threshold" [ OptionalColumn.Type ]
+        (ViewColumns.fit values layout (hidesAt + 1)).Hidden |> Expect.isEmpty "shown one pixel wider"
   ]

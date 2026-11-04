@@ -218,3 +218,49 @@ let columnTests =
       fitted.Shown |> Expect.isEmpty "nothing optional shown"
       fitted.Hidden |> Expect.equal "all hidden, in order" [ OptionalColumn.Type; OptionalColumn.Source; OptionalColumn.State ]
   ]
+
+/// Reading a workflow's view from the layer files (`SettingsCatalog.viewFor`), the way the dock does for the app it draws.
+[<Tests>]
+let viewForTests =
+  let withApp (body: ConfigPaths -> unit) =
+    let root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-viewfor-%s" (System.Guid.NewGuid().ToString "N"))
+    let globalDir = System.IO.Path.Combine(root, "global")
+    System.IO.Directory.CreateDirectory globalDir |> ignore
+    try body { GlobalDir = globalDir; Repo = RepoRootAt root }
+    finally (try System.IO.Directory.Delete(root, true) with _ -> ())
+  let store (paths: ConfigPaths) (layer: ConfigLayer) (workflow: ViewWorkflow) (value: AxisValue) =
+    let d = ViewSettings.descriptor workflow (AxisValue.axisOf value)
+    match SettingsCatalog.edit paths layer (AxisValue.token value) d with
+    | Result.Ok _ -> ()
+    | Result.Error e -> failtestf "the edit should persist: %A" e
+  testList "SettingsCatalog.viewFor" [
+    testCase "WHY — an app nobody touched shows the workflow's recommended view, and says every axis is a default" <| fun _ ->
+      withApp (fun paths ->
+        for workflow in ViewWorkflow.all do
+          let resolved = SettingsCatalog.viewFor paths workflow
+          resolved.View |> Expect.equal (sprintf "%A follows its recommendation" workflow) (View.recommended workflow)
+          resolved.Sources |> Map.forall (fun _ layer -> layer = LDefault) |> Expect.isTrue "no axis claims a file")
+
+    testCase "WHY — a choice saved for this app changes that workflow only, and says it came from the repo layer" <| fun _ ->
+      withApp (fun paths ->
+        store paths LRepo ViewWorkflow.Repl (AxisValue.TypeColumn Off)
+        store paths LRepo ViewWorkflow.Repl (AxisValue.ValueMode ValueMode.Full)
+        let repl = SettingsCatalog.viewFor paths ViewWorkflow.Repl
+        repl.View.Layout.Type |> Expect.equal "the Type column is off" Off
+        repl.View.Values |> Expect.equal "values print in full" ValueMode.Full
+        repl.Sources |> Map.find ViewAxis.TypeColumn |> Expect.equal "from the repo layer" LRepo
+        (SettingsCatalog.viewFor paths ViewWorkflow.HotReload).View
+        |> Expect.equal "hot reload is untouched" (View.recommended ViewWorkflow.HotReload))
+
+    testCase "WHY — the repo layer beats the global one for the same axis" <| fun _ ->
+      withApp (fun paths ->
+        store paths LGlobal ViewWorkflow.LiveTesting (AxisValue.RowHeight RowHeight.Roomy)
+        store paths LRepo ViewWorkflow.LiveTesting (AxisValue.RowHeight RowHeight.Compact)
+        (SettingsCatalog.viewFor paths ViewWorkflow.LiveTesting).View.Row |> Expect.equal "this app's choice wins" RowHeight.Compact)
+
+    testCase "WHY — a layer file edited by hand to nonsense leaves the page working on the recommended view" <| fun _ ->
+      withApp (fun paths ->
+        let key = ViewSettings.key ViewWorkflow.Repl ViewAxis.RowHeight
+        System.IO.File.WriteAllText(SettingsStore.globalPath paths.GlobalDir, sprintf "{ \"%s\": \"gigantic\" }" key)
+        (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View |> Expect.equal "the recommendation" (View.recommended ViewWorkflow.Repl))
+  ]

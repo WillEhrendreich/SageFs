@@ -284,7 +284,7 @@ let private paneView (bindings: LiveValueTree.LiveBindingValue list) : LiveBindi
 let private tweaks (rows: (RowKey * RowView) list) : TweakView = { Rows = Map.ofList rows }
 
 let private dockWith (view: TweakView) (bindings: LiveValueTree.LiveBindingValue list) : string =
-  Dock.renderDockWith view DockPanes.SessionInView "abcd1234" (Dock.WalkedBindings(paneView bindings)) None
+  Dock.renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) view DockPanes.SessionInView "abcd1234" (Dock.WalkedBindings(paneView bindings)) None
   |> renderNode
 
 [<Tests>]

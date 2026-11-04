@@ -1427,6 +1427,7 @@ h2 {
 }
 
 .live-tree {
+  container-type: inline-size;
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
@@ -1592,6 +1593,40 @@ h2 {
 .live-binding-node > .live-preview {
   flex: 1 1 0;
   font-size: 0.7rem;
+}
+
+/* The view's axes (ViewSettings.fs). The tree carries `data-values` and `data-row`, and the rules below draw them.
+   `Full` prints the whole value, wrapped, where `Clipped` cuts it at the column. `Roomy` is a taller row. */
+.live-tree[data-values="full"] .live-binding-node {
+  flex-wrap: wrap;
+}
+
+.live-tree[data-values="full"] .live-binding-node > .live-preview {
+  flex: 1 1 20ch;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.live-tree[data-row="roomy"] .live-binding-node {
+  padding-block: 5px;
+}
+
+/* A column gives way when the tree is too narrow for it, before the value does. The tree is the size container, so the width is its
+   content box, the same width `ViewColumns.fit` takes. Each threshold is the width Name, Value and Type need together, less one
+   (`ViewColumns.needed`), and `dockViewTests` fails if either number drifts from the pure function. The tree is declared a size
+   container in its own rule above. */
+@container (max-width: 355px) {
+  .live-tree[data-values="clipped"] .live-type {
+    display: none;
+  }
+}
+
+@container (max-width: 535px) {
+  .live-tree[data-values="full"] .live-type {
+    display: none;
+  }
 }
 
 /* A value takes the theme's syntax colour for what it is, so it changes with the editor's. Anything else keeps the default. */
