@@ -233,21 +233,21 @@ let coveringTests =
   testList "per-test coverage: which tests cover a line" [
 
     testCase "each line lists exactly the tests whose own coverage reached it" <| fun _ ->
-      let byLine = CoverageBitmap.coveringTestsByLine moduleFs [| fixtureMap |] bitmaps discoveredIds
+      let byLine = CoverageByFile.coveringTestsByLine moduleFs [| fixtureMap |] bitmaps discoveredIds
       byLine |> Map.tryFind 10 |> Expect.equal "line 10" (Some [| testA.Id |])
       byLine |> Map.tryFind 20 |> Expect.equal "line 20" (Some [| testB.Id |])
       byLine |> Map.tryFind 30 |> Expect.equal "the expression's first line" (Some [| testA.Id; testB.Id |])
       byLine |> Map.tryFind 32 |> Expect.equal "the expression's last line" (Some [| testA.Id; testB.Id |])
 
     testCase "a test with no recorded coverage covers no line" <| fun _ ->
-      CoverageBitmap.coveringTestsByLine moduleFs [| fixtureMap |] bitmaps discoveredIds
+      CoverageByFile.coveringTestsByLine moduleFs [| fixtureMap |] bitmaps discoveredIds
       |> Map.values
       |> Seq.forall (fun ids -> not (Array.contains testC.Id ids))
       |> Expect.isTrue "C never appears"
 
     testCase "a line nobody hit is not listed, so the gutter shows it as uncovered" <| fun _ ->
       let onlyA = Map.ofList [ testA.Id, bitmapOf 4 [ 0 ] ]
-      CoverageBitmap.coveringTestsByLine moduleFs [| fixtureMap |] onlyA discoveredIds
+      CoverageByFile.coveringTestsByLine moduleFs [| fixtureMap |] onlyA discoveredIds
       |> Map.tryFind 20
       |> Expect.isNone "line 20 has a probe and no test hit it"
 

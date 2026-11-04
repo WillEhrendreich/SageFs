@@ -1539,12 +1539,15 @@ let replayCachedTestState
             | _ -> None)
           |> Array.distinct
         let ltState = model.LiveTesting
+        // Everything about the session that does not depend on the file, found once. It used to be found
+        // again for every file, which is what made this loop take minutes on a big session.
+        let basis = FileAnnotations.prepare ltState
         for file in files do
           gone.ThrowIfCancellationRequested()
-          // Projecting a file takes a while on a big session, and the daemon keeps publishing into this
-          // connection's queue meanwhile; `between` lets what has queued out so the queue cannot fill.
+          // A client can be slow, and the daemon keeps publishing into this connection's queue meanwhile;
+          // `between` lets what has queued out so the queue cannot fill.
           do! between ()
-          let fa = FileAnnotations.projectWithCoverage file ltState
+          let fa = FileAnnotations.projectFile basis file
           match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 || fa.InlineFailures.Length > 0 with
           | true ->
             do! SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa
@@ -1552,8 +1555,8 @@ let replayCachedTestState
             // Emit coverage_view events on replay so late-connecting
             // editors get the same views as already-connected ones.
             let views =
-              FileAnnotationsInternals.projectViewsForFile
-                CoverageViewMode.defaults file ltState.DepGraph ltState.TestState
+              FileAnnotationsInternals.projectViewsOf
+                CoverageViewMode.defaults (FileAnnotations.coverageAnnotationsOf basis file) file ltState.DepGraph ltState.TestState
             let gen = RunGeneration.value ltState.TestState.LastGeneration
             for view in views do
               gone.ThrowIfCancellationRequested()
@@ -2253,8 +2256,10 @@ let wireModelChangeHandlers
               |> Seq.filter (fun f -> not (Array.contains f files))
               |> Array.ofSeq
           let allFiles = Array.append files instrFiles
+          // Found once for all the files, and only if there are any (see `FileAnnotations.prepare`).
+          let basis = lazy (SageFs.Features.LiveTesting.FileAnnotations.prepare model.LiveTesting)
           for file in allFiles do
-            let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting
+            let fa = SageFs.Features.LiveTesting.FileAnnotations.projectFile basis.Value file
             match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 || fa.InlineFailures.Length > 0 with
             | true ->
               ctx.TestEventBroadcast.Trigger(
@@ -2263,8 +2268,9 @@ let wireModelChangeHandlers
               // Emit one coverage_view event per CoverageView so editors
               // can render a single badge per function instead of one per test.
               let views =
-                SageFs.Features.LiveTesting.FileAnnotationsInternals.projectViewsForFile
+                SageFs.Features.LiveTesting.FileAnnotationsInternals.projectViewsOf
                   SageFs.Features.LiveTesting.CoverageViewMode.defaults
+                  (SageFs.Features.LiveTesting.FileAnnotations.coverageAnnotationsOf basis.Value file)
                   file
                   model.LiveTesting.DepGraph
                   model.LiveTesting.TestState

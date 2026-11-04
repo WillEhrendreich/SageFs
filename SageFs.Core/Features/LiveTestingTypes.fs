@@ -958,67 +958,9 @@ module CoverageBitmap =
               | Some bm -> probes |> List.exists (fun slot -> isSet slot bm))
             |> LineNarrowing.NarrowedTo
 
-  /// The tests whose own recorded coverage reaches `line` of `filePath`, by line, for every line
-  /// that has a sequence point some test hit. Tests are in discovery order.
-  let coveringTestsByLine
-    (filePath: string)
-    (maps: InstrumentationMap array)
-    (bitmaps: Map<TestId, CoverageBitmap>)
-    (discovered: TestId array)
-    : Map<int, TestId array> =
-    let merged = InstrumentationMap.merge maps
-    match merged.TotalProbes with
-    | 0 -> Map.empty
-    | total ->
-      let fileSlots =
-        [| for i in 0 .. merged.Slots.Length - 1 do
-             match merged.Slots.[i].File = filePath with
-             | true -> yield i
-             | false -> () |]
-      let testsOfLine = System.Collections.Generic.Dictionary<int, ResizeArray<TestId>>()
-      for id in discovered do
-        match Map.tryFind id bitmaps with
-        | Some bm when bm.Count = total ->
-          for slot in fileSlots do
-            match isSet slot bm with
-            | false -> ()
-            | true ->
-              let sp = merged.Slots.[slot]
-              for line in sp.Line .. max sp.Line sp.EndLine do
-                match testsOfLine.TryGetValue line with
-                | true, tests ->
-                  // `discovered` is walked once, in order, so a test is only ever the last one in a line's list.
-                  match tests.Count > 0 && tests.[tests.Count - 1] = id with
-                  | true -> ()
-                  | false -> tests.Add id
-                | false, _ -> testsOfLine.[line] <- ResizeArray [ id ]
-        | _ -> ()
-      testsOfLine |> Seq.map (fun kv -> kv.Key, kv.Value.ToArray()) |> Map.ofSeq
-
-  /// Merge all test bitmaps via OR, compute LineCoverage per line for a file.
-  let computeLineCoverageForFile
-    (filePath: string)
-    (maps: InstrumentationMap array)
-    (bitmaps: Map<TestId, CoverageBitmap>)
-    : Map<int, LineCoverage> =
-    let merged = InstrumentationMap.merge maps
-    match merged.TotalProbes = 0 || merged.Slots.Length = 0 with
-    | true -> Map.empty
-    | false ->
-      let compatBitmaps =
-        bitmaps |> Map.values |> Seq.filter (fun bm -> bm.Count = merged.TotalProbes) |> Seq.toArray
-      match compatBitmaps.Length = 0 with
-      | true -> Map.empty
-      | false ->
-        let combined =
-          compatBitmaps
-          |> Array.reduce (fun acc bm ->
-            let bits = Array.init acc.Bits.Length (fun i -> acc.Bits.[i] ||| bm.Bits.[i])
-            { Bits = bits; Count = acc.Count })
-        let hits = toBoolArray combined
-        let state = InstrumentationMap.toCoverageState hits merged
-        let allLineCov = ILCoverage.computeLineCoverage state
-        allLineCov |> Map.tryFind filePath |> Option.defaultValue Map.empty
+  // `coveringTestsByLine` and `computeLineCoverageForFile` moved to CoverageProjection.fs: the projection
+  // that needs them is in TestAnnotations.fs, and they now come in a form that does the file-independent
+  // part once (this file is under a line budget that only goes down).
 
   /// Compute per-test coverage weights for a set of changed files.
   /// Weight = popCount(intersect(testBitmap, fileMask)) — how many probes the test
