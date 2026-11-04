@@ -435,5 +435,5 @@ let tests =
       resources.CohortStatus()
       |> Expect.equal
            "cohort status"
-           """{"claims":[],"integrationHead":"0000000000000000000000000000000000000000","landings":[],"members":[],"rows":[],"tests":[],"version":0}"""
+           """{"claims":[],"cohortScope":"machine","integrationHead":"0000000000000000000000000000000000000000","landings":[],"members":[],"rows":[],"tests":[],"version":0}"""
   ]
