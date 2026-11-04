@@ -282,8 +282,9 @@ File.WriteAllText(
 
 /// Pre-build the project `projectFile` of a copied fixture or sample in `dest` (Debug is fine: the daemon's config
 /// fallback resolves Debug<->Release at the same TFM), so a session's warmup loads an already-built project. Fails
-/// loudly with the build log if the project cannot build on this machine.
-let prebuildCopy (dest: string) (projectFile: string) : unit =
+/// loudly with the build log if the project cannot build on this machine. The build's logs go to `logDir`, so building a
+/// sample that lives in the repo leaves nothing in it.
+let prebuildCopy (dest: string) (logDir: string) (projectFile: string) : unit =
   let psi = Diagnostics.ProcessStartInfo()
   psi.FileName <- "dotnet"
   psi.UseShellExecute <- false
@@ -298,8 +299,8 @@ let prebuildCopy (dest: string) (projectFile: string) : unit =
   SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   use build = Diagnostics.Process.Start(psi)
   // Drain to files (never undrained pipes): files can't deadlock the child.
-  let buildOut = Path.Combine(dest, "build.stdout.log")
-  let buildErr = Path.Combine(dest, "build.stderr.log")
+  let buildOut = Path.Combine(logDir, "build.stdout.log")
+  let buildErr = Path.Combine(logDir, "build.stderr.log")
   let outWriter = new System.IO.StreamWriter(buildOut)
   let errWriter = new System.IO.StreamWriter(buildErr)
   let drain (stream: System.IO.StreamReader) (writer: System.IO.StreamWriter) =
@@ -323,6 +324,21 @@ let prebuildCopy (dest: string) (projectFile: string) : unit =
     let err = if File.Exists buildErr then File.ReadAllText(buildErr) else ""
     failwithf "runner: pre-build of %s in %s failed (exit %d).\n%s\n%s"
       projectFile dest build.ExitCode out err
+
+/// Build the two sample projects the browser journeys start sessions on. Each carries a copy of `SageFs.Core.dll` in its own
+/// `bin`, and the daemon refuses a session whose project holds a Core older than its own (a worker that loaded it would die on a
+/// method the daemon calls), so a journey run after any `SageFs.Core` change failed at session creation until someone rebuilt the
+/// samples by hand. Building them here, once, before the daemon starts, makes the tier start from samples that match the build
+/// under test. An up-to-date sample costs a few seconds.
+let prebuildJourneySamples () : unit =
+  let logDir = SageFs.Tests.RunnerDirs.create SageFs.Tests.RunnerDirs.Family.BrowserRuns
+  try
+    for project in
+      [ DashboardSessionSwitchOutputBrowserTests.projectA
+        DashboardSessionSwitchOutputBrowserTests.projectB ] do
+      prebuildCopy (Path.GetDirectoryName project) logDir project
+  finally
+    SageFs.Tests.RunnerDirs.remove logDir
 
 /// Copy the WebAppFixture into a fresh temp dir, drop in the init profile,
 /// and pre-build the copy so the daemon's warmup loads an already-built
@@ -370,7 +386,7 @@ let prepareHotReloadFixture (repoRoot: string) (runtime: HotReloadStateHarness.H
         Path.Combine(dest, "global.json"),
         sprintf """{"sdk":{"version":"%s","rollForward":"latestPatch","allowPrerelease":false}}""" sdk)
     | None -> failwith "HR runner: a net10 fixture copy needs an SDK pin, and none was produced"
-  prebuildCopy dest "WebAppFixture.fsproj"
+  prebuildCopy dest dest "WebAppFixture.fsproj"
   dest
 
 /// What the HR runner's daemon and fixture are set up for. Both kinds boot the same way (an isolated daemon, a
@@ -687,7 +703,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   let sampleDir = SageFs.Tests.LiveTestingShards.sampleCopy repoRoot
   let sampleFile = "SageFs.Samples.FromCSharp.fsproj"
   let sampleProject = Path.Combine(sampleDir, sampleFile)
-  prebuildCopy sampleDir sampleFile
+  prebuildCopy sampleDir sampleDir sampleFile
 
   let psi = Diagnostics.ProcessStartInfo()
   psi.FileName <- exe

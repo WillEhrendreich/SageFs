@@ -362,6 +362,7 @@ let main argv =
   let isIntegrationBrowser = argv |> Array.exists (fun a -> a = "--integration-browser")
   match isIntegrationBrowser with
   | true ->
+    SageFs.Tests.DashboardBrowserRunner.prebuildJourneySamples ()
     let result = SageFs.Tests.DashboardBrowserRunner.runBrowserJourneys argv
     Environment.Exit result
     result
