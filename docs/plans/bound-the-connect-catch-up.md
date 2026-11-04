@@ -14,7 +14,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Last green commit | none yet |
 | Next action | Run "Measure first" (one client, a settled `SageFs.Tests` session, read until the `retry:` hint and count frames and bytes by type). Then write the first failing test: a catch-up for a session with N files sends at most a fixed number of frames, whatever N is. |
 | Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Surprises | The pinned `handleTestSummaryChange` thread has a likely cause that is now fixed but not yet re-measured: model changes ran as one pool work item each, so a second pass over every file started beside the first (`Coalescer`, roast finding 4). Re-measure on a settled `SageFs.Tests` session before step 7 is sized. |
 
 Already fixed and shipped on the way here (`ba0b59be`): a catch-up stops at the next file or view once its client has left. That removed the worst symptom, a daemon pinned at three cores by catch-ups nobody was reading. It did not shrink what a client that stays is sent.
 
@@ -38,7 +38,8 @@ At 100 s the catch-up had sent 30 `file_annotations` frames and 3,486 `coverage_
 - `replayCachedTestState` (`SageFs/McpServer.fs`) projects every source-mapped file of the session: one `file_annotations` frame and one `coverage_view` frame per function, each written and flushed in turn. The cost grows with the number of files times the number of functions.
 - Nothing about a client's open files reaches the daemon, so it sends everything.
 - Before `ba0b59be`, a client that left did not stop this. Kestrel turns a write to a closed connection into a no-op that does not throw, so five catch-ups were still running at about three cores minutes after the last client had gone, and a new session on the same daemon would not finish warming up in four minutes.
-- The live path has the same shape. `handleTestSummaryChange` projects every file again on each summary change. On the fixed daemon, with no client attached, one thread stayed in `handleTestSummaryChange` and `projectWithCoverage` at 102% of a core for over 40 seconds. Why it runs that long is not explained yet.
+- The live path has the same shape. `handleTestSummaryChange` projects every file again on each summary change. On the fixed daemon, with no client attached, one thread stayed in `handleTestSummaryChange` and `projectWithCoverage` at 102% of a core for over 40 seconds. Why it runs that long is not explained yet. One cause is fixed since: handlers ran once per model change, on separate pool threads, so passes overlapped (`Coalescer`, `SageFs.Core/ChangeCoalescer.fs`). A single pass over 1,629 files may still take that long, and a re-measure says.
+- Live frames queue behind a long catch-up, because the catch-up writes straight to the socket and the queue is drained after it. If they pass the cap (1,024 frames or 32 MiB) the connection ends as soon as the catch-up is done, and the reconnect writes the same catch-up again. A short catch-up ends that loop, so it can repeat on a busy daemon until this item lands.
 - There is a precedent for the fix. `test_results_batch` used to carry every entry and now carries a summary, with the list on `GET /api/live-testing/entries` (`mapEventsRoute`).
 - Clients that read these frames: `sagefs-vscode/src/LiveTestingListener.fs` and, in the Neovim plugin, `lua/sagefs/annotations.lua` (`handle_file_annotations`), `coverage.lua` and `coverage_hover.lua`.
 

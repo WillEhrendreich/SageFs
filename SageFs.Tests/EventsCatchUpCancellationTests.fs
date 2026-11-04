@@ -61,7 +61,9 @@ let private context : SseContext =
   { GetElmModel = Some (fun () -> model)
     GetWarmupContext = None
     GetHotReloadState = None
-    SseJsonOpts = JsonSerializerOptions()
+    // The options the daemon serializes with. A bare `JsonSerializerOptions()` writes an F# union on .NET 11 and
+    // throws on .NET 10, so a catch-up built on one wrote nothing there and these cases saw zero frames.
+    SseJsonOpts = Json.optionsOf Json.standard
     TestEventBroadcast = Event<SseFrame>()
     SessionEventBroadcast = Event<SseFrame>()
     Log = SseLog.startNew ()

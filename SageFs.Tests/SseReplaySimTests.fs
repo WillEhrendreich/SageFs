@@ -160,4 +160,33 @@ let tests =
       testCase "some seeded scenario makes the twin violate never-sees-another-sessions-frames" <| fun _ ->
         someSeedBreaks ReplayBehavior.IgnoresScopeTwin neverSeesAnotherSessionsFrames
     ]
+
+    // The other twins break what `catchUp` computes. This one breaks the step around it: `SseLog.Attach`
+    // works out what a connection missed and registers it for live frames under one lock, so no publish
+    // can fall between. The scenarios above step an attach as one event and could not tell the lock from
+    // no lock; here the event after a `Reconnect` lands between its two halves.
+    testList "a twin whose attach is two steps loses a frame published between them" [
+
+      testCase "REPRODUCED: a frame lands after the twin worked out the replay and before it registered the client" <| fun _ ->
+        let scenario =
+          { Seed = -605
+            Limits = roomy
+            Events =
+              reconnectAll
+              @ [ SimEvent.Publish(FrameScope.Daemon, 10)
+                  SimEvent.Disconnect 0
+                  SimEvent.Reconnect 0
+                  SimEvent.Publish(FrameScope.Daemon, 10) ] }
+        holdsFor ReplayBehavior.Real nothingMissedAfterReconnect scenario
+        violatedBy ReplayBehavior.TwoStepAttachTwin nothingMissedAfterReconnect scenario
+        |> Expect.isTrue "the second frame is in neither the replay nor the live feed, and no snapshot covers it"
+
+      testCase "the same scenario with the attach in one step is whole, and the halves split only where a Reconnect was" <| fun _ ->
+        let events = [ SimEvent.Reconnect 0; SimEvent.Publish(FrameScope.Daemon, 10); SimEvent.Disconnect 0 ]
+        splitAttaches events
+        |> Expect.equal "the publish sits between the halves" [ SimEvent.AttachBegin 0; SimEvent.Publish(FrameScope.Daemon, 10); SimEvent.AttachEnd 0; SimEvent.Disconnect 0 ]
+
+      testCase "some seeded scenario makes the twin violate nothing-missed" <| fun _ ->
+        someSeedBreaks ReplayBehavior.TwoStepAttachTwin nothingMissedAfterReconnect
+    ]
   ]

@@ -54,7 +54,7 @@ let private sseContext () : SseContext =
   { GetElmModel = None
     GetWarmupContext = None
     GetHotReloadState = None
-    SseJsonOpts = JsonSerializerOptions()
+    SseJsonOpts = Json.optionsOf Json.standard
     TestEventBroadcast = Event<SseFrame>()
     SessionEventBroadcast = Event<SseFrame>()
     Log = SseLog.startNew ()
@@ -109,7 +109,7 @@ let tests =
       let owners = registry ()
       let owner = owners.OwnerFor repoB
       join owner repoB "bea"
-      use doc = JsonDocument.Parse(SageFs.SseWriter.cohortFrameJson (JsonSerializerOptions()) (owner.ReadFrame()))
+      use doc = JsonDocument.Parse(SageFs.SseWriter.cohortFrameJson (Json.optionsOf Json.standard) (owner.ReadFrame()))
       doc.RootElement.GetProperty("CohortScope").GetString()
       |> Expect.equal "the label of the frame's own scope" (SageFs.Scope.label repoB)
     }

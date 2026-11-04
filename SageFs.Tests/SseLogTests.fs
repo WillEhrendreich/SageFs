@@ -131,7 +131,38 @@ let sseLogTests =
       }
     ]
 
+    testList "the position a heartbeat reports" [
+      test "is the newest id, or empty before the first frame" {
+        let log = newLog ()
+        let positions = ResizeArray<LogPosition>()
+        log.WithPosition positions.Add
+        [ 1; 2; 3 ] |> List.iter (fun n -> log.Publish (daemonFrame n) |> ignore)
+        log.WithPosition positions.Add
+        List.ofSeq positions
+        |> Expect.equal "empty, then seq 3" [ LogPosition.Empty; LogPosition.At { Epoch = epoch; Seq = 3L } ]
+      }
+
+      test "WHY — an id-only frame offered from it is queued behind every frame published before it" {
+        // A scoped client's last id lags traffic it cannot see. The heartbeat names the position so it does
+        // not, and the frame must come after the frames the connection was already offered.
+        let log = newLog ()
+        let queued = ResizeArray<string>()
+        let _attachment = log.Attach(StreamScope.EverySession, None, fun item -> queued.Add (Replayable.toWire item))
+        log.Publish (daemonFrame 1) |> ignore
+        log.Publish (daemonFrame 2) |> ignore
+        log.WithPosition(function
+          | LogPosition.At position -> queued.Add (EventId.toIdOnlyFrame position)
+          | LogPosition.Empty -> ())
+        log.Publish (daemonFrame 3) |> ignore
+        queued.Count |> Expect.equal "three frames and one id-only frame" 4
+        queued.[2] |> Expect.equal "the id-only frame sits after seq 2 and before seq 3" (EventId.toIdOnlyFrame { Epoch = epoch; Seq = 2L })
+      }
+    ]
+
     testList "under concurrent publishers" [
+      // This runs the real lock on real threads, so it can only show that the lock holds, never that the test
+      // would notice its absence: a twin without the lock fails by timing. That proof is deterministic and
+      // lives in SseReplaySimTests, where `TwoStepAttachTwin` splits an attach in two and loses a frame.
       testTask "WHY — a client that keeps reconnecting while others publish sees each seq once, in order, whatever the interleaving" {
         let log = newLog ()
         let publishers = 4

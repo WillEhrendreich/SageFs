@@ -119,6 +119,15 @@ let sseReplayTests =
         |> Expect.equal "a client current through the big frame replays what came after" (Some [ 5L ])
       }
 
+      test "WHY — a frame's size is its UTF-8 bytes, which a char count would understate for a path or test name with an accent" {
+        // 'h' 1 byte, 'é' 2, 'l' 'l' 'o' 3, '→' 3: six chars and nine bytes. Every other fixture here is made of "z".
+        let wire = "héllo→"
+        let item, _ = SseReplay.record (frameOf FrameScope.Daemon wire) (SseReplay.create epoch roomy)
+        item.Bytes |> Expect.equal "nine bytes, not six chars" 9
+        let _, tight = SseReplay.record (frameOf FrameScope.Daemon wire) (SseReplay.create epoch { MaxFrames = 10; MaxBytes = 8 })
+        tight.Count |> Expect.equal "over an 8-byte bound by bytes though inside it by chars, so it evicts itself" 0
+      }
+
       test "the count of kept frames is kept, not recounted" {
         let buffer = fill (SseReplay.create epoch { MaxFrames = 3; MaxBytes = plentyOfBytes }) (daemonFrames 5)
         buffer.Count |> Expect.equal "three kept" 3
@@ -203,6 +212,16 @@ let sseReplayTests =
         | SseReplay.CatchUp.Resync (SseReplay.ResyncReason.AheadOfThisRun (theirs, l)) ->
           theirs = lastSeen && lastSeen > latest && l = latest
         | SseReplay.CatchUp.Resync _ -> false)
+
+      test "WHY — an evicted wanted frame is refused with exactly the seq wanted and the first one still held" {
+        // Five frames, room for two: seqs 4 and 5 are kept. A client at seq 1 wants 2, which is gone.
+        let buffer = fill (SseReplay.create epoch { MaxFrames = 2; MaxBytes = plentyOfBytes }) (daemonFrames 5)
+        SseReplay.catchUp StreamScope.EverySession (idAt 1L) buffer
+        |> Expect.equal "wanted 2, first held 4" (SseReplay.CatchUp.Resync (SseReplay.ResyncReason.Evicted (2L, 4L)))
+        SseReplay.catchUp StreamScope.EverySession (idAt 3L) buffer
+        |> seqsOf
+        |> Expect.equal "a client at seq 3 wants 4, which is held, and is replayed 4 and 5" (Some [ 4L; 5L ])
+      }
 
       check "the frame and byte bounds hold, and the byte total is the sum of what is kept" (fun scenario ->
         let buffer, model, _, _ = materialize scenario

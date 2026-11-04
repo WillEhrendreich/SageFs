@@ -18,7 +18,9 @@ type SseAttachment =
 /// what an attaching connection missed and registering it. That is the whole point: with two steps
 /// a frame published between them would be in neither the replay nor the live feed, and a client
 /// would never know it had missed it. An observer is called under the lock, so it must be quick
-/// and must not throw; the daemon's is a write into a bounded channel.
+/// and must not throw; the daemon's queues the shared `Replayable` into a bounded channel
+/// (`SseOutbox.OfferLogged`) and builds no text, so the one thing that could throw there, formatting a
+/// large frame, happens on each connection's own writer and not under this lock.
 type SseLog(epoch: string, limits: ReplayLimits) =
   let gate = obj ()
   let mutable buffer = SseReplay.create epoch limits
@@ -35,6 +37,13 @@ type SseLog(epoch: string, limits: ReplayLimits) =
         | true -> onFrame item
         | false -> ()
       item)
+
+  /// Hands `offer` the newest id, under the lock publishers hold. A connection that offers an id-only
+  /// frame from it queues that frame behind every frame published before the position was read, because
+  /// those were offered to its outbox under the same lock. Read outside the lock, a visible frame could
+  /// still be on its way and the id would claim the connection was ahead of it.
+  member _.WithPosition(offer: LogPosition -> unit) : unit =
+    lock gate (fun () -> offer (SseReplay.position buffer))
 
   member _.Attach(stream: StreamScope, lastEventId: string option, onFrame: Replayable -> unit) : SseAttachment =
     lock gate (fun () ->

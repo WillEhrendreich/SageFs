@@ -3463,8 +3463,21 @@ let serveEventsWork (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.A
       // it, which every frame is built to survive (a snapshot is a set, not an append).
       let attachment =
         rctx.SseContext.Log.Attach(stream, lastEventIdOf ctx, outbox.OfferLogged)
+      // The heartbeat names the log's position when it has moved, so a connection that is quiet because
+      // the traffic is another session's still moves its last id. Without that, a scoped client that
+      // reconnects after a busy hour asks from an id the log has dropped and is told to resync from
+      // snapshots, having missed nothing. Unmoved, it is the keepalive comment it always was.
+      let lastHeartbeatSeq = ref 0L
+      let heartbeat () =
+        rctx.SseContext.Log.WithPosition(fun position ->
+          match position with
+          | LogPosition.At at when at.Seq > lastHeartbeatSeq.Value ->
+            lastHeartbeatSeq.Value <- at.Seq
+            outbox.Offer (EventId.toIdOnlyFrame at)
+          | LogPosition.At _
+          | LogPosition.Empty -> outbox.Keepalive ())
       try
-        use _heartbeat = new Timer((fun _ -> outbox.Keepalive ()), null, heartbeatMs, heartbeatMs)
+        use _heartbeat = new Timer((fun _ -> heartbeat ()), null, heartbeatMs, heartbeatMs)
         match attachment.CatchUp with
         | SseReplay.CatchUp.Replay missed ->
           for item in missed do
