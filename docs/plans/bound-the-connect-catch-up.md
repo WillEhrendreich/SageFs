@@ -8,12 +8,12 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress. "Measure first" is done and its finding is fixed (the cost of each file). What a connect sends is still one frame per file, and that is what is left. |
+| Status | Done, released in 0.6.937. A connect sends the list of files with annotations in one frame, editors ask for the files they have open, and a running suite pushes only the files whose annotations changed. |
 | Size | S to M (was M) |
-| Branch and worktree | none; the first slice is on master |
-| Last green commit | the projection-basis commit (`FileAnnotations.prepare`) |
-| Next action | Write the failing test: a catch-up for a model with 10,000 source-mapped files writes at most a fixed number of frames. Then step 1. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
+| Branch and worktree | none; it is all on master |
+| Last green commit | `6ce1cf81` (the 0.6.937 gate, every tier) |
+| Next action | None for this item. Measure the file list on a project with far more annotated files than 868, and decide then whether the editor should ask for the list too. |
+| Decisions made | The list of files stays in the `annotations_available` frame: 868 paths were 55 KB on `SageFs.Tests`. The live path (step 7) landed with this item. |
 | Surprises | Measuring first changed the size of this item. A connect was slow because `projectWithCoverage` rebuilt, for every file, what does not depend on the file, not because of how many frames it sends. Fixing that took the catch-up on `SageFs.Tests` from "never reaches the `retry:` hint in 100 s" to 1.8 s. The same fault was the pinned `handleTestSummaryChange` thread: one thread, 100% of a core while idle with no client, in `buildRangeLookup` and `Map.add` (three stack samples three seconds apart). Idle CPU went from 30 CPU-seconds in 30 s to 0. |
 
 Already fixed and shipped on the way here: a catch-up stops at the next file or view once its client has left (`ba0b59be`), which removed a daemon pinned at three cores by catch-ups nobody was reading; model changes run one at a time; and the catch-up lets its queue out between files, so a busy daemon cannot cut the connection as the catch-up ends.
@@ -44,7 +44,20 @@ Measured again on 2026-11-04, same project and client, with the per-file rebuild
 | Idle daemon, no client, settled | 30 CPU-seconds in 30 s | 0 CPU-seconds in 30 s |
 | Live frames on a settled stream after the catch-up | not measured | none in 45 s |
 
-What is left is size: about 3.6 KB and one frame per file with annotations, so a connect to a 10,000-file session would send about 36 MB and take about 20 s. That is what the design below bounds.
+That left size: about 3.6 KB and one frame per file with annotations, so a connect to a 10,000-file session would have sent about 36 MB and taken about 20 s. The design below bounds that, and it is built.
+
+Measured on 2026-11-04 against the installed 0.6.937 daemon (`6ce1cf81`), a live-testing session on `SageFs.Tests` with 17,973 tests discovered and none run yet, one `curl` client reading `/events` for 12 s:
+
+| What | Result |
+|:--|:--|
+| Time to the first byte | 0.018 s |
+| Frames on connect | 14 |
+| Bytes on connect | 115,913 |
+| Of those, `annotations_available` | 1 frame, 868 files, 55,439 bytes |
+| Of those, the three `session` frames | 58,422 bytes |
+| Of those, the test summary and batch | 296 and 592 bytes |
+
+The list is the largest single frame. It is about 64 bytes a path, so a session with 10,000 annotated files would send a list near 640 KB, which one frame can carry. Before the change, a connect to the same project while its suite ran was 3.3 MB after 60 s.
 
 - `replayCachedTestState` (`SageFs/McpServer.fs`) projects every source-mapped file of the session: one `file_annotations` frame and one `coverage_view` frame per function, each written and flushed in turn. The cost grows with the number of files times the number of functions.
 - Nothing about a client's open files reaches the daemon, so it sends everything.
@@ -102,5 +115,5 @@ M. Steps 1 to 6 are a week of work with two clients. Step 7 may be another.
 
 ## Decisions for Will
 
-- Is the list of files in `annotations_available` the right size to put in a frame, or should the editor ask for the list too? For `SageFs.Tests` it is 1,629 paths, which I estimate at about 100 KB (not measured).
-- Should the live path (step 7) land with this item or be its own?
+- Answered: the list stays in the frame. For `SageFs.Tests` it is 868 paths and 55,439 bytes, measured on 2026-11-04.
+- Answered: the live path (step 7) landed with this item, in `c57aa875`.

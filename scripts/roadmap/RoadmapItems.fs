@@ -146,9 +146,9 @@ let items : Item list =
       "Debugging a failing test from the VS Code lens works for one test at a time. The attach is now proven in our own tests, the same case the Neovim item leans on. Still open is debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out."
 
     item "bound-the-connect-catch-up" "Bound what a connection is sent on connect" LiveTesting Next
-      NoLandmarkYet
+      (landmark "SageFs.Core/SseWriter.fs" "formatAnnotationsAvailableEvent")
       [ "docs/sse-events.md"; "docs/how-live-testing-works.md"; "docs/plans/bound-the-connect-catch-up.md" ]
-      "Connecting an editor sends the annotations and coverage badges of every file in the session, one frame each. On a project of 1,629 files the catch-up had sent 2.7 MB after 100 seconds and had not finished. I'd send the list of files and let an editor ask for the ones it has open, the way the test list already works."
+      "A connection is sent the list of files that have annotations in one frame, and an editor asks for the ones it has open. Before, a connect sent the annotations and coverage badges of every file, one frame each, and on a project of 1,629 files that had sent 2.7 MB after 100 seconds without finishing. Now a connect to a session on SageFs.Tests, with 17,973 tests discovered, is 14 frames and 116 KB. While a suite runs, only the files whose annotations changed are pushed."
 
     item "live-requests-not-dropped" "No live request dropped during a swap" LiveTesting Next
       (landmark "SageFs/Mcp.fs" "requireToolFor")

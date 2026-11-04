@@ -11,16 +11,15 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 6, Later 19, Exploring 20. Already built: 42.
+On the page today: Now 0, Next 5, Later 19, Exploring 20. Already built: 43.
 
-## Next (6)
+## Next (5)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Live testing
 
 - [ ] **Debug failing tests properly in VS Code.** Debugging a failing test from the VS Code lens works for one test at a time. The attach is now proven in our own tests, the same case the Neovim item leans on. Still open is debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out. ([LIVE_TESTING_GUIDE.md](LIVE_TESTING_GUIDE.md), [how-live-testing-works.md](how-live-testing-works.md), [debug-failing-tests-in-vscode.md](plans/debug-failing-tests-in-vscode.md))
-- [ ] **Bound what a connection is sent on connect.** Connecting an editor sends the annotations and coverage badges of every file in the session, one frame each. On a project of 1,629 files the catch-up had sent 2.7 MB after 100 seconds and had not finished. I'd send the list of files and let an editor ask for the ones it has open, the way the test list already works. ([sse-events.md](sse-events.md), [how-live-testing-works.md](how-live-testing-works.md), [bound-the-connect-catch-up.md](plans/bound-the-connect-catch-up.md))
 
 ### Hot reload
 
@@ -115,7 +114,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub. ([command-palette-and-one-timeline.md](plans/command-palette-and-one-timeline.md))
 
-## Built (42)
+## Built (43)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -124,6 +123,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - [x] **A test receipt says what source it ran on.** If you edit a test file and don't rebuild, `run_tests` used to say "3 passed" with no warning. Now every receipt carries whether the source is in sync, stale (naming the files), being rebuilt, or unknown and why. A pass over stale source reads "passed, but on STALE source" and is never plain AllPassed. It's also on `get_session_status` and `list_sessions`, next to the REPL-behind state. Code: [`SageFs.Core/Features/SourceState.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/SourceState.fs)
 - [x] **A pending test is skipped, not passed.** An Expecto `ptest` used to run its body and count as passed. It's now reported as skipped and never run, and a run with one is Incomplete, not AllPassed. If anything is focused with `ftest`, the unfocused tests are reported as skipped too, matching what Expecto itself does. Code: [`SageFs.Core/Features/LiveTestingExecutors.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/LiveTestingExecutors.fs)
 - [x] **Edits during a worker swap are judged.** An edit typed while the confirming build replaces the worker used to be lost. A type-check or an eval now waits for a Ready worker and believes an answer only from the worker it asked. Code: [`SageFs/LiveCheckRelay.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/LiveCheckRelay.fs)
+- [x] **Bound what a connection is sent on connect.** A connection is sent the list of files that have annotations in one frame, and an editor asks for the ones it has open. Before, a connect sent the annotations and coverage badges of every file, one frame each, and on a project of 1,629 files that had sent 2.7 MB after 100 seconds without finishing. Now a connect to a session on SageFs.Tests, with 17,973 tests discovered, is 14 frames and 116 KB. While a suite runs, only the files whose annotations changed are pushed. Code: [`SageFs.Core/SseWriter.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SseWriter.fs)
 - [x] **No live request dropped during a swap.** A check that waited out the 30 second swap bound was dropped instead of retried, and running affected tests or discovery dropped a request that found no worker. The gate now parks on the manager's own AwaitReady for the bound a rebuild's own wait uses, then judges the state that wait released, so a code tool waits for the replacement instead of being refused the moment a swap begins. Code: [`SageFs/Mcp.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/Mcp.fs)
 
 ### Hot reload
