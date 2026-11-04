@@ -56,8 +56,9 @@ then `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session` and
 That lets an agent clean up after itself from a host that never shows the
 prompt (a phone on Remote Control, a headless run). A dashboard tab that only
 watches the session does not count. One that has run code in it does, and so
-does an editor that sent code over `/exec` (VS Code, Neovim, Jupyter), the
-deprecated TUI, and another agent that ran code there and has since moved on.
+does an editor that sent code over `/exec` (VS Code, Neovim, Jupyter), a
+buffer sent through `POST /api/dispatch`, and another agent that ran code there
+and has since moved on.
 `manage_local_data` acts on your machine's stores and `stop_app` stops an app
 people may be using from outside SageFs (a browser on its port, a game window),
 so both ask every time. Everything else asks as before: a session you made

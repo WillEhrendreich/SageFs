@@ -163,9 +163,9 @@ let activityTests =
       decideWith (ranCode [ EvalSource.Member alice; EvalSource.Member(MemberId.Minted "cli-integrated") ]) ToolName.StopSession mine own alice
       |> Expect.equal "a person's definitions from VS Code or Neovim are at stake" (Confirmation.Required ConfirmationReason.SomeoneElseRanCode)
 
-    testCase "WHY — code from the deprecated TUI keeps the prompt, though its route names no caller" <| fun _ ->
-      decideWith (ranCode [ EvalSource.Tui ]) ToolName.ResetFsiSession mine own alice
-      |> Expect.equal "a person's definitions from the TUI are at stake" (Confirmation.Required ConfirmationReason.SomeoneElseRanCode)
+    testCase "WHY — code sent through /api/dispatch keeps the prompt, though its route names no caller" <| fun _ ->
+      decideWith (ranCode [ EvalSource.EditorDispatch ]) ToolName.ResetFsiSession mine own alice
+      |> Expect.equal "a person's definitions from an editor buffer are at stake" (Confirmation.Required ConfirmationReason.SomeoneElseRanCode)
 
     testCase "WHY — an agent that ran code here and then moved to another session keeps the prompt, though presence forgot it" <| fun _ ->
       decideWith (ranCode [ EvalSource.Member alice; EvalSource.Member bob ]) ToolName.SwitchWorkflow mine own alice
@@ -190,7 +190,7 @@ let activityTests =
       let foreign =
         match pick % 4uy with
         | 0uy -> EvalSource.Dashboard
-        | 1uy -> EvalSource.Tui
+        | 1uy -> EvalSource.EditorDispatch
         | 2uy -> EvalSource.Member(MemberId.Mcp other)
         | _ -> EvalSource.Member(MemberId.Minted other)
       foreign = EvalSource.Member alice

@@ -59,9 +59,9 @@ type EvalSource =
   /// The dashboard's REPL box, from any tab. A tab is an Observer in the occupancy table even while it runs code, so
   /// this is the only record that a person worked there.
   | Dashboard
-  /// The deprecated TUI's editor buffer, submitted through `POST /api/dispatch` (`EditorEffect.RequestEval`). That
-  /// route names no caller, so it counts as someone other than any agent.
-  | Tui
+  /// An editor buffer submitted through `POST /api/dispatch` (`EditorEffect.RequestEval`). That route names no
+  /// caller, so it counts as someone other than any agent.
+  | EditorDispatch
 
 /// Who is working in a session now, as the occupancy table has it.
 [<RequireQualifiedAccess>]
@@ -104,7 +104,8 @@ type ConfirmationReason =
   /// A different connection or member token made the session.
   | CreatedBySomeoneElse
   /// The caller made the session, but someone else has run code in it: another agent (which may since have moved to
-  /// another session), the dashboard, an editor over `/exec`, or the TUI. Their definitions would go too.
+  /// another session), the dashboard, an editor over `/exec`, or an editor buffer sent through `/api/dispatch`. Their
+  /// definitions would go too.
   | SomeoneElseRanCode
   /// The caller made the session, but another agent is working in it now.
   | AnotherAgentIsWorkingInIt

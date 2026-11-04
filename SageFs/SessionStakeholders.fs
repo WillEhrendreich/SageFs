@@ -2,8 +2,8 @@ namespace SageFs
 
 /// Who has run code in each session. The prompt before a stop or a reset is skipped only when every eval a session has
 /// had came from the agent that created it (`ConfirmationPolicy.SessionActivity`), so each way in that runs code records
-/// itself here: the MCP and `/exec` eval in Mcp.fs, the dashboard's REPL box in DaemonMode.fs, and the deprecated TUI's
-/// editor in SageFsEffectHandler.fs.
+/// itself here: the MCP and `/exec` eval in Mcp.fs, the dashboard's REPL box in DaemonMode.fs, and an editor buffer sent
+/// through `/api/dispatch` in SageFsEffectHandler.fs.
 module SessionEvaluators =
 
   open SageFs.ConfirmationPolicy
