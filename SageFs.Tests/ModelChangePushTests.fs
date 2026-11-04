@@ -103,6 +103,22 @@ let tests =
       pushed |> count "test_source_locations" |> Expect.equal "the same locations are not sent again" 1
     }
 
+    test "WHY — rows that only changed what ran them are pushed again, because the batch is how a client learns to refetch them" {
+      // The batch carries the tally and not the rows (they sit behind GET /api/live-testing/entries), so a real
+      // build confirming an evaluated run leaves the frame's text exactly as it was. A frame that looked
+      // unchanged and was not sent left every client showing "evaluated" for a run the build had confirmed.
+      let current = ref (modelWith 3)
+      let pushed, tick, _ = pushing current
+      tick ()
+      let confirmed =
+        { LiveTestState.empty with Activation = LiveTestingActivation.Active }
+        |> LiveTestState.withStatusEntries [| for i in 1 .. 3 -> { entryIn i with Provenance = ResultProvenance.VerifiedByBuild } |]
+      current.Value <- { current.Value with LiveTesting = { current.Value.LiveTesting with TestState = confirmed } }
+      tick ()
+      pushed |> count "test_results_batch" |> Expect.equal "the confirmed rows are a change" 2
+      pushed |> count "test_summary" |> Expect.equal "the tally did not move, so the summary is not sent again" 1
+    }
+
     test "locations that changed are pushed again" {
       let current = ref (modelWith 3)
       let pushed, tick, _ = pushing current

@@ -2142,12 +2142,16 @@ let wireModelChangeHandlers
   // The summary and the batch are small and an idle session sent them on every change. Each push goes into
   // the replay log, so a frame that says what the last one said spends the window for nothing. Handlers
   // run one at a time (`Coalescer` in DaemonMode), so these tables have one writer.
-  let lastPushedWire = System.Collections.Generic.Dictionary<string * ChangeGatedEvent, string>()
-  let pushUnlessUnchanged (activeId: string) (event: ChangeGatedEvent) (wire: string) : unit =
+  // The batch's text carries the tally and not the rows, which sit behind GET /api/live-testing/entries and are
+  // fetched when a batch arrives. A real build confirming an evaluated run changes what the rows say and leaves
+  // the text as it was, so the rows are part of what "unchanged" means. A frame with no rows of its own passes
+  // none.
+  let lastPushedWire = System.Collections.Generic.Dictionary<string * ChangeGatedEvent, string * TestStatusEntry array>()
+  let pushUnlessUnchanged (activeId: string) (event: ChangeGatedEvent) (rows: TestStatusEntry array) (wire: string) : unit =
     match lastPushedWire.TryGetValue((activeId, event)) with
-    | true, last when last = wire -> ()
+    | true, (lastWire, lastRows) when lastWire = wire && lastRows = rows -> ()
     | _ ->
-      lastPushedWire.[(activeId, event)] <- wire
+      lastPushedWire.[(activeId, event)] <- (wire, rows)
       ctx.TestEventBroadcast.Trigger(SseFrame.ofSession (Some activeId) wire)
   let lastPushedLocations = System.Collections.Generic.Dictionary<string, SageFs.Features.LiveTesting.TestSourceLocation list>()
   // What each file said the last time it was pushed, for the session it was pushed for.
@@ -2177,7 +2181,7 @@ let wireModelChangeHandlers
         match shouldPushTestSummary now modelChangeState.Value.LastTestSsePushTicks modelChangeState.Value.TestSseThrottleMs isRunComplete with
         | true ->
           modelChangeState.Value <- { modelChangeState.Value with LastTestSsePushTicks = now }
-          pushUnlessUnchanged activeId ChangeGatedEvent.TestSummary
+          pushUnlessUnchanged activeId ChangeGatedEvent.TestSummary Array.empty
             (SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration (SageFsModel.liveTestActivityFor activeId model))
           let freshness =
             match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
@@ -2201,7 +2205,7 @@ let wireModelChangeHandlers
             | SourceStateProbe.SourceSourceRefusal.Assessed state -> Some(SourceState.toWire state)
             | SourceStateProbe.SourceSourceRefusal.NoSessionToRead
             | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None
-          pushUnlessUnchanged activeId ChangeGatedEvent.TestResultsBatch
+          pushUnlessUnchanged activeId ChangeGatedEvent.TestResultsBatch payload.Entries
             (SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire)
           // A FINISHED run is a different fact from a batch of results arriving: this fires
           // only when nothing is running, so a client that renders "run finished" acts once
