@@ -1710,16 +1710,20 @@ let wireSessionEventSubscription
       | SseEvent.SessionSwitched _
       // MCP clients get cohort changes from wireCohortEventSubscription.
       | SseEvent.CohortChanged _ -> ()
-      // Session-channel cases never arrive on this stream — DaemonMode.fs
-      // only ever triggers the nine "state" channel cases above — but the
-      // match stays exhaustive (no wildcard) so a future emitter of one of
-      // these through stateChangedEvent is forced to decide its handling here.
+      // A session starting, stopping or becoming the active one. DaemonMode derives these from the
+      // session registry (`SessionLifecycle.observe`) and sends them here, and they go out as
+      // `session` frames, so they are numbered in the replay log: a client that was away is told, in
+      // order, what happened to the session list while it was gone.
+      | SseEvent.SessionActivated _
+      | SseEvent.SessionCreated _
+      | SseEvent.SessionStopped _ as lifecycle -> ctx.SessionEventBroadcast.Trigger(SseEvent.frame lifecycle)
+      // The other session-channel cases never arrive on this stream — DaemonMode.fs triggers the nine
+      // "state" channel cases above and the three lifecycle cases — but the match stays exhaustive (no
+      // wildcard) so a future emitter of one of these through stateChangedEvent is forced to decide its
+      // handling here.
       | SseEvent.WarmupContextSnapshot _
       | SseEvent.HotReloadSnapshot _
       | SseEvent.HotReloadFileToggled _
-      | SseEvent.SessionActivated _
-      | SseEvent.SessionCreated _
-      | SseEvent.SessionStopped _
       | SseEvent.WorkflowSwitching _
       | SseEvent.WorkflowSwitched _
       | SseEvent.SessionHealthChanged _ -> ()) |> ignore
@@ -3353,7 +3357,14 @@ let wireSseLog (rctx: RouteContext) : IDisposable list =
   [ rctx.SseContext.TestEventBroadcast.Publish |> Observable.subscribe publish
     rctx.SseContext.SessionEventBroadcast.Publish |> Observable.subscribe publish ]
   @ (rctx.Config.StateChanged
-     |> Option.map (fun evt -> evt |> Observable.map stateFrameOf |> Observable.subscribe publish)
+     // Only the state channel is a `state` frame. The session lifecycle events arrive on the same event and
+     // are sent as `session` frames by `wireSessionEventSubscription`; mapping them here too would log each
+     // one a second time under the wrong event name.
+     |> Option.map (fun evt ->
+       evt
+       |> Observable.filter (fun change -> SseEvent.channel change = SseChannel.State)
+       |> Observable.map stateFrameOf
+       |> Observable.subscribe publish)
      |> Option.toList)
 
 /// The id a reconnecting client says it last saw, or none for a first connection.

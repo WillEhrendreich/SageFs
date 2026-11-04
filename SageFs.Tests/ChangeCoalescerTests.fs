@@ -59,6 +59,27 @@ let rec private sequencesOf (length: int) : bool list list =
 let private initial : Sim =
   { State = CoalesceState.Idle; InFlight = 0; MaxInFlight = 0; Started = []; Posted = 0 }
 
+/// The same walk with a merge that keeps everything: each post is a one-element list and a waiting value
+/// absorbs the ones after it. Nothing posted may be lost, and nothing may be delivered out of order.
+let private deliveredWhenMerging (ops: bool list) : int list =
+  let merge (older: int list) (newer: int list) = older @ newer
+  let rec step (state: CoalesceState<int list>, posted: int, delivered: int list list) (isPost: bool) =
+    match isPost, state with
+    | true, _ ->
+      let posted' = posted + 1
+      let state', next = Coalesce.postWith merge [ posted' ] state
+      state', posted', (match next with CoalesceStep.StartDelivery batch -> batch :: delivered | CoalesceStep.Wait -> delivered)
+    | false, CoalesceState.Idle -> state, posted, delivered
+    | false, _ ->
+      let state', next = Coalesce.finished state
+      state', posted, (match next with CoalesceStep.StartDelivery batch -> batch :: delivered | CoalesceStep.Wait -> delivered)
+  let final = ops |> List.fold step (CoalesceState.Idle, 0, [])
+  let rec drain (state, posted, delivered) =
+    match state with
+    | CoalesceState.Idle -> delivered
+    | _ -> drain (step (state, posted, delivered) false)
+  drain final |> List.rev |> List.concat
+
 // ── The class, on real threads ──
 
 let private onThePool (work: unit -> unit) : unit =
@@ -79,6 +100,28 @@ let tests =
           match final.Posted with
           | 0 -> started |> Expect.isEmpty "nothing posted, nothing delivered"
           | posted -> List.last started |> Expect.equal (sprintf "the newest post is delivered for [%s]" shown) posted
+    }
+
+    test "WHY — with a merge that keeps everything, every value posted is delivered once and in order, whatever the interleaving" {
+      // Model changes may drop the ones in between because the model is read when the handler runs. A session
+      // starting or stopping is not in the model after the fact, so those carry along instead of being replaced.
+      for length in 1 .. 10 do
+        for ops in sequencesOf length do
+          let posted = ops |> List.filter id |> List.length
+          let shown = ops |> List.map (fun p -> if p then "post" else "finish") |> String.concat ", "
+          deliveredWhenMerging ops
+          |> Expect.equal (sprintf "all %d posts, in order, for [%s]" posted shown) [ for n in 1 .. posted -> n ]
+    }
+
+    test "a waiting value absorbs the posts after it through the merge" {
+      let merge (older: string) (newer: string) = older + newer
+      let state1, step1 = Coalesce.postWith merge "a" CoalesceState.Idle
+      step1 |> Expect.equal "the first post starts a delivery" (CoalesceStep.StartDelivery "a")
+      let state2, _ = Coalesce.postWith merge "b" state1
+      let state3, _ = Coalesce.postWith merge "c" state2
+      Coalesce.finished state3
+      |> snd
+      |> Expect.equal "what waited is delivered as one value" (CoalesceStep.StartDelivery "bc")
     }
 
     test "posts that arrive while a delivery is in flight are delivered once, as the newest" {

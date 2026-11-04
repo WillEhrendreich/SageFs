@@ -18,11 +18,17 @@ type CoalesceStep<'a> =
 /// in flight waits, and a newer one replaces it: whoever reads the value wants the latest, and has the
 /// model to read besides, so the ones in between were already out of date when they were posted.
 module Coalesce =
-  let post (value: 'a) (state: CoalesceState<'a>) : CoalesceState<'a> * CoalesceStep<'a> =
+  /// `merge older newer` says what waits when a value arrives while one already waits. Latest-wins is
+  /// `fun _ newer -> newer`; a caller whose values carry facts that exist nowhere else (a session that
+  /// stopped is not in the model afterwards) merges them together instead.
+  let postWith (merge: 'a -> 'a -> 'a) (value: 'a) (state: CoalesceState<'a>) : CoalesceState<'a> * CoalesceStep<'a> =
     match state with
     | CoalesceState.Idle -> CoalesceState.Delivering, CoalesceStep.StartDelivery value
-    | CoalesceState.Delivering
-    | CoalesceState.DeliveringWithNewer _ -> CoalesceState.DeliveringWithNewer value, CoalesceStep.Wait
+    | CoalesceState.Delivering -> CoalesceState.DeliveringWithNewer value, CoalesceStep.Wait
+    | CoalesceState.DeliveringWithNewer older -> CoalesceState.DeliveringWithNewer (merge older value), CoalesceStep.Wait
+
+  let post (value: 'a) (state: CoalesceState<'a>) : CoalesceState<'a> * CoalesceStep<'a> =
+    postWith (fun _ newer -> newer) value state
 
   /// The delivery in flight has ended.
   let finished (state: CoalesceState<'a>) : CoalesceState<'a> * CoalesceStep<'a> =
@@ -38,7 +44,7 @@ module Coalesce =
 /// subscriber to completion on its own thread. A change that arrived while an earlier one was still
 /// projecting every file of a big session started a second projection beside it; the handlers' state
 /// (`ref` cells written with `<-`) was written from both, and a burst of N output lines meant N passes.
-type Coalescer<'a>(deliver: 'a -> unit, start: (unit -> unit) -> unit) =
+type Coalescer<'a>(deliver: 'a -> unit, start: (unit -> unit) -> unit, merge: 'a -> 'a -> 'a) =
   let gate = obj ()
   let mutable state : CoalesceState<'a> = CoalesceState.Idle
 
@@ -67,7 +73,10 @@ type Coalescer<'a>(deliver: 'a -> unit, start: (unit -> unit) -> unit) =
           | true -> next <- Some newer
           | false -> start (fun () -> run newer)
 
+  /// Latest wins: a value that waits is replaced by the next one to arrive.
+  new(deliver: 'a -> unit, start: (unit -> unit) -> unit) = Coalescer<'a>(deliver, start, (fun _ newer -> newer))
+
   member _.Post(value: 'a) : unit =
-    match step (Coalesce.post value) with
+    match step (Coalesce.postWith merge value) with
     | CoalesceStep.Wait -> ()
     | CoalesceStep.StartDelivery first -> start (fun () -> run first)

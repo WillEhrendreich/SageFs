@@ -41,8 +41,9 @@ ${extractFunction("parseFreshness")}
 ${extractFunction("parseCompletion")}
 ${extractFunction("parseResultsBatch")}
 ${extractFunction("classifyStateEvent")}
+${extractFunction("sessionEventRefreshes")}
 ${extractFunction("parseReportWire")}
-module.exports = { parseSummary, parseResultsBatch, classifyStateEvent, parseReportWire };
+module.exports = { parseSummary, parseResultsBatch, classifyStateEvent, sessionEventRefreshes, parseReportWire };
 `;
 
 const context = {
@@ -125,7 +126,7 @@ const context = {
 
 vm.runInNewContext(harness, context);
 
-const { parseSummary, parseResultsBatch, classifyStateEvent, parseReportWire } = context.module.exports;
+const { parseSummary, parseResultsBatch, classifyStateEvent, sessionEventRefreshes, parseReportWire } = context.module.exports;
 
 function readFixture(name) {
   return JSON.parse(fs.readFileSync(path.join(fixturesDir, name), "utf8"));
@@ -373,6 +374,28 @@ run("parseReportWire reads a compiling save with its file and defaults the rest"
   assert(w.File === "/w/Program.fs", `file: ${w.File}`);
   assert(w.Outcome === "" && w.Message === "" && w.Mechanism === "", `defaults: ${w.Outcome}|${w.Message}|${w.Mechanism}`);
   assert(w.Patched === 0 && w.Considered === 0, `counts: ${w.Patched}/${w.Considered}`);
+});
+
+// ── sessionEventRefreshes: which "session" envelope subtypes mean "re-poll the session list" ──
+// The daemon now announces a session starting and stopping (SageFs/SessionLifecycle.fs), numbered in the
+// replay log, so a window that was away is told in order. The window reads the list from GET /api/sessions
+// and only needs to know it is out of date.
+
+run("sessionEventRefreshes re-polls on a session starting or stopping", () => {
+  assert(sessionEventRefreshes("session_created") === true, "session_created should re-poll");
+  assert(sessionEventRefreshes("session_stopped") === true, "session_stopped should re-poll");
+});
+
+run("sessionEventRefreshes keeps re-polling on the hot-reload and workflow subtypes it always did", () => {
+  for (const subtype of ["hotreload_snapshot", "hotreload_file_toggled", "workflow_switching"]) {
+    assert(sessionEventRefreshes(subtype) === true, `${subtype} should re-poll`);
+  }
+});
+
+run("sessionEventRefreshes ignores what names any session on the daemon, which says nothing about this window's", () => {
+  for (const subtype of ["session_activated", "warmup_context_snapshot", "workflow_switched", "", "something_new"]) {
+    assert(sessionEventRefreshes(subtype) === false, `${subtype} should not re-poll`);
+  }
 });
 
 if (process.exitCode && process.exitCode !== 0) {
