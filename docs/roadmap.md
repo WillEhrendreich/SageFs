@@ -11,9 +11,9 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 6, Later 19, Exploring 20. Already built: 41.
+On the page today: Now 0, Next 5, Later 19, Exploring 20. Already built: 42.
 
-## Next (6)
+## Next (5)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -25,10 +25,6 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 - [ ] **A REPL eval changes the running app.** An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. That one is in: an eval that names its file and line writes the declaration back, journaled so it undoes, and it is now driven end to end against a running run_app app in our own tests. The eval writes the declaration back, the file change reaches the worker, and the running app serves the new code. Measured here, the whole route takes about 5.6 seconds, most of it the build. The other grafts FSI's own IL into a delta. In a spike that worked and was served in milliseconds, but the IL lives in the FSI host and the delta chain lives in the worker, and nobody has worked out how it crosses. That one isn't built. ([how-hot-reload-works.md](how-hot-reload-works.md), [repl-eval-reaches-the-running-app.md](plans/repl-eval-reaches-the-running-app.md))
 - [ ] **Level the REPL after a patch without losing it.** Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. Half of the fix is already in: the daemon re-fetches maps and discovery after every in-worker host swap, refused through a gate rather than half-refreshed when the worker is unsettled. What is still missing is the idle-and-empty check inside the eval actor, which cancels a running eval before a hard reset so the check cannot live outside it, and the host's own in-flight test count, because a test run runs in the host and the actor's idle phase proves nothing about it. With those, the refresh becomes a background step with the loud state held until it finishes. ([decisions.md](decisions.md), [how-hot-reload-works.md](how-hot-reload-works.md), [level-the-repl-without-losing-it.md](plans/level-the-repl-without-losing-it.md))
-
-### Agents and cohorts
-
-- [ ] **Walk the rest of the symbol ladder.** The references rung is built: `list_references` takes a qualified name and lists every definition and use the compiler resolves to it across the session's projects, a page at a time. Its first line is the scope (project-wide, partial with the projects it did not reach, or unavailable with the reason), so a count never travels without how far the compiler looked, and one budget covers all the projects together. What remains of the progressive map plan: the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again. ([progressive-map-research-2026-10-24.md](progressive-map-research-2026-10-24.md), [walk-the-rest-of-the-symbol-ladder.md](plans/walk-the-rest-of-the-symbol-ladder.md))
 
 ### Dashboard
 
@@ -118,7 +114,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub. ([command-palette-and-one-timeline.md](plans/command-palette-and-one-timeline.md))
 
-## Built (41)
+## Built (42)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -163,6 +159,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - [x] **One typed list of what counts as destructive.** SageFs could say who may call a tool, but nothing said what calling it does to your work. There is now one `Set<ToolName>` on the same DU the authority gate reads, held to the registered tools by a test so a renamed tool cannot leave a stale name behind, and `tools/list` publishes it as MCP's own `destructiveHint`, so a client asks the server instead of keeping a copy of the list itself. Code: [`SageFs.Core/Affordances.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Affordances.fs)
 - [x] **Ask you before a destructive tool runs.** The server asks you itself now, over MCP's own elicitation request: a confirm-tier tool stops after the four gates already there and before its body, names what it is about to take away, and a decline refuses the call the way a gate rejection does. The tier sits on the same `ToolName` the authority gate reads rather than in another string list, and it says out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into. A session an agent created itself does not ask when that same connection (or member token) resets or stops it, because nobody else put anything in it. Sessions a person or another agent made still ask. Code: [`SageFs/McpServer.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpServer.fs)
 - [x] **Ask what is inside a name, a page at a time.** `list_members` takes a qualified name and answers with its members a page at a time. The reply gives a total that is either exact or marked as a lower bound, a count for each real kind (classes, modules, methods and so on) with the kinds you can step into first, and a footer naming the offset of the next page. A name that lists nothing says why: it is a leaf, an empty container, or it does not resolve under its parent. The kind comes from the compiler through the worker. Before, the daemon guessed it from the shape of the name, and every reply stopped at 50 members whatever the real size. Code: [`SageFs/McpMemberPage.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpMemberPage.fs)
+- [x] **Walk the rest of the symbol ladder.** The references rung is built: `list_references` takes a qualified name and lists every definition and use the compiler resolves to it across the session's projects, a page at a time. Its first line is the scope (project-wide, partial with the projects it did not reach, or unavailable with the reason), so a count never travels without how far the compiler looked, and one budget covers all the projects together. What remains of the progressive map plan: the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again. Code: [`SageFs/McpNamePath.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpNamePath.fs)
 
 ### Editors
 

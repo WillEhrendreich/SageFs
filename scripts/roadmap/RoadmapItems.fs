@@ -465,6 +465,6 @@ let items : Item list =
       "`list_members` takes a qualified name and answers with its members a page at a time. The reply gives a total that is either exact or marked as a lower bound, a count for each real kind (classes, modules, methods and so on) with the kinds you can step into first, and a footer naming the offset of the next page. A name that lists nothing says why: it is a leaf, an empty container, or it does not resolve under its parent. The kind comes from the compiler through the worker. Before, the daemon guessed it from the shape of the name, and every reply stopped at 50 members whatever the real size."
 
     item "walk-the-rest-of-the-symbol-ladder" "Walk the rest of the symbol ladder" Agents Next
-      NoLandmarkYet
+      (landmark "SageFs/McpNamePath.fs" "resolve")
       [ "docs/progressive-map-research-2026-10-24.md"; "docs/plans/walk-the-rest-of-the-symbol-ladder.md" ]
       "The references rung is built: `list_references` takes a qualified name and lists every definition and use the compiler resolves to it across the session's projects, a page at a time. Its first line is the scope (project-wide, partial with the projects it did not reach, or unavailable with the reason), so a count never travels without how far the compiler looked, and one budget covers all the projects together. What remains of the progressive map plan: the name-path fallback for a stale reference, and per-tool result-size ratchet rows so a ladder reply can never become the map again." ]
