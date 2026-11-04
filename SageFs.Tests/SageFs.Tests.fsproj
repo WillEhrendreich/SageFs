@@ -788,6 +788,8 @@
         <Compile Include="SseReplaySimTests.fs" />
         <Compile Include="SseLogTests.fs" />
         <Compile Include="SseOutboxTests.fs" />
+        <Compile Include="ChangeCoalescerTests.fs" />
+        <Compile Include="ModelChangePushTests.fs" />
         <Compile Include="CapabilitySimTests.fs" />
         <Compile Include="LeaseWireTests.fs" />
         <Compile Include="TestDebugTests.fs" />

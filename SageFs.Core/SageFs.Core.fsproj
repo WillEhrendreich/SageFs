@@ -371,6 +371,7 @@
         <Compile Include="SseReplay.fs" />
         <Compile Include="SseLog.fs" />
         <Compile Include="SseOutbox.fs" />
+        <Compile Include="ChangeCoalescer.fs" />
         <Compile Include="SseWriter.fs" />
     <Compile Include="Features\EvalStore.fs" />
     <Compile Include="Features\FeatureHooks.fs" />

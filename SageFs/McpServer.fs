@@ -1519,6 +1519,13 @@ let replayCachedTestState (ctx: SseContext) (target: string option) (gone: Cance
           | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None
         do! SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire
             |> writeSseFrame body
+        // The source locations are the ACTIVE session's, and a model change pushes them only when they
+        // change, so a client that connects in between has to be given them here.
+        match model.ResolvedSourceLocations with
+        | locs when not locs.IsEmpty && target = SseContext.activeSessionId ctx ->
+          do! SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts target locs
+              |> writeSseFrame body
+        | _ -> ()
         let files =
           sessionEntries
           |> Array.choose (fun e ->
@@ -1952,6 +1959,12 @@ module ActionQueuePush =
 
 // ── Model change handlers: state change → SSE + MCP notifications ──
 
+/// The frames a model change pushes only when they differ from the last one pushed for the session.
+[<RequireQualifiedAccess>]
+type ChangeGatedEvent =
+  | TestSummary
+  | TestResultsBatch
+
 /// Wire SseEvent.ModelChanged events to the handler pipeline.
 /// Creates handler closures and subscribes them to the event.
 /// Returns the subscription disposable.
@@ -2055,6 +2068,18 @@ let wireModelChangeHandlers
             SseFrame.ofSession sid (SageFs.SseWriter.formatTestTraceEvent sid json))
         | AccumulatePush _ -> ())
 
+  // The summary and the batch are small and an idle session sent them on every change. Each push goes into
+  // the replay log, so a frame that says what the last one said spends the window for nothing. Handlers
+  // run one at a time (`Coalescer` in DaemonMode), so these cells have one writer.
+  let lastPushedWire = ref (Map.empty: Map<string * ChangeGatedEvent, string>)
+  let pushUnlessUnchanged (activeId: string) (event: ChangeGatedEvent) (wire: string) : unit =
+    match Map.tryFind (activeId, event) lastPushedWire.Value with
+    | Some last when last = wire -> ()
+    | _ ->
+      lastPushedWire.Value <- Map.add (activeId, event) wire lastPushedWire.Value
+      ctx.TestEventBroadcast.Trigger(SseFrame.ofSession (Some activeId) wire)
+  let lastPushedLocations = ref (Map.empty: Map<string, SageFs.Features.LiveTesting.TestSourceLocation list>)
+
   let handleTestSummaryChange () =
     SseContext.withModel ctx (fun model ->
       let lt = model.LiveTesting.TestState
@@ -2079,9 +2104,8 @@ let wireModelChangeHandlers
         match shouldPushTestSummary now modelChangeState.Value.LastTestSsePushTicks modelChangeState.Value.TestSseThrottleMs isRunComplete with
         | true ->
           modelChangeState.Value <- { modelChangeState.Value with LastTestSsePushTicks = now }
-          ctx.TestEventBroadcast.Trigger(
-            SseFrame.ofSession (Some activeId)
-              (SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration (SageFsModel.liveTestActivityFor activeId model)))
+          pushUnlessUnchanged activeId ChangeGatedEvent.TestSummary
+            (SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration (SageFsModel.liveTestActivityFor activeId model))
           let freshness =
             match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
             | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
@@ -2104,9 +2128,8 @@ let wireModelChangeHandlers
             | SourceStateProbe.SourceSourceRefusal.Assessed state -> Some(SourceState.toWire state)
             | SourceStateProbe.SourceSourceRefusal.NoSessionToRead
             | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None
-          ctx.TestEventBroadcast.Trigger(
-            SseFrame.ofSession (Some activeId)
-              (SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire))
+          pushUnlessUnchanged activeId ChangeGatedEvent.TestResultsBatch
+            (SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire)
           // A FINISHED run is a different fact from a batch of results arriving: this fires
           // only when nothing is running, so a client that renders "run finished" acts once
           // per run rather than on every incremental batch during one. Gated on a real
@@ -2332,10 +2355,19 @@ let wireModelChangeHandlers
           match model.ResolvedSourceLocations with
           | [] -> ()
           | locs ->
-            ctx.ServerTracker.AccumulateEvent(SseContext.activeSessionId ctx, PushEvent.TestSourceLocations locs)
-            ctx.TestEventBroadcast.Trigger(
-              SseFrame.ofSession (SseContext.activeSessionId ctx)
-                (SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts (SseContext.activeSessionId ctx) locs)))
+            let sessionId = SseContext.activeSessionId ctx
+            ctx.ServerTracker.AccumulateEvent(sessionId, PushEvent.TestSourceLocations locs)
+            // The whole list goes out only when it differs from the last one sent for this session: it is
+            // a row per test (hundreds of KB on a big suite) and used to go out on every model change.
+            // A client that connects later gets it in its snapshot (`replayCachedTestState`).
+            let key = sessionId |> Option.defaultValue ""
+            match Map.tryFind key lastPushedLocations.Value with
+            | Some last when obj.ReferenceEquals(last, locs) || last = locs -> ()
+            | _ ->
+              lastPushedLocations.Value <- Map.add key locs lastPushedLocations.Value
+              ctx.TestEventBroadcast.Trigger(
+                SseFrame.ofSession sessionId
+                  (SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts sessionId locs)))
         match ctx.ServerTracker.Count > 0 with
         | true ->
           try
