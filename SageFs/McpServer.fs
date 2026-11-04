@@ -1333,7 +1333,7 @@ let runSseWriteLoop
   (sources: IObservable<string> list)
   (heartbeatMs: int) =
   task {
-    let outbox = SseOutbox SseOutbox.capacity
+    let outbox = SseOutbox(SseOutbox.capacity, SseOutbox.maxBytes)
     let subs = sources |> List.map (fun src -> src.Subscribe(fun frame -> outbox.Offer frame))
     try
       use _heartbeat = new Timer((fun _ -> outbox.Keepalive ()), null, heartbeatMs, heartbeatMs)
@@ -1519,6 +1519,13 @@ let replayCachedTestState (ctx: SseContext) (target: string option) (gone: Cance
           | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None
         do! SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire
             |> writeSseFrame body
+        // The source locations are the ACTIVE session's, and a model change pushes them only when they
+        // change, so a client that connects in between has to be given them here.
+        match model.ResolvedSourceLocations with
+        | locs when not locs.IsEmpty && target = SseContext.activeSessionId ctx ->
+          do! SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts target locs
+              |> writeSseFrame body
+        | _ -> ()
         let files =
           sessionEntries
           |> Array.choose (fun e ->
@@ -1751,6 +1758,14 @@ let saveObservedRow
     | None -> None
   | _ -> None
 
+/// What a cohort's subscription pushes besides its matrix.
+[<RequireQualifiedAccess>]
+type CohortPush =
+  /// `claim_changed`, `landing_changed` and `save_observed` as well: the launch cohort's.
+  | Detailed
+  /// The matrix alone, which names its cohort.
+  | MatrixOnly
+
 /// Subscribe to `CohortOwner.Handle.Events` and push `claim_changed`/
 /// `landing_changed`/`save_observed` for the events one applied command
 /// produced, plus `cohort_matrix` once per frame-version change. Wait-free: every push
@@ -1763,12 +1778,15 @@ let saveObservedRow
 /// guard is cheap insurance against a future double-fire) emits nothing.
 let wireCohortEventSubscription
   (cohortOwner: SageFs.Features.CohortOwner.Handle)
-  (ctx: SseContext) : IDisposable =
+  (ctx: SseContext)
+  (push: CohortPush) : IDisposable =
   let matrixGate = ref SageFs.McpResourceGate.initial<int64>
   cohortOwner.Events.Subscribe(fun events ->
     try
       let state = cohortOwner.ReadCohortState()
-      for ev in events do
+      // The detail frames carry no cohort scope, so only the launch cohort's are pushed; any other
+      // cohort tells a client what changed through its matrix, which does.
+      for ev in (match push with CohortPush.Detailed -> events | CohortPush.MatrixOnly -> []) do
         match claimChangeKind ev with
         | Some(claimId, kind) ->
           match Map.tryFind claimId state.Claims with
@@ -1804,10 +1822,52 @@ let wireCohortEventSubscription
         matrixGate.Value <- newGate
         ctx.SessionEventBroadcast.Trigger(
           SseFrame.daemon (SageFs.SseWriter.formatCohortMatrixEvent ctx.SseJsonOpts frame))
-        ctx.ServerTracker.NotifyResourceUpdatedAsync(SageFs.Server.McpResources.CohortStatusUri) |> ignore
+        // `cohort://status` is the launch cohort's resource, so another cohort's change is not its news.
+        match push with
+        | CohortPush.Detailed -> ctx.ServerTracker.NotifyResourceUpdatedAsync(SageFs.Server.McpResources.CohortStatusUri) |> ignore
+        | CohortPush.MatrixOnly -> ()
       | false -> ()
     with ex ->
       Log.error "[SSE] Cohort event push error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
+
+/// Subscribe the stream to EVERY cohort the daemon serves: the ones that exist now, and each one as it is
+/// created. The daemon runs a cohort per scope, and this used to follow only the one it was launched from,
+/// so a second repository's cohort changed and `/events` said nothing about it beyond a `state` frame.
+let wireCohortEventSubscriptions (support: SageFs.Features.CohortOwners.Wiring) (ctx: SseContext) : IDisposable =
+  let subscriptions = ResizeArray<IDisposable>()
+  let remember (subscription: IDisposable) = lock subscriptions (fun () -> subscriptions.Add subscription)
+  match support with
+  | SageFs.Features.CohortOwners.Wiring.Wired(owners, own) ->
+    owners.OnEachOwner(fun scope owner ->
+      let push =
+        match SageFs.Scope.equal scope own with
+        | true -> CohortPush.Detailed
+        | false -> CohortPush.MatrixOnly
+      remember (wireCohortEventSubscription owner ctx push))
+  | SageFs.Features.CohortOwners.Wiring.Single(owner, _) -> remember (wireCohortEventSubscription owner ctx CohortPush.Detailed)
+  | SageFs.Features.CohortOwners.Wiring.Unwired -> ()
+  { new IDisposable with
+      member _.Dispose() = lock subscriptions (fun () -> subscriptions |> Seq.iter (fun s -> s.Dispose())) }
+
+/// A connecting client is replayed the matrix of every cohort besides the launch one (`replayCohortMatrix`
+/// does that one), each naming its own scope. Nothing is created: a cohort that does not exist has no
+/// matrix to send.
+let replayOtherCohortMatrices (support: SageFs.Features.CohortOwners.Wiring) (ctx: SseContext) (body: System.IO.Stream) =
+  match support with
+  | SageFs.Features.CohortOwners.Wiring.Wired(owners, own) ->
+    task {
+      for scope in owners.Scopes () do
+        match SageFs.Scope.equal scope own, owners.TryFind scope with
+        | false, Some owner ->
+          try
+            do! SageFs.SseWriter.formatCohortMatrixEvent ctx.SseJsonOpts (owner.ReadFrame())
+                |> writeSseFrame body
+          with
+          | :? System.IO.IOException | :? ObjectDisposedException -> ()
+        | _ -> ()
+    }
+  | SageFs.Features.CohortOwners.Wiring.Single _
+  | SageFs.Features.CohortOwners.Wiring.Unwired -> task { () }
 
 // ── sessions://list resource subscription (item 12) ──
 
@@ -1952,6 +2012,12 @@ module ActionQueuePush =
 
 // ── Model change handlers: state change → SSE + MCP notifications ──
 
+/// The frames a model change pushes only when they differ from the last one pushed for the session.
+[<RequireQualifiedAccess>]
+type ChangeGatedEvent =
+  | TestSummary
+  | TestResultsBatch
+
 /// Wire SseEvent.ModelChanged events to the handler pipeline.
 /// Creates handler closures and subscribes them to the event.
 /// Returns the subscription disposable.
@@ -2055,6 +2121,18 @@ let wireModelChangeHandlers
             SseFrame.ofSession sid (SageFs.SseWriter.formatTestTraceEvent sid json))
         | AccumulatePush _ -> ())
 
+  // The summary and the batch are small and an idle session sent them on every change. Each push goes into
+  // the replay log, so a frame that says what the last one said spends the window for nothing. Handlers
+  // run one at a time (`Coalescer` in DaemonMode), so these cells have one writer.
+  let lastPushedWire = ref (Map.empty: Map<string * ChangeGatedEvent, string>)
+  let pushUnlessUnchanged (activeId: string) (event: ChangeGatedEvent) (wire: string) : unit =
+    match Map.tryFind (activeId, event) lastPushedWire.Value with
+    | Some last when last = wire -> ()
+    | _ ->
+      lastPushedWire.Value <- Map.add (activeId, event) wire lastPushedWire.Value
+      ctx.TestEventBroadcast.Trigger(SseFrame.ofSession (Some activeId) wire)
+  let lastPushedLocations = ref (Map.empty: Map<string, SageFs.Features.LiveTesting.TestSourceLocation list>)
+
   let handleTestSummaryChange () =
     SseContext.withModel ctx (fun model ->
       let lt = model.LiveTesting.TestState
@@ -2079,9 +2157,8 @@ let wireModelChangeHandlers
         match shouldPushTestSummary now modelChangeState.Value.LastTestSsePushTicks modelChangeState.Value.TestSseThrottleMs isRunComplete with
         | true ->
           modelChangeState.Value <- { modelChangeState.Value with LastTestSsePushTicks = now }
-          ctx.TestEventBroadcast.Trigger(
-            SseFrame.ofSession (Some activeId)
-              (SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration (SageFsModel.liveTestActivityFor activeId model)))
+          pushUnlessUnchanged activeId ChangeGatedEvent.TestSummary
+            (SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration (SageFsModel.liveTestActivityFor activeId model))
           let freshness =
             match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
             | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
@@ -2104,9 +2181,8 @@ let wireModelChangeHandlers
             | SourceStateProbe.SourceSourceRefusal.Assessed state -> Some(SourceState.toWire state)
             | SourceStateProbe.SourceSourceRefusal.NoSessionToRead
             | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None
-          ctx.TestEventBroadcast.Trigger(
-            SseFrame.ofSession (Some activeId)
-              (SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire))
+          pushUnlessUnchanged activeId ChangeGatedEvent.TestResultsBatch
+            (SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire)
           // A FINISHED run is a different fact from a batch of results arriving: this fires
           // only when nothing is running, so a client that renders "run finished" acts once
           // per run rather than on every incremental batch during one. Gated on a real
@@ -2332,10 +2408,19 @@ let wireModelChangeHandlers
           match model.ResolvedSourceLocations with
           | [] -> ()
           | locs ->
-            ctx.ServerTracker.AccumulateEvent(SseContext.activeSessionId ctx, PushEvent.TestSourceLocations locs)
-            ctx.TestEventBroadcast.Trigger(
-              SseFrame.ofSession (SseContext.activeSessionId ctx)
-                (SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts (SseContext.activeSessionId ctx) locs)))
+            let sessionId = SseContext.activeSessionId ctx
+            ctx.ServerTracker.AccumulateEvent(sessionId, PushEvent.TestSourceLocations locs)
+            // The whole list goes out only when it differs from the last one sent for this session: it is
+            // a row per test (hundreds of KB on a big suite) and used to go out on every model change.
+            // A client that connects later gets it in its snapshot (`replayCachedTestState`).
+            let key = sessionId |> Option.defaultValue ""
+            match Map.tryFind key lastPushedLocations.Value with
+            | Some last when obj.ReferenceEquals(last, locs) || last = locs -> ()
+            | _ ->
+              lastPushedLocations.Value <- Map.add key locs lastPushedLocations.Value
+              ctx.TestEventBroadcast.Trigger(
+                SseFrame.ofSession sessionId
+                  (SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts sessionId locs)))
         match ctx.ServerTracker.Count > 0 with
         | true ->
           try
@@ -3285,6 +3370,7 @@ let writeCatchUpSnapshots (rctx: RouteContext) (stream: StreamScope) (gone: Canc
     do! replaySessionSnapshot rctx.SseContext target body
     do! replayCachedTestState rctx.SseContext target gone body
     do! replayCohortMatrix rctx.SseContext body
+    do! replayOtherCohortMatrices rctx.Config.CohortSupport rctx.SseContext body
     do! replayHealthSnapshot rctx.SseContext stream rctx.Config.SessionOps.GetAllSessions body
     // The bindings map is the ACTIVE session's, so it is only replayed to a connection
     // that is catching up on that session.
@@ -3370,15 +3456,28 @@ let serveEventsWork (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.A
     | Some _ ->
       let body = ctx.Response.Body
       let heartbeatMs = int SageFs.Timeouts.sseHeartbeat.TotalMilliseconds
-      let outbox = SseOutbox SseOutbox.capacity
+      let outbox = SseOutbox(SseOutbox.capacity, SseOutbox.maxBytes)
       // Attach before anything is written: from this moment every frame this connection may see is
       // either in `CatchUp` or queued behind it, so nothing published while the snapshots are
       // being built is lost. The one cost is that a frame can arrive both in a snapshot and after
       // it, which every frame is built to survive (a snapshot is a set, not an append).
       let attachment =
-        rctx.SseContext.Log.Attach(stream, lastEventIdOf ctx, fun item -> outbox.Offer (Replayable.toWire item))
+        rctx.SseContext.Log.Attach(stream, lastEventIdOf ctx, outbox.OfferLogged)
+      // The heartbeat names the log's position when it has moved, so a connection that is quiet because
+      // the traffic is another session's still moves its last id. Without that, a scoped client that
+      // reconnects after a busy hour asks from an id the log has dropped and is told to resync from
+      // snapshots, having missed nothing. Unmoved, it is the keepalive comment it always was.
+      let lastHeartbeatSeq = ref 0L
+      let heartbeat () =
+        rctx.SseContext.Log.WithPosition(fun position ->
+          match position with
+          | LogPosition.At at when at.Seq > lastHeartbeatSeq.Value ->
+            lastHeartbeatSeq.Value <- at.Seq
+            outbox.Offer (EventId.toIdOnlyFrame at)
+          | LogPosition.At _
+          | LogPosition.Empty -> outbox.Keepalive ())
       try
-        use _heartbeat = new Timer((fun _ -> outbox.Keepalive ()), null, heartbeatMs, heartbeatMs)
+        use _heartbeat = new Timer((fun _ -> heartbeat ()), null, heartbeatMs, heartbeatMs)
         match attachment.CatchUp with
         | SseReplay.CatchUp.Replay missed ->
           for item in missed do
@@ -4726,8 +4825,8 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       | Some evt -> wireSessionEventSubscription evt sseCtx
       | None -> ()
 
-      let _cohortEventSub =
-        SageFs.McpTools.cohortOwnerFor mcpContext None |> Option.map (fun cohortOwner -> wireCohortEventSubscription cohortOwner sseCtx)
+      // Every cohort the daemon serves, not only the one it was launched from.
+      let _cohortEventSub = wireCohortEventSubscriptions cfg.CohortSupport sseCtx
 
       let _sessionsResourceSub =
         cfg.StateChanged |> Option.map (fun evt -> wireSessionsResourceSubscription evt sseCtx cfg.SessionOps.GetAllSessions)

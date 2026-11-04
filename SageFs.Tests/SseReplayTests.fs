@@ -103,6 +103,36 @@ let sseReplayTests =
         buffer.Bytes |> Expect.equal "no bytes held" 0
       }
 
+      test "WHY — one frame over the byte bound clears the window, so a client behind it resyncs and one after it replays" {
+        // Dropping the old frames and keeping the seq spent is what stops a hole going unseen: a client at
+        // seq 1 must not be told "replay from 2" when 2 is gone.
+        let small = fill (SseReplay.create epoch { MaxFrames = 10; MaxBytes = 50 }) (daemonFrames 3)
+        let _, afterBig = SseReplay.record (frameOf FrameScope.Daemon (String.replicate 200 "z")) small
+        let afterNext = fill afterBig (daemonFrames 1)
+        afterNext.Count |> Expect.equal "only the frame after the big one is kept" 1
+        SseReplay.catchUp StreamScope.EverySession (idAt 1L) afterNext
+        |> function
+          | SseReplay.CatchUp.Resync (SseReplay.ResyncReason.Evicted _) -> ()
+          | other -> failtestf "a client behind the big frame must resync, got %A" other
+        SseReplay.catchUp StreamScope.EverySession (idAt 4L) afterNext
+        |> seqsOf
+        |> Expect.equal "a client current through the big frame replays what came after" (Some [ 5L ])
+      }
+
+      test "WHY — a frame's size is its UTF-8 bytes, which a char count would understate for a path or test name with an accent" {
+        // 'h' 1 byte, 'é' 2, 'l' 'l' 'o' 3, '→' 3: six chars and nine bytes. Every other fixture here is made of "z".
+        let wire = "héllo→"
+        let item, _ = SseReplay.record (frameOf FrameScope.Daemon wire) (SseReplay.create epoch roomy)
+        item.Bytes |> Expect.equal "nine bytes, not six chars" 9
+        let _, tight = SseReplay.record (frameOf FrameScope.Daemon wire) (SseReplay.create epoch { MaxFrames = 10; MaxBytes = 8 })
+        tight.Count |> Expect.equal "over an 8-byte bound by bytes though inside it by chars, so it evicts itself" 0
+      }
+
+      test "the count of kept frames is kept, not recounted" {
+        let buffer = fill (SseReplay.create epoch { MaxFrames = 3; MaxBytes = plentyOfBytes }) (daemonFrames 5)
+        buffer.Count |> Expect.equal "three kept" 3
+      }
+
       test "the oldest frames go first when the count bound is hit" {
         let buffer = fill (SseReplay.create epoch { MaxFrames = 2; MaxBytes = plentyOfBytes }) (daemonFrames 5)
         buffer.Frames |> Map.toList |> List.map fst |> Expect.equal "newest two" [ 4L; 5L ]
@@ -183,9 +213,20 @@ let sseReplayTests =
           theirs = lastSeen && lastSeen > latest && l = latest
         | SseReplay.CatchUp.Resync _ -> false)
 
+      test "WHY — an evicted wanted frame is refused with exactly the seq wanted and the first one still held" {
+        // Five frames, room for two: seqs 4 and 5 are kept. A client at seq 1 wants 2, which is gone.
+        let buffer = fill (SseReplay.create epoch { MaxFrames = 2; MaxBytes = plentyOfBytes }) (daemonFrames 5)
+        SseReplay.catchUp StreamScope.EverySession (idAt 1L) buffer
+        |> Expect.equal "wanted 2, first held 4" (SseReplay.CatchUp.Resync (SseReplay.ResyncReason.Evicted (2L, 4L)))
+        SseReplay.catchUp StreamScope.EverySession (idAt 3L) buffer
+        |> seqsOf
+        |> Expect.equal "a client at seq 3 wants 4, which is held, and is replayed 4 and 5" (Some [ 4L; 5L ])
+      }
+
       check "the frame and byte bounds hold, and the byte total is the sum of what is kept" (fun scenario ->
         let buffer, model, _, _ = materialize scenario
         Map.count buffer.Frames <= buffer.Limits.MaxFrames
+        && buffer.Count = Map.count buffer.Frames
         && buffer.Bytes <= buffer.Limits.MaxBytes
         && buffer.Bytes = (buffer.Frames |> Map.toList |> List.sumBy (fun (_, r) -> r.Bytes))
         && buffer.Latest = int64 (List.length model))

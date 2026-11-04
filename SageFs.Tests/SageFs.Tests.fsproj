@@ -788,6 +788,8 @@
         <Compile Include="SseReplaySimTests.fs" />
         <Compile Include="SseLogTests.fs" />
         <Compile Include="SseOutboxTests.fs" />
+        <Compile Include="ChangeCoalescerTests.fs" />
+        <Compile Include="ModelChangePushTests.fs" />
         <Compile Include="CapabilitySimTests.fs" />
         <Compile Include="LeaseWireTests.fs" />
         <Compile Include="TestDebugTests.fs" />
@@ -899,6 +901,7 @@
         <Compile Include="CohortLanesTests.fs" />
         <Compile Include="CohortOwnerTests.fs" />
         <Compile Include="CohortSseEventsTests.fs" />
+        <Compile Include="CohortSseEveryScopeTests.fs" />
         <Compile Include="McpResourcesTests.fs" />
         <Compile Include="AgentGuidanceTests.fs" />
         <Compile Include="RetiredToolNameTests.fs" />

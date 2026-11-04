@@ -62,6 +62,9 @@ module SseReplay =
       Limits: ReplayLimits
       /// Keyed by seq, so the oldest is first.
       Frames: Map<int64, Replayable>
+      /// How many frames are kept. `Map.count` walks the whole tree, and `trim` asks on every record and
+      /// every eviction step while the log's lock is held.
+      Count: int
       Bytes: int
       /// The newest seq ever issued, kept or not.
       Latest: int64 }
@@ -86,13 +89,17 @@ module SseReplay =
     | Resync of ResyncReason
 
   let create (epoch: string) (limits: ReplayLimits) : Buffer =
-    { Epoch = epoch; Limits = limits; Frames = Map.empty; Bytes = 0; Latest = 0L }
+    { Epoch = epoch; Limits = limits; Frames = Map.empty; Count = 0; Bytes = 0; Latest = 0L }
 
   let rec trim (buffer: Buffer) : Buffer =
-    let over = Map.count buffer.Frames > buffer.Limits.MaxFrames || buffer.Bytes > buffer.Limits.MaxBytes
+    let over = buffer.Count > buffer.Limits.MaxFrames || buffer.Bytes > buffer.Limits.MaxBytes
     match over, Seq.tryHead buffer.Frames with
     | true, Some oldest ->
-      trim { buffer with Frames = Map.remove oldest.Key buffer.Frames; Bytes = buffer.Bytes - oldest.Value.Bytes }
+      trim
+        { buffer with
+            Frames = Map.remove oldest.Key buffer.Frames
+            Count = buffer.Count - 1
+            Bytes = buffer.Bytes - oldest.Value.Bytes }
     | _ -> buffer
 
   /// Spends the next seq on this frame and keeps it if the limits allow. A frame bigger than
@@ -103,7 +110,13 @@ module SseReplay =
       { Id = { Epoch = buffer.Epoch; Seq = seq }
         Frame = frame
         Bytes = System.Text.Encoding.UTF8.GetByteCount frame.Wire }
-    item, trim { buffer with Frames = Map.add seq item buffer.Frames; Bytes = buffer.Bytes + item.Bytes; Latest = seq }
+    item,
+    trim
+      { buffer with
+          Frames = Map.add seq item buffer.Frames
+          Count = buffer.Count + 1
+          Bytes = buffer.Bytes + item.Bytes
+          Latest = seq }
 
   /// The newest id issued, or `Empty` before the first frame.
   let position (buffer: Buffer) : LogPosition =

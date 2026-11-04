@@ -163,7 +163,7 @@ type Harness =
 
 /// Stand up only `mapEventsRoute` on a bare Kestrel host. `staleSlot` is what the daemon's
 /// single "last eval diff" replay slot happens to hold when a client connects.
-let startServer (staleSlot: SseFrame option) = task {
+let startServerWith (model: SageFsModel option) (staleSlot: SseFrame option) = task {
   let builder = WebApplication.CreateBuilder([||])
   builder.WebHost.UseUrls("http://127.0.0.1:0") |> ignore
   builder.Logging.ClearProviders() |> ignore
@@ -209,10 +209,11 @@ let startServer (staleSlot: SseFrame option) = task {
       GetProcessTelemetry = fun () -> None }
 
   let sseContext : McpServer.SseContext =
-    { GetElmModel = None
+    { // The daemon's model, when a test wants the connect-time snapshots a real stream writes.
+      GetElmModel = model |> Option.map (fun m -> fun () -> m)
       GetWarmupContext = None
       GetHotReloadState = None
-      SseJsonOpts = JsonSerializerOptions()
+      SseJsonOpts = Json.optionsOf Json.standard
       TestEventBroadcast = test
       SessionEventBroadcast = session
       Log = SseLog.startNew ()
@@ -239,6 +240,8 @@ let startServer (staleSlot: SseFrame option) = task {
     |> Seq.head
   return { App = app; BaseUrl = baseUrl; State = state; Session = session; Test = test }
 }
+
+let startServer (staleSlot: SseFrame option) = startServerWith None staleSlot
 
 let client = new HttpClient(Timeout = Timeout.InfiniteTimeSpan)
 
@@ -385,5 +388,101 @@ let routeTests = testList "GET /events?sessionId=" [
         text |> Expect.stringContains "says what to do next" "list_sessions"
       | Choice1Of2 _ -> failtest "an unknown session opened a stream"
     })
+  }
+]
+
+// ── The order a stream is written in, with a real snapshot ───────────────
+//
+// The harness above has no model, so no route test wrote a snapshot. The order matters: what a client
+// missed, then the snapshots (current by construction), then the id-only frame that says "caught up
+// through here", then the retry hint. A snapshot written after the id-only frame, or an id-only frame
+// that names a position the snapshot does not reach, would mean a client that drops mid-snapshot resumes
+// from a position it never fully had.
+
+open SageFs.Features.LiveTesting
+
+let private snapshotModel : SageFsModel =
+  let initial = SageFsModel.initial ()
+  let entry =
+    { TestId = TestId.TestId "Tests.snapshot.case"
+      DisplayName = "Tests.snapshot.case"
+      FullName = "Tests.snapshot.case"
+      Origin = TestOrigin.SourceMapped ("/repo/Tests/Snapshot.fs", 10)
+      Framework = TestFramework.Expecto
+      Category = TestCategory.Unit
+      CurrentPolicy = RunPolicy.OnEveryChange
+      Status = TestRunStatus.Passed TimeSpan.Zero
+      PreviousStatus = TestRunStatus.Detected
+      Provenance = ResultProvenance.Compiled }
+  let state =
+    { LiveTestState.empty with Activation = LiveTestingActivation.Active }
+    |> LiveTestState.withStatusEntries [| entry |]
+  { initial with LiveTesting = { initial.LiveTesting with TestState = state } }
+
+/// Connect with `Last-Event-ID`, and read through the replay up to the retry hint.
+let private openResuming (h: Harness) (lastEventId: string) : Task<string> = task {
+  use request = new HttpRequestMessage(HttpMethod.Get, h.BaseUrl + "/events")
+  request.Headers.Add("Last-Event-ID", lastEventId)
+  let! resp = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+  let! body = resp.Content.ReadAsStreamAsync()
+  let reader = new StreamReader(body)
+  return! readUntil reader "retry:"
+}
+
+/// The id-only frame for a seq: `id: <epoch>:<seq>` and a blank line, with no event after it.
+let private idOnlyFrame (text: string) (seq: int) : int =
+  let found = System.Text.RegularExpressions.Regex.Match(text, sprintf @"(?m)^id: [^\n]+:%d\n\n" seq)
+  match found.Success with
+  | true -> found.Index
+  | false -> -1
+
+let private epochIn (text: string) : string =
+  let found = System.Text.RegularExpressions.Regex.Match(text, @"(?m)^id: ([^:\n]+):\d+$")
+  match found.Success with
+  | true -> found.Groups.[1].Value
+  | false -> failwithf "no id in:\n%s" text
+
+[<Tests>]
+let snapshotOrderTests = testList "GET /events writes its snapshot between the replay and the id-only frame" [
+
+  testTask "a first connection is sent its snapshot, then the id-only frame naming the newest id, then the retry hint" {
+    let! h = startServerWith (Some snapshotModel) None
+    try
+      h.Session.Trigger(SseFrame.daemon (wireOf "MARKER-ONE"))
+      h.Session.Trigger(SseFrame.daemon (wireOf "MARKER-TWO"))
+      let! (_reader: StreamReader), (text: string) = open200 h ""
+      let snapshotAt = text.IndexOf "event: test_summary"
+      let idOnlyAt = idOnlyFrame text 2
+      let retryAt = text.IndexOf "retry:"
+      Expect.isTrue "the snapshot was written" (snapshotAt >= 0)
+      Expect.isTrue "the id-only frame names seq 2, the newest at the moment of attaching" (idOnlyAt >= 0)
+      Expect.isTrue "the snapshot comes before the id-only frame" (snapshotAt < idOnlyAt)
+      Expect.isTrue "the id-only frame comes before the retry hint" (idOnlyAt < retryAt)
+    finally (h.App :> IDisposable).Dispose()
+  }
+
+  testTask "WHY — a reconnect is sent what it missed first, then the snapshot, then the id-only frame, then the retry hint" {
+    let! h = startServerWith (Some snapshotModel) None
+    try
+      h.Session.Trigger(SseFrame.daemon (wireOf "MARKER-ONE"))
+      h.Session.Trigger(SseFrame.daemon (wireOf "MARKER-TWO"))
+      let! (_reader: StreamReader), (first: string) = open200 h ""
+      let epoch = epochIn first
+      // Two frames the client did not hear, while it was away.
+      h.Session.Trigger(SseFrame.daemon (wireOf "MARKER-MISSED-A"))
+      h.Session.Trigger(SseFrame.daemon (wireOf "MARKER-MISSED-B"))
+      let! (text: string) = openResuming h (sprintf "%s:2" epoch)
+      let missedAt = text.IndexOf "MARKER-MISSED-A"
+      let missedBAt = text.IndexOf "MARKER-MISSED-B"
+      let snapshotAt = text.IndexOf "event: test_summary"
+      let idOnlyAt = idOnlyFrame text 4
+      let retryAt = text.IndexOf "retry:"
+      Expect.isTrue "the first missed frame was replayed" (missedAt >= 0)
+      Expect.isTrue "the second missed frame was replayed after it" (missedBAt > missedAt)
+      Expect.isFalse "a frame the client already had is not replayed" (text.Contains "MARKER-TWO")
+      Expect.isTrue "the snapshot follows the replay" (missedBAt < snapshotAt)
+      Expect.isTrue "the id-only frame names seq 4 and follows the snapshot" (snapshotAt < idOnlyAt)
+      Expect.isTrue "the retry hint is last" (idOnlyAt < retryAt)
+    finally (h.App :> IDisposable).Dispose()
   }
 ]

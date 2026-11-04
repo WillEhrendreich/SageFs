@@ -374,6 +374,9 @@ type LiveTestingListener = {
 let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> unit) option) (onDisconnect: (unit -> unit) option) (log: (string -> unit) option) : LiveTestingListener =
   let mutable state = VscLiveTestState.empty
   let mutable discoveryGen = 0L
+  // Which list fetch may still deliver: each batch frame that owes one takes a ticket, and an answer
+  // whose ticket is no longer the newest for its session is dropped (HydrationGatePure).
+  let mutable hydrationGate = SageFs.Vscode.HydrationGatePure.empty
   let mutable bindings: obj array = [||]
   let mutable TestTrace: obj option = None
   let mutable evalDiff: VscEvalDiff option = None
@@ -458,6 +461,8 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       let noQuery = sseUrl.Split([| '?' |]).[0]
       let origin = noQuery.Substring(0, noQuery.LastIndexOf '/')
       let url = sprintf "%s/api/live-testing/entries?session=%s" origin (System.Uri.EscapeDataString sid)
+      let ticket, gate' = SageFs.Vscode.HydrationGatePure.take sid hydrationGate
+      hydrationGate <- gate'
       // Fire and forget: the tally is already applied, so a failed fetch leaves an empty panel
       // rather than a wrong one, and the next discovery or run brings the list anyway.
       // The shape JsHelpers uses for a promise nobody waits on: map the side effect, drop the
@@ -465,7 +470,9 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       // empty panel rather than a wrong one.
       httpGetRaw url 15000
       |> Promise.map (fun resp ->
-        if resp.statusCode = 200 && resp.body <> "" then
+        // A newer frame for this session asked after this one did, and its own answer is coming:
+        // delivering this frame now would put its older generation and freshness over the newer ones.
+        if resp.statusCode = 200 && resp.body <> "" && SageFs.Vscode.HydrationGatePure.isCurrent sid ticket hydrationGate then
           data?Entries <- jsonParse resp.body
           deliver eventType data)
       |> ignore

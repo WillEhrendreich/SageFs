@@ -653,6 +653,9 @@ let cohortFrameJson (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<Mem
          NextAction = nextAction |})
   let payload =
     {| Version = frame.Version
+       // Which cohort this is. The daemon serves one per scope, and a client that holds only the frame
+       // cannot otherwise tell whose members and claims it is looking at.
+       CohortScope = SageFs.Scope.label frame.Scope
        Members = members
        Claims = claims
        Tests = tests

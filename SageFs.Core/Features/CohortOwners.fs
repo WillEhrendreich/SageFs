@@ -75,6 +75,13 @@ type Owners =
     /// Called once for each owner as it is created, with the scope it belongs to. Set this
     /// BEFORE the first `OwnerFor`, or the scopes created earlier are missed.
     SetOnOwnerStarted: (CohortScope -> CohortOwner.Handle -> unit) -> unit
+    /// Like `SetOnOwnerStarted`, with two differences that each remove a way to miss a cohort. It ADDS to
+    /// the hooks already registered instead of replacing the one hook, so a second subscriber does not
+    /// silence the first. And it is called at once for every owner that ALREADY exists, so registering
+    /// after the daemon's own cohort was seeded (which happens before most wiring runs) loses nothing.
+    /// Each owner reaches each hook exactly once, whichever came first. A scope rebuilt after `Evict`
+    /// reaches every hook again, since its old owner was disposed.
+    OnEachOwner: (CohortScope -> CohortOwner.Handle -> unit) -> unit
     /// Dispose the owner for `scope` and forget it, so the next request for it starts a
     /// fresh one from the ledger. This is how a scope that no longer has work stops costing
     /// a mailbox: an owner is not a scarce resource, but an unbounded set of them is a
@@ -192,6 +199,11 @@ let create (factory: Factory) : Owners =
   // omitting it is not a crash.
   let started = ref (fun (_: CohortScope) (_: CohortOwner.Handle) -> ())
   let notified = System.Collections.Concurrent.ConcurrentDictionary<CohortScope, bool>()
+  // The hooks `OnEachOwner` added, newest first. `gate` makes "this owner is now notified" and "this hook
+  // is now registered" one step each, so an owner reaches a hook once: through the snapshot
+  // `OnEachOwner` takes, or through the list `OwnerFor` reads, never both and never neither.
+  let gate = obj ()
+  let each = ref ([]: (CohortScope -> CohortOwner.Handle -> unit) list)
 
   let disposeOf (h: CohortOwner.Handle) =
     // `Handle` is `IDisposable`; disposing it releases the mailbox, and it does not throw if
@@ -208,8 +220,12 @@ let create (factory: Factory) : Owners =
         // Fire the hook exactly ONCE per scope, for the call that created the owner.
         // Firing on every `OwnerFor` would attach another subscriber per request, so one
         // cohort change would redraw the dashboard N times after N requests.
-        if notified.TryAdd(scope, true) then
+        let hooks = lock gate (fun () -> if notified.TryAdd(scope, true) then Some (List.rev each.Value) else None)
+        match hooks with
+        | Some added ->
           (!started) scope owner
+          added |> List.iter (fun hook -> hook scope owner)
+        | None -> ()
         owner
     Scopes = fun () -> owners.Keys |> Seq.toList |> List.sort
     TryFind = fun scope ->
@@ -217,6 +233,16 @@ let create (factory: Factory) : Owners =
       | true, h -> Some h
       | _ -> None
     SetOnOwnerStarted = fun f -> started.Value <- f
+    OnEachOwner =
+      fun hook ->
+        let existing =
+          lock gate (fun () ->
+            each.Value <- hook :: each.Value
+            notified.Keys |> Seq.sort |> Seq.toList)
+        for scope in existing do
+          match owners.TryGetValue scope with
+          | true, owner -> hook scope owner
+          | _ -> ()
     Evict =
       fun scope ->
         // `TryRemove` is the atomic part: exactly one caller can win the removal, so a

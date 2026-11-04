@@ -1896,6 +1896,14 @@ let createElmRuntime
   let mutable lastStateJson = ""
   let mutable lastLoggedOutputCount = 0
   let mutable lastLoggedDiagCount = 0
+  // Subscribers run on the pool, one delivery at a time, and a change that lands while one is running
+  // replaces any waiting behind it. Every handler reads the model when it runs, so the changes in between
+  // had nothing to add. This was one pool work item per change, which let a second pass over every file of
+  // a big session start beside the first and wrote the handlers' `ref` state from both.
+  let modelChanges =
+    Coalescer<int * int>(
+      (fun (outputCount, diagCount) -> stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))),
+      fun work -> System.Threading.ThreadPool.QueueUserWorkItem(fun _ -> work ()) |> ignore)
   let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
     async {
       try
@@ -2046,8 +2054,7 @@ let createElmRuntime
             // inside the thread-pool work item so it reflects when the
             // change was decided, not when the work item happened to run.
             EvalLatencyTrace.shared.StampModelChanged()
-            System.Threading.ThreadPool.QueueUserWorkItem(fun _ ->
-              stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))) |> ignore
+            modelChanges.Post (outputCount, diagCount)
           | false -> ()
         with ex -> Log.error "[elm] State change propagation error: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
       (fun phase msg ->

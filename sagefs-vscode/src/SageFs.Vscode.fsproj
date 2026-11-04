@@ -10,6 +10,7 @@
     <Compile Include="JsHelpers.fs" />
     <Compile Include="BufferBridge.fs" />
     <Compile Include="SessionScopePure.fs" />
+    <Compile Include="HydrationGatePure.fs" />
     <Compile Include="ReloadReportPure.fs" />
     <Compile Include="LiveTestingTypes.fs" />
     <Compile Include="ContextKeysPure.fs" />
