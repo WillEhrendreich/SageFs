@@ -3454,6 +3454,8 @@ let activate (context: ExtensionContext) =
         // (one event per symbol). One refresh per event keeps the editor
         // idle when nothing changes.
         CovViewLens.updateFile view.FilePath generation view
+      OpenEditorPaths = fun () ->
+        Window.getVisibleTextEditors () |> Array.map (fun editor -> editor.document.fileName) |> List.ofArray
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."
@@ -3513,7 +3515,10 @@ let activate (context: ExtensionContext) =
     sseDisposable <- Some listenerDisposable
     trackDaemonConnectionDisposable listenerDisposable
     // Re-apply decorations when editors change
-    Window.onDidChangeVisibleTextEditors (fun _editors -> refreshAllDecorations () |> ignore)
+    Window.onDidChangeVisibleTextEditors (fun _editors ->
+      // An editor that became visible after the daemon listed the files with annotations has not been asked for.
+      listener.FetchAnnotationsForEditors ()
+      refreshAllDecorations () |> ignore)
     |> trackDaemonConnectionDisposable
     Window.onDidChangeActiveTextEditor (fun _editor -> refreshAllDecorations () |> ignore)
     |> trackDaemonConnectionDisposable
