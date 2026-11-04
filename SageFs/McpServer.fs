@@ -1758,6 +1758,14 @@ let saveObservedRow
     | None -> None
   | _ -> None
 
+/// What a cohort's subscription pushes besides its matrix.
+[<RequireQualifiedAccess>]
+type CohortPush =
+  /// `claim_changed`, `landing_changed` and `save_observed` as well: the launch cohort's.
+  | Detailed
+  /// The matrix alone, which names its cohort.
+  | MatrixOnly
+
 /// Subscribe to `CohortOwner.Handle.Events` and push `claim_changed`/
 /// `landing_changed`/`save_observed` for the events one applied command
 /// produced, plus `cohort_matrix` once per frame-version change. Wait-free: every push
@@ -1770,12 +1778,15 @@ let saveObservedRow
 /// guard is cheap insurance against a future double-fire) emits nothing.
 let wireCohortEventSubscription
   (cohortOwner: SageFs.Features.CohortOwner.Handle)
-  (ctx: SseContext) : IDisposable =
+  (ctx: SseContext)
+  (push: CohortPush) : IDisposable =
   let matrixGate = ref SageFs.McpResourceGate.initial<int64>
   cohortOwner.Events.Subscribe(fun events ->
     try
       let state = cohortOwner.ReadCohortState()
-      for ev in events do
+      // The detail frames carry no cohort scope, so only the launch cohort's are pushed; any other
+      // cohort tells a client what changed through its matrix, which does.
+      for ev in (match push with CohortPush.Detailed -> events | CohortPush.MatrixOnly -> []) do
         match claimChangeKind ev with
         | Some(claimId, kind) ->
           match Map.tryFind claimId state.Claims with
@@ -1811,10 +1822,52 @@ let wireCohortEventSubscription
         matrixGate.Value <- newGate
         ctx.SessionEventBroadcast.Trigger(
           SseFrame.daemon (SageFs.SseWriter.formatCohortMatrixEvent ctx.SseJsonOpts frame))
-        ctx.ServerTracker.NotifyResourceUpdatedAsync(SageFs.Server.McpResources.CohortStatusUri) |> ignore
+        // `cohort://status` is the launch cohort's resource, so another cohort's change is not its news.
+        match push with
+        | CohortPush.Detailed -> ctx.ServerTracker.NotifyResourceUpdatedAsync(SageFs.Server.McpResources.CohortStatusUri) |> ignore
+        | CohortPush.MatrixOnly -> ()
       | false -> ()
     with ex ->
       Log.error "[SSE] Cohort event push error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
+
+/// Subscribe the stream to EVERY cohort the daemon serves: the ones that exist now, and each one as it is
+/// created. The daemon runs a cohort per scope, and this used to follow only the one it was launched from,
+/// so a second repository's cohort changed and `/events` said nothing about it beyond a `state` frame.
+let wireCohortEventSubscriptions (support: SageFs.Features.CohortOwners.Wiring) (ctx: SseContext) : IDisposable =
+  let subscriptions = ResizeArray<IDisposable>()
+  let remember (subscription: IDisposable) = lock subscriptions (fun () -> subscriptions.Add subscription)
+  match support with
+  | SageFs.Features.CohortOwners.Wiring.Wired(owners, own) ->
+    owners.OnEachOwner(fun scope owner ->
+      let push =
+        match SageFs.Scope.equal scope own with
+        | true -> CohortPush.Detailed
+        | false -> CohortPush.MatrixOnly
+      remember (wireCohortEventSubscription owner ctx push))
+  | SageFs.Features.CohortOwners.Wiring.Single(owner, _) -> remember (wireCohortEventSubscription owner ctx CohortPush.Detailed)
+  | SageFs.Features.CohortOwners.Wiring.Unwired -> ()
+  { new IDisposable with
+      member _.Dispose() = lock subscriptions (fun () -> subscriptions |> Seq.iter (fun s -> s.Dispose())) }
+
+/// A connecting client is replayed the matrix of every cohort besides the launch one (`replayCohortMatrix`
+/// does that one), each naming its own scope. Nothing is created: a cohort that does not exist has no
+/// matrix to send.
+let replayOtherCohortMatrices (support: SageFs.Features.CohortOwners.Wiring) (ctx: SseContext) (body: System.IO.Stream) =
+  match support with
+  | SageFs.Features.CohortOwners.Wiring.Wired(owners, own) ->
+    task {
+      for scope in owners.Scopes () do
+        match SageFs.Scope.equal scope own, owners.TryFind scope with
+        | false, Some owner ->
+          try
+            do! SageFs.SseWriter.formatCohortMatrixEvent ctx.SseJsonOpts (owner.ReadFrame())
+                |> writeSseFrame body
+          with
+          | :? System.IO.IOException | :? ObjectDisposedException -> ()
+        | _ -> ()
+    }
+  | SageFs.Features.CohortOwners.Wiring.Single _
+  | SageFs.Features.CohortOwners.Wiring.Unwired -> task { () }
 
 // ── sessions://list resource subscription (item 12) ──
 
@@ -3317,6 +3370,7 @@ let writeCatchUpSnapshots (rctx: RouteContext) (stream: StreamScope) (gone: Canc
     do! replaySessionSnapshot rctx.SseContext target body
     do! replayCachedTestState rctx.SseContext target gone body
     do! replayCohortMatrix rctx.SseContext body
+    do! replayOtherCohortMatrices rctx.Config.CohortSupport rctx.SseContext body
     do! replayHealthSnapshot rctx.SseContext stream rctx.Config.SessionOps.GetAllSessions body
     // The bindings map is the ACTIVE session's, so it is only replayed to a connection
     // that is catching up on that session.
@@ -4758,8 +4812,8 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       | Some evt -> wireSessionEventSubscription evt sseCtx
       | None -> ()
 
-      let _cohortEventSub =
-        SageFs.McpTools.cohortOwnerFor mcpContext None |> Option.map (fun cohortOwner -> wireCohortEventSubscription cohortOwner sseCtx)
+      // Every cohort the daemon serves, not only the one it was launched from.
+      let _cohortEventSub = wireCohortEventSubscriptions cfg.CohortSupport sseCtx
 
       let _sessionsResourceSub =
         cfg.StateChanged |> Option.map (fun evt -> wireSessionsResourceSubscription evt sseCtx cfg.SessionOps.GetAllSessions)

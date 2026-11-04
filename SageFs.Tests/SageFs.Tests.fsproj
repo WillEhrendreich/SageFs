@@ -901,6 +901,7 @@
         <Compile Include="CohortLanesTests.fs" />
         <Compile Include="CohortOwnerTests.fs" />
         <Compile Include="CohortSseEventsTests.fs" />
+        <Compile Include="CohortSseEveryScopeTests.fs" />
         <Compile Include="McpResourcesTests.fs" />
         <Compile Include="AgentGuidanceTests.fs" />
         <Compile Include="RetiredToolNameTests.fs" />
