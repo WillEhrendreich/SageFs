@@ -2,6 +2,7 @@
 // Shared implementation for both simple and typed SSE subscriptions.
 const http = require('http');
 const zlib = require('zlib');
+const { StringDecoder } = require('string_decoder');
 
 function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) {
   const log = logger || ((msg) => console.log('[SageFs SSE]', msg));
@@ -74,9 +75,13 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
       } else if (encoding === 'deflate') {
         stream = res.pipe(zlib.createInflate());
       }
+      // A chunk can end in the middle of a multi-byte character. The decoder holds the partial
+      // bytes until the rest arrives; decoding each chunk alone turned both halves into U+FFFD, and
+      // the JSON still parsed, so a path or test name with an accent came through wrong.
+      const decoder = new StringDecoder('utf8');
       stream.on('data', (chunk) => {
         resetInactivity();
-        buffer += chunk.toString();
+        buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
         // An id counts as seen once its frame is delivered, or at the blank line for a frame that

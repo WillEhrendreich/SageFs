@@ -30,8 +30,11 @@ function scenario(name, scripts, wantMessages) {
       connections += 1;
       seenHeaders.push(req.headers['last-event-id']);
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.write(script.write);
-      if (script.hangUp) setTimeout(() => res.destroy(), 20);
+      // A script's `write` is one string, or several pieces sent a beat apart, so a piece can end
+      // in the middle of a character and reach the client as its own chunk.
+      const pieces = Array.isArray(script.write) ? script.write : [script.write];
+      pieces.forEach((piece, i) => setTimeout(() => res.write(piece), i * 40));
+      if (script.hangUp) setTimeout(() => res.destroy(), 20 + pieces.length * 40);
     });
 
     const timeout = setTimeout(() => {
@@ -87,4 +90,17 @@ const two = await scenario(
 );
 assert.strictEqual(two.seenHeaders[1], 'run-9:1', 'the frame that never completed is not counted as seen');
 console.log('ok: an id whose event never completed is not committed');
+
+// A frame of a few hundred KB crosses many chunk boundaries, and one of them can land inside a
+// character. Decoding each chunk on its own turns the two halves into U+FFFD and the JSON still
+// parses, so the corruption is silent: a test name or a path with an accent arrives wrong.
+const accented = Buffer.from('id: run-9:1\nevent: state\ndata: {"name":"héllo→wörld"}\n\n', 'utf8');
+const insideE = accented.indexOf(0xc3) + 1;
+const three = await scenario(
+  'a character split across chunks',
+  [{ write: [accented.subarray(0, insideE), accented.subarray(insideE)], hangUp: false }],
+  1
+);
+assert.strictEqual(three.received[0].data.name, 'héllo→wörld', 'the character is whole, not two replacement characters');
+console.log('ok: a character split across two chunks is decoded whole');
 process.exit(0);
