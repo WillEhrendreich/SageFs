@@ -37,6 +37,7 @@ let mcpPort = match Environment.GetEnvironmentVariable "SAGEFS_MCP_PORT" with | 
 let healthProbeTimeout = TimeSpan.FromSeconds 3.
 let sessionsProbeTimeout = TimeSpan.FromSeconds 5.
 let daemonStopTimeout = TimeSpan.FromSeconds 30.
+let maxStopAttempts = 3
 let daemonStartTimeout = TimeSpan.FromSeconds 90.
 let pollEvery = TimeSpan.FromSeconds 1.
 let shortShaLength = 8
@@ -50,21 +51,29 @@ type Failure =
   | InstallFailed of string
   | OpenSessions of count: int
   | OldDaemonStillUp
+  /// A different process starts a daemon each time the old one is stopped, so the port is never free for this script's own.
+  | ReplacementKeepsStarting of pid: int * directory: string
   | NewDaemonNotUp of logPath: string
   | WrongVersionRunning of expected: string * actual: string
+  /// What answers is not the daemon this script started: another process got to the port first.
+  | StartedElsewhere of pid: int * directory: string
 
 let exitCodeOf = function
   | Usage _ -> 64
   | NothingToInstall _ -> 3
   | PackFailed _ | InstallFailed _ -> 4
   | OpenSessions _ -> 5
-  | OldDaemonStillUp -> 6
-  | NewDaemonNotUp _ | WrongVersionRunning _ -> 7
+  | OldDaemonStillUp | ReplacementKeepsStarting _ -> 6
+  | NewDaemonNotUp _ | WrongVersionRunning _ | StartedElsewhere _ -> 7
 
 let describe = function
   | Usage m | NothingToInstall m | PackFailed m | InstallFailed m -> m
   | OpenSessions n -> sprintf "the daemon has %d open session(s) and --force was not given" n
   | OldDaemonStillUp -> sprintf "the old daemon is still answering on %d after %.0fs; stop it and rerun" mcpPort daemonStopTimeout.TotalSeconds
+  | ReplacementKeepsStarting (pid, directory) ->
+    sprintf "the old daemon stopped, but another process keeps starting one on %d (the last is pid %d, started in %s). It is not this script's, and it ends when its owner does. Stop whatever starts it and rerun" mcpPort pid directory
+  | StartedElsewhere (pid, directory) ->
+    sprintf "the daemon answering on %d is pid %d, started in %s, not the one this script started. Another process got to the port first, so that daemon lives in its owner's sandbox and ends when its owner does" mcpPort pid directory
   | NewDaemonNotUp log -> sprintf "the new daemon did not answer on %d within %.0fs; log: %s" mcpPort daemonStartTimeout.TotalSeconds log
   | WrongVersionRunning (expected, actual) -> sprintf "the daemon that answered reports '%s', not %s" actual expected
 
@@ -215,11 +224,25 @@ let install (repo: string) (shaArg: string option) (build: bool) (force: bool) =
   let toolVersion = versionIn (snd (run "sagefs" [ "--version" ] repo))
   if not (toolVersion.StartsWith version) then fail (WrongVersionRunning (version, toolVersion))
 
-  // 4. Stop the old daemon.
+  // 4. Stop the old daemon. An agent's `sagefs mcp` bridge starts a daemon as soon as there is none, inside that agent's own
+  //    sandbox, so what answers after the stop can be a replacement and not the old daemon. Asking "is anything answering?" took the
+  //    replacement for the old daemon, said it was "still answering", and left the replacement running. Compare process ids instead,
+  //    stop a replacement too, and start ours as soon as the port is free.
+  let answering () = DaemonStatus.classify (snd (run "sagefs" [ "status" ] repo))
+  let rec stopUntilFree (stoppedPid: int) (attempt: int) =
+    run "timeout" [ string (int daemonStopTimeout.TotalSeconds); "sagefs"; "stop" ] repo |> ignore
+    let settled () = DaemonStatus.afterStop stoppedPid (answering ())
+    match waitUntil daemonStopTimeout (fun () -> settled () <> DaemonStatus.OldStillRunning), settled () with
+    | true, DaemonStatus.OldGone -> ()
+    | true, DaemonStatus.ReplacedBy next when attempt < maxStopAttempts ->
+      say (DaemonStatus.describeReplacement next + "; stopping it too")
+      stopUntilFree next.Pid (attempt + 1)
+    | true, DaemonStatus.ReplacedBy next -> fail (ReplacementKeepsStarting (next.Pid, next.Directory))
+    | _ -> fail OldDaemonStillUp
   if daemonUp () then
     say "stopping the running daemon"
-    run "timeout" [ string (int daemonStopTimeout.TotalSeconds); "sagefs"; "stop" ] repo |> ignore
-    if not (waitUntil daemonStopTimeout (fun () -> not (daemonUp ()))) then fail OldDaemonStillUp
+    let oldPid = match answering () with | DaemonStatus.Running old -> old.Pid | _ -> 0
+    stopUntilFree oldPid 1
 
   // 5. Start the new one, detached from this process (setsid), with its output in a log. The one-line sh
   //    only redirects the daemon's output to the log; it does no scripting. The daemon starts in markDir and not in
@@ -230,7 +253,11 @@ let install (repo: string) (shaArg: string option) (build: bool) (force: bool) =
   run "setsid" [ "--fork"; "sh"; "-c"; sprintf "exec sagefs --no-resume > '%s' 2>&1 < /dev/null" log ] markDir |> ignore
   if not (waitUntil daemonStartTimeout daemonUp) then fail (NewDaemonNotUp log)
 
-  // 6. Read the version back from the daemon that answered.
+  // 6. Read the version back from the daemon that answered, and check it is the one started above. A daemon that answers from
+  //    somewhere else, such as an agent's worktree, belongs to that agent, runs in its sandbox, and ends when it does.
+  match answering () with
+  | DaemonStatus.Running d when not (DaemonStatus.startedIn markDir d) -> fail (StartedElsewhere (d.Pid, d.Directory))
+  | _ -> ()
   let running = match run "sagefs" [ "status" ] repo with | _, o -> versionIn o
   if not (running.StartsWith version) then fail (WrongVersionRunning (version, running))
 

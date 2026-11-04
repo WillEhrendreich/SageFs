@@ -11,16 +11,23 @@ open FsCheck
 open SageFs
 open SageFs.Build.DaemonStatus
 
-let private info version failures : DaemonInfo =
-  { Pid = 4242
+let private installDirectory = Path.Combine(Path.GetTempPath(), "sagefs-daemon-status-tests")
+
+let private infoAt pid directory version failures : DaemonInfo =
+  { Pid = pid
     Port = 37749
     DashboardPort = 37750
     StartedAt = DateTime.UtcNow
-    WorkingDirectory = Path.Combine(Path.GetTempPath(), "sagefs-daemon-status-tests")
+    WorkingDirectory = directory
     Version = version
     ApiVersion = None
     SessionCount = None
     ComponentFailures = failures }
+
+let private info version failures : DaemonInfo = infoAt 4242 installDirectory version failures
+
+let private daemonOf pid directory : RunningDaemon =
+  { Version = "0.6.937+abc1234"; Failing = 0; Pid = pid; Directory = directory }
 
 /// What the real command prints and exits with, with the daemon lookup injected as the existing CLI tests do.
 let private realCommand (readOnPort: int -> DaemonInfo option) (wedgedPid: int -> int option) : int * string =
@@ -49,6 +56,12 @@ let private ruleByExitCode (code: int, output: string) : string =
   | 0 -> versionIn output
   | _ -> "not running"
 
+/// The rule the script used after a stop: any daemon answering means the old one is still up.
+let private ruleAnythingAnswering (report: DaemonReport) : AfterStop =
+  match report with
+  | NotRunning -> OldGone
+  | _ -> OldStillRunning
+
 [<Tests>]
 let daemonStatusTests =
   testSequenced
@@ -58,14 +71,14 @@ let daemonStatusTests =
       let code, output = degraded
       code |> Expect.equal "the command itself exits 1 for a degraded daemon" 1
       classify output
-      |> Expect.equal "so the exit code cannot be what says it is running" (Running("0.6.937+abc1234", 2))
+      |> Expect.equal "so the exit code cannot be what says it is running" (Running { Version = "0.6.937+abc1234"; Failing = 2; Pid = 4242; Directory = installDirectory })
       describe (classify output)
       |> Expect.equal "and the status line says both" "0.6.937+abc1234 (degraded: 2 components failing)"
 
     testCase "a healthy daemon is its version and nothing else" <| fun _ ->
       let code, output = healthy
       code |> Expect.equal "healthy exits 0" 0
-      classify output |> Expect.equal "running, nothing failing" (Running("0.6.937+abc1234", 0))
+      classify output |> Expect.equal "running, nothing failing" (Running(daemonOf 4242 installDirectory))
       describe (classify output) |> Expect.equal "the line is just the version" "0.6.937+abc1234"
 
     testCase "a wedged daemon is not running and not healthy, and says so" <| fun _ ->
@@ -94,5 +107,28 @@ let daemonStatusTests =
       let version = sprintf "0.%d.%d+sha%d" (versionSeed.Get % 900) (versionSeed.Get % 97) (versionSeed.Get % 9999)
       let failures = [ for i in 1 .. int failureCount % 6 -> sprintf "component-%d: failed" i ]
       let _, output = realCommand (fun _ -> Some(info version failures)) (fun _ -> None)
-      classify output = Running(version, failures.Length)
+      classify output = Running { Version = version; Failing = failures.Length; Pid = 4242; Directory = installDirectory }
+
+    testCase "WHY — after a stop, a different daemon answering is a replacement and not the old one still running, because an agent's bridge starts one the moment there is none" <| fun _ ->
+      let stoppedPid = 4242
+      let replacement = realCommand (fun _ -> Some(infoAt 9100 "/home/will/Work/another-agents-worktree" "0.6.937+abc1234" [])) (fun _ -> None)
+      match afterStop stoppedPid (classify (snd replacement)) with
+      | ReplacedBy d ->
+        d.Pid |> Expect.equal "names the process that started it" 9100
+        d.Directory |> Expect.equal "and where it was started" "/home/will/Work/another-agents-worktree"
+      | other -> failtestf "expected a replacement, got %A" other
+      afterStop stoppedPid (classify (snd healthy)) |> Expect.equal "the same pid is the old daemon" OldStillRunning
+      afterStop stoppedPid (classify (snd absent)) |> Expect.equal "nothing answering is gone" OldGone
+      afterStop stoppedPid (classify (snd wedged)) |> Expect.equal "a wedged daemon may still hold the port" OldStillRunning
+      afterStop stoppedPid (Unreadable "x") |> Expect.equal "output nobody can read is not proof it is gone" OldStillRunning
+
+    testCase "TWIN — the old rule, any daemon answering means the old one is up, calls a replacement the old daemon" <| fun _ ->
+      let replacement = classify (snd (realCommand (fun _ -> Some(infoAt 9100 "/elsewhere" "0.6.937+abc1234" [])) (fun _ -> None)))
+      ruleAnythingAnswering replacement |> Expect.equal "the old rule's answer" OldStillRunning
+      (afterStop 4242 replacement = ruleAnythingAnswering replacement) |> Expect.isFalse "and the new rule tells them apart"
+
+    testCase "a daemon is the install script's own only when it was started in the install directory" <| fun _ ->
+      startedIn installDirectory (daemonOf 1 installDirectory) |> Expect.isTrue "started where the script starts it"
+      startedIn installDirectory (daemonOf 1 (installDirectory + "/")) |> Expect.isTrue "a trailing slash is the same place"
+      startedIn installDirectory (daemonOf 1 "/home/will/Work/grugschool-wt/analyzers-door") |> Expect.isFalse "an agent's worktree is not"
   ]
