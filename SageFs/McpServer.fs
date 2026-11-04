@@ -1333,7 +1333,7 @@ let runSseWriteLoop
   (sources: IObservable<string> list)
   (heartbeatMs: int) =
   task {
-    let outbox = SseOutbox SseOutbox.capacity
+    let outbox = SseOutbox(SseOutbox.capacity, SseOutbox.maxBytes)
     let subs = sources |> List.map (fun src -> src.Subscribe(fun frame -> outbox.Offer frame))
     try
       use _heartbeat = new Timer((fun _ -> outbox.Keepalive ()), null, heartbeatMs, heartbeatMs)
@@ -3370,13 +3370,13 @@ let serveEventsWork (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.A
     | Some _ ->
       let body = ctx.Response.Body
       let heartbeatMs = int SageFs.Timeouts.sseHeartbeat.TotalMilliseconds
-      let outbox = SseOutbox SseOutbox.capacity
+      let outbox = SseOutbox(SseOutbox.capacity, SseOutbox.maxBytes)
       // Attach before anything is written: from this moment every frame this connection may see is
       // either in `CatchUp` or queued behind it, so nothing published while the snapshots are
       // being built is lost. The one cost is that a frame can arrive both in a snapshot and after
       // it, which every frame is built to survive (a snapshot is a set, not an append).
       let attachment =
-        rctx.SseContext.Log.Attach(stream, lastEventIdOf ctx, fun item -> outbox.Offer (Replayable.toWire item))
+        rctx.SseContext.Log.Attach(stream, lastEventIdOf ctx, outbox.OfferLogged)
       try
         use _heartbeat = new Timer((fun _ -> outbox.Keepalive ()), null, heartbeatMs, heartbeatMs)
         match attachment.CatchUp with

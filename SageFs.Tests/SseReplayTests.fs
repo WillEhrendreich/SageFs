@@ -103,6 +103,27 @@ let sseReplayTests =
         buffer.Bytes |> Expect.equal "no bytes held" 0
       }
 
+      test "WHY — one frame over the byte bound clears the window, so a client behind it resyncs and one after it replays" {
+        // Dropping the old frames and keeping the seq spent is what stops a hole going unseen: a client at
+        // seq 1 must not be told "replay from 2" when 2 is gone.
+        let small = fill (SseReplay.create epoch { MaxFrames = 10; MaxBytes = 50 }) (daemonFrames 3)
+        let _, afterBig = SseReplay.record (frameOf FrameScope.Daemon (String.replicate 200 "z")) small
+        let afterNext = fill afterBig (daemonFrames 1)
+        afterNext.Count |> Expect.equal "only the frame after the big one is kept" 1
+        SseReplay.catchUp StreamScope.EverySession (idAt 1L) afterNext
+        |> function
+          | SseReplay.CatchUp.Resync (SseReplay.ResyncReason.Evicted _) -> ()
+          | other -> failtestf "a client behind the big frame must resync, got %A" other
+        SseReplay.catchUp StreamScope.EverySession (idAt 4L) afterNext
+        |> seqsOf
+        |> Expect.equal "a client current through the big frame replays what came after" (Some [ 5L ])
+      }
+
+      test "the count of kept frames is kept, not recounted" {
+        let buffer = fill (SseReplay.create epoch { MaxFrames = 3; MaxBytes = plentyOfBytes }) (daemonFrames 5)
+        buffer.Count |> Expect.equal "three kept" 3
+      }
+
       test "the oldest frames go first when the count bound is hit" {
         let buffer = fill (SseReplay.create epoch { MaxFrames = 2; MaxBytes = plentyOfBytes }) (daemonFrames 5)
         buffer.Frames |> Map.toList |> List.map fst |> Expect.equal "newest two" [ 4L; 5L ]
@@ -186,6 +207,7 @@ let sseReplayTests =
       check "the frame and byte bounds hold, and the byte total is the sum of what is kept" (fun scenario ->
         let buffer, model, _, _ = materialize scenario
         Map.count buffer.Frames <= buffer.Limits.MaxFrames
+        && buffer.Count = Map.count buffer.Frames
         && buffer.Bytes <= buffer.Limits.MaxBytes
         && buffer.Bytes = (buffer.Frames |> Map.toList |> List.sumBy (fun (_, r) -> r.Bytes))
         && buffer.Latest = int64 (List.length model))
