@@ -73,6 +73,24 @@ let tests =
       let dim, body = luminance (declaredColour "--fg-dim"), luminance (declaredColour "--fg-default")
       (dim < body) |> Expect.isTrue "dim text is still darker than default text"
 
+    testCase "WHY — every built-in theme's dim text reaches 4.5:1 on the page, the panel and the selection, because the running dashboard writes the theme's values over the stylesheet's fallback" <| fun _ ->
+      let bare (hex: string) = hex.TrimStart '#'
+      let below =
+        [ for (name, theme) in SageFs.ThemePresets.all do
+            for (surface, background) in [ "page", theme.BgDefault; "panel", theme.BgPanel; "selection", theme.BgSelection ] do
+              let ratio = contrast (bare theme.FgDim) (bare background)
+              if ratio < minimumContrast then
+                yield sprintf "%s: dim %s on the %s (%s) is %.2f:1" name theme.FgDim surface background ratio ]
+      below |> Expect.isEmpty (sprintf "no theme may set dim text below %.1f:1, but %s" minimumContrast (String.Join("; ", below)))
+
+    testCase "WHY — every built-in theme keeps dim text dimmer than its body text, because lifting dim to default would flatten the hierarchy" <| fun _ ->
+      let bare (hex: string) = hex.TrimStart '#'
+      let flattened =
+        [ for (name, theme) in SageFs.ThemePresets.all do
+            if luminance (bare theme.FgDim) >= luminance (bare theme.FgDefault) then
+              yield sprintf "%s: dim %s is not dimmer than default %s" name theme.FgDim theme.FgDefault ]
+      flattened |> Expect.isEmpty "dim stays below default in every theme"
+
     testCase "WHY — a reduced-motion preference stops every animation, because the connection pulse repeats for as long as the daemon is away" <| fun _ ->
       match reducedMotionBlock () with
       | None -> failtest "the stylesheet has no prefers-reduced-motion rule"
