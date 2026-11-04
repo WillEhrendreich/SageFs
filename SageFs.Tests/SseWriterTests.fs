@@ -680,7 +680,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
       }
       let bm = CoverageBitmap.ofBoolArray [| true; false; true |]
       let bms = Map.ofList [ TestId.TestId "t1", bm ]
-      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      CoverageByFile.computeLineCoverageForFile "f.fs" [| map |] bms
       |> Map.tryFind 10
       |> Expect.equal "partial" (Some (LineCoverage.PartiallyCovered(2, 3)))
 
@@ -691,7 +691,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
       }
       let bm = CoverageBitmap.ofBoolArray [| true; true |]
       let bms = Map.ofList [ TestId.TestId "t1", bm ]
-      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      CoverageByFile.computeLineCoverageForFile "f.fs" [| map |] bms
       |> Map.tryFind 10
       |> Expect.equal "full" (Some LineCoverage.FullyCovered)
 
@@ -702,7 +702,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
       }
       let bm = CoverageBitmap.ofBoolArray [| false; false |]
       let bms = Map.ofList [ TestId.TestId "t1", bm ]
-      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      CoverageByFile.computeLineCoverageForFile "f.fs" [| map |] bms
       |> Map.tryFind 10
       |> Expect.equal "not covered" (Some LineCoverage.NotCovered)
 
@@ -714,12 +714,12 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
       let bm1 = CoverageBitmap.ofBoolArray [| true; false; false |]
       let bm2 = CoverageBitmap.ofBoolArray [| false; false; true |]
       let bms = Map.ofList [ TestId.TestId "t1", bm1; TestId.TestId "t2", bm2 ]
-      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      CoverageByFile.computeLineCoverageForFile "f.fs" [| map |] bms
       |> Map.tryFind 10
       |> Expect.equal "OR'd partial" (Some (LineCoverage.PartiallyCovered(2, 3)))
 
     testCase "empty maps returns empty" <| fun () ->
-      CoverageBitmap.computeLineCoverageForFile "f.fs" [||] Map.empty
+      CoverageByFile.computeLineCoverageForFile "f.fs" [||] Map.empty
       |> Expect.isEmpty "empty"
 
     testCase "no matching bitmaps returns empty" <| fun () ->
@@ -727,7 +727,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
         Slots = [| mkSp "f.fs" 10 0 0 |]
         TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none
       }
-      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] Map.empty
+      CoverageByFile.computeLineCoverageForFile "f.fs" [| map |] Map.empty
       |> Expect.isEmpty "empty"
 
     testCase "different file returns empty" <| fun () ->
@@ -737,7 +737,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
       }
       let bm = CoverageBitmap.ofBoolArray [| true |]
       let bms = Map.ofList [ TestId.TestId "t1", bm ]
-      CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] bms
+      CoverageByFile.computeLineCoverageForFile "f.fs" [| map |] bms
       |> Expect.isEmpty "empty"
   ]
 

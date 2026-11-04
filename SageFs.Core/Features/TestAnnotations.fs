@@ -307,24 +307,21 @@ module FileAnnotations =
       key, (best.EndLine, best.EndColumn))
     |> Map.ofSeq
 
-  let project
+  /// `state` belongs wholly to one session (see `LiveTestState.ownerSessionId`).
+  let private owningPhaseOf (state: LiveTestState) : TestRunPhase =
+    match LiveTestState.ownerSessionId state with
+    | Some sid -> state.RunPhases |> Map.tryFind sid |> Option.defaultValue Idle
+    | None -> if TestRunPhase.isAnyRunning state.RunPhases then RunningButEdited RunGeneration.zero else Idle
+
+  /// One file's annotations, from the entries and coverage annotations that belong to it. `project` finds
+  /// those by scanning everything; `prepare` finds them for every file at once.
+  let private projectFrom
     (filePath: string)
     (depGraph: TestDependencyGraph option)
-    (state: LiveTestState)
-    =
-    let entries = LiveTestState.orderedStatusEntries state
-    // `state` belongs wholly to one session (see `LiveTestState.ownerSessionId`).
-    let owningPhase =
-      match LiveTestState.ownerSessionId state with
-      | Some sid -> state.RunPhases |> Map.tryFind sid |> Option.defaultValue Idle
-      | None -> if TestRunPhase.isAnyRunning state.RunPhases then RunningButEdited RunGeneration.zero else Idle
-    let fileEntries =
-      entries
-      |> Array.choose (fun e ->
-        match e.Origin with
-        | TestOrigin.SourceMapped(f, line) when f = filePath ->
-          Some(e, line)
-        | _ -> None)
+    (owningPhase: TestRunPhase)
+    (fileEntries: (TestStatusEntry * int) array)
+    (fileCoverage: CoverageAnnotation array)
+    : FileAnnotations =
     let testAnnotations =
       fileEntries
       |> Array.groupBy (fun (_, line) -> line)
@@ -363,8 +360,7 @@ module FileAnnotations =
         | _ -> None)
       |> Array.sortBy (fun f -> f.Line)
     let coverageAnnotations =
-      state.CoverageAnnotations
-      |> Array.filter (fun ca -> ca.FilePath = filePath)
+      fileCoverage
       |> Array.map (fun ca ->
         { Line = ca.DefinitionLine
           EndLine = 0
@@ -386,6 +382,21 @@ module FileAnnotations =
       InlineFailures = inlineFailures
       CodeLenses = codeLenses
       PerformanceAnnotations = [||] }
+
+  let project
+    (filePath: string)
+    (depGraph: TestDependencyGraph option)
+    (state: LiveTestState)
+    =
+    let fileEntries =
+      LiveTestState.orderedStatusEntries state
+      |> Array.choose (fun e ->
+        match e.Origin with
+        | TestOrigin.SourceMapped(f, line) when f = filePath ->
+          Some(e, line)
+        | _ -> None)
+    let fileCoverage = state.CoverageAnnotations |> Array.filter (fun ca -> ca.FilePath = filePath)
+    projectFrom filePath depGraph (owningPhaseOf state) fileEntries fileCoverage
 
   /// Synthesize coverage annotations from dep graph + analysis cache when
   /// no explicit CoverageUpdated events have been dispatched.
@@ -411,28 +422,77 @@ module FileAnnotations =
           Some { Symbol = ref.SymbolFullName; FilePath = filePath; DefinitionLine = ref.Line; Status = status; BranchCoverage = BranchCoverage.Unknown })
       |> Array.ofList
 
+  /// What `projectFile` needs about a cycle state that does not depend on which file is asked about.
+  type ProjectionBasis =
+    { CycleState: LiveTestCycleState
+      OwningPhase: TestRunPhase
+      /// Source-mapped entries with their line, by file, in the state's own order.
+      EntriesByFile: Map<string, (TestStatusEntry * int) array>
+      CoverageByFile: Map<string, CoverageAnnotation array>
+      Merged: InstrumentationMap
+      SlotsByFile: Map<string, int array>
+      LineCoverageByFile: Map<string, Map<int, LineCoverage>>
+      RangeLookup: Map<string * int, int * int>
+      DiscoveredIds: TestId array
+      DisplayNames: Map<TestId, string> }
+
   /// Project file annotations with coverage synthesized from the dependency graph.
   /// Use this instead of `project` when the full cycle state is available.
-  let projectWithCoverage (filePath: string) (cycleState: LiveTestCycleState) : FileAnnotations =
-    let depGraph = Some cycleState.DepGraph
-    let base' = project filePath depGraph cycleState.TestState
+  ///
+  /// `projectFile` does one file from a `ProjectionBasis`, which holds everything about the cycle state
+  /// that does not depend on the file: the entries and coverage annotations grouped by file, the merged
+  /// instrumentation map, the line coverage of every file, the range lookup and the test names. Those used
+  /// to be rebuilt inside every call, so projecting the 1,629 files of a big session cost 1,629 times what
+  /// it takes to look at the whole session once (about 0.3 s of CPU a file on `SageFs.Tests`), and a
+  /// client's connect-time catch-up took minutes. A caller with many files calls `prepare` once.
+  let prepare (cycleState: LiveTestCycleState) : ProjectionBasis =
+    let state = cycleState.TestState
     let allMaps = cycleState.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-    let lineCovMap = CoverageBitmap.computeLineCoverageForFile filePath allMaps cycleState.TestState.TestCoverageBitmaps
-    let rangeLookup = buildRangeLookup allMaps
+    let merged = InstrumentationMap.merge allMaps
+    let discovered = state.DiscoveredTests
+    { CycleState = cycleState
+      OwningPhase = owningPhaseOf state
+      EntriesByFile =
+        LiveTestState.orderedStatusEntries state
+        |> Array.choose (fun e ->
+          match e.Origin with
+          | TestOrigin.SourceMapped(f, line) -> Some (f, (e, line))
+          | TestOrigin.ReflectionOnly -> None)
+        |> Array.groupBy fst
+        |> Array.map (fun (file, entries) -> file, entries |> Array.map snd)
+        |> Map.ofArray
+      CoverageByFile = state.CoverageAnnotations |> Array.groupBy (fun ca -> ca.FilePath) |> Map.ofArray
+      Merged = merged
+      SlotsByFile = CoverageByFile.slotsByFile merged
+      LineCoverageByFile = CoverageByFile.computeLineCoverageAllFiles merged state.TestCoverageBitmaps
+      RangeLookup = buildRangeLookup allMaps
+      DiscoveredIds = discovered |> Array.map (fun t -> t.Id)
+      DisplayNames = discovered |> Array.map (fun t -> t.Id, t.DisplayName) |> Map.ofArray }
+
+  /// The coverage annotations that belong to one file, from a basis.
+  let coverageAnnotationsOf (basis: ProjectionBasis) (filePath: string) : CoverageAnnotation array =
+    Map.tryFind filePath basis.CoverageByFile |> Option.defaultValue [||]
+
+  let projectFile (basis: ProjectionBasis) (filePath: string) : FileAnnotations =
+    let cycleState = basis.CycleState
+    let depGraph = Some cycleState.DepGraph
+    let fileEntries = Map.tryFind filePath basis.EntriesByFile |> Option.defaultValue [||]
+    let base' = projectFrom filePath depGraph basis.OwningPhase fileEntries (coverageAnnotationsOf basis filePath)
+    let lineCovMap = Map.tryFind filePath basis.LineCoverageByFile |> Option.defaultValue Map.empty
+    let rangeLookup = basis.RangeLookup
     let enrichWithRange (ca: CoverageLineAnnotation) =
       match Map.tryFind (filePath, ca.Line) rangeLookup with
       | Some (endL, endC) -> { ca with EndLine = endL; EndColumn = endC }
       | None -> ca
     // Which tests cover each line, from each test's OWN recorded coverage. When no test has coverage
     // recorded for this file the annotation keeps what the dependency graph said (it is all there is).
-    let discoveredTests = cycleState.TestState.DiscoveredTests
     let coveringByLine =
-      CoverageBitmap.coveringTestsByLine
-        filePath
-        allMaps
+      CoverageByFile.coveringTestsByLineIn
+        basis.Merged
+        (Map.tryFind filePath basis.SlotsByFile |> Option.defaultValue [||])
         cycleState.TestState.TestCoverageBitmaps
-        (discoveredTests |> Array.map (fun t -> t.Id))
-    let displayNames = discoveredTests |> Array.map (fun t -> t.Id, t.DisplayName) |> Map.ofArray
+        basis.DiscoveredIds
+    let displayNames = basis.DisplayNames
     let enrichWithCovering (ca: CoverageLineAnnotation) =
       match Map.isEmpty coveringByLine with
       | true -> ca
@@ -476,6 +536,11 @@ module FileAnnotations =
           |> enrichWithCovering)
         |> Array.sortBy (fun c -> c.Line)
       { base' with CoverageAnnotations = coverageLineAnnotations }
+
+  /// One file, for a caller that has only one. A caller with many files calls `prepare` once and
+  /// `projectFile` for each.
+  let projectWithCoverage (filePath: string) (cycleState: LiveTestCycleState) : FileAnnotations =
+    projectFile (prepare cycleState) filePath
 
   /// Resolve a file path query to a full path by checking test sources first,
   /// then production code files from instrumentation maps.
@@ -698,15 +763,15 @@ module CoverageView =
 // CoverageAnnotation for the file. Used by the SSE publisher to emit
 // one coverage_view event per symbol. Pure function.
 module FileAnnotationsInternals =
-  let projectViewsForFile
+  /// The views of one file's coverage annotations, for a caller that already has them (from a
+  /// `ProjectionBasis`) and so does not scan every annotation of the session to find them.
+  let projectViewsOf
     (mode: CoverageViewMode)
+    (annotations: CoverageAnnotation array)
     (file: string)
     (depGraph: TestDependencyGraph)
     (state: LiveTestState)
     : CoverageView array =
-    let annotations =
-      state.CoverageAnnotations
-      |> Array.filter (fun ca -> ca.FilePath = file)
     if Array.isEmpty annotations then [||]
     else
       annotations
@@ -716,6 +781,17 @@ module FileAnnotationsInternals =
           | Some arr -> arr
           | None -> [||]
         CoverageView.project mode coveringIds depGraph state file ca.DefinitionLine ca.Symbol)
+
+  let projectViewsForFile
+    (mode: CoverageViewMode)
+    (file: string)
+    (depGraph: TestDependencyGraph)
+    (state: LiveTestState)
+    : CoverageView array =
+    let annotations =
+      state.CoverageAnnotations
+      |> Array.filter (fun ca -> ca.FilePath = file)
+    projectViewsOf mode annotations file depGraph state
 
 // --- Test Run Explainer (read by the `explain_test_run` formatter in McpTools.fs, which is not a registered
 // MCP tool; `explain_test_failure` is the registered one, and there is no `query_test_coverage` tool) ---

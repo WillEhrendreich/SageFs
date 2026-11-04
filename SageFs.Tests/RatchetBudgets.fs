@@ -192,7 +192,7 @@ let fileSize : (string * int) list =
     // provenance, pause and scope). Deliberate and reviewed; still below the 4353 this file stood at
     // before the cycle moved out. The confirmation machine went to its own file (BuildConfirmation.fs)
     // rather than here. Ratchet back DOWN when this file is split; never bump to paper over drift.
-    "SageFs.Core/Features/LiveTestingTypes.fs", 3545
+    "SageFs.Core/Features/LiveTestingTypes.fs", 3487
     // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
     // live-testing enable/disable — EnableLiveTestingForSession /
     // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a
