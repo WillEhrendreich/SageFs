@@ -145,6 +145,11 @@ let items : Item list =
       [ "docs/LIVE_TESTING_GUIDE.md"; "docs/how-live-testing-works.md"; "docs/plans/debug-failing-tests-in-vscode.md" ]
       "Debugging a failing test from the VS Code lens works for one test at a time. The attach is now proven in our own tests, the same case the Neovim item leans on. Still open is debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out."
 
+    item "bound-the-connect-catch-up" "Bound what a connection is sent on connect" LiveTesting Next
+      NoLandmarkYet
+      [ "docs/sse-events.md"; "docs/how-live-testing-works.md"; "docs/plans/bound-the-connect-catch-up.md" ]
+      "Connecting an editor sends the annotations and coverage badges of every file in the session, one frame each. On a project of 1,629 files the catch-up had sent 2.7 MB after 100 seconds and had not finished. I'd send the list of files and let an editor ask for the ones it has open, the way the test list already works."
+
     item "live-requests-not-dropped" "No live request dropped during a swap" LiveTesting Next
       (landmark "SageFs/Mcp.fs" "requireToolFor")
       [ "docs/how-live-testing-works.md" ]
