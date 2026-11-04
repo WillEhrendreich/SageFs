@@ -157,7 +157,7 @@ let dockTreeTests =
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep }
       let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
-      let html = renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
+      let html = renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
       html |> Expect.stringContains "the count, in the bar" "2 REPL only"
       html |> Expect.stringContains "the chip's own test id" "data-testid=\"live-repl-only\""
       html |> Expect.stringContains "the reason on hover" "nothing to save it to"
@@ -269,7 +269,7 @@ let dockColourTests =
 let dockViewTests =
   let recommended = View.recommended ViewWorkflow.Repl
   let drawn (look: View) =
-    renderDockWith look TweakView.none SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
+    renderDockWith look None TweakView.none SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
   let attribute (name: string) (html: string) : string =
     let m = Text.RegularExpressions.Regex.Match(html, sprintf "<div id=\"live-tree\"[^>]*%s=\"([^\"]*)\"" name)
     match m.Success with
@@ -292,7 +292,7 @@ let dockViewTests =
           attribute "data-row" html |> Expect.equal "the row height" (AxisValue.token (AxisValue.RowHeight row))
 
     testCase "WHY — the tree with nothing in it carries the same attributes, so the empty page and the full page agree" <| fun _ ->
-      let html = renderDockWith { recommended with Values = ValueMode.Full } TweakView.none SessionInView "abcd1234" NothingBound None |> decoded
+      let html = renderDockWith { recommended with Values = ValueMode.Full } None TweakView.none SessionInView "abcd1234" NothingBound None |> decoded
       attribute "data-values" html |> Expect.equal "the empty tree says the mode too" "full"
 
     testCase "WHY — a column gives way at the width the pure fit says, because the stylesheet's thresholds are the fit's numbers" <| fun _ ->
@@ -310,4 +310,80 @@ let dockViewTests =
         let layout = { recommended.Layout with Type = On; State = Off; Source = Off }
         (ViewColumns.fit values layout hidesAt).Hidden |> Expect.equal "hidden at the threshold" [ OptionalColumn.Type ]
         (ViewColumns.fit values layout (hidesAt + 1)).Hidden |> Expect.isEmpty "shown one pixel wider"
+  ]
+
+/// The view panel the pane bar opens (docs/plans/live-bindings-watch-view.md, phase 1, step 3).
+[<Tests>]
+let viewPanelTests =
+  let sessionId = "abcd1234"
+  let resolvedOf (workflow: ViewWorkflow) (sources: (ViewAxis * ConfigLayer) list) (edits: AxisValue list) : ResolvedView =
+    { View = edits |> List.fold (fun v value -> View.withValue value v) (View.recommended workflow)
+      Sources = Map.ofList sources }
+  let panelHtml (workflow: ViewWorkflow) (resolved: ResolvedView) : string =
+    let controls = LiveBindingsViewPanel.render sessionId workflow resolved
+    decoded (Elem.div [] [ controls.Button; controls.Panel ])
+  let untouched (workflow: ViewWorkflow) = resolvedOf workflow [] []
+  /// Every click a panel offers, as the (verb, axis, value) it stages.
+  let clicksIn (html: string) : (string * string * string) list =
+    Text.RegularExpressions.Regex.Matches(html, @"\$bvAction = '([^']*)'; \$bvAxis = '([^']*)'; \$bvValue = '([^']*)';")
+    |> Seq.map (fun m -> m.Groups.[1].Value, m.Groups.[2].Value, m.Groups.[3].Value)
+    |> Seq.toList
+  testList "the view panel" [
+
+    testProperty "WHY — every click the panel offers is a request the route accepts, so no control can post something it refuses" <| fun (workflowSeed: int) (touched: bool) ->
+      let workflow = ViewWorkflow.all.[abs (workflowSeed % ViewWorkflow.all.Length)]
+      let resolved =
+        match touched with
+        | true -> resolvedOf workflow (ViewAxis.drawn |> List.map (fun a -> a, LRepo)) [ AxisValue.RowHeight RowHeight.Roomy ]
+        | false -> untouched workflow
+      let clicks = clicksIn (panelHtml workflow resolved)
+      not clicks.IsEmpty
+      && clicks |> List.forall (fun (verb, axis, value) -> ViewEdit.parse workflow verb axis value |> Result.isOk)
+
+    testCase "WHY — the panel offers a control for each axis the dock draws and for no other, so none of them changes nothing" <| fun _ ->
+      let axesOffered =
+        clicksIn (panelHtml ViewWorkflow.Repl (untouched ViewWorkflow.Repl))
+        |> List.filter (fun (verb, _, _) -> verb = ViewAction.token ViewAction.SetAxis)
+        |> List.map (fun (_, axis, _) -> axis)
+        |> List.distinct
+      axesOffered |> Expect.equal "exactly the drawn axes, in order" (ViewAxis.drawn |> List.map ViewAxis.token)
+
+    testCase "WHY — each drawn axis, set to each of its values, changes what the dock draws, so the axis list is true" <| fun _ ->
+      let recommended = View.recommended ViewWorkflow.Repl
+      let drawn (look: View) =
+        renderDockWith look None TweakView.none SessionInView sessionId (WalkedBindings(view [ person; scores ])) None |> decoded
+      for axis in ViewAxis.drawn do
+        let pages = AxisValue.allFor axis |> List.map (fun value -> drawn (View.withValue value recommended))
+        (pages |> List.distinct |> List.length) |> Expect.equal (sprintf "%s: each value draws a different dock" (ViewAxis.label axis)) pages.Length
+
+    testCase "WHY — the pressed button is the view's current value, and the preset row names the recommended one" <| fun _ ->
+      let html = panelHtml ViewWorkflow.Repl (resolvedOf ViewWorkflow.Repl [ ViewAxis.RowHeight, LRepo ] [ AxisValue.RowHeight RowHeight.Roomy ])
+      html |> Expect.stringContains "the recommended preset is named" "Watch window (recommended)"
+      let pressed = Text.RegularExpressions.Regex.Matches(html, "aria-pressed=\"true\"").Count
+      // One per drawn axis, plus the preset row's pressed button.
+      pressed |> Expect.equal "one pressed button per drawn axis and one preset" (ViewAxis.drawn.Length + 1)
+
+    testCase "WHY — a reset appears beside an axis only when a file holds a choice for it, and says where it came from" <| fun _ ->
+      let none = panelHtml ViewWorkflow.Repl (untouched ViewWorkflow.Repl)
+      count "live-view-reset\"" none |> Expect.equal "no per-axis reset when nothing is saved" 0
+      none |> Expect.stringContains "the source is the recommendation" "recommended"
+      let saved = panelHtml ViewWorkflow.Repl (resolvedOf ViewWorkflow.Repl [ ViewAxis.RowHeight, LRepo ] [ AxisValue.RowHeight RowHeight.Roomy ])
+      count "live-view-reset\"" saved |> Expect.equal "one reset, for the saved axis" 1
+      saved |> Expect.stringContains "the source is named" "saved for this app"
+
+    testCase "WHY — the panel is closed until the button opens it, the scope starts at this app, and a page with no session has neither button nor panel" <| fun _ ->
+      let html = panelHtml ViewWorkflow.Repl (untouched ViewWorkflow.Repl)
+      html |> Expect.stringContains "closed by default" "live-view-panel live-hidden"
+      (LiveBindingsViewPanel.ViewSignals.initial |> List.length) > 3 |> Expect.isTrue "the signals are declared"
+      let page = renderDock NoSessionInView "" NothingBound |> decoded
+      page.Contains "live-view-btn" |> Expect.isFalse "no button without a session"
+
+    testCase "WHY — the chosen button is marked with the focus colour and the panel heading with the heading colour, never the warning yellow or failure red" <| fun _ ->
+      let pressed = ruleBody ".live-view-opt[aria-pressed=\"true\"]"
+      pressed |> Expect.stringContains "the focus colour" "--border-focus"
+      for selector in [ ".live-view-opt[aria-pressed=\"true\"]"; ".live-view-head"; ".live-view-source" ] do
+        let body = ruleBody selector
+        body.Contains "--fg-yellow" |> Expect.isFalse (sprintf "%s is not the warning colour" selector)
+        body.Contains "--fg-red" |> Expect.isFalse (sprintf "%s is not the failure colour" selector)
+      ruleBody ".live-view-head" |> Expect.stringContains "the heading colour" "var(--fg-blue)"
   ]

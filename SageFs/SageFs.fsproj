@@ -128,6 +128,8 @@
     <Compile Include="AppOutputView.fs" />
         <!-- The live-bindings knob's row: the persistence state in words, and the control a state allows. Typed Datastar helpers only. -->
         <Compile Include="LiveBindingsTweakView.fs" />
+        <!-- The view panel: the pane bar's button and the panel of choices it opens. Posts one request per click. -->
+        <Compile Include="LiveBindingsViewPanel.fs" />
         <Compile Include="LiveBindingsDock.fs" />
         <Compile Include="NewSessionDialogView.fs" />
         <Compile Include="DashboardNewSession.fs" />

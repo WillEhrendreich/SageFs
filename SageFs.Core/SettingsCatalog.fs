@@ -246,6 +246,36 @@ module SettingsCatalog =
       | Error _ -> { Effective = descriptor.Default; Source = LDefault; PerLayer = [] }
     ViewSettings.resolveView workflow provenanceOf
 
+  /// Carries out one view edit against the layer files. The layer is the scope's (this app's file, or the global one), except that
+  /// resetting one axis clears whichever layer holds it, because a reset that left the value in the other layer would look like it
+  /// did nothing. What each write does is `ViewEdit.writes`' to say, measured against the view the layer below gives: for this app
+  /// that is the global layer over the recommendation, for everywhere it is the recommendation. Stops at the first write that fails.
+  let applyViewEdit (paths: ConfigPaths) (workflow: ViewWorkflow) (scope: ViewScope) (change: ViewEdit) : Result<unit, ConfigError> =
+    let layer =
+      match change, scope with
+      | ViewEdit.Reset axis, _ ->
+        (viewFor paths workflow).Sources |> Map.tryFind axis |> Option.defaultValue LDefault
+      | _, ViewScope.ThisApp -> LRepo
+      | _, ViewScope.Everywhere -> LGlobal
+    let below =
+      match layer with
+      | LRepo -> (viewFor { paths with Repo = NoRepoCheckout } workflow).View
+      | LGlobal
+      | LDefault
+      | LSession -> View.recommended workflow
+    let run (write: AxisWrite) : Result<unit, ConfigError> =
+      let descriptor = ViewSettings.descriptor workflow write.Axis
+      match write.Write with
+      | Write.Store value -> edit paths layer (AxisValue.token value) descriptor |> Result.map ignore
+      | Write.ClearOverride -> clear paths layer descriptor |> Result.map ignore
+    match layer with
+    | LDefault -> Ok()
+    | LGlobal
+    | LRepo
+    | LSession ->
+      ViewEdit.writes below change
+      |> List.fold (fun outcome write -> outcome |> Result.bind (fun () -> run write)) (Ok())
+
   /// The MCP port the persisted layers hold, if they hold one that parses. The
   /// Settings panel writes this value and its row says it applies on the next
   /// daemon restart; until the daemon read it, nothing did, and the row's promise

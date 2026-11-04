@@ -1414,6 +1414,7 @@ h2 {
    30px and cost a row of visible values. They stay square, just sized for the row they sit in. */
 .live-pane-pin,
 .live-pane-collapse,
+.live-pane-view,
 .live-held-btn {
   width: 20px;
   height: 20px;
@@ -1486,9 +1487,64 @@ h2 {
   color: var(--border-focus);
 }
 
-.live-pane-pin.session-btn-on {
+.live-pane-pin.session-btn-on,
+.live-pane-view.session-btn-on {
   background: var(--border-focus);
   color: var(--bg-default);
+}
+
+/* The view panel (LiveBindingsViewPanel.fs): a few rows of small buttons under the pane bar. A choice is a button, and the chosen one
+   is marked with the focus colour, as a pinned row is: choosing is not a warning. It is as compact as the rows it changes. */
+.live-view-panel {
+  display: grid;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-normal);
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+
+.live-view-head {
+  color: var(--fg-blue);
+  font-weight: 700;
+}
+
+.live-view-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.live-view-label {
+  min-width: 7rem;
+  color: var(--fg-dim);
+}
+
+.live-view-source {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.live-view-opt,
+.live-view-reset,
+.live-view-reset-all {
+  height: 20px;
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.live-view-opt[aria-pressed="true"] {
+  background: var(--border-focus);
+  color: var(--bg-default);
+}
+
+.live-view-scope {
+  height: 20px;
+  min-width: 0;
+  font-size: 11px;
 }
 
 @media (hover: none) {

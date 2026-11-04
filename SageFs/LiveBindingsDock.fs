@@ -46,6 +46,8 @@ module DockSignals =
       Ds.signal (LivePins, ",")
       Ds.signal (LivePanePinned, false)
       Ds.signal (LivePaneCollapsed, false) ]
+    // What the view panel stages before it posts (LiveBindingsViewPanel): declared once, with the dock's own.
+    @ LiveBindingsViewPanel.ViewSignals.initial
     // What a row's knob stages before it posts (LiveBindingsTweakView): declared once, with the dock's own.
     @ TweakSignals.initial
 
@@ -460,7 +462,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
     ] ]
 
 /// The open pane: a header (what opened it, when it was read, a filter, the pin), then the tree.
-let renderPaneWith (look: View) (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
+let renderPaneWith (look: View) (controls: LiveBindingsViewPanel.ViewControls option) (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
   let stamp =
     match source with
     | WalkedBindings view -> sprintf "gen %d · %s" view.Snapshot.Generation (view.Snapshot.CapturedAt.ToLocalTime().ToString("HH:mm:ss"))
@@ -505,22 +507,30 @@ let renderPaneWith (look: View) (tweaks: TweakView) (sessionId: string) (source:
           Attr.create "spellcheck" "false"
           Ds.bind DockSignals.LiveFilter ]
       collapseButton ()
+      match controls with
+      | Some viewControls -> viewControls.Button
+      | None -> ()
       panePinButton DockIds.PanePin
     ]
+    match controls with
+    | Some viewControls -> viewControls.Panel
+    | None -> ()
     yield! body
   ]
 
 /// The open pane with no knob, in the REPL workflow's recommended view: what a session whose files have not been asked about shows.
 let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
-  renderPaneWith (View.recommended ViewWorkflow.Repl) TweakView.none sessionId source because display
+  renderPaneWith (View.recommended ViewWorkflow.Repl) None TweakView.none sessionId source because display
 
 /// The dock, decided and drawn. Both answers of the pin are rendered when the pin can matter (the signal picks between them);
 /// when a session has bindings, or there is no session to pin on, only the one answer exists. `tweaks` is what the session's files
 /// say about each row (the persistence state and the knob): rows it has nothing for are drawn as they always were. `look` is the
 /// view the session's workflow and app resolved to (`SettingsCatalog.viewFor`): which columns a row has, how much of a value
-/// prints, how tall a row is.
+/// prints, how tall a row is. `controls` is the pane bar's view button and the panel it opens; a page with no session to choose a view
+/// for has none.
 let renderDockWith
   (look: View)
+  (controls: LiveBindingsViewPanel.ViewControls option)
   (tweaks: TweakView)
   (session: SessionInView)
   (sessionId: string)
@@ -544,14 +554,14 @@ let renderDockWith
 
   let liveBindings =
     match PaneState.decide facts DockPane.LiveBindings with
-    | PaneOpen because -> [ renderPaneWith look tweaks sessionId source because ShownAlways ]
+    | PaneOpen because -> [ renderPaneWith look controls tweaks sessionId source because ShownAlways ]
     | PaneCollapsed why ->
       match CollapsedBecause.pin why with
       | PinNotOffered -> [ renderCollapsedBar why ShownAlways ]
       | PinOffered ->
         match PaneState.decide { facts with Pin = Pinned } DockPane.LiveBindings with
         | PaneOpen pinnedBecause ->
-          [ renderCollapsedBar why ShownUnlessPinned; renderPaneWith look tweaks sessionId source pinnedBecause ShownOnlyWhilePinned ]
+          [ renderCollapsedBar why ShownUnlessPinned; renderPaneWith look controls tweaks sessionId source pinnedBecause ShownOnlyWhilePinned ]
         | PaneCollapsed _ -> [ renderCollapsedBar why ShownAlways ]
 
   // Qualified rather than `open`: AppOutputView has its own `renderCollapsedBar`, and opening it here
@@ -564,7 +574,7 @@ let renderDockWith
 
 /// The dock with no knob (a session whose files have not been asked about, and the no-session page).
 let renderDock (session: SessionInView) (sessionId: string) (source: BindingsSource) : XmlNode =
-  renderDockWith (View.recommended ViewWorkflow.Repl) TweakView.none session sessionId source None
+  renderDockWith (View.recommended ViewWorkflow.Repl) None TweakView.none session sessionId source None
 
 /// A brief highlight on a value that changed. It is drawn from what the SSE morph really rewrote, so only a changed value
 /// flashes and nothing polls: the browser's own mutation record says a `.live-preview` text node was replaced, and that cell

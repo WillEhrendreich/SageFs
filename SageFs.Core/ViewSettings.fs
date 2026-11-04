@@ -149,6 +149,11 @@ module ViewAxis =
       ViewAxis.ValueMode
       ViewAxis.RowHeight ]
 
+  /// The axes the dock draws today, in the order the view panel lists them. The other settings exist and persist, and nothing
+  /// draws them yet; the panel offers a control only for an axis here, so it has no control that changes nothing. A test holds this
+  /// list to the dock: each drawn axis, set to each of its values, must change what the dock draws.
+  let drawn : ViewAxis list = [ ViewAxis.TypeColumn; ViewAxis.ValueMode; ViewAxis.RowHeight ]
+
   /// The word in a settings key.
   let token (axis: ViewAxis) : string =
     match axis with
@@ -215,6 +220,24 @@ module AxisValue =
     | AxisValue.ValueMode ValueMode.Full -> "full"
     | AxisValue.RowHeight RowHeight.Compact -> "compact"
     | AxisValue.RowHeight RowHeight.Roomy -> "roomy"
+
+  /// The words a person reads on the button for a value.
+  let label (value: AxisValue) : string =
+    match value with
+    | AxisValue.TypeColumn t
+    | AxisValue.StateColumn t
+    | AxisValue.SourceColumn t
+    | AxisValue.PinnedStrip t
+    | AxisValue.Inspector t ->
+      match t with
+      | On -> "On"
+      | Off -> "Off"
+    | AxisValue.GroupBy GroupMode.NoGrouping -> "None"
+    | AxisValue.GroupBy GroupMode.ByOrigin -> "By origin"
+    | AxisValue.ValueMode ValueMode.Clipped -> "Clipped"
+    | AxisValue.ValueMode ValueMode.Full -> "Full"
+    | AxisValue.RowHeight RowHeight.Compact -> "Compact"
+    | AxisValue.RowHeight RowHeight.Roomy -> "Roomy"
 
   /// Every legal value of an axis, which is also the closed set its setting accepts.
   let allFor (axis: ViewAxis) : AxisValue list =
@@ -404,6 +427,128 @@ module ViewSettings =
     match below = chosen with
     | true -> Write.ClearOverride
     | false -> Write.Store chosen
+
+/// What a person does in the view panel, before it is turned into writes to a layer.
+[<RequireQualifiedAccess>]
+type ViewEdit =
+  /// Choose a value for one axis.
+  | Set of AxisValue
+  /// Drop this layer's choice for one axis, so it follows the layer below again.
+  | Reset of ViewAxis
+  /// Take a preset's six layout axes. Value printing and row height are left as they are.
+  | Preset of ViewPreset
+  /// Drop every choice this layer holds for the workflow.
+  | ResetAll
+
+/// One axis of a layer, and what to do to it.
+type AxisWrite = { Axis: ViewAxis; Write: Write }
+
+/// The verbs the view panel posts. Closed, so the panel and the endpoint cannot disagree about a spelling.
+[<RequireQualifiedAccess>]
+type ViewAction =
+  | SetAxis
+  | ResetAxis
+  | ApplyPreset
+  | ResetEverything
+
+/// Where a view edit is saved: this app's own settings file, or the person's global one.
+[<RequireQualifiedAccess>]
+type ViewScope =
+  | ThisApp
+  | Everywhere
+
+[<RequireQualifiedAccess>]
+module ViewAction =
+  let all : ViewAction list = [ ViewAction.SetAxis; ViewAction.ResetAxis; ViewAction.ApplyPreset; ViewAction.ResetEverything ]
+
+  let token (action: ViewAction) : string =
+    match action with
+    | ViewAction.SetAxis -> "set"
+    | ViewAction.ResetAxis -> "reset"
+    | ViewAction.ApplyPreset -> "preset"
+    | ViewAction.ResetEverything -> "resetall"
+
+  let parse (raw: string) : Result<ViewAction, ConfigError> =
+    match all |> List.tryFind (fun action -> token action = raw) with
+    | Some action -> Ok action
+    | None -> Error(NotAMember(raw, all |> List.map token))
+
+[<RequireQualifiedAccess>]
+module ViewScope =
+  let all : ViewScope list = [ ViewScope.ThisApp; ViewScope.Everywhere ]
+
+  let token (scope: ViewScope) : string =
+    match scope with
+    | ViewScope.ThisApp -> "app"
+    | ViewScope.Everywhere -> "everywhere"
+
+  let label (scope: ViewScope) : string =
+    match scope with
+    | ViewScope.ThisApp -> "This app"
+    | ViewScope.Everywhere -> "Everywhere"
+
+  let parse (raw: string) : Result<ViewScope, ConfigError> =
+    match all |> List.tryFind (fun scope -> token scope = raw) with
+    | Some scope -> Ok scope
+    | None -> Error(NotAMember(raw, all |> List.map token))
+
+[<RequireQualifiedAccess>]
+module ViewEdit =
+  /// The word a preset button posts. `recommended` is not one of the five presets: it means the workflow's own.
+  [<Literal>]
+  let RecommendedToken = "recommended"
+
+  let presetToken (preset: ViewPreset) : string =
+    match preset with
+    | ViewPreset.WatchWindow -> "watchwindow"
+    | ViewPreset.TreeAndInspector -> "treeandinspector"
+    | ViewPreset.PinnedStrip -> "pinnedstrip"
+    | ViewPreset.GroupedByOrigin -> "groupedbyorigin"
+    | ViewPreset.Tuner -> "tuner"
+
+  /// The edit a posted request means, for one workflow: the axis and value tokens are read only for the actions that use them.
+  let parse (workflow: ViewWorkflow) (action: string) (axis: string) (value: string) : Result<ViewEdit, ConfigError> =
+    let axisOf (raw: string) : Result<ViewAxis, ConfigError> =
+      match ViewAxis.all |> List.tryFind (fun candidate -> ViewAxis.token candidate = raw) with
+      | Some found -> Ok found
+      | None -> Error(NotAMember(raw, ViewAxis.all |> List.map ViewAxis.token))
+    let presetOf (raw: string) : Result<ViewPreset, ConfigError> =
+      match raw = RecommendedToken with
+      | true -> Ok(ViewPreset.recommendedFor workflow)
+      | false ->
+        match ViewPreset.all |> List.tryFind (fun candidate -> presetToken candidate = raw) with
+        | Some found -> Ok found
+        | None -> Error(NotAMember(raw, RecommendedToken :: (ViewPreset.all |> List.map presetToken)))
+    ViewAction.parse action
+    |> Result.bind (fun parsed ->
+      match parsed with
+      | ViewAction.SetAxis -> axisOf axis |> Result.bind (fun found -> AxisValue.parse found value) |> Result.map ViewEdit.Set
+      | ViewAction.ResetAxis -> axisOf axis |> Result.map ViewEdit.Reset
+      | ViewAction.ApplyPreset -> presetOf value |> Result.map ViewEdit.Preset
+      | ViewAction.ResetEverything -> Ok ViewEdit.ResetAll)
+
+  /// The axes a preset sets.
+  let private layoutAxes : ViewAxis list =
+    [ ViewAxis.TypeColumn
+      ViewAxis.StateColumn
+      ViewAxis.SourceColumn
+      ViewAxis.GroupBy
+      ViewAxis.PinnedStrip
+      ViewAxis.Inspector ]
+
+  /// The writes an edit comes to for one layer, given the view the layer below would give. Only an override is stored: a value equal
+  /// to what the layer below gives is cleared, so a layer file never holds a choice that changes nothing.
+  let writes (below: View) (edit: ViewEdit) : AxisWrite list =
+    let store (chosen: AxisValue) : AxisWrite =
+      let axis = AxisValue.axisOf chosen
+      { Axis = axis; Write = ViewSettings.planWrite (View.valueOf below axis) chosen }
+    match edit with
+    | ViewEdit.Set value -> [ store value ]
+    | ViewEdit.Reset axis -> [ { Axis = axis; Write = Write.ClearOverride } ]
+    | ViewEdit.Preset preset ->
+      let chosen = View.withPreset preset below
+      layoutAxes |> List.map (fun axis -> store (View.valueOf chosen axis))
+    | ViewEdit.ResetAll -> ViewAxis.all |> List.map (fun axis -> { Axis = axis; Write = Write.ClearOverride })
 
 [<RequireQualifiedAccess>]
 module ViewColumns =

@@ -264,3 +264,200 @@ let viewForTests =
         System.IO.File.WriteAllText(SettingsStore.globalPath paths.GlobalDir, sprintf "{ \"%s\": \"gigantic\" }" key)
         (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View |> Expect.equal "the recommendation" (View.recommended ViewWorkflow.Repl))
   ]
+
+/// What a person does in the view panel, turned into writes for one layer (docs/plans/live-bindings-watch-view.md, phase 1, step 3).
+/// A layer is modelled as the choices it holds, and the view is what those choices make over the layer below.
+[<Tests>]
+let viewEditTests =
+  let apply (layer: Map<ViewAxis, AxisValue>) (writes: AxisWrite list) : Map<ViewAxis, AxisValue> =
+    writes
+    |> List.fold
+      (fun held write ->
+        match write.Write with
+        | Write.Store value -> Map.add write.Axis value held
+        | Write.ClearOverride -> Map.remove write.Axis held)
+      layer
+  let resolve (below: View) (layer: Map<ViewAxis, AxisValue>) : View =
+    layer |> Map.fold (fun view _ value -> View.withValue value view) below
+  let pick (rng: System.Random) (axis: ViewAxis) : AxisValue =
+    let all = AxisValue.allFor axis
+    all.[rng.Next all.Length]
+  /// A below-view and a layer that already holds some choices, both built from a seed.
+  let situation (seed: int) : View * Map<ViewAxis, AxisValue> =
+    let rng = System.Random seed
+    let workflow = ViewWorkflow.all.[rng.Next ViewWorkflow.all.Length]
+    let below = ViewAxis.all |> List.fold (fun view axis -> View.withValue (pick rng axis) view) (View.recommended workflow)
+    let layer = ViewAxis.all |> List.filter (fun _ -> rng.Next 2 = 0) |> List.map (fun axis -> axis, pick rng axis) |> Map.ofList
+    below, layer
+  let editFor (seed: int) : ViewEdit =
+    let rng = System.Random(seed * 31 + 7)
+    match rng.Next 4 with
+    | 0 -> ViewEdit.Set(pick rng ViewAxis.all.[rng.Next ViewAxis.all.Length])
+    | 1 -> ViewEdit.Reset ViewAxis.all.[rng.Next ViewAxis.all.Length]
+    | 2 -> ViewEdit.Preset ViewPreset.all.[rng.Next ViewPreset.all.Length]
+    | _ -> ViewEdit.ResetAll
+  testList "ViewEdit" [
+
+    testProperty "WHY — choosing a value sets that axis and leaves every other axis as it was" <| fun (seed: int) ->
+      let below, layer = situation seed
+      let rng = System.Random seed
+      let value = pick rng ViewAxis.all.[rng.Next ViewAxis.all.Length]
+      let before = resolve below layer
+      let after = resolve below (apply layer (ViewEdit.writes below (ViewEdit.Set value)))
+      let axis = AxisValue.axisOf value
+      View.valueOf after axis = value
+      && (ViewAxis.all |> List.filter ((<>) axis) |> List.forall (fun other -> View.valueOf after other = View.valueOf before other))
+
+    testProperty "WHY — a preset sets the six layout axes and leaves value printing and row height alone" <| fun (seed: int) ->
+      let below, layer = situation seed
+      let preset = ViewPreset.all.[System.Random(seed).Next ViewPreset.all.Length]
+      let before = resolve below layer
+      let after = resolve below (apply layer (ViewEdit.writes below (ViewEdit.Preset preset)))
+      after.Layout = ViewPreset.layout preset && after.Values = before.Values && after.Row = before.Row
+
+    testProperty "WHY — resetting an axis makes it follow the layer below again, and nothing else moves" <| fun (seed: int) ->
+      let below, layer = situation seed
+      let axis = ViewAxis.all.[System.Random(seed).Next ViewAxis.all.Length]
+      let before = resolve below layer
+      let after = resolve below (apply layer (ViewEdit.writes below (ViewEdit.Reset axis)))
+      View.valueOf after axis = View.valueOf below axis
+      && (ViewAxis.all |> List.filter ((<>) axis) |> List.forall (fun other -> View.valueOf after other = View.valueOf before other))
+
+    testProperty "WHY — reset all leaves the layer holding nothing, so the view is the layer below's" <| fun (seed: int) ->
+      let below, layer = situation seed
+      let after = apply layer (ViewEdit.writes below ViewEdit.ResetAll)
+      Map.isEmpty after && resolve below after = below
+
+    testProperty "WHY — no edit stores a value the layer below already gives, so a layer file holds only real overrides" <| fun (seed: int) ->
+      let below, _ = situation seed
+      ViewEdit.writes below (editFor seed)
+      |> List.forall (fun write ->
+        match write.Write with
+        | Write.Store value -> value <> View.valueOf below write.Axis
+        | Write.ClearOverride -> true)
+
+    testCase "WHY — a twin that stores every chosen value, even one equal to the layer below, is caught by the no-redundant-override rule" <| fun _ ->
+      // The twin: a writes function without planWrite. On the recommended view, choosing what is already shown stores a choice.
+      let below = View.recommended ViewWorkflow.Repl
+      let twin (value: AxisValue) = [ { Axis = AxisValue.axisOf value; Write = Write.Store value } ]
+      let same = View.valueOf below ViewAxis.RowHeight
+      twin same |> List.forall (fun w -> match w.Write with Write.Store v -> v <> View.valueOf below w.Axis | Write.ClearOverride -> true)
+      |> Expect.isFalse "the twin stores a redundant override"
+      ViewEdit.writes below (ViewEdit.Set same) |> Expect.equal "the real one clears it instead" [ { Axis = ViewAxis.RowHeight; Write = Write.ClearOverride } ]
+  ]
+
+/// The request the view panel posts, parsed. Every token the panel can send is one the parser takes, and nothing else is.
+[<Tests>]
+let viewEditParseTests =
+  testList "ViewEdit.parse" [
+
+    testProperty "WHY — every value of every axis, posted the way the panel posts it, parses back to the edit it names" <| fun (workflowSeed: int) ->
+      let workflow = ViewWorkflow.all.[abs (workflowSeed % ViewWorkflow.all.Length)]
+      ViewAxis.all
+      |> List.collect AxisValue.allFor
+      |> List.forall (fun value ->
+        let axis = AxisValue.axisOf value
+        ViewEdit.parse workflow (ViewAction.token ViewAction.SetAxis) (ViewAxis.token axis) (AxisValue.token value) = Ok(ViewEdit.Set value))
+
+    testCase "WHY — each preset's token parses to it, and 'recommended' means the workflow's own preset" <| fun _ ->
+      for preset in ViewPreset.all do
+        ViewEdit.parse ViewWorkflow.Repl (ViewAction.token ViewAction.ApplyPreset) "" (ViewEdit.presetToken preset)
+        |> Expect.equal "the preset" (Ok(ViewEdit.Preset preset))
+      for workflow in ViewWorkflow.all do
+        ViewEdit.parse workflow (ViewAction.token ViewAction.ApplyPreset) "" ViewEdit.RecommendedToken
+        |> Expect.equal "the workflow's own" (Ok(ViewEdit.Preset(ViewPreset.recommendedFor workflow)))
+
+    testCase "WHY — reset names its axis and reset-all needs none" <| fun _ ->
+      ViewEdit.parse ViewWorkflow.Repl (ViewAction.token ViewAction.ResetAxis) (ViewAxis.token ViewAxis.RowHeight) ""
+      |> Expect.equal "reset one" (Ok(ViewEdit.Reset ViewAxis.RowHeight))
+      ViewEdit.parse ViewWorkflow.Repl (ViewAction.token ViewAction.ResetEverything) "" ""
+      |> Expect.equal "reset all" (Ok ViewEdit.ResetAll)
+
+    testCase "WHY — a verb, an axis, a value or a preset that is not one of the closed sets is refused with the set it should have been" <| fun _ ->
+      let refused (result: Result<ViewEdit, ConfigError>) =
+        match result with
+        | Error(NotAMember(_, allowed)) -> not allowed.IsEmpty
+        | Error _ | Ok _ -> false
+      ViewEdit.parse ViewWorkflow.Repl "explode" "" "" |> refused |> Expect.isTrue "unknown verb"
+      ViewEdit.parse ViewWorkflow.Repl "set" "colour" "red" |> refused |> Expect.isTrue "unknown axis"
+      ViewEdit.parse ViewWorkflow.Repl "set" "row" "gigantic" |> refused |> Expect.isTrue "unknown value"
+      ViewEdit.parse ViewWorkflow.Repl "preset" "" "sparkly" |> refused |> Expect.isTrue "unknown preset"
+
+    testCase "WHY — the scope tokens round-trip and an unknown one is refused" <| fun _ ->
+      for scope in ViewScope.all do
+        ViewScope.parse (ViewScope.token scope) |> Expect.equal "round trip" (Ok scope)
+      ViewScope.parse "galaxy" |> Expect.isError "unknown scope"
+  ]
+
+/// A view edit carried out against the layer files (`SettingsCatalog.applyViewEdit`), the way the view panel's route does.
+[<Tests>]
+let applyViewEditTests =
+  let withApp (body: ConfigPaths -> unit) =
+    let root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-viewedit-%s" (System.Guid.NewGuid().ToString "N"))
+    let globalDir = System.IO.Path.Combine(root, "global")
+    System.IO.Directory.CreateDirectory globalDir |> ignore
+    try body { GlobalDir = globalDir; Repo = RepoRootAt root }
+    finally (try System.IO.Directory.Delete(root, true) with _ -> ())
+  let applied (paths: ConfigPaths) (workflow: ViewWorkflow) (scope: ViewScope) (edit: ViewEdit) =
+    match SettingsCatalog.applyViewEdit paths workflow scope edit with
+    | Result.Ok() -> ()
+    | Result.Error e -> failtestf "the edit should apply: %s" (ConfigError.describe e)
+  let repoFile (paths: ConfigPaths) =
+    match paths.Repo with
+    | RepoRootAt root -> SettingsStore.readLayer (SettingsStore.repoPath root)
+    | NoRepoCheckout -> Map.empty
+  testList "SettingsCatalog.applyViewEdit" [
+
+    testCase "WHY — a choice saved for this app lands in the app's file and shows up in the view" <| fun _ ->
+      withApp (fun paths ->
+        applied paths ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View.Row |> Expect.equal "roomy" RowHeight.Roomy
+        Map.containsKey (ViewSettings.key ViewWorkflow.Repl ViewAxis.RowHeight) (repoFile paths) |> Expect.isTrue "stored in the repo layer")
+
+    testCase "WHY — a choice saved everywhere lands in the global file and applies to an app with no choice of its own" <| fun _ ->
+      withApp (fun paths ->
+        applied paths ViewWorkflow.Repl ViewScope.Everywhere (ViewEdit.Set(AxisValue.TypeColumn Off))
+        (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View.Layout.Type |> Expect.equal "off" Off
+        repoFile paths |> Map.isEmpty |> Expect.isTrue "nothing was written for the app")
+
+    testCase "WHY — choosing what the layer below already shows stores nothing, so only real overrides are in a file" <| fun _ ->
+      withApp (fun paths ->
+        applied paths ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Set(AxisValue.RowHeight RowHeight.Compact))
+        repoFile paths |> Map.isEmpty |> Expect.isTrue "compact is already what the recommendation gives")
+
+    testCase "WHY — an app's choice is measured against what everywhere gives, so putting an app back to the global choice clears it" <| fun _ ->
+      withApp (fun paths ->
+        applied paths ViewWorkflow.Repl ViewScope.Everywhere (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        applied paths ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Set(AxisValue.RowHeight RowHeight.Compact))
+        (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View.Row |> Expect.equal "the app's own choice wins" RowHeight.Compact
+        applied paths ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        repoFile paths |> Map.isEmpty |> Expect.isTrue "roomy is what everywhere gives, so the app stores nothing")
+
+    testCase "WHY — resetting an axis clears the layer that holds it, whichever scope the panel shows" <| fun _ ->
+      withApp (fun paths ->
+        applied paths ViewWorkflow.Repl ViewScope.Everywhere (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        applied paths ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Reset ViewAxis.RowHeight)
+        (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View.Row |> Expect.equal "back to the recommendation" RowHeight.Compact)
+
+    testCase "WHY — reset all drops this scope's choices for the workflow only" <| fun _ ->
+      withApp (fun paths ->
+        applied paths ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        applied paths ViewWorkflow.HotReload ViewScope.ThisApp (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        applied paths ViewWorkflow.Repl ViewScope.ThisApp ViewEdit.ResetAll
+        (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View.Row |> Expect.equal "repl is back" RowHeight.Compact
+        (SettingsCatalog.viewFor paths ViewWorkflow.HotReload).View.Row |> Expect.equal "hot reload kept its choice" RowHeight.Roomy)
+
+    testCase "WHY — a preset saved for this app sets the layout and leaves the value mode alone" <| fun _ ->
+      withApp (fun paths ->
+        applied paths ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Set(AxisValue.ValueMode ValueMode.Full))
+        applied paths ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Preset ViewPreset.Tuner)
+        let view = (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View
+        view.Layout |> Expect.equal "the tuner layout" (ViewPreset.layout ViewPreset.Tuner)
+        view.Values |> Expect.equal "values untouched" ValueMode.Full)
+
+    testCase "WHY — saving for an app with no checkout is refused, not written somewhere else" <| fun _ ->
+      withApp (fun paths ->
+        let noRepo = { paths with Repo = NoRepoCheckout }
+        SettingsCatalog.applyViewEdit noRepo ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        |> Expect.isError "there is no app layer to write")
+  ]

@@ -310,6 +310,38 @@ let journey () : Task<unit> = task {
       do! push "view-cleared"
       do! waitJs page "the open page to take the recommended view back" BrowserWaits.panelUpdates
             "() => { const t = document.querySelector('#live-tree'); return !!t && t.dataset.values === 'clipped' && t.dataset.row === 'compact' && t.querySelectorAll('.live-type').length > 0; }" null
+
+      // The same through the panel a person uses. A click saves for this app (the scope's default), and the open page changes with no
+      // other push to carry it: the route asks for one.
+      let rowIs (value: string) =
+        sprintf "() => { const t = document.querySelector('#live-tree'); return !!t && t.dataset.row === '%s'; }" value
+      do! waitHidden page "#live-view-panel"
+      do! page.Locator("#live-view-btn").ClickAsync()
+      do! waitVisible page "#live-view-panel"
+      let! compactPressed = page.Locator("#live-view-panel button[aria-pressed=true]:has-text('Compact')").CountAsync()
+      compactPressed |> Expect.equal "the recommended row height is the pressed one" 1
+      do! page.Locator("#live-view-panel button:has-text('Roomy')").ClickAsync()
+      do! waitJs page "the tree to turn roomy from the panel" BrowserWaits.panelUpdates (rowIs "roomy") null
+      let! roomyPressed = page.Locator("#live-view-panel button[aria-pressed=true]:has-text('Roomy')").CountAsync()
+      roomyPressed |> Expect.equal "the pressed button follows the saved choice" 1
+      let! saidWhere = textOf page "#live-view-panel"
+      saidWhere |> Expect.stringContains "the panel says where the choice is saved" "saved for this app"
+      do! shot page "3-view-panel"
+      // A reload keeps it: the file is the memory.
+      let! _ = page.GotoAsync dashboard
+      do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
+      do! waitVisible page "#bindings-panel"
+      do! waitJs page "the choice to survive a reload" BrowserWaits.panelUpdates (rowIs "roomy") null
+      // The Type column, off from the panel.
+      do! page.Locator("#live-view-btn").ClickAsync()
+      do! waitVisible page "#live-view-panel"
+      do! page.Locator("#live-view-panel [aria-label='Type column'] button:has-text('Off')").ClickAsync()
+      do! waitJs page "the type cells to go" BrowserWaits.panelUpdates "() => document.querySelectorAll('#live-tree .live-type').length === 0" null
+      // Reset puts the recommendation back.
+      do! page.Locator("#live-view-panel button:has-text('Reset this workflow')").ClickAsync()
+      do! waitJs page "the recommended view to return" BrowserWaits.panelUpdates
+            "() => { const t = document.querySelector('#live-tree'); return !!t && t.dataset.row === 'compact' && t.querySelectorAll('.live-type').length > 0; }" null
+      expectNoErrors errors "using the view panel"
     finally
       match settingsBefore with
       | Some text -> System.IO.File.WriteAllText(appSettings, text)

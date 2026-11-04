@@ -1018,13 +1018,15 @@ let private panelFactsFor
 /// The Live Bindings view this session shows: its workflow's axes, resolved across the global settings and the app's own
 /// `.SageFs/settings.json` (the session's working directory is "this app"). A session with no working directory has only the
 /// global layer.
-let private liveBindingsLook (workflow: WorkflowTypes.SessionWorkflow) (workingDir: string) : SageFs.View =
+let private liveBindingsViewPaths (workingDir: string) : SageFs.ConfigPaths =
   let repo =
     match System.String.IsNullOrWhiteSpace workingDir with
     | true -> SageFs.NoRepoCheckout
     | false -> SageFs.RepoRootAt workingDir
-  let paths : SageFs.ConfigPaths = { GlobalDir = DaemonState.SageFsDir; Repo = repo }
-  (SageFs.SettingsCatalog.viewFor paths (SageFs.ViewWorkflow.ofSessionWorkflow workflow)).View
+  { GlobalDir = DaemonState.SageFsDir; Repo = repo }
+
+let private liveBindingsResolved (workflow: WorkflowTypes.SessionWorkflow) (workingDir: string) : SageFs.ResolvedView =
+  SageFs.SettingsCatalog.viewFor (liveBindingsViewPaths workingDir) (SageFs.ViewWorkflow.ofSessionWorkflow workflow)
 
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
@@ -1178,8 +1180,17 @@ let buildDashboardSnapshotWithSessions
         match sid.Length > 0 with
         | true -> DockPanes.SessionInView
         | false -> DockPanes.NoSessionInView
+      let sessionWorkflow = q.GetSessionWorkflow sessionId
+      let resolved = liveBindingsResolved sessionWorkflow workingDir
+      // The view button and panel exist for a session whose view they would change.
+      let controls =
+        match session with
+        | DockPanes.SessionInView ->
+          Some(LiveBindingsViewPanel.render (WorkerProtocol.SessionId.value sessionId) (SageFs.ViewWorkflow.ofSessionWorkflow sessionWorkflow) resolved)
+        | DockPanes.NoSessionInView -> None
       LiveBindingsDock.renderDockWith
-        (liveBindingsLook (q.GetSessionWorkflow sessionId) workingDir)
+        resolved.View
+        controls
         tweakView
         session
         (WorkerProtocol.SessionId.value sessionId)
@@ -2435,6 +2446,40 @@ let createSettingsClearHandler : string -> HttpHandler =
     | :? System.ObjectDisposedException -> ()
   }
 
+/// The Live Bindings view panel's one route (`LiveBindingsViewPanel`): a click stages its verb, axis, value and scope in signals and
+/// posts them here. The edit is parsed into closed types before anything is written, `SettingsCatalog.applyViewEdit` does the writing,
+/// and one state change makes every open page redraw with the new view. A request the panel could not have sent is refused with the
+/// set it should have been, never written.
+let createBindingsViewHandler (q: DashboardQueries) (infra: DashboardInfra) : WorkerProtocol.SessionId -> HttpHandler =
+  fun sessionId ctx -> task {
+    try
+      use! doc = readSignalsJsonSized ctx
+      let signal (name: string) (kebab: string) = getSignalString doc name kebab
+      let workflow = SageFs.ViewWorkflow.ofSessionWorkflow (q.GetSessionWorkflow sessionId)
+      let paths = liveBindingsViewPaths (q.GetSessionWorkingDir sessionId)
+      let outcome =
+        SageFs.ViewScope.parse (signal LiveBindingsViewPanel.ViewSignals.Scope "bv-scope")
+        |> Result.bind (fun scope ->
+          SageFs.ViewEdit.parse
+            workflow
+            (signal LiveBindingsViewPanel.ViewSignals.Action "bv-action")
+            (signal LiveBindingsViewPanel.ViewSignals.Axis "bv-axis")
+            (signal LiveBindingsViewPanel.ViewSignals.Value "bv-value")
+          |> Result.bind (SageFs.SettingsCatalog.applyViewEdit paths workflow scope))
+      match outcome with
+      | Ok() ->
+        Response.sseStartResponse ctx |> ignore
+        infra.TriggerStateChange ()
+      | Error why ->
+        ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
+        ctx.Response.ContentType <- "text/plain; charset=utf-8"
+        do! ctx.Response.WriteAsync(sprintf "The view was not changed: %s" (SageFs.ConfigError.describe why))
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
 /// Whether the stop / dispose / purge the handler asked for took effect.
 [<RequireQualifiedAccess>]
 type TeardownOutcome =
@@ -3509,6 +3554,7 @@ let createEndpoints
     // name (no dots), mapped back to the descriptor.
     yield mapPostRaw "/dashboard/settings/edit/{sig}" (routeValue "sig") createSettingsEditHandler
     yield mapPostRaw "/dashboard/settings/clear/{sig}" (routeValue "sig") createSettingsClearHandler
+    yield mapPostRaw "/dashboard/bindings-view/{id}" (routeValue "id") (SessionIdRoute.handle (createBindingsViewHandler q infra))
     yield post "/dashboard/eval" (createEvalHandler q infra a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
     yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)
