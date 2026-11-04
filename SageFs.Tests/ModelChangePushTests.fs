@@ -116,7 +116,7 @@ let tests =
       let current = ref (modelWith 3)
       let ctx = contextOver current
       let stream = new IO.MemoryStream()
-      do! replayCachedTestState ctx None CancellationToken.None (fun () -> Task.CompletedTask) stream
+      do! replayCachedTestState ctx None CancellationToken.None stream
       let text = Text.Encoding.UTF8.GetString (stream.ToArray())
       text.Contains "event: test_source_locations" |> Expect.isTrue "the snapshot carries the locations"
     }
@@ -125,7 +125,7 @@ let tests =
       let current = ref (modelWith 3)
       let ctx = contextOver current
       let stream = new IO.MemoryStream()
-      do! replayCachedTestState ctx (Some "bbbbbbbb") CancellationToken.None (fun () -> Task.CompletedTask) stream
+      do! replayCachedTestState ctx (Some "bbbbbbbb") CancellationToken.None stream
       let text = Text.Encoding.UTF8.GetString (stream.ToArray())
       text.Contains "event: test_source_locations" |> Expect.isFalse "another session's snapshot has none"
     }

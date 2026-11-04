@@ -99,16 +99,6 @@ type SseOutbox(limits: OutboxLimits) =
 
   member _.Overflowed : bool = Volatile.Read(&overflowed) = 1
 
-  /// The next queued entry if there is one, without waiting. Taking it gives its room back. For the reader
-  /// that owns this outbox only: it is a single-reader channel, and the catch-up and the drain that follows
-  /// it run on one request, one after the other.
-  member _.TryTake() : OutboxEntry option =
-    match channel.Reader.TryRead() with
-    | true, entry ->
-      release (OutboxEntry.weight entry)
-      Some entry
-    | false, _ -> None
-
   /// The next frame's text, waiting for one. Reading gives its room back. Throws
   /// `ChannelClosedException` once the outbox is closed and empty.
   member _.ReadAsync(ct: CancellationToken) : Task<string> =
@@ -138,34 +128,6 @@ module SseOutbox =
     /// The client went away: cancelled, or a write failed.
     | ClientLeft
 
-  /// Writes what is queued RIGHT NOW, in order, and does not wait for more. A catch-up calls this between
-  /// the files it projects, so a daemon that keeps publishing while a long catch-up writes does not fill
-  /// the queue and have the connection cut the moment the catch-up ends (the reconnect then wrote the
-  /// same catch-up again).
-  ///
-  /// A logged frame goes out as its own text with no `id:` line. The client's last id must not move past
-  /// frames it has not got the snapshot for: a connection cut in the middle of the catch-up resumes from
-  /// the id it last had in full, is replayed these frames again, and is sent the snapshots again. The
-  /// newest id written is returned so the id-only frame at the end of the catch-up can name it
-  /// (`SseReplay.announcedAfterCatchUp`).
-  let drainQueued (outbox: SseOutbox) (write: string -> Task) : Task<EventId option> =
-    task {
-      // What is queued right now, taken in one go and then written: entries that arrive meanwhile wait for
-      // the next turn, which a catch-up gives them at its next file.
-      let entries = List.unfold (fun () -> outbox.TryTake() |> Option.map (fun entry -> entry, ())) ()
-      for entry in entries do
-        match entry with
-        | OutboxEntry.Logged item -> do! write item.Frame.Wire
-        | OutboxEntry.Text text -> do! write text
-      return
-        entries
-        |> List.choose (fun entry ->
-          match entry with
-          | OutboxEntry.Logged item -> Some item.Id
-          | OutboxEntry.Text _ -> None)
-        |> List.tryLast
-    }
-
   /// Writes queued frames, in order, until the outbox ends or the client leaves.
   let drain (outbox: SseOutbox) (write: string -> Task) (ct: CancellationToken) : Task<DrainEnd> =
     task {
@@ -191,25 +153,6 @@ module SseOutbox =
                   | false -> DrainEnd.Closed)
       return ended.Value
     }
-
-/// Lets a connection's queue out during its catch-up, as often as the catch-up calls `Release`, and
-/// remembers the newest id it wrote. The catch-up reads that once the snapshots are whole, to name the
-/// right position in its id-only frame (`SseReplay.announcedAfterCatchUp`).
-type QueueRelease(outbox: SseOutbox, write: string -> Task) =
-  let mutable newest : EventId option = None
-
-  /// Write what is queued now, without ids.
-  member _.Release() : Task =
-    task {
-      let! released = SseOutbox.drainQueued outbox write
-      match released with
-      | Some id -> newest <- Some id
-      | None -> ()
-    }
-    :> Task
-
-  /// The newest frame written ahead of the snapshots, if any was.
-  member _.WrittenAhead : EventId option = newest
 
 /// Names the log's position on a heartbeat, but only when it has moved since the last time. A scoped
 /// connection is quiet because the traffic is another session's, and without this its last id lags the

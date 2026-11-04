@@ -36,10 +36,10 @@ Every frame that arrives through the daemon's broadcasts is numbered `<epoch>:<s
 A client that reconnects with `Last-Event-ID: <the last id it saw>` is sent, in this order:
 
 1. The frames it missed, oldest first, limited to what its stream may see: a connection narrowed to one session is not replayed another session's frames.
-2. The snapshots a first connection gets (session state, cached test results, the cohort matrix, health, the bindings map and the four per-feature slots). A snapshot is current, and a replay carries what a snapshot cannot. The frames with no snapshot form are `eval_started`, `eval_heartbeat`, `eval_result`, `warmup_progress`, `test_run_completed`, `failure_narratives`, `test_trace`, `live_bindings`, `diagnosis_ready`, `save_observed`, and the `state` frames that announce a faulted session, a reload report or an alarm. A client that resyncs (no id, a foreign epoch, or an id the log has dropped) does not get those back, and the replay window is the only way to receive them after a drop. The snapshots are the warmup and hot-reload state, the session health, the test summary, results batch, source locations, file annotations and coverage views, every cohort's matrix, the bindings, and the four per-feature slots.
-3. An id-only frame: `id: <epoch>:<seq>` and no event. It names the newest id at the moment the connection attached, and a client reads it as "caught up through here". A connection cut off in the middle of the snapshots has not read it, so its next reconnect asks again from the last id it had in full.
+2. The snapshots a first connection gets (session state, cached test results, the cohort matrix, health, the bindings map and the four per-feature slots). A snapshot is current, and a replay carries what a snapshot cannot. The frames with no snapshot form are `eval_started`, `eval_heartbeat`, `eval_result`, `warmup_progress`, `test_run_completed`, `failure_narratives`, `test_trace`, `live_bindings`, `diagnosis_ready`, `save_observed`, and the `state` frames that announce a faulted session, a reload report or an alarm. A client that resyncs (no id, a foreign epoch, or an id the log has dropped) does not get those back, and the replay window is the only way to receive them after a drop. The snapshots are the warmup and hot-reload state, the session health, the test summary, results batch and source locations, `annotations_available`, every cohort's matrix, the bindings, and the four per-feature slots.
 
-   While the snapshots are written, frames the daemon publishes for this connection are let out between the files, so a long catch-up cannot fill the connection's queue. Those frames are written without an `id:` line, for the same reason the id-only frame comes last: the client's last id must not move ahead of snapshots it has not finished receiving. When the id-only frame is written it names the newer of the attach position and the newest frame let out this way, so a client's last id never moves backwards. The keepalive heartbeat starts after the catch-up, because a connection that is writing is not idle.
+   The annotations are not in the snapshots. `annotations_available` lists the files of the session that have annotations (`SessionId`, `Generation`, `Files`), and a client asks for the ones it has open, with `GET /api/live-testing/file-annotations?session=<id>&file=<path>`, which answers with the file's `file_annotations` object and a `CoverageViews` array. What a connection is sent therefore does not grow with the number of files: one frame, not a `file_annotations` frame and a `coverage_view` frame per function for every file, which on `SageFs.Tests` was minutes of CPU and megabytes per connect. The list is still one path per annotated file.
+3. An id-only frame: `id: <epoch>:<seq>` and no event. It names the newest id at the moment the connection attached, and a client reads it as "caught up through here". A connection cut off in the middle of the snapshots has not read it, so its next reconnect asks again from the last id it had in full.
 4. The `retry:` hint.
 
 With no `Last-Event-ID`, or one the daemon cannot replay from, the connection gets steps 2 to 4 and no replayed frames. That is the case when the header is absent, is not `<epoch>:<seq>`, names a different run of the daemon, is ahead of anything this run has sent, or asks for a frame that was dropped to stay inside the limits (`SseReplay.ResyncReason` in `SageFs.Core/SseReplay.fs`). None of these is an error, and the daemon logs which one it was at debug level.
@@ -60,7 +60,7 @@ A client that falls behind is disconnected, not trimmed: when its queue fills, t
 
 ---
 
-## SseWriter Events (22)
+## SseWriter Events (24)
 
 The event names are defined in `allSseEventTypes` in `SageFs.Core/SseWriter.fs`.
 
@@ -139,7 +139,8 @@ in-memory effect. The same is true of a getter a click runs on an OS with no fil
 | `test_results_batch` | `Completion`, `Freshness`, `Generation`, `LastDecision`, `Summary` (no list) | The tally for one run. The rows are a fetch (`GET /api/live-testing/entries?session=<id>`): a 2,604-case list made this frame ~990 KB, so it moved off the stream in 0.6.928. |
 | `test_trace` | Pre-serialized JSON trace data | Execution trace with diagnostic metadata for test runs. |
 | `test_source_locations` | `Locations[]` (testId, filePath, lineNumber) | Maps test names to source locations for jump-to-definition. |
-| `file_annotations` | `testAnnotations[]`, `codeLenses[]`, `coverageAnnotations[]`, `inlineFailures[]` | Per-file test decorations, coverage data, and inline failure markers. |
+| `file_annotations` | `testAnnotations[]`, `codeLenses[]`, `coverageAnnotations[]`, `inlineFailures[]` | Per-file test decorations, coverage data, and inline failure markers. Pushed when a file's annotations change; on connect a client asks for the files it has open instead (`annotations_available`). |
+| `annotations_available` | `SessionId`, `Generation`, `Files[]` | The files of a session that have annotations, sent on connect in place of the annotations themselves. A client asks for the ones it has open with `GET /api/live-testing/file-annotations?session=&file=`. |
 | `failure_narratives` | Map of test → `{LastPassedAt, TimeSinceLastPass, CausalChanges[], PropertyViolation, Summary}` | Causal analysis for Passed→Failed transitions: what changed and when. |
 | `coverage_view` | `Generation`, `Symbol`, `FilePath`, `DefinitionLine`, `TotalCount`, `Overflow`, `InlineBadgeText`, `Health` | Per-symbol coverage badge for inline display. Version-gated: an unchanged frame emits nothing. The same data for one file is on `GET /api/live-testing/file-annotations?session=<id>&file=<path>`: the answer is that file's `file_annotations` object plus a `CoverageViews` array whose elements are exactly the `data:` of these frames, so a client's handlers take it unchanged. |
 
@@ -209,7 +210,7 @@ A single `state` event carries variant-specific fields.
 
 | Category | Count | Events |
 |:---|:---|:---|
-| SseWriter | 22 | warmup_progress, eval_started, eval_heartbeat, eval_result, eval_diff, eval_timeline, bindings_snapshot, binding_scope_map, live_bindings, test_summary, test_results_batch, test_trace, test_source_locations, file_annotations, failure_narratives, coverage_view, cell_dependencies, diagnosis_ready, cohort_matrix, claim_changed, landing_changed, save_observed |
+| SseWriter | 24 | warmup_progress, eval_started, eval_heartbeat, eval_result, eval_diff, eval_timeline, bindings_snapshot, binding_scope_map, live_bindings, test_summary, test_results_batch, test_run_completed, test_trace, test_source_locations, file_annotations, annotations_available, failure_narratives, coverage_view, cell_dependencies, diagnosis_ready, cohort_matrix, claim_changed, landing_changed, save_observed |
 | Session | 1 (8 subtypes) | session |
 | Daemon state | 1 (8 variants) | state |
 | Diagnostics | 1 (separate endpoint) | diagnostics |

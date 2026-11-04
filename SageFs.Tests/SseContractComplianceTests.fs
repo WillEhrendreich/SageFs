@@ -240,11 +240,11 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
   // ── Group 1: Registry exhaustiveness ──
 
   testList "registry exhaustiveness" [
-    testCase "allSseEventTypes has exactly 23 items" <| fun () ->
+    testCase "allSseEventTypes has exactly 24 items" <| fun () ->
       allSseEventTypes |> List.length
       |> Expect.equal
-           "should have exactly 23 event types (22, plus test_run_completed — a FINISHED run carrying the `source` verdict, which now has a formatter, a registry entry, and a producer)"
-           23
+           "should have exactly 24 event types (23, plus annotations_available — the files of a session that have annotations, sent on connect in place of the annotations themselves; 22, plus test_run_completed — a FINISHED run carrying the `source` verdict)"
+           24
 
     testCase "allSseEventTypes has no duplicates" <| fun () ->
       let distinct = allSseEventTypes |> List.distinct

@@ -128,86 +128,8 @@ let sseOutboxTests =
       outbox.Overflowed |> Expect.isTrue "120 queued is over 100"
     }
 
-    // A catch-up writes straight to the socket and can take a long while on a big session, while the daemon
-    // keeps publishing into this queue. Nothing read the queue until the catch-up ended, so a busy daemon
-    // filled it, the connection was cut the moment the catch-up finished, and the reconnect wrote the same
-    // catch-up again. The catch-up now lets what is queued out as it goes.
-    testList "letting the queue out during a catch-up" [
-
-      let logged (seq: int64) (wire: string) : Replayable =
-        { Id = { Epoch = "e1"; Seq = seq }; Frame = { Scope = FrameScope.Daemon; Wire = wire }; Bytes = wire.Length }
-
-      testTask "writes what is queued without ids, in order, and reports the newest id it wrote" {
-        let outbox = SseOutbox 8
-        let written, write = collecting ()
-        outbox.OfferLogged (logged 5L "event: a\ndata: 1\n\n")
-        outbox.Offer ": a comment\n\n"
-        outbox.OfferLogged (logged 6L "event: b\ndata: 2\n\n")
-        let! newest = SseOutbox.drainQueued outbox write
-        List.ofSeq written
-        |> Expect.equal "the frames' own text, no id line, nothing reordered" [ "event: a\ndata: 1\n\n"; ": a comment\n\n"; "event: b\ndata: 2\n\n" ]
-        newest |> Expect.equal "seq 6 is the newest that went out" (Some { Epoch = "e1"; Seq = 6L })
-      }
-
-      testTask "an empty queue writes nothing and reports no id" {
-        let written, write = collecting ()
-        let! newest = SseOutbox.drainQueued (SseOutbox 8) write
-        written.Count |> Expect.equal "nothing written" 0
-        newest |> Expect.isNone "no id"
-      }
-
-      testTask "WHY — letting the queue out gives its room back, so a catch-up longer than the queue is deep does not overflow it" {
-        // Room for two 40-byte frames. Without letting it out, the third offer overflows.
-        let outbox = SseOutbox({ QueuedFrames = 1000; QueuedBytes = 100 })
-        let frame = System.String('x', 20)
-        let written, write = collecting ()
-        for _ in 1 .. 6 do
-          outbox.Offer frame
-          outbox.Offer frame
-          let! _ = SseOutbox.drainQueued outbox write
-          ()
-        outbox.Overflowed |> Expect.isFalse "twelve frames went through a queue that holds two"
-        written.Count |> Expect.equal "all twelve were written" 12
-      }
-
-      testTask "the rest of the queue is still there to drain normally once the catch-up is over" {
-        let outbox = SseOutbox 8
-        let written, write = collecting ()
-        outbox.Offer "a"
-        let! _ = SseOutbox.drainQueued outbox write
-        outbox.Offer "b"
-        outbox.Close ()
-        let! ended = SseOutbox.drain outbox write CancellationToken.None
-        ended |> Expect.equal "closed, not overflowed" SseOutbox.DrainEnd.Closed
-        List.ofSeq written |> Expect.equal "a during the catch-up, b after" [ "a"; "b" ]
-      }
-    ]
-
-    testList "the release a catch-up holds" [
-      let logged (seq: int64) : Replayable =
-        { Id = { Epoch = "e1"; Seq = seq }; Frame = { Scope = FrameScope.Daemon; Wire = "event: x\ndata: {}\n\n" }; Bytes = 19 }
-
-      testTask "remembers the newest id it wrote across turns, and none before it has written a logged frame" {
-        let outbox = SseOutbox 8
-        let _, write = collecting ()
-        let release = QueueRelease(outbox, write)
-        release.WrittenAhead |> Expect.isNone "nothing yet"
-        outbox.Offer ": comment\n\n"
-        do! release.Release ()
-        release.WrittenAhead |> Expect.isNone "a comment carries no id"
-        outbox.OfferLogged (logged 4L)
-        do! release.Release ()
-        release.WrittenAhead |> Expect.equal "seq 4" (Some { Epoch = "e1"; Seq = 4L })
-        do! release.Release ()
-        release.WrittenAhead |> Expect.equal "an empty turn keeps it" (Some { Epoch = "e1"; Seq = 4L })
-        outbox.OfferLogged (logged 9L)
-        do! release.Release ()
-        release.WrittenAhead |> Expect.equal "and a later turn moves it" (Some { Epoch = "e1"; Seq = 9L })
-      }
-    ]
-
     testList "the heartbeat's position" [
-      test "WHY — names the log's position when it moved, and is the keepalive comment when it did not" {
+      testTask "WHY — names the log's position when it moved, and is the keepalive comment when it did not" {
         let log = SseLog("e1", { MaxFrames = 100; MaxBytes = 1 <<< 20 })
         let outbox = SseOutbox 8
         let beat = HeartbeatPosition(log, outbox)
@@ -218,8 +140,10 @@ let sseOutboxTests =
         beat.Beat ()
         log.Publish { Scope = FrameScope.Daemon; Wire = "c" } |> ignore
         beat.Beat ()
-        let taken = List.unfold (fun () -> outbox.TryTake() |> Option.map (fun entry -> OutboxEntry.toWire entry, ())) ()
-        taken
+        outbox.Close ()
+        let taken, write = collecting ()
+        let! _ = SseOutbox.drain outbox write CancellationToken.None
+        List.ofSeq taken
         |> Expect.equal "keepalive (empty log), id 2, keepalive (unmoved), id 3"
              [ SseOutbox.KeepaliveFrame
                EventId.toIdOnlyFrame { Epoch = "e1"; Seq = 2L }

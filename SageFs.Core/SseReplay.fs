@@ -124,18 +124,6 @@ module SseReplay =
     | 0L -> LogPosition.Empty
     | latest -> LogPosition.At { Epoch = buffer.Epoch; Seq = latest }
 
-  /// The position a catch-up announces when it is done. A catch-up lets queued live frames out as it goes
-  /// (without their ids, so a connection cut mid-snapshot still resumes from the id it last had in full),
-  /// so the client has already been sent frames past the position the connection attached at, and
-  /// announcing the attach position would move its last id backwards. It is the newer of the two.
-  let announcedAfterCatchUp (position: LogPosition) (writtenAhead: EventId option) : LogPosition =
-    match position, writtenAhead with
-    | LogPosition.At at, Some ahead when ahead.Seq > at.Seq -> LogPosition.At ahead
-    | LogPosition.Empty, Some ahead -> LogPosition.At ahead
-    | LogPosition.At _, Some _
-    | LogPosition.At _, None
-    | LogPosition.Empty, None -> position
-
   /// The oldest seq still held, or the next one to be issued when nothing is.
   let firstAvailable (buffer: Buffer) : int64 =
     match Seq.tryHead buffer.Frames with

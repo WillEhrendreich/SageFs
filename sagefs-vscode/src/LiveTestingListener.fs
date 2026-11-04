@@ -662,6 +662,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         callbacks.OnSourceLocationsUpdate locations
       | "file_annotations" ->
         callbacks.OnFileAnnotations data
+      | "annotations_available" ->
+        // The list of files with annotations. It is acted on in `hydrateFrame`, which has the stream's URL
+        // the requests are made against; named here so every event the daemon sends has a case.
+        ()
       | "failure_narratives" ->
         let narratives = parseFailureNarratives data
         let narrativeMap =

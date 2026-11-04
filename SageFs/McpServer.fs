@@ -1490,7 +1490,6 @@ let replayCachedTestState
   (ctx: SseContext)
   (target: string option)
   (gone: CancellationToken)
-  (between: unit -> Task)
   (body: System.IO.Stream) =
   SseContext.withModelAsync ctx (fun model -> task {
     try
@@ -1541,39 +1540,25 @@ let replayCachedTestState
           do! SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts target locs
               |> writeSseFrame body
         | _ -> ()
-        let files =
-          sessionEntries
-          |> Array.choose (fun e ->
-            match e.Origin with
-            | TestOrigin.SourceMapped (f, _) -> Some f
-            | _ -> None)
+        // The files that have annotations, as a list. A connection used to be sent a `file_annotations` frame
+        // and a `coverage_view` frame per function for EVERY file, because nothing said which files an editor
+        // had open: minutes of CPU and megabytes for a big session, every time anyone connected. An editor
+        // now asks for the files it has open (GET /api/live-testing/file-annotations), so what a connect
+        // writes does not grow with the number of files.
+        let annotatedFiles =
+          Array.append
+            (sessionEntries
+             |> Array.choose (fun e ->
+               match e.Origin with
+               | TestOrigin.SourceMapped (f, _) -> Some f
+               | TestOrigin.ReflectionOnly -> None))
+            (lt.CoverageAnnotations |> Array.map (fun ca -> ca.FilePath))
           |> Array.distinct
-        let ltState = model.LiveTesting
-        // Everything about the session that does not depend on the file, found once. It used to be found
-        // again for every file, which is what made this loop take minutes on a big session.
-        let basis = FileAnnotations.prepare ltState
-        for file in files do
-          gone.ThrowIfCancellationRequested()
-          // A client can be slow, and the daemon keeps publishing into this connection's queue meanwhile;
-          // `between` lets what has queued out so the queue cannot fill.
-          do! between ()
-          let fa = FileAnnotations.projectFile basis file
-          match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 || fa.InlineFailures.Length > 0 with
-          | true ->
-            do! SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa
-                |> writeSseFrame body
-            // Emit coverage_view events on replay so late-connecting
-            // editors get the same views as already-connected ones.
-            let views =
-              FileAnnotationsInternals.projectViewsOf
-                CoverageViewMode.defaults (FileAnnotations.coverageAnnotationsOf basis file) file ltState.DepGraph ltState.TestState
-            let gen = RunGeneration.value ltState.TestState.LastGeneration
-            for view in views do
-              gone.ThrowIfCancellationRequested()
-              do! SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) gen view
-                  |> writeSseFrame body
-              do! between ()
-          | false -> ()
+          |> Array.sort
+          |> List.ofArray
+        do! SageFs.SseWriter.formatAnnotationsAvailableEvent
+              ctx.SseJsonOpts (Some activeId) (RunGeneration.value lt.LastGeneration) annotatedFiles
+            |> writeSseFrame body
       | false -> ()
     with
     | :? OperationCanceledException -> ()
@@ -3404,12 +3389,11 @@ let writeCatchUpSnapshots
   (rctx: RouteContext)
   (stream: StreamScope)
   (gone: CancellationToken)
-  (between: unit -> Task)
   (body: System.IO.Stream) : Task =
   task {
     let target = SseContext.replayTarget rctx.SseContext stream
     do! replaySessionSnapshot rctx.SseContext target body
-    do! replayCachedTestState rctx.SseContext target gone between body
+    do! replayCachedTestState rctx.SseContext target gone body
     do! replayCohortMatrix rctx.SseContext body
     do! replayOtherCohortMatrices rctx.Config.CohortSupport rctx.SseContext body
     do! replayHealthSnapshot rctx.SseContext stream rctx.Config.SessionOps.GetAllSessions body
@@ -3513,22 +3497,14 @@ let serveEventsWork (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.A
           for item in missed do
             do! writeSseFrame body (Replayable.toWire item)
         | SseReplay.CatchUp.Resync reason -> Log.debug "[SSE] /events resync: %A" reason
-        // A long catch-up writes straight to the socket while the daemon keeps publishing into the queue.
-        // Between its files it lets the queue out, so the queue cannot fill and cut the connection the
-        // moment the catch-up ends, which made the reconnect write the same catch-up again. Those frames
-        // go out without ids, and the newest is named below, once the snapshots are whole.
-        let queueRelease = QueueRelease(outbox, (fun frame -> writeSseFrame body frame :> Task))
-        do! writeCatchUpSnapshots rctx stream ctx.RequestAborted queueRelease.Release body
+        do! writeCatchUpSnapshots rctx stream ctx.RequestAborted body
         // Said last, so a connection cut mid-snapshot resumes from the id it last had in full.
-        match SseReplay.announcedAfterCatchUp attachment.Position queueRelease.WrittenAhead with
+        match attachment.Position with
         | LogPosition.At position -> do! writeSseFrame body (EventId.toIdOnlyFrame position)
         | LogPosition.Empty -> ()
         // The retry hint comes once the client is caught up, as it always did: a client (and a test)
         // that reads up to it has the whole catch-up, and has been attached since before it began.
         do! writeSseFrame body (SageFs.SseWriter.formatRetryHint heartbeatMs)
-        // The connection is not idle while it is being caught up, so the heartbeat starts here. Started
-        // earlier, its id-only frame would sit in the queue and be let out by `queueRelease`, moving the
-        // client's last id before the snapshots were whole.
         use _heartbeat = new Timer((fun _ -> heartbeat.Beat ()), null, heartbeatMs, heartbeatMs)
         let! ended = SseOutbox.drain outbox (fun frame -> writeSseFrame body frame :> Task) ctx.RequestAborted
         match ended with

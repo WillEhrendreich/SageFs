@@ -243,14 +243,14 @@ let neovimKnownGaps : Set<string> =
 [<Tests>]
 let sseParityTests = testList "SSE Parity" [
 
-  test "allDaemonSseEvents contains 25 entries (23 SseWriter + session + state)" {
+  test "allDaemonSseEvents contains 26 entries (24 SseWriter + session + state)" {
     allDaemonSseEvents
-    |> Expect.hasLength "should have 25 daemon SSE event types" 25
+    |> Expect.hasLength "should have 26 daemon SSE event types" 26
   }
 
-  test "SseWriter.allSseEventTypes contains exactly 23 formatter event types" {
+  test "SseWriter.allSseEventTypes contains exactly 24 formatter event types" {
     SseWriter.allSseEventTypes
-    |> Expect.hasLength "SseWriter exposes 23 event type names" 23
+    |> Expect.hasLength "SseWriter exposes 24 event type names" 24
   }
 
   test "no duplicate entries in allDaemonSseEvents" {
@@ -413,7 +413,7 @@ let sseParityTests = testList "SSE Parity" [
     |> Expect.equal
          "if this fails, you added a daemon SSE event - the VS Code and Neovim coverage tests above \
            will tell you whether either extension handles it"
-         25
+         26
   }
 ]
 

@@ -263,6 +263,19 @@ let coverageViewJson
        Health = view.Health |}
   writeWith(payload, opts) |> injectSessionId sessionId
 
+/// The files of a session that have annotations, sent on connect instead of the annotations themselves. A
+/// connection used to be sent a `file_annotations` frame and a `coverage_view` frame per function for every
+/// file, because nothing said which files an editor had open. Now an editor asks for the ones it has open
+/// (GET /api/live-testing/file-annotations), and this says which exist and which run they are of.
+let formatAnnotationsAvailableEvent
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (generation: int)
+  (files: string list)
+  : string =
+  let json = writeWith({| Generation = generation; Files = files |}, opts) |> injectSessionId sessionId
+  formatSseEvent "annotations_available" json
+
 /// An annotations object with the views of the same file added as `CoverageViews`: the object's own text
 /// with one more member before its closing brace, each view being the text `coverageViewJson` gave. A value
 /// that is not an object is returned as it was.
@@ -784,6 +797,7 @@ let allSseEventTypes : string list = [
   "eval_timeline"
   "diagnosis_ready"
   "coverage_view"
+  "annotations_available"
   "cohort_matrix"
   "claim_changed"
   "landing_changed"
