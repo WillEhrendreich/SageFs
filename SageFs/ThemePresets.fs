@@ -3,7 +3,7 @@ namespace SageFs
 /// Built-in theme presets for popular color schemes.
 module ThemePresets =
   let kanagawa : ThemeConfig = {
-    FgDefault = "#dcd7ba"; FgDim = "#727169"; FgGreen = "#98bb6c"; FgRed = "#ff5d62"
+    FgDefault = "#dcd7ba"; FgDim = "#a4a39a"; FgGreen = "#98bb6c"; FgRed = "#ff5d62"
     FgYellow = "#e6c384"; FgCyan = "#7fb4ca"; FgBlue = "#7e9cd8"; FgMagenta = "#957fb8"
     BgDefault = "#1f1f28"; BgPanel = "#2a2a37"; BgEditor = "#1f1f28"
     BgSelection = "#363646"; BgStatus = "#1f1f28"; BgFocus = "#363646"
@@ -16,7 +16,7 @@ module ThemePresets =
   }
 
   let tokyoNight : ThemeConfig = {
-    FgDefault = "#c0caf5"; FgDim = "#565f89"; FgGreen = "#9ece6a"; FgRed = "#f7768e"
+    FgDefault = "#c0caf5"; FgDim = "#959ec9"; FgGreen = "#9ece6a"; FgRed = "#f7768e"
     FgYellow = "#e0af68"; FgCyan = "#7dcfff"; FgBlue = "#7aa2f7"; FgMagenta = "#bb9af7"
     BgDefault = "#1a1b26"; BgPanel = "#24283b"; BgEditor = "#1a1b26"
     BgSelection = "#283457"; BgStatus = "#1a1b26"; BgFocus = "#292e42"
@@ -29,7 +29,7 @@ module ThemePresets =
   }
 
   let gruvbox : ThemeConfig = {
-    FgDefault = "#ebdbb2"; FgDim = "#928374"; FgGreen = "#b8bb26"; FgRed = "#fb4934"
+    FgDefault = "#ebdbb2"; FgDim = "#c9ba9a"; FgGreen = "#b8bb26"; FgRed = "#fb4934"
     FgYellow = "#fabd2f"; FgCyan = "#8ec07c"; FgBlue = "#83a598"; FgMagenta = "#d3869b"
     BgDefault = "#282828"; BgPanel = "#3c3836"; BgEditor = "#282828"
     BgSelection = "#504945"; BgStatus = "#282828"; BgFocus = "#504945"
@@ -42,7 +42,7 @@ module ThemePresets =
   }
 
   let catppuccinMocha : ThemeConfig = {
-    FgDefault = "#cdd6f4"; FgDim = "#6c7086"; FgGreen = "#a6e3a1"; FgRed = "#f38ba8"
+    FgDefault = "#cdd6f4"; FgDim = "#b1b8d4"; FgGreen = "#a6e3a1"; FgRed = "#f38ba8"
     FgYellow = "#f9e2af"; FgCyan = "#94e2d5"; FgBlue = "#89b4fa"; FgMagenta = "#cba6f7"
     BgDefault = "#1e1e2e"; BgPanel = "#313244"; BgEditor = "#1e1e2e"
     BgSelection = "#45475a"; BgStatus = "#1e1e2e"; BgFocus = "#45475a"
@@ -55,7 +55,7 @@ module ThemePresets =
   }
 
   let monokai : ThemeConfig = {
-    FgDefault = "#f8f8f2"; FgDim = "#75715e"; FgGreen = "#a6e22e"; FgRed = "#f92672"
+    FgDefault = "#f8f8f2"; FgDim = "#bab9ac"; FgGreen = "#a6e22e"; FgRed = "#f92672"
     FgYellow = "#e6db74"; FgCyan = "#66d9ef"; FgBlue = "#66d9ef"; FgMagenta = "#ae81ff"
     BgDefault = "#272822"; BgPanel = "#3e3d32"; BgEditor = "#272822"
     BgSelection = "#49483e"; BgStatus = "#272822"; BgFocus = "#49483e"
@@ -68,7 +68,7 @@ module ThemePresets =
   }
 
   let dracula : ThemeConfig = {
-    FgDefault = "#f8f8f2"; FgDim = "#6272a4"; FgGreen = "#50fa7b"; FgRed = "#ff5555"
+    FgDefault = "#f8f8f2"; FgDim = "#b0b8cd"; FgGreen = "#50fa7b"; FgRed = "#ff5555"
     FgYellow = "#f1fa8c"; FgCyan = "#8be9fd"; FgBlue = "#8be9fd"; FgMagenta = "#bd93f9"
     BgDefault = "#282a36"; BgPanel = "#44475a"; BgEditor = "#282a36"
     BgSelection = "#44475a"; BgStatus = "#282a36"; BgFocus = "#6272a4"
@@ -81,7 +81,7 @@ module ThemePresets =
   }
 
   let nordic : ThemeConfig = {
-    FgDefault = "#d8dee9"; FgDim = "#616e88"; FgGreen = "#a3be8c"; FgRed = "#bf616a"
+    FgDefault = "#d8dee9"; FgDim = "#b5becd"; FgGreen = "#a3be8c"; FgRed = "#bf616a"
     FgYellow = "#ebcb8b"; FgCyan = "#88c0d0"; FgBlue = "#81a1c1"; FgMagenta = "#b48ead"
     BgDefault = "#2e3440"; BgPanel = "#3b4252"; BgEditor = "#2e3440"
     BgSelection = "#434c5e"; BgStatus = "#2e3440"; BgFocus = "#434c5e"

@@ -19,7 +19,7 @@ type ThemeConfig = {
 /// TUI converts to truecolor ANSI (38;2;r;g;b). Raylib parses hex directly. Dashboard passes through to CSS.
 module Theme =
   let defaults : ThemeConfig = {
-    FgDefault = "#ffffff"; FgDim = "#8b8b8b"; FgGreen = "#87d787"; FgRed = "#ff5f5f"
+    FgDefault = "#ffffff"; FgDim = "#b4b4b4"; FgGreen = "#87d787"; FgRed = "#ff5f5f"
     FgYellow = "#d7af5f"; FgCyan = "#87d7d7"; FgBlue = "#5fafff"; FgMagenta = "#d787d7"
     BgDefault = "#000000"; BgPanel = "#262626"; BgEditor = "#1c1c1c"
     BgSelection = "#444444"; BgStatus = "#303030"; BgFocus = "#3a3a3a"
