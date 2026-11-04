@@ -73,7 +73,7 @@ let sseOutboxTests =
 
     testTask "WHY — a client stalled behind big frames is cut off by their size, long before the frame count would" {
       // 20 chars is 40 bytes in memory. Two fit in 100; the third would make 120.
-      let outbox = SseOutbox(1000, 100)
+      let outbox = SseOutbox({ QueuedFrames = 1000; QueuedBytes = 100 })
       let written, write = collecting ()
       let frame = System.String('x', 20)
       for _ in 1 .. 4 do outbox.Offer frame
@@ -83,7 +83,7 @@ let sseOutboxTests =
     }
 
     testTask "WHY — a frame bigger than the whole byte cap is still delivered when nothing is waiting, or no client could ever get it" {
-      let outbox = SseOutbox(8, 100)
+      let outbox = SseOutbox({ QueuedFrames = 8; QueuedBytes = 100 })
       let written, write = collecting ()
       let huge = System.String('x', 500)
       outbox.Offer huge
@@ -94,7 +94,7 @@ let sseOutboxTests =
     }
 
     testTask "what the client has read gives its room back" {
-      let outbox = SseOutbox(8, 100)
+      let outbox = SseOutbox({ QueuedFrames = 8; QueuedBytes = 100 })
       let frame = System.String('x', 20)
       outbox.Offer frame
       outbox.Offer frame
@@ -118,7 +118,7 @@ let sseOutboxTests =
     }
 
     testTask "WHY — a logged frame weighs what the log says it weighs, so a queue of shared frames is capped too" {
-      let outbox = SseOutbox(8, 100)
+      let outbox = SseOutbox({ QueuedFrames = 8; QueuedBytes = 100 })
       let item : Replayable =
         { Id = { Epoch = "e1"; Seq = 1L }
           Frame = { Scope = FrameScope.Daemon; Wire = "x" }
@@ -158,7 +158,7 @@ let sseOutboxTests =
 
       testTask "WHY — letting the queue out gives its room back, so a catch-up longer than the queue is deep does not overflow it" {
         // Room for two 40-byte frames. Without letting it out, the third offer overflows.
-        let outbox = SseOutbox(1000, 100)
+        let outbox = SseOutbox({ QueuedFrames = 1000; QueuedBytes = 100 })
         let frame = System.String('x', 20)
         let written, write = collecting ()
         for _ in 1 .. 6 do
@@ -180,6 +180,51 @@ let sseOutboxTests =
         let! ended = SseOutbox.drain outbox write CancellationToken.None
         ended |> Expect.equal "closed, not overflowed" SseOutbox.DrainEnd.Closed
         List.ofSeq written |> Expect.equal "a during the catch-up, b after" [ "a"; "b" ]
+      }
+    ]
+
+    testList "the release a catch-up holds" [
+      let logged (seq: int64) : Replayable =
+        { Id = { Epoch = "e1"; Seq = seq }; Frame = { Scope = FrameScope.Daemon; Wire = "event: x\ndata: {}\n\n" }; Bytes = 19 }
+
+      testTask "remembers the newest id it wrote across turns, and none before it has written a logged frame" {
+        let outbox = SseOutbox 8
+        let _, write = collecting ()
+        let release = QueueRelease(outbox, write)
+        release.WrittenAhead |> Expect.isNone "nothing yet"
+        outbox.Offer ": comment\n\n"
+        do! release.Release ()
+        release.WrittenAhead |> Expect.isNone "a comment carries no id"
+        outbox.OfferLogged (logged 4L)
+        do! release.Release ()
+        release.WrittenAhead |> Expect.equal "seq 4" (Some { Epoch = "e1"; Seq = 4L })
+        do! release.Release ()
+        release.WrittenAhead |> Expect.equal "an empty turn keeps it" (Some { Epoch = "e1"; Seq = 4L })
+        outbox.OfferLogged (logged 9L)
+        do! release.Release ()
+        release.WrittenAhead |> Expect.equal "and a later turn moves it" (Some { Epoch = "e1"; Seq = 9L })
+      }
+    ]
+
+    testList "the heartbeat's position" [
+      test "WHY — names the log's position when it moved, and is the keepalive comment when it did not" {
+        let log = SseLog("e1", { MaxFrames = 100; MaxBytes = 1 <<< 20 })
+        let outbox = SseOutbox 8
+        let beat = HeartbeatPosition(log, outbox)
+        beat.Beat ()
+        log.Publish { Scope = FrameScope.Daemon; Wire = "a" } |> ignore
+        log.Publish { Scope = FrameScope.Daemon; Wire = "b" } |> ignore
+        beat.Beat ()
+        beat.Beat ()
+        log.Publish { Scope = FrameScope.Daemon; Wire = "c" } |> ignore
+        beat.Beat ()
+        let taken = List.unfold (fun () -> outbox.TryTake() |> Option.map (fun entry -> OutboxEntry.toWire entry, ())) ()
+        taken
+        |> Expect.equal "keepalive (empty log), id 2, keepalive (unmoved), id 3"
+             [ SseOutbox.KeepaliveFrame
+               EventId.toIdOnlyFrame { Epoch = "e1"; Seq = 2L }
+               SseOutbox.KeepaliveFrame
+               EventId.toIdOnlyFrame { Epoch = "e1"; Seq = 3L } ]
       }
     ]
   ]

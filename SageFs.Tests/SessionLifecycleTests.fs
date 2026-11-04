@@ -199,6 +199,14 @@ let tests =
             |> Expect.equal (sprintf "after %A then %A then %A" (liveIds first) (liveIds second) (liveIds third)) (liveIds third)
     }
 
+    test "the watch remembers what it announced: the first look is silent, a stop is said once, a repeat is silent" {
+      let watch = SessionLifecycleWatch()
+      watch.Observe (registry [ running a ] (ActiveSession.Viewing a)) |> Expect.isEmpty "the first look is a baseline"
+      watch.Observe (registry [] ActiveSession.AwaitingSession)
+      |> Expect.equal "the stop" [ SseEvent.SessionStopped (SessionId.value a) ]
+      watch.Observe (registry [] ActiveSession.AwaitingSession) |> Expect.isEmpty "and not again"
+    }
+
     test "WHY — deliveries that pile up keep the newest counts and every lifecycle event, in order" {
       let stop = SseEvent.SessionStopped (SessionId.value a)
       let create = SseEvent.SessionCreated (SessionId.value b, [ "App" ])

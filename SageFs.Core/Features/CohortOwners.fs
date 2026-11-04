@@ -199,11 +199,11 @@ let create (factory: Factory) : Owners =
   // omitting it is not a crash.
   let started = ref (fun (_: CohortScope) (_: CohortOwner.Handle) -> ())
   let notified = System.Collections.Concurrent.ConcurrentDictionary<CohortScope, bool>()
-  // The hooks `OnEachOwner` added, newest first. `gate` makes "this owner is now notified" and "this hook
+  // The hooks `OnEachOwner` added, in the order they were added. `gate` makes "this owner is now notified" and "this hook
   // is now registered" one step each, so an owner reaches a hook once: through the snapshot
   // `OnEachOwner` takes, or through the list `OwnerFor` reads, never both and never neither.
   let gate = obj ()
-  let each = ref ([]: (CohortScope -> CohortOwner.Handle -> unit) list)
+  let each = ResizeArray<CohortScope -> CohortOwner.Handle -> unit>()
 
   let disposeOf (h: CohortOwner.Handle) =
     // `Handle` is `IDisposable`; disposing it releases the mailbox, and it does not throw if
@@ -220,7 +220,7 @@ let create (factory: Factory) : Owners =
         // Fire the hook exactly ONCE per scope, for the call that created the owner.
         // Firing on every `OwnerFor` would attach another subscriber per request, so one
         // cohort change would redraw the dashboard N times after N requests.
-        let hooks = lock gate (fun () -> if notified.TryAdd(scope, true) then Some (List.rev each.Value) else None)
+        let hooks = lock gate (fun () -> if notified.TryAdd(scope, true) then Some (List.ofSeq each) else None)
         match hooks with
         | Some added ->
           (!started) scope owner
@@ -237,7 +237,7 @@ let create (factory: Factory) : Owners =
       fun hook ->
         let existing =
           lock gate (fun () ->
-            each.Value <- hook :: each.Value
+            each.Add hook
             notified.Keys |> Seq.sort |> Seq.toList)
         for scope in existing do
           match owners.TryGetValue scope with

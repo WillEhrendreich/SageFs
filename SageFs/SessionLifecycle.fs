@@ -81,3 +81,16 @@ module SessionLifecycle =
         | ActiveSession.Viewing _
         | ActiveSession.AwaitingSession -> []
       announced, stopped @ created @ activated
+
+/// Remembers what the daemon last announced about the session list, and says what changed each time it is
+/// shown the registry. The daemon looks from the thread that runs the Elm loop's model hook, and a lock keeps
+/// two looks from reading the same "last" if that ever stops being true.
+type SessionLifecycleWatch() =
+  let gate = obj ()
+  let mutable announced : SessionsAnnounced option = None
+
+  member _.Observe(registry: SessionRegistryView) : SseEvent list =
+    lock gate (fun () ->
+      let now, events = SessionLifecycle.observe announced registry
+      announced <- Some now
+      events)

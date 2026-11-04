@@ -54,24 +54,16 @@ type Coalescer<'a>(deliver: 'a -> unit, start: (unit -> unit) -> unit, merge: 'a
       state <- state'
       next)
 
-  let rec run (first: 'a) : unit =
-    let mutable next = Some first
-    while Option.isSome next do
-      let current = next.Value
-      next <- None
-      let mutable delivered = false
-      try
-        deliver current
-        delivered <- true
-      finally
-        match step Coalesce.finished with
-        | CoalesceStep.Wait -> ()
-        // A delivery that threw ends this work item, as it always did, but the value waiting behind it
-        // still gets its own.
-        | CoalesceStep.StartDelivery newer ->
-          match delivered with
-          | true -> next <- Some newer
-          | false -> start (fun () -> run newer)
+  let rec run (current: 'a) : unit =
+    try
+      deliver current
+    finally
+      // What waited behind this delivery gets its own work item, whether this one finished or threw: a
+      // delivery that throws ends its work item, as it always did, and the value behind it is not
+      // stranded. One hop through `start` per pile-up costs nothing next to a delivery.
+      match step Coalesce.finished with
+      | CoalesceStep.Wait -> ()
+      | CoalesceStep.StartDelivery newer -> start (fun () -> run newer)
 
   /// Latest wins: a value that waits is replaced by the next one to arrive.
   new(deliver: 'a -> unit, start: (unit -> unit) -> unit) = Coalescer<'a>(deliver, start, (fun _ newer -> newer))

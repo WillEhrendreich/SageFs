@@ -1896,7 +1896,7 @@ let createElmRuntime
   let mutable lastStateJson = ""
   let mutable lastLoggedOutputCount = 0
   let mutable lastLoggedDiagCount = 0
-  let mutable lifecycleSeen : SessionsAnnounced option = None
+  let sessionLifecycle = SessionLifecycleWatch()
   // Subscribers run on the pool, one delivery at a time, and a change that lands while one is running
   // replaces any waiting behind it. Every handler reads the model when it runs, so the changes in between
   // had nothing to add. This was one pool work item per change, which let a second pass over every file of
@@ -2038,8 +2038,7 @@ let createElmRuntime
         try
           // What happened to the session list since the last look. It is read before the model-JSON
           // dedupe below, because a session starting or stopping may leave that key as it was.
-          let announced, lifecycle = SessionLifecycle.observe lifecycleSeen model.Sessions
-          lifecycleSeen <- Some announced
+          let lifecycle = sessionLifecycle.Observe model.Sessions
           let json = SseDedupKey.fromModel model
           match json <> lastStateJson with
           | true ->

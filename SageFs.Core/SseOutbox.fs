@@ -28,6 +28,12 @@ module OutboxEntry =
     | OutboxEntry.Text text -> text
     | OutboxEntry.Logged item -> Replayable.toWire item
 
+/// How much one connection's queue may hold. A record, because two bare ints in one constructor are
+/// swappable and nothing but the reader's care says which is which.
+type OutboxLimits =
+  { QueuedFrames: int
+    QueuedBytes: int }
+
 /// One `/events` connection's queue of frames waiting to be written. The log fills it from the
 /// thread that published, and one reader drains it onto the socket, so a slow client never holds
 /// up a publisher.
@@ -37,13 +43,14 @@ module OutboxEntry =
 /// replayed what it missed. The old queue dropped its oldest frame without a word, which with ids
 /// would be a hole no client could see.
 ///
-/// Full means two things: `capacity` frames, or `maxBytes` of them. A count alone let a client that
-/// stopped reading hold 1,024 frames of 400 KB each. A frame bigger than `maxBytes` is still
+/// Full means two things: `QueuedFrames` frames, or `QueuedBytes` of them. A count alone let a client that
+/// stopped reading hold 1,024 frames of 400 KB each. A frame bigger than `QueuedBytes` is still
 /// accepted when nothing is waiting, because refusing it would mean no client could ever get it.
-type SseOutbox(capacity: int, maxBytes: int) =
+type SseOutbox(limits: OutboxLimits) =
+  let maxBytes = limits.QueuedBytes
   let channel =
     Channel.CreateBounded<OutboxEntry>(
-      BoundedChannelOptions(capacity, FullMode = BoundedChannelFullMode.Wait, SingleReader = true))
+      BoundedChannelOptions(limits.QueuedFrames, FullMode = BoundedChannelFullMode.Wait, SingleReader = true))
   let mutable overflowed = 0
   let mutable queuedBytes = 0
 
@@ -67,7 +74,8 @@ type SseOutbox(capacity: int, maxBytes: int) =
         release weight
         refuse ()
 
-  new(capacity: int) = SseOutbox(capacity, Int32.MaxValue)
+  /// A queue bounded by frame count alone.
+  new(capacity: int) = SseOutbox({ QueuedFrames = capacity; QueuedBytes = Int32.MaxValue })
 
   /// A comment line that keeps an idle connection open.
   static member KeepaliveFrame : string = ": keepalive\n\n"
@@ -118,6 +126,9 @@ module SseOutbox =
   /// holds (`SseLog.productionLimits`), since a queued frame can outlive its place in the log.
   let maxBytes : int = 32 <<< 20
 
+  /// What a connection's queue is built with.
+  let limits : OutboxLimits = { QueuedFrames = capacity; QueuedBytes = maxBytes }
+
   [<RequireQualifiedAccess>]
   type DrainEnd =
     /// The outbox was closed after the last frame was written.
@@ -139,16 +150,20 @@ module SseOutbox =
   /// (`SseReplay.announcedAfterCatchUp`).
   let drainQueued (outbox: SseOutbox) (write: string -> Task) : Task<EventId option> =
     task {
-      let mutable newest = None
-      let mutable more = true
-      while more do
-        match outbox.TryTake() with
-        | None -> more <- false
-        | Some (OutboxEntry.Logged item) ->
-          do! write item.Frame.Wire
-          newest <- Some item.Id
-        | Some (OutboxEntry.Text text) -> do! write text
-      return newest
+      // What is queued right now, taken in one go and then written: entries that arrive meanwhile wait for
+      // the next turn, which a catch-up gives them at its next file.
+      let entries = List.unfold (fun () -> outbox.TryTake() |> Option.map (fun entry -> entry, ())) ()
+      for entry in entries do
+        match entry with
+        | OutboxEntry.Logged item -> do! write item.Frame.Wire
+        | OutboxEntry.Text text -> do! write text
+      return
+        entries
+        |> List.choose (fun entry ->
+          match entry with
+          | OutboxEntry.Logged item -> Some item.Id
+          | OutboxEntry.Text _ -> None)
+        |> List.tryLast
     }
 
   /// Writes queued frames, in order, until the outbox ends or the client leaves.
@@ -176,3 +191,38 @@ module SseOutbox =
                   | false -> DrainEnd.Closed)
       return ended.Value
     }
+
+/// Lets a connection's queue out during its catch-up, as often as the catch-up calls `Release`, and
+/// remembers the newest id it wrote. The catch-up reads that once the snapshots are whole, to name the
+/// right position in its id-only frame (`SseReplay.announcedAfterCatchUp`).
+type QueueRelease(outbox: SseOutbox, write: string -> Task) =
+  let mutable newest : EventId option = None
+
+  /// Write what is queued now, without ids.
+  member _.Release() : Task =
+    task {
+      let! released = SseOutbox.drainQueued outbox write
+      match released with
+      | Some id -> newest <- Some id
+      | None -> ()
+    }
+    :> Task
+
+  /// The newest frame written ahead of the snapshots, if any was.
+  member _.WrittenAhead : EventId option = newest
+
+/// Names the log's position on a heartbeat, but only when it has moved since the last time. A scoped
+/// connection is quiet because the traffic is another session's, and without this its last id lags the
+/// log until it falls out of the replay window, so a reconnect is told to resync having missed nothing.
+/// Unmoved, a heartbeat is the keepalive comment it always was.
+type HeartbeatPosition(log: SseLog, outbox: SseOutbox) =
+  let mutable last = 0L
+
+  member _.Beat() : unit =
+    log.WithPosition(fun position ->
+      match position with
+      | LogPosition.At at when at.Seq > last ->
+        last <- at.Seq
+        outbox.Offer (EventId.toIdOnlyFrame at)
+      | LogPosition.At _
+      | LogPosition.Empty -> outbox.Keepalive ())

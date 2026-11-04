@@ -1333,7 +1333,7 @@ let runSseWriteLoop
   (sources: IObservable<string> list)
   (heartbeatMs: int) =
   task {
-    let outbox = SseOutbox(SseOutbox.capacity, SseOutbox.maxBytes)
+    let outbox = SseOutbox SseOutbox.limits
     let subs = sources |> List.map (fun src -> src.Subscribe(fun frame -> outbox.Offer frame))
     try
       use _heartbeat = new Timer((fun _ -> outbox.Keepalive ()), null, heartbeatMs, heartbeatMs)
@@ -2139,15 +2139,15 @@ let wireModelChangeHandlers
 
   // The summary and the batch are small and an idle session sent them on every change. Each push goes into
   // the replay log, so a frame that says what the last one said spends the window for nothing. Handlers
-  // run one at a time (`Coalescer` in DaemonMode), so these cells have one writer.
-  let lastPushedWire = ref (Map.empty: Map<string * ChangeGatedEvent, string>)
+  // run one at a time (`Coalescer` in DaemonMode), so these tables have one writer.
+  let lastPushedWire = System.Collections.Generic.Dictionary<string * ChangeGatedEvent, string>()
   let pushUnlessUnchanged (activeId: string) (event: ChangeGatedEvent) (wire: string) : unit =
-    match Map.tryFind (activeId, event) lastPushedWire.Value with
-    | Some last when last = wire -> ()
+    match lastPushedWire.TryGetValue((activeId, event)) with
+    | true, last when last = wire -> ()
     | _ ->
-      lastPushedWire.Value <- Map.add (activeId, event) wire lastPushedWire.Value
+      lastPushedWire.[(activeId, event)] <- wire
       ctx.TestEventBroadcast.Trigger(SseFrame.ofSession (Some activeId) wire)
-  let lastPushedLocations = ref (Map.empty: Map<string, SageFs.Features.LiveTesting.TestSourceLocation list>)
+  let lastPushedLocations = System.Collections.Generic.Dictionary<string, SageFs.Features.LiveTesting.TestSourceLocation list>()
 
   let handleTestSummaryChange () =
     SseContext.withModel ctx (fun model ->
@@ -2433,10 +2433,10 @@ let wireModelChangeHandlers
             // a row per test (hundreds of KB on a big suite) and used to go out on every model change.
             // A client that connects later gets it in its snapshot (`replayCachedTestState`).
             let key = sessionId |> Option.defaultValue ""
-            match Map.tryFind key lastPushedLocations.Value with
-            | Some last when obj.ReferenceEquals(last, locs) || last = locs -> ()
+            match lastPushedLocations.TryGetValue key with
+            | true, last when obj.ReferenceEquals(last, locs) || last = locs -> ()
             | _ ->
-              lastPushedLocations.Value <- Map.add key locs lastPushedLocations.Value
+              lastPushedLocations.[key] <- locs
               ctx.TestEventBroadcast.Trigger(
                 SseFrame.ofSession sessionId
                   (SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts sessionId locs)))
@@ -3487,7 +3487,7 @@ let serveEventsWork (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.A
     | Some _ ->
       let body = ctx.Response.Body
       let heartbeatMs = int SageFs.Timeouts.sseHeartbeat.TotalMilliseconds
-      let outbox = SseOutbox(SseOutbox.capacity, SseOutbox.maxBytes)
+      let outbox = SseOutbox SseOutbox.limits
       // Attach before anything is written: from this moment every frame this connection may see is
       // either in `CatchUp` or queued behind it, so nothing published while the snapshots are
       // being built is lost. The one cost is that a frame can arrive both in a snapshot and after
@@ -3495,18 +3495,8 @@ let serveEventsWork (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.A
       let attachment =
         rctx.SseContext.Log.Attach(stream, lastEventIdOf ctx, outbox.OfferLogged)
       // The heartbeat names the log's position when it has moved, so a connection that is quiet because
-      // the traffic is another session's still moves its last id. Without that, a scoped client that
-      // reconnects after a busy hour asks from an id the log has dropped and is told to resync from
-      // snapshots, having missed nothing. Unmoved, it is the keepalive comment it always was.
-      let lastHeartbeatSeq = ref 0L
-      let heartbeat () =
-        rctx.SseContext.Log.WithPosition(fun position ->
-          match position with
-          | LogPosition.At at when at.Seq > lastHeartbeatSeq.Value ->
-            lastHeartbeatSeq.Value <- at.Seq
-            outbox.Offer (EventId.toIdOnlyFrame at)
-          | LogPosition.At _
-          | LogPosition.Empty -> outbox.Keepalive ())
+      // the traffic is another session's still moves its last id (`HeartbeatPosition`).
+      let heartbeat = HeartbeatPosition(rctx.SseContext.Log, outbox)
       try
         match attachment.CatchUp with
         | SseReplay.CatchUp.Replay missed ->
@@ -3517,24 +3507,19 @@ let serveEventsWork (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.A
         // Between its files it lets the queue out, so the queue cannot fill and cut the connection the
         // moment the catch-up ends, which made the reconnect write the same catch-up again. Those frames
         // go out without ids, and the newest is named below, once the snapshots are whole.
-        let writtenAhead = ref None
-        let letQueueOut () : Task =
-          task {
-            let! newest = SseOutbox.drainQueued outbox (fun frame -> writeSseFrame body frame :> Task)
-            newest |> Option.iter (fun id -> writtenAhead.Value <- Some id)
-          } :> Task
-        do! writeCatchUpSnapshots rctx stream ctx.RequestAborted letQueueOut body
+        let queueRelease = QueueRelease(outbox, (fun frame -> writeSseFrame body frame :> Task))
+        do! writeCatchUpSnapshots rctx stream ctx.RequestAborted queueRelease.Release body
         // Said last, so a connection cut mid-snapshot resumes from the id it last had in full.
-        match SseReplay.announcedAfterCatchUp attachment.Position writtenAhead.Value with
+        match SseReplay.announcedAfterCatchUp attachment.Position queueRelease.WrittenAhead with
         | LogPosition.At position -> do! writeSseFrame body (EventId.toIdOnlyFrame position)
         | LogPosition.Empty -> ()
         // The retry hint comes once the client is caught up, as it always did: a client (and a test)
         // that reads up to it has the whole catch-up, and has been attached since before it began.
         do! writeSseFrame body (SageFs.SseWriter.formatRetryHint heartbeatMs)
         // The connection is not idle while it is being caught up, so the heartbeat starts here. Started
-        // earlier, its id-only frame would sit in the queue and be let out by `letQueueOut`, moving the
+        // earlier, its id-only frame would sit in the queue and be let out by `queueRelease`, moving the
         // client's last id before the snapshots were whole.
-        use _heartbeat = new Timer((fun _ -> heartbeat ()), null, heartbeatMs, heartbeatMs)
+        use _heartbeat = new Timer((fun _ -> heartbeat.Beat ()), null, heartbeatMs, heartbeatMs)
         let! ended = SseOutbox.drain outbox (fun frame -> writeSseFrame body frame :> Task) ctx.RequestAborted
         match ended with
         | SseOutbox.DrainEnd.Overflowed -> Log.debug "[SSE] /events client fell behind; closed so it resumes by id"
