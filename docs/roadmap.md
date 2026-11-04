@@ -11,15 +11,16 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 5, Later 19, Exploring 20. Already built: 42.
+On the page today: Now 0, Next 6, Later 19, Exploring 20. Already built: 42.
 
-## Next (5)
+## Next (6)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Live testing
 
 - [ ] **Debug failing tests properly in VS Code.** Debugging a failing test from the VS Code lens works for one test at a time. The attach is now proven in our own tests, the same case the Neovim item leans on. Still open is debug runs updating the gutter. Several tests at once and breakpoints in evaluated code are further out. ([LIVE_TESTING_GUIDE.md](LIVE_TESTING_GUIDE.md), [how-live-testing-works.md](how-live-testing-works.md), [debug-failing-tests-in-vscode.md](plans/debug-failing-tests-in-vscode.md))
+- [ ] **Bound what a connection is sent on connect.** Connecting an editor sends the annotations and coverage badges of every file in the session, one frame each. On a project of 1,629 files the catch-up had sent 2.7 MB after 100 seconds and had not finished. I'd send the list of files and let an editor ask for the ones it has open, the way the test list already works. ([sse-events.md](sse-events.md), [how-live-testing-works.md](how-live-testing-works.md), [bound-the-connect-catch-up.md](plans/bound-the-connect-catch-up.md))
 
 ### Hot reload
 
