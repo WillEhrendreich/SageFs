@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress (step 1 of 12 done) |
 | Size | L (five phases; phase 1 is M, phase 4 is L) |
-| Branch and worktree | none yet |
-| Last green commit | `7065203b` (no code has changed for this item; the plan is the only change) |
-| Next action | Phase 1, step 1: write the failing property tests for a pure `SageFs.Core/ViewSettings.fs` (precedence, only-overrides-stored, `fitColumns`), then the module. Start "Measure first" (the Live testing spike) beside it, because it blocks only phase 5. |
+| Branch and worktree | none; on master. The step 1 worktree (`view-settings`) is merged and can be reaped. |
+| Last green commit | `cebf9925` (step 1; default tier 14,644 of 14,644 and ratchets 509 of 509 `Trusted`, analyzers within budget) |
+| Next action | Phase 1, step 2: rewrite `SageFs/LiveBindingsDock.fs` to draw from the resolved view (`ViewSettings.resolveView`, read through `SettingsCatalog.resolve`): one line per row, the small kind glyph with the word on hover, the hover pin, the REPL-only chip in the bar, the theme tokens, and the collapsed output strip in `AppOutputView.fs`. Write test 2 first (`LiveBindingsViewBrowserTests.fs`): ten collapsed bindings in a 252 px dock show at least eight rows. The two dock journeys change in the same commit. Daemon and dashboard code does not load into a Core session, so prove it in the browser against a live daemon. Start "Measure first" (the Live testing spike) beside it, because it blocks only phase 5. |
 | Decisions made | 2026-11-04, Will: a view is personal, and a change saves to "This app" by default. Expression rows and per-row views are wanted. "Use the current value as the initial value" is wanted. Following a call into its initializer is worth building. The kind of a value is a small glyph with the word on hover. The app-output strip collapses when no app is running. Earlier the same day, Will: colour follows the theme's semantic tokens and red means failure only. One configurable view with presets, a recommended preset for each mode, kept per app and mode. |
-| Surprises | Writing the plan found five things the pane's history did not say. The repo already resolves settings through four layers, so persistence needs no new store. `PersistenceState.DiffersFromFile` stands for three different situations. `PathStep` has no step into a function body. The live walk carries no mutable-storage flag. And every built-in theme set `--fg-dim` below 4.5:1, which hid behind a test that read the stylesheet's fallback (fixed in `cfaebb0e`). |
+| Surprises | Writing the plan found five things the pane's history did not say. The repo already resolves settings through four layers, so persistence needs no new store. `PersistenceState.DiffersFromFile` stands for three different situations. `PathStep` has no step into a function body. The live walk carries no mutable-storage flag. And every built-in theme set `--fg-dim` below 4.5:1, which hid behind a test that read the stylesheet's fallback (fixed in `cfaebb0e`). Step 1 added one more: the settings core already had everything persistence needs (`SettingsResolver`, `SettingsCatalog.edit` and `clear`), so `ViewSettings.fs` holds only what a view is, and the write rule is a pure function that decides between storing and clearing. |
 
 ## What done looks like
 
