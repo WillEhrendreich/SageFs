@@ -2023,6 +2023,13 @@ module ActionQueuePush =
 
 // ── Model change handlers: state change → SSE + MCP notifications ──
 
+/// What one file's push says, as a short comparable value: its annotations and its views, hashed, so the daemon
+/// remembers a few bytes per file and not the frames.
+let pushedFileDigest (annotationsWire: string) (viewJsons: string array) : string =
+  use sha = System.Security.Cryptography.SHA256.Create()
+  sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(annotationsWire + "\n" + String.concat "\n" viewJsons))
+  |> Convert.ToBase64String
+
 /// The frames a model change pushes only when they differ from the last one pushed for the session.
 [<RequireQualifiedAccess>]
 type ChangeGatedEvent =
@@ -2143,6 +2150,8 @@ let wireModelChangeHandlers
       lastPushedWire.[(activeId, event)] <- wire
       ctx.TestEventBroadcast.Trigger(SseFrame.ofSession (Some activeId) wire)
   let lastPushedLocations = System.Collections.Generic.Dictionary<string, SageFs.Features.LiveTesting.TestSourceLocation list>()
+  // What each file said the last time it was pushed, for the session it was pushed for.
+  let lastPushedFile = System.Collections.Generic.Dictionary<string * string, string>()
 
   let handleTestSummaryChange () =
     SseContext.withModel ctx (fun model ->
@@ -2257,11 +2266,9 @@ let wireModelChangeHandlers
             let fa = SageFs.Features.LiveTesting.FileAnnotations.projectFile basis.Value file
             match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 || fa.InlineFailures.Length > 0 with
             | true ->
-              ctx.TestEventBroadcast.Trigger(
-                SseFrame.ofSession (Some activeId)
-                  (SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa))
-              // Emit one coverage_view event per CoverageView so editors
-              // can render a single badge per function instead of one per test.
+              let annotationsWire = SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa
+              // One coverage_view event per CoverageView so editors can render a single badge per
+              // function instead of one per test.
               let views =
                 SageFs.Features.LiveTesting.FileAnnotationsInternals.projectViewsOf
                   SageFs.Features.LiveTesting.CoverageViewMode.defaults
@@ -2271,10 +2278,23 @@ let wireModelChangeHandlers
                   model.LiveTesting.TestState
               let gen =
                 RunGeneration.value model.LiveTesting.TestState.LastGeneration
-              for view in views do
-                ctx.TestEventBroadcast.Trigger(
-                  SseFrame.ofSession (Some activeId)
-                    (SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) gen view))
+              // A file is pushed when what it would say differs from what was last pushed for it. After every
+              // completed run this pushed every annotated file, changed or not: about 900 file_annotations
+              // frames and their views on SageFs.Tests, each into the replay log. The views are compared
+              // without their generation, which is new on every run and would make every file differ; an
+              // editor keeps a view of an older generation until a newer one replaces it.
+              let digest =
+                pushedFileDigest annotationsWire
+                  (views |> Array.map (SageFs.SseWriter.coverageViewJson ctx.SseJsonOpts (Some activeId) 0))
+              match lastPushedFile.TryGetValue((activeId, file)) with
+              | true, last when last = digest -> ()
+              | _ ->
+                lastPushedFile.[(activeId, file)] <- digest
+                ctx.TestEventBroadcast.Trigger(SseFrame.ofSession (Some activeId) annotationsWire)
+                for view in views do
+                  ctx.TestEventBroadcast.Trigger(
+                    SseFrame.ofSession (Some activeId)
+                      (SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) gen view))
             | false -> ()
         | false -> ()
       | false -> ())

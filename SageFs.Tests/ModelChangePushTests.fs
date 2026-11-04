@@ -130,3 +130,112 @@ let tests =
       text.Contains "event: test_source_locations" |> Expect.isFalse "another session's snapshot has none"
     }
   ]
+
+// ── Which files a run pushes ──
+//
+// After every completed run the live path used to push the annotations and coverage views of EVERY annotated
+// file, changed or not: about 900 `file_annotations` frames and their `coverage_view` frames on SageFs.Tests, each
+// into the replay log. That spent the log's two thousand frames on one run, and sent every connected editor
+// megabytes to learn that a few files changed. A file is pushed when what it would say differs from what was last
+// pushed for it.
+
+let private generationOf (n: int) : RunGeneration =
+  Seq.fold (fun generation _ -> RunGeneration.next generation) RunGeneration.zero (seq { 1 .. n })
+
+/// `files` files with one test each and one covered symbol each, run `generation`; `failing` names the file whose test failed.
+let private runOf (files: int) (generation: int) (failing: int option) : SageFsModel =
+  let initial = SageFsModel.initial ()
+  let entries =
+    [| for i in 1 .. files ->
+         let entry = entryIn i
+         match failing with
+         | Some f when f = i -> { entry with Status = TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TimeSpan.Zero) }
+         | _ -> entry |]
+  let state =
+    { LiveTestState.empty with
+        Activation = LiveTestingActivation.Active
+        LastGeneration = generationOf generation
+        CoverageAnnotations =
+          [| for i in 1 .. files ->
+               { Symbol = sprintf "File%d.f" i
+                 FilePath = fileOf i
+                 DefinitionLine = 10
+                 Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing)
+                 BranchCoverage = BranchCoverage.Unknown } |] }
+    |> LiveTestState.withStatusEntries entries
+  { initial with LiveTesting = { initial.LiveTesting with TestState = state } }
+
+/// The files a frame stream carried a `file_annotations` frame for.
+let private annotatedFiles (wires: ResizeArray<string>) : string list =
+  [ for wire in wires do
+      if wire.StartsWith "event: file_annotations" then
+        let data = wire.Split('\n') |> Array.find (fun line -> line.StartsWith "data: ") |> fun line -> line.Substring 6
+        use parsed = System.Text.Json.JsonDocument.Parse data
+        yield parsed.RootElement.GetProperty("FilePath").GetString() ]
+
+let private pushingWires (current: SageFsModel ref) =
+  let ctx = contextOver current
+  let wires = ResizeArray<string>()
+  ctx.TestEventBroadcast.Publish.Add(fun frame -> wires.Add frame.Wire)
+  let changed = Event<SseEvent>()
+  let subscription =
+    wireModelChangeHandlers
+      changed.Publish ctx (ref Map.empty) (ref SageFs.Features.FeatureHooks.FeaturePushState.empty)
+      (ref 0) (ref None) (ref None) None
+  wires, (fun () -> changed.Trigger (SseEvent.ModelChanged (0, 0))), subscription
+
+[<Tests>]
+let pushedFilesTests =
+  testList "model change pushes only the files that changed" [
+
+    test "the first run pushes every file" {
+      let current = ref (runOf 5 1 None)
+      let wires, tick, _ = pushingWires current
+      tick ()
+      annotatedFiles wires |> List.sort |> Expect.equal "all five" [ for i in 1 .. 5 -> fileOf i ] 
+    }
+
+    test "WHY — a run that changes one file's result pushes that file, not all of them" {
+      let current = ref (runOf 5 1 None)
+      let wires, tick, _ = pushingWires current
+      tick ()
+      wires.Clear ()
+      current.Value <- runOf 5 2 (Some 3)
+      tick ()
+      annotatedFiles wires |> Expect.equal "only file 3" [ fileOf 3 ]
+    }
+
+    test "WHY — a run that changes nothing pushes no file, though it is a new generation" {
+      let current = ref (runOf 5 1 None)
+      let wires, tick, _ = pushingWires current
+      tick ()
+      wires.Clear ()
+      current.Value <- runOf 5 2 None
+      tick ()
+      annotatedFiles wires |> Expect.isEmpty "nothing differs from what was pushed"
+      wires |> Seq.exists (fun w -> w.StartsWith "event: coverage_view") |> Expect.isFalse "and no view"
+    }
+
+    test "a file that changed back is pushed again, since the last push is what it is compared with" {
+      let current = ref (runOf 5 1 None)
+      let wires, tick, _ = pushingWires current
+      tick ()
+      current.Value <- runOf 5 2 (Some 2)
+      tick ()
+      wires.Clear ()
+      current.Value <- runOf 5 3 None
+      tick ()
+      annotatedFiles wires |> Expect.equal "file 2 passes again" [ fileOf 2 ]
+    }
+
+    test "a file pushed with its views carries them, so the views of a changed file are not left behind" {
+      let current = ref (runOf 3 1 None)
+      let wires, tick, _ = pushingWires current
+      tick ()
+      wires.Clear ()
+      current.Value <- runOf 3 2 (Some 1)
+      tick ()
+      wires |> Seq.filter (fun w -> w.StartsWith "event: coverage_view") |> Seq.length
+      |> Expect.equal "the changed file's one view" 1
+    }
+  ]
