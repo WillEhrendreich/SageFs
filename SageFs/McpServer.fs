@@ -3307,16 +3307,64 @@ let writeCatchUpSnapshots (rctx: RouteContext) (stream: StreamScope) (gone: Canc
       do! writeSseFrame body frame.Wire
   } :> Task
 
-/// One `/events` connection: catch it up on what it asked for, then stream what it asked for.
-let serveEvents (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNetCore.Http.HttpContext) : Task =
+/// How one connection ended, when it ended without an error.
+[<RequireQualifiedAccess>]
+type ConnectionOutcome =
+  | Served
+  | Refused of reason: string
+
+/// What counting a connection does to the instruments, as four effects so the order and the
+/// guarantee can be tested without the process-wide meters.
+type ConnectionTracking =
+  { Opened: unit -> unit
+    Closed: TimeSpan -> unit
+    Succeeded: unit -> unit
+    Failed: string -> unit }
+
+module ConnectionTracking =
+  /// Counts a connection open, runs its work, and counts it closed however the work ends. A write
+  /// that throws mid-catch-up used to skip the lines after the `finally`, which left the gauge one
+  /// too high and the span open for good. A client that leaves (cancellation) is a normal end, and
+  /// a failure still reaches the caller after it has been counted.
+  let around (tracking: ConnectionTracking) (work: unit -> Task<ConnectionOutcome>) : Task =
+    task {
+      tracking.Opened ()
+      let started = System.Diagnostics.Stopwatch.GetTimestamp()
+      let pending = work ()
+      // Waiting on `WhenAny` never throws, so how the work ended is read off the task and the
+      // counting below runs whichever way it ended. The task is awaited last, so its error still
+      // reaches the caller.
+      let! _ = Task.WhenAny [| pending :> Task |]
+      match pending.Status with
+      | TaskStatus.RanToCompletion ->
+        match pending.Result with
+        | ConnectionOutcome.Served -> tracking.Succeeded ()
+        | ConnectionOutcome.Refused reason -> tracking.Failed reason
+      | TaskStatus.Canceled -> tracking.Succeeded ()
+      | _ -> tracking.Failed (pending.Exception.GetBaseException().Message)
+      tracking.Closed (System.Diagnostics.Stopwatch.GetElapsedTime started)
+      let! _ = pending
+      ()
+    }
+
+/// The daemon's instruments for one connection to `endpoint`: the active gauge, the duration
+/// histogram and the connection's span, which starts now.
+let sseConnectionTracking (endpoint: string) : ConnectionTracking =
+  let activity =
+    SageFs.Instrumentation.startSpanWithKind
+      SageFs.Instrumentation.daemonSource "sse.connection"
+      System.Diagnostics.ActivityKind.Server
+      [("sse.endpoint", box endpoint)]
+  { Opened = fun () -> SageFs.Instrumentation.sseConnectionsActive.Add(1L)
+    Closed = fun elapsed ->
+      SageFs.Instrumentation.sseConnectionDurationMs.Record(elapsed.TotalMilliseconds)
+      SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
+    Succeeded = fun () -> SageFs.Instrumentation.succeedSpan activity
+    Failed = fun reason -> SageFs.Instrumentation.failSpan activity reason }
+
+/// One `/events` connection's work: catch it up on what it asked for, then stream what it asked for.
+let serveEventsWork (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNetCore.Http.HttpContext) : Task<ConnectionOutcome> =
   task {
-    SageFs.Instrumentation.sseConnectionsActive.Add(1L)
-    let connSw = System.Diagnostics.Stopwatch.StartNew()
-    let connActivity =
-      SageFs.Instrumentation.startSpanWithKind
-        SageFs.Instrumentation.daemonSource "sse.connection"
-        System.Diagnostics.ActivityKind.Server
-        [("sse.endpoint", box "/events")]
     setSseHeaders ctx
     match rctx.Config.StateChanged with
     | Some _ ->
@@ -3351,18 +3399,16 @@ let serveEvents (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNe
         | SseOutbox.DrainEnd.ClientLeft -> ()
       finally
         attachment.Detach ()
-      connSw.Stop()
-      SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
-      SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
-      SageFs.Instrumentation.succeedSpan connActivity
+      return ConnectionOutcome.Served
     | None ->
       ctx.Response.StatusCode <- 501
       do! writeSseFrame ctx.Response.Body "event: error\ndata: {\"error\":\"No Elm loop available\"}\n\n"
-      connSw.Stop()
-      SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
-      SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
-      SageFs.Instrumentation.failSpan connActivity "No Elm loop available"
+      return ConnectionOutcome.Refused "No Elm loop available"
   }
+
+/// One `/events` connection, counted from the moment it opens to the moment it ends, however it ends.
+let serveEvents (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNetCore.Http.HttpContext) : Task =
+  ConnectionTracking.around (sseConnectionTracking "/events") (fun () -> serveEventsWork rctx stream ctx)
 
 let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
   // From here every frame the daemon pushes is numbered and kept for replay.

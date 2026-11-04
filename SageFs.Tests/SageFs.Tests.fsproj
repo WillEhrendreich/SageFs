@@ -544,6 +544,7 @@
         <Compile Include="EventsStreamScopeTests.fs" />
         <Compile Include="EventsResumeTests.fs" />
         <Compile Include="EventsCatchUpCancellationTests.fs" />
+        <Compile Include="SseConnectionTrackingTests.fs" />
         <Compile Include="LiveBindingsSseWiringTests.fs" />
         <Compile Include="EvalStoreTests.fs" />
         <Compile Include="FeatureHookTests.fs" />
