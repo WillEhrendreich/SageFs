@@ -1471,9 +1471,15 @@ let replaySessionSnapshot (ctx: SseContext) (target: string option) (body: Syste
   | _ -> task { () }
 
 /// Replay cached test results + file annotations for a new SSE connection.
-let replayCachedTestState (ctx: SseContext) (target: string option) (body: System.IO.Stream) =
+///
+/// Every file of the session is projected here, which on a large project is minutes of CPU. A
+/// write to a connection that has closed is a no-op that never throws, so nothing in the loop
+/// learns the client left. `gone` is how it learns: it stops at the next file, and costs the
+/// daemon nothing more.
+let replayCachedTestState (ctx: SseContext) (target: string option) (gone: CancellationToken) (body: System.IO.Stream) =
   SseContext.withModelAsync ctx (fun model -> task {
     try
+      gone.ThrowIfCancellationRequested()
       let lt = model.LiveTesting.TestState
       let activeId = target |> Option.defaultValue ""
       let sessionEntries =
@@ -1522,6 +1528,7 @@ let replayCachedTestState (ctx: SseContext) (target: string option) (body: Syste
           |> Array.distinct
         let ltState = model.LiveTesting
         for file in files do
+          gone.ThrowIfCancellationRequested()
           let fa = FileAnnotations.projectWithCoverage file ltState
           match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 || fa.InlineFailures.Length > 0 with
           | true ->
@@ -1534,12 +1541,14 @@ let replayCachedTestState (ctx: SseContext) (target: string option) (body: Syste
                 CoverageViewMode.defaults file ltState.DepGraph ltState.TestState
             let gen = RunGeneration.value ltState.TestState.LastGeneration
             for view in views do
+              gone.ThrowIfCancellationRequested()
               do! SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) gen view
                   |> writeSseFrame body
           | false -> ()
       | false -> ()
-    with ex ->
-      Log.error "[SSE] replay error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+    with
+    | :? OperationCanceledException -> ()
+    | ex -> Log.error "[SSE] replay error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
   })
 
 /// Replay the current cohort matrix to a newly-connected client (item 15a).
@@ -3270,11 +3279,11 @@ let lastEventIdOf (ctx: Microsoft.AspNetCore.Http.HttpContext) : string option =
 
 /// The state a connection is caught up on, written whether or not it also replays missed frames:
 /// a snapshot is current by construction, and a replay adds what a snapshot cannot carry.
-let writeCatchUpSnapshots (rctx: RouteContext) (stream: StreamScope) (body: System.IO.Stream) : Task =
+let writeCatchUpSnapshots (rctx: RouteContext) (stream: StreamScope) (gone: CancellationToken) (body: System.IO.Stream) : Task =
   task {
     let target = SseContext.replayTarget rctx.SseContext stream
     do! replaySessionSnapshot rctx.SseContext target body
-    do! replayCachedTestState rctx.SseContext target body
+    do! replayCachedTestState rctx.SseContext target gone body
     do! replayCohortMatrix rctx.SseContext body
     do! replayHealthSnapshot rctx.SseContext stream rctx.Config.SessionOps.GetAllSessions body
     // The bindings map is the ACTIVE session's, so it is only replayed to a connection
@@ -3327,7 +3336,7 @@ let serveEvents (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNe
           for item in missed do
             do! writeSseFrame body (Replayable.toWire item)
         | SseReplay.CatchUp.Resync reason -> Log.debug "[SSE] /events resync: %A" reason
-        do! writeCatchUpSnapshots rctx stream body
+        do! writeCatchUpSnapshots rctx stream ctx.RequestAborted body
         // Said last, so a connection cut mid-snapshot resumes from the id it last had in full.
         match attachment.Position with
         | LogPosition.At position -> do! writeSseFrame body (EventId.toIdOnlyFrame position)
