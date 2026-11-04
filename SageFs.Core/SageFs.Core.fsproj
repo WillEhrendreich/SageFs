@@ -68,6 +68,7 @@
         <Compile Include="UpdateCheck.fs" />
         <Compile Include="Settings.fs" />
         <Compile Include="SettingsStore.fs" />
+        <Compile Include="ViewSettings.fs" />
         <Compile Include="SettingsCatalog.fs" />
         <Compile Include="EvalLatencyTrace.fs" />
         <Compile Include="Features\Treemap.fs" />
