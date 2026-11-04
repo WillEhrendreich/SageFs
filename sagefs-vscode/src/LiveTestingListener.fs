@@ -362,6 +362,9 @@ type LiveTestingCallbacks = {
   OnBindingValuesUpdate: int -> ClientBindingValue list -> unit
   OnWorkflowChanged: string -> unit
   OnCoverageView: SageFs.Vscode.CoverageViewPure.CoverageView -> int -> unit
+  /// The paths of the editors the window shows. The listener asks for the annotations of those the daemon
+  /// lists; it takes them from here so it never touches the VS Code runtime, which node cannot load.
+  OpenEditorPaths: unit -> string list
 }
 
 type LiveTestingListener = {
@@ -376,6 +379,8 @@ type LiveTestingListener = {
   /// Coverage views per file (with the run generation that produced them).
   /// file path -> (generation, views). Read by the CodeLens provider.
   CoverageViews: unit -> Map<string, int * SageFs.Vscode.CoverageViewPure.CoverageView array>
+  /// Ask for the annotations of the visible editors the daemon lists. Called when the visible editors change.
+  FetchAnnotationsForEditors: unit -> unit
   /// Choose whose session-scoped events the listener takes. Binding a session drops the state already
   /// taken if any of it came from another session.
   SetEventFilter: SageFs.Vscode.SessionScopePure.EventFilter -> unit
@@ -488,8 +493,7 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     match availableAnnotations with
     | None -> ()
     | Some (sid, files) ->
-      let openPaths = Window.getVisibleTextEditors () |> Array.map (fun editor -> editor.document.fileName) |> List.ofArray
-      SageFs.Vscode.AnnotationsFetchPure.filesToFetch files openPaths
+      SageFs.Vscode.AnnotationsFetchPure.filesToFetch files (callbacks.OpenEditorPaths ())
       |> List.iter (fetchAnnotationsFile sseUrl deliver sid)
 
   /// The daemon listed the files that have annotations: remember them, and ask for the open ones.
@@ -735,9 +739,6 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       ) disconnectFn (fun msg -> try printfn "[SageFs SSE] %s" msg with _ -> ())
     | _ -> subscribeTypedSse url (hydrateFrame url processEvent)
 
-  // An editor that becomes visible after the list arrived has not been asked for yet.
-  let editorWatch = Window.onDidChangeVisibleTextEditors (fun _ -> fetchAvailableForEditors url processEvent)
-
   { State = fun () -> state
     Summary = fun () -> VscLiveTestState.summary state
     Bindings = fun () -> bindings
@@ -748,6 +749,7 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     Timeline = fun () -> timeline
     SetEventFilter = setEventFilter
     CoverageViews = fun () -> coverageViews
-    Dispose = fun () ->
-      editorWatch.dispose () |> ignore
-      disposable.dispose () |> ignore }
+    // An editor that becomes visible after the list arrived has not been asked for yet; the extension calls
+    // this when the visible editors change.
+    FetchAnnotationsForEditors = fun () -> fetchAvailableForEditors url processEvent
+    Dispose = fun () -> disposable.dispose () |> ignore }
