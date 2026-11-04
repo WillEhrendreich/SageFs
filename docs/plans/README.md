@@ -73,7 +73,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | Item | Size | First failing test |
 |:--|:--|:--|
 | [Debug failing tests in VS Code](debug-failing-tests-in-vscode.md) | M for the Next scope, L overall | `holdBody` carries the session id |
-| [Bound what a connection is sent on connect](bound-the-connect-catch-up.md) | M | a catch-up for a 10,000-file session writes a fixed number of frames |
+| [Bound what a connection is sent on connect](bound-the-connect-catch-up.md) | S to M | a catch-up for a 10,000-file session writes a fixed number of frames |
 | [Markers on individual Expecto cases](markers-on-expecto-cases.md) | M | two cases under one `testList` get two lines |
 | [Confirm builds without restarting the worker](confirm-builds-without-restarting-the-worker.md) | L | a verifying session is always refused a venue |
 | [Live testing numbers on bigger projects](live-testing-numbers-on-bigger-projects.md) | M | a latency record with no machine is refused |
