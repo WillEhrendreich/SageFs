@@ -8,6 +8,48 @@ open SageFs.Features
 /// An uptime that no assertion in the snapshots using it depends on.
 let private settledUptime = FixtureDurations.uptimeUnread
 
+/// A daemon with nothing wrong, to change one thing at a time.
+let private nothingWrong : HealthSnapshot =
+  { DaemonPid = 1234
+    DaemonPort = 37749
+    Uptime = settledUptime
+    Version = "0.5.761"
+    SessionSummaries =
+      [ { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 42; LastActivity = DateTimeOffset.UtcNow } ]
+    LiveTestingSummary = None
+    MemoryMB = 256
+    Anomalies = []
+    GcDumpOutcome = None
+    MemoryPressure = SageFs.MemoryPressure.Normal
+    SupervisorHealth = SageFs.SupervisorHealth.Healthy
+    ComponentFailures = [] }
+
+let private lostWatcher : ComponentWatch.Failure =
+  { Component = "file-watcher:/work/a"
+    Reason = "the directory being watched was deleted or moved"
+    Hint = "The OS-level file watcher reported an error and may have lost events under this root." }
+
+[<Tests>]
+let componentFailureTests =
+  testList "DaemonHealth component failures" [
+
+    testCase "WHY — a daemon with a failing component is degraded, because every session can be Ready while its file watcher has lost events" <| fun _ ->
+      DaemonHealth.overallStatus { nothingWrong with ComponentFailures = [ lostWatcher ] }
+      |> Expect.equal "degraded, not healthy" OverallHealth.Degraded
+
+    testCase "a daemon with no failing component and nothing else wrong stays healthy" <| fun _ ->
+      DaemonHealth.overallStatus nothingWrong |> Expect.equal "healthy" OverallHealth.Healthy
+
+    testCase "a failing component never makes a worse state look milder" <| fun _ ->
+      let critical = { nothingWrong with MemoryPressure = SageFs.MemoryPressure.Critical; ComponentFailures = [ lostWatcher ] }
+      DaemonHealth.overallStatus critical |> Expect.equal "critical memory is still unhealthy" OverallHealth.Unhealthy
+
+    testProperty "any number of failing components is degraded, and none is not" <| fun (count: byte) ->
+      let failures = [ for i in 1 .. int count % 8 -> { lostWatcher with Component = sprintf "file-watcher:/work/%d" i } ]
+      let expected = if failures.IsEmpty then OverallHealth.Healthy else OverallHealth.Degraded
+      DaemonHealth.overallStatus { nothingWrong with ComponentFailures = failures } = expected
+  ]
+
 [<Tests>]
 let healthSnapshotTests =
   testList "DaemonHealth snapshot" [
@@ -27,6 +69,7 @@ let healthSnapshotTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
         SupervisorHealth = SageFs.SupervisorHealth.Healthy
+        ComponentFailures = []
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "should be healthy" OverallHealth.Healthy
@@ -47,6 +90,7 @@ let healthSnapshotTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
         SupervisorHealth = SageFs.SupervisorHealth.Healthy
+        ComponentFailures = []
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "should be degraded" OverallHealth.Degraded
@@ -64,6 +108,7 @@ let healthSnapshotTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
         SupervisorHealth = SageFs.SupervisorHealth.Healthy
+        ComponentFailures = []
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "no sessions = healthy (idle)" OverallHealth.Healthy
@@ -86,6 +131,7 @@ let healthSnapshotTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Critical
         SupervisorHealth = SageFs.SupervisorHealth.Healthy
+        ComponentFailures = []
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "the machine is almost out of memory, whatever the shape detector says" OverallHealth.Unhealthy
@@ -105,6 +151,7 @@ let healthSnapshotTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Tight
         SupervisorHealth = SageFs.SupervisorHealth.Healthy
+        ComponentFailures = []
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "the machine is short on memory — worth degrading for, not staying silent about" OverallHealth.Degraded
@@ -124,6 +171,7 @@ let healthSnapshotTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
         SupervisorHealth = SageFs.SupervisorHealth.Healthy
+        ComponentFailures = []
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "plenty of machine memory, nothing anomalous, nothing faulted" OverallHealth.Healthy
@@ -143,6 +191,7 @@ let healthSnapshotTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
         SupervisorHealth = SageFs.SupervisorHealth.Degraded "stuck on StopWorker"
+        ComponentFailures = []
       }
       DaemonHealth.overallStatus snapshot
       |> Expect.equal "Ready sessions do not hide a stuck supervisor" OverallHealth.Degraded
@@ -169,6 +218,7 @@ let healthFormatTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
         SupervisorHealth = SageFs.SupervisorHealth.Healthy
+        ComponentFailures = []
       }
       let text = DaemonHealth.formatSummary snapshot
       text |> Expect.stringContains "has pid" "5678"
@@ -198,6 +248,7 @@ let healthFormatTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
         SupervisorHealth = SageFs.SupervisorHealth.Healthy
+        ComponentFailures = []
       }
       let text = DaemonHealth.diagnosticSummary snapshot
       text |> Expect.equal "should explain the missing session state" "No sessions registered with the daemon."
@@ -219,6 +270,7 @@ let healthFormatTests =
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
         SupervisorHealth = SageFs.SupervisorHealth.Healthy
+        ComponentFailures = []
       }
       let text = DaemonHealth.diagnosticSummary snapshot
       text |> Expect.stringContains "should mention the faulted project" "FaultedProject"

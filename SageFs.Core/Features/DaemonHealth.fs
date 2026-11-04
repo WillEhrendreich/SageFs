@@ -68,6 +68,11 @@ type HealthSnapshot = {
   /// session commands draining while reads still answer from the snapshot, so
   /// every session can look Ready on a daemon that can no longer act on them.
   SupervisorHealth: SageFs.SupervisorHealth
+  /// Components the daemon depends on that have reported a failure (`ComponentWatch`): a file watcher that lost events under a
+  /// root, an MCP server that never started. Every session can be Ready while this is not empty, and a daemon that has lost
+  /// its file watcher is not healthy, so `overallStatus` reads it and every surface that shows the daemon's health agrees with
+  /// `/api/daemon-info` and `sagefs status`, which already reported these.
+  ComponentFailures: ComponentWatch.Failure list
 }
 
 module DaemonHealth =
@@ -117,7 +122,9 @@ module DaemonHealth =
       match snap.SupervisorHealth with
       | SageFs.SupervisorHealth.Healthy -> false
       | SageFs.SupervisorHealth.Degraded _ -> true
-    match broken || memoryCritical, hasFaulted || memoryTight || supervisorDegraded with
+    // A failing component degrades the daemon and never makes a worse state look milder.
+    let componentFailing = not (List.isEmpty snap.ComponentFailures)
+    match broken || memoryCritical, hasFaulted || memoryTight || supervisorDegraded || componentFailing with
     | true, _ -> OverallHealth.Unhealthy
     | false, true -> OverallHealth.Degraded
     | false, false -> OverallHealth.Healthy

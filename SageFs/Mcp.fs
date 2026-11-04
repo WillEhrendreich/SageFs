@@ -1371,10 +1371,10 @@ module McpTools =
         uptimeSeconds =
           health |> Option.map (fun h -> h.Uptime.TotalSeconds) |> Option.defaultValue 0.0
         overall = health |> Option.map (fun h -> SageFs.Features.DaemonHealth.healthLabel (SageFs.Features.DaemonHealth.overallStatus h)) |> Option.defaultValue "Unknown"
+        componentFailures = health |> Option.map (fun h -> SageFs.Features.ComponentWatch.wire h.ComponentFailures) |> Option.defaultValue Array.empty
         memoryPressure =
           health |> Option.map (fun h -> SageFs.MemoryPressure.describe h.MemoryPressure) |> Option.defaultValue (SageFs.MemoryPressure.describe SageFs.MemoryPressure.Normal)
-        memoryPressureNote =
-          health |> Option.map (fun h -> SageFs.MemoryPressure.explain h.MemoryPressure) |> Option.defaultValue ""
+        memoryPressureNote = health |> Option.map (fun h -> SageFs.MemoryPressure.explain h.MemoryPressure) |> Option.defaultValue ""
         machineMemory =
           {| totalBytes = machineMemory.TotalBytes
              availableBytes = machineMemory.AvailableBytes |}

@@ -28,7 +28,8 @@ let private makeHealthSnapshot
     Anomalies = []
     GcDumpOutcome = None
     MemoryPressure = SageFs.MemoryPressure.Normal
-    SupervisorHealth = SageFs.SupervisorHealth.Healthy }
+    SupervisorHealth = SageFs.SupervisorHealth.Healthy
+    ComponentFailures = [] }
 
 /// The moment every case's daemon started. Fixed, because the bar renders it and never the elapsed time.
 let private startedAt = DateTimeOffset.UnixEpoch
@@ -44,6 +45,33 @@ let private makeSession id proj status evalCount : SessionHealthSummary =
     Status = status
     EvalCount = evalCount
     LastActivity = DateTimeOffset.UtcNow }
+
+let private lostWatcher : ComponentWatch.Failure =
+  { Component = "file-watcher:/work/a"
+    Reason = "the directory being watched was deleted or moved"
+    Hint = "The OS-level file watcher reported an error and may have lost events under this root." }
+
+[<Tests>]
+let daemonHealthHeaderTellsTheTruthTests =
+  testList "DaemonHealth header and component failures" [
+
+    testCase "WHY — a failing component is in the header in words, whether or not any session exists, because a yellow dot alone is not an answer" <| fun () ->
+      for sessions in [ []; [ makeSession "abc" "MyProject.fsproj" SessionHealthStatus.Ready 10 ] ] do
+        let snap = { makeHealthSnapshot sessions None unremarkableUptime 128 with ComponentFailures = [ lostWatcher ] }
+        let html = DaemonHealthView.fromSnapshot startedAt snap |> DashboardFragments.renderDaemonHealth |> renderNode
+        html |> Expect.stringContains "names the component" lostWatcher.Component
+        html |> Expect.stringContains "says why" lostWatcher.Reason
+
+    testCase "the header says nothing about components when none fails" <| fun () ->
+      let snap = makeHealthSnapshot [] None unremarkableUptime 128
+      let html = DaemonHealthView.fromSnapshot startedAt snap |> DashboardFragments.renderDaemonHealth |> renderNode
+      html.Contains "file-watcher" |> Expect.isFalse "no component text without a failure"
+
+    testCase "fromSnapshot carries the failures and the health they cause" <| fun () ->
+      let view = viewOf { defaultSnap () with ComponentFailures = [ lostWatcher ] }
+      view.OverallHealth |> Expect.equal "degraded" OverallHealth.Degraded
+      view.ComponentFailures |> Expect.equal "the failures, unchanged" [ lostWatcher ]
+  ]
 
 [<Tests>]
 let daemonHealthViewTests =

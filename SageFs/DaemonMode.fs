@@ -3578,7 +3578,8 @@ let run
             Anomalies = SageFs.Features.HealthWatch.troubled ()
             GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome ()
             MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel ()
-            SupervisorHealth = SupervisorHealthWatch.current () }
+            SupervisorHealth = SupervisorHealthWatch.current ()
+            ComponentFailures = SageFs.Features.ComponentWatch.current () }
       : SageFs.Features.HealthSnapshot)
 
   // Both listeners share one origin set: the dashboard page (mcpPort + 1, see

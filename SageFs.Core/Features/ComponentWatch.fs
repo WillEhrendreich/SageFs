@@ -44,6 +44,16 @@ module ComponentWatch =
   let current () : Failure list =
     failures.Values |> List.ofSeq |> List.sortBy (fun f -> f.Component)
 
+  /// The failures as the wire carries them, in `/health` and in `get_daemon_status`: each with the name of the component, why,
+  /// and what to check next.
+  let wire (failures: Failure list) =
+    failures |> List.map (fun f -> {| name = f.Component; reason = f.Reason; hint = f.Hint |}) |> List.toArray
+
+  /// One failure as a line: the component, why, and what to check next. The one wording `/api/daemon-info` (and so
+  /// `sagefs status`) uses, so a failure reads the same wherever it is shown.
+  let describe (failure: Failure) : string =
+    sprintf "%s: %s — %s" failure.Component failure.Reason failure.Hint
+
   /// For tests, and for a daemon that wants to start clean.
   let reset () : unit =
     failures.Clear()

@@ -3171,7 +3171,10 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           // alone (`Anomalies`) missed both real incidents.
           MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel ()
           // Written by the daemon when the session manager's watchdog reports.
-          SupervisorHealth = SageFs.SupervisorHealthWatch.current () }
+          SupervisorHealth = SageFs.SupervisorHealthWatch.current ()
+          // The same list `/api/daemon-info` and `sagefs status` read. It is in the snapshot so `overall` below, the dashboard
+          // header and the MCP status tool cannot say Healthy about a daemon whose file watcher has lost events.
+          ComponentFailures = SageFs.Features.ComponentWatch.current () }
       let sessionStatus =
         SageFs.Features.DaemonHealth.primarySessionStatusLabel healthSnapshot.SessionSummaries
       let healthy = healthyForSessions healthSnapshot.SessionSummaries
@@ -3225,16 +3228,13 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
       // its doc comment. Every session can look "Ready" while this is
       // true, so it is its own veto rather than something folded into
       // session status.
-      let componentFailures = SageFs.Features.ComponentWatch.current ()
+      let componentFailures = healthSnapshot.ComponentFailures
       let healthy = healthy && overall <> SageFs.Features.OverallHealth.Unhealthy && List.isEmpty componentFailures
       do! jsonResponse ctx 200
             {| healthy = healthy
                status = sessionStatus
                overall = SageFs.Features.DaemonHealth.healthLabel overall
-               componentFailures =
-                 componentFailures
-                 |> List.map (fun f -> {| name = f.Component; reason = f.Reason; hint = f.Hint |})
-                 |> List.toArray
+               componentFailures = SageFs.Features.ComponentWatch.wire componentFailures
                anomalies = anomalies
                memoryMB = healthSnapshot.MemoryMB
                // The level-based judgment (§ HealthSnapshot.MemoryPressure's

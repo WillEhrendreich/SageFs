@@ -40,7 +40,8 @@ module private Idle =
       Anomalies = []
       GcDumpOutcome = None
       MemoryPressure = SageFs.MemoryPressure.Normal
-      SupervisorHealth = SageFs.SupervisorHealth.Healthy }
+      SupervisorHealth = SageFs.SupervisorHealth.Healthy
+      ComponentFailures = [] }
 
   /// A daemon start no case compares with a clock: any moment will do, as long as it is not the epoch's 0.
   let startMs = DateTimeOffset(2026, 10, 17, 12, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds()

@@ -671,6 +671,15 @@ let renderDaemonHealth (view: DaemonHealthView) =
           Attr.style "margin-left: 0.5rem;"
           Attr.create "aria-label" "A signal the daemon tracks about itself has moved away from its own normal" ]
         [ textEnc (sprintf "⚠ %s" anomaly) ]
+    // A component the daemon depends on has failed (a file watcher that lost events under a root, say). Sessions can all be
+    // Ready while this is true, so it is said here in words next to the label, and never left to a dot's colour.
+    for failure in view.ComponentFailures do
+      Elem.span
+        [ Attr.class' "daemon-component-failure"
+          Attr.style "margin-left: 0.5rem;"
+          Attr.create "title" failure.Hint
+          Attr.create "aria-label" "A component the daemon depends on has failed" ]
+        [ textEnc (sprintf "⚠ %s: %s" failure.Component failure.Reason) ]
     // Evidence captured (or not) for a worker_rss Broken verdict this run —
     // both incidents this exists for had nothing to look at afterward.
     match view.GcDumpNote with

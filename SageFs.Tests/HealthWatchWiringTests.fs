@@ -31,7 +31,8 @@ let private snapshotWith anomalies sessions =
     Anomalies = anomalies
     GcDumpOutcome = None
     MemoryPressure = SageFs.MemoryPressure.Normal
-    SupervisorHealth = SageFs.SupervisorHealth.Healthy }
+    SupervisorHealth = SageFs.SupervisorHealth.Healthy
+    ComponentFailures = [] }
   : HealthSnapshot
 
 let private readySession =

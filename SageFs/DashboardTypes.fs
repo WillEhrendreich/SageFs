@@ -814,6 +814,9 @@ type DaemonHealthView = {
   /// 412 (±38), now 51700 ..."), so the panel says which signal and by how
   /// much rather than just turning a dot yellow.
   Anomalies: string list
+  /// Components the daemon depends on that have reported a failure, shown in the header in words. `OverallHealth` already
+  /// counts them, so the label and these lines cannot disagree.
+  ComponentFailures: Features.ComponentWatch.Failure list
   /// What happened, if anything, when `worker_rss` went Broken this run —
   /// "captured at <path>", "skipped: <reason>", "failed: <reason>", or
   /// `None` if RSS has never gone Broken this run. See `GcDumpWatch`.
@@ -839,6 +842,7 @@ module DaemonHealthView =
       TestsPassed = testsPassed
       TestsFailed = testsFailed
       Anomalies = snap.Anomalies |> List.choose Features.HealthAnomaly.describe
+      ComponentFailures = snap.ComponentFailures
       GcDumpNote =
         snap.GcDumpOutcome
         |> Option.map (function
@@ -1741,7 +1745,7 @@ module DaemonInfoContract =
       LogPath = logPath
       ComponentFailures =
         SageFs.Features.ComponentWatch.current ()
-        |> List.map (fun f -> sprintf "%s: %s — %s" f.Component f.Reason f.Hint) }
+        |> List.map SageFs.Features.ComponentWatch.describe }
 
 /// Parse an editor action string + optional value into an EditorAction DU case.
 let parseEditorAction (actionName: string) (value: string option) : EditorAction option =
