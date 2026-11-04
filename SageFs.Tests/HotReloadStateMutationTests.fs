@@ -2,10 +2,11 @@
 ///
 /// Proves the test suite catches mutations in `SageFs.HotReloadState`.
 ///
-/// ### Formal Verification Correspondence
-/// This module validates that the F# HotReloadState implementation satisfies
-/// the same properties proved in `formal-verification/lean/FVSquad/HotReloadState.lean`.
-/// Each test maps 1-to-1 to a Lean theorem (see theorem name in test name).
+/// ### Origin of the properties
+/// The properties these tests check were once proved in a Lean model of HotReloadState
+/// (removed from the tree on 2026-11-03, in git history under
+/// `formal-verification/lean/FVSquad/HotReloadState.lean`). Each test is named for the
+/// theorem it came from, and stands on its own.
 ///
 /// ### Mutations Defined
 ///   1. `normalize_no_lowercase` — skips ToLowerInvariant

@@ -146,13 +146,6 @@ let architectureTests =
           "SageFs.Core should not depend on the CLI tool"
           "SageFs"
 
-      testCase "SageFs.Core must not reference SageFs.Gui"
-      <| fun _ ->
-        coreAssembly
-        |> doesNotReference
-          "SageFs.Core should not depend on the GUI project"
-          "SageFs.Gui"
-
       testCase "SageFs.Core must not reference test assemblies"
       <| fun _ ->
         coreAssembly
@@ -180,20 +173,7 @@ let architectureTests =
         |> Array.exists (fun n ->
           n.Contains("Raylib", StringComparison.OrdinalIgnoreCase))
         |> Expect.isFalse
-          "SageFs.Core should not depend on Raylib-cs — GUI deps belong in SageFs.Gui"
-
-      testCase "SageFs.Gui must not reference SageFs CLI"
-      <| fun _ ->
-        match tryLoadAssembly "SageFs.Gui" with
-        | Some guiAssembly ->
-          guiAssembly
-          |> doesNotReference
-            "SageFs.Gui should depend on Core, not CLI"
-            "SageFs"
-        | None ->
-          // SageFs.Gui not referenced by test project — rule enforced
-          // at build time via project references instead
-          ()
+          "SageFs.Core should not depend on Raylib-cs — graphics dependencies belong in the samples that use them"
     ]
     |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
 
@@ -394,7 +374,7 @@ let architectureTests =
           host
           |> doesNotReferenceAny
             "MCP surface must stay out of the worker process closure"
-            [ "ModelContextProtocol"; "StreamJsonRpc" ]
+            [ "ModelContextProtocol" ]
         | None ->
           failwith "SageFs.Host assembly not loadable — closure seam unverifiable"
 
@@ -472,7 +452,7 @@ let architectureTests =
         coreAssembly
         |> doesNotReferenceAny
           "MCP SDK belongs to the daemon adapter layer, not the domain core"
-          [ "ModelContextProtocol"; "StreamJsonRpc" ]
+          [ "ModelContextProtocol" ]
 
       testCase "SageFs.Core still hosts the worker-domain modules"
       <| fun _ ->
@@ -649,8 +629,7 @@ let architectureTests =
   ]
 
 // ---------------------------------------------------------------------------
-// Actor wait-for graph acyclicity (roast-7 §2) — the formal-verification
-// beachhead.
+// Actor wait-for graph acyclicity (roast-7 §2).
 //
 // Deadlock = a cycle in the actor wait-for relation: actor A issues a
 // BLOCKING request to actor B and suspends → edge A→B. A cycle where every

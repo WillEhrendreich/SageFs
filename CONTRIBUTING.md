@@ -67,19 +67,17 @@ sagefs
 ```
 SageFs.Core/       — Shared engine, session, testing, persistence, and protocol logic (start here!)
 SageFs/            — CLI tool, daemon, MCP server, dashboard, plus retained deprecated TUI source
-SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
 SageFs.Host/       — The worker process the daemon spawns per session
 SageFs.FsiHost/    — The isolated FSI host: the FSI session, your running code, the hot reload and live testing agent
 SageFs.Simulation/ — Deterministic simulation (DST) models that fold the real cores
 SageFs.Tests/      — Expecto test project (thousands of tests; the README badge is auto-derived)
 sagefs-vscode/     — VS Code extension (F# via Fable → JavaScript)
-sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as legacy source; not built or published
 docs/              — User docs, design decisions, troubleshooting and feature references
 ```
 
 The Neovim plugin lives in a separate repo: [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim).
 
-The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Do not extend them as current product surfaces. Raylib application and game demos remain valuable examples of SageFs game-project support and should be preserved.
+The built-in SageTUI client and legacy TUI are deprecated; their source stays inside `SageFs/`. Do not extend them as current product surfaces. The `SageFs.Gui` Raylib frontend and the Visual Studio extension were removed on 2026-11-03 and are in git history. The Raylib application and game demos under `samples/` remain valuable examples of SageFs game-project support and should be preserved.
 
 **Good starting points for reading code:**
 - `SageFs/DaemonMode.fs`, daemon composition and client routing

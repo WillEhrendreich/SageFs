@@ -571,7 +571,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 - `scripts/`, repo helper scripts and smoke/integration utilities
 - `ci-pipeline.fsx`, CI is one Partas.Build pipeline; the GitHub workflows just invoke it
 
-`SageFs.slnx` has `SageFs.Core`, `SageFs.Simulation`, `SageFs`, `SageFs.Host`, `SageFs.Tests` and the samples. It has no legacy projects: the deprecated `SageFs.Gui/` and `sagefs-vs/` are in no solution, and `SageFs.FsiHost/` is built per session by the tool, not by the solution. The VS Code integration lives alongside it in `sagefs-vscode/` because it uses its own packaging toolchain and release flow.
+`SageFs.slnx` has `SageFs.Core`, `SageFs.Simulation`, `SageFs`, `SageFs.Host`, `SageFs.Tests` and the samples. It has no legacy projects, and `SageFs.FsiHost/` is built per session by the tool, not by the solution. The VS Code integration lives alongside it in `sagefs-vscode/` because it uses its own packaging toolchain and release flow.
 
 The Neovim plugin isn't in this repo. It lives in the separate [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) repository.
 

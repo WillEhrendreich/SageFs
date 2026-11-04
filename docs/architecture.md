@@ -30,8 +30,8 @@ sagefs-vscode/     — VS Code extension (Fable F#→JS)
 docs/              — User docs, design decisions and references
 ```
 
-The deprecated frontends (`SageFs.Gui/`, the terminal UI source inside `SageFs/`, and `sagefs-vs/`) are still in the
-tree as legacy source and aren't product surfaces.
+The terminal UI source inside `SageFs/` is deprecated and still in the tree as legacy source; it isn't a product
+surface. The Raylib GUI frontend and the Visual Studio extension were removed on 2026-11-03 and are in git history.
 
 The Neovim plugin lives in a separate repo: [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim).
 

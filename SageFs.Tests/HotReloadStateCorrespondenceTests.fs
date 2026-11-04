@@ -1,8 +1,9 @@
 /// ## HotReloadState Correspondence Tests
 ///
-/// Validates that the F# HotReloadState satisfies the same properties
-/// proved in `formal-verification/lean/FVSquad/HotReloadState.lean`.
-/// Each test maps 1-to-1 to a Lean theorem.
+/// Validates that the F# HotReloadState satisfies the properties a Lean model of it
+/// once proved (the proofs were removed from the tree on 2026-11-03 and are in git
+/// history, under `formal-verification/lean/FVSquad/HotReloadState.lean`).
+/// Each test is named for the theorem it came from, and stands on its own.
 module HotReloadStateCorrespondenceTests
 
 open Expecto

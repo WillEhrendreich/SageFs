@@ -96,17 +96,6 @@
          Microsoft.Extensions.* 9.x exists to fall back to. -->
     <PackageVersion Include="Serilog.Extensions.Logging.File" Version="9.0.0-dev-02303" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.0.0" />
-    <!-- TODO: justify or downgrade — verified 2026-09-12 that NO project in
-         this repo has a `<PackageReference Include="StreamJsonRpc" />` (grep
-         across every .fsproj/.csproj is empty); the only mention is
-         SageFs.Tests/ArchitectureTests.fs:311,387 asserting the daemon/host
-         assemblies must NOT reference it, which reads as a leftover guard
-         from when the now-deprecated sagefs-vs Visual Studio extension used
-         it for JSON-RPC transport. This pin appears to be dead weight with no
-         current consumer; stable releases (2.25.x+) exist if it is ever
-         needed again. Consider removing this PackageVersion entirely rather
-         than justifying its prerelease. -->
-    <PackageVersion Include="StreamJsonRpc" Version="2.23.32-alpha" />
     <PackageVersion Include="System.Configuration.ConfigurationManager" Version="10.0.3" />
     <PackageVersion Include="TreeSitter.DotNet" Version="1.3.0" />
     <PackageVersion Include="Verify.Expecto" Version="28.6.1" />

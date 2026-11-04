@@ -109,14 +109,15 @@ There are **20 mutation suites**, for: `Affordances`, `BinaryPrimitives`,
 `SessionLifecycle`, `SessionOperations`, `SseWriterCohort`,
 `TestCachePersistence`, `Watchdog`, `WorkflowTypes`.
 
-**The three layers the framework's own header names**, which is a useful way to
+**The two layers the framework's own header names**, which is a useful way to
 think about where a gap actually is:
 
-1. **Lean theorems** (`formal-verification/lean/`), model correctness.
-2. **Correspondence tests**: model ↔ implementation alignment.
-3. **Mutation tests**: whether the TEST SUITE would notice a wrong answer.
+1. **Correspondence tests**: model ↔ implementation alignment.
+2. **Mutation tests**: whether the TEST SUITE would notice a wrong answer.
 
-A module with examples but no mutants is at layer 3 blind, however green it is.
+A module with examples but no mutants is at layer 2 blind, however green it is.
+(There was a third layer, Lean proofs of the models. They were removed on
+2026-11-03 and are in git history.)
 
 ## What this means for your change
 

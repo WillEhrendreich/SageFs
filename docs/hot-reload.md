@@ -718,6 +718,3 @@ refresh the page, since nothing it would fetch changed.
 Set `SAGEFS_DEVRELOAD=0` (or `false`) to disable auto-injection.
 
 The VS Code extension gives per-file and per-directory hot reload toggles.
-
-See [HOT_RELOAD_STATUS.md](internal/HOT_RELOAD_STATUS.md) for the full
-technical details, if you want to go spelunking.

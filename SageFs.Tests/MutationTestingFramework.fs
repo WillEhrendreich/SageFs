@@ -6,9 +6,9 @@
 /// "survived" — meaning there's a gap in the test suite.
 ///
 /// ### Architecture
-///   1. **Lean theorems** (formal-verification/lean/) — model correctness
-///   2. **Correspondence tests** — model ↔ implementation alignment
-///   3. **Mutation tests** (this file) — test suite effectiveness
+///   1. **Correspondence tests** — model ↔ implementation alignment (the Lean model some of
+///      them mirror was removed on 2026-11-03 and is in git history)
+///   2. **Mutation tests** (this file) — test suite effectiveness
 ///
 /// Usage:
 ///   Mutations are defined as `Mutant<'a>` records. Each test applies the

@@ -10,6 +10,10 @@ something doesn't work, the page quotes the error you'll actually see, because I
 that describe a limitation in the abstract and then leave you guessing whether the error
 you're staring at is the one they meant.
 
+If your question is about a kind of project rather than a library (a Blazor app, a WPF or Avalonia
+window, a game, a worker service), [Project types SageFs can load](project-types-and-loading.md)
+has the table: which shared framework and native packs each one needs, and how it reloads.
+
 ---
 
 ## The one rule that explains every row

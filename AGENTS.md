@@ -150,9 +150,7 @@ silent no-op reads exactly like a successful one.
 
 SageFs is F# Interactive that already has your project loaded, re-runs the affected tests on unsaved edits, and patches the running app on save. VS Code, Neovim, a web dashboard and an MCP server for agents all share its sessions. A daemon hosts persistent, isolated F# Interactive sessions, one worker process each.
 
-The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Do not treat them as current product surfaces or add new product documentation for them. Preserve Raylib application and game demos because they demonstrate SageFs support for game projects and are independent of the deprecated GUI frontend.
-
-The Visual Studio extension (`sagefs-vs/`) is deprecated and no longer built, tested, or published, do not treat it as a current product surface, do not add new product documentation for it, and do not route new engineering effort into it.
+The built-in SageTUI client and legacy TUI are deprecated, and their source stays inside `SageFs/`. Do not treat them as current product surfaces or add new product documentation for them. The `SageFs.Gui` Raylib frontend and the Visual Studio extension (`sagefs-vs/`) were removed from the tree on 2026-11-03 and are in git history; do not bring either back or route new engineering effort into them. Preserve the Raylib application and game demos under `samples/`, because they demonstrate SageFs support for game projects and do not depend on the removed GUI frontend.
 
 ## Language & Stack
 
@@ -315,10 +313,8 @@ Consequences, in order of importance:
 ```
 SageFs.Core/       — Shared engine, session, testing, persistence, and protocol logic
 SageFs/            — CLI tool, daemon, MCP server, dashboard, and retained deprecated TUI source
-SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
 SageFs.Tests/      — Expecto test project
 sagefs-vscode/     — VS Code extension (Fable F#→JS)
-sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as legacy source
 docs/              — Markdown docs, linked from Readme.md and shown on sagetech.dev/sagefs (that site is the SageTech repo; GitHub Pages is retired)
 ```
 

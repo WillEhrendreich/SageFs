@@ -85,7 +85,7 @@ let selectIntegrationProjectsTests =
     let walked =
       declared @ [
         "samples/from-rust/SageFs.Samples.FromRust/SageFs.Samples.FromRust.fsproj"
-        "SageFs.Gui/SageFs.Gui.fsproj"
+        "sagefs-vscode/src/SageFs.Vscode.fsproj"
       ]
 
     test "TWIN WITH TEETH: the walk-only shape pulls in projects the solution never declared" {
