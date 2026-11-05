@@ -581,6 +581,25 @@ let dockWordingTests =
       let html = dock (WalkedBindings { walked with Snapshot = { walked.Snapshot with CapturedAt = at } })
       html |> Expect.stringContains "the stamp is the UTC time, labelled" "read after eval 7 at 17:17:31 UTC"
 
+    testCase "WHY — a value carries its full text as a title, because the cell clips a long one with an ellipsis and the rest was out of reach" <| fun _ ->
+      let long = "{ JumpVelocity = 13.2; CoyoteTime = 0.12; Buffer = 0.08; Apex = 0.4 }"
+      let b = { Name = "feel"; TypeSignature = "Feel"; Root = node "feel" NodeKind.Leaf long [] }
+      let html = dock (WalkedBindings(view [ b ]))
+      let titles = Text.RegularExpressions.Regex.Matches(html, "class=\"live-preview[^\"]*\" title=\"([^\"]*)\"") |> Seq.map (fun m -> m.Groups.[1].Value) |> List.ofSeq
+      titles |> Expect.contains "the preview's title is the whole value" long
+
+    testCase "WHY — the walked tree is headed by the names of its columns, so a chip or a knob in a column has a label, and the type label follows the Type setting" <| fun _ ->
+      // Above 900px the rows share columns (the CSS lays them out), and a column nobody names is a column a reader has to guess.
+      // The header is decoration for the eye: the rows carry their own accessible names.
+      let on = dock (WalkedBindings(view [ person ]))
+      on |> Expect.stringContains "the header is drawn" "live-cols"
+      for name in [ "Name = value"; "State"; "Source"; "Edit" ] do on |> Expect.stringContains (sprintf "the %s column is named" name) name
+      on |> Expect.stringContains "the type column is named while it is shown" ">Type<"
+      let off = renderDockWith { View.recommended ViewWorkflow.Repl with Layout = { (View.recommended ViewWorkflow.Repl).Layout with Type = Off } } None TweakView.none SessionInView "abcd1234" (WalkedBindings(view [ person ])) None |> decoded
+      off.Contains ">Type<" |> Expect.isFalse "and the label goes when the column is off"
+      let header = Text.RegularExpressions.Regex.Match(on, "<div class=\"live-cols\"[^>]*>").Value
+      header |> Expect.stringContains "it is hidden from assistive technology, the rows speak for themselves" "aria-hidden=\"true\""
+
     testPropertyWithConfig propConfig "WHY — no sentence the pane says about itself carries a raw case name, a backtick or a format hole"
       (Prop.forAll (Arb.fromGen (Gen.elements allNotes)) (fun note ->
         let said = PaneNote.text note

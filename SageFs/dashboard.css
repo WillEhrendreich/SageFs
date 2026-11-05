@@ -37,14 +37,13 @@
   --syn-number: #d27e99;
   --font-size: 14px;
   --sidebar-width: 320px;
-  /* The bottom dock is a SECONDARY surface: the transcript above it is what a session is
-     read for. One home for its ceiling, mirroring --sidebar-width, so a resize control has
-     a single value to write and the default can be reasoned about here rather than at the
-     rule that uses it. 45vh put it level with the output panel; 30vh at an 18rem cap showed
-     three and a half binding rows at 900px, which three blind reviewers read as "a few rows,
-     and nothing says there are more". 36vh at a 22rem cap shows about five and keeps the
-     transcript well over its own height. */
-  --dock-max-height: min(36vh, 22rem);
+  /* The bottom dock holds the live bindings, which is what this page is opened for while a program runs: a watch window you
+     can read at a glance. One home for its ceiling, mirroring --sidebar-width, so a resize control has a single value to
+     write and the default can be reasoned about here rather than at the rule that uses it. 30vh at an 18rem cap showed three
+     and a half binding rows at 900px, which blind reviewers read as "a few rows, and nothing says there are more". With a
+     binding on one line (see `.live-row` in the container query below), 46vh at a 30rem cap shows all nine of the fixture's
+     bindings at 900px and still leaves the transcript above it more than half the window. */
+  --dock-max-height: min(46vh, 30rem);
   --tabline-h: 36px;
   --statusline-h: 28px;
   --cmdline-h: 32px;
@@ -1534,10 +1533,100 @@ h2 {
     radial-gradient(farthest-side at 50% 100%, rgb(0 0 0 / 0.45), transparent) bottom / 100% 7px no-repeat scroll;
 }
 
-/* Rows stop growing at 56rem. On a wide window a row ran the whole width of the dock, so a binding's name and its type were
+/* Rows stop growing at 72rem. On a wide window a row ran the whole width of the dock, so a binding's name and its type were
    600px apart, and the eye had to cross that gap to pair them. The tree's own width, which the column fit measures, is unchanged. */
 .live-tree > * {
-  max-width: 56rem;
+  max-width: 72rem;
+}
+
+/* The column names exist for the wide layout only: under 900px the rows are stacked and there are no columns to name. This rule
+   comes before the container query that shows them, because both have the same specificity and the later one wins. */
+.live-cols {
+  display: none;
+}
+
+/* A watch window is one line per binding. Above 900px the strip under a row (its state, its file and line, its knob) joins the row:
+   the strip dissolves (`display: contents`) and its pieces become cells of the row's grid, so the name and value, the type, the
+   state, the file and the knob sit in aligned columns, the way a debugger's watch window reads. Each piece names its own column, so
+   a row with no state or no knob leaves that cell empty and the others stay put. Anything else the strip says (the sentence about
+   what a write reaches, the running and file values, an undo's reason) takes a line of its own under the row, only on the rows that
+   have something to say. A composite binding keeps its strip inside its summary, so it takes the same grid. Under 900px the rows
+   stay stacked, as before. The three right-hand tracks have fixed widths, sized for the longest words they hold ("differs from the
+   file", a file name with its line, a slider with its readout), because every row is its own grid and content-sized tracks put
+   the columns at a different x on every row. What is left of the row's width is the name, the value and the type; 900px keeps
+   that at about 350px. */
+@container (min-width: 900px) {
+  /* A standard row says nothing beyond its state, its file, its knob and at most one hint sentence. A row with anything more under
+     its strip (the running and file values, an undo, a reload's verdict) keeps the stacked layout, so the row that needs attention
+     opens out and the rest stay on one line each. The condition is the same selector everywhere below. */
+  .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))),
+  .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 11.5rem 6.5rem 18rem;
+    column-gap: 12px;
+    align-items: center;
+    min-height: 2.3rem;
+  }
+
+  .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-binding-node,
+  .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-binding-node {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-tweak,
+  .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-tweak {
+    display: contents;
+  }
+
+  /* A hint sentence (what a write reaches, how a formula is edited) takes the line under its row, indented to the name, in the
+     small dim text, and stops at a readable line length. */
+  .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-tweak > .live-detail,
+  .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-tweak > .live-detail {
+    grid-column: 1 / -1;
+    max-width: 64rem;
+    padding: 0 0 6px 1.7em;
+    font-size: 11.5px;
+  }
+
+  .live-tweak > .live-state {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .live-tweak > .live-where {
+    grid-column: 3;
+  }
+
+  .live-tweak > .live-knob,
+  .live-tweak > .live-field {
+    grid-column: 4;
+  }
+
+  /* The names of the columns, above the rows and level with them. They stay in view while the list scrolls. */
+  .live-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 11.5rem 6.5rem 18rem;
+    column-gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    /* The right padding is the 20px each row's wrapper keeps for the pin, so the labels sit over the columns they name. */
+    padding: 3px 20px 4px 0;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-normal);
+    color: var(--fg-dim);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  /* The name's label starts where the names do (past the glyph), and the type's label ends where the types do. */
+  .live-cols-name {
+    display: flex;
+    justify-content: space-between;
+    padding-left: 1.7em;
+  }
 }
 
 /* A top-level binding: one column, with the pin a small icon at the end of its first row. It shows on hover or focus and while pinned,
@@ -1547,6 +1636,11 @@ h2 {
   position: relative;
   padding: 0;
   border-bottom: 1px solid var(--border-normal);
+}
+
+/* A row lights up under the pointer, so the eye can follow one binding across the columns. */
+.live-binding:hover {
+  background: color-mix(in oklch, var(--border-focus) 7%, transparent);
 }
 
 .live-binding.live-pinned {
@@ -2185,13 +2279,15 @@ h2 {
   max-width: 16rem;
   height: 28px;
   margin: 0;
-  accent-color: var(--fg-yellow);
+  /* The focus colour, as every chosen control in the pane takes: a slider is not a warning, and yellow is the warning colour. */
+  accent-color: var(--border-focus);
 }
 
 .live-readout {
   min-width: 5ch;
   padding: 0 0.4em;
-  color: var(--fg-yellow);
+  color: var(--fg-default);
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: center;
   white-space: nowrap;
@@ -3215,4 +3311,48 @@ body[data-connected="false"] .statusline-info {
     transition-delay: 0s !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* The text floor. Nothing a person is meant to read on this page is set below 11px (0.8rem at the 14px root). Measured in a real
+   browser, the sidebar card's chips and path, the header's counters and the output bar's button were 9.1px to 10.5px, which three
+   blind reviewers called "tiny" and "unreadable". Several of these sizes are written inline in the markup, so the floor needs
+   `!important` to win; the selectors name exactly what the audit found, and a browser audit of the page (every width, no text under
+   11px) is what holds the list complete. */
+.perf-toggle-btn,
+.panel-header-btn,
+#connection-counts,
+#hygiene-state,
+.sidebar .status,
+.sidebar .badge,
+.sidebar .badge-agent,
+.sidebar .session-dir,
+.sidebar .session-card-body,
+.sidebar .session-row {
+  font-size: max(0.8rem, 11px) !important;
+}
+
+/* The session card's five buttons carry a word beside the glyph. They were ◎ ▶ ■ ⌫ ✖ in a row of identical squares, with the
+   meanings in a long tooltip, and one of them (Purge) deletes data: reviewers could not tell which was which, or which was
+   destructive. The word is drawn with ::before (::after is the tooltip) from each button's own accessible name, so the markup
+   and the names are unchanged. The row already wraps. */
+.session-card-actions > .session-btn {
+  width: auto;
+  min-width: 28px;
+  padding: 0 9px;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.session-card-actions > .session-btn[aria-label^="Warmup auto-open"]::before { content: "Auto-open"; order: 1; }
+.session-card-actions > .session-btn[aria-label^="Run "]::before { content: "Run"; order: 1; }
+.session-card-actions > .session-btn[aria-label^="Stop"]::before { content: "Stop"; order: 1; }
+.session-card-actions > .session-btn[aria-label^="Dispose"]::before { content: "Dispose"; order: 1; }
+.session-card-actions > .session-btn[aria-label^="Purge"]::before { content: "Purge"; order: 1; }
+
+/* Purge deletes the session's saved state, so it stands apart from the rest of the row. Red is for failure, so it is marked by an
+   outline and its place at the end of the row, not by the failure colour. */
+.session-card-actions > .session-btn[aria-label^="Purge"] {
+  margin-left: auto;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--fg-dim);
 }

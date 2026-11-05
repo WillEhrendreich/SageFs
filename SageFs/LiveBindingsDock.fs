@@ -324,6 +324,22 @@ let private treeElement (look: View) (children: XmlNode list) : XmlNode =
       Ds.preserveAttr "class" ]
     children
 
+/// The names of the columns the rows share. Above 900px the CSS lays each row out in columns (the name, the value and the type; the
+/// state; the file and line; the knob), and a column nobody names is one a reader has to guess at. It is decoration for the eye, so
+/// it is hidden from assistive technology: every row carries its own accessible names. The type label follows the Type setting.
+let private columnHeader (look: View) : XmlNode =
+  Elem.div [ Attr.class' "live-cols"; Attr.create "aria-hidden" "true" ] [
+    Elem.span [ Attr.class' "live-cols-name" ] [
+      Elem.span [] [ Text.raw "Name = value" ]
+      match look.Layout.Type with
+      | On -> Elem.span [] [ Text.raw "Type" ]
+      | Off -> ()
+    ]
+    Elem.span [] [ Text.raw "State" ]
+    Elem.span [] [ Text.raw "Source" ]
+    Elem.span [] [ Text.raw "Edit" ]
+  ]
+
 let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (view: LiveBindingsPane.PaneView) : XmlNode list =
   let evaluateEndpoint = sprintf "/api/sessions/%s/live-values/evaluate" (Uri.EscapeDataString sessionId)
   let modeEndpoint = sprintf "/api/sessions/%s/live-values/mode" (Uri.EscapeDataString sessionId)
@@ -420,7 +436,9 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
       Elem.div [ Attr.class' "live-binding-node" ] [
         glyphCell node
         nameCell node
-        Elem.span [ Attr.class' ("live-preview" + valueToneClass (valueToneOf node.Kind node.TypeName)) ] [ textEnc (sprintf "= %s" node.Preview) ]
+        // The whole value is the tooltip: the cell clips a long one to a line with an ellipsis (always at phone width), and the
+        // rest was out of reach. The pane's own "Long values: Full" setting is the way to see it without hovering.
+        Elem.span [ Attr.class' ("live-preview" + valueToneClass (valueToneOf node.Kind node.TypeName)); Attr.create "title" (attrEnc node.Preview) ] [ textEnc (sprintf "= %s" node.Preview) ]
         yield! typeCells node
         yield! tweakCells binding path
         yield! kindBadge node
@@ -489,6 +507,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
       match view.Snapshot.Bindings with
       | [] -> renderEmptyState
       | bindings ->
+        yield! [ columnHeader look ]
         yield!
           bindings
           |> List.map (fun b ->
