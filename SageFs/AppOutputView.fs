@@ -70,17 +70,27 @@ let private controls (pane: AppOutputPane) : XmlNode list =
       Attr.create "aria-label" label
       Attr.create "aria-pressed" (if isOn then "true" else "false")
       testid testId
-      Ds.onEvent ("click", sprintf "@post('/dashboard/app-output/%s', {value: '%b'})" target (not isOn))
+      // The value rides the URL. `@post`'s second argument is fetch options, so a `{value: ...}` there is dropped before it reaches
+      // the handler, which reads `Request.Query["value"]`: every toggle then read false and every filter fell back to "both".
+      Ds.onEvent ("click", sprintf "@post('/dashboard/app-output/%s?value=%b')" target (not isOn))
     ] [ textEnc (if isOn then onLabel else offLabel) ]
 
   let streamChoice (value: string) (label: string) (wanted: OutputStreamFilter) =
+    let chosen = (filter = wanted)
     Elem.button [
-      Attr.class' ("session-btn" + (if filter = wanted then " session-btn-on" else ""))
+      Attr.class' ("session-btn" + (if chosen then " session-btn-on" else ""))
       Attr.type' "button"
       Attr.create "aria-label" (sprintf "Show %s" label)
+      Attr.create "aria-pressed" (if chosen then "true" else "false")
       testid (sprintf "app-output-stream-%s" value)
-      Ds.onEvent ("click", sprintf "@post('/dashboard/app-output/stream', {value: '%s'})" value)
-    ] [ textEnc label ]
+      Ds.onEvent ("click", sprintf "@post('/dashboard/app-output/stream?value=%s')" value)
+    ] [
+      // The chosen stream carries a mark as well as a fill, so the choice never rests on colour alone.
+      match chosen with
+      | true -> Elem.span [ Attr.create "aria-hidden" "true" ] [ Text.raw "✓ " ]
+      | false -> ()
+      textEnc label
+    ]
 
   [
     toggle AppOutputIds.Follow "app-output-follow" "Follow new output, or hold the view still" "following" "held still" following "follow"
@@ -90,9 +100,10 @@ let private controls (pane: AppOutputPane) : XmlNode list =
       Attr.class' "live-filter"
       Attr.type' "text"
       Attr.create "placeholder" "filter lines"
+      Attr.create "aria-label" "Filter the app output lines"
       Attr.create "value" pane.Search
       testid "app-output-search"
-      Ds.onEvent ("input", "@post('/dashboard/app-output/search', {value: event.target.value})")
+      Ds.onEvent ("input", "@post('/dashboard/app-output/search?value=' + encodeURIComponent(event.target.value))")
     ]
     streamChoice "both" "all" BothStreams
     streamChoice "errors" "errors" ErrorsOnly

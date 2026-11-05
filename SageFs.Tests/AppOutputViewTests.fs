@@ -93,6 +93,16 @@ let appOutputViewTests =
       html |> Expect.stringContains "search" "/dashboard/app-output/search"
       html |> Expect.stringContains "stream" "/dashboard/app-output/stream"
 
+    testCase "WHY — the value a control posts is in the URL the handler reads, because @post's second argument is request options and an arbitrary key there is dropped" <| fun _ ->
+      // The handler reads `Request.Query["value"]`. Datastar's `@post(url, {value: ...})` hands `{value: ...}` to fetch as OPTIONS
+      // (payload, headers, contentType, ...), so `value` never reached the server: follow and pause always read false, search
+      // always cleared, and the stream filter always fell back to "both". DashboardFragments documents the same trap for the
+      // workflow picker. The value rides the query string instead.
+      let html = draw paneWithBothLines (HasAppOutput 2) SessionInView
+      html.Contains "{value:" |> Expect.isFalse "no options object: it would be dropped"
+      for route in [ "follow"; "pause"; "search"; "stream" ] do
+        html |> Expect.stringContains (sprintf "the %s control posts its value in the query string" route) (sprintf "/dashboard/app-output/%s?value=" route)
+
     testCase "WHY — nothing is hand-written: every interaction is a Datastar attribute, the same rule the rest of the dock is held to" <| fun _ ->
       let html = draw paneWithBothLines (HasAppOutput 2) SessionInView
       html.Contains " onclick=" |> Expect.isFalse "no raw onclick"
