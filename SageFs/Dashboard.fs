@@ -2462,9 +2462,9 @@ let createBindingsViewHandler (q: DashboardQueries) (infra: DashboardInfra) : Wo
         |> Result.bind (fun scope ->
           SageFs.ViewEdit.parse
             workflow
-            (signal LiveBindingsViewPanel.ViewSignals.Action "bv-action")
-            (signal LiveBindingsViewPanel.ViewSignals.Axis "bv-axis")
-            (signal LiveBindingsViewPanel.ViewSignals.Value "bv-value")
+            { Verb = signal LiveBindingsViewPanel.ViewSignals.Action "bv-action"
+              Setting = signal LiveBindingsViewPanel.ViewSignals.Axis "bv-axis"
+              Choice = signal LiveBindingsViewPanel.ViewSignals.Value "bv-value" }
           |> Result.bind (SageFs.SettingsCatalog.applyViewEdit paths workflow scope))
       match outcome with
       | Ok() ->

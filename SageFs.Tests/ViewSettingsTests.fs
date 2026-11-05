@@ -357,20 +357,20 @@ let viewEditParseTests =
       |> List.collect AxisValue.allFor
       |> List.forall (fun value ->
         let axis = AxisValue.axisOf value
-        ViewEdit.parse workflow (ViewAction.token ViewAction.SetAxis) (ViewAxis.token axis) (AxisValue.token value) = Ok(ViewEdit.Set value))
+        ViewEdit.parse workflow { Verb = ViewAction.token ViewAction.SetAxis; Setting = ViewAxis.token axis; Choice = AxisValue.token value } = Ok(ViewEdit.Set value))
 
     testCase "WHY — each preset's token parses to it, and 'recommended' means the workflow's own preset" <| fun _ ->
       for preset in ViewPreset.all do
-        ViewEdit.parse ViewWorkflow.Repl (ViewAction.token ViewAction.ApplyPreset) "" (ViewEdit.presetToken preset)
+        ViewEdit.parse ViewWorkflow.Repl { Verb = ViewAction.token ViewAction.ApplyPreset; Setting = ""; Choice = ViewEdit.presetToken preset }
         |> Expect.equal "the preset" (Ok(ViewEdit.Preset preset))
       for workflow in ViewWorkflow.all do
-        ViewEdit.parse workflow (ViewAction.token ViewAction.ApplyPreset) "" ViewEdit.RecommendedToken
+        ViewEdit.parse workflow { Verb = ViewAction.token ViewAction.ApplyPreset; Setting = ""; Choice = ViewEdit.RecommendedToken }
         |> Expect.equal "the workflow's own" (Ok(ViewEdit.Preset(ViewPreset.recommendedFor workflow)))
 
     testCase "WHY — reset names its axis and reset-all needs none" <| fun _ ->
-      ViewEdit.parse ViewWorkflow.Repl (ViewAction.token ViewAction.ResetAxis) (ViewAxis.token ViewAxis.RowHeight) ""
+      ViewEdit.parse ViewWorkflow.Repl { Verb = ViewAction.token ViewAction.ResetAxis; Setting = ViewAxis.token ViewAxis.RowHeight; Choice = "" }
       |> Expect.equal "reset one" (Ok(ViewEdit.Reset ViewAxis.RowHeight))
-      ViewEdit.parse ViewWorkflow.Repl (ViewAction.token ViewAction.ResetEverything) "" ""
+      ViewEdit.parse ViewWorkflow.Repl { Verb = ViewAction.token ViewAction.ResetEverything; Setting = ""; Choice = "" }
       |> Expect.equal "reset all" (Ok ViewEdit.ResetAll)
 
     testCase "WHY — a verb, an axis, a value or a preset that is not one of the closed sets is refused with the set it should have been" <| fun _ ->
@@ -378,10 +378,10 @@ let viewEditParseTests =
         match result with
         | Error(NotAMember(_, allowed)) -> not allowed.IsEmpty
         | Error _ | Ok _ -> false
-      ViewEdit.parse ViewWorkflow.Repl "explode" "" "" |> refused |> Expect.isTrue "unknown verb"
-      ViewEdit.parse ViewWorkflow.Repl "set" "colour" "red" |> refused |> Expect.isTrue "unknown axis"
-      ViewEdit.parse ViewWorkflow.Repl "set" "row" "gigantic" |> refused |> Expect.isTrue "unknown value"
-      ViewEdit.parse ViewWorkflow.Repl "preset" "" "sparkly" |> refused |> Expect.isTrue "unknown preset"
+      ViewEdit.parse ViewWorkflow.Repl { Verb = "explode"; Setting = ""; Choice = "" } |> refused |> Expect.isTrue "unknown verb"
+      ViewEdit.parse ViewWorkflow.Repl { Verb = "set"; Setting = "colour"; Choice = "red" } |> refused |> Expect.isTrue "unknown axis"
+      ViewEdit.parse ViewWorkflow.Repl { Verb = "set"; Setting = "row"; Choice = "gigantic" } |> refused |> Expect.isTrue "unknown value"
+      ViewEdit.parse ViewWorkflow.Repl { Verb = "preset"; Setting = ""; Choice = "sparkly" } |> refused |> Expect.isTrue "unknown preset"
 
     testCase "WHY — the scope tokens round-trip and an unknown one is refused" <| fun _ ->
       for scope in ViewScope.all do

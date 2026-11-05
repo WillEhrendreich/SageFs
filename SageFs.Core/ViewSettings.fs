@@ -492,6 +492,13 @@ module ViewScope =
     | Some scope -> Ok scope
     | None -> Error(NotAMember(raw, all |> List.map token))
 
+/// What a view panel click posts, as the three words it sends. Named fields, so the verb, the axis and the value cannot be passed
+/// in each other's place.
+type PostedViewEdit =
+  { Verb: string
+    Setting: string
+    Choice: string }
+
 [<RequireQualifiedAccess>]
 module ViewEdit =
   /// The word a preset button posts. `recommended` is not one of the five presets: it means the workflow's own.
@@ -507,7 +514,7 @@ module ViewEdit =
     | ViewPreset.Tuner -> "tuner"
 
   /// The edit a posted request means, for one workflow: the axis and value tokens are read only for the actions that use them.
-  let parse (workflow: ViewWorkflow) (action: string) (axis: string) (value: string) : Result<ViewEdit, ConfigError> =
+  let parse (workflow: ViewWorkflow) (posted: PostedViewEdit) : Result<ViewEdit, ConfigError> =
     let axisOf (raw: string) : Result<ViewAxis, ConfigError> =
       match ViewAxis.all |> List.tryFind (fun candidate -> ViewAxis.token candidate = raw) with
       | Some found -> Ok found
@@ -519,12 +526,12 @@ module ViewEdit =
         match ViewPreset.all |> List.tryFind (fun candidate -> presetToken candidate = raw) with
         | Some found -> Ok found
         | None -> Error(NotAMember(raw, RecommendedToken :: (ViewPreset.all |> List.map presetToken)))
-    ViewAction.parse action
+    ViewAction.parse posted.Verb
     |> Result.bind (fun parsed ->
       match parsed with
-      | ViewAction.SetAxis -> axisOf axis |> Result.bind (fun found -> AxisValue.parse found value) |> Result.map ViewEdit.Set
-      | ViewAction.ResetAxis -> axisOf axis |> Result.map ViewEdit.Reset
-      | ViewAction.ApplyPreset -> presetOf value |> Result.map ViewEdit.Preset
+      | ViewAction.SetAxis -> axisOf posted.Setting |> Result.bind (fun found -> AxisValue.parse found posted.Choice) |> Result.map ViewEdit.Set
+      | ViewAction.ResetAxis -> axisOf posted.Setting |> Result.map ViewEdit.Reset
+      | ViewAction.ApplyPreset -> presetOf posted.Choice |> Result.map ViewEdit.Preset
       | ViewAction.ResetEverything -> Ok ViewEdit.ResetAll)
 
   /// The axes a preset sets.

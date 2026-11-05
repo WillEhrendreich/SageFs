@@ -338,7 +338,7 @@ let viewPanelTests =
         | false -> untouched workflow
       let clicks = clicksIn (panelHtml workflow resolved)
       not clicks.IsEmpty
-      && clicks |> List.forall (fun (verb, axis, value) -> ViewEdit.parse workflow verb axis value |> Result.isOk)
+      && clicks |> List.forall (fun (verb, axis, value) -> ViewEdit.parse workflow { Verb = verb; Setting = axis; Choice = value } |> Result.isOk)
 
     testCase "WHY — the panel offers a control for each axis the dock draws and for no other, so none of them changes nothing" <| fun _ ->
       let axesOffered =
