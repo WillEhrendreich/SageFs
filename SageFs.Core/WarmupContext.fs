@@ -183,18 +183,37 @@ module SessionContext =
   let equivalentForElmHotPath (left: SessionContext) (right: SessionContext) =
     hotPathSignature left = hotPathSignature right
 
+  /// A duration in words a reader takes in: milliseconds below a second, seconds with one decimal below a minute (rounded half
+  /// up in whole milliseconds), then minutes and seconds.
+  let durationText (ms: int64) : string =
+    match ms < 1000L with
+    | true -> sprintf "%dms" ms
+    | false ->
+      let tenths = (ms + 50L) / 100L
+      match tenths < 600L with
+      | true -> sprintf "%d.%ds" (tenths / 10L) (tenths % 10L)
+      | false ->
+        let seconds = (ms + 500L) / 1000L
+        sprintf "%dm %ds" (seconds / 60L) (seconds % 60L)
+
+  let countOf (n: int) (noun: string) : string =
+    match n with
+    | 1 -> sprintf "1 %s" noun
+    | _ -> sprintf "%d %ss" n noun
+
   let summary (ctx: SessionContext) =
     let opened = WarmupContext.totalOpenedCount ctx.Warmup
     let failed = WarmupContext.totalFailedCount ctx.Warmup
-    let loaded =
-      ctx.FileStatuses
-      |> List.filter (fun f -> f.Readiness = Loaded)
-      |> List.length
-    let total = ctx.FileStatuses |> List.length
-    // About warmup only. It used to lead with the daemon's state word ("Ready"), which sat beside the header's own badge and
-    // read as the session's health: a session can be Ready here and running older code there.
-    sprintf "Warmup: %d/%d files loaded | %d namespaces opened (%d failed) | took %dms"
-      loaded total opened failed (WarmupContext.totalDurationMs ctx.Warmup)
+    // About warmup only, in words. It used to lead with the daemon's state word ("Ready"), which sat beside the header's own
+    // badge and read as the session's health, and it printed a files-loaded ratio. That ratio counts a file as loaded only
+    // when an opened namespace's name ends its path, so a zero is normal for a REPL session and read as a failure beside
+    // Ready. A failure count is printed only when it is not zero.
+    let failures =
+      match failed with
+      | 0 -> ""
+      | n -> sprintf ", %d failed" n
+    sprintf "Warmup finished in %s: %s opened%s."
+      (durationText (WarmupContext.totalDurationMs ctx.Warmup)) (countOf opened "namespace") failures
 
   let assemblyLine (asm: LoadedAssembly) =
     sprintf "📦 %s (%d ns, %d mod)" asm.Name asm.NamespaceCount asm.ModuleCount

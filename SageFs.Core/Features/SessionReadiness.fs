@@ -61,15 +61,32 @@ module Readiness =
         | ReplFreshness.Unknown _
         | ReplFreshness.InSync -> Readiness.ReadyUnchecked
 
+  /// What a Ready session's build adds to the word "Ready", in lower case so it can follow it. A plain Ready and a state other
+  /// than Ready add nothing. Every surface's words come from this one phrase: the long label, the short phrase, the card's
+  /// badge and the strip's marker.
+  let qualification (readiness: Readiness) : string option =
+    match readiness with
+    | Readiness.InState _
+    | Readiness.ReadyCurrent -> None
+    | Readiness.ReadyOlderCode -> Some "running older code"
+    | Readiness.ReadyRebuilding -> Some "rebuilding"
+    | Readiness.ReadyReplBehindApp -> Some "REPL behind the app"
+    | Readiness.ReadyUnchecked -> Some "build not checked"
+
   /// The words a surface prints. A state other than Ready keeps the daemon's own word, which clients wait on.
   let label (readiness: Readiness) : string =
-    match readiness with
-    | Readiness.InState state -> SessionState.label state
-    | Readiness.ReadyCurrent -> "Ready"
-    | Readiness.ReadyOlderCode -> "Ready, running older code"
-    | Readiness.ReadyRebuilding -> "Ready, rebuilding"
-    | Readiness.ReadyReplBehindApp -> "Ready, REPL behind the app"
-    | Readiness.ReadyUnchecked -> "Ready, build not checked"
+    match readiness, qualification readiness with
+    | _, Some phrase -> sprintf "Ready, %s" phrase
+    // The daemon's token "WarmingUp" is a name in code. A person reads "Warming up", and every surface says it that way.
+    | Readiness.InState SessionState.WarmingUp, None -> "Warming up"
+    | Readiness.InState state, None -> SessionState.label state
+    | _, None -> "Ready"
+
+  /// The qualification as a short phrase on its own ("Running older code"), for a place with no room for "Ready, " in front of
+  /// it: the note in the live bindings pane and the marker on the sessions strip.
+  let brief (readiness: Readiness) : string option =
+    qualification readiness
+    |> Option.map (fun phrase -> sprintf "%c%s" (System.Char.ToUpperInvariant phrase.[0]) (phrase.Substring 1))
 
   let tone (readiness: Readiness) : ReadinessTone =
     match readiness with
@@ -88,3 +105,28 @@ module Readiness =
   /// ReadyCurrent for a Ready session: not having looked is `ReadyUnchecked`, which says so.
   let ofStateAlone (state: SessionState) : Readiness =
     decide state (SourceState.Unknown UnknownReason.NotAssessed) ReplFreshness.InSync
+
+/// What can be done about a build that is not current, decided once from the source state. The session card's button, the
+/// live bindings pane's note and the pane's button all read this, so they appear together or not at all.
+[<RequireQualifiedAccess>]
+type Remedy =
+  | NothingToDo
+  /// Files changed after the build: the hard reset with a rebuild loads them.
+  | RebuildAndReload
+
+[<RequireQualifiedAccess>]
+module Remedy =
+  /// A rebuild under way needs no second one, and a build nobody could read is not known to need one.
+  let ofSource (source: SourceState) : Remedy =
+    match source with
+    | SourceState.Stale _ -> Remedy.RebuildAndReload
+    | SourceState.InSync _
+    | SourceState.Rebuilding _
+    | SourceState.Unknown _ -> Remedy.NothingToDo
+
+  /// The words that name what is wrong when a rebuild is the remedy ("Running older code"), the same phrase the card, the
+  /// header and the sessions strip use for it. Empty when there is nothing to do.
+  let headline (remedy: Remedy) : string =
+    match remedy with
+    | Remedy.NothingToDo -> ""
+    | Remedy.RebuildAndReload -> Readiness.brief Readiness.ReadyOlderCode |> Option.defaultValue ""

@@ -221,6 +221,7 @@
         <Compile Include="DashboardRenderGateTests.fs" />
         <Compile Include="DashboardIdleStabilityTests.fs" />
         <Compile Include="DashboardReadinessTests.fs" />
+        <Compile Include="DashboardScopedStateTests.fs" />
         <Compile Include="DashboardTeardownStateTests.fs" />
         <Compile Include="DashboardTelemetrySendTests.fs" />
         <Compile Include="DashboardTestStatusGridTests.fs" />
@@ -241,6 +242,7 @@
         <Compile Include="OutputPanelLayoutBrowserTests.fs" />
         <Compile Include="DashboardStreamResilienceBrowserTests.fs" />
         <Compile Include="DashboardMobileBrowserTests.fs" />
+        <Compile Include="SessionCardEdgesBrowserTests.fs" />
         <Compile Include="DashboardSessionSwitchOutputBrowserTests.fs" />
         <Compile Include="DashboardLiveBindingsDockBrowserTests.fs" />
         <Compile Include="NewSessionDialogBrowserTests.fs" />

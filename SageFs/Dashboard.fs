@@ -479,6 +479,14 @@ let viewedReadiness (state: SessionState) (viewed: WorkerProtocol.SessionId) (ca
     Readiness.decide state source card.Freshness
   | None -> Readiness.ofStateAlone state
 
+/// What can be done about the viewed session's build, from the viewed card's own source reading: the same decision
+/// (`CardSource.remedy`) the card's button reads, so the live bindings pane's note and the card's button appear together. A session
+/// with no card has nothing to offer.
+let viewedRemedy (viewed: WorkerProtocol.SessionId) (cards: ParsedSession list) : Remedy =
+  match cards |> List.tryFind (fun card -> card.Id = viewed) with
+  | Some card -> CardSource.remedy card.Source
+  | None -> Remedy.NothingToDo
+
 let private buildOutputPanelsFrom
   (q: DashboardQueries)
   (infra: DashboardInfra)
@@ -1160,6 +1168,18 @@ let buildDashboardSnapshotWithSessions
               AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory (q.GetSessionWorkingDir sessionId) }
         | None -> renderSessionContextEmpty
       | false -> renderSessionContextEmpty
+    // The cards come first: the header badge, the daemon health bar, the card and the live bindings pane's note all read the
+    // viewed card's own reading, so they are built from it and cannot differ by a poll.
+    let warmupProgress = q.GetWarmupProgress sessionId
+    let! outputPanel, sessionsPanel, sessionPicker, cards = buildOutputPanelsFrom q infra sessions sessionId stateStr warmupProgress wCtx
+    // What the viewed session's Ready is worth, read from the viewed card's own source reading and the registry's freshness:
+    // the header badge, the daemon health bar and the card all say this one thing.
+    let readiness = viewedReadiness state sessionId cards
+    // The one decision about what can be done: the card's button and the live bindings pane's note read it.
+    let remedy = viewedRemedy sessionId cards
+    // The header counts finished evals the way the viewed card does. The worker's own tally and the Elm model's differ by an
+    // eval in flight, and two surfaces reading two tallies printed "13 evals" beside "evals: 12" for one session.
+    let evalStatsView = HeaderEvals.agreeWithCard sessionId cards evalStatsView
     // The bottom dock. The live watch window takes priority; the text-parsed panel stands in for a session that has
     // not produced a live snapshot yet. DockPanes decides which of the two (or the reason line) is drawn.
     let bindingsSource =
@@ -1197,7 +1217,8 @@ let buildDashboardSnapshotWithSessions
         | DockPanes.SessionInView ->
           Some(LiveBindingsViewPanel.render (WorkerProtocol.SessionId.value sessionId) (SageFs.ViewWorkflow.ofSessionWorkflow sessionWorkflow) resolved)
         | DockPanes.NoSessionInView -> None
-      LiveBindingsDock.renderDockWith
+      LiveBindingsDock.renderDockWithRemedy
+        (RebuildRemedy.paneNote remedy)
         resolved.View
         controls
         tweakView
@@ -1207,14 +1228,6 @@ let buildDashboardSnapshotWithSessions
         (q.GetAppOutput sessionId)
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
-    let warmupProgress = q.GetWarmupProgress sessionId
-    let! outputPanel, sessionsPanel, sessionPicker, cards = buildOutputPanelsFrom q infra sessions sessionId stateStr warmupProgress wCtx
-    // What the viewed session's Ready is worth, read from the viewed card's own source reading and the registry's freshness:
-    // the header badge, the daemon health bar and the card below all say this one thing.
-    let readiness = viewedReadiness state sessionId cards
-    // The header counts finished evals the way the viewed card does. The worker's own tally and the Elm model's differ by an
-    // eval in flight, and two surfaces reading two tallies printed "13 evals" beside "evals: 12" for one session.
-    let evalStatsView = HeaderEvals.agreeWithCard sessionId cards evalStatsView
     let daemonHealthPanel =
       let processLivenessPanel =
         match daemonHealth with

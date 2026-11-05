@@ -80,7 +80,8 @@ let pageTests =
       badge |> Expect.stringContains "in the caution colour" "status status-notice"
       badge.Contains "status-ready" |> Expect.isFalse "and not in green"
       let bar = between html "id=\"daemon-health\"" "</div>"
-      bar |> Expect.stringContains "the daemon bar names the session and says it in the same words" "Fixture.fsproj [Ready, rebuilding]"
+      bar |> Expect.stringContains "the daemon bar names the session and says it in the same words" "Session Fixture.fsproj: Ready, rebuilding"
+      bar |> Expect.stringContains "and says whose health the green is" "Daemon healthy"
       bar.Contains "✅ Fixture.fsproj" |> Expect.isFalse "the bar's check mark is gone from the session"
       let card = between html "data-testid=\"session-card-source\"" "session-card-actions"
       card |> Expect.stringContains "the card says the same fact" "Rebuilding"
@@ -146,10 +147,10 @@ let daemonBarTests =
 
     testCase "WHY — a session the caller read a build for reads as its readiness, with the caution glyph, and not as a check mark" <| fun _ ->
       let html = barFor (Map.ofList [ "0a2b3c4d", Readiness.ReadyOlderCode ]) [ summary ]
-      html |> Expect.stringContains "words and glyph" "⚠️ Fixture.fsproj [Ready, running older code]"
+      html |> Expect.stringContains "words and glyph" "⚠️ Session Fixture.fsproj: Ready, running older code"
 
     testCase "WHY — a session nobody read a build for reads as the snapshot says, which is what the bar always did" <| fun _ ->
-      barFor Map.empty [ summary ] |> Expect.stringContains "unchanged" "✅ Fixture.fsproj [Ready]"
+      barFor Map.empty [ summary ] |> Expect.stringContains "the snapshot's words, scoped to the session" "✅ Session Fixture.fsproj: Ready"
 
     testCase "WHY — with several sessions, one that is not plainly ready names itself in words, and 'all ready' is not claimed" <| fun _ ->
       let others = [ for i in 1 .. 3 -> { summary with SessionId = sprintf "0a2b3c4%d" i; ProjectName = sprintf "P%d.fsproj" i } ]

@@ -3524,15 +3524,14 @@ let run
     let sessions =
       model.Sessions.Sessions
       |> List.map (fun s ->
+        // The registry's reading of the session wins over the Elm model's, because the header badge and the cards read the
+        // registry and the model lags it: the bar said "Warming Up" for seconds after the badge said "Ready".
         let healthStatus : SageFs.Features.SessionHealthStatus =
-          match s.Status with
-          | SageFs.SessionDisplayStatus.Running -> SageFs.Features.SessionHealthStatus.Ready
-          | SageFs.SessionDisplayStatus.Starting -> SageFs.Features.SessionHealthStatus.WarmingUp
-          | SageFs.SessionDisplayStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
-          | SageFs.SessionDisplayStatus.Faulted _ -> SageFs.Features.SessionHealthStatus.Faulted
-          | SageFs.SessionDisplayStatus.Lost -> SageFs.Features.SessionHealthStatus.Faulted
-          | SageFs.SessionDisplayStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
-          | SageFs.SessionDisplayStatus.Idle -> SageFs.Features.SessionHealthStatus.Ready
+          let registryReading =
+            SessionManager.QuerySnapshot.tryGetSession s.Id (readSnapshot ())
+            |> Option.map (SageFs.SessionDisplay.displayStatus System.DateTime.UtcNow)
+          SageFs.SessionDisplayStatus.reconcile registryReading s.Status
+          |> SageFs.SessionDisplayStatus.healthStatus
         let projectName =
           match s.Projects with
           | p :: _ -> System.IO.Path.GetFileName p

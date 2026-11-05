@@ -250,6 +250,22 @@ h2 {
   gap: 0.25rem;
 }
 
+/* A word on the Sessions header for a viewed session whose card has something to say ("Running older code"). Where the card is
+   folded away this strip is all that shows, so the marker is a word and not only a colour. It shrinks and ends in an ellipsis
+   before it pushes the buttons off the strip. */
+.sessions-stale-marker {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border: 1px solid var(--fg-yellow);
+  color: var(--fg-yellow);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 /* Collapsed to a 32px sliver there is room for the toggle only; the others come back with the sidebar. */
 .sidebar.collapsed .sidebar-header-btn:not(#sidebar-toggle-btn) {
   display: none;
@@ -939,6 +955,8 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  /* Air at the right edge: the card has no padding of its own, so "2m" and "last: just now" sat on the border and read as cut. */
+  padding-inline-end: 8px;
 }
 
 .session-row .session-card-status-row {
@@ -969,6 +987,9 @@ h2 {
   width: 100%;
   min-width: 0;
   margin-top: 0.35rem;
+  /* The same air at the right edge as the card body, so the apply button does not sit on the border. */
+  padding-inline-end: 8px;
+  box-sizing: border-box;
 }
 
 .session-row .session-projects-label {
@@ -1398,6 +1419,33 @@ h2 {
   color: var(--fg-dim);
   font-size: 11px;
   white-space: nowrap;
+}
+
+/* The remedy beside the warning: the session runs older code than its files say, and the button that fixes it. The caution colour
+   (red is for failure). The words and the button stay together on one line and wrap as a unit when the bar has no room, and the
+   button never squeezes its text into a column. */
+.live-pane-stale {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.6rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--fg-yellow);
+  font-weight: 700;
+}
+
+.live-pane-stale-words {
+  white-space: nowrap;
+}
+
+.live-pane-stale .live-pane-rebuild {
+  width: auto;
+  height: auto;
+  padding: 2px 8px;
+  line-height: 1.3;
+  white-space: nowrap;
+  font-size: 0.8rem;
 }
 
 .live-pane-count,
