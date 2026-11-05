@@ -46,7 +46,8 @@ let render (keyboardHelp: XmlNode) : XmlNode =
         testid "evaluate-toggle"
         Attr.create "aria-label" (sprintf "Evaluate: open a quick box to check something (key %s)" OpenKey)
         Attr.create "title" (sprintf "Evaluate (key %s)" OpenKey) ]
-      [ Text.raw "λ" ]
+      // The word is beside the glyph: a lone λ was an unlabelled button to three reviewers who had never seen it.
+      [ Text.raw "λ Evaluate" ]
     Elem.div [ Attr.class' "eval-pop-body"; Attr.create "role" "dialog"; Attr.create "aria-labelledby" "eval-pop-title" ] [
       Elem.div [ Attr.class' "eval-pop-head" ] [
         Elem.span [ Attr.id "eval-pop-title"; Attr.class' "eval-pop-title" ] [ Text.raw "Evaluate" ]

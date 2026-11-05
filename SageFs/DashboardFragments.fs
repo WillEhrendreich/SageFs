@@ -2371,9 +2371,9 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 EvaluatePopover.render (renderKeyboardHelp ())
                 Elem.button
                   [ Attr.class' "panel-header-btn"
-                    Attr.create "aria-label" "Clear — clear the output panel"
+                    Attr.create "aria-label" "Clear the output panel"
                     Ds.onClick (Ds.post "/dashboard/clear-output") ]
-                  [ Text.raw "[CLEAR]" ]
+                  [ Text.raw "Clear output" ]
               ]
             ]
             snap.OutputPanel
