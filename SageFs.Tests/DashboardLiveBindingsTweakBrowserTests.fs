@@ -182,7 +182,7 @@ let journey () : Task<unit> = task {
     let! evaled =
       Sw.post daemon TestTimeouts.requestPatience "/exec"
         {| code =
-             "let gravity = 9.8;;\nlet maxHealth = 100;;\nlet hardMode = false;;\nlet title = \"Nudge\";;\nlet jump = gravity * 2.0;;\ntype Feel = { JumpVelocity: float; CoyoteTime: float };;\nlet feel = { JumpVelocity = 13.2; CoyoteTime = 0.12 };;\nlet speed = 3;;\nlet scores = [1; 2; 3];;"
+             "let gravity = 9.8;;\nlet maxHealth = 100;;\nlet hardMode = false;;\nlet title = \"Nudge\";;\nlet jump = gravity * 2.0;;\ntype Feel = { JumpVelocity: float; CoyoteTime: float };;\nlet feel = { JumpVelocity = 13.2; CoyoteTime = 0.12 };;\ntype Rig = { Mass: float; Drag: float };;\nlet makeRig () = { Mass = 80.0; Drag = 0.25 };;\nlet rig = makeRig ();;\nlet speed = 3;;\nlet scores = [1; 2; 3];;"
            working_directory = built |}
     evaled |> Expect.isOk "the REPL took the bindings"
 
@@ -310,6 +310,20 @@ let journey () : Task<unit> = task {
     do! waitForFile tuning "the record field stepped, in its own range" expected
     do! shot page "5-record-field-and-bool"
     expectNoErrors errors "after a bool, a string, a formula and a record field"
+
+    // A field of a value the file builds with a call is the callee's literal: the row says which callee builds it and how many calls
+    // a write reaches, and the step changes the one literal in `makeRig`, never the two calls.
+    do! page.Locator("#lb_726967 summary").First.ClickAsync()
+    let built = "rig/Mass"
+    do! waitState page built "InSource"
+    do! waitJs page "the row to say which callee builds it and how many calls a write reaches" BrowserWaits.panelUpdates
+          "sel => { const e = document.querySelector(sel + ' [data-testid=tweak-through]'); return !!e && /makeRig builds this/.test(e.innerText) && /2 calls/.test(e.innerText); }"
+          (box (row built))
+    do! page.Locator(sprintf "%s [data-testid=tweak-step-up]" (row built)).ClickAsync()
+    expected <- expected.Replace("{ Mass = 80.0; Drag = 0.25 }", "{ Mass = 80.1; Drag = 0.25 }")
+    do! waitForFile tuning "the one literal in the callee stepped, and both calls read as before" expected
+    do! shot page "5b-field-of-a-call"
+    expectNoErrors errors "after stepping a field built by a call"
 
     // ── 5. a click on a row the file changed under, and a refusal ─────────────────────────────────────────────────────
     let! unwatched = http.PostAsync(sprintf "%s/api/sessions/%s/hotreload/unwatch-all" dashboardBase sessionId, json ())
