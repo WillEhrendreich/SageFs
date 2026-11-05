@@ -48,7 +48,8 @@ let private healthWith (session: WorkerProtocol.SessionInfo) : HealthSnapshot =
     Anomalies = []
     GcDumpOutcome = None
     MemoryPressure = SageFs.MemoryPressure.Normal
-    SupervisorHealth = SageFs.SupervisorHealth.Healthy }
+    SupervisorHealth = SageFs.SupervisorHealth.Healthy
+    ComponentFailures = [] }
 
 /// The queries for one session: the worker says it has run `workerEvals`, the daemon's tally says `finishedEvals`.
 let private queriesFor (session: WorkerProtocol.SessionInfo) (workerEvals: int) (finishedEvals: int) : DashboardQueries =
