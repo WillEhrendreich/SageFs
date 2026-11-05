@@ -733,17 +733,23 @@ module FileTrail =
     | [] -> trail
     | next :: rest -> { Applied = trail.Applied @ [ next ]; Undone = rest }
 
+  /// A row has something to undo only if its own write is in the trail. The file's undo is exact only while that write is the newest;
+  /// otherwise the newest one comes first, and that is said only on a row that has its own write waiting. A row nobody wrote has
+  /// nothing to undo, whatever the file's history holds, so it offers no button and no reason.
   let undoFor (address: string) (trail: FileTrail) : HistoryStep =
-    match List.tryLast trail.Applied with
-    | None -> HistoryStep.NothingToStep
-    | Some newest when newest = address -> HistoryStep.StepAvailable
-    | Some newest -> HistoryStep.OtherRowFirst newest
+    match List.contains address trail.Applied, List.tryLast trail.Applied with
+    | false, _
+    | _, None -> HistoryStep.NothingToStep
+    | true, Some newest when newest = address -> HistoryStep.StepAvailable
+    | true, Some newest -> HistoryStep.OtherRowFirst newest
 
+  /// The same for redo: a row has something to redo only if its own undone write is on the redo side.
   let redoFor (address: string) (trail: FileTrail) : HistoryStep =
-    match trail.Undone with
-    | [] -> HistoryStep.NothingToStep
-    | next :: _ when next = address -> HistoryStep.StepAvailable
-    | next :: _ -> HistoryStep.OtherRowFirst next
+    match List.contains address trail.Undone, trail.Undone with
+    | false, _
+    | _, [] -> HistoryStep.NothingToStep
+    | true, next :: _ when next = address -> HistoryStep.StepAvailable
+    | true, next :: _ -> HistoryStep.OtherRowFirst next
 
 // ── what the running app did with the write ──
 

@@ -397,8 +397,21 @@ let trailTests =
     testCase "an undo offers a redo to the same row, and a write after an undo ends the redo" <| fun _ ->
       let afterUndo = trailOf [ "g"; "h" ] |> FileTrail.undid
       FileTrail.redoFor "h" afterUndo |> Expect.equal "redo is h's" HistoryStep.StepAvailable
-      FileTrail.redoFor "g" afterUndo |> Expect.equal "not g's turn" (HistoryStep.OtherRowFirst "h")
       FileTrail.redoFor "h" (FileTrail.wrote "g" afterUndo) |> Expect.equal "a new write ends redo" HistoryStep.NothingToStep
+      // Two undos put g's write and h's both on the redo side, g's first: h's redo waits for g's.
+      let afterTwo = trailOf [ "g"; "h" ] |> FileTrail.undid |> FileTrail.undid
+      FileTrail.redoFor "g" afterTwo |> Expect.equal "g's is next" HistoryStep.StepAvailable
+      FileTrail.redoFor "h" afterTwo |> Expect.equal "h's waits for g's" (HistoryStep.OtherRowFirst "g")
+
+    testCase "WHY — a row with no write of its own has nothing to undo or redo, whatever the file's history holds, so an unrelated row never offers a button or a reason" <| fun _ ->
+      // Seen in a real browser: after one nudge, every other row in the same file showed a disabled Undo and "Undo waits: the newest
+      // write in this file is to Game.Tuning.gravity", on rows nobody had touched. The reason belongs only to a row whose own write is
+      // in the trail and is not the newest.
+      let trail = trailOf [ "g"; "h" ]
+      FileTrail.undoFor "x" trail |> Expect.equal "an untouched row has nothing to undo" HistoryStep.NothingToStep
+      let afterUndo = trail |> FileTrail.undid
+      FileTrail.redoFor "x" afterUndo |> Expect.equal "an untouched row has nothing to redo" HistoryStep.NothingToStep
+      FileTrail.redoFor "g" afterUndo |> Expect.equal "a row whose write was not undone has nothing to redo" HistoryStep.NothingToStep
 
     testPropertyWithConfig propConfig "undo then redo restores the trail, and undoing everything empties it"
       (Prop.forAll (arbitrary (Gen.listOf (Gen.elements [ "a"; "b"; "c" ]))) (fun writes ->

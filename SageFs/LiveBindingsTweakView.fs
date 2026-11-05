@@ -164,8 +164,8 @@ let describe (state: PersistenceState) : Described =
   | PersistenceState.Derived(place, DerivedWhy.AFormula) ->
     { Label = tagLabel StateTag.Formula
       Tone = Tone.Quiet
-      Detail =
-        sprintf "%s spells it as %s. Edit it as an expression: the file is parsed, not type-checked, and the reload says if it does not compile." (whereOf place) place.Text }
+      // One short line: the field beside it already shows the expression and the column beside that names the file.
+      Detail = sprintf "Worked out from other values in %s. Edit the formula; it is not type-checked, so a reload reports an error." (whereOf place) }
   | PersistenceState.Derived(place, DerivedWhy.AContainer) ->
     { Label = tagLabel StateTag.MadeOfParts
       Tone = Tone.Quiet
@@ -289,9 +289,9 @@ module NextStep =
     match step with
     | NextStep.NoNextStep -> ""
     | NextStep.UndoOrReload ->
-      "Undo takes your last write back. To run the file's value instead, evaluate the binding again or use Rebuild and reload on the session card."
+      "Undo takes the write back. To run the file's value, evaluate the binding again or use Rebuild and reload."
     | NextStep.ReloadOnly ->
-      "To run the file's value, evaluate the binding again or use Rebuild and reload on the session card. This page cannot apply it for you."
+      "To run the file's value, evaluate the binding again or use Rebuild and reload."
     | NextStep.UseTheControl -> "The control on this row sets what the file says."
     | NextStep.UseTheControlAgain -> "The control on this row now starts from what the file holds. Change it again from there."
 
@@ -338,15 +338,17 @@ type DetailShown =
 
 let detailShown (state: PersistenceState) : DetailShown =
   match state with
+  // A row that differs from its file labels both numbers ("running", "file") and says the next step in its own line, so its sentence
+  // would say a third time what the row already shows. A formula's expression is in the field beside its tag.
   | PersistenceState.InSource _
+  | PersistenceState.DiffersFromFile _
+  | PersistenceState.Derived(_, DerivedWhy.AFormula)
   | PersistenceState.Derived(_, DerivedWhy.AContainer) -> DetailShown.InTheTooltipOnly
   | PersistenceState.NotInAFile _
   | PersistenceState.Held
-  | PersistenceState.Derived(_, DerivedWhy.AFormula)
   | PersistenceState.Ambiguous _
   | PersistenceState.Tweaked _
   | PersistenceState.Evolved _
-  | PersistenceState.DiffersFromFile _
   | PersistenceState.StaleAddress _
   | PersistenceState.Refused _
   | PersistenceState.Writing _ -> DetailShown.OnTheRow

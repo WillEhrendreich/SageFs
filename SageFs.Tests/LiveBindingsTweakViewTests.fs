@@ -433,8 +433,13 @@ let controlTests =
       strip (rowOf (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl) |> fun html -> html.Contains "tweak-detail" |> Expect.isFalse "REPL only is said once in the title bar, not on every row"
       for state in states do
         match state with
+        // A row that differs from its file labels both numbers and says the next step, and a formula's expression is in the field
+        // beside the tag: their sentences repeated what was already on the row, so they are the tooltip's.
         | PersistenceState.InSource _
-        | PersistenceState.Derived(_, DerivedWhy.AContainer) -> ()
+        | PersistenceState.DiffersFromFile _
+        | PersistenceState.Derived(_, DerivedWhy.AFormula)
+        | PersistenceState.Derived(_, DerivedWhy.AContainer) ->
+          detailShown state |> Expect.equal (sprintf "%s keeps its sentence in the tooltip" (PersistenceState.token state)) DetailShown.InTheTooltipOnly
         | other -> detailShown other |> Expect.equal (sprintf "%s explains itself on the row" (PersistenceState.token other)) DetailShown.OnTheRow
 
     testCase "WHY — a REPL-only row draws a marker with its state and nothing visible, because the title bar says it once and ten rows saying it again cost ten lines" <| fun _ ->
