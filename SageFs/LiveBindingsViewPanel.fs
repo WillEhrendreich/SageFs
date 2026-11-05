@@ -170,15 +170,10 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         Ds.class' ("live-hidden", sprintf "!$%s" ViewSignals.Open)
         Ds.preserveAttr "class" ]
       [ Elem.div [ Attr.class' "live-view-head" ] [ textEnc (sprintf "View for %s" (ViewWorkflow.label workflow)) ]
-        // Said once, where the choices are. State and source are not lost when they are Off or the list is narrow: they move
-        // under the row. (Type is not: Off hides it.)
-        Elem.div [ Attr.class' "live-view-note" ] [
-          Text.raw "State and source sit in the row when there is room, and under it when there is not."
-        ]
         presetRow sessionId workflow resolved.View
         yield! ViewAxis.drawn |> List.map (axisRow sessionId resolved)
         scopeRow sessionId
         Elem.div [ Attr.class' "live-view-note" ] [
-          Text.raw "A choice is saved as you click it. This project writes .SageFs/settings.json in the project folder; All projects writes your own settings.json."
+          Text.raw "A choice is saved as you click it: for This project in .SageFs/settings.json in the project folder, for All projects in your own settings.json."
         ] ]
   { Button = button; Panel = panel }

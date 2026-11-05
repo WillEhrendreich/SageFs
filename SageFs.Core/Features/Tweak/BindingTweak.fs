@@ -815,6 +815,16 @@ module TweakView =
   /// Whether any row has a control, so the pane can say where a change goes before the first one is made.
   let hasKnob (view: TweakView) : bool = view.Rows |> Map.exists (fun _ row -> rowHasKnob row)
 
+  /// Whether any row that has a place is in a file nothing is watching, so the pane can say once, before an edit, that the running
+  /// session will not follow it.
+  let anyUnwatched (view: TweakView) : bool =
+    view.Rows
+    |> Map.exists (fun _ row ->
+      match row.Watching, row.Place with
+      | WatchStatus.NotWatched, PlaceOf.Placed _ -> true
+      | WatchStatus.NotWatched, PlaceOf.NotPlaced
+      | WatchStatus.Watched, _ -> false)
+
   /// Whether no file of the session holds the value. Every state says which it is, so a new state cannot go unanswered.
   let isReplOnly (state: PersistenceState) : bool =
     match state with

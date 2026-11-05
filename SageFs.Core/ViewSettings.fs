@@ -160,8 +160,12 @@ module ViewAxis =
   /// The axes the dock draws today, in the order the view panel lists them. The other settings exist and persist, and nothing
   /// draws them yet; the panel offers a control only for an axis here, so it has no control that changes nothing. A test holds this
   /// list to the dock: each drawn axis, set to each of its values, must change what the dock draws.
+  ///
+  /// The state and the source are not offered. Above 900px the list gives each its own column, always, so a "Show state" switch set to
+  /// Off beside a State column on screen read as a bug to three reviewers. The settings still exist and persist, and a narrow list
+  /// still moves their facts under the row; only the panel stops offering a switch the wide list does not obey.
   let drawn : ViewAxis list =
-    [ ViewAxis.TypeColumn; ViewAxis.StateColumn; ViewAxis.SourceColumn; ViewAxis.ValueMode; ViewAxis.RowHeight ]
+    [ ViewAxis.TypeColumn; ViewAxis.ValueMode; ViewAxis.RowHeight ]
 
   /// The word in a settings key.
   let token (axis: ViewAxis) : string =

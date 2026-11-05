@@ -352,7 +352,7 @@ let dockViewTests =
       let on = withLayout { recommended.Layout with State = On; Source = Off }
       let off = withLayout { recommended.Layout with State = Off; Source = Off }
       rowOf on |> Expect.stringContains "the cell is in the row" "live-cell-state"
-      rowOf on |> Expect.stringContains "and says the state's word" "in source"
+      rowOf on |> Expect.stringContains "and says the state's word" (LiveBindingsTweakView.tagLabel StateTag.InSource)
       (rowOf off).Contains "live-cell-state" |> Expect.isFalse "no cell when the column is off"
       off |> Expect.stringContains "the strip still says it" "live-state"
       on |> Expect.stringContains "the strip says it too, for a pane too narrow for the column" "live-state"
@@ -537,6 +537,7 @@ let dockWordingTests =
       PaneNote.LegendSummary
       PaneNote.ReadFromPrinted
       PaneNote.ChangesGoToTheFile
+      PaneNote.ChangesGoToAnUnwatchedFile
       PaneNote.ModeGoverns
       PaneNote.ModeMeans WalkSafe
       PaneNote.ModeMeans WalkEverything
@@ -557,6 +558,19 @@ let dockWordingTests =
       (dockWith TweakView.none ValueWalk.standard On [ person ]).Contains "live-writes-caption" |> Expect.isFalse "no editable row, no caption"
       TweakView.hasKnob withKnob |> Expect.isTrue "the pure fact the caption follows"
       TweakView.hasKnob TweakView.none |> Expect.isFalse "no rows, no knob"
+
+    testCase "WHY — when nothing watches the files the rows are in, the pane says so once, in its edit caption, and a row nobody has written says nothing: the sentence under every row was noise" <| fun _ ->
+      // Seen in a real browser once hot reload was left off (the usual state in a REPL session): after one nudge every row in the file
+      // said "Nothing is watching Tuning.fs, so a change saved to it will not reach the running session", ten rows of the same sentence.
+      let unwatched : TweakView = { Rows = withKnob.Rows |> Map.map (fun _ row -> { row with Watching = WatchStatus.NotWatched }) }
+      let said = PaneNote.text PaneNote.ChangesGoToAnUnwatchedFile
+      let html = dockWith unwatched ValueWalk.standard On [ person ]
+      html |> Expect.stringContains "the caption names the consequence, once" said
+      count said html |> Expect.equal "once" 1
+      html.Contains "tweak-watching" |> Expect.isFalse "and no unwritten row repeats it"
+      (dockWith withKnob ValueWalk.standard On [ person ]).Contains said |> Expect.isFalse "a watched file needs no such caption"
+      TweakView.anyUnwatched unwatched |> Expect.isTrue "the fact the caption follows"
+      TweakView.anyUnwatched withKnob |> Expect.isFalse "a watched one has none"
 
     testCase "WHY — values come first: the standard mode spends no line on its meaning, and a mode that is not the standard says what it does on one line" <| fun _ ->
       for mode in ValueWalk.all do
@@ -679,6 +693,26 @@ let dockWordingTests =
       html |> Expect.stringContains "the chip's number is that count" (PaneNote.text (PaneNote.NotInAnyFile counted))
       html |> Expect.stringContains "the badge says what it is" (tagLabel StateTag.NotInAFile)
 
+    testCase "WHY — a sentence about a call is said once for the rows it covers, because 'makeRig builds this value' under each of a record's fields was the same line twice" <| fun _ ->
+      // Reviewers read the repeat as clutter that "reads as a separate item". Consecutive rows that owe the same sentence say it on the
+      // first, and the others are silent; a row with a different sentence says its own.
+      let viaCall (callee: string) : RowView =
+        { State = PersistenceState.Held
+          Control = Control.NoControl
+          Place = PlaceOf.NotPlaced
+          Watching = WatchStatus.Watched
+          Reload = RowReload.NoWriteYet
+          Undo = HistoryStep.NothingToStep
+          Redo = HistoryStep.NothingToStep
+          Through = ThroughCall.CouldNotFollow(Refusal.NoCalleeInFiles callee) }
+      let fieldKey (label: string) : RowKey = { Binding = "rig"; Labels = [ label ] }
+      let tweaks : TweakView =
+        { Rows = Map.ofList [ fieldKey "Mass", viaCall "makeRig"; fieldKey "Drag", viaCall "makeRig"; fieldKey "Spin", viaCall "makeSpin" ] }
+      let rig = binding "rig" NodeKind.Record [ node "Mass" NodeKind.Leaf "80.0" []; node "Drag" NodeKind.Leaf "0.25" []; node "Spin" NodeKind.Leaf "1.0" [] ]
+      let html = dockWith tweaks ValueWalk.standard On [ rig ]
+      count "Built by makeRig," html |> Expect.equal "the shared sentence is said once" 1
+      count "Built by makeSpin," html |> Expect.equal "a different sentence is still said" 1
+
     testCase "WHY — at the standard mode the header is one line of help: no line of its own for the mode, and the edit caption, label, buttons and legend share a row" <| fun _ ->
       let head (html: string) =
         let start = html.IndexOf "class=\"live-pane-head\""
@@ -688,6 +722,20 @@ let dockWordingTests =
       count "data-testid=\"live-writes-caption\"" standardHead |> Expect.equal "one edit caption" 1
       let otherHead = head (dockWith withKnob WalkEverything On [ person ])
       count "live-containment" otherHead |> Expect.equal "a mode that is not the standard takes exactly one more line" 1
+
+    testCase "WHY — a state tag says what is true, in words a person uses: 'in the file', 'has parts', and 'saved, not running' for a file that is ahead of the app" <| fun _ ->
+      // Reviewers read "DIFFERS FROM THE FILE" over a sentence that said "Saved to the file" as a contradiction (is the file the same
+      // or not?), "IN SOURCE" as unrelated to "NOT IN A FILE", and "MADE OF PARTS" as vague. The pairs now read as pairs.
+      LiveBindingsTweakView.tagLabel StateTag.InSource |> Expect.equal "the pair of 'not in a file'" "in the file"
+      LiveBindingsTweakView.tagLabel StateTag.MadeOfParts |> Expect.equal "what a record or list is" "has parts"
+      LiveBindingsTweakView.tagLabel StateTag.DiffersFromFile |> Expect.equal "what the row says about the app" "saved, not running"
+
+    testCase "WHY — the label on the mode buttons is plain: it says they govern what is looked at inside an object, not 'class values'" <| fun _ ->
+      // Three reviewers: "Class values is not explained, what is a class, what does Safe do". The label names the act.
+      PaneNote.text PaneNote.ModeGoverns |> Expect.equal "the label" "Look inside objects:"
+
+    testCase "WHY — the view panel offers only the settings the list still obeys: state and source always have their own columns above 900px, so a Show state switch set to Off beside a State column on screen read as a bug" <| fun _ ->
+      ViewAxis.drawn |> Expect.equal "type, long values and row height" [ ViewAxis.TypeColumn; ViewAxis.ValueMode; ViewAxis.RowHeight ]
 
     testCase "WHY — a value carries its full text as a title, because the cell clips a long one with an ellipsis and the rest was out of reach" <| fun _ ->
       let long = "{ JumpVelocity = 13.2; CoyoteTime = 0.12; Buffer = 0.08; Apex = 0.4 }"

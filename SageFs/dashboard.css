@@ -253,6 +253,10 @@ h2 {
    folded away this strip is all that shows, so the marker is a word and not only a colour. It shrinks and ends in an ellipsis
    before it pushes the buttons off the strip. */
 .sessions-stale-marker {
+  /* Only where the card is folded below the first screen (phone width, see the media block that shows it). At a wide window the
+     header badge, the card and the pane already say it, and a fourth copy beside the title was noise: three reviewers counted
+     five places saying "running older code". */
+  display: none;
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -1688,6 +1692,20 @@ h2 {
     grid-column: 4;
   }
 
+  /* A row no file defines has an empty Edit cell, and an empty cell reads as "not loaded yet" or "not supported". It says why, in
+     the cell, in the one way a person can change such a value. The sentence is drawn here, and the badge in the State column is
+     what selects the row. */
+  .live-row:has(> .live-binding-node > .live-state)::after,
+  .live-node-summary:has(> .live-binding-node > .live-state)::after {
+    content: "Change it by evaluating code";
+    grid-column: 4;
+    grid-row: 1;
+    color: var(--fg-dim);
+    font-size: 11.5px;
+    font-style: italic;
+    white-space: nowrap;
+  }
+
   /* The names of the columns, above the rows and level with them. They stay in view while the list scrolls. */
   .live-cols {
     display: grid;
@@ -1731,6 +1749,41 @@ h2 {
 .live-dock :is(button, input, select, summary):focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
+}
+
+/* The state tags no longer all look alike. They differed only by the colour of one outline, so "in the file" and "not in a file" read as
+   equals, and the one tag that asks something of the person looked as calm as the rest. A tag that needs attention ("saved, not
+   running") is a filled label; a quiet one ("has parts", "formula", "not in a file") has a dashed edge, the visual word for "nothing
+   to do here"; "in the file" keeps its solid green outline. */
+.live-state.live-tone-notice {
+  background: var(--fg-yellow);
+  border-color: var(--fg-yellow);
+  color: var(--bg-default);
+  font-weight: 700;
+}
+
+.live-state.live-tone-quiet {
+  border-style: dashed;
+}
+
+/* The two lines that tell a person what editing does and what they are looking at are in the text colour, not the dim one: "Edits go
+   to the file" is the answer to "what happens when I change a value", and was small grey text to three reviewers. The remaining
+   dim text on the pane is mixed toward the text colour, because it measured 5.6:1 and still read as faint at 11px. */
+.live-dock .live-writes-caption,
+.live-dock .live-help > summary {
+  color: var(--fg-default);
+}
+
+.live-dock .live-writes-caption {
+  font-weight: 700;
+}
+
+.live-dock .live-pane-count,
+.live-dock .live-pane-stamp,
+.live-dock .live-cols,
+.live-dock .live-where,
+.live-dock .live-type {
+  color: color-mix(in srgb, var(--fg-dim) 55%, var(--fg-default));
 }
 
 /* A row lights up under the pointer, so the eye can follow one binding across the columns. */
@@ -2467,12 +2520,16 @@ h2 {
   white-space: nowrap;
 }
 
-/* A number with its word while the file and the running program disagree: "running" beside the value in the heading and "file"
-   beside the knob. Small and dim, so the number stays the thing you read. */
+/* A number with its word while the file and the running program disagree: "running" beside the value in the heading and "in file"
+   beside the knob. Each word is a small label with an edge of its own, in the normal text colour, not tiny dim italics: three
+   reviewers could not tell which of the three numbers on the row the program was using. */
 .live-number-tag {
-  color: var(--fg-dim);
+  padding: 0 5px;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg-default);
   font-size: 11px;
-  font-style: italic;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -3088,6 +3145,10 @@ h2 {
        bounded, and the main area is tall enough for both. At 22rem the dock showed two and a half binding rows at 400px, once
        the pane's captions had taken their share, so it is taller here, and the main area's floor grows with it. */
     max-height: 30rem;
+    /* The bindings are what the page is opened for, so on a phone they come first, above the output transcript. With the output
+       first, the bindings began halfway down a 400x800 window and only the first two rows showed above the fold: three reviewers
+       scored the narrow layouts 5 because the subject was buried under the log. */
+    order: -1;
   }
 
   /* The popover needs room above the dock, and a phone-width page has little: the panel's title slid under the fixed header.
@@ -3229,7 +3290,20 @@ h2 {
   }
 
   .app-header .theme-select {
-    width: 6.5rem;
+    /* Wide enough for the longest theme name ("Kanagawa" lost its last letter at 6.5rem). */
+    width: 8rem;
+  }
+
+  /* With the card folded below the first screen, the Sessions header carries the word. At a wide window it is hidden: the
+     badge, the card and the pane already say it. */
+  .sessions-stale-marker {
+    display: inline-block;
+  }
+
+  /* The session's part of the health line goes on a line of its own instead of wrapping in the middle of a sentence. */
+  .session-health-list {
+    display: block;
+    margin-left: 0 !important;
   }
 }
 

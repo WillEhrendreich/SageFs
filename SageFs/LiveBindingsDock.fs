@@ -549,7 +549,9 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
       | [] -> "r"
       | labels -> "r_" + (labels |> List.map hexOf |> String.concat "_")
     sprintf "open_%s_%s_%s" (signalIdent binding) (hexOf binding) pathToken
-  let rec renderNode (binding: string) (path: string list) (node: LiveValueTree.LiveValueNode) : XmlNode =
+  /// `alreadySaid` is the sentence about a call that the row just before this one (its sibling) said. Rows that owe the same sentence
+  /// (the fields of a record built by one call) say it once, on the first: the repeat read as clutter.
+  let rec renderNode (binding: string) (path: string list) (node: LiveValueTree.LiveValueNode) (alreadySaid: string option) : XmlNode =
     let row =
       // Text.create escapes: labels, type names and previews are FSI-derived DATA, not trusted markup. A string
       // preview holding <script> must never inject into the dashboard DOM.
@@ -570,7 +572,13 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
     let key : RowKey = { Binding = binding; Labels = path }
     let stripFor (placement: Placement) : XmlNode list =
       match TweakView.tryRow tweaks key with
-      | Some view -> [ renderStrip key view placement ]
+      | Some view ->
+        let mine = describeThrough view.Through |> Option.map (fun said -> said.Detail)
+        let view' =
+          match mine, alreadySaid with
+          | Some sentence, Some before when sentence = before -> { view with Through = ThroughCall.NoCall }
+          | _ -> view
+        [ renderStrip key view' placement ]
       | None -> []
     let withStrip (rowNode: XmlNode) : XmlNode =
       match stripFor Placement.OnLeafRow with
@@ -583,7 +591,15 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
       signalDetails (nodeSignal binding path) [ Attr.class' "live-node" ] [
         Elem.summary [ Attr.class' "live-node-summary" ] [ row; yield! stripFor Placement.InsideSummary ]
         Elem.div [ Attr.class' "live-children" ] [
-          yield! node.Children |> List.map (fun child -> renderNode binding (path @ [ child.Label ]) child)
+          let sayingOf (child: LiveValueTree.LiveValueNode) : string option =
+            TweakView.tryRow tweaks { Binding = binding; Labels = path @ [ child.Label ] }
+            |> Option.bind (fun view -> describeThrough view.Through)
+            |> Option.map (fun said -> said.Detail)
+          let said = node.Children |> List.map sayingOf
+          yield!
+            node.Children
+            |> List.mapi (fun index child ->
+              renderNode binding (path @ [ child.Label ]) child (match index with 0 -> None | n -> said.[n - 1]))
         ]
       ]
   let walkModeLoading = "liveWalkModeLoading"
@@ -610,8 +626,12 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
       // is not the standard one; the standard mode's meaning is in the buttons' tooltips.
       match TweakView.hasKnob tweaks with
       | true ->
+        let caption =
+          match TweakView.anyUnwatched tweaks with
+          | true -> LiveBindingsPane.PaneNote.ChangesGoToAnUnwatchedFile
+          | false -> LiveBindingsPane.PaneNote.ChangesGoToTheFile
         Elem.span [ Attr.class' "live-pane-count live-writes-caption"; testid "live-writes-caption" ] [
-          textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ChangesGoToTheFile) ]
+          textEnc (LiveBindingsPane.PaneNote.text caption) ]
       | false -> ()
       Elem.span [ Attr.id DockIds.ModeLabel; Attr.class' "live-pane-count live-mode-label"; testid "live-mode-label" ] [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ModeGoverns) ]
       Elem.div [ Attr.class' "live-mode"; Attr.create "role" "group"; Attr.create "aria-labelledby" DockIds.ModeLabel ] [
@@ -653,7 +673,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
                     Ds.preserveAttr "class aria-pressed"
                     Ds.onClick (attrEnc (togglePinExpr b.Name)) ]
                   [ pinIcon ]
-                Elem.div [ Attr.class' "live-binding-tree" ] [ renderNode b.Name [] b.Root ] ])
+                Elem.div [ Attr.class' "live-binding-tree" ] [ renderNode b.Name [] b.Root None ] ])
         Elem.div
           [ Attr.id DockIds.NoMatch
             Attr.class' "live-empty live-hidden"

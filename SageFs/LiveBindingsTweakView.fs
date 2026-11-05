@@ -104,17 +104,19 @@ let shortHash (hash: string) : string = if hash.Length > 8 then hash.Substring(0
 /// The words on a badge. One function, so the badge on a row and the line that explains it in the legend are the same text.
 let tagLabel (tag: StateTag) : string =
   match tag with
-  | StateTag.InSource -> "in source"
+  | StateTag.InSource -> "in the file"
   | StateTag.NotInAFile -> "not in a file"
   | StateTag.FilesUnknown -> "files unknown"
   | StateTag.NotSpelled -> "not spelled in the file"
   | StateTag.Held -> "held"
   | StateTag.Formula -> "formula"
-  | StateTag.MadeOfParts -> "made of parts"
+  | StateTag.MadeOfParts -> "has parts"
   | StateTag.Ambiguous -> "ambiguous"
   | StateTag.Tweaked -> "tweaked"
   | StateTag.Evolved -> "evolved"
-  | StateTag.DiffersFromFile -> "differs from the file"
+  // What is true about the running app, not a comparison: "differs from the file" sat over a sentence that said "Saved to the
+  // file", and read as the file not having been written.
+  | StateTag.DiffersFromFile -> "saved, not running"
   | StateTag.FileChanged -> "file changed"
   | StateTag.Refused -> "refused"
   | StateTag.Writing -> "writing"
@@ -244,7 +246,7 @@ module NumberLabels =
   /// The word beside the value in the heading.
   let runningWord : string = "running"
   /// The word beside the number in the knob.
-  let fileWord : string = "file"
+  let fileWord : string = "in file"
   let runningMeaning : string = "The value the running program holds."
   let fileMeaning : string = "The value in the file. The control below changes it."
 
@@ -288,10 +290,11 @@ module NextStep =
   let sentence (step: NextStep) : string =
     match step with
     | NextStep.NoNextStep -> ""
-    | NextStep.UndoOrReload ->
-      "Undo takes the write back. To run the file's value, evaluate the binding again or use Rebuild and reload."
+    // One remedy in plain words. The Undo button, when there is one, is on the row and says what it does, so the sentence does not
+    // explain it a second time.
+    | NextStep.UndoOrReload
     | NextStep.ReloadOnly ->
-      "To run the file's value, evaluate the binding again or use Rebuild and reload."
+      "To run the file's value, evaluate the binding again or rebuild."
     | NextStep.UseTheControl -> "The control on this row sets what the file says."
     | NextStep.UseTheControlAgain -> "The control on this row now starts from what the file holds. Change it again from there."
 
@@ -731,18 +734,17 @@ let historyNodes (key: RowKey) (view: RowView) : XmlNode list =
         yield historyButton key place "↷" "redo" "tweak-redo" redo
         yield! historyReason "redo" redo ]
 
-/// What a file that hot reload is not watching says. One sentence whether or not the row has been written yet, so a REPL session says
-/// it once and not in two voices ("Saved. Hot reload has not said..." beside "hot reload is not watching").
-let notWatchedSentence (written: bool) (file: string) : string =
-  match written with
-  | true -> sprintf "Saved to the file. Hot reload is not watching %s, so the running app will not follow the change." (Path.GetFileName file)
-  | false -> sprintf "Hot reload is not watching %s, so the running app will not follow a write." (Path.GetFileName file)
+/// What a row that was written to a file nothing is watching says. Only a row that was written says it: said under every row of the
+/// file before any write, it was ten copies of one sentence. The pane says the same fact once, ahead of any edit, in its caption
+/// (`PaneNote.ChangesGoToAnUnwatchedFile`).
+let notWatchedSentence (file: string) : string =
+  sprintf "Saved to the file. Nothing is watching %s, so the running session still has the old value." (Path.GetFileName file)
 
 let reloadNodes (view: RowView) : XmlNode list =
-  let watching (written: bool) : XmlNode list =
+  let watching : XmlNode list =
     match view.Watching, view.Place with
     | WatchStatus.NotWatched, PlaceOf.Placed place ->
-      [ Elem.span [ Attr.class' "live-reload live-tone-notice"; testid "tweak-watching" ] [ textEnc (notWatchedSentence written place.File) ] ]
+      [ Elem.span [ Attr.class' "live-reload live-tone-notice"; testid "tweak-watching" ] [ textEnc (notWatchedSentence place.File) ] ]
     | WatchStatus.NotWatched, PlaceOf.NotPlaced
     | WatchStatus.Watched, _ -> []
   let line =
@@ -755,11 +757,12 @@ let reloadNodes (view: RowView) : XmlNode list =
             Attr.title (attrEnc more) ]
           [ textEnc text ] ]
   match view.Watching, view.Reload with
-  // Nothing was heard from hot reload, and it is not watching the file: one sentence says so, and says the write happened if it did.
-  | WatchStatus.NotWatched, RowReload.NoWriteYet -> watching false
-  | WatchStatus.NotWatched, RowReload.Watching(_, (ReloadWatch.AwaitingReload | ReloadWatch.Compiling | ReloadWatch.NoNewReport)) -> watching true
+  // A row nobody has written to says nothing, watched or not: the pane's caption says a file is not watched, once.
+  | WatchStatus.NotWatched, RowReload.NoWriteYet -> []
+  // Written, and nothing is watching the file: one sentence says so, in place of a verdict that cannot come.
+  | WatchStatus.NotWatched, RowReload.Watching(_, (ReloadWatch.AwaitingReload | ReloadWatch.Compiling | ReloadWatch.NoNewReport)) -> watching
   | WatchStatus.NotWatched, RowReload.Watching(_, ReloadWatch.Reported _)
-  | WatchStatus.Watched, (RowReload.NoWriteYet | RowReload.Watching _) -> line @ watching false
+  | WatchStatus.Watched, (RowReload.NoWriteYet | RowReload.Watching _) -> line @ watching
 
 /// The strip under a row: the state as a chip and a sentence, the knob where the state allows one, the row's undo and redo, and what
 /// the app did with its last write. Every row the pane has something to say about gets one, so no row is silent about its file.

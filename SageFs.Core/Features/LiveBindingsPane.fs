@@ -149,6 +149,9 @@ module LiveBindingsPane =
     | ReadFromPrinted
     /// Shown while at least one row has a control: where a change goes, before anyone makes one.
     | ChangesGoToTheFile
+    /// The same, when nothing is watching the files the rows are in (the usual state in a REPL session): the consequence is said once,
+    /// here, ahead of any edit, and no row repeats it until it has been written.
+    | ChangesGoToAnUnwatchedFile
     /// The label of the mode buttons: what they govern.
     | ModeGoverns
     /// The one-line meaning of the chosen mode.
@@ -180,7 +183,8 @@ module LiveBindingsPane =
       | PaneNote.ValuesAsOf at -> sprintf "Values as of %s" at
       | PaneNote.ReadFromPrinted -> "read from FSI's printed output"
       | PaneNote.ChangesGoToTheFile -> "Edits go to the file."
-      | PaneNote.ModeGoverns -> "Class values:"
+      | PaneNote.ChangesGoToAnUnwatchedFile -> "Edits go to the file, and nothing watches it: the session keeps its values until you evaluate them again."
+      | PaneNote.ModeGoverns -> "Look inside objects:"
       | PaneNote.LegendSummary -> "What do the tags mean?"
       | PaneNote.ModeMeans choice ->
         let meaning =

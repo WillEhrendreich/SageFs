@@ -421,9 +421,11 @@ let controlTests =
       let html = strip notWatched
       html |> Expect.stringContains "the not-watched sentence" "data-testid=\"tweak-watching\""
       html.Contains "tweak-reload" |> Expect.isFalse "no second sentence about a verdict that cannot come"
-      textOfTestId "tweak-watching" html |> Expect.equal "it says the write happened" (Some(notWatchedSentence true gravity.File))
+      textOfTestId "tweak-watching" html |> Expect.equal "it says the write happened" (Some(notWatchedSentence gravity.File))
+      // A row nobody has written says nothing about the file not being watched: said under every row of a file, once any row was
+      // written, it was ten copies of one sentence. The pane says it once, in its edit caption.
       textOfTestId "tweak-watching" (strip { row with Watching = WatchStatus.NotWatched })
-      |> Expect.equal "before any write it only says hot reload is not watching" (Some(notWatchedSentence false gravity.File))
+      |> Expect.isNone "before any write the row is silent"
       let watched = strip { row with Reload = RowReload.Watching("Tuning.fs", ReloadWatch.NoNewReport); Watching = WatchStatus.Watched }
       watched |> Expect.stringContains "a watched file shows the reload line" "data-testid=\"tweak-reload\""
       watched.Contains "tweak-watching" |> Expect.isFalse "and no not-watched sentence"
