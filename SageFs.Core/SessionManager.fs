@@ -393,6 +393,14 @@ module SessionManager =
       : ManagerState * Result<unit, SageFsError> =
       let onExited workerPid exitCode =
         inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
+      // `session` can be a copy parked while the old worker left (a session whose startup profile runs at load), taken while the
+      // rebuild was still running. What the rebuild did is recorded on the registered session after that, so it is read from
+      // there: carrying the parked copy's `InProgress` forward made the session read "Rebuild in progress" for the rest of its
+      // life (#186).
+      let rebuildNow =
+        match ManagerState.tryGetSession id state with
+        | Some registered -> registered.Info.Rebuild
+        | None -> session.Info.Rebuild
       match runtime.StartWorkerProcess id session.Targets session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
       | Ok spawned ->
         let proc = spawned.Process
@@ -409,7 +417,7 @@ module SessionManager =
           ActiveProject = session.Info.ActiveProject
           ProjectRoles = session.ProjectRoles
           App = AppRun.acrossWorkerRestart session.Info.App
-          Rebuild = session.Info.Rebuild
+          Rebuild = rebuildNow
           Reload = SessionReload.NoReloadYet; Freshness = ReplFreshness.InSync
         }
         let restarted = {

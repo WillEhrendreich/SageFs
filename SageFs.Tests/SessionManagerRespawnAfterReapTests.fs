@@ -262,6 +262,29 @@ let respawnAfterReapTests =
           }))
     }
 
+    testTask "WHY — a rebuilding reset of a session with a profile ends Succeeded once its replacement starts, and the session never reads InProgress for the rest of its life (#186)" {
+      let rig = mkRig true (fun _ -> false)
+      do! withProject true (fun root ->
+        withHarness rig (fun harness ->
+          task {
+            let info = createSession harness root
+            makeReady harness info
+            hardReset harness info.Id (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker) |> Result.isOk |> Expect.isTrue "the reset is accepted"
+            rig.LetOldWorkersLeave ()
+            do! within "the replacement to start once the old worker left" (rig.Started 2)
+            let! _ = workersGone harness info.Id
+            let outcome () = (managed harness info.Id).Info.Rebuild
+            match outcome () with
+            | LastRebuild.Latest (RebuildOutcome.Succeeded _) -> ()
+            | other -> failtestf "after the replacement started, expected Succeeded, got %A" other
+            // The replacement then reports Ready: that must not bring the old outcome back either.
+            makeReady harness (managed harness info.Id).Info
+            match outcome () with
+            | LastRebuild.Latest (RebuildOutcome.Succeeded _) -> ()
+            | other -> failtestf "after the replacement was Ready, expected Succeeded, got %A" other
+          }))
+    }
+
     testTask "WHY — a second hard reset while the replacement is parked is refused, so one reset cannot start two workers" {
       let rig = mkRig true (fun _ -> false)
       do! withProject true (fun root ->
