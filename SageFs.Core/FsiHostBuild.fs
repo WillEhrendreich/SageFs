@@ -25,6 +25,7 @@ let hostSourceNames =
     "Timeouts.fs"
     "NativeResolution.fs"
     "Instrumentation.fs"
+    "FSharpSpelling.fs"
     "LiveValueTree.fs"
     "DirectoryConfigTypes.fs"
     "ConfigDsl.fs"

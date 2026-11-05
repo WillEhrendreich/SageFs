@@ -4,6 +4,7 @@ open System
 open System.Collections
 open System.Reflection
 open Microsoft.FSharp.Reflection
+open SageFs
 
 /// Live value tree — a reflection-walked, bounded tree of the actual bound
 /// values in the FSI session, for the dashboard's debugger-style watch window.
@@ -121,7 +122,7 @@ module LiveValueTree =
     | :? string as s -> sprintf "\"%s\"" (truncateString s)
     | :? char as c -> sprintf "'%c'" c
     | :? bool as b -> if b then "true" else "false"
-    | :? float as f -> sprintf "%g" f
+    | :? float as f -> FSharpFloat.text f
     | :? DateTime as dt -> dt.ToString("o")
     | _ -> truncateString (string value)
 
@@ -552,21 +553,21 @@ module LiveValueTree =
 
     // Cycle protection: reference types seen before are not re-expanded.
     if isCycle visited value then
-      { Label = label; TypeName = t.Name; Preview = "↩ (cycle)"; Kind = NodeKind.Cycle
+      { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = "↩ (cycle)"; Kind = NodeKind.Cycle
         Children = []; BestEffort = false; Depth = depth }
     elif depth >= MaxDepth then
-      { Label = label; TypeName = t.Name; Preview = scalarPreview value; Kind = NodeKind.Truncated
+      { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = scalarPreview value; Kind = NodeKind.Truncated
         Children = []; BestEffort = false; Depth = depth }
     elif budget.Value <= 0 then
       // Total node budget exhausted — stop the walk for this snapshot. The
       // depth/children limits alone allow a 50^depth blow-up on hostile object
       // graphs; the budget forces a hard stop regardless of graph shape.
-      { Label = label; TypeName = t.Name; Preview = "… (node budget)"; Kind = NodeKind.Truncated
+      { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = "… (node budget)"; Kind = NodeKind.Truncated
         Children = []; BestEffort = false; Depth = depth }
     else
       budget.Value <- budget.Value - 1
       try
-        let typeName = t.Name
+        let typeName = FSharpTypeName.runtimeName t
         let leaf preview kind = {
           Label = label; TypeName = typeName; Preview = preview; Kind = kind
           Children = []; BestEffort = false; Depth = depth }
@@ -821,7 +822,7 @@ module LiveValueTree =
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Class
             Children = children; BestEffort = false; Depth = depth }
       with ex ->
-        { Label = label; TypeName = t.Name; Preview = sprintf "<error: %s>" ex.Message
+        { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = sprintf "<error: %s>" ex.Message
           Kind = NodeKind.Leaf; Children = []; BestEffort = false; Depth = depth }
 
   /// Build the root node for a binding's value under `walk`.
@@ -848,7 +849,7 @@ module LiveValueTree =
 
   let private unreadableNode (label: string) (value: obj) (why: string) : LiveValueNode =
     let t = if isNull value then typeof<obj> else value.GetType()
-    { Label = label; TypeName = t.Name; Preview = why; Kind = NodeKind.Leaf
+    { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = why; Kind = NodeKind.Leaf
       Children = []; BestEffort = false; Depth = 0 }
 
   /// Walk `bindings` in order with a deadline for each one.

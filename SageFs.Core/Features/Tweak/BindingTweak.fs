@@ -83,7 +83,7 @@ module LiveShape =
     | LiteralValue.Bool true -> "true"
     | LiteralValue.Bool false -> "false"
     | LiteralValue.Integer i -> i.ToString(CultureInfo.InvariantCulture)
-    | LiteralValue.Real r -> sprintf "%g" r
+    | LiteralValue.Real r -> FSharpFloat.text r
     | LiteralValue.Char c -> sprintf "'%c'" c
     | LiteralValue.Text s -> sprintf "\"%s\"" s
     | LiteralValue.Case name -> name
@@ -742,6 +742,17 @@ type TweakView = { Rows: Map<RowKey, RowView> }
 module TweakView =
   let none : TweakView = { Rows = Map.empty }
   let tryRow (view: TweakView) (key: RowKey) : RowView option = Map.tryFind key view.Rows
+
+  /// Whether a row draws a control a person can change the file with. A control is drawn only for a row with a place in a file, so
+  /// a row with no place has none whatever its control says.
+  let rowHasKnob (row: RowView) : bool =
+    match row.Place, row.Control with
+    | PlaceOf.NotPlaced, _ -> false
+    | PlaceOf.Placed _, Control.NoControl -> false
+    | PlaceOf.Placed _, (Control.RealStepper _ | Control.IntegerStepper _ | Control.Toggle _ | Control.LiteralField _ | Control.ExpressionField _) -> true
+
+  /// Whether any row has a control, so the pane can say where a change goes before the first one is made.
+  let hasKnob (view: TweakView) : bool = view.Rows |> Map.exists (fun _ row -> rowHasKnob row)
 
   /// Whether no file of the session holds the value. Every state says which it is, so a new state cannot go unanswered.
   let isReplOnly (state: PersistenceState) : bool =

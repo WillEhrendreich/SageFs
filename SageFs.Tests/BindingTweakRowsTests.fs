@@ -163,10 +163,11 @@ let memoryTests =
       (Map.find gravityKey landed.Writes).At |> Expect.equal "when" 100L
 
     testCase "a value pushed into the app makes its row tweaked, and the newest push is the one that counts" <| fun _ ->
-      let pushed = Memory.empty |> Memory.pushed gravityKey "11" |> Memory.pushed gravityKey "12"
+      // A pushed value is kept as the walk prints it, and the walk prints a float the way F# spells it.
+      let pushed = Memory.empty |> Memory.pushed gravityKey (FSharpFloat.text 11.0) |> Memory.pushed gravityKey (FSharpFloat.text 12.0)
       let view = buildRows tuningIndex (walked [ "gravity", box 12.0 ]) pushed
       match stateOf view gravityKey with
-      | PersistenceState.Tweaked(live, _) -> live |> Expect.equal "what is live" "12"
+      | PersistenceState.Tweaked(live, _) -> live |> Expect.equal "what is live" (FSharpFloat.text 12.0)
       | other -> failtestf "expected Tweaked, got %A" other
 
     testCase "a pushed value the program has moved off makes its row evolved, and a revert makes it differ again without attribution" <| fun _ ->
