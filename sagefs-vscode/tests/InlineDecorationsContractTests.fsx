@@ -73,13 +73,13 @@ let inlineResultRendering =
     testCase "exactly 4 lines joins every line with the separator, no truncation" <| fun _ ->
       let text = "a\nb\nc\nd"
       let r = renderInlineResult None text |> Option.get
-      r.ContentText |> Expect.equal "all 4 lines shown" "  // → a  │  b  │  c  │  d"
+      r.ContentText |> Expect.equal "all 4 lines shown, joined with a semicolon" "  // → a; b; c; d"
       r.HoverText |> Expect.equal "hover is the untruncated original" text
 
     testCase "5 lines truncates to the first line plus a count, but the hover keeps everything" <| fun _ ->
       let text = "a\nb\nc\nd\ne"
       let r = renderInlineResult None text |> Option.get
-      r.ContentText |> Expect.equal "summary form" "  // → a  │  ... (5 lines)"
+      r.ContentText |> Expect.equal "summary form says how many lines there are" "  // → a … (5 lines)"
       r.HoverText |> Expect.equal "hover has all 5 lines, reachable via hoverMessage" text
       r.HoverText |> Expect.stringContains "the truncated remainder is reachable" "e"
 
@@ -210,10 +210,12 @@ let oneLineGhostTextTests =
         hasTerminator rendered.ContentText |> Expect.isFalse "no line terminator is left in the ghost text"
         rendered.HoverText |> Expect.stringContains "the hover still has the whole reply" "val b: int = 5"
 
-    testCase "a Unix reply renders as it always did" <| fun _ ->
+    testCase "a Unix reply joins its lines with a semicolon, never a box-drawing bar" <| fun _ ->
       match renderInlineResult None "Result: val a: int = 3\nval b: int = 5\n" with
       | None -> failtest "a result with text renders"
-      | Some rendered -> rendered.ContentText |> Expect.equal "joined with the bar" "  // → Result: val a: int = 3  │  val b: int = 5"
+      | Some rendered ->
+        rendered.ContentText |> Expect.equal "joined with a semicolon" "  // → Result: val a: int = 3; val b: int = 5"
+        rendered.ContentText.Contains "│" |> Expect.isFalse "no box-drawing bar in the ghost text"
 
     testCase "a diagnostic whose first line ends in \\r\\n renders that line alone" <| fun _ ->
       match renderInlineDiagnostic "error FS0001: bad\r\nmore detail\r\n" with
