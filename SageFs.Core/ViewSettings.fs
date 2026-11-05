@@ -108,6 +108,14 @@ type Fit =
   { Shown: OptionalColumn list
     Hidden: OptionalColumn list }
 
+/// One stylesheet rule the fit implies: for a tree that asked for `Requested` (in hiding order) with `Values`, `Hides` goes when the
+/// tree is `Below` pixels wide or narrower. A rule exists for each requested column, so a width where two give way has two rules.
+type ContainerRule =
+  { Values: ValueMode
+    Requested: OptionalColumn list
+    Below: int
+    Hides: OptionalColumn }
+
 /// A view with where each axis's value came from.
 type ResolvedView =
   { View: View
@@ -152,7 +160,8 @@ module ViewAxis =
   /// The axes the dock draws today, in the order the view panel lists them. The other settings exist and persist, and nothing
   /// draws them yet; the panel offers a control only for an axis here, so it has no control that changes nothing. A test holds this
   /// list to the dock: each drawn axis, set to each of its values, must change what the dock draws.
-  let drawn : ViewAxis list = [ ViewAxis.TypeColumn; ViewAxis.ValueMode; ViewAxis.RowHeight ]
+  let drawn : ViewAxis list =
+    [ ViewAxis.TypeColumn; ViewAxis.StateColumn; ViewAxis.SourceColumn; ViewAxis.ValueMode; ViewAxis.RowHeight ]
 
   /// The word in a settings key.
   let token (axis: ViewAxis) : string =
@@ -618,3 +627,35 @@ module ViewColumns =
       | _ when needed values remaining <= width -> { Shown = remaining; Hidden = hidden }
       | first :: rest -> go (hidden @ [ first ]) rest
     go [] (requested layout)
+
+  /// The word for a column in the tree's `data-cols` and in the stylesheet.
+  let token (column: OptionalColumn) : string =
+    match column with
+    | OptionalColumn.Type -> "type"
+    | OptionalColumn.Source -> "source"
+    | OptionalColumn.State -> "state"
+
+  /// The columns a layout asks for, as the words a stylesheet matches one at a time, in hiding order. A layout with none gives "".
+  let requestedToken (layout: Layout) : string = requested layout |> List.map token |> String.concat " "
+
+  /// Every set of optional columns a layout can ask for, in hiding order.
+  let allRequests : OptionalColumn list list =
+    [ for withType in [ true; false ] do
+        for withSource in [ true; false ] do
+          for withState in [ true; false ] do
+            yield
+              [ if withType then yield OptionalColumn.Type
+                if withSource then yield OptionalColumn.Source
+                if withState then yield OptionalColumn.State ] ]
+
+  /// The rules the fit implies, for every request and both value modes. The k-th requested column goes when what remains after the
+  /// first k-1 are gone no longer fits, which is the width `needed` gives for that remainder, less one pixel.
+  let containerRules : ContainerRule list =
+    [ for values in [ ValueMode.Clipped; ValueMode.Full ] do
+        for request in allRequests do
+          for index in 0 .. request.Length - 1 do
+            yield
+              { Values = values
+                Requested = request
+                Below = needed values (List.skip index request) - 1
+                Hides = request.[index] } ]

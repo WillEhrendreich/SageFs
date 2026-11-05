@@ -264,6 +264,25 @@ let dockColourTests =
       (html "Person").Contains "live-v-" |> Expect.isFalse "nothing for anything else"
   ]
 
+/// A binding the files hold as a literal, as the pane would know it: the row view the service builds for `gravity`.
+let private gravityTweaks : TweakView =
+  let place : SourceRef =
+    { File = "/work/game/Tuning.fs"
+      Address = SageFs.Tests.BindingTweakTests.addressOf "gravity" []
+      Text = "9.8"
+      Hash = String('a', 64)
+      Span = { Line = 3; Column = 14; EndLine = 3; EndColumn = 17 }
+      Kind = ItemKind.Knob(SageFs.Features.Tweak.LiteralEdit.LiteralValue.Real 9.8) }
+  let row : RowView =
+    { State = PersistenceState.InSource place
+      Control = Control.NoControl
+      Place = PlaceOf.Placed place
+      Watching = WatchStatus.Watched
+      Reload = RowReload.NoWriteYet
+      Undo = HistoryStep.NothingToStep
+      Redo = HistoryStep.NothingToStep }
+  { Rows = Map.ofList [ RowKey.top "gravity", row ] }
+
 /// The dock draws from the view it is handed (docs/plans/live-bindings-watch-view.md, phase 1, step 2b).
 [<Tests>]
 let dockViewTests =
@@ -295,21 +314,52 @@ let dockViewTests =
       let html = renderDockWith { recommended with Values = ValueMode.Full } None TweakView.none SessionInView "abcd1234" NothingBound None |> decoded
       attribute "data-values" html |> Expect.equal "the empty tree says the mode too" "full"
 
-    testCase "WHY — a column gives way at the width the pure fit says, because the stylesheet's thresholds are the fit's numbers" <| fun _ ->
-      // Only the Type column is drawn so far, so the threshold is the width Name, Value and Type need together, less one.
-      let thresholdIn (mode: string) : int option =
-        let m = Text.RegularExpressions.Regex.Match(Dashboard.dashboardCss, sprintf @"@container \(max-width: (\d+)px\)\s*\{\s*\.live-tree\[data-values=""%s""\] \.live-type" mode)
-        match m.Success with
-        | true -> Some(int m.Groups.[1].Value)
-        | false -> None
+    testCase "WHY — the stylesheet holds the generated container rules verbatim, because the thresholds are the pure fit's numbers and a hand edit would drift from them" <| fun _ ->
+      Dashboard.dashboardCss |> Expect.stringContains "the generated block, between its markers" columnCss
+      // The pure fit agrees with a threshold: at the width Name, Value and Type need, less one, Type is hidden; one pixel wider it is shown.
       for values in [ ValueMode.Clipped; ValueMode.Full ] do
-        let mode = AxisValue.token (AxisValue.ValueMode values)
         let hidesAt = ViewColumns.needed values [ OptionalColumn.Type ] - 1
-        thresholdIn mode |> Expect.equal (sprintf "%s: Type hides one pixel below what the three columns need" mode) (Some hidesAt)
-        // And the pure fit agrees: at that width Type is hidden, one pixel wider it is shown.
         let layout = { recommended.Layout with Type = On; State = Off; Source = Off }
         (ViewColumns.fit values layout hidesAt).Hidden |> Expect.equal "hidden at the threshold" [ OptionalColumn.Type ]
         (ViewColumns.fit values layout (hidesAt + 1)).Hidden |> Expect.isEmpty "shown one pixel wider"
+
+    testCase "WHY — the tree names the columns it was asked for, so the stylesheet can pick the rules that hide them in the right order" <| fun _ ->
+      let tokenOf (layout: Layout) = attribute "data-cols" (drawn { recommended with Layout = layout })
+      tokenOf { recommended.Layout with Type = On; State = Off; Source = Off } |> Expect.equal "type alone" "type"
+      tokenOf { recommended.Layout with Type = On; State = On; Source = On } |> Expect.equal "all three" "type source state"
+      tokenOf { recommended.Layout with Type = Off; State = Off; Source = Off } |> Expect.equal "none" ""
+
+    testCase "WHY — with the State column on, the row says its state in its own line, and with it off the row has no state cell and the strip alone says it" <| fun _ ->
+      let leaf = binding "gravity" NodeKind.Leaf []
+      let withLayout (layout: Layout) =
+        renderDockWith { recommended with Layout = layout } None gravityTweaks SessionInView "abcd1234" (WalkedBindings(view [ leaf ])) None |> decoded
+      let rowOf (html: string) : string =
+        // The row is the one flex line; its cells are spans, so the first closing div ends it.
+        let start = html.IndexOf("class=\"live-binding-node\"", StringComparison.Ordinal)
+        html.Substring(start, html.IndexOf("</div>", start, StringComparison.Ordinal) - start)
+      let on = withLayout { recommended.Layout with State = On; Source = Off }
+      let off = withLayout { recommended.Layout with State = Off; Source = Off }
+      rowOf on |> Expect.stringContains "the cell is in the row" "live-cell-state"
+      rowOf on |> Expect.stringContains "and says the state's word" "in source"
+      (rowOf off).Contains "live-cell-state" |> Expect.isFalse "no cell when the column is off"
+      off |> Expect.stringContains "the strip still says it" "live-state"
+      on |> Expect.stringContains "the strip says it too, for a pane too narrow for the column" "live-state"
+
+    testCase "WHY — with the Source column on, the row names its file and line, and the cell is a column of its own and not the strip's chip" <| fun _ ->
+      let leaf = binding "gravity" NodeKind.Leaf []
+      let html (source: Toggle) =
+        renderDockWith { recommended with Layout = { recommended.Layout with State = Off; Source = source } } None gravityTweaks SessionInView "abcd1234" (WalkedBindings(view [ leaf ])) None |> decoded
+      let start = (html On).IndexOf("class=\"live-binding-node\"", StringComparison.Ordinal)
+      let row = (html On).Substring(start, (html On).IndexOf("</div>", start, StringComparison.Ordinal) - start)
+      row |> Expect.stringContains "the file and line are in the row" "Tuning.fs:3"
+      row |> Expect.stringContains "as its own cell" "live-cell-source"
+      (html Off).Contains "live-cell-source" |> Expect.isFalse "no cell when the column is off"
+
+    testCase "WHY — a row the pane has nothing to say about draws no state or source cell, so a column is never an empty box" <| fun _ ->
+      let html =
+        renderDockWith { recommended with Layout = { recommended.Layout with State = On; Source = On } } None TweakView.none SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
+      html.Contains "live-cell-state" |> Expect.isFalse "no state cell without a row view"
+      html.Contains "live-cell-source" |> Expect.isFalse "no source cell without a row view"
   ]
 
 /// The view panel the pane bar opens (docs/plans/live-bindings-watch-view.md, phase 1, step 3).

@@ -219,6 +219,56 @@ let columnTests =
       fitted.Hidden |> Expect.equal "all hidden, in order" [ OptionalColumn.Type; OptionalColumn.Source; OptionalColumn.State ]
   ]
 
+/// What the stylesheet does with a width, read back from the rules `ViewColumns.containerRules` generates: the columns the rules
+/// that apply at that width hide. The browser applies a container query to every rule at once, so this is the same reading.
+let private hiddenByRules (rules: ContainerRule list) (values: ValueMode) (layout: Layout) (width: int) : Set<OptionalColumn> =
+  rules
+  |> List.filter (fun rule -> rule.Values = values && rule.Requested = ViewColumns.requested layout && width <= rule.Below)
+  |> List.map (fun rule -> rule.Hides)
+  |> Set.ofList
+
+let private everyLayout : Layout list =
+  [ for t in [ On; Off ] do
+      for s in [ On; Off ] do
+        for src in [ On; Off ] do
+          yield { ViewPreset.flat with Type = t; State = s; Source = src } ]
+
+[<Tests>]
+let containerRuleTests =
+  testList "ViewColumns container rules" [
+
+    testCase "WHY — at every width from 0 to 900, for every layout and both value modes, the generated rules hide exactly the columns the pure fit hides, so the stylesheet cannot disagree with the function" <| fun _ ->
+      let disagreements =
+        [ for layout in everyLayout do
+            for mode in [ ValueMode.Clipped; ValueMode.Full ] do
+              for width in 0 .. 900 do
+                let fromFit = (ViewColumns.fit mode layout width).Hidden |> Set.ofList
+                let fromRules = hiddenByRules ViewColumns.containerRules mode layout width
+                if fromFit <> fromRules then yield mode, layout, width ]
+      disagreements |> Expect.isEmpty "no width where the rules and the fit disagree"
+
+    testCase "TWIN — rules that hide State at the width Type should go are caught, so the thresholds are tested and not assumed" <| fun _ ->
+      let swapped =
+        ViewColumns.containerRules
+        |> List.map (fun rule ->
+          match rule.Hides with
+          | OptionalColumn.Type -> { rule with Hides = OptionalColumn.State }
+          | _ -> rule)
+      let caught =
+        [ for layout in everyLayout do
+            for width in 0 .. 900 do
+              if (ViewColumns.fit ValueMode.Clipped layout width).Hidden |> Set.ofList <> hiddenByRules swapped ValueMode.Clipped layout width then yield width ]
+      caught |> Expect.isNonEmpty "a wrong column is noticed"
+
+    testCase "a layout that asks for no optional column has no rule, and says so in its token" <| fun _ ->
+      ViewColumns.containerRules |> List.filter (fun rule -> rule.Requested.IsEmpty) |> Expect.isEmpty "nothing to hide"
+      ViewColumns.requestedToken { ViewPreset.flat with Type = Off } |> Expect.equal "the token for no columns" ""
+
+    testCase "the token lists the requested columns in hiding order, as words a stylesheet can match one at a time" <| fun _ ->
+      ViewColumns.requestedToken { ViewPreset.flat with Type = On; State = On; Source = On } |> Expect.equal "all three" "type source state"
+      ViewColumns.requestedToken { ViewPreset.flat with Type = Off; State = On } |> Expect.equal "state alone" "state"
+  ]
+
 /// Reading a workflow's view from the layer files (`SettingsCatalog.viewFor`), the way the dock does for the app it draws.
 [<Tests>]
 let viewForTests =
