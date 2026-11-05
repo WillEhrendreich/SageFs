@@ -143,8 +143,8 @@ module LiveBindingsPane =
     | NoNameMatchesFilter
     /// The walk stopped at its depth or size limit for at least one value.
     | ValuesCutShort
-    /// The walk's values, as of the eval that produced them.
-    | ReadAfterEval of generation: int64 * at: string
+    /// The walk's values, as of the moment they were read (a clock time the caller has already spelled, with its zone).
+    | ValuesAsOf of at: string
     /// There is no walk yet: the values are what FSI printed.
     | ReadFromPrinted
     /// Shown while at least one row has a control: where a change goes, before anyone makes one.
@@ -155,6 +155,21 @@ module LiveBindingsPane =
     | ModeMeans of ValueWalk
     /// The count of bindings no file defines.
     | NotInAnyFile of count: int
+    /// The summary of the closed disclosure that explains the badges and the glyphs.
+    | LegendSummary
+
+  /// Whether the chosen mode's meaning is drawn as a line of its own. The standard mode is what a person gets without choosing, so its
+  /// meaning stays in the buttons' tooltips and the line is spent only when the mode is not the standard one.
+  [<RequireQualifiedAccess>]
+  type ModeCaption =
+    | Shown of ValueWalk
+    | NotShown
+
+  module ModeCaption =
+    let ofMode (mode: ValueWalk) : ModeCaption =
+      match mode = ValueWalk.standard with
+      | true -> ModeCaption.NotShown
+      | false -> ModeCaption.Shown mode
 
   module PaneNote =
     let text (note: PaneNote) : string =
@@ -162,10 +177,11 @@ module LiveBindingsPane =
       | PaneNote.NoNameMatchesFilter -> "No binding's name contains that. Clear the filter to see them all."
       | PaneNote.ValuesCutShort ->
         sprintf "Some values were cut short: the pane reads %d levels deep and %d items per collection. Bind the part you want to its own name to see all of it." LiveValueTree.MaxDepth LiveValueTree.MaxChildren
-      | PaneNote.ReadAfterEval(generation, at) -> sprintf "read after eval %d at %s" generation at
+      | PaneNote.ValuesAsOf at -> sprintf "Values as of %s" at
       | PaneNote.ReadFromPrinted -> "read from FSI's printed output"
-      | PaneNote.ChangesGoToTheFile -> "Changes you make here are written to the file."
-      | PaneNote.ModeGoverns -> "How class values are read:"
+      | PaneNote.ChangesGoToTheFile -> "Edits go to the file."
+      | PaneNote.ModeGoverns -> "Class values:"
+      | PaneNote.LegendSummary -> "What do the tags mean?"
       | PaneNote.ModeMeans choice ->
         let meaning =
           match choice with

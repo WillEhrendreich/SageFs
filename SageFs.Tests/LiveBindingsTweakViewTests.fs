@@ -48,6 +48,13 @@ let private rowOf (state: PersistenceState) (control: Control) : RowView =
 
 let private strip (view: RowView) = renderStrip key view Placement.OnLeafRow |> decoded
 
+/// The text inside the first element that carries this test id, whatever order its attributes come in.
+let textOfTestId (testId: string) (html: string) : string option =
+  let m = Regex.Match(html, sprintf "data-testid=\"%s\"[^>]*>([^<]*)<" (Regex.Escape testId))
+  match m.Success with
+  | true -> Some m.Groups.[1].Value
+  | false -> None
+
 let private states : PersistenceState list =
   [ PersistenceState.InSource gravity
     PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt
@@ -157,30 +164,46 @@ let describeTests =
         for control in [ Control.NoControl; Control.RealStepper(9.8, Step.Fraction 1) ] do
           for undo in [ HistoryStep.StepAvailable; HistoryStep.NothingToStep; HistoryStep.OtherRowFirst "Game.Tuning.maxHealth" ] do
             let view = { rowOf state control with Undo = undo }
-            let spoken = [ (describe state).Detail; (describe state).Label; NextStep.sentence (NextStep.ofRow view); ValuesLine.text (ValuesLine.ofState state) ]
+            let spoken = [ (describe state).Detail; (describe state).Label; badgeTitle state; tagMeaning (StateTag.ofState state); NextStep.sentence (NextStep.ofRow view) ]
             for sentence in spoken do
               sentence.Contains "`" |> Expect.isFalse (sprintf "%s has no backtick: %s" (PersistenceState.token state) sentence)
               for name in raw do
                 sentence.Contains name |> Expect.isFalse (sprintf "%s does not say the case name %s: %s" (PersistenceState.token state) name sentence)
 
-    testCase "WHY — a value that differs from the file shows what runs and what is saved, each labelled, so which number is which is never a guess" <| fun _ ->
-      ValuesLine.ofState (PersistenceState.DiffersFromFile("9.8", { gravity with Text = "9.9" }))
-      |> Expect.equal "the running value and the file's" (ValuesLine.RunningAndFile("9.8", "9.9"))
-      let shown = ValuesLine.text (ValuesLine.RunningAndFile("9.8", "9.9"))
-      shown |> Expect.stringContains "the running value" "9.8"
-      shown |> Expect.stringContains "the file's value" "9.9"
-      (shown.IndexOf "9.8", shown.IndexOf "9.9") |> Expect.isLessThan "running comes first, then the file"
-      let view = { rowOf (PersistenceState.DiffersFromFile("9.8", { gravity with Text = "9.9" })) (Control.RealStepper(9.9, Step.Fraction 1)) with Place = PlaceOf.Placed { gravity with Text = "9.9" } }
-      strip view |> Expect.stringContains "the line is on the row" "data-testid=\"tweak-values\""
-      strip (rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))) |> fun html -> html.Contains "tweak-values" |> Expect.isFalse "a row in step has nothing to compare"
+    testCase "WHY — a row whose file and running value differ labels the knob's number as the file's, and the strip never prints a third line of values" <| fun _ ->
+      for state in states do
+        match NumberLabels.ofState state with
+        | NumberLabels.RunningAndFile ->
+          match state with
+          | PersistenceState.Tweaked _
+          | PersistenceState.Evolved _
+          | PersistenceState.DiffersFromFile _ -> ()
+          | other -> failtestf "%s is labelled as two numbers" (PersistenceState.token other)
+        | NumberLabels.OneNumber ->
+          match state with
+          | PersistenceState.Tweaked _
+          | PersistenceState.Evolved _
+          | PersistenceState.DiffersFromFile _ -> failtestf "%s has two numbers and does not label them" (PersistenceState.token state)
+          | _ -> ()
+      let differs = PersistenceState.DiffersFromFile("9.8", { gravity with Text = "9.9" })
+      let view = { rowOf differs (Control.RealStepper(9.9, Step.Fraction 1)) with Place = PlaceOf.Placed { gravity with Text = "9.9" } }
+      let html = strip view
+      textOfTestId "tweak-file-tag" html |> Expect.equal "the knob's number carries the file's word" (Some NumberLabels.fileWord)
+      html.Contains "tweak-values" |> Expect.isFalse "no separate line repeats the numbers"
+      let inStep = strip (rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1)))
+      inStep.Contains "tweak-file-tag" |> Expect.isFalse "a row in step has one number and needs no word"
+      NumberLabels.runningWord |> Expect.notEqual "the two words differ" NumberLabels.fileWord
 
     testCase "the next step for a row that differs from the file is a button that exists: Undo when it can take the write back, and otherwise a plain statement of what cannot be done from here" <| fun _ ->
       let differs = PersistenceState.DiffersFromFile("9.8", { gravity with Text = "9.9" })
       let rowWith undo = { rowOf differs (Control.RealStepper(9.9, Step.Fraction 1)) with Undo = undo }
-      NextStep.ofRow (rowWith HistoryStep.StepAvailable) |> Expect.equal "undo is available" NextStep.UndoTakesItBack
-      NextStep.ofRow (rowWith HistoryStep.NothingToStep) |> Expect.equal "nothing to undo" NextStep.SendTheFileToTheSession
-      NextStep.ofRow (rowWith (HistoryStep.OtherRowFirst "x")) |> Expect.equal "another row's write is on top" NextStep.SendTheFileToTheSession
+      NextStep.ofRow (rowWith HistoryStep.StepAvailable) |> Expect.equal "undo is available" NextStep.UndoOrReload
+      NextStep.ofRow (rowWith HistoryStep.NothingToStep) |> Expect.equal "nothing to undo" NextStep.ReloadOnly
+      NextStep.ofRow (rowWith (HistoryStep.OtherRowFirst "x")) |> Expect.equal "another row's write is on top" NextStep.ReloadOnly
       strip (rowWith HistoryStep.StepAvailable) |> Expect.stringContains "the step is on the row" "data-testid=\"tweak-next\""
+      for step in [ NextStep.UndoOrReload; NextStep.ReloadOnly ] do
+        NextStep.sentence step |> Expect.stringContains "both name evaluating again" "evaluate the binding again"
+        NextStep.sentence step |> Expect.stringContains "both name Rebuild and reload" "Rebuild and reload"
 
     testPropertyWithConfig propConfig "WHY — a next step never points at a control the row does not draw: Undo only when the undo button is enabled, the row's control only when it has one"
       (Prop.forAll (arbitrary (Gen.zip3 (Gen.elements states) (Gen.elements [ Control.NoControl; Control.RealStepper(9.8, Step.Fraction 1); Control.Toggle true ]) (Gen.elements [ HistoryStep.StepAvailable; HistoryStep.NothingToStep; HistoryStep.OtherRowFirst "x" ])))
@@ -188,10 +211,10 @@ let describeTests =
           let view = { rowOf state control with Undo = undo }
           let html = strip view
           match NextStep.ofRow view with
-          | NextStep.UndoTakesItBack -> html.Contains "data-testid=\"tweak-undo\"" && not (html.Contains "tweak-undo-why")
+          | NextStep.UndoOrReload -> html.Contains "data-testid=\"tweak-undo\"" && not (html.Contains "tweak-undo-why")
           | NextStep.UseTheControl
           | NextStep.UseTheControlAgain -> html.Contains "<input"
-          | NextStep.SendTheFileToTheSession
+          | NextStep.ReloadOnly
           | NextStep.NoNextStep -> true))
   ]
 
@@ -301,12 +324,6 @@ let throughTests =
 
 let private count (needle: string) (html: string) = html.Split([| needle |], StringSplitOptions.None).Length - 1
 
-/// The text inside the first element that carries this test id, whatever order its attributes come in.
-let textOfTestId (testId: string) (html: string) : string option =
-  let m = Regex.Match(html, sprintf "data-testid=\"%s\"[^>]*>([^<]*)<" (Regex.Escape testId))
-  match m.Success with
-  | true -> Some m.Groups.[1].Value
-  | false -> None
 
 [<Tests>]
 let controlTests =
@@ -353,28 +370,33 @@ let controlTests =
           | StripShown.Strip -> not (html.Contains "<input") && html.Contains (describe state).Label
         | _ -> true))
 
-    testCase "undo and redo are per row: the pair appears once there is history, a later write in the file disables an earlier row's undo and says whose turn it is" <| fun _ ->
+    testCase "undo and redo only where they have something to act on, the same on every row: none without a write, Undo with one to take back, Redo with one undone" <| fun _ ->
       let base' = rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))
-      count "tweak-undo" (strip base') |> Expect.equal "no history, no pair" 0
-      let withHistory = strip { base' with Undo = HistoryStep.StepAvailable; Redo = HistoryStep.NothingToStep }
-      withHistory |> Expect.stringContains "undo" "data-testid=\"tweak-undo\""
-      withHistory |> Expect.stringContains "redo" "data-testid=\"tweak-redo\""
+      count "tweak-undo" (strip base') |> Expect.equal "no history, no undo" 0
+      count "tweak-redo" (strip base') |> Expect.equal "no history, no redo" 0
+      let withUndo = strip { base' with Undo = HistoryStep.StepAvailable; Redo = HistoryStep.NothingToStep }
+      withUndo |> Expect.stringContains "undo" "data-testid=\"tweak-undo\""
+      withUndo.Contains "tweak-redo" |> Expect.isFalse "nothing undone, so no redo, and no sentence about it"
+      let withRedo = strip { base' with Undo = HistoryStep.NothingToStep; Redo = HistoryStep.StepAvailable }
+      withRedo |> Expect.stringContains "redo" "data-testid=\"tweak-redo\""
+      withRedo.Contains "tweak-undo" |> Expect.isFalse "nothing to take back, so no undo"
       let waiting = strip { base' with Undo = HistoryStep.OtherRowFirst "Game.Tuning.maxHealth" }
       waiting |> Expect.stringContains "says whose turn it is" "Game.Tuning.maxHealth"
       waiting |> Expect.stringContains "and the button is disabled in the markup" "disabled"
 
-    testCase "WHY — undo and redo carry their words, and a button that cannot be pressed says why in text on the row, not only in a tooltip" <| fun _ ->
+    testCase "WHY — undo and redo carry their words, and a step a later write blocks says why in text on the row, not only in a tooltip; a step with nothing to act on says nothing" <| fun _ ->
       let base' = rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))
-      let html = strip { base' with Undo = HistoryStep.StepAvailable; Redo = HistoryStep.NothingToStep }
+      let html = strip { base' with Undo = HistoryStep.StepAvailable; Redo = HistoryStep.StepAvailable }
       html |> Expect.stringContains "the Undo word is on the button" (sprintf ">%s<" (historyWord "undo"))
       html |> Expect.stringContains "the Redo word is on the button" (sprintf ">%s<" (historyWord "redo"))
-      html |> Expect.stringContains "the redo that cannot be pressed has its reason as text" "data-testid=\"tweak-redo-why\""
-      html.Contains "tweak-undo-why" |> Expect.isFalse "an available undo needs no reason"
+      html.Contains "-why" |> Expect.isFalse "available steps need no reason"
       let blocked = strip { base' with Undo = HistoryStep.OtherRowFirst "Game.Tuning.maxHealth"; Redo = HistoryStep.NothingToStep }
       blocked |> Expect.stringContains "whose turn it is, as text" "data-testid=\"tweak-undo-why\""
+      blocked.Contains "tweak-redo" |> Expect.isFalse "no redo, so no sentence about one"
       for verb in [ "undo"; "redo" ] do
         historyWhy verb HistoryStep.StepAvailable |> Expect.isNone "a step that can be taken has no reason"
-        (historyWhy verb HistoryStep.NothingToStep).Value |> Expect.stringContains "the reason names the verb" verb
+        historyWhy verb HistoryStep.NothingToStep |> Expect.isNone "a step that is not drawn has no reason either"
+        (historyWhy verb (HistoryStep.OtherRowFirst "Game.Tuning.maxHealth")).Value |> Expect.stringContains "a blocked step names the verb" (historyWord verb)
 
     testCase "WHY — a bool is a switch you can read: the checkbox says it is a switch and whether it is on, and the word for where it stands is text beside it" <| fun _ ->
       for value in [ true; false ] do
@@ -393,11 +415,18 @@ let controlTests =
         let html = strip { rowOf (PersistenceState.InSource literal) (Control.RealStepper(value, step)) with Place = PlaceOf.Placed literal }
         textOfTestId "tweak-readout" html = Some(FSharpFloat.text value)))
 
-    testCase "the reload the write caused is shown on the row, and a file hot reload is not watching says so" <| fun _ ->
-      let view = { rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1)) with Reload = RowReload.Watching("Tuning.fs", ReloadWatch.NoNewReport); Watching = WatchStatus.NotWatched }
-      let html = strip view
-      html |> Expect.stringContains "the reload line" "data-testid=\"tweak-reload\""
-      html |> Expect.stringContains "the not-watched note" "not watching"
+    testCase "the reload the write caused is shown on the row; a file hot reload is not watching says so once, in one voice, and says the write happened if it did" <| fun _ ->
+      let row = rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))
+      let notWatched = { row with Reload = RowReload.Watching("Tuning.fs", ReloadWatch.NoNewReport); Watching = WatchStatus.NotWatched }
+      let html = strip notWatched
+      html |> Expect.stringContains "the not-watched sentence" "data-testid=\"tweak-watching\""
+      html.Contains "tweak-reload" |> Expect.isFalse "no second sentence about a verdict that cannot come"
+      textOfTestId "tweak-watching" html |> Expect.equal "it says the write happened" (Some(notWatchedSentence true gravity.File))
+      textOfTestId "tweak-watching" (strip { row with Watching = WatchStatus.NotWatched })
+      |> Expect.equal "before any write it only says hot reload is not watching" (Some(notWatchedSentence false gravity.File))
+      let watched = strip { row with Reload = RowReload.Watching("Tuning.fs", ReloadWatch.NoNewReport); Watching = WatchStatus.Watched }
+      watched |> Expect.stringContains "a watched file shows the reload line" "data-testid=\"tweak-reload\""
+      watched.Contains "tweak-watching" |> Expect.isFalse "and no not-watched sentence"
 
     testCase "a value that is simply in its file keeps its sentence in the tooltip, and anything a person must act on or understand keeps it on the row" <| fun _ ->
       strip (rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))) |> fun html -> html.Contains "tweak-detail" |> Expect.isFalse "in source: no wall of text"
@@ -525,4 +554,52 @@ let numberAgreementTests =
       (Prop.forAll (arbitrary (Gen.map2 (fun whole tenths -> float whole + float tenths / 10.0) (Gen.choose (-500, 500)) (Gen.choose (0, 9)))) (fun value ->
         let walked = LiveValueTree.buildValueNodeIn LiveValueTree.WalkMode.Safe "x" (box value)
         LiveShape.equalsLiteral (LiteralValue.Real value) walked.Preview))
+  ]
+
+[<Tests>]
+let situationAndTagTests =
+  testList "one sentence per reload situation, and one badge vocabulary for the row and the legend" [
+
+    testCase "WHY — a patch that is applied and not seen running and one that never ran are one situation with one sentence, because a person cannot tell them apart" <| fun _ ->
+      ReloadSituation.ofCase ReloadCase.PatchPending |> Expect.equal "pending and never entered are the same situation" (ReloadSituation.ofCase ReloadCase.NeverEntered)
+      reloadMeaning ReloadCase.PatchPending |> Expect.equal "so they read the same" (reloadMeaning ReloadCase.NeverEntered)
+
+    testCase "WHY — no reload sentence says the app has the new code, because the header can say the session runs older code beside it; each begins with the write and none names the verdict" <| fun _ ->
+      for case in ReloadCase.all do
+        let text, _ = reloadMeaning case
+        text.StartsWith "Saved to the file" |> Expect.isTrue (sprintf "%s begins with what was written" (ReloadCase.token case))
+        for forbidden in [ "new code"; "has the new"; "applied"; ReloadCase.token case; "`" ] do
+          text.Contains forbidden |> Expect.isFalse (sprintf "%s does not say %s: %s" (ReloadCase.token case) forbidden text)
+
+    testCase "a reload that went wrong is bad news and says what to do: restart the app, or fix the file or undo the write" <| fun _ ->
+      for case in [ ReloadCase.RestartRequired; ReloadCase.CompileFailed; ReloadCase.EvalFailed ] do
+        let text, tone = reloadMeaning case
+        tone |> Expect.equal (sprintf "%s is bad news" (ReloadCase.token case)) Tone.Bad
+        (text.Contains "Restart the app" || text.Contains "undo the write") |> Expect.isTrue (sprintf "%s names a step: %s" (ReloadCase.token case) text)
+      reloadMeaning ReloadCase.Patched |> snd |> Expect.equal "a patch the app runs is good news" Tone.Good
+
+    testCase "every badge: the tags are exactly the cases of the closed set, each with its own words and its own plain line" <| fun _ ->
+      StateTag.all.Length |> Expect.equal "the list names every case" (Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<StateTag>).Length)
+      (StateTag.all |> List.distinct).Length |> Expect.equal "no tag is listed twice" StateTag.all.Length
+      (StateTag.all |> List.map tagLabel |> List.distinct).Length |> Expect.equal "no two tags share a badge" StateTag.all.Length
+      for tag in StateTag.all do
+        String.IsNullOrWhiteSpace(tagLabel tag) |> Expect.isFalse (sprintf "%A has a label" tag)
+        String.IsNullOrWhiteSpace(tagMeaning tag) |> Expect.isFalse (sprintf "%A has a meaning" tag)
+        (tagMeaning tag).Contains "`" |> Expect.isFalse (sprintf "%A has no backtick" tag)
+
+    testPropertyWithConfig propConfig "WHY — the badge a row wears is the tag's label, for any state, so the legend that lists the tags can never be missing one"
+      (Prop.forAll (arbitrary (Gen.zip3 genLive genSource genOutcome)) (fun (live, source, outcome) ->
+        let state = PersistenceState.derive live source outcome
+        let tag = StateTag.ofState state
+        (describe state).Label = tagLabel tag && List.contains tag StateTag.all && (badgeTitle state).Contains(tagMeaning tag)))
+
+    testCase "every state of the fixture list has a badge title that starts with what the badge means" <| fun _ ->
+      for state in states do
+        (badgeTitle state).StartsWith(tagMeaning (StateTag.ofState state)) |> Expect.isTrue (sprintf "%s: %s" (PersistenceState.token state) (badgeTitle state))
+
+    testCase "WHY — a binding no file defines wears its badge on its own line, because its strip draws nothing and the title bar's count has to match rows a person can see" <| fun _ ->
+      for state in states do
+        match state with
+        | PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt -> badgePlace state |> Expect.equal "on the row" BadgePlace.OnTheRow
+        | other -> badgePlace other |> Expect.equal (sprintf "%s is in its strip" (PersistenceState.token other)) BadgePlace.InTheStrip
   ]
