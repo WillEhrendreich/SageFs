@@ -160,6 +160,20 @@ module Rows =
       let waited = TimeSpan.FromTicks(max 0L (now - write.At))
       RowReload.Watching(write.File, ReloadWatch.ofSession write.Baseline current waited patience)
 
+  /// A part the file does not spell, of a binding the file builds with a call, is followed to the literal in the callee, and that
+  /// literal is then the row's source. Any other facts stand as they are. A call that cannot be followed keeps the facts and says why.
+  let throughCall (index: SourceIndex) (steps: PathStep list) (facts: SourceFacts) : SourceFacts * ThroughCall =
+    match facts with
+    | SourceFacts.PartNotSpelled owner ->
+      match CallFollow.follow index owner steps with
+      | Outcome.Followed followed -> SourceFacts.OneSource followed.Place, ThroughCall.Through followed
+      | Outcome.Refused Refusal.NotAPlainCall -> facts, ThroughCall.NoCall
+      | Outcome.Refused refusal -> facts, ThroughCall.CouldNotFollow refusal
+    | SourceFacts.NoFileBindsIt
+    | SourceFacts.FilesUnknown _
+    | SourceFacts.OneSource _
+    | SourceFacts.ManySources _ -> facts, ThroughCall.NoCall
+
   let viewOf
     (index: SourceIndex)
     (memory: Memory)
@@ -168,8 +182,9 @@ module Rows =
     (patience: TimeSpan)
     (key: RowKey)
     (live: LiveShape)
-    (facts: SourceFacts)
+    (found: SourceFacts)
     : RowView =
+    let facts, through = throughCall index (RowKey.steps key) found
     let place = PlaceOf.ofFacts facts
     // The walk does not report whether a place is assignable yet, so storage is not known and a row is `Evolved` only from a push.
     let fileNow =
@@ -196,7 +211,8 @@ module Rows =
       Watching = watchingOf index place
       Reload = reloadOf memory current now patience key
       Undo = FileTrail.undoFor address trail
-      Redo = FileTrail.redoFor address trail }
+      Redo = FileTrail.redoFor address trail
+      Through = through }
 
   /// Record fields down from a binding the files hold in exactly one place. Only records are walked: a list's, a tuple's or a map's
   /// items are not mapped, so they get no row, and the binding's own row says it is a container.

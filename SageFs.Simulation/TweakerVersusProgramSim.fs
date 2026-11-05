@@ -143,7 +143,8 @@ module TweakerVersusProgramSim =
               Watching = WatchStatus.Watched
               Reload = RowReload.NoWriteYet
               Undo = HistoryStep.NothingToStep
-              Redo = HistoryStep.NothingToStep } ] }
+              Redo = HistoryStep.NothingToStep
+              Through = ThroughCall.NoCall } ] }
 
   /// The door took a write of `value` into the file.
   let written (world: World) (value: int) : World =

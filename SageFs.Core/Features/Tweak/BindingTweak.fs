@@ -153,6 +153,55 @@ type ApplicationCounts =
   | Counted of Map<string, int>
   | NotCounted of reason: string
 
+// ── a part of a value built by a call (the resolver is `CallFollow`) ──
+
+[<RequireQualifiedAccess>]
+type CallerCount =
+  | Counted of int
+  /// The calls could not all be counted (a file did not parse), so no number is given and none is zero.
+  | NotCounted of reason: string
+
+/// Why a call was not followed. Each is a different fact and none picks a first match.
+[<RequireQualifiedAccess>]
+type Refusal =
+  /// The right-hand side is not an application of a plain or module-qualified name (a record, an operator, a generic call).
+  | NotAPlainCall
+  /// The files were read and none declares the callee.
+  | NoCalleeInFiles of name: string
+  /// Files could not be read, so "no file declares it" cannot be said.
+  | CalleeFilesUnknown of reason: string
+  /// Two or more places declare it. All are named.
+  | CalleeDeclaredSeveralTimes of name: string * places: SourceRef list
+  /// A file declares it, and its right-hand side was not read, so what it builds is not known.
+  | CalleeNotRead of name: string * file: string
+  /// The callee is declared once, and what it builds has nothing at this part that the files spell.
+  | ResultNotSpelled of callee: SourceRef
+  /// The callee spells this part as an expression (`hp`, `base * 2`), not a literal. An expression in a function can use the call's
+  /// arguments, so a write there would change what every caller passes in, and the pane says what the expression is and stops.
+  | ResultIsAnExpression of expression: SourceRef
+
+type Followed =
+  { /// The callee's name as the file declares it.
+    Callee: string
+    /// The literal in the callee that gives the row's part its value.
+    Place: SourceRef
+    Callers: CallerCount }
+
+[<RequireQualifiedAccess>]
+type Outcome =
+  | Followed of Followed
+  | Refused of Refusal
+
+/// What a row's part owes to a call. A part of a value the file builds with a call has its literal in the callee; a row says so, and
+/// says why when it could not follow.
+[<RequireQualifiedAccess>]
+type ThroughCall =
+  /// The row's value is not built by a call the pane looked at.
+  | NoCall
+  /// The row's source is the callee's literal, and a write there reaches every caller.
+  | Through of Followed
+  | CouldNotFollow of Refusal
+
 /// The session's inspected files, and the files that could not be read. Built by the shell that does the reading.
 type SourceIndex =
   { Files: FileInspection list
@@ -683,7 +732,9 @@ type RowView =
     Watching: WatchStatus
     Reload: RowReload
     Undo: HistoryStep
-    Redo: HistoryStep }
+    Redo: HistoryStep
+    /// Whether the row's literal is in a callee, and what a write there reaches.
+    Through: ThroughCall }
 
 /// Every row the pane has something to say about. A row not in the map has nothing to say (a part of a REPL-only value: its binding says it).
 type TweakView = { Rows: Map<RowKey, RowView> }

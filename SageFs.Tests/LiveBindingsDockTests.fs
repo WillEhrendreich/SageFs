@@ -155,7 +155,8 @@ let dockTreeTests =
           Watching = WatchStatus.Watched
           Reload = RowReload.NoWriteYet
           Undo = HistoryStep.NothingToStep
-          Redo = HistoryStep.NothingToStep }
+          Redo = HistoryStep.NothingToStep
+          Through = ThroughCall.NoCall }
       let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
       let html = renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
       html |> Expect.stringContains "the count, in the bar" "2 REPL only"
@@ -280,7 +281,8 @@ let private gravityTweaks : TweakView =
       Watching = WatchStatus.Watched
       Reload = RowReload.NoWriteYet
       Undo = HistoryStep.NothingToStep
-      Redo = HistoryStep.NothingToStep }
+      Redo = HistoryStep.NothingToStep
+      Through = ThroughCall.NoCall }
   { Rows = Map.ofList [ RowKey.top "gravity", row ] }
 
 /// The dock draws from the view it is handed (docs/plans/live-bindings-watch-view.md, phase 1, step 2b).

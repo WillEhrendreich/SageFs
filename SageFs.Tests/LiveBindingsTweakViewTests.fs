@@ -43,7 +43,8 @@ let private rowOf (state: PersistenceState) (control: Control) : RowView =
     Watching = WatchStatus.Watched
     Reload = RowReload.NoWriteYet
     Undo = HistoryStep.NothingToStep
-    Redo = HistoryStep.NothingToStep }
+    Redo = HistoryStep.NothingToStep
+    Through = ThroughCall.NoCall }
 
 let private strip (view: RowView) = renderStrip key view Placement.OnLeafRow |> decoded
 

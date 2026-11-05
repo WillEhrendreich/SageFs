@@ -11,9 +11,12 @@ open SageFs.Features.Tweak
 open SageFs.Features.Tweak.TweakAddress
 open SageFs.Features.Tweak.LiteralEdit
 open SageFs.Features.Tweak.Nudge
+open SageFs
 open SageFs.Features.Tweak.BindingTweak
+open SageFs.Features.Tweak.BindingTweakRows
 open SageFs.Features.Tweak.CallFollow
 open SageFs.Tests.BindingTweakTests
+open SageFs.Tests.BindingTweakRowsTests
 
 /// A callee found, and three callers of it.
 let private oneCallee =
@@ -159,4 +162,62 @@ let followTests =
       match CallFollow.applicationsIn "module M\nlet x = (((\n" with
       | ApplicationCounts.NotCounted reason -> reason |> Expect.isNotEmpty "a reason"
       | other -> failtestf "expected NotCounted, got %A" other
+  ]
+
+/// Public on purpose: the live-values walk reads a record through reflection and takes a non-public one for an opaque class.
+type PlayerRecord = { Health: int; Speed: float; Name: string }
+
+let private rowFor (index: SourceIndex) (binding: string) (value: obj) (field: string) : RowView =
+  let view = buildRows index (walked [ binding, value ]) Memory.empty
+  let key = RowKey.field (RowKey.top binding) field
+  match TweakView.tryRow view key with
+  | Some row -> row
+  | None -> failtestf "no row for %s.%s among %A" binding field (view.Rows |> Map.toList |> List.map fst)
+
+[<Tests>]
+let rowTests =
+  let player (health: int) : obj = box { Health = health; Speed = 4.5; Name = "Ada" }
+  testList "the pane's rows follow a call into its initializer" [
+
+    testCase "WHY — a field of a value built by a call has the callee's literal as its source, so the knob writes where the value comes from" <| fun _ ->
+      let index = indexOver [ fileIndex "State.fs" oneCallee [ "player"; "initPlayer" ] ]
+      let row = rowFor index "player" (player 100) "Health"
+      match row.Place with
+      | PlaceOf.Placed place ->
+        place.Address.BindingName |> Expect.equal "the callee's binding is the target" "initPlayer"
+        place.Text |> Expect.equal "the literal" "100"
+      | PlaceOf.NotPlaced -> failtest "expected the row to be placed in the callee"
+      match row.Through with
+      | ThroughCall.Through followed -> followed.Callers |> Expect.equal "the three calls" (CallerCount.Counted 3)
+      | other -> failtestf "expected Through, got %A" other
+      match row.State with
+      | PersistenceState.InSource _ -> ()
+      | other -> failtestf "live equals the literal, so the row is in source, got %A" other
+
+    testCase "WHY — a live value that is not the callee's literal says it differs, and never that the program changed it, because nothing says which came last" <| fun _ ->
+      let index = indexOver [ fileIndex "State.fs" oneCallee [ "player"; "initPlayer" ] ]
+      match (rowFor index "player" (player 62) "Health").State with
+      | PersistenceState.DiffersFromFile(live, place) ->
+        live |> Expect.equal "the running value" "62"
+        place.Text |> Expect.equal "the callee's literal" "100"
+      | other -> failtestf "expected differs from the file, got %A" other
+
+    testCase "WHY — a part the callee spells as an expression keeps the refusal and the expression's text, so the row can say what it is" <| fun _ ->
+      let index = indexOver [ fileIndex "State.fs" parameterised [ "boss"; "make" ] ]
+      let row = rowFor index "boss" (box { Health = 50; Speed = 4.5; Name = "" }) "Health"
+      match row.Through with
+      | ThroughCall.CouldNotFollow(Refusal.ResultIsAnExpression expression) -> expression.Text |> Expect.equal "the expression" "hp"
+      | other -> failtestf "expected the refusal, got %A" other
+      match row.State with
+      | PersistenceState.NotInAFile(NotInFileWhy.NotSpelledInTheFile _) -> ()
+      | other -> failtestf "no literal to write, got %A" other
+      row.Control |> Expect.equal "so no knob" Control.NoControl
+
+    testCase "a record the file spells itself is not a call, and its parts say nothing about one" <| fun _ ->
+      let text = "module Game.Tuning\n\nlet gravity = 9.8\n"
+      let index = indexOver [ fileIndex "T.fs" text [ "gravity" ] ]
+      let view = buildRows index (walked [ "gravity", box 9.8 ]) Memory.empty
+      match TweakView.tryRow view (RowKey.top "gravity") with
+      | Some row -> row.Through |> Expect.equal "no call" ThroughCall.NoCall
+      | None -> failtest "no row for gravity"
   ]
