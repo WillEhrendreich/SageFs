@@ -243,6 +243,7 @@
         <Compile Include="DashboardMobileBrowserTests.fs" />
         <Compile Include="DashboardSessionSwitchOutputBrowserTests.fs" />
         <Compile Include="DashboardLiveBindingsDockBrowserTests.fs" />
+        <Compile Include="DashboardLiveBindingsHeaderBrowserTests.fs" />
         <Compile Include="NewSessionDialogBrowserTests.fs" />
         <!-- The live-bindings knob: a step writes a file through the nudge door, and the file's bytes are the proof. -->
         <Compile Include="DashboardLiveBindingsTweakBrowserTests.fs" />

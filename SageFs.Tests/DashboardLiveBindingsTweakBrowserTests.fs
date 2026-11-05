@@ -230,10 +230,10 @@ let journey () : Task<unit> = task {
     do! waitJs page "the row to say the REPL and the file differ, or that hot reload brought them back in step" BrowserWaits.daemonWork
           "sel => { const e = document.querySelector(sel); return !!e && ['DiffersFromFile', 'InSource'].includes(e.getAttribute('data-state')) && /9\\.9/.test(e.innerText); }"
           (box (row "gravity"))
-    // The reload the write caused is on the row.
-    do! waitJs page "the reload verdict on the gravity row" BrowserWaits.daemonWork
-          "sel => { const e = document.querySelector(sel + ' [data-testid=tweak-reload]'); return !!e && e.innerText.trim().length > 0; }" (box (row "gravity"))
-    let! reloadText = textIn page (sprintf "%s [data-testid=tweak-reload]" (row "gravity"))
+    // What hot reload did with the write is on the row: its verdict, or, when it is not watching the file, the one sentence that says so.
+    do! waitJs page "the reload verdict, or the not-watching sentence, on the gravity row" BrowserWaits.daemonWork
+          "sel => { const e = document.querySelector(sel + ' [data-testid=tweak-reload], ' + sel + ' [data-testid=tweak-watching]'); return !!e && e.innerText.trim().length > 0; }" (box (row "gravity"))
+    let! reloadText = textIn page (sprintf "%s [data-testid=tweak-reload], %s [data-testid=tweak-watching]" (row "gravity") (row "gravity"))
     do! shot page "2-reload-on-the-row"
     eprintfn "reload line: %s" reloadText
     // The REPL re-evaluates it, and the row is back in step.
