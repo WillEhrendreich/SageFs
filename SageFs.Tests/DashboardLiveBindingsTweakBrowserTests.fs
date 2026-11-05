@@ -236,9 +236,21 @@ let journey () : Task<unit> = task {
     let! reloadText = textIn page (sprintf "%s [data-testid=tweak-reload], %s [data-testid=tweak-watching]" (row "gravity") (row "gravity"))
     do! shot page "2-reload-on-the-row"
     eprintfn "reload line: %s" reloadText
-    // The REPL re-evaluates it, and the row is back in step.
-    let! _ = Sw.post daemon TestTimeouts.requestPatience "/exec" {| code = "let gravity = 9.9;;"; working_directory = built |}
+    // The session takes the file's value. When nothing watches the file the row offers the button for it (a REPL session always does),
+    // and pressing it is the answer; when hot reload brought the row back in step already, the binding is evaluated again by hand.
+    let apply = page.Locator(sprintf "%s [data-testid=tweak-apply]" (row "gravity"))
+    let! offered = apply.CountAsync()
+    match offered with
+    | 0 ->
+      let! _ = Sw.post daemon TestTimeouts.requestPatience "/exec" {| code = "let gravity = 9.9;;"; working_directory = built |}
+      ()
+    | _ -> do! apply.ClickAsync()
     do! waitState page "gravity" "InSource"
+    // The session holds the file's value now, so no sentence on the row says it still has the old one, and the button is gone.
+    let! staleSentences = page.Locator(sprintf "%s [data-testid=tweak-watching]" (row "gravity")).CountAsync()
+    staleSentences |> Expect.equal "once the session holds the file's value, no sentence says it does not" 0
+    let! leftoverButtons = page.Locator(sprintf "%s [data-testid=tweak-apply]" (row "gravity")).CountAsync()
+    leftoverButtons |> Expect.equal "and the Apply button has nothing left to apply" 0
     expectNoErrors errors "after a step"
 
     // A drag counts steps while it moves, and writes once, on release.
@@ -318,7 +330,7 @@ let journey () : Task<unit> = task {
     let built = "rig/Mass"
     do! waitState page built "InSource"
     do! waitJs page "the row to say which callee builds it and how many calls a write reaches" BrowserWaits.panelUpdates
-          "sel => { const e = document.querySelector(sel + ' [data-testid=tweak-through]'); return !!e && /makeRig builds this/.test(e.innerText) && /2 calls/.test(e.innerText); }"
+          "sel => { const e = document.querySelector(sel + ' [data-testid=tweak-through]'); return !!e && /makeRig builds this/.test(e.innerText) && /2 places call makeRig/.test(e.innerText); }"
           (box (row built))
     do! page.Locator(sprintf "%s [data-testid=tweak-step-up]" (row built)).ClickAsync()
     expected <- expected.Replace("{ Mass = 80.0; Drag = 0.25 }", "{ Mass = 80.1; Drag = 0.25 }")
