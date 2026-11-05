@@ -156,10 +156,12 @@ let tests =
     testCase "WHY — a session with no card has no remedy to offer" <| fun _ ->
       viewedRemedy currentSession.Id [] |> Expect.equal "nothing" Remedy.NothingToDo
 
-    testCase "WHY — the pane's note names what is wrong in the card's words and carries the same hard reset route, with its own test ids" <| fun _ ->
+    testCase "WHY — the pane's note says what the state means for the values below it, not the session's state word a fourth time, and carries the same hard reset route, with its own test ids" <| fun _ ->
       let html = RebuildRemedy.paneNote Remedy.RebuildAndReload |> renderNode
       html |> Expect.stringContains "its test id" "data-testid=\"live-pane-stale\""
-      html |> Expect.stringContains "the words" ">Running older code<"
+      html |> Expect.stringContains "the words are the pane's own" (sprintf ">%s<" (Remedy.paneWords Remedy.RebuildAndReload))
+      Remedy.paneWords Remedy.RebuildAndReload |> Expect.stringContains "they are about the values the pane shows" "values"
+      Remedy.paneWords Remedy.RebuildAndReload |> Expect.notEqual "the session's own phrase is said on the card, the header and the strip, not here" (Remedy.headline Remedy.RebuildAndReload)
       html |> Expect.stringContains "the button's test id" "data-testid=\"live-pane-rebuild\""
       html |> Expect.stringContains "the same route" "@post('/dashboard/hard-reset')"
       html |> Expect.stringContains "the same button words" "Rebuild and reload"

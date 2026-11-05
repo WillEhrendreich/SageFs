@@ -723,12 +723,12 @@ let dockWordingTests =
       let otherHead = head (dockWith withKnob WalkEverything On [ person ])
       count "live-containment" otherHead |> Expect.equal "a mode that is not the standard takes exactly one more line" 1
 
-    testCase "WHY — a state tag says what is true, in words a person uses: 'in the file', 'has parts', and 'saved, not running' for a file that is ahead of the app" <| fun _ ->
+    testCase "WHY — a state tag says what is true, in words a person uses: 'in the file', 'has parts', and 'saved, not applied' for a file that is ahead of the app" <| fun _ ->
       // Reviewers read "DIFFERS FROM THE FILE" over a sentence that said "Saved to the file" as a contradiction (is the file the same
       // or not?), "IN SOURCE" as unrelated to "NOT IN A FILE", and "MADE OF PARTS" as vague. The pairs now read as pairs.
       LiveBindingsTweakView.tagLabel StateTag.InSource |> Expect.equal "the pair of 'not in a file'" "in the file"
       LiveBindingsTweakView.tagLabel StateTag.MadeOfParts |> Expect.equal "what a record or list is" "has parts"
-      LiveBindingsTweakView.tagLabel StateTag.DiffersFromFile |> Expect.equal "what the row says about the app" "saved, not running"
+      LiveBindingsTweakView.tagLabel StateTag.DiffersFromFile |> Expect.equal "what the row says about the app: the file's value has not been applied, and the program is not stopped" "saved, not applied"
 
     testCase "WHY — the label on the mode buttons is plain: it says they govern what is looked at inside an object, not 'class values'" <| fun _ ->
       // Three reviewers: "Class values is not explained, what is a class, what does Safe do". The label names the act.

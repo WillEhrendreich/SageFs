@@ -159,12 +159,12 @@ let cardNoteTests =
     testCase "WHY — one changed file is one sentence: the session runs older code, and how many files changed" <| fun _ ->
       noteOf (SourceState.Stale [ editedIn "/home/will/proj/src/Tuning.fs" ])
       |> Option.map fst
-      |> Expect.equal "the headline" (Some "Running older code: 1 file changed since the build.")
+      |> Expect.equal "the headline is the cause only; the card's pill beside it says the state" (Some "1 file changed since the build.")
 
     testCase "WHY — the sentence counts files and says 'files' from two on" <| fun _ ->
       noteOf (SourceState.Stale [ editedIn "/home/will/proj/A.fs"; editedIn "/home/will/proj/B.fs"; editedIn "/home/will/proj/C.fs" ])
       |> Option.map fst
-      |> Expect.equal "three files" (Some "Running older code: 3 files changed since the build.")
+      |> Expect.equal "three files" (Some "3 files changed since the build.")
 
     testCase "WHY — the details name each file relative to the working directory, with when it was edited and when the build is from" <| fun _ ->
       let _, details = noteOf (SourceState.Stale [ editedIn "/home/will/proj/src/Tuning.fs" ]) |> Option.get
@@ -204,7 +204,7 @@ let cardNoteTests =
     testCase "WHY — a newer build on disk is said without naming a file as 'changed'" <| fun _ ->
       noteOf (SourceState.Stale [ { Path = "/home/will/proj/bin/P.dll"; Because = StaleBecause.RebuiltAfterLoad (t0.AddMinutes 5.0, t0) } ])
       |> Option.map fst
-      |> Expect.equal "the headline" (Some "Running older code: a newer build exists than the one this session loaded.")
+      |> Expect.equal "the headline" (Some "A newer build exists than the one this session loaded.")
 
     testCase "WHY — a long list is cut after twenty lines and says how many more" <| fun _ ->
       let many = [ for i in 1 .. 25 -> editedIn (sprintf "/home/will/proj/F%d.fs" i) ]

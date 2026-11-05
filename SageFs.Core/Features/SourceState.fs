@@ -311,9 +311,11 @@ module SourceState =
       let edited = changed.Length - rebuilt
       let headline =
         match edited, rebuilt with
-        | 0, _ -> "Running older code: a newer build exists than the one this session loaded."
-        | _, 0 -> sprintf "Running older code: %s changed since the build." (count edited "file")
-        | _ -> sprintf "Running older code: %s changed since the build, and a newer build exists." (count edited "file")
+        // The cause only. The card's pill beside this note already says "Running older code", and a reviewer counted that phrase five
+        // times on one screen.
+        | 0, _ -> "A newer build exists than the one this session loaded."
+        | _, 0 -> sprintf "%s changed since the build." (count edited "file")
+        | _ -> sprintf "%s changed since the build, and a newer build exists." (count edited "file")
       CardNote.Note (headline, changed |> List.map (cardFileLine root) |> capped)
     | SourceState.Rebuilding since ->
       CardNote.Note

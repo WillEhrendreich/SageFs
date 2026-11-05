@@ -116,7 +116,8 @@ let tagLabel (tag: StateTag) : string =
   | StateTag.Evolved -> "evolved"
   // What is true about the running app, not a comparison: "differs from the file" sat over a sentence that said "Saved to the
   // file", and read as the file not having been written.
-  | StateTag.DiffersFromFile -> "saved, not running"
+  // "Not running" read as the program being stopped (two reviewers), so the tag says the file's value has not been applied.
+  | StateTag.DiffersFromFile -> "saved, not applied"
   | StateTag.FileChanged -> "file changed"
   | StateTag.Refused -> "refused"
   | StateTag.Writing -> "writing"
@@ -297,6 +298,68 @@ module NextStep =
       "To run the file's value, evaluate the binding again with λ Evaluate, or press Rebuild and reload."
     | NextStep.UseTheControl -> "The control on this row sets what the file says."
     | NextStep.UseTheControlAgain -> "The control on this row now starts from what the file holds. Change it again from there."
+
+/// Why a row's file value cannot be applied to the session by evaluating it.
+[<RequireQualifiedAccess>]
+type ApplyRefusal =
+  /// A record field or list item is not a binding of its own, so evaluating it alone would not rebind anything.
+  | PartOfAValue
+  | SpansLines
+  /// A `;;` inside the text would end the statement before the expression does.
+  | CarriesStatementEnd
+
+module ApplyRefusal =
+  let text (refusal: ApplyRefusal) : string =
+    match refusal with
+    | ApplyRefusal.PartOfAValue -> "A part of a value cannot be applied alone. Evaluate the whole binding, or press Rebuild and reload."
+    | ApplyRefusal.SpansLines -> "The file's expression spans lines, so it cannot be evaluated from here. Evaluate the binding yourself, or press Rebuild and reload."
+    | ApplyRefusal.CarriesStatementEnd -> "The file's expression contains ';;', so it cannot be evaluated from here. Press Rebuild and reload."
+
+/// Whether a row offers to apply the file's value to the running session, and the code that would.
+[<RequireQualifiedAccess>]
+type ApplyOffer =
+  | Offered of code: string
+  | NotOffered
+
+/// A file nothing watches never reaches the session, so the row offers to evaluate what the file holds. This is what a REPL session
+/// wants: its bindings are not compiled code that hot reload can patch, they are values the session was handed, and rebinding the
+/// name to the file's expression is how the session takes the file's value.
+module ApplyToSession =
+  /// Where the button posts. Its own route, because it evaluates code in the session and writes nothing to the file.
+  let [<Literal>] Endpoint = "/dashboard/tweak/apply"
+  let words : string = "Apply to this session"
+  /// The row's one next step when the button is offered: the button is the step, so the sentence points at it and at nothing else.
+  let sentence : string = "To run the file's value, press Apply to this session."
+
+  /// The statement that rebinds the row's name to the file's expression.
+  let codeFor (key: RowKey) (fileText: string) : Result<string, ApplyRefusal> =
+    let text = fileText.Trim()
+    match key.Labels, text.Contains "\n", text.Contains ";;" with
+    | _ :: _, _, _ -> Error ApplyRefusal.PartOfAValue
+    | [], true, _ -> Error ApplyRefusal.SpansLines
+    | [], false, true -> Error ApplyRefusal.CarriesStatementEnd
+    | [], false, false -> Ok(sprintf "let %s = %s;;" key.Binding text)
+
+  let offerFor (key: RowKey) (view: RowView) : ApplyOffer =
+    match view.State with
+    | PersistenceState.DiffersFromFile(_, file) ->
+      match view.Watching, view.Place with
+      | WatchStatus.NotWatched, PlaceOf.Placed _ ->
+        match codeFor key file.Text with
+        | Ok code -> ApplyOffer.Offered code
+        | Error _ -> ApplyOffer.NotOffered
+      | WatchStatus.NotWatched, PlaceOf.NotPlaced
+      | WatchStatus.Watched, _ -> ApplyOffer.NotOffered
+    | PersistenceState.InSource _
+    | PersistenceState.NotInAFile _
+    | PersistenceState.Held
+    | PersistenceState.Derived _
+    | PersistenceState.Ambiguous _
+    | PersistenceState.Tweaked _
+    | PersistenceState.Evolved _
+    | PersistenceState.StaleAddress _
+    | PersistenceState.Refused _
+    | PersistenceState.Writing _ -> ApplyOffer.NotOffered
 
 /// What a row owes to a call, said once: which callee builds the value and how many places call it, or why the call was not
 /// followed. A row not built by a call, and a right-hand side that is not a call at all, say nothing. A write here is not a problem,
@@ -507,8 +570,8 @@ type Placement =
 
 let invariant (value: float) : string = value.ToString("R", CultureInfo.InvariantCulture)
 
-/// The script that stages a row's request in the page's signals and posts it. `valueJs` is a JS expression for the value.
-let stagePostJs (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
+/// The script that stages a row's request in the page's signals and posts it to `endpoint`. `valueJs` is a JS expression for the value.
+let stagePostTo (endpoint: string) (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
   sprintf
     "$%s = %s; $%s = %s; $%s = %s; $%s = %s; $%s = %s; $%s = %s; $%s = %s; %s"
     TweakSignals.Row (jsText (RowKey.text key))
@@ -518,7 +581,11 @@ let stagePostJs (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string
     TweakSignals.SeenText (jsText place.Text)
     TweakSignals.Verb (jsText verb)
     TweakSignals.Value valueJs
-    (Ds.post TweakSignals.Endpoint)
+    (Ds.post endpoint)
+
+/// The script for the knob's own route.
+let stagePostJs (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
+  stagePostTo TweakSignals.Endpoint key place verb valueJs
 
 /// The same, as an attribute value: the script is escaped once, here.
 let stageAndPost (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
@@ -734,6 +801,24 @@ let historyNodes (key: RowKey) (view: RowView) : XmlNode list =
         yield historyButton key place "↷" "redo" "tweak-redo" redo
         yield! historyReason "redo" redo ]
 
+/// The button that applies the file's value to the session, where the row offers it. It evaluates code in the session and changes
+/// nothing in the file, and its title says both.
+let applyNodes (key: RowKey) (view: RowView) : XmlNode list =
+  match view.Place, ApplyToSession.offerFor key view with
+  | PlaceOf.Placed place, ApplyOffer.Offered code ->
+    [ Elem.button
+        [ Attr.class' "session-btn session-btn-labeled live-history live-apply"
+          Attr.type' "button"
+          testid "tweak-apply"
+          Attr.create "aria-label" (attrEnc (sprintf "%s: evaluates %s in the session" ApplyToSession.words code))
+          Attr.title (attrEnc (sprintf "Evaluates %s in the running session. The file is not changed." code))
+          Ds.indicator (TweakSignals.busyOf key)
+          Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
+          Ds.onClick (attrEnc (stagePostTo ApplyToSession.Endpoint key place "apply" "''")) ]
+        [ Text.raw "▶"; Elem.span [ Attr.class' "session-btn-label" ] [ textEnc ApplyToSession.words ] ] ]
+  | PlaceOf.Placed _, ApplyOffer.NotOffered
+  | PlaceOf.NotPlaced, _ -> []
+
 /// What a row that was written to a file nothing is watching says. Only a row that was written says it: said under every row of the
 /// file before any write, it was ten copies of one sentence. The pane says the same fact once, ahead of any edit, in its caption
 /// (`PaneNote.ChangesGoToAnUnwatchedFile`).
@@ -759,10 +844,14 @@ let reloadNodes (view: RowView) : XmlNode list =
   match view.Watching, view.Reload with
   // A row nobody has written to says nothing, watched or not: the pane's caption says a file is not watched, once.
   | WatchStatus.NotWatched, RowReload.NoWriteYet -> []
-  // Written, and nothing is watching the file: one sentence says so, in place of a verdict that cannot come.
-  | WatchStatus.NotWatched, RowReload.Watching(_, (ReloadWatch.AwaitingReload | ReloadWatch.Compiling | ReloadWatch.NoNewReport)) -> watching
-  | WatchStatus.NotWatched, RowReload.Watching(_, ReloadWatch.Reported _)
-  | WatchStatus.Watched, (RowReload.NoWriteYet | RowReload.Watching _) -> line @ watching
+  // Written, and nothing is watching the file: no verdict from hot reload can be about this file, so none is shown. One sentence says
+  // the file is ahead, for as long as it is. When the session holds the file's value (an Apply, or the person evaluated it), "the
+  // running session still has the old value" would be false, and nothing is said.
+  | WatchStatus.NotWatched, RowReload.Watching _ ->
+    match NumberLabels.ofState view.State with
+    | NumberLabels.RunningAndFile -> watching
+    | NumberLabels.OneNumber -> []
+  | WatchStatus.Watched, (RowReload.NoWriteYet | RowReload.Watching _) -> line
 
 /// The strip under a row: the state as a chip and a sentence, the knob where the state allows one, the row's undo and redo, and what
 /// the app did with its last write. Every row the pane has something to say about gets one, so no row is silent about its file.
@@ -783,7 +872,7 @@ let renderStrip (key: RowKey) (view: RowView) (placement: Placement) : XmlNode =
           [ Elem.span [ Attr.class' "live-number-tag"; Attr.title NumberLabels.fileMeaning; testid "tweak-file-tag" ] [ textEnc NumberLabels.fileWord ] ]
         | NumberLabels.RunningAndFile, []
         | NumberLabels.OneNumber, _ -> []
-      fileTag @ knob @ historyNodes key view
+      fileTag @ knob @ historyNodes key view @ applyNodes key view
     | Placement.InsideSummary -> []
   let reload =
     match placement with
@@ -811,9 +900,10 @@ let renderStrip (key: RowKey) (view: RowView) (placement: Placement) : XmlNode =
          match detailShown view.State with
          | DetailShown.OnTheRow -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-detail" ] [ textEnc described.Detail ]
          | DetailShown.InTheTooltipOnly -> ()
-         match NextStep.ofRow view with
-         | NextStep.NoNextStep -> ()
-         | step -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-next" ] [ textEnc (NextStep.sentence step) ]
+         match NextStep.ofRow view, ApplyToSession.offerFor key view with
+         | NextStep.NoNextStep, _ -> ()
+         | _, ApplyOffer.Offered _ -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-next" ] [ textEnc ApplyToSession.sentence ]
+         | step, ApplyOffer.NotOffered -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-next" ] [ textEnc (NextStep.sentence step) ]
          match describeThrough view.Through with
          | Some through -> yield Elem.div [ Attr.class' (sprintf "live-detail %s" (Tone.cssClass through.Tone)); testid "tweak-through" ] [ textEnc through.Detail ]
          | None -> () ])

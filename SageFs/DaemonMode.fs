@@ -4610,7 +4610,9 @@ let run
       Dashboard.mapPostRaw "/api/sessions/{sid}/live-values/mode" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsSetMode askFor hub ctx)
       Dashboard.mapGetRaw "/api/sessions/{sid}/live-values/mode" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsReadMode askFor hub ctx)
       // The knob on a live binding's row: one write (or undo, or redo) through the nudge door, answered on the page's own stream.
-      Dashboard.mapPostRaw "/dashboard/tweak" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.handler dashboardQueries dashboardInfra tweakService) ]
+      Dashboard.mapPostRaw "/dashboard/tweak" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.handler dashboardQueries dashboardInfra tweakService)
+      // The row's "Apply to this session": evaluates the file's value in the session, writes nothing to the file.
+      Dashboard.mapPostRaw "/dashboard/tweak/apply" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.applyHandler dashboardInfra dashboardActions.EvalCode) ]
 
   let dashboardTask =
     startDashboardServer log bindHost daemonOrigins dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints @ liveBindingsEndpoints) cts.Token

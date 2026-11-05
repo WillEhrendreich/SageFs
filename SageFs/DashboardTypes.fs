@@ -1150,7 +1150,7 @@ module RebuildRemedy =
         [ Attr.class' "live-pane-stale"
           Attr.create "data-testid" "live-pane-stale"
           Attr.create "role" "status" ]
-        [ Elem.span [ Attr.class' "live-pane-stale-words" ] [ Text.raw (System.Net.WebUtility.HtmlEncode (Remedy.headline remedy)) ]
+        [ Elem.span [ Attr.class' "live-pane-stale-words" ] [ Text.raw (System.Net.WebUtility.HtmlEncode (Remedy.paneWords remedy)) ]
           button RemedyPlace.InPaneBar ]
 
 /// One sidebar card. Which card is being viewed is NOT a property of the card:

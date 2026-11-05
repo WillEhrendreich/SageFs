@@ -130,3 +130,10 @@ module Remedy =
     match remedy with
     | Remedy.NothingToDo -> ""
     | Remedy.RebuildAndReload -> Readiness.brief Readiness.ReadyOlderCode |> Option.defaultValue ""
+
+  /// The same fact in the live bindings pane's terms: what it means for the values the pane shows. The session's phrase is on the
+  /// card, the header and the strip already; a fourth copy beside the list told the reader nothing new, and three reviewers counted it.
+  let paneWords (remedy: Remedy) : string =
+    match remedy with
+    | Remedy.NothingToDo -> ""
+    | Remedy.RebuildAndReload -> "These values come from older code."

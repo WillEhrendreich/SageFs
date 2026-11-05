@@ -219,6 +219,58 @@ let describeTests =
   ]
 
 [<Tests>]
+let applyToSessionTests =
+  testList "applying the file's value to a session nothing watches" [
+    let filePlace = { gravity with Text = "9.9" }
+    let differs = PersistenceState.DiffersFromFile("9.8", filePlace)
+    let rowOfFile watching state =
+      { rowOf state (Control.RealStepper(9.9, Step.Fraction 1)) with Place = PlaceOf.Placed filePlace; Watching = watching }
+    let part = { Binding = "feel"; Labels = [ "JumpVelocity" ] }
+
+    testCase "WHY — the code is the binding rebound to the file's expression, so the session holds what the file holds" <| fun _ ->
+      ApplyToSession.codeFor key "9.9" |> Expect.equal "one line, one statement" (Ok "let gravity = 9.9;;")
+      ApplyToSession.codeFor key "  gravity * 2.0 " |> Expect.equal "an expression, trimmed" (Ok "let gravity = gravity * 2.0;;")
+
+    testCase "WHY — what a rebinding cannot honestly do is refused with its reason: a part of a value, a spanning expression, a statement end inside" <| fun _ ->
+      ApplyToSession.codeFor part "13.2" |> Expect.equal "a field cannot be rebound alone" (Error ApplyRefusal.PartOfAValue)
+      ApplyToSession.codeFor key "1.0 +\n 2.0" |> Expect.equal "it spans lines" (Error ApplyRefusal.SpansLines)
+      ApplyToSession.codeFor key "1.0;; 2.0" |> Expect.equal "it would end the statement early" (Error ApplyRefusal.CarriesStatementEnd)
+      for refusal in [ ApplyRefusal.PartOfAValue; ApplyRefusal.SpansLines; ApplyRefusal.CarriesStatementEnd ] do
+        ApplyRefusal.text refusal |> Expect.isNotEmpty "every refusal has words"
+
+    testCase "WHY — the button is offered only where it is the answer: the file's value differs, the file is not watched, and the row is a whole binding" <| fun _ ->
+      let offer watching state key' =
+        match ApplyToSession.offerFor key' (rowOfFile watching state) with
+        | ApplyOffer.Offered _ -> "offered"
+        | ApplyOffer.NotOffered -> "not offered"
+      offer WatchStatus.NotWatched differs key |> Expect.equal "unwatched and differing" "offered"
+      offer WatchStatus.Watched differs key |> Expect.equal "a watched file reaches the session by itself" "not offered"
+      offer WatchStatus.NotWatched (PersistenceState.InSource filePlace) key |> Expect.equal "nothing differs" "not offered"
+      offer WatchStatus.NotWatched differs part |> Expect.equal "a part of a value" "not offered"
+
+    testCase "WHY — the row draws the button with its words and its own test id, and says the one next step, which is that button" <| fun _ ->
+      let drawn = strip (rowOfFile WatchStatus.NotWatched differs)
+      drawn |> Expect.stringContains "its test id" "data-testid=\"tweak-apply\""
+      drawn |> Expect.stringContains "its words" ApplyToSession.words
+      drawn |> Expect.stringContains "it posts to its own route" ApplyToSession.Endpoint
+      textOfTestId "tweak-next" drawn |> Expect.equal "the next step is the button" (Some(ApplyToSession.sentence))
+      let watched = strip (rowOfFile WatchStatus.Watched differs)
+      watched.Contains "tweak-apply" |> Expect.isFalse "a watched file has no button"
+
+    testCase "WHY — the route reads the session, the page and the file's text from the signals the row staged, and turns away what the row would not have offered" <| fun _ ->
+      let asked (row: string) (text: string) : string =
+        use doc =
+          System.Text.Json.JsonDocument.Parse(
+            sprintf "{\"%s\":\"0a2b3c4d\",\"%s\":\"client-1\",\"%s\":\"%s\",\"%s\":\"%s\"}" DashboardTypes.Signals.ViewingSessionId DashboardTypes.Signals.ClientId TweakSignals.Row row TweakSignals.SeenText text)
+        match LiveBindingsTweakRoute.applyAskedOf doc.RootElement with
+        | LiveBindingsTweakRoute.ApplyAsked.Apply(_, clientId, code) -> sprintf "apply %s: %s" clientId code
+        | LiveBindingsTweakRoute.ApplyAsked.NotAnApply reason -> sprintf "refused: %s" reason
+      asked "gravity" "9.9" |> Expect.equal "a whole binding" "apply client-1: let gravity = 9.9;;"
+      asked "feel/JumpVelocity" "13.2" |> Expect.equal "a part of a value, in the refusal's own words" (sprintf "refused: %s" (ApplyRefusal.text ApplyRefusal.PartOfAValue))
+      (asked "" "9.9").StartsWith "refused: " |> Expect.isTrue "no row is not a request"
+  ]
+
+[<Tests>]
 let escapingTests =
   testList "text that came from a file or a person is shown as text and spliced into script as a string" [
 
@@ -416,11 +468,27 @@ let controlTests =
         textOfTestId "tweak-readout" html = Some(FSharpFloat.text value)))
 
     testCase "the reload the write caused is shown on the row; a file hot reload is not watching says so once, in one voice, and says the write happened if it did" <| fun _ ->
-      let row = rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))
+      let row = rowOf (PersistenceState.DiffersFromFile("9.8", { gravity with Text = "9.9" })) (Control.RealStepper(9.9, Step.Fraction 1))
       let notWatched = { row with Reload = RowReload.Watching("Tuning.fs", ReloadWatch.NoNewReport); Watching = WatchStatus.NotWatched }
       let html = strip notWatched
       html |> Expect.stringContains "the not-watched sentence" "data-testid=\"tweak-watching\""
       html.Contains "tweak-reload" |> Expect.isFalse "no second sentence about a verdict that cannot come"
+      // "The running session still has the old value" is true only while the file is ahead of the session. Once the session holds the
+      // file's value (the row is in its file, after an Apply or an eval), the sentence would be a lie, and so would any hot reload
+      // verdict for a file nothing watches: both go.
+      let applied = { notWatched with State = PersistenceState.InSource gravity }
+      strip applied |> fun after -> after.Contains "tweak-watching" |> Expect.isFalse "the session has the file's value, so no sentence says it does not"
+      let nothingToChange : ReloadFacts =
+        { Case = ReloadCase.NoEffect
+          Patched = 0
+          Considered = 1
+          Message = "m"
+          SuggestedAction = ""
+          Mechanism = Features.ReloadOutcome.PatchMechanism.NoPatch
+          Declarations = []
+          Callers = Features.CallerState.CallersState.CallersNotReported }
+      let reported = { applied with Reload = RowReload.Watching("Tuning.fs", ReloadWatch.Reported nothingToChange) }
+      strip reported |> fun after -> after.Contains "tweak-reload" |> Expect.isFalse "a verdict from hot reload means nothing for a file nothing watches"
       textOfTestId "tweak-watching" html |> Expect.equal "it says the write happened" (Some(notWatchedSentence gravity.File))
       // A row nobody has written says nothing about the file not being watched: said under every row of a file, once any row was
       // written, it was ten copies of one sentence. The pane says it once, in its edit caption.
