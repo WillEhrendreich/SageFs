@@ -246,7 +246,7 @@ module NumberLabels =
   /// The word beside the value in the heading.
   let runningWord : string = "running"
   /// The word beside the number in the knob.
-  let fileWord : string = "in file"
+  let fileWord : string = "in the file"
   let runningMeaning : string = "The value the running program holds."
   let fileMeaning : string = "The value in the file. The control below changes it."
 
@@ -294,7 +294,7 @@ module NextStep =
     // explain it a second time.
     | NextStep.UndoOrReload
     | NextStep.ReloadOnly ->
-      "To run the file's value, evaluate the binding again or rebuild."
+      "To run the file's value, evaluate the binding again with λ Evaluate, or press Rebuild and reload."
     | NextStep.UseTheControl -> "The control on this row sets what the file says."
     | NextStep.UseTheControlAgain -> "The control on this row now starts from what the file holds. Change it again from there."
 
