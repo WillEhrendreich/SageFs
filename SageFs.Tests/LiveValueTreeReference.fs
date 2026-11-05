@@ -25,7 +25,7 @@ let private scalarPreview (value: obj) =
   | :? string as s -> sprintf "\"%s\"" (truncateString s)
   | :? char as c -> sprintf "'%c'" c
   | :? bool as b -> if b then "true" else "false"
-  | :? float as f -> sprintf "%g" f
+  | :? float as f -> SageFs.FSharpFloat.text f
   | :? DateTime as dt -> dt.ToString("o")
   | _ -> truncateString (string value)
 
@@ -48,18 +48,18 @@ let rec private buildNode
   let t = if isNull value then typeof<obj> else value.GetType()
 
   if isCycle visited value then
-    { Label = label; TypeName = t.Name; Preview = "↩ (cycle)"; Kind = NodeKind.Cycle
+    { Label = label; TypeName = SageFs.FSharpTypeName.runtimeName t; Preview = "↩ (cycle)"; Kind = NodeKind.Cycle
       Children = []; BestEffort = false; Depth = depth }
   elif depth >= MaxDepth then
-    { Label = label; TypeName = t.Name; Preview = scalarPreview value; Kind = NodeKind.Truncated
+    { Label = label; TypeName = SageFs.FSharpTypeName.runtimeName t; Preview = scalarPreview value; Kind = NodeKind.Truncated
       Children = []; BestEffort = false; Depth = depth }
   elif budget.Value <= 0 then
-    { Label = label; TypeName = t.Name; Preview = "… (node budget)"; Kind = NodeKind.Truncated
+    { Label = label; TypeName = SageFs.FSharpTypeName.runtimeName t; Preview = "… (node budget)"; Kind = NodeKind.Truncated
       Children = []; BestEffort = false; Depth = depth }
   else
     budget.Value <- budget.Value - 1
     try
-      let typeName = t.Name
+      let typeName = SageFs.FSharpTypeName.runtimeName t
       let leaf preview kind = {
         Label = label; TypeName = typeName; Preview = preview; Kind = kind
         Children = []; BestEffort = false; Depth = depth }
@@ -199,7 +199,7 @@ let rec private buildNode
         { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Class
           Children = children; BestEffort = false; Depth = depth }
     with ex ->
-      { Label = label; TypeName = t.Name; Preview = sprintf "<error: %s>" ex.Message
+      { Label = label; TypeName = SageFs.FSharpTypeName.runtimeName t; Preview = sprintf "<error: %s>" ex.Message
         Kind = NodeKind.Leaf; Children = []; BestEffort = false; Depth = depth }
 
 /// The pre-caching walker's tree for one binding.
