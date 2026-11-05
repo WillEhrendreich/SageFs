@@ -607,7 +607,8 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
     let name = ValueWalk.name choice
     let pressed, label =
       match choice = current with
-      | true -> "true", sprintf "● %s" name
+      // The same tick the view panel's chosen options carry, so a chosen option is marked one way everywhere on the pane.
+      | true -> "true", sprintf "✓ %s" name
       | false -> "false", name
     Elem.button
       [ Attr.class' "eval-btn live-mode-btn"

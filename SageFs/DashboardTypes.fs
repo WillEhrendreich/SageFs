@@ -283,7 +283,7 @@ module Signals =
   let [<Literal>] DockHeight = "dockHeight"
   /// The dock's default ceiling. One home: the signal starts at it, a double-click on the resize handle returns to it, and a
   /// test holds the stylesheet's `--dock-max-height` to the same text.
-  let [<Literal>] DockHeightDefault = "min(46vh, 30rem)"
+  let [<Literal>] DockHeightDefault = "min(56vh, 36rem)"
   /// True while the dock's resize handle is being dragged, so pointermove knows a drag is live.
   let [<Literal>] DockResizing = "dockResizing"
   let [<Literal>] NewSessionDir = "newSessionDir"

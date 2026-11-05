@@ -504,6 +504,22 @@ let viewPanelTests =
           |> List.ofSeq)
         |> List.filter (fun (_, px) -> px < floorPx)
       tooSmall |> Expect.isEmpty (sprintf "every live-* font size is at least %gpx, but these are smaller: %A" floorPx tooSmall)
+
+    testCase "WHY — the page has one corner language, square, so no label, chip or button is a pill beside square controls" <| fun _ ->
+      // A filled state label and the agent chips were first drawn with `border-radius: 999px` beside buttons with none, and it looked
+      // wrong at once. Nothing is rounded: the switch's track and thumb, the settings chips and the select boxes are square too.
+      let allowed : Set<string> = Set.empty
+      let rules =
+        Text.RegularExpressions.Regex.Matches(Dashboard.dashboardCss, @"(?m)^([^\s{}/*@][^{}]*)\{([^}]*)\}")
+        |> Seq.map (fun m -> m.Groups.[1].Value.Trim(), m.Groups.[2].Value)
+        |> List.ofSeq
+      (rules.Length > 100) |> Expect.isTrue "the stylesheet's rules were found (the pattern did not silently match nothing)"
+      let rounded =
+        rules
+        |> List.filter (fun (selector, body) ->
+          Text.RegularExpressions.Regex.IsMatch(body, @"border-radius:(?>[ \t]*)(?!0[ \t]*[;}])[^;]+;") && not (allowed.Contains selector))
+        |> List.map fst
+      rounded |> Expect.isEmpty (sprintf "no rule rounds a corner, but these do: %A" rounded)
   ]
 
 /// What the pane says about itself and its rows in words a person can read cold (three reviewers who saw only screenshots scored the

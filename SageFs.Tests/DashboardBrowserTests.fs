@@ -1129,6 +1129,9 @@ let tests =
     do! OutputScroll.waitForPillText page "1 new eval"
     let! visible = OutputScroll.pillVisible page
     Expect.isTrue visible "the pill shows at phone width"
+    // On a phone the bindings come first and the page's column scrolls, so Output is below the dock: a person looking at it has
+    // scrolled it into view, and the pill is judged against the viewport from there.
+    do! page.Locator("#output-section").ScrollIntoViewIfNeededAsync()
     // Inside the output area and the viewport, and nothing sits on top of it.
     let! verdict =
       page.EvaluateAsync<string>(

@@ -329,7 +329,7 @@ module ApplyToSession =
   let [<Literal>] Endpoint = "/dashboard/tweak/apply"
   let words : string = "Apply to this session"
   /// The row's one next step when the button is offered: the button is the step, so the sentence points at it and at nothing else.
-  let sentence : string = "To run the file's value, press Apply to this session."
+  let sentence : string = "Press Apply to this session to run the file's value now."
 
   /// The statement that rebinds the row's name to the file's expression.
   let codeFor (key: RowKey) (fileText: string) : Result<string, ApplyRefusal> =
@@ -821,16 +821,33 @@ let applyNodes (key: RowKey) (view: RowView) : XmlNode list =
 /// What a row that was written to a file nothing is watching says. Only a row that was written says it: said under every row of the
 /// file before any write, it was ten copies of one sentence. The pane says the same fact once, ahead of any edit, in its caption
 /// (`PaneNote.ChangesGoToAnUnwatchedFile`).
-let notWatchedSentence (file: string) : string =
-  sprintf "Saved to the file. Nothing is watching %s, so the running session still has the old value." (Path.GetFileName file)
+let notWatchedSentence (file: string) (running: string) (inFile: string) : string =
+  sprintf "Saved to %s as %s. The session still runs %s: nothing watches the file." (Path.GetFileName file) inFile running
+
+/// The running value and the file's, while the two differ. The sentence names both numbers, because a row that shows 9.8 in its
+/// heading and 9.9 at its slider left three reviewers asking which was live.
+let differingValues (state: PersistenceState) : (string * string) option =
+  match state with
+  | PersistenceState.DiffersFromFile(running, file) -> Some(running, file.Text)
+  | PersistenceState.InSource _
+  | PersistenceState.NotInAFile _
+  | PersistenceState.Held
+  | PersistenceState.Derived _
+  | PersistenceState.Ambiguous _
+  | PersistenceState.Tweaked _
+  | PersistenceState.Evolved _
+  | PersistenceState.StaleAddress _
+  | PersistenceState.Refused _
+  | PersistenceState.Writing _ -> None
 
 let reloadNodes (view: RowView) : XmlNode list =
   let watching : XmlNode list =
-    match view.Watching, view.Place with
-    | WatchStatus.NotWatched, PlaceOf.Placed place ->
-      [ Elem.span [ Attr.class' "live-reload live-tone-notice"; testid "tweak-watching" ] [ textEnc (notWatchedSentence place.File) ] ]
-    | WatchStatus.NotWatched, PlaceOf.NotPlaced
-    | WatchStatus.Watched, _ -> []
+    match view.Watching, view.Place, differingValues view.State with
+    | WatchStatus.NotWatched, PlaceOf.Placed place, Some(running, inFile) ->
+      [ Elem.span [ Attr.class' "live-reload live-tone-notice"; testid "tweak-watching" ] [ textEnc (notWatchedSentence place.File running inFile) ] ]
+    | WatchStatus.NotWatched, PlaceOf.Placed _, None
+    | WatchStatus.NotWatched, PlaceOf.NotPlaced, _
+    | WatchStatus.Watched, _, _ -> []
   let line =
     match describeReload view.Reload with
     | ReloadLine.NoLine -> []

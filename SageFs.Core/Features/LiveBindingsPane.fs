@@ -183,7 +183,7 @@ module LiveBindingsPane =
       | PaneNote.ValuesAsOf at -> sprintf "Values as of %s" at
       | PaneNote.ReadFromPrinted -> "read from FSI's printed output"
       | PaneNote.ChangesGoToTheFile -> "Edits go to the file."
-      | PaneNote.ChangesGoToAnUnwatchedFile -> "Edits go to the file, and nothing watches it: the session keeps its values until you evaluate them again."
+      | PaneNote.ChangesGoToAnUnwatchedFile -> "A change is saved to the file. Nothing watches the file for changes, so the session keeps its old values until you apply them."
       | PaneNote.ModeGoverns -> "Look inside objects:"
       | PaneNote.LegendSummary -> "What do the tags mean?"
       | PaneNote.ModeMeans choice ->

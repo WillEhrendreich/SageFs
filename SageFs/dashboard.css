@@ -41,9 +41,10 @@
      can read at a glance. One home for its ceiling, mirroring --sidebar-width, so a resize control has a single value to
      write and the default can be reasoned about here rather than at the rule that uses it. 30vh at an 18rem cap showed three
      and a half binding rows at 900px, which blind reviewers read as "a few rows, and nothing says there are more". With a
-     binding on one line (see `.live-row` in the container query below), 46vh at a 30rem cap shows all nine of the fixture's
-     bindings at 900px and still leaves the transcript above it more than half the window. */
-  --dock-max-height: min(46vh, 30rem);
+     binding on one line (see `.live-row` in the container query below) 46vh at a 30rem cap showed nine bindings at 900px, and
+     then two reviewers in a row saw the pane as a strip under a mostly empty transcript, with rows cut at its foot. 56vh at a
+     36rem cap shows eleven and the transcript keeps the rest. */
+  --dock-max-height: min(56vh, 36rem);
   --tabline-h: 36px;
   --statusline-h: 28px;
   --cmdline-h: 32px;
@@ -1012,7 +1013,7 @@ h2 {
   color: var(--fg);
   background: var(--bg-alt, var(--bg));
   border: 1px solid var(--border, var(--fg-dim));
-  border-radius: 3px;
+  border-radius: 0;
   text-overflow: ellipsis;
 }
 
@@ -1569,7 +1570,7 @@ h2 {
 }
 
 .live-pane-pin::before {
-  content: "Pin";
+  content: "Keep open";
 }
 
 .live-pane-view::before {
@@ -1577,7 +1578,19 @@ h2 {
 }
 
 .live-pane-collapse::before {
-  content: "Fold";
+  content: "Collapse";
+}
+
+/* On a phone the three words are short, so the title, the count and the three buttons fit one line: "Keep open" and "Collapse" did
+   not, and "Keep open" fell onto a line of its own at 400px. */
+@media (max-width: 768px) {
+  .live-pane-pin::before {
+    content: "Pin";
+  }
+
+  .live-pane-collapse::before {
+    content: "Hide";
+  }
 }
 
 .live-tree {
@@ -1595,8 +1608,8 @@ h2 {
   background:
     linear-gradient(var(--bg-panel) 30%, transparent) top / 100% 16px no-repeat local,
     linear-gradient(transparent, var(--bg-panel) 70%) bottom / 100% 16px no-repeat local,
-    radial-gradient(farthest-side at 50% 0, rgb(0 0 0 / 0.45), transparent) top / 100% 7px no-repeat scroll,
-    radial-gradient(farthest-side at 50% 100%, rgb(0 0 0 / 0.45), transparent) bottom / 100% 7px no-repeat scroll;
+    radial-gradient(farthest-side at 50% 0, color-mix(in srgb, var(--fg-default) 30%, transparent), transparent) top / 100% 9px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, color-mix(in srgb, var(--fg-default) 30%, transparent), transparent) bottom / 100% 9px no-repeat scroll;
 }
 
 /* Rows stop growing at 72rem. On a wide window a row ran the whole width of the dock, so a binding's name and its type were
@@ -1699,12 +1712,12 @@ h2 {
      what selects the row. */
   .live-row:has(> .live-binding-node > .live-state)::after,
   .live-node-summary:has(> .live-binding-node > .live-state)::after {
-    content: "Change it by evaluating code";
+    content: "Change it with λ Evaluate";
     grid-column: 4;
     grid-row: 1;
-    color: var(--fg-dim);
+    color: var(--fg-default);
     font-size: 11.5px;
-    font-style: italic;
+    font-style: normal;
     white-space: nowrap;
   }
 
@@ -1821,7 +1834,8 @@ h2 {
   border: 0;
   background: transparent;
   color: var(--fg-dim);
-  opacity: 0;
+  /* Always drawn, quietly: a control that exists only under the pointer is a control a person never finds. */
+  opacity: 0.55;
 }
 
 .live-binding:hover .live-binding-pin,
@@ -2472,7 +2486,7 @@ h2 {
   margin: 0;
   background: var(--bg-default);
   border: 1px solid var(--fg-dim);
-  border-radius: 0.7rem;
+  border-radius: 0;
   cursor: pointer;
 }
 
@@ -2483,7 +2497,7 @@ h2 {
   left: 2px;
   width: calc(1.4rem - 8px);
   height: calc(1.4rem - 8px);
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--fg-dim);
 }
 
@@ -3175,13 +3189,11 @@ h2 {
     /* The stacked layout scrolls as one column, so the output above the dock keeps a floor of its own: the dock is
        bounded, and the main area is tall enough for both. At 22rem the dock showed two and a half binding rows at 400px, once
        the pane's captions had taken their share, so it is taller here, and the main area's floor grows with it. */
-    max-height: 30rem;
-    /* The pane's own header (bar, remedy, caption, mode buttons, legend) takes about 230px at 400px wide, so at 30rem the list has
-       room for about three rows, and three reviewers called that a strip. A taller cap does not fix it: the dock and Output share
-       the viewport's height here, so every pixel the list gains comes out of Output. Measured at 390x844: a cap of 80vh left Output
-       1px tall (the unseen-eval pill journey caught it), 60vh left it 138px, and even 55vh left 55px at 768x900 (the dock
-       journey's Output-height guard caught that) for one more row. The remedy is a shorter pane header at narrow widths, which is a
-       design change, not a number. */
+    max-height: max(30rem, 70vh);
+    /* The pane's own header (bar, remedy, caption, mode buttons, legend) takes about 230px at 400px wide, so at 30rem the list had
+       room for about three rows, and three reviewers called that a strip. The cap is taller now that it can be: Output has a box of
+       its own (`#editor-area` below) and the page's column scrolls, so the dock no longer takes its height from Output. Before that,
+       a taller cap crushed Output (80vh left it 1px, 55vh left 55px at 768x900). At 390x844 this gives the list seven or eight rows. */
     /* The bindings are what the page is opened for, so on a phone they come first, above the output transcript. With the output
        first, the bindings began halfway down a 400x800 window and only the first two rows showed above the fold: three reviewers
        scored the narrow layouts 5 because the subject was buried under the log. */
@@ -3510,7 +3522,7 @@ body[data-connected="false"] .statusline-info {
 .settings-perlayer { font-size: 0.75rem; color: var(--fg-dim); font-family: 'JetBrains Mono', monospace; }
 
 .settings-badge, .settings-chip {
-  font-size: 0.65rem; padding: 0.05rem 0.4rem; border-radius: 0.6rem;
+  font-size: 0.65rem; padding: 0.05rem 0.4rem; border-radius: 0;
   border: 1px solid var(--border-normal); white-space: nowrap;
 }
 .settings-badge-default { color: var(--fg-dim); }
@@ -3624,4 +3636,206 @@ body[data-connected="false"] .statusline-info {
   margin-left: auto;
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--fg-dim);
+}
+
+/* ── The state column, calm ──
+   Nine rows of bordered, uppercase pills in two edge styles and three colours made the State column the loudest thing on the pane,
+   louder than the values it describes. An ordinary state is now a dot and a plain lowercase word: a filled dot for "in the file",
+   a hollow one for a state with nothing to do ("has parts", "formula", "not in a file"). The state is told by the word and the dot's
+   shape, never by colour alone. Only a state that asks something of the person keeps a filled label ("saved, not applied", a
+   refusal). */
+.live-dock .live-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg-default);
+}
+
+.live-dock .live-state::before {
+  content: "";
+  flex: none;
+  width: 0.55em;
+  height: 0.55em;
+  /* Square, like every other edge on the page: the marker's shape (filled or hollow) is what tells states apart. */
+  border-radius: 0;
+  background: currentColor;
+}
+
+.live-dock .live-state.live-tone-good::before {
+  background: var(--fg-green);
+}
+
+.live-dock .live-state.live-tone-info::before {
+  background: var(--fg-blue);
+}
+
+.live-dock .live-state.live-tone-quiet::before {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--fg-dim);
+}
+
+.live-dock .live-state.live-tone-notice,
+.live-dock .live-state.live-tone-bad {
+  padding: 1px 0.7em;
+  border-radius: 0;
+  font-weight: 700;
+  color: var(--bg-default);
+}
+
+.live-dock .live-state.live-tone-notice {
+  background: var(--fg-yellow);
+}
+
+.live-dock .live-state.live-tone-bad {
+  background: var(--fg-red);
+}
+
+.live-dock .live-state.live-tone-notice::before,
+.live-dock .live-state.live-tone-bad::before {
+  display: none;
+}
+
+/* ── The pane's header, with a title ──
+   "Live bindings" was twelve pixels of blue among five other twelve-pixel things, so the pane's subject read as one more caption.
+   The title is the largest and brightest word in the bar, and what it holds (the count, when the values were read, how many are
+   not in a file) is the quiet line after it. A row lifts a little under the pointer so a long list can be followed across. */
+.live-dock .live-pane-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--fg-default);
+}
+
+.live-dock .live-binding:hover {
+  background: color-mix(in srgb, var(--fg-default) 5%, transparent);
+}
+
+/* The two number labels ("running", "in the file") are chips of one family with the state column: lowercase, a quiet fill, no edge.
+   They still read as labels because they are filled and sit against a number; they no longer shout in capitals and borders. */
+.live-dock .live-number-tag {
+  padding: 1px 0.6em;
+  border: none;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--fg-default) 14%, transparent);
+  color: var(--fg-default);
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* The one action a row points to is the one filled button on it. */
+.live-dock .live-apply {
+  background: var(--border-focus);
+  color: var(--bg-default);
+  font-weight: 700;
+}
+
+.live-dock .live-apply:hover {
+  background: color-mix(in srgb, var(--border-focus) 85%, var(--fg-default));
+}
+
+/* ── The Sessions card, quieter ──
+   An agent chip is a filled label without a border: three bordered boxes (the "selected" mark, and two agents) stacked in the card
+   read as three buttons. Its corners are square like everything else here. */
+.sidebar .badge-agent {
+  border: none;
+  border-radius: 0;
+  padding: 1px 0.7rem;
+  background: color-mix(in srgb, var(--fg-default) 11%, transparent);
+}
+
+.sidebar .badge-agent-stale {
+  background: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-dim) 60%, transparent);
+}
+
+/* ── Three states, three markers ──
+   A hollow square meant "has parts", "formula" and "not in a file" alike, so a reviewer read one marker as three things. A value
+   worked out by the file ("formula", "has parts") is half filled, along the diagonal: it is there, computed. A value no file holds
+   stays an empty square. A value in its file is a filled green one. */
+.live-dock .live-tweak[data-state="Derived"] > .live-state::before,
+.live-dock .live-node-summary .live-tweak[data-state="Derived"] .live-state::before {
+  background: linear-gradient(135deg, var(--fg-default) 50%, transparent 50%);
+  box-shadow: inset 0 0 0 1.5px var(--fg-default);
+}
+
+/* ── The file's value is labelled where its number is ──
+   The "in the file" chip sat before the slider, a long way from the 9.9 it names, so the row read as two unlabelled numbers.
+   The knob comes first on the line, its label right after it, then the buttons. */
+/* The label comes before the control it names ("in the file", then the slider and its 9.9), so the number is read with its label and
+   not after it, at the far end of a slider. */
+.live-dock .live-tweak > .live-number-tag {
+  order: 1;
+}
+
+.live-dock .live-tweak > .live-knob {
+  order: 2;
+}
+
+.live-dock .live-tweak > .live-history,
+.live-dock .live-tweak > .live-apply {
+  order: 3;
+}
+
+/* ── Smaller things the reviewers named ──
+   A row scrolled to by the keyboard or a link stops under the sticky column header, not behind it. The header's words are in the
+   text colour, not dim at 11px. A switch that is off is a visible grey thumb, not a faint one. */
+.live-dock .live-binding {
+  scroll-margin-top: 2.2rem;
+}
+
+.live-dock .live-cols,
+.live-dock .live-cols > * {
+  color: var(--fg-default);
+}
+
+.live-dock .live-toggle:not(:checked)::after {
+  background: var(--fg-default);
+}
+
+/* ── Marks you can see, text you can read ──
+   The state markers were six pixels, which three reviewers could not tell apart. They are ten, so filled, half filled and empty
+   differ at a glance. The row pins are always drawn and big enough to hit. The pane's meta line (count, as-of time, how many are
+   not in a file) and the filter's placeholder are in the text colour, not dim at 11px. The session card's text starts clear of its
+   accent bar instead of touching it. */
+.live-dock .live-state::before {
+  width: 0.85em;
+  height: 0.85em;
+}
+
+.live-dock .live-binding > .live-binding-pin {
+  width: 20px;
+  height: 20px;
+  top: 2px;
+  opacity: 0.7;
+}
+
+.live-dock .live-pane-count,
+.live-dock .live-pane-stamp,
+.live-dock .live-repl-chip {
+  color: color-mix(in srgb, var(--fg-default) 88%, transparent);
+}
+
+.live-dock .live-filter::placeholder {
+  color: color-mix(in srgb, var(--fg-default) 70%, transparent);
+}
+
+.sidebar .session-card-body,
+.sidebar .session-card-actions {
+  padding-left: 0.5rem;
+}
+
+/* In the stacked rows the source has lost its column heading, so it says what it is: "in Tuning.fs:11". */
+@container (max-width: 899px) {
+  .live-dock .live-where::before {
+    content: "in ";
+    color: color-mix(in srgb, var(--fg-default) 70%, transparent);
+  }
 }
