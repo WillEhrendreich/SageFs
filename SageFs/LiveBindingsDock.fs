@@ -524,7 +524,9 @@ let renderPaneWith (look: View) (controls: LiveBindingsViewPanel.ViewControls op
   let stamp =
     match source with
     | WalkedBindings view ->
-      LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.ReadAfterEval(view.Snapshot.Generation, view.Snapshot.CapturedAt.ToLocalTime().ToString("HH:mm:ss")))
+      // The output panel beside this pane prints the daemon's UTC clock, so the stamp uses it too and says so: a local time here
+      // read as a different moment under output lines stamped hours apart.
+      LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.ReadAfterEval(view.Snapshot.Generation, view.Snapshot.CapturedAt.UtcDateTime.ToString("HH:mm:ss 'UTC'")))
     | PrintedBindings _ -> LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ReadFromPrinted
     | NothingBound -> ""
   let body =

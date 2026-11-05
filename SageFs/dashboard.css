@@ -524,6 +524,7 @@ h2 {
 
 .eval-pop > summary {
   list-style: none;
+  white-space: nowrap;
 
   &::-webkit-details-marker {
     display: none;
@@ -1063,6 +1064,10 @@ h2 {
 .session-row .session-card-source-action {
   display: block;
   box-sizing: border-box;
+  /* `.session-btn` is a 28px square, and the card sets `word-break: break-word`: without these two the label drew one letter per
+     line down the card. The button takes the width its words need, and breaks between words. */
+  width: auto;
+  word-break: normal;
   max-width: 100%;
   margin: 4px 0;
   padding: 3px 8px;
@@ -1070,7 +1075,7 @@ h2 {
   line-height: 1.3;
   text-align: left;
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
 }
 
 .session-row .session-card-source-details {
@@ -1318,6 +1323,22 @@ h2 {
   background: transparent;
   border-style: dashed;
   overflow-wrap: anywhere;
+}
+
+/* In the sidebar these notes ("Hot reload: this session is in REPL mode", "Live testing: it's off for this session", "Cohort: no
+   cohort is running") are a list of what is not in use here, and each used to be a dashed box of its own: three of them took
+   about 40% of the column and answered none of the questions a person came with. As a quiet list they say the same thing in a
+   quarter of the room. The dock's collapsed bars share the class and keep their dashed look. */
+.sidebar-inner > .panel-hidden-reason {
+  padding: 0 4px 0 1.1em;
+  border: none;
+  margin-block: -0.35rem;
+  text-indent: -1.1em;
+}
+
+.sidebar-inner > .panel-hidden-reason::before {
+  content: "○ ";
+  color: var(--fg-dim);
 }
 
 .panel-hidden-why {
@@ -2750,7 +2771,7 @@ h2 {
        floor so the output/eval area isn't crushed toward zero height
        when the (now full-width, below it) sidebar content is tall. */
     flex: 1 1 auto;
-    min-height: 36rem;
+    min-height: 46rem;
   }
 
   .sidebar {
@@ -2793,8 +2814,30 @@ h2 {
 
   .live-dock {
     /* The stacked layout scrolls as one column, so the output above the dock keeps a floor of its own: the dock is
-       bounded, and the main area is tall enough for both. */
-    max-height: 22rem;
+       bounded, and the main area is tall enough for both. At 22rem the dock showed two and a half binding rows at 400px, once
+       the pane's captions had taken their share, so it is taller here, and the main area's floor grows with it. */
+    max-height: 30rem;
+  }
+
+  /* The popover needs room above the dock, and a phone-width page has little: the panel's title slid under the fixed header.
+     Here it opens in the flow, under the pane bar, and the dock scrolls. The selector matches the position rule's, so it wins by
+     coming later. */
+  .live-dock .live-view-panel {
+    position: static;
+    transform: none;
+    max-height: none;
+    /* In the pane's flex column it keeps its own height and the list gives way: left to shrink, `overflow: auto` let the dock's
+       height cap squeeze it to about 50px with its controls hidden. */
+    flex: 0 0 auto;
+    box-shadow: none;
+    border-left: none;
+    border-right: none;
+  }
+
+  /* While the panel is open in the flow, the dock grows by its height: the page scrolls as one column here, and the bindings
+     the panel configures stay under it, in view after a scroll, rather than squeezed out of a fixed-height dock. */
+  .live-dock:has(.live-view-panel:not(.live-hidden)) {
+    max-height: 54rem;
   }
 
   #output-panel {
@@ -2821,28 +2864,69 @@ h2 {
   }
 }
 
-/* The header at phone width. Four segments want about 540px: the brand, the status badge, the session with its workflow
-   switcher, and the theme picker. At 400px the session was squeezed to 25px ("Se…") and the evals count to 24px, with no sign
-   that anything had been cut. So below 560px the parts that repeat something shown elsewhere drop out whole: the word beside
-   the icon, the word "Session:" before the id, and the evals count (the session card carries it). What stays fits and reads
-   whole. The header's own inline styles set display and padding, so these rules need !important to win. */
-@media (max-width: 560px) {
+/* The header below 820px. Four segments want about 850px with the longest status badge ("Ready, running older code"): the
+   brand, the badge, the session with its workflow switcher, and the theme picker. At 600px the session was squeezed to a few
+   letters with no sign that anything had been cut, and the badge is the one that must never be cut. So below 820px the header is
+   two rows: the brand, the badge and the theme picker on the first, the session and its workflow switcher on a row of their
+   own. The evals count (the session card carries it) drops out whole. The row height is the one variable the page offsets read,
+   so the rest of the page moves down with it. The header's own inline styles set display, height and padding, so the rules that
+   undo them need !important. */
+@media (max-width: 820px) {
+  :root {
+    --tabline-h: 72px;
+  }
+
+  .app-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: 36px 36px;
+  }
+
+  /* The centre group's children become cells of the header's grid, so the session can take a row to itself. */
+  .tabline-menu {
+    display: contents !important;
+  }
+
   .tabline-brand {
+    grid-column: 1;
+    grid-row: 1;
     padding: 0 8px !important;
   }
 
-  .tabline-brand-name,
-  .tabline-session-label,
+  .tabline-status {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    padding: 0 8px !important;
+    overflow: hidden;
+  }
+
+  .tabline-right {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .tabline-info:not(.tabline-evals) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    border-top: 1px solid var(--border-normal);
+    border-right: none !important;
+    padding: 0 12px !important;
+  }
+
   .tabline-evals {
     display: none !important;
   }
 
-  .tabline-info {
-    padding: 0 8px !important;
-  }
-
   .app-header .theme-select {
     width: 6.5rem;
+  }
+}
+
+/* The word beside the brand's icon is the first thing to go at phone width: the icon says whose page it is. */
+@media (max-width: 560px) {
+  .tabline-brand-name {
+    display: none !important;
   }
 }
 

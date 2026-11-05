@@ -42,7 +42,7 @@ let private actionButton (cls: string) (id: string) (label: string) (glyph: stri
 let render (keyboardHelp: XmlNode) : XmlNode =
   Elem.details [ Attr.id DomIds.EvaluateSection; Attr.class' "eval-pop"; Ds.preserveAttr "open" ] [
     Elem.summary
-      [ Attr.class' "session-btn eval-pop-toggle"
+      [ Attr.class' "session-btn session-btn-labeled eval-pop-toggle"
         testid "evaluate-toggle"
         Attr.create "aria-label" (sprintf "Evaluate: open a quick box to check something (key %s)" OpenKey)
         Attr.create "title" (sprintf "Evaluate (key %s)" OpenKey) ]

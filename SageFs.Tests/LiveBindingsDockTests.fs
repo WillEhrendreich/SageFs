@@ -563,6 +563,14 @@ let dockWordingTests =
       html |> Expect.stringContains "the stamp" "read after eval 7 at "
       html.Contains "gen 7" |> Expect.isFalse "no bare generation number"
 
+    testCase "WHY — the stamp is on the output panel's clock, UTC, and says so, because two times on one screen that differ by the machine's offset read as a bug" <| fun _ ->
+      // The output lines beside the pane print the daemon's UTC clock. The stamp used the machine's local time, so a machine at
+      // UTC-6 showed 11:17:31 under output lines stamped 17:17:31: the same moment, written two ways.
+      let walked = view [ person ]
+      let at = DateTimeOffset(2026, 11, 5, 17, 17, 31, TimeSpan.Zero)
+      let html = dock (WalkedBindings { walked with Snapshot = { walked.Snapshot with CapturedAt = at } })
+      html |> Expect.stringContains "the stamp is the UTC time, labelled" "read after eval 7 at 17:17:31 UTC"
+
     testPropertyWithConfig propConfig "WHY — no sentence the pane says about itself carries a raw case name, a backtick or a format hole"
       (Prop.forAll (Arb.fromGen (Gen.elements allNotes)) (fun note ->
         let said = PaneNote.text note

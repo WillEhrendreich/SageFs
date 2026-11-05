@@ -192,3 +192,17 @@ let helperTests =
       let stats : EvalStatsView = { FixtureStats.noEvals with Count = 13 }
       HeaderEvals.agreeWithCard currentSession.Id [] stats |> Expect.equal "unchanged" stats
   ]
+
+[<Tests>]
+let sourceActionStyleTests =
+  testList "the rebuild button on a session card is drawn as a button, not a column of letters" [
+
+    testCase "WHY — the button takes the width its words need and breaks between words, because .session-btn is a 28px square and the card breaks words anywhere" <| fun _ ->
+      // Seen in a real browser: the label "Rebuild and reload" drew one letter per line down the card. `.session-btn` sets
+      // `width: 28px`, and the card's own `word-break: break-word` is inherited. The action rule resets both.
+      let rule =
+        Text.RegularExpressions.Regex.Match(Dashboard.dashboardCss, @"(?m)^\.session-row \.session-card-source-action\s*\{([^}]*)\}")
+      rule.Success |> Expect.isTrue "the stylesheet has a rule for the card's source action"
+      rule.Groups.[1].Value |> Expect.stringContains "its width is not the icon square's" "width: auto"
+      rule.Groups.[1].Value |> Expect.stringContains "it breaks between words, not inside them" "word-break: normal"
+  ]
