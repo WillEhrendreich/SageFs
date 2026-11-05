@@ -100,12 +100,51 @@ let renderTests =
 let sourceRenderTests =
   testList "SourceState on the session card (rendered HTML)" [
 
-    testCase "WHY - a session whose files changed after its build shows a line of its own, with a test id a journey can find" <| fun _ ->
+    testCase "WHY - a session whose files changed after its build shows a block of its own, with a test id a journey can find, one sentence and the file names" <| fun _ ->
       let html = htmlOf [ cardWith "0a2b3c4d" ReplFreshness.InSync staleSource ]
-      html |> Expect.stringContains "the line has its test id" "data-testid=\"session-card-source\""
-      html |> Expect.stringContains "it says the source is stale" "STALE SOURCE"
-      html |> Expect.stringContains "it names the files" "/repo/SageFs/Mcp.fs"
-      html |> Expect.stringContains "it says what to do" "hard_reset_fsi_session"
+      html |> Expect.stringContains "the block has its test id" "data-testid=\"session-card-source\""
+      html |> Expect.stringContains "it says in one sentence that the session runs older code" "Running older code: 2 files changed since the build."
+      html |> Expect.stringContains "it names the files, as file names" "Mcp.fs"
+      html.Contains "STALE SOURCE" |> Expect.isFalse "the red monospace wall is the tool result's wording, not the card's"
+
+    testCase "WHY - the stale block has one button that does the dashboard's own hard reset with a rebuild, on the card being viewed" <| fun _ ->
+      let html = renderSessionsForSession "0a2b3c4d" [ cardWith "0a2b3c4d" ReplFreshness.InSync staleSource ] false |> renderNode
+      html |> Expect.stringContains "the button has its test id" "data-testid=\"session-card-rebuild\""
+      html |> Expect.stringContains "it posts to the existing hard reset route" "@post('/dashboard/hard-reset')"
+      html |> Expect.stringContains "it says what it does, in words" "Rebuild and reload"
+      let fromBlock = html.Substring(html.IndexOf "session-card-source")
+      let block = fromBlock.Substring(0, fromBlock.IndexOf "session-card-actions")
+      block.Split("<button").Length - 1 |> Expect.equal "exactly one button in the block" 1
+
+    testCase "WHY - a card that is not being viewed has no rebuild button, because the hard reset acts on the session in view" <| fun _ ->
+      let html = htmlOf [ cardWith "0a2b3c4d" ReplFreshness.InSync staleSource ]
+      html.Contains "session-card-rebuild" |> Expect.isFalse "no button on a card the reset would not act on"
+
+    testCase "WHY - the times and the file list sit in a closed disclosure, so the card shows one sentence until the person asks for more" <| fun _ ->
+      let html = renderSessionsForSession "0a2b3c4d" [ cardWith "0a2b3c4d" ReplFreshness.InSync staleSource ] false |> renderNode
+      html |> Expect.stringContains "a details element holds the detail" "<details"
+      html |> Expect.stringContains "it has its test id" "data-testid=\"session-card-source-details\""
+      let details = html.Substring(html.IndexOf "session-card-source-details")
+      details |> Expect.stringContains "the edit time is in it" "edited 2026-10-02 00:05:00Z"
+      details |> Expect.stringContains "and the build time" "the build is from 2026-10-02 00:01:00Z"
+      html.Contains "<details open" |> Expect.isFalse "it is closed until opened"
+
+    testCase "WHY - the card never prints an absolute path, because a path from the root of the disk is a wall nobody reads" <| fun _ ->
+      let workingDir = "/home/will/proj"
+      let inside =
+        CardSource.Read (
+          SourceState.Stale
+            [ { Path = "/home/will/proj/src/Tuning.fs"; Because = StaleBecause.EditedAfterBuild (builtAt.AddMinutes 5.0, builtAt) }
+              { Path = "/somewhere/else/Other.fs"; Because = StaleBecause.EditedAfterBuild (builtAt.AddMinutes 6.0, builtAt) } ])
+      let html =
+        renderSessionsForSession "0a2b3c4d" [ { cardWith "0a2b3c4d" ReplFreshness.InSync inside with WorkingDir = workingDir } ] false |> renderNode
+      let block = html.Substring(html.IndexOf "data-testid=\"session-card-source\"")
+      // The card's own working-directory row follows the block and is not part of it.
+      let block = block.Substring(0, block.IndexOf "class=\"session-dir\"")
+      block |> Expect.stringContains "a file under the working directory is named relative to it" "src/Tuning.fs"
+      block |> Expect.stringContains "a file outside it is named by its file name" "Other.fs"
+      block.Contains "/home/will" |> Expect.isFalse "no absolute path from the working directory"
+      block.Contains "/somewhere/else" |> Expect.isFalse "no absolute path from elsewhere"
 
     testCase "WHY - a session whose build is current, or whose source this card did not read, is as quiet as it was" <| fun _ ->
       let current = htmlOf [ cardWith "0a2b3c4d" ReplFreshness.InSync inSyncSource ]
@@ -115,9 +154,14 @@ let sourceRenderTests =
 
     testCase "WHY - a rebuild in progress and an unknown source are said too, because 'could not tell' is not 'fine'" <| fun _ ->
       let rebuilding = htmlOf [ cardWith "0a2b3c4d" ReplFreshness.InSync (CardSource.Read (SourceState.Rebuilding builtAt)) ]
-      rebuilding |> Expect.stringContains "rebuilding is said" "A rebuild is in progress"
-      let unknown = htmlOf [ cardWith "0a2b3c4d" ReplFreshness.InSync (CardSource.Read (SourceState.Unknown UnknownReason.NoProjectLoaded)) ]
-      unknown |> Expect.stringContains "unknown is said" "could not be told"
+      rebuilding |> Expect.stringContains "rebuilding is said" "Rebuilding: this session keeps serving the build from before it"
+      let unknown = htmlOf [ cardWith "0a2b3c4d" ReplFreshness.InSync (CardSource.Read (SourceState.Unknown (UnknownReason.LoadTimeNotReported "no report"))) ]
+      unknown |> Expect.stringContains "unknown is said" "Cannot tell whether this session runs current code."
+      unknown |> Expect.stringContains "and why, behind the disclosure" "no report"
+
+    testCase "WHY - a session with no project says nothing about its build, because there is no build for it to be behind" <| fun _ ->
+      let bare = htmlOf [ cardWith "0a2b3c4d" ReplFreshness.InSync (CardSource.Read (SourceState.Unknown UnknownReason.NoProjectLoaded)) ]
+      bare.Contains "session-card-source" |> Expect.isFalse "a bare session is not behind anything"
 
     testCase "WHY - the two facts have their own lines and their own words, so one can never be read as the other" <| fun _ ->
       let html = htmlOf [ cardWith "0a2b3c4d" behind staleSource ]
@@ -127,7 +171,7 @@ let sourceRenderTests =
       let sourceAt = html.IndexOf "session-card-source"
       (freshnessAt < sourceAt) |> Expect.isTrue "two elements, the REPL line first"
       let freshnessLine = html.Substring(freshnessAt, sourceAt - freshnessAt)
-      freshnessLine.Contains "STALE SOURCE" |> Expect.isFalse "the freshness line does not say the source is stale"
+      freshnessLine.Contains "older code" |> Expect.isFalse "the freshness line does not say the source is stale"
       let actionsAt = html.IndexOf "session-card-actions"
       let sourceLine = html.Substring(sourceAt, actionsAt - sourceAt)
       sourceLine.Contains "BEHIND" |> Expect.isFalse "the source line does not say the REPL is behind the app"
@@ -170,6 +214,13 @@ let private layoutProblems (page: IPage) (testId: string) : Task<string> =
     if (b.width <= 0 || b.height <= 0) problems.push('the line has no size');
     if (b.left < c.left - 0.5 || b.right > c.right + 0.5) problems.push('the line spills out of the card sideways');
     if (banner.scrollWidth > banner.clientWidth + 1) problems.push('the line text overflows its own box');
+    const rebuild = card.querySelector('[data-testid="session-card-rebuild"]');
+    if (rebuild && testId === 'session-card-source') {
+      const r = rebuild.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) problems.push('the rebuild button has no size');
+      if (r.left < c.left - 0.5 || r.right > c.right + 0.5) problems.push('the rebuild button spills out of the card sideways');
+      if (rebuild.scrollWidth > rebuild.clientWidth + 1) problems.push('the rebuild button text is clipped');
+    }
     if (card.scrollWidth > card.clientWidth + 1) problems.push('the card scrolls sideways');
     if (document.documentElement.scrollWidth > document.documentElement.clientWidth + 1) problems.push('the page scrolls sideways');
     if (actions) {
@@ -201,8 +252,9 @@ let browserTests =
       let! (browser: IBrowser) = playwright.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
       use _browser = (browser :> IAsyncDisposable)
       let! (page: IPage) = browser.NewPageAsync()
-      // One card with both lines, so each is also checked against the other.
-      let html = htmlOf [ cardWith "0a2b3c4d" behind staleSource ]
+      // One card with both lines, so each is also checked against the other. It is the viewed card, so the stale block carries its
+      // rebuild button and the button is checked too: the remedy must never be clipped.
+      let html = renderSessionsForSession "0a2b3c4d" [ cardWith "0a2b3c4d" behind staleSource ] false |> renderNode
       let mutable heights = []
       for width in widths do
         do! page.SetViewportSizeAsync(width, 900)
@@ -212,6 +264,10 @@ let browserTests =
           problems |> Expect.equal (sprintf "at %dpx wide nothing about %s overflows or overlaps" width line) ""
           let! height = heightOf page line
           heights <- (width, line, height) :: heights
+        // The disclosure opened: the file list wraps inside the card too, and nothing in it overflows.
+        let! _ = page.EvaluateAsync("() => { for (const d of document.querySelectorAll('[data-testid=\"session-card-source-details\"]')) d.open = true }")
+        let! openProblems = layoutProblems page SourceLine
+        openProblems |> Expect.equal (sprintf "at %dpx wide the opened details do not overflow or overlap" width) ""
       let at (w: int) (line: string) = heights |> List.find (fun (width, l, _) -> width = w && l = line) |> fun (_, _, h) -> h
       // Wrapping, not shrinking or clipping: the narrower the card, the taller each line.
       for line in [ FreshnessLine; SourceLine ] do

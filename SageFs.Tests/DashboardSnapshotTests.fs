@@ -1284,7 +1284,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
   }
 
   test "the session's state appears in rendered output, and a faulted session says why" {
-    let view = SessionInView.InPlay(SessionState.Faulted, SessionDisplayStatus.Faulted "the project did not build")
+    let view = SessionInView.InPlay(SessionState.Faulted, SessionDisplayStatus.Faulted "the project did not build", Readiness.InState SessionState.Faulted)
     let html = mkSnap "0.0.0" "s1" "C:\\" view |> renderMainContent |> renderNode
     html |> Expect.stringContains "the badge says Faulted" "Faulted"
     html |> Expect.stringContains "the badge is red, not green" "status status-faulted"

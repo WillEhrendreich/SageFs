@@ -52,7 +52,8 @@ let private replFacts =
 let private isShown facts panel =
   match PanelVisibility.decide facts panel with
   | PanelVisibility.Shown -> true
-  | PanelVisibility.Hidden _ -> false
+  | PanelVisibility.Hidden _
+  | PanelVisibility.NotOffered -> false
 
 /// A snapshot carrying the REAL optional panels, so the render tests see the
 /// same markup the dashboard sends.
@@ -115,19 +116,25 @@ let dashboardPanelVisibilityTests =
         |> Expect.equal "default no, opted in yes" [ false; true ]
 
       testCase "every hidden panel says why" <| fun _ ->
-        [ OptionalPanel.HotReload; OptionalPanel.LiveTesting; OptionalPanel.Cohort; OptionalPanel.Friction ]
+        [ OptionalPanel.HotReload; OptionalPanel.LiveTesting; OptionalPanel.Cohort ]
         |> List.forall (fun p ->
           match PanelVisibility.decide replFacts p with
           | PanelVisibility.Hidden reason -> not (String.IsNullOrWhiteSpace reason)
-          | PanelVisibility.Shown -> false)
-        |> Expect.isTrue "a REPL session hides all four, each with a reason"
+          | PanelVisibility.Shown
+          | PanelVisibility.NotOffered -> false)
+        |> Expect.isTrue "a REPL session hides the three, each with a reason"
+
+      testCase "WHY — a friction panel nobody asked for is not offered, so no line about how to ask for it is written for users to read" <| fun _ ->
+        PanelVisibility.decide replFacts OptionalPanel.Friction
+        |> Expect.equal "not offered, rather than hidden with a note for developers" PanelVisibility.NotOffered
 
       testCase "a panel hidden because no session is selected says so, because a session can be open and not selected" <| fun _ ->
         let noSession = { replFacts with Viewed = ViewedSession.NoSession }
         match PanelVisibility.decide noSession OptionalPanel.HotReload with
         | PanelVisibility.Hidden reason ->
           reason |> Expect.stringContains "the reason says the session is not selected" "no session is selected"
-        | PanelVisibility.Shown -> failtest "a panel with no session selected is not shown"
+        | PanelVisibility.Shown
+        | PanelVisibility.NotOffered -> failtest "a panel with no session selected is hidden with a reason"
 
       testCase "?panels=friction opts in, anything else doesn't" <| fun _ ->
         [ "friction"; "FRICTION"; "cohort,friction"; ""; "cohort"; null ]
@@ -179,14 +186,15 @@ let dashboardPanelVisibilityTests =
         html |> Expect.stringContains "the hot reload panel says why it is not there" "Hot reload: this session is in REPL mode"
         html |> Expect.stringContains "the live testing panel says why it is not there" "Live testing: it's off for this session"
         html |> Expect.stringContains "the cohort panel says why it is not there" "Cohort: no cohort is running"
-        html |> Expect.stringContains "the friction panel says why it is not there" "Friction: hidden until reporting has a real endpoint"
+        html.Contains "reporting has a real endpoint" |> Expect.isFalse "the friction panel nobody asked for says nothing, and certainly no note about a developer URL"
+        html.Contains "panels=friction" |> Expect.isFalse "no query string for developers is printed on the page"
 
       testCase "the reason a panel is hidden names that panel, so the line says which one is missing" <| fun _ ->
         let html = PanelVisibility.apply replFacts (snapshotWith off joined) |> renderMainContent |> renderNode
         html |> Expect.stringContains "the hot reload line" (idAttr DomIds.HiddenReasonHotReload)
         html |> Expect.stringContains "the live testing line" (idAttr DomIds.HiddenReasonLiveTesting)
         html |> Expect.stringContains "the cohort line" (idAttr DomIds.HiddenReasonCohort)
-        html |> Expect.stringContains "the friction line" (idAttr DomIds.HiddenReasonFriction)
+        html.Contains(idAttr DomIds.HiddenReasonFriction) |> Expect.isFalse "and the friction panel, which is not offered, leaves no line"
 
       testCase "a panel that is shown leaves no reason line behind" <| fun _ ->
         let html =

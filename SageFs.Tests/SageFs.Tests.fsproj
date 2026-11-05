@@ -220,6 +220,7 @@
         <Compile Include="WorkerReloadRelayTests.fs" />
         <Compile Include="DashboardRenderGateTests.fs" />
         <Compile Include="DashboardIdleStabilityTests.fs" />
+        <Compile Include="DashboardReadinessTests.fs" />
         <Compile Include="DashboardTeardownStateTests.fs" />
         <Compile Include="DashboardTelemetrySendTests.fs" />
         <Compile Include="DashboardTestStatusGridTests.fs" />
@@ -458,6 +459,7 @@
          <Compile Include="McpStdioBridgeOwnershipTests.fs" />
          <Compile Include="TestRunReceiptTests.fs" />
          <Compile Include="SourceStateTests.fs" />
+        <Compile Include="SessionReadinessTests.fs" />
          <Compile Include="McpRunTestsTests.fs" />
          <Compile Include="JsonTests.fs" />
          <Compile Include="JsonCentralizationTests.fs" />

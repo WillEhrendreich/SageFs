@@ -732,6 +732,68 @@ let watchRootGuardTests =
     }
   ]
 
+// ── A watcher failure ends when its cause ends ──────────────────────────
+// `ComponentWatch.clear` had no callers, so one inotify error recorded at some
+// point kept the whole daemon "Degraded" with no sessions left, long after the
+// watcher was disposed and the cause was gone.
+
+let watcherRecoveryTests =
+  let failureOf (root: string) : SageFs.Features.ComponentWatch.Failure =
+    { Component = sprintf "file-watcher:%s" root
+      Reason = "watcher error: The configured user limit (524288) on the number of inotify watches has been reached"
+      Hint = "raise the limit" }
+  let isReported (root: string) =
+    SageFs.Features.ComponentWatch.current ()
+    |> List.exists (fun f -> f.Component = sprintf "file-watcher:%s" root)
+  let inProject (body: string -> string -> unit) =
+    let home = Directory.CreateTempSubdirectory("sagefs-recovery-home-").FullName
+    let project = Directory.CreateDirectory(Path.Combine(home, "proj")).FullName
+    try
+      SageFs.Features.ComponentWatch.reset ()
+      body home project
+    finally
+      SageFs.Features.ComponentWatch.reset ()
+      Directory.Delete(home, true)
+  testList "watcher recovery" [
+
+    testCase "WHY — disposing a watcher clears the failure recorded for its root, because the watcher that lost events no longer exists and /health must not stay Degraded for it" <| fun () ->
+      inProject (fun home project ->
+        let watcher = startPrunedWatcherUnder home project [ ".fs" ] 65536 (fun _ _ -> ()) (fun _ -> ())
+        handleWatcherError project ignore (IOException "The configured user limit (524288) on the number of inotify watches has been reached")
+        isReported project |> Flip.Expect.isTrue "the error is visible while the watcher lives"
+        watcher.Dispose()
+        isReported project |> Flip.Expect.isFalse "the failure is gone once the watcher is disposed")
+
+    testCase "WHY — starting a watcher for a root re-arms it, so a failure left over from an earlier watcher for the same root clears when the new one starts" <| fun () ->
+      inProject (fun home project ->
+        SageFs.Features.ComponentWatch.reportFailure (failureOf project)
+        use _watcher = startPrunedWatcherUnder home project [ ".fs" ] 65536 (fun _ _ -> ()) (fun _ -> ())
+        isReported project |> Flip.Expect.isFalse "a successful start replaces the old failure")
+
+    testCase "WHY — disposing a watcher clears only its own root, because a failure recorded for another root belongs to that root's watcher" <| fun () ->
+      inProject (fun home project ->
+        let other = Directory.CreateDirectory(Path.Combine(home, "other")).FullName
+        SageFs.Features.ComponentWatch.reportFailure (failureOf other)
+        let watcher = startPrunedWatcherUnder home project [ ".fs" ] 65536 (fun _ _ -> ()) (fun _ -> ())
+        watcher.Dispose()
+        isReported other |> Flip.Expect.isTrue "the other root's failure stays")
+
+    testCase "WHY — a start that fails for a reason nothing names is reported, so re-arming a root never leaves it looking fine while it gets no file events" <| fun () ->
+      inProject (fun home project ->
+        // A null extension list makes the watcher's setup throw a NullReferenceException: a start that fails for a reason no
+        // branch of the start function names.
+        let noExtensions : string list = Unchecked.defaultof<string list>
+        use _watcher = startPrunedWatcherUnder home project noExtensions 65536 (fun _ _ -> ()) (fun _ -> ())
+        isReported project |> Flip.Expect.isTrue "the failed start is visible")
+
+    testCase "WHY — a refused root stays reported while its session lives and clears when the session's watcher is disposed" <| fun () ->
+      inProject (fun home _ ->
+        let watcher = startPrunedWatcherUnder home home [ ".fs" ] 65536 (fun _ _ -> ()) (fun _ -> ())
+        isReported home |> Flip.Expect.isTrue "the refusal is reported while the watcher exists"
+        watcher.Dispose()
+        isReported home |> Flip.Expect.isFalse "the refusal ends with the watcher")
+  ]
+
 /// These lists reset and read the daemon-wide `ComponentWatch` registry, so they run one after another: two of them in
 /// parallel would wipe each other's entries between a report and its read (the gate saw `List.find` fail once).
 [<Tests>]
@@ -741,4 +803,5 @@ let componentWatchRegistryTests =
       watchableDirsCappedTests
       handleWatcherErrorTests
       watchRootGuardTests
+      watcherRecoveryTests
     ])

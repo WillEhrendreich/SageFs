@@ -466,6 +466,19 @@ let buildSessionCards (q: DashboardQueries) (infra: DashboardInfra) : System.Thr
     return buildSessionCardsFrom q (infra.Teardowns.Current ()) None sessions
   }
 
+/// What the viewed session's Ready is worth, from the viewed card: its own source reading (the push loop reads the viewed
+/// session's source, and a card whose source was not read says so) and the freshness the registry holds. A session that has
+/// no card (the registry no longer lists it) is judged by its state alone, which never reads as a plain Ready.
+let viewedReadiness (state: SessionState) (viewed: WorkerProtocol.SessionId) (cards: ParsedSession list) : Readiness =
+  match cards |> List.tryFind (fun card -> card.Id = viewed) with
+  | Some card ->
+    let source =
+      match card.Source with
+      | CardSource.Read read -> read
+      | CardSource.NotReadOnThisCard -> SourceState.Unknown UnknownReason.NotAssessed
+    Readiness.decide state source card.Freshness
+  | None -> Readiness.ofStateAlone state
+
 let private buildOutputPanelsFrom
   (q: DashboardQueries)
   (infra: DashboardInfra)
@@ -474,9 +487,11 @@ let private buildOutputPanelsFrom
   (sessionState: string)
   (warmupProgress: string)
   (wCtx: WarmupContext option)
-  : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode> =
+  : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode * ParsedSession list> =
   task {
     let! previous = q.GetPreviousSessions ()
+    // The cards are returned with the panels: the header's readiness and eval count are read from the VIEWED card, so the
+    // header and the card are one reading of one session and cannot differ by a poll.
     let cards = buildSessionCardsFrom q (infra.Teardowns.Current ()) (Some (sessionId, wCtx)) sessions
     let creating = q.IsCreatingSession ()
     let sessionsPanel = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards creating
@@ -516,9 +531,9 @@ let private buildOutputPanelsFrom
             | true -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) evalsFinished lines emptyPlaceholder
             | false -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) evalsFinished lines "No output yet"
           | None -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) evalsFinished [] emptyPlaceholder
-        (outNode, sessionsPanel, sessionPicker)
+        (outNode, sessionsPanel, sessionPicker, cards)
       | None ->
-        (renderOutputForSession (WorkerProtocol.SessionId.value sessionId) evalsFinished [] emptyPlaceholder, sessionsPanel, sessionPicker)
+        (renderOutputForSession (WorkerProtocol.SessionId.value sessionId) evalsFinished [] emptyPlaceholder, sessionsPanel, sessionPicker, cards)
     return computeResult ()
   }
 
@@ -1090,12 +1105,6 @@ let buildDashboardSnapshotWithSessions
       match sessions |> List.tryFind (fun s -> s.Id = sessionId) with
       | Some info -> SessionHealth.classify info.Status info.ProjectRoles wCtx
       | None -> SessionHealth.Starting
-    let daemonHealthPanel =
-      let processLivenessPanel =
-        match daemonHealth with
-        | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot infra.DaemonStartedAt snap)
-        | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
-      Elem.div [] [ processLivenessPanel; renderSessionHealthLine viewedHealth ]
     let failureNarrativesPanel =
       let pairs = q.GetFailureNarratives sessionId
       renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
@@ -1199,7 +1208,19 @@ let buildDashboardSnapshotWithSessions
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let warmupProgress = q.GetWarmupProgress sessionId
-    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanelsFrom q infra sessions sessionId stateStr warmupProgress wCtx
+    let! outputPanel, sessionsPanel, sessionPicker, cards = buildOutputPanelsFrom q infra sessions sessionId stateStr warmupProgress wCtx
+    // What the viewed session's Ready is worth, read from the viewed card's own source reading and the registry's freshness:
+    // the header badge, the daemon health bar and the card below all say this one thing.
+    let readiness = viewedReadiness state sessionId cards
+    // The header counts finished evals the way the viewed card does. The worker's own tally and the Elm model's differ by an
+    // eval in flight, and two surfaces reading two tallies printed "13 evals" beside "evals: 12" for one session.
+    let evalStatsView = HeaderEvals.agreeWithCard sessionId cards evalStatsView
+    let daemonHealthPanel =
+      let processLivenessPanel =
+        match daemonHealth with
+        | Some snap -> renderDaemonHealthWith (Map.ofList [ sid, readiness ]) (DaemonHealthView.fromSnapshot infra.DaemonStartedAt snap)
+        | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
+      Elem.div [] [ processLivenessPanel; renderSessionHealthLine viewedHealth ]
     // Friction review panel — local store only. Built server-side so the
     // client never assembles raw telemetry. The read is synchronous SQLite;
     // an SSE stream reuses its last-built panel within the worker-data TTL
@@ -1250,7 +1271,7 @@ let buildDashboardSnapshotWithSessions
         |> List.tryFind (fun s -> s.Id = sessionId)
         |> Option.map (SessionDisplay.displayStatus DateTime.UtcNow)
         |> Option.defaultValue (SessionDisplayStatus.ofSessionState state)
-      SessionInView.InPlay(state, display)
+      SessionInView.InPlay(state, display, readiness)
     let snap : DashboardSnapshot = {
               Version = infra.Version
               InView = inView
@@ -2608,14 +2629,25 @@ let createSessionActionHandler
             do! ssePatchNode ctx (renderOutputForSession (WorkerProtocol.SessionId.value target) evalsFinished (parseOutputLines outputRegion.Content) "No output yet")
           | None -> ()
         | None -> ()
-        let! cards = buildSessionCards q infra
+        // The target is the session in view from here on, so its card reads its source (the push loop does the same for the
+        // viewed session) and the header badge says what that reading says, never a plain green Ready of its own.
+        let! sessionsNow = q.GetAllSessions ()
+        let! warmupOfTarget = q.GetWarmupContext target
+        let cards = buildSessionCardsFrom q (infra.Teardowns.Current ()) (Some (target, warmupOfTarget)) sessionsNow
         do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value target) cards (q.IsCreatingSession ()))
-        let stateLabel = q.GetSessionState target |> SessionState.label
+        let targetState = q.GetSessionState target
+        let readiness = viewedReadiness targetState target cards
+        let display =
+          sessionsNow
+          |> List.tryFind (fun s -> s.Id = target)
+          |> Option.map (SessionDisplay.displayStatus DateTime.UtcNow)
+          |> Option.defaultValue (SessionDisplayStatus.ofSessionState targetState)
+        let inView = SessionInView.InPlay(targetState, display, readiness)
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.SessionStatus ] [
-            Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ textEnc stateLabel ]
+            Elem.span [ Attr.class' (sprintf "status %s" (SessionInView.badgeCssClass inView)); Attr.style "border-radius:0;" ] [ textEnc (SessionInView.badgeLabel inView) ]
           ])
-        do! ssePatchNode ctx (renderStatuslineLeft stateLabel (q.GetSessionWorkingDir target))
+        do! ssePatchNode ctx (renderStatuslineLeft readiness (q.GetSessionWorkingDir target))
       }
       // The viewer's view is left alone: only the sessions panel needs to
       // stop listing (or start flagging) the card the action touched.

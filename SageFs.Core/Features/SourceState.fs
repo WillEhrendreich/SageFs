@@ -78,11 +78,28 @@ type SourceState =
   /// Could not tell, and why. Never to be read as in sync.
   | Unknown of reason: UnknownReason
 
+/// The directory a session works in, as a card knows it. A session that reported none has none to be relative to.
+[<RequireQualifiedAccess>]
+type WorkingDirectory =
+  | Reported of path: string
+  | NotReported
+
+/// What a card says about the build when it is not known to be current: one short sentence a reader takes in at a glance, and
+/// the detail (when, and which files) to keep behind a disclosure. Paths are relative to the session's working directory.
+[<RequireQualifiedAccess>]
+type CardNote =
+  /// The build is current, or there is no build to be behind. The card says nothing.
+  | NothingToSay
+  | Note of headline: string * details: string list
+
 [<RequireQualifiedAccess>]
 module SourceState =
 
   /// How many changed files a sentence names before it says how many more there are.
   let private namedInSentence = 5
+
+  /// How many lines of detail a card lists before it says how many more there are.
+  let detailLines = 20
 
   let private clock (at: DateTime) = at.ToString("yyyy-MM-dd HH:mm:ss'Z'")
 
@@ -237,6 +254,73 @@ module SourceState =
     | SourceState.Stale _
     | SourceState.Rebuilding _
     | SourceState.Unknown _ -> banner state
+
+  /// A path as a reader of the card sees it: relative to the session's working directory, so it never starts at the root of
+  /// the disk. A path outside the working directory (a chain of `..`), on another drive, or with no working directory to be
+  /// relative to shrinks to its file name.
+  let relativeTo (root: WorkingDirectory) (path: string) : string =
+    match root with
+    | WorkingDirectory.NotReported -> System.IO.Path.GetFileName path
+    | WorkingDirectory.Reported workingDir ->
+      let relative = System.IO.Path.GetRelativePath(workingDir, path)
+      let leavesWorkingDir =
+        relative = ".." || relative.StartsWith("../", StringComparison.Ordinal) || relative.StartsWith("..\\", StringComparison.Ordinal)
+      match System.IO.Path.IsPathRooted relative || leavesWorkingDir with
+      | true -> System.IO.Path.GetFileName path
+      | false -> relative
+
+  let count (n: int) (noun: string) : string =
+    match n with
+    | 1 -> sprintf "1 %s" noun
+    | _ -> sprintf "%d %ss" n noun
+
+  let cardReason (root: WorkingDirectory) (reason: UnknownReason) : string =
+    match reason with
+    | UnknownReason.Unreadable (path, detail) -> sprintf "%s could not be read (%s)" (relativeTo root path) detail
+    | UnknownReason.NotInspectable (project, detail) ->
+      sprintf "what builds into %s could not be listed (%s)" (relativeTo root project) detail
+    | UnknownReason.NotAssessed
+    | UnknownReason.NoProjectLoaded
+    | UnknownReason.LoadTimeNotReported _ -> reasonText reason
+
+  let cardFileLine (root: WorkingDirectory) (file: StaleFile) : string =
+    match file.Because with
+    | StaleBecause.EditedAfterBuild (editedAt, builtAt) ->
+      sprintf "%s: edited %s, the build is from %s" (relativeTo root file.Path) (clock editedAt) (clock builtAt)
+    | StaleBecause.RebuiltAfterLoad (builtAt, loadedAt) ->
+      sprintf "%s: a build from %s exists, this session loaded at %s" (relativeTo root file.Path) (clock builtAt) (clock loadedAt)
+
+  let capped (lines: string list) : string list =
+    match lines.Length <= detailLines with
+    | true -> lines
+    | false -> (lines |> List.truncate detailLines) @ [ sprintf "and %d more" (lines.Length - detailLines) ]
+
+  /// The card's short form of the state. `describe`, `banner` and `listLine` keep their long wording for tool results and
+  /// `sagefs status`, which agents read; a card has a few characters of width and a person in front of it, so it gets one
+  /// sentence and the rest behind a disclosure, with no absolute path anywhere.
+  let cardNote (workingDir: string) (state: SourceState) : CardNote =
+    let root =
+      match String.IsNullOrWhiteSpace workingDir with
+      | true -> WorkingDirectory.NotReported
+      | false -> WorkingDirectory.Reported workingDir
+    match state with
+    | SourceState.InSync _
+    | SourceState.Unknown UnknownReason.NoProjectLoaded -> CardNote.NothingToSay
+    | SourceState.Stale changed ->
+      let rebuilt = changed |> List.filter (fun file -> match file.Because with StaleBecause.RebuiltAfterLoad _ -> true | StaleBecause.EditedAfterBuild _ -> false) |> List.length
+      let edited = changed.Length - rebuilt
+      let headline =
+        match edited, rebuilt with
+        | 0, _ -> "Running older code: a newer build exists than the one this session loaded."
+        | _, 0 -> sprintf "Running older code: %s changed since the build." (count edited "file")
+        | _ -> sprintf "Running older code: %s changed since the build, and a newer build exists." (count edited "file")
+      CardNote.Note (headline, changed |> List.map (cardFileLine root) |> capped)
+    | SourceState.Rebuilding since ->
+      CardNote.Note
+        ("Rebuilding: this session keeps serving the build from before it until the rebuild finishes.",
+         [ sprintf "The rebuild started %s." (clock since) ])
+    | SourceState.Unknown reason ->
+      CardNote.Note ("Cannot tell whether this session runs current code.", [ cardReason root reason ])
 
   /// A tool's result, with the warning after it when the build is not known to be current. The result stays first and whole.
   let annotate (state: SourceState) (text: string) : string =
