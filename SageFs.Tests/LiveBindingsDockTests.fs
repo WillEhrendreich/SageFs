@@ -22,6 +22,7 @@ open SageFs.Server
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DockPanes
 open SageFs.Server.LiveBindingsDock
+open SageFs.Server.LiveBindingsTweakView
 open SageFs.Tests.SharedGenerators
 
 let private decoded (node: XmlNode) = Net.WebUtility.HtmlDecode(renderNode node)
@@ -514,7 +515,8 @@ let dockWordingTests =
   let allNotes : PaneNote list =
     [ PaneNote.NoNameMatchesFilter
       PaneNote.ValuesCutShort
-      PaneNote.ReadAfterEval(7L, "14:03:22")
+      PaneNote.ValuesAsOf "14:03:22 UTC"
+      PaneNote.LegendSummary
       PaneNote.ReadFromPrinted
       PaneNote.ChangesGoToTheFile
       PaneNote.ModeGoverns
@@ -538,13 +540,21 @@ let dockWordingTests =
       TweakView.hasKnob withKnob |> Expect.isTrue "the pure fact the caption follows"
       TweakView.hasKnob TweakView.none |> Expect.isFalse "no rows, no knob"
 
-    testCase "the mode buttons carry a visible label that says what they govern, and the chosen mode a visible one-line meaning" <| fun _ ->
+    testCase "WHY — values come first: the standard mode spends no line on its meaning, and a mode that is not the standard says what it does on one line" <| fun _ ->
       for mode in ValueWalk.all do
         let html = dockWith TweakView.none mode On [ person ]
         html |> Expect.stringContains "the group's label" (PaneNote.text PaneNote.ModeGoverns)
-        html |> Expect.stringContains (sprintf "the meaning of %s, as text" (ValueWalk.name mode)) (PaneNote.text (PaneNote.ModeMeans mode))
         html |> Expect.stringContains "the group is named by that label" (sprintf "aria-labelledby=\"%s\"" DockIds.ModeLabel)
         html |> Expect.stringContains "the label has the id the group names" (sprintf "id=\"%s\"" DockIds.ModeLabel)
+        match ModeCaption.ofMode mode with
+        | ModeCaption.NotShown ->
+          mode |> Expect.equal "only the standard mode is quiet" ValueWalk.standard
+          html.Contains "live-mode-caption" |> Expect.isFalse "no line for the standard mode"
+        | ModeCaption.Shown chosen ->
+          chosen |> Expect.equal "the caption is for the chosen mode" mode
+          html |> Expect.stringContains (sprintf "the meaning of %s, as text" (ValueWalk.name mode)) (PaneNote.text (PaneNote.ModeMeans mode))
+          count "data-testid=\"live-mode-caption\"" html |> Expect.equal "exactly one caption" 1
+      ValueWalk.all |> List.filter (fun mode -> ModeCaption.ofMode mode = ModeCaption.NotShown) |> Expect.equal "exactly one mode is the standard" [ ValueWalk.standard ]
       ValueWalk.all |> List.map (fun mode -> PaneNote.text (PaneNote.ModeMeans mode)) |> List.distinct |> List.length |> Expect.equal "each mode says its own thing" 3
       PaneNote.text (PaneNote.ModeMeans WalkEverything) |> Expect.stringContains "Everything says it runs getters" "runs your property getters"
 
@@ -558,10 +568,11 @@ let dockWordingTests =
       visible |> Expect.isNonEmpty "a type cell was drawn"
       for text in visible do text.Contains "`" |> Expect.isFalse "no backtick in the visible type"
 
-    testCase "the stamp says what it is: the eval it was read after and when" <| fun _ ->
+    testCase "the stamp says what it is, with no generation number and no eval jargon: the values as of a time" <| fun _ ->
       let html = dockWith TweakView.none ValueWalk.standard On [ person ]
-      html |> Expect.stringContains "the stamp" "read after eval 7 at "
+      html |> Expect.stringContains "the stamp" (PaneNote.text (PaneNote.ValuesAsOf ""))
       html.Contains "gen 7" |> Expect.isFalse "no bare generation number"
+      html.Contains "after eval" |> Expect.isFalse "no eval jargon"
 
     testCase "WHY — the stamp is on the output panel's clock, UTC, and says so, because two times on one screen that differ by the machine's offset read as a bug" <| fun _ ->
       // The output lines beside the pane print the daemon's UTC clock. The stamp used the machine's local time, so a machine at
@@ -569,7 +580,96 @@ let dockWordingTests =
       let walked = view [ person ]
       let at = DateTimeOffset(2026, 11, 5, 17, 17, 31, TimeSpan.Zero)
       let html = dock (WalkedBindings { walked with Snapshot = { walked.Snapshot with CapturedAt = at } })
-      html |> Expect.stringContains "the stamp is the UTC time, labelled" "read after eval 7 at 17:17:31 UTC"
+      html |> Expect.stringContains "the stamp is the UTC time, labelled" (PaneNote.text (PaneNote.ValuesAsOf "17:17:31 UTC"))
+
+    testCase "WHY — the legend is closed until opened, one click away, and has one line for every badge and every glyph, generated from the sets they come from" <| fun _ ->
+      let html = dockWith withKnob ValueWalk.standard On [ person ]
+      let opening = Text.RegularExpressions.Regex.Match(html, "<details[^>]*id=\"live-legend\"[^>]*>")
+      opening.Success |> Expect.isTrue "the legend is a details element"
+      opening.Value.Contains " open" |> Expect.isFalse "and it starts closed"
+      html |> Expect.stringContains "its summary says what it is for" (PaneNote.text PaneNote.LegendSummary)
+      count "data-testid=\"live-legend-tag\"" html |> Expect.equal "a line per badge" StateTag.all.Length
+      count "data-testid=\"live-legend-glyph\"" html |> Expect.equal "a line per glyph" GlyphKind.all.Length
+      for tag in StateTag.all do
+        html |> Expect.stringContains (sprintf "the badge %A is named" tag) (tagLabel tag)
+        html |> Expect.stringContains (sprintf "and explained" ) (tagMeaning tag)
+      for glyph in GlyphKind.all do
+        html |> Expect.stringContains (sprintf "the glyph %A is explained" glyph) (GlyphKind.meaning glyph)
+
+    testCase "WHY — information reads as information: the reach hint is in the dim text colour and not a link's blue, and the count of bindings no file holds is plain text and not a bordered box" <| fun _ ->
+      let hint = ruleBody ".live-detail.live-tone-info"
+      hint |> Expect.stringContains "the dim text colour" "var(--fg-dim)"
+      hint.Contains "--fg-blue" |> Expect.isFalse "not the colour of a link"
+      hint.Contains "--fg-yellow" |> Expect.isFalse "not the warning colour"
+      ruleBody ".live-binding-node > .live-preview:has(+ .live-number-tag)" |> Expect.stringContains "a value with its word keeps to its own width, so the word sits beside it" "flex: 0 1 auto"
+      let chip = ruleBody ".live-repl-chip"
+      chip.Contains "border" |> Expect.isFalse "no box around the count"
+      chip.Contains "padding" |> Expect.isFalse "and no padding that makes it a button's shape"
+
+    testCase "every glyph a row can wear is one the legend lists, and the closed set names every case of the glyph's own kinds" <| fun _ ->
+      GlyphKind.all.Length |> Expect.equal "the list names every case" (Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<GlyphKind>).Length)
+      let kinds =
+        [ NodeKind.Leaf, "String"; NodeKind.Leaf, "Int32"; NodeKind.Leaf, "Boolean"; NodeKind.NotEvaluated NotEvaluatedReason.GetterRunsCode, "T"
+          NodeKind.Record, "T"; NodeKind.List, "T"; NodeKind.Map, "T"; NodeKind.Option, "T"; NodeKind.Union, "T"; NodeKind.Tuple, "T"
+          NodeKind.Array, "T"; NodeKind.Class, "T"; NodeKind.Closure, "T"; NodeKind.Cycle, "T"; NodeKind.Truncated, "T" ]
+      for kind, typeName in kinds do
+        let glyph = GlyphKind.ofNode kind typeName
+        List.contains glyph GlyphKind.all |> Expect.isTrue (sprintf "%A is in the legend" kind)
+        kindGlyph kind typeName |> Expect.equal "the drawn glyph is the kind's glyph" (GlyphKind.glyph glyph)
+      (kinds |> List.map (fun (kind, typeName) -> GlyphKind.ofNode kind typeName) |> List.distinct).Length
+      |> Expect.equal "the kinds reach every glyph" GlyphKind.all.Length
+
+    testCase "WHY — while a row differs from its file the heading's value says running and the knob's number says file, so no number is unlabelled" <| fun _ ->
+      let place : SourceRef =
+        { File = "/work/Tuning.fs"
+          Address = { ModulePath = []; BindingName = "gravity"; Path = [] }
+          Text = "9.9"
+          Hash = String('a', 64)
+          Span = { Line = 3; Column = 1; EndLine = 3; EndColumn = 3 }
+          Kind = ItemKind.Knob(LiteralValue.Real 9.9) }
+      let rowOf state : RowView =
+        { State = state
+          Control = Control.RealStepper(9.9, Step.Fraction 1)
+          Place = PlaceOf.Placed place
+          Watching = WatchStatus.Watched
+          Reload = RowReload.NoWriteYet
+          Undo = HistoryStep.NothingToStep
+          Redo = HistoryStep.NothingToStep
+          Through = ThroughCall.NoCall }
+      let gravity = binding "gravity" NodeKind.Leaf []
+      let differing = dockWith { Rows = Map.ofList [ RowKey.top "gravity", rowOf (PersistenceState.DiffersFromFile("9.8", place)) ] } ValueWalk.standard On [ gravity ]
+      differing |> Expect.stringContains "the heading's value says running" "data-testid=\"tweak-running-tag\""
+      differing |> Expect.stringContains "the knob's number says file" "data-testid=\"tweak-file-tag\""
+      let inStep = dockWith { Rows = Map.ofList [ RowKey.top "gravity", rowOf (PersistenceState.InSource place) ] } ValueWalk.standard On [ gravity ]
+      inStep.Contains "tweak-running-tag" |> Expect.isFalse "a row in step has one number"
+      inStep.Contains "tweak-file-tag" |> Expect.isFalse "and needs no word for it"
+
+    testCase "WHY — every binding the title bar counts as not in a file wears its badge on its row, so the number and the rows agree" <| fun _ ->
+      let replOnly : RowView =
+        { State = PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt
+          Control = Control.NoControl
+          Place = PlaceOf.NotPlaced
+          Watching = WatchStatus.Watched
+          Reload = RowReload.NoWriteYet
+          Undo = HistoryStep.NothingToStep
+          Redo = HistoryStep.NothingToStep
+          Through = ThroughCall.NoCall }
+      let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
+      let html = dockWith tweaks ValueWalk.standard On [ person; scores ]
+      let counted = TweakView.replOnlyCount tweaks [ "person"; "scores" ]
+      count "data-testid=\"tweak-row-badge\"" html |> Expect.equal "a badge per counted binding" counted
+      html |> Expect.stringContains "the chip's number is that count" (PaneNote.text (PaneNote.NotInAnyFile counted))
+      html |> Expect.stringContains "the badge says what it is" (tagLabel StateTag.NotInAFile)
+
+    testCase "WHY — at the standard mode the header is one line of help: no line of its own for the mode, and the edit caption, label, buttons and legend share a row" <| fun _ ->
+      let head (html: string) =
+        let start = html.IndexOf "class=\"live-pane-head\""
+        html.Substring(start, html.IndexOf("id=\"live-tree\"", start) - start)
+      let standardHead = head (dockWith withKnob ValueWalk.standard On [ person ])
+      standardHead.Contains "live-containment" |> Expect.isFalse "nothing in the head takes a full line at the standard mode"
+      count "data-testid=\"live-writes-caption\"" standardHead |> Expect.equal "one edit caption" 1
+      let otherHead = head (dockWith withKnob WalkEverything On [ person ])
+      count "live-containment" otherHead |> Expect.equal "a mode that is not the standard takes exactly one more line" 1
 
     testPropertyWithConfig propConfig "WHY — no sentence the pane says about itself carries a raw case name, a backtick or a format hole"
       (Prop.forAll (Arb.fromGen (Gen.elements allNotes)) (fun note ->

@@ -1391,10 +1391,9 @@ h2 {
   white-space: nowrap;
 }
 
-/* A binding no file holds, said once in the title bar. The reason is on hover. */
+/* How many bindings no file holds, said once in the title bar as plain text: a box here read as a button. Each of those rows
+   carries its own "not in a file" badge, and the reason is on hover. */
 .live-repl-chip {
-  padding: 0 6px;
-  border: 1px solid var(--border-normal);
   color: var(--fg-dim);
   font-size: 11px;
   white-space: nowrap;
@@ -2226,31 +2225,81 @@ h2 {
   font-weight: 700;
 }
 
-/* The line of values on a row that differs from its file ("Running: 9.8 · File: 9.9") and the reason a blocked undo or redo gives:
-   small, and dim, but readable. */
-.live-values,
+/* The reason a blocked undo or redo gives: small, and dim, but readable. */
 .live-history-why {
   font-size: 11.5px;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
-.live-values {
-  flex: 1 1 100%;
-  color: var(--fg-default);
-}
-
-/* The two captions under the mode buttons: one line each, always on screen. */
+/* The captions in the pane header: one short line each, always on screen. The edit caption shares a line with the mode buttons when
+   the width allows, so it does not take the full row; the mode's own meaning does, and is drawn only for a mode that is not the
+   standard one. */
 .live-mode-caption,
 .live-writes-caption {
   font-size: 11.5px;
   line-height: 1.35;
 }
 
-/* A hint about reach ("makeRig builds this value. 2 places call makeRig ...") is information, not a warning: the info colour. Like
-   the notice rule above, it needs the extra class to beat `.live-detail`, which comes later than the tone classes. */
+.live-writes-caption {
+  white-space: nowrap;
+}
+
+/* A number with its word while the file and the running program disagree: "running" beside the value in the heading and "file"
+   beside the knob. Small and dim, so the number stays the thing you read. */
+.live-number-tag {
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+/* The heading's value normally takes all the room in its row, which would push "running" to the far edge, away from the number it
+   labels. A value that carries the word keeps to its own width, and the word follows it. */
+.live-binding-node > .live-preview:has(+ .live-number-tag) {
+  flex: 0 1 auto;
+}
+
+.live-preview + .live-number-tag {
+  margin-right: auto;
+}
+
+/* The closed legend that explains the badges and glyphs. Its summary is quiet text on the header line; its body is a short list. */
+.live-help {
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+.live-help[open] {
+  flex: 1 1 100%;
+}
+
+.live-help-summary {
+  color: var(--fg-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.live-legend-body {
+  margin-top: 0.3rem;
+  color: var(--fg-dim);
+}
+
+.live-legend-list {
+  margin: 0 0 0.4rem;
+  padding: 0;
+  list-style: none;
+}
+
+.live-legend-list li {
+  padding: 1px 0;
+  overflow-wrap: anywhere;
+}
+
+/* A hint about reach ("makeRig builds this value. 2 places call makeRig ...") is information: it reads in the dim text colour, not
+   blue, which a link or a warning would use. Like the notice rule above, it needs the extra class to beat `.live-detail`. */
 .live-detail.live-tone-info {
-  color: var(--fg-blue);
+  color: var(--fg-dim);
 }
 
 .live-field {

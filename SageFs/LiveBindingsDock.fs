@@ -165,27 +165,127 @@ let valueToneClass (tone: ValueTone) : string =
   | ValueTone.NumberTone -> " live-v-number"
   | ValueTone.PlainTone -> ""
 
+/// What a glyph stands for. The glyph drawn on a row and the line that explains it in the legend both come from this, so a glyph
+/// cannot be drawn that the legend does not name.
+[<RequireQualifiedAccess>]
+type GlyphKind =
+  | TextValue
+  | NumberValue
+  | PlainValue
+  | RecordValue
+  | ListValue
+  | ArrayValue
+  | MapValue
+  | OptionValue
+  | UnionValue
+  | TupleValue
+  | ClassValue
+  | FunctionValue
+  | SelfReference
+  | CutShort
+  | Unread
+
+module GlyphKind =
+  /// Every glyph, in the order the legend lists them.
+  let all : GlyphKind list =
+    [ GlyphKind.TextValue
+      GlyphKind.NumberValue
+      GlyphKind.PlainValue
+      GlyphKind.RecordValue
+      GlyphKind.ListValue
+      GlyphKind.ArrayValue
+      GlyphKind.MapValue
+      GlyphKind.OptionValue
+      GlyphKind.UnionValue
+      GlyphKind.TupleValue
+      GlyphKind.ClassValue
+      GlyphKind.FunctionValue
+      GlyphKind.SelfReference
+      GlyphKind.CutShort
+      GlyphKind.Unread ]
+
+  let ofNode (kind: LiveValueTree.NodeKind) (typeName: string) : GlyphKind =
+    match kind with
+    | LiveValueTree.NodeKind.Leaf ->
+      match valueToneOf kind typeName with
+      | ValueTone.TextTone -> GlyphKind.TextValue
+      | ValueTone.NumberTone -> GlyphKind.NumberValue
+      | ValueTone.PlainTone -> GlyphKind.PlainValue
+    | LiveValueTree.NodeKind.NotEvaluated _ -> GlyphKind.Unread
+    | LiveValueTree.NodeKind.Record -> GlyphKind.RecordValue
+    | LiveValueTree.NodeKind.List -> GlyphKind.ListValue
+    | LiveValueTree.NodeKind.Map -> GlyphKind.MapValue
+    | LiveValueTree.NodeKind.Option -> GlyphKind.OptionValue
+    | LiveValueTree.NodeKind.Union -> GlyphKind.UnionValue
+    | LiveValueTree.NodeKind.Tuple -> GlyphKind.TupleValue
+    | LiveValueTree.NodeKind.Array -> GlyphKind.ArrayValue
+    | LiveValueTree.NodeKind.Class -> GlyphKind.ClassValue
+    | LiveValueTree.NodeKind.Closure -> GlyphKind.FunctionValue
+    | LiveValueTree.NodeKind.Cycle -> GlyphKind.SelfReference
+    | LiveValueTree.NodeKind.Truncated -> GlyphKind.CutShort
+
+  /// The one or two characters drawn on a row.
+  let glyph (kind: GlyphKind) : string =
+    match kind with
+    | GlyphKind.TextValue -> "ab"
+    | GlyphKind.NumberValue -> "#"
+    | GlyphKind.PlainValue -> "·"
+    | GlyphKind.RecordValue -> "{}"
+    | GlyphKind.ListValue -> "[]"
+    | GlyphKind.ArrayValue -> "[]"
+    | GlyphKind.MapValue -> "⇄"
+    | GlyphKind.OptionValue -> "?"
+    | GlyphKind.UnionValue -> "∪"
+    | GlyphKind.TupleValue -> "()"
+    | GlyphKind.ClassValue -> "◇"
+    | GlyphKind.FunctionValue -> "ƒ"
+    | GlyphKind.SelfReference -> "↩"
+    | GlyphKind.CutShort -> "…"
+    | GlyphKind.Unread -> "…"
+
+  /// What a glyph means, in one plain line: its line in the legend.
+  let meaning (kind: GlyphKind) : string =
+    match kind with
+    | GlyphKind.TextValue -> "A text value."
+    | GlyphKind.NumberValue -> "A number."
+    | GlyphKind.PlainValue -> "Another plain value, such as true or false."
+    | GlyphKind.RecordValue -> "A record. Its fields are the rows below it."
+    | GlyphKind.ListValue -> "A list. Its items are the rows below it."
+    | GlyphKind.ArrayValue -> "An array. Its items are the rows below it."
+    | GlyphKind.MapValue -> "A map. Its keys and values are the rows below it."
+    | GlyphKind.OptionValue -> "An option: a value, or nothing."
+    | GlyphKind.UnionValue -> "A union: one of several cases."
+    | GlyphKind.TupleValue -> "A tuple: a few values kept together."
+    | GlyphKind.ClassValue -> "A class instance."
+    | GlyphKind.FunctionValue -> "A function, with the values it captured."
+    | GlyphKind.SelfReference -> "A value that refers back to itself."
+    | GlyphKind.CutShort -> "Cut short: the pane stops at its depth or size limit."
+    | GlyphKind.Unread -> "Not read yet: reading it would run your code."
+
 /// A node's kind as a glyph of one or two characters. The shape says what the node is, the word is on hover and in the accessible
 /// name (`kindLabel`), and the glyph takes no colour of its own, because every theme has a syntax colour that equals a meaning colour.
-let kindGlyph (kind: LiveValueTree.NodeKind) (typeName: string) : string =
-  match kind with
-  | LiveValueTree.NodeKind.Leaf ->
-    match valueToneOf kind typeName with
-    | ValueTone.TextTone -> "ab"
-    | ValueTone.NumberTone -> "#"
-    | ValueTone.PlainTone -> "·"
-  | LiveValueTree.NodeKind.NotEvaluated _ -> "…"
-  | LiveValueTree.NodeKind.Record -> "{}"
-  | LiveValueTree.NodeKind.List -> "[]"
-  | LiveValueTree.NodeKind.Map -> "⇄"
-  | LiveValueTree.NodeKind.Option -> "?"
-  | LiveValueTree.NodeKind.Union -> "∪"
-  | LiveValueTree.NodeKind.Tuple -> "()"
-  | LiveValueTree.NodeKind.Array -> "[]"
-  | LiveValueTree.NodeKind.Class -> "◇"
-  | LiveValueTree.NodeKind.Closure -> "ƒ"
-  | LiveValueTree.NodeKind.Cycle -> "↩"
-  | LiveValueTree.NodeKind.Truncated -> "…"
+let kindGlyph (kind: LiveValueTree.NodeKind) (typeName: string) : string = GlyphKind.glyph (GlyphKind.ofNode kind typeName)
+
+/// The legend: a closed disclosure with one plain line for each badge a row can carry and each glyph it can wear. Both lists come from
+/// the closed sets the badges and glyphs come from (`StateTag.all`, `GlyphKind.all`), so a tag cannot be drawn without a line here.
+let renderLegend : XmlNode =
+  signalDetails "liveLegend" [ Attr.id "live-legend"; Attr.class' "live-help live-legend"; testid "live-legend" ] [
+    Elem.summary [ Attr.class' "live-help-summary" ] [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.LegendSummary) ]
+    Elem.div [ Attr.class' "live-legend-body" ] [
+      Elem.ul [ Attr.class' "live-legend-list"; testid "live-legend-tags" ] (
+        StateTag.all
+        |> List.map (fun tag ->
+          Elem.li [ testid "live-legend-tag" ] [
+            Elem.span [ Attr.class' "live-state live-tone-quiet" ] [ textEnc (tagLabel tag) ]
+            Text.raw " "
+            textEnc (tagMeaning tag) ]))
+      Elem.ul [ Attr.class' "live-legend-list"; testid "live-legend-glyphs" ] (
+        GlyphKind.all
+        |> List.map (fun kind ->
+          Elem.li [ testid "live-legend-glyph" ] [
+            Elem.span [ Attr.class' "live-glyph" ] [ textEnc (GlyphKind.glyph kind) ]
+            Text.raw " "
+            textEnc (GlyphKind.meaning kind) ])) ] ]
 
 /// A pin, drawn in the text's own colour so a theme and the pressed state reach it.
 let private pinIcon : XmlNode =
@@ -365,16 +465,36 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
           yield Elem.span [ Attr.class' "live-cell-source"; Attr.title (attrEnc place.File) ] [ textEnc (whereOf place) ]
         | On, PlaceOf.NotPlaced
         | Off, _ -> ()
+        let described = describe rowView.State
         match look.Layout.State with
         | On ->
-          let described = describe rowView.State
           yield
             Elem.span
               [ Attr.class' (sprintf "live-cell-state %s" (Tone.cssClass described.Tone))
                 testid "tweak-cell-state"
-                Attr.title (attrEnc described.Detail) ]
+                Attr.title (attrEnc (badgeTitle rowView.State)) ]
               [ textEnc described.Label ]
-        | Off -> () ]
+        | Off ->
+          // With no State column the badge is in the row's strip, except for a row whose strip draws nothing: its badge is here.
+          match badgePlace rowView.State with
+          | BadgePlace.OnTheRow ->
+            yield
+              Elem.span
+                [ Attr.class' (sprintf "live-state %s" (Tone.cssClass described.Tone))
+                  testid "tweak-row-badge"
+                  Attr.title (attrEnc (badgeTitle rowView.State)) ]
+                [ textEnc described.Label ]
+          | BadgePlace.InTheStrip -> () ]
+  // While a row's file and running program disagree, the value in the heading is the running program's, and it says so: the knob
+  // below carries the file's number with its own word (`LiveBindingsTweakView.renderStrip`), so no number is left unlabelled.
+  let runningTag (binding: string) (path: string list) : XmlNode list =
+    match TweakView.tryRow tweaks { Binding = binding; Labels = path } with
+    | None -> []
+    | Some rowView ->
+      match NumberLabels.ofState rowView.State with
+      | NumberLabels.RunningAndFile ->
+        [ Elem.span [ Attr.class' "live-number-tag"; Attr.title NumberLabels.runningMeaning; testid "tweak-running-tag" ] [ textEnc NumberLabels.runningWord ] ]
+      | NumberLabels.OneNumber -> []
   let heldRow (binding: string) (path: string list) (node: LiveValueTree.LiveValueNode) (reason: LiveValueTree.NotEvaluatedReason) =
     let action = LiveBindingsPane.rowActionOf reason
     let rowClass =
@@ -421,6 +541,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
         glyphCell node
         nameCell node
         Elem.span [ Attr.class' ("live-preview" + valueToneClass (valueToneOf node.Kind node.TypeName)) ] [ textEnc (sprintf "= %s" node.Preview) ]
+        yield! runningTag binding path
         yield! typeCells node
         yield! tweakCells binding path
         yield! kindBadge node
@@ -466,18 +587,24 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
   let held = LiveBindingsPane.notEvaluatedCount view.Snapshot
   let names = view.Snapshot.Bindings |> List.map (fun b -> b.Name)
   [ Elem.div [ Attr.class' "live-pane-head" ] [
-      // The mode buttons say what they govern, and the chosen one says what it does, in text that is always on screen.
+      // Values come first, so everything the pane says about itself shares one line when the width allows: where an edit goes, what the
+      // mode buttons govern, the buttons, and the closed legend. The chosen mode's meaning takes a line of its own only when the mode
+      // is not the standard one; the standard mode's meaning is in the buttons' tooltips.
+      match TweakView.hasKnob tweaks with
+      | true ->
+        Elem.span [ Attr.class' "live-pane-count live-writes-caption"; testid "live-writes-caption" ] [
+          textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ChangesGoToTheFile) ]
+      | false -> ()
       Elem.span [ Attr.id DockIds.ModeLabel; Attr.class' "live-pane-count live-mode-label"; testid "live-mode-label" ] [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ModeGoverns) ]
       Elem.div [ Attr.class' "live-mode"; Attr.create "role" "group"; Attr.create "aria-labelledby" DockIds.ModeLabel ] [
         yield! ValueWalk.all |> List.map (modeButton view.Notes.Mode)
       ]
-      Elem.div [ Attr.class' "live-containment live-mode-caption"; testid "live-mode-caption" ] [
-        textEnc (LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.ModeMeans view.Notes.Mode)) ]
-      match TweakView.hasKnob tweaks with
-      | true ->
-        Elem.div [ Attr.class' "live-containment live-writes-caption"; testid "live-writes-caption" ] [
-          textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ChangesGoToTheFile) ]
-      | false -> ()
+      renderLegend
+      match LiveBindingsPane.ModeCaption.ofMode view.Notes.Mode with
+      | LiveBindingsPane.ModeCaption.Shown chosen ->
+        Elem.div [ Attr.class' "live-containment live-mode-caption"; testid "live-mode-caption" ] [
+          textEnc (LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.ModeMeans chosen)) ]
+      | LiveBindingsPane.ModeCaption.NotShown -> ()
       match held with
       | 0 -> ()
       | n -> Elem.span [ Attr.class' "live-held-count" ] [ textEnc (sprintf "%d not evaluated" n) ]
@@ -526,7 +653,7 @@ let renderPaneWith (look: View) (controls: LiveBindingsViewPanel.ViewControls op
     | WalkedBindings view ->
       // The output panel beside this pane prints the daemon's UTC clock, so the stamp uses it too and says so: a local time here
       // read as a different moment under output lines stamped hours apart.
-      LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.ReadAfterEval(view.Snapshot.Generation, view.Snapshot.CapturedAt.UtcDateTime.ToString("HH:mm:ss 'UTC'")))
+      LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.ValuesAsOf(view.Snapshot.CapturedAt.UtcDateTime.ToString("HH:mm:ss 'UTC'")))
     | PrintedBindings _ -> LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ReadFromPrinted
     | NothingBound -> ""
   let body =

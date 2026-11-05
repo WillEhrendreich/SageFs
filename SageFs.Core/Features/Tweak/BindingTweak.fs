@@ -496,6 +496,61 @@ module PersistenceState =
   let derive (live: LiveShape) (source: SourceFacts) (outcome: RowOutcome) : PersistenceState =
     deriveWith Provenance.unknown live source outcome
 
+/// The kinds of state a row can be in, without the facts a state carries (which file, which values). The badge on a row and the
+/// legend that explains the badges both come from this, so a badge cannot exist that the legend does not name.
+[<RequireQualifiedAccess>]
+type StateTag =
+  | InSource
+  | NotInAFile
+  | FilesUnknown
+  | NotSpelled
+  | Held
+  | Formula
+  | MadeOfParts
+  | Ambiguous
+  | Tweaked
+  | Evolved
+  | DiffersFromFile
+  | FileChanged
+  | Refused
+  | Writing
+
+module StateTag =
+  /// Every tag, in the order the legend lists them.
+  let all : StateTag list =
+    [ StateTag.InSource
+      StateTag.NotInAFile
+      StateTag.FilesUnknown
+      StateTag.NotSpelled
+      StateTag.Held
+      StateTag.Formula
+      StateTag.MadeOfParts
+      StateTag.Ambiguous
+      StateTag.Tweaked
+      StateTag.Evolved
+      StateTag.DiffersFromFile
+      StateTag.FileChanged
+      StateTag.Refused
+      StateTag.Writing ]
+
+  /// The tag of a state. Exhaustive, so a new state cannot arrive without a badge the legend can name.
+  let ofState (state: PersistenceState) : StateTag =
+    match state with
+    | PersistenceState.InSource _ -> StateTag.InSource
+    | PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt -> StateTag.NotInAFile
+    | PersistenceState.NotInAFile(NotInFileWhy.OwnedFilesUnknown _) -> StateTag.FilesUnknown
+    | PersistenceState.NotInAFile(NotInFileWhy.NotSpelledInTheFile _) -> StateTag.NotSpelled
+    | PersistenceState.Held -> StateTag.Held
+    | PersistenceState.Derived(_, DerivedWhy.AFormula) -> StateTag.Formula
+    | PersistenceState.Derived(_, DerivedWhy.AContainer) -> StateTag.MadeOfParts
+    | PersistenceState.Ambiguous _ -> StateTag.Ambiguous
+    | PersistenceState.Tweaked _ -> StateTag.Tweaked
+    | PersistenceState.Evolved _ -> StateTag.Evolved
+    | PersistenceState.DiffersFromFile _ -> StateTag.DiffersFromFile
+    | PersistenceState.StaleAddress _ -> StateTag.FileChanged
+    | PersistenceState.Refused _ -> StateTag.Refused
+    | PersistenceState.Writing _ -> StateTag.Writing
+
 // ── steps: the knob's arithmetic ──
 
 /// How far one step moves a number, taken from how the author spelled it: `1.0` steps by 0.1, `0.12` by 0.01, `10` by 1, `0x1F` by 1.
