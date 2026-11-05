@@ -120,6 +120,13 @@ open System
 /// per-signal — the API takes `Params` explicitly rather than hiding it, so
 /// that override is a caller decision, not a fork of this module.
 ///
+/// DIRECTION: the detector is two-sided by default, because a signal it does not know can fail either way. The signals the
+/// daemon names (`paramsFor`) are memory, latency, queue depth and warm-up time, and for those a fall is the good direction:
+/// the daemon reported `worker_rss is broken went down` when its sessions stopped and the workers' memory dropped. They are
+/// `Worsens.Upward`, which keeps the negative CUSUM at zero. A verdict also outlives its cause by a few samples (the CUSUM
+/// holds it until its evidence decays), so the evidence carries the episode's peak and the sentence says what peaked when the
+/// latest value has moved back.
+///
 /// KNOWN LIMITATION: a periodic signal whose full swing is wider than what
 /// the warmup window observed (a sawtooth reset larger than one warmup's
 /// worth of history) can trip transient `Drifting` verdicts once per cycle
@@ -187,6 +194,13 @@ module HealthAnomaly =
     /// How many consecutive observations have been in breach, including
     /// this one.
     SamplesSustained: int
+    /// The value furthest from the baseline since this episode began. A verdict
+    /// outlives its cause by a few samples (CUSUM holds it until its evidence
+    /// decays), so the latest value can be back inside the noise while the
+    /// verdict stands; the peak is what the verdict is about.
+    PeakValue: float
+    /// How many standard deviations the peak was from the baseline, raw.
+    PeakDeviationInSigmas: float
   }
 
   /// The verdict. Not a bool, not an `Option` standing in for "nothing
@@ -206,6 +220,13 @@ module HealthAnomaly =
     /// Sustained deviation at or above the break threshold: this is the
     /// "say so in your own status" case.
     | Broken of SignalEvidence
+
+  /// Which way a signal can be a fault. Memory, latency, queue depth and warm-up time getting smaller is the good direction,
+  /// so a fall in one of them is not a verdict. A signal the module does not know can fail either way.
+  [<RequireQualifiedAccess>]
+  type Worsens =
+    | Upward
+    | EitherWay
 
   /// Tuning constants. Every one of them operates in standard-deviation
   /// units except `MinWarmupSamples`, `MinSustainSamples` (sample counts)
@@ -246,6 +267,8 @@ module HealthAnomaly =
     /// learned mean's magnitude, so a signal with genuinely near-zero noise
     /// doesn't divide by (near) zero.
     MinRelativeStdDev: float
+    /// Which direction of movement can be a fault for this signal.
+    Faults: Worsens
   }
 
   /// One `Params` value for every signal, because standardizing against the
@@ -263,7 +286,18 @@ module HealthAnomaly =
     MinWarmupSamples = 20
     MinSustainSamples = 4
     MinRelativeStdDev = 1e-3
+    Faults = Worsens.EitherWay
   }
+
+  /// The tuning for one signal: the shared constants, and the direction in which that signal can fail.
+  let paramsFor (signal: SignalId) : Params =
+    match signal with
+    | SignalId.HealthLatency
+    | SignalId.EvalLatency
+    | SignalId.WorkerRss
+    | SignalId.MailboxQueueDepth
+    | SignalId.WarmupDuration -> { defaultParams with Faults = Worsens.Upward }
+    | SignalId.Custom _ -> defaultParams
 
   /// Fixed-size accumulator per signal: bounded memory no matter how long
   /// the daemon runs. During warmup (`Count <= Params.MinWarmupSamples`),
@@ -281,6 +315,9 @@ module HealthAnomaly =
     CusumNeg: float
     BreachStreak: int
     BreachSince: DateTimeOffset option
+    /// The raw deviation and the value of the observation furthest from the baseline since the last full recovery.
+    PeakZ: float
+    PeakValue: float
   }
 
   /// The detector's state before it has seen anything.
@@ -292,6 +329,8 @@ module HealthAnomaly =
     CusumNeg = 0.0
     BreachStreak = 0
     BreachSince = None
+    PeakZ = 0.0
+    PeakValue = 0.0
   }
 
   let private clamp lo hi v = max lo (min hi v)
@@ -337,7 +376,12 @@ module HealthAnomaly =
       let z = clamp (-p.ClipSigmas) p.ClipSigmas rawZ
 
       let cusumPos = max 0.0 (s.CusumPos + z - p.Slack)
-      let cusumNeg = min 0.0 (s.CusumNeg + z + p.Slack)
+      // A signal that only worsens upward gathers no evidence from a fall: the baseline still follows it down, and nothing else
+      // about the fall is a verdict.
+      let cusumNeg =
+        match p.Faults with
+        | Worsens.Upward -> 0.0
+        | Worsens.EitherWay -> min 0.0 (s.CusumNeg + z + p.Slack)
       let magnitude = max cusumPos -cusumNeg
 
       let mean' = s.Mean + p.Alpha * z * sigma
@@ -366,6 +410,16 @@ module HealthAnomaly =
           // hold the streak where it is and let CUSUM keep evolving.
           s.BreachStreak, s.BreachSince, cusumPos, cusumNeg
 
+      // The furthest observation of the episode, kept until a full recovery. An episode starts when the CUSUM leaves the clear band,
+      // so the observations that built it are part of it.
+      let peakZ', peakValue' =
+        match magnitude <= clearThreshold with
+        | true -> 0.0, 0.0
+        | false ->
+          match abs rawZ > abs s.PeakZ with
+          | true -> rawZ, obs.Value
+          | false -> s.PeakZ, s.PeakValue
+
       let s' = {
         Count = count
         Mean = mean'
@@ -374,14 +428,17 @@ module HealthAnomaly =
         CusumNeg = cusumNeg'
         BreachStreak = breachStreak'
         BreachSince = breachSince'
+        PeakZ = peakZ'
+        PeakValue = peakValue'
       }
 
       let verdict =
         if breachStreak' < p.MinSustainSamples then
           Verdict.Normal
         else
+          // The direction of the episode, which is the peak's: the latest sample can be back across the baseline.
           let direction =
-            if rawZ >= 0.0 then SignalDirection.Increased else SignalDirection.Decreased
+            if peakZ' >= 0.0 then SignalDirection.Increased else SignalDirection.Decreased
           let sustainedFor =
             match breachSince' with
             | Some since -> obs.At - since
@@ -396,20 +453,22 @@ module HealthAnomaly =
             DeviationInSigmas = rawZ
             SustainedFor = sustainedFor
             SamplesSustained = breachStreak'
+            PeakValue = peakValue'
+            PeakDeviationInSigmas = peakZ'
           }
           if magnitude >= p.BreakThreshold then Verdict.Broken evidence else Verdict.Drifting evidence
 
       s', verdict
 
   /// Fold a whole observation series through the detector with
-  /// `defaultParams`, starting from `initial` — the convenience form for
+  /// the signal's own tuning (`paramsFor`), starting from `initial` — the convenience form for
   /// tests and callers that don't need to keep the intermediate state
   /// themselves. Returns one verdict per observation, in order.
   let evaluateSeries (signal: SignalId) (observations: Observation list) : Verdict list =
     observations
     |> List.fold
       (fun (s, verdicts) obs ->
-        let s', verdict = step defaultParams signal obs s
+        let s', verdict = step (paramsFor signal) signal obs s
         s', verdict :: verdicts)
       (initial, [])
     |> snd
@@ -441,13 +500,25 @@ module HealthAnomaly =
         match e.Direction with
         | SignalDirection.Increased -> "went up"
         | SignalDirection.Decreased -> "went down"
+      // The verdict is about the episode. When the latest value has moved back from the peak (by more than half the peak's own
+      // excursion and by more than the signal's noise), the sentence says what the peak was, because a bare "now 4 (0.1σ)" beside
+      // "is broken" reads as a false alarm. The baseline chases a step, so a distance from the baseline cannot say this: a value
+      // that has not moved looks closer to it with every sample.
+      let movedBack =
+        let fromPeak = abs (e.ObservedValue - e.PeakValue)
+        fromPeak > abs (e.PeakValue - e.BaselineMean) / 2.0 && fromPeak > e.BaselineStdDev
+      let peak =
+        match movedBack with
+        | true -> sprintf "peaked at %.3g (%.1fσ), " e.PeakValue e.PeakDeviationInSigmas
+        | false -> ""
       sprintf
-        "%s %s %s: baseline %.3g (±%.3g), now %.3g (%.1fσ), sustained for %s over %d samples"
+        "%s %s %s: baseline %.3g (±%.3g), %snow %.3g (%.1fσ), sustained for %s over %d samples"
         (signalName e.Signal)
         kind
         directionWord
         e.BaselineMean
         e.BaselineStdDev
+        peak
         e.ObservedValue
         e.DeviationInSigmas
         (e.SustainedFor.ToString("g"))

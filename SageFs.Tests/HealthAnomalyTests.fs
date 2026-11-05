@@ -201,6 +201,72 @@ let tests =
         |> Expect.isFalse "a daemon behaving exactly as usual must never be flagged"
     ]
 
+    testList "a signal that only worsens upward" [
+      // The daemon reported `worker_rss is broken went down` after its sessions stopped and the workers' memory fell. Memory,
+      // latency, queue depth and warm-up time getting smaller is the good direction, so a fall is not a verdict.
+      testCase "a sustained fall in worker memory is never Drifting or Broken" <| fun _ ->
+        let rng = Random 11
+        let before = flatNoisy rng 40 8000.0 100.0
+        let after = flatNoisy rng 80 2000.0 50.0
+        evaluateSeries SignalId.WorkerRss ((before @ after) |> reindexed)
+        |> List.exists fires
+        |> Expect.isFalse "a fall to a quarter of the memory is not a fault"
+
+      testCase "every signal the daemon names is one-sided: a fall is not a verdict for any of them" <| fun _ ->
+        let rng = Random 12
+        let before = flatNoisy rng 40 900.0 10.0
+        let after = flatNoisy rng 80 4.0 0.1
+        for signal in [ SignalId.HealthLatency; SignalId.EvalLatency; SignalId.WorkerRss; SignalId.MailboxQueueDepth; SignalId.WarmupDuration ] do
+          evaluateSeries signal ((before @ after) |> reindexed)
+          |> List.exists fires
+          |> Expect.isFalse (sprintf "%s falling is not a fault" (signalName signal))
+
+      testCase "a signal the module does not know stays two-sided: a fall can still be a fault" <| fun _ ->
+        let rng = Random 13
+        let before = flatNoisy rng 40 8000.0 100.0
+        let after = flatNoisy rng 80 2000.0 50.0
+        evaluateSeries (SignalId.Custom "heartbeats_per_minute") ((before @ after) |> reindexed)
+        |> List.exists fires
+        |> Expect.isTrue "a custom signal keeps the detector it always had"
+
+      testCase "a rise in worker memory is still flagged" <| fun _ ->
+        let rng = Random 14
+        let before = flatNoisy rng 40 2000.0 50.0
+        let after = flatNoisy rng 80 8000.0 100.0
+        evaluateSeries SignalId.WorkerRss ((before @ after) |> reindexed)
+        |> List.exists isBroken
+        |> Expect.isTrue "a climb to four times the memory is a fault"
+    ]
+
+    testList "a verdict that outlives its cause says so" [
+      // CUSUM holds a verdict until its accumulated evidence decays, so for a few samples after a spike ends the latest
+      // sample is back near normal while the verdict is still Broken. The message must not present that sample as the evidence.
+      testCase "after a spike has passed, the evidence still names the peak" <| fun _ ->
+        let rng = Random 15
+        let before = flatNoisy rng 40 100.0 2.0
+        let spike = flatNoisy rng 8 900.0 10.0
+        let back = flatNoisy rng 3 100.0 2.0
+        let series = (before @ spike @ back) |> reindexed
+        let last =
+          evaluateSeries (SignalId.Custom "test") series |> List.last
+        match last with
+        | Verdict.Broken e
+        | Verdict.Drifting e ->
+          (Math.Abs e.DeviationInSigmas, 1.0) |> Expect.isLessThan "the latest sample is back inside the noise"
+          (e.PeakValue, 500.0) |> Expect.isGreaterThan "the evidence carries the value the breach peaked at"
+          (describe last).Value |> Expect.stringContains "the sentence says it peaked" "peaked"
+        | other -> failtestf "expected the verdict to still stand a few samples after the spike, got %A" other
+
+      testCase "a breach that is still at its peak does not claim a separate peak" <| fun _ ->
+        let rng = Random 16
+        let before = flatNoisy rng 40 100.0 2.0
+        let after = flatNoisy rng 12 900.0 5.0
+        match evaluateSeries (SignalId.Custom "test") ((before @ after) |> reindexed) |> List.last with
+        | Verdict.Broken _ as verdict ->
+          (describe verdict).Value.Contains "peaked" |> Expect.isFalse "no peak clause while the latest sample is the evidence"
+        | other -> failtestf "expected Broken, got %A" other
+    ]
+
     testList "evidence and messages" [
       testCase "Broken evidence names the right direction and carries the raw deviation" <| fun _ ->
         let rng = Random 5

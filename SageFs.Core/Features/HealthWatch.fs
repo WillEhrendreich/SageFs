@@ -28,11 +28,11 @@ module HealthWatch =
     states.AddOrUpdate(
       key,
       (fun _ ->
-        let next, v = HealthAnomaly.step HealthAnomaly.defaultParams signal { Value = value; At = at } HealthAnomaly.initial
+        let next, v = HealthAnomaly.step (HealthAnomaly.paramsFor signal) signal { Value = value; At = at } HealthAnomaly.initial
         verdict <- v
         next),
       (fun _ previous ->
-        let next, v = HealthAnomaly.step HealthAnomaly.defaultParams signal { Value = value; At = at } previous
+        let next, v = HealthAnomaly.step (HealthAnomaly.paramsFor signal) signal { Value = value; At = at } previous
         verdict <- v
         next)
     )

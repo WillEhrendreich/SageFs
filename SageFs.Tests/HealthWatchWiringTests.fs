@@ -17,7 +17,9 @@ let private evidence signal value =
     Direction = HealthAnomaly.SignalDirection.Increased
     DeviationInSigmas = 120.0
     SustainedFor = FixtureDurations.sustainedLong
-    SamplesSustained = 12 }
+    SamplesSustained = 12
+    PeakValue = value
+    PeakDeviationInSigmas = 120.0 }
   : HealthAnomaly.SignalEvidence
 
 let private snapshotWith anomalies sessions =

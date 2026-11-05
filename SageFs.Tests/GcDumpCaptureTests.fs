@@ -29,7 +29,9 @@ let private brokenRss : HealthAnomaly.Verdict =
       Direction = HealthAnomaly.SignalDirection.Increased
       DeviationInSigmas = 100.0
       SustainedFor = FixtureDurations.sustainedLong
-      SamplesSustained = 10 }
+      SamplesSustained = 10
+      PeakValue = 51_700.0
+      PeakDeviationInSigmas = 100.0 }
 
 let private drifting : HealthAnomaly.Verdict =
   HealthAnomaly.Verdict.Drifting
@@ -41,7 +43,9 @@ let private drifting : HealthAnomaly.Verdict =
       Direction = HealthAnomaly.SignalDirection.Increased
       DeviationInSigmas = 5.0
       SustainedFor = briefSustain
-      SamplesSustained = 5 }
+      SamplesSustained = 5
+      PeakValue = 900.0
+      PeakDeviationInSigmas = 5.0 }
 
 [<Tests>]
 let shouldCaptureTests =
@@ -70,7 +74,9 @@ let shouldCaptureTests =
             Direction = HealthAnomaly.SignalDirection.Increased
             DeviationInSigmas = 200.0
             SustainedFor = briefSustain
-            SamplesSustained = 10 }
+            SamplesSustained = 10
+            PeakValue = 900.0
+            PeakDeviationInSigmas = 200.0 }
       GcDumpCapture.shouldCapture false HealthAnomaly.SignalId.HealthLatency brokenLatency
       |> Expect.isFalse "a gcdump has nothing to say about a slow /health — only RSS"
 
