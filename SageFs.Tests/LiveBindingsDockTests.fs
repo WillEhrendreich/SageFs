@@ -424,6 +424,16 @@ let viewPanelTests =
       // One per drawn axis, plus the preset row's pressed button.
       pressed |> Expect.equal "one pressed button per drawn axis and one preset" (ViewAxis.drawn.Length + 1)
 
+    testCase "WHY — the panel's visible words are plain: none of 'column', 'workflow', 'fact' or 'pane', which three reviewers could not decode" <| fun _ ->
+      // What a person reads is the text outside the tags. The words are the code's nouns for a thing the person sees as a
+      // table column, a kind of work, or a part of the window, and "fact" is a developer's word for a datum.
+      let saved = resolvedOf ViewWorkflow.Repl [ ViewAxis.RowHeight, LRepo ] [ AxisValue.RowHeight RowHeight.Roomy ]
+      for html in [ panelHtml ViewWorkflow.Repl (untouched ViewWorkflow.Repl); panelHtml ViewWorkflow.Repl saved ] do
+        let visible = Text.RegularExpressions.Regex.Replace(html, "<[^>]*>", " ").ToLowerInvariant()
+        for word in [ "column"; "workflow"; "fact"; "pane" ] do
+          Text.RegularExpressions.Regex.IsMatch(visible, sprintf @"\b%s\b" word)
+          |> Expect.isFalse (sprintf "the visible text never says '%s': %s" word visible)
+
     testCase "WHY — a reset appears beside an axis only when a file holds a choice for it, and says where it came from" <| fun _ ->
       let none = panelHtml ViewWorkflow.Repl (untouched ViewWorkflow.Repl)
       count "live-view-reset\"" none |> Expect.equal "no per-axis reset when nothing is saved" 0
@@ -433,7 +443,7 @@ let viewPanelTests =
       none |> Expect.stringContains "the preset row names the recommendation once" "(recommended)"
       let saved = panelHtml ViewWorkflow.Repl (resolvedOf ViewWorkflow.Repl [ ViewAxis.RowHeight, LRepo ] [ AxisValue.RowHeight RowHeight.Roomy ])
       count "live-view-reset\"" saved |> Expect.equal "one reset, for the saved axis" 1
-      saved |> Expect.stringContains "the source is named" "saved for this app"
+      saved |> Expect.stringContains "the source is named" "saved for this project"
 
     testCase "WHY — the panel is closed until the button opens it, the scope starts at this app, and a page with no session has neither button nor panel" <| fun _ ->
       let html = panelHtml ViewWorkflow.Repl (untouched ViewWorkflow.Repl)

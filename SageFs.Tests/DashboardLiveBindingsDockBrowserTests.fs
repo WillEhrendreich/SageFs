@@ -325,7 +325,7 @@ let journey () : Task<unit> = task {
       let! roomyPressed = page.Locator("#live-view-panel button[aria-pressed=true]:has-text('Roomy')").CountAsync()
       roomyPressed |> Expect.equal "the pressed button follows the saved choice" 1
       let! saidWhere = textOf page "#live-view-panel"
-      saidWhere |> Expect.stringContains "the panel says where the choice is saved" "saved for this app"
+      saidWhere |> Expect.stringContains "the panel says where the choice is saved" "saved for this project"
       do! shot page "3-view-panel"
       // A reload keeps it: the file is the memory.
       let! _ = page.GotoAsync dashboard
@@ -335,10 +335,10 @@ let journey () : Task<unit> = task {
       // The Type column, off from the panel.
       do! page.Locator("#live-view-btn").ClickAsync()
       do! waitVisible page "#live-view-panel"
-      do! page.Locator("#live-view-panel [aria-label='Type column'] button:has-text('Off')").ClickAsync()
+      do! page.Locator("#live-view-panel [aria-label='Show type'] button:has-text('Off')").ClickAsync()
       do! waitJs page "the type cells to go" BrowserWaits.panelUpdates "() => document.querySelectorAll('#live-tree .live-type').length === 0" null
       // Reset puts the recommendation back.
-      do! page.Locator("#live-view-panel button:has-text('Reset this workflow')").ClickAsync()
+      do! page.Locator("#live-view-panel button:has-text('Reset to recommended')").ClickAsync()
       do! waitJs page "the recommended view to return" BrowserWaits.panelUpdates
             "() => { const t = document.querySelector('#live-tree'); return !!t && t.dataset.row === 'compact' && t.querySelectorAll('.live-type').length > 0; }" null
       expectNoErrors errors "using the view panel"

@@ -1491,6 +1491,30 @@ h2 {
   margin-left: auto;
 }
 
+/* The pane's three buttons carry a word as well as an icon: three reviewers could not tell the sliders icon from the pin or the
+   fold arrow ("no visible labels"). The word is drawn by CSS so the markup's accessible names stay as they are, and each button
+   keeps its 20px height and grows only as wide as its word. */
+.live-pane-pin,
+.live-pane-collapse,
+.live-pane-view {
+  width: auto;
+  min-width: 20px;
+  padding: 0 7px;
+  gap: 4px;
+}
+
+.live-pane-pin::before {
+  content: "Pin";
+}
+
+.live-pane-view::before {
+  content: "View";
+}
+
+.live-pane-collapse::before {
+  content: "Fold";
+}
+
 .live-tree {
   container-type: inline-size;
   flex: 1 1 auto;
@@ -1508,6 +1532,12 @@ h2 {
     linear-gradient(transparent, var(--bg-panel) 70%) bottom / 100% 16px no-repeat local,
     radial-gradient(farthest-side at 50% 0, rgb(0 0 0 / 0.45), transparent) top / 100% 7px no-repeat scroll,
     radial-gradient(farthest-side at 50% 100%, rgb(0 0 0 / 0.45), transparent) bottom / 100% 7px no-repeat scroll;
+}
+
+/* Rows stop growing at 56rem. On a wide window a row ran the whole width of the dock, so a binding's name and its type were
+   600px apart, and the eye had to cross that gap to pair them. The tree's own width, which the column fit measures, is unchanged. */
+.live-tree > * {
+  max-width: 56rem;
 }
 
 /* A top-level binding: one column, with the pin a small icon at the end of its first row. It shows on hover or focus and while pinned,
@@ -2838,6 +2868,38 @@ h2 {
      the panel configures stay under it, in view after a scroll, rather than squeezed out of a fixed-height dock. */
   .live-dock:has(.live-view-panel:not(.live-hidden)) {
     max-height: 54rem;
+  }
+
+  /* The pane bar in a deliberate order at phone width, where it used to wrap wherever it ran out of room (the pin alone on a
+     fourth line): the title, the count and the three buttons on the first line, the stamp on a line of its own, then the
+     "not in a file" count with the filter taking the rest of the row. */
+  .live-pane-bar .live-pane-collapse,
+  .live-pane-bar .live-pane-view,
+  .live-pane-bar .live-pane-pin {
+    order: 1;
+  }
+
+  .live-pane-bar .live-pane-collapse {
+    margin-left: auto;
+  }
+
+  .live-pane-bar .live-pane-pin {
+    margin-left: 0;
+  }
+
+  .live-pane-bar .live-pane-stamp {
+    order: 2;
+    flex: 1 1 100%;
+  }
+
+  .live-pane-bar .live-repl-chip {
+    order: 3;
+  }
+
+  .live-pane-bar .live-filter {
+    order: 3;
+    flex: 1 1 9rem;
+    max-width: none;
   }
 
   #output-panel {

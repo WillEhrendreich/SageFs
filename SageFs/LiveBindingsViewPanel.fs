@@ -47,8 +47,8 @@ type ViewControls = { Button: XmlNode; Panel: XmlNode }
 let sourceWords (layer: ConfigLayer) : string =
   match layer with
   | LDefault -> "recommended"
-  | LGlobal -> "saved everywhere"
-  | LRepo -> "saved for this app"
+  | LGlobal -> "saved for all projects"
+  | LRepo -> "saved for this project"
   | LSession -> "this session only"
 
 let private slidersIcon : XmlNode =
@@ -134,7 +134,7 @@ let private axisRow (sessionId: string) (resolved: ResolvedView) (axis: ViewAxis
 
 let private scopeRow (sessionId: string) : XmlNode =
   Elem.div [ Attr.class' "live-view-row" ] [
-    Elem.label [ Attr.class' "live-view-label"; Attr.create "for" ViewIds.ScopeSelect ] [ Text.raw "Save to" ]
+    Elem.label [ Attr.class' "live-view-label"; Attr.create "for" ViewIds.ScopeSelect ] [ Text.raw "Save choices for" ]
     Elem.select
       [ Attr.id ViewIds.ScopeSelect
         Attr.class' "live-view-scope"
@@ -144,7 +144,7 @@ let private scopeRow (sessionId: string) : XmlNode =
       [ Attr.class' "session-btn session-btn-labeled live-view-reset-all"
         Attr.type' "button"
         Ds.onClick (click sessionId ViewAction.ResetEverything "" "") ]
-      [ Text.raw "Reset this workflow's choices" ]
+      [ Text.raw "Reset to recommended" ]
   ]
 
 /// The button and the panel, for one session's workflow and its resolved view.
@@ -170,14 +170,15 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         Ds.class' ("live-hidden", sprintf "!$%s" ViewSignals.Open)
         Ds.preserveAttr "class" ]
       [ Elem.div [ Attr.class' "live-view-head" ] [ textEnc (sprintf "View for %s" (ViewWorkflow.label workflow)) ]
-        // Said once, where the choices are. Off for a column does not remove the fact: a narrow list shows it under the row.
+        // Said once, where the choices are. State and source are not lost when they are Off or the list is narrow: they move
+        // under the row. (Type is not: Off hides it.)
         Elem.div [ Attr.class' "live-view-note" ] [
-          Text.raw "A column set to On sits in the row when there is room. Set to Off, or when the pane is narrow, its fact shows under the row instead."
+          Text.raw "State and source sit in the row when there is room, and under it when there is not."
         ]
         presetRow sessionId workflow resolved.View
         yield! ViewAxis.drawn |> List.map (axisRow sessionId resolved)
         scopeRow sessionId
         Elem.div [ Attr.class' "live-view-note" ] [
-          Text.raw "Each click is saved straight away. This app writes the project's .SageFs/settings.json; Everywhere writes your own settings.json."
+          Text.raw "A choice is saved as you click it. This project writes .SageFs/settings.json in the project folder; All projects writes your own settings.json."
         ] ]
   { Button = button; Panel = panel }

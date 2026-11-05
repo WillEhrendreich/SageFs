@@ -177,13 +177,13 @@ module ViewAxis =
 
   let label (axis: ViewAxis) : string =
     match axis with
-    | ViewAxis.TypeColumn -> "Type column"
-    | ViewAxis.StateColumn -> "State column"
-    | ViewAxis.SourceColumn -> "Source column"
+    | ViewAxis.TypeColumn -> "Show type"
+    | ViewAxis.StateColumn -> "Show state"
+    | ViewAxis.SourceColumn -> "Show source"
     | ViewAxis.GroupBy -> "Group by"
     | ViewAxis.PinnedStrip -> "Pinned strip"
     | ViewAxis.Inspector -> "Inspector"
-    | ViewAxis.ValueMode -> "Values"
+    | ViewAxis.ValueMode -> "Long values"
     | ViewAxis.RowHeight -> "Row height"
 
   let description (axis: ViewAxis) : string =
@@ -493,8 +493,8 @@ module ViewScope =
 
   let label (scope: ViewScope) : string =
     match scope with
-    | ViewScope.ThisApp -> "This app"
-    | ViewScope.Everywhere -> "Everywhere"
+    | ViewScope.ThisApp -> "This project"
+    | ViewScope.Everywhere -> "All projects"
 
   let parse (raw: string) : Result<ViewScope, ConfigError> =
     match all |> List.tryFind (fun scope -> token scope = raw) with
