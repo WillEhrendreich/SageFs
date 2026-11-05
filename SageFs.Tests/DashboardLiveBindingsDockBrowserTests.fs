@@ -246,21 +246,21 @@ let journey () : Task<unit> = task {
     (listGlyphs >= 1) |> Expect.isTrue "a list row carries a list glyph with the word as its name"
     let! boxedKinds = page.Locator("#bindings-panel .live-kind").CountAsync()
     boxedKinds |> Expect.equal "no boxed kind word on any row" 0
-    // The title is a panel heading: its words, and the heading colour every other panel uses, never red.
+    // The title is a panel heading: its words, in the brightest text colour on the page (it was blue, one more small caption among
+    // five; it is now the largest and brightest word in the bar), and never red, which is for failure.
     let! titleText = textOf page "#bindings-panel .live-pane-title"
     titleText.Trim() |> Expect.equal "the title is its words and no red circle" "Live bindings"
-    let! titleIsHeadingColour =
-      page.EvaluateAsync<bool>(
+    let! titleColours =
+      page.EvaluateAsync<string>(
         """() => {
           const title = document.querySelector('#bindings-panel .live-pane-title');
-          const probe = document.createElement('span');
-          probe.style.color = 'var(--fg-blue)';
-          document.body.appendChild(probe);
-          const heading = getComputedStyle(probe).color;
-          probe.remove();
-          return getComputedStyle(title).color === heading;
+          const colourOf = token => { const probe = document.createElement('span'); probe.style.color = 'var(' + token + ')'; document.body.appendChild(probe); const c = getComputedStyle(probe).color; probe.remove(); return c; };
+          const own = getComputedStyle(title).color;
+          return own === colourOf('--fg-default') ? 'text colour' : own === colourOf('--fg-red') ? 'red' : 'other: ' + own;
         }""")
-    titleIsHeadingColour |> Expect.isTrue "the title is --fg-blue, the heading colour"
+    titleColours |> Expect.equal "the title is the text colour, the brightest on the page" "text colour"
+    let! titleSize = page.EvaluateAsync<float>("() => parseFloat(getComputedStyle(document.querySelector('#bindings-panel .live-pane-title')).fontSize)")
+    (titleSize >= 13.0) |> Expect.isTrue (sprintf "the title is larger than the pane's 12px captions, got %fpx" titleSize)
     // With no app running the output pane draws nothing visible.
     let! outputBar = page.EvaluateAsync<float>("() => { const e = document.querySelector('#app-output-bar'); return e ? e.getBoundingClientRect().height : 0; }")
     outputBar |> Expect.equal "the app-output pane takes no height when no app has written" 0.0
