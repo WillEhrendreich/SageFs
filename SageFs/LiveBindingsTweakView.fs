@@ -176,6 +176,38 @@ let describe (state: PersistenceState) : Described =
       Tone = Tone.Notice
       Detail = sprintf "%s in %s…" what (whereOf place) }
 
+/// What a row owes to a call, said once: which callee builds the value and how many calls a write reaches, or why the call was not
+/// followed. A row not built by a call, and a right-hand side that is not a call at all, say nothing.
+let describeThrough (through: ThroughCall) : Described option =
+  let said (tone: Tone) (detail: string) : Described option = Some { Label = "call"; Tone = tone; Detail = detail }
+  match through with
+  | ThroughCall.NoCall -> None
+  | ThroughCall.Through followed ->
+    match followed.Callers with
+    | CallerCount.Counted 1 ->
+      said Tone.Quiet (sprintf "%s builds this. Only this call uses the literal, so a change reaches nothing else." followed.Callee)
+    | CallerCount.Counted 0 ->
+      said Tone.Notice (sprintf "%s builds this. No call to it was found in the files, so a change reaches whatever calls it." followed.Callee)
+    | CallerCount.Counted n ->
+      said Tone.Notice (sprintf "%s builds this. %d calls use this literal, so a change reaches all of them." followed.Callee n)
+    | CallerCount.NotCounted reason ->
+      said Tone.Notice (sprintf "%s builds this. Every call to it uses this literal, so a change reaches all of them. The calls could not be counted: %s" followed.Callee reason)
+  | ThroughCall.CouldNotFollow refusal ->
+    match refusal with
+    | Refusal.NotAPlainCall -> None
+    | Refusal.NoCalleeInFiles name ->
+      said Tone.Quiet (sprintf "Built by %s, which no file of the session declares, so there is no literal to change here." name)
+    | Refusal.CalleeFilesUnknown reason ->
+      said Tone.Quiet (sprintf "Built by a call, and the session's files could not all be read, so its callee cannot be found: %s" reason)
+    | Refusal.CalleeDeclaredSeveralTimes(name, places) ->
+      said Tone.Quiet (sprintf "%d places declare %s: %s. The pane will not pick one, so there is nothing to change here." places.Length name (places |> List.map whereOf |> String.concat ", "))
+    | Refusal.CalleeNotRead(name, file) ->
+      said Tone.Quiet (sprintf "%s is declared in %s, which has not been read, so what it builds is not known." name (Path.GetFileName file))
+    | Refusal.ResultNotSpelled callee ->
+      said Tone.Quiet (sprintf "%s (%s) does not spell this part as a literal, so there is nothing to change here." callee.Address.BindingName (whereOf callee))
+    | Refusal.ResultIsAnExpression expression ->
+      said Tone.Quiet (sprintf "%s spells this part as %s (%s), an expression that can use the call's arguments, so there is no literal to change." expression.Address.BindingName expression.Text (whereOf expression))
+
 /// Whether a state's sentence is written under the row. A value that is simply in its file, and a record that is made of the rows
 /// below it, are fine as they are: their sentence is the chip's tooltip, so a long tree is not a wall of repeated text. Everything
 /// a person has to act on or understand (why there is no knob, what differs, what was refused) is on the row.
@@ -527,4 +559,7 @@ let renderStrip (key: RowKey) (view: RowView) (placement: Placement) : XmlNode =
          yield! reload
          match detailShown view.State with
          | DetailShown.OnTheRow -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-detail" ] [ textEnc described.Detail ]
-         | DetailShown.InTheTooltipOnly -> () ])
+         | DetailShown.InTheTooltipOnly -> ()
+         match describeThrough view.Through with
+         | Some through -> yield Elem.div [ Attr.class' (sprintf "live-detail %s" (Tone.cssClass through.Tone)); testid "tweak-through" ] [ textEnc through.Detail ]
+         | None -> () ])

@@ -2033,6 +2033,12 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+/* What a write reaches (a literal in a callee that several calls share) takes the notice colour; the tone class alone would lose to
+   the rule above, which comes later. */
+.live-detail.live-tone-notice {
+  color: var(--fg-yellow);
+}
+
 .live-knob {
   display: inline-flex;
   flex-wrap: wrap;

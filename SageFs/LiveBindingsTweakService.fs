@@ -182,20 +182,26 @@ type Inspected =
   { FileStamp: FileStamp
     JournalStamp: FileStamp
     Names: Set<string>
+    /// The names declared anywhere in the session's files when this was read. A binding built by a call of one of them has its whole
+    /// right-hand side read, so a name declared later in another file asks for another look.
+    Known: Set<string>
     File: FileInspection }
 
 type Service =
   { Env: Env
     Memories: ConcurrentDictionary<string, Memory>
     Declared: ConcurrentDictionary<string, FileStamp * Set<string>>
-    Inspected: ConcurrentDictionary<string, Inspected> }
+    Inspected: ConcurrentDictionary<string, Inspected>
+    /// The calls a file makes, counted again only when the file's stamp moved.
+    Applied: ConcurrentDictionary<string, FileStamp * ApplicationCounts> }
 
 module Service =
   let create (env: Env) : Service =
     { Env = env
       Memories = ConcurrentDictionary<string, Memory>(StringComparer.Ordinal)
       Declared = ConcurrentDictionary<string, FileStamp * Set<string>>(StringComparer.Ordinal)
-      Inspected = ConcurrentDictionary<string, Inspected>(StringComparer.Ordinal) }
+      Inspected = ConcurrentDictionary<string, Inspected>(StringComparer.Ordinal)
+      Applied = ConcurrentDictionary<string, FileStamp * ApplicationCounts>(StringComparer.Ordinal) }
 
   let memoryOf (service: Service) (sessionId: string) : Memory =
     match service.Memories.TryGetValue sessionId with
@@ -260,8 +266,32 @@ module Service =
     | NudgeOutcome.Inspected inspection -> Ok(inspection.Items |> List.map (SourceRef.ofItem path), inspection)
     | other -> Error(sprintf "the door answered an inspect with %s" (NudgeOutcome.token other))
 
-  /// Inspect one file through the door, with the whole right-hand side of each of `names` the listing carries only parts of.
-  let inspectFile (service: Service) (owned: OwnedFiles) (names: Set<string>) (path: string) : Task<Result<Inspected, string>> =
+  /// The calls a file makes, read again only when the file's stamp moved. A file that cannot be read is not counted, and says so.
+  let appliedIn (service: Service) (path: string) : ApplicationCounts =
+    let stamp = service.Env.Stamp path
+    match service.Applied.TryGetValue path with
+    | true, (cachedStamp, counts) when cachedStamp = stamp -> counts
+    | _ ->
+      let counts =
+        match service.Env.Ports.Files.ReadBytes path with
+        | Ok bytes -> CallFollow.applicationsIn (Text.Encoding.UTF8.GetString bytes)
+        | Error fault -> ApplicationCounts.NotCounted fault.Reason
+      service.Applied.[path] <- (stamp, counts)
+      counts
+
+  /// The bindings of a file that the door lists no point of but a file builds with a call of a name the session declares: the
+  /// addresses of their whole right-hand sides, to be read so the call can be followed.
+  let callBuiltIn (service: Service) (path: string) (names: Set<string>) (known: Set<string>) : TweakAddress list =
+    match service.Env.Ports.Files.ReadBytes path with
+    | Error _ -> []
+    | Ok bytes ->
+      match TweakAddress.declaredBindings (Text.Encoding.UTF8.GetString bytes) with
+      | Ok declared -> CallFollow.callBuiltToRead names known declared
+      | Error _ -> []
+
+  /// Inspect one file through the door, with the whole right-hand side of each of `names` the listing carries only parts of, and of
+  /// each of `names` the file builds with a call of one of `known`.
+  let inspectFile (service: Service) (owned: OwnedFiles) (names: Set<string>) (known: Set<string>) (path: string) : Task<Result<Inspected, string>> =
     task {
       let! listed = door service owned (inspectRaw path "")
       match listed with
@@ -272,7 +302,7 @@ module Service =
         | Ok(items, inspection) ->
           let mutable wholes = []
           let mutable failure = None
-          for address in SourceIndex.wholesToRead names items do
+          for address in (SourceIndex.wholesToRead names items @ callBuiltIn service path names known) |> List.distinct do
             match failure with
             | Some _ -> ()
             | None ->
@@ -303,6 +333,7 @@ module Service =
                   { FileStamp = service.Env.Stamp path
                     JournalStamp = journalStamp
                     Names = names
+                    Known = known
                     File =
                       { File = path
                         Watching = watching
@@ -315,13 +346,15 @@ module Service =
 
   /// What the session's files say, for the names asked about. A file that does not declare any of them is not parsed; one that does is
   /// parsed once per change (its file or its journal moving), and again only when a new name is asked about.
-  let indexFor (service: Service) (owned: OwnedFiles) (names: Set<string>) : Task<SourceIndex> =
+  let inspectAsked
+    (service: Service)
+    (owned: OwnedFiles)
+    (known: Set<string>)
+    (sources: string list)
+    (names: Set<string>)
+    : Task<FileInspection list * (string * string) list> =
     task {
-      let candidates =
-        owned.Paths
-        |> Set.toList
-        |> List.filter isFSharpSource
-        |> List.filter (fun path -> not (Set.isEmpty (Set.intersect names (declaredIn service path))))
+      let candidates = sources |> List.filter (fun path -> not (Set.isEmpty (Set.intersect names (declaredIn service path))))
       let mutable files = []
       let mutable unreadable = []
       for path in candidates do
@@ -331,14 +364,14 @@ module Service =
           | Ok file -> service.Env.Stamp(service.Env.Ports.JournalPathOf file)
           | Error _ -> FileStamp.Unstamped
         match service.Inspected.TryGetValue path with
-        | true, cached when cached.FileStamp = fileStamp && cached.JournalStamp = journalStamp && Set.isSubset names cached.Names ->
+        | true, cached when cached.FileStamp = fileStamp && cached.JournalStamp = journalStamp && Set.isSubset names cached.Names && Set.isSubset known cached.Known ->
           files <- files @ [ cached.File ]
         | cachedBefore ->
           let wanted =
             match cachedBefore with
             | true, cached when cached.FileStamp = fileStamp -> Set.union names cached.Names
             | _ -> names
-          let! result = inspectFile service owned wanted path
+          let! result = inspectFile service owned wanted known path
           match result with
           | Ok inspected ->
             service.Inspected.[path] <- inspected
@@ -346,7 +379,27 @@ module Service =
           | Error why ->
             service.Inspected.TryRemove path |> ignore
             unreadable <- unreadable @ [ path, why ]
-      return { Files = files; Unreadable = unreadable; Applied = ApplicationCounts.NotCounted "the pane does not count calls yet" }
+      return files, unreadable
+    }
+
+  /// What the session's files say, for the names asked about, and for the callees of the bindings among them that a file builds with a
+  /// call (a second look, only when there are such callees not already asked about). The calls of every owned file are counted only
+  /// then, because only a followed call needs the number.
+  let indexFor (service: Service) (owned: OwnedFiles) (names: Set<string>) : Task<SourceIndex> =
+    task {
+      let sources = owned.Paths |> Set.toList |> List.filter isFSharpSource
+      let known = sources |> List.map (declaredIn service) |> Set.unionMany
+      let! firstFiles, firstUnreadable = inspectAsked service owned known sources names
+      let callees = firstFiles |> List.collect (fun file -> file.Wholes) |> CallFollow.calleeNamesOf
+      let! files, unreadable =
+        match Set.isSubset callees names with
+        | true -> Task.FromResult(firstFiles, firstUnreadable)
+        | false -> inspectAsked service owned known sources (Set.union names callees)
+      let applied =
+        match Set.isEmpty callees with
+        | true -> ApplicationCounts.NotCounted "no row of the pane is built by a call of a function of the session"
+        | false -> CallFollow.combineCounts (sources |> List.map (fun path -> path, appliedIn service path))
+      return { Files = files; Unreadable = unreadable; Applied = applied }
     }
 
   /// The rows for a session's walked values, from what its files say now and what the dashboard did to each row. A row waits for the

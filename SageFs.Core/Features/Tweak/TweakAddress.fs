@@ -265,6 +265,20 @@ let private parse (source: string) : Result<string list * ModuleBinding list, Re
   | Ok(ParsedInput.ImplFile _) -> Error(ResolveError.ParseFailed "the file declares several namespaces or modules at the top level")
   | Ok(ParsedInput.SigFile _) -> Error(ResolveError.ParseFailed "signature files have no tweakable expressions")
 
+/// A `let` of a file: where it is, and its whole right-hand side as the file spells it.
+type DeclaredBinding =
+  { ModulePath: string list
+    Name: string
+    Rhs: string }
+
+/// Every `let` of a file with its right-hand side, whether or not the door lists a tweakable point in it. A binding built by a call
+/// (`let player = initPlayer ()`) has none, so this is the only way to see what it is built by.
+let declaredBindings (source: string) : Result<DeclaredBinding list, ResolveError> =
+  parse source
+  |> Result.map (fun (_, bindings) ->
+    bindings
+    |> List.map (fun b -> ({ ModulePath = b.ModulePath; Name = b.Name; Rhs = rangeText source b.Expr.Range }: DeclaredBinding)))
+
 /// Every tweakable leaf (numeric, bool, char, string, DU-case-like
 /// identifier) plus every record-field expression, for every binding in the
 /// file. A record field's own address is included even when its expression

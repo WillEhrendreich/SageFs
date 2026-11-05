@@ -158,6 +158,73 @@ let escapingTests =
           Regex.IsMatch(raw, "data-(on|signals|show)[^=]*=\"[^\"]*\n") |> Expect.isFalse "a newline never reaches a script raw"
   ]
 
+let private callee = { gravity with Address = addressOf "initPlayer" []; Text = "{ Health = 100 }"; Span = { gravity.Span with Line = 5 } }
+
+let private followedWith (callers: CallerCount) : ThroughCall =
+  ThroughCall.Through { Callee = "initPlayer"; Place = { gravity with Address = addressOf "initPlayer" [ PathStep.RecordField "Health" ] }; Callers = callers }
+
+/// Every way a call can fail to be followed, one of each.
+let private refusals : Refusal list =
+  [ Refusal.NotAPlainCall
+    Refusal.NoCalleeInFiles "initPlayer"
+    Refusal.CalleeFilesUnknown "Other.fs: the file does not parse"
+    Refusal.CalleeDeclaredSeveralTimes("initPlayer", [ callee; { callee with File = "/work/game/Other.fs" } ])
+    Refusal.CalleeNotRead("initPlayer", "/work/game/State.fs")
+    Refusal.ResultNotSpelled callee
+    Refusal.ResultIsAnExpression { callee with Text = "hp"; Address = addressOf "initPlayer" [ PathStep.RecordField "Health" ] } ]
+
+[<Tests>]
+let throughTests =
+  testList "what a row owes to a call is said in words" [
+
+    testCase "WHY — a row whose literal is in a callee says which callee builds it and how many calls the write reaches" <| fun _ ->
+      let said (callers: CallerCount) = (describeThrough (followedWith callers)).Value
+      (said (CallerCount.Counted 3)).Detail |> Expect.stringContains "the callee and the number" "initPlayer"
+      (said (CallerCount.Counted 3)).Detail |> Expect.stringContains "the number" "3 calls"
+      (said (CallerCount.Counted 3)).Tone |> Expect.equal "more than one call is a notice" Tone.Notice
+      (said (CallerCount.Counted 1)).Detail |> Expect.stringContains "one call says only this one" "Only this call"
+      (said (CallerCount.Counted 1)).Tone |> Expect.equal "one call is nothing to warn about" Tone.Quiet
+      (said (CallerCount.NotCounted "Other.fs does not parse")).Detail |> Expect.stringContains "the count is not invented" "could not be counted"
+      (said (CallerCount.NotCounted "Other.fs does not parse")).Detail |> Expect.stringContains "and says why" "Other.fs does not parse"
+
+    testCase "WHY — every refusal says something, and says the one thing that explains it (the callee, the reason or the expression), so no refusal reads as an empty row" <| fun _ ->
+      let explainedBy (refusal: Refusal) : string =
+        match refusal with
+        | Refusal.NotAPlainCall -> ""
+        | Refusal.NoCalleeInFiles name -> name
+        | Refusal.CalleeFilesUnknown reason -> reason
+        | Refusal.CalleeDeclaredSeveralTimes(name, _) -> name
+        | Refusal.CalleeNotRead(name, _) -> name
+        | Refusal.ResultNotSpelled owner -> owner.Address.BindingName
+        | Refusal.ResultIsAnExpression expression -> expression.Text
+      for refusal in refusals do
+        match describeThrough (ThroughCall.CouldNotFollow refusal), refusal with
+        | None, Refusal.NotAPlainCall -> ()
+        | None, other -> failtestf "%A said nothing" other
+        | Some said, Refusal.NotAPlainCall -> failtestf "a record is not a call, yet it said %s" said.Detail
+        | Some said, _ ->
+          said.Detail |> Expect.stringContains "the one thing that explains it" (explainedBy refusal)
+          said.Tone |> Expect.equal "an explanation, not a failure" Tone.Quiet
+
+    testCase "WHY — a callee declared in two places names both, and picks neither" <| fun _ ->
+      let said = (describeThrough (ThroughCall.CouldNotFollow(Refusal.CalleeDeclaredSeveralTimes("initPlayer", [ callee; { callee with File = "/work/game/Other.fs" } ])))).Value
+      said.Detail |> Expect.stringContains "the first file" "Tuning.fs"
+      said.Detail |> Expect.stringContains "the second file" "Other.fs"
+      said.Detail |> Expect.stringContains "says it will not pick" "will not pick"
+
+    testCase "WHY — a row that is not built by a call says nothing about one" <| fun _ ->
+      describeThrough ThroughCall.NoCall |> Expect.isNone "nothing to add"
+
+    testCase "WHY — a refusal that has an expression names it, so the row can say what it is instead of calling it a parameter it cannot know" <| fun _ ->
+      (describeThrough (ThroughCall.CouldNotFollow(Refusal.ResultIsAnExpression { callee with Text = "hp" }))).Value.Detail
+      |> Expect.stringContains "the expression" "hp"
+
+    testCase "the strip carries the consequence on its own line, with a test id, and a row with no call has none" <| fun _ ->
+      let withThrough = { rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1)) with Through = followedWith (CallerCount.Counted 3) }
+      renderStrip key withThrough Placement.OnLeafRow |> decoded |> Expect.stringContains "the consequence" "data-testid=\"tweak-through\""
+      (strip (rowOf (PersistenceState.InSource gravity) Control.NoControl)).Contains "tweak-through" |> Expect.isFalse "no call, no line"
+  ]
+
 let private count (needle: string) (html: string) = html.Split([| needle |], StringSplitOptions.None).Length - 1
 
 [<Tests>]

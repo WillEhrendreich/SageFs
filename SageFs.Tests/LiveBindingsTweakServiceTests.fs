@@ -277,3 +277,58 @@ let serviceTests =
         (Service.memoryOf sb.Service "s") |> Expect.equal "nothing remembered" Memory.empty
       }) }
   ]
+
+/// Public on purpose: the live-values walk takes a non-public record for an opaque class.
+type CallPlayer = { Health: int; Speed: float; Name: string }
+
+let private callFiles =
+  [ "State.fs",
+    "module Game.Tuning\n\ntype CallPlayer = { Health: int; Speed: float; Name: string }\n\nlet initPlayer () = { Health = 100; Speed = 4.5; Name = \"Ada\" }\n\nlet player = initPlayer ()\nlet spare = initPlayer ()\n"
+    "Other.fs", "module Game.Other\n\nlet again = Game.Tuning.initPlayer ()\n" ]
+
+/// A real directory holding `callFiles`, both owned and watched, and a service over it.
+let private withCallFiles (body: string -> Service -> OwnedFiles -> Task<unit>) : Task<unit> =
+  task {
+    let dir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-call-%s" (Guid.NewGuid().ToString("N")))
+    Directory.CreateDirectory dir |> ignore
+    try
+      let paths = callFiles |> List.map (fun (name, text) -> let path = Path.Combine(dir, name) in File.WriteAllText(path, text); path)
+      let env : Env =
+        { Ports = McpNudge.productionPorts (Path.Combine(dir, "tweaks-journal"))
+          Locks = FileLocks()
+          Stamp = Env.stampOf
+          Now = fun () -> 0L }
+      do! body dir (Service.create env) (Service.ownedOf "s" dir (paths |> List.map (fun path -> path, HotReloadWatch.Watched)))
+    finally
+      try Directory.Delete(dir, true) with _ -> ()
+  }
+
+[<Tests>]
+let callTests =
+  testList "the service follows a call into its initializer" [
+
+    testTask "WHY — a part of a value built by a call is placed in the callee, the callers are counted in every owned file, and the write changes only that literal" {
+      do! withCallFiles (fun dir service owned -> task {
+        let player = box { Health = 100; Speed = 4.5; Name = "Ada" }
+        let health = RowKey.field (RowKey.top "player") "Health"
+        let! rows = Service.viewFor service "s" owned (walked [ "player", player ]) SessionReload.NoReloadYet
+        let row = (TweakView.tryRow rows health).Value
+        match row.Through with
+        | ThroughCall.Through followed ->
+          followed.Callee |> Expect.equal "the callee" "initPlayer"
+          followed.Callers |> Expect.equal "two calls in State.fs and one qualified call in Other.fs, which declares no name the pane asked about" (CallerCount.Counted 3)
+        | other -> failtestf "expected the call to be followed, got %A" other
+        let place = placeOf rows health
+        place.File |> Expect.equal "the callee's file" (Path.Combine(dir, "State.fs"))
+        do! Service.act service "s" owned noReload ignore (requestFor place health (TweakVerb.SetLiteral "62"))
+        let written = File.ReadAllText(Path.Combine(dir, "State.fs"))
+        written |> Expect.equal "exactly one literal changed" ((snd callFiles.[0]).Replace("Health = 100", "Health = 62"))
+        File.ReadAllText(Path.Combine(dir, "Other.fs")) |> Expect.equal "the other file is untouched" (snd callFiles.[1])
+      }) }
+
+    testTask "a binding built by a call of the framework is not read whole, so it stays out of the files, as before" {
+      do! withCallFiles (fun _ service owned -> task {
+        let! rows = Service.viewFor service "s" owned (walked [ "answer", box 42 ]) SessionReload.NoReloadYet
+        stateOf rows (RowKey.top "answer") |> Expect.equal "not in a file" (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt)
+      }) }
+  ]

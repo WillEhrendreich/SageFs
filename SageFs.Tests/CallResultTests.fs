@@ -40,18 +40,9 @@ let private fileIndex (file: string) (text: string) (wholes: string list) : File
   { fileOf file items with Wholes = wholes |> List.collect (wholeOf file text) }, CallFollow.applicationsIn text
 
 let private indexOver (files: (FileInspection * ApplicationCounts) list) : SourceIndex =
-  let counts =
-    files
-    |> List.map snd
-    |> List.fold
-      (fun acc next ->
-        match acc, next with
-        | ApplicationCounts.Counted a, ApplicationCounts.Counted b ->
-          ApplicationCounts.Counted(Map.fold (fun m k v -> Map.add k (v + (Map.tryFind k m |> Option.defaultValue 0)) m) a b)
-        | ApplicationCounts.NotCounted why, _
-        | _, ApplicationCounts.NotCounted why -> ApplicationCounts.NotCounted why)
-      (ApplicationCounts.Counted Map.empty)
-  { Files = files |> List.map fst; Unreadable = []; Applied = counts }
+  { Files = files |> List.map fst
+    Unreadable = []
+    Applied = CallFollow.combineCounts (files |> List.map (fun (file, counts) -> file.File, counts)) }
 
 let private ownerOf (index: SourceIndex) (binding: string) : SourceRef =
   match SourceIndex.declarations index binding |> List.collect (fun d -> d.Owners) with
@@ -167,6 +158,41 @@ let followTests =
 /// Public on purpose: the live-values walk reads a record through reflection and takes a non-public one for an opaque class.
 type PlayerRecord = { Health: int; Speed: float; Name: string }
 
+[<Tests>]
+let readingTests =
+  let declared (text: string) =
+    match TweakAddress.declaredBindings text with
+    | Ok found -> found
+    | Error why -> failtestf "declaredBindings failed: %A" why
+  testList "reading what a call needs from the files" [
+
+    testCase "WHY — every let in a file is listed with where it is and how its right-hand side is written, whether or not the door lists a point in it" <| fun _ ->
+      let found = declared oneCallee |> List.map (fun d -> d.Name, d.Rhs)
+      found |> Expect.contains "a call-built binding, which the door lists no point of" ("player", "initPlayer ()")
+      found |> Expect.contains "the callee, whose right-hand side is a record" ("initPlayer", "{ Health = 100; Speed = 4.5; Name = \"Ada\" }")
+
+    testCase "WHY — only a binding asked about, built by a call of a name some owned file declares, has its whole right-hand side read" <| fun _ ->
+      let wanted (names: string list) (known: string list) =
+        CallFollow.callBuiltToRead (Set.ofList names) (Set.ofList known) (declared oneCallee) |> List.map (fun a -> a.BindingName)
+      wanted [ "player"; "spare" ] [ "initPlayer" ] |> Expect.equal "the two call-built bindings" [ "player"; "spare" ]
+      wanted [ "player" ] [ "initPlayer" ] |> Expect.equal "only the one asked about" [ "player" ]
+      wanted [ "player" ] [] |> Expect.isEmpty "a callee no owned file declares is not read for"
+      wanted [ "initPlayer" ] [ "initPlayer" ] |> Expect.isEmpty "a record is not a call"
+
+    testCase "WHY — the callees to look for are the names the call-built wholes apply, without their module" <| fun _ ->
+      let wholes = [ { sourceAt "a.fs" "x" "Game.Tuning.make 1 2" ItemKind.Formula with Address = addressOf "x" [] }; sourceAt "a.fs" "y" "{ A = 1 }" ItemKind.Formula ]
+      CallFollow.calleeNamesOf wholes |> Expect.equal "make, and nothing for a record" (Set.ofList [ "make" ])
+
+    testCase "WHY — counts over several files are added by name, and one file that could not be counted makes the total not counted and names the file" <| fun _ ->
+      let counted (pairs: (string * int) list) = ApplicationCounts.Counted(Map.ofList pairs)
+      CallFollow.combineCounts [ "a.fs", counted [ "make", 2 ]; "b.fs", counted [ "make", 1; "other", 4 ] ]
+      |> Expect.equal "summed per name" (counted [ "make", 3; "other", 4 ])
+      match CallFollow.combineCounts [ "a.fs", counted [ "make", 2 ]; "b.fs", ApplicationCounts.NotCounted "the file does not parse" ] with
+      | ApplicationCounts.NotCounted reason -> reason |> Expect.stringContains "the file is named" "b.fs"
+      | other -> failtestf "a total over the readable files is not the number of callers, got %A" other
+      CallFollow.combineCounts [] |> Expect.equal "no files, nothing called" (counted [])
+  ]
+
 let private rowFor (index: SourceIndex) (binding: string) (value: obj) (field: string) : RowView =
   let view = buildRows index (walked [ binding, value ]) Memory.empty
   let key = RowKey.field (RowKey.top binding) field
@@ -212,6 +238,18 @@ let rowTests =
       | PersistenceState.NotInAFile(NotInFileWhy.NotSpelledInTheFile _) -> ()
       | other -> failtestf "no literal to write, got %A" other
       row.Control |> Expect.equal "so no knob" Control.NoControl
+
+    testCase "WHY — a write through a followed call is remembered against the row that was clicked, so the reload verdict shows on that row and not on the callee's address" <| fun _ ->
+      let index = indexOver [ fileIndex "State.fs" oneCallee [ "player"; "initPlayer" ] ]
+      let key = RowKey.field (RowKey.top "player") "Health"
+      let place =
+        match (rowFor index "player" (player 100) "Health").Place with
+        | PlaceOf.Placed place -> place
+        | PlaceOf.NotPlaced -> failtest "expected the row to be placed in the callee"
+      let ran = ranOf (NudgeOutcome.Written(receiptFor place.Address))
+      let memory = Memory.finished key place ran SessionReload.NoReloadYet 5L Memory.empty
+      memory.Writes |> Map.containsKey key |> Expect.isTrue "the clicked row holds the write"
+      memory.Writes |> Map.containsKey (RowKey.top "initPlayer") |> Expect.isFalse "the callee's name is not a row of the pane"
 
     testCase "a record the file spells itself is not a call, and its parts say nothing about one" <| fun _ ->
       let text = "module Game.Tuning\n\nlet gravity = 9.8\n"

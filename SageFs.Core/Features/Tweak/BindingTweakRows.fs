@@ -129,7 +129,12 @@ module Memory =
     | Error refusal -> { memory with Outcomes = Map.add key (RowOutcome.Rejected(refusal, attempted)) memory.Outcomes }
     | Ok ran ->
       let landed (receipt: Receipt) (move: FileTrail -> FileTrail) =
-        let target = RowKey.ofAddress receipt.Address |> Option.defaultValue key
+        // A write to the address the clicked row showed is that row's, even when the address is a callee's literal and no row is named
+        // for it. An undo or redo can land on another row's write, so that one is found by its address.
+        let target =
+          match receipt.Address = attempted.Address with
+          | true -> key
+          | false -> RowKey.ofAddress receipt.Address |> Option.defaultValue key
         { cleared with
             Trails = Map.add receipt.File (move (trailOf cleared receipt.File)) cleared.Trails
             Writes = Map.add target { File = receipt.File; Baseline = baseline; At = now } cleared.Writes

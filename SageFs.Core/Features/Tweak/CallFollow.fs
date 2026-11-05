@@ -97,6 +97,28 @@ let applicationsIn (source: string) : ApplicationCounts =
     |> Map.ofSeq
     |> ApplicationCounts.Counted
 
+/// The counts of every file added up. One file that could not be counted makes the total not counted, and names the file, because
+/// a total over the files that could be read is not the number of callers.
+let combineCounts (perFile: (string * ApplicationCounts) list) : ApplicationCounts =
+  let failures =
+    perFile
+    |> List.choose (fun (file, counts) ->
+      match counts with
+      | ApplicationCounts.NotCounted reason -> Some(sprintf "%s: %s" file reason)
+      | ApplicationCounts.Counted _ -> None)
+  match failures with
+  | first :: _ -> ApplicationCounts.NotCounted first
+  | [] ->
+    perFile
+    |> List.collect (fun (_, counts) ->
+      match counts with
+      | ApplicationCounts.Counted found -> Map.toList found
+      | ApplicationCounts.NotCounted _ -> [])
+    |> List.groupBy fst
+    |> List.map (fun (name, entries) -> name, entries |> List.sumBy snd)
+    |> Map.ofList
+    |> ApplicationCounts.Counted
+
 // ── following ──
 
 /// A name as it is written at a call: the modules before it, and the name.
@@ -110,6 +132,26 @@ let private writtenOf (text: string) : Written =
 let private qualifies (written: Written) (modulePath: string list) : bool =
   let skip = List.length modulePath - List.length written.Qualifier
   skip >= 0 && List.skip skip modulePath = written.Qualifier
+
+/// The names the right-hand sides in `wholes` apply, without their modules: the callees the files must be read for.
+let calleeNamesOf (wholes: SourceRef list) : Set<string> =
+  wholes
+  |> List.choose (fun whole -> calleeOf whole.Text)
+  |> List.map (fun text -> (writtenOf text).Name)
+  |> Set.ofList
+
+/// The bindings whose whole right-hand side is worth reading: those the pane asks about (`names`) that a file builds with a call of
+/// a name some owned file declares (`known`). Anything else the door lists no point of stays "not in a file", as before: a call to
+/// the framework is not a callee the pane can follow, and its expression is not offered for editing.
+let callBuiltToRead (names: Set<string>) (known: Set<string>) (declared: DeclaredBinding list) : TweakAddress list =
+  declared
+  |> List.filter (fun binding -> Set.contains binding.Name names)
+  |> List.filter (fun binding ->
+    match calleeOf binding.Rhs with
+    | Some text -> Set.contains (writtenOf text).Name known
+    | None -> false)
+  |> List.map (fun binding -> { ModulePath = binding.ModulePath; BindingName = binding.Name; Path = [] })
+  |> List.distinct
 
 let private callersOf (index: SourceIndex) (callee: Written) (modulePath: string list) : CallerCount =
   match index.Applied with
