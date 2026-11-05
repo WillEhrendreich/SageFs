@@ -50,6 +50,25 @@ module SessionDisplayStatus =
     | SessionState.Faulted -> SessionDisplayStatus.Faulted "session faulted"
     | SessionState.Uninitialized -> SessionDisplayStatus.Lost
 
+  /// What a daemon health summary says about a session with this display status.
+  let healthStatus = function
+    | SessionDisplayStatus.Running -> SageFs.Features.SessionHealthStatus.Ready
+    | SessionDisplayStatus.Idle -> SageFs.Features.SessionHealthStatus.Ready
+    | SessionDisplayStatus.Starting -> SageFs.Features.SessionHealthStatus.WarmingUp
+    | SessionDisplayStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
+    | SessionDisplayStatus.Faulted _ -> SageFs.Features.SessionHealthStatus.Faulted
+    | SessionDisplayStatus.Lost -> SageFs.Features.SessionHealthStatus.Faulted
+    | SessionDisplayStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
+
+  /// Two readings of one session's status: the registry's (what the header badge and the cards read, and the authority on
+  /// the worker's lifecycle) and the Elm model's (which the health summaries used, and which lags the registry at every
+  /// transition). The registry's reading wins when there is one, so the health bar cannot say "Warming Up" for the seconds
+  /// after the badge says "Ready".
+  let reconcile (registry: SessionDisplayStatus option) (elmModel: SessionDisplayStatus) : SessionDisplayStatus =
+    match registry with
+    | Some status -> status
+    | None -> elmModel
+
   let cssClass = function
     | SessionDisplayStatus.Running -> "status-ready"
     | SessionDisplayStatus.Starting -> "status-warming"

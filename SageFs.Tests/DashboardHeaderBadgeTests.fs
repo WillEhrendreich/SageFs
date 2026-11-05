@@ -75,7 +75,7 @@ let tests =
         [ inPlay SessionState.Ready SessionDisplayStatus.Running, "Ready"
           inPlay SessionState.Ready SessionDisplayStatus.Idle, "Ready"
           inPlay SessionState.Evaluating SessionDisplayStatus.Running, "Evaluating"
-          inPlay SessionState.WarmingUp SessionDisplayStatus.Starting, "WarmingUp"
+          inPlay SessionState.WarmingUp SessionDisplayStatus.Starting, "Warming up"
           inPlay SessionState.Faulted (SessionDisplayStatus.Faulted "boom"), "Faulted"
           inPlay SessionState.Uninitialized SessionDisplayStatus.Lost, "Uninitialized"
           SessionInView.NoSessionInPlay, "No session" ]

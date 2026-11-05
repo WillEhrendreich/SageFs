@@ -92,13 +92,20 @@ let readinessTests =
         let expected = state = SessionState.Ready && isFine source freshness
         plain |> Expect.equal (sprintf "%A / %A / %A" state source freshness) expected)
 
-    testCase "WHY — over every combination, a state other than Ready keeps the daemon's own word whatever the build says" <| fun _ ->
+    testCase "WHY — over every combination, a state other than Ready keeps the daemon's own word whatever the build says (WarmingUp, a token in code, is spelled 'Warming up' for a person, on every surface)" <| fun _ ->
       every
       |> List.filter (fun (state, _, _) -> state <> SessionState.Ready)
       |> List.iter (fun (state, source, freshness) ->
+        let expected =
+          match state with
+          | SessionState.WarmingUp -> "Warming up"
+          | SessionState.Uninitialized
+          | SessionState.Ready
+          | SessionState.Evaluating
+          | SessionState.Faulted -> SessionState.label state
         Readiness.decide state source freshness
         |> Readiness.label
-        |> Expect.equal (sprintf "%A" state) (SessionState.label state))
+        |> Expect.equal (sprintf "%A" state) expected)
 
     testCase "WHY — over every combination, a build that is behind never reads as failure: red is for failure only" <| fun _ ->
       every
@@ -211,4 +218,43 @@ let cardNoteTests =
       SourceState.describe state |> Expect.stringContains "still the long sentence" "STALE SOURCE: 1 file(s) changed on disk after the build this session runs"
       SourceState.describe state |> Expect.stringContains "still the absolute path, which a tool result wants" "/home/will/proj/src/A.fs"
       SourceState.banner state |> Expect.stringStarts "still the warning" "WARNING: STALE SOURCE"
+  ]
+
+// ── One phrase per state, and one remedy decision ────────────────────────────────────────────────────────────────────
+
+let private qualified =
+  [ Readiness.ReadyOlderCode; Readiness.ReadyRebuilding; Readiness.ReadyReplBehindApp; Readiness.ReadyUnchecked ]
+
+[<Tests>]
+let phraseTests =
+  testList "Readiness.brief and Remedy" [
+
+    testCase "WHY — the short phrase for a session running older code is the one the pane note, the card and the strip print" <| fun _ ->
+      Readiness.brief Readiness.ReadyOlderCode |> Expect.equal "the phrase" (Some "Running older code")
+
+    testCase "WHY — a plain Ready and a state other than Ready have no phrase, because there is nothing to qualify" <| fun _ ->
+      Readiness.brief Readiness.ReadyCurrent |> Expect.isNone "plain Ready"
+      for state in everyState do
+        Readiness.brief (Readiness.InState state) |> Expect.isNone (sprintf "%A" state)
+
+    testCase "WHY — over every qualified readiness the long label is 'Ready, ' and the short phrase, so no surface words one state two ways" <| fun _ ->
+      for readiness in qualified do
+        let brief = Readiness.brief readiness |> Option.get
+        Readiness.label readiness |> fun label -> label.ToLowerInvariant() |> Expect.equal (sprintf "%A" readiness) ("ready, " + brief.ToLowerInvariant())
+
+    testCase "WHY — the remedy is to rebuild exactly when files changed after the build, and never for a rebuild already under way or a build nobody could read" <| fun _ ->
+      for source in everySource do
+        let expected =
+          match source with
+          | SourceState.Stale _ -> Remedy.RebuildAndReload
+          | SourceState.InSync _
+          | SourceState.Rebuilding _
+          | SourceState.Unknown _ -> Remedy.NothingToDo
+        Remedy.ofSource source |> Expect.equal (sprintf "%A" source) expected
+
+    testCase "WHY — over every source and freshness, a Ready session is offered the rebuild exactly when its readiness is 'running older code'" <| fun _ ->
+      for source in everySource do
+        for freshness in everyFreshness do
+          let olderCode = Readiness.decide SessionState.Ready source freshness = Readiness.ReadyOlderCode
+          (Remedy.ofSource source = Remedy.RebuildAndReload) |> Expect.equal (sprintf "%A / %A" source freshness) olderCode
   ]

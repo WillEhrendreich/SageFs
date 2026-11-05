@@ -666,7 +666,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
     ] ]
 
 /// The open pane: a header (what opened it, when it was read, a filter, the pin), then the tree.
-let renderPaneWith (look: View) (controls: LiveBindingsViewPanel.ViewControls option) (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
+let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsViewPanel.ViewControls option) (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
   let stamp =
     match source with
     | WalkedBindings view ->
@@ -691,6 +691,8 @@ let renderPaneWith (look: View) (controls: LiveBindingsViewPanel.ViewControls op
       Elem.span [ Attr.class' "live-pane-title" ] [ Text.raw "Live bindings" ]
       Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
       Elem.span [ Attr.class' "live-pane-stamp" ] [ textEnc stamp ]
+      // When the session runs older code than its files say: what is wrong, and the button that fixes it (empty otherwise).
+      remedy
       // A binding no file holds is said once here, with its reason on hover, and not on every row.
       match source with
       | WalkedBindings view ->
@@ -725,6 +727,10 @@ let renderPaneWith (look: View) (controls: LiveBindingsViewPanel.ViewControls op
     yield! body
   ]
 
+/// The open pane with no remedy note in its bar.
+let renderPaneWith (look: View) (controls: LiveBindingsViewPanel.ViewControls option) (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
+  renderPaneWithRemedy (Text.raw "") look controls tweaks sessionId source because display
+
 /// The open pane with no knob, in the REPL workflow's recommended view: what a session whose files have not been asked about shows.
 let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
   renderPaneWith (View.recommended ViewWorkflow.Repl) None TweakView.none sessionId source because display
@@ -735,7 +741,8 @@ let renderPane (sessionId: string) (source: BindingsSource) (because: OpenBecaus
 /// view the session's workflow and app resolved to (`SettingsCatalog.viewFor`): which columns a row has, how much of a value
 /// prints, how tall a row is. `controls` is the pane bar's view button and the panel it opens; a page with no session to choose a view
 /// for has none.
-let renderDockWith
+let renderDockWithRemedy
+  (remedy: XmlNode)
   (look: View)
   (controls: LiveBindingsViewPanel.ViewControls option)
   (tweaks: TweakView)
@@ -761,14 +768,14 @@ let renderDockWith
 
   let liveBindings =
     match PaneState.decide facts DockPane.LiveBindings with
-    | PaneOpen because -> [ renderPaneWith look controls tweaks sessionId source because ShownAlways ]
+    | PaneOpen because -> [ renderPaneWithRemedy remedy look controls tweaks sessionId source because ShownAlways ]
     | PaneCollapsed why ->
       match CollapsedBecause.pin why with
       | PinNotOffered -> [ renderCollapsedBar why ShownAlways ]
       | PinOffered ->
         match PaneState.decide { facts with Pin = Pinned } DockPane.LiveBindings with
         | PaneOpen pinnedBecause ->
-          [ renderCollapsedBar why ShownUnlessPinned; renderPaneWith look controls tweaks sessionId source pinnedBecause ShownOnlyWhilePinned ]
+          [ renderCollapsedBar why ShownUnlessPinned; renderPaneWithRemedy remedy look controls tweaks sessionId source pinnedBecause ShownOnlyWhilePinned ]
         | PaneCollapsed _ -> [ renderCollapsedBar why ShownAlways ]
 
   // Qualified rather than `open`: AppOutputView has its own `renderCollapsedBar`, and opening it here
@@ -778,6 +785,18 @@ let renderDockWith
     [ SageFs.Server.AppOutputView.render (PaneState.decide facts DockPane.AppOutput) pane ]
 
   shell (liveBindings @ appOutputPane)
+
+/// The dock with no remedy note in the pane bar.
+let renderDockWith
+  (look: View)
+  (controls: LiveBindingsViewPanel.ViewControls option)
+  (tweaks: TweakView)
+  (session: SessionInView)
+  (sessionId: string)
+  (source: BindingsSource)
+  (appOutput: SageFs.Server.AppOutputPane.AppOutputPane option)
+  : XmlNode =
+  renderDockWithRemedy (Text.raw "") look controls tweaks session sessionId source appOutput
 
 /// The dock with no knob (a session whose files have not been asked about, and the no-session page).
 let renderDock (session: SessionInView) (sessionId: string) (source: BindingsSource) : XmlNode =

@@ -1058,6 +1058,20 @@ module ToneStyle =
     | ReadinessTone.Failing -> "❌"
     | ReadinessTone.Quiet -> "⏹️"
 
+  /// The glyph for a readiness: warming up and evaluating keep their own, everything else follows its tone.
+  let readinessGlyph (readiness: Readiness) : string =
+    match readiness with
+    | Readiness.InState SessionState.WarmingUp -> "⏳"
+    | Readiness.InState SessionState.Evaluating -> "⚡"
+    | Readiness.InState SessionState.Faulted
+    | Readiness.InState SessionState.Uninitialized
+    | Readiness.InState SessionState.Ready
+    | Readiness.ReadyCurrent
+    | Readiness.ReadyOlderCode
+    | Readiness.ReadyRebuilding
+    | Readiness.ReadyReplBehindApp
+    | Readiness.ReadyUnchecked -> glyph (Readiness.tone readiness)
+
 module SessionInView =
   /// The CSS class for the header status badge. A session that is simply ready, or in another state, takes the card's class
   /// for the same status, so the badge cannot say green over a session whose card says faulted. A Ready session that is
@@ -1088,6 +1102,56 @@ module SessionInView =
 type CardSource =
   | Read of SourceState
   | NotReadOnThisCard
+
+module CardSource =
+  /// What can be done about the card's build, from the one decision (`Remedy.ofSource`) the card's button and the live
+  /// bindings pane's note both read. A card whose source was not read offers nothing.
+  let remedy (source: CardSource) : Remedy =
+    match source with
+    | CardSource.Read state -> Remedy.ofSource state
+    | CardSource.NotReadOnThisCard -> Remedy.NothingToDo
+
+/// The "Rebuild and reload" control and the note that carries it. It is the dashboard's own hard reset with a rebuild (the same
+/// route the evaluate popover's button posts to), drawn in two places that read one decision: on the viewed session's card, and in
+/// the live bindings pane's bar, where the warning is felt.
+[<RequireQualifiedAccess>]
+type RemedyPlace =
+  | OnCard
+  | InPaneBar
+
+module RebuildRemedy =
+  let route = "/dashboard/hard-reset"
+  let words = "Rebuild and reload"
+
+  /// The button. Each place has its own test id and its own class, so a journey finds each one and the stylesheet sizes each.
+  let button (place: RemedyPlace) : XmlNode =
+    let testId, cssClass =
+      match place with
+      | RemedyPlace.OnCard -> "session-card-rebuild", "session-btn session-card-source-action"
+      | RemedyPlace.InPaneBar -> "live-pane-rebuild", "session-btn live-pane-rebuild"
+    Elem.button
+      [ Attr.class' cssClass
+        Attr.type' "button"
+        Attr.create "data-testid" testId
+        Attr.create "aria-label" "Rebuild and reload: hard reset this session with a rebuild, so it runs the code in the files"
+        Ds.indicator Signals.ActionLoading
+        Ds.attr' ("disabled", "$actionLoading")
+        Ds.onClick (Ds.post route) ]
+      [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
+        Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "↻ " ]
+        Text.raw words ]
+
+  /// The note for the live bindings pane's bar: what is wrong in a few words, and the button. Nothing when there is nothing to do.
+  let paneNote (remedy: Remedy) : XmlNode =
+    match remedy with
+    | Remedy.NothingToDo -> Text.raw ""
+    | Remedy.RebuildAndReload ->
+      Elem.span
+        [ Attr.class' "live-pane-stale"
+          Attr.create "data-testid" "live-pane-stale"
+          Attr.create "role" "status" ]
+        [ Elem.span [ Attr.class' "live-pane-stale-words" ] [ Text.raw (System.Net.WebUtility.HtmlEncode (Remedy.headline remedy)) ]
+          button RemedyPlace.InPaneBar ]
 
 /// One sidebar card. Which card is being viewed is NOT a property of the card:
 /// renderers are always told the viewing session explicitly (the page's
@@ -1264,6 +1328,34 @@ let liveSessionCards
     let evals = evalCounts |> Map.tryFind s.Id |> Option.defaultValue 0
     let health = SessionHealth.classify s.Status s.ProjectRoles (warmupContextFor s.Id)
     sessionCardOf now (warmupProgress s.Id) evals health s)
+
+/// The words and the class of a card's status badge. A card that read its session's build says so in the badge when the build
+/// is not known to be current, in the header badge's own words and tone: the card said a green "running" beside a block that
+/// said the session ran older code.
+type CardBadge = { Words: string; CssClass: string }
+
+module CardBadge =
+  let ofCard (card: ParsedSession) : CardBadge =
+    let plain = { Words = SessionDisplayStatus.label card.Status; CssClass = SessionDisplayStatus.cssClass card.Status }
+    match card.Source with
+    | CardSource.NotReadOnThisCard -> plain
+    | CardSource.Read source ->
+      match card.Status with
+      | SessionDisplayStatus.Running
+      | SessionDisplayStatus.Idle ->
+        let readiness = Readiness.decide SessionState.Ready source card.Freshness
+        // The words are the header badge's ("Ready", or "Ready, running older code"). The colour is the tone's when the build
+        // is not known to be current, and otherwise the card's own, so an idle session stays quiet.
+        match Readiness.qualification readiness with
+        | Some _ -> { Words = Readiness.label readiness; CssClass = ToneStyle.cssClass (Readiness.tone readiness) }
+        | None -> { plain with Words = Readiness.label readiness }
+      // The same moment on the header badge reads "Warming up", so the viewed card does too. Its colour class stays the
+      // card's own: the two are both the warming colour.
+      | SessionDisplayStatus.Starting
+      | SessionDisplayStatus.Restarting -> { plain with Words = Readiness.label (Readiness.InState SessionState.WarmingUp) }
+      | SessionDisplayStatus.Faulted _
+      | SessionDisplayStatus.Lost
+      | SessionDisplayStatus.Stopped -> plain
 
 /// The header's eval count and the viewed card's are one number. The header's came from the worker's own tally and the
 /// card's from the daemon's finished-eval count, which differ by an eval in flight, so one session read "13 evals" at the top

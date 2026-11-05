@@ -612,43 +612,55 @@ module ElapsedClock =
 let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHealthView) =
   let emoji = Features.DaemonHealth.healthEmoji view.OverallHealth
   let label = Features.DaemonHealth.healthLabel view.OverallHealth
-  let qualification (s: Features.SessionHealthSummary) : Readiness option =
-    match s.Status with
-    | Features.SessionHealthStatus.Ready -> readinessOf |> Map.tryFind s.SessionId
-    | Features.SessionHealthStatus.Evaluating
-    | Features.SessionHealthStatus.WarmingUp
-    | Features.SessionHealthStatus.Faulted
-    | Features.SessionHealthStatus.Stopped -> None
+  // A session the caller has a readiness for reads as that readiness, whatever the health snapshot says about it: the snapshot
+  // is built from the Elm model, which lags the registry for a moment at every transition, and the header badge and the card
+  // read the registry. One decision for the viewed session, so the bar cannot say Warming Up beside a header that says Ready.
+  let readinessFor (s: Features.SessionHealthSummary) : Readiness option = readinessOf |> Map.tryFind s.SessionId
   let glyphOf (s: Features.SessionHealthSummary) =
-    match qualification s with
-    | Some readiness -> ToneStyle.glyph (Readiness.tone readiness)
+    match readinessFor s with
+    | Some readiness -> ToneStyle.readinessGlyph readiness
     | None -> Features.DaemonHealth.sessionStatusEmoji s.Status
   let wordOf (s: Features.SessionHealthSummary) =
-    match qualification s with
+    match readinessFor s with
     | Some readiness -> Readiness.label readiness
     | None -> Features.DaemonHealth.sessionStatusLabel s.Status
   let isNominal (s: Features.SessionHealthSummary) =
-    match s.Status, qualification s |> Option.map Readiness.tone with
-    | Features.SessionHealthStatus.Ready, Some ReadinessTone.Caution -> false
-    | Features.SessionHealthStatus.Ready, _
-    | Features.SessionHealthStatus.Evaluating, _
-    | Features.SessionHealthStatus.WarmingUp, _ -> true
-    | Features.SessionHealthStatus.Faulted, _
-    | Features.SessionHealthStatus.Stopped, _ -> false
+    match readinessFor s with
+    | Some readiness ->
+      match readiness with
+      | Readiness.ReadyCurrent
+      | Readiness.InState SessionState.Ready
+      | Readiness.InState SessionState.WarmingUp
+      | Readiness.InState SessionState.Evaluating -> true
+      | Readiness.InState SessionState.Faulted
+      | Readiness.InState SessionState.Uninitialized
+      | Readiness.ReadyOlderCode
+      | Readiness.ReadyRebuilding
+      | Readiness.ReadyReplBehindApp
+      | Readiness.ReadyUnchecked -> false
+    | None ->
+      match s.Status with
+      | Features.SessionHealthStatus.Ready
+      | Features.SessionHealthStatus.Evaluating
+      | Features.SessionHealthStatus.WarmingUp -> true
+      | Features.SessionHealthStatus.Faulted
+      | Features.SessionHealthStatus.Stopped -> false
   let sessionSummaryText (summaries: Features.SessionHealthSummary list) =
     match summaries with
     | [] -> None
-    | [s] -> Some (sprintf "%s %s [%s]" (glyphOf s) s.ProjectName (wordOf s))
+    // The session's own words, scoped by name, so the daemon's green above is never read as this session's.
+    | [s] -> Some (sprintf "%s Session %s: %s" (glyphOf s) s.ProjectName (wordOf s))
     | _ when summaries.Length <= 3 ->
       // A session that is not plainly ready says so in words, because a glyph alone is a colour alone.
       let caveat (s: Features.SessionHealthSummary) =
-        match qualification s with
+        match readinessFor s with
         | Some readiness when not (isNominal s) -> sprintf " (%s)" (Readiness.label readiness)
         | Some _
         | None -> ""
       Some (summaries
         |> List.map (fun s -> sprintf "%s %s%s" (glyphOf s) s.ProjectName (caveat s))
-        |> String.concat " · ")
+        |> String.concat " · "
+        |> sprintf "Sessions: %s")
     | _ ->
       let degraded = summaries |> List.filter (not << isNominal)
       match degraded with
@@ -658,14 +670,10 @@ let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHe
         Some (sprintf "⚠️ %d sessions · %d degraded: %s" summaries.Length problems.Length names)
   Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] [
     Elem.span [ Attr.style "font-weight: bold;" ] [
-      // Daemon facts only (version · uptime · memory). Readiness lives in the
-      // top status tab + the green dot; the no-session state is shown by the
-      // Sessions panel empty-state — neither is repeated here.
-      let statusText =
-        match view.SessionSummaries with
-        | [] -> emoji
-        | _ -> sprintf "%s %s" emoji label
-      textEnc (sprintf "%s · SageFs %s · " statusText view.Version)
+      // Daemon facts only (version · uptime · memory), and the word says whose they are: "Daemon healthy" is the daemon's, and a
+      // session's readiness is named as the session's in the list that follows. The word is there with no session too, so a
+      // glyph is never the only signal.
+      textEnc (sprintf "%s Daemon %s · SageFs %s · " emoji (label.ToLowerInvariant()) view.Version)
       // The uptime ticks in the browser (ElapsedClock); the server renders only the moment it started.
       match view.StartedAt with
       | Since.At startedAtMs ->
@@ -1699,7 +1707,6 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
       ]
     | false ->
       let ordinaryCard (i: int) (s: ParsedSession) =
-        let statusClass = SessionDisplayStatus.cssClass s.Status
         let sid = WorkerProtocol.SessionId.value s.Id
         let isViewing = sid = viewingSessionId
         let cls =
@@ -1742,9 +1749,12 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               // Row 1: session ID + status + selected indicator
               Elem.div [ Attr.class' "session-card-status-row" ] [
                 Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc sid ]
+                // The badge's words and tone are the viewed session's readiness when the card read its build, so the card says
+                // what the header badge says ("Ready, running older code" in the caution tone), never a green "running".
+                let badge = CardBadge.ofCard s
                 Elem.span
-                  [ Attr.class' (sprintf "status badge %s" statusClass) ]
-                  [ textEnc (SessionDisplayStatus.label s.Status) ]
+                  [ Attr.class' (sprintf "status badge %s" badge.CssClass) ]
+                  [ textEnc badge.Words ]
                 // The one TRUE usability verdict (SessionHealth.classify),
                 // distinct from the worker-liveness badge above it — visible
                 // on the card WITHOUT expanding anything (sagefs-ux-roast.md
@@ -1847,10 +1857,12 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     | ReadinessTone.Quiet -> "quiet"
                   // The button acts on the session in view, so it is on the viewed session's card and only when the files
                   // changed: a rebuild already under way needs no second one, and an unknown build is not known to need one.
+                  // The live bindings pane's note reads the same decision (`CardSource.remedy`).
                   let offersRebuild =
-                    match isViewing, state with
-                    | true, SourceState.Stale _ -> true
-                    | _ -> false
+                    match isViewing, CardSource.remedy s.Source with
+                    | true, Remedy.RebuildAndReload -> true
+                    | true, Remedy.NothingToDo
+                    | false, _ -> false
                   Elem.div
                     [ Attr.class' (sprintf "session-card-source session-card-source-%s" toneName)
                       testid "session-card-source"
@@ -1858,18 +1870,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       Attr.create "data-readiness" (attrEnc (Readiness.label readiness)) ]
                     [ Elem.div [ Attr.class' "session-card-source-headline" ] [ textEnc headline ]
                       match offersRebuild with
-                      | true ->
-                        Elem.button
-                          [ Attr.class' "session-btn session-card-source-action"
-                            Attr.type' "button"
-                            testid "session-card-rebuild"
-                            Attr.create "aria-label" "Rebuild and reload: hard reset this session with a rebuild, so it runs the code in the files"
-                            Ds.indicator Signals.ActionLoading
-                            Ds.attr' ("disabled", "$actionLoading")
-                            Ds.onClick (Ds.post "/dashboard/hard-reset") ]
-                          [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
-                            Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "↻ " ]
-                            Text.raw "Rebuild and reload" ]
+                      | true -> RebuildRemedy.button RemedyPlace.OnCard
                       | false -> ()
                       match details with
                       | [] -> ()
@@ -1900,8 +1901,18 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 Elem.div
                   [ Attr.class' "session-dir"
                     Attr.style "font-size: 0.75rem; color: var(--fg-dim);"
-                    Attr.create "aria-label"(attrEnc s.WorkingDir) ]
-                  [ Text.raw "📁 "; textEnc s.WorkingDir ]
+                    Attr.create "aria-label"(attrEnc s.WorkingDir)
+                    // The full path, for a card that wraps it.
+                    Attr.create "title" (attrEnc s.WorkingDir) ]
+                  [ Text.raw "📁 "
+                    // A break opportunity after each separator, so a narrow card wraps the path between its parts and never in
+                    // the middle of a word ("fixture" / "s").
+                    // Split after a `/` or a `\` (the separator stays with the part before it).
+                    yield! System.Text.RegularExpressions.Regex.Split(s.WorkingDir, @"(?<=[/\\])") |> Array.toList |> List.mapi (fun index part ->
+                      match index with
+                      | 0 -> [ textEnc part ]
+                      | _ -> [ Text.raw "<wbr>"; textEnc part ])
+                      |> List.concat ]
               | false -> ()
               // Row 3: projects as tags + evals + last activity
               Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem; flex-wrap: wrap;" ] [
@@ -2342,6 +2353,23 @@ let renderStatuslineLeft (readiness: Readiness) (workingDir: string) =
     Elem.div [ Attr.id "statusline-file"; Attr.class' "statusline-file" ] [ textEnc workingDir ]
   ]
 
+/// A word on the Sessions header for a viewed session whose card has something to say. At narrow widths the card is folded away
+/// and only this header shows, so without it the warning is visible and the fix cannot be found. It is a word and not only a colour,
+/// the same short phrase the live bindings pane's note uses, from the same readiness. Nothing for a session with nothing to say.
+let renderSessionsStripMarker (view: SessionInView) : XmlNode =
+  match view with
+  | SessionInView.NoSessionInPlay -> Text.raw ""
+  | SessionInView.InPlay(_, _, readiness) ->
+    match Readiness.brief readiness with
+    | None -> Text.raw ""
+    | Some phrase ->
+      Elem.span
+        [ Attr.class' "sessions-stale-marker"
+          testid "sessions-stale-marker"
+          Attr.create "role" "status"
+          Attr.create "title" (attrEnc (sprintf "%s: open the session card for details" (Readiness.label readiness))) ]
+        [ textEnc phrase ]
+
 /// Render the full dynamic content of the dashboard as a single <div id="main">.
 /// This is the ONLY thing pushed via SSE on every state change.
 /// Implements "immediate mode HTML" — the server renders the complete page from
@@ -2508,6 +2536,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         // Sidebar header — title + dynamic collapse/expand toggle (always visible)
         Elem.div [ Attr.class' "sidebar-header" ] [
           Elem.h2 [] [ Text.raw "Sessions" ]
+          renderSessionsStripMarker snap.InView
           Elem.span [ Attr.style "margin-left:auto;margin-right:8px;" ] [ connectionNode ]
           // New session: opens the guided dialog (find projects, pick a workflow, see who is already here).
           // Opening is a signal, and the post asks the daemon to look in the directory the dialog opens on.
@@ -3661,12 +3690,10 @@ let renderSessionContextPanel (ctx: SessionContext) =
   let filesSection =
     signalDetails Signals.SessionContextFilesOpen [] [
       Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
-        let loadedCount =
-          ctx.FileStatuses
-          |> List.filter (fun f -> f.Readiness = Loaded)
-          |> List.length
         Text.raw "📄 "
-        textEnc (sprintf "Files (%d/%d loaded)" loadedCount (ctx.FileStatuses |> List.length))
+        // A count of the files, not a ratio: "loaded" here means an opened namespace's name ends the file's path, which is
+        // usually nothing for a REPL session, and "0/2 loaded" read as a failure. The rows below still show each file's mark.
+        textEnc (sprintf "Files (%d)" (ctx.FileStatuses |> List.length))
       ]
       Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em; font-size: 0.7rem;" ] [
         for f in ctx.FileStatuses do

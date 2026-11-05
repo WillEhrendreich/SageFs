@@ -151,10 +151,29 @@ let sessionContextTests = testList "SessionContext" [
     let s = SessionContext.summary sampleSession
     s |> Expect.stringContains "says it is about warmup" "Warmup"
     s.Contains sampleSession.Status |> Expect.isFalse "the daemon's state word is the header badge's to say, not this line's"
-    s |> Expect.stringContains "has file count" "2/5"
-    s |> Expect.stringContains "has namespace count" "4 namespaces"
-    s |> Expect.stringContains "has failed count" "1 failed"
-    s |> Expect.stringContains "has duration" "1234ms"
+    s |> Expect.equal "plain words, the count opened, the failures because there is one, and how long it took" "Warmup finished in 1.2s: 4 namespaces opened, 1 failed."
+
+  testCase "WHY — the summary does not print a files-loaded ratio, because a zero there is normal for a REPL session (a file counts as loaded only when an opened namespace's name ends its path) and read as a failure beside Ready" <| fun _ ->
+    let s = SessionContext.summary sampleSession
+    s.Contains "files loaded" |> Expect.isFalse "no ratio of files"
+    s.Contains "2/5" |> Expect.isFalse "and no fraction"
+    SessionContext.summary { sampleSession with FileStatuses = [] }
+    |> Expect.equal "the line does not depend on the file list" s
+
+  testCase "WHY — a failure count is printed only when it is not zero, so a clean warmup reads as finished and not as a column of zeros" <| fun _ ->
+    let clean = SessionContext.summary { sampleSession with Warmup = { sampleSession.Warmup with FailedOpens = [] } }
+    clean |> Expect.equal "no failure clause" "Warmup finished in 1.2s: 4 namespaces opened."
+    clean.Contains "failed" |> Expect.isFalse "the word failed is absent"
+
+  testCase "WHY — one namespace is 'namespace', not 'namespaces'" <| fun _ ->
+    let one = { sampleSession.Warmup with NamespacesOpened = List.truncate 1 sampleSession.Warmup.NamespacesOpened; FailedOpens = [] }
+    SessionContext.summary { sampleSession with Warmup = one }
+    |> Expect.stringContains "singular" "1 namespace opened"
+
+  testCase "WHY — durations read in seconds with one decimal from a second up, and in milliseconds below it" <| fun _ ->
+    [ 0L; 980L; 999L; 1000L; 1478L; 1950L; 59000L; 61000L; 125000L ]
+    |> List.map SessionContext.durationText
+    |> Expect.equal "the table" [ "0ms"; "980ms"; "999ms"; "1.0s"; "1.5s"; "2.0s"; "59.0s"; "1m 1s"; "2m 5s" ]
 
   testCase "assemblyLine formats assembly info" <| fun _ ->
     SessionContext.assemblyLine sampleAssembly
