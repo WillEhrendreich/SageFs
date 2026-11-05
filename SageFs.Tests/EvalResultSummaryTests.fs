@@ -74,3 +74,25 @@ let evalResultSummaryTests =
       let result = bound cap raw
       result.WasTruncated = (raw.Length > cap)
   ]
+
+/// Issue #132: `printf "5"` gave `5val it: unit = ()`, one run of text, because the program's output and FSI's own `val` line
+/// share one stream and `printf` writes no newline.
+[<Tests>]
+let valueLineTests =
+  testList "EvalResultSummary.startValueLinesOnTheirOwn" [
+
+    testCase "WHY — a val line that follows printed text on the same line starts its own line, so the text and FSI's report are not one word" <| fun _ ->
+      startValueLinesOnTheirOwn "5val it: unit = ()" |> Expect.equal "split" "5\nval it: unit = ()"
+      startValueLinesOnTheirOwn "hello world val x: int = 3" |> Expect.equal "the space is the gap, nothing is added after it" "hello world\nval x: int = 3"
+
+    testCase "WHY — output that already has its line break, or no val line at all, comes back byte for byte" <| fun _ ->
+      for text in [ "val it: unit = ()"; "5\nval it: unit = ()"; "5\r\nval it: unit = ()"; "interval = 3"; "the val of it"; ""; "val a: int = 3\nval b: int = 5" ] do
+        startValueLinesOnTheirOwn text |> Expect.equal (sprintf "%A is untouched" text) text
+
+    testCase "WHY — two bindings printed after one unterminated line each get their own line" <| fun _ ->
+      startValueLinesOnTheirOwn "5val a: int = 3\nval b: int = 5" |> Expect.equal "split once" "5\nval a: int = 3\nval b: int = 5"
+
+    testProperty "WHY — a text with no val line in it is never changed, whatever it holds" <| fun (text: string) ->
+      let text = (text |> Option.ofObj |> Option.defaultValue "").Replace("val", "va1")
+      startValueLinesOnTheirOwn text = text
+  ]

@@ -40,6 +40,14 @@ for (const [name, reply] of Object.entries(replies)) {
 const two = Pure.renderInlineResult(undefined, replies["windows, two bindings"]);
 assert.match(paintedByVsCode(two.ContentText), /val a: int = 3.*val b: int = 5/, "both bindings are painted");
 
+// WHY: issue #132, the second screenshot. Lines were joined with a box-drawing bar ("val a: int = 3  │  val b: int = 5"),
+// which reads as noise. They are joined with a semicolon, and a result cut at four lines says how many it has.
+assert.equal(two.ContentText, "  // → Result: val a: int = 3; val b: int = 5", "two bindings read as one plain line");
+for (const [name, reply] of Object.entries(replies)) {
+  assert.ok(!Pure.renderInlineResult(undefined, reply).ContentText.includes("│"), `${name}: no box-drawing bar in the ghost text`);
+}
+assert.equal(Pure.renderInlineResult(undefined, "a\nb\nc\nd\ne\nf").ContentText, "  // → a … (6 lines)", "a long result says how long it is");
+
 // A diagnostic is first-line by design, and must still be painted whole.
 const diagnostic = Pure.renderInlineDiagnostic("error FS0001: bad\r\nmore detail\r\n");
 assert.equal(paintedByVsCode(diagnostic.ContentText), diagnostic.ContentText, "the diagnostic's ghost text is painted whole");

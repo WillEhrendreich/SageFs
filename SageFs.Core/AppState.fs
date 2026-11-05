@@ -390,7 +390,7 @@ let evalFn (token: CancellationToken) =
     let evalRes, resultMetadata =
       match evaluation.Outcome with
       | FsiSession.FsiSucceeded ->
-        let fsiOutput = st.OutStream.StopRecording()
+        let fsiOutput = st.OutStream.StopRecording() |> Features.EvalResultSummary.startValueLinesOnTheirOwn
         let stdout = stdoutCapture.ToString() |> cleanStdout
         let combined =
           match String.IsNullOrWhiteSpace stdout with

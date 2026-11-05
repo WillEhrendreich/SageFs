@@ -53,3 +53,13 @@ let metadata (bounded: BoundedResult) : Map<string, objnull> =
   match bounded.WasTruncated with
   | true -> Map.ofList [ "resultTruncated", box true; "resultOriginalLength", box bounded.OriginalLength; "resultKeptLength", box bounded.KeptLength ]
   | false -> Map.empty
+
+/// What F# Interactive prints for a binding: `val it: unit = ()`, `val x: int = 3`. A program's own output and FSI's report share
+/// one stream, and `printf "5"` writes no line break, so the stream held `5val it: unit = ()` (issue #132). The report starts
+/// at the first thing on a line that looks like this, and the printed text it ran into is left where it was.
+let private valueLine =
+  System.Text.RegularExpressions.Regex(@"(?<=\S)[ \t]*(?=val (?:it|[A-Za-z_][A-Za-z0-9_']*)[ \t]*:)", System.Text.RegularExpressions.RegexOptions.Compiled)
+
+/// Put a `val` report that follows printed text on the same line onto a line of its own. Text with no such run-together, and text
+/// that already has its line break (LF or CRLF), comes back unchanged.
+let startValueLinesOnTheirOwn (text: string) : string = valueLine.Replace(text, "\n")

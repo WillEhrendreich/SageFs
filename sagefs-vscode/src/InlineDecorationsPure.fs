@@ -100,8 +100,8 @@ let renderInlineResult (durationMs: float option) (text: string) : InlineResultR
     let summary =
       match lines.Length with
       | 0 | 1 -> firstLine
-      | n when n <= MaxInlineLines -> lines |> String.concat "  │  "
-      | n -> sprintf "%s  │  ... (%d lines)" firstLine n
+      | n when n <= MaxInlineLines -> lines |> String.concat "; "
+      | n -> sprintf "%s … (%d lines)" firstLine n
     Some {
       ContentText = sprintf "  // → %s%s" (ghostLine summary) durSuffix
       HoverText = trimmed
