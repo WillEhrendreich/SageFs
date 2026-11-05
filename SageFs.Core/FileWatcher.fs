@@ -183,6 +183,19 @@ let watchableDirsCapped (cap: int) (root: string) (hasCheckoutMarker: string -> 
   | true -> walk rootFull, truncated
   | false -> [], false
 
+/// The name a root's file watcher reports under in `ComponentWatch`. A second failure for the same root replaces the first,
+/// and a watcher that ends or is re-armed clears it by this same name.
+let watcherComponent (rootFull: string) : string = sprintf "file-watcher:%s" rootFull
+
+/// Disposing the watcher also clears what was recorded about its root. A failure belongs to the watcher that had it: once
+/// that watcher is gone (its session stopped), nothing is left to be failing, and a daemon with no sessions must not read
+/// Degraded for it.
+let clearOnDispose (rootFull: string) (inner: IDisposable) : IDisposable =
+  { new IDisposable with
+      member _.Dispose() =
+        try inner.Dispose()
+        finally SageFs.Features.ComponentWatch.clear (watcherComponent rootFull) }
+
 /// Impure (directory enumeration only, no watches): every directory under
 /// `root` — including `root` itself — that a pruned recursive watch would
 /// give its own watch to, capped at `MaxWatchableEntries`. If the cap is
@@ -202,7 +215,7 @@ let watchableDirs (root: string) (hasCheckoutMarker: string -> bool) : string li
       "[FileWatcher] Stopped walking %s after %d directories — the cap was reached before every directory was examined. Some directories under %s will NOT be watched (hot reload may silently miss them). This usually means a large generated/vendor/build-scratch directory needs its own entry in FileWatcher.excludedDirNames."
       rootFull MaxWatchableEntries rootFull
     SageFs.Features.ComponentWatch.reportFailure
-      { Component = sprintf "file-watcher:%s" rootFull
+      { Component = watcherComponent rootFull
         Reason = sprintf "directory walk stopped at the %d-directory cap before finishing %s" MaxWatchableEntries rootFull
         Hint = "Add the large directory's name to FileWatcher.excludedDirNames (e.g. a build/scratch root like `artifacts`), then restart the session." }
   dirs
@@ -382,7 +395,7 @@ let handleWatcherError (rootFull: string) (onOverflow: string -> unit) (ex: exn)
   let kind, hint = classifyWatcherError ex
   Log.warn "[FileWatcher] %s watching %s — events may have been lost. Cause: %s\n%s" kind rootFull ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
   SageFs.Features.ComponentWatch.reportFailure
-    { Component = sprintf "file-watcher:%s" rootFull
+    { Component = watcherComponent rootFull
       Reason = sprintf "%s watching %s: %s" kind rootFull ex.Message
       Hint = hint }
   onOverflow rootFull
@@ -464,15 +477,20 @@ let startPrunedWatcherUnder
   : IDisposable =
   let rootFull = Path.GetFullPath root
   let noop = { new IDisposable with member _.Dispose() = () }
+  // Starting a watcher for a root re-arms it: whatever an earlier watcher for the same root recorded is over. A start
+  // that fails below records its own failure, and the directory walk records a hit cap, both after this clear.
+  SageFs.Features.ComponentWatch.clear (watcherComponent rootFull)
+  // Every watcher this returns clears its root's record when it is disposed, started or refused alike.
+  let started = clearOnDispose rootFull
   match Directory.Exists rootFull, classifyWatchRoot home rootFull with
   | false, _ -> noop
   | true, WatchRootVerdict.TooBroad reason ->
     Log.error "[FileWatcher] Not watching %s: %s. A recursive watch there would spend an inotify watch on every directory under it." rootFull reason
     SageFs.Features.ComponentWatch.reportFailure
-      { Component = sprintf "file-watcher:%s" rootFull
+      { Component = watcherComponent rootFull
         Reason = sprintf "refused to watch %s: %s" rootFull reason
         Hint = "Open the session in a project directory, not the home directory or a filesystem root, and restart it. Hot reload and live testing get no file events for this session until then." }
-    noop
+    started noop
   | true, WatchRootVerdict.Watchable ->
     // Diagnostic-only: how many directories this watch conceptually covers,
     // and whether that walk itself hit MaxWatchableEntries (still worth
@@ -501,7 +519,7 @@ let startPrunedWatcherUnder
       watcher.Error.Add(fun e -> handleWatcherError rootFull onOverflow (e.GetException()))
       watcher.EnableRaisingEvents <- true
       Log.info "FileWatcher started for %s: one recursive watch (~%d directories in scope; bin/obj/.git/node_modules/.runs/artifacts/nested-checkouts filtered at event time, not walked separately)" rootFull watchableCount
-      watcher :> IDisposable
+      started (watcher :> IDisposable)
     // Even one recursive watcher can fail if the per-real-UID inotify
     // instance budget is ALREADY exhausted by other processes when this
     // session starts — rare now that this needs exactly one instance
@@ -515,13 +533,19 @@ let startPrunedWatcherUnder
         "[FileWatcher] Out of inotify instances watching %s: %s. Raise fs.inotify.max_user_instances (e.g. `sudo sysctl fs.inotify.max_user_instances=8192`, or persist it in /etc/sysctl.d/) and restart affected sessions. Hot reload is unavailable for this session until then."
         rootFull ex.Message
       SageFs.Features.ComponentWatch.reportFailure
-        { Component = sprintf "file-watcher:%s" rootFull
+        { Component = watcherComponent rootFull
           Reason = sprintf "inotify instance limit reached watching %s: %s" rootFull ex.Message
           Hint = "Raise fs.inotify.max_user_instances (sudo sysctl fs.inotify.max_user_instances=8192) and restart affected sessions." }
-      noop
+      started noop
     | ex ->
       Log.warn "[FileWatcher] Cannot watch %s: %s — hot reload disabled for this session\n%s" rootFull ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      noop
+      // The start failed for a reason no branch above names. The earlier clear must not leave this root looking fine while
+      // its session gets no file events.
+      SageFs.Features.ComponentWatch.reportFailure
+        { Component = watcherComponent rootFull
+          Reason = sprintf "could not start watching %s: %s" rootFull ex.Message
+          Hint = "Hot reload and live testing get no file events for this session until the watcher can start. The log line before this one has the stack." }
+      started noop
 
 /// `startPrunedWatcherUnder` with this process's own home directory.
 let startPrunedWatcher
