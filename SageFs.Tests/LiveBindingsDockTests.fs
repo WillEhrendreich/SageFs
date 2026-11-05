@@ -469,6 +469,14 @@ let viewPanelTests =
       ruleBody ".live-dock .live-view-panel" |> Expect.stringContains "absolute, so it leaves the dock's flow" "position: absolute"
       ruleBody ".live-view-panel" |> Expect.stringContains "lifted above the dock's top edge" "translateY(-100%)"
 
+    testCase "WHY — every control in the dock shows where keyboard focus is, because the step buttons and the slider drew no ring at all" <| fun _ ->
+      // Measured in a real browser: `outline-style` was none on `.live-step` and `.live-slider` when focused by keyboard, so a person
+      // tabbing through a row could not see which control they were on. One rule covers the dock, in the focus colour every chosen
+      // control in the pane already uses.
+      let body = ruleBody ".live-dock :is(button, input, select, summary):focus-visible"
+      body |> Expect.stringContains "a solid outline" "outline: 2px solid var(--border-focus)"
+      body |> Expect.stringContains "that stands off the control" "outline-offset"
+
     testCase "WHY — the dock's default ceiling has one home: the stylesheet starts at the same length the page's signal and the double-click reset use" <| fun _ ->
       // The body's style attribute writes `--dock-max-height` from the DockHeight signal, so a stylesheet default that differs
       // from the signal's initial value is never seen: the first change to the CSS did nothing until this was held.

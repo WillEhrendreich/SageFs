@@ -690,7 +690,7 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
     Elem.div [ Attr.class' "live-pane-bar" ] [
       Elem.span [ Attr.class' "live-pane-title" ] [ Text.raw "Live bindings" ]
       Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
-      Elem.span [ Attr.class' "live-pane-stamp" ] [ textEnc stamp ]
+      Elem.span [ Attr.class' "live-pane-stamp"; Attr.create "title" (attrEnc stamp) ] [ textEnc stamp ]
       // When the session runs older code than its files say: what is wrong, and the button that fixes it (empty otherwise).
       remedy
       // A binding no file holds is said once here, with its reason on hover, and not on every row.
