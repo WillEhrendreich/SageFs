@@ -14,10 +14,13 @@
 /// It is exhaustive on purpose: a state added here cannot be left undrawn, because the dashboard renders it with one
 /// exhaustive match.
 ///
-/// SEAM FOR STAGE 2. Stage 2 (apply a value to the running app before saving it) adds the states that need that mechanism: a
-/// tweak the file does not hold yet, a saved tweak, and a value the app copied at startup. They are NOT in this file, because
-/// nothing in stage 1 can tell them apart from `DiffersFromFile`. When they arrive they join `PersistenceState` and the one
-/// render in the dashboard stops compiling until it draws them.
+/// TWEAKED AND EVOLVED. A live value that differs from the file's literal is one of three things, and `ofDifference` tells them
+/// apart from what the pane holds: a value pushed into the running app and not saved (`Tweaked`), a value the program moved after
+/// it was made (`Evolved`, which has no plain Save), or a difference the pane cannot attribute (`DiffersFromFile`). The program's
+/// change is claimed only when the storage is known to be assignable and the file is the same write it was when the live value
+/// last matched it (`Baseline`, `FileRevision`), because a file edited with nothing reloading looks the same from the live side.
+/// Nothing in the daemon pushes a value into the running app yet, so `Memory.Pushes` stays empty until it does, and `Storage` is
+/// `NotKnown` until the walk reports it: until then a row reads `DiffersFromFile` exactly as it did.
 module SageFs.Features.Tweak.BindingTweak
 
 open System
@@ -121,6 +124,14 @@ module PlaceOf =
     | SourceFacts.ManySources _
     | SourceFacts.PartNotSpelled _ -> PlaceOf.NotPlaced
 
+/// Which write of a file this is. It changes whenever the file is written, even to the text it already had, so a file edited and
+/// edited back is a different revision from the one before. (An expression's hash cannot say that: the same text hashes the same.)
+[<RequireQualifiedAccess>]
+type FileRevision =
+  | Revised of stamp: string
+  /// The shell could not stamp the file, so nothing about whether it moved can be said.
+  | Unrevised
+
 /// A file the session owns, inspected through the door. `Items` is the door's listing of the file's tweakable points: every
 /// literal, and every record field. A binding whose right-hand side is not itself a literal (a record, a formula) has no item
 /// of its own in that listing, so its whole right-hand side is read separately (`Wholes`) for the names the pane is asked about.
@@ -130,7 +141,9 @@ type FileInspection =
     Items: SourceRef list
     Wholes: SourceRef list
     UndoSteps: int
-    RedoSteps: int }
+    RedoSteps: int
+    /// Which write of the file this inspection read.
+    Revision: FileRevision }
 
 /// The session's inspected files, and the files that could not be read. Built by the shell that does the reading.
 type SourceIndex =
@@ -262,6 +275,53 @@ type StaleNow =
 
 type Stale = { Seen: SourceRef; Now: StaleNow }
 
+/// What the pane knows about how a row's live value came to be what it is, beyond what the file says. Both facts are things the
+/// daemon holds or the walk reports; neither is inferred from the other.
+[<RequireQualifiedAccess>]
+type PushedValue =
+  /// Nothing has been pushed into this row's value.
+  | NoPush
+  /// The value last pushed into the running app for this row, printed the way the walk prints it.
+  | Pushed of printed: string
+
+/// Whether the place a value lives in can be assigned after it was made. The walk says so where it can see it (a record field's
+/// setter); a top-level binding it cannot see into is `NotKnown`, and `NotKnown` never counts as either answer.
+[<RequireQualifiedAccess>]
+type Storage =
+  | Mutable
+  | Fixed
+  | NotKnown
+
+/// The revision of the file when the pane last saw a row's live value equal the file's expression. Without it a live value that
+/// differs from the file could be the program's doing or the file's (someone edited it and nothing reloaded), and the pane would be
+/// guessing which.
+[<RequireQualifiedAccess>]
+type Baseline =
+  /// The pane has not seen this row's live value equal the file's expression.
+  | NeverInStep
+  | InStepAt of revision: string
+
+type Provenance =
+  { Pushed: PushedValue
+    Storage: Storage
+    Baseline: Baseline
+    /// The revision of the row's file now.
+    FileNow: FileRevision }
+
+module Provenance =
+  /// Nothing known: a row with this derives exactly as it did before the pane tracked pushes.
+  let unknown : Provenance =
+    { Pushed = PushedValue.NoPush; Storage = Storage.NotKnown; Baseline = Baseline.NeverInStep; FileNow = FileRevision.Unrevised }
+
+/// Why a value is neither the file's literal nor the one last pushed.
+[<RequireQualifiedAccess>]
+type EvolvedBy =
+  /// A value was pushed, and the live value has since moved off it.
+  | OvertookTweak of pushed: string
+  /// Nothing was pushed, the storage can be assigned, the file is the revision the live value last matched, and the live value is
+  /// not the file's: something assigned it while running.
+  | MovedWhileRunning
+
 [<RequireQualifiedAccess>]
 type PersistenceState =
   /// The file has this expression and the running value is what it says.
@@ -274,7 +334,13 @@ type PersistenceState =
   | Derived of SourceRef * DerivedWhy
   /// More than one place declares this name. Every one is listed; none is picked.
   | Ambiguous of SourceRef list
-  /// A file declares it, and the REPL holds another value. Nothing here knows which came last.
+  /// The live value is the one last pushed into the running app, and the file still holds the old literal. Saving writes it.
+  | Tweaked of live: string * SourceRef
+  /// The live value is neither the file's literal nor anything pushed: something moved it after it was made. It has no plain
+  /// Save, because writing it would record the program's change as if it were a decision.
+  | Evolved of live: string * EvolvedBy * SourceRef
+  /// A file declares it, and the REPL holds another value, and nothing here can say which moved: nothing was pushed, and the
+  /// storage is not known to be assignable. Narrower than it was: a value the pane can attribute is `Tweaked` or `Evolved`.
   | DiffersFromFile of live: string * SourceRef
   /// The file changed under the row. Both versions, never a guess.
   | StaleAddress of Stale
@@ -292,6 +358,8 @@ module PersistenceState =
     | PersistenceState.Held -> "Held"
     | PersistenceState.Derived _ -> "Derived"
     | PersistenceState.Ambiguous _ -> "Ambiguous"
+    | PersistenceState.Tweaked _ -> "Tweaked"
+    | PersistenceState.Evolved _ -> "Evolved"
     | PersistenceState.DiffersFromFile _ -> "DiffersFromFile"
     | PersistenceState.StaleAddress _ -> "StaleAddress"
     | PersistenceState.Refused _ -> "Refused"
@@ -315,7 +383,22 @@ module PersistenceState =
       PersistenceState.StaleAddress { Seen = attempted; Now = StaleNow.Gone(NudgeRefusal.describeResolve why) }
     | other -> PersistenceState.Refused(other, attempted)
 
-  let ofSource (live: LiveShape) (source: SourceFacts) : PersistenceState =
+  /// How a live value that is not the file's literal came to differ, from what was pushed and what the storage allows. The one
+  /// place the three are told apart, so no caller decides it for itself.
+  let ofDifference (provenance: Provenance) (preview: string) (place: SourceRef) : PersistenceState =
+    match provenance.Pushed, provenance.Storage, provenance.Baseline, provenance.FileNow with
+    | PushedValue.Pushed pushed, _, _, _ when String.Equals(pushed, preview, StringComparison.Ordinal) -> PersistenceState.Tweaked(preview, place)
+    | PushedValue.Pushed pushed, _, _, _ -> PersistenceState.Evolved(preview, EvolvedBy.OvertookTweak pushed, place)
+    | PushedValue.NoPush, Storage.Mutable, Baseline.InStepAt seen, FileRevision.Revised now when String.Equals(seen, now, StringComparison.Ordinal) ->
+      PersistenceState.Evolved(preview, EvolvedBy.MovedWhileRunning, place)
+    // The file was written since the value last matched it (someone edited it and nothing reloaded), or the pane never saw them
+    // agree, or the file cannot be stamped, or the storage may not be assignable: the difference could be either side's, so it is
+    // not attributed.
+    | PushedValue.NoPush, Storage.Mutable, _, _
+    | PushedValue.NoPush, Storage.Fixed, _, _
+    | PushedValue.NoPush, Storage.NotKnown, _, _ -> PersistenceState.DiffersFromFile(preview, place)
+
+  let ofSourceWith (provenance: Provenance) (live: LiveShape) (source: SourceFacts) : PersistenceState =
     match source with
     | SourceFacts.NoFileBindsIt -> PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt
     | SourceFacts.FilesUnknown reason -> PersistenceState.NotInAFile(NotInFileWhy.OwnedFilesUnknown reason)
@@ -329,12 +412,14 @@ module PersistenceState =
       | LiveShape.Scalar preview, ItemKind.Knob value ->
         match LiveShape.equalsLiteral value preview with
         | true -> PersistenceState.InSource place
-        | false -> PersistenceState.DiffersFromFile(preview, place)
+        | false -> ofDifference provenance preview place
       | LiveShape.NotRead, _ -> PersistenceState.Held
 
-  /// The state of a row, from what it is, what the files say about it and what was last done to it. A value that runs code to read
-  /// is `Held` whatever else is true: nothing about it is known until someone clicks.
-  let derive (live: LiveShape) (source: SourceFacts) (outcome: RowOutcome) : PersistenceState =
+  let ofSource (live: LiveShape) (source: SourceFacts) : PersistenceState = ofSourceWith Provenance.unknown live source
+
+  /// The state of a row, from what it is, what the files say about it, how its value came to be and what was last done to it. A
+  /// value that runs code to read is `Held` whatever else is true: nothing about it is known until someone clicks.
+  let deriveWith (provenance: Provenance) (live: LiveShape) (source: SourceFacts) (outcome: RowOutcome) : PersistenceState =
     match live with
     | LiveShape.NotRead -> PersistenceState.Held
     | LiveShape.Scalar _
@@ -344,9 +429,13 @@ module PersistenceState =
       | RowOutcome.InFlight(kind, attempted) -> PersistenceState.Writing(kind, attempted)
       | RowOutcome.Rejected(refusal, attempted) ->
         match ofRefusal refusal attempted with
-        | PersistenceState.StaleAddress _ when not (staleStillApplies source attempted) -> ofSource live source
+        | PersistenceState.StaleAddress _ when not (staleStillApplies source attempted) -> ofSourceWith provenance live source
         | refused -> refused
-      | RowOutcome.NoOutcome -> ofSource live source
+      | RowOutcome.NoOutcome -> ofSourceWith provenance live source
+
+  /// The state of a row when nothing is known about how its value came to be.
+  let derive (live: LiveShape) (source: SourceFacts) (outcome: RowOutcome) : PersistenceState =
+    deriveWith Provenance.unknown live source outcome
 
 // ── steps: the knob's arithmetic ──
 
@@ -427,6 +516,9 @@ module Control =
     // not been taken by the running session yet, or the REPL rebound the name) does not make it ambiguous which expression a
     // write goes to. The chip says the two differ, so a person tuning in a loop can keep stepping.
     | PersistenceState.DiffersFromFile(_, place) -> ofSource place
+    // A tweaked or evolved row keeps the knob of the file's literal, for the same reason: the control edits the FILE's expression.
+    | PersistenceState.Tweaked(_, place)
+    | PersistenceState.Evolved(_, _, place) -> ofSource place
     | PersistenceState.Derived(place, DerivedWhy.AFormula) -> Control.ExpressionField place.Text
     | PersistenceState.Derived(_, DerivedWhy.AContainer) -> Control.NoControl
     | PersistenceState.Refused _
@@ -436,11 +528,44 @@ module Control =
     | PersistenceState.Ambiguous _
     | PersistenceState.Writing _ -> Control.NoControl
 
-/// A row's state and the control that state allows, from the three facts. The one place the two are decided together, so a row
+/// A row's state and the control that state allows, from the facts. The one place the two are decided together, so a row
 /// cannot show a state and offer a control that state does not allow.
-let stateAndControl (live: LiveShape) (source: SourceFacts) (outcome: RowOutcome) : PersistenceState * Control =
-  let state = PersistenceState.derive live source outcome
+let stateAndControlWith (provenance: Provenance) (live: LiveShape) (source: SourceFacts) (outcome: RowOutcome) : PersistenceState * Control =
+  let state = PersistenceState.deriveWith provenance live source outcome
   state, Control.ofState state source
+
+let stateAndControl (live: LiveShape) (source: SourceFacts) (outcome: RowOutcome) : PersistenceState * Control =
+  stateAndControlWith Provenance.unknown live source outcome
+
+/// What Save does for a row in this state. A closed answer, so a state added later cannot be left without one.
+[<RequireQualifiedAccess>]
+type SaveOffer =
+  /// The file already says this.
+  | NothingToSave
+  /// Write the pushed value into exactly the literal the file holds.
+  | WriteTweak of value: string * SourceRef
+  /// The file spells it as a formula: edit the expression, or replace it with a plain value (which breaks the link).
+  | EditFormula of SourceRef
+  /// The program changed it. Never a plain Save: reset it, or adopt the current value as the initial one after a confirmation.
+  | ResetOrAdopt of live: string * SourceRef
+  /// Nothing to save to, or not now. The state beside the button says why.
+  | NoSave
+
+module SaveOffer =
+  let ofState (state: PersistenceState) : SaveOffer =
+    match state with
+    | PersistenceState.InSource _ -> SaveOffer.NothingToSave
+    | PersistenceState.Tweaked(live, place) -> SaveOffer.WriteTweak(live, place)
+    | PersistenceState.Derived(place, DerivedWhy.AFormula) -> SaveOffer.EditFormula place
+    | PersistenceState.Evolved(live, _, place) -> SaveOffer.ResetOrAdopt(live, place)
+    | PersistenceState.Derived(_, DerivedWhy.AContainer)
+    | PersistenceState.NotInAFile _
+    | PersistenceState.Held
+    | PersistenceState.Ambiguous _
+    | PersistenceState.DiffersFromFile _
+    | PersistenceState.StaleAddress _
+    | PersistenceState.Refused _
+    | PersistenceState.Writing _ -> SaveOffer.NoSave
 
 [<RequireQualifiedAccess>]
 type StepRefusal =
@@ -567,6 +692,8 @@ module TweakView =
     | PersistenceState.Held
     | PersistenceState.Derived _
     | PersistenceState.Ambiguous _
+    | PersistenceState.Tweaked _
+    | PersistenceState.Evolved _
     | PersistenceState.DiffersFromFile _
     | PersistenceState.StaleAddress _
     | PersistenceState.Refused _

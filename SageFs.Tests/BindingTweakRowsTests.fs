@@ -162,6 +162,41 @@ let memoryTests =
       (Memory.trailOf landed "Tuning.fs").Applied |> Expect.equal "the trail" [ "Game.Tuning.gravity" ]
       (Map.find gravityKey landed.Writes).At |> Expect.equal "when" 100L
 
+    testCase "a value pushed into the app makes its row tweaked, and the newest push is the one that counts" <| fun _ ->
+      let pushed = Memory.empty |> Memory.pushed gravityKey "11" |> Memory.pushed gravityKey "12"
+      let view = buildRows tuningIndex (walked [ "gravity", box 12.0 ]) pushed
+      match stateOf view gravityKey with
+      | PersistenceState.Tweaked(live, _) -> live |> Expect.equal "what is live" "12"
+      | other -> failtestf "expected Tweaked, got %A" other
+
+    testCase "a pushed value the program has moved off makes its row evolved, and a revert makes it differ again without attribution" <| fun _ ->
+      let pushed = Memory.pushed gravityKey "11" Memory.empty
+      match stateOf (buildRows tuningIndex (walked [ "gravity", box 12.0 ]) pushed) gravityKey with
+      | PersistenceState.Evolved(_, EvolvedBy.OvertookTweak overtook, _) -> overtook |> Expect.equal "what it overtook" "11"
+      | other -> failtestf "expected Evolved, got %A" other
+      match stateOf (buildRows tuningIndex (walked [ "gravity", box 12.0 ]) (Memory.unpushed gravityKey pushed)) gravityKey with
+      | PersistenceState.DiffersFromFile _ -> ()
+      | other -> failtestf "expected DiffersFromFile, got %A" other
+
+    testCase "a landed write, an undo and a redo each end the row's push: from then on the file is the record" <| fun _ ->
+      let pushed = Memory.pushed gravityKey "12" Memory.empty
+      for outcome in [ NudgeOutcome.Written(receiptFor gravityRef.Address)
+                       NudgeOutcome.Undone(receiptFor gravityRef.Address)
+                       NudgeOutcome.Redone(receiptFor gravityRef.Address) ] do
+        let after = Memory.finished gravityKey gravityRef (ranOf outcome) SessionReload.NoReloadYet 0L pushed
+        Memory.pushOf after gravityKey |> Expect.equal "nothing pushed any more" PushedValue.NoPush
+
+    testCase "observing a view remembers the file's expression for rows in step, and keeps it for rows that fell out of step" <| fun _ ->
+      let stamped = { tuningIndex with Files = tuningIndex.Files |> List.map (fun file -> { file with Revision = FileRevision.Revised "r1" }) }
+      let inStep = buildRows stamped (walked [ "gravity", box 9.8 ]) Memory.empty
+      let seen = Memory.observe stamped inStep Memory.empty
+      Memory.baselineOf seen gravityKey |> Expect.equal "the revision the file was at" (Baseline.InStepAt "r1")
+      Memory.baselineOf Memory.empty gravityKey |> Expect.equal "never seen" Baseline.NeverInStep
+      let drifted = buildRows stamped (walked [ "gravity", box 12.0 ]) seen
+      Memory.observe stamped drifted seen |> Expect.equal "a row out of step keeps its baseline" seen
+      let unstamped = Memory.observe tuningIndex inStep seen
+      Memory.baselineOf unstamped gravityKey |> Expect.equal "a file that cannot be stamped gives no baseline" Baseline.NeverInStep
+
     testCase "an undo takes the write off the trail and offers the redo; the redo puts it back" <| fun _ ->
       let wrote = Memory.finished gravityKey gravityRef (ranOf (NudgeOutcome.Written(receiptFor gravityRef.Address))) SessionReload.NoReloadYet 0L Memory.empty
       let undone = Memory.finished gravityKey gravityRef (ranOf (NudgeOutcome.Undone(receiptFor gravityRef.Address))) SessionReload.NoReloadYet 0L wrote

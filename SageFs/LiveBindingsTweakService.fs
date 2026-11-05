@@ -136,6 +136,13 @@ type FileStamp =
   | Stamped of length: int64 * modified: int64
   | Unstamped
 
+module FileStamp =
+  /// The revision a stamp says: the file's size and last write, which change whenever it is written.
+  let revision (stamp: FileStamp) : FileRevision =
+    match stamp with
+    | FileStamp.Stamped(length, modified) -> FileRevision.Revised(sprintf "%d:%d" length modified)
+    | FileStamp.Unstamped -> FileRevision.Unrevised
+
 /// Whether the worker says hot reload watches a file (its `/hotreload` list carries a flag per file).
 [<RequireQualifiedAccess>]
 type HotReloadWatch =
@@ -302,7 +309,8 @@ module Service =
                         Items = items
                         Wholes = wholes
                         UndoSteps = inspection.UndoSteps
-                        RedoSteps = inspection.RedoSteps } }
+                        RedoSteps = inspection.RedoSteps
+                        Revision = FileStamp.revision (service.Env.Stamp path) } }
     }
 
   /// What the session's files say, for the names asked about. A file that does not declare any of them is not parsed; one that does is
@@ -356,7 +364,10 @@ module Service =
       | [] -> return TweakView.none
       | _ ->
         let! index = indexFor service owned (namesOf snapshot)
-        return Rows.build index snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.compileQueueWait
+        let view = Rows.build index snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.compileQueueWait
+        // Remember which rows are in step with their file now, so a later difference can be told from a file edit.
+        update service sessionId (Memory.observe index view)
+        return view
     }
 
   /// The rows for a session whose file list the dashboard may not have. A list that is not known makes every row say the files are

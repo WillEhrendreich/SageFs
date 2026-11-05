@@ -52,7 +52,7 @@ let real (file: string) (binding: string) (text: string) : SourceRef =
   sourceAt file binding text (ItemKind.Knob(LiteralValue.Real(Double.Parse(text, Globalization.CultureInfo.InvariantCulture))))
 
 let fileOf (name: string) (items: SourceRef list) : FileInspection =
-  { File = name; Watching = WatchStatus.Watched; Items = items; Wholes = []; UndoSteps = 0; RedoSteps = 0 }
+  { File = name; Watching = WatchStatus.Watched; Items = items; Wholes = []; UndoSteps = 0; RedoSteps = 0; Revision = FileRevision.Unrevised }
 
 let inspectedWith (file: string) (text: string) (target: InspectTarget) : SourceRef list =
   match inspect file text EventLog.empty target with

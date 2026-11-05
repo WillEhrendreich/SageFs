@@ -24,7 +24,12 @@ type LastWrite =
 type Memory =
   { Outcomes: Map<RowKey, RowOutcome>
     Writes: Map<RowKey, LastWrite>
-    Trails: Map<string, FileTrail> }
+    Trails: Map<string, FileTrail>
+    /// The value last pushed into the running app for a row, as the walk prints it, while the file does not hold it yet. A save
+    /// (or an undo or redo) of the row ends it: from then on the file is the record.
+    Pushes: Map<RowKey, string>
+    /// For a row the pane has seen in step with its file, the hash of the file's expression at that moment (`Baseline`).
+    Seen: Map<RowKey, string> }
 
 module RowKey =
   let top (binding: string) : RowKey = { Binding = binding; Labels = [] }
@@ -45,7 +50,55 @@ module RowKey =
   let text (key: RowKey) : string = String.concat "/" (key.Binding :: key.Labels)
 
 module Memory =
-  let empty : Memory = { Outcomes = Map.empty; Writes = Map.empty; Trails = Map.empty }
+  let empty : Memory = { Outcomes = Map.empty; Writes = Map.empty; Trails = Map.empty; Pushes = Map.empty; Seen = Map.empty }
+
+  let baselineOf (memory: Memory) (key: RowKey) : Baseline =
+    match Map.tryFind key memory.Seen with
+    | Some hash -> Baseline.InStepAt hash
+    | None -> Baseline.NeverInStep
+
+  /// The revision of the file a place is in, as this index read it.
+  let revisionOf (index: SourceIndex) (place: SourceRef) : FileRevision =
+    match SourceIndex.fileOf index place.File with
+    | file :: _ -> file.Revision
+    | [] -> FileRevision.Unrevised
+
+  /// Take note of every row that is in step with its file in this view, so a later difference can be told from a file edit. A
+  /// row not in step keeps what it had: the baseline is the last time they agreed, not the latest look. A file that cannot be
+  /// stamped gives no baseline, because nothing could later say it had not moved.
+  let observe (index: SourceIndex) (view: TweakView) (memory: Memory) : Memory =
+    let seen =
+      view.Rows
+      |> Map.fold
+           (fun acc key row ->
+             match row.State with
+             | PersistenceState.InSource place ->
+               match revisionOf index place with
+               | FileRevision.Revised stamp -> Map.add key stamp acc
+               | FileRevision.Unrevised -> Map.remove key acc
+             | PersistenceState.NotInAFile _
+             | PersistenceState.Held
+             | PersistenceState.Derived _
+             | PersistenceState.Ambiguous _
+             | PersistenceState.Tweaked _
+             | PersistenceState.Evolved _
+             | PersistenceState.DiffersFromFile _
+             | PersistenceState.StaleAddress _
+             | PersistenceState.Refused _
+             | PersistenceState.Writing _ -> acc)
+           memory.Seen
+    { memory with Seen = seen }
+
+  let pushOf (memory: Memory) (key: RowKey) : PushedValue =
+    match Map.tryFind key memory.Pushes with
+    | Some printed -> PushedValue.Pushed printed
+    | None -> PushedValue.NoPush
+
+  /// A value was pushed into the running app for this row. The newest push is the one that counts.
+  let pushed (key: RowKey) (printed: string) (memory: Memory) : Memory = { memory with Pushes = Map.add key printed memory.Pushes }
+
+  /// The person reverted the tweak: nothing is pushed any more.
+  let unpushed (key: RowKey) (memory: Memory) : Memory = { memory with Pushes = Map.remove key memory.Pushes }
 
   let outcomeOf (memory: Memory) (key: RowKey) : RowOutcome =
     match Map.tryFind key memory.Outcomes with
@@ -79,7 +132,8 @@ module Memory =
         let target = RowKey.ofAddress receipt.Address |> Option.defaultValue key
         { cleared with
             Trails = Map.add receipt.File (move (trailOf cleared receipt.File)) cleared.Trails
-            Writes = Map.add target { File = receipt.File; Baseline = baseline; At = now } cleared.Writes }
+            Writes = Map.add target { File = receipt.File; Baseline = baseline; At = now } cleared.Writes
+            Pushes = Map.remove target cleared.Pushes }
       match ran.Outcome with
       | NudgeOutcome.Written receipt -> landed receipt (FileTrail.wrote (NudgeAddress.format receipt.Address))
       | NudgeOutcome.Undone receipt -> landed receipt FileTrail.undid
@@ -116,8 +170,18 @@ module Rows =
     (live: LiveShape)
     (facts: SourceFacts)
     : RowView =
-    let state, control = stateAndControl live facts (Memory.outcomeOf memory key)
     let place = PlaceOf.ofFacts facts
+    // The walk does not report whether a place is assignable yet, so storage is not known and a row is `Evolved` only from a push.
+    let fileNow =
+      match place with
+      | PlaceOf.Placed source -> Memory.revisionOf index source
+      | PlaceOf.NotPlaced -> FileRevision.Unrevised
+    let provenance =
+      { Pushed = Memory.pushOf memory key
+        Storage = Storage.NotKnown
+        Baseline = Memory.baselineOf memory key
+        FileNow = fileNow }
+    let state, control = stateAndControlWith provenance live facts (Memory.outcomeOf memory key)
     let trail =
       match place with
       | PlaceOf.Placed source -> Memory.trailOf memory source.File

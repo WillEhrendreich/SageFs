@@ -168,6 +168,7 @@
              skip the confirmation for every session, take an unrecorded session as the caller's own and treat every
              tool as acting on one session. -->
         <Compile Include="ConfirmationGateSim.fs" />
+        <Compile Include="TweakerVersusProgramSim.fs" />
         <!-- Ready-wait DST: folds the real ReadyWait decisions (plan, ofSession, ofRebuildEnd) through callers
              arriving, a rebuild starting and succeeding or failing, workers coming up, faults and deadlines,
              in every order; twins return early during a rebuild, poll instead of waking, never time out and

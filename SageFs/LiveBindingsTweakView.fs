@@ -69,12 +69,15 @@ type Tone =
   | Notice
   | Bad
   | Quiet
+  /// Something to know that is not a problem and not a warning: the program moved a value on its own.
+  | Info
 
 module Tone =
   /// One class per tone, from one exhaustive function.
   let cssClass (tone: Tone) : string =
     match tone with
     | Tone.Good -> "live-tone-good"
+    | Tone.Info -> "live-tone-info"
     | Tone.Notice -> "live-tone-notice"
     | Tone.Bad -> "live-tone-bad"
     | Tone.Quiet -> "live-tone-quiet"
@@ -129,6 +132,21 @@ let describe (state: PersistenceState) : Described =
       Tone = Tone.Bad
       Detail =
         sprintf "%d places declare this name: %s. The pane will not pick one. Remove or rename all but one, or edit the file by hand." places.Length where }
+  | PersistenceState.Tweaked(live, place) ->
+    { Label = "tweaked"
+      Tone = Tone.Notice
+      Detail =
+        sprintf "The running app holds %s, which was pushed into it, and %s still says %s. The file does not have the tweak yet." live (whereOf place) place.Text }
+  | PersistenceState.Evolved(live, EvolvedBy.OvertookTweak pushed, place) ->
+    { Label = "evolved"
+      Tone = Tone.Info
+      Detail =
+        sprintf "You pushed %s, and the program has since changed it to %s. %s still says %s. A plain save would record the program's change as your decision, so it is not offered." pushed live (whereOf place) place.Text }
+  | PersistenceState.Evolved(live, EvolvedBy.MovedWhileRunning, place) ->
+    { Label = "evolved"
+      Tone = Tone.Info
+      Detail =
+        sprintf "The running value is %s and %s says %s: something assigned it while the app ran. A plain save would record that change as your decision, so it is not offered." live (whereOf place) place.Text }
   | PersistenceState.DiffersFromFile(live, place) ->
     { Label = "differs from the file"
       Tone = Tone.Notice
@@ -174,6 +192,8 @@ let detailShown (state: PersistenceState) : DetailShown =
   | PersistenceState.Held
   | PersistenceState.Derived(_, DerivedWhy.AFormula)
   | PersistenceState.Ambiguous _
+  | PersistenceState.Tweaked _
+  | PersistenceState.Evolved _
   | PersistenceState.DiffersFromFile _
   | PersistenceState.StaleAddress _
   | PersistenceState.Refused _
@@ -196,6 +216,8 @@ let stripShown (state: PersistenceState) : StripShown =
   | PersistenceState.Held
   | PersistenceState.Derived _
   | PersistenceState.Ambiguous _
+  | PersistenceState.Tweaked _
+  | PersistenceState.Evolved _
   | PersistenceState.DiffersFromFile _
   | PersistenceState.StaleAddress _
   | PersistenceState.Refused _
