@@ -58,6 +58,9 @@ let private states : PersistenceState list =
     PersistenceState.Derived(gravity, DerivedWhy.AContainer)
     PersistenceState.Ambiguous [ gravity; { gravity with File = "/work/game/Other.fs"; Span = { gravity.Span with Line = 9 } } ]
     PersistenceState.DiffersFromFile("12", gravity)
+    PersistenceState.Tweaked("12", gravity)
+    PersistenceState.Evolved("12", EvolvedBy.OvertookTweak "11", gravity)
+    PersistenceState.Evolved("12", EvolvedBy.MovedWhileRunning, gravity)
     PersistenceState.StaleAddress { Seen = gravity; Now = StaleNow.Edited("9.9", String('b', 64)) }
     PersistenceState.StaleAddress { Seen = gravity; Now = StaleNow.MovedTo(addressOf "g2" []) }
     PersistenceState.StaleAddress { Seen = gravity; Now = StaleNow.Gone "the binding is not in the file any more" }
@@ -96,9 +99,9 @@ let describeTests =
 
     testCase "a value that differs from the file names both values and the file's place" <| fun _ ->
       let described = describe (PersistenceState.DiffersFromFile("12", gravity))
-      described.Detail |> Expect.stringContains "the REPL's value" "12"
+      described.Detail |> Expect.stringContains "the running value" "12"
       described.Detail |> Expect.stringContains "the file's value" "9.8"
-      described.Detail |> Expect.stringContains "where" "Tuning.fs:3"
+      described.Detail |> Expect.stringContains "where, as words a person reads" (whereInWords gravity)
 
     testCase "a REPL-only value says there is nothing to save it to" <| fun _ ->
       (describe (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt)).Detail |> Expect.stringContains "nothing to save to" "nothing to save it to"
@@ -108,7 +111,7 @@ let describeTests =
         let described = describe (PersistenceState.derive live source outcome)
         not (String.IsNullOrWhiteSpace described.Label) && not (String.IsNullOrWhiteSpace described.Detail)))
 
-    testCase "every reload verdict is said in words: the case, and the declarations a patch named" <| fun _ ->
+    testCase "WHY — every reload verdict is said as a sentence a person can read without knowing the verdict's name, and the name and the declarations a patch named are the tooltip" <| fun _ ->
       let facts case : ReloadFacts =
         { Case = case
           Patched = 1
@@ -120,11 +123,76 @@ let describeTests =
           Callers = CallerState.CallersState.CallersNotReported }
       for case in ReloadCase.all do
         match describeReload (RowReload.Watching("Tuning.fs", ReloadWatch.Reported(facts case))) with
-        | ReloadLine.Line(text, _, _) ->
-          text |> Expect.stringContains (sprintf "%s is named" (ReloadCase.token case)) (ReloadCase.token case)
-          text |> Expect.stringContains "the declaration is named" "Game.Tuning.gravity"
+        | ReloadLine.Line(text, _, more) ->
+          text.Contains(ReloadCase.token case) |> Expect.isFalse (sprintf "the row never shows the raw name %s" (ReloadCase.token case))
+          text.Contains "Game.Tuning.gravity" |> Expect.isFalse "the row does not carry the declaration"
+          String.IsNullOrWhiteSpace text |> Expect.isFalse (sprintf "%s is said" (ReloadCase.token case))
+          more |> Expect.stringContains (sprintf "%s is named in the tooltip" (ReloadCase.token case)) (ReloadCase.token case)
+          more |> Expect.stringContains "the declaration is named in the tooltip" "Game.Tuning.gravity"
         | ReloadLine.NoLine -> failtestf "%s is not said" (ReloadCase.token case)
       describeReload RowReload.NoWriteYet |> Expect.equal "no write, nothing to say" ReloadLine.NoLine
+
+    testCase "WHY — a write that the running app did not take never reads as a contradiction: no verdict is both applied and never entered" <| fun _ ->
+      for case in ReloadCase.all do
+        let text, tone = reloadMeaning case
+        text.Contains "applied" |> Expect.isFalse (sprintf "%s does not say applied beside a refusal to run" (ReloadCase.token case))
+        // A verdict that failed the write is bad news, and one that worked is good news: the tone follows what happened.
+        match case, tone with
+        | (ReloadCase.CompileFailed | ReloadCase.EvalFailed | ReloadCase.RestartRequired), Tone.Bad -> ()
+        | (ReloadCase.CompileFailed | ReloadCase.EvalFailed | ReloadCase.RestartRequired), other -> failtestf "%s is %A" (ReloadCase.token case) other
+        | ReloadCase.Patched, Tone.Good -> ()
+        | ReloadCase.Patched, other -> failtestf "a patched write is %A" other
+        | _ -> ()
+
+    testPropertyWithConfig propConfig "no sentence the pane says about a row carries a raw case name or a backtick, for any state"
+      (Prop.forAll (arbitrary (Gen.zip3 genLive genSource genOutcome)) (fun (live, source, outcome) ->
+        let state = PersistenceState.derive live source outcome
+        let described = describe state
+        let raw = [ PersistenceState.token state; "NeverEntered"; "PatchPending"; "RestartRequired"; "DiffersFromFile"; "StaleAddress" ]
+        not (described.Detail.Contains "`") && not (raw |> List.exists described.Detail.Contains)))
+
+    testCase "WHY — every state and every next step is said without a raw case name or a backtick, whichever way the row's controls and history stand" <| fun _ ->
+      let raw = [ "NeverEntered"; "PatchPending"; "RestartRequired"; "DiffersFromFile"; "StaleAddress"; "InSource"; "NotInAFile"; "Evolved"; "Tweaked" ]
+      for state in states do
+        for control in [ Control.NoControl; Control.RealStepper(9.8, Step.Fraction 1) ] do
+          for undo in [ HistoryStep.StepAvailable; HistoryStep.NothingToStep; HistoryStep.OtherRowFirst "Game.Tuning.maxHealth" ] do
+            let view = { rowOf state control with Undo = undo }
+            let spoken = [ (describe state).Detail; (describe state).Label; NextStep.sentence (NextStep.ofRow view); ValuesLine.text (ValuesLine.ofState state) ]
+            for sentence in spoken do
+              sentence.Contains "`" |> Expect.isFalse (sprintf "%s has no backtick: %s" (PersistenceState.token state) sentence)
+              for name in raw do
+                sentence.Contains name |> Expect.isFalse (sprintf "%s does not say the case name %s: %s" (PersistenceState.token state) name sentence)
+
+    testCase "WHY — a value that differs from the file shows what runs and what is saved, each labelled, so which number is which is never a guess" <| fun _ ->
+      ValuesLine.ofState (PersistenceState.DiffersFromFile("9.8", { gravity with Text = "9.9" }))
+      |> Expect.equal "the running value and the file's" (ValuesLine.RunningAndFile("9.8", "9.9"))
+      let shown = ValuesLine.text (ValuesLine.RunningAndFile("9.8", "9.9"))
+      shown |> Expect.stringContains "the running value" "9.8"
+      shown |> Expect.stringContains "the file's value" "9.9"
+      (shown.IndexOf "9.8", shown.IndexOf "9.9") |> Expect.isLessThan "running comes first, then the file"
+      let view = { rowOf (PersistenceState.DiffersFromFile("9.8", { gravity with Text = "9.9" })) (Control.RealStepper(9.9, Step.Fraction 1)) with Place = PlaceOf.Placed { gravity with Text = "9.9" } }
+      strip view |> Expect.stringContains "the line is on the row" "data-testid=\"tweak-values\""
+      strip (rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))) |> fun html -> html.Contains "tweak-values" |> Expect.isFalse "a row in step has nothing to compare"
+
+    testCase "the next step for a row that differs from the file is a button that exists: Undo when it can take the write back, and otherwise a plain statement of what cannot be done from here" <| fun _ ->
+      let differs = PersistenceState.DiffersFromFile("9.8", { gravity with Text = "9.9" })
+      let rowWith undo = { rowOf differs (Control.RealStepper(9.9, Step.Fraction 1)) with Undo = undo }
+      NextStep.ofRow (rowWith HistoryStep.StepAvailable) |> Expect.equal "undo is available" NextStep.UndoTakesItBack
+      NextStep.ofRow (rowWith HistoryStep.NothingToStep) |> Expect.equal "nothing to undo" NextStep.SendTheFileToTheSession
+      NextStep.ofRow (rowWith (HistoryStep.OtherRowFirst "x")) |> Expect.equal "another row's write is on top" NextStep.SendTheFileToTheSession
+      strip (rowWith HistoryStep.StepAvailable) |> Expect.stringContains "the step is on the row" "data-testid=\"tweak-next\""
+
+    testPropertyWithConfig propConfig "WHY — a next step never points at a control the row does not draw: Undo only when the undo button is enabled, the row's control only when it has one"
+      (Prop.forAll (arbitrary (Gen.zip3 (Gen.elements states) (Gen.elements [ Control.NoControl; Control.RealStepper(9.8, Step.Fraction 1); Control.Toggle true ]) (Gen.elements [ HistoryStep.StepAvailable; HistoryStep.NothingToStep; HistoryStep.OtherRowFirst "x" ])))
+        (fun (state, control, undo) ->
+          let view = { rowOf state control with Undo = undo }
+          let html = strip view
+          match NextStep.ofRow view with
+          | NextStep.UndoTakesItBack -> html.Contains "data-testid=\"tweak-undo\"" && not (html.Contains "tweak-undo-why")
+          | NextStep.UseTheControl
+          | NextStep.UseTheControlAgain -> html.Contains "<input"
+          | NextStep.SendTheFileToTheSession
+          | NextStep.NoNextStep -> true))
   ]
 
 [<Tests>]
@@ -180,10 +248,16 @@ let throughTests =
     testCase "WHY — a row whose literal is in a callee says which callee builds it and how many calls the write reaches" <| fun _ ->
       let said (callers: CallerCount) = (describeThrough (followedWith callers)).Value
       (said (CallerCount.Counted 3)).Detail |> Expect.stringContains "the callee and the number" "initPlayer"
-      (said (CallerCount.Counted 3)).Detail |> Expect.stringContains "the number" "3 calls"
-      (said (CallerCount.Counted 3)).Tone |> Expect.equal "more than one call is a notice" Tone.Notice
-      (said (CallerCount.Counted 1)).Detail |> Expect.stringContains "one call says only this one" "Only this call"
+      (said (CallerCount.Counted 3)).Detail |> Expect.stringContains "the number" "3 places"
+      (said (CallerCount.Counted 3)).Detail |> Expect.stringContains "and what the change does" "changes all of them"
+      (said (CallerCount.Counted 3)).Tone |> Expect.equal "more than one place is something to know, in the notice colour and never the warning one" Tone.Info
+      (said (CallerCount.Counted 1)).Detail |> Expect.stringContains "one place says only this one" "Only one place"
       (said (CallerCount.Counted 1)).Tone |> Expect.equal "one call is nothing to warn about" Tone.Quiet
+      for callers in [ CallerCount.Counted 0; CallerCount.Counted 1; CallerCount.Counted 3; CallerCount.NotCounted "x" ] do
+        let detail = (said callers).Detail
+        detail.Contains "literal" |> Expect.isFalse "no code vocabulary: the pane talks about values, not literals"
+        let tone = (said callers).Tone
+        (tone = Tone.Notice || tone = Tone.Bad) |> Expect.isFalse "never the amber or red that mean a person must act"
       (said (CallerCount.NotCounted "Other.fs does not parse")).Detail |> Expect.stringContains "the count is not invented" "could not be counted"
       (said (CallerCount.NotCounted "Other.fs does not parse")).Detail |> Expect.stringContains "and says why" "Other.fs does not parse"
 
@@ -226,6 +300,13 @@ let throughTests =
   ]
 
 let private count (needle: string) (html: string) = html.Split([| needle |], StringSplitOptions.None).Length - 1
+
+/// The text inside the first element that carries this test id, whatever order its attributes come in.
+let textOfTestId (testId: string) (html: string) : string option =
+  let m = Regex.Match(html, sprintf "data-testid=\"%s\"[^>]*>([^<]*)<" (Regex.Escape testId))
+  match m.Success with
+  | true -> Some m.Groups.[1].Value
+  | false -> None
 
 [<Tests>]
 let controlTests =
@@ -281,6 +362,36 @@ let controlTests =
       let waiting = strip { base' with Undo = HistoryStep.OtherRowFirst "Game.Tuning.maxHealth" }
       waiting |> Expect.stringContains "says whose turn it is" "Game.Tuning.maxHealth"
       waiting |> Expect.stringContains "and the button is disabled in the markup" "disabled"
+
+    testCase "WHY — undo and redo carry their words, and a button that cannot be pressed says why in text on the row, not only in a tooltip" <| fun _ ->
+      let base' = rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1))
+      let html = strip { base' with Undo = HistoryStep.StepAvailable; Redo = HistoryStep.NothingToStep }
+      html |> Expect.stringContains "the Undo word is on the button" (sprintf ">%s<" (historyWord "undo"))
+      html |> Expect.stringContains "the Redo word is on the button" (sprintf ">%s<" (historyWord "redo"))
+      html |> Expect.stringContains "the redo that cannot be pressed has its reason as text" "data-testid=\"tweak-redo-why\""
+      html.Contains "tweak-undo-why" |> Expect.isFalse "an available undo needs no reason"
+      let blocked = strip { base' with Undo = HistoryStep.OtherRowFirst "Game.Tuning.maxHealth"; Redo = HistoryStep.NothingToStep }
+      blocked |> Expect.stringContains "whose turn it is, as text" "data-testid=\"tweak-undo-why\""
+      for verb in [ "undo"; "redo" ] do
+        historyWhy verb HistoryStep.StepAvailable |> Expect.isNone "a step that can be taken has no reason"
+        (historyWhy verb HistoryStep.NothingToStep).Value |> Expect.stringContains "the reason names the verb" verb
+
+    testCase "WHY — a bool is a switch you can read: the checkbox says it is a switch and whether it is on, and the word for where it stands is text beside it" <| fun _ ->
+      for value in [ true; false ] do
+        let toggle = place (switchWord value) (ItemKind.Knob(LiteralValue.Bool value))
+        let html = strip { rowOf (PersistenceState.InSource toggle) (Control.Toggle value) with Place = PlaceOf.Placed toggle }
+        html |> Expect.stringContains "a switch" "role=\"switch\""
+        html |> Expect.stringContains "its state for a screen reader" (sprintf "aria-checked=\"%s\"" (switchWord value))
+        textOfTestId "tweak-toggle-word" html |> Expect.equal "its state in text" (Some(switchWord value))
+        html.Contains " checked" |> Expect.equal "the checked attribute follows the value" value
+      switchWord true |> Expect.notEqual "the two words differ" (switchWord false)
+
+    testPropertyWithConfig propConfig "WHY — a real's box and the row's value text are one spelling of one number: a number with up to one decimal reads the same in both"
+      (Prop.forAll (arbitrary (Gen.choose (-9999, 9999) |> Gen.map (fun tenths -> float tenths / 10.0))) (fun value ->
+        let literal = place (FSharpFloat.text value) (ItemKind.Knob(LiteralValue.Real value))
+        let step = Step.ofRealText literal.Text
+        let html = strip { rowOf (PersistenceState.InSource literal) (Control.RealStepper(value, step)) with Place = PlaceOf.Placed literal }
+        textOfTestId "tweak-readout" html = Some(FSharpFloat.text value)))
 
     testCase "the reload the write caused is shown on the row, and a file hot reload is not watching says so" <| fun _ ->
       let view = { rowOf (PersistenceState.InSource gravity) (Control.RealStepper(9.8, Step.Fraction 1)) with Reload = RowReload.Watching("Tuning.fs", ReloadWatch.NoNewReport); Watching = WatchStatus.NotWatched }
@@ -392,4 +503,26 @@ let dockIntegrationTests =
       let html = dockWith view [ binding "gravity" LiveValueTree.NodeKind.Leaf "9.8" [] ]
       for tag in html.Split('<') |> Array.filter (fun t -> t.Contains "data-preserve-attr") do
         tag.Contains " id=\"" |> Expect.isTrue (sprintf "a preserved attribute needs an id: <%s" (tag.Substring(0, min 80 tag.Length)))
+  ]
+
+type NumbersRig = { Mass: float; Drag: float }
+
+[<Tests>]
+let numberAgreementTests =
+  testList "one value is one text, wherever the pane draws it" [
+
+    testCase "WHY — a record's parent text and the child row's box print the same float the same way (80.0, not 80 in one and 80.0 in the other)" <| fun _ ->
+      let walked = LiveValueTree.buildValueNodeIn LiveValueTree.WalkMode.Safe "rig" (box { Mass = 80.0; Drag = 0.25 })
+      let mass = walked.Children |> List.find (fun child -> child.Label = "Mass")
+      walked.Preview |> Expect.stringContains "the parent shows the child's text" (sprintf "Mass = %s" mass.Preview)
+      mass.Preview |> Expect.equal "the walk prints a whole float with its point" "80.0"
+      // The file spells it `80.0`; the row's box shows the same text the child row's value shows.
+      let literal = place "80.0" (ItemKind.Knob(LiteralValue.Real 80.0))
+      let html = strip { rowOf (PersistenceState.InSource literal) (Control.RealStepper(80.0, Step.ofRealText literal.Text)) with Place = PlaceOf.Placed literal }
+      textOfTestId "tweak-readout" html |> Expect.equal "the box agrees with the value text" (Some mass.Preview)
+
+    testPropertyWithConfig propConfig "a literal the file spells equals the live value the walk prints for it, for every float, so a row in step is never reported as differing over formatting"
+      (Prop.forAll (arbitrary (Gen.map2 (fun whole tenths -> float whole + float tenths / 10.0) (Gen.choose (-500, 500)) (Gen.choose (0, 9)))) (fun value ->
+        let walked = LiveValueTree.buildValueNodeIn LiveValueTree.WalkMode.Safe "x" (box value)
+        LiveShape.equalsLiteral (LiteralValue.Real value) walked.Preview))
   ]

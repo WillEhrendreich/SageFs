@@ -207,7 +207,8 @@ let journey () : Task<unit> = task {
     let! speedText = textIn page (row "speed")
     speedText.Trim() |> Expect.equal "a REPL-only row has no words of its own" ""
     let! chipText = textIn page "[data-testid=live-repl-only]"
-    chipText |> Expect.stringContains "the title bar counts the REPL-only bindings" "REPL only"
+    // The chip says what it counts in the pane's own words: the sentence for a count of 0, without the number in front.
+    chipText |> Expect.stringContains "the title bar counts the REPL-only bindings" ((SageFs.Features.LiveBindingsPane.PaneNote.text (SageFs.Features.LiveBindingsPane.PaneNote.NotInAnyFile 0)).Substring 1)
     let! chipReason = page.Locator("[data-testid=live-repl-only]").GetAttributeAsync("title")
     chipReason |> Expect.stringContains "and its reason is on hover" "nothing to save it to"
     let! jumpControl = page.Locator(sprintf "%s [data-testid=tweak-expression]" (row "jump")).CountAsync()

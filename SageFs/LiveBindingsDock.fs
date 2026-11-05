@@ -62,6 +62,7 @@ module DockIds =
   let [<Literal>] EmptyState = "live-empty-state"
   let [<Literal>] NoMatch = "live-nomatch"
   let [<Literal>] PaneCollapse = "live-pane-collapse"
+  let [<Literal>] ModeLabel = "live-mode-label"
 
   /// Every element the morph keeps client-owned attributes on has an id of its own, so the morph matches it by id and never
   /// by position: matched by position, a preserved `class` would be carried from whatever stood in that slot before.
@@ -351,7 +352,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
   // The Type column is a view axis: off, the cell is not drawn at all (and is not a hidden node a screen reader would still read).
   let typeCells (node: LiveValueTree.LiveValueNode) : XmlNode list =
     match look.Layout.Type with
-    | On -> [ Elem.span [ Attr.class' "live-type" ] [ textEnc node.TypeName ] ]
+    | On -> [ Elem.span [ Attr.class' "live-type"; Attr.title (attrEnc node.TypeName) ] [ textEnc (FSharpTypeName.display node.TypeName) ] ]
     | Off -> []
   // The Source and State columns are cells of the row's own line, drawn from what the pane knows about the row, so a row it has nothing
   // to say about draws neither (a column is never an empty box). The strip under the row says the same, and CSS shows one of the two.
@@ -385,14 +386,11 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
     Elem.div [ Attr.class' rowClass ] [
       glyphCell node
       nameCell node
-      Elem.span [ Attr.class' "live-held-reason" ] [
-        match action with
-        | LiveBindingsPane.ClickFailed -> textEnc (sprintf "unknown: %s" node.Preview)
-        | LiveBindingsPane.ClickToRun
-        | LiveBindingsPane.NothingToClick -> textEnc node.Preview
-      ]
-      match action with
-      | LiveBindingsPane.ClickToRun ->
+      // The sentence is chosen by the reason, and says only what is on this row or in the pane's header: the run button, or the mode.
+      Elem.span [ Attr.class' "live-held-reason" ] [ textEnc (LiveBindingsPane.heldSaying reason) ]
+      match LiveBindingsPane.heldNext reason with
+      | LiveBindingsPane.HeldNext.RunWithButton
+      | LiveBindingsPane.HeldNext.RetryWithButton ->
         Elem.button
           [ Attr.class' "session-btn live-held-btn"
             Attr.create "aria-label" (attrEnc (sprintf "Run %s now: it runs your code under a deadline" node.Label))
@@ -402,8 +400,8 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
             Ds.onClick (evaluateClick binding path) ]
           [ Text.raw "▶" ]
         Elem.span [ Attr.class' "live-held-evaluating"; Ds.show (sprintf "$%s" indicator) ] [ Text.raw "⏳ evaluating…" ]
-      | LiveBindingsPane.NothingToClick
-      | LiveBindingsPane.ClickFailed -> ()
+      | LiveBindingsPane.HeldNext.SwitchMode _
+      | LiveBindingsPane.HeldNext.NothingOnScreen -> ()
       yield! typeCells node
       yield! tweakCells binding path
     ]
@@ -468,9 +466,18 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
   let held = LiveBindingsPane.notEvaluatedCount view.Snapshot
   let names = view.Snapshot.Bindings |> List.map (fun b -> b.Name)
   [ Elem.div [ Attr.class' "live-pane-head" ] [
-      Elem.div [ Attr.class' "live-mode"; Attr.create "role" "group"; Attr.create "aria-label" "How much of a class the live bindings run to show it" ] [
+      // The mode buttons say what they govern, and the chosen one says what it does, in text that is always on screen.
+      Elem.span [ Attr.id DockIds.ModeLabel; Attr.class' "live-pane-count live-mode-label"; testid "live-mode-label" ] [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ModeGoverns) ]
+      Elem.div [ Attr.class' "live-mode"; Attr.create "role" "group"; Attr.create "aria-labelledby" DockIds.ModeLabel ] [
         yield! ValueWalk.all |> List.map (modeButton view.Notes.Mode)
       ]
+      Elem.div [ Attr.class' "live-containment live-mode-caption"; testid "live-mode-caption" ] [
+        textEnc (LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.ModeMeans view.Notes.Mode)) ]
+      match TweakView.hasKnob tweaks with
+      | true ->
+        Elem.div [ Attr.class' "live-containment live-writes-caption"; testid "live-writes-caption" ] [
+          textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ChangesGoToTheFile) ]
+      | false -> ()
       match held with
       | 0 -> ()
       | n -> Elem.span [ Attr.class' "live-held-count" ] [ textEnc (sprintf "%d not evaluated" n) ]
@@ -506,9 +513,9 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
             Attr.class' "live-empty live-hidden"
             Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" (nothingMatchesExpr names)))
             Ds.preserveAttr "class" ]
-          [ Text.raw "no binding's name contains that" ]
+          [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.NoNameMatchesFilter) ]
         match view.Snapshot.Truncated with
-        | true -> Elem.div [ Attr.class' "live-truncated live-truncated-note" ] [ Text.raw "Some values truncated (depth/children limits)" ]
+        | true -> Elem.div [ Attr.class' "live-truncated live-truncated-note" ] [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ValuesCutShort) ]
         | false -> ()
     ] ]
 
@@ -516,8 +523,9 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
 let renderPaneWith (look: View) (controls: LiveBindingsViewPanel.ViewControls option) (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
   let stamp =
     match source with
-    | WalkedBindings view -> sprintf "gen %d · %s" view.Snapshot.Generation (view.Snapshot.CapturedAt.ToLocalTime().ToString("HH:mm:ss"))
-    | PrintedBindings _ -> "read from FSI's printed output"
+    | WalkedBindings view ->
+      LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.ReadAfterEval(view.Snapshot.Generation, view.Snapshot.CapturedAt.ToLocalTime().ToString("HH:mm:ss")))
+    | PrintedBindings _ -> LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ReadFromPrinted
     | NothingBound -> ""
   let body =
     match source with
@@ -545,7 +553,7 @@ let renderPaneWith (look: View) (controls: LiveBindingsViewPanel.ViewControls op
             [ Attr.class' "live-repl-chip"
               testid "live-repl-only"
               Attr.title (attrEnc (describe (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt)).Detail) ]
-            [ textEnc (sprintf "%d REPL only" count) ]
+            [ textEnc (LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.NotInAnyFile count)) ]
       | PrintedBindings _
       | NothingBound -> ()
       Elem.input
