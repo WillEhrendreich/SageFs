@@ -431,6 +431,10 @@ let journey () : Task<unit> = task {
       let! problems = layoutProblems page
       problems |> Expect.equal (sprintf "at %dpx wide nothing overflows sideways and the dock stays inside the viewport: %s" width problems) ""
       do! shot page (sprintf "6-%s-%d" name width)
+      // Output keeps a few lines of height at every width, whatever the dock holds. On the stacked layout it was the flex child that
+      // shrank: with the View panel open (dock cap 54rem) it measured 1px, and 34px in a busy session at 390x780.
+      let! outputHeight = page.EvaluateAsync<float>("() => document.querySelector('#output-section').getBoundingClientRect().height")
+      (outputHeight >= 120.0) |> Expect.isTrue (sprintf "at %dx%d the Output section keeps at least 120px, got %f" width height outputHeight)
       // With the popover open too: its box stays inside the viewport at this size.
       do! openPopover page
       let! withPopover = layoutProblems page

@@ -3120,8 +3120,17 @@ h2 {
     /* No longer sharing width with a fixed sidebar column. Give it a
        floor so the output/eval area isn't crushed toward zero height
        when the (now full-width, below it) sidebar content is tall. */
-    flex: 1 1 auto;
+    flex: 1 0 auto;
     min-height: 46rem;
+  }
+
+  /* Output keeps a box of its own, and the main area grows around it. The dock and Output used to share the main area's 46rem, with
+     Output the one that shrank: a dock opened out by the View panel (its cap is 54rem while the panel is open) or a busy session left
+     Output 1px or 34px tall at phone width, and the page's own scroll could not help because the main area never grew. Now the
+     dock takes what it needs, Output is 16rem and scrolls inside itself, and the column scrolls. */
+  #editor-area {
+    flex: 0 0 16rem;
+    min-height: 0;
   }
 
   .sidebar {
@@ -3166,9 +3175,13 @@ h2 {
     /* The stacked layout scrolls as one column, so the output above the dock keeps a floor of its own: the dock is
        bounded, and the main area is tall enough for both. At 22rem the dock showed two and a half binding rows at 400px, once
        the pane's captions had taken their share, so it is taller here, and the main area's floor grows with it. */
-    max-height: max(30rem, 80vh);
-    /* The pane's own header (bar, remedy, caption, mode buttons, legend) takes about 230px at 400px wide, so at 30rem the list had
-       room for two rows and a clipped third; three reviewers named the strip. A window taller than 600px gives the rest to the list. */
+    max-height: 30rem;
+    /* The pane's own header (bar, remedy, caption, mode buttons, legend) takes about 230px at 400px wide, so at 30rem the list has
+       room for about three rows, and three reviewers called that a strip. A taller cap does not fix it: the dock and Output share
+       the viewport's height here, so every pixel the list gains comes out of Output. Measured at 390x844: a cap of 80vh left Output
+       1px tall (the unseen-eval pill journey caught it), 60vh left it 138px, and even 55vh left 55px at 768x900 (the dock
+       journey's Output-height guard caught that) for one more row. The remedy is a shorter pane header at narrow widths, which is a
+       design change, not a number. */
     /* The bindings are what the page is opened for, so on a phone they come first, above the output transcript. With the output
        first, the bindings began halfway down a 400x800 window and only the first two rows showed above the fold: three reviewers
        scored the narrow layouts 5 because the subject was buried under the log. */
