@@ -824,6 +824,13 @@ h2 {
   color: white;
 }
 
+/* Ready, but not known to run current code (the files are ahead of the build, a rebuild is under way, the REPL is behind
+   the app, or nobody could tell). A caution, not a failure: red stays for failure, and the words in the badge say which. */
+.status-notice {
+  background: var(--fg-yellow);
+  color: var(--bg-default);
+}
+
 .status-idle {
   background: var(--fg-dim);
   color: var(--bg-default);
@@ -1025,21 +1032,53 @@ h2 {
 }
 
 /* The files on disk are ahead of the build the session runs (or a rebuild is picking them up, or nobody could tell): another
-   line of the card's own column, the same wrapping rules as the one above and a different colour, because it is a different fact.
-   File paths are long, so it wraps anywhere. It never widens the card and never overlaps the rows around it. */
+   block of the card's own column, the same wrapping rules as the one above. It is a caution, so it takes the caution colour
+   (red is for failure only). It holds one sentence, the one button that fixes it, and the detail behind a disclosure. It wraps
+   at any width, never widens the card and never overlaps the rows around it, and the button wraps with it so the remedy is
+   never clipped. */
 .session-row .session-card-source {
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
   padding: 2px 0 2px 6px;
-  border-left: 3px solid var(--fg-red);
-  color: var(--fg-red);
+  border-left: 3px solid var(--fg-yellow);
+  color: var(--fg-yellow);
   font-size: 0.7rem;
-  font-weight: bold;
   line-height: 1.35;
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: normal;
+}
+
+.session-row .session-card-source-headline {
+  font-weight: bold;
+}
+
+.session-row .session-card-source-action {
+  display: block;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 4px 0;
+  padding: 3px 8px;
+  height: auto;
+  line-height: 1.3;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-row .session-card-source-details {
+  margin-top: 2px;
+  color: var(--fg-dim);
+}
+
+.session-row .session-card-source-summary {
+  cursor: pointer;
+}
+
+.session-row .session-card-source-list {
+  margin: 2px 0;
+  padding-left: 1.2em;
 }
 
 .session-stopping {

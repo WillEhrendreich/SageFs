@@ -1027,21 +1027,52 @@ type SessionInView =
   /// A session is viewed. `state` is the daemon's coarse state (the badge's words, which clients wait on, such as
   /// "Ready"); `display` is the same status the session's card shows, with the fault's reason when it has one (the
   /// badge's colour, and what the main area says when the session faulted).
-  | InPlay of state: SessionState * display: SessionDisplayStatus
+  ///
+  /// `readiness` joins that state with what is known about the build the session runs (`Readiness.decide`): a Ready session
+  /// whose files changed after its build reads "Ready, running older code" in a caution tone, and every surface that names
+  /// the session's readiness reads this one value.
+  | InPlay of state: SessionState * display: SessionDisplayStatus * readiness: Readiness
+
+module ToneStyle =
+  /// The badge class for a tone: green for healthy, the caution colour for a warning, red for failure only.
+  let cssClass (tone: ReadinessTone) : string =
+    match tone with
+    | ReadinessTone.Healthy -> "status-ready"
+    | ReadinessTone.Caution -> "status-notice"
+    | ReadinessTone.Failing -> "status-faulted"
+    | ReadinessTone.Quiet -> "status-idle"
+
+  /// A glyph for a tone, for a line of text that cannot carry a colour (the daemon health bar). The word beside it says the
+  /// same thing, so the glyph is never the only signal.
+  let glyph (tone: ReadinessTone) : string =
+    match tone with
+    | ReadinessTone.Healthy -> "✅"
+    | ReadinessTone.Caution -> "⚠️"
+    | ReadinessTone.Failing -> "❌"
+    | ReadinessTone.Quiet -> "⏹️"
 
 module SessionInView =
-  /// The CSS class for the header status badge. It is the card's class for the same status, so the badge cannot say
-  /// green over a session whose card says faulted. Green is for a running session only.
+  /// The CSS class for the header status badge. A session that is simply ready, or in another state, takes the card's class
+  /// for the same status, so the badge cannot say green over a session whose card says faulted. A Ready session that is
+  /// not known to run current code takes its readiness's tone, so it is never green.
   let badgeCssClass (view: SessionInView) : string =
     match view with
     | SessionInView.NoSessionInPlay -> "status-idle"
-    | SessionInView.InPlay(_, display) -> SessionDisplayStatus.cssClass display
+    | SessionInView.InPlay(_, display, readiness) ->
+      match readiness with
+      | Readiness.InState _
+      | Readiness.ReadyCurrent -> SessionDisplayStatus.cssClass display
+      | Readiness.ReadyOlderCode
+      | Readiness.ReadyRebuilding
+      | Readiness.ReadyReplBehindApp
+      | Readiness.ReadyUnchecked -> ToneStyle.cssClass (Readiness.tone readiness)
 
-  /// The words in the header status badge: the daemon's own state words, which clients wait on ("Ready").
+  /// The words in the header status badge: the daemon's own state words, which clients wait on ("Ready"), and for a Ready
+  /// session that is not known to run current code, what is wrong in plain words.
   let badgeLabel (view: SessionInView) : string =
     match view with
     | SessionInView.NoSessionInPlay -> "No session"
-    | SessionInView.InPlay(state, _) -> SessionState.label state
+    | SessionInView.InPlay(_, _, readiness) -> Readiness.label readiness
 
 /// What a sidebar card knows about whether the files on disk are ahead of the build its session runs (`SourceState`).
 /// Reading it takes the worker's own warmup report (a worker round trip), which the push loop pays only for the session
@@ -1226,6 +1257,16 @@ let liveSessionCards
     let evals = evalCounts |> Map.tryFind s.Id |> Option.defaultValue 0
     let health = SessionHealth.classify s.Status s.ProjectRoles (warmupContextFor s.Id)
     sessionCardOf now (warmupProgress s.Id) evals health s)
+
+/// The header's eval count and the viewed card's are one number. The header's came from the worker's own tally and the
+/// card's from the daemon's finished-eval count, which differ by an eval in flight, so one session read "13 evals" at the top
+/// and "evals: 12" on its card. The header now takes the card's count (the card is built from one read of the daemon's tally
+/// for the whole push), and keeps the worker's timings, which only it has.
+module HeaderEvals =
+  let agreeWithCard (viewed: WorkerProtocol.SessionId) (cards: ParsedSession list) (stats: EvalStatsView) : EvalStatsView =
+    match cards |> List.tryFind (fun card -> card.Id = viewed) with
+    | Some card -> { stats with Count = card.EvalCount }
+    | None -> stats
 
 /// A previously-known session that can be resumed.
 type PreviousSession = {
@@ -1587,6 +1628,10 @@ type PanelVisibility =
   | Shown
   /// Carries why, for the View menu the redesign adds later.
   | Hidden of reason: string
+  /// Not part of this page for this tab, and nothing a user could do about it: it renders nothing, and says nothing. A
+  /// panel that is off until it is asked for (`?panels=friction`) is not a missing panel, so a note about how to ask for it
+  /// would be a note written for developers.
+  | NotOffered
 
 /// What the viewed session is doing, as far as panel visibility cares.
 [<RequireQualifiedAccess>]
@@ -1664,8 +1709,7 @@ module PanelVisibility =
     | OptionalPanel.Friction ->
       match facts.Friction with
       | FrictionPanelOptIn.OptedIn -> PanelVisibility.Shown
-      | FrictionPanelOptIn.NotOptedIn ->
-        PanelVisibility.Hidden "Friction: hidden until reporting has a real endpoint (open /dashboard?panels=friction to see it)"
+      | FrictionPanelOptIn.NotOptedIn -> PanelVisibility.NotOffered
 
   /// A hidden panel says why, in one line, in the place the panel would have been.
   ///
@@ -1687,11 +1731,12 @@ module PanelVisibility =
         Attr.create "role" "status" ]
       [ Elem.span [ Attr.class' "panel-hidden-why" ] [ Text.raw reason ] ]
 
-  /// A hidden panel renders the line that says why it is not there.
+  /// A hidden panel renders the line that says why it is not there. A panel that is not offered renders nothing.
   let private keep (facts: PanelFacts) (panel: OptionalPanel) (node: Falco.Markup.XmlNode) =
     match decide facts panel with
     | PanelVisibility.Shown -> node
     | PanelVisibility.Hidden reason -> reasonBar panel reason
+    | PanelVisibility.NotOffered -> Text.raw ""
 
   /// Drop the panels that aren't relevant from a built snapshot. Still one
   /// snapshot and one fat morph; hidden panels just aren't in it.

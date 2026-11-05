@@ -147,9 +147,10 @@ let sampleSession: SessionContext = {
 
 [<Tests>]
 let sessionContextTests = testList "SessionContext" [
-  testCase "summary includes status and counts" <| fun _ ->
+  testCase "WHY — the summary is about warmup and says so, and carries no state word, because a \"Ready\" in it read as the session's health beside a header that said something else" <| fun _ ->
     let s = SessionContext.summary sampleSession
-    s |> Expect.stringContains "has status" "Ready"
+    s |> Expect.stringContains "says it is about warmup" "Warmup"
+    s.Contains sampleSession.Status |> Expect.isFalse "the daemon's state word is the header badge's to say, not this line's"
     s |> Expect.stringContains "has file count" "2/5"
     s |> Expect.stringContains "has namespace count" "4 namespaces"
     s |> Expect.stringContains "has failed count" "1 failed"

@@ -11,8 +11,13 @@ open SageFs
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 
+/// A session whose build is current and whose REPL is level: readiness says nothing beyond the state.
 let private inPlay (state: SessionState) (display: SessionDisplayStatus) : SessionInView =
-  SessionInView.InPlay(state, display)
+  SessionInView.InPlay(state, display, Readiness.decide state (SourceState.InSync (System.DateTime.UtcNow, 1)) ReplFreshness.InSync)
+
+/// A Ready, running session whose readiness is the given one.
+let private readyWith (readiness: Readiness) : SessionInView =
+  SessionInView.InPlay(SessionState.Ready, SessionDisplayStatus.Running, readiness)
 
 /// Every way a session in view can be, with the class its badge must carry.
 let private classByStatus : (string * SessionInView * string) list =
@@ -115,6 +120,29 @@ let tests =
       let landing = page SessionInView.NoSessionInPlay
       landing |> Expect.stringContains "the shell is whole with no session: the header is there" "app-header"
       landing |> Expect.stringContains "and so is the sidebar" "id=\"sidebar\""
+
+    testCase "WHY — a Ready session that runs older code is not a plain green Ready in the header, because the card beside it says the files are ahead of the build" <| fun _ ->
+      let view = readyWith Readiness.ReadyOlderCode
+      SessionInView.badgeLabel view |> Expect.equal "the words say it" "Ready, running older code"
+      SessionInView.badgeCssClass view |> Expect.equal "in the caution colour, not green and not red" "status-notice"
+      let badge = renderMainContent (snapshotOf view) |> render |> headerBadge
+      badge |> Expect.stringContains "the page draws the caution class" "status status-notice"
+      badge |> Expect.stringContains "and the words" ">Ready, running older code"
+
+    testCase "WHY — over every readiness, only a current build is green, and a build that is behind is never red" <| fun _ ->
+      let readinesses =
+        [ Readiness.ReadyCurrent; Readiness.ReadyOlderCode; Readiness.ReadyRebuilding; Readiness.ReadyReplBehindApp; Readiness.ReadyUnchecked ]
+      let classes = readinesses |> List.map (fun r -> r, SessionInView.badgeCssClass (readyWith r))
+      classes
+      |> List.filter (fun (_, cls) -> cls = "status-ready")
+      |> List.map fst
+      |> Expect.equal "green is for a current build only" [ Readiness.ReadyCurrent ]
+      classes
+      |> List.exists (fun (_, cls) -> cls = "status-faulted")
+      |> Expect.isFalse "stale is a warning, and red is for failure only"
+      for readiness in readinesses do
+        SessionInView.badgeLabel (readyWith readiness)
+        |> fun words -> words.StartsWith "Ready" |> Expect.isTrue (sprintf "%A still starts with the word clients wait on" readiness)
 
     testCase "a session that is not faulted gets no notice, and neither does no session at all" <| fun _ ->
       for view in

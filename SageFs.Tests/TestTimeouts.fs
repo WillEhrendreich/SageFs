@@ -1374,7 +1374,7 @@ module FixtureStats =
 module FixtureViews =
   /// A session that is ready and running.
   let running : SageFs.Server.DashboardTypes.SessionInView =
-    SageFs.Server.DashboardTypes.SessionInView.InPlay(SageFs.SessionState.Ready, SageFs.SessionDisplayStatus.Running)
+    SageFs.Server.DashboardTypes.SessionInView.InPlay(SageFs.SessionState.Ready, SageFs.SessionDisplayStatus.Running, SageFs.Readiness.ReadyCurrent)
   /// No session in play.
   let none : SageFs.Server.DashboardTypes.SessionInView =
     SageFs.Server.DashboardTypes.SessionInView.NoSessionInPlay

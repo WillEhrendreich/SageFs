@@ -191,8 +191,10 @@ module SessionContext =
       |> List.filter (fun f -> f.Readiness = Loaded)
       |> List.length
     let total = ctx.FileStatuses |> List.length
-    sprintf "%s | %d/%d files loaded | %d namespaces (%d failed) | %dms"
-      ctx.Status loaded total opened failed (WarmupContext.totalDurationMs ctx.Warmup)
+    // About warmup only. It used to lead with the daemon's state word ("Ready"), which sat beside the header's own badge and
+    // read as the session's health: a session can be Ready here and running older code there.
+    sprintf "Warmup: %d/%d files loaded | %d namespaces opened (%d failed) | took %dms"
+      loaded total opened failed (WarmupContext.totalDurationMs ctx.Warmup)
 
   let assemblyLine (asm: LoadedAssembly) =
     sprintf "📦 %s (%d ns, %d mod)" asm.Name asm.NamespaceCount asm.ModuleCount

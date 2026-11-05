@@ -126,7 +126,7 @@ And this is the same session after I broke a test on purpose:
 
 ![The same panel with one failing test: a green 10 and a red 1, and the line "1 failed · 10 passed".](images/live-testing-panel-red.png)
 
-While a save's confirming build runs, the session card above that panel also carries a red STALE SOURCE warning.
+While a save's confirming build runs, the session card above that panel also carries an amber "Rebuilding" note, and the status badge in the header reads "Ready, rebuilding".
 
 ## 6. A worked example
 
@@ -167,7 +167,7 @@ The daemon's reason for picking tests was: "Coverage evidence widened the impact
 
 Those times are slow. The load average on the machine was around 45 on 8 cores, with other agents building on it. [how-live-testing-works.md](how-live-testing-works.md) reports about 0.7 seconds from an edit to a verdict, measured on one quiet 16-thread machine. I have no number for a calm laptop.
 
-After a save there is a second step. About two seconds after your edits go quiet, SageFs starts a real build of the saved text and runs the tests again against it, to confirm or contradict the first answer. It took about 35 seconds on that loaded machine. While it runs, the dashboard session card shows a red STALE SOURCE warning and the status call says `"Confirmation":"building"`. It restarts the worker, so the output pane shows a fresh `Loaded ... FSI session created` block. The verdict stays on screen the whole time.
+After a save there is a second step. About two seconds after your edits go quiet, SageFs starts a real build of the saved text and runs the tests again against it, to confirm or contradict the first answer. It took about 35 seconds on that loaded machine. While it runs, the dashboard session card shows an amber "Rebuilding" note and the status call says `"Confirmation":"building"`. It restarts the worker, so the output pane shows a fresh `Loaded ... FSI session created` block. The verdict stays on screen the whole time.
 
 The whole thing, from creating the session to seeing green again, took under three minutes, and most of that was the cold start and me typing.
 

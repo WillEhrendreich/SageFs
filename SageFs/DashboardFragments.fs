@@ -74,7 +74,7 @@ let testid (name: string) = Attr.create "data-testid" name
 /// It is an alert: a session can fault while the person is looking elsewhere on the page.
 let renderSessionFaultNotice (view: SessionInView) : XmlNode =
   match view with
-  | SessionInView.InPlay(_, SessionDisplayStatus.Faulted reason) ->
+  | SessionInView.InPlay(_, SessionDisplayStatus.Faulted reason, _) ->
     Elem.div
       [ Attr.class' "session-fault-notice"
         testid "session-fault-notice"
@@ -84,12 +84,12 @@ let renderSessionFaultNotice (view: SessionInView) : XmlNode =
         Elem.div
           [ Attr.class' "session-fault-remedy" ]
           [ Text.raw "Stop it with ■ on its card in the sidebar, then start a new session with +." ] ]
-  | SessionInView.InPlay(_, SessionDisplayStatus.Running)
-  | SessionInView.InPlay(_, SessionDisplayStatus.Starting)
-  | SessionInView.InPlay(_, SessionDisplayStatus.Restarting)
-  | SessionInView.InPlay(_, SessionDisplayStatus.Lost)
-  | SessionInView.InPlay(_, SessionDisplayStatus.Stopped)
-  | SessionInView.InPlay(_, SessionDisplayStatus.Idle)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Running, _)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Starting, _)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Restarting, _)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Lost, _)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Stopped, _)
+  | SessionInView.InPlay(_, SessionDisplayStatus.Idle, _)
   | SessionInView.NoSessionInPlay -> Text.raw ""
 
 let renderKeyboardHelp () =
@@ -604,27 +604,50 @@ module ElapsedClock =
     Elem.span [ Ds.text expr ] []
 
 /// Render daemon health as an HTML panel — shows status, uptime, memory, sessions, and tests.
-let renderDaemonHealth (view: DaemonHealthView) =
+///
+/// `readinessOf` holds what is known about the build a session runs (`Readiness.decide`), by session id, for the sessions
+/// the caller read it for. A Ready session in it reads as its readiness ("Ready, running older code", with the caution
+/// glyph) instead of a plain "Ready" with a check mark beside a card that says the files are ahead of the build. A session
+/// not in it reads as the health snapshot says.
+let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHealthView) =
   let emoji = Features.DaemonHealth.healthEmoji view.OverallHealth
   let label = Features.DaemonHealth.healthLabel view.OverallHealth
-  let isNominal (s: Features.SessionHealthSummary) =
+  let qualification (s: Features.SessionHealthSummary) : Readiness option =
     match s.Status with
-    | Features.SessionHealthStatus.Ready
+    | Features.SessionHealthStatus.Ready -> readinessOf |> Map.tryFind s.SessionId
     | Features.SessionHealthStatus.Evaluating
-    | Features.SessionHealthStatus.WarmingUp -> true
+    | Features.SessionHealthStatus.WarmingUp
     | Features.SessionHealthStatus.Faulted
-    | Features.SessionHealthStatus.Stopped -> false
+    | Features.SessionHealthStatus.Stopped -> None
+  let glyphOf (s: Features.SessionHealthSummary) =
+    match qualification s with
+    | Some readiness -> ToneStyle.glyph (Readiness.tone readiness)
+    | None -> Features.DaemonHealth.sessionStatusEmoji s.Status
+  let wordOf (s: Features.SessionHealthSummary) =
+    match qualification s with
+    | Some readiness -> Readiness.label readiness
+    | None -> Features.DaemonHealth.sessionStatusLabel s.Status
+  let isNominal (s: Features.SessionHealthSummary) =
+    match s.Status, qualification s |> Option.map Readiness.tone with
+    | Features.SessionHealthStatus.Ready, Some ReadinessTone.Caution -> false
+    | Features.SessionHealthStatus.Ready, _
+    | Features.SessionHealthStatus.Evaluating, _
+    | Features.SessionHealthStatus.WarmingUp, _ -> true
+    | Features.SessionHealthStatus.Faulted, _
+    | Features.SessionHealthStatus.Stopped, _ -> false
   let sessionSummaryText (summaries: Features.SessionHealthSummary list) =
     match summaries with
     | [] -> None
-    | [s] ->
-      Some (sprintf "%s %s [%s]"
-        (Features.DaemonHealth.sessionStatusEmoji s.Status)
-        s.ProjectName
-        (Features.DaemonHealth.sessionStatusLabel s.Status))
+    | [s] -> Some (sprintf "%s %s [%s]" (glyphOf s) s.ProjectName (wordOf s))
     | _ when summaries.Length <= 3 ->
+      // A session that is not plainly ready says so in words, because a glyph alone is a colour alone.
+      let caveat (s: Features.SessionHealthSummary) =
+        match qualification s with
+        | Some readiness when not (isNominal s) -> sprintf " (%s)" (Readiness.label readiness)
+        | Some _
+        | None -> ""
       Some (summaries
-        |> List.map (fun s -> sprintf "%s %s" (Features.DaemonHealth.sessionStatusEmoji s.Status) s.ProjectName)
+        |> List.map (fun s -> sprintf "%s %s%s" (glyphOf s) s.ProjectName (caveat s))
         |> String.concat " · ")
     | _ ->
       let degraded = summaries |> List.filter (not << isNominal)
@@ -684,6 +707,9 @@ let renderDaemonHealth (view: DaemonHealthView) =
     // Test counts removed from health row — they live in the Live Testing panel.
     // When live testing is inactive, no stale counts bleed into the health bar.
   ]
+
+/// The daemon health bar for a caller that has read no session's build.
+let renderDaemonHealth (view: DaemonHealthView) = renderDaemonHealthWith Map.empty view
 
 /// Render failure narratives as a dashboard panel — shows recent test failures with context.
 /// Silent when there are no failures — absence of red is the signal.
@@ -1792,15 +1818,62 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               // The files on disk are ahead of the build this session runs, or a rebuild is picking them up, or nobody could tell:
               // a different fact from the line above (that one is the REPL behind the APP), so it has its own line, its own test id
               // and its own words. A current build, or a card whose source was not read, says nothing.
+              //
+              // The card says it in one sentence, with the one button that fixes it (the same hard reset with a rebuild the
+              // evaluate popover has) and the times and files behind a disclosure. The long wording stays in
+              // `SourceState.describe` for tool results and `sagefs status`; a card has a person in front of it.
               match s.Source with
-              | CardSource.NotReadOnThisCard
-              | CardSource.Read (SourceState.InSync _) -> ()
+              | CardSource.NotReadOnThisCard -> ()
               | CardSource.Read state ->
-                Elem.div
-                  [ Attr.class' "session-card-source"
-                    testid "session-card-source"
-                    Attr.create "role" "status" ]
-                  [ textEnc (SourceState.banner state) ]
+                match SourceState.cardNote s.WorkingDir state with
+                | CardNote.NothingToSay -> ()
+                | CardNote.Note (headline, details) ->
+                  // The same readiness the header badge reads, so the card cannot say a different thing about the build.
+                  let readiness = Readiness.decide SessionState.Ready state s.Freshness
+                  let toneName =
+                    match Readiness.tone readiness with
+                    | ReadinessTone.Healthy -> "healthy"
+                    | ReadinessTone.Caution -> "caution"
+                    | ReadinessTone.Failing -> "failing"
+                    | ReadinessTone.Quiet -> "quiet"
+                  // The button acts on the session in view, so it is on the viewed session's card and only when the files
+                  // changed: a rebuild already under way needs no second one, and an unknown build is not known to need one.
+                  let offersRebuild =
+                    match isViewing, state with
+                    | true, SourceState.Stale _ -> true
+                    | _ -> false
+                  Elem.div
+                    [ Attr.class' (sprintf "session-card-source session-card-source-%s" toneName)
+                      testid "session-card-source"
+                      Attr.create "role" "status"
+                      Attr.create "data-readiness" (attrEnc (Readiness.label readiness)) ]
+                    [ Elem.div [ Attr.class' "session-card-source-headline" ] [ textEnc headline ]
+                      match offersRebuild with
+                      | true ->
+                        Elem.button
+                          [ Attr.class' "session-btn session-card-source-action"
+                            Attr.type' "button"
+                            testid "session-card-rebuild"
+                            Attr.create "aria-label" "Rebuild and reload: hard reset this session with a rebuild, so it runs the code in the files"
+                            Ds.indicator Signals.ActionLoading
+                            Ds.attr' ("disabled", "$actionLoading")
+                            Ds.onClick (Ds.post "/dashboard/hard-reset") ]
+                          [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
+                            Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "↻ " ]
+                            Text.raw "Rebuild and reload" ]
+                      | false -> ()
+                      match details with
+                      | [] -> ()
+                      | lines ->
+                        Elem.details
+                          [ Attr.id (sprintf "session-card-source-details-%s" sid)
+                            Attr.class' "session-card-source-details"
+                            testid "session-card-source-details"
+                            Ds.preserveAttr "open"
+                            // Opening the details on a card that is not the viewed one must not also switch to it.
+                            Ds.onClick "evt.stopPropagation()" ]
+                          [ Elem.summary [ Attr.class' "session-card-source-summary" ] [ Text.raw "Details" ]
+                            Elem.ul [ Attr.class' "session-card-source-list" ] (lines |> List.map (fun line -> Elem.li [] [ textEnc line ])) ] ]
               // Self-host staleness (F5b): this session adopted its own
               // SageFs.Core build and a newer one has since landed on disk —
               // its own line so it never cramps the badges, wrapping at any
@@ -2240,9 +2313,23 @@ let renderCurrentDiagnostics (diags: Diagnostic list) =
 /// Statusline left block: session state + working directory.
 /// Shared by the full-shell render and the switch/teardown SSE patches so the
 /// two can never diverge (the patch once dropped the classes and the encoding).
-let renderStatuslineLeft (_stateLabel: string) (workingDir: string) =
-  // The status/readiness label lives in the top status tab — not repeated here.
+let renderStatuslineLeft (readiness: Readiness) (workingDir: string) =
   Elem.div [ Attr.id "statusline-left"; Attr.class' "statusline-left" ] [
+    // A plain Ready lives in the top status tab and is not repeated here. A Ready that is not known to run current code is,
+    // in the same words and tone as the tab, so the two cannot read differently.
+    match readiness with
+    | Readiness.InState _
+    | Readiness.ReadyCurrent -> ()
+    | Readiness.ReadyOlderCode
+    | Readiness.ReadyRebuilding
+    | Readiness.ReadyReplBehindApp
+    | Readiness.ReadyUnchecked ->
+      Elem.span
+        [ Attr.id "statusline-readiness"
+          Attr.class' (sprintf "status statusline-readiness %s" (ToneStyle.cssClass (Readiness.tone readiness)))
+          testid "statusline-readiness"
+          Attr.create "role" "status" ]
+        [ textEnc (Readiness.label readiness) ]
     Elem.div [ Attr.id "statusline-file"; Attr.class' "statusline-file" ] [ textEnc workingDir ]
   ]
 
@@ -3582,7 +3669,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
     signalDetails Signals.SessionContextOpen [] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.8rem;" ] [
         Text.raw "🔍 "
-        textEnc (sprintf "Session Context: %s" summaryText)
+        textEnc summaryText
       ]
       Elem.div [ Attr.style "padding-left: 0.5em; margin-top: 0.3em;" ] [
         timingSection
