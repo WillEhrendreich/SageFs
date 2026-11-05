@@ -98,6 +98,83 @@ module LiveBindingsPane =
     | LiveValueTree.NotEvaluatedReason.EvaluationThrew _
     | LiveValueTree.NotEvaluatedReason.EvaluationNotContained _ -> ClickFailed
 
+  /// What a person can do about a held row from what is on the screen. Each case names a control that is really drawn, so a
+  /// sentence built from it never points at one that is not.
+  [<RequireQualifiedAccess>]
+  type HeldNext =
+    /// The run button on the row runs the getter, under a deadline.
+    | RunWithButton
+    /// The run button on the row runs it again.
+    | RetryWithButton
+    /// The mode buttons in the pane's header change what is read.
+    | SwitchMode of ValueWalk
+    /// Nothing on screen changes this row.
+    | NothingOnScreen
+
+  let heldNext (reason: LiveValueTree.NotEvaluatedReason) : HeldNext =
+    match reason with
+    | LiveValueTree.NotEvaluatedReason.GetterRunsCode
+    | LiveValueTree.NotEvaluatedReason.GetterLoops -> HeldNext.RunWithButton
+    // A sequence is read in the mode that runs everything, and a class is opened in the mode that runs only what does nothing.
+    | LiveValueTree.NotEvaluatedReason.SequenceNotEnumerated -> HeldNext.SwitchMode WalkEverything
+    | LiveValueTree.NotEvaluatedReason.ClassesCollapsed -> HeldNext.SwitchMode WalkSafe
+    | LiveValueTree.NotEvaluatedReason.EvaluationTimedOut
+    | LiveValueTree.NotEvaluatedReason.EvaluationThrew _ -> HeldNext.RetryWithButton
+    | LiveValueTree.NotEvaluatedReason.EvaluationNotContained _ -> HeldNext.NothingOnScreen
+
+  /// The sentence a held row shows: why it was not read, and the one thing to do about it that this screen offers. The wording is
+  /// chosen by the case, so a new reason cannot be left with the walk's terse text.
+  let heldSaying (reason: LiveValueTree.NotEvaluatedReason) : string =
+    match reason with
+    | LiveValueTree.NotEvaluatedReason.GetterRunsCode -> "Calls other code, so it was not run. The run button runs it under a deadline."
+    | LiveValueTree.NotEvaluatedReason.GetterLoops -> "Loops or calls itself, so it was not run. The run button runs it under a deadline."
+    | LiveValueTree.NotEvaluatedReason.SequenceNotEnumerated ->
+      sprintf "A sequence: reading it runs the code behind it, so it was not read. Switch the mode to %s to read it." (ValueWalk.name WalkEverything)
+    | LiveValueTree.NotEvaluatedReason.ClassesCollapsed ->
+      sprintf "Class values are closed in this mode. Switch the mode to %s to open them." (ValueWalk.name WalkSafe)
+    | LiveValueTree.NotEvaluatedReason.EvaluationTimedOut -> "The getter did not return in time. The run button tries again."
+    | LiveValueTree.NotEvaluatedReason.EvaluationThrew message -> sprintf "The getter threw: %s. The run button runs it again." message
+    | LiveValueTree.NotEvaluatedReason.EvaluationNotContained why -> sprintf "Not run: %s. A retry would be refused the same way." why
+
+  /// One line the pane says about itself, apart from any row. One exhaustive function, so each says what is true and what to do next.
+  [<RequireQualifiedAccess>]
+  type PaneNote =
+    /// The filter is set and no binding's name contains it.
+    | NoNameMatchesFilter
+    /// The walk stopped at its depth or size limit for at least one value.
+    | ValuesCutShort
+    /// The walk's values, as of the eval that produced them.
+    | ReadAfterEval of generation: int64 * at: string
+    /// There is no walk yet: the values are what FSI printed.
+    | ReadFromPrinted
+    /// Shown while at least one row has a control: where a change goes, before anyone makes one.
+    | ChangesGoToTheFile
+    /// The label of the mode buttons: what they govern.
+    | ModeGoverns
+    /// The one-line meaning of the chosen mode.
+    | ModeMeans of ValueWalk
+    /// The count of bindings no file defines.
+    | NotInAnyFile of count: int
+
+  module PaneNote =
+    let text (note: PaneNote) : string =
+      match note with
+      | PaneNote.NoNameMatchesFilter -> "No binding's name contains that. Clear the filter to see them all."
+      | PaneNote.ValuesCutShort ->
+        sprintf "Some values were cut short: the pane reads %d levels deep and %d items per collection. Bind the part you want to its own name to see all of it." LiveValueTree.MaxDepth LiveValueTree.MaxChildren
+      | PaneNote.ReadAfterEval(generation, at) -> sprintf "read after eval %d at %s" generation at
+      | PaneNote.ReadFromPrinted -> "read from FSI's printed output"
+      | PaneNote.ChangesGoToTheFile -> "Changes you make here are written to the file."
+      | PaneNote.ModeGoverns -> "How class values are read:"
+      | PaneNote.ModeMeans choice ->
+        let meaning =
+          match choice with
+          | WalkSafe -> "reads fields, and runs only property getters that provably do nothing. The other getters wait for your click."
+          | WalkEverything -> "runs your property getters after every eval. That is your code running."
+          | WalkOff -> "class values stay closed. Records, unions, tuples, lists and maps still show."
+        sprintf "%s: %s" (ValueWalk.name choice) meaning
+      | PaneNote.NotInAnyFile count -> sprintf "%d not defined in a file" count
+
   type ReplaceOutcome =
     | Replaced of LiveValueTree.LiveValueSnapshot
     | NotInSnapshot of name: string

@@ -81,7 +81,7 @@ let heldRowTests =
   testList "a row listed and not read" [
     testCase "it says why, and a getter that can be run gets one square button that posts the click with its binding and path" <| fun _ ->
       let html = panel (view WalkSafe NoClickYet [ box [ held "Slow" NotEvaluatedReason.GetterRunsCode ] ])
-      html |> Expect.stringContains "the reason" "GetterRunsCode"
+      html |> Expect.stringContains "the reason, in words" (heldSaying NotEvaluatedReason.GetterRunsCode)
       html |> Expect.stringContains "stages the binding" "$binding = 'box';"
       html |> Expect.stringContains "stages the path below the binding" "$path = ['Slow'];"
       html |> Expect.stringContains "posts through Datastar to the daemon route" "@post('/api/sessions/abcd1234/live-values/evaluate')"
@@ -102,11 +102,23 @@ let heldRowTests =
     testCase "a sequence and a collapsed class say why and offer no click, because a click cannot do anything there" <| fun _ ->
       let html =
         panel (view WalkOff NoClickYet [ box [ held "Items" NotEvaluatedReason.SequenceNotEnumerated; held "Inner" NotEvaluatedReason.ClassesCollapsed ] ])
-      html |> Expect.stringContains "sequence reason" "SequenceNotEnumerated"
-      html |> Expect.stringContains "collapsed reason" "ClassesCollapsed"
+      html |> Expect.stringContains "sequence reason, in words" (heldSaying NotEvaluatedReason.SequenceNotEnumerated)
+      html |> Expect.stringContains "collapsed reason, in words" (heldSaying NotEvaluatedReason.ClassesCollapsed)
       html.Contains "live-values/evaluate" |> Expect.isFalse "no click was offered"
 
-    testCase "a click that timed out, threw or could not be contained reads as unknown with its reason, never as empty" <| fun _ ->
+    testCase "WHY — a row that is not read names the mode that would read it, and the mode buttons it names are in the pane's header" <| fun _ ->
+      heldNext NotEvaluatedReason.ClassesCollapsed |> Expect.equal "a closed class is opened by the mode that runs only what does nothing" (HeldNext.SwitchMode WalkSafe)
+      heldNext NotEvaluatedReason.SequenceNotEnumerated |> Expect.equal "a sequence is read by the mode that runs everything" (HeldNext.SwitchMode WalkEverything)
+      for choice in [ WalkSafe; WalkEverything ] do
+        match choice with
+        | WalkSafe -> heldSaying NotEvaluatedReason.ClassesCollapsed |> Expect.stringContains "the sentence names the mode" (ValueWalk.name choice)
+        | WalkEverything -> heldSaying NotEvaluatedReason.SequenceNotEnumerated |> Expect.stringContains "the sentence names the mode" (ValueWalk.name choice)
+        | WalkOff -> ()
+      let html = panel (view WalkOff NoClickYet [ box [ held "Inner" NotEvaluatedReason.ClassesCollapsed ] ])
+      for choice in ValueWalk.all do
+        html |> Expect.stringContains (sprintf "the %s button exists" (ValueWalk.name choice)) (sprintf "aria-label=\"Walk live values in %s mode" (ValueWalk.name choice))
+
+    testCase "a click that timed out, threw or could not be contained says what happened and what to do, with no doubled prefix, and offers the run button only where a run can help" <| fun _ ->
       let html =
         panel
           (view WalkSafe NoClickYet
@@ -114,10 +126,24 @@ let heldRowTests =
                 [ held "Slow" NotEvaluatedReason.EvaluationTimedOut
                   held "Boom" (NotEvaluatedReason.EvaluationThrew "kaput")
                   held "Wild" (NotEvaluatedReason.EvaluationNotContained "no filter here") ] ])
-      html |> Expect.stringContains "says unknown" "unknown"
+      for reason in [ NotEvaluatedReason.EvaluationTimedOut; NotEvaluatedReason.EvaluationThrew "kaput"; NotEvaluatedReason.EvaluationNotContained "no filter here" ] do
+        html |> Expect.stringContains "each says its own sentence" (heldSaying reason)
       html |> Expect.stringContains "the throw's own message" "kaput"
       html |> Expect.stringContains "the containment reason" "no filter here"
-      html |> Expect.stringContains "the timeout" "EvaluationTimedOut"
+      html.Contains "unknown: not evaluated" |> Expect.isFalse "the prefix is not doubled"
+      html.Contains "EvaluationTimedOut" |> Expect.isFalse "a raw case name is not shown"
+      (html.Split([| "live-held-btn" |], StringSplitOptions.None).Length - 1) |> Expect.equal "the run button is there for the timeout and the throw, not for a refusal a retry would repeat" 2
+
+    testCase "every reason has a sentence, a next step, and no raw case name or backtick" <| fun _ ->
+      let reasons =
+        [ NotEvaluatedReason.GetterRunsCode; NotEvaluatedReason.GetterLoops; NotEvaluatedReason.SequenceNotEnumerated; NotEvaluatedReason.ClassesCollapsed
+          NotEvaluatedReason.EvaluationTimedOut; NotEvaluatedReason.EvaluationThrew "kaput"; NotEvaluatedReason.EvaluationNotContained "no filter here" ]
+      for reason in reasons do
+        let said = heldSaying reason
+        String.IsNullOrWhiteSpace said |> Expect.isFalse (sprintf "%A says something" reason)
+        said.Contains "`" |> Expect.isFalse "no backtick"
+        for name in [ "GetterRunsCode"; "GetterLoops"; "SequenceNotEnumerated"; "ClassesCollapsed"; "EvaluationTimedOut"; "EvaluationThrew"; "EvaluationNotContained" ] do
+          said.Contains name |> Expect.isFalse (sprintf "%A does not say %s" reason name)
 
     testCase "every clickable row has its own evaluating mark, so a pane with two of them shows two marks and a click can only turn on its own" <| fun _ ->
       let html = panel (view WalkSafe NoClickYet [ heldAt "probe" [ "RunsCode" ]; heldAt "spinner" [ "Self" ] ])

@@ -48,6 +48,8 @@
          searches the NuGet cache's runtimes/<rid>/native, so this process has to be told. -->
     <Compile Include="NativeResolution.fs" />
     <Compile Include="Instrumentation.fs" />
+    <!-- How a type and a float are spelled in F#. BCL only, and the walk in LiveValueTree names its values' types with it. -->
+    <Compile Include="FSharpSpelling.fs" />
     <Compile Include="LiveValueTree.fs" />
     <Compile Include="DirectoryConfigTypes.fs" />
     <Compile Include="ConfigDsl.fs" />

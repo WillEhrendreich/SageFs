@@ -13,6 +13,8 @@ open SageFs
 open SageFs.Features
 open SageFs.Features.LiveBindingsPane
 open SageFs.Features.LiveValueTree
+open SageFs.Features.Tweak.TweakAddress
+open SageFs.Features.Tweak.LiteralEdit
 open SageFs.Features.Tweak.Nudge
 open SageFs.Features.Tweak.BindingTweak
 open SageFs.Features.Tweak.BindingTweakRows
@@ -159,18 +161,25 @@ let dockTreeTests =
           Through = ThroughCall.NoCall }
       let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
       let html = renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
-      html |> Expect.stringContains "the count, in the bar" "2 REPL only"
+      html |> Expect.stringContains "the count, in the bar, in words that say what it counts" (PaneNote.text (PaneNote.NotInAnyFile 2))
       html |> Expect.stringContains "the chip's own test id" "data-testid=\"live-repl-only\""
       html |> Expect.stringContains "the reason on hover" "nothing to save it to"
       count "Bound in the REPL" html |> Expect.equal "the sentence appears once, in the chip, and not on each row" 1
-      (dock (WalkedBindings(view [ person; scores ]))).Contains "REPL only" |> Expect.isFalse "no chip when the files were not asked about"
+      (dock (WalkedBindings(view [ person; scores ]))).Contains "live-repl-only" |> Expect.isFalse "no chip when the files were not asked about"
+
+    testCase "WHY — the chip says what it counts: bindings no file defines, and never the word REPL a new user has not met" <| fun _ ->
+      for count in [ 1; 2; 30 ] do
+        let said = PaneNote.text (PaneNote.NotInAnyFile count)
+        said |> Expect.stringContains "the number" (string count)
+        said.Contains "REPL" |> Expect.isFalse "no jargon on the chip"
+        said |> Expect.stringContains "what it counts" "file"
 
     testCase "the filter is a typed signal binding, and each binding hides itself by name through a typed class toggle" <| fun _ ->
       let html = dock (WalkedBindings(view [ person; scores ]))
       html |> Expect.stringContains "the filter box is bound (Datastar writes the camelCase signal in kebab case)" "data-bind:live-filter"
       html |> Expect.stringContains "a binding hides when the filter does not match" "data-class:live-hidden"
       html |> Expect.stringContains "matching is by lowercase name" "'person'.includes("
-      html |> Expect.stringContains "a notice when nothing matches" "no binding's name contains that"
+      html |> Expect.stringContains "a notice when nothing matches, with a way out" (PaneNote.text PaneNote.NoNameMatchesFilter)
 
     testCase "each top-level binding has a pin button that shows its real state and moves it to the top" <| fun _ ->
       let html = dock (WalkedBindings(view [ person; scores ]))
@@ -195,7 +204,7 @@ let dockTreeTests =
       let v = view [ cut ]
       let html = dock (WalkedBindings { v with Snapshot = { v.Snapshot with Truncated = true } })
       html |> Expect.stringContains "the row marker" "… (truncated)"
-      html |> Expect.stringContains "the note" "Some values truncated"
+      html |> Expect.stringContains "the note, with the limits and what to do" (PaneNote.text PaneNote.ValuesCutShort)
 
     testCase "every element whose class the client owns has an id, so the morph matches it by id and never by position" <| fun _ ->
       let sources =
@@ -476,4 +485,86 @@ let viewPanelTests =
           |> List.ofSeq)
         |> List.filter (fun (_, px) -> px < floorPx)
       tooSmall |> Expect.isEmpty (sprintf "every live-* font size is at least %gpx, but these are smaller: %A" floorPx tooSmall)
+  ]
+
+/// What the pane says about itself and its rows in words a person can read cold (three reviewers who saw only screenshots scored the
+/// wording 4 of 10). The sentences are chosen by DU cases, so these tests check the data and the property that no sentence leaks a raw
+/// case name, not the exact words.
+[<Tests>]
+let dockWordingTests =
+  let withKnob : TweakView =
+    let place : SourceRef =
+      { File = "/work/Tuning.fs"
+        Address = { ModulePath = []; BindingName = "person"; Path = [] }
+        Text = "36"
+        Hash = String('a', 64)
+        Span = { Line = 3; Column = 1; EndLine = 3; EndColumn = 3 }
+        Kind = ItemKind.Knob(LiteralValue.Integer 36L) }
+    { Rows =
+        Map.ofList
+          [ RowKey.top "person",
+            { State = PersistenceState.InSource place
+              Control = Control.IntegerStepper 36L
+              Place = PlaceOf.Placed place
+              Watching = WatchStatus.Watched
+              Reload = RowReload.NoWriteYet
+              Undo = HistoryStep.NothingToStep
+              Redo = HistoryStep.NothingToStep
+              Through = ThroughCall.NoCall } ] }
+  let allNotes : PaneNote list =
+    [ PaneNote.NoNameMatchesFilter
+      PaneNote.ValuesCutShort
+      PaneNote.ReadAfterEval(7L, "14:03:22")
+      PaneNote.ReadFromPrinted
+      PaneNote.ChangesGoToTheFile
+      PaneNote.ModeGoverns
+      PaneNote.ModeMeans WalkSafe
+      PaneNote.ModeMeans WalkEverything
+      PaneNote.ModeMeans WalkOff
+      PaneNote.NotInAnyFile 3 ]
+  let dockWith (tweaks: TweakView) (mode: ValueWalk) (typeColumn: Toggle) (bindings: LiveBindingValue list) : string =
+    let recommended = SageFs.View.recommended SageFs.ViewWorkflow.Repl
+    let look = { recommended with Layout = { recommended.Layout with Type = typeColumn } }
+    let v = view bindings
+    renderDockWith look None tweaks SessionInView "abcd1234" (WalkedBindings { v with Notes = { v.Notes with Mode = mode } }) None |> decoded
+
+  testList "the pane says what its controls govern and where a change goes, before anyone has to find out" [
+
+    testCase "WHY — a list with at least one editable row says, in text that is always on screen, where a change goes" <| fun _ ->
+      let said = PaneNote.text PaneNote.ChangesGoToTheFile
+      (dockWith withKnob ValueWalk.standard On [ person ]) |> Expect.stringContains "the caption is there" said
+      (dockWith withKnob ValueWalk.standard On [ person ]) |> Expect.stringContains "under its own test id" "data-testid=\"live-writes-caption\""
+      (dockWith TweakView.none ValueWalk.standard On [ person ]).Contains "live-writes-caption" |> Expect.isFalse "no editable row, no caption"
+      TweakView.hasKnob withKnob |> Expect.isTrue "the pure fact the caption follows"
+      TweakView.hasKnob TweakView.none |> Expect.isFalse "no rows, no knob"
+
+    testCase "the mode buttons carry a visible label that says what they govern, and the chosen mode a visible one-line meaning" <| fun _ ->
+      for mode in ValueWalk.all do
+        let html = dockWith TweakView.none mode On [ person ]
+        html |> Expect.stringContains "the group's label" (PaneNote.text PaneNote.ModeGoverns)
+        html |> Expect.stringContains (sprintf "the meaning of %s, as text" (ValueWalk.name mode)) (PaneNote.text (PaneNote.ModeMeans mode))
+        html |> Expect.stringContains "the group is named by that label" (sprintf "aria-labelledby=\"%s\"" DockIds.ModeLabel)
+        html |> Expect.stringContains "the label has the id the group names" (sprintf "id=\"%s\"" DockIds.ModeLabel)
+      ValueWalk.all |> List.map (fun mode -> PaneNote.text (PaneNote.ModeMeans mode)) |> List.distinct |> List.length |> Expect.equal "each mode says its own thing" 3
+      PaneNote.text (PaneNote.ModeMeans WalkEverything) |> Expect.stringContains "Everything says it runs getters" "runs your property getters"
+
+    testCase "WHY — the Type column shows F# names and keeps the full .NET name in the tooltip" <| fun _ ->
+      let typed = { node "xs" NodeKind.Leaf "[1; 2]" [] with TypeName = "FSharpList`1[Int32]" }
+      let root = { Name = "xs"; TypeSignature = "T"; Root = typed }
+      let html = dockWith TweakView.none ValueWalk.standard On [ root ]
+      html |> Expect.stringContains "the F# spelling is the text" ">int list<"
+      html |> Expect.stringContains "the full .NET name is the tooltip" "title=\"FSharpList`1[Int32]\""
+      let visible = Text.RegularExpressions.Regex.Matches(html, "class=\"live-type\"[^>]*>([^<]*)<") |> Seq.map (fun m -> m.Groups.[1].Value) |> List.ofSeq
+      visible |> Expect.isNonEmpty "a type cell was drawn"
+      for text in visible do text.Contains "`" |> Expect.isFalse "no backtick in the visible type"
+
+    testCase "the stamp says what it is: the eval it was read after and when" <| fun _ ->
+      let html = dockWith TweakView.none ValueWalk.standard On [ person ]
+      html |> Expect.stringContains "the stamp" "read after eval 7 at "
+      html.Contains "gen 7" |> Expect.isFalse "no bare generation number"
+
+    testPropertyWithConfig propConfig "WHY — no sentence the pane says about itself carries a raw case name, a backtick or a format hole"
+      (Prop.forAll (Arb.fromGen (Gen.elements allNotes)) (fun note ->
+        let said = PaneNote.text note
+        not (String.IsNullOrWhiteSpace said) && not (said.Contains "`") && not (said.Contains "%") && not (said.Contains "WalkSafe") && not (said.Contains "NoNameMatches")))
   ]

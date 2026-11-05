@@ -91,6 +91,13 @@ let whereOf (place: SourceRef) : string =
   | 0 -> name
   | line -> sprintf "%s:%d" name line
 
+/// Where an expression sits, in a sentence: the file's name and the line, spelled out (`Tuning.fs line 3`).
+let whereInWords (place: SourceRef) : string =
+  let name = Path.GetFileName place.File
+  match place.Span.Line with
+  | 0 -> name
+  | line -> sprintf "%s line %d" name line
+
 /// A hash, short enough to read and long enough to compare.
 let shortHash (hash: string) : string = if hash.Length > 8 then hash.Substring(0, 8) else hash
 
@@ -102,13 +109,14 @@ let describe (state: PersistenceState) : Described =
       Tone = Tone.Good
       Detail = sprintf "%s is %s in %s. A change here is written to that file." (SourceRef.addressText place) place.Text (whereOf place) }
   | PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt ->
-    { Label = "REPL only"
+    { Label = "not in a file"
       Tone = Tone.Quiet
       Detail = "Bound in the REPL. No file of this session holds a literal, a record field or a formula by this name, so there is nothing to save it to." }
   | PersistenceState.NotInAFile(NotInFileWhy.OwnedFilesUnknown reason) ->
     { Label = "files unknown"
       Tone = Tone.Notice
-      Detail = sprintf "The session's files could not all be read, so the pane cannot say whether one holds this: %s" reason }
+      Detail =
+        sprintf "The session's files could not all be read, so the pane cannot say whether one holds this. The problem: %s. This row has no control until the files read cleanly, so fix the file it names." reason }
   | PersistenceState.NotInAFile(NotInFileWhy.NotSpelledInTheFile owner) ->
     { Label = "not spelled in the file"
       Tone = Tone.Quiet
@@ -141,27 +149,25 @@ let describe (state: PersistenceState) : Described =
     { Label = "evolved"
       Tone = Tone.Info
       Detail =
-        sprintf "You pushed %s, and the program has since changed it to %s. %s still says %s. A plain save would record the program's change as your decision, so it is not offered." pushed live (whereOf place) place.Text }
+        sprintf "You pushed %s, and the program has since changed it to %s. %s still says %s. The pane does not write the program's value into the file, because that would record the program's change as your decision." pushed live (whereInWords place) place.Text }
   | PersistenceState.Evolved(live, EvolvedBy.MovedWhileRunning, place) ->
     { Label = "evolved"
       Tone = Tone.Info
       Detail =
-        sprintf "The running value is %s and %s says %s: something assigned it while the app ran. A plain save would record that change as your decision, so it is not offered." live (whereOf place) place.Text }
+        sprintf "The running value is %s and %s says %s: something assigned it while the app ran. The pane does not write that value into the file, because it would record the program's change as your decision." live (whereInWords place) place.Text }
   | PersistenceState.DiffersFromFile(live, place) ->
     { Label = "differs from the file"
       Tone = Tone.Notice
-      Detail =
-        sprintf "The REPL holds %s and the file says %s (%s). The knob changes the file. Evaluate the binding again, or let hot reload take the write, to bring the two back in step." live place.Text (whereOf place) }
+      Detail = sprintf "%s holds %s. The running program has %s." (whereInWords place) place.Text live }
   | PersistenceState.StaleAddress stale ->
     let nowText =
       match stale.Now with
-      | StaleNow.Edited(text, hash) -> sprintf "it now holds %s (hash %s)" text (shortHash hash)
-      | StaleNow.MovedTo candidate -> sprintf "it moved: the same expression is now at %s" (NudgeAddress.format candidate)
-      | StaleNow.Gone reason -> sprintf "it is gone: %s" reason
-    { Label = "stale"
+      | StaleNow.Edited(text, _) -> sprintf "the file now holds %s" text
+      | StaleNow.MovedTo candidate -> sprintf "the same expression is now at %s" (NudgeAddress.format candidate)
+      | StaleNow.Gone reason -> sprintf "that expression is gone: %s" reason
+    { Label = "file changed"
       Tone = Tone.Bad
-      Detail =
-        sprintf "The file changed under this row. You saw %s (hash %s); %s. Nothing was written. Read it again and try from what is there." stale.Seen.Text (shortHash stale.Seen.Hash) nowText }
+      Detail = sprintf "The file changed after this row was drawn. The row showed %s, and %s. Nothing was written." stale.Seen.Text nowText }
   | PersistenceState.Refused(refusal, _) ->
     { Label = "refused"
       Tone = Tone.Bad
@@ -176,8 +182,81 @@ let describe (state: PersistenceState) : Described =
       Tone = Tone.Notice
       Detail = sprintf "%s in %s…" what (whereOf place) }
 
-/// What a row owes to a call, said once: which callee builds the value and how many calls a write reaches, or why the call was not
-/// followed. A row not built by a call, and a right-hand side that is not a call at all, say nothing.
+/// What the running program and the file each hold, said with a label on each so neither number is left to be guessed at. Only a
+/// state that is about the two differing has one.
+[<RequireQualifiedAccess>]
+type ValuesLine =
+  | NoValues
+  | RunningAndFile of running: string * file: string
+
+module ValuesLine =
+  let ofState (state: PersistenceState) : ValuesLine =
+    match state with
+    | PersistenceState.Tweaked(live, place)
+    | PersistenceState.Evolved(live, _, place)
+    | PersistenceState.DiffersFromFile(live, place) -> ValuesLine.RunningAndFile(live, place.Text)
+    | PersistenceState.InSource _
+    | PersistenceState.NotInAFile _
+    | PersistenceState.Held
+    | PersistenceState.Derived _
+    | PersistenceState.Ambiguous _
+    | PersistenceState.StaleAddress _
+    | PersistenceState.Refused _
+    | PersistenceState.Writing _ -> ValuesLine.NoValues
+
+  let text (line: ValuesLine) : string =
+    match line with
+    | ValuesLine.NoValues -> ""
+    | ValuesLine.RunningAndFile(running, file) -> sprintf "Running: %s · File: %s" running file
+
+/// What a person can do next about a row, in terms of the controls that row really draws. Each case names a control that is on the
+/// screen or says plainly that none is, so a sentence built from it never points at a control that does not exist.
+[<RequireQualifiedAccess>]
+type NextStep =
+  | NoNextStep
+  /// The Undo button on the row takes back the last write, so the file goes back to what it held.
+  | UndoTakesItBack
+  /// Nothing on this page applies the file's value to the running program: the person evaluates the file in the session, or hot
+  /// reload takes it.
+  | SendTheFileToTheSession
+  /// The control on the row sets what the file says.
+  | UseTheControl
+  /// The control on the row now starts from what the file holds.
+  | UseTheControlAgain
+
+module NextStep =
+  /// The next step for a row, from its state and the controls it draws now.
+  let ofRow (view: RowView) : NextStep =
+    let knob = TweakView.rowHasKnob view
+    match view.State with
+    | PersistenceState.DiffersFromFile _ ->
+      match view.Undo with
+      | HistoryStep.StepAvailable -> NextStep.UndoTakesItBack
+      | HistoryStep.OtherRowFirst _
+      | HistoryStep.NothingToStep -> NextStep.SendTheFileToTheSession
+    | PersistenceState.Tweaked _
+    | PersistenceState.Evolved _ -> if knob then NextStep.UseTheControl else NextStep.NoNextStep
+    | PersistenceState.StaleAddress _ -> if knob then NextStep.UseTheControlAgain else NextStep.NoNextStep
+    | PersistenceState.InSource _
+    | PersistenceState.NotInAFile _
+    | PersistenceState.Held
+    | PersistenceState.Derived _
+    | PersistenceState.Ambiguous _
+    | PersistenceState.Refused _
+    | PersistenceState.Writing _ -> NextStep.NoNextStep
+
+  let sentence (step: NextStep) : string =
+    match step with
+    | NextStep.NoNextStep -> ""
+    | NextStep.UndoTakesItBack -> "Undo takes back your last write, so the file goes back to what it held."
+    | NextStep.SendTheFileToTheSession ->
+      "Nothing on this page sends the file's value to the running program yet. Evaluate the file in the session, or let hot reload take it."
+    | NextStep.UseTheControl -> "The control on this row sets what the file says."
+    | NextStep.UseTheControlAgain -> "The control on this row now starts from what the file holds. Change it again from there."
+
+/// What a row owes to a call, said once: which callee builds the value and how many places call it, or why the call was not
+/// followed. A row not built by a call, and a right-hand side that is not a call at all, say nothing. A write here is not a problem,
+/// only something to know, so it takes the notice colour and never the warning one.
 let describeThrough (through: ThroughCall) : Described option =
   let said (tone: Tone) (detail: string) : Described option = Some { Label = "call"; Tone = tone; Detail = detail }
   match through with
@@ -185,28 +264,28 @@ let describeThrough (through: ThroughCall) : Described option =
   | ThroughCall.Through followed ->
     match followed.Callers with
     | CallerCount.Counted 1 ->
-      said Tone.Quiet (sprintf "%s builds this. Only this call uses the literal, so a change reaches nothing else." followed.Callee)
+      said Tone.Quiet (sprintf "%s builds this value. Only one place calls %s, so changing it changes nothing else." followed.Callee followed.Callee)
     | CallerCount.Counted 0 ->
-      said Tone.Notice (sprintf "%s builds this. No call to it was found in the files, so a change reaches whatever calls it." followed.Callee)
+      said Tone.Info (sprintf "%s builds this value. No call to %s was found in the files, so changing it changes whatever calls it." followed.Callee followed.Callee)
     | CallerCount.Counted n ->
-      said Tone.Notice (sprintf "%s builds this. %d calls use this literal, so a change reaches all of them." followed.Callee n)
+      said Tone.Info (sprintf "%s builds this value. %d places call %s, so changing it changes all of them." followed.Callee n followed.Callee)
     | CallerCount.NotCounted reason ->
-      said Tone.Notice (sprintf "%s builds this. Every call to it uses this literal, so a change reaches all of them. The calls could not be counted: %s" followed.Callee reason)
+      said Tone.Info (sprintf "%s builds this value. Every place that calls %s gets the change. The calls could not be counted: %s" followed.Callee followed.Callee reason)
   | ThroughCall.CouldNotFollow refusal ->
     match refusal with
     | Refusal.NotAPlainCall -> None
     | Refusal.NoCalleeInFiles name ->
-      said Tone.Quiet (sprintf "Built by %s, which no file of the session declares, so there is no literal to change here." name)
+      said Tone.Quiet (sprintf "Built by %s, which no file of the session declares, so there is nothing here to change." name)
     | Refusal.CalleeFilesUnknown reason ->
-      said Tone.Quiet (sprintf "Built by a call, and the session's files could not all be read, so its callee cannot be found: %s" reason)
+      said Tone.Quiet (sprintf "Built by a function call, and the session's files could not all be read, so the function cannot be found: %s" reason)
     | Refusal.CalleeDeclaredSeveralTimes(name, places) ->
       said Tone.Quiet (sprintf "%d places declare %s: %s. The pane will not pick one, so there is nothing to change here." places.Length name (places |> List.map whereOf |> String.concat ", "))
     | Refusal.CalleeNotRead(name, file) ->
       said Tone.Quiet (sprintf "%s is declared in %s, which has not been read, so what it builds is not known." name (Path.GetFileName file))
     | Refusal.ResultNotSpelled callee ->
-      said Tone.Quiet (sprintf "%s (%s) does not spell this part as a literal, so there is nothing to change here." callee.Address.BindingName (whereOf callee))
+      said Tone.Quiet (sprintf "%s (%s) does not spell this part as a plain value, so there is nothing to change here." callee.Address.BindingName (whereOf callee))
     | Refusal.ResultIsAnExpression expression ->
-      said Tone.Quiet (sprintf "%s spells this part as %s (%s), an expression that can use the call's arguments, so there is no literal to change." expression.Address.BindingName expression.Text (whereOf expression))
+      said Tone.Quiet (sprintf "%s spells this part as %s (%s), an expression that can use the call's arguments, so there is no plain value to change." expression.Address.BindingName expression.Text (whereOf expression))
 
 /// Whether a state's sentence is written under the row. A value that is simply in its file, and a record that is made of the rows
 /// below it, are fine as they are: their sentence is the chip's tooltip, so a long tree is not a wall of repeated text. Everything
@@ -261,29 +340,30 @@ type ReloadLine =
   /// The line, its tone, and the longer text for the tooltip (the worker's own wording of what happened and what to do).
   | Line of text: string * Tone * more: string
 
-/// What a reload verdict means for the one value that was written, in a few words.
+/// What a reload verdict means for the one value that was written, as a sentence a person reads without knowing the verdict's name.
+/// Each begins with what the write did (it is in the file), then what the running app did with it.
 let reloadMeaning (case: ReloadCase) : string * Tone =
   match case with
-  | ReloadCase.Patched -> "the app is running the new code", Tone.Good
-  | ReloadCase.PatchPending -> "applied, and the new code has not run yet", Tone.Notice
-  | ReloadCase.NeverEntered -> "applied, and the new code was never entered", Tone.Notice
-  | ReloadCase.Restarted -> "the app restarted to take it", Tone.Notice
-  | ReloadCase.NoEffect -> "nothing in the running process changed", Tone.Quiet
-  | ReloadCase.RestartRequired -> "the app needs a restart to take it", Tone.Bad
-  | ReloadCase.CompileFailed -> "the file did not compile, and the app kept its last code", Tone.Bad
-  | ReloadCase.EvalFailed -> "the save did not finish evaluating, and the app kept its last code", Tone.Bad
-  | ReloadCase.KeptLiveState -> "a live value was kept instead of reset", Tone.Notice
+  | ReloadCase.Patched -> "Saved to the file, and the running app is using the new code.", Tone.Good
+  | ReloadCase.PatchPending -> "Saved to the file. The app has the new code but has not run it yet.", Tone.Notice
+  | ReloadCase.NeverEntered -> "Saved to the file. The app has not run the changed code, so it still has the old value.", Tone.Notice
+  | ReloadCase.Restarted -> "Saved to the file. The app restarted to take it.", Tone.Notice
+  | ReloadCase.NoEffect -> "Saved to the file. Nothing in the running app changed.", Tone.Quiet
+  | ReloadCase.RestartRequired -> "Saved to the file, but the running app needs a restart to take it.", Tone.Bad
+  | ReloadCase.CompileFailed -> "Saved to the file, but it did not compile, so the app kept its last working code.", Tone.Bad
+  | ReloadCase.EvalFailed -> "Saved to the file, but evaluating it failed, so the app kept its last working code.", Tone.Bad
+  | ReloadCase.KeptLiveState -> "Saved to the file. A live value was kept instead of being reset.", Tone.Notice
 
-/// What the app did with the row's write, in words. A verdict names its case and, when a patch named them, the declarations; the
-/// worker's own longer wording is the tooltip.
+/// What the app did with the row's write, in words. The sentence says what happened and never names the verdict's case; the case, the
+/// declarations a patch named and the worker's own longer wording are the tooltip.
 let describeReload (reload: RowReload) : ReloadLine =
   match reload with
   | RowReload.NoWriteYet -> ReloadLine.NoLine
-  | RowReload.Watching(_, ReloadWatch.AwaitingReload) -> ReloadLine.Line("waiting for the app to take it", Tone.Quiet, "")
-  | RowReload.Watching(_, ReloadWatch.Compiling) -> ReloadLine.Line("hot reload is compiling it", Tone.Notice, "")
+  | RowReload.Watching(_, ReloadWatch.AwaitingReload) -> ReloadLine.Line("Saved to the file. Waiting for the app to take it.", Tone.Quiet, "")
+  | RowReload.Watching(_, ReloadWatch.Compiling) -> ReloadLine.Line("Saved to the file. Hot reload is compiling it.", Tone.Notice, "")
   | RowReload.Watching(_, ReloadWatch.NoNewReport) ->
     ReloadLine.Line(
-      "no new reload report arrived",
+      "Saved to the file. Hot reload has not said whether the app took it.",
       Tone.Quiet,
       "Hot reload may not be running, or its verdict is the same as the last one's, which cannot be told apart from no verdict."
     )
@@ -291,9 +371,9 @@ let describeReload (reload: RowReload) : ReloadLine =
     let named =
       match facts.Declarations with
       | [] -> ""
-      | declarations -> sprintf " (%s)" (String.concat ", " (declarations |> List.truncate 3))
+      | declarations -> sprintf "Changed: %s. " (String.concat ", " (declarations |> List.truncate 3))
     let meaning, tone = reloadMeaning facts.Case
-    ReloadLine.Line(sprintf "%s%s: %s" (ReloadCase.token facts.Case) named meaning, tone, sprintf "%s %s" facts.Message facts.SuggestedAction)
+    ReloadLine.Line(meaning, tone, sprintf "%s: %s%s %s" (ReloadCase.token facts.Case) named facts.Message facts.SuggestedAction)
 
 // ── script text ──
 
@@ -395,26 +475,44 @@ let stepper (key: RowKey) (place: SourceRef) (current: string) (landing: string)
       Elem.span
         [ Attr.id (TweakSignals.readoutId key)
           Attr.class' "live-readout"
+          Attr.title "The value in the file"
           testid "tweak-readout"
           Attr.create "aria-live" "polite"
           Ds.text landing ]
         [ textEnc current ]
       stepButton key "+" (sprintf "Step %s up" label) "tweak-step-up" 1 ]
 
+/// The word a switch shows for a value. The file spells a bool `true` or `false`, so the switch says the same.
+let switchWord (value: bool) : string =
+  match value with
+  | true -> "true"
+  | false -> "false"
+
+/// A switch: the checkbox and, beside it, the word for where it stands, so on and off are told apart by reading and not by the shade of
+/// a box. The word and `aria-checked` follow the row's own signal, so they change the moment it is switched; the server's next push
+/// sets the signal to what the file holds.
 let toggle (key: RowKey) (place: SourceRef) (value: bool) (label: string) : XmlNode =
-  Elem.input
-    ([ Attr.id (TweakSignals.sliderId key)
-       Attr.class' "live-toggle"
-       Attr.type' "checkbox"
-       Attr.create "role" "switch"
-       testid "tweak-toggle"
-       Attr.create "aria-label" (attrEnc (sprintf "Switch %s" label))
-       Ds.indicator (TweakSignals.busyOf key)
-       Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-       Ds.onEvent ("change", stageAndPost key place "set" "event.target.checked ? 'true' : 'false'") ]
-     @ (match value with
-        | true -> [ Attr.create "checked" "" ]
-        | false -> []))
+  let signal = TweakSignals.fieldOf key
+  let wordExpr = sprintf "$%s ? 'true' : 'false'" signal
+  Elem.label [ Attr.class' "live-knob live-switch"; Ds.signal (signal, value) ] [
+    Elem.input
+      ([ Attr.id (TweakSignals.sliderId key)
+         Attr.class' "live-toggle"
+         Attr.type' "checkbox"
+         Attr.create "role" "switch"
+         Attr.create "aria-checked" (switchWord value)
+         Ds.attr' ("aria-checked", wordExpr)
+         testid "tweak-toggle"
+         Attr.create "aria-label" (attrEnc (sprintf "Switch %s" label))
+         Ds.bind signal
+         Ds.indicator (TweakSignals.busyOf key)
+         Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
+         Ds.onEvent ("change", stageAndPost key place "set" "event.target.checked ? 'true' : 'false'") ]
+       @ (match value with
+          | true -> [ Attr.create "checked" "" ]
+          | false -> []))
+    Elem.span [ Attr.class' "live-switch-word"; testid "tweak-toggle-word"; Ds.text wordExpr ] [ textEnc (switchWord value) ]
+  ]
 
 /// A field for a string, a character, a union case or an expression. Enter applies, Escape puts back what the file holds, and a hint
 /// shows while what is typed differs from it.
@@ -452,29 +550,51 @@ let field (key: RowKey) (place: SourceRef) (value: string) (verb: string) (testN
       [ Text.raw "Enter to apply, Escape to cancel" ]
   ]
 
+/// The word on an undo or redo button, from the verb the button posts: `undo` is shown `Undo`.
+let historyWord (verb: string) : string =
+  match verb with
+  | "" -> verb
+  | word -> string (Char.ToUpperInvariant word.[0]) + word.Substring 1
+
+/// Why an undo or redo is not available, in words that stay on screen. A step that can be taken has no reason.
+let historyWhy (verb: string) (step: HistoryStep) : string option =
+  match step with
+  | HistoryStep.StepAvailable -> None
+  | HistoryStep.OtherRowFirst address ->
+    Some(sprintf "%s waits: the newest write in this file is to %s, so that one comes first." (historyWord verb) address)
+  | HistoryStep.NothingToStep -> Some(sprintf "Nothing to %s." verb)
+
+/// An undo or redo button with its word on it. A button that cannot be pressed keeps its word and its reason is written next to it
+/// (`historyReason`), because a title shows only to a pointer.
 let historyButton (key: RowKey) (place: SourceRef) (glyph: string) (verb: string) (testName: string) (step: HistoryStep) : XmlNode =
   let common =
-    [ Attr.class' "session-btn live-history"
+    [ Attr.class' "session-btn session-btn-labeled live-history"
       Attr.type' "button"
       testid testName ]
+  let content = [ Text.raw glyph; Elem.span [ Attr.class' "session-btn-label" ] [ textEnc (historyWord verb) ] ]
   match step with
   | HistoryStep.StepAvailable ->
     Elem.button
       (common
-       @ [ Attr.create "aria-label" (attrEnc (sprintf "%s the last write to this value" verb))
-           Attr.title (attrEnc (sprintf "%s the last write to this value" verb))
+       @ [ Attr.create "aria-label" (attrEnc (sprintf "%s the last write to this value" (historyWord verb)))
+           Attr.title (attrEnc (sprintf "%s the last write to this value" (historyWord verb)))
            Ds.indicator (TweakSignals.busyOf key)
            Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
            Ds.onClick (stageAndPost key place verb "''") ])
-      [ Text.raw glyph ]
-  | HistoryStep.OtherRowFirst address ->
+      content
+  | HistoryStep.OtherRowFirst _
+  | HistoryStep.NothingToStep ->
     Elem.button
       (common
        @ [ Attr.create "disabled" ""
-           Attr.title (attrEnc (sprintf "A later write in this file is on top: %s comes first." address)) ])
-      [ Text.raw glyph ]
-  | HistoryStep.NothingToStep ->
-    Elem.button (common @ [ Attr.create "disabled" ""; Attr.title (attrEnc (sprintf "Nothing to %s." verb)) ]) [ Text.raw glyph ]
+           Attr.title (attrEnc (historyWhy verb step |> Option.defaultValue "")) ])
+      content
+
+/// The reason a history button cannot be pressed, as text beside the buttons. Nothing when the step is available.
+let historyReason (verb: string) (step: HistoryStep) : XmlNode list =
+  match historyWhy verb step with
+  | Some why -> [ Elem.span [ Attr.class' "live-history-why live-tone-quiet"; testid (sprintf "tweak-%s-why" verb) ] [ textEnc why ] ]
+  | None -> []
 
 let controlNodes (key: RowKey) (view: RowView) : XmlNode list =
   match view.Place with
@@ -483,7 +603,8 @@ let controlNodes (key: RowKey) (view: RowView) : XmlNode list =
     let label = RowKey.text key
     match view.Control with
     | Control.RealStepper(value, step) ->
-      let places = Step.places step
+      // A real is shown with at least one decimal, the way F# spells it (`80.0`), so the box agrees with the value text in the row.
+      let places = max 1 (Step.places step)
       let size = invariant (Step.size step)
       let landing = sprintf "(%s + Number($%s || 0) * %s).toFixed(%d)" (invariant value) (TweakSignals.stepsOf key) size places
       [ stepper key place (value.ToString("F" + string places, CultureInfo.InvariantCulture)) landing label ]
@@ -500,8 +621,10 @@ let historyNodes (key: RowKey) (view: RowView) : XmlNode list =
   | PlaceOf.NotPlaced, _, _ -> []
   | PlaceOf.Placed _, HistoryStep.NothingToStep, HistoryStep.NothingToStep -> []
   | PlaceOf.Placed place, undo, redo ->
-    [ historyButton key place "↶" "undo" "tweak-undo" undo
-      historyButton key place "↷" "redo" "tweak-redo" redo ]
+    [ yield historyButton key place "↶" "undo" "tweak-undo" undo
+      yield historyButton key place "↷" "redo" "tweak-redo" redo
+      yield! historyReason "undo" undo
+      yield! historyReason "redo" redo ]
 
 let reloadNodes (view: RowView) : XmlNode list =
   let notWatched =
@@ -555,11 +678,17 @@ let renderStrip (key: RowKey) (view: RowView) (placement: Placement) : XmlNode =
                Attr.title (attrEnc described.Detail) ]
              [ textEnc described.Label ]
          yield! whereChip
+         match ValuesLine.ofState view.State with
+         | ValuesLine.NoValues -> ()
+         | values -> yield Elem.span [ Attr.class' "live-values live-tone-quiet"; testid "tweak-values" ] [ textEnc (ValuesLine.text values) ]
          yield! controls
          yield! reload
          match detailShown view.State with
          | DetailShown.OnTheRow -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-detail" ] [ textEnc described.Detail ]
          | DetailShown.InTheTooltipOnly -> ()
+         match NextStep.ofRow view with
+         | NextStep.NoNextStep -> ()
+         | step -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-next" ] [ textEnc (NextStep.sentence step) ]
          match describeThrough view.Through with
          | Some through -> yield Elem.div [ Attr.class' (sprintf "live-detail %s" (Tone.cssClass through.Tone)); testid "tweak-through" ] [ textEnc through.Detail ]
          | None -> () ])
