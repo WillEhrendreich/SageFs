@@ -63,7 +63,10 @@ module RespawnAfterReap =
     sequencingOf (tryFindStartupScript targets workingDir loaded)
 
   /// Replacements waiting for their old worker to leave, by session. Generic so the decision is testable without a
-  /// session record.
+  /// session record. A parked session is a snapshot taken when the reset was accepted: what is recorded on the registered
+  /// session afterwards (a rebuild's outcome, which is written after the park) is not in it, so the respawn takes that
+  /// from the registry. Carrying the snapshot's `InProgress` forward left a session reading "Rebuild in progress" for the
+  /// rest of its life (#186).
   type Book<'session> = Map<SessionId, 'session>
 
   [<RequireQualifiedAccess>]
