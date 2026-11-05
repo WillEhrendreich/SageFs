@@ -270,9 +270,11 @@ let browserTests =
         let! openProblems = layoutProblems page SourceLine
         openProblems |> Expect.equal (sprintf "at %dpx wide the opened details do not overflow or overlap" width) ""
       let at (w: int) (line: string) = heights |> List.find (fun (width, l, _) -> width = w && l = line) |> fun (_, _, h) -> h
-      // Wrapping, not shrinking or clipping: the narrower the card, the taller each line.
-      for line in [ FreshnessLine; SourceLine ] do
-        Expect.isGreaterThan (sprintf "%s is taller at 240px (%f) than at 1280px (%f), because it wraps" line (at 240 line) (at 1280 line)) (at 240 line, at 1280 line)
+      // Wrapping, not shrinking or clipping: the narrower the card, the taller each line, or the same height when the words still fit.
+      // The source note is now the cause only ("1 file changed since the build."), short enough to fit a 240px card on one line, so
+      // it is held to never getting shorter; the freshness line is long enough that it must wrap.
+      Expect.isGreaterThan (sprintf "%s is taller at 240px (%f) than at 1280px (%f), because it wraps" FreshnessLine (at 240 FreshnessLine) (at 1280 FreshnessLine)) (at 240 FreshnessLine, at 1280 FreshnessLine)
+      Expect.isGreaterThanOrEqual (sprintf "%s is no shorter at 240px (%f) than at 1280px (%f)" SourceLine (at 240 SourceLine) (at 1280 SourceLine)) (at 240 SourceLine, at 1280 SourceLine)
     }
     |> Integration.register (Integration.Dedicated "--integration-browser")
   ]

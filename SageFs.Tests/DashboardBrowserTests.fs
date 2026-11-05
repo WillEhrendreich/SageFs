@@ -1641,7 +1641,8 @@ let tests =
   playwrightTest "page structure: clear output button in panel header" (fun page -> task {
     let clearBtn = page.Locator("#output-section .panel-header-btn")
     do! PlaywrightExpect.isVisibleAsync clearBtn "clear button visible"
-    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders clearBtn "CLEAR"
+    // The button says what it clears: "Clear output", where it once said only "Clear" (read as clearing what, to two reviewers).
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders clearBtn "Clear output"
   })
 
   playwrightTest "page structure: the plus opens the new-session dialog with its inputs and buttons" (fun page -> task {

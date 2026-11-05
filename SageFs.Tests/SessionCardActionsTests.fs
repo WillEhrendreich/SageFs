@@ -69,4 +69,13 @@ let tests = testList "Session card actions" [
     let html = render "0a2b3c4e" [ mkCardSession "0a2b3c4d" [] ]
     html |> Expect.stringContains "card click guard" "evt.target.closest('button, a') ||"
   }
+
+  test "WHY — an agent chip says what it is on hover, and whether it is still active, because 'browser:427f5871' and 'cli-integrated' alone read as mystery labels to three reviewers" {
+    let chip (css: string) : AgentBadge = { Name = "cli-integrated"; IntentLabel = ""; CssClass = css; DetailLabel = "" }
+    let card (badge: AgentBadge) = { mkCardSession "0a2b3c4d" [] with AgentBadges = [ badge ] }
+    render "0a2b3c4e" [ card (chip "badge-agent") ]
+    |> Expect.stringContains "a recent agent" "title=\"cli-integrated is an agent connected to this session\""
+    render "0a2b3c4e" [ card (chip "badge-agent badge-agent-stale") ]
+    |> Expect.stringContains "an agent that has gone quiet says so" "cli-integrated is an agent connected to this session and has not acted for a while"
+  }
 ]

@@ -62,6 +62,11 @@ let themePickerSnapshotTests = testList "renderThemePicker snapshots" [
     let html = renderThemePicker "Nordic" |> renderNode
     do! verifyTheme "theme_picker_nordic" html
   }
+
+  testCase "WHY — the picker is named, because a box that shows only \"Kanagawa\" tells a screen reader nothing and a first-time reader no more" <| fun _ ->
+    let html = renderThemePicker "Kanagawa" |> renderNode
+    html |> Flip.Expect.stringContains "its accessible name" "aria-label=\"Theme\""
+    html |> Flip.Expect.stringContains "its tooltip says what it changes" "title=\"Colour theme for the dashboard\""
 ]
 
 // ─── Unit: renderThemeVars content ───────────────────────────────────────────

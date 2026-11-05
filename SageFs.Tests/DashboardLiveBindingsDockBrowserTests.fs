@@ -184,8 +184,12 @@ let journey () : Task<unit> = task {
     popoverOpen |> Expect.isFalse "Evaluate is closed until someone opens it"
     do! waitHidden page "#evaluate-section .eval-pop-body"
     let! toggle = page.Locator("[data-testid=evaluate-toggle]").BoundingBoxAsync()
-    (abs (toggle.Width - 28.0f) < 1.0f && abs (toggle.Height - 28.0f) < 1.0f)
-    |> Expect.isTrue (sprintf "the Evaluate button is the uniform 28x28 square, got %fx%f" toggle.Width toggle.Height)
+    // It carries its word ("λ Evaluate"), so it is as tall as every other control in the bar and as wide as the word needs: a bare
+    // glyph in a 28px square was read by three reviewers as "a mystery button".
+    let! toggleText = page.Locator("[data-testid=evaluate-toggle]").InnerTextAsync()
+    toggleText |> Expect.stringContains "the button says what it is" "Evaluate"
+    (abs (toggle.Height - 28.0f) < 1.0f && toggle.Width >= 28.0f)
+    |> Expect.isTrue (sprintf "the Evaluate button is 28px tall, like the other controls, and at least a square wide, got %fx%f" toggle.Width toggle.Height)
     expectNoErrors errors "on a bare URL with a session"
 
     // ── 4. a session with no bindings ──────────────────────────────────────────────────────────────────────────────────
@@ -408,7 +412,10 @@ let journey () : Task<unit> = task {
     expectNoErrors errors "while evaluating, filtering and pinning"
 
     // ── 7. the popover's keyboard: key e opens it with the box focused, Escape closes it ───────────────────────────────
-    do! page.Locator("#output-panel").ClickAsync()
+    // The View panel opened earlier in the journey is still open, and it sits over the lower part of Output, so the click goes to
+    // Output's top-left corner where nothing overlaps (the middle of the panel is under the popover, and Playwright refuses to click
+    // through it, as a mouse would not).
+    do! page.Locator("#output-panel").ClickAsync(LocatorClickOptions(Position = Position(X = 20.0f, Y = 8.0f)))
     do! page.Keyboard.PressAsync "e"
     do! waitVisible page "#evaluate-section .eval-pop-body"
     do! waitJs page "the box to take focus" BrowserWaits.panelUpdates "() => document.activeElement && document.activeElement.id === 'eval-textarea'" null

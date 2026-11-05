@@ -258,9 +258,11 @@ let createJourney (daemon: Daemon) (seen: Seen) : Task<unit> = task {
   let! ready =
     waitUntil warmup (fun () -> task {
       let! text = page.Locator(sprintf "#session-card-%s" id).InnerTextAsync()
-      return text.ToLowerInvariant().Contains "running"
+      // The card's pill reads "Ready" once the session can take code. It used to read "Running", a word that said only that a process
+      // existed; a session that has not warmed says "Warming up", which does not contain this word.
+      return text.ToLowerInvariant().Contains "ready"
     })
-  ready |> Expect.isTrue "the card shows the session running once it has warmed up"
+  ready |> Expect.isTrue "the card shows the session ready once it has warmed up"
   do! PlaywrightExpect.waitForSelectorText warmup page "#session-status" "Ready"
   do! waitForState page "closed"
   assertNoErrors "create" seen

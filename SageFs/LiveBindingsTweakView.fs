@@ -584,8 +584,7 @@ let stagePostTo (endpoint: string) (key: RowKey) (place: SourceRef) (verb: strin
     (Ds.post endpoint)
 
 /// The script for the knob's own route.
-let stagePostJs (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
-  stagePostTo TweakSignals.Endpoint key place verb valueJs
+let stagePostJs : RowKey -> SourceRef -> string -> string -> string = stagePostTo TweakSignals.Endpoint
 
 /// The same, as an attribute value: the script is escaped once, here.
 let stageAndPost (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =

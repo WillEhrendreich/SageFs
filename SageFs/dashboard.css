@@ -1640,8 +1640,10 @@ h2 {
     min-width: 0;
   }
 
-  .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-tweak,
-  .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-tweak {
+  /* Not the REPL-only marker, which draws nothing and is `display: none` below: this selector out-ranks that one, and a marker the
+     grid took in as `display: contents` read as shown to the browser journey that checks it. */
+  .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-tweak:not(.live-tweak-marker),
+  .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail))) > .live-tweak:not(.live-tweak-marker) {
     display: contents;
   }
 
@@ -1753,7 +1755,7 @@ h2 {
 
 /* The state tags no longer all look alike. They differed only by the colour of one outline, so "in the file" and "not in a file" read as
    equals, and the one tag that asks something of the person looked as calm as the rest. A tag that needs attention ("saved, not
-   running") is a filled label; a quiet one ("has parts", "formula", "not in a file") has a dashed edge, the visual word for "nothing
+   applied") is a filled label; a quiet one ("has parts", "formula", "not in a file") has a dashed edge, the visual word for "nothing
    to do here"; "in the file" keeps its solid green outline. */
 .live-state.live-tone-notice {
   background: var(--fg-yellow);
@@ -1764,6 +1766,9 @@ h2 {
 
 .live-state.live-tone-quiet {
   border-style: dashed;
+  /* The dashed edge says "nothing to do here"; the words are still read, so they take the text colour. A reviewer called the grey
+     "HAS PARTS" and "FORMULA" tags tiny and low contrast. */
+  color: var(--fg-default);
 }
 
 /* The two lines that tell a person what editing does and what they are looking at are in the text colour, not the dim one: "Edits go

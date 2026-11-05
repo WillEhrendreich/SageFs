@@ -180,7 +180,7 @@ let tests =
     let! text = paneText page
     Expect.stringContains text "Harmless" "the harmless getter is shown"
     Expect.stringContains text "7" "with its value, because Safe mode ran it"
-    Expect.stringContains text "the getter calls other code" "the getter that runs code says why it was not read"
+    Expect.stringContains text "Calls other code, so it was not run" "the getter that runs code says why it was not read"
     Expect.stringContains text "1 not evaluated" "the header counts the rows listed and not read"
     let buttons = page.Locator(sprintf "%s .live-held-row .live-held-btn" pane)
     do! PlaywrightExpect.waitForCount BrowserWaits.pageRenders buttons 1
@@ -253,14 +253,14 @@ let tests =
 
     do! (modeButton page "Off").ClickAsync()
     do! waitForMode page "Off"
-    do! waitForPaneText page "does not open class instances"
+    do! waitForPaneText page "Class values are closed in this mode"
     do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator(sprintf "%s .live-held-btn" pane)) 0
     do! shot page "5-off"
 
     do! (modeButton page "Safe").ClickAsync()
     do! waitForMode page "Safe"
     do! openBinding page "probe"
-    do! waitForPaneText page "the getter calls other code"
+    do! waitForPaneText page "Calls other code, so it was not run"
     do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator(sprintf "%s .live-held-btn" pane)) 1
     let! problems = layoutProblems page
     Expect.equal problems "" (sprintf "back in Safe mode nothing overflows or overlaps: %s" problems)
@@ -273,7 +273,7 @@ let tests =
     do! evalCode page spinnerCode "spinner-defined"
     do! waitForPaneText page "spinner"
     do! openBinding page "spinner"
-    do! waitForPaneText page "the getter loops or calls itself"
+    do! waitForPaneText page "Loops or calls itself, so it was not run"
     let row = page.Locator(sprintf "%s .live-held-row" pane).Filter(LocatorFilterOptions(HasTextString = "Self"))
     do! row.Locator(".live-held-btn").ClickAsync()
     // Every clickable row carries its own evaluating mark, hidden until its own click, and the pane still lists the earlier
@@ -284,7 +284,9 @@ let tests =
     do! PlaywrightExpect.waitForCount BrowserWaits.pageRenders (row.Locator(".live-held-evaluating:visible")) 1
     do! shot page "6-loop-evaluating"
     // The host gives the getter its deadline, then gives up on the thread; the answer is a reason, not a blank.
-    do! waitForPaneText page "unknown"
+    // Wait for the row's own sentence, not the word "unknown": the pane's tag legend carries "files unknown", so that word is on the
+    // page before any getter has run, and waiting for it returned before the deadline had passed.
+    do! waitForPaneText page "did not return in time"
     let! text = paneText page
     Expect.stringContains text "did not return in time" "the row says why the value is unknown"
     Expect.isTrue

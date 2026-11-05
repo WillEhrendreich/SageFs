@@ -152,6 +152,9 @@ let renderThemePicker (selectedTheme: string) =
   Elem.select
     [ Attr.id DomIds.ThemePicker
       Attr.class' "theme-select"
+      // Named, because the box shows only the current theme's name ("Kanagawa") and three reviewers could not tell what it was.
+      Attr.create "aria-label" "Theme"
+      Attr.title "Colour theme for the dashboard"
       // Seed the theme signal with the actual current theme so data-bind shows
       // it — otherwise the shell's empty "" default clobbers the server-rendered
       // <option selected>, and the picker never reflects the live theme.
@@ -1782,6 +1785,12 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 yield! s.AgentBadges |> List.map (fun badge ->
                   Elem.span
                     [ Attr.class' badge.CssClass
+                      // What the chip is, on hover: the names are connection ids ("browser:427f5871", "cli-integrated") that three
+                      // reviewers could not place, and a chip dimmed for being stale said nothing about why.
+                      Attr.title (attrEnc (
+                        match badge.CssClass.Contains "badge-agent-stale" with
+                        | true -> sprintf "%s is an agent connected to this session and has not acted for a while" badge.Name
+                        | false -> sprintf "%s is an agent connected to this session" badge.Name))
                       Attr.create "aria-label"(attrEnc (
                         match badge.DetailLabel.Length > 0 with
                         | true -> sprintf "%s — files: %s" badge.Name badge.DetailLabel
