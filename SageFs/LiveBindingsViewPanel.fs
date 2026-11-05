@@ -67,7 +67,12 @@ let private choice (sessionId: string) (pressed: bool) (label: string) (action: 
       Attr.type' "button"
       Attr.create "aria-pressed" (match pressed with | true -> "true" | false -> "false")
       Ds.onClick (click sessionId action axis value) ]
-    [ textEnc label ]
+    [ // The chosen option carries a mark as well as a fill, so the choice never rests on colour alone. The mark is decoration:
+      // `aria-pressed` already tells a screen reader which one is chosen.
+      match pressed with
+      | true -> Elem.span [ Attr.class' "live-view-check"; Attr.create "aria-hidden" "true" ] [ Text.raw "✓ " ]
+      | false -> ()
+      textEnc label ]
 
 /// The presets worth offering while some of the axes are not drawn: the workflow's own, and the plain watch window. The others set
 /// axes nothing draws yet, so a button for them would change nothing the person can see.
@@ -111,12 +116,14 @@ let private axisRow (sessionId: string) (resolved: ResolvedView) (axis: ViewAxis
       AxisValue.allFor axis
       |> List.map (fun value ->
         choice sessionId (value = current) (AxisValue.label value) ViewAction.SetAxis (ViewAxis.token axis) (AxisValue.token value))
-    Elem.span [ Attr.class' "live-view-source" ] [ textEnc (sourceWords source) ]
+    // Only a choice somebody saved says where it came from. A default says nothing here: the preset row above already names the
+    // recommended view, and the word repeated beside every pair read as noise.
     match source with
     | LDefault -> ()
     | LGlobal
     | LRepo
     | LSession ->
+      Elem.span [ Attr.class' "live-view-source" ] [ textEnc (sourceWords source) ]
       Elem.button
         [ Attr.class' "session-btn session-btn-labeled live-view-reset"
           Attr.type' "button"
@@ -163,7 +170,14 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         Ds.class' ("live-hidden", sprintf "!$%s" ViewSignals.Open)
         Ds.preserveAttr "class" ]
       [ Elem.div [ Attr.class' "live-view-head" ] [ textEnc (sprintf "View for %s" (ViewWorkflow.label workflow)) ]
+        // Said once, where the choices are. Off for a column does not remove the fact: a narrow list shows it under the row.
+        Elem.div [ Attr.class' "live-view-note" ] [
+          Text.raw "A column set to On sits in the row when there is room. Set to Off, or when the pane is narrow, its fact shows under the row instead."
+        ]
         presetRow sessionId workflow resolved.View
         yield! ViewAxis.drawn |> List.map (axisRow sessionId resolved)
-        scopeRow sessionId ]
+        scopeRow sessionId
+        Elem.div [ Attr.class' "live-view-note" ] [
+          Text.raw "Each click is saved straight away. This app writes the project's .SageFs/settings.json; Everywhere writes your own settings.json."
+        ] ]
   { Button = button; Panel = panel }

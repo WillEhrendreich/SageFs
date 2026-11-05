@@ -418,7 +418,10 @@ let viewPanelTests =
     testCase "WHY — a reset appears beside an axis only when a file holds a choice for it, and says where it came from" <| fun _ ->
       let none = panelHtml ViewWorkflow.Repl (untouched ViewWorkflow.Repl)
       count "live-view-reset\"" none |> Expect.equal "no per-axis reset when nothing is saved" 0
-      none |> Expect.stringContains "the source is the recommendation" "recommended"
+      // A default says nothing beside its axis: the preset row names the recommended view once. The word repeated beside every
+      // pair read as noise to three reviewers.
+      count "live-view-source\"" none |> Expect.equal "no source word beside an axis nobody saved" 0
+      none |> Expect.stringContains "the preset row names the recommendation once" "(recommended)"
       let saved = panelHtml ViewWorkflow.Repl (resolvedOf ViewWorkflow.Repl [ ViewAxis.RowHeight, LRepo ] [ AxisValue.RowHeight RowHeight.Roomy ])
       count "live-view-reset\"" saved |> Expect.equal "one reset, for the saved axis" 1
       saved |> Expect.stringContains "the source is named" "saved for this app"
@@ -438,4 +441,26 @@ let viewPanelTests =
         body.Contains "--fg-yellow" |> Expect.isFalse (sprintf "%s is not the warning colour" selector)
         body.Contains "--fg-red" |> Expect.isFalse (sprintf "%s is not the failure colour" selector)
       ruleBody ".live-view-head" |> Expect.stringContains "the heading colour" "var(--fg-blue)"
+
+    testCase "WHY — no text in the live bindings pane is set below 11px, because the state chip at 0.6rem was 8.4px and three reviewers could not read it" <| fun _ ->
+      // The root font size is 14px, so a `rem` size is 14 times its number. 11px is the smallest size the pane's chips and
+      // captions use; anything under it is the unreadable text the reviewers named.
+      let floorPx = 11.0
+      let rootPx = 14.0
+      let rules =
+        Text.RegularExpressions.Regex.Matches(Dashboard.dashboardCss, @"(?m)^\s*(\.live-[^{}]*)\{([^}]*)\}")
+        |> Seq.map (fun m -> m.Groups.[1].Value.Trim(), m.Groups.[2].Value)
+        |> List.ofSeq
+      (rules.Length > 20) |> Expect.isTrue "the stylesheet's live-* rules were found (the pattern did not silently match nothing)"
+      let tooSmall =
+        rules
+        |> List.collect (fun (selector, body) ->
+          Text.RegularExpressions.Regex.Matches(body, @"font-size:\s*([0-9.]+)(px|rem)")
+          |> Seq.map (fun m ->
+            let n = float m.Groups.[1].Value
+            let px = match m.Groups.[2].Value with | "rem" -> n * rootPx | _ -> n
+            selector, px)
+          |> List.ofSeq)
+        |> List.filter (fun (_, px) -> px < floorPx)
+      tooSmall |> Expect.isEmpty (sprintf "every live-* font size is at least %gpx, but these are smaller: %A" floorPx tooSmall)
   ]

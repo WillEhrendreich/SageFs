@@ -40,9 +40,11 @@
   /* The bottom dock is a SECONDARY surface: the transcript above it is what a session is
      read for. One home for its ceiling, mirroring --sidebar-width, so a resize control has
      a single value to write and the default can be reasoned about here rather than at the
-     rule that uses it. 45vh put it level with the output panel; 30vh keeps the transcript
-     roughly twice its height. */
-  --dock-max-height: min(30vh, 18rem);
+     rule that uses it. 45vh put it level with the output panel; 30vh at an 18rem cap showed
+     three and a half binding rows at 900px, which three blind reviewers read as "a few rows,
+     and nothing says there are more". 36vh at a 22rem cap shows about five and keeps the
+     transcript well over its own height. */
+  --dock-max-height: min(36vh, 22rem);
   --tabline-h: 36px;
   --statusline-h: 28px;
   --cmdline-h: 32px;
@@ -1285,6 +1287,8 @@ h2 {
 }
 
 .live-dock {
+  /* The view panel opens as a popover anchored to the dock's top edge, so it needs a box to be positioned against. */
+  position: relative;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1435,7 +1439,15 @@ h2 {
   display: flex;
   flex-direction: column;
   padding: 2px 8px 6px;
-  font-size: 0.75rem;
+  font-size: 12px;
+  /* Shadows at the ends of the list that fade in only when there is more to scroll to: the classic background-attachment
+     trick, so a list taller than its box says so without a script. The cover gradients (local) hide the shadows (scroll)
+     when the list is at that end. */
+  background:
+    linear-gradient(var(--bg-panel) 30%, transparent) top / 100% 16px no-repeat local,
+    linear-gradient(transparent, var(--bg-panel) 70%) bottom / 100% 16px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgb(0 0 0 / 0.45), transparent) top / 100% 7px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgb(0 0 0 / 0.45), transparent) bottom / 100% 7px no-repeat scroll;
 }
 
 /* A top-level binding: one column, with the pin a small icon at the end of its first row. It shows on hover or focus and while pinned,
@@ -1498,10 +1510,21 @@ h2 {
 .live-view-panel {
   display: grid;
   gap: 4px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-normal);
+  padding: 8px 10px;
+  border: 1px solid var(--border-normal);
   background: var(--bg-panel);
   font-size: 12px;
+  /* A popover over the output above the dock, not a row inside it: opening it used to fill the whole dock and push the
+     bindings it configures out of sight, so nobody could watch a value while changing how values are shown. */
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  transform: translateY(-100%);
+  z-index: 30;
+  max-height: 70vh;
+  overflow: auto;
+  box-shadow: 0 -6px 18px rgb(0 0 0 / 0.35);
 }
 
 .live-view-head {
@@ -1525,6 +1548,18 @@ h2 {
 .live-view-source {
   color: var(--fg-dim);
   font-size: 11px;
+}
+
+/* A sentence of explanation inside the panel: said once, plain, and readable (the pane's smallest text is 11px). */
+.live-view-note {
+  max-width: 72ch;
+  color: var(--fg-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.live-view-check {
+  font-weight: 700;
 }
 
 .live-view-opt,
@@ -1606,7 +1641,7 @@ h2 {
   flex: none;
   width: 1.5em;
   color: var(--fg-dim);
-  font-size: 0.7rem;
+  font-size: 12px;
   font-weight: 700;
   text-align: center;
 }
@@ -1615,13 +1650,13 @@ h2 {
   flex: 0 1 auto;
   max-width: 30%;
   color: var(--fg-dim);
-  font-size: 0.7rem;
+  font-size: 11.5px;
 }
 
 .live-mode-btn {
   height: 1.5rem;
   padding: 0 0.5rem;
-  font-size: 0.7rem;
+  font-size: 11.5px;
 }
 
 /* One value, one line — the shape a debugger's watch window has, and the reason a pane can show more
@@ -1648,7 +1683,7 @@ h2 {
 
 .live-binding-node > .live-preview {
   flex: 1 1 0;
-  font-size: 0.7rem;
+  font-size: 12px;
 }
 
 /* The view's axes (ViewSettings.fs). The tree carries `data-values` and `data-row`, and the rules below draw them.
@@ -1680,7 +1715,7 @@ h2 {
 
 .live-cell-source {
   color: var(--fg-dim);
-  font-size: 0.7rem;
+  font-size: 11.5px;
 }
 
 .live-tree[data-cols~="state"] .live-state,
@@ -1903,7 +1938,7 @@ h2 {
 
 .live-closure-badge {
   color: var(--fg-yellow);
-  font-size: 0.65rem;
+  font-size: 11px;
   font-style: italic;
   opacity: 0.8;
   white-space: nowrap;
@@ -1911,13 +1946,13 @@ h2 {
 
 .live-cycle {
   color: var(--fg-red);
-  font-size: 0.65rem;
+  font-size: 11px;
   white-space: nowrap;
 }
 
 .live-truncated {
   color: var(--fg-dim);
-  font-size: 0.65rem;
+  font-size: 11px;
   font-style: italic;
 }
 
@@ -1929,7 +1964,7 @@ h2 {
   align-items: center;
   gap: 0.3rem 0.8rem;
   margin: 0.3rem 0;
-  font-size: 0.7rem;
+  font-size: 11.5px;
   min-width: 0;
 }
 
@@ -1968,7 +2003,7 @@ h2 {
 
 .live-held-evaluating {
   color: var(--fg-yellow);
-  font-size: 0.7rem;
+  font-size: 11.5px;
 }
 
 /* The knob on a live binding's row (LiveBindingsTweakView.fs): a strip under the row that says where the value lives and, where
@@ -1986,14 +2021,14 @@ h2 {
   gap: 4px 8px;
   min-width: 0;
   padding: 2px 0 6px 1.2em;
-  font-size: 0.7rem;
+  font-size: 12px;
 }
 
 .live-state,
 .live-cell-state {
   padding: 0 0.5em;
   border: 1px solid currentColor;
-  font-size: 0.6rem;
+  font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -2653,6 +2688,31 @@ h2 {
   .app-header,
   .session-context {
     overflow-x: auto;
+  }
+}
+
+/* The header at phone width. Four segments want about 540px: the brand, the status badge, the session with its workflow
+   switcher, and the theme picker. At 400px the session was squeezed to 25px ("Se…") and the evals count to 24px, with no sign
+   that anything had been cut. So below 560px the parts that repeat something shown elsewhere drop out whole: the word beside
+   the icon, the word "Session:" before the id, and the evals count (the session card carries it). What stays fits and reads
+   whole. The header's own inline styles set display and padding, so these rules need !important to win. */
+@media (max-width: 560px) {
+  .tabline-brand {
+    padding: 0 8px !important;
+  }
+
+  .tabline-brand-name,
+  .tabline-session-label,
+  .tabline-evals {
+    display: none !important;
+  }
+
+  .tabline-info {
+    padding: 0 8px !important;
+  }
+
+  .app-header .theme-select {
+    width: 6.5rem;
   }
 }
 

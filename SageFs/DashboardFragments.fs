@@ -2280,7 +2280,11 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     Elem.div [ Attr.class' "app-header" ] [
       // Brand tab — left side
       Elem.div [ Attr.class' "tabline-brand"; Attr.style "display:flex;align-items:center;gap:8px;padding:0 16px;height:100%;border-right:1px solid var(--border-normal);" ] [
-        Elem.span [ Attr.style "font-weight:700;color:var(--fg-blue);font-size:14px;" ] [ Text.raw "🧙 SageFs" ]
+        Elem.span [ Attr.style "font-weight:700;color:var(--fg-blue);font-size:14px;" ] [
+          Text.raw "🧙"
+          // The word drops out below 560px (dashboard.css): the icon stays, and the room goes to the session and its status.
+          Elem.span [ Attr.class' "tabline-brand-name" ] [ Text.raw " SageFs" ]
+        ]
       ]
       // Status tabs — center
       Elem.div [ Attr.class' "tabline-menu"; Attr.style "display:flex;align-items:center;height:100%;flex:1;min-width:0;" ] [
@@ -2299,7 +2303,9 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         Elem.div
           [ Attr.class' "tabline-info"
             Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:12px;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;" ] [
-          textEnc (sprintf "Session: %s" snap.SessionId)
+          // The word "Session:" drops out below 560px (dashboard.css), leaving the id and the workflow switcher whole.
+          Elem.span [ Attr.class' "tabline-session-label" ] [ textEnc "Session: " ]
+          textEnc snap.SessionId
           renderWorkflowSwitcher snap.WorkflowLabel snap.SessionId
         ]
         // The duplicate #eval-stats id (this wrapper AND renderEvalStats's own
@@ -2307,7 +2313,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         // an app whose whole render model is "one #main, one morph") is fixed
         // by leaving the id off this wrapper; renderEvalStats owns it.
         Elem.div
-          [ Attr.class' "tabline-info"
+          [ Attr.class' "tabline-info tabline-evals"
             // nowrap: the bar is one row high, and "0 evals" wrapping onto a second line at phone width spilled out of it and was clipped.
             Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;min-width:0;overflow:hidden;flex-shrink:1;white-space:nowrap;" ] [ renderEvalStats snap.EvalStats ]
       ]
@@ -2432,8 +2438,10 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             [ Attr.class' "sidebar-header-btn"
               Attr.id "sidebar-toggle-btn"
               Ds.onEvent ("click", "$sidebarOpen = !$sidebarOpen")
-              Ds.text "$sidebarOpen ? '✕' : '☰'"
-              Ds.attr' ("aria-label", "$sidebarOpen ? 'Collapse panel' : 'Expand panel'") ]
+              // "»" slides the panel away to the right. It was "✕", which beside "+" read as a close or delete for the session.
+              Ds.text "$sidebarOpen ? '»' : '☰'"
+              Ds.attr' ("aria-label", "$sidebarOpen ? 'Collapse the sessions panel' : 'Expand the sessions panel'")
+              Ds.attr' ("title", "$sidebarOpen ? 'Collapse the sessions panel' : 'Expand the sessions panel'") ]
             []
         ]
         Elem.div [ Attr.class' "sidebar-inner" ] [
