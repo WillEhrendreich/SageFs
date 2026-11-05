@@ -2516,8 +2516,10 @@ h2 {
   line-height: 1.35;
 }
 
+/* It takes the whole line and wraps, so the mode label that follows stays beside its own buttons. At 725px wide on one line it
+   pushed "Look inside objects:" to the far end of the row and left the three buttons below it, away from their label. */
 .live-writes-caption {
-  white-space: nowrap;
+  flex: 1 1 100%;
 }
 
 /* A number with its word while the file and the running program disagree: "running" beside the value in the heading and "in file"
@@ -3557,7 +3559,9 @@ body[data-connected="false"] .statusline-info {
 .sidebar .session-card-source-headline,
 .sidebar .session-card-source-summary,
 .sidebar .session-card-source-details,
-.sidebar .session-row {
+.sidebar .session-row,
+#session-context details,
+#session-context details * {
   font-size: max(0.8rem, 11px) !important;
 }
 

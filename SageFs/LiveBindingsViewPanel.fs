@@ -174,6 +174,6 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         yield! ViewAxis.drawn |> List.map (axisRow sessionId resolved)
         scopeRow sessionId
         Elem.div [ Attr.class' "live-view-note" ] [
-          Text.raw "A choice is saved as you click it: for This project in .SageFs/settings.json in the project folder, for All projects in your own settings.json."
+          Text.raw "A choice is saved as you click it. \"This project\" writes .SageFs/settings.json in the project folder. \"All projects\" writes your own settings.json."
         ] ]
   { Button = button; Panel = panel }
