@@ -442,6 +442,12 @@ let viewPanelTests =
         body.Contains "--fg-red" |> Expect.isFalse (sprintf "%s is not the failure colour" selector)
       ruleBody ".live-view-head" |> Expect.stringContains "the heading colour" "var(--fg-blue)"
 
+    testCase "WHY — the dock's default ceiling has one home: the stylesheet starts at the same length the page's signal and the double-click reset use" <| fun _ ->
+      // The body's style attribute writes `--dock-max-height` from the DockHeight signal, so a stylesheet default that differs
+      // from the signal's initial value is never seen: the first change to the CSS did nothing until this was held.
+      Dashboard.dashboardCss
+      |> Expect.stringContains "the stylesheet's default is the signal's default" (sprintf "--dock-max-height: %s;" Signals.DockHeightDefault)
+
     testCase "WHY — no text in the live bindings pane is set below 11px, because the state chip at 0.6rem was 8.4px and three reviewers could not read it" <| fun _ ->
       // The root font size is 14px, so a `rem` size is 14 times its number. 11px is the smallest size the pane's chips and
       // captions use; anything under it is the unreadable text the reviewers named.

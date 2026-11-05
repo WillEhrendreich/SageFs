@@ -2409,7 +2409,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           )
           Ds.onEvent (
             "dblclick",
-            sprintf "$%s='min(30vh, 18rem)'; try{localStorage.removeItem('sagefs.dockHeight')}catch(e){}" Signals.DockHeight
+            sprintf "$%s='%s'; try{localStorage.removeItem('sagefs.dockHeight')}catch(e){}" Signals.DockHeight Signals.DockHeightDefault
           )
         ] []
         snap.BindingsPanel
