@@ -442,6 +442,13 @@ let viewPanelTests =
         body.Contains "--fg-red" |> Expect.isFalse (sprintf "%s is not the failure colour" selector)
       ruleBody ".live-view-head" |> Expect.stringContains "the heading colour" "var(--fg-blue)"
 
+    testCase "WHY — the view panel is a popover over the output, and its position rule outranks the tooltip rule that makes every aria-label element relative" <| fun _ ->
+      // `[aria-label]:not(input):not(textarea) { position: relative }` (specificity 0,1,2) sets position on the panel, which has an
+      // aria-label. `.live-view-panel` alone (0,1,0) lost to it and the panel sat inside the dock, hiding the bindings. The rule
+      // with the dock in its selector (0,2,0) wins.
+      ruleBody ".live-dock .live-view-panel" |> Expect.stringContains "absolute, so it leaves the dock's flow" "position: absolute"
+      ruleBody ".live-view-panel" |> Expect.stringContains "lifted above the dock's top edge" "translateY(-100%)"
+
     testCase "WHY — the dock's default ceiling has one home: the stylesheet starts at the same length the page's signal and the double-click reset use" <| fun _ ->
       // The body's style attribute writes `--dock-max-height` from the DockHeight signal, so a stylesheet default that differs
       // from the signal's initial value is never seen: the first change to the CSS did nothing until this was held.

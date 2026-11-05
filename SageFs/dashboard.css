@@ -1516,7 +1516,6 @@ h2 {
   font-size: 12px;
   /* A popover over the output above the dock, not a row inside it: opening it used to fill the whole dock and push the
      bindings it configures out of sight, so nobody could watch a value while changing how values are shown. */
-  position: absolute;
   left: 0;
   right: 0;
   top: 0;
@@ -1525,6 +1524,13 @@ h2 {
   max-height: 70vh;
   overflow: auto;
   box-shadow: 0 -6px 18px rgb(0 0 0 / 0.35);
+}
+
+/* The position is its own rule, with the dock in the selector for specificity: the tooltip rule at the end of this file sets
+   `position: relative` on anything with an aria-label, and the panel has one, so `.live-view-panel` alone lost to it and the
+   panel sat inside the dock again. */
+.live-dock .live-view-panel {
+  position: absolute;
 }
 
 .live-view-head {
