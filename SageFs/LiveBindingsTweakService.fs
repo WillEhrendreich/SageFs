@@ -346,7 +346,7 @@ module Service =
           | Error why ->
             service.Inspected.TryRemove path |> ignore
             unreadable <- unreadable @ [ path, why ]
-      return { Files = files; Unreadable = unreadable }
+      return { Files = files; Unreadable = unreadable; Applied = ApplicationCounts.NotCounted "the pane does not count calls yet" }
     }
 
   /// The rows for a session's walked values, from what its files say now and what the dashboard did to each row. A row waits for the
@@ -385,7 +385,7 @@ module Service =
       let owned = ownedOf sessionId workingDirectory (listed |> List.map (fun (path, watched) -> path, HotReloadWatch.ofFlag watched))
       viewFor service sessionId owned snapshot current
     | Error reason ->
-      let unknown : SourceIndex = { Files = []; Unreadable = [ "the session's project files", reason ] }
+      let unknown : SourceIndex = { SourceIndex.empty with Unreadable = [ "the session's project files", reason ] }
       Task.FromResult(Rows.build unknown snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.compileQueueWait)
 
   /// The expression the row was showing when it was clicked, as the page reported it. The cached inspection has the real one

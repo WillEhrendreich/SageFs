@@ -145,10 +145,20 @@ type FileInspection =
     /// Which write of the file this inspection read.
     Revision: FileRevision }
 
+/// How many times each name is applied as a function across the session's own files, by the name as it is written (`make` and
+/// `Game.Tuning.make` are counted apart). It says "not counted" with the reason when a file could not be read, because a total
+/// over some of the files is not the number of callers.
+[<RequireQualifiedAccess>]
+type ApplicationCounts =
+  | Counted of Map<string, int>
+  | NotCounted of reason: string
+
 /// The session's inspected files, and the files that could not be read. Built by the shell that does the reading.
 type SourceIndex =
   { Files: FileInspection list
-    Unreadable: (string * string) list }
+    Unreadable: (string * string) list
+    /// The calls of each name in every owned file, not only the files `Files` holds (a callee's callers can be anywhere).
+    Applied: ApplicationCounts }
 
 /// One declaration of a name in one file and module: the expressions that are its whole right-hand side (none when it has not been read).
 type Declaration =
@@ -157,7 +167,7 @@ type Declaration =
     Owners: SourceRef list }
 
 module SourceIndex =
-  let empty : SourceIndex = { Files = []; Unreadable = [] }
+  let empty : SourceIndex = { Files = []; Unreadable = []; Applied = ApplicationCounts.NotCounted "no file was read" }
 
   /// The whole right-hand sides still to be read: for each of `names`, every binding the listing shows a part of but not the whole
   /// of. The shell asks the door for these addresses (one `inspect` each) and puts the answers in `Wholes`.

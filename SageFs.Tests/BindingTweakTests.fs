@@ -68,7 +68,7 @@ let inspectedFile (file: string) (text: string) (names: string list) : FileInspe
     |> List.collect (fun address -> inspectedWith file text (InspectTarget.OneAddress address))
   { fileOf file items with Wholes = wholes }
 
-let indexOf (files: FileInspection list) : SourceIndex = { Files = files; Unreadable = [] }
+let indexOf (files: FileInspection list) : SourceIndex = { Files = files; Unreadable = []; Applied = ApplicationCounts.NotCounted "a test index does not count calls" }
 
 let anySource (kind: ItemKind) : SourceRef = sourceAt "a.fs" "x" "1" kind
 
@@ -183,14 +183,14 @@ let sourceIndexTests =
       | other -> failtestf "expected the ambiguity to be named, got %A" other
 
     testCase "a file that cannot be read, with no declaration found elsewhere, means NO FILE cannot be said" <| fun _ ->
-      let index = { Files = [ fileOf "a.fs" [] ]; Unreadable = [ "b.fs", "the file does not parse" ] }
+      let index = { indexOf [ fileOf "a.fs" [] ] with Unreadable = [ "b.fs", "the file does not parse" ] }
       match SourceIndex.factsFor index "gravity" [] with
       | SourceFacts.FilesUnknown reason -> reason |> Expect.stringContains "names the file and why" "b.fs: the file does not parse"
       | other -> failtestf "expected FilesUnknown, got %A" other
 
     testCase "a declaration found in a readable file is still one source though another file is unreadable" <| fun _ ->
       let gravity = real "a.fs" "gravity" "9.8"
-      let index = { Files = [ fileOf "a.fs" [ gravity ] ]; Unreadable = [ "b.fs", "the file does not parse" ] }
+      let index = { indexOf [ fileOf "a.fs" [ gravity ] ] with Unreadable = [ "b.fs", "the file does not parse" ] }
       SourceIndex.factsFor index "gravity" [] |> Expect.equal "the unreadable file does not unsettle a finding" (SourceFacts.OneSource gravity)
 
     testCase "the door's own inspection of a real file: a binding, a record field and a field the file does not spell as a literal" <| fun _ ->

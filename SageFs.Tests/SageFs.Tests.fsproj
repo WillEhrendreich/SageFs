@@ -528,6 +528,7 @@
         <!-- What a live-bindings row knows about the file it may be written back to: the persistence state, the knob's step. -->
         <Compile Include="BindingTweakTests.fs" />
         <Compile Include="BindingTweakRowsTests.fs" />
+        <Compile Include="CallResultTests.fs" />
         <Compile Include="BindingRelationTests.fs" />
         <Compile Include="LiveBindingsTweakServiceTests.fs" />
         <Compile Include="LiveBindingsTweakViewTests.fs" />

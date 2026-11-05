@@ -116,7 +116,8 @@ module TweakerVersusProgramSim =
             UndoSteps = 0
             RedoSteps = 0
             Revision = revisionOf world } ]
-      Unreadable = [] }
+      Unreadable = []
+      Applied = ApplicationCounts.NotCounted "the simulation does not count calls" }
 
   /// What the row says now: the real derivation over the memory the pane holds. The twin that ignores file edits reads the
   /// baseline against the file as it is now.

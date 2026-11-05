@@ -242,22 +242,28 @@ let rec private bindingsIn (modulePath: string list) (decls: SynModuleDecl list)
       bindingsIn (modulePath @ [ identText ids ]) inner
     | _ -> [])
 
-let private parse (source: string) : Result<string list * ModuleBinding list, ResolveError> =
+/// A file's syntax tree, or the reason it has none: it does not parse, or the parser itself failed on it.
+let parseInput (source: string) : Result<ParsedInput, ResolveError> =
   try
     let input, diagnostics = Fantomas.FCS.Parse.parseFile false (SourceText.ofString source) []
-    match diagnostics |> List.tryFind (fun d -> d.Severity.IsError), input with
-    | Some error, _ ->
+    match diagnostics |> List.tryFind (fun d -> d.Severity.IsError) with
+    | Some error ->
       let line = error.Range |> Option.map (fun r -> string r.StartLine) |> Option.defaultValue "?"
       Error(ResolveError.ParseFailed(sprintf "the file does not parse (line %s: %s)" line error.Message))
-    | None, ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(longId = ids; kind = kind; decls = decls) ])) ->
-      let modulePath =
-        match kind with
-        | SynModuleOrNamespaceKind.AnonModule -> []
-        | _ -> ids |> List.map _.idText
-      Ok(modulePath, bindingsIn modulePath decls)
-    | None, ParsedInput.ImplFile _ -> Error(ResolveError.ParseFailed "the file declares several namespaces or modules at the top level")
-    | None, ParsedInput.SigFile _ -> Error(ResolveError.ParseFailed "signature files have no tweakable expressions")
+    | None -> Ok input
   with ex -> Error(ResolveError.ParseFailed(sprintf "the file could not be parsed: %s" ex.Message))
+
+let private parse (source: string) : Result<string list * ModuleBinding list, ResolveError> =
+  match parseInput source with
+  | Error e -> Error e
+  | Ok(ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(longId = ids; kind = kind; decls = decls) ]))) ->
+    let modulePath =
+      match kind with
+      | SynModuleOrNamespaceKind.AnonModule -> []
+      | _ -> ids |> List.map _.idText
+    Ok(modulePath, bindingsIn modulePath decls)
+  | Ok(ParsedInput.ImplFile _) -> Error(ResolveError.ParseFailed "the file declares several namespaces or modules at the top level")
+  | Ok(ParsedInput.SigFile _) -> Error(ResolveError.ParseFailed "signature files have no tweakable expressions")
 
 /// Every tweakable leaf (numeric, bool, char, string, DU-case-like
 /// identifier) plus every record-field expression, for every binding in the
