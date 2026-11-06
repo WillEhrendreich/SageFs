@@ -249,7 +249,9 @@ let journey () : Task<unit> = task {
     // The title is a panel heading: its words, in the brightest text colour on the page (it was blue, one more small caption among
     // five; it is now the largest and brightest word in the bar), and never red, which is for failure.
     let! titleText = textOf page "#bindings-panel .live-pane-title"
-    titleText.Trim() |> Expect.equal "the title is its words and no red circle" "Live bindings"
+    // The heading style sets the title in capitals (CSS `text-transform`), and `innerText` returns the capitals, so the words are compared
+    // without their case.
+    titleText.Trim().ToLowerInvariant() |> Expect.equal "the title is its words and no red circle" "live bindings"
     let! titleColours =
       page.EvaluateAsync<string>(
         """() => {
@@ -279,8 +281,10 @@ let journey () : Task<unit> = task {
           const heights = rows.map(e => (e.id || e.className) + '=' + Math.round(e.getBoundingClientRect().height)).join(' ');
           return inView + '|tree=' + Math.round(tree.height) + '|rows=' + rows.length + '|' + heights;
         }""")
-    let! shownMarkers = page.EvaluateAsync<int>("() => [...document.querySelectorAll('#live-tree .live-tweak-marker')].filter(e => getComputedStyle(e).display !== 'none').length")
-    shownMarkers |> Expect.equal "a REPL-only marker takes no space (the later .live-tweak rule must not win)" 0
+    // A marker draws no box of its own: `none` where the page is stacked, and `contents` on the wide layout, where its "n/a" chip takes
+    // the row's Source cell and nothing else. A `flex` marker would be the later .live-tweak rule winning, with a strip under the row.
+    let! boxedMarkers = page.EvaluateAsync<int>("() => [...document.querySelectorAll('#live-tree .live-tweak-marker')].filter(e => !['none', 'contents'].includes(getComputedStyle(e).display)).length")
+    boxedMarkers |> Expect.equal "a REPL-only marker takes no box of its own (the later .live-tweak rule must not win)" 0
     let! flowPins = page.EvaluateAsync<int>("() => [...document.querySelectorAll('#live-tree .live-binding-pin')].filter(e => getComputedStyle(e).position !== 'absolute').length")
     flowPins |> Expect.equal "every row's pin is out of the flow (the aria-label tooltip rule must not win)" 0
     let rowsInView = geometry.Split('|').[0] |> int
