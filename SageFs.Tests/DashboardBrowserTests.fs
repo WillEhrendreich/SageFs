@@ -425,8 +425,9 @@ module OutputScroll =
 
   /// Scroll up the way a person does: the mouse wheel over the panel.
   let wheelUp (page: IPage) (px: float32) = task {
-    let! box = page.Locator(panelSelector).BoundingBoxAsync()
-    do! page.Mouse.MoveAsync(box.X + box.Width / 2.0f, box.Y + box.Height / 2.0f)
+    // Hover scrolls the panel into view, waits for its box to hold still, and puts the pointer over it. On a phone Output sits below the
+    // bindings dock, so the panel's middle can be below the viewport, and a pointer measured there before a layout shift lands on nothing.
+    do! page.Locator(panelSelector).HoverAsync()
     do! page.Mouse.WheelAsync(0.0f, -px)
     // Let the wheel's scroll events land before anything reads the position.
     do! page.WaitForTimeoutAsync(400.0f)
