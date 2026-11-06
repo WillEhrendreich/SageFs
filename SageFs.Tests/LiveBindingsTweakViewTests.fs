@@ -268,6 +268,26 @@ let applyToSessionTests =
       asked "gravity" "9.9" |> Expect.equal "a whole binding" "apply client-1: let gravity = 9.9;;"
       asked "feel/JumpVelocity" "13.2" |> Expect.equal "a part of a value, in the refusal's own words" (sprintf "refused: %s" (ApplyRefusal.text ApplyRefusal.PartOfAValue))
       (asked "" "9.9").StartsWith "refused: " |> Expect.isTrue "no row is not a request"
+
+    testCase "WHY — a formula that reads a binding with a change waiting says so, because jump = gravity * 2.0 kept showing 19.6 beside a gravity that was about to be 9.9" <| fun _ ->
+      let gravityFile = { gravity with Text = "9.9" }
+      let formula (name: string) (text: string) : SourceRef = { gravity with Address = addressOf name []; Text = text; Kind = ItemKind.Formula }
+      let rowIn state (file: SourceRef) : RowView = { rowOf state Control.NoControl with Place = PlaceOf.Placed file }
+      let viewOf (formulaText: string) : TweakView =
+        let jumpFile = formula "jump" formulaText
+        { Rows =
+            Map.ofList
+              [ RowKey.top "gravity", rowIn (PersistenceState.DiffersFromFile("9.8", gravityFile)) gravityFile
+                RowKey.top "jump", rowIn (PersistenceState.Derived(jumpFile, DerivedWhy.AFormula)) jumpFile ] }
+      pendingDependencies (viewOf "gravity * 2.0") (RowKey.top "jump") |> Expect.equal "the formula reads the pending binding" [ "gravity" ]
+      pendingDependencies (viewOf "(gravity+1.0)") (RowKey.top "jump") |> Expect.equal "however it is spaced" [ "gravity" ]
+      pendingDependencies (viewOf "antigravity * 2.0") (RowKey.top "jump") |> Expect.isEmpty "a longer name is another name"
+      pendingDependencies (viewOf "world.gravity * 2.0") (RowKey.top "jump") |> Expect.isEmpty "a member of something else is not the binding"
+      pendingDependencies (viewOf "gravity * 2.0") (RowKey.top "gravity") |> Expect.isEmpty "the changed row depends on nothing pending"
+      let notes = dependencyNotes (viewOf "gravity * 2.0") (RowKey.top "jump") |> List.map decoded |> String.concat ""
+      notes |> Expect.stringContains "its test id" "data-testid=\"tweak-depends\""
+      notes |> Expect.stringContains "it names the binding" "gravity"
+      dependencyNotes (viewOf "antigravity * 2.0") (RowKey.top "jump") |> Expect.isEmpty "no note when nothing it reads is pending"
   ]
 
 [<Tests>]

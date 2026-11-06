@@ -820,7 +820,7 @@ let applyNodes (key: RowKey) (view: RowView) : XmlNode list =
 /// file before any write, it was ten copies of one sentence. The pane says the same fact once, ahead of any edit, in its caption
 /// (`PaneNote.ChangesGoToAnUnwatchedFile`).
 let notWatchedSentence (file: string) (running: string) (inFile: string) : string =
-  sprintf "Saved to %s as %s. The session still runs %s: nothing watches the file." (Path.GetFileName file) inFile running
+  sprintf "Saved to %s as %s. The session still runs %s: nothing watches the file. Apply runs %s now." (Path.GetFileName file) inFile running inFile
 
 /// The running value and the file's, while the two differ. The sentence names both numbers, because a row that shows 9.8 in its
 /// heading and 9.9 at its slider left three reviewers asking which was live.
@@ -867,9 +867,54 @@ let reloadNodes (view: RowView) : XmlNode list =
     | NumberLabels.OneNumber -> []
   | WatchStatus.Watched, (RowReload.NoWriteYet | RowReload.Watching _) -> line
 
+/// Whether a formula reads a name: the whole word, so `antigravity` and `world.gravity` are other things. Written and checked in a
+/// SageFs session on real strings before it went into this file.
+let mentions (name: string) (expression: string) : bool =
+  Text.RegularExpressions.Regex.IsMatch(expression, sprintf @"(?<![\w.])%s(?!\w)" (Text.RegularExpressions.Regex.Escape name))
+
+/// The formula a row is, when it is one the file works out from other values.
+let formulaOf (state: PersistenceState) : string option =
+  match state with
+  | PersistenceState.Derived(place, DerivedWhy.AFormula) -> Some place.Text
+  | PersistenceState.Derived(_, DerivedWhy.AContainer)
+  | PersistenceState.InSource _
+  | PersistenceState.NotInAFile _
+  | PersistenceState.Held
+  | PersistenceState.Ambiguous _
+  | PersistenceState.DiffersFromFile _
+  | PersistenceState.Tweaked _
+  | PersistenceState.Evolved _
+  | PersistenceState.StaleAddress _
+  | PersistenceState.Refused _
+  | PersistenceState.Writing _ -> None
+
+/// The whole bindings a row's formula reads that have a change saved and not yet applied. After a nudge, `jump = gravity * 2.0` kept
+/// showing 19.6 beside a gravity that was about to be 9.9, with nothing to say so.
+let pendingDependencies (view: TweakView) (key: RowKey) : string list =
+  match Map.tryFind key view.Rows |> Option.bind (fun row -> formulaOf row.State) with
+  | None -> []
+  | Some formula ->
+    view.Rows
+    |> Map.toList
+    |> List.choose (fun (other, row) ->
+      match differingValues row.State with
+      | Some _ when other <> key && List.isEmpty other.Labels && mentions other.Binding formula -> Some other.Binding
+      | Some _
+      | None -> None)
+
+/// The note under a formula that reads a binding with a change waiting.
+let dependencyNotes (view: TweakView) (key: RowKey) : XmlNode list =
+  match pendingDependencies view key with
+  | [] -> []
+  | names ->
+    [ Elem.div
+        [ Attr.class' "live-detail live-tone-notice"; testid "tweak-depends" ]
+        [ textEnc (sprintf "Reads %s, which has a saved change not applied yet. This value will change when it is." (String.concat ", " names)) ] ]
+
 /// The strip under a row: the state as a chip and a sentence, the knob where the state allows one, the row's undo and redo, and what
 /// the app did with its last write. Every row the pane has something to say about gets one, so no row is silent about its file.
-let renderStrip (key: RowKey) (view: RowView) (placement: Placement) : XmlNode =
+/// `notes` are extra sentences the caller knows and the row alone cannot (what else it depends on).
+let renderStripWith (notes: XmlNode list) (key: RowKey) (view: RowView) (placement: Placement) : XmlNode =
   let described = describe view.State
   let whereChip =
     match view.Place with
@@ -922,4 +967,7 @@ let renderStrip (key: RowKey) (view: RowView) (placement: Placement) : XmlNode =
          | step, ApplyOffer.NotOffered -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-next" ] [ textEnc (NextStep.sentence step) ]
          match describeThrough view.Through with
          | Some through -> yield Elem.div [ Attr.class' (sprintf "live-detail %s" (Tone.cssClass through.Tone)); testid "tweak-through" ] [ textEnc through.Detail ]
-         | None -> () ])
+         | None -> ()
+         yield! notes ])
+
+let renderStrip (key: RowKey) (view: RowView) (placement: Placement) : XmlNode = renderStripWith [] key view placement

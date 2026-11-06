@@ -1442,7 +1442,10 @@ h2 {
 }
 
 .live-pane-stale-words {
-  white-space: nowrap;
+  /* It wraps: the sentence now says what Rebuild and reload covers, and as one nowrap line it ran off the edge at 400px ("…reload b")
+     and lost the end of the instruction on exactly the widths where it is read. */
+  white-space: normal;
+  min-width: 0;
 }
 
 .live-pane-stale .live-pane-rebuild {
@@ -3220,6 +3223,32 @@ h2 {
     flex: 0 0 auto;
   }
 
+  /* On a phone the pane opens with the title, the one-line rule and then the bindings. The mode row and the tags' legend are
+     reference, so they come after the list: the bindings began more than halfway down a 400x850 screen, behind nine stacked
+     controls and paragraphs, and four reviewers named it. The head stops being a box of its own so its parts can be placed
+     one by one in the panel's column. */
+  #bindings-panel > .live-pane-head {
+    display: contents;
+  }
+
+  #bindings-panel .live-writes-caption {
+    order: 2;
+    flex: 0 0 auto;
+  }
+
+  #bindings-panel > .live-tree {
+    order: 3;
+  }
+
+  #bindings-panel .live-mode-label,
+  #bindings-panel .live-mode,
+  #bindings-panel .live-mode-caption,
+  #bindings-panel .live-legend {
+    order: 4;
+    flex: 0 0 auto;
+    padding: 4px 8px;
+  }
+
   /* The pane bar in a deliberate order at phone width, where it used to wrap wherever it ran out of room (the pin alone on a
      fourth line): the title, the count and the three buttons on the first line, the stamp on a line of its own, then the
      "not in a file" count with the filter taking the rest of the row. */
@@ -3237,6 +3266,22 @@ h2 {
     margin-left: 0;
   }
 
+  /* The count joins the "values as of" line, so the title and the three buttons share the first line at 400px: with the count
+     beside the title, "Keep open" fell onto a line of its own. */
+  .live-pane-bar .live-pane-count {
+    order: 3;
+    flex: 0 0 auto;
+  }
+
+  .live-pane-bar .live-pane-stamp {
+    flex: 1 1 0;
+  }
+
+  /* The pane's one-line rule is read from the screen's edge, so it keeps the pane's own side padding. */
+  #bindings-panel .live-writes-caption {
+    padding: 4px 8px;
+  }
+
   /* The "running older code" note and its button, when the session has one, take the line under the title: it is the thing to act
      on, so it comes before the stamp and the filter. */
   .live-pane-bar .live-pane-stale {
@@ -3246,7 +3291,7 @@ h2 {
 
   .live-pane-bar .live-pane-stamp {
     order: 3;
-    flex: 1 1 100%;
+    flex: 1 1 0;
   }
 
   .live-pane-bar .live-repl-chip {

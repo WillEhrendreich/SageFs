@@ -578,7 +578,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
           match mine, alreadySaid with
           | Some sentence, Some before when sentence = before -> { view with Through = ThroughCall.NoCall }
           | _ -> view
-        [ renderStrip key view' placement ]
+        [ renderStripWith (dependencyNotes tweaks key) key view' placement ]
       | None -> []
     let withStrip (rowNode: XmlNode) : XmlNode =
       match stripFor Placement.OnLeafRow with
