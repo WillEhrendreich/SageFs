@@ -167,12 +167,15 @@ module Ownership =
         |> List.tryFind (fun (suffix, _) -> s.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
         |> Option.defaultValue ("", TimeSpan.TicksPerSecond)
       let numeric = s.Substring(0, s.Length - suffix.Length)
+      // The number parser's "trailing white" also takes a NUL and \n \v \f \r. A ttl allows spaces and tabs between the number and its
+      // unit and nothing else, so the characters are checked before the number is read.
+      let onlyDurationCharacters = numeric |> Seq.forall (fun c -> Char.IsAsciiDigit c || c = '.' || c = ' ' || c = '\t')
       let style =
         Globalization.NumberStyles.AllowDecimalPoint
         ||| Globalization.NumberStyles.AllowLeadingWhite
         ||| Globalization.NumberStyles.AllowTrailingWhite
-      match Double.TryParse(numeric, style, Globalization.CultureInfo.InvariantCulture) with
-      | true, n when Double.IsFinite n && n >= 0.0 ->
+      match onlyDurationCharacters, Double.TryParse(numeric, style, Globalization.CultureInfo.InvariantCulture) with
+      | true, (true, n) when Double.IsFinite n && n >= 0.0 ->
         let ticks = n * float ticksPerUnit
         match ticks < float TimeSpan.MaxValue.Ticks with
         | true -> Some (TimeSpan.FromTicks (int64 ticks))

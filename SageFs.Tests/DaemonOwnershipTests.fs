@@ -158,6 +158,14 @@ let parseTests = testList "Ownership.parse" [
     OwnershipArgError.describe OwnershipArgError.OwnerStartWithoutOwnerPid
     |> Expect.stringContains "names the missing flag" "--owner-pid"
 
+  testCase "WHY — a NUL after the number, or a line break between the number and its unit, is not a duration, though .NET's number parser lets both through" <| fun _ ->
+    // Found by the property below on a random seed: "8" and a NUL parsed as 8 seconds. A ttl allows spaces and tabs between the number
+    // and the unit (the oracle's shape) and nothing else.
+    for raw in [ "8\000"; "8\000s"; "8\ns"; "8\u000bs"; "8\u000cm"; "8\rh"; "8\n" + "ms" ] do
+      match Ownership.parse ["--ttl"; raw] with
+      | Result.Ok _ -> failwithf "%A was accepted as a ttl" raw
+      | Result.Error errors -> errors |> List.exists (namesFlag OwnershipFlag.Ttl) |> Expect.isTrue (sprintf "%A is refused and names --ttl" raw)
+
   testPropertyWithConfig cfg "any text that is not a duration is an Error naming --ttl" <|
     Prop.forAll (Arb.fromGen (Gen.oneof [ genNearDuration; genAnyText ])) (fun raw ->
       match Ownership.parse ["--ttl"; raw], durationShape.IsMatch raw with
