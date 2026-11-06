@@ -509,7 +509,7 @@ let controlTests =
           Callers = Features.CallerState.CallersState.CallersNotReported }
       let reported = { applied with Reload = RowReload.Watching("Tuning.fs", ReloadWatch.Reported nothingToChange) }
       strip reported |> fun after -> after.Contains "tweak-reload" |> Expect.isFalse "a verdict from hot reload means nothing for a file nothing watches"
-      textOfTestId "tweak-watching" html |> Expect.equal "it says the write happened" (Some(notWatchedSentence gravity.File "9.8" "9.9"))
+      textOfTestId "tweak-watching" html |> Expect.equal "it says the write happened" (Some(notWatchedSentence "9.8" "9.9"))
       // A row nobody has written says nothing about the file not being watched: said under every row of a file, once any row was
       // written, it was ten copies of one sentence. The pane says it once, in its edit caption.
       textOfTestId "tweak-watching" (strip { row with Watching = WatchStatus.NotWatched })

@@ -136,4 +136,4 @@ module Remedy =
   let paneWords (remedy: Remedy) : string =
     match remedy with
     | Remedy.NothingToDo -> ""
-    | Remedy.RebuildAndReload -> "These values come from older code. Rebuild and reload brings in every changed file."
+    | Remedy.RebuildAndReload -> "These values come from older code."

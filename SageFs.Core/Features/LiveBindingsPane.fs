@@ -152,6 +152,9 @@ module LiveBindingsPane =
     /// The same, when nothing is watching the files the rows are in (the usual state in a REPL session): the consequence is said once,
     /// here, ahead of any edit, and no row repeats it until it has been written.
     | ChangesGoToAnUnwatchedFile
+    /// Shown instead of the one above while changes are saved to a file and the session does not run them yet: it names the changed
+    /// bindings and what each of the two remedies does, in one place, so no other line has to.
+    | PendingChange of names: string list
     /// The label of the mode buttons: what they govern.
     | ModeGoverns
     /// The one-line meaning of the chosen mode.
@@ -184,6 +187,12 @@ module LiveBindingsPane =
       | PaneNote.ReadFromPrinted -> "read from FSI's printed output"
       | PaneNote.ChangesGoToTheFile -> "Edits go to the file."
       | PaneNote.ChangesGoToAnUnwatchedFile -> "Changes are saved to the file. Nothing watches the file for changes, so the session keeps its old values until you apply them."
+      | PaneNote.PendingChange names ->
+        let count = List.length names
+        sprintf "%s saved to the file but not running: %s. Apply to this session runs %s now. Rebuild and reload brings in every changed file."
+          (match count with | 1 -> "1 change is" | n -> sprintf "%d changes are" n)
+          (String.concat ", " names)
+          (match count with | 1 -> "it" | _ -> "them")
       | PaneNote.ModeGoverns -> "Look inside objects:"
       | PaneNote.LegendSummary -> "What do the tags mean?"
       | PaneNote.ModeMeans choice ->

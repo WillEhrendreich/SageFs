@@ -627,10 +627,15 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
       // is not the standard one; the standard mode's meaning is in the buttons' tooltips.
       match TweakView.hasKnob tweaks with
       | true ->
+        // While a change is saved and not running, the caption is the one place that names it and both remedies; before any change
+        // it is the standing rule; with watched files it is the short one.
         let caption =
-          match TweakView.anyUnwatched tweaks with
-          | true -> LiveBindingsPane.PaneNote.ChangesGoToAnUnwatchedFile
-          | false -> LiveBindingsPane.PaneNote.ChangesGoToTheFile
+          match LiveBindingsTweakView.pendingChanges tweaks with
+          | [] ->
+            match TweakView.anyUnwatched tweaks with
+            | true -> LiveBindingsPane.PaneNote.ChangesGoToAnUnwatchedFile
+            | false -> LiveBindingsPane.PaneNote.ChangesGoToTheFile
+          | names -> LiveBindingsPane.PaneNote.PendingChange names
         Elem.span [ Attr.class' "live-pane-count live-writes-caption"; testid "live-writes-caption" ] [
           textEnc (LiveBindingsPane.PaneNote.text caption) ]
       | false -> ()

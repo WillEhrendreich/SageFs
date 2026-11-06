@@ -462,12 +462,15 @@ let viewPanelTests =
         body.Contains "--fg-red" |> Expect.isFalse (sprintf "%s is not the failure colour" selector)
       ruleBody ".live-view-head" |> Expect.stringContains "the heading colour" "var(--fg-blue)"
 
-    testCase "WHY — the view panel is a popover over the output, and its position rule outranks the tooltip rule that makes every aria-label element relative" <| fun _ ->
+    testCase "WHY — the view panel is a popover under the View button, and its position rule outranks the tooltip rule that makes every aria-label element relative" <| fun _ ->
       // `[aria-label]:not(input):not(textarea) { position: relative }` (specificity 0,1,2) sets position on the panel, which has an
       // aria-label. `.live-view-panel` alone (0,1,0) lost to it and the panel sat inside the dock, hiding the bindings. The rule
       // with the dock in its selector (0,2,0) wins.
       ruleBody ".live-dock .live-view-panel" |> Expect.stringContains "absolute, so it leaves the dock's flow" "position: absolute"
-      ruleBody ".live-view-panel" |> Expect.stringContains "lifted above the dock's top edge" "translateY(-100%)"
+      // It sits under the pane's bar, beside the button that opened it, and no longer above the dock over Output, where it left Output
+      // one line tall and far from its button.
+      ruleBody ".live-view-panel" |> Expect.stringContains "anchored under the bar, at the button" "top: 2.9rem"
+      (ruleBody ".live-view-panel").Contains "translateY(-100%)" |> Expect.isFalse "and not lifted above the dock over Output"
 
     testCase "WHY — every control in the dock shows where keyboard focus is, because the step buttons and the slider drew no ring at all" <| fun _ ->
       // Measured in a real browser: `outline-style` was none on `.live-step` and `.live-slider` when focused by keyboard, so a person
@@ -554,6 +557,8 @@ let dockWordingTests =
       PaneNote.ReadFromPrinted
       PaneNote.ChangesGoToTheFile
       PaneNote.ChangesGoToAnUnwatchedFile
+      PaneNote.PendingChange [ "gravity" ]
+      PaneNote.PendingChange [ "gravity"; "maxHealth" ]
       PaneNote.ModeGoverns
       PaneNote.ModeMeans WalkSafe
       PaneNote.ModeMeans WalkEverything
@@ -587,6 +592,23 @@ let dockWordingTests =
       (dockWith withKnob ValueWalk.standard On [ person ]).Contains said |> Expect.isFalse "a watched file needs no such caption"
       TweakView.anyUnwatched unwatched |> Expect.isTrue "the fact the caption follows"
       TweakView.anyUnwatched withKnob |> Expect.isFalse "a watched one has none"
+
+    testCase "WHY — while a change is saved and not running, the caption is the one place that names it and both remedies, and the standing rule steps aside: the same fact was said four times" <| fun _ ->
+      let pending : TweakView =
+        { Rows =
+            withKnob.Rows
+            |> Map.map (fun _ row ->
+              match row.Place with
+              | PlaceOf.Placed place -> { row with Watching = WatchStatus.NotWatched; State = PersistenceState.DiffersFromFile("35", place) }
+              | PlaceOf.NotPlaced -> row) }
+      let html = dockWith pending ValueWalk.standard On [ person ]
+      let said = PaneNote.text (PaneNote.PendingChange [ "person" ])
+      html |> Expect.stringContains "the caption names the changed binding and what to do" said
+      said |> Expect.stringContains "it names the first remedy" "Apply to this session"
+      said |> Expect.stringContains "and the second, with what it covers" "Rebuild and reload brings in every changed file"
+      html.Contains (PaneNote.text PaneNote.ChangesGoToAnUnwatchedFile) |> Expect.isFalse "the standing rule is not said beside it"
+      LiveBindingsTweakView.pendingChanges pending |> Expect.equal "the names the caption follows" [ "person" ]
+      LiveBindingsTweakView.pendingChanges withKnob |> Expect.isEmpty "nothing pending, nothing named"
 
     testCase "WHY — values come first: the standard mode spends no line on its meaning, and a mode that is not the standard says what it does on one line" <| fun _ ->
       for mode in ValueWalk.all do

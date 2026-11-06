@@ -819,8 +819,9 @@ let applyNodes (key: RowKey) (view: RowView) : XmlNode list =
 /// What a row that was written to a file nothing is watching says. Only a row that was written says it: said under every row of the
 /// file before any write, it was ten copies of one sentence. The pane says the same fact once, ahead of any edit, in its caption
 /// (`PaneNote.ChangesGoToAnUnwatchedFile`).
-let notWatchedSentence (file: string) (running: string) (inFile: string) : string =
-  sprintf "Saved to %s as %s. The session still runs %s: nothing watches the file. Apply runs %s now." (Path.GetFileName file) inFile running inFile
+let notWatchedSentence (running: string) (inFile: string) : string =
+  // The pane's caption names the changed bindings and both remedies once; the row says only its own two numbers.
+  sprintf "Saved as %s. The session still runs %s." inFile running
 
 /// The running value and the file's, while the two differ. The sentence names both numbers, because a row that shows 9.8 in its
 /// heading and 9.9 at its slider left three reviewers asking which was live.
@@ -838,11 +839,22 @@ let differingValues (state: PersistenceState) : (string * string) option =
   | PersistenceState.Refused _
   | PersistenceState.Writing _ -> None
 
+/// The whole bindings that have a change saved to a file nothing watches and not run by the session. The pane's caption names them.
+let pendingChanges (view: TweakView) : string list =
+  view.Rows
+  |> Map.toList
+  |> List.choose (fun (key, row) ->
+    match differingValues row.State, row.Watching with
+    | Some _, WatchStatus.NotWatched when List.isEmpty key.Labels -> Some key.Binding
+    | Some _, WatchStatus.NotWatched
+    | Some _, WatchStatus.Watched
+    | None, _ -> None)
+
 let reloadNodes (view: RowView) : XmlNode list =
   let watching : XmlNode list =
     match view.Watching, view.Place, differingValues view.State with
-    | WatchStatus.NotWatched, PlaceOf.Placed place, Some(running, inFile) ->
-      [ Elem.span [ Attr.class' "live-reload live-tone-notice"; testid "tweak-watching" ] [ textEnc (notWatchedSentence place.File running inFile) ] ]
+    | WatchStatus.NotWatched, PlaceOf.Placed _, Some(running, inFile) ->
+      [ Elem.span [ Attr.class' "live-reload live-tone-notice"; testid "tweak-watching" ] [ textEnc (notWatchedSentence running inFile) ] ]
     | WatchStatus.NotWatched, PlaceOf.Placed _, None
     | WatchStatus.NotWatched, PlaceOf.NotPlaced, _
     | WatchStatus.Watched, _, _ -> []
@@ -931,7 +943,12 @@ let renderStripWith (notes: XmlNode list) (key: RowKey) (view: RowView) (placeme
           [ Elem.span [ Attr.class' "live-number-tag"; Attr.title NumberLabels.fileMeaning; testid "tweak-file-tag" ] [ textEnc NumberLabels.fileWord ] ]
         | NumberLabels.RunningAndFile, []
         | NumberLabels.OneNumber, _ -> []
-      fileTag @ knob @ historyNodes key view @ applyNodes key view
+      // Undo, redo and Apply are one group, so on the wide layout they take one cell under the slider.
+      let actions =
+        match historyNodes key view @ applyNodes key view with
+        | [] -> []
+        | nodes -> [ Elem.span [ Attr.class' "live-actions" ] nodes ]
+      fileTag @ knob @ actions
     | Placement.InsideSummary -> []
   let reload =
     match placement with
@@ -951,6 +968,8 @@ let renderStripWith (notes: XmlNode list) (key: RowKey) (view: RowView) (placeme
            Elem.span
              [ Attr.class' (sprintf "live-state %s" (Tone.cssClass described.Tone))
                testid "tweak-state"
+               // The label as data, so the stylesheet can give "has parts" and "formula" marks of their own.
+               Attr.create "data-label" (attrEnc described.Label)
                Attr.title (attrEnc (badgeTitle view.State)) ]
              [ textEnc described.Label ]
          yield! whereChip
