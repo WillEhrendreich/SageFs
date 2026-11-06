@@ -183,16 +183,17 @@ let createJourney (daemon: Daemon) (seen: Seen) : Task<unit> = task {
   let! oldForm = page.Locator(".new-session-panel").CountAsync()
   oldForm |> Expect.equal "no collapsible New Session panel" 0
 
-  // The plus is a small square icon button, the same size as its neighbours in the Sessions header.
+  // The plus carries its word, "+ New" (an icon alone read as an unlabelled button to every reviewer), and is the same height as its
+  // neighbours in the Sessions header.
   let plus = byTestId page NewSessionNames.OpenTestId
   do! PlaywrightExpect.isVisibleAsync plus "the plus is visible"
+  let! plusText = plus.InnerTextAsync()
+  plusText.Trim() |> Expect.equal "the button says what it does" "+ New"
   let! plusBox = boxOf plus
-  plusBox.Width |> Expect.equal "square" plusBox.Height
   let! headerButtons = page.Locator(".sidebar-header .sidebar-header-btn, .sidebar-header .icon-btn").AllAsync()
   for button in headerButtons do
     let! box = boxOf button
-    box.Width |> Expect.equal "every Sessions header button is the same width as the plus" plusBox.Width
-    box.Height |> Expect.equal "and the same height" plusBox.Height
+    box.Height |> Expect.equal "every Sessions header button is the same height as the plus" plusBox.Height
   do! shot page "1-closed-sidebar"
 
   // Open it: a native modal, and discovery of the default directory runs.

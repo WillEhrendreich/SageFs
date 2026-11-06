@@ -203,9 +203,10 @@ let journey () : Task<unit> = task {
     do! waitState page "feel" "Derived"
     do! waitState page "speed" "NotInAFile"
     do! waitState page "scores" "NotInAFile"
-    // A REPL-only value says nothing on its row. The title bar says it once, with a count, and its reason is on hover.
+    // A REPL-only value has no sentence on its row. Its Source cell says "n/a" so the column has an answer in every row; the title bar
+    // says the rest once, with a count, and its reason is on hover.
     let! speedText = textIn page (row "speed")
-    speedText.Trim() |> Expect.equal "a REPL-only row has no words of its own" ""
+    speedText.Trim() |> Expect.equal "a REPL-only row says n/a in its Source cell and nothing else" "n/a"
     let! chipText = textIn page "[data-testid=live-repl-only]"
     // The chip says what it counts in the pane's own words: the sentence for a count of 0, without the number in front.
     chipText |> Expect.stringContains "the title bar counts the REPL-only bindings" ((SageFs.Features.LiveBindingsPane.PaneNote.text (SageFs.Features.LiveBindingsPane.PaneNote.NotInAnyFile 0)).Substring 1)
@@ -324,14 +325,15 @@ let journey () : Task<unit> = task {
     do! shot page "5-record-field-and-bool"
     expectNoErrors errors "after a bool, a string, a formula and a record field"
 
-    // A field of a value the file builds with a call is the callee's literal: the row says which callee builds it and how many calls
-    // a write reaches, and the step changes the one literal in `makeRig`, never the two calls.
+    // A field of a value the file builds with a call is the callee's literal: the group says once, above its fields, which callee builds
+    // it and how many calls a write reaches (it is not repeated under every field), and the step changes the one literal in `makeRig`,
+    // never the two calls.
     do! page.Locator("#lb_726967 summary").First.ClickAsync()
     let built = "rig/Mass"
     do! waitState page built "InSource"
-    do! waitJs page "the row to say which callee builds it and how many calls a write reaches" BrowserWaits.panelUpdates
-          "sel => { const e = document.querySelector(sel + ' [data-testid=tweak-through]'); return !!e && /makeRig builds this/.test(e.innerText) && /2 places call makeRig/.test(e.innerText); }"
-          (box (row built))
+    do! waitJs page "the group to say which callee builds it and how many calls a write reaches" BrowserWaits.panelUpdates
+          "sel => { const e = document.querySelector(sel + ' [data-testid=live-shared-note]'); return !!e && /makeRig builds this/.test(e.innerText) && /2 places call makeRig/.test(e.innerText); }"
+          "#lb_726967"
     do! page.Locator(sprintf "%s [data-testid=tweak-step-up]" (row built)).ClickAsync()
     expected <- expected.Replace("{ Mass = 80.0; Drag = 0.25 }", "{ Mass = 80.1; Drag = 0.25 }")
     do! waitForFile tuning "the one literal in the callee stepped, and both calls read as before" expected
