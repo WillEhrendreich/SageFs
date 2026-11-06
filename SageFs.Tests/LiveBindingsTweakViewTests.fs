@@ -248,12 +248,12 @@ let applyToSessionTests =
       offer WatchStatus.NotWatched (PersistenceState.InSource filePlace) key |> Expect.equal "nothing differs" "not offered"
       offer WatchStatus.NotWatched differs part |> Expect.equal "a part of a value" "not offered"
 
-    testCase "WHY — the row draws the button with its words and its own test id, and says the one next step, which is that button" <| fun _ ->
+    testCase "WHY — the row draws the button with its words and its own test id, and no second sentence repeats what the button says" <| fun _ ->
       let drawn = strip (rowOfFile WatchStatus.NotWatched differs)
       drawn |> Expect.stringContains "its test id" "data-testid=\"tweak-apply\""
       drawn |> Expect.stringContains "its words" ApplyToSession.words
       drawn |> Expect.stringContains "it posts to its own route" ApplyToSession.Endpoint
-      textOfTestId "tweak-next" drawn |> Expect.equal "the next step is the button" (Some(ApplyToSession.sentence))
+      drawn.Contains "tweak-next" |> Expect.isFalse "the button is the next step, so there is no sentence for it"
       let watched = strip (rowOfFile WatchStatus.Watched differs)
       watched.Contains "tweak-apply" |> Expect.isFalse "a watched file has no button"
 

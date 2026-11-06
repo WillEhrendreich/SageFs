@@ -328,8 +328,6 @@ module ApplyToSession =
   /// Where the button posts. Its own route, because it evaluates code in the session and writes nothing to the file.
   let [<Literal>] Endpoint = "/dashboard/tweak/apply"
   let words : string = "Apply to this session"
-  /// The row's one next step when the button is offered: the button is the step, so the sentence points at it and at nothing else.
-  let sentence : string = "Press Apply to this session to run the file's value now."
 
   /// The statement that rebinds the row's name to the file's expression.
   let codeFor (key: RowKey) (fileText: string) : Result<string, ApplyRefusal> =
@@ -918,7 +916,9 @@ let renderStrip (key: RowKey) (view: RowView) (placement: Placement) : XmlNode =
          | DetailShown.InTheTooltipOnly -> ()
          match NextStep.ofRow view, ApplyToSession.offerFor key view with
          | NextStep.NoNextStep, _ -> ()
-         | _, ApplyOffer.Offered _ -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-next" ] [ textEnc ApplyToSession.sentence ]
+         // The button is the next step and says so in its own words, so no second sentence repeats it: a reviewer counted the row's
+         // story four times (tag, sentence, "Press Apply…", button).
+         | _, ApplyOffer.Offered _ -> ()
          | step, ApplyOffer.NotOffered -> yield Elem.div [ Attr.class' "live-detail"; testid "tweak-next" ] [ textEnc (NextStep.sentence step) ]
          match describeThrough view.Through with
          | Some through -> yield Elem.div [ Attr.class' (sprintf "live-detail %s" (Tone.cssClass through.Tone)); testid "tweak-through" ] [ textEnc through.Detail ]

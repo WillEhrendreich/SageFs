@@ -440,7 +440,10 @@ h2 {
   font-size: 0.85rem;
   padding: 1px 0.5rem;
   white-space: pre-wrap;
-  word-break: break-all;
+  /* Wrap at spaces first, and split a word only when it is longer than the line (a path, a hash). `break-all` split every line at
+     the edge, so "0 failed" read "0 faile / d" at phone width. */
+  overflow-wrap: anywhere;
+  word-break: normal;
   line-height: 1.5;
 }
 
@@ -1577,20 +1580,11 @@ h2 {
   content: "View";
 }
 
+/* The same three words at every width. "Hide" is short enough for the title, the count and all three buttons to share one line on a
+   phone; the words once changed with the window ("Collapse" and "Keep open" wide, "Hide" and "Pin" narrow), and two reviewers
+   noted a user would have to learn them twice, and that "Pin" looks like the pin on every row. */
 .live-pane-collapse::before {
-  content: "Collapse";
-}
-
-/* On a phone the three words are short, so the title, the count and the three buttons fit one line: "Keep open" and "Collapse" did
-   not, and "Keep open" fell onto a line of its own at 400px. */
-@media (max-width: 768px) {
-  .live-pane-pin::before {
-    content: "Pin";
-  }
-
-  .live-pane-collapse::before {
-    content: "Hide";
-  }
+  content: "Hide";
 }
 
 .live-tree {
@@ -3189,11 +3183,10 @@ h2 {
     /* The stacked layout scrolls as one column, so the output above the dock keeps a floor of its own: the dock is
        bounded, and the main area is tall enough for both. At 22rem the dock showed two and a half binding rows at 400px, once
        the pane's captions had taken their share, so it is taller here, and the main area's floor grows with it. */
-    max-height: max(30rem, 70vh);
-    /* The pane's own header (bar, remedy, caption, mode buttons, legend) takes about 230px at 400px wide, so at 30rem the list had
-       room for about three rows, and three reviewers called that a strip. The cap is taller now that it can be: Output has a box of
-       its own (`#editor-area` below) and the page's column scrolls, so the dock no longer takes its height from Output. Before that,
-       a taller cap crushed Output (80vh left it 1px, 55vh left 55px at 768x900). At 390x844 this gives the list seven or eight rows. */
+    max-height: none;
+    /* The dock takes the height its rows need, and the page's one column scrolls. A capped dock was a box that scrolled inside a page
+       that scrolled, and it cut the row it ended on: three reviewers saw the Apply button sliced in half at its foot, with nothing
+       to say the box scrolled. Output has a box of its own (`#editor-area` below), so a tall dock no longer takes its height. */
     /* The bindings are what the page is opened for, so on a phone they come first, above the output transcript. With the output
        first, the bindings began halfway down a 400x800 window and only the first two rows showed above the fold: three reviewers
        scored the narrow layouts 5 because the subject was buried under the log. */
@@ -3218,7 +3211,13 @@ h2 {
   /* While the panel is open in the flow, the dock grows by its height: the page scrolls as one column here, and the bindings
      the panel configures stay under it, in view after a scroll, rather than squeezed out of a fixed-height dock. */
   .live-dock:has(.live-view-panel:not(.live-hidden)) {
-    max-height: 54rem;
+    max-height: none;
+  }
+
+  /* The list is part of the page's column here, not a scroller of its own. */
+  .live-tree {
+    overflow: visible;
+    flex: 0 0 auto;
   }
 
   /* The pane bar in a deliberate order at phone width, where it used to wrap wherever it ran out of room (the pin alone on a
@@ -3782,6 +3781,19 @@ body[data-connected="false"] .statusline-info {
 .live-dock .live-tweak > .live-history,
 .live-dock .live-tweak > .live-apply {
   order: 3;
+}
+
+/* The sentences a row carries (what a write reaches, what the session still runs) come after its controls, so the slider and the
+   button stay on the row beside the name they act on. The note under "Mass" sat between the row and its slider and dropped the
+   control below it with a gap, and on a phone it pushed Apply to the foot of the pane. */
+.live-dock .live-tweak > .live-reload,
+.live-dock .live-tweak > .live-detail {
+  order: 4;
+}
+
+/* The file and line are read on every row, so they are not the dimmest text on it. */
+.live-dock .live-where {
+  color: color-mix(in srgb, var(--fg-default) 82%, transparent);
 }
 
 /* ── Smaller things the reviewers named ──
