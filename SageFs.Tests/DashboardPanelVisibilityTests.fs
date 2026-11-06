@@ -183,9 +183,10 @@ let dashboardPanelVisibilityTests =
 
       testCase "a panel that is not relevant says why, where the panel would have been" <| fun _ ->
         let html = PanelVisibility.apply replFacts (snapshotWith off joined) |> renderMainContent |> renderNode
-        html |> Expect.stringContains "the hot reload panel says why it is not there" "Hot reload: this session is in REPL mode"
-        html |> Expect.stringContains "the live testing panel says why it is not there" "Live testing: it's off for this session"
-        html |> Expect.stringContains "the cohort panel says why it is not there" "Cohort: no cohort is running"
+        html |> Expect.stringContains "the hot reload panel says why it is not there" "Hot reload: off"
+        html |> Expect.stringContains "the live testing panel says why it is not there" "Live testing: off"
+        html |> Expect.stringContains "the cohort panel says why it is not there" "Agent team: none running"
+        html |> Expect.stringContains "and the sentence that says why is in the line, a click away" "this is a REPL session"
         html.Contains "reporting has a real endpoint" |> Expect.isFalse "the friction panel nobody asked for says nothing, and certainly no note about a developer URL"
         html.Contains "panels=friction" |> Expect.isFalse "no query string for developers is printed on the page"
 

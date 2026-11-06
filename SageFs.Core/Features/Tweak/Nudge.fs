@@ -226,6 +226,8 @@ type NudgeRefusal =
   /// The literal text is not a value of the literal's own kind (`abc` for an integer).
   | LiteralNotReadable of kind: LiteralKindName * given: string
   | ValueKindMismatch of reason: string
+  /// The number is the literal's own kind but outside what its type holds (a byte past 255, NaN, a negative in hex).
+  | ValueOutOfRange of reason: string
   | ExpressionDoesNotParse of reason: string
   | BlockedByOpenConflict of address: TweakAddress
   /// Nothing this door wrote to the file is left to undo. The door never compacts
@@ -265,6 +267,7 @@ module NudgeRefusal =
     | NudgeRefusal.NotALiteral _ -> "NotALiteral"
     | NudgeRefusal.LiteralNotReadable _ -> "LiteralNotReadable"
     | NudgeRefusal.ValueKindMismatch _ -> "ValueKindMismatch"
+    | NudgeRefusal.ValueOutOfRange _ -> "ValueOutOfRange"
     | NudgeRefusal.ExpressionDoesNotParse _ -> "ExpressionDoesNotParse"
     | NudgeRefusal.BlockedByOpenConflict _ -> "BlockedByOpenConflict"
     | NudgeRefusal.NothingToUndo -> "NothingToUndo"
@@ -330,6 +333,7 @@ module NudgeRefusal =
     | NudgeRefusal.LiteralNotReadable(kind, given) ->
       sprintf "'%s' is not a %s, which is the kind of the literal here." given (LiteralKindName.toToken kind)
     | NudgeRefusal.ValueKindMismatch reason -> reason
+    | NudgeRefusal.ValueOutOfRange reason -> reason
     | NudgeRefusal.ExpressionDoesNotParse reason -> sprintf "That is not an F# expression: %s" reason
     | NudgeRefusal.BlockedByOpenConflict address -> sprintf "%s has an open conflict, so no write or undo goes there until it is resolved." (format address)
     | NudgeRefusal.NothingToUndo -> "This door has written nothing to this file that is left to undo."
@@ -366,6 +370,7 @@ module NudgeRefusal =
     | NudgeRefusal.NotALiteral _ -> "Send it as expression instead, or inspect the file for a literal address inside it."
     | NudgeRefusal.LiteralNotReadable(kind, _) -> sprintf "Send %s." (kindHint kind)
     | NudgeRefusal.ValueKindMismatch _ -> "Send a value of the literal's own kind."
+    | NudgeRefusal.ValueOutOfRange _ -> "Send a number the literal's own type can hold. Nothing was changed."
     | NudgeRefusal.ExpressionDoesNotParse _ -> "Fix the expression and send it again. Nothing was written."
     | NudgeRefusal.BlockedByOpenConflict _ -> "No tool resolves a conflict yet. Write to a different address, or edit the file by hand."
     | NudgeRefusal.NothingToUndo -> "Nothing to do. action=inspect shows how much history there is and where undo stands."
@@ -659,6 +664,7 @@ let planSet
           match setLiteral source address newValue with
           | Ok newSource -> finish resolved newSource
           | Error(SetLiteralError.KindMismatch reason) -> Error(NudgeRefusal.ValueKindMismatch reason)
+          | Error(SetLiteralError.OutOfRange reason) -> Error(NudgeRefusal.ValueOutOfRange reason)
           | Error(SetLiteralError.NotALiteral shown) -> Error(NudgeRefusal.NotALiteral shown)
           | Error(SetLiteralError.Gone e) -> Error(NudgeRefusal.AddressGone e)
     | NudgeValue.ExpressionText text ->

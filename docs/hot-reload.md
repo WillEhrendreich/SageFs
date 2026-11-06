@@ -586,6 +586,8 @@ What it will not do, and what it does about it:
 
 - It only touches the project files of the session you call it for. Anything else is refused as `NotOwned`, and so is a symbolic link, because a rename over a link would replace the link. A project file hot reload is not watching is still written, and the reply says so with the `FileNotWatched` note. When several sessions share a directory, pass `session_id`: the directory alone is refused as ambiguous.
 - It never guesses at a stale address. If the expression changed since you inspected it you get `SourceMoved` with the text that is there now. If the binding was renamed you get `AddressMoved` with the new address to confirm, and nothing is written until you send it again. If it is gone you get `AddressGone`.
+- It never writes a number the literal's own type cannot hold. A byte past 255, an `int` past 2,147,483,647, `NaN`, infinity, and a negative number in a hex, octal or binary literal are refused as `ValueOutOfRange` with the limits named, and the file is untouched.
+- It holds a number to the range a person chose for it. See "Choosing a range and step" below.
 - A failed write leaves the file byte-identical. The file is replaced by renaming a finished temp file over it, so a crash at any step leaves the old file or the new one, never half of one.
 - Every write is journaled before the file changes, in a per-file journal under the tweaks folder of SageFs's data directory. A crash between the record and the rename leaves a record for a write that did not land, and the next call finds it, marks it undone and says so. A torn record is removed the same way.
 - `undo` refuses with all three texts when the expression was edited after the write, and leaves your edit alone.
@@ -599,6 +601,27 @@ Where it falls short:
 - If hot reload is not watching the file, the file changes and the running app does not. The reply says so.
 - A journal holds 5000 events per file per session. Past that a new write is refused and undo still works. Compacting a journal is not built.
 - A nested module declared with a dotted name (`module A.B =` inside a file) cannot be addressed.
+
+### Choosing a range and step
+
+A number's slider in the Live Bindings pane is a gauge. Its two ends are the lowest and the highest the number may take, so where the handle sits is where the number sits in its range, and the ends are labelled under the track with the step between them. The `-` and `+` buttons stop at an end. Press **range** at the end of the row to choose three things for that number: the lowest, the highest and how far one step moves it. An empty box means none chosen.
+
+- With no range chosen the handle covers 100 steps either way, and the ends are blank rather than a scale. The number's own type still bounds it: an `int` stops at the top of an int, a byte at 255, a hex literal at zero.
+- The choice is kept in `.SageFs/tweak-limits.json` beside the project, so it travels with the code and a team shares it. The file is plain JSON, one entry per row, rows in name order:
+
+  ```json
+  {
+    "gravity": { "min": 0, "max": 30, "step": 0.1 },
+    "rig/Mass": { "min": 1, "max": 500, "step": 5 }
+  }
+  ```
+
+  A row is its binding, then `/` and a record field for each step down. A whole number steps by a whole amount, never below 1.
+- It holds for every writer, not only the slider. A write outside the range is refused as `ValueOutOfRange` and the file is byte-identical: the dashboard's step buttons and handle, `nudge_value` whether it sends the number as a `literal` or as an `expression`, and an eval that is written back to its file (the eval runs, and the reply says `not persisted: <reason>`).
+- A number already outside its range can only be stepped back in: its handle has no steps on the side it is past.
+- A file that is not JSON, or has an entry no number fits (a lowest above the highest, a step of zero), is read as broken, never as "no limits": while it is, no number is written and a step says why when you try one, because a broken file read as empty would let through a number the person had ruled out. The dashboard never overwrites a broken file, since it holds the person's other choices.
+
+Pinned by [`NumberLimitsTests`](../SageFs.Tests/NumberLimitsTests.fs) (the arithmetic, the ends, the file) and [`LiveBindingsTweakServiceTests`](../SageFs.Tests/LiveBindingsTweakServiceTests.fs) (the real file on disk, the door, `nudge_value`).
 
 Each of these is pinned by a test: [`NudgeTests`](../SageFs.Tests/NudgeTests.fs) for the behavior and the refusals, [`NudgeSimDstTests`](../SageFs.Tests/NudgeSimDstTests.fs) for the crash and concurrency invariants across 500 seeds, [`NudgeMutationTests`](../SageFs.Tests/NudgeMutationTests.fs) for the decisions, and [`NudgeOutcomeTests`](../SageFs.Tests/NudgeOutcomeTests.fs) for the running app on net10 and net11.
 

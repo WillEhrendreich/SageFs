@@ -4,6 +4,7 @@ open System
 open Expecto
 open Expecto.Flip
 open Falco.Markup
+open SageFs
 open SageFs.Server
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
@@ -21,7 +22,7 @@ let alarmBannerRenderTests =
 
     test "empty list renders no alarm text" {
       let html = renderAlarmBanner [] |> render
-      (html.Contains "🚨") |> Expect.isFalse "empty list should not show alarm icon"
+      (html.Contains (Glyphs.text Glyph.Alarm)) |> Expect.isFalse "empty list should not show alarm icon"
     }
 
     test "single alarm renders phase" {
@@ -39,7 +40,7 @@ let alarmBannerRenderTests =
     test "single alarm renders alarm icon" {
       let alarm = { Phase = "effect"; Message = "IO error"; Timestamp = DateTimeOffset.UtcNow }
       let html = renderAlarmBanner [ alarm ] |> render
-      html |> Expect.stringContains "should render alarm icon" "🚨"
+      html |> Expect.stringContains "should render alarm icon" (Glyphs.text Glyph.Alarm)
     }
 
     test "non-empty alarm banner renders as closed disclosure" {

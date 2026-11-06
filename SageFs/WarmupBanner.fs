@@ -9,6 +9,12 @@ open SageFs.Features.LiveTesting
 /// Converts a SessionContext into OutputLine list for the warmup banner.
 /// Shown in the output pane BEFORE any eval results so users know what was loaded.
 module WarmupBanner =
+  /// "1 assembly", "3 assemblies": a count is never followed by the wrong number of the noun (the banner said "1 assemblies").
+  let assembliesText (count: int) : string =
+    match count with
+    | 1 -> "1 assembly"
+    | n -> sprintf "%d assemblies" n
+
   let toOutputLines (ctx: SessionContext) : OutputLine list =
     let w = ctx.Warmup
     let sid = ctx.SessionId
@@ -19,8 +25,8 @@ module WarmupBanner =
     let lines = Collections.Generic.List<OutputLine>()
     lines.Add {
       Kind = OutputKind.System
-      Text = sprintf "🔧 Warmup: %d assemblies, %d opened, %d failed, %dms"
-        asmCount opened failed (WarmupContext.totalDurationMs w)
+      Text = sprintf "%s Warmup: %s, %d opened, %d failed, %dms"
+        (Glyphs.text Glyph.Settings) (assembliesText asmCount) opened failed (WarmupContext.totalDurationMs w)
       Timestamp = now; SessionId = sid
     }
     match asmCount > 0 with
@@ -28,7 +34,7 @@ module WarmupBanner =
       for a in w.AssembliesLoaded do
         lines.Add {
           Kind = OutputKind.System
-          Text = sprintf "  📦 %s (%d ns, %d modules)" a.Name a.NamespaceCount a.ModuleCount
+          Text = sprintf "  %s %s (%d ns, %d modules)" (Glyphs.text Glyph.Package) a.Name a.NamespaceCount a.ModuleCount
           Timestamp = now; SessionId = sid
         }
     | false -> ()
@@ -38,7 +44,7 @@ module WarmupBanner =
       let kind = OpenableKind.label f.Kind
       lines.Add {
         Kind = OutputKind.Failure
-        Text = sprintf "  ✖ Failed to open %s (%s) — %s" f.Name kind f.ErrorMessage
+        Text = sprintf "  %s Failed to open %s (%s) — %s" (Glyphs.text Glyph.Fail) f.Name kind f.ErrorMessage
         Timestamp = now; SessionId = sid
       }
       for d in f.Diagnostics do

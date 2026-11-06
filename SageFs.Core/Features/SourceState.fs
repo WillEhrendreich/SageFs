@@ -314,7 +314,8 @@ module SourceState =
         // The cause only. The card's pill beside this note already says "Running older code", and a reviewer counted that phrase five
         // times on one screen.
         | 0, _ -> "A newer build exists than the one this session loaded."
-        | _, 0 -> sprintf "%s changed since the build." (count edited "file")
+        // The banner in the live bindings pane says "1 change is saved but not live"; the card says the same thing in the same words.
+        | _, 0 -> sprintf "%s saved but not live." (count edited "change")
         | _ -> sprintf "%s changed since the build, and a newer build exists." (count edited "file")
       CardNote.Note (headline, changed |> List.map (cardFileLine root) |> capped)
     | SourceState.Rebuilding since ->

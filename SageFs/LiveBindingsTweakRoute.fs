@@ -63,6 +63,25 @@ let applyAskedOf (body: JsonElement) : ApplyAsked =
     | Error refusal -> ApplyAsked.NotAnApply(ApplyRefusal.text refusal)
     | Ok code -> ApplyAsked.Apply(sessionId, text Signals.ClientId, code)
 
+/// What a range-and-step request said: the session, the page that asked, the row, and the three texts, or why it was not a request.
+[<RequireQualifiedAccess>]
+type LimitsAsked =
+  | Limits of sessionId: WorkerProtocol.SessionId * clientId: string * row: SageFs.Features.Tweak.BindingTweak.RowKey * texts: SageFs.Features.Tweak.LimitsTexts
+  | NotLimits of reason: string
+
+let limitsAskedOf (body: JsonElement) : LimitsAsked =
+  let text (name: string) : string = signalText body name
+  match WorkerProtocol.SessionId.validate (text Signals.ViewingSessionId), TweakRequest.rowOfText (text TweakSignals.Row) with
+  | Error why, _ -> LimitsAsked.NotLimits(sprintf "the page is not viewing a session: %s" why)
+  | Ok _, Error fault -> LimitsAsked.NotLimits(TweakRequest.describe fault)
+  | Ok sessionId, Ok key ->
+    LimitsAsked.Limits(
+      sessionId,
+      text Signals.ClientId,
+      key,
+      { LowestText = text TweakSignals.LimLow; HighestText = text TweakSignals.LimHigh; StepText = text TweakSignals.LimStep }
+    )
+
 /// Tell one page's own stream to draw: the same push the live-bindings subscription uses, so it is serialized with every other write
 /// to that stream and the whole-page morph stays the only render path.
 let pushTo (infra: DashboardInfra) (clientId: string) : unit =
@@ -128,6 +147,29 @@ let applyHandler
           match answer with
           | Ok _
           | Error _ -> pushTo infra clientId
+      with
+      | :? RequestTooLargeException -> ()
+      | :? IO.IOException -> ()
+      | :? ObjectDisposedException -> ()
+    }
+    :> Threading.Tasks.Task
+
+/// Keep a number's range and step. The choice is written beside the project; the page's stream is told to draw (the slider's ends
+/// move), and the row's own note says why when the texts could not be used.
+let limitsHandler (q: DashboardQueries) (infra: DashboardInfra) (service: Service) : HttpHandler =
+  fun ctx ->
+    task {
+      try
+        use! doc = readSignalsJsonSized ctx
+        match limitsAskedOf doc.RootElement with
+        | LimitsAsked.NotLimits reason ->
+          ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
+          do! ctx.Response.WriteAsync reason
+        | LimitsAsked.Limits(sessionId, clientId, row, texts) ->
+          let note = Service.setLimits service (q.GetSessionWorkingDir sessionId) row texts
+          pushTo infra clientId
+          Response.sseStartResponse ctx |> ignore
+          do! Response.ssePatchSignal ctx (SignalPath.sp (TweakSignals.limNoteOf row)) note
       with
       | :? RequestTooLargeException -> ()
       | :? IO.IOException -> ()

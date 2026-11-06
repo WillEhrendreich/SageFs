@@ -181,7 +181,7 @@ let hardBanner () : XmlNode =
       Attr.create "role" "alert"
       Attr.style "display:none"
       Ds.show (sprintf "!$%s" Signals.Connected) ]
-    [ Text.raw "❌ Daemon not running — start SageFs to continue" ]
+    [ Text.enc (Glyphs.lead Glyph.Fail + "Daemon not running — start SageFs to continue") ]
 
 /// The daemon answers, and the live stream is catching up. Says what is known, and claims nothing more.
 let softBanner () : XmlNode =
@@ -192,4 +192,4 @@ let softBanner () : XmlNode =
       Attr.create "role" "status"
       Attr.style "display:none"
       Ds.show (sprintf "$%s && $%s" LateSignal Signals.Connected) ]
-    [ Text.raw "⏳ Live updates paused — the daemon answers, this page is reconnecting" ]
+    [ Text.enc (Glyphs.lead Glyph.Busy + "Live updates paused — the daemon answers, this page is reconnecting") ]

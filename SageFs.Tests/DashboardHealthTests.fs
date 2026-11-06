@@ -141,19 +141,19 @@ let daemonHealthViewTests =
 let renderDaemonHealthTests =
   testList "renderDaemonHealth HTML" [
 
-    testCase "renders healthy emoji for Healthy" <| fun () ->
+    testCase "renders the check glyph for Healthy" <| fun () ->
       let s = makeSession "s1" "Proj.fsproj" SessionHealthStatus.Ready 10
       let snap = makeHealthSnapshot [s] None unremarkableUptime 128
       let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
-      html |> Expect.stringContains "green circle for healthy" "🟢"
+      html |> Expect.stringContains "the check for healthy" (Glyphs.text Glyph.Pass)
 
-    testCase "renders degraded emoji for Degraded" <| fun () ->
+    testCase "renders the caution glyph for Degraded" <| fun () ->
       let s = makeSession "s1" "Proj.fsproj" SessionHealthStatus.Faulted 0
       let snap = makeHealthSnapshot [s] None unremarkableUptime 128
       let view = viewOf snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
-      html |> Expect.stringContains "yellow circle for degraded" "🟡"
+      html |> Expect.stringContains "the caution mark for degraded" (Glyphs.text Glyph.Warn)
 
     testCase "renders version in output" <| fun () ->
       let snap = defaultSnap ()

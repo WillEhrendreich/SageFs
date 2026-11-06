@@ -299,10 +299,10 @@ let keyboardHandlerScript () =
       function d(a,v){var b=v?{action:a,value:v}:{action:a};fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});}
       var BINDINGS=%s,TEXT=%s,CARD=%s,STOP=%s,OTHERS=%s;
       function typing(t){return !!t&&(TEXT.indexOf((t.tagName||'').toLowerCase())>=0||t.isContentEditable===true);}
-      var sizes=[10,12,14,16,18,20,24],idx=2;
+      var sizes=[62.5,75,87.5,100,112.5,125,150],idx=2;
       document.addEventListener('keydown',function(e){
-        if(e.ctrlKey&&(e.key==='='||e.key==='+')){e.preventDefault();idx=Math.min(sizes.length-1,idx+1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
-        if(e.ctrlKey&&e.key==='-'){e.preventDefault();idx=Math.max(0,idx-1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
+        if(e.ctrlKey&&(e.key==='='||e.key==='+')){e.preventDefault();idx=Math.min(sizes.length-1,idx+1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'%%');}
+        if(e.ctrlKey&&e.key==='-'){e.preventDefault();idx=Math.max(0,idx-1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'%%');}
         if(e.ctrlKey&&e.key==='Tab'){e.preventDefault();d(e.shiftKey?'sessionCyclePrev':'sessionCycleNext');return;}
         if(e.key==='Escape'){var pop=document.getElementById('%s');if(pop&&pop.open){pop.open=false;return;}}
         if(typing(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;
@@ -357,11 +357,11 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
     Elem.head [] [
       yield! pageHeadMetas
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
-      // Inline 🧙 favicon (base64 SVG data URI) — matches the header glyph and
+      // Inline λ favicon (base64 SVG data URI), the header's own mark, and
       // makes no external request, so the browser tab stops 404-ing on
       // /favicon.ico (roast UX-8). base64 (not raw SVG) so attribute encoding
       // can't mangle the data URI.
-      Elem.link [ Attr.rel "icon"; Attr.type' "image/svg+xml"; Attr.href "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn6eZPC90ZXh0Pjwvc3ZnPg==" ]
+      Elem.link [ Attr.rel "icon"; Attr.type' "image/svg+xml"; Attr.href "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuODVlbSIgZm9udC1zaXplPSI5MCIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiIGZpbGw9IiM3YWEyZjciPs67PC90ZXh0Pjwvc3ZnPg==" ]
       // Self-hosted pinned Datastar bundle (see `datastarBundle`) — never
       // fetch a moving CDN branch at runtime.
       Elem.script [ Attr.type' "module"; Attr.src "/dashboard/datastar.js" ] []
@@ -516,7 +516,7 @@ let private buildOutputPanelsFrom
     // when the session exists but hasn't produced eval output yet.
     let emptyPlaceholder =
       match warmupProgress.Length > 0 with
-      | true -> sprintf "⏳ %s" warmupProgress
+      | true -> sprintf "%s %s" (Glyphs.text Glyph.Busy) warmupProgress
       | false ->
         match sessionState with
         | "Ready" -> "Ready — type code in the evaluator below, or use the MCP tools"
@@ -1128,12 +1128,12 @@ let buildDashboardSnapshotWithSessions
       | Some tracker ->
         let counts = tracker.GetAllCounts()
         let parts =
-          [ match counts.Browsers > 0 with | true -> sprintf "🌐 %d" counts.Browsers | false -> ()
-            match counts.McpAgents > 0 with | true -> sprintf "🤖 %d" counts.McpAgents | false -> ()
-            match counts.Terminals > 0 with | true -> sprintf "💻 %d" counts.Terminals | false -> () ]
+          [ match counts.Browsers > 0 with | true -> sprintf "%d browser%s" counts.Browsers (match counts.Browsers with | 1 -> "" | _ -> "s") | false -> ()
+            match counts.McpAgents > 0 with | true -> sprintf "%d agent%s" counts.McpAgents (match counts.McpAgents with | 1 -> "" | _ -> "s") | false -> ()
+            match counts.Terminals > 0 with | true -> sprintf "%d terminal%s" counts.Terminals (match counts.Terminals with | 1 -> "" | _ -> "s") | false -> () ]
         match parts.IsEmpty with
         | true -> Some (sprintf "%d connected" tracker.TotalCount)
-        | false -> Some (String.Join(" ", parts))
+        | false -> Some (String.Join(" · ", parts))
       | None -> None
     let hrPanel =
       match sid.Length > 0 with
@@ -1392,12 +1392,12 @@ let buildNoSessionSnapshotWithSessionsSorted
       | Some tracker ->
         let counts = tracker.GetAllCounts()
         let parts =
-          [ match counts.Browsers > 0 with | true -> sprintf "🌐 %d" counts.Browsers | false -> ()
-            match counts.McpAgents > 0 with | true -> sprintf "🤖 %d" counts.McpAgents | false -> ()
-            match counts.Terminals > 0 with | true -> sprintf "💻 %d" counts.Terminals | false -> () ]
+          [ match counts.Browsers > 0 with | true -> sprintf "%d browser%s" counts.Browsers (match counts.Browsers with | 1 -> "" | _ -> "s") | false -> ()
+            match counts.McpAgents > 0 with | true -> sprintf "%d agent%s" counts.McpAgents (match counts.McpAgents with | 1 -> "" | _ -> "s") | false -> ()
+            match counts.Terminals > 0 with | true -> sprintf "%d terminal%s" counts.Terminals (match counts.Terminals with | 1 -> "" | _ -> "s") | false -> () ]
         match parts.IsEmpty with
         | true -> Some (sprintf "%d connected" tracker.TotalCount)
-        | false -> Some (String.Join(" ", parts))
+        | false -> Some (String.Join(" · ", parts))
       | None -> None
     // No session in view: the activity across every live session's tests. An empty id names the
     // primary session's cycle alone, which reads off while another session is running tests, so
@@ -1996,7 +1996,7 @@ let createEvalHandler
             | Error err ->
               err
                 .Replace("FSharp.Compiler.Interactive.Shell+FsiCompilationException: ", "")
-                .Replace("Evaluation failed: ", "⚠ "),
+                .Replace("Evaluation failed: ", Glyphs.lead Glyph.Warn),
               "output-line output-error"
           do! ssePatchNode ctx (evalResultShown cssClass displayResult)
     with
@@ -2151,7 +2151,7 @@ let createResetHandler
         // Immediate feedback: show the in-flight state before the reset
         // itself (which can take seconds — minutes for a hard-reset
         // rebuild) resolves. Mirrors the teardown path's immediate
-        // "⏳ Stopping…" card swap (roast UX-8: RESET/HARD_RESET showed
+        // "◐ Stopping…" card swap (roast UX-8: RESET/HARD_RESET showed
         // nothing until the action itself finished).
         do! ssePatchNode ctx (evalResultInfo (sprintf "%s: in progress…" label))
         let! result = resetSession sessionId
@@ -2309,7 +2309,7 @@ let createCancelEvalHandler
 
 /// Create the session action handler (switch/stop).
 /// If `teardown` is true (stop/dispose/purge), it:
-///   - immediately replaces the session's card with "⏳ Stopping session id:[id]..."
+///   - immediately replaces the session's card with "◐ Stopping session id:[id]..."
 ///   - clears the output + eval-result if that session is the one being viewed
 ///   - after the action resolves, auto-switches to the next session in the list
 ///     (or shows the session picker if none remain)
@@ -2804,7 +2804,7 @@ let private frictionSendResultDom (ok: bool) (error: string) (reportId: string) 
     then sprintf "Sent (report id: %s)" (if reportId.Length > 0 then reportId else "?")
     else sprintf "Failed: %s" (if error.Length > 0 then error else "unknown error")
   Elem.div [ Attr.class' (sprintf "friction-send-status %s" statusClass); Attr.id DomIds.FrictionSendStatus ] [
-    Elem.pre [ Attr.style "margin: 0; white-space: pre-wrap; font-size: 0.8rem;" ] [ textEnc statusText ]
+    Elem.pre [ Attr.style "margin: 0; white-space: pre-wrap; font-size: 0.857rem;" ] [ textEnc statusText ]
   ]
 
 /// SHA-256 of the endpoint URL, hex-encoded. We hash rather than store
@@ -3068,7 +3068,7 @@ let createCreateSessionHandler
           | Ok targets ->
             // Immediate feedback: show the in-flight state before the
             // 15-30s warmup resolves — mirrors the teardown path's
-            // immediate "⏳ Stopping…" card swap (roast UX-8: session
+            // immediate "◐ Stopping…" card swap (roast UX-8: session
             // create showed nothing until warmup finished).
             let! preCards = buildSessionCards q infra
             do! ssePatchNode ctx (renderSessionsForSession "" preCards true)
@@ -3539,7 +3539,7 @@ let createEndpoints
     yield get "/favicon.ico" (fun ctx -> task {
       ctx.Response.ContentType <- "image/svg+xml"
       ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "public, max-age=86400"
-      do! ctx.Response.WriteAsync("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🧙</text></svg>""")
+      do! ctx.Response.WriteAsync("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".85em" font-size="90" font-family="sans-serif" fill="#7aa2f7">λ</text></svg>""")
     })
     // Static CSS — served from embedded resource. No immutable caching so
     // dashboard.css changes propagate without requiring a browser hard-refresh.

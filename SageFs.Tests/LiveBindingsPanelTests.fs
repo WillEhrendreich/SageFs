@@ -47,6 +47,20 @@ let private openPane (v: PaneView) : XmlNode =
 
 let private panel (v: PaneView) = openPane v |> decoded
 
+/// The same pane drawn with the Display panel, which holds the mode buttons (`LiveBindingsDock.modeRows`).
+let private panelWithDisplay (v: PaneView) : string =
+  let recommended = SageFs.View.recommended SageFs.ViewWorkflow.Repl
+  let controls = LiveBindingsViewPanel.render "abcd1234" SageFs.ViewWorkflow.Repl { View = recommended; Sources = Map.empty }
+  LiveBindingsDock.renderPaneWith
+    recommended
+    (Some controls)
+    SageFs.Features.Tweak.BindingTweak.TweakView.none
+    "abcd1234"
+    (LiveBindingsDock.WalkedBindings v)
+    (DockPanes.SessionHasBindings v.Snapshot.Bindings.Length)
+    LiveBindingsDock.ShownAlways
+  |> decoded
+
 /// A class binding with one held getter at the end of `path`: a bare label is a getter of the binding, more labels are
 /// nested records on the way down to it.
 let private heldAt (binding: string) (path: string list) : LiveBindingValue =
@@ -106,7 +120,7 @@ let heldRowTests =
       html |> Expect.stringContains "collapsed reason, in words" (heldSaying NotEvaluatedReason.ClassesCollapsed)
       html.Contains "live-values/evaluate" |> Expect.isFalse "no click was offered"
 
-    testCase "WHY — a row that is not read names the mode that would read it, and the mode buttons it names are in the pane's header" <| fun _ ->
+    testCase "WHY — a row that is not read names the mode that would read it, and the mode buttons it names are in the Display panel" <| fun _ ->
       heldNext NotEvaluatedReason.ClassesCollapsed |> Expect.equal "a closed class is opened by the mode that runs only what does nothing" (HeldNext.SwitchMode WalkSafe)
       heldNext NotEvaluatedReason.SequenceNotEnumerated |> Expect.equal "a sequence is read by the mode that runs everything" (HeldNext.SwitchMode WalkEverything)
       for choice in [ WalkSafe; WalkEverything ] do
@@ -114,7 +128,9 @@ let heldRowTests =
         | WalkSafe -> heldSaying NotEvaluatedReason.ClassesCollapsed |> Expect.stringContains "the sentence names the mode" (ValueWalk.name choice)
         | WalkEverything -> heldSaying NotEvaluatedReason.SequenceNotEnumerated |> Expect.stringContains "the sentence names the mode" (ValueWalk.name choice)
         | WalkOff -> ()
-      let html = panel (view WalkOff NoClickYet [ box [ held "Inner" NotEvaluatedReason.ClassesCollapsed ] ])
+      let walked = view WalkOff NoClickYet [ box [ held "Inner" NotEvaluatedReason.ClassesCollapsed ] ]
+      (panel walked).Contains "aria-label=\"Walk live values in" |> Expect.isFalse "the pane's own header holds no mode button"
+      let html = panelWithDisplay walked
       for choice in ValueWalk.all do
         html |> Expect.stringContains (sprintf "the %s button exists" (ValueWalk.name choice)) (sprintf "aria-label=\"Walk live values in %s mode" (ValueWalk.name choice))
 
@@ -173,8 +189,8 @@ let heldRowTests =
 [<Tests>]
 let headerTests =
   testList "the pane header" [
-    testCase "it shows the session's real mode as the pressed one, and every choice posts through Datastar with its tooltip" <| fun _ ->
-      let html = panel (view WalkEverything NoClickYet [ box [] ])
+    testCase "the Display panel shows the session's real mode as the pressed one, and every choice posts through Datastar with its tooltip" <| fun _ ->
+      let html = panelWithDisplay (view WalkEverything NoClickYet [ box [] ])
       for choice in ValueWalk.all do
         html |> Expect.stringContains "stages the mode" (sprintf "$mode = '%s';" (ValueWalk.name choice))
         html |> Expect.stringContains "says what it does" (ValueWalk.consequence choice)
@@ -184,9 +200,11 @@ let headerTests =
 
     testCase "exactly one choice is pressed, and it is the current one" <| fun _ ->
       for choice in ValueWalk.all do
-        let html = panel (view choice NoClickYet [ box [] ])
-        (html.Split([| "aria-pressed=\"true\"" |], StringSplitOptions.None).Length - 1)
-        |> Expect.equal (sprintf "only %s is pressed" (ValueWalk.name choice)) 1
+        // The Display panel also presses one button per view setting, so only the mode buttons are counted.
+        let html = panelWithDisplay (view choice NoClickYet [ box [] ])
+        let pressedModes = Text.RegularExpressions.Regex.Matches(html, "<button[^>]*live-mode-btn[^>]*aria-pressed=\"true\"[^>]*>")
+        pressedModes.Count |> Expect.equal (sprintf "only %s is pressed" (ValueWalk.name choice)) 1
+        pressedModes[0].Value |> Expect.stringContains "and it is the current one" (ValueWalk.consequence choice)
 
     testCase "it counts the rows that are listed and not read" <| fun _ ->
       let html =

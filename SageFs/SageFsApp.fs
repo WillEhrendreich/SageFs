@@ -19,7 +19,7 @@ module TestOutputFormatter =
     match r.Result with
     | TestResult.Passed duration ->
       { Kind = OutputKind.Info
-        Text = sprintf "  ✅ %s (%s)" r.TestName (formatDuration duration)
+        Text = sprintf "  %s %s (%s)" (Glyphs.text Glyph.Pass) r.TestName (formatDuration duration)
         Timestamp = now; SessionId = "" }
     | TestResult.Failed (failure, duration) ->
       let failMsg =
@@ -28,11 +28,11 @@ module TestOutputFormatter =
         | TestFailure.ExceptionThrown (msg, _) -> msg
         | TestFailure.TimedOut after -> sprintf "Timed out after %s" (formatDuration after)
       { Kind = OutputKind.Failure
-        Text = sprintf "  ❌ %s (%s)\n     %s" r.TestName (formatDuration duration) failMsg
+        Text = sprintf "  %s %s (%s)\n     %s" (Glyphs.text Glyph.Fail) r.TestName (formatDuration duration) failMsg
         Timestamp = now; SessionId = "" }
     | TestResult.Skipped reason ->
       { Kind = OutputKind.System
-        Text = sprintf "  ⏭️ %s — %s" r.TestName reason
+        Text = sprintf "  %s %s — %s" (Glyphs.text Glyph.Skip) r.TestName reason
         Timestamp = now; SessionId = "" }
     | TestResult.NotRun ->
       { Kind = OutputKind.System
@@ -40,7 +40,7 @@ module TestOutputFormatter =
         Timestamp = now; SessionId = "" }
     | TestResult.NoResult reason ->
       { Kind = OutputKind.System
-        Text = sprintf "  ⬜ %s — never reported: %s" r.TestName (NoResultReason.describe reason)
+        Text = sprintf "  %s %s — never reported: %s" (Glyphs.text Glyph.NotRun) r.TestName (NoResultReason.describe reason)
         Timestamp = now; SessionId = "" }
 
   let private resultLines (r: TestRunResult) : OutputLine list =
@@ -147,8 +147,8 @@ module PendingRunSummary =
       | _ -> OutputKind.Failure
     { Kind = kind
       Text =
-        sprintf "🧪 Test run complete: %d passed, %d failed, %d skipped%s (%s)"
-          agg.Passed agg.Failed agg.Skipped incomplete
+        sprintf "%s Test run complete: %d passed, %d failed, %d skipped%s (%s)"
+          (Glyphs.text Glyph.Test) agg.Passed agg.Failed agg.Skipped incomplete
           (TestOutputFormatter.formatDuration (TimeSpan.FromMilliseconds agg.TotalDurationMs))
       Timestamp = DateTime.UtcNow; SessionId = "" }
 
@@ -1422,7 +1422,7 @@ module SageFsUpdate =
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
       | TuiEvent.WarmupProgress(sid, step, total, msg) ->
-        let line = { Kind = OutputKind.Info; Text = sprintf "⏳ [%d/%d] %s" step total msg; Timestamp = DateTime.UtcNow; SessionId = SessionId.value sid }
+        let line = { Kind = OutputKind.Info; Text = sprintf "[%d/%d] %s" step total msg; Timestamp = DateTime.UtcNow; SessionId = SessionId.value sid }
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
       | TuiEvent.WarmupCompleted (_, failures) ->
@@ -1795,7 +1795,7 @@ module SageFsUpdate =
           let lt' = { lt with TestState = { lt.TestState with LastDecision = Some decision } }
           let quarantineLine : OutputLine =
             { Kind = OutputKind.System
-              Text = sprintf "🔒 Quarantined (flaky), skipped: %s" (String.concat ", " quarantinedNames)
+              Text = sprintf "%s Quarantined (flaky), skipped: %s" (Glyphs.text Glyph.Warn) (String.concat ", " quarantinedNames)
               Timestamp = DateTime.UtcNow
               SessionId = targetSession |> Option.defaultValue "" }
           { model with
@@ -2421,13 +2421,13 @@ module SageFsRender =
         |> fun s ->
           let creatingLine =
             match model.CreatingSession with
-            | true -> "\n⏳ Creating session..."
+            | true -> "\n" + Glyphs.lead Glyph.Busy + "Creating session..."
             | false -> ""
           match s.Length > 0 with
           | true -> sprintf "%s%s\n↑↓ nav  ↵ switch  Del stop  ^N new" s creatingLine
           | false ->
             match model.CreatingSession with
-            | true -> "⏳ Creating session..."
+            | true -> Glyphs.lead Glyph.Busy + "Creating session..."
             | false -> "No sessions yet.\nCtrl+N new · Ctrl+Alt+A auto-open off"
       Affordances = []
       Cursor = None

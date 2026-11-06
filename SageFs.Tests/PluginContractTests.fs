@@ -140,7 +140,7 @@ let fileStatusRenderTests =
       ]
       let ctx = mkTestSessionCtx "s1" ["Test"] (mkTestWarmup 5 []) files
       SessionContextTui.renderContent ctx
-      |> Expect.stringContains "eye for watched" "👁"
+      |> Expect.stringContains "eye for watched" (SageFs.Glyphs.text SageFs.Glyphs.Glyph.Watched)
 
     testCase "unwatched file has no eye icon on its line" <| fun _ ->
       let files = [
@@ -149,7 +149,7 @@ let fileStatusRenderTests =
       let ctx = mkTestSessionCtx "s1" ["Test"] (mkTestWarmup 5 []) files
       let rendered = SessionContextTui.renderContent ctx
       let fileLine = rendered.Split('\n') |> Array.find (fun l -> l.Contains("uw.fs"))
-      fileLine.Contains("👁")
+      fileLine.Contains(SageFs.Glyphs.text SageFs.Glyphs.Glyph.Watched)
       |> Expect.isFalse "no eye for unwatched"
 
     testCase "no files section when no file statuses" <| fun _ ->

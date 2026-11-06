@@ -76,13 +76,14 @@ let pageTests =
     testTask "WHY — a Ready session whose rebuild is in progress reads the same on the header badge, the daemon bar and the card, and none of them is a plain green Ready" {
       let! html = pageFor rebuildingSession 12 12
       let badge = between html "id=\"session-status\"" "</span>"
-      badge |> Expect.stringContains "the header badge says it in words" ">Ready, rebuilding"
+      badge |> Expect.stringContains "the header badge keeps the engine's word" ">Ready"
+      html |> Expect.stringContains "and the note beside it says what is under way" (Glyphs.lead Glyph.Warn + "rebuilding")
       badge |> Expect.stringContains "in the caution colour" "status status-notice"
       badge.Contains "status-ready" |> Expect.isFalse "and not in green"
       let bar = between html "id=\"daemon-health\"" "</div>"
       bar |> Expect.stringContains "the daemon bar names the session and says it in the same words" "Session Fixture.fsproj: Ready, rebuilding"
       bar |> Expect.stringContains "and says whose health the green is" "Daemon healthy"
-      bar.Contains "✅ Fixture.fsproj" |> Expect.isFalse "the bar's check mark is gone from the session"
+      bar.Contains (Glyphs.lead Glyph.Pass + "Fixture.fsproj") |> Expect.isFalse "the bar's check mark is gone from the session"
       let card = between html "data-testid=\"session-card-source\"" "session-card-actions"
       card |> Expect.stringContains "the card says the same fact" "Rebuilding"
       card |> Expect.stringContains "and carries the same readiness words for a journey to read" "data-readiness=\"Ready, rebuilding\""
@@ -100,7 +101,7 @@ let pageTests =
 
     testTask "WHY — the header counts the evals the card counts, because the worker's tally said 13 while the card said 12 for the same session" {
       let! html = pageFor currentSession 13 12
-      html |> Expect.stringContains "the card" "evals: 12"
+      html |> Expect.stringContains "the card" "12 evals</span>"
       html |> Expect.stringContains "the header" "12 evals"
       html.Contains "13 evals" |> Expect.isFalse "the worker's own tally is not printed beside the card's"
     }
@@ -109,7 +110,7 @@ let pageTests =
       for worker in [ 0; 1; 12; 13; 40 ] do
         for finished in [ 1; 12; 13; 40 ] do
           let! html = pageFor currentSession worker finished
-          html |> Expect.stringContains (sprintf "worker %d, daemon %d: the card" worker finished) (sprintf "evals: %d" finished)
+          html |> Expect.stringContains (sprintf "worker %d, daemon %d: the card" worker finished) (sprintf "%d evals</span>" finished)
           html |> Expect.stringContains (sprintf "worker %d, daemon %d: the header" worker finished) (sprintf "%d evals" finished)
     }
   ]
@@ -118,9 +119,9 @@ let pageTests =
 let statuslineTests =
   testList "the statusline repeats a Ready that is not plain, and only that" [
 
-    testCase "WHY — a Ready session running older code says so in the statusline, in the badge's words and tone" <| fun _ ->
+    testCase "WHY — a Ready session with changes not live says so in the statusline, in the badge's words and tone" <| fun _ ->
       let html = renderStatuslineLeft Readiness.ReadyOlderCode "/w" |> renderNode
-      html |> Expect.stringContains "the words" ">Ready, running older code<"
+      html |> Expect.stringContains "the words" ">Ready, changes not live<"
       html |> Expect.stringContains "the caution tone" "status-notice"
       html |> Expect.stringContains "the working directory is still there" "<div id=\"statusline-file\" class=\"statusline-file\">/w</div>"
 
@@ -129,11 +130,16 @@ let statuslineTests =
         renderStatuslineLeft readiness "/w" |> renderNode
         |> fun html -> html.Contains "statusline-readiness" |> Expect.isFalse (sprintf "%A adds no chip" readiness)
 
-    testCase "WHY — the statusline and the badge use the same words for every readiness" <| fun _ ->
+    testCase "WHY — the statusline says the whole readiness, and the top bar says the same words in two cells: the badge keeps the engine's word and the note beside it says the rest" <| fun _ ->
       for readiness in [ Readiness.ReadyOlderCode; Readiness.ReadyRebuilding; Readiness.ReadyReplBehindApp; Readiness.ReadyUnchecked ] do
         let view = SessionInView.InPlay(SessionState.Ready, SessionDisplayStatus.Running, readiness)
         renderStatuslineLeft readiness "/w" |> renderNode
-        |> Expect.stringContains (sprintf "%A" readiness) (sprintf ">%s<" (SessionInView.badgeLabel view))
+        |> Expect.stringContains (sprintf "%A" readiness) (sprintf ">%s<" (Readiness.label readiness))
+        let words =
+          match SessionInView.liveNote view with
+          | Some (_, phrase) -> phrase
+          | None -> ""
+        sprintf "%s, %s" (SessionInView.badgeLabel view) words |> Expect.equal (sprintf "badge and note join back into the statusline's words for %A" readiness) (Readiness.label readiness)
   ]
 
 [<Tests>]
@@ -147,18 +153,18 @@ let daemonBarTests =
 
     testCase "WHY — a session the caller read a build for reads as its readiness, with the caution glyph, and not as a check mark" <| fun _ ->
       let html = barFor (Map.ofList [ "0a2b3c4d", Readiness.ReadyOlderCode ]) [ summary ]
-      html |> Expect.stringContains "words and glyph" "⚠️ Session Fixture.fsproj: Ready, running older code"
+      html |> Expect.stringContains "words and glyph" (Glyphs.lead Glyph.Warn + "Session Fixture.fsproj: Ready, changes not live")
 
     testCase "WHY — a session nobody read a build for reads as the snapshot says, which is what the bar always did" <| fun _ ->
-      barFor Map.empty [ summary ] |> Expect.stringContains "the snapshot's words, scoped to the session" "✅ Session Fixture.fsproj: Ready"
+      barFor Map.empty [ summary ] |> Expect.stringContains "the snapshot's words, scoped to the session" (Glyphs.lead Glyph.Pass + "Session Fixture.fsproj: Ready")
 
     testCase "WHY — with several sessions, one that is not plainly ready names itself in words, and 'all ready' is not claimed" <| fun _ ->
       let others = [ for i in 1 .. 3 -> { summary with SessionId = sprintf "0a2b3c4%d" i; ProjectName = sprintf "P%d.fsproj" i } ]
       let html = barFor (Map.ofList [ "0a2b3c4d", Readiness.ReadyOlderCode ]) (summary :: others)
-      html.Contains "all ready" |> Expect.isFalse "four sessions, one running older code"
+      html.Contains "all ready" |> Expect.isFalse "four sessions, one with changes not live"
       html |> Expect.stringContains "the session is named" "Fixture.fsproj"
       let two = barFor (Map.ofList [ "0a2b3c4d", Readiness.ReadyOlderCode ]) [ summary; others.Head ]
-      two |> Expect.stringContains "a few sessions say the words beside the glyph" "Fixture.fsproj (Ready, running older code)"
+      two |> Expect.stringContains "a few sessions say the words beside the glyph" "Fixture.fsproj (Ready, changes not live)"
   ]
 
 [<Tests>]

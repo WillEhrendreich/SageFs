@@ -25,6 +25,59 @@ open SageFs.Features.Tweak.NudgeIo
 open SageFs.Features.Tweak.TweakAddress
 open SageFs.Features.Tweak.TweakLog
 
+/// Where a project keeps the range and step a person chose for each number, read the same way by every door that writes one: the
+/// live-bindings slider, `nudge_value`, and the eval write-back. One reader and one check, so no door is a way around a range.
+module TweakLimitsFile =
+  /// What reading the choices found. A file that cannot be read is never taken for "nothing chosen": that would let a number through
+  /// that the person had ruled out.
+  [<RequireQualifiedAccess>]
+  type Read =
+    | Chosen of LimitsBook
+    | Unreadable of reason: string
+
+  let pathOf (workingDirectory: string) : string = Path.Combine(workingDirectory, ".SageFs", "tweak-limits.json")
+
+  let read (files: FileSteps) (workingDirectory: string) : Read =
+    let path = pathOf workingDirectory
+    match files.KindOf path with
+    | FileKind.Missing -> Read.Chosen LimitsBook.empty
+    | FileKind.RegularFile
+    | FileKind.SymbolicLink
+    | FileKind.NotAFile ->
+      match files.ReadBytes path with
+      | Error fault -> Read.Unreadable(sprintf "%s could not be read (%s), so numbers are not written until it can." path fault.Reason)
+      | Ok bytes ->
+        match LimitsBook.parse (Text.Encoding.UTF8.GetString bytes) with
+        | Ok book -> Read.Chosen book
+        | Error fault -> Read.Unreadable(sprintf "%s. Numbers are not written until it reads." (LimitsFileFault.describe fault))
+
+  /// Replace the file with `book`: the folder first, then the file whole or not at all.
+  let save (files: FileSteps) (workingDirectory: string) (book: LimitsBook) : Result<unit, FileFault> =
+    let path = pathOf workingDirectory
+    match files.MakeDirectory(Path.GetDirectoryName path) with
+    | Error fault -> Error fault
+    | Ok() -> AtomicWrite.write files path (Text.Encoding.UTF8.GetBytes(LimitsBook.text book))
+
+  /// Why a write was held back: the number is outside its row's range, or the file of choices cannot be read.
+  [<RequireQualifiedAccess>]
+  type WriteRefusal =
+    | OutsideRange of RangeRefusal
+    | Unreadable of reason: string
+
+  let describe (refusal: WriteRefusal) : string =
+    match refusal with
+    | WriteRefusal.OutsideRange outside -> RangeRefusal.describe outside
+    | WriteRefusal.Unreadable reason -> reason
+
+  /// Whether writing `written` at `address` keeps a number inside its chosen range. While the file cannot be read, no number is written.
+  let checkWrite (limits: Read) (address: TweakAddress) (written: string) : Result<unit, WriteRefusal> =
+    match limits with
+    | Read.Chosen book -> LimitsBook.checkWrite book address written |> Result.mapError WriteRefusal.OutsideRange
+    | Read.Unreadable reason ->
+      match LimitsBook.numberOf written with
+      | Some _ -> Error(WriteRefusal.Unreadable reason)
+      | None -> Ok()
+
 module EvalWriteBackWire =
 
   /// Where the daemon keeps nudge journals — the same journals `undo` reads, so a write-back is
@@ -122,6 +175,7 @@ module EvalWriteBackWire =
     (journal: string)
     (seenHash: string)
     (splice: Splice)
+    (limits: TweakLimitsFile.Read)
     : Result<WriteBack, NudgeRefusal> =
     sweepStaleTemp ports.Files path
     sweepStaleTemp ports.Files journal
@@ -160,6 +214,11 @@ module EvalWriteBackWire =
                     match resolve newSource address with
                     | Error e -> Error(NudgeRefusal.AddressGone e)
                     | Ok after ->
+                      // A range the person chose holds for an eval's write-back too: the eval ran, but a number outside its row's range is
+                      // not saved into the file.
+                      match TweakLimitsFile.checkWrite limits address after.Text with
+                      | Error refusal -> Ok(WriteBack.NotPersisted(TweakLimitsFile.describe refusal))
+                      | Ok() ->
                       let planned : PlannedWrite =
                         { NewSource = newSource
                           Event = TweakLogEvent.TweakSaved(address, before.Text, after.Text, after.Hash, contentHash image.Text)
@@ -219,7 +278,7 @@ module EvalWriteBackWire =
                   match decide code (Some file) (Some blockLine) image.Text with
                   | Error verdict -> return verdict
                   | Ok splice ->
-                    match! locks.WithLock(path, Timeouts.nudgeFileLock, fun () -> writeLocked ports path journal seenHash splice) with
+                    match! locks.WithLock(path, Timeouts.nudgeFileLock, fun () -> writeLocked ports path journal seenHash splice (TweakLimitsFile.read ports.Files owned.WorkingDirectory)) with
                     | Error refusal -> return WriteBack.NotPersisted(refusalText refusal)
                     | Ok verdict -> return verdict
       with ex ->

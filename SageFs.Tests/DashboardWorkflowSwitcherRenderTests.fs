@@ -30,7 +30,7 @@ let switcherTests =
       let selectedBlock =
         System.Text.RegularExpressions.Regex.Match(out, "<option[^>]*selected[^>]*>([^<]*)</option>")
       selectedBlock.Success |> Expect.isTrue "exactly one selected option should exist"
-      selectedBlock.Groups.[1].Value |> Expect.equal "the selected option's text is the current label" "Live Testing"
+      selectedBlock.Groups.[1].Value |> Expect.equal "the selected option's text is the current label, after 'Mode: '" "Mode: Live Testing"
 
     testCase "WHY — the control posts to /dashboard/switch-workflow with the picked value on change, not the old read-only badge's static text" <| fun _ ->
       let out = renderWorkflowSwitcher "REPL" "0a0b0c0d" |> html

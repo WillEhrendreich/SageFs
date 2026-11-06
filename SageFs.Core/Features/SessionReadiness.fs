@@ -68,7 +68,7 @@ module Readiness =
     match readiness with
     | Readiness.InState _
     | Readiness.ReadyCurrent -> None
-    | Readiness.ReadyOlderCode -> Some "running older code"
+    | Readiness.ReadyOlderCode -> Some "changes not live"
     | Readiness.ReadyRebuilding -> Some "rebuilding"
     | Readiness.ReadyReplBehindApp -> Some "REPL behind the app"
     | Readiness.ReadyUnchecked -> Some "build not checked"
@@ -82,7 +82,7 @@ module Readiness =
     | Readiness.InState state, None -> SessionState.label state
     | _, None -> "Ready"
 
-  /// The qualification as a short phrase on its own ("Running older code"), for a place with no room for "Ready, " in front of
+  /// The qualification as a short phrase on its own ("Changes not live"), for a place with no room for "Ready, " in front of
   /// it: the note in the live bindings pane and the marker on the sessions strip.
   let brief (readiness: Readiness) : string option =
     qualification readiness
@@ -136,4 +136,4 @@ module Remedy =
   let paneWords (remedy: Remedy) : string =
     match remedy with
     | Remedy.NothingToDo -> ""
-    | Remedy.RebuildAndReload -> "These values come from older code."
+    | Remedy.RebuildAndReload -> "These values are not live: the files have changes this session has not run."

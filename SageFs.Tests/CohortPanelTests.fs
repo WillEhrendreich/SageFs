@@ -77,12 +77,12 @@ let cohortPanelTests =
 
     testCase "WHY — an empty cohort renders a tasteful empty state, never a blank or broken panel" <| fun _ ->
       let html = renderCohortPanel emptyFrame |> render
-      html |> Expect.stringContains "shows the panel heading with zero members" "Cohort — 0 members"
+      html |> Expect.stringContains "shows the panel heading with zero members" "Agent team — 0 members"
       html |> Expect.stringContains "explains how to join, instead of rendering nothing" "join_cohort"
 
     testCase "WHY — a member who LEFT is not counted as a member, so the panel can go away" <| fun _ ->
       // `frame.MemberIds` deliberately keeps a departed member (a claim they held must stay
-      // resolvable). The heading counted THAT array, so it said "Cohort — 1 member" after the
+      // resolvable). The heading counted THAT array, so it said "Agent team — 1 member" after the
       // only member had left, contradicted the VACANT conductor line beside it, and the panel
       // could never disappear — which read as "the dashboard is not updating".
       let m = MemberId.Minted "agent-1"
@@ -91,7 +91,7 @@ let cohortPanelTests =
           [ CohortCommand.Join(m, JoinableRole.Implementer, None, machine)
             CohortCommand.Depart(m, machine) ]
       let html = renderCohortPanel frame |> render
-      html |> Expect.stringContains "the heading counts only PRESENT members" "Cohort — 0 members"
+      html |> Expect.stringContains "the heading counts only PRESENT members" "Agent team — 0 members"
       html |> Expect.stringContains "so the panel falls back to its empty state" "join_cohort"
 
     testCase "WHY — a claim whose holder DEPARTED renders as an orphan, and says so" <| fun _ ->
@@ -146,7 +146,7 @@ let cohortPanelTests =
     testCase "WHY — a joined member renders their id and role" <| fun _ ->
       let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine) ]
       let html = renderCohortPanel frame |> render
-      html |> Expect.stringContains "shows the singular member count in the heading" "Cohort — 1 member"
+      html |> Expect.stringContains "shows the singular member count in the heading" "Agent team — 1 member"
       html |> Expect.stringContains "shows the member's display id" (MemberId.display alice)
       html |> Expect.stringContains "shows the member's role" "Implementer"
 
@@ -154,7 +154,7 @@ let cohortPanelTests =
       let frame =
         frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine); CohortCommand.Join(bob, JoinableRole.Verifier, None, machine) ]
       let html = renderCohortPanel frame |> render
-      html |> Expect.stringContains "pluralizes members in the heading" "Cohort — 2 members"
+      html |> Expect.stringContains "pluralizes members in the heading" "Agent team — 2 members"
       html |> Expect.stringContains "shows the second member's role" "Verifier"
 
     testCase "WHY — a held claim renders its scope and the holder's display id, not the raw MemberId case" <| fun _ ->
@@ -244,7 +244,7 @@ let cohortPanelTests =
       let htmlX = renderCohortPanel frameX |> render
       htmlX |> Expect.stringContains "the first scope's member is present in its own frame" (MemberId.display alice)
       (htmlX.Contains(MemberId.display bob)) |> Expect.isFalse "the other scope's member is NOT in this frame"
-      htmlX |> Expect.stringContains "and it is genuinely that scope's cohort, not an empty one" "Cohort — 1 member"
+      htmlX |> Expect.stringContains "and it is genuinely that scope's cohort, not an empty one" "Agent team — 1 member"
       // Symmetrically: bob's cohort holds bob and has never heard of alice.
       let htmlY = renderCohortPanel frameY |> render
       htmlY |> Expect.stringContains "the second scope's member is present in its own frame" (MemberId.display bob)

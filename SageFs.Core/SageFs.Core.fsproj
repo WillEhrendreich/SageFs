@@ -43,6 +43,8 @@
         <Compile Include="ModelSnapshot.fs" />
         <Compile Include="TimeTravel.fs" />
         <Compile Include="Utils.fs" />
+        <!-- Before everything that words a state for a person: the dashboard and the session output draw their icons from it. -->
+        <Compile Include="Glyphs.fs" />
         <Compile Include="WorkerLogFile.fs" />
         <Compile Include="FsiNaming.fs" />
         <Compile Include="NativeResolution.fs" />
@@ -535,6 +537,8 @@
         <Compile Include="Features\LiveBindingsPane.fs" />
         <!-- What a live-bindings row knows about the file it may be written back to: the persistence state, the knob's step,
              the row's own undo trail. Pure; the file reading and the writes are the daemon's (LiveBindingsTweakService). -->
+        <!-- What a person chose for one number: its range and its step, kept in a file beside the project. Pure. -->
+        <Compile Include="Features\Tweak\NumberLimits.fs" />
         <Compile Include="Features\Tweak\BindingTweak.fs" />
         <!-- A part of a value built by a call, followed to the literal in the callee that gives it its value. Pure, over the index. -->
         <Compile Include="Features\Tweak\CallFollow.fs" />

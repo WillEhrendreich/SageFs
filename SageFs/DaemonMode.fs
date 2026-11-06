@@ -4612,7 +4612,9 @@ let run
       // The knob on a live binding's row: one write (or undo, or redo) through the nudge door, answered on the page's own stream.
       Dashboard.mapPostRaw "/dashboard/tweak" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.handler dashboardQueries dashboardInfra tweakService)
       // The row's "Apply to this session": evaluates the file's value in the session, writes nothing to the file.
-      Dashboard.mapPostRaw "/dashboard/tweak/apply" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.applyHandler dashboardInfra dashboardActions.EvalCode) ]
+      Dashboard.mapPostRaw "/dashboard/tweak/apply" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.applyHandler dashboardInfra dashboardActions.EvalCode)
+      // A number's chosen range and step, kept in .SageFs/tweak-limits.json beside the project.
+      Dashboard.mapPostRaw "/dashboard/tweak/limits" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.limitsHandler dashboardQueries dashboardInfra tweakService) ]
 
   let dashboardTask =
     startDashboardServer log bindHost daemonOrigins dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints @ liveBindingsEndpoints) cts.Token

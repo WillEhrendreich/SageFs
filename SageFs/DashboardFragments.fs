@@ -99,7 +99,7 @@ let renderKeyboardHelp () =
       Elem.td [ Attr.style "padding: 2px 8px;" ] [ textEnc desc ]
     ]
   Elem.div [ Attr.id DomIds.KeyboardHelp; Attr.style "margin-top: 0.5rem;" ] [
-    Elem.table [ Attr.style "font-size: 0.85rem; border-collapse: collapse;" ] [
+    Elem.table [ Attr.style "font-size: 0.857rem; border-collapse: collapse;" ] [
       shortcut EvaluatePopover.OpenKey "Open Evaluate (a quick check; Esc closes it)"
       shortcut "Alt+Enter" "Evaluate code"
       shortcut "Tab" "Insert 2 spaces (in editor)"
@@ -128,7 +128,7 @@ let renderCompletionDropdown (items: Features.AutoCompletion.CompletionItem list
             Attr.style (sprintf "padding:2px 6px;cursor:pointer;%s" (match i with | 0 -> "background:var(--bg-selection)" | _ -> ""))
             Ds.onEvent ("click", sprintf "window._insertComp('%s',%d)" (escJs item.ReplacementText) cursorPos) ]
           [ textEnc item.DisplayText
-            Elem.span [ Attr.style "opacity:0.5;font-size:0.8em;margin-left:4px;" ] [
+            Elem.span [ Attr.style "opacity:0.5;font-size:0.857em;margin-left:4px;" ] [
               textEnc (sprintf "(%s)" (Features.AutoCompletion.CompletionKind.label item.Kind))
             ]
           ]))
@@ -167,7 +167,7 @@ let renderThemePicker (selectedTheme: string) =
     (ThemePresets.all |> List.map (fun (name, _) ->
       Elem.option
         ([ Attr.value name ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
-        [ textEnc name ]))
+        [ textEnc ("Theme: " + name) ]))
 
 /// Render the workflow picker as a `<select id="workflow-switcher">` — the
 /// dashboard's answer to sagefs-ux-roast.md §4.1/§4.2/§11 Island B item 4:
@@ -187,7 +187,7 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
     Elem.select
       [ Attr.id DomIds.WorkflowSwitcher
         Attr.class' "badge workflow-select"
-        Attr.style "font-size:10px;margin-left:6px;"
+        Attr.style "font-size:0.857rem;margin-left:6px;"
         Attr.create "aria-label" (attrEnc (sprintf "Workflow: %s — choose a workflow to switch (restarts the session)" currentLabel))
         Ds.indicator Signals.WorkflowSwitchLoading
         Ds.attr' ("disabled", sprintf "$%s" Signals.WorkflowSwitchLoading)
@@ -207,7 +207,7 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
         let lbl = WorkflowTypes.SessionWorkflow.label w
         Elem.option
           ([ Attr.value (WorkflowSwitch.requestValue w) ] @ (match lbl = currentLabel with | true -> [ Attr.create "selected" "selected" ] | false -> []))
-          [ textEnc lbl ]))
+          [ textEnc ("Mode: " + lbl) ]))
 
 /// The transient control shown the instant a switch is requested — the
 /// teardown path's `renderTeardownCard` pattern (roast UX-8: "swap the card
@@ -217,10 +217,10 @@ let renderWorkflowSwitcherPending (targetLabel: string) : XmlNode =
   Elem.span
     [ Attr.id DomIds.WorkflowSwitcher
       Attr.class' "badge"
-      Attr.style "font-size:10px;margin-left:6px;"
+      Attr.style "font-size:0.857rem;margin-left:6px;"
       Attr.create "aria-label" (attrEnc (sprintf "Switching workflow to %s…" targetLabel))
       Attr.create "role" "status" ]
-    [ textEnc (sprintf "⏳ %s…" targetLabel) ]
+    [ textEnc (sprintf "%s %s…" (Glyphs.text Glyph.Busy) targetLabel) ]
 
 /// The directory-autocomplete datalist for the New Session working-dir input.
 /// Morphed by POST /dashboard/dir-suggest as the user types; the input binds to
@@ -236,7 +236,7 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
     | true ->
       [ Elem.br []
         Elem.span [ Attr.class' "meta warmup-progress" ] [
-          Text.raw "⏳ "
+          textEnc (Glyphs.lead Glyph.Busy)
           textEnc warmupProgress
         ] ]
     | false -> []
@@ -358,7 +358,7 @@ let renderAlarmBanner (alarms: SystemAlarmEntry list) =
     Elem.div [ Attr.id DomIds.AlarmBanner; Attr.class' "alarm-banner" ] [
       signalDetails Signals.AlarmBannerOpen [] [
         Elem.summary [ Attr.style disclosureSummaryStyle ] [
-          Elem.span [ Attr.class' "alarm-icon" ] [ Text.raw "🚨" ]
+          Elem.span [ Attr.class' "alarm-icon" ] [ textEnc (Glyphs.text Glyph.Alarm) ]
           Elem.span [ Attr.class' "alarm-title" ] [
             textEnc (sprintf " System Alarm (%d)" alarmCount)
           ]
@@ -520,8 +520,8 @@ let renderAutoOpenToggleButton (enabled: bool) (style: string) =
       Ds.indicator Signals.ConfigLoading
       Ds.attr' ("disabled", "$configLoading")
       Ds.onClick (Ds.post endpoint) ]
-    [ Elem.span [ Ds.show "$configLoading" ] [ Text.raw "⏳ " ]
-      Elem.span [ Ds.show "!$configLoading" ] [ Text.raw "⚙ " ]
+    [ Elem.span [ Ds.show "$configLoading" ] [ textEnc (Glyphs.lead Glyph.Busy) ]
+      Elem.span [ Ds.show "!$configLoading" ] [ textEnc (Glyphs.lead Glyph.Settings) ]
       label ]
 
 /// Render the one TRUE, user-meaningful usability verdict for the viewed
@@ -613,7 +613,11 @@ module ElapsedClock =
 /// glyph) instead of a plain "Ready" with a check mark beside a card that says the files are ahead of the build. A session
 /// not in it reads as the health snapshot says.
 let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHealthView) =
-  let emoji = Features.DaemonHealth.healthEmoji view.OverallHealth
+  let emoji =
+    match view.OverallHealth with
+    | Features.OverallHealth.Healthy -> Glyphs.text Glyph.Pass
+    | Features.OverallHealth.Degraded -> Glyphs.text Glyph.Warn
+    | Features.OverallHealth.Unhealthy -> Glyphs.text Glyph.Fail
   let label = Features.DaemonHealth.healthLabel view.OverallHealth
   // A session the caller has a readiness for reads as that readiness, whatever the health snapshot says about it: the snapshot
   // is built from the Elm model, which lags the registry for a moment at every transition, and the header badge and the card
@@ -622,7 +626,13 @@ let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHe
   let glyphOf (s: Features.SessionHealthSummary) =
     match readinessFor s with
     | Some readiness -> ToneStyle.readinessGlyph readiness
-    | None -> Features.DaemonHealth.sessionStatusEmoji s.Status
+    | None ->
+      match s.Status with
+      | Features.SessionHealthStatus.Ready -> Glyphs.text Glyph.Pass
+      | Features.SessionHealthStatus.Evaluating -> Glyphs.text Glyph.Busy
+      | Features.SessionHealthStatus.WarmingUp -> Glyphs.text Glyph.Busy
+      | Features.SessionHealthStatus.Faulted -> Glyphs.text Glyph.Fail
+      | Features.SessionHealthStatus.Stopped -> Glyphs.text Glyph.Stopped
   let wordOf (s: Features.SessionHealthSummary) =
     match readinessFor s with
     | Some readiness -> Readiness.label readiness
@@ -667,10 +677,10 @@ let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHe
     | _ ->
       let degraded = summaries |> List.filter (not << isNominal)
       match degraded with
-      | [] -> Some (sprintf "📦 %d sessions · all ready" summaries.Length)
+      | [] -> Some (sprintf "%s %d sessions · all ready" (Glyphs.text Glyph.Package) summaries.Length)
       | problems ->
         let names = problems |> List.map (fun s -> s.ProjectName) |> String.concat ", "
-        Some (sprintf "⚠️ %d sessions · %d degraded: %s" summaries.Length problems.Length names)
+        Some (sprintf "%s %d sessions · %d degraded: %s" (Glyphs.text Glyph.Warn) summaries.Length problems.Length names)
   Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] [
     Elem.span [ Attr.style "font-weight: bold;" ] [
       // Daemon facts only (version · uptime · memory), and the word says whose they are: "Daemon healthy" is the daemon's, and a
@@ -688,7 +698,7 @@ let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHe
       // the HTML, so a change of memory alone cannot make the page push.
       Elem.span
         [ Attr.create "aria-label" "Memory the SageFs daemon process itself is using (refreshes every few seconds)"
-          Ds.text (TelemetrySignals.textExpr TelemetrySignals.DaemonMemoryMb "") ]
+          Ds.text (TelemetrySignals.textExpr TelemetrySignals.DaemonMemoryMb "daemon memory ") ]
         []
     ]
     match sessionSummaryText view.SessionSummaries with
@@ -704,7 +714,7 @@ let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHe
         [ Attr.class' "daemon-anomaly"
           Attr.style "margin-left: 0.5rem;"
           Attr.create "aria-label" "A signal the daemon tracks about itself has moved away from its own normal" ]
-        [ textEnc (sprintf "⚠ %s" anomaly) ]
+        [ textEnc (sprintf "%s %s" (Glyphs.text Glyph.Warn) anomaly) ]
     // A component the daemon depends on has failed (a file watcher that lost events under a root, say). Sessions can all be
     // Ready while this is true, so it is said here in words next to the label, and never left to a dot's colour.
     for failure in view.ComponentFailures do
@@ -713,7 +723,7 @@ let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHe
           Attr.style "margin-left: 0.5rem;"
           Attr.create "title" failure.Hint
           Attr.create "aria-label" "A component the daemon depends on has failed" ]
-        [ textEnc (sprintf "⚠ %s: %s" failure.Component failure.Reason) ]
+        [ textEnc (sprintf "%s %s: %s" (Glyphs.text Glyph.Warn) failure.Component failure.Reason) ]
     // Evidence captured (or not) for a worker_rss Broken verdict this run —
     // both incidents this exists for had nothing to look at afterward.
     match view.GcDumpNote with
@@ -723,7 +733,7 @@ let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHe
         [ Attr.class' "daemon-gcdump-note"
           Attr.style "margin-left: 0.5rem;"
           Attr.create "aria-label" "What happened when the daemon tried to capture a heap dump for its own worker_rss alarm" ]
-        [ textEnc (sprintf "🗎 gcdump: %s" note) ]
+        [ textEnc (sprintf "%s gcdump: %s" (Glyphs.text Glyph.File) note) ]
     // Test counts removed from health row — they live in the Live Testing panel.
     // When live testing is inactive, no stale counts bleed into the health bar.
   ]
@@ -751,7 +761,7 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
       signalDetails Signals.FailureNarrativesOpen [] [
         Elem.summary [ Attr.style disclosureSummaryStyle ] [
           Elem.span [ Attr.class' "failure-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
-            Text.raw "🔴 "
+            textEnc (Glyphs.lead Glyph.Fail)
             textEnc badgeText
           ]
         ]
@@ -762,7 +772,7 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
               if parts.Length > 1 then parts.[parts.Length - 1] else entry.TestName
             Elem.div [ Attr.class' "narrative-entry"; Attr.style "margin-top: 0.25rem;" ] [
               Elem.span [ Attr.class' "narrative-test-name"; Attr.style "font-weight: bold;" ] [
-                Text.raw "🔴 "
+                textEnc (Glyphs.lead Glyph.Fail)
                 textEnc shortName
               ]
               match entry.TimeSinceLabel with
@@ -782,7 +792,7 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
                 ]
               if entry.HasPropertyViolation then
                 Elem.span [ Attr.class' "meta narrative-property"; Attr.style "margin-left: 0.5rem;" ] [
-                  Text.raw "⚡ property violation"
+                  textEnc (Glyphs.lead Glyph.Warn + "property violation")
                 ]
             ]
         ]
@@ -790,7 +800,7 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
   ]
 
 /// Render eval stats: just the eval count by default, with all the perf detail
-/// (avg/min/max, sparkline, P50/P95) behind a 📊 toggle — perf numbers are noise
+/// (avg/min/max, sparkline, P50/P95) behind a ▥ toggle — perf numbers are noise
 /// unless you're chasing a slowdown, so they stay hidden until asked for.
 let renderEvalStats (stats: EvalStatsView) =
   Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "meta" ] [
@@ -799,7 +809,7 @@ let renderEvalStats (stats: EvalStatsView) =
       [ Attr.class' "perf-toggle-btn"
         Attr.create "aria-label""Show eval performance detail (avg/min/max, latency percentiles, eval-to-pixel)"
         Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.PerfStatsOpen Signals.PerfStatsOpen) ]
-      [ Text.raw "📊" ]
+      [ textEnc (Glyphs.text Glyph.Chart) ]
     Elem.span [ Attr.class' "eval-perf-detail meta"; Ds.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
       textEnc (sprintf " · avg %.0fms · min %.0fms · max %.0fms" stats.AvgMs stats.MinMs stats.MaxMs)
       match stats.Sparkline with
@@ -998,7 +1008,7 @@ let renderOutputForSession (sessionId: string) (evalsFinished: int) (lines: Outp
         Attr.create "role" "status"
         Attr.create "aria-label" "Evaluation in progress"
         Ds.show (sprintf "$%s" Signals.ActionLoading) ]
-      [ Text.raw "⏳ Evaluating…" ]
+      [ textEnc (Glyphs.lead Glyph.Busy + "Evaluating…") ]
     match lines.IsEmpty with
     | true ->
       Elem.span [ Attr.class' "meta" ] [ textEnc placeholder ]
@@ -1249,13 +1259,13 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
             Ds.onClick (Ds.post "/dashboard/session/create-temp")
             Ds.onEvent ("keydown", sprintf "if(event.key==='Enter'||event.key===' '){event.preventDefault();%s}" (Ds.post "/dashboard/session/create-temp")) ]
           [ Elem.h3 [] [
-              Elem.span [ Ds.show "$tempLoading" ] [ Text.raw "⏳ " ]
-              Elem.span [ Ds.show "!$tempLoading" ] [ Text.raw "⚡ " ]
+              Elem.span [ Ds.show "$tempLoading" ] [ textEnc (Glyphs.lead Glyph.Busy) ]
+              Elem.span [ Ds.show "!$tempLoading" ] [ textEnc (Glyphs.lead Glyph.Go) ]
               Text.raw "Quick Start" ]
             Elem.p [] [ Text.raw "Create a new session in a temporary directory. Good for quick experiments and throwaway work." ] ]
         // Option 2: Create in custom directory
         Elem.div [ Attr.class' "picker-card"; Attr.style "cursor: default;" ] [
-          Elem.h3 [] [ Text.raw "📁 Open Directory" ]
+          Elem.h3 [] [ textEnc (Glyphs.lead Glyph.Folder + "Open Directory") ]
           Elem.p [] [ Text.raw "Create a session in a specific directory with your projects." ]
           Elem.div [ Attr.class' "picker-form"; Attr.style "margin-top: 0.75rem;" ] [
             Elem.input
@@ -1266,18 +1276,18 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
             Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
               Elem.button
                 [ Attr.class' "eval-btn"
-                  Attr.style "flex: 1; font-size: 0.8rem;"
+                  Attr.style "flex: 1; font-size: 0.857rem;"
                   Attr.create "aria-label" "Discover — scan this directory for projects"
                   Attr.create "title" "Discover — scan this directory for projects"
                   Ds.indicator Signals.DiscoverLoading
                   Ds.attr' ("disabled", "$discoverLoading")
                   Ds.onClick (Ds.post "/dashboard/discover-projects") ]
-                [ Elem.span [ Ds.show "$discoverLoading" ] [ Text.raw "⏳ " ]
-                  Elem.span [ Ds.show "!$discoverLoading" ] [ Text.raw "🔍 " ]
+                [ Elem.span [ Ds.show "$discoverLoading" ] [ textEnc (Glyphs.lead Glyph.Busy) ]
+                  Elem.span [ Ds.show "!$discoverLoading" ] [ textEnc (Glyphs.lead Glyph.Search) ]
                   Text.raw "Discover" ]
               Elem.button
                 [ Attr.class' "eval-btn"
-                  Attr.style "flex: 1; font-size: 0.8rem;"
+                  Attr.style "flex: 1; font-size: 0.857rem;"
                   Attr.create "aria-label" "Create — start a new session in this directory"
                   // A disabled control that explains itself beats a dead one:
                   // clicking Create with a blank directory used to patch its
@@ -1290,8 +1300,8 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
                   Ds.indicator Signals.CreateLoading
                   Ds.attr' ("disabled", "$createLoading || !$newSessionDir.trim()")
                   Ds.onClick (Ds.post "/dashboard/session/create") ]
-                [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ " ]
-                  Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ " ]
+                [ Elem.span [ Ds.show "$createLoading" ] [ textEnc (Glyphs.lead Glyph.Busy) ]
+                  Elem.span [ Ds.show "!$createLoading" ] [ textEnc (Glyphs.lead Glyph.Add) ]
                   Text.raw "Create" ]
             ]
             Elem.div [ Attr.id DomIds.DiscoveredProjects ] []
@@ -1303,7 +1313,7 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
         let ordered = sortPreviousSessions sortOrder previous
         Elem.div [ Attr.class' "picker-previous" ] [
           Elem.h3 [ Attr.style "color: var(--fg-blue); margin-bottom: 0.5rem;" ] [
-            Text.raw "📋 Resume Previous"
+            textEnc (Glyphs.lead Glyph.List + "Resume Previous")
           ]
           Elem.p [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem;" ] [
             // Both halves of the old copy ("last 90 days", "configurable") were untrue:
@@ -1342,9 +1352,9 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
                   match s.WorkingDir.Length > 0 with
                   | true ->
                     Elem.div
-                      [ Attr.style "font-size: 0.75rem; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                      [ Attr.style "font-size: 0.857rem; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
                         Attr.create "aria-label"(attrEnc s.WorkingDir) ]
-                      [ Text.raw "📁 "; textEnc s.WorkingDir ]
+                      [ textEnc (Glyphs.lead Glyph.Folder); textEnc s.WorkingDir ]
                   | false -> ()
                   match s.Projects.IsEmpty with
                   | false ->
@@ -1357,14 +1367,14 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
                   | true -> ()
                   // Bookkeeping — still visible (log/API correlation), no
                   // longer the row's headline.
-                  Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 2px; font-size: 0.7rem;" ] [
+                  Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 2px; font-size: 0.857rem;" ] [
                     textEnc (sprintf "%s · " s.Id)
                     match Since.ofUtc s.LastSeen with
                     | Since.At lastSeenMs -> ElapsedClock.span (ElapsedClock.agoExpr lastSeenMs)
                     | Since.Unknown -> ()
                   ]
                 ]
-                Elem.span [ Attr.style "color: var(--fg-blue); font-size: 0.85rem;" ] [ Text.raw "▶" ]
+                Elem.span [ Attr.style "color: var(--fg-blue); font-size: 0.857rem;" ] [ Text.raw "▶" ]
               ])
         ]
       | true -> ()
@@ -1407,20 +1417,20 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
       [ Attr.class' "test-filter-btn"
         Ds.onEvent ("click", sprintf "$testFilter = '%s'" value)
         Ds.show (sprintf "$testFilter !== '%s'" value)
-        Attr.style (sprintf "background:transparent;border:1px solid %s;color:%s;padding:1px 5px;font-size:0.6rem;border-radius:0;cursor:pointer;margin-right:2px;" color color) ]
+        Attr.style (sprintf "background:transparent;border:1px solid %s;color:%s;padding:1px 5px;font-size:0.857rem;border-radius:0;cursor:pointer;margin-right:2px;" color color) ]
       [ textEnc (sprintf "%s %d" label count) ]
   let activeBtn (label: string) (value: string) (count: int) (color: string) =
     Elem.button
       [ Attr.class' "test-filter-btn test-filter-active"
         Ds.onEvent ("click", "$testFilter = 'all'")
         Ds.show (sprintf "$testFilter === '%s'" value)
-        Attr.style (sprintf "background:%s;color:#fff;padding:1px 5px;font-size:0.6rem;border-radius:0;cursor:pointer;margin-right:2px;border:1px solid %s;" color color) ]
+        Attr.style (sprintf "background:%s;color:#fff;padding:1px 5px;font-size:0.857rem;border-radius:0;cursor:pointer;margin-right:2px;border:1px solid %s;" color color) ]
       [ textEnc (sprintf "%s %d ✕" label count) ]
   Elem.div
     [ Attr.class' "test-filter-bar"
       Attr.style "display:flex;align-items:center;gap:2px;margin-bottom:4px;flex-wrap:wrap;" ]
     [ yield Elem.span
-        [ Attr.style "font-size:0.6rem;color:var(--fg-dim);margin-right:4px;" ]
+        [ Attr.style "font-size:0.857rem;color:var(--fg-dim);margin-right:4px;" ]
         [ Text.raw "Filter:" ]
       yield filterBtn "✓" "passed" passedCount "var(--fg-green,#27ae60)"
       yield activeBtn "✓" "passed" passedCount "var(--fg-green,#27ae60)"
@@ -1502,13 +1512,13 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
               Ds.show (sprintf "$testFilter === 'all' || $testFilter === '%s'" statusFilter) ]
             [ match showLabel with
               | true ->
-                Elem.div [ Attr.style "font-size:0.5rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ] [
+                Elem.div [ Attr.style "font-size:0.857rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ] [
                   textEnc c.Entry.DisplayName
                 ]
               | false -> ()
               match showDuration with
               | true ->
-                Elem.div [ Attr.style "font-size:0.45rem;color:rgba(255,255,255,0.7);padding:0 2px;line-height:1;" ] [
+                Elem.div [ Attr.style "font-size:0.857rem;color:rgba(255,255,255,0.7);padding:0 2px;line-height:1;" ] [
                   textEnc durationLabel
                 ]
               | false -> () ]) ]
@@ -1575,7 +1585,7 @@ let rec private renderCoverageLevels
     | None -> Elem.div [] []
     | Some pid ->
       Elem.div
-        [ Attr.style "cursor:pointer;font-size:0.65rem;color:var(--fg-blue);margin-bottom:2px;user-select:none;"
+        [ Attr.style "cursor:pointer;font-size:0.857rem;color:var(--fg-blue);margin-bottom:2px;user-select:none;"
           Ds.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral pid)) ]
         [ Text.raw "← back" ]
   let body =
@@ -1583,7 +1593,7 @@ let rec private renderCoverageLevels
     | [] ->
       // Leaf — nothing further to drill into; show its own detail.
       let pct = coveragePercent node.ProbeCount node.CoveredCount
-      Elem.div [ Attr.style "padding:4px 2px;font-size:0.7rem;" ] [
+      Elem.div [ Attr.style "padding:4px 2px;font-size:0.857rem;" ] [
         Elem.div
           [ Attr.style (sprintf "font-weight:bold;color:%s;" (coverageStatusColor node.Status)) ]
           [ textEnc node.Name ]
@@ -1614,7 +1624,7 @@ let rec private renderCoverageLevels
               [ match showLabel with
                 | true ->
                   Elem.div
-                    [ Attr.style "font-size:0.5rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ]
+                    [ Attr.style "font-size:0.857rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ]
                     [ textEnc child.Name ]
                 | false -> () ]) ]
   let levelDiv = Elem.div [ Ds.show showExpr ] [ backLink; body ]
@@ -1634,7 +1644,7 @@ let renderCoverageTreemap (sid: string) (root: Features.Treemap.CoverageTreemapN
     let drillSignal = signalIdent (sprintf "coverageDrill_%s" sid)
     let legend =
       Elem.div
-        [ Attr.style "display:flex;gap:6px;align-items:center;font-size:0.6rem;color:var(--fg-dim);margin-bottom:4px;flex-wrap:wrap;" ]
+        [ Attr.style "display:flex;gap:6px;align-items:center;font-size:0.857rem;color:var(--fg-dim);margin-bottom:4px;flex-wrap:wrap;" ]
         [ Elem.span [] [ Text.raw "Legend:" ]
           coverageLegendSwatch "pass" (coverageStatusColor Features.Treemap.CoverageStatus.Covered)
           coverageLegendSwatch "fail" (coverageStatusColor Features.Treemap.CoverageStatus.Failed)
@@ -1650,20 +1660,20 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
   match bindings.Length with
   | 0 -> Elem.div [] []
   | _ ->
-    Elem.div [ Attr.style "font-size: 0.72rem; max-height: 200px; overflow-y: auto;" ] [
+    Elem.div [ Attr.style "font-size: 0.857rem; max-height: 200px; overflow-y: auto;" ] [
       for b in bindings do
         Elem.div
           [ Attr.style "display:flex;align-items:baseline;gap:0.4em;padding:2px 0;border-bottom:1px solid var(--border-normal,#333);" ]
           [ Elem.code
-              [ Attr.style "color:var(--fg-cyan,#56b6c2);font-weight:bold;white-space:nowrap;font-size:0.7rem;" ]
+              [ Attr.style "color:var(--fg-cyan,#56b6c2);font-weight:bold;white-space:nowrap;font-size:0.857rem;" ]
               [ textEnc b.Name ]
             Elem.span
-              [ Attr.style "color:var(--fg-dim,#666);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" ]
+              [ Attr.style "color:var(--fg-dim,#666);font-size:0.857rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" ]
               [ textEnc (sprintf ": %s" b.TypeSig) ]
             match b.Value with
             | Some v ->
               Elem.span
-                [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
+                [ Attr.style "color:var(--fg-green,#98c379);font-size:0.857rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
                   Attr.create "aria-label"(attrEnc v) ]
                 [ textEnc (sprintf "= %s" v) ]
             | None -> ()
@@ -1671,11 +1681,11 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
             | 0 -> ()
             | n ->
               Elem.span
-                [ Attr.style "color:var(--fg-yellow,#e5c07b);font-size:0.6rem;white-space:nowrap;" ]
+                [ Attr.style "color:var(--fg-yellow,#e5c07b);font-size:0.857rem;white-space:nowrap;" ]
                 [ textEnc (sprintf "→%d" n) ] ]
     ]
 
-/// Render the "⏳ Stopping session id:[id]..." card that replaces a session's
+/// Render the "◐ Stopping session id:[id]..." card that replaces a session's
 /// display card while it unloads/disposes/purges itself.
 /// Shares the session-card-<id> DOM id with the card in renderSessions so
 /// Datastar morphs the card in place. The stop POST patches this card at once and the sidebar draws the
@@ -1690,7 +1700,7 @@ let renderTeardownCard (teardown: Teardown) (sessionId: WorkerProtocol.SessionId
       Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal);" ]
     [ Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc sid ]
       Elem.span [ Attr.class' "meta"; Attr.style "margin-left: 0.5rem;" ] [
-        textEnc (sprintf "⏳ %s session id:%s..." (Teardown.describe teardown) sid)
+        textEnc (sprintf "%s %s session id:%s..." (Glyphs.text Glyph.Busy) (Teardown.describe teardown) sid)
       ] ]
 
 /// Render sessions as an HTML fragment with action buttons.
@@ -1699,8 +1709,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
     match creating with
     | true ->
       Elem.div
-        [ Attr.style "padding: 8px; text-align: center; color: var(--fg-blue); font-size: 0.85rem;" ]
-        [ Text.raw "⏳ Creating session..." ]
+        [ Attr.style "padding: 8px; text-align: center; color: var(--fg-blue); font-size: 0.857rem;" ]
+        [ textEnc (Glyphs.lead Glyph.Busy + "Creating session...") ]
     | false -> ()
     match sessions.IsEmpty && not creating with
     | true ->
@@ -1769,8 +1779,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 | SessionHealth.Degraded _ | SessionHealth.Failed _ ->
                   let glyph, color =
                     match s.Health with
-                    | SessionHealth.Failed _ -> "❌", "var(--fg-red)"
-                    | _ -> "⚠", "var(--fg-yellow)"
+                    | SessionHealth.Failed _ -> Glyphs.text Glyph.Fail, "var(--fg-red)"
+                    | _ -> Glyphs.text Glyph.Warn, "var(--fg-yellow)"
                   Elem.span
                     [ Attr.class' "status badge session-health-badge"
                       Attr.style (sprintf "background: transparent; color: %s; border: 1px solid %s;" color color)
@@ -1795,16 +1805,26 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                         match badge.DetailLabel.Length > 0 with
                         | true -> sprintf "%s — files: %s" badge.Name badge.DetailLabel
                         | false -> badge.Name)) ]
-                    [ Text.raw "🤖 "
+                    [ textEnc (Glyphs.lead Glyph.Members)
                       textEnc (
+                        // The chip names a connection, so it says so: the raw ids ("cli-integrated", "browser:427f5871") were
+                        // unreadable to every reviewer who met them.
+                        let shown =
+                          match badge.Name with
+                          | "cli-integrated" -> "command line"
+                          // The browser's id means nothing to a person, and the chip's title still names the connection.
+                          | name when name.StartsWith "browser:" -> "browser"
+                          | name -> name
+                        // A chip drawn dim says why in its words: a connection that has not acted for a while is idle, not absent.
+                        let word = match badge.CssClass.Contains "badge-agent-stale" with | true -> "connected, idle" | false -> "connected"
                         match badge.IntentLabel.Length > 0 with
-                        | true -> sprintf "%s (%s)" badge.Name badge.IntentLabel
-                        | false -> badge.Name) ])
+                        | true -> sprintf "%s: %s (%s)" word shown badge.IntentLabel
+                        | false -> sprintf "%s: %s" word shown) ])
                 match s.Uptime with
                 | Since.At createdAtMs ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
-                    textEnc "⏱ "
-                    ElapsedClock.span (ElapsedClock.spanExpr createdAtMs)
+                    textEnc "started "
+                    ElapsedClock.span (ElapsedClock.agoExpr createdAtMs)
                   ]
                 | Since.Unknown -> ()
               ]
@@ -1814,8 +1834,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               | Some msg ->
                 Elem.div
                   [ Attr.class' "status-msg"
-                    Attr.style "font-size: 0.7rem; color: var(--fg-yellow); font-style: italic;" ]
-                  [ textEnc (sprintf "⏳ %s" msg) ]
+                    Attr.style "font-size: 0.857rem; color: var(--fg-yellow); font-style: italic;" ]
+                  [ textEnc (sprintf "%s %s" (Glyphs.text Glyph.Busy) msg) ]
               | None -> ()
               // The health badge above names WHAT (Degraded/Failed); this
               // line is WHY — "the reason is the whole point of the DU"
@@ -1829,7 +1849,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 let color = match s.Health with SessionHealth.Failed _ -> "var(--fg-red)" | _ -> "var(--fg-yellow)"
                 Elem.div
                   [ Attr.class' "session-health-reason"
-                    Attr.style (sprintf "font-size: 0.7rem; font-weight: bold; overflow-wrap: anywhere; margin-top: 2px; color: %s;" color) ]
+                    Attr.style (sprintf "font-size: 0.857rem; font-weight: bold; overflow-wrap: anywhere; margin-top: 2px; color: %s;" color) ]
                   [ textEnc line ]
               | None -> ()
               // The REPL runs the build from before a patch the app took, so a call to what changed runs the OLD code. Its own
@@ -1896,12 +1916,12 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               // Self-host staleness (F5b): this session adopted its own
               // SageFs.Core build and a newer one has since landed on disk —
               // its own line so it never cramps the badges, wrapping at any
-              // width. The text already carries the ⚠ prefix + remediation.
+              // width. The text already carries the ▲ prefix + remediation.
               match s.SelfHostStaleness with
               | Some line ->
                 Elem.div
                   [ Attr.class' "self-host-stale"
-                    Attr.style "font-size: 0.7rem; color: var(--fg-yellow); font-weight: bold; overflow-wrap: anywhere; margin-top: 2px;" ]
+                    Attr.style "font-size: 0.857rem; color: var(--fg-yellow); font-weight: bold; overflow-wrap: anywhere; margin-top: 2px;" ]
                   [ textEnc line ]
               | None -> ()
               // Row 2: working directory
@@ -1909,11 +1929,11 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               | true ->
                 Elem.div
                   [ Attr.class' "session-dir"
-                    Attr.style "font-size: 0.75rem; color: var(--fg-dim);"
+                    Attr.style "font-size: 0.857rem; color: var(--fg-dim);"
                     Attr.create "aria-label"(attrEnc s.WorkingDir)
                     // The full path, for a card that wraps it.
                     Attr.create "title" (attrEnc s.WorkingDir) ]
-                  [ Text.raw "📁 "
+                  [ textEnc (Glyphs.lead Glyph.Folder)
                     // A break opportunity after each separator, so a narrow card wraps the path between its parts and never in
                     // the middle of a word ("fixture" / "s").
                     // Split after a `/` or a `\` (the separator stays with the part before it).
@@ -1940,7 +1960,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 match s.EvalCount > 0 with
                 | true ->
                   Elem.span [ Attr.class' "meta" ] [
-                    textEnc (sprintf "evals: %d" s.EvalCount)
+                    textEnc (sprintf "%d evals" s.EvalCount)
                   ]
                 | false -> ()
                 // Worker RSS (vision §3.4 "worker RSS" — the first of the
@@ -1954,7 +1974,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.span
                     [ Attr.class' "meta"; testid "session-rss"
                       Attr.create "aria-label" "Memory this session's FSI worker process is using (resident set size)"
-                      Ds.text (TelemetrySignals.textExpr (TelemetrySignals.workerRssMb s.Id) "Memory: ") ]
+                      Ds.text (TelemetrySignals.textExpr (TelemetrySignals.workerRssMb s.Id) "session memory: ") ]
                     []
                 | None -> ()
                 match s.TestSummary with
@@ -1969,7 +1989,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       | false -> "var(--fg-green)"
                   Elem.span
                     [ Attr.class' "badge"
-                      Attr.style (sprintf "color: %s; font-size: 0.7rem;" badgeColor) ]
+                      Attr.style (sprintf "color: %s; font-size: 0.857rem;" badgeColor) ]
                     [ textEnc badge ]
                 | _ -> ()
                 match s.CoverageSummary with
@@ -1995,14 +2015,14 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                         Attr.create "aria-label"title ]
                       []
                     Elem.span
-                      [ Attr.style "font-size:0.6rem;color:var(--fg-dim);" ]
+                      [ Attr.style "font-size:0.857rem;color:var(--fg-dim);" ]
                       [ textEnc pct ]
                   ]
                 | _ -> ()
                 match s.LastActivity with
                 | Since.At lastActiveAtMs ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
-                    textEnc "last: "
+                    textEnc "last used "
                     ElapsedClock.span (ElapsedClock.agoExpr lastActiveAtMs)
                   ]
                 | Since.Unknown -> ()
@@ -2016,7 +2036,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     | _ -> "var(--fg-dim)"
                   Elem.div
                     [ Attr.class' "session-card-app"
-                      Attr.style (sprintf "flex-basis: 100%%; font-size: 0.7rem; color: %s; overflow-wrap: anywhere;" color) ]
+                      Attr.style (sprintf "flex-basis: 100%%; font-size: 0.857rem; color: %s; overflow-wrap: anywhere;" color) ]
                     [ textEnc (AppRun.describeState app) ]
               ]
             ]
@@ -2106,7 +2126,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       Attr.rel "noopener"
                       Attr.create "aria-label"(attrEnc (sprintf "Open %s — save a source file to hot reload it" url))
                       Attr.create "title" (attrEnc (sprintf "Open %s — save a source file to hot reload it" url)) ]
-                    [ Text.raw "🌐" ]
+                    [ textEnc (Glyphs.text Glyph.Open) ]
                 | AppRun.AppEndpoint.NoServer -> ()
                 Elem.button
                   [ Attr.class' "session-btn session-btn-success"
@@ -2121,7 +2141,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Attr.disabled
                     Attr.create "aria-label"(attrEnc (AppRun.describeState s.App))
                     Attr.create "title" (attrEnc (AppRun.describeState s.App)) ]
-                  [ Text.raw "⏳" ]
+                  [ textEnc (Glyphs.text Glyph.Busy) ]
               | [ project ], _ ->
                 Elem.button
                   [ Attr.class' "session-btn session-btn-primary"
@@ -2188,8 +2208,14 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Attr.create "aria-label""Purge — dispose and delete binaries + manifest entry (corrupt state)"
                   Attr.create "title" "Purge — dispose and delete binaries + manifest entry (corrupt state)"
                   Ds.onEvent ("click", sprintf "if(confirm('Purge session %s? This deletes its saved binaries and manifest entry. This cannot be undone.')){%s}" sid (Ds.post (sprintf "/dashboard/session/purge/%s" sid))) ]
-                [ Text.raw "✖" ]
+                [ textEnc (Glyphs.text Glyph.Remove) ]
             ]
+            // What the three that take a session down do, in words on the card: three reviewers saw Stop, Dispose and Purge side by
+            // side with no hint of how they differ, and a tooltip is not on screen for a person who does not hover.
+            Elem.div
+              [ Attr.class' "session-card-hint"
+                Attr.create "data-testid" "session-card-hint" ]
+              [ textEnc "Stop unloads the session and keeps its saved state. Close ends it. Delete ends it and removes the saved state, after asking." ]
             // Collapsible test status grid (one legible cell per test)
             match s.TestTreemapEntries.Length with
             | 0 -> ()
@@ -2206,10 +2232,10 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 | _ -> sprintf "no timed tests (%d untimed)" (s.TestTreemapEntries.Length - timedCount)
               signalDetails
                 (sprintf "testTreemapOpen_%s" sid)
-                [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
+                [ Attr.style "margin-top: 4px; font-size: 0.857rem;" ]
                 [ Elem.summary
                     [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
-                    [ Text.raw "🧪 "
+                    [ textEnc (Glyphs.lead Glyph.Test)
                       textEnc (sprintf "%d tests · %s" s.TestTreemapEntries.Length durationLabel) ]
                   renderTestFilterBar s.TestTreemapEntries
                   renderTestTreemap s.TestTreemapEntries ]
@@ -2222,7 +2248,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               let pct = coveragePercent root.ProbeCount root.CoveredCount
               signalDetails
                 (sprintf "coverageTreemapOpen_%s" sid)
-                [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
+                [ Attr.style "margin-top: 4px; font-size: 0.857rem;" ]
                 [ Elem.summary
                     [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
                     [ Text.raw "\U0001F5FA "
@@ -2236,7 +2262,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
         match s.Teardown with
         | TeardownState.TearingDown teardown -> renderTeardownCard teardown s.Id
         | TeardownState.NotTearingDown -> ordinaryCard i s)
-    // A positional legend ("⇄ switch · ■ stop · ⌫ dispose · ✖ purge") went
+    // A positional legend ("⇄ switch · ■ stop · ⌫ dispose · ✕ purge") went
     // stale the moment a new button (◎/◌ auto-open) was added first in the
     // row without updating it — the FIRST glyph and its labeled meaning had
     // already drifted out of sync (roast-9 #7). Every button now carries its
@@ -2251,7 +2277,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
         [
           Elem.button
             [ Attr.class' "session-btn session-btn-danger"
-              Attr.style "font-size: 0.65rem; padding: 1px 6px; width: auto;"
+              Attr.style "font-size: 0.857rem; padding: 1px 6px; width: auto;"
               Attr.create "aria-label" "Stop Others — unload every session except the one you are viewing"
               Attr.create "title" "Stop Others — unload every session except the one you are viewing"
               Ds.onClick (Ds.post "/dashboard/session/stop-others") ]
@@ -2280,8 +2306,8 @@ let renderSessionFilmstrip (entries: FilmstripEntry list) =
           match e.Outcome with EvalSuccess -> "✓" | EvalError -> "✗" | EvalCancelled -> "⊘")
         |> String.concat ""
       signalDetails Signals.FilmstripOpen [] [
-        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
-          textEnc (sprintf "⏱ %d evals  %s" entries.Length recentIcons)
+        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.857rem; color: var(--fg-dim); user-select: none;" ] [
+          textEnc (sprintf "%s %d evals  %s" (Glyphs.text Glyph.Time) entries.Length recentIcons)
         ]
         Elem.div [ Attr.class' "filmstrip-frames" ] [
           yield! entries |> List.map (fun e ->
@@ -2315,12 +2341,12 @@ let renderCurrentDiagnostics (diags: Diagnostic list) =
       let plural n = if n = 1 then "" else "s"
       let badgeNodes =
         match errorCount, warnCount with
-        | e, 0 -> [ Text.raw "🔴 "; textEnc (sprintf "%d error%s" e (plural e)) ]
-        | 0, w -> [ Text.raw "⚠️ "; textEnc (sprintf "%d warning%s" w (plural w)) ]
+        | e, 0 -> [ textEnc (Glyphs.lead Glyph.Fail); textEnc (sprintf "%d error%s" e (plural e)) ]
+        | 0, w -> [ textEnc (Glyphs.lead Glyph.Warn); textEnc (sprintf "%d warning%s" w (plural w)) ]
         | e, w ->
-          [ Text.raw "🔴 "
+          [ textEnc (Glyphs.lead Glyph.Fail)
             textEnc (sprintf "%d error%s · " e (plural e))
-            Text.raw "⚠️ "
+            textEnc (Glyphs.lead Glyph.Warn)
             textEnc (sprintf "%d warning%s" w (plural w)) ]
       signalDetails Signals.DiagnosticsOpen [] [
         Elem.summary [ Attr.style disclosureSummaryStyle ] [
@@ -2328,7 +2354,7 @@ let renderCurrentDiagnostics (diags: Diagnostic list) =
         ]
         Elem.div [ Attr.style "margin-top: 0.25rem;" ] [
           yield! diags |> List.map (fun diag ->
-            let icon = match diag.Severity with DiagError -> Text.raw "🔴" | DiagWarning -> Text.raw "⚠️"
+            let icon = match diag.Severity with DiagError -> textEnc (Glyphs.text Glyph.Fail) | DiagWarning -> textEnc (Glyphs.text Glyph.Warn)
             Elem.div [ Attr.class' (sprintf "diag %s" (DiagSeverity.toCssClass diag.Severity)) ] [
               Elem.span [ Attr.class' "diag-icon" ] [ icon ]
               if diag.Line > 0 || diag.Col > 0 then
@@ -2373,11 +2399,12 @@ let renderSessionsStripMarker (view: SessionInView) : XmlNode =
     | None -> Text.raw ""
     | Some phrase ->
       Elem.span
-        [ Attr.class' "sessions-stale-marker"
+        // The same words and the same tone as the card's own chip and the header badge: three spellings of one state read as three states.
+        [ Attr.class' (sprintf "status sessions-stale-marker %s" (ToneStyle.cssClass (Readiness.tone readiness)))
           testid "sessions-stale-marker"
           Attr.create "role" "status"
-          Attr.create "title" (attrEnc (sprintf "%s: open the session card for details" (Readiness.label readiness))) ]
-        [ textEnc phrase ]
+          Attr.create "title" (attrEnc (sprintf "%s: open the session card for details" phrase)) ]
+        [ textEnc (Readiness.label readiness) ]
 
 /// Render the full dynamic content of the dashboard as a single <div id="main">.
 /// This is the ONLY thing pushed via SSE on every state change.
@@ -2386,17 +2413,17 @@ let renderSessionsStripMarker (view: SessionInView) : XmlNode =
 /// See: "The Tao of Datastar" — https://data-star.dev/essays/tao_of_datastar
 let renderMainContent (snap: DashboardSnapshot) : XmlNode =
   let connectionNode =
-    // Connected-clients count (browsers 🌐 · agents 🤖 · terminals 💻). Lives in
+    // Connected-clients count (browsers, agents and terminals). Lives in
     // the Sessions panel header (not floating above the panel body).
     match snap.ConnectionLabel with
     | Some label ->
       Elem.div
         [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"
-          Attr.style "font-size: 0.72rem;"
-          Attr.create "aria-label""Connected clients — 🌐 browsers · 🤖 agents · 💻 terminals" ]
+          Attr.style "font-size: 0.857rem;"
+          Attr.create "aria-label""Connected clients: browsers, agents and terminals" ]
         [ textEnc label ]
     | None ->
-      Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] []
+      Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] []
   Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId) ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
@@ -2404,18 +2431,27 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     Elem.div [ Attr.class' "app-header" ] [
       // Brand tab — left side
       Elem.div [ Attr.class' "tabline-brand"; Attr.style "display:flex;align-items:center;gap:8px;padding:0 16px;height:100%;border-right:1px solid var(--border-normal);" ] [
-        Elem.span [ Attr.style "font-weight:700;color:var(--fg-blue);font-size:14px;" ] [
-          Text.raw "🧙"
+        Elem.span [ Attr.style "font-weight:700;color:var(--fg-blue);font-size:1rem;" ] [
+          textEnc (Glyphs.text Glyph.Logo)
           // The word drops out below 560px (dashboard.css): the icon stays, and the room goes to the session and its status.
           Elem.span [ Attr.class' "tabline-brand-name" ] [ Text.raw " SageFs" ]
         ]
       ]
       // Status tabs — center
       Elem.div [ Attr.class' "tabline-menu"; Attr.style "display:flex;align-items:center;height:100%;flex:1;min-width:0;" ] [
-        Elem.div [ Attr.id DomIds.SessionStatus; Attr.class' "tabline-status"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);font-size:12px;white-space:nowrap;flex-shrink:0;" ] [
+        Elem.div [ Attr.id DomIds.SessionStatus; Attr.class' "tabline-status"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);font-size:0.857rem;white-space:nowrap;flex-shrink:0;" ] [
           Elem.span [ Attr.class' (sprintf "status %s" (SessionInView.badgeCssClass snap.InView)); Attr.style "border-radius:0;" ] [
             textEnc (SessionInView.badgeLabel snap.InView) ]
         ]
+        // The second fact, beside the badge and outside it: "Ready" is the engine's word and the badge keeps it alone, so the
+        // state and whether the changes are live are two things on the bar. It folds away below 40em (dashboard.css), where the
+        // header has no cell for it and the health line under the header says the same thing in full.
+        match SessionInView.liveNote snap.InView with
+        | Some (glyph, words) ->
+          let tone = match glyph with | Glyph.Pass -> "tabline-livenote-ok" | _ -> "tabline-livenote-warn"
+          Elem.div [ Attr.id "session-live-note"; Attr.class' ("tabline-livenote " + tone); testid "session-live-note" ] [
+            textEnc (Glyphs.lead glyph + words) ]
+        | None -> ()
         // min-width:0 + overflow:hidden + text-overflow:ellipsis let this
         // shrink instead of overflowing onto the right-side theme picker at
         // phone width (sagefs-ux-roast.md §7.2 — a measured 130px collision
@@ -2426,7 +2462,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         // overflow surface.
         Elem.div
           [ Attr.class' "tabline-info"
-            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:12px;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;" ] [
+            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:0.857rem;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;" ] [
           // The word "Session:" drops out below 560px (dashboard.css), leaving the id and the workflow switcher whole.
           Elem.span [ Attr.class' "tabline-session-label" ] [ textEnc "Session: " ]
           textEnc snap.SessionId
@@ -2439,7 +2475,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         Elem.div
           [ Attr.class' "tabline-info tabline-evals"
             // nowrap: the bar is one row high, and "0 evals" wrapping onto a second line at phone width spilled out of it and was clipped.
-            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;min-width:0;overflow:hidden;flex-shrink:1;white-space:nowrap;" ] [ renderEvalStats snap.EvalStats ]
+            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:0.857rem;min-width:0;overflow:hidden;flex-shrink:1;white-space:nowrap;" ] [ renderEvalStats snap.EvalStats ]
       ]
       // Right side — expand toggle, theme picker
       Elem.div [ Attr.class' "tabline-right"; Attr.style "display:flex;align-items:center;height:100%;margin-left:auto;" ] [
@@ -2450,7 +2486,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             Attr.href "/dashboard/settings"
             Attr.create "aria-label""Runtime settings"
             Attr.style "text-decoration:none;display:inline-flex;align-items:center;justify-content:center;" ]
-          [ Text.raw "⚙" ]
+          [ textEnc (Glyphs.text Glyph.Settings) ]
         snap.ThemePicker
       ]
     ]
@@ -2458,7 +2494,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     snap.DaemonHealth
     // Eval-to-pixel latency — hidden by default (perf is noise unless you're
     // chasing a slowdown); revealed with the rest of the perf detail via the
-    // 📊 toggle ($perfStatsOpen). Rendered only once an eval has completed the
+    // ▥ toggle ($perfStatsOpen). Rendered only once an eval has completed the
     // chain. The working dir is not repeated here; it lives on the sidebar card.
     match snap.EvalToPixelP50Ms, snap.EvalToPixelP99Ms with
     | Some p50, Some p99 ->
@@ -2558,13 +2594,13 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
               Attr.create "aria-haspopup" "dialog"
               Attr.create "title" "New session"
               Ds.onClick (sprintf "$%s = true; %s" Signals.NewSessionOpen (Ds.post NewSessionDialog.NewSessionNames.DiscoverRoute)) ]
-            [ Text.raw "+" ]
+            [ Text.raw "+ New" ]
           Elem.button
             [ Attr.class' "sidebar-header-btn"
               Attr.id "sidebar-toggle-btn"
               Ds.onEvent ("click", "$sidebarOpen = !$sidebarOpen")
               // "»" slides the panel away to the right. It was "✕", which beside "+" read as a close or delete for the session.
-              Ds.text "$sidebarOpen ? '»' : '☰'"
+              Ds.text "$sidebarOpen ? 'Hide »' : '☰ Sessions'"
               Ds.attr' ("aria-label", "$sidebarOpen ? 'Collapse the sessions panel' : 'Expand the sessions panel'")
               Ds.attr' ("title", "$sidebarOpen ? 'Collapse the sessions panel' : 'Expand the sessions panel'") ]
             []
@@ -2638,7 +2674,7 @@ let resolveThemePush
 /// Every control here is wired through the Datastar `Ds.post`/`Ds.onClick`
 /// action builders — never a hand-rolled `onclick` + `fetch()` string (the
 /// "some random xml nonsense" the maintainer explicitly banned). A shared
-/// per-control-class `Ds.indicator` signal drives immediate ⏳ feedback,
+/// per-control-class `Ds.indicator` signal drives immediate ◐ feedback,
 /// mirroring `Signals.ActionLoading` (the eval-actions row's single
 /// in-flight signal). The `/api/sessions/{sid}/hotreload/*` endpoints and
 /// their JSON body shapes (`{}`, `{"path":...}`, `{"directory":...}`) are
@@ -2680,7 +2716,7 @@ let renderHotReloadPanelFull
   let indicatorAttrs (signal: string) =
     [ Ds.indicator signal; Ds.attr' ("disabled", sprintf "$%s" signal) ]
   let loadingSpan (signal: string) =
-    Elem.span [ Ds.show (sprintf "$%s" signal) ] [ Text.raw "⏳ " ]
+    Elem.span [ Ds.show (sprintf "$%s" signal) ] [ textEnc (Glyphs.lead Glyph.Busy) ]
   let hotReloadResetLoading = "hotReloadResetLoading"
   let keptNotice =
     match kept with
@@ -2688,7 +2724,7 @@ let renderHotReloadPanelFull
     | _ ->
       [ Elem.div
           [ Attr.class' "kept-state"
-            Attr.style "margin-bottom: 0.5rem; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px;" ]
+            Attr.style "margin-bottom: 0.5rem; font-size: 0.857rem; display: flex; flex-direction: column; gap: 4px;" ]
           [ Elem.div [ Attr.class' "meta" ] [ Text.raw "Kept live state. Your edits to these initializers are waiting for a reset:" ]
             yield!
               kept
@@ -2700,7 +2736,7 @@ let renderHotReloadPanelFull
                       [ textEnc (sprintf "kept %s = %s, new initializer %s" k.Binding k.KeptValue k.NewInitializer) ]
                     Elem.button
                       ([ Attr.class' "eval-btn"
-                         Attr.style "height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+                         Attr.style "height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
                          Attr.create "aria-label" (attrEnc (sprintf "Reset %s: run its new initializer %s" k.Binding k.NewInitializer)) ]
                        @ indicatorAttrs hotReloadResetLoading
                        @ [ Ds.onClick (hotReloadClick (sprintf "$binding = %s; " (jsStringLiteral k.Binding)) "reset-state") ])
@@ -2718,7 +2754,7 @@ let renderHotReloadPanelFull
           yield
             Elem.button
               ([ Attr.class' "eval-btn"
-                 Attr.style "height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+                 Attr.style "height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
                  Attr.create "aria-pressed" pressed
                  Attr.title (attrEnc (SageFs.Middleware.ValueReads.ReflectionReadMode.consequence mode))
                  Attr.create "aria-label" (attrEnc (sprintf "Reflection reads: %s. %s" name (SageFs.Middleware.ValueReads.ReflectionReadMode.consequence mode))) ]
@@ -2761,7 +2797,7 @@ let renderHotReloadPanelFull
                     [ textEnc (sprintf "%s: %s" (SageFs.Middleware.ValueReads.ReflectionReadMode.name mode) (SageFs.Middleware.ValueReads.ReflectionReadMode.consequence mode)) ]) ])
       [ Elem.div
           [ Attr.class' "reflection-reads"
-            Attr.style "margin-bottom: 0.5rem; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px;" ]
+            Attr.style "margin-bottom: 0.5rem; font-size: 0.857rem; display: flex; flex-direction: column; gap: 4px;" ]
           [ Elem.div [ Attr.class' "meta" ] [ Text.raw "Reflection reads (values read through reflection after the app started):" ]
             modeButtons report.Mode
             yield! watchLine
@@ -2780,7 +2816,7 @@ let renderHotReloadPanelFull
       | 0 -> Text.raw "Hot Reload: OFF"
       | n -> textEnc (sprintf "Hot Reload: ON — %d of %d files" n total)
     ]
-    Elem.div [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem; font-size: 0.8rem;" ] [
+    Elem.div [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem; font-size: 0.857rem;" ] [
       textEnc (sprintf "%d of %d files watched" watchedCount total)
     ]
     yield! keptNotice
@@ -2796,31 +2832,31 @@ let renderHotReloadPanelFull
     | 0 ->
       Elem.div
         [ Attr.class' "meta"
-          Attr.style "margin-bottom: 0.5rem; font-size: 0.75rem; color: var(--fg-yellow);" ]
-        [ Text.raw "⚠ No source files were discovered for hot reload — nothing to watch. Check that the project builds and that it has .fs files outside bin/obj." ]
+          Attr.style "margin-bottom: 0.5rem; font-size: 0.857rem; color: var(--fg-yellow);" ]
+        [ textEnc (Glyphs.lead Glyph.Warn + "No source files were discovered for hot reload — nothing to watch. Check that the project builds and that it has .fs files outside bin/obj.") ]
     | _ ->
       Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
         Elem.button
           ([ Attr.class' "eval-btn"
-             Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+             Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
              Attr.create "aria-label" "Watch All — hot-reload every discovered source file" ]
            @ indicatorAttrs hotReloadWatchAllLoading
            @ [ Ds.onClick (hotReloadClick "" "watch-all") ])
           [ loadingSpan hotReloadWatchAllLoading; Text.raw "Watch All" ]
         Elem.button
           ([ Attr.class' "eval-btn"
-             Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+             Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
              Attr.create "aria-label" "Unwatch All — stop hot-reloading every discovered source file" ]
            @ indicatorAttrs hotReloadUnwatchAllLoading
            @ [ Ds.onClick (hotReloadClick "" "unwatch-all") ])
           [ loadingSpan hotReloadUnwatchAllLoading; Text.raw "Unwatch All" ]
       ]
     signalDetails Signals.HotReloadFilesOpen [] [
-      Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
-        Text.raw "📁 "
+      Elem.summary [ Attr.style "cursor: pointer; font-size: 0.857rem; color: var(--fg-dim); user-select: none;" ] [
+        textEnc (Glyphs.lead Glyph.Folder)
         textEnc (sprintf "%d files" total)
       ]
-      Elem.div [ Attr.style "max-height: 200px; overflow-y: auto; font-size: 0.75rem;" ] [
+      Elem.div [ Attr.style "max-height: 200px; overflow-y: auto; font-size: 0.857rem;" ] [
         yield! grouped |> List.collect (fun (dir, dirFiles) ->
           let dirLabel =
             match dir.Length > 40 with
@@ -2834,12 +2870,12 @@ let renderHotReloadPanelFull
           let dirClick = hotReloadClick (sprintf "$directory = %s; " (jsStringLiteral dir)) dirAction
           [
             Elem.div
-              [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.8; font-size: 0.7rem; cursor: pointer; display: flex; align-items: center; gap: 4px;"
+              [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.8; font-size: 0.857rem; cursor: pointer; display: flex; align-items: center; gap: 4px;"
                 Ds.indicator hotReloadDirLoading
                 Ds.onClick dirClick ]
               [ loadingSpan hotReloadDirLoading
                 Elem.span [ Attr.style (sprintf "color: %s;" dirColor); Ds.show (sprintf "!$%s" hotReloadDirLoading) ] [ textEnc dirIcon ]
-                Text.raw "📁 "
+                textEnc (Glyphs.lead Glyph.Folder)
                 textEnc (sprintf "%s (%d/%d)" dirLabel dirWatchedCount (List.length dirFiles)) ]
             yield! dirFiles |> List.map (fun f ->
               let fileName =
@@ -2855,7 +2891,7 @@ let renderHotReloadPanelFull
                   Ds.indicator hotReloadFileLoading
                   Ds.onClick fileClick ]
                 [ loadingSpan hotReloadFileLoading
-                  Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.8rem;" color); Ds.show (sprintf "!$%s" hotReloadFileLoading) ] [ textEnc icon ]
+                  Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.857rem;" color); Ds.show (sprintf "!$%s" hotReloadFileLoading) ] [ textEnc icon ]
                   Elem.span [ Attr.style (match f.watched with | true -> "opacity: 1" | false -> "opacity: 0.6") ] [ textEnc fileName ] ]
             )
           ])
@@ -2879,7 +2915,7 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
 let renderHotReloadEmpty =
   Elem.div [ Attr.id DomIds.HotReloadPanel; Attr.class' "panel" ] [
     Elem.h2 [] [ Text.raw "Hot Reload: OFF" ]
-    Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
+    Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
       Text.raw "No active session"
     ]
   ]
@@ -2920,12 +2956,12 @@ let private confidenceBadge (confidence: SageFs.Features.ObservedFrictionTypes.S
   | SageFs.Features.ObservedFrictionTypes.SignalConfidence.Strong ->
     Elem.span
       [ Attr.class' "meta"
-        Attr.style "margin-left: 0.4rem; font-size: 0.62rem; padding: 0 0.3rem; border-radius: 3px; background: var(--fg-green); color: var(--bg);" ]
+        Attr.style "margin-left: 0.4rem; font-size: 0.857rem; padding: 0 0.3rem; border-radius: 3px; background: var(--fg-green); color: var(--bg);" ]
       [ Text.raw "strong" ]
   | SageFs.Features.ObservedFrictionTypes.SignalConfidence.Heuristic ->
     Elem.span
       [ Attr.class' "meta"
-        Attr.style "margin-left: 0.4rem; font-size: 0.62rem; padding: 0 0.3rem; border-radius: 3px; background: var(--fg-dim); color: var(--bg);" ]
+        Attr.style "margin-left: 0.4rem; font-size: 0.857rem; padding: 0 0.3rem; border-radius: 3px; background: var(--fg-dim); color: var(--bg);" ]
       [ Text.raw "heuristic" ]
 
 /// Render the "Observed friction" section: passively-detected signals
@@ -2936,16 +2972,16 @@ let private confidenceBadge (confidence: SageFs.Features.ObservedFrictionTypes.S
 /// whether any friction has been recorded at all.
 let private renderObservedFrictionSection (signals: SageFs.Features.ObservedFrictionTypes.DetectedSignal list) =
   Elem.div [ Attr.class' "observed-friction"; Attr.style "margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
-    Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.75rem; font-weight: bold; color: var(--fg-blue);" ] [
+    Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; font-weight: bold; color: var(--fg-blue);" ] [
       Text.raw "Observed friction"
     ]
     match signals with
     | [] ->
-      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] [
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
         Text.raw "No observed friction yet."
       ]
     | items ->
-      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.72rem; color: var(--fg-dim);" ] [
+      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.857rem; color: var(--fg-dim);" ] [
         for d in items do
           Elem.li [ Attr.create "data-signal-id" (attrEnc (SageFs.Features.ObservedFrictionTypes.FrictionSignal.id d.Signal)) ] [
             textEnc (observedSignalSummary d.Signal)
@@ -2963,9 +2999,9 @@ let private renderObservedFrictionSection (signals: SageFs.Features.ObservedFric
 /// server-authoritative — the client never assembles the payload.
 let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReviewSnapshot) =
   signalDetails Signals.FrictionPanelOpen [ Attr.id DomIds.FrictionPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
-    Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
+    Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.857rem; user-select: none; color: var(--fg-blue);" ] [
       Elem.span [] [
-        Text.raw "🧾 "
+        textEnc (Glyphs.lead Glyph.File)
         textEnc (sprintf "Friction (%d events, %d feedback)" snap.EventCount snap.FeedbackCount) ]
     ]
     // Renders unconditionally — independent of snap.IsEmpty — so the
@@ -2975,19 +3011,19 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
     renderObservedFrictionSection snap.ObservedSignals
     match snap.IsEmpty with
     | true ->
-      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem; margin-top: 0.4rem;" ] [
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; margin-top: 0.4rem;" ] [
         Text.raw "No local friction recorded yet. It appears here as SageFs tools are used."
       ]
     | false ->
       Elem.div [ Attr.style "margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem;" ] [
-        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
+        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
           Text.raw "Report is sanitized locally before send. You can edit the reasons below."
         ]
         // Top tools with friction — a compact preview of the outbound summary
         (match snap.Outgoing.ToolsWithFriction with
          | [] -> Elem.div [] []
          | tools ->
-           Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.72rem; color: var(--fg-dim);" ] [
+           Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.857rem; color: var(--fg-dim);" ] [
              for t in tools |> List.truncate 5 do
                Elem.li [] [
                  textEnc (sprintf "%s — %d calls, %d blocked, %d abandoned, %d feedback"
@@ -3002,31 +3038,31 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
          | feedback ->
            Elem.div [ Attr.style "display: flex; flex-direction: column; gap: 0.3rem;" ] [
              for f in feedback do
-               Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; display: block;" ] [
+               Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; display: block;" ] [
                  textEnc (sprintf "%s (%s)" f.Tool f.Kind)
                ]
                Elem.textarea
                  [ Attr.class' "eval-input friction-edit"
                    Attr.create "data-tool" (attrEnc f.Tool)
                    Attr.create "data-kind" (attrEnc f.Kind)
-                   Attr.style "min-height: 3rem; height: auto; font-size: 0.75rem;" ]
+                   Attr.style "min-height: 3rem; height: auto; font-size: 0.857rem;" ]
                   [ textEnc f.Reason ]
            ])
         // Endpoint + optional token, bound to signals.
-        Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; display: block;" ] [
+        Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; display: block;" ] [
           Text.raw "Report endpoint (https, or http to localhost)"
         ]
         Elem.input
           [ Attr.class' "eval-input"
-            Attr.style "min-height: auto; height: 2rem; font-size: 0.75rem;"
+            Attr.style "min-height: auto; height: 2rem; font-size: 0.857rem;"
             Ds.bind Signals.FrictionEndpoint
             Attr.create "placeholder" "https://your-worker.example.workers.dev/" ]
-        Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; display: block; margin-top: 0.3rem;" ] [
+        Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; display: block; margin-top: 0.3rem;" ] [
           Text.raw "Ingest token (optional)"
         ]
         Elem.input
           [ Attr.class' "eval-input"
-            Attr.style "min-height: auto; height: 2rem; font-size: 0.75rem;"
+            Attr.style "min-height: auto; height: 2rem; font-size: 0.857rem;"
             Ds.bind Signals.FrictionToken
             Attr.create "placeholder" "token if your receiver requires one" ]
         // Send button + result status. The click handler assembles the
@@ -3034,12 +3070,12 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
         Elem.div [ Attr.style "display: flex; gap: 0.4rem; align-items: center; margin-top: 0.4rem;" ] [
           Elem.button
             [ Attr.class' "eval-btn"
-              Attr.style "font-size: 0.75rem;"
+              Attr.style "font-size: 0.857rem;"
               Attr.create "aria-label" "Send Report — submit the friction report"
               Ds.indicator Signals.FrictionSending
               Ds.attr' ("disabled", "$frictionSending")
               Ds.onEvent ("click", "var edits={};document.querySelectorAll('.friction-edit').forEach(function(ta){if(ta.dataset.tool&&ta.dataset.kind)edits[ta.dataset.tool+'|'+ta.dataset.kind]=ta.value});var h=document.getElementById('friction-edits-json');h.value=JSON.stringify(edits);h.dispatchEvent(new Event('input',{bubbles:true}));@post('/dashboard/friction/send')") ]
-            [ Elem.span [ Ds.show "$frictionSending" ] [ Text.raw "⏳ " ]
+            [ Elem.span [ Ds.show "$frictionSending" ] [ textEnc (Glyphs.lead Glyph.Busy) ]
               Text.raw "Send Report" ]
         ]
         Elem.input
@@ -3052,10 +3088,10 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
          | [] -> Elem.div [] []
          | history ->
            signalDetails Signals.FrictionHistoryOpen [ Attr.style "margin-top: 0.4rem;" ] [
-             Elem.summary [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; cursor: pointer;" ] [
+             Elem.summary [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; cursor: pointer;" ] [
                textEnc (sprintf "Sent reports (%d)" history.Length)
              ]
-             Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.7rem; color: var(--fg-dim);" ] [
+             Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.857rem; color: var(--fg-dim);" ] [
                for s in history |> List.truncate 10 do
                  Elem.li [] [
                    textEnc (sprintf "%s — %s (%d events)" s.ReportId (s.SentAtUtc.ToLocalTime().ToString("g")) s.TotalEvents)
@@ -3139,9 +3175,9 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
   let memberView = Features.CohortBoundedView.members Features.CohortBoundedView.rowCap frame
   let claimView = Features.CohortBoundedView.claims Features.CohortBoundedView.rowCap frame
   signalDetails Signals.CohortPanelOpen [ Attr.id DomIds.CohortPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
-    Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
-      Text.raw "👥 "
-      textEnc (sprintf "Cohort — %d member%s" memberCount (if memberCount = 1 then "" else "s"))
+    Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.857rem; user-select: none; color: var(--fg-blue);" ] [
+      textEnc (Glyphs.lead Glyph.Members)
+      textEnc (sprintf "Agent team — %d member%s" memberCount (if memberCount = 1 then "" else "s"))
     ]
     // "Show the detail" is NOT "are there members". Claims and landings outlive the members
     // who made them — an orphaned claim must still render as neutral territory, and that is
@@ -3150,26 +3186,26 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
     let hasAnythingToShow = memberCount > 0 || claimCount > 0 || frame.LandingIds.Length > 0
     match hasAnythingToShow with
     | false ->
-      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem; margin-top: 0.4rem;" ] [
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; margin-top: 0.4rem;" ] [
         Text.raw "No cohort members — agents join via join_cohort."
       ]
     | _ ->
       Elem.div [ Attr.style "margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;" ] [
-        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] [
+        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
           textEnc (sprintf "Ledger v%d" (int64 frame.Version))
         ]
         Elem.div [] [
-          Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+          Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; margin-bottom: 0.2rem;" ] [
             Text.raw "Members"
           ]
-          Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.25rem;" ] [
+          Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.857rem; display: flex; flex-direction: column; gap: 0.25rem;" ] [
             for i in memberView.Shown do
               Elem.li [ Attr.style "display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap; overflow-wrap: anywhere;" ] [
                 textEnc (MemberTable.MemberId.display frame.MemberIds.[i])
                 Elem.span [ Attr.class' "badge"; Attr.style "background: var(--bg-focus); color: var(--fg-dim);" ] [
                   textEnc (cohortRoleLabel frame.MemberRole.[i])
                 ]
-                Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+                Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
                   textEnc (cohortSeatLabel frame.MemberSeat.[i])
                 ]
               ]
@@ -3177,21 +3213,21 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
           match memberView.HiddenTotal with
           | 0 -> ()
           | _ ->
-            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
               textEnc (Features.CohortBoundedView.memberOverflowLabel memberView)
             ]
         ]
         match claimCount with
         | 0 ->
-          Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
+          Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
             Text.raw "No claims held."
           ]
         | _ ->
           Elem.div [] [
-            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; margin-bottom: 0.2rem;" ] [
               textEnc (sprintf "Claims (%d)" claimCount)
             ]
-            Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
+            Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.857rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
               for i in claimView.Shown do
                 let (SageFs.Cohort.ClaimId claimIdStr) = frame.ClaimIds.[i]
                 let holderIdx = frame.ClaimHolderIndex.[i]
@@ -3210,7 +3246,7 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
                     Text.raw " — "
                     textEnc (cohortScopeLabel frame.ClaimScope.[i])
                   ]
-                  Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+                  Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
                     textEnc (sprintf "%s · fence %d" holderText (int64 frame.ClaimFence.[i]))
                   ]
                 ]
@@ -3218,7 +3254,7 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
             match claimView.HiddenTotal with
             | 0 -> ()
             | _ ->
-              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
                 textEnc (Features.CohortBoundedView.claimOverflowLabel claimView)
               ]
           ]
@@ -3228,10 +3264,10 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
         | landingCount ->
           let landingView = Features.CohortBoundedView.landings Features.CohortBoundedView.rowCap frame
           Elem.div [] [
-            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; margin-bottom: 0.2rem;" ] [
               textEnc (sprintf "Landings (%d)" landingCount)
             ]
-            Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
+            Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.857rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
               for i in landingView.Shown do
                 let (SageFs.Cohort.LandingId landingId) = frame.LandingIds.[i]
                 let requester =
@@ -3240,7 +3276,7 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
                   | false -> "(unknown member)"
                 Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [
                   Elem.div [] [ textEnc landingId ]
-                  Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+                  Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
                     textEnc (sprintf "%s · %s" requester (cohortLandingStateLabel frame.LandingState.[i]))
                   ]
                 ]
@@ -3248,7 +3284,7 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
             match landingView.HiddenTotal with
             | 0 -> ()
             | _ ->
-              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
                 textEnc (Features.CohortBoundedView.landingOverflowLabel landingView)
               ]
           ]
@@ -3273,7 +3309,7 @@ and private renderCohortMatrix (frame: SageFs.Cohort.CohortFrame<MemberTable.Mem
     let dataUri = Features.CohortMatrixRender.toPngDataUri frame.Pass frame.Fail frame.Stale
     let charGrid = Features.CohortMatrixRender.toCharGrid frame.Pass frame.Fail frame.Stale
     Elem.div [ Attr.id DomIds.CohortMatrix; Attr.style "margin-top: 0.2rem;" ] [
-      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; margin-bottom: 0.2rem;" ] [
         textEnc (sprintf "Test matrix (%d tests x %d row%s)" testCount rowCount (if rowCount = 1 then "" else "s"))
       ]
       Elem.create "img" [
@@ -3282,10 +3318,10 @@ and private renderCohortMatrix (frame: SageFs.Cohort.CohortFrame<MemberTable.Mem
         Attr.style "image-rendering: pixelated; width: 100%; max-width: 420px; display: block; border: 1px solid var(--border, #444);"
       ] []
       signalDetails Signals.CohortMatrixTextOpen [ Attr.style "margin-top: 0.3rem;" ] [
-        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.7rem; color: var(--fg-dim); user-select: none;" ] [
+        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.857rem; color: var(--fg-dim); user-select: none;" ] [
           Text.raw "Text fallback"
         ]
-        Elem.pre [ Attr.style "font-size: 0.62rem; line-height: 1.15; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre;" ] [
+        Elem.pre [ Attr.style "font-size: 0.857rem; line-height: 1.15; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre;" ] [
           textEnc charGrid
         ]
       ]
@@ -3330,15 +3366,15 @@ and private renderCohortTerritory (frame: SageFs.Cohort.CohortFrame<MemberTable.
         | _ -> yield Features.CohortBoundedView.claimOverflowLabel legendView ]
       |> String.concat "\n"
     Elem.div [ Attr.id DomIds.CohortTerritory; Attr.style "margin-top: 0.4rem;" ] [
-      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; margin-bottom: 0.2rem;" ] [
         textEnc (sprintf "Territory map (%d claimed path%s)" tiles.Length (if tiles.Length = 1 then "" else "s"))
       ]
       Elem.div [ Attr.style "max-width: 420px;" ] [ Text.raw svg ]
       signalDetails Signals.CohortTerritoryTextOpen [ Attr.style "margin-top: 0.3rem;" ] [
-        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.7rem; color: var(--fg-dim); user-select: none;" ] [
+        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.857rem; color: var(--fg-dim); user-select: none;" ] [
           Text.raw "Text fallback"
         ]
-        Elem.pre [ Attr.style "font-size: 0.68rem; line-height: 1.3; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre-wrap;" ] [
+        Elem.pre [ Attr.style "font-size: 0.857rem; line-height: 1.3; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre-wrap;" ] [
           textEnc legend
         ]
       ]
@@ -3393,16 +3429,16 @@ let renderCohortLanesPanel (ledgerEntries: SageFs.Cohort.LedgerEntry<MemberTable
         |> List.map (fun s -> sprintf "%s — %s (%s)" (cohortLaneLabel lane.Member) s.Label (cohortSpanOutcomeLabel s.Outcome)))
       |> String.concat "\n"
     signalDetails Signals.CohortLanesPanelOpen [ Attr.id DomIds.CohortLanes; Attr.class' "panel"; Attr.style "margin-top: 0.4rem;" ] [
-      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
-        Text.raw "🔥 "
+      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.857rem; user-select: none; color: var(--fg-blue);" ] [
+        textEnc (Glyphs.lead Glyph.Reload)
         textEnc (sprintf "Lanes — %d lane%s" laneCount (if laneCount = 1 then "" else "s"))
       ]
       Elem.div [ Attr.style "max-width: 420px; margin-top: 0.4rem;" ] [ Text.raw lanesSvg ]
       signalDetails Signals.CohortLanesTextOpen [ Attr.style "margin-top: 0.3rem;" ] [
-        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.7rem; color: var(--fg-dim); user-select: none;" ] [
+        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.857rem; color: var(--fg-dim); user-select: none;" ] [
           Text.raw "Text fallback"
         ]
-        Elem.pre [ Attr.style "font-size: 0.68rem; line-height: 1.3; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre-wrap;" ] [
+        Elem.pre [ Attr.style "font-size: 0.857rem; line-height: 1.3; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre-wrap;" ] [
           textEnc legend
         ]
       ]
@@ -3426,19 +3462,19 @@ let renderTrunkPanel (machine: Features.TrunkFollow.TrunkMachine) : XmlNode =
   | _ ->
     let count = List.length landings
     signalDetails Signals.CohortTrunkOpen [ Attr.id DomIds.CohortTrunk; Attr.class' "panel"; Attr.style "margin-top: 0.4rem;" ] [
-      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
+      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.857rem; user-select: none; color: var(--fg-blue);" ] [
         textEnc (sprintf "Trunk: %d landing%s followed" count (if count = 1 then "" else "s"))
       ]
-      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
+      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.857rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
         for id, text in inFlight @ queued do
           Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [
             Elem.div [] [ textEnc id ]
-            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [ textEnc text ]
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [ textEnc text ]
           ]
         for record in landings do
           Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [
             Elem.div [] [ textEnc (sprintf "%s at %s" (landingText record.Landing) (record.Commit.Substring(0, min 8 record.Commit.Length))) ]
-            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [ textEnc (Features.TrunkFollow.describeVerdict record.Verdict) ]
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [ textEnc (Features.TrunkFollow.describeVerdict record.Verdict) ]
           ]
       ]
     ]
@@ -3470,8 +3506,8 @@ let renderCohortScrubControl (viewingSeq: int64<ledgerSeq> option) (latestSeq: i
     let currentInt = viewingSeq |> Option.map int64 |> Option.defaultValue latestInt
     let scrubEndpoint = "/dashboard/cohort/scrub"
     Elem.div [ Attr.id DomIds.CohortScrubber; Attr.style "margin-top: 0.3rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border, #444); display: flex; flex-direction: column; gap: 0.3rem;" ] [
-      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;" ] [
-        Text.raw "🕐 "
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;" ] [
+        textEnc (Glyphs.lead Glyph.Time)
         match viewingSeq with
         | None -> Elem.span [ Attr.style "color: var(--fg-green, #27ae60);" ] [ textEnc (sprintf "LIVE · v%d" latestInt) ]
         | Some v -> Elem.span [ Attr.style "color: var(--fg-amber, orange);" ] [ textEnc (sprintf "Viewing v%d of v%d" (int64 v) latestInt) ]
@@ -3489,12 +3525,12 @@ let renderCohortScrubControl (viewingSeq: int64<ledgerSeq> option) (latestSeq: i
             Attr.class' "session-btn"
             Attr.create "title" "Back to live"
             Ds.onEvent ("click", sprintf "@post('%s', {%s: ''})" scrubEndpoint Signals.CohortViewingSeq)
-          ] [ Text.raw "⏭" ]
+          ] [ textEnc (Glyphs.text Glyph.Skip) ]
         | None -> Elem.div [] []
         Elem.button [
           Attr.create "disabled" "disabled"
           Attr.create "title" "Forking a cohort from a scrubbed seq is not supported yet — Cohort.fs has no fork command/event to send (see CohortScrubber.fs's module doc)."
-          Attr.style "font-size: 0.68rem; opacity: 0.5; cursor: not-allowed;"
+          Attr.style "font-size: 0.857rem; opacity: 0.5; cursor: not-allowed;"
         ] [ Text.raw "⑂ fork (not yet supported)" ]
       ]
     ]
@@ -3559,17 +3595,17 @@ let renderLiveTestingPanel (activity: Features.LiveTestActivity.LiveTestActivity
     Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
       Elem.button
         [ Attr.class' "eval-btn"
-          Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+          Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.857rem;"
           testid "live-testing-toggle"
           Attr.create "aria-label" (sprintf "%s — %s live testing" label (match activity with Features.LiveTestActivity.LiveTestActivity.Off -> "start" | _ -> "stop"))
           Ds.indicator Signals.LiveTestingLoading
           Ds.attr' ("disabled", "$liveTestingLoading")
           Ds.onClick (Ds.post endpoint) ]
-        [ Elem.span [ Ds.show "$liveTestingLoading" ] [ textEnc ("⏳ " + pending) ]
+        [ Elem.span [ Ds.show "$liveTestingLoading" ] [ textEnc (Glyphs.lead Glyph.Busy + pending) ]
           Elem.span [ Ds.show "!$liveTestingLoading" ] [ textEnc label ] ]
     ]
     // Reasons carry compiler output, which contains markup characters.
-    Elem.div [ Attr.class' "meta"; Attr.style ("font-size: 0.8rem; " + LiveTestActivityView.tone activity) ] [
+    Elem.div [ Attr.class' "meta"; Attr.style ("font-size: 0.857rem; " + LiveTestActivityView.tone activity) ] [
       textEnc (LiveTestActivityView.words activity)
     ]
   ]
@@ -3581,11 +3617,11 @@ let renderSessionContextPanel (ctx: SessionContext) =
 
   let assembliesSection =
     signalDetails Signals.SessionContextAssembliesOpen [] [
-      Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
-        Text.raw "📦 "
+      Elem.summary [ Attr.style "font-size: 0.857rem; cursor: pointer;" ] [
+        textEnc (Glyphs.lead Glyph.Package)
         textEnc (sprintf "Assemblies (%d)" (ctx.Warmup.AssembliesLoaded |> List.length))
       ]
-      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em; font-size: 0.7rem;" ] [
+      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em; font-size: 0.857rem;" ] [
         for asm in ctx.Warmup.AssembliesLoaded do
           Elem.li [] [ textEnc (SessionContext.assemblyLine asm) ]
       ]
@@ -3595,12 +3631,12 @@ let renderSessionContextPanel (ctx: SessionContext) =
     let opened = ctx.Warmup.NamespacesOpened
     let failed = ctx.Warmup.FailedOpens
     signalDetails Signals.SessionContextNamespacesOpen [] [
-      Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
-        Text.raw "📂 "
+      Elem.summary [ Attr.style "font-size: 0.857rem; cursor: pointer;" ] [
+        textEnc (Glyphs.lead Glyph.Folder)
         textEnc (sprintf "Namespaces (%d opened, %d failed)"
           (opened |> List.length) (failed |> List.length))
       ]
-      Elem.div [ Attr.style "font-size: 0.7rem;" ] [
+      Elem.div [ Attr.style "font-size: 0.857rem;" ] [
         Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em;" ] [
           for b in opened do
             Elem.li [] [
@@ -3617,14 +3653,14 @@ let renderSessionContextPanel (ctx: SessionContext) =
         | false ->
           signalDetails Signals.SessionContextFailedOpensOpen [ Attr.style "margin-top: 0.5em;" ] [
             Elem.summary [ Attr.style "color: var(--fg-red); cursor: pointer; font-weight: bold;" ] [
-              textEnc (sprintf "⚠️ %d Failed Opens (expanded)" failed.Length)
+              textEnc (sprintf "%s %d Failed Opens (expanded)" (Glyphs.text Glyph.Warn) failed.Length)
             ]
             Elem.div [ Attr.style "padding-left: 0.5em;" ] [
               for f in failed do
                 Elem.div [ Attr.class' "diag-error-block" ] [
                   Elem.div [ Attr.style "font-weight: bold; color: var(--fg-red);" ] [
                     let kind = OpenableKind.label f.Kind
-                    textEnc (sprintf "✖ %s (%s)" f.Name kind)
+                    textEnc (sprintf "%s %s (%s)" (Glyphs.text Glyph.Fail) f.Name kind)
                     match f.RetryCount > 1 with
                     | true ->
                       Elem.span [ Attr.style "color: var(--fg-dim); font-weight: normal; margin-left: 0.5em;" ] [
@@ -3670,10 +3706,10 @@ let renderSessionContextPanel (ctx: SessionContext) =
   let timingSection =
     let t = ctx.Warmup.PhaseTiming
     signalDetails Signals.SessionContextTimingOpen [] [
-      Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
-        textEnc (sprintf "⏱️ Warmup Timing (%dms total)" t.TotalMs)
+      Elem.summary [ Attr.style "font-size: 0.857rem; cursor: pointer;" ] [
+        textEnc (sprintf "%s Warmup Timing (%dms total)" (Glyphs.text Glyph.Time) t.TotalMs)
       ]
-      Elem.div [ Attr.style "font-size: 0.7rem; padding-left: 0.5em;" ] [
+      Elem.div [ Attr.style "font-size: 0.857rem; padding-left: 0.5em;" ] [
         let phases = [
           "Scan source files", t.ScanSourceFilesMs
           "Scan assemblies", t.ScanAssembliesMs
@@ -3698,13 +3734,13 @@ let renderSessionContextPanel (ctx: SessionContext) =
 
   let filesSection =
     signalDetails Signals.SessionContextFilesOpen [] [
-      Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
-        Text.raw "📄 "
+      Elem.summary [ Attr.style "font-size: 0.857rem; cursor: pointer;" ] [
+        textEnc (Glyphs.lead Glyph.File)
         // A count of the files, not a ratio: "loaded" here means an opened namespace's name ends the file's path, which is
         // usually nothing for a REPL session, and "0/2 loaded" read as a failure. The rows below still show each file's mark.
         textEnc (sprintf "Files (%d)" (ctx.FileStatuses |> List.length))
       ]
-      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em; font-size: 0.7rem;" ] [
+      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em; font-size: 0.857rem;" ] [
         for f in ctx.FileStatuses do
           let color =
             match f.Readiness with
@@ -3720,8 +3756,8 @@ let renderSessionContextPanel (ctx: SessionContext) =
 
   Elem.div [ Attr.id DomIds.SessionContext; Attr.class' "panel" ] [
     signalDetails Signals.SessionContextOpen [] [
-      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.8rem;" ] [
-        Text.raw "🔍 "
+      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.857rem;" ] [
+        textEnc (Glyphs.lead Glyph.Search)
         textEnc summaryText
       ]
       Elem.div [ Attr.style "padding-left: 0.5em; margin-top: 0.3em;" ] [
@@ -3736,7 +3772,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
 /// Render empty session context panel when no session is active.
 let renderSessionContextEmpty =
   Elem.div [ Attr.id DomIds.SessionContext; Attr.class' "panel" ] [
-    Elem.div [ Attr.style "font-size: 0.8rem; opacity: 0.6;" ] [
+    Elem.div [ Attr.style "font-size: 0.857rem; opacity: 0.6;" ] [
       Text.raw "No session context"
     ]
   ]
@@ -3751,7 +3787,7 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
     // walk has come back (LiveBindingsDock.PrintedBindings).
     signalDetails Signals.BindingsPanelOpen [] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
-        Text.raw "📦 "
+        textEnc (Glyphs.lead Glyph.Package)
         textEnc (sprintf "Bindings (%d)" activeCount)
       ]
       match snapshot with
@@ -3762,28 +3798,28 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
         | 0 ->
           Elem.div [ Attr.class' "meta" ] [ Text.raw "No active bindings" ]
         | _ ->
-          Elem.div [ Attr.style "font-size: 0.75rem;" ] [
+          Elem.div [ Attr.style "font-size: 0.857rem;" ] [
             for KeyValue(_, b) in scope.ActiveBindings do
               Elem.div [ Attr.style "display: flex; align-items: baseline; gap: 0.5em; padding: 2px 0; border-bottom: 1px solid var(--border, #333);" ] [
                 Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [
                   textEnc b.Name
                 ]
-                Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" ] [
+                Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.857rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" ] [
                   textEnc b.TypeSig
                 ]
-                Elem.span [ Attr.style "color: var(--fg-dim, #555); font-size: 0.65rem; white-space: nowrap;" ] [
+                Elem.span [ Attr.style "color: var(--fg-dim, #555); font-size: 0.857rem; white-space: nowrap;" ] [
                   textEnc (sprintf "cell %d" b.CellIndex)
                 ]
                 match b.ReferencedIn.Length with
                 | 0 -> ()
                 | n ->
-                  Elem.span [ Attr.style "color: var(--fg-yellow, #e5c07b); font-size: 0.65rem; white-space: nowrap;" ] [
+                  Elem.span [ Attr.style "color: var(--fg-yellow, #e5c07b); font-size: 0.857rem; white-space: nowrap;" ] [
                     textEnc (sprintf "→%d" n)
                   ]
                 match b.Value with
                 | None -> ()
                 | Some v ->
-                  Elem.span [ Attr.class' "value-display"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20em;" ] [
+                  Elem.span [ Attr.class' "value-display"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.857rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20em;" ] [
                     textEnc (sprintf "= %s" v)
                   ]
               ]
@@ -3792,11 +3828,11 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
           | 0 -> ()
           | _ ->
             signalDetails Signals.ShadowedBindingsOpen [ Attr.style "margin-top: 0.5em;" ] [
-              Elem.summary [ Attr.style "font-size: 0.7rem; cursor: pointer; color: var(--fg-dim, #666);" ] [
-                Text.raw "👻 "
+              Elem.summary [ Attr.style "font-size: 0.857rem; cursor: pointer; color: var(--fg-dim, #666);" ] [
+                textEnc (Glyphs.lead Glyph.Phantom)
                 textEnc (sprintf "%d shadowed" shadowedCount)
               ]
-              Elem.div [ Attr.style "font-size: 0.7rem; opacity: 0.6;" ] [
+              Elem.div [ Attr.style "font-size: 0.857rem; opacity: 0.6;" ] [
                 for b in scope.ShadowedBindings do
                   Elem.div [ Attr.style "padding: 1px 0;" ] [
                     Elem.code [] [ textEnc b.Name ]
@@ -3843,10 +3879,10 @@ let private renderDiscoveredProjectsBody (discovered: DiscoveredProjects) (planT
       match discovered.Solutions.IsEmpty with
       | false ->
         yield! discovered.Solutions |> List.map (fun s ->
-          renderDiscoveredResultRow "📁 " (sprintf "%s (solution)" s) s)
+          renderDiscoveredResultRow (Glyphs.lead Glyph.Folder) (sprintf "%s (solution)" s) s)
       | true -> ()
       yield! discovered.Projects |> List.map (fun p ->
-        renderDiscoveredResultRow "📄 " p p)
+        renderDiscoveredResultRow (Glyphs.lead Glyph.File) p p)
     ]
     match planText.Length with
     | 0 -> ()
@@ -3868,24 +3904,24 @@ let private renderDiscoverConfigNotes (dirConfig: DirectoryConfig option) =
         match config.Load with
         | Solution path ->
           Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
-            textEnc (sprintf "⚙️ .SageFs/config.fsx: solution %s" path)
+            textEnc (sprintf "%s .SageFs/config.fsx: solution %s" (Glyphs.text Glyph.Settings) path)
           ]
         | Projects paths ->
           Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
-            textEnc (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", paths)))
+            textEnc (sprintf "%s .SageFs/config.fsx: %s" (Glyphs.text Glyph.Settings) (String.Join(", ", paths)))
           ]
         | NoLoad ->
           Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
-            Text.raw "⚙️ .SageFs/config.fsx: no project loading (bare session)"
+            textEnc (Glyphs.lead Glyph.Settings + ".SageFs/config.fsx: no project loading (bare session)")
           ]
         | AutoDetect ->
           Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
-            Text.raw "⚙️ .SageFs/config.fsx found (auto-detect projects)"
+            textEnc (Glyphs.lead Glyph.Settings + ".SageFs/config.fsx found (auto-detect projects)")
           ]
 
       if not config.AutoOpenNamespaces then
         yield Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
-          Text.raw "⚙️ .SageFs/config.fsx: warmup auto-open disabled (sessions won't auto-open namespaces/modules)"
+          textEnc (Glyphs.lead Glyph.Settings + ".SageFs/config.fsx: warmup auto-open disabled (sessions won't auto-open namespaces/modules)")
         ]
     ]
   | None -> []
@@ -3931,7 +3967,7 @@ let evalResultError (msg: string) =
 /// Helper: render an eval-result info fragment — used for optimistic
 /// "in progress" feedback patched in BEFORE a slow action (reset, hard
 /// reset, session create) resolves, mirroring the teardown path's
-/// immediate "⏳ Stopping…" card swap (roast UX-8: RESET/HARD_RESET/create
+/// immediate "◐ Stopping…" card swap (roast UX-8: RESET/HARD_RESET/create
 /// showed nothing until the action itself finished).
 let evalResultInfo (msg: string) =
   Elem.div [ Attr.id DomIds.EvalResult ] [
@@ -3995,7 +4031,7 @@ let private hygieneRiskId (risk: WorkspaceHygiene.Risk) : string =
   | WorkspaceHygiene.Risk.Busy -> "busy"
 
 let private hygieneButton (id: string) (label: string) (action: string option) : XmlNode =
-  let common = [ Attr.id id; Attr.class' "eval-btn"; Attr.style "font-size: 0.8rem; flex: 0 1 auto;" ]
+  let common = [ Attr.id id; Attr.class' "eval-btn"; Attr.style "font-size: 0.857rem; flex: 0 1 auto;" ]
   match action with
   | Some post -> Elem.button (common @ [ Ds.onClick post ]) [ textEnc label ]
   | None -> Elem.button (common @ [ Attr.create "disabled" "disabled" ]) [ textEnc label ]
@@ -4003,24 +4039,24 @@ let private hygieneButton (id: string) (label: string) (action: string option) :
 let private hygieneRow (step: WorkspaceHygiene.Step) : XmlNode =
   let entry = WorkspaceHygiene.Leftover.entry step.Target
   Elem.li [ Attr.style "display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.15rem 0.5rem; min-width: 0; overflow-wrap: anywhere;" ] [
-    Elem.span [ Attr.style "font-family: var(--font-mono, monospace); font-size: 0.72rem;" ] [
+    Elem.span [ Attr.style "font-family: var(--font-mono, monospace); font-size: 0.857rem;" ] [
       textEnc (WorkspaceHygieneRender.label step.Target)
     ]
-    Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; white-space: nowrap;" ] [
+    Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; white-space: nowrap;" ] [
       textEnc (sprintf "%s · %s" (WorkspaceHygieneRender.formatBytes entry.SizeBytes) (WorkspaceHygieneRender.formatAge entry.Age))
     ]
-    Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; flex: 1 1 14rem;" ] [ textEnc step.Reason ]
+    Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; flex: 1 1 14rem;" ] [ textEnc step.Reason ]
     match step.Risk, step.Command with
     | WorkspaceHygiene.Risk.Safe, _
     | _, "" -> ()
     | _, command ->
-      Elem.code [ Attr.style "flex: 1 1 100%; font-size: 0.68rem; color: var(--fg-dim); overflow-wrap: anywhere;" ] [ textEnc command ]
+      Elem.code [ Attr.style "flex: 1 1 100%; font-size: 0.857rem; color: var(--fg-dim); overflow-wrap: anywhere;" ] [ textEnc command ]
   ]
 
 let private hygieneGroup (risk: WorkspaceHygiene.Risk) (steps: WorkspaceHygiene.Step list) : XmlNode =
   Elem.details
     [ Attr.id (sprintf "hygiene-group-%s" (hygieneRiskId risk)); Ds.preserveAttr "open"; Attr.style "min-width: 0;" ]
-    [ Elem.summary [ Attr.style "cursor: pointer; font-size: 0.78rem; user-select: none;" ] [
+    [ Elem.summary [ Attr.style "cursor: pointer; font-size: 0.857rem; user-select: none;" ] [
         textEnc (sprintf "%s (%d)" (WorkspaceHygieneRender.Risk.describe risk |> fun d -> d.Substring(0, 1).ToUpperInvariant() + d.Substring 1) (List.length steps))
       ]
       Elem.div [ Attr.style "display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.3rem; min-width: 0;" ] [
@@ -4033,7 +4069,7 @@ let private hygieneGroup (risk: WorkspaceHygiene.Risk) (steps: WorkspaceHygiene.
             let shown = sorted |> List.truncate WorkspaceHygieneRender.Limits.itemsPerGroup
             let total = ofKind |> List.sumBy (fun s -> (WorkspaceHygiene.Leftover.entry s.Target).SizeBytes)
             Elem.div [ Attr.style "min-width: 0;" ] [
-              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] [
+              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
                 textEnc (sprintf "%s × %d, %s" (WorkspaceHygiene.Kind.describe kind) (List.length ofKind) (WorkspaceHygieneRender.formatBytes total))
               ]
               Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; display: flex; flex-direction: column; gap: 0.25rem;" ] [
@@ -4041,13 +4077,13 @@ let private hygieneGroup (risk: WorkspaceHygiene.Risk) (steps: WorkspaceHygiene.
               ]
               match List.length sorted - List.length shown with
               | 0 -> ()
-              | more -> Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [ textEnc (sprintf "...and %d more" more) ]
+              | more -> Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [ textEnc (sprintf "...and %d more" more) ]
             ]
       ]
     ]
 
 let private hygieneTidiedBanner (summary: HygieneService.TidySummary) : XmlNode =
-  Elem.div [ Attr.id "hygiene-tidied"; Attr.class' "output-line output-info"; Attr.style "font-size: 0.78rem;" ] [
+  Elem.div [ Attr.id "hygiene-tidied"; Attr.class' "output-line output-info"; Attr.style "font-size: 0.857rem;" ] [
     textEnc (
       sprintf "Tidied: %d removed (%s reclaimed), %d already gone, %d skipped, %d failed."
         summary.Removed (WorkspaceHygieneRender.formatBytes summary.ReclaimedBytes) summary.AlreadyGone summary.Skipped summary.Failed)
@@ -4060,18 +4096,18 @@ let renderHygienePanel (view: HygieneService.HygieneView) : XmlNode =
     signalDetails
       Signals.HygienePanelOpen
       [ Attr.id DomIds.HygienePanel; Attr.class' "panel hygiene-panel"; Attr.style "margin-top: 0.5rem;" ]
-      [ Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
-          Text.raw "🧹 "
+      [ Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.857rem; user-select: none; color: var(--fg-blue);" ] [
+          textEnc (Glyphs.lead Glyph.Tidy)
           textEnc title
         ]
         Elem.div [ Attr.style "margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; min-width: 0;" ] body ]
   let meta (id: string) (text: string) : XmlNode =
-    Elem.div [ Attr.id id; Attr.class' "meta"; Attr.style "font-size: 0.78rem;" ] [ textEnc text ]
+    Elem.div [ Attr.id id; Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [ textEnc text ]
   match view with
   | HygieneService.HygieneView.NoRepository ->
-    panel "Workspace hygiene" [ meta "hygiene-state" "No git repository in play: open a session in one to see what agents left behind it." ]
+    panel "Workspace cleanup" [ meta "hygiene-state" "No git repository in play: open a session in one to see what agents left behind it." ]
   | HygieneService.HygieneView.NotScanned _ ->
-    panel "Workspace hygiene" [
+    panel "Workspace cleanup" [
       meta "hygiene-state" "Not scanned yet. A scan reads git and the process table and changes nothing."
       Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [
         hygieneButton DomIds.HygieneScan "Scan the workspace" (Some(Ds.post "/dashboard/hygiene/scan"))
@@ -4093,7 +4129,7 @@ let renderHygienePanel (view: HygieneService.HygieneView) : XmlNode =
     ]
   | HygieneService.HygieneView.ScanFailed(_, reason) ->
     panel "Workspace hygiene: scan failed" [
-      Elem.div [ Attr.id "hygiene-state"; Attr.class' "output-line output-error"; Attr.style "font-size: 0.78rem;" ] [
+      Elem.div [ Attr.id "hygiene-state"; Attr.class' "output-line output-error"; Attr.style "font-size: 0.857rem;" ] [
         textEnc (sprintf "The scan failed: %s" reason)
       ]
       Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [

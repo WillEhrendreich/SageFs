@@ -113,7 +113,7 @@ module FileReadiness =
     | NotLoaded -> "○"
     | Loaded -> "●"
     | Stale -> "~"
-    | LoadFailed -> "✖"
+    | LoadFailed -> Glyphs.text Glyph.Fail
 
   let isAvailable = function
     | Loaded -> true
@@ -212,11 +212,11 @@ module SessionContext =
       match failed with
       | 0 -> ""
       | n -> sprintf ", %d failed" n
-    sprintf "Warmup finished in %s: %s opened%s."
+    sprintf "Project loaded in %s: %s opened%s."
       (durationText (WarmupContext.totalDurationMs ctx.Warmup)) (countOf opened "namespace") failures
 
   let assemblyLine (asm: LoadedAssembly) =
-    sprintf "📦 %s (%d ns, %d mod)" asm.Name asm.NamespaceCount asm.ModuleCount
+    sprintf "%s %s (%d ns, %d mod)" (Glyphs.text Glyph.Package) asm.Name asm.NamespaceCount asm.ModuleCount
 
   let openLine (b: OpenedBinding) =
     let kind = OpenableKind.label b.Kind
@@ -226,7 +226,7 @@ module SessionContext =
     sprintf "%s %s%s"
       (FileReadiness.icon f.Readiness)
       f.Path
-      (match f.IsWatched with | true -> " 👁" | false -> "")
+      (match f.IsWatched with | true -> " " + Glyphs.text Glyph.Watched | false -> "")
 
 /// TUI-specific formatting for session context — plain text lines.
 module SessionContextTui =
@@ -270,7 +270,7 @@ module SessionContextTui =
       lines.Add(sprintf "── Failed (%d) ──" failed.Length)
       for f in failed do
         let kind = OpenableKind.label f.Kind
-        lines.Add(sprintf "✖ %s (%s): %s" f.Name kind f.ErrorMessage)
+        lines.Add(sprintf "%s %s (%s): %s" (Glyphs.text Glyph.Fail) f.Name kind f.ErrorMessage)
         for d in f.Diagnostics do
           lines.Add(sprintf "    %s" (WarmupFcsDiagnostic.formatLine d))
         match WarmupOpenFailure.suggestedAction f with

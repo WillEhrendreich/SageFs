@@ -929,7 +929,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "a failed run summary should be surfaced as an error" OutputKind.Failure
     summary.[0].Text
     |> Expect.equal "summary should reflect every prior batch in the run"
-         "🧪 Test run complete: 1 passed, 1 failed, 1 skipped (15ms)"
+         (SageFs.Glyphs.lead SageFs.Glyphs.Glyph.Test + "Test run complete: 1 passed, 1 failed, 1 skipped (15ms)")
     completed.PendingRunSummary
     |> PendingRunSummary.count
     |> Expect.equal "completion should clear the pending result accumulator" 0

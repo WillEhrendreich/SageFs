@@ -11,6 +11,7 @@ module SageFs.Server.EvaluatePopover
 
 open Falco.Markup
 open Falco.Datastar
+open SageFs
 open SageFs.Server.DashboardTypes
 
 /// The shortcut that opens the popover from anywhere on the page that is not a text field.
@@ -34,7 +35,7 @@ let private actionButton (cls: string) (id: string) (label: string) (glyph: stri
       Ds.indicator Signals.ActionLoading
       Ds.attr' ("disabled", "$actionLoading")
       Ds.onClick (Ds.post post) ]
-    [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
+    [ Elem.span [ Ds.show "$actionLoading" ] [ Text.enc (Glyphs.lead Glyph.Busy) ]
       Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw glyph ]
       Text.raw text ]
 
@@ -100,11 +101,11 @@ let render (keyboardHelp: XmlNode) : XmlNode =
             Ds.indicator Signals.CancelLoading
             Ds.attr' ("disabled", "$cancelLoading")
             Ds.onClick (Ds.post "/dashboard/cancel-eval") ]
-          [ Elem.span [ Ds.show "$cancelLoading" ] [ Text.raw "⏳ " ]
-            Elem.span [ Ds.show "!$cancelLoading" ] [ Text.raw "⛔ " ]
+          [ Elem.span [ Ds.show "$cancelLoading" ] [ Text.enc (Glyphs.lead Glyph.Busy) ]
+            Elem.span [ Ds.show "!$cancelLoading" ] [ Text.enc (Glyphs.lead Glyph.Stopped) ]
             Text.raw "[CANCEL]" ]
-        actionButton "eval-btn eval-btn-reset" "reset" "Reset — restart the FSI session, keeping loaded projects" "↻ " "[RESET]" "/dashboard/reset"
-        actionButton "eval-btn eval-btn-reset eval-btn-hard" "hard-reset" "Hard Reset — rebuild and restart the FSI session from scratch" "✖ " "[HARD_RESET]" "/dashboard/hard-reset"
+        actionButton "eval-btn eval-btn-reset" "reset" "Reset — restart the FSI session, keeping loaded projects" (Glyphs.lead Glyph.Reload) "[RESET]" "/dashboard/reset"
+        actionButton "eval-btn eval-btn-reset eval-btn-hard" "hard-reset" "Hard Reset — rebuild and restart the FSI session from scratch" (Glyphs.lead Glyph.Remove) "[HARD_RESET]" "/dashboard/hard-reset"
         Elem.label
           [ Attr.class' "eval-btn eval-btn-file"
             Attr.create "aria-label" "Load File — read a local .fs/.fsx/.fsi file into the editor" ]
@@ -113,7 +114,7 @@ let render (keyboardHelp: XmlNode) : XmlNode =
                 Attr.accept ".fs,.fsx,.fsi"
                 Attr.style "display: none;"
                 Ds.onEvent ("change", sprintf "var i=event.target; var f=i.files[0]; if(f){var r=new FileReader(); r.onload=function(){var ta=document.getElementById('%s'); ta.value=r.result; ta.dispatchEvent(new Event('input'))}; r.readAsText(f); i.value=''}" DomIds.EvalTextarea) ]
-            Text.raw "📂 Load File" ]
+            Text.enc (Glyphs.lead Glyph.Folder + "Load File") ]
       ]
       Elem.div [ Attr.id DomIds.EvalResult ] []
     ]

@@ -955,6 +955,7 @@ let refusalSamples : NudgeRefusal list =
     NudgeRefusal.NotALiteral "gravity * 2.0"
     NudgeRefusal.LiteralNotReadable(LiteralKindName.Real, "abc")
     NudgeRefusal.ValueKindMismatch "kind"
+    NudgeRefusal.ValueOutOfRange "300 is outside what a byte holds (0 to 255)."
     NudgeRefusal.ExpressionDoesNotParse "bad"
     NudgeRefusal.BlockedByOpenConflict gravity
     NudgeRefusal.NothingToUndo

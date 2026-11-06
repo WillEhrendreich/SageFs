@@ -147,11 +147,11 @@ let sampleSession: SessionContext = {
 
 [<Tests>]
 let sessionContextTests = testList "SessionContext" [
-  testCase "WHY — the summary is about warmup and says so, and carries no state word, because a \"Ready\" in it read as the session's health beside a header that said something else" <| fun _ ->
+  testCase "WHY — the summary is about the project load and says so, and carries no state word, because a \"Ready\" in it read as the session's health beside a header that said something else" <| fun _ ->
     let s = SessionContext.summary sampleSession
-    s |> Expect.stringContains "says it is about warmup" "Warmup"
+    s |> Expect.stringContains "says it is about the project load" "Project loaded"
     s.Contains sampleSession.Status |> Expect.isFalse "the daemon's state word is the header badge's to say, not this line's"
-    s |> Expect.equal "plain words, the count opened, the failures because there is one, and how long it took" "Warmup finished in 1.2s: 4 namespaces opened, 1 failed."
+    s |> Expect.equal "plain words, the count opened, the failures because there is one, and how long it took" "Project loaded in 1.2s: 4 namespaces opened, 1 failed."
 
   testCase "WHY — the summary does not print a files-loaded ratio, because a zero there is normal for a REPL session (a file counts as loaded only when an opened namespace's name ends its path) and read as a failure beside Ready" <| fun _ ->
     let s = SessionContext.summary sampleSession
@@ -162,7 +162,7 @@ let sessionContextTests = testList "SessionContext" [
 
   testCase "WHY — a failure count is printed only when it is not zero, so a clean warmup reads as finished and not as a column of zeros" <| fun _ ->
     let clean = SessionContext.summary { sampleSession with Warmup = { sampleSession.Warmup with FailedOpens = [] } }
-    clean |> Expect.equal "no failure clause" "Warmup finished in 1.2s: 4 namespaces opened."
+    clean |> Expect.equal "no failure clause" "Project loaded in 1.2s: 4 namespaces opened."
     clean.Contains "failed" |> Expect.isFalse "the word failed is absent"
 
   testCase "WHY — one namespace is 'namespace', not 'namespaces'" <| fun _ ->
@@ -189,7 +189,7 @@ let sessionContextTests = testList "SessionContext" [
 
   testCase "fileLine shows icon and path" <| fun _ ->
     SessionContext.fileLine { Path = "Domain.fs"; Readiness = Loaded; LastLoadedAt = None; IsWatched = true }
-    |> Expect.equal "loaded watched" "● Domain.fs 👁"
+    |> Expect.equal "loaded watched" ("● Domain.fs " + SageFs.Glyphs.text SageFs.Glyphs.Glyph.Watched)
     SessionContext.fileLine { Path = "Tests.fs"; Readiness = NotLoaded; LastLoadedAt = None; IsWatched = false }
     |> Expect.equal "not loaded unwatched" "○ Tests.fs"
 ]
@@ -269,7 +269,7 @@ let sessionContextTuiTests= testList "SessionContextTui" [
     lines |> List.exists (fun l -> l.Contains("●") && l.Contains("Domain.fs")) |> Expect.isTrue "loaded+watched"
     lines |> List.exists (fun l -> l.Contains("○") && l.Contains("Startup.fs")) |> Expect.isTrue "not loaded"
     lines |> List.exists (fun l -> l.Contains("~") && l.Contains("Old.fs")) |> Expect.isTrue "stale"
-    lines |> List.exists (fun l -> l.Contains("✖") && l.Contains("Broken.fs")) |> Expect.isTrue "failed"
+    lines |> List.exists (fun l -> l.Contains(SageFs.Glyphs.text SageFs.Glyphs.Glyph.Fail) && l.Contains("Broken.fs")) |> Expect.isTrue "failed"
 
   testCase "detailLines shows failed opens" <| fun _ ->
     let lines = SessionContextTui.detailLines sampleTuiSession
@@ -373,7 +373,7 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
     let result = formatWarmupDetailForLlm ctx
     result |> Expect.stringContains "files header""Files (1/2 loaded):"
     result |> Expect.stringContains "loaded file" "● good.fs"
-    result |> Expect.stringContains "failed file" "✖ broken.fs"
+    result |> Expect.stringContains "failed file" (SageFs.Glyphs.text SageFs.Glyphs.Glyph.Fail + " broken.fs")
 
   testCase "empty session shows zero summary" <| fun _ ->
     let ctx : SessionContext = {

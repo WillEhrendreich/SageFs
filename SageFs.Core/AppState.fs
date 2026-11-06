@@ -850,7 +850,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
       WarmupFcsDiagnostic.pickErrorMessage ex.Message (toWarmupDiagnostics diagnostics)
     let reportOpenSuccess name elapsed =
       openCount <- openCount + 1
-      onProgress(openCount, totalNames, sprintf "✅ open %s (%.0fms)" name elapsed)
+      onProgress(openCount, totalNames, sprintf "%s open %s (%.0fms)" (Glyphs.text Glyph.Pass) name elapsed)
     let reportOpenSkipped name elapsed =
       openCount <- openCount + 1
       onProgress(openCount, totalNames, sprintf "⏭️ open %s (skipped, %.0fms)" name elapsed)

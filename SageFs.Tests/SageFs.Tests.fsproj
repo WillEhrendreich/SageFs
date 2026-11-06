@@ -220,6 +220,8 @@
         <Compile Include="WorkerReloadRelayTests.fs" />
         <Compile Include="DashboardRenderGateTests.fs" />
         <Compile Include="DashboardIdleStabilityTests.fs" />
+        <Compile Include="DashboardTypeScaleTests.fs" />
+        <Compile Include="DashboardGlyphTests.fs" />
         <Compile Include="DashboardReadinessTests.fs" />
         <Compile Include="DashboardScopedStateTests.fs" />
         <Compile Include="DashboardTeardownStateTests.fs" />
@@ -531,6 +533,7 @@
         <Compile Include="NudgeSimDstTests.fs" />
         <Compile Include="NudgeToolTests.fs" />
         <!-- What a live-bindings row knows about the file it may be written back to: the persistence state, the knob's step. -->
+        <Compile Include="NumberLimitsTests.fs" />
         <Compile Include="BindingTweakTests.fs" />
         <Compile Include="BindingTweakRowsTests.fs" />
         <Compile Include="CallResultTests.fs" />

@@ -82,6 +82,28 @@ let tests =
       for view, expected in labels do
         SessionInView.badgeLabel view |> Expect.equal (sprintf "the label for %A" view) expected
 
+    testCase "WHY — a session whose build is current says so beside the badge, in an element of its own, because \"Ready\" is the engine's word and the badge keeps it" <| fun _ ->
+      let page = renderMainContent (snapshotOf (readyWith Readiness.ReadyCurrent)) |> render
+      page |> Expect.stringContains "the note says the second fact" "all changes live"
+      page |> Expect.stringContains "it has an element of its own" "data-testid=\"session-live-note\""
+      headerBadge page |> Expect.stringContains "the badge still says Ready" ">Ready"
+      (headerBadge page).Contains "all changes live" |> Expect.isFalse "and the note is not inside the badge"
+
+    testCase "WHY — a Ready session says what its build is next to the badge, with the caution glyph when it is not current, and a session that is not Ready says nothing there because its badge already names the state" <| fun _ ->
+      let page (view: SessionInView) = renderMainContent (snapshotOf view) |> render
+      [ "changes not live", readyWith Readiness.ReadyOlderCode
+        "rebuilding", readyWith Readiness.ReadyRebuilding
+        "REPL behind the app", readyWith Readiness.ReadyReplBehindApp
+        "build not checked", readyWith Readiness.ReadyUnchecked ]
+      |> List.iter (fun (words, view) ->
+        page view |> Expect.stringContains (sprintf "the note says %s" words) (Glyphs.lead Glyph.Warn + words)
+        page view |> Expect.stringContains "in the warning cell" "tabline-livenote-warn")
+      [ "faulted", inPlay SessionState.Faulted (SessionDisplayStatus.Faulted "boom")
+        "warming up", inPlay SessionState.WarmingUp SessionDisplayStatus.Starting
+        "no session", SessionInView.NoSessionInPlay ]
+      |> List.iter (fun (name, view) ->
+        (page view).Contains "session-live-note" |> Expect.isFalse (sprintf "no live note for %s" name))
+
     testCase "WHY — a faulted session's main area says why and what to do, because the reason and the remedy sat on a sidebar card" <| fun _ ->
       let html =
         renderSessionFaultNotice (inPlay SessionState.Faulted (SessionDisplayStatus.Faulted "NuGet restore failed for SageFs.Core.fsproj"))
@@ -123,11 +145,14 @@ let tests =
 
     testCase "WHY — a Ready session that runs older code is not a plain green Ready in the header, because the card beside it says the files are ahead of the build" <| fun _ ->
       let view = readyWith Readiness.ReadyOlderCode
-      SessionInView.badgeLabel view |> Expect.equal "the words say it" "Ready, running older code"
+      SessionInView.badgeLabel view |> Expect.equal "the badge keeps the engine's word" "Ready"
+      SessionInView.liveNote view |> Expect.equal "and the note says the rest, with the caution glyph" (Some (Glyph.Warn, "changes not live"))
       SessionInView.badgeCssClass view |> Expect.equal "in the caution colour, not green and not red" "status-notice"
       let badge = renderMainContent (snapshotOf view) |> render |> headerBadge
       badge |> Expect.stringContains "the page draws the caution class" "status status-notice"
-      badge |> Expect.stringContains "and the words" ">Ready, running older code"
+      badge |> Expect.stringContains "and the engine's word" ">Ready"
+      badge.Contains "changes not live" |> Expect.isFalse "and nothing added to it"
+      renderMainContent (snapshotOf view) |> render |> Expect.stringContains "the note beside it, in its own cell" (Glyphs.lead Glyph.Warn + "changes not live")
 
     testCase "WHY — over every readiness, only a current build is green, and a build that is behind is never red" <| fun _ ->
       let readinesses =

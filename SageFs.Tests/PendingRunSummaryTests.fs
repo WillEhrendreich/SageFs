@@ -56,7 +56,7 @@ let tests =
       line.Kind |> Expect.equal "a failed run is surfaced as an error" OutputKind.Failure
       line.Text
       |> Expect.equal "summary reflects every batch"
-           "🧪 Test run complete: 1 passed, 1 failed, 1 skipped (15ms)"
+           (SageFs.Glyphs.lead SageFs.Glyphs.Glyph.Test + "Test run complete: 1 passed, 1 failed, 1 skipped (15ms)")
 
     testCase "an all-pass run renders an Info line" <| fun _ ->
       let line =

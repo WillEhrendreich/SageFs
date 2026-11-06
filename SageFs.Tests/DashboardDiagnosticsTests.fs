@@ -106,13 +106,13 @@ let renderCurrentDiagnosticsTests =
     test "error renders error icon" {
       let diags = [ { Severity = DiagError; Message = "err"; Line = 1; Col = 1 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      html |> Expect.stringContains "should show error icon" "🔴"
+      html |> Expect.stringContains "should show error icon" (Glyphs.text Glyph.Fail)
     }
 
     test "warning renders warning icon" {
       let diags = [ { Severity = DiagWarning; Message = "warn"; Line = 1; Col = 1 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      html |> Expect.stringContains "should show warning icon" "⚠️"
+      html |> Expect.stringContains "should show warning icon" (Glyphs.text Glyph.Warn)
     }
 
     test "renders location for diagnostic with line and col" {

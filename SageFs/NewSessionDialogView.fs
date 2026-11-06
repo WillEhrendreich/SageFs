@@ -347,7 +347,7 @@ let startingCard (request: Request) : XmlNode =
           Elem.span [ Attr.class' "status badge status-starting" ] [ Text.raw "Starting" ]
         ]
         Elem.div [ Attr.class' "status-msg" ] [
-          textEnc (sprintf "⏳ Starting a %s session…" (workflowName request.Workflow))
+          textEnc (sprintf "%s Starting a %s session…" (Glyphs.text Glyph.Busy) (workflowName request.Workflow))
         ]
         Elem.div [ Attr.class' "nsd-meta nsd-path" ] [ textEnc request.Directory ]
       ] ]

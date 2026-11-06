@@ -196,7 +196,7 @@ let tests =
           let! visible = marker.IsVisibleAsync()
           visible |> Expect.isTrue (sprintf "at %dpx the marker is visible" width)
           let! text = marker.InnerTextAsync()
-          text |> Expect.stringContains "and it is a word" "Running older code"
+          text |> Expect.stringContains "and it is a word" "Changes not live"
           let! inside = page.EvaluateAsync<bool>("() => { const r = document.querySelector('[data-testid=sessions-stale-marker]').getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth + 0.5 }")
           inside |> Expect.isTrue (sprintf "at %dpx the marker is inside the screen" width)
         })

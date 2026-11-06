@@ -159,7 +159,7 @@ let dockTreeTests =
           Reload = RowReload.NoWriteYet
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep
-          Through = ThroughCall.NoCall }
+          Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
       let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
       let html = renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
       html |> Expect.stringContains "the count, in the bar, in words that say what it counts" (PaneNote.text (PaneNote.NotInAnyFile 2))
@@ -292,7 +292,7 @@ let private gravityTweaks : TweakView =
       Reload = RowReload.NoWriteYet
       Undo = HistoryStep.NothingToStep
       Redo = HistoryStep.NothingToStep
-      Through = ThroughCall.NoCall }
+      Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
   { Rows = Map.ofList [ RowKey.top "gravity", row ] }
 
 /// The dock draws from the view it is handed (docs/plans/live-bindings-watch-view.md, phase 1, step 2b).
@@ -418,12 +418,12 @@ let viewPanelTests =
         let pages = AxisValue.allFor axis |> List.map (fun value -> drawn (View.withValue value recommended))
         (pages |> List.distinct |> List.length) |> Expect.equal (sprintf "%s: each value draws a different dock" (ViewAxis.label axis)) pages.Length
 
-    testCase "WHY — the pressed button is the view's current value, and the preset row names the recommended one" <| fun _ ->
+    testCase "WHY — the pressed button is the view's current value, and one button puts everything back to the recommended view" <| fun _ ->
       let html = panelHtml ViewWorkflow.Repl (resolvedOf ViewWorkflow.Repl [ ViewAxis.RowHeight, LRepo ] [ AxisValue.RowHeight RowHeight.Roomy ])
-      html |> Expect.stringContains "the recommended preset is named" "Watch window (recommended)"
+      html |> Expect.stringContains "the way back to the recommended view is offered" "Reset to recommended"
       let pressed = Text.RegularExpressions.Regex.Matches(html, "aria-pressed=\"true\"").Count
-      // One per drawn axis, plus the preset row's pressed button.
-      pressed |> Expect.equal "one pressed button per drawn axis and one preset" (ViewAxis.drawn.Length + 1)
+      // One per drawn axis.
+      pressed |> Expect.equal "one pressed button per drawn axis" ViewAxis.drawn.Length
 
     testCase "WHY — the panel's visible words are plain: none of 'column', 'workflow', 'fact' or 'pane', which three reviewers could not decode" <| fun _ ->
       // What a person reads is the text outside the tags. The words are the code's nouns for a thing the person sees as a
@@ -438,10 +438,10 @@ let viewPanelTests =
     testCase "WHY — a reset appears beside an axis only when a file holds a choice for it, and says where it came from" <| fun _ ->
       let none = panelHtml ViewWorkflow.Repl (untouched ViewWorkflow.Repl)
       count "live-view-reset\"" none |> Expect.equal "no per-axis reset when nothing is saved" 0
-      // A default says nothing beside its axis: the preset row names the recommended view once. The word repeated beside every
-      // pair read as noise to three reviewers.
+      // A default says nothing beside its axis: the panel's one reset names the recommended view once. The word repeated beside
+      // every pair read as noise to three reviewers.
       count "live-view-source\"" none |> Expect.equal "no source word beside an axis nobody saved" 0
-      none |> Expect.stringContains "the preset row names the recommendation once" "(recommended)"
+      none |> Expect.stringContains "the panel's one reset names the recommendation once" "Reset to recommended"
       let saved = panelHtml ViewWorkflow.Repl (resolvedOf ViewWorkflow.Repl [ ViewAxis.RowHeight, LRepo ] [ AxisValue.RowHeight RowHeight.Roomy ])
       count "live-view-reset\"" saved |> Expect.equal "one reset, for the saved axis" 1
       saved |> Expect.stringContains "the source is named" "saved for this project"
@@ -548,7 +548,7 @@ let dockWordingTests =
               Reload = RowReload.NoWriteYet
               Undo = HistoryStep.NothingToStep
               Redo = HistoryStep.NothingToStep
-              Through = ThroughCall.NoCall } ] }
+              Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited } ] }
   let allNotes : PaneNote list =
     [ PaneNote.NoNameMatchesFilter
       PaneNote.ValuesCutShort
@@ -569,31 +569,42 @@ let dockWordingTests =
     let look = { recommended with Layout = { recommended.Layout with Type = typeColumn } }
     let v = view bindings
     renderDockWith look None tweaks SessionInView "abcd1234" (WalkedBindings { v with Notes = { v.Notes with Mode = mode } }) None |> decoded
+  /// The same dock drawn with the Display panel, which holds the mode buttons and the legend (`LiveBindingsDock.modeRows`).
+  let dockWithPanel (tweaks: TweakView) (mode: ValueWalk) (bindings: LiveBindingValue list) : string =
+    let recommended = SageFs.View.recommended SageFs.ViewWorkflow.Repl
+    let controls = LiveBindingsViewPanel.render "abcd1234" SageFs.ViewWorkflow.Repl { View = recommended; Sources = Map.empty }
+    let v = view bindings
+    renderDockWith recommended (Some controls) tweaks SessionInView "abcd1234" (WalkedBindings { v with Notes = { v.Notes with Mode = mode } }) None |> decoded
 
   testList "the pane says what its controls govern and where a change goes, before anyone has to find out" [
 
-    testCase "WHY — a list with at least one editable row says, in text that is always on screen, where a change goes" <| fun _ ->
-      let said = PaneNote.text PaneNote.ChangesGoToTheFile
-      (dockWith withKnob ValueWalk.standard On [ person ]) |> Expect.stringContains "the caption is there" said
-      (dockWith withKnob ValueWalk.standard On [ person ]) |> Expect.stringContains "under its own test id" "data-testid=\"live-writes-caption\""
-      (dockWith TweakView.none ValueWalk.standard On [ person ]).Contains "live-writes-caption" |> Expect.isFalse "no editable row, no caption"
-      TweakView.hasKnob withKnob |> Expect.isTrue "the pure fact the caption follows"
+    testCase "WHY — the pane's one line under its title says where an edit goes, and a list with an editable row adds no standing caption of its own to the header" <| fun _ ->
+      let editable = dockWith withKnob ValueWalk.standard On [ person ]
+      editable |> Expect.stringContains "the line under the title is there, under its own test id" "data-testid=\"live-pane-sub\""
+      editable |> Expect.stringContains "it says the file changes now" "Edit one: the file changes now"
+      editable |> Expect.stringContains "and that the row says how the session catches up" "the row says how the session catches up"
+      editable.Contains "live-writes-caption" |> Expect.isFalse "no change is pending, so the header has no caption"
+      editable.Contains "live-writes-banner" |> Expect.isFalse "and no banner"
+      editable.Contains (PaneNote.text PaneNote.ChangesGoToTheFile) |> Expect.isFalse "the standing sentence is not drawn"
+      (dockWith TweakView.none ValueWalk.standard On [ person ]) |> Expect.stringContains "the line under the title is there with no editable row too" "data-testid=\"live-pane-sub\""
+      TweakView.hasKnob withKnob |> Expect.isTrue "the pure fact: this list has an editable row"
       TweakView.hasKnob TweakView.none |> Expect.isFalse "no rows, no knob"
 
-    testCase "WHY — when nothing watches the files the rows are in, the pane says so once, in its edit caption, and a row nobody has written says nothing: the sentence under every row was noise" <| fun _ ->
+    testCase "WHY — when nothing watches the files the rows are in and nothing is pending, the header says nothing about it, and a row nobody has written says nothing: the sentence under every row was noise" <| fun _ ->
       // Seen in a real browser once hot reload was left off (the usual state in a REPL session): after one nudge every row in the file
       // said "Nothing is watching Tuning.fs, so a change saved to it will not reach the running session", ten rows of the same sentence.
+      // The line under the pane's title carries the one general rule, and a change that is saved and not live gets the banner.
       let unwatched : TweakView = { Rows = withKnob.Rows |> Map.map (fun _ row -> { row with Watching = WatchStatus.NotWatched }) }
       let said = PaneNote.text PaneNote.ChangesGoToAnUnwatchedFile
       let html = dockWith unwatched ValueWalk.standard On [ person ]
-      html |> Expect.stringContains "the caption names the consequence, once" said
-      count said html |> Expect.equal "once" 1
-      html.Contains "tweak-watching" |> Expect.isFalse "and no unwritten row repeats it"
-      (dockWith withKnob ValueWalk.standard On [ person ]).Contains said |> Expect.isFalse "a watched file needs no such caption"
-      TweakView.anyUnwatched unwatched |> Expect.isTrue "the fact the caption follows"
+      html.Contains said |> Expect.isFalse "no standing caption names the consequence"
+      html.Contains "live-writes-caption" |> Expect.isFalse "the header draws no caption while nothing is pending"
+      html |> Expect.stringContains "the line under the title is still there" "data-testid=\"live-pane-sub\""
+      html.Contains "tweak-watching" |> Expect.isFalse "and no unwritten row repeats the sentence"
+      TweakView.anyUnwatched unwatched |> Expect.isTrue "the pure fact: nothing watches these files"
       TweakView.anyUnwatched withKnob |> Expect.isFalse "a watched one has none"
 
-    testCase "WHY — while a change is saved and not running, the caption is the one place that names it and both remedies, and the standing rule steps aside: the same fact was said four times" <| fun _ ->
+    testCase "WHY — while a change is saved and not live, the banner is the one place that names it and both remedies, with the buttons beside the sentence: the same fact was said four times" <| fun _ ->
       let pending : TweakView =
         { Rows =
             withKnob.Rows
@@ -603,16 +614,19 @@ let dockWordingTests =
               | PlaceOf.NotPlaced -> row) }
       let html = dockWith pending ValueWalk.standard On [ person ]
       let said = PaneNote.text (PaneNote.PendingChange [ "person" ])
-      html |> Expect.stringContains "the caption names the changed binding and what to do" said
+      html |> Expect.stringContains "the banner is drawn, under its own test id" "data-testid=\"live-writes-banner\""
+      html |> Expect.stringContains "its caption names the changed binding and what to do" said
+      said |> Expect.stringContains "it says the change is saved but not live" "saved but not live"
       said |> Expect.stringContains "it names the first remedy" "Apply to this session"
-      said |> Expect.stringContains "and the second, with what it covers" "Rebuild and reload brings in every changed file"
+      said |> Expect.stringContains "and the second, with what it covers" "Rebuild and reload makes every changed file live"
       html.Contains (PaneNote.text PaneNote.ChangesGoToAnUnwatchedFile) |> Expect.isFalse "the standing rule is not said beside it"
       LiveBindingsTweakView.pendingChanges pending |> Expect.equal "the names the caption follows" [ "person" ]
       LiveBindingsTweakView.pendingChanges withKnob |> Expect.isEmpty "nothing pending, nothing named"
 
-    testCase "WHY — values come first: the standard mode spends no line on its meaning, and a mode that is not the standard says what it does on one line" <| fun _ ->
+    testCase "WHY — values come first: the mode buttons live in the Display panel, the standard mode spends no line on its meaning, and a mode that is not the standard says what it does on one line" <| fun _ ->
       for mode in ValueWalk.all do
-        let html = dockWith TweakView.none mode On [ person ]
+        let html = dockWithPanel TweakView.none mode [ person ]
+        (dockWith TweakView.none mode On [ person ]).Contains DockIds.ModeLabel |> Expect.isFalse "the pane's own header holds no mode buttons"
         html |> Expect.stringContains "the group's label" (PaneNote.text PaneNote.ModeGoverns)
         html |> Expect.stringContains "the group is named by that label" (sprintf "aria-labelledby=\"%s\"" DockIds.ModeLabel)
         html |> Expect.stringContains "the label has the id the group names" (sprintf "id=\"%s\"" DockIds.ModeLabel)
@@ -652,8 +666,9 @@ let dockWordingTests =
       let html = dock (WalkedBindings { walked with Snapshot = { walked.Snapshot with CapturedAt = at } })
       html |> Expect.stringContains "the stamp is the UTC time, labelled" (PaneNote.text (PaneNote.ValuesAsOf "17:17:31 UTC"))
 
-    testCase "WHY — the legend is closed until opened, one click away, and has one line for every badge and every glyph, generated from the sets they come from" <| fun _ ->
-      let html = dockWith withKnob ValueWalk.standard On [ person ]
+    testCase "WHY — the legend sits in the Display panel, closed until opened, and has one line for every badge and every glyph, generated from the sets they come from" <| fun _ ->
+      (dockWith withKnob ValueWalk.standard On [ person ]).Contains "live-legend" |> Expect.isFalse "the pane's own header holds no legend"
+      let html = dockWithPanel withKnob ValueWalk.standard [ person ]
       let opening = Text.RegularExpressions.Regex.Match(html, "<details[^>]*id=\"live-legend\"[^>]*>")
       opening.Success |> Expect.isTrue "the legend is a details element"
       opening.Value.Contains " open" |> Expect.isFalse "and it starts closed"
@@ -705,7 +720,7 @@ let dockWordingTests =
           Reload = RowReload.NoWriteYet
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep
-          Through = ThroughCall.NoCall }
+          Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
       let gravity = binding "gravity" NodeKind.Leaf []
       let differing = dockWith { Rows = Map.ofList [ RowKey.top "gravity", rowOf (PersistenceState.DiffersFromFile("9.8", place)) ] } ValueWalk.standard On [ gravity ]
       differing |> Expect.stringContains "the heading's value says running" "data-testid=\"tweak-running-tag\""
@@ -723,7 +738,7 @@ let dockWordingTests =
           Reload = RowReload.NoWriteYet
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep
-          Through = ThroughCall.NoCall }
+          Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
       let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
       let html = dockWith tweaks ValueWalk.standard On [ person; scores ]
       let counted = TweakView.replOnlyCount tweaks [ "person"; "scores" ]
@@ -742,7 +757,7 @@ let dockWordingTests =
           Reload = RowReload.NoWriteYet
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep
-          Through = ThroughCall.CouldNotFollow(Refusal.NoCalleeInFiles callee) }
+          Through = ThroughCall.CouldNotFollow(Refusal.NoCalleeInFiles callee); Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
       let fieldKey (label: string) : RowKey = { Binding = "rig"; Labels = [ label ] }
       let tweaks : TweakView =
         { Rows = Map.ofList [ fieldKey "Mass", viaCall "makeRig"; fieldKey "Drag", viaCall "makeRig"; fieldKey "Spin", viaCall "makeSpin" ] }
@@ -751,26 +766,28 @@ let dockWordingTests =
       count "Built by makeRig," html |> Expect.equal "the shared sentence is said once" 1
       count "Built by makeSpin," html |> Expect.equal "a different sentence is still said" 1
 
-    testCase "WHY — at the standard mode the header is one line of help: no line of its own for the mode, and the edit caption, label, buttons and legend share a row" <| fun _ ->
+    testCase "WHY — at the standard mode the header spends no line at all: no line of its own for the mode, no standing edit caption, and no mode buttons or legend, which are in the Display panel" <| fun _ ->
       let head (html: string) =
         let start = html.IndexOf "class=\"live-pane-head\""
         html.Substring(start, html.IndexOf("id=\"live-tree\"", start) - start)
       let standardHead = head (dockWith withKnob ValueWalk.standard On [ person ])
       standardHead.Contains "live-containment" |> Expect.isFalse "nothing in the head takes a full line at the standard mode"
-      count "data-testid=\"live-writes-caption\"" standardHead |> Expect.equal "one edit caption" 1
+      standardHead.Contains "live-writes-caption" |> Expect.isFalse "no change is pending, so no edit caption"
+      standardHead.Contains "live-mode-btn" |> Expect.isFalse "the mode buttons are not in the head"
+      standardHead.Contains "live-legend" |> Expect.isFalse "and neither is the legend"
       let otherHead = head (dockWith withKnob WalkEverything On [ person ])
       count "live-containment" otherHead |> Expect.equal "a mode that is not the standard takes exactly one more line" 1
 
-    testCase "WHY — a state tag says what is true, in words a person uses: 'in the file', 'has parts', and 'saved, not applied' for a file that is ahead of the app" <| fun _ ->
+    testCase "WHY — a state tag says what is true, in words a person uses: 'in the file', 'expandable', and 'saved, not live' for a file that is ahead of the app" <| fun _ ->
       // Reviewers read "DIFFERS FROM THE FILE" over a sentence that said "Saved to the file" as a contradiction (is the file the same
       // or not?), "IN SOURCE" as unrelated to "NOT IN A FILE", and "MADE OF PARTS" as vague. The pairs now read as pairs.
       LiveBindingsTweakView.tagLabel StateTag.InSource |> Expect.equal "the pair of 'not in a file'" "in the file"
-      LiveBindingsTweakView.tagLabel StateTag.MadeOfParts |> Expect.equal "what a record or list is" "has parts"
-      LiveBindingsTweakView.tagLabel StateTag.DiffersFromFile |> Expect.equal "what the row says about the app: the file's value has not been applied, and the program is not stopped" "saved, not applied"
+      LiveBindingsTweakView.tagLabel StateTag.MadeOfParts |> Expect.equal "what a record or list is" "expandable"
+      LiveBindingsTweakView.tagLabel StateTag.DiffersFromFile |> Expect.equal "what the row says about the app: the file's value has not been applied, and the program is not stopped" "saved, not live"
 
     testCase "WHY — the label on the mode buttons is plain: it says they govern what is looked at inside an object, not 'class values'" <| fun _ ->
       // Three reviewers: "Class values is not explained, what is a class, what does Safe do". The label names the act.
-      PaneNote.text PaneNote.ModeGoverns |> Expect.equal "the label" "Look inside objects:"
+      PaneNote.text PaneNote.ModeGoverns |> Expect.equal "the label" "Show inside objects (Safe skips properties that could run your code):"
 
     testCase "WHY — the view panel offers only the settings the list still obeys: state and source always have their own columns above 900px, so a Show state switch set to Off beside a State column on screen read as a bug" <| fun _ ->
       ViewAxis.drawn |> Expect.equal "type, long values and row height" [ ViewAxis.TypeColumn; ViewAxis.ValueMode; ViewAxis.RowHeight ]
@@ -787,7 +804,7 @@ let dockWordingTests =
       // The header is decoration for the eye: the rows carry their own accessible names.
       let on = dock (WalkedBindings(view [ person ]))
       on |> Expect.stringContains "the header is drawn" "live-cols"
-      for name in [ "Name = value"; "State"; "Source"; "Edit" ] do on |> Expect.stringContains (sprintf "the %s column is named" name) name
+      for name in [ "Name · running value"; "State"; "Source"; "Edit (saves to file)" ] do on |> Expect.stringContains (sprintf "the %s column is named" name) name
       on |> Expect.stringContains "the type column is named while it is shown" ">Type<"
       let off = renderDockWith { View.recommended ViewWorkflow.Repl with Layout = { (View.recommended ViewWorkflow.Repl).Layout with Type = Off } } None TweakView.none SessionInView "abcd1234" (WalkedBindings(view [ person ])) None |> decoded
       off.Contains ">Type<" |> Expect.isFalse "and the label goes when the column is off"

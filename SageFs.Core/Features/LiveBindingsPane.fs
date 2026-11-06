@@ -186,15 +186,15 @@ module LiveBindingsPane =
       | PaneNote.ValuesAsOf at -> sprintf "Values as of %s" at
       | PaneNote.ReadFromPrinted -> "read from FSI's printed output"
       | PaneNote.ChangesGoToTheFile -> "Edits go to the file."
-      | PaneNote.ChangesGoToAnUnwatchedFile -> "Changes are saved to the file. Nothing watches the file for changes, so the session keeps its old values until you apply them."
+      | PaneNote.ChangesGoToAnUnwatchedFile -> "A saved edit reaches the running session when you press Apply to this session."
       | PaneNote.PendingChange names ->
         let count = List.length names
-        sprintf "%s saved to the file but not running: %s. Apply to this session runs %s now. Rebuild and reload brings in every changed file."
+        sprintf "%s saved but not live: %s. Apply to this session makes %s live now. Rebuild and reload makes every changed file live."
           (match count with | 1 -> "1 change is" | n -> sprintf "%d changes are" n)
           (String.concat ", " names)
           (match count with | 1 -> "it" | _ -> "them")
-      | PaneNote.ModeGoverns -> "Look inside objects:"
-      | PaneNote.LegendSummary -> "What do the tags mean?"
+      | PaneNote.ModeGoverns -> "Show inside objects (Safe skips properties that could run your code):"
+      | PaneNote.LegendSummary -> "What do the State marks mean?"
       | PaneNote.ModeMeans choice ->
         let meaning =
           match choice with
@@ -202,7 +202,7 @@ module LiveBindingsPane =
           | WalkEverything -> "runs your property getters after every eval. That is your code running."
           | WalkOff -> "class values stay closed. Records, unions, tuples, lists and maps still show."
         sprintf "%s: %s" (ValueWalk.name choice) meaning
-      | PaneNote.NotInAnyFile count -> sprintf "%d not defined in a file" count
+      | PaneNote.NotInAnyFile count -> sprintf "%d not in a file" count
 
   type ReplaceOutcome =
     | Replaced of LiveValueTree.LiveValueSnapshot

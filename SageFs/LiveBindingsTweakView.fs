@@ -35,6 +35,12 @@ module TweakSignals =
   let [<Literal>] SeenText = "twSeenText"
   let [<Literal>] Verb = "twVerb"
   let [<Literal>] Value = "twValue"
+  /// The three texts a person typed to choose a number's range and step, staged for the post.
+  let [<Literal>] LimLow = "twLimLow"
+  let [<Literal>] LimHigh = "twLimHigh"
+  let [<Literal>] LimStep = "twLimStep"
+  /// Where a chosen range and step are posted.
+  let [<Literal>] LimitsEndpoint = "/dashboard/tweak/limits"
   /// Where the knob posts. A dashboard route, because the page posts to the origin it was served from.
   let [<Literal>] Endpoint = "/dashboard/tweak"
   /// How many steps a drag, the buttons or the keys may count from where the row stands, either way.
@@ -48,7 +54,10 @@ module TweakSignals =
       Ds.signal (Seen, "")
       Ds.signal (SeenText, "")
       Ds.signal (Verb, "")
-      Ds.signal (Value, "") ]
+      Ds.signal (Value, "")
+      Ds.signal (LimLow, "")
+      Ds.signal (LimHigh, "")
+      Ds.signal (LimStep, "") ]
 
   let hexOf (text: string) : string = Convert.ToHexStringLower(Text.Encoding.UTF8.GetBytes text)
 
@@ -60,6 +69,12 @@ module TweakSignals =
   let stripId (key: RowKey) : string = named "tw" key
   let sliderId (key: RowKey) : string = named "twr" key
   let readoutId (key: RowKey) : string = named "twv" key
+  /// The row's own copies of the three texts, bound to the inputs of its range editor, and the note the route answers with.
+  let limLowOf (key: RowKey) : string = named "twLow" key
+  let limHighOf (key: RowKey) : string = named "twHigh" key
+  let limStepOf (key: RowKey) : string = named "twStep" key
+  let limNoteOf (key: RowKey) : string = named "twLimNote" key
+  let limitsId (key: RowKey) : string = named "twl" key
 
 // ── said in words ──
 
@@ -110,14 +125,14 @@ let tagLabel (tag: StateTag) : string =
   | StateTag.NotSpelled -> "not spelled in the file"
   | StateTag.Held -> "held"
   | StateTag.Formula -> "formula"
-  | StateTag.MadeOfParts -> "has parts"
+  | StateTag.MadeOfParts -> "expandable"
   | StateTag.Ambiguous -> "ambiguous"
   | StateTag.Tweaked -> "tweaked"
   | StateTag.Evolved -> "evolved"
   // What is true about the running app, not a comparison: "differs from the file" sat over a sentence that said "Saved to the
   // file", and read as the file not having been written.
   // "Not running" read as the program being stopped (two reviewers), so the tag says the file's value has not been applied.
-  | StateTag.DiffersFromFile -> "saved, not applied"
+  | StateTag.DiffersFromFile -> "saved, not live"
   | StateTag.FileChanged -> "file changed"
   | StateTag.Refused -> "refused"
   | StateTag.Writing -> "writing"
@@ -245,9 +260,11 @@ module NumberLabels =
     | PersistenceState.Writing _ -> NumberLabels.OneNumber
 
   /// The word beside the value in the heading.
-  let runningWord : string = "running"
+  // "running" beside a value read as a health badge for the whole program (three reviewers); this is where the session holds it.
+  let runningWord : string = "running value"
   /// The word beside the number in the knob.
-  let fileWord : string = "in the file"
+  // "in the file" beside a value that was just changed read as "everything is fine" next to "saved, not applied": it is the saved value.
+  let fileWord : string = "saved value"
   let runningMeaning : string = "The value the running program holds."
   let fileMeaning : string = "The value in the file. The control below changes it."
 
@@ -568,8 +585,11 @@ type Placement =
 
 let invariant (value: float) : string = value.ToString("R", CultureInfo.InvariantCulture)
 
-/// The script that stages a row's request in the page's signals and posts it to `endpoint`. `valueJs` is a JS expression for the value.
-let stagePostTo (endpoint: string) (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
+/// What a staged post says: the verb, and a JS expression for its value. A record, so the two cannot be swapped by mistake.
+type Staged = { Verb: string; ValueJs: string }
+
+/// The script that stages a row's request in the page's signals and posts it to `endpoint`.
+let stagePostTo (endpoint: string) (key: RowKey) (place: SourceRef) (staged: Staged) : string =
   sprintf
     "$%s = %s; $%s = %s; $%s = %s; $%s = %s; $%s = %s; $%s = %s; $%s = %s; %s"
     TweakSignals.Row (jsText (RowKey.text key))
@@ -577,16 +597,16 @@ let stagePostTo (endpoint: string) (key: RowKey) (place: SourceRef) (verb: strin
     TweakSignals.Address (jsText (SourceRef.addressText place))
     TweakSignals.Seen (jsText place.Hash)
     TweakSignals.SeenText (jsText place.Text)
-    TweakSignals.Verb (jsText verb)
-    TweakSignals.Value valueJs
+    TweakSignals.Verb (jsText staged.Verb)
+    TweakSignals.Value staged.ValueJs
     (Ds.post endpoint)
 
 /// The script for the knob's own route.
-let stagePostJs : RowKey -> SourceRef -> string -> string -> string = stagePostTo TweakSignals.Endpoint
+let stagePostJs : RowKey -> SourceRef -> Staged -> string = stagePostTo TweakSignals.Endpoint
 
 /// The same, as an attribute value: the script is escaped once, here.
-let stageAndPost (key: RowKey) (place: SourceRef) (verb: string) (valueJs: string) : string =
-  attrEnc (stagePostJs key place verb valueJs)
+let stageAndPost (key: RowKey) (place: SourceRef) (staged: Staged) : string =
+  attrEnc (stagePostJs key place staged)
 
 /// One write per settle: the handler runs once, a moment after the last change event, not on every one. Datastar's own modifier
 /// (`data-on:change__debounce.300ms`), written by the typed helper. The pause is the one the as-you-type typecheck waits after
@@ -594,47 +614,102 @@ let stageAndPost (key: RowKey) (place: SourceRef) (verb: string) (valueJs: strin
 let settled : OnEventModifier list =
   [ OnEventModifier.Debounce { TimeSpan = Timeouts.liveTestFcsDebounce; Leading = false; NoTrailing = false } ]
 
-let stepButton (key: RowKey) (glyph: string) (label: string) (testName: string) (delta: int) : XmlNode =
+/// How many steps a side of the handle holds, whether or not something stops it there.
+let private stepsOf (run: Run) : int =
+  match run with
+  | Run.Ends(steps, _)
+  | Run.Open steps -> steps
+
+[<RequireQualifiedAccess>]
+type StepDirection =
+  | Down
+  | Up
+
+/// A step button. At the end of the handle's reach it is disabled: it cannot go further, and a button that does nothing says so.
+let stepButton (key: RowKey) (glyph: string) (label: string) (testName: string) (reach: Reach) (direction: StepDirection) : XmlNode =
+  let steps = TweakSignals.stepsOf key
+  let below = stepsOf reach.Below
+  let above = stepsOf reach.Above
+  let delta = match direction with StepDirection.Down -> -1 | StepDirection.Up -> 1
+  let atTheEnd =
+    match direction with
+    | StepDirection.Down -> sprintf "Number($%s || 0) <= %d" steps (-below)
+    | StepDirection.Up -> sprintf "Number($%s || 0) >= %d" steps above
   Elem.button
     [ Attr.class' "session-btn live-step"
       Attr.type' "button"
       testid testName
       Attr.create "aria-label" (attrEnc label)
       Attr.title (attrEnc label)
-      Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
+      Ds.attr' ("disabled", sprintf "$%s || %s" (TweakSignals.busyOf key) atTheEnd)
       Ds.onClick (
         attrEnc (
           sprintf
-            "$%s = Math.max(-%d, Math.min(%d, Number($%s || 0) + (%d))); document.getElementById(%s).dispatchEvent(new Event('change'))"
-            (TweakSignals.stepsOf key) TweakSignals.MostSteps TweakSignals.MostSteps (TweakSignals.stepsOf key) delta
+            "$%s = Math.max(%d, Math.min(%d, Number($%s || 0) + (%d))); document.getElementById(%s).dispatchEvent(new Event('change'))"
+            steps (-below) above steps delta
             (jsText (TweakSignals.sliderId key))
         )
       ) ]
     [ Text.raw glyph ]
 
+/// The size of one step, written the way a person writes it (`0.1`, `5`).
+let private sizeText (size: float) : string = size.ToString("0.###############", CultureInfo.InvariantCulture)
+
+/// What the ends of the handle stand for, under the track: the lowest number, the step, the highest. An end that nothing stops is
+/// said to have none, and the title says what that means.
+let rangeCaption (chosen: bool) (reach: Reach) : XmlNode =
+  let endText (run: Run) : string =
+    match run with
+    | Run.Ends(_, at) -> at.ToString("F" + string reach.Places, CultureInfo.InvariantCulture)
+    | Run.Open _ -> ""
+  let openSide =
+    match reach.Below, reach.Above with
+    | Run.Open _, _
+    | _, Run.Open _ -> " A side marked 'no end' has no range set: the handle covers 100 steps that way. Choose a range to give it one."
+    | Run.Ends _, Run.Ends _ -> ""
+  Elem.span
+    [ Attr.class' "live-range"
+      testid "tweak-range"
+      Attr.title (attrEnc (sprintf "The handle's two ends: the lowest and the highest this number can take. One step moves it %s.%s" (sizeText reach.Size) openSide)) ]
+    [ Elem.span [ Attr.class' "live-range-lo" ] [ textEnc (endText reach.Below) ]
+      // With no range chosen the caption says how to choose one, in words: the caption is the control that opens the editor.
+      Elem.span
+        [ Attr.class' "live-range-step" ]
+        [ textEnc (match chosen with | true -> sprintf "step %s" (sizeText reach.Size) | false -> sprintf "step %s · no range · edit" (sizeText reach.Size)) ]
+      Elem.span [ Attr.class' "live-range-hi" ] [ textEnc (endText reach.Above) ] ]
+
 /// A number: a drag handle that counts steps from where the row stands, the two step buttons, and a readout that shows where the
-/// count would land. The arrow keys are the range input's own. One write per settle.
-let stepper (key: RowKey) (place: SourceRef) (current: string) (landing: string) (label: string) : XmlNode =
+/// count would land. The handle's two ends are the lowest and highest the number may take, so where it sits is where the number sits
+/// in its range. The arrow keys are the range input's own. One write per settle.
+let stepper (key: RowKey) (place: SourceRef) (reach: Reach) (editor: XmlNode) (current: string) (landing: string) (label: string) : XmlNode =
   let steps = TweakSignals.stepsOf key
+  let below = stepsOf reach.Below
+  let above = stepsOf reach.Above
+  let size = sizeText reach.Size
   Elem.span
     [ Attr.class' "live-knob"
       Attr.create "role" "group"
       Attr.create "aria-label" (attrEnc (sprintf "Change %s" label))
       Ds.signal (steps, 0) ]
-    [ stepButton key "−" (sprintf "Step %s down" label) "tweak-step-down" -1
-      Elem.input
-        [ Attr.id (TweakSignals.sliderId key)
-          Attr.class' "live-slider"
-          Attr.type' "range"
-          Attr.create "min" (sprintf "-%d" TweakSignals.MostSteps)
-          Attr.create "max" (string TweakSignals.MostSteps)
-          Attr.create "step" "1"
-          testid "tweak-slider"
-          Attr.create "aria-label" (attrEnc (sprintf "Drag to change %s. Arrow keys step it. It is written when you let go." label))
-          Ds.bind steps
-          Ds.indicator (TweakSignals.busyOf key)
-          Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-          Ds.onEvent ("change", stageAndPost key place "steps" (sprintf "String(Number($%s || 0))" steps), settled) ]
+    [ stepButton key "−" (sprintf "Step %s down by %s" label size) "tweak-step-down" reach StepDirection.Down
+      Elem.span [ Attr.class' "live-slider-wrap" ] [
+        Elem.input
+          [ Attr.id (TweakSignals.sliderId key)
+            Attr.class' "live-slider"
+            Attr.type' "range"
+            Attr.create "min" (string (-below))
+            Attr.create "max" (string above)
+            Attr.create "step" "1"
+            testid "tweak-slider"
+            Attr.title (attrEnc (sprintf "Drag to change %s by steps of %s. The two ends are the lowest and highest it can take." label size))
+            Attr.create "aria-label" (attrEnc (sprintf "Drag to change %s. Arrow keys step it by %s. It is written when you let go." label size))
+            Attr.create "aria-valuetext" (attrEnc (sprintf "%s steps from %s" label current))
+            Ds.bind steps
+            Ds.indicator (TweakSignals.busyOf key)
+            Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
+            Ds.onEvent ("change", stageAndPost key place { Verb = "steps"; ValueJs = sprintf "String(Number($%s || 0))" steps }, settled) ]
+        // Under the track: the lowest, the step and the highest. It is also the button that opens the range editor.
+        editor ]
       Elem.span
         [ Attr.id (TweakSignals.readoutId key)
           Attr.class' "live-readout"
@@ -643,7 +718,73 @@ let stepper (key: RowKey) (place: SourceRef) (current: string) (landing: string)
           Attr.create "aria-live" "polite"
           Ds.text landing ]
         [ textEnc current ]
-      stepButton key "+" (sprintf "Step %s up" label) "tweak-step-up" 1 ]
+      stepButton key "+" (sprintf "Step %s up by %s" label size) "tweak-step-up" reach StepDirection.Up ]
+
+/// Choose a number's range and step. A small popover under the row: three boxes (lowest, highest, step), Save and Clear. It posts the
+/// three texts, and the route answers with a note when they cannot be used. Empty means none chosen.
+let limitsEditor (key: RowKey) (limits: NumberLimits) (reach: Reach) : XmlNode =
+  let low = TweakSignals.limLowOf key
+  let high = TweakSignals.limHighOf key
+  let step = TweakSignals.limStepOf key
+  let note = TweakSignals.limNoteOf key
+  let stage (lowJs: string) (highJs: string) (stepJs: string) : string =
+    attrEnc (
+      sprintf "$%s = %s; $%s = %s; $%s = %s; $%s = %s; %s"
+        TweakSignals.Row (jsText (RowKey.text key))
+        TweakSignals.LimLow lowJs
+        TweakSignals.LimHigh highJs
+        TweakSignals.LimStep stepJs
+        (Ds.post TweakSignals.LimitsEndpoint)
+    )
+  // The button says only "range": the handle's ends already show the numbers, and a button wide enough to repeat them squeezed the
+  // slider. A chosen range fills it, so a row with one reads differently from one without.
+  let chosen = match NumberLimits.isUnlimited limits with | true -> "false" | false -> "true"
+  let box (label: string) (signal: string) (testName: string) (placeholder: string) : XmlNode =
+    Elem.label [ Attr.class' "live-limits-field" ] [
+      Elem.span [] [ textEnc label ]
+      Elem.input
+        [ Attr.class' "live-limits-input"
+          Attr.type' "text"
+          Attr.create "inputmode" "decimal"
+          Attr.create "autocomplete" "off"
+          Attr.create "spellcheck" "false"
+          Attr.create "placeholder" (attrEnc placeholder)
+          testid testName
+          Ds.bind signal ] ]
+  Elem.details
+    [ Attr.id (TweakSignals.limitsId key)
+      Attr.class' "live-limits"
+      Attr.create "data-preserve-attr" "open"
+      Attr.create "data-chosen" chosen
+      testid "tweak-limits"
+      signalFromText low (NumberLimits.edgeText limits.Lowest)
+      signalFromText high (NumberLimits.edgeText limits.Highest)
+      signalFromText step (NumberLimits.stepText limits.Step)
+      signalFromText note "" ]
+    [ Elem.summary
+        [ Attr.class' "live-limits-summary"
+          Attr.title "Choose the lowest and highest this number may take, and how far one step moves it. It is kept in .SageFs/tweak-limits.json, beside the project." ]
+        [ rangeCaption (chosen = "true") reach ]
+      Elem.div [ Attr.class' "live-limits-body" ] [
+        box "Lowest" low "tweak-limit-low" "none"
+        box "Highest" high "tweak-limit-high" "none"
+        box "Step" step "tweak-limit-step" (sizeText reach.Size)
+        Elem.div [ Attr.class' "live-limits-actions" ] [
+          Elem.button
+            [ Attr.class' "session-btn session-btn-labeled live-limits-save"
+              Attr.type' "button"
+              testid "tweak-limits-save"
+              Ds.onClick (stage (sprintf "$%s" low) (sprintf "$%s" high) (sprintf "$%s" step)) ]
+            [ Text.raw "Save" ]
+          Elem.button
+            [ Attr.class' "session-btn session-btn-labeled live-limits-clear"
+              Attr.type' "button"
+              testid "tweak-limits-clear"
+              Ds.onClick (sprintf "$%s = ''; $%s = ''; $%s = ''; %s" low high step (stage "''" "''" "''")) ]
+            [ Text.raw "Clear" ] ]
+        Elem.span [ Attr.class' "live-limits-note"; testid "tweak-limits-note"; Ds.text (sprintf "$%s" note) ] []
+        Elem.span [ Attr.class' "live-limits-hint" ] [
+          Text.raw "Empty means none. The ends are the lowest and highest this number may take; a number is never written outside them or outside its own type." ] ] ]
 
 /// The word a switch shows for a value. The file spells a bool `true` or `false`, so the switch says the same.
 let switchWord (value: bool) : string =
@@ -670,7 +811,7 @@ let toggle (key: RowKey) (place: SourceRef) (value: bool) (label: string) : XmlN
          Ds.bind signal
          Ds.indicator (TweakSignals.busyOf key)
          Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-         Ds.onEvent ("change", stageAndPost key place "set" "event.target.checked ? 'true' : 'false'") ]
+         Ds.onEvent ("change", stageAndPost key place { Verb = "set"; ValueJs = "event.target.checked ? 'true' : 'false'" }) ]
        @ (match value with
           | true -> [ Attr.create "checked" "" ]
           | false -> []))
@@ -690,7 +831,7 @@ let field (key: RowKey) (place: SourceRef) (value: string) (verb: string) (testN
         Attr.create "spellcheck" "false"
         Attr.create "autocomplete" "off"
         testid testName
-        Attr.create "aria-label" (attrEnc (sprintf "%s. Enter applies it, Escape puts back what the file holds." label))
+        Attr.create "aria-label" (attrEnc (sprintf "%s. Enter saves it to the file, Escape puts back what the file holds." label))
         signalFromText signal value
         Ds.bind signal
         Ds.indicator (TweakSignals.busyOf key)
@@ -700,7 +841,7 @@ let field (key: RowKey) (place: SourceRef) (value: string) (verb: string) (testN
           attrEnc (
             sprintf
               "if (event.key === 'Enter') { event.preventDefault(); %s } else if (event.key === 'Escape') { $%s = %s; event.target.blur() }"
-              (stagePostJs key place verb (sprintf "$%s" signal))
+              (stagePostJs key place { Verb = verb; ValueJs = sprintf "$%s" signal })
               signal (jsText value)
           )
         ) ]
@@ -710,7 +851,7 @@ let field (key: RowKey) (place: SourceRef) (value: string) (verb: string) (testN
         Attr.style "display:none"
         Ds.preserveAttr "style"
         Ds.show (attrEnc (sprintf "$%s !== %s" signal (jsText value))) ]
-      [ Text.raw "Enter to apply, Escape to cancel" ]
+      [ Text.raw "Enter saves to the file, Escape cancels" ]
   ]
 
 /// The word on an undo or redo button, from the verb the button posts: `undo` is shown `Undo`.
@@ -744,7 +885,7 @@ let historyButton (key: RowKey) (place: SourceRef) (glyph: string) (verb: string
            Attr.title (attrEnc (sprintf "%s the last write to this value" (historyWord verb)))
            Ds.indicator (TweakSignals.busyOf key)
            Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-           Ds.onClick (stageAndPost key place verb "''") ])
+           Ds.onClick (stageAndPost key place { Verb = verb; ValueJs = "''" }) ])
       content
   | HistoryStep.OtherRowFirst _
   | HistoryStep.NothingToStep ->
@@ -766,15 +907,26 @@ let controlNodes (key: RowKey) (view: RowView) : XmlNode list =
   | PlaceOf.Placed place ->
     let label = RowKey.text key
     match view.Control with
-    | Control.RealStepper(value, step) ->
-      // A real is shown with at least one decimal, the way F# spells it (`80.0`), so the box agrees with the value text in the row.
-      let places = max 1 (Step.places step)
-      let size = invariant (Step.size step)
-      let landing = sprintf "(%s + Number($%s || 0) * %s).toFixed(%d)" (invariant value) (TweakSignals.stepsOf key) size places
-      [ stepper key place (value.ToString("F" + string places, CultureInfo.InvariantCulture)) landing label ]
-    | Control.IntegerStepper value ->
-      let landing = sprintf "String(%d + Number($%s || 0))" value (TweakSignals.stepsOf key)
-      [ stepper key place (string value) landing label ]
+    | Control.RealStepper _
+    | Control.IntegerStepper _ ->
+      match Stepping.reachOf (typeRangeOfText place.Text) view.Limits view.Control with
+      | Dial.NoDial -> []
+      | Dial.Dial reach ->
+        let steps = TweakSignals.stepsOf key
+        let size = invariant reach.Size
+        match view.Control with
+        | Control.RealStepper _ ->
+          // A real is shown with at least one decimal, the way F# spells it (`80.0`), so the box agrees with the value text in the row.
+          let places = max 1 reach.Places
+          let landing = sprintf "(%s + Number($%s || 0) * %s).toFixed(%d)" (invariant reach.Value) steps size places
+          [ stepper key place reach (limitsEditor key view.Limits reach) (reach.Value.ToString("F" + string places, CultureInfo.InvariantCulture)) landing label ]
+        | Control.IntegerStepper _
+        | Control.Toggle _
+        | Control.LiteralField _
+        | Control.ExpressionField _
+        | Control.NoControl ->
+          let landing = sprintf "String(%s + Number($%s || 0) * %s)" (invariant reach.Value) steps size
+          [ stepper key place reach (limitsEditor key view.Limits reach) (invariant reach.Value) landing label ]
     | Control.Toggle value -> [ toggle key place value label ]
     | Control.LiteralField(_, value) -> [ field key place value "set" "tweak-field" (sprintf "New value for %s" label) ]
     | Control.ExpressionField text -> [ field key place text "expression" "tweak-expression" (sprintf "Expression for %s" label) ]
@@ -811,17 +963,50 @@ let applyNodes (key: RowKey) (view: RowView) : XmlNode list =
           Attr.title (attrEnc (sprintf "Evaluates %s in the running session. The file is not changed." code))
           Ds.indicator (TweakSignals.busyOf key)
           Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
-          Ds.onClick (attrEnc (stagePostTo ApplyToSession.Endpoint key place "apply" "''")) ]
+          Ds.onClick (attrEnc (stagePostTo ApplyToSession.Endpoint key place { Verb = "apply"; ValueJs = "''" })) ]
         [ Text.raw "▶"; Elem.span [ Attr.class' "session-btn-label" ] [ textEnc ApplyToSession.words ] ] ]
   | PlaceOf.Placed _, ApplyOffer.NotOffered
   | PlaceOf.NotPlaced, _ -> []
 
+/// The two numbers of a row whose file and running program disagree. A record, so the two cannot be swapped by mistake.
+type ValuesDiffer = { RunningValue: string; SavedValue: string }
+
+/// Whether a row's value exists only in the session, so the one way to change it is to evaluate new code there. A value that no
+/// file binds says so; a part the file does not spell, or a file list that is not known, is the state's job to explain.
+let changesOnlyByEvaluating (state: PersistenceState) : bool =
+  match state with
+  | PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt -> true
+  | PersistenceState.NotInAFile(NotInFileWhy.OwnedFilesUnknown _)
+  | PersistenceState.NotInAFile(NotInFileWhy.NotSpelledInTheFile _)
+  | PersistenceState.Held
+  | PersistenceState.InSource _
+  | PersistenceState.Derived _
+  | PersistenceState.Ambiguous _
+  | PersistenceState.Tweaked _
+  | PersistenceState.Evolved _
+  | PersistenceState.DiffersFromFile _
+  | PersistenceState.StaleAddress _
+  | PersistenceState.Refused _
+  | PersistenceState.Writing _ -> false
+
+/// The way to change a value no file holds: a button that opens the Evaluate box and puts the cursor in it. The page said "Change it
+/// with Evaluate, top of Output" in words, and every reviewer asked where; this is that place. Inside a summary a click would fold the
+/// row, so it stops the click from reaching it.
+let evaluateLink : XmlNode =
+  Elem.button
+    [ Attr.class' "session-btn session-btn-labeled live-evaluate-link"
+      Attr.type' "button"
+      testid "tweak-evaluate-link"
+      Attr.title "No file holds this value, so it changes only when you evaluate new code in this session. This opens the Evaluate box."
+      Ds.onClick (attrEnc "event.preventDefault(); event.stopPropagation(); var d = document.getElementById('evaluate-section'); if (d) { d.open = true; var t = d.querySelector('textarea'); if (t) { t.focus() } }") ]
+    [ Text.raw "λ Edit in Evaluate" ]
+
 /// What a row that was written to a file nothing is watching says. Only a row that was written says it: said under every row of the
 /// file before any write, it was ten copies of one sentence. The pane says the same fact once, ahead of any edit, in its caption
 /// (`PaneNote.ChangesGoToAnUnwatchedFile`).
-let notWatchedSentence (running: string) (inFile: string) : string =
+let notWatchedSentence (values: ValuesDiffer) : string =
   // The pane's caption names the changed bindings and both remedies once; the row says only its own two numbers.
-  sprintf "Saved as %s. The session still runs %s." inFile running
+  sprintf "Saved as %s. The session still runs %s." values.SavedValue values.RunningValue
 
 /// The running value and the file's, while the two differ. The sentence names both numbers, because a row that shows 9.8 in its
 /// heading and 9.9 at its slider left three reviewers asking which was live.
@@ -854,7 +1039,7 @@ let reloadNodes (view: RowView) : XmlNode list =
   let watching : XmlNode list =
     match view.Watching, view.Place, differingValues view.State with
     | WatchStatus.NotWatched, PlaceOf.Placed _, Some(running, inFile) ->
-      [ Elem.span [ Attr.class' "live-reload live-tone-notice"; testid "tweak-watching" ] [ textEnc (notWatchedSentence running inFile) ] ]
+      [ Elem.span [ Attr.class' "live-reload live-tone-notice"; testid "tweak-watching" ] [ textEnc (notWatchedSentence { RunningValue = running; SavedValue = inFile }) ] ]
     | WatchStatus.NotWatched, PlaceOf.Placed _, None
     | WatchStatus.NotWatched, PlaceOf.NotPlaced, _
     | WatchStatus.Watched, _, _ -> []
@@ -881,8 +1066,8 @@ let reloadNodes (view: RowView) : XmlNode list =
 
 /// Whether a formula reads a name: the whole word, so `antigravity` and `world.gravity` are other things. Written and checked in a
 /// SageFs session on real strings before it went into this file.
-let mentions (name: string) (expression: string) : bool =
-  Text.RegularExpressions.Regex.IsMatch(expression, sprintf @"(?<![\w.])%s(?!\w)" (Text.RegularExpressions.Regex.Escape name))
+let mentions (row: RowKey) (expression: string) : bool =
+  Text.RegularExpressions.Regex.IsMatch(expression, sprintf @"(?<![\w.])%s(?!\w)" (Text.RegularExpressions.Regex.Escape row.Binding))
 
 /// The formula a row is, when it is one the file works out from other values.
 let formulaOf (state: PersistenceState) : string option =
@@ -910,7 +1095,7 @@ let pendingDependencies (view: TweakView) (key: RowKey) : string list =
     |> Map.toList
     |> List.choose (fun (other, row) ->
       match differingValues row.State with
-      | Some _ when other <> key && List.isEmpty other.Labels && mentions other.Binding formula -> Some other.Binding
+      | Some _ when other <> key && List.isEmpty other.Labels && mentions other formula -> Some other.Binding
       | Some _
       | None -> None)
 
@@ -921,7 +1106,7 @@ let dependencyNotes (view: TweakView) (key: RowKey) : XmlNode list =
   | names ->
     [ Elem.div
         [ Attr.class' "live-detail live-tone-notice"; testid "tweak-depends" ]
-        [ textEnc (sprintf "Reads %s, which has a saved change not applied yet. This value will change when it is." (String.concat ", " names)) ] ]
+        [ textEnc (sprintf "Reads %s, which has a saved change that is not live yet. This value changes when that change goes live." (String.concat ", " names)) ] ]
 
 /// The strip under a row: the state as a chip and a sentence, the knob where the state allows one, the row's undo and redo, and what
 /// the app did with its last write. Every row the pane has something to say about gets one, so no row is silent about its file.
@@ -931,7 +1116,8 @@ let renderStripWith (notes: XmlNode list) (key: RowKey) (view: RowView) (placeme
   let whereChip =
     match view.Place with
     | PlaceOf.Placed place -> [ Elem.span [ Attr.class' "live-where"; Attr.title (attrEnc place.File) ] [ textEnc (whereOf place) ] ]
-    | PlaceOf.NotPlaced -> []
+    // No file holds this value, so the Source cell says "n/a" and not nothing: an empty cell reads as a missing answer.
+    | PlaceOf.NotPlaced -> [ Elem.span [ Attr.class' "live-where"; Attr.title "No file holds this value, so there is no source line." ] [ textEnc "n/a" ] ]
   let controls =
     match placement with
     | Placement.OnLeafRow ->
@@ -962,7 +1148,11 @@ let renderStripWith (notes: XmlNode list) (key: RowKey) (view: RowView) (placeme
       Attr.create "data-state" (PersistenceState.token view.State)
       Attr.create "data-row" (attrEnc (RowKey.text key)) ]
     (match shown with
-     | StripShown.Marker -> []
+     // A marker row has no strip, but its Source cell says "n/a" when no file holds the value, so the column has an answer in every row.
+     | StripShown.Marker ->
+       (match view.Place with
+        | PlaceOf.NotPlaced -> whereChip
+        | PlaceOf.Placed _ -> [])
      | StripShown.Strip ->
        [ yield
            Elem.span

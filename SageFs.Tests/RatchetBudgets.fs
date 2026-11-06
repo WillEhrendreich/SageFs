@@ -409,7 +409,7 @@ let analyzerFindings : (string * int) list =
     "SageFs/SAGE-001", 7
     "SageFs/SAGE-003", 13
     "SageFs/SAGE-004", 40
-    "SageFs/SAGE-005", 216
+    "SageFs/SAGE-005", 214
     "SageFs/SAGE-006", 3
     "SageFs/SAGE-007", 101
     "SageFs/SAGE-009", 42 ]

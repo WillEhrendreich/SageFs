@@ -40,8 +40,10 @@ module ViewIds =
 /// The route a click posts to.
 let endpoint (sessionId: string) : string = sprintf "/dashboard/bindings-view/%s" (Uri.EscapeDataString sessionId)
 
-/// The pane bar's button and the panel it opens, drawn together because they share one signal.
-type ViewControls = { Button: XmlNode; Panel: XmlNode }
+/// The pane bar's button and the panel it opens, drawn together because they share one signal. `PanelWith` is the same panel with
+/// more rows the pane has for how the bindings are read (the mode buttons and the legend), which it draws after the axes: they
+/// govern the display too, and the pane's own bar has no room for them on a phone.
+type ViewControls = { Button: XmlNode; Panel: XmlNode; PanelWith: XmlNode list -> XmlNode }
 
 /// Where an axis's value came from, in the words a person reads.
 let sourceWords (layer: ConfigLayer) : string =
@@ -155,13 +157,14 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         Attr.class' "session-btn live-pane-view"
         Attr.type' "button"
         Attr.create "aria-label" "Change how the live bindings are shown"
+        Attr.title "Table display settings"
         Attr.create "aria-expanded" "false"
         Ds.attr' ("aria-expanded", sprintf "$%s ? 'true' : 'false'" ViewSignals.Open)
         Ds.class' ("session-btn-on", sprintf "$%s" ViewSignals.Open)
         Ds.preserveAttr "class aria-expanded"
         Ds.onClick (sprintf "$%s = !$%s" ViewSignals.Open ViewSignals.Open) ]
       [ slidersIcon ]
-  let panel =
+  let panelWith (extras: XmlNode list) : XmlNode =
     Elem.div
       [ Attr.id ViewIds.Panel
         Attr.class' "live-view-panel live-hidden"
@@ -169,11 +172,25 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         Attr.create "aria-label" (attrEnc (sprintf "How the live bindings are shown in %s" (ViewWorkflow.label workflow)))
         Ds.class' ("live-hidden", sprintf "!$%s" ViewSignals.Open)
         Ds.preserveAttr "class" ]
-      [ Elem.div [ Attr.class' "live-view-head" ] [ textEnc (sprintf "View for %s" (ViewWorkflow.label workflow)) ]
-        presetRow sessionId workflow resolved.View
+      [ Elem.div [ Attr.class' "live-view-head" ] [
+          Elem.span [] [ textEnc (sprintf "Table display settings for %s mode" (ViewWorkflow.label workflow)) ]
+          // A way to close it where it is: the panel floats over the table, and the only other way was to find the View button again.
+          Elem.button
+            [ Attr.class' "live-view-close"
+              Attr.type' "button"
+              Attr.create "aria-label" "Hide the display settings"
+              Ds.onClick (sprintf "$%s = false" ViewSignals.Open) ]
+            // "Close" ends a session on the Sessions card, so this one says what it does to the panel.
+            [ Text.raw "✕ Done" ] ]
+        // One preset that is already chosen is not a choice, so the row appears only when there is something to pick.
+        match offeredPresets workflow, View.detect workflow resolved.View.Layout with
+        | [ _ ], DetectedPreset.IsRecommended
+        | [ _ ], DetectedPreset.IsPreset _ -> ()
+        | _ -> presetRow sessionId workflow resolved.View
         yield! ViewAxis.drawn |> List.map (axisRow sessionId resolved)
+        yield! extras
         scopeRow sessionId
         Elem.div [ Attr.class' "live-view-note" ] [
           Text.raw "A choice is saved as you click it. \"This project\" writes .SageFs/settings.json in the project folder. \"All projects\" writes your own settings.json."
         ] ]
-  { Button = button; Panel = panel }
+  { Button = button; Panel = panelWith []; PanelWith = panelWith }

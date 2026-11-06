@@ -185,6 +185,7 @@ module Rows =
     (current: SessionReload)
     (now: int64)
     (patience: TimeSpan)
+    (limits: LimitsBook)
     (key: RowKey)
     (live: LiveShape)
     (found: SourceFacts)
@@ -217,7 +218,8 @@ module Rows =
       Reload = reloadOf memory current now patience key
       Undo = FileTrail.undoFor address trail
       Redo = FileTrail.redoFor address trail
-      Through = through }
+      Through = through
+      Limits = LimitsBook.forRow limits (RowKey.text key) }
 
   /// Record fields down from a binding the files hold in exactly one place. Only records are walked: a list's, a tuple's or a map's
   /// items are not mapped, so they get no row, and the binding's own row says it is a container.
@@ -244,8 +246,9 @@ module Rows =
     (current: SessionReload)
     (now: int64)
     (patience: TimeSpan)
+    (limits: LimitsBook)
     : TweakView =
-    let rowOf = viewOf index memory current now patience
+    let rowOf = viewOf index memory current now patience limits
     let rows =
       snapshot.Bindings
       |> List.collect (fun binding ->

@@ -144,7 +144,8 @@ module TweakerVersusProgramSim =
               Reload = RowReload.NoWriteYet
               Undo = HistoryStep.NothingToStep
               Redo = HistoryStep.NothingToStep
-              Through = ThroughCall.NoCall } ] }
+              Through = ThroughCall.NoCall
+              Limits = SageFs.Features.Tweak.NumberLimits.unlimited } ] }
 
   /// The door took a write of `value` into the file.
   let written (world: World) (value: int) : World =

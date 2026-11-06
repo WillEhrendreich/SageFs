@@ -23,6 +23,7 @@ open SageFs.Features.Tweak
 open SageFs.Features.Tweak.TweakAddress
 open SageFs.Features.Tweak.LiteralEdit
 open SageFs.Features.Tweak.Nudge
+open SageFs.Features.Tweak.NudgeIo
 open SageFs.Features.Tweak.BindingTweak
 open SageFs.Features.Tweak.BindingTweakRows
 
@@ -402,6 +403,18 @@ module Service =
       return { Files = files; Unreadable = unreadable; Applied = applied }
     }
 
+  /// Where a project keeps the range and step a person chose for each number, read and checked by the one module every writer shares.
+  let limitsPathOf (workingDirectory: string) : string = TweakLimitsFile.pathOf workingDirectory
+
+  let limitsIn (service: Service) (workingDirectory: string) : TweakLimitsFile.Read =
+    TweakLimitsFile.read service.Env.Ports.Files workingDirectory
+
+  /// The choices a view draws from: the file's, or none while it cannot be read (the write path says why it refuses).
+  let limitsBookFor (service: Service) (workingDirectory: string) : LimitsBook =
+    match limitsIn service workingDirectory with
+    | TweakLimitsFile.Read.Chosen book -> book
+    | TweakLimitsFile.Read.Unreadable _ -> LimitsBook.empty
+
   /// The rows for a session's walked values, from what its files say now and what the dashboard did to each row. A row waits for the
   /// reload verdict of its write for as long as a save waits for its compile (`Timeouts.compileQueueWait`): past that no verdict is
   /// coming, and the row says so.
@@ -417,7 +430,8 @@ module Service =
       | [] -> return TweakView.none
       | _ ->
         let! index = indexFor service owned (namesOf snapshot)
-        let view = Rows.build index snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.compileQueueWait
+        let limits = limitsBookFor service owned.WorkingDirectory
+        let view = Rows.build index snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.compileQueueWait limits
         // Remember which rows are in step with their file now, so a later difference can be told from a file edit.
         update service sessionId (Memory.observe index view)
         return view
@@ -439,7 +453,7 @@ module Service =
       viewFor service sessionId owned snapshot current
     | Error reason ->
       let unknown : SourceIndex = { SourceIndex.empty with Unreadable = [ "the session's project files", reason ] }
-      Task.FromResult(Rows.build unknown snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.compileQueueWait)
+      Task.FromResult(Rows.build unknown snapshot (memoryOf service sessionId) current (service.Env.Now()) Timeouts.compileQueueWait (limitsBookFor service workingDirectory))
 
   /// The expression the row was showing when it was clicked, as the page reported it. The cached inspection has the real one
   /// (with its span and kind) when the hash still matches; otherwise it is what the page said, with no position.
@@ -469,13 +483,23 @@ module Service =
         Kind = kind }
 
   /// A step count becomes the literal it means, from the number the row showed. Anything else is already what the door takes.
-  let resolve (attempted: SourceRef) (request: TweakRequest) : Result<TweakRequest, NudgeRefusal> =
+  let resolve (limits: TweakLimitsFile.Read) (attempted: SourceRef) (request: TweakRequest) : Result<TweakRequest, NudgeRefusal> =
     match request.Verb with
     | TweakVerb.Steps count ->
-      match Stepping.literalAfter (Control.ofSource attempted) count with
-      | Ok text -> Ok { request with Verb = TweakVerb.SetLiteral text }
-      | Error StepRefusal.OutOfRange ->
-        Error(NudgeRefusal.ValueKindMismatch(sprintf "%s is not a number a step can move, or the step leaves the numbers a literal can spell." attempted.Text))
+      match limits with
+      | TweakLimitsFile.Read.Unreadable reason -> Error(NudgeRefusal.ValueOutOfRange reason)
+      | TweakLimitsFile.Read.Chosen book ->
+        let chosen = LimitsBook.forRow book (RowKey.text request.Row)
+        match Stepping.literalAfterWithin chosen (Control.ofSource attempted) count with
+        | Ok text -> Ok { request with Verb = TweakVerb.SetLiteral text }
+        | Error(StepRefusal.OutsideLimits(landing, lowest, highest)) ->
+          Error(
+            NudgeRefusal.ValueOutOfRange(
+              sprintf "%s is outside the range chosen for %s (%s)." (landing.ToString("R", Globalization.CultureInfo.InvariantCulture)) (RowKey.text request.Row) (NumberLimits.rangeText lowest highest)
+            )
+          )
+        | Error StepRefusal.OutOfRange ->
+          Error(NudgeRefusal.ValueKindMismatch(sprintf "%s is not a number a step can move, or the step leaves the numbers a literal can spell." attempted.Text))
     | TweakVerb.SetLiteral _
     | TweakVerb.SetExpression _
     | TweakVerb.Undo
@@ -495,7 +519,7 @@ module Service =
     task {
       let attempted = attemptedOf service request
       let baseline = currentReload ()
-      match resolve attempted request with
+      match resolve (limitsIn service owned.WorkingDirectory) attempted request with
       | Error refusal ->
         update service sessionId (Memory.finished request.Row attempted (Error refusal) baseline (service.Env.Now()))
         changed ()
@@ -506,3 +530,21 @@ module Service =
         update service sessionId (Memory.finished resolved.Row attempted result baseline (service.Env.Now()))
         changed ()
     }
+
+  /// Writes of the limits file are one at a time: each reads the file, changes one row and replaces it, so two at once would lose one.
+  let private limitsGate = obj ()
+
+  /// Keep or clear one row's range and step, from the three texts a person typed. Answers what the editor should say afterwards:
+  /// nothing when the choice was kept, the reason when it was not. A file that cannot be read is never replaced: the person's other
+  /// choices are in it.
+  let setLimits (service: Service) (workingDirectory: string) (row: RowKey) (texts: LimitsTexts) : string =
+    match NumberLimits.ofTexts texts with
+    | Error refusal -> NumberLimits.describe refusal
+    | Ok chosen ->
+      lock limitsGate (fun () ->
+        match limitsIn service workingDirectory with
+        | TweakLimitsFile.Read.Unreadable reason -> reason
+        | TweakLimitsFile.Read.Chosen book ->
+          match TweakLimitsFile.save service.Env.Ports.Files workingDirectory (LimitsBook.set (RowKey.text row) chosen book) with
+          | Ok() -> ""
+          | Error fault -> sprintf "The range could not be saved: %s" fault.Reason)

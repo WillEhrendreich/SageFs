@@ -103,8 +103,8 @@ let sourceRenderTests =
     testCase "WHY - a session whose files changed after its build shows a block of its own, with a test id a journey can find, one sentence and the file names" <| fun _ ->
       let html = htmlOf [ cardWith "0a2b3c4d" ReplFreshness.InSync staleSource ]
       html |> Expect.stringContains "the block has its test id" "data-testid=\"session-card-source\""
-      html |> Expect.stringContains "it says in one sentence what changed" "2 files changed since the build."
-      html |> Expect.stringContains "and the card's state word says the session runs older code" "running older code"
+      html |> Expect.stringContains "it says in one sentence what changed" "2 changes saved but not live."
+      html |> Expect.stringContains "and the card's state word says the session's changes are not live" "changes not live"
       html |> Expect.stringContains "it names the files, as file names" "Mcp.fs"
       html.Contains "STALE SOURCE" |> Expect.isFalse "the red monospace wall is the tool result's wording, not the card's"
 

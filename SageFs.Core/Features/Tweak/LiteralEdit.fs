@@ -70,6 +70,9 @@ type SetLiteralError =
   /// setting a `Text` value onto an `IntStyle` address). A tweak never
   /// silently changes an expression's type.
   | KindMismatch of reason: string
+  /// The number is the right kind but the literal's own type cannot hold it (`300` for a byte, `NaN` for a float, a negative
+  /// number in hex). Written, it would be text that does not compile.
+  | OutOfRange of reason: string
 
 // ── extracting VALUE from the parsed constant (correct for escapes,
 //    unaffected by how the literal happens to be spelled) ──
@@ -245,6 +248,97 @@ let private formatFloat (suffix: string) (trailingDot: bool) (v: float) : string
       | _ -> s
   core + suffix
 
+/// The type a spelling's suffix names, said as a person says it, with the whole numbers it holds. `L` is int64 and `l` is int32,
+/// `UL` is a 64-bit unsigned and `ul` is uint32, the way F# reads them. A 64-bit unsigned stops at the top of an int64, because that is
+/// the widest number `LiteralValue.Integer` carries.
+let private integerFacts (suffix: string) : string * int64 * int64 =
+  match suffix with
+  | "y" -> "an sbyte", -128L, 127L
+  | "uy" -> "a byte", 0L, 255L
+  | "s" -> "an int16", -32768L, 32767L
+  | "us" -> "a uint16", 0L, 65535L
+  | ""
+  | "l" -> "an int", int64 Int32.MinValue, int64 Int32.MaxValue
+  | "u"
+  | "ul" -> "a uint32", 0L, int64 UInt32.MaxValue
+  | "UL"
+  | "uL"
+  | "un" -> "an unsigned 64-bit integer", 0L, Int64.MaxValue
+  | _ -> "an int64", Int64.MinValue, Int64.MaxValue
+
+/// Whether a whole number can be spelled as this literal. Hex, octal and binary tokens have no negative spelling (a leading minus
+/// would be a different expression), so they start at zero.
+let private checkInteger (numberBase: NumberBase) (suffix: string) (v: int64) : Result<unit, SetLiteralError> =
+  let typeName, lowest, highest = integerFacts suffix
+  let lowest =
+    match numberBase with
+    | NumberBase.Dec -> lowest
+    | NumberBase.Hex
+    | NumberBase.Oct
+    | NumberBase.Bin -> max 0L lowest
+  match v >= lowest && v <= highest with
+  | true -> Ok()
+  | false ->
+    let spelled =
+      match numberBase with
+      | NumberBase.Dec -> ""
+      | NumberBase.Hex -> " Hex has no negative spelling."
+      | NumberBase.Oct -> " Octal has no negative spelling."
+      | NumberBase.Bin -> " Binary has no negative spelling."
+    Error(SetLiteralError.OutOfRange(sprintf "%d is outside what %s holds (%d to %d).%s" v typeName lowest highest spelled))
+
+/// Whether a real number can be spelled as this literal: finite, and inside the suffix's own type.
+let private checkReal (suffix: string) (v: float) : Result<unit, SetLiteralError> =
+  let typeName, largest =
+    match suffix with
+    | "f"
+    | "F" -> "a float32", float Single.MaxValue
+    | "m"
+    | "M" -> "a decimal", float Decimal.MaxValue
+    | _ -> "a float", Double.MaxValue
+  match Double.IsFinite v with
+  | false -> Error(SetLiteralError.OutOfRange(sprintf "%s cannot be written as a literal: a literal is a finite number." (v.ToString(CultureInfo.InvariantCulture))))
+  | true when abs v > largest ->
+    Error(SetLiteralError.OutOfRange(sprintf "%s is outside what %s holds (-%s to %s)." (v.ToString(CultureInfo.InvariantCulture)) typeName (largest.ToString("G6", CultureInfo.InvariantCulture)) (largest.ToString("G6", CultureInfo.InvariantCulture))))
+  | true -> Ok()
+
+/// The numbers a type holds, smallest to largest. A record, so the two ends cannot be swapped by mistake.
+type NumberRange = { Smallest: float; Largest: float }
+
+/// The whole numbers a number literal's own spelling can hold, lowest and highest, as the slider needs them to know where its
+/// ends are. The same facts `formatLiteral` enforces, read from the text a file spells (`100` is an int, `2uy` a byte, `1.0f` a
+/// float32, `0x1F` starts at zero). A spelling this module does not recognise as a number has no type limit to report, so it gets
+/// the widest a float holds.
+let typeRangeOfText (text: string) : NumberRange =
+  let widest = { Smallest = -Double.MaxValue; Largest = Double.MaxValue }
+  let rec rangeOf (style: LiteralStyle option) : NumberRange =
+    match style with
+    | Some(LiteralStyle.MeasureStyle(_, inner)) -> rangeOf (Some inner)
+    | Some(LiteralStyle.IntStyle(numberBase, suffix, _)) ->
+      let _, lowest, highest = integerFacts suffix
+      let lowest =
+        match numberBase with
+        | NumberBase.Dec -> lowest
+        | NumberBase.Hex
+        | NumberBase.Oct
+        | NumberBase.Bin -> max 0L lowest
+      { Smallest = float lowest; Largest = float highest }
+    | Some(LiteralStyle.FloatStyle(suffix, _)) ->
+      let largest =
+        match suffix with
+        | "f"
+        | "F" -> float Single.MaxValue
+        | "m"
+        | "M" -> float Decimal.MaxValue
+        | _ -> Double.MaxValue
+      { Smallest = -largest; Largest = largest }
+    | Some LiteralStyle.BoolStyle
+    | Some LiteralStyle.CharStyle
+    | Some LiteralStyle.StringStyle
+    | Some LiteralStyle.CaseStyle
+    | None -> widest
+  rangeOf (styleOf text)
+
 let rec formatLiteral (style: LiteralStyle) (value: LiteralValue) : Result<string, SetLiteralError> =
   match style, value with
   | LiteralStyle.MeasureStyle(unitText, inner), _ ->
@@ -254,8 +348,13 @@ let rec formatLiteral (style: LiteralStyle) (value: LiteralValue) : Result<strin
   | LiteralStyle.CharStyle, LiteralValue.Char c -> Ok(sprintf "'%s'" (escapeChar c))
   | LiteralStyle.StringStyle, LiteralValue.Text s -> Ok(sprintf "\"%s\"" (escapeString s))
   | LiteralStyle.IntStyle(numberBase, suffix, grouped), LiteralValue.Integer v ->
-    Ok(formatInteger numberBase suffix grouped v)
-  | LiteralStyle.FloatStyle(suffix, trailingDot), LiteralValue.Real v -> Ok(formatFloat suffix trailingDot v)
+    match checkInteger numberBase suffix v with
+    | Error refusal -> Error refusal
+    | Ok() -> Ok(formatInteger numberBase suffix grouped v)
+  | LiteralStyle.FloatStyle(suffix, trailingDot), LiteralValue.Real v ->
+    match checkReal suffix v with
+    | Error refusal -> Error refusal
+    | Ok() -> Ok(formatFloat suffix trailingDot v)
   | _ -> Error(SetLiteralError.KindMismatch "the new value's kind doesn't match this literal's own style")
 
 let private sameValue (a: LiteralValue) (b: LiteralValue) : bool =

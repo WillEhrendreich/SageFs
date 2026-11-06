@@ -35,7 +35,7 @@
   --syn-property: #7fb4ca;
   --syn-string: #98bb6c;
   --syn-number: #d27e99;
-  --font-size: 14px;
+  --font-size: 87.5%;
   --sidebar-width: 320px;
   /* The bottom dock holds the live bindings, which is what this page is opened for while a program runs: a watch window you
      can read at a glance. One home for its ceiling, mirroring --sidebar-width, so a resize control has a single value to
@@ -43,8 +43,9 @@
      and a half binding rows at 900px, which blind reviewers read as "a few rows, and nothing says there are more". With a
      binding on one line (see `.live-row` in the container query below) 46vh at a 30rem cap showed nine bindings at 900px, and
      then two reviewers in a row saw the pane as a strip under a mostly empty transcript, with rows cut at its foot. 56vh at a
-     36rem cap shows eleven and the transcript keeps the rest. */
-  --dock-max-height: min(56vh, 36rem);
+     36rem cap shows eleven and the transcript keeps the rest. Reviewers then read the pane as the second thing on a page whose first
+     half was a transcript, so it is 72vh at a 50rem cap: the pane is what the page is for, and the transcript scrolls. */
+  --dock-max-height: min(72vh, 50rem);
   --tabline-h: 36px;
   --statusline-h: 28px;
   --cmdline-h: 32px;
@@ -141,7 +142,7 @@ h2 {
   align-items: center;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-normal);
-  font-size: 13px;
+  font-size: 0.929rem;
 }
 
 .app-layout {
@@ -214,7 +215,7 @@ h2 {
 
   h2 {
     margin: 0;
-    font-size: 0.85rem;
+    font-size: 0.857rem;
     font-weight: 600;
     color: var(--fg-default);
     text-transform: uppercase;
@@ -266,7 +267,7 @@ h2 {
   padding: 0 6px;
   border: 1px solid var(--fg-yellow);
   color: var(--fg-yellow);
-  font-size: 0.8rem;
+  font-size: 0.857rem;
   font-weight: 700;
 }
 
@@ -314,7 +315,7 @@ h2 {
 
   & h2 {
     color: var(--fg-blue);
-    font-size: 0.85rem;
+    font-size: 0.857rem;
     margin-bottom: 0.5rem;
     border-bottom: 1px solid var(--border-normal);
     padding-bottom: 0.5rem;
@@ -331,7 +332,7 @@ h2 {
   border-radius: 0;
   padding: 1px 8px;
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 0.857rem;
   font-family: inherit;
   transition: background 0.15s, color 0.15s;
 
@@ -372,7 +373,7 @@ h2 {
   max-width: calc(100% - 16px);
   padding: 0.3em 0.9em;
   font-family: inherit;
-  font-size: 0.8em;
+  font-size: 0.857em;
   line-height: 1.4;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -417,11 +418,11 @@ h2 {
   flex-shrink: 0;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-normal);
-  font-size: 12px;
+  font-size: 0.857rem;
 
   & h2 {
     color: var(--fg-dim);
-    font-size: 12px;
+    font-size: 0.857rem;
     font-weight: 500;
     margin: 0;
   }
@@ -432,12 +433,12 @@ h2 {
   overflow-y: auto;
   scroll-behavior: smooth;
   background: var(--bg-default);
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   padding: 0.25rem 0;
 }
 
 .output-line {
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   padding: 1px 0.5rem;
   white-space: pre-wrap;
   /* Wrap at spaces first, and split a word only when it is longer than the line (a path, a hash). `break-all` split every line at
@@ -488,7 +489,7 @@ h2 {
   border-radius: 0;
   color: inherit;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   padding: 1px 0.5rem 1px 1rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -526,7 +527,7 @@ h2 {
   user-select: none;
   list-style: none;
   color: var(--fg-dim);
-  font-size: 0.8rem;
+  font-size: 0.857rem;
   padding: 1px 0.5rem;
 }
 
@@ -594,7 +595,7 @@ h2 {
 }
 
 .eval-pop-size {
-  font-size: 0.75rem;
+  font-size: 0.857rem;
 }
 
 .eval-pop-input {
@@ -643,7 +644,7 @@ h2 {
   cursor: pointer;
   font-family: inherit;
   font-weight: bold;
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   transition: opacity 0.15s;
   display: inline-flex;
   align-items: center;
@@ -769,7 +770,7 @@ h2 {
 
   & p {
     color: var(--fg-dim);
-    font-size: 0.85rem;
+    font-size: 0.857rem;
     line-height: 1.4;
   }
 }
@@ -835,7 +836,7 @@ h2 {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 0;
-  font-size: 0.8rem;
+  font-size: 0.857rem;
   font-weight: bold;
 }
 
@@ -879,13 +880,13 @@ h2 {
   color: var(--fg-default);
   border: none;
   border-radius: 0;
-  /* Uniform square buttons: every action glyph (◎ ■ ⌫ ✖) renders in the
+  /* Uniform square buttons: every action glyph (◎ ■ ⌫ ✕) renders in the
      same box, centered — no more size drift between icons. */
   width: 28px;
   height: 28px;
   padding: 0;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   line-height: 1;
   display: inline-flex;
   align-items: center;
@@ -933,7 +934,7 @@ h2 {
 .session-btn-autoopen {
   background: transparent;
   border: 1px solid var(--border-normal);
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   line-height: 1;
 
   &:hover {
@@ -1000,7 +1001,7 @@ h2 {
 }
 
 .session-row .session-projects-label {
-  font-size: 0.65rem;
+  font-size: 0.857rem;
   color: var(--fg-dim);
   flex-shrink: 0;
 }
@@ -1011,7 +1012,7 @@ h2 {
   max-width: 100%;
   box-sizing: border-box;
   font-family: inherit;
-  font-size: 0.65rem;
+  font-size: 0.857rem;
   padding: 2px 4px;
   color: var(--fg);
   background: var(--bg-alt, var(--bg));
@@ -1058,7 +1059,7 @@ h2 {
   padding: 2px 0 2px 6px;
   border-left: 3px solid var(--fg-yellow);
   color: var(--fg-yellow);
-  font-size: 0.7rem;
+  font-size: 0.857rem;
   font-weight: bold;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -1078,7 +1079,7 @@ h2 {
   padding: 2px 0 2px 6px;
   border-left: 3px solid var(--fg-yellow);
   color: var(--fg-yellow);
-  font-size: 0.7rem;
+  font-size: 0.857rem;
   line-height: 1.35;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -1217,7 +1218,7 @@ h2 {
 
   legend {
     padding: 0 0.25rem;
-    font-size: 0.75rem;
+    font-size: 0.857rem;
     color: var(--fg-dim);
   }
 }
@@ -1249,7 +1250,7 @@ h2 {
 }
 
 .nsd-meta {
-  font-size: 0.75rem;
+  font-size: 0.857rem;
   color: var(--fg-dim);
   overflow-wrap: anywhere;
 }
@@ -1304,7 +1305,7 @@ h2 {
 }
 
 .nsd-status {
-  font-size: 0.8rem;
+  font-size: 0.857rem;
   color: var(--fg-blue);
 }
 
@@ -1346,7 +1347,7 @@ h2 {
    vocabulary for "not here, and here is why". */
 .panel-hidden-reason {
   padding: 4px 8px;
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--fg-dim);
   background: transparent;
   border-style: dashed;
@@ -1358,15 +1359,14 @@ h2 {
    about 40% of the column and answered none of the questions a person came with. As a quiet list they say the same thing in a
    quarter of the room. The dock's collapsed bars share the class and keep their dashed look. */
 .sidebar-inner > .panel-hidden-reason {
-  padding: 0 4px 0 1.1em;
+  padding: 0 4px;
   border: none;
   margin-block: -0.35rem;
-  text-indent: -1.1em;
 }
 
+/* Each is a disclosure now ("▶ Hot reload: off"), so the triangle says it opens and the name says it is off: no bullet stands in front. */
 .sidebar-inner > .panel-hidden-reason::before {
-  content: "○ ";
-  color: var(--fg-dim);
+  content: none;
 }
 
 .panel-hidden-why {
@@ -1386,6 +1386,14 @@ h2 {
   background: var(--bg-panel);
 }
 
+/* An open pane holds the size the person gave it, and its list scrolls inside. It used to size itself to its rows, so opening one made
+   the divider above it jump and the transcript lose a third of its height with no touch on the divider. Debugger and devtools panels
+   work this way (a size you set and keep, a scroll bar for what does not fit); the drag handle on the divider sets it and the browser
+   remembers it. */
+.live-dock:has(.live-tree) {
+  height: var(--dock-max-height);
+}
+
 /* `app-output-bar` is the second pane's collapsed bar: the same strip, its own class, because two panes
    share one dock and a shared class makes an open bindings pane beside a collapsed output pane read as a
    collapsed bindings pane. */
@@ -1398,7 +1406,7 @@ h2 {
   gap: 0.3rem 0.8rem;
   padding: 4px 8px;
   min-width: 0;
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 .live-pane-bar {
@@ -1423,7 +1431,7 @@ h2 {
    carries its own "not in a file" badge, and the reason is on hover. */
 .live-repl-chip {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: 0.857rem;
   white-space: nowrap;
 }
 
@@ -1454,7 +1462,7 @@ h2 {
   padding: 2px 8px;
   line-height: 1.3;
   white-space: nowrap;
-  font-size: 0.8rem;
+  font-size: 0.857rem;
   gap: 5px;
 }
 
@@ -1531,7 +1539,7 @@ h2 {
   border: 1px solid var(--border-normal);
   border-radius: 0;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 0.857rem;
 
   &:focus {
     outline: 1px solid var(--border-focus);
@@ -1555,7 +1563,7 @@ h2 {
   width: 20px;
   height: 20px;
   padding: 0;
-  font-size: 11px;
+  font-size: 0.857rem;
   line-height: 1;
 }
 
@@ -1598,14 +1606,14 @@ h2 {
   display: flex;
   flex-direction: column;
   padding: 2px 8px 6px;
-  font-size: 12px;
+  font-size: 0.857rem;
   /* Shadows at the ends of the list that fade in only when there is more to scroll to: the classic background-attachment
      trick, so a list taller than its box says so without a script. The cover gradients (local) hide the shadows (scroll)
      when the list is at that end. */
+  /* Only the foot has a shadow. The one at the top sat under the column header and read to three reviewers as a row of faded, cut-off
+     text. The header already says there is more above it, because it sticks. */
   background:
-    linear-gradient(var(--bg-panel) 30%, transparent) top / 100% 16px no-repeat local,
     linear-gradient(transparent, var(--bg-panel) 70%) bottom / 100% 16px no-repeat local,
-    radial-gradient(farthest-side at 50% 0, color-mix(in srgb, var(--fg-default) 30%, transparent), transparent) top / 100% 9px no-repeat scroll,
     radial-gradient(farthest-side at 50% 100%, color-mix(in srgb, var(--fg-default) 30%, transparent), transparent) bottom / 100% 9px no-repeat scroll;
 }
 
@@ -1631,14 +1639,14 @@ h2 {
    file", a file name with its line, a slider with its readout), because every row is its own grid and content-sized tracks put
    the columns at a different x on every row. What is left of the row's width is the name, the value and the type; 900px keeps
    that at about 350px. */
-@container (min-width: 900px) {
+@container (width >= 64.286rem) {
   /* A standard row says nothing beyond its state, its file, its knob and at most one hint sentence. A row with anything more under
      its strip (the running and file values, an undo, a reload's verdict) keeps the stacked layout, so the row that needs attention
      opens out and the rest stay on one line each. The condition is the same selector everywhere below. */
   .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload))),
   .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload))) {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 11.5rem 6.5rem 18rem;
+    grid-template-columns: minmax(0, 1fr) 11.5rem 6.5rem 21rem;
     column-gap: 12px;
     align-items: center;
     min-height: 2.3rem;
@@ -1675,7 +1683,9 @@ h2 {
   .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload))) > .live-binding-node > .live-state,
   .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload))) > .live-binding-node > .live-state {
     position: absolute;
-    left: calc(100% - 36rem - 24px);
+    /* The State track and the two after it (11.5rem, 6.5rem, 21rem) and the two gaps between them: where the State column starts. It
+       said 36rem while the State track was 8.5rem, and the badge sat 3rem right of its heading when the track grew. */
+    left: calc(100% - 39rem - 24px);
     top: 50%;
     transform: translateY(-50%);
   }
@@ -1687,7 +1697,7 @@ h2 {
     grid-column: 1 / -1;
     max-width: 64rem;
     padding: 0 0 6px 1.7em;
-    font-size: 11.5px;
+    font-size: 0.857rem;
   }
 
   .live-tweak > .live-state {
@@ -1712,8 +1722,19 @@ h2 {
     display: none;
   }
 
+  /* The readout carries a word on this row, so the slider is shorter and the stepper stays on one line in the Edit column. */
+  .live-tweak:has(> .live-number-tag) .live-slider {
+    flex: 0 1 4.2rem;
+    width: 4.2rem;
+    min-width: 2.5rem;
+  }
+
+  .live-tweak:has(> .live-number-tag) .live-knob {
+    flex-wrap: nowrap;
+  }
+
   .live-tweak:has(> .live-number-tag) .live-readout::before {
-    content: "file ";
+    content: "saved ";
     font-weight: 400;
     color: color-mix(in srgb, var(--fg-default) 75%, transparent);
   }
@@ -1728,7 +1749,7 @@ h2 {
     grid-column: 1 / -1;
     max-width: 64rem;
     padding: 0 0 6px 1.7em;
-    font-size: 11.5px;
+    font-size: 0.857rem;
   }
 
   /* A row no file defines has an empty Edit cell, and an empty cell reads as "not loaded yet" or "not supported". It says why, in
@@ -1736,11 +1757,11 @@ h2 {
      what selects the row. */
   .live-row:has(> .live-binding-node > .live-state)::after,
   .live-node-summary:has(> .live-binding-node > .live-state)::after {
-    content: "Edit it in Output, then Evaluate";
+    content: "Not in a file. Change it with λ Evaluate, top of Output.";
     grid-column: 4;
     grid-row: 1;
     color: var(--fg-default);
-    font-size: 11.5px;
+    font-size: 0.857rem;
     font-style: normal;
     white-space: nowrap;
   }
@@ -1748,19 +1769,20 @@ h2 {
   /* The names of the columns, above the rows and level with them. They stay in view while the list scrolls. */
   .live-cols {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 11.5rem 6.5rem 18rem;
+    grid-template-columns: minmax(0, 1fr) 11.5rem 6.5rem 21rem;
     column-gap: 12px;
     position: sticky;
     /* The tree has 2px of top padding, and a sticky offset is measured from the scrollport's edge, so at 0 the header stops 2px
        down and a row scrolling past shows in the gap above it. */
     top: -2px;
     z-index: 2;
-    /* The right padding is the 20px each row's wrapper keeps for the pin, so the labels sit over the columns they name. */
-    padding: 3px 20px 4px 0;
+    /* The right padding is the 28px each row's wrapper keeps for the pin (`.live-binding-tree`, set again further down), so the
+       labels sit over the columns they name. It said 20px after the pin grew, which left every column label 8px right of its cells. */
+    padding: 3px 28px 4px 0;
     background: var(--bg-panel);
     border-bottom: 1px solid var(--border-normal);
     color: var(--fg-dim);
-    font-size: 11px;
+    font-size: 0.857rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
@@ -1888,7 +1910,7 @@ h2 {
   padding: 8px 10px;
   border: 1px solid var(--border-normal);
   background: var(--bg-panel);
-  font-size: 12px;
+  font-size: 0.857rem;
   /* A popover under the View button, not a row inside the dock and not a sheet over the output: a row filled the dock and pushed
      the bindings it configures out of sight, and a sheet above the dock sat far from the button and left Output one line tall
      (three reviewers). Right-aligned under the bar, it covers the edit column and leaves the names and values it changes in view. */
@@ -1930,14 +1952,14 @@ h2 {
 
 .live-view-source {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: 0.857rem;
 }
 
 /* A sentence of explanation inside the panel: said once, plain, and readable (the pane's smallest text is 11px). */
 .live-view-note {
   max-width: 72ch;
   color: var(--fg-dim);
-  font-size: 11.5px;
+  font-size: 0.857rem;
   line-height: 1.4;
 }
 
@@ -1948,10 +1970,11 @@ h2 {
 .live-view-opt,
 .live-view-reset,
 .live-view-reset-all {
-  height: 20px;
+  height: auto;
+  min-height: 1.5rem;
   min-width: 0;
   padding: 0 8px;
-  font-size: 11px;
+  font-size: 0.857rem;
 }
 
 .live-view-opt[aria-pressed="true"] {
@@ -1975,7 +1998,7 @@ h2 {
 .live-view-scope {
   height: 20px;
   min-width: 0;
-  font-size: 11px;
+  font-size: 0.857rem;
 }
 
 @media (hover: none) {
@@ -2037,7 +2060,7 @@ h2 {
   flex: none;
   width: 1.5em;
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: 0.857rem;
   font-weight: 700;
   text-align: center;
 }
@@ -2046,13 +2069,7 @@ h2 {
   flex: 0 1 auto;
   max-width: 30%;
   color: var(--fg-dim);
-  font-size: 11.5px;
-}
-
-.live-mode-btn {
-  height: 1.5rem;
-  padding: 0 0.5rem;
-  font-size: 11.5px;
+  font-size: 0.857rem;
 }
 
 /* One value, one line — the shape a debugger's watch window has, and the reason a pane can show more
@@ -2079,7 +2096,7 @@ h2 {
 
 .live-binding-node > .live-preview {
   flex: 1 1 0;
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 /* The view's axes (ViewSettings.fs). The tree carries `data-values` and `data-row`, and the rules below draw them.
@@ -2111,7 +2128,7 @@ h2 {
 
 .live-cell-source {
   color: var(--fg-dim);
-  font-size: 11.5px;
+  font-size: 0.857rem;
 }
 
 .live-tree[data-cols~="state"] .live-state,
@@ -2125,13 +2142,13 @@ h2 {
    `dockViewTests` fails if the text here is not that text. The tree is declared a size container in its own rule above. */
 /* columns: generated by LiveBindingsDock.columnCss; do not edit by hand */
 
-@container (max-width: 587px) {
+@container (width < 42rem) {
   .live-tree[data-values="clipped"][data-cols="type source state"] .live-type {
     display: none;
   }
 }
 
-@container (max-width: 509px) {
+@container (width < 36.429rem) {
   .live-tree[data-values="clipped"][data-cols="type source state"] .live-cell-source {
     display: none;
   }
@@ -2140,7 +2157,7 @@ h2 {
   }
 }
 
-@container (max-width: 381px) {
+@container (width < 27.286rem) {
   .live-tree[data-values="clipped"][data-cols="type source state"] .live-cell-state {
     display: none;
   }
@@ -2149,13 +2166,13 @@ h2 {
   }
 }
 
-@container (max-width: 483px) {
+@container (width < 34.571rem) {
   .live-tree[data-values="clipped"][data-cols="type source"] .live-type {
     display: none;
   }
 }
 
-@container (max-width: 405px) {
+@container (width < 29rem) {
   .live-tree[data-values="clipped"][data-cols="type source"] .live-cell-source {
     display: none;
   }
@@ -2164,13 +2181,13 @@ h2 {
   }
 }
 
-@container (max-width: 459px) {
+@container (width < 32.857rem) {
   .live-tree[data-values="clipped"][data-cols="type state"] .live-type {
     display: none;
   }
 }
 
-@container (max-width: 381px) {
+@container (width < 27.286rem) {
   .live-tree[data-values="clipped"][data-cols="type state"] .live-cell-state {
     display: none;
   }
@@ -2179,13 +2196,13 @@ h2 {
   }
 }
 
-@container (max-width: 355px) {
+@container (width < 25.429rem) {
   .live-tree[data-values="clipped"][data-cols="type"] .live-type {
     display: none;
   }
 }
 
-@container (max-width: 509px) {
+@container (width < 36.429rem) {
   .live-tree[data-values="clipped"][data-cols="source state"] .live-cell-source {
     display: none;
   }
@@ -2194,7 +2211,7 @@ h2 {
   }
 }
 
-@container (max-width: 381px) {
+@container (width < 27.286rem) {
   .live-tree[data-values="clipped"][data-cols="source state"] .live-cell-state {
     display: none;
   }
@@ -2203,7 +2220,7 @@ h2 {
   }
 }
 
-@container (max-width: 405px) {
+@container (width < 29rem) {
   .live-tree[data-values="clipped"][data-cols="source"] .live-cell-source {
     display: none;
   }
@@ -2212,7 +2229,7 @@ h2 {
   }
 }
 
-@container (max-width: 381px) {
+@container (width < 27.286rem) {
   .live-tree[data-values="clipped"][data-cols="state"] .live-cell-state {
     display: none;
   }
@@ -2221,13 +2238,13 @@ h2 {
   }
 }
 
-@container (max-width: 767px) {
+@container (width < 54.857rem) {
   .live-tree[data-values="full"][data-cols="type source state"] .live-type {
     display: none;
   }
 }
 
-@container (max-width: 689px) {
+@container (width < 49.286rem) {
   .live-tree[data-values="full"][data-cols="type source state"] .live-cell-source {
     display: none;
   }
@@ -2236,7 +2253,7 @@ h2 {
   }
 }
 
-@container (max-width: 561px) {
+@container (width < 40.143rem) {
   .live-tree[data-values="full"][data-cols="type source state"] .live-cell-state {
     display: none;
   }
@@ -2245,13 +2262,13 @@ h2 {
   }
 }
 
-@container (max-width: 663px) {
+@container (width < 47.429rem) {
   .live-tree[data-values="full"][data-cols="type source"] .live-type {
     display: none;
   }
 }
 
-@container (max-width: 585px) {
+@container (width < 41.857rem) {
   .live-tree[data-values="full"][data-cols="type source"] .live-cell-source {
     display: none;
   }
@@ -2260,13 +2277,13 @@ h2 {
   }
 }
 
-@container (max-width: 639px) {
+@container (width < 45.714rem) {
   .live-tree[data-values="full"][data-cols="type state"] .live-type {
     display: none;
   }
 }
 
-@container (max-width: 561px) {
+@container (width < 40.143rem) {
   .live-tree[data-values="full"][data-cols="type state"] .live-cell-state {
     display: none;
   }
@@ -2275,13 +2292,13 @@ h2 {
   }
 }
 
-@container (max-width: 535px) {
+@container (width < 38.286rem) {
   .live-tree[data-values="full"][data-cols="type"] .live-type {
     display: none;
   }
 }
 
-@container (max-width: 689px) {
+@container (width < 49.286rem) {
   .live-tree[data-values="full"][data-cols="source state"] .live-cell-source {
     display: none;
   }
@@ -2290,7 +2307,7 @@ h2 {
   }
 }
 
-@container (max-width: 561px) {
+@container (width < 40.143rem) {
   .live-tree[data-values="full"][data-cols="source state"] .live-cell-state {
     display: none;
   }
@@ -2299,7 +2316,7 @@ h2 {
   }
 }
 
-@container (max-width: 585px) {
+@container (width < 41.857rem) {
   .live-tree[data-values="full"][data-cols="source"] .live-cell-source {
     display: none;
   }
@@ -2308,7 +2325,7 @@ h2 {
   }
 }
 
-@container (max-width: 561px) {
+@container (width < 40.143rem) {
   .live-tree[data-values="full"][data-cols="state"] .live-cell-state {
     display: none;
   }
@@ -2334,7 +2351,7 @@ h2 {
 
 .live-closure-badge {
   color: var(--fg-yellow);
-  font-size: 11px;
+  font-size: 0.857rem;
   font-style: italic;
   opacity: 0.8;
   white-space: nowrap;
@@ -2342,13 +2359,13 @@ h2 {
 
 .live-cycle {
   color: var(--fg-red);
-  font-size: 11px;
+  font-size: 0.857rem;
   white-space: nowrap;
 }
 
 .live-truncated {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: 0.857rem;
   font-style: italic;
 }
 
@@ -2360,7 +2377,7 @@ h2 {
   align-items: center;
   gap: 0.3rem 0.8rem;
   margin: 0.3rem 0;
-  font-size: 11.5px;
+  font-size: 0.857rem;
   min-width: 0;
 }
 
@@ -2399,7 +2416,7 @@ h2 {
 
 .live-held-evaluating {
   color: var(--fg-yellow);
-  font-size: 11.5px;
+  font-size: 0.857rem;
 }
 
 /* The knob on a live binding's row (LiveBindingsTweakView.fs): a strip under the row that says where the value lives and, where
@@ -2417,14 +2434,14 @@ h2 {
   gap: 4px 8px;
   min-width: 0;
   padding: 2px 0 6px 1.2em;
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 .live-state,
 .live-cell-state {
   padding: 0 0.5em;
   border: 1px solid currentColor;
-  font-size: 11px;
+  font-size: 0.857rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -2560,7 +2577,7 @@ h2 {
 
 /* The reason a blocked undo or redo gives: small, and dim, but readable. */
 .live-history-why {
-  font-size: 11.5px;
+  font-size: 0.857rem;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -2570,7 +2587,7 @@ h2 {
    standard one. */
 .live-mode-caption,
 .live-writes-caption {
-  font-size: 11.5px;
+  font-size: 0.857rem;
   line-height: 1.35;
 }
 
@@ -2589,7 +2606,7 @@ h2 {
   padding: 0 5px;
   border: 1px solid var(--fg-dim);
   color: var(--fg-default);
-  font-size: 11px;
+  font-size: 0.857rem;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -2608,7 +2625,7 @@ h2 {
 /* The closed legend that explains the badges and glyphs. Its summary is quiet text on the header line; its body is a short list. */
 .live-help {
   min-width: 0;
-  font-size: 11.5px;
+  font-size: 0.857rem;
 }
 
 .live-help[open] {
@@ -2654,7 +2671,7 @@ h2 {
   border: 1px solid var(--border-normal);
   border-radius: 0;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 0.857rem;
 
   &:focus {
     outline: 1px solid var(--border-focus);
@@ -2712,7 +2729,7 @@ h2 {
 /* ── Diagnostics ──────────────────────────────────────────────── */
 
 .diag {
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   padding: 1px 0.5rem;
   line-height: 1.5;
 }
@@ -2730,7 +2747,7 @@ h2 {
   background: var(--bg-selection);
   padding: 1px 4px;
   border-radius: 0;
-  font-size: 0.8rem;
+  font-size: 0.857rem;
   margin-right: 0.25rem;
 }
 
@@ -2738,7 +2755,7 @@ h2 {
 
 .meta {
   color: var(--fg-dim);
-  font-size: 0.8rem;
+  font-size: 0.857rem;
 }
 
 .log-box {
@@ -2746,7 +2763,7 @@ h2 {
   border: 1px solid var(--border-normal);
   border-radius: 0;
   padding: 0.5rem 0;
-  font-size: 0.85rem;
+  font-size: 0.857rem;
 }
 
 /* ── Connection Banner ────────────────────────────────────────── */
@@ -2754,7 +2771,7 @@ h2 {
 .conn-banner {
   padding: 4px 1rem;
   text-align: center;
-  font-size: 0.8rem;
+  font-size: 0.857rem;
   font-weight: bold;
   border-radius: 0;
   transition: all 0.3s;
@@ -2818,7 +2835,7 @@ h2 {
   cursor: pointer;
   padding: 2px 8px;
   border-radius: 0;
-  font-size: 0.8rem;
+  font-size: 0.857rem;
   transition: background 0.2s;
 }
 
@@ -2828,7 +2845,7 @@ h2 {
 
 .alarm-entry {
   margin: 0.25rem 0 0 1.5rem;
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   color: var(--fg-default);
 }
 
@@ -2847,7 +2864,7 @@ h2 {
   border-radius: 0;
   padding: 4px 8px;
   font-family: inherit;
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   cursor: pointer;
 
   &:focus {
@@ -2927,7 +2944,7 @@ h2 {
   align-items: center;
   flex-shrink: 0;
   padding: 2px 12px;
-  font-size: 0.7rem;
+  font-size: 0.857rem;
   color: var(--fg-dim);
 }
 
@@ -2954,7 +2971,7 @@ h2 {
   border: 1px solid var(--border-normal);
   border-radius: 0;
   padding: 4px 8px;
-  font-size: 0.72rem;
+  font-size: 0.857rem;
   line-height: 1.35;
   white-space: normal;
   text-align: left;
@@ -3013,13 +3030,13 @@ h2 {
   }
 }
 
-/* Perf-stats reveal toggle (📊) — count stays; the detail hides behind it. */
+/* Perf-stats reveal toggle (▥) — count stays; the detail hides behind it. */
 .perf-toggle-btn {
   background: none;
   border: none;
   cursor: pointer;
   padding: 0 4px;
-  font-size: 0.72rem;
+  font-size: 0.857rem;
   opacity: 0.45;
   transition: opacity 0.15s;
 }
@@ -3038,7 +3055,7 @@ h2 {
   height: 28px;
   box-sizing: border-box;
   padding: 0 4px;
-  font-size: 0.72rem;
+  font-size: 0.857rem;
   max-width: 150px;
   min-width: 0;
 }
@@ -3144,7 +3161,7 @@ h2 {
    a squeezed side column, and not a hidden/position:fixed overlay
    that hides the session list from view. */
 
-@media (max-width: 768px) {
+@media (width < 48.062em) {
   .app-layout {
     /* Was a fixed-width side-by-side flex row (main-area | sidebar);
        stack the two as full-width blocks instead. #main still clips
@@ -3225,6 +3242,11 @@ h2 {
     order: -1;
   }
 
+  /* In the stacked layout the page is the one scroll, so the dock is as tall as its rows: a fixed height is for the side-by-side layout. */
+  .live-dock:has(.live-tree) {
+    height: auto;
+  }
+
   /* The popover needs room above the dock, and a phone-width page has little: the panel's title slid under the fixed header.
      Here it opens in the flow, under the pane bar, and the dock scrolls. The selector matches the position rule's, so it wins by
      coming later. */
@@ -3269,10 +3291,7 @@ h2 {
     order: 3;
   }
 
-  #bindings-panel .live-mode-label,
-  #bindings-panel .live-mode,
-  #bindings-panel .live-mode-caption,
-  #bindings-panel .live-legend {
+  #bindings-panel .live-mode-caption {
     order: 4;
     flex: 0 0 auto;
     padding: 4px 8px;
@@ -3350,7 +3369,7 @@ h2 {
    overflow:hidden). Give each bar its own scroll region so overflow
    is contained and reachable, and never bleeds off-screen or forces
    the page itself to scroll horizontally. */
-@media (max-width: 480px) {
+@media (width < 30.062em) {
   .app-header,
   .session-context {
     overflow-x: auto;
@@ -3364,7 +3383,7 @@ h2 {
    own. The evals count (the session card carries it) drops out whole. The row height is the one variable the page offsets read,
    so the rest of the page moves down with it. The header's own inline styles set display, height and padding, so the rules that
    undo them need !important. */
-@media (max-width: 820px) {
+@media (width < 51.312em) {
   :root {
     --tabline-h: 72px;
   }
@@ -3430,7 +3449,7 @@ h2 {
 }
 
 /* The word beside the brand's icon is the first thing to go at phone width: the icon says whose page it is. */
-@media (max-width: 560px) {
+@media (width < 35.062em) {
   .tabline-brand-name {
     display: none !important;
   }
@@ -3453,13 +3472,13 @@ h2 {
 }
 
 .badge {
-  font-size: 0.65rem;
+  font-size: 0.857rem;
   padding: 1px 5px;
   border-radius: 0;
 }
 
 .meta-text {
-  font-size: 0.75rem;
+  font-size: 0.857rem;
   color: var(--fg-dim);
 }
 
@@ -3473,7 +3492,7 @@ h2 {
   background: rgba(0, 0, 0, 0.1);
   padding: 0.1em 0.3em;
   border-radius: 0;
-  font-size: 0.65rem;
+  font-size: 0.857rem;
 }
 
 /* Diagnostic error block — failed opens, warmup errors */
@@ -3511,7 +3530,9 @@ h2 {
   color: var(--fg-dim, #888);
   cursor: pointer;
   font-family: inherit;
-  font-size: 0.85rem;
+  /* The settings glyph is a small mark in a text face: it needs the room a button's icon has. */
+  font-size: 1.286rem;
+  line-height: 1;
 }
 
 .expand-toggle-btn:hover {
@@ -3524,7 +3545,7 @@ h2 {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  font-size: 0.7rem;
+  font-size: 0.857rem;
   padding: 1px 6px;
   border-radius: 0;
   background: var(--bg-focus, #363646);
@@ -3557,7 +3578,7 @@ h2 {
   z-index: 100;
   padding: 8px 16px;
   text-align: center;
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: bold;
   font-family: inherit;
 }
@@ -3579,7 +3600,7 @@ body[data-connected="false"] .statusline-info {
 .settings-groups { display: flex; flex-direction: column; gap: 1.25rem; }
 .settings-group { display: flex; flex-direction: column; gap: 0.5rem; }
 .settings-group-title {
-  margin: 0; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em;
+  margin: 0; font-size: 0.857rem; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--fg-dim); border-bottom: 1px solid var(--border-normal); padding-bottom: 0.25rem;
 }
 .settings-row {
@@ -3588,14 +3609,14 @@ body[data-connected="false"] .statusline-info {
 }
 .settings-row-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .settings-name { font-weight: bold; }
-.settings-desc { font-size: 0.8rem; color: var(--fg-dim); overflow-wrap: anywhere; }
-.settings-value { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.85rem; }
+.settings-desc { font-size: 0.857rem; color: var(--fg-dim); overflow-wrap: anywhere; }
+.settings-value { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.857rem; }
 .settings-effective { font-family: 'JetBrains Mono', monospace; }
 .settings-value-error { color: var(--fg-red); }
-.settings-perlayer { font-size: 0.75rem; color: var(--fg-dim); font-family: 'JetBrains Mono', monospace; }
+.settings-perlayer { font-size: 0.857rem; color: var(--fg-dim); font-family: 'JetBrains Mono', monospace; }
 
 .settings-badge, .settings-chip {
-  font-size: 0.65rem; padding: 0.05rem 0.4rem; border-radius: 0;
+  font-size: 0.857rem; padding: 0.05rem 0.4rem; border-radius: 0;
   border: 1px solid var(--border-normal); white-space: nowrap;
 }
 .settings-badge-default { color: var(--fg-dim); }
@@ -3607,9 +3628,9 @@ body[data-connected="false"] .statusline-info {
 .settings-chip-guarded { color: var(--fg-red); border-color: var(--fg-red); }
 
 /* Settings scope toggle (Phase C1) */
-.settings-scope { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0 0.75rem; font-size: 0.8rem; }
+.settings-scope { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0 0.75rem; font-size: 0.857rem; }
 .settings-scope-label { color: var(--fg-dim); }
-.settings-scope-select { background: var(--bg-panel); color: var(--fg-normal, inherit); border: 1px solid var(--border-normal); border-radius: 0; padding: 0.1rem 0.3rem; font-size: 0.8rem; }
+.settings-scope-select { background: var(--bg-panel); color: var(--fg-normal, inherit); border: 1px solid var(--border-normal); border-radius: 0; padding: 0.1rem 0.3rem; font-size: 0.857rem; }
 
 /* No-session sessions panel empty state (anchors the panel; no floating bare text) */
 .sessions-empty {
@@ -3619,11 +3640,11 @@ body[data-connected="false"] .statusline-info {
   border-radius: 0;
   text-align: center;
   color: var(--fg-dim);
-  font-size: 0.85rem;
+  font-size: 0.857rem;
 }
 .sessions-empty-hint {
   margin-top: 4px;
-  font-size: 0.72rem;
+  font-size: 0.857rem;
   color: var(--fg-dim);
   opacity: 0.8;
 }
@@ -3636,7 +3657,7 @@ body[data-connected="false"] .statusline-info {
   background: var(--bg-panel);
   border-left: 4px solid var(--fg-red);
   color: var(--fg-default);
-  font-size: 0.85rem;
+  font-size: 0.857rem;
   overflow-wrap: anywhere;
 }
 .session-fault-title { font-weight: 700; color: var(--fg-red); }
@@ -3682,10 +3703,10 @@ body[data-connected="false"] .statusline-info {
 .sidebar .session-row,
 #session-context details,
 #session-context details * {
-  font-size: max(0.8rem, 11px) !important;
+  font-size: 0.857rem !important;
 }
 
-/* The session card's five buttons carry a word beside the glyph. They were ◎ ▶ ■ ⌫ ✖ in a row of identical squares, with the
+/* The session card's five buttons carry a word beside the glyph. They were ◎ ▶ ■ ⌫ ✕ in a row of identical squares, with the
    meanings in a long tooltip, and one of them (Purge) deletes data: reviewers could not tell which was which, or which was
    destructive. The word is drawn with ::before (::after is the tooltip) from each button's own accessible name, so the markup
    and the names are unchanged. The row already wraps. */
@@ -3694,19 +3715,18 @@ body[data-connected="false"] .statusline-info {
   min-width: 28px;
   padding: 0 9px;
   gap: 6px;
-  font-size: 0.8rem;
+  font-size: 0.857rem;
 }
 
 .session-card-actions > .session-btn[aria-label^="Warmup auto-open"]::before { content: "Auto-open"; order: 1; }
-.session-card-actions > .session-btn[aria-label^="Run "]::before { content: "Run"; order: 1; }
-.session-card-actions > .session-btn[aria-label^="Stop"]::before { content: "Stop"; order: 1; }
+.session-card-actions > .session-btn[aria-label^="Run "]::before { content: "Run app"; order: 1; }
+.session-card-actions > .session-btn[aria-label^="Stop"]::before { content: "Stop session"; order: 1; }
 .session-card-actions > .session-btn[aria-label^="Dispose"]::before { content: "Dispose"; order: 1; }
 .session-card-actions > .session-btn[aria-label^="Purge"]::before { content: "Purge"; order: 1; }
 
 /* Purge deletes the session's saved state, so it stands apart from the rest of the row. Red is for failure, so it is marked by an
    outline and its place at the end of the row, not by the failure colour. */
 .session-card-actions > .session-btn[aria-label^="Purge"] {
-  margin-left: auto;
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--fg-dim);
 }
@@ -3724,7 +3744,7 @@ body[data-connected="false"] .statusline-info {
   padding: 0;
   border: none;
   background: none;
-  font-size: 12px;
+  font-size: 0.857rem;
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
@@ -3780,7 +3800,7 @@ body[data-connected="false"] .statusline-info {
    The title is the largest and brightest word in the bar, and what it holds (the count, when the values were read, how many are
    not in a file) is the quiet line after it. A row lifts a little under the pointer so a long list can be followed across. */
 .live-dock .live-pane-title {
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.01em;
   color: var(--fg-default);
@@ -3798,7 +3818,7 @@ body[data-connected="false"] .statusline-info {
   border-radius: 0;
   background: color-mix(in srgb, var(--fg-default) 14%, transparent);
   color: var(--fg-default);
-  font-size: 11px;
+  font-size: 0.857rem;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -3888,22 +3908,22 @@ body[data-connected="false"] .statusline-info {
 /* The switch says its position in its own track: "off" or "on", a word and not only a thumb at one end, so it cannot be read as a
    checkbox or a colour swatch. The track is wide enough for the word beside the thumb. */
 .live-dock .live-toggle {
-  width: 3.7rem;
+  width: 4.6rem;
 }
 
 .live-dock .live-toggle::before {
-  content: "off";
+  content: "false";
   position: absolute;
   top: 50%;
   right: 7px;
   transform: translateY(-50%);
-  font-size: 11px;
+  font-size: 0.857rem;
   font-weight: 700;
   color: var(--fg-default);
 }
 
 .live-dock .live-toggle:checked::before {
-  content: "on";
+  content: "true";
   right: auto;
   left: 7px;
   color: var(--bg-default);
@@ -3911,8 +3931,8 @@ body[data-connected="false"] .statusline-info {
 
 /* A value that is computed, and a value made of parts, are different things and wear different marks: half filled for a formula,
    a square with a plus in it for a value that opens into parts. */
-.live-dock .live-tweak[data-state] > .live-state[data-label="has parts"]::before,
-.live-dock .live-node-summary .live-tweak[data-state] .live-state[data-label="has parts"]::before {
+.live-dock .live-tweak[data-state] > .live-state[data-label="expandable"]::before,
+.live-dock .live-node-summary .live-tweak[data-state] .live-state[data-label="expandable"]::before {
   background:
     linear-gradient(var(--fg-default), var(--fg-default)) center / 60% 1.5px no-repeat,
     linear-gradient(var(--fg-default), var(--fg-default)) center / 1.5px 60% no-repeat;
@@ -3928,11 +3948,122 @@ body[data-connected="false"] .statusline-info {
 .live-dock .live-pane-stamp,
 .live-dock .live-repl-chip,
 .live-dock .live-number-tag {
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 
 .live-dock .live-tree {
-  font-size: 13px;
+  font-size: 0.929rem;
+}
+
+/* ── What the pane is for, and where the rest of the page went ──
+   One line under the title says what the pane is. On a phone that line is hidden (every line before the first binding pushes the
+   list down) and a pair of links says that Output and Sessions are below and takes you there. */
+.live-pane-sub {
+  padding: 2px 8px 6px;
+  color: color-mix(in srgb, var(--fg-default) 80%, transparent);
+  font-size: 0.857rem;
+}
+
+.live-jump {
+  display: none;
+}
+
+@media (width < 48.062em) {
+  .live-pane-sub {
+    display: none;
+  }
+
+  .live-jump {
+    display: flex;
+    gap: 1.2rem;
+    padding: 2px 8px 6px;
+    font-size: 0.857rem;
+  }
+
+  .live-jump a {
+    color: var(--border-focus);
+    text-decoration: underline;
+  }
+
+  /* A long value wraps onto more lines here, where it used to end in an ellipsis with no way to read the rest. */
+  .live-dock .live-preview {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* The word "Session:" keeps a gap before the id: the trailing space in its text collapses in a flex row. */
+.tabline-session-label {
+  margin-right: 0.4em;
+}
+
+/* While a change is pending, the caption names it and both remedies, so the stale banner keeps only its button: its words said "older
+   code" beside a button the caption's sentence already explains, and a reviewer read the two as competing remedies. */
+.live-dock:has(.live-writes-pending) .live-pane-stale-words {
+  display: none;
+}
+
+/* The close control sits in the View panel's head, level with its title. */
+.live-view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.live-view-close {
+  padding: 2px 8px;
+  border: 1px solid var(--fg-dim);
+  background: transparent;
+  color: var(--fg-default);
+  font-size: 0.857rem;
+  cursor: pointer;
+}
+
+/* The purpose line stays on a phone: a narrow-window user otherwise never learns the pane saves to a file. */
+@media (width < 48.062em) {
+  .live-pane-sub {
+    display: block;
+  }
+}
+
+/* On the stacked layout the type has lost its column heading, so it says what it is: "type float". */
+@container (width < 64.286rem) {
+  .live-dock .live-type::before {
+    content: "type ";
+    color: color-mix(in srgb, var(--fg-default) 70%, transparent);
+  }
+}
+
+/* The standing rule is ordinary text; only a pending change is loud (bold, in the notice colour). The rule was bold at all times and
+   turned into wallpaper, and when a change was pending two near-identical bold sentences stood side by side. */
+.live-dock .live-writes-caption {
+  font-weight: 400;
+}
+
+.live-dock .live-writes-caption.live-writes-pending {
+  font-weight: 700;
+  color: var(--fg-yellow);
+}
+
+/* The file and line answer "where does it come from", so they are the text colour, and the step buttons read as buttons. */
+.live-dock .live-where {
+  color: var(--fg-default);
+}
+
+.live-dock .live-step {
+  background: color-mix(in srgb, var(--border-focus) 38%, var(--bg-panel));
+  color: var(--fg-default);
+}
+
+/* What Stop, Dispose and Purge do, said once under the card's buttons. */
+.sidebar .session-card-hint {
+  padding: 4px 0.5rem 2px;
+  color: color-mix(in srgb, var(--fg-default) 75%, transparent);
+  font-size: 0.857rem;
+  line-height: 1.4;
 }
 
 /* ── Marks you can see, text you can read ──
@@ -3968,9 +4099,1055 @@ body[data-connected="false"] .statusline-info {
 }
 
 /* In the stacked rows the source has lost its column heading, so it says what it is: "in Tuning.fs:11". */
-@container (max-width: 899px) {
+@container (width < 64.286rem) {
   .live-dock .live-where::before {
     content: "in ";
     color: color-mix(in srgb, var(--fg-default) 70%, transparent);
   }
+}
+
+/* ── Round 12: the remedy sits with the warning, secondary text is readable, the view panel pushes instead of covering ──
+   Three reviewers (all 7/10) named the same things: the button that answers the amber sentence was a small grey button on another
+   row; the dim text was 4.5:1 only on paper; the View popover cut the sentences and the Edit column beneath it in half; the pins
+   were small and unnamed; the edited row's slider shrank to a stub. */
+
+/* The banner: the pending sentence and its button, one box with the caution colour at its edge. */
+.live-dock .live-writes-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.8rem;
+  margin: 4px 8px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--fg-yellow);
+  background: color-mix(in srgb, var(--fg-yellow) 12%, var(--bg-panel));
+  flex: 1 1 100%;
+  min-width: 0;
+  max-width: calc(100% - 16px);
+  box-sizing: border-box;
+}
+
+.live-dock .live-writes-banner .live-writes-caption {
+  flex: 1 1 18rem;
+  min-width: 0;
+  white-space: normal;
+  padding: 0;
+}
+
+.live-dock .live-writes-banner .live-pane-rebuild {
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
+  padding: 4px 12px;
+  font-size: 0.929rem;
+  background: var(--border-focus);
+  color: var(--bg-default);
+  border-color: var(--border-focus);
+}
+
+/* The bar's own copy of the button goes while the banner has one, so the page never offers the same remedy twice. */
+.live-dock:has(.live-writes-banner) .live-pane-bar > .live-pane-stale {
+  display: none;
+}
+
+@media (width < 48.062em) {
+  #bindings-panel .live-writes-banner {
+    order: 2;
+  }
+}
+
+/* Secondary text is 78% of the text colour in this pane, not the theme's dim: the dim grey measured under 4.5:1 on the panel. */
+.live-dock {
+  --fg-dim: color-mix(in srgb, var(--fg-default) 78%, var(--bg-panel));
+}
+
+.live-dock .live-tree {
+  font-size: 0.929rem;
+}
+
+/* A pin is a button you can hit: 24px, always drawn, and its name is its tooltip. */
+.live-dock .live-binding > .live-binding-pin {
+  width: 24px;
+  height: 24px;
+  top: 0;
+  opacity: 0.85;
+}
+
+/* The view panel is a block that pushes the table down. It was a popover over the Source and Edit columns and cut the sentences
+   under it; at phone width it was already a block, and the reviewers called that the better one. */
+.live-dock .live-view-panel {
+  position: static;
+  width: auto;
+  max-height: none;
+  margin: 4px 8px;
+  box-shadow: none;
+  z-index: auto;
+}
+
+/* The list comes after the pane's own lines at phone width. The mode buttons and the legend are rows of the Display panel now, so
+   the only mode line left in the pane is the caption of a mode that is not the standard one. */
+@media (width < 48.062em) {
+  #bindings-panel > .live-tree {
+    order: 4;
+  }
+
+  #bindings-panel .live-mode-caption {
+    order: 5;
+  }
+}
+
+/* The edited row: the Edit column is wider, the slider keeps a usable track, and the sentence about the change sits on the
+   buttons' line, not under the Name column. */
+@container (width >= 64.286rem) {
+  .live-tweak:has(> .live-number-tag) .live-slider {
+    flex: 1 1 6rem;
+    width: auto;
+    min-width: 4rem;
+  }
+
+  .live-tweak > .live-actions {
+    grid-row: 2;
+  }
+
+  .live-tweak > .live-reload {
+    grid-column: 2 / 4;
+    grid-row: 2;
+    align-self: center;
+    justify-self: end;
+    text-align: right;
+    padding-top: 4px;
+  }
+}
+
+/* The banner's button is the second remedy, so it is outlined; the row's Apply is the filled one the sentence names first. */
+.live-dock .live-writes-banner .live-pane-rebuild {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--fg-default);
+  border: 1px solid var(--fg-yellow);
+}
+
+/* A text or formula box says how it is committed as soon as it has focus, not only once something differs. */
+.live-dock .live-field-wrap:focus-within .live-field-hint {
+  display: block !important;
+}
+
+/* Inside the banner the sentence wraps and the button follows it, at phone width too: the phone rules that place the caption on its
+   own (`#bindings-panel .live-writes-caption`) outrank a class selector and kept it on one line, clipped. */
+#bindings-panel .live-writes-banner .live-writes-caption {
+  flex: 1 1 14rem;
+  white-space: normal;
+  padding: 0;
+}
+
+/* The view panel keeps its own height: as a block in the dock's column it was squeezed and cut its note in half. */
+.live-dock .live-view-panel {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.live-dock .live-writes-banner .live-writes-caption {
+  order: 1;
+}
+
+.live-dock .live-writes-banner .live-pane-rebuild {
+  order: 2;
+}
+
+/* ── Round 13 ──
+   The remedy for a value no file holds is said at every width, not only in the wide grid's Edit cell. "Not in a file" is a dash, not a
+   hollow square: a reviewer took the square for a checkbox. The label on a waiting file value is one form at every width, "saved"
+   before its number, so the grey chip that moved between widths is gone. The pins keep a slot of their own on the stacked layout, so
+   they no longer touch the text before them. */
+.live-dock .live-state[data-label="not in a file"]::before {
+  width: 0.8em;
+  height: 0.18em;
+  box-shadow: none;
+  background: var(--fg-default);
+}
+
+@container (width < 64.286rem) {
+  .live-row:has(> .live-binding-node > .live-state)::after,
+  .live-node-summary:has(> .live-binding-node > .live-state)::after {
+    content: "Not in a file. Change it with λ Evaluate, top of Output.";
+    display: block;
+    padding: 2px 0 4px 1.7em;
+    font-size: 0.857rem;
+    color: var(--fg-default);
+  }
+
+  .live-dock .live-binding-tree {
+    padding-right: 28px;
+  }
+}
+
+.live-dock .live-tweak > .live-number-tag {
+  display: none;
+}
+
+.live-dock .live-tweak:has(> .live-number-tag) .live-readout::before {
+  content: "saved ";
+  font-weight: 400;
+  color: color-mix(in srgb, var(--fg-default) 75%, transparent);
+}
+
+/* The note about a call every field came through, above the fields, indented with them. */
+.live-dock .live-shared-note {
+  padding: 2px 0 4px 1.7em;
+  font-size: 0.857rem;
+  color: color-mix(in srgb, var(--fg-default) 85%, transparent);
+}
+
+/* On a phone the banner stacks: the sentence takes the full width and the button sits under it, instead of a six-line column beside it. */
+@media (width < 48.062em) {
+  #bindings-panel .live-writes-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  #bindings-panel .live-writes-banner .live-writes-caption {
+    flex: 0 0 auto;
+  }
+
+  #bindings-panel .live-writes-banner .live-pane-rebuild {
+    justify-content: center;
+  }
+}
+
+/* ── Round 14 ──
+   The legend that decodes the state marks stays above the list at phone width, beside the mode control: without the column
+   headings the marks are only decoded by it. An open object no longer says "expandable" beside an arrow that says it is open. The
+   pins have their own gutter at every width, so none touches the "+" beside it. */
+.live-dock details[open] > .live-node-summary .live-state[data-label="expandable"] {
+  visibility: hidden;
+}
+
+.live-dock .live-binding-tree {
+  padding-right: 28px;
+}
+
+/* ── Legibility, across the page ──
+   Every round-14 reviewer scored density and legibility 6 or 7 and accessibility cues 6, and named the same things: 11px grey text in the
+   Sessions column and the status strip, and no focus ring they could see. Secondary text is 78% of the text colour on every surface (the
+   dock already was), the Sessions column's small text is 12.5px, and every control draws a ring when the keyboard reaches it. */
+body {
+  --fg-dim: color-mix(in srgb, var(--fg-default) 78%, var(--bg-panel));
+}
+
+#sidebar :is(.meta, .badge, .badge-agent, .session-dir, .session-card-source-headline, .session-card-source-action,
+    .session-card-source-summary, .session-btn, .session-card-hint, .sessions-stale-marker, .eval-btn, li, summary, code),
+.sidebar .session-card-hint {
+  font-size: 0.929rem;
+}
+
+/* A ring two colours wide: the focus colour, and a line of the page's own background outside it, so it shows on a blue-grey button, on
+   a pale one and on the page. Three reviewers could not find the 2px ring on the button the keyboard had reached. */
+:is(button, input, select, textarea, summary, a, [tabindex]):focus-visible {
+  outline: 3px solid var(--border-focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--bg-default);
+}
+
+/* The commit hint under a text or formula box is always on screen, not only once the box has focus or differs from the file. */
+.live-dock .live-field-hint {
+  display: block !important;
+  color: color-mix(in srgb, var(--fg-default) 80%, transparent);
+  font-size: 0.857rem;
+}
+
+/* ── Round 15 ──
+   Undo and Apply are two actions with a gap between them, and Undo is outlined where Apply is filled, so the focus ring on one never
+   runs into the other. The sentence about a saved value sits on one line beside the buttons at wide widths. The source reads
+   "in the file · Tuning.fs:5", not "in the file in Tuning.fs:5". The pins are full strength. */
+.live-dock .live-actions {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.live-dock .live-actions .live-history:not(.live-apply) {
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+}
+
+@container (width >= 64.286rem) {
+  .live-tweak > .live-reload {
+    white-space: nowrap;
+    font-size: 0.857rem;
+  }
+}
+
+@container (width < 64.286rem) {
+  .live-dock .live-where::before {
+    content: "· ";
+  }
+}
+
+.live-dock .live-binding > .live-binding-pin {
+  opacity: 1;
+}
+
+/* A row with nothing to edit has the whole Edit column empty, so its value wraps and shows in full instead of ending in "…" with the
+   widest free space on the row beside it. */
+.live-dock .live-node-summary:not(:has(.live-knob, .live-field, .live-actions)) .live-preview {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* ── Whole-dashboard pass (round 17) ──
+   The banner offers both remedies it names: the row's Apply (filled, the quick one) and the rebuild (outlined, the thorough one). */
+.live-dock .live-writes-banner .live-apply {
+  order: 2;
+  flex: 0 0 auto;
+}
+
+.live-dock .live-writes-banner .live-pane-rebuild {
+  order: 3;
+}
+
+/* The header buttons keep their words on one line, and the theme box is wide enough for "Theme: " and the name at phone width. */
+.sidebar-header-btn {
+  white-space: nowrap;
+  width: auto;
+  padding: 0 8px;
+}
+
+.theme-select {
+  min-width: 9.5rem;
+}
+
+/* At phone width the Sessions header wraps instead of squeezing: the title and the "+ New" button keep their words, and the
+   state marker takes a line of its own under them. The theme box is wide enough for "Theme: " and its name. */
+@media (width < 35.062em) {
+  .sidebar-header {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .sidebar-header .sessions-stale-marker {
+    order: 5;
+    flex: 1 1 100%;
+    text-align: center;
+  }
+
+  .sidebar-header h2 {
+    flex: 0 0 auto;
+  }
+
+  .tabline-right .theme-select {
+    min-width: 10.5rem;
+    max-width: none;
+    font-size: 0.857rem;
+  }
+}
+
+/* The Sessions header's state marker repeats the card's own chip right under it at phone width, and its extra row was clipped by the
+   header, so it is not drawn there. The top badge and the theme box share the bar at 400px without cutting either. */
+@media (width < 35.062em) {
+  .sidebar-header .sessions-stale-marker {
+    display: none;
+  }
+
+  .tabline-right .theme-select {
+    min-width: 9.6rem;
+  }
+
+  .app-header .status {
+    font-size: 0.857rem;
+    padding-inline: 6px;
+  }
+}
+
+@media (width < 35.062em) {
+  .tabline-right .theme-select {
+    min-width: 10.4rem;
+    font-size: 0.857rem;
+    padding-inline: 4px;
+  }
+
+  .tabline-right .expand-toggle-btn {
+    width: 24px;
+    padding: 0;
+  }
+}
+
+/* ── Round 17 fixes ──
+   The Sessions header's chip repeats the card's chip right under it, and its longer text cut the panel's own title to "SES…" at
+   wide widths, so it is not drawn. The session and mode cell keeps its width, so the Mode select shows its arrow at 900px. */
+.sidebar-header .sessions-stale-marker {
+  display: none;
+}
+
+.tabline-info {
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.tabline-info {
+  margin-right: 8px;
+}
+
+.tabline-info .workflow-select {
+  padding-right: 18px;
+}
+
+@media (width < 43.812em) {
+  .tabline-right {
+    min-width: 0;
+    flex-shrink: 1;
+  }
+
+  .tabline-right .theme-select {
+    width: 9.6rem;
+    min-width: 0;
+    max-width: 100%;
+    font-size: 0.857rem;
+    padding-inline: 4px;
+  }
+}
+
+.tabline-info .workflow-select {
+  min-width: 8.8rem;
+}
+
+/* Purge is the irreversible one. It is drawn in the failure colour, with no white outline: the outline read as keyboard focus, and
+   two controls looked focused at once. */
+.session-card-actions > .session-btn[aria-label^="Purge"] {
+  box-shadow: inset 0 0 0 1px var(--fg-red);
+  color: var(--fg-red);
+}
+
+/* The banner stacks whenever the pane is narrow, which includes 900px with the Sessions column beside it: its sentence was a seven-line
+   column with two buttons beside it. */
+@media (width < 78.188em) {
+  .live-dock .live-writes-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .live-dock .live-writes-banner .live-writes-caption {
+    flex: 0 0 auto;
+  }
+
+  .live-dock .live-writes-banner .live-apply,
+  .live-dock .live-writes-banner .live-pane-rebuild {
+    justify-content: center;
+  }
+}
+
+/* In the stacked banner the sentence takes its own height: the id rule above that gives it a 14rem basis for the row layout became
+   a 14rem-tall box here. */
+@media (width < 78.188em) {
+  #bindings-panel .live-writes-banner .live-writes-caption {
+    flex: 0 0 auto;
+  }
+}
+
+/* ── Round 18 ──
+   The hint for a value no file holds is a whole sentence now, so it wraps instead of running past the Edit cell. The mode line's
+   label wraps at phone width, and the theme box keeps a gutter from the window's edge. */
+.live-row:has(> .live-binding-node > .live-state)::after,
+.live-node-summary:has(> .live-binding-node > .live-state)::after {
+  white-space: normal;
+}
+
+.live-dock .live-mode-label {
+  white-space: normal;
+}
+
+.tabline-right {
+  padding-right: 6px;
+}
+
+/* At phone width the daemon line wraps instead of cutting itself with an ellipsis: "up 0m · daemo…" lost the memory figure, the
+   one fact on the line that changes, and three reviewers read the cut as a bug. */
+@media (width < 35.062em) {
+  #daemon-health {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+}
+
+/* ── A slider that is a gauge ──
+   The handle's two ends are the lowest and highest the number may take, so where it sits is where the number sits in its range.
+   Under the track: the lowest, the step, the highest. An end nothing stops says "no end". The editor for a number's range and step
+   is a small popover at the end of the knob; the knob owns it, so the row's grid still places one knob and nothing else. */
+.live-dock .live-knob .live-slider-wrap {
+  display: flex;
+  flex: 1 1 5rem;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 3.5rem;
+}
+
+/* The row rules above give the slider its own width and flex basis for a row laid out in a line; inside the wrap it is a column item. */
+.live-dock .live-knob .live-slider-wrap > .live-slider {
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.live-dock .live-range {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 0.857rem;
+  line-height: 1.1;
+  color: color-mix(in srgb, var(--fg-default) 78%, transparent);
+  white-space: nowrap;
+}
+
+.live-dock .live-range-step {
+  flex: 1 1 auto;
+  text-align: center;
+  opacity: 0.85;
+}
+
+.live-dock .live-knob > .live-limits {
+  position: relative;
+  flex: 0 0 auto;
+  margin-left: 4px;
+}
+
+.live-dock .live-limits-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 1px 6px;
+  border: 1px solid var(--border-normal);
+  font-size: 0.857rem;
+  white-space: nowrap;
+  color: var(--fg-default);
+}
+
+.live-dock .live-limits-summary::-webkit-details-marker {
+  display: none;
+}
+
+.live-dock .live-limits[open] > .live-limits-summary {
+  background: var(--border-focus);
+  color: var(--bg-default);
+}
+
+.live-dock .live-limits[open] > .live-limits-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  display: grid;
+  gap: 6px;
+  width: 17rem;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-focus);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.45);
+  font-size: 0.857rem;
+  text-align: left;
+  white-space: normal;
+}
+
+.live-dock .live-limits-body {
+  display: none;
+}
+
+.live-dock .live-limits-field {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.live-dock .live-limits-input {
+  width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--border-normal);
+  background: var(--bg-default);
+  color: var(--fg-default);
+  font: inherit;
+}
+
+.live-dock .live-limits-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.live-dock .live-limits-note {
+  color: var(--fg-yellow);
+  font-weight: 700;
+}
+
+.live-dock .live-limits-note:empty {
+  display: none;
+}
+
+.live-dock .live-limits-hint {
+  color: color-mix(in srgb, var(--fg-default) 78%, transparent);
+  font-size: 0.857rem;
+  line-height: 1.35;
+}
+
+.live-dock .live-limits-summary {
+  padding: 0 5px;
+  font-size: 0.857rem;
+}
+
+/* A number with a range chosen has its button filled, so it reads differently from one without. */
+.live-dock .live-limits[data-chosen="true"] > .live-limits-summary {
+  background: color-mix(in srgb, var(--border-focus) 38%, var(--bg-panel));
+  border-color: var(--border-focus);
+}
+
+/* ── The design pass: a button where the hint was, and targets a thumb can hit ── */
+
+/* The sentence "Change it with λ Evaluate, top of Output" was drawn here by CSS and pointed at a control nobody could see. The row now
+   carries a real button that opens the Evaluate box, so the pseudo-element is off. */
+.live-row:has(> .live-binding-node > .live-state)::after,
+.live-node-summary:has(> .live-binding-node > .live-state)::after {
+  display: none !important;
+}
+
+.live-dock .live-evaluate-link {
+  justify-self: start;
+  align-self: center;
+  padding: 2px 10px;
+  font-size: 0.857rem;
+  white-space: nowrap;
+}
+
+@container (width >= 64.286rem) {
+  .live-dock .live-evaluate-link {
+    grid-column: 4;
+    grid-row: 1;
+  }
+}
+
+@container (width < 64.286rem) {
+  .live-dock .live-evaluate-link {
+    margin: 2px 0 6px 1.7em;
+  }
+}
+
+/* A phone-width window is touched, not pointed at: the steps, the range button, the pane's buttons and the pins are 40px tall, and a
+   mis-tap on "+" writes to the file. */
+@media (width < 48.062em) {
+  .live-dock .live-step,
+  .live-dock .live-limits-summary,
+  .live-dock .live-evaluate-link,
+  .live-dock .live-actions .session-btn,
+  .live-dock .live-pane-bar .session-btn,
+  .live-dock .live-binding > .live-binding-pin {
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  .live-dock .live-limits-summary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+  }
+
+  .live-dock .live-pane-bar .session-btn {
+    padding-inline: 10px;
+  }
+}
+
+/* ── Round 19: the caption is the control; the numbers are readable ──
+   Three reviewers scored legibility 5 or 6 on the slider's caption (10px, dim) and could not say what "range" was for, or why only one
+   row's was filled. The caption under the track (lowest, step, highest) is now the button that opens the range editor, at the row's
+   own size, and says "set range" until one is chosen. */
+.live-dock .live-slider-wrap > .live-limits {
+  position: relative;
+  margin: 0;
+}
+
+.live-dock .live-slider-wrap .live-limits-summary {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.857rem;
+  color: color-mix(in srgb, var(--fg-default) 92%, transparent);
+  cursor: pointer;
+}
+
+.live-dock .live-slider-wrap .live-limits-summary .live-range-step {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.live-dock .live-slider-wrap .live-limits[data-chosen="true"] > .live-limits-summary {
+  background: none;
+  border: 0;
+  font-weight: 600;
+}
+
+.live-dock .live-slider-wrap .live-limits[open] > .live-limits-summary {
+  background: none;
+  color: var(--border-focus);
+}
+
+.live-dock .live-range {
+  font-size: 0.857rem;
+  color: color-mix(in srgb, var(--fg-default) 92%, transparent);
+}
+
+.live-dock .live-slider-wrap .live-limits[open] > .live-limits-body {
+  top: calc(100% + 2px);
+}
+
+/* The switch says "off" or "on" inside its track; the word after it said the same thing in other words. */
+.live-dock .live-switch-word {
+  display: none;
+}
+
+/* The number the pane exists to show is the first thing in its row. */
+.live-dock .live-preview {
+  font-weight: 600;
+}
+
+/* Touch targets: the pin keeps its corner and a slot of its own, so it never wraps under the type label. */
+@media (width < 48.062em) {
+  .live-dock .live-binding > .live-binding-pin {
+    min-height: 32px;
+    min-width: 32px;
+    top: 0;
+    right: 0;
+  }
+
+  .live-dock .live-binding-tree {
+    padding-right: 38px;
+  }
+}
+
+/* "expandable" is not a state of the value: the arrow at the left of the row already says the row opens. The State column answers one
+   question, where the value lives, and an object row has no answer of its own. */
+.live-dock .live-state[data-label="expandable"] {
+  visibility: hidden;
+}
+
+/* At phone width a number's control is one line, as it is on a wide window: − the slider and its range, the value, +. It was a stack of
+   two lines per number (the slider, then − value +), which put each scalar at about 100px and left two values on a 400px screen. */
+@media (width < 48.062em) {
+  .live-dock .live-tweak .live-knob {
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .live-dock .live-tweak .live-knob > .live-slider-wrap {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+
+/* The caption under the track is text you can press, not a 40px button: the 40px floor above is for the buttons beside it. */
+@media (width < 48.062em) {
+  .live-dock .live-slider-wrap .live-limits-summary {
+    min-height: 24px;
+    min-width: 0;
+  }
+}
+
+/* ── The Sessions card, said in plain words ──
+   Stop, Dispose and Purge are three ways to end a session and read as one. They are named for what happens to the session: Stop
+   unloads it, Close ends it, Delete ends it and removes its saved state. The two clocks both read "just now" with no word to say
+   which was which, and each floated to the card's right edge on a line of its own. They now say what they count ("started",
+   "last used") and sit with the other facts, from the left. */
+.session-card-actions > .session-btn[aria-label^="Stop"]::before { content: "Stop"; }
+.session-card-actions > .session-btn[aria-label^="Dispose"]::before { content: "Close"; }
+.session-card-actions > .session-btn[aria-label^="Purge"]::before { content: "Delete"; }
+
+#sidebar .session-card-body .meta {
+  margin-left: 0 !important;
+}
+
+/* ── A narrow row keeps every word it has ──
+   At 400 pixels the name, the tag and the type each clipped to an ellipsis ("JumpVeloc…", "running v…", "type fl…"), and the clipped
+   word was the one that said which number was the running one. On a phone the row wraps instead: the name, its tag and its type
+   keep their full words, and the value takes whatever line is left. */
+@media (width < 48.062em) {
+  .live-dock .live-binding-node {
+    flex-wrap: wrap;
+  }
+
+  .live-dock .live-binding-node > :is(.live-name, .live-number-tag, .live-type) {
+    flex-shrink: 0;
+    max-width: 100%;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .live-dock .live-binding-node > .live-preview {
+    flex: 1 1 12ch;
+  }
+}
+
+/* ── A narrow number is one left-aligned stack ──
+   At 600 and 400 pixels the pieces of one number landed in three places: the slider centred, its caption centred, and the Undo and
+   Apply buttons floating at the right of whatever line had room. The control (− slider value +) is one line, then Undo and Apply on
+   a line of their own at the left edge, then the sentence about what the save did. */
+@media (width < 48.062em) {
+  .live-dock .live-tweak > .live-knob {
+    flex: 1 1 100%;
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
+  .live-dock .live-tweak > .live-actions,
+  .live-dock .live-tweak > .live-reload {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+
+  .live-dock .live-tweak .live-slider-wrap {
+    align-items: stretch;
+  }
+
+  .live-dock .live-tweak .live-slider-wrap > .live-limits {
+    align-self: flex-start;
+  }
+}
+
+/* ── The Mode select is never the part that gives way ──
+   The session and mode group is drawn with inline `overflow: hidden; flex-shrink: 1`, so at 900 pixels, where the header is tight, the
+   select was cut at the divider and lost its arrow. Inline style outranks the rules above, so these say !important: the group keeps
+   its size, the select needs only the width of "Mode: REPL" and its arrow, and the eval count beside it is what shortens. */
+.tabline-info:not(.tabline-evals) {
+  flex-shrink: 0 !important;
+  overflow: visible !important;
+}
+
+.tabline-info .workflow-select {
+  min-width: 7.4rem;
+}
+
+/* The health strip starts where the page's text starts, and breaks between its facts, never inside one. */
+#daemon-health {
+  padding-left: 8px;
+}
+
+/* At 900 the theme select took 210px of a header whose eval count was cut to "12 e". The select shrinks to the width of its longest
+   theme name and the count keeps its words. */
+@media (width < 62.562em) {
+  .tabline-right .theme-select {
+    width: 11.2rem;
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+/* ── Narrow-window clips, from round 23 ──
+   The status pill ("Ready, running older code") ran under the gear at 400 and lost its last letters; it now wraps inside its cell. A
+   text field was 112px wide beside a hint cut to "Escape canc"; the field takes the full width and the hint wraps under it. An
+   object row has no state to show, so the dot that separated the state from the file ("· Tuning.fs:11") stood alone: the empty state
+   is gone from the row and so is the dot. */
+@media (width < 43.812em) {
+  .tabline-status {
+    padding: 0 6px !important;
+    overflow: visible !important;
+  }
+
+  .tabline-status .status {
+    white-space: normal;
+    font-size: 0.857rem;
+    line-height: 1.15;
+    padding: 2px 6px;
+  }
+}
+
+@media (width < 48.062em) {
+  .live-dock .live-field-wrap {
+    flex-wrap: wrap;
+  }
+
+  .live-dock .live-field-wrap > .live-field {
+    flex: 1 1 100%;
+  }
+
+  .live-dock .live-field-wrap > .live-field-hint {
+    white-space: normal;
+  }
+}
+
+@container (width < 64.286rem) {
+  .live-dock .live-tweak:has(> .live-state[data-label="expandable"]) > .live-state {
+    display: none;
+  }
+
+  .live-dock .live-tweak:has(> .live-state[data-label="expandable"]) .live-where::before {
+    content: none;
+  }
+}
+
+/* ── The off-state notes in the Sessions column open on a click ──
+   "Hot reload is off", "Live testing is off" and "No cohort is running" were three sentences of small text in a row. Each is now a line
+   with the name and the state, and the sentence that says why and what to do opens under it. */
+.panel-hidden-reason > .panel-hidden-name {
+  cursor: pointer;
+  color: var(--fg-dim);
+  font-size: 0.857rem;
+}
+
+.panel-hidden-reason > .panel-hidden-why {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.857rem;
+  line-height: 1.45;
+}
+
+/* The off-state line is a disclosure now, and its triangle says it opens: the hollow bullet that stood for "off" sat alone on the line
+   above the name, and the name already says "off". */
+.panel-hidden-reason::before {
+  content: none;
+}
+
+/* A row no file holds has no strip, but its Source cell says "n/a", so the column has an answer in every row. The marker is hidden in the
+   stacked layout, where there are no columns to fill, and takes its cell in the grid. */
+@container (width >= 64.286rem) {
+  .live-tweak-marker:has(> .live-where) {
+    display: contents;
+  }
+}
+
+/* ── A larger font wraps the Sessions column; it never cuts it ──
+   At a browser font 40% larger the SESSIONS title, the state badge and the connection chips were clipped with an ellipsis. Chips wrap
+   inside their cell instead, and the header's row wraps its buttons under the title. */
+.sidebar-header {
+  flex-wrap: wrap;
+  row-gap: 0.25rem;
+}
+
+.sidebar-header > h2 {
+  flex: 0 0 auto;
+}
+
+#sidebar .session-row .badge,
+#sidebar .session-row .badge-agent,
+#sidebar .session-row .meta,
+#sidebar .session-row .session-card-status-row > span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+/* ── Round 24: what three checklists failed together ── */
+
+/* The pane's focus ring and the switch's are the same three-pixel, two-colour ring as everywhere else. */
+.live-dock :is(button, input, select, summary):focus-visible,
+.live-toggle:focus-visible {
+  outline-width: 3px;
+  box-shadow: 0 0 0 2px var(--bg-default);
+}
+
+/* The pane's buttons say what they act on. "Hide" and "Keep open" had no object, and "Auto-open" did not say whether it was on. */
+.live-pane-collapse::before {
+  content: "Hide panel";
+}
+
+.live-pane-pin::before {
+  content: "Keep open";
+}
+
+.session-card-actions > .session-btn[aria-label*="auto-open is ON"]::before { content: "Auto-open: on"; }
+.session-card-actions > .session-btn[aria-label*="auto-open is OFF"]::before { content: "Auto-open: off"; }
+
+/* One heading style for the three regions of the page: the transcript, the panel and the sessions column. They were plain, bold
+   mixed-case and spaced capitals. */
+.output-header h2,
+.sidebar-header h2,
+.live-dock .live-pane-title {
+  font-size: 0.929rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* The transcript's header is a dim bar and its title inherited the dim colour, so "OUTPUT" read as a lesser heading than the two
+     beside it. The three share the text colour. */
+  color: var(--fg-default);
+}
+
+/* The captions a person reads to use a control (the slider's range and step, the field's hint, the notes under a row, the Sessions
+   card's facts and its explanation) are 13px, one step above the 12px floor. Three reviewers called them the hardest text on the
+   page to read and they are the text that explains the controls. The row's cells keep 12px: their columns are sized for it. */
+.live-dock .live-range,
+.live-dock .live-range-step,
+.live-dock .live-limits-summary,
+.live-dock .live-field-hint,
+.live-dock .live-detail,
+.live-dock .live-reload,
+#sidebar .session-card-body .meta,
+#sidebar .session-card-hint,
+#sidebar .panel-hidden-name,
+#sidebar .panel-hidden-why {
+  font-size: 0.929rem;
+}
+
+/* On a phone the three buttons and the title share one line: "Keep panel open" dropped the third button to a row of its own. */
+@media (max-width: 48em) {
+  .live-pane-pin::before {
+    content: "Keep open";
+  }
+}
+
+/* The pane's View button says what it opens, and the row's pin is big enough to see and hit: it was an 8px glyph, the smallest
+   control on the page, with no word beside it. */
+.live-pane-view::before {
+  content: "Display settings";
+}
+
+.live-dock .live-binding > .live-binding-pin {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* ── The top bar's second fact ──
+   "Ready" is the engine's word: loaded and able to take work. Beside it, "all changes live" says the session runs what the files
+   say. It sits in its own cell, so the badge keeps the word clients wait on, and it folds away where the top bar has no room (the
+   Live bindings pane says the same thing there, in the same words). */
+.tabline-livenote {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 0.857rem;
+  border-right: 1px solid var(--border-normal);
+  font-size: 0.857rem;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+/* A warning is the same amber as the badge beside it. */
+.tabline-livenote-warn {
+  color: var(--fg-yellow);
+}
+
+/* Below 62.562em (the width where the theme select already shrinks) the header has no room for a third cell: at 900 it cut the eval
+   count to "12 eva". The health line directly under the header says the same thing in full ("Session ...: Ready, changes not
+   live"), so the note folds away there. */
+@media (width < 62.562em) {
+  .tabline-livenote {
+    display: none;
+  }
+}
+
+/* The word over the pin column. It sits in the 28px the header keeps at its right edge, over the glyph in each row. */
+.live-cols-pin {
+  position: absolute;
+  right: 0;
+  width: 28px;
+  text-align: center;
+  letter-spacing: 0;
+}
+
+/* One style for the Sessions column's panel titles that are switched on: bold, in the text colour. Workspace hygiene was bold blue and
+   Project loaded was bold in the text colour, so two panels in one column read as two kinds of thing. The off-state lines stay dim on
+   purpose: dim says "off". */
+.sidebar-inner .panel > summary:not(.panel-hidden-name),
+.sidebar-inner .hygiene-panel > summary {
+  color: var(--fg-default) !important;
+  font-weight: 700 !important;
 }

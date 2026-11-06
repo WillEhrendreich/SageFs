@@ -559,6 +559,8 @@ type Step =
   | Whole
   /// `Decimals` places after the point, and a step of one unit in the last of them.
   | Fraction of decimals: int
+  /// A size the person chose (`0.25`, `5`), and the places a result is rounded to so it reads as a number they could have typed.
+  | Every of size: float * places: int
 
 module Step =
   let afterPoint = Regex(@"^-?[0-9_]*\.([0-9_]*)", RegexOptions.Compiled)
@@ -581,12 +583,20 @@ module Step =
     match step with
     | Step.Whole -> 1.0
     | Step.Fraction places -> Math.Pow(10.0, float -places)
+    | Step.Every(chosen, _) -> chosen
 
   /// The places a result is rounded to, so `0.1 + 0.2` is `0.3` and not `0.30000000000000004`.
   let places (step: Step) : int =
     match step with
     | Step.Whole -> 0
     | Step.Fraction p -> p
+    | Step.Every(_, p) -> p
+
+  /// The step a chosen size makes: its places are the decimals the size is written with (`0.25` is 2, `5` is 0), kept inside the 15 a
+  /// double can round to.
+  let ofSize (size: float) : Step =
+    let written = size.ToString("0.###############", CultureInfo.InvariantCulture)
+    Step.Every(size, min 15 (decimalsOf written))
 
 /// The control a row offers, from what the file spells. A kind without a control is the state's job to explain.
 [<RequireQualifiedAccess>]
@@ -685,24 +695,108 @@ module SaveOffer =
 type StepRefusal =
   /// The step would leave the numbers a literal can spell.
   | OutOfRange
+  /// The step would leave the range the person chose. `attempted` is the number it would have written.
+  | OutsideLimits of attempted: float * lowest: Edge * highest: Edge
+
+/// How far a handle can go one way: the steps it has, and whether something stops it there.
+[<RequireQualifiedAccess>]
+type Run =
+  /// Nothing stops it near. The handle covers a window of this many steps, and the row says there is no end to show.
+  | Open of steps: int
+  /// It stops after `steps` steps, at `at`: the number the handle's end stands for.
+  | Ends of steps: int * at: float
+
+/// What a slider needs to be a gauge: the number now, how far one step moves it, and where the handle's two sides stop.
+type Reach =
+  { Value: float
+    Size: float
+    Places: int
+    Below: Run
+    Above: Run }
+
+[<RequireQualifiedAccess>]
+type Dial =
+  | Dial of Reach
+  /// A control that is not a number has no handle.
+  | NoDial
 
 module Stepping =
-  /// The literal text to send to move a number `steps` steps from where it is (negative is down). Rounded to the literal's own
-  /// decimals, so the text is a number the author could have typed. The door reads it as the literal's own kind and keeps the style.
-  let literalAfter (control: Control) (steps: int) : Result<string, StepRefusal> =
+  /// The steps a handle covers each way when nothing is set that stops it near.
+  [<Literal>]
+  let OpenWindow = 100
+
+  /// The most steps one side of a handle holds before it is an open window: a range this wide is not worth a scale.
+  [<Literal>]
+  let MostBounded = 5000
+
+  /// The step a real takes: the person's, or the one its spelling gives.
+  let private stepOfReal (limits: NumberLimits) (spelled: Step) : Step =
+    match limits.Step with
+    | StepChoice.FromSpelling -> spelled
+    | StepChoice.Every size -> Step.ofSize size
+
+  /// The step a whole number takes: the person's, rounded to a whole number and never below one.
+  let private sizeOfInteger (limits: NumberLimits) : int64 =
+    match limits.Step with
+    | StepChoice.FromSpelling -> 1L
+    | StepChoice.Every size -> max 1L (int64 (Math.Round size))
+
+  /// The literal text to send to move a number `steps` steps from where it is (negative is down), kept inside the range the person
+  /// chose. Rounded to the step's own decimals, so the text is a number the author could have typed. The door reads it as the
+  /// literal's own kind and keeps the style, and refuses a number the literal's own type cannot hold.
+  let literalAfterWithin (limits: NumberLimits) (control: Control) (steps: int) : Result<string, StepRefusal> =
+    let inside (moved: float) (text: string) =
+      match NumberLimits.allows limits moved with
+      | true -> Ok text
+      | false -> Error(StepRefusal.OutsideLimits(moved, limits.Lowest, limits.Highest))
     match control with
-    | Control.RealStepper(value, step) ->
-      let moved = Math.Round(value + float steps * Step.size step, Step.places step)
+    | Control.RealStepper(value, spelled) ->
+      let step = stepOfReal limits spelled
+      let moved = Math.Round(value + float steps * Step.size step, min 15 (Step.places step))
       match Double.IsFinite moved with
-      | true -> Ok(moved.ToString("R", CultureInfo.InvariantCulture))
+      | true -> inside moved (moved.ToString("R", CultureInfo.InvariantCulture))
       | false -> Error StepRefusal.OutOfRange
     | Control.IntegerStepper value ->
-      try Ok((Checked.(+) value (int64 steps)).ToString(CultureInfo.InvariantCulture))
+      try
+        let moved = Checked.(+) value (Checked.(*) (int64 steps) (sizeOfInteger limits))
+        inside (float moved) (moved.ToString(CultureInfo.InvariantCulture))
       with :? OverflowException -> Error StepRefusal.OutOfRange
     | Control.Toggle _
     | Control.LiteralField _
     | Control.ExpressionField _
     | Control.NoControl -> Error StepRefusal.OutOfRange
+
+  /// `literalAfterWithin` with nothing chosen.
+  let literalAfter (control: Control) (steps: int) : Result<string, StepRefusal> =
+    literalAfterWithin NumberLimits.unlimited control steps
+
+  /// Where a number's handle can go: its two sides, each stopping at the tighter of the chosen range and what the number's own type
+  /// holds (`typeRange`, from `LiteralEdit.typeRangeOfText`), or an open window when that end is too far to be a scale. A number
+  /// already outside the chosen range has no steps on the side it is past: it can only be stepped back in.
+  let reachOf (typeRange: NumberRange) (limits: NumberLimits) (control: Control) : Dial =
+    let lowest = match limits.Lowest with Edge.At chosen -> max chosen typeRange.Smallest | Edge.Unlimited -> typeRange.Smallest
+    let highest = match limits.Highest with Edge.At chosen -> min chosen typeRange.Largest | Edge.Unlimited -> typeRange.Largest
+    let build (value: float) (size: float) (places: int) : Dial =
+      let run (distance: float) (at: float) : Run =
+        let steps = Math.Floor(distance / size + 1e-9)
+        match steps <= float MostBounded with
+        | true -> Run.Ends(int (max 0.0 steps), at)
+        | false -> Run.Open OpenWindow
+      Dial.Dial
+        { Value = value
+          Size = size
+          Places = places
+          Below = run (value - lowest) lowest
+          Above = run (highest - value) highest }
+    match control with
+    | Control.RealStepper(value, spelled) ->
+      let step = stepOfReal limits spelled
+      build value (Step.size step) (Step.places step)
+    | Control.IntegerStepper value -> build (float value) (float (sizeOfInteger limits)) 0
+    | Control.Toggle _
+    | Control.LiteralField _
+    | Control.ExpressionField _
+    | Control.NoControl -> Dial.NoDial
 
 // ── the row's own history ──
 
@@ -795,7 +889,9 @@ type RowView =
     Undo: HistoryStep
     Redo: HistoryStep
     /// Whether the row's literal is in a callee, and what a write there reaches.
-    Through: ThroughCall }
+    Through: ThroughCall
+    /// What the person chose for this number: its range and its step. Nothing chosen is `NumberLimits.unlimited`.
+    Limits: NumberLimits }
 
 /// Every row the pane has something to say about. A row not in the map has nothing to say (a part of a REPL-only value: its binding says it).
 type TweakView = { Rows: Map<RowKey, RowView> }

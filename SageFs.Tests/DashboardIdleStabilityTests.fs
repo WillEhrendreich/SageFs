@@ -106,8 +106,8 @@ let tests =
       let info = SageFs.Tests.DashboardParsingTests.SidebarCards.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
       let card = sessionCardOf SageFs.Tests.DashboardParsingTests.SidebarCards.now None 0 SessionHealth.Healthy info
       let html = renderSessionsForSession "" [ card ] false |> renderNode
-      html |> Expect.stringContains "uptime label" "⏱ "
-      html |> Expect.stringContains "last-activity label" "last: "
+      html |> Expect.stringContains "uptime label" "started "
+      html |> Expect.stringContains "last-activity label" "last used "
       (match card.Uptime, card.LastActivity with
        | Since.At created, Since.At lastActive ->
          html |> Expect.stringContains "counts from the creation" (string created)

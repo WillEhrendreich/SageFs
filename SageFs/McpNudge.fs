@@ -122,8 +122,20 @@ module McpNudge =
       match parse owned ports.Files.KindOf raw with
       | Error refusal -> return render (Error refusal)
       | Ok request ->
-        let! result = execute ports locks Timeouts.nudgeFileLock request
-        return render result
+        // A range the person chose holds for an agent's write too, whether it sends the number as a literal or as an expression.
+        let blocked =
+          match request with
+          | NudgeRequest.Set(_, address, _, NudgeValue.LiteralText written)
+          | NudgeRequest.Set(_, address, _, NudgeValue.ExpressionText written) ->
+            TweakLimitsFile.checkWrite (TweakLimitsFile.read ports.Files owned.WorkingDirectory) address written
+          | NudgeRequest.Inspect _
+          | NudgeRequest.Undo _
+          | NudgeRequest.Redo _ -> Ok()
+        match blocked with
+        | Error refusal -> return render (Error(NudgeRefusal.ValueOutOfRange(TweakLimitsFile.describe refusal)))
+        | Ok() ->
+          let! result = execute ports locks Timeouts.nudgeFileLock request
+          return render result
     }
 
   /// What a worker's `GET /hotreload` says, as the files a session owns: every project file it lists,

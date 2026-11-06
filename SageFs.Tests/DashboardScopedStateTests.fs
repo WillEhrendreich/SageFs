@@ -1,7 +1,7 @@
-/// One scoped state on every surface. Three reviewers read "Healthy" beside "[Ready, running older code]" as a contradiction (the
+/// One scoped state on every surface. Three reviewers read "Healthy" beside "[Ready, changes not live]" as a contradiction (the
 /// first word was the daemon's and the second the session's, and nothing said so), found the remedy in a Sessions card that is a
 /// strip at narrow widths, far from the Live bindings pane where the warning is felt, and saw the card say a green "running"
-/// beside "Running older code". These cases read the surfaces together: green means the daemon, amber means the session, every
+/// beside "Changes not live". These cases read the surfaces together: green means the daemon, amber means the session, every
 /// surface words one state one way, and the remedy appears beside the warning exactly when the card offers it.
 module SageFs.Tests.DashboardScopedStateTests
 
@@ -87,11 +87,11 @@ let tests =
 
     testCase "WHY — a viewed card that read a stale build says so in its badge, in the header's words and tone, not a green 'running'" <| fun _ ->
       let badge = CardBadge.ofCard (staleCard SessionDisplayStatus.Running)
-      badge.Words |> Expect.equal "the header's words" "Ready, running older code"
+      badge.Words |> Expect.equal "the header's words" "Ready, changes not live"
       badge.CssClass |> Expect.equal "the caution tone" "status-notice"
 
     testCase "WHY — an idle session's badge reads the same way, because idle is a Ready session nobody has used lately" <| fun _ ->
-      (CardBadge.ofCard (staleCard SessionDisplayStatus.Idle)).Words |> Expect.equal "words" "Ready, running older code"
+      (CardBadge.ofCard (staleCard SessionDisplayStatus.Idle)).Words |> Expect.equal "words" "Ready, changes not live"
 
     testCase "WHY — a viewed card with a current build says the header's word, Ready, in the card's own green" <| fun _ ->
       let current = { staleCard SessionDisplayStatus.Running with Source = CardSource.Read (SourceState.InSync (startedAt, 3)) }
@@ -129,7 +129,7 @@ let tests =
     testCase "WHY — the rendered card carries the badge's words, so the Sessions card no longer says running in green beside the warning" <| fun _ ->
       let html = renderSessionsForSession sessionId [ staleCard SessionDisplayStatus.Running ] false |> renderNode
       let badge = between html "class=\"status badge" "</span>"
-      badge |> Expect.stringContains "the words" "Ready, running older code"
+      badge |> Expect.stringContains "the words" "Ready, changes not live"
       badge |> Expect.stringContains "the tone" "status-notice"
       badge.Contains "status-ready" |> Expect.isFalse "not green"
 
@@ -183,7 +183,7 @@ let tests =
       let html = renderMainContent (snapshotWith Readiness.ReadyOlderCode [ staleCard SessionDisplayStatus.Running ]) |> renderNode
       let header = between html "class=\"sidebar-header\"" "id=\"sidebar-toggle-btn\""
       header |> Expect.stringContains "the marker is in the strip's header" "data-testid=\"sessions-stale-marker\""
-      header |> Expect.stringContains "and says the phrase" "Running older code"
+      header |> Expect.stringContains "and says the phrase" "Changes not live"
 
     testCase "WHY — the strip says nothing for a session with nothing to say" <| fun _ ->
       let html = renderMainContent (snapshotWith Readiness.ReadyCurrent []) |> renderNode
@@ -199,7 +199,7 @@ let tests =
       let view = DaemonHealthView.fromSnapshot DateTimeOffset.UnixEpoch (healthSnapshot [ fixtureSummary ])
       let html = renderDaemonHealthWith (Map.ofList [ sessionId, Readiness.ReadyOlderCode ]) view |> renderNode
       html |> Expect.stringContains "the daemon's word" "Daemon healthy"
-      html |> Expect.stringContains "the session's words" "Session Fixture.fsproj: Ready, running older code"
+      html |> Expect.stringContains "the session's words" "Session Fixture.fsproj: Ready, changes not live"
       html.Contains "Healthy ·" |> Expect.isFalse "a bare 'Healthy' no longer sits beside the warning"
 
     testCase "WHY — a daemon with no session still says whose health the glyph is, in a word" <| fun _ ->

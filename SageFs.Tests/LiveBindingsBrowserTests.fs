@@ -76,6 +76,15 @@ let private openBinding (page: IPage) (binding: string) = task {
 let private modeButton (page: IPage) (name: string) =
   page.Locator(sprintf "%s .live-mode button" pane).Filter(LocatorFilterOptions(HasTextString = name))
 
+/// The mode buttons are rows of the Display panel, closed until the Display button opens it. Clicks `name` there and closes the panel
+/// again, because an open panel floats over the table and would sit on the rows the test reads next.
+let private clickMode (page: IPage) (name: string) = task {
+  let display = page.Locator(sprintf "%s #live-view-btn" pane)
+  do! display.ClickAsync()
+  do! (modeButton page name).ClickAsync()
+  do! display.ClickAsync()
+}
+
 /// Wait until the pressed mode button is `name`, and it is the only one pressed.
 let private waitForMode (page: IPage) (name: string) = task {
   do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator(sprintf "%s .live-mode button[aria-pressed='true']" pane)) 1
@@ -241,7 +250,7 @@ let tests =
     let everything = modeButton page "Everything"
     let! tooltip = everything.GetAttributeAsync("title")
     Expect.stringContains tooltip "getters" "the tooltip tells the user that Everything runs their getters"
-    do! everything.ClickAsync()
+    do! clickMode page "Everything"
     do! waitForMode page "Everything"
     do! openBinding page "probe"
     do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator(sprintf "%s .live-held-btn" pane)) 0
@@ -251,13 +260,13 @@ let tests =
     Expect.isFalse (everythingText.Contains "not evaluated") "nothing is left listed and not read"
     do! shot page "4-everything"
 
-    do! (modeButton page "Off").ClickAsync()
+    do! clickMode page "Off"
     do! waitForMode page "Off"
     do! waitForPaneText page "Class values are closed in this mode"
     do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator(sprintf "%s .live-held-btn" pane)) 0
     do! shot page "5-off"
 
-    do! (modeButton page "Safe").ClickAsync()
+    do! clickMode page "Safe"
     do! waitForMode page "Safe"
     do! openBinding page "probe"
     do! waitForPaneText page "Calls other code, so it was not run"

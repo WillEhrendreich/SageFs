@@ -58,7 +58,7 @@ let readinessTests =
     testCase "WHY — a Ready session whose files changed after its build says it runs older code, in words, and in a caution tone" <| fun _ ->
       let readiness = Readiness.decide SessionState.Ready (SourceState.Stale [ staleFile ]) ReplFreshness.InSync
       readiness |> Expect.equal "older code" Readiness.ReadyOlderCode
-      Readiness.label readiness |> Expect.equal "plain words" "Ready, running older code"
+      Readiness.label readiness |> Expect.equal "plain words" "Ready, changes not live"
       Readiness.tone readiness |> Expect.equal "stale is a warning" ReadinessTone.Caution
 
     testCase "WHY — a rebuild in progress is said as such, because the session keeps serving the old build until it finishes" <| fun _ ->
@@ -159,12 +159,12 @@ let cardNoteTests =
     testCase "WHY — one changed file is one sentence: the session runs older code, and how many files changed" <| fun _ ->
       noteOf (SourceState.Stale [ editedIn "/home/will/proj/src/Tuning.fs" ])
       |> Option.map fst
-      |> Expect.equal "the headline is the cause only; the card's pill beside it says the state" (Some "1 file changed since the build.")
+      |> Expect.equal "the headline is the cause only; the card's pill beside it says the state" (Some "1 change saved but not live.")
 
     testCase "WHY — the sentence counts files and says 'files' from two on" <| fun _ ->
       noteOf (SourceState.Stale [ editedIn "/home/will/proj/A.fs"; editedIn "/home/will/proj/B.fs"; editedIn "/home/will/proj/C.fs" ])
       |> Option.map fst
-      |> Expect.equal "three files" (Some "3 files changed since the build.")
+      |> Expect.equal "three files" (Some "3 changes saved but not live.")
 
     testCase "WHY — the details name each file relative to the working directory, with when it was edited and when the build is from" <| fun _ ->
       let _, details = noteOf (SourceState.Stale [ editedIn "/home/will/proj/src/Tuning.fs" ]) |> Option.get
@@ -209,7 +209,7 @@ let cardNoteTests =
     testCase "WHY — a long list is cut after twenty lines and says how many more" <| fun _ ->
       let many = [ for i in 1 .. 25 -> editedIn (sprintf "/home/will/proj/F%d.fs" i) ]
       let headline, details = noteOf (SourceState.Stale many) |> Option.get
-      headline |> Expect.stringContains "the sentence counts them all" "25 files"
+      headline |> Expect.stringContains "the sentence counts them all" "25 changes"
       details |> List.length |> Expect.equal "twenty and the remainder line" 21
       details |> List.last |> Expect.equal "the remainder" "and 5 more"
 
@@ -229,8 +229,8 @@ let private qualified =
 let phraseTests =
   testList "Readiness.brief and Remedy" [
 
-    testCase "WHY — the short phrase for a session running older code is the one the pane note, the card and the strip print" <| fun _ ->
-      Readiness.brief Readiness.ReadyOlderCode |> Expect.equal "the phrase" (Some "Running older code")
+    testCase "WHY — the short phrase for a session with changes not live is the one the pane note, the card and the strip print" <| fun _ ->
+      Readiness.brief Readiness.ReadyOlderCode |> Expect.equal "the phrase" (Some "Changes not live")
 
     testCase "WHY — a plain Ready and a state other than Ready have no phrase, because there is nothing to qualify" <| fun _ ->
       Readiness.brief Readiness.ReadyCurrent |> Expect.isNone "plain Ready"
@@ -252,7 +252,7 @@ let phraseTests =
           | SourceState.Unknown _ -> Remedy.NothingToDo
         Remedy.ofSource source |> Expect.equal (sprintf "%A" source) expected
 
-    testCase "WHY — over every source and freshness, a Ready session is offered the rebuild exactly when its readiness is 'running older code'" <| fun _ ->
+    testCase "WHY — over every source and freshness, a Ready session is offered the rebuild exactly when its readiness is 'changes not live'" <| fun _ ->
       for source in everySource do
         for freshness in everyFreshness do
           let olderCode = Readiness.decide SessionState.Ready source freshness = Readiness.ReadyOlderCode

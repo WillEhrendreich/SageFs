@@ -14,6 +14,17 @@ let private addr name : TweakAddress = { ModulePath = [ "M" ]; BindingName = nam
 let private roundTrip (source: string) (name: string) (newValue: LiteralValue) : string =
   setLiteral source (addr name) newValue |> Expect.wantOk "setLiteral should succeed"
 
+let private refusedAsOutOfRange (source: string) (value: LiteralValue) : bool =
+  match setLiteral source (addr "x") value with
+  | Error(SetLiteralError.OutOfRange _) -> true
+  | Ok _
+  | Error _ -> false
+
+let private accepted (source: string) (value: LiteralValue) : bool =
+  match setLiteral source (addr "x") value with
+  | Ok _ -> true
+  | Error _ -> false
+
 [<Tests>]
 let literalEditTests =
   testList "LiteralEdit" [
@@ -129,5 +140,70 @@ let literalEditTests =
         | Ok newSource ->
           newSource.StartsWith "module M\nlet before = 111\nlet x = "
           && newSource.EndsWith "\nlet after = 222\n"
+        | Error _ -> false
+
+    // ── a literal never leaves the numbers its own type holds ──
+    // The door writes text. A number the type cannot hold is text that does not compile, so it is refused here, where every
+    // path that writes a number (the dashboard's slider, the MCP tool) passes through.
+
+    testCase "an int (no suffix) holds exactly the int32 numbers" <| fun _ ->
+      let source = "module M\nlet x = 100\n"
+      accepted source (LiteralValue.Integer 2147483647L) |> Expect.isTrue "the largest int32"
+      accepted source (LiteralValue.Integer -2147483648L) |> Expect.isTrue "the smallest int32"
+      refusedAsOutOfRange source (LiteralValue.Integer 2147483648L) |> Expect.isTrue "one past the largest"
+      refusedAsOutOfRange source (LiteralValue.Integer -2147483649L) |> Expect.isTrue "one before the smallest"
+
+    testCase "a byte (uy) holds 0 to 255" <| fun _ ->
+      let source = "module M\nlet x = 2uy\n"
+      accepted source (LiteralValue.Integer 255L) |> Expect.isTrue "255"
+      accepted source (LiteralValue.Integer 0L) |> Expect.isTrue "0"
+      refusedAsOutOfRange source (LiteralValue.Integer 256L) |> Expect.isTrue "256"
+      refusedAsOutOfRange source (LiteralValue.Integer -1L) |> Expect.isTrue "-1"
+
+    testCase "sbyte, int16, uint16 and uint32 keep their own edges" <| fun _ ->
+      refusedAsOutOfRange "module M\nlet x = 1y\n" (LiteralValue.Integer 128L) |> Expect.isTrue "sbyte 128"
+      accepted "module M\nlet x = 1y\n" (LiteralValue.Integer -128L) |> Expect.isTrue "sbyte -128"
+      refusedAsOutOfRange "module M\nlet x = 1s\n" (LiteralValue.Integer 32768L) |> Expect.isTrue "int16 32768"
+      accepted "module M\nlet x = 1s\n" (LiteralValue.Integer 32767L) |> Expect.isTrue "int16 32767"
+      refusedAsOutOfRange "module M\nlet x = 1us\n" (LiteralValue.Integer 65536L) |> Expect.isTrue "uint16 65536"
+      refusedAsOutOfRange "module M\nlet x = 1us\n" (LiteralValue.Integer -1L) |> Expect.isTrue "uint16 -1"
+      accepted "module M\nlet x = 1u\n" (LiteralValue.Integer 4294967295L) |> Expect.isTrue "uint32 max"
+      refusedAsOutOfRange "module M\nlet x = 1u\n" (LiteralValue.Integer 4294967296L) |> Expect.isTrue "uint32 past max"
+
+    testCase "an int64 (L) holds every int64, and an unsigned 64 (UL) holds no negative" <| fun _ ->
+      accepted "module M\nlet x = 1L\n" (LiteralValue.Integer System.Int64.MaxValue) |> Expect.isTrue "int64 max"
+      accepted "module M\nlet x = 1L\n" (LiteralValue.Integer System.Int64.MinValue) |> Expect.isTrue "int64 min"
+      refusedAsOutOfRange "module M\nlet x = 1UL\n" (LiteralValue.Integer -1L) |> Expect.isTrue "uint64 -1"
+
+    testCase "hex, octal and binary have no negative spelling, so a negative number is refused there" <| fun _ ->
+      refusedAsOutOfRange "module M\nlet x = 0x1F\n" (LiteralValue.Integer -5L) |> Expect.isTrue "hex"
+      refusedAsOutOfRange "module M\nlet x = 0o17\n" (LiteralValue.Integer -5L) |> Expect.isTrue "octal"
+      refusedAsOutOfRange "module M\nlet x = 0b101\n" (LiteralValue.Integer -5L) |> Expect.isTrue "binary"
+
+    testCase "a float is always a finite number, and NaN and infinity are not spellable" <| fun _ ->
+      let source = "module M\nlet x = 1.0\n"
+      refusedAsOutOfRange source (LiteralValue.Real nan) |> Expect.isTrue "NaN"
+      refusedAsOutOfRange source (LiteralValue.Real infinity) |> Expect.isTrue "infinity"
+      refusedAsOutOfRange source (LiteralValue.Real -infinity) |> Expect.isTrue "minus infinity"
+      accepted source (LiteralValue.Real System.Double.MaxValue) |> Expect.isTrue "the largest double"
+
+    testCase "a float32 (f) and a decimal (m) keep their own range" <| fun _ ->
+      refusedAsOutOfRange "module M\nlet x = 1.0f\n" (LiteralValue.Real 1e39) |> Expect.isTrue "float32 past 3.4e38"
+      accepted "module M\nlet x = 1.0f\n" (LiteralValue.Real 3.0e38) |> Expect.isTrue "float32 inside"
+      refusedAsOutOfRange "module M\nlet x = 1.0m\n" (LiteralValue.Real 1e29) |> Expect.isTrue "decimal past 7.9e28"
+      accepted "module M\nlet x = 1.0m\n" (LiteralValue.Real 1e28) |> Expect.isTrue "decimal inside"
+
+    testProperty "PROPERTY, a write to a plain int either lands inside the int32 range or is refused, and never writes text outside it" <|
+      fun (m: int64) ->
+        let source = "module M\nlet x = 100\n"
+        match setLiteral source (addr "x") (LiteralValue.Integer m) with
+        | Ok newSource ->
+          match readLiteral newSource (addr "x") with
+          | Ok lit ->
+            match lit.Value with
+            | LiteralValue.Integer v -> v = m && m >= -2147483648L && m <= 2147483647L
+            | _ -> false
+          | Error _ -> false
+        | Error(SetLiteralError.OutOfRange _) -> m < -2147483648L || m > 2147483647L
         | Error _ -> false
   ]

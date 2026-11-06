@@ -88,7 +88,7 @@ let successPathTests =
       let selectedBlock =
         System.Text.RegularExpressions.Regex.Match(out, "<option[^>]*selected[^>]*>([^<]*)</option>")
       selectedBlock.Success |> Expect.isTrue "a final switcher with a selected option should be present"
-      selectedBlock.Groups.[1].Value |> Expect.equal "the NEW workflow is selected after success" "Live Testing"
+      selectedBlock.Groups.[1].Value |> Expect.equal "the NEW workflow is selected after success" "Mode: Live Testing"
     }
   ]
 
@@ -103,7 +103,7 @@ let failurePathTests =
       let selectedBlock =
         System.Text.RegularExpressions.Regex.Match(out, "<option[^>]*selected[^>]*>([^<]*)</option>")
       selectedBlock.Success |> Expect.isTrue "the reverted switcher should be present"
-      selectedBlock.Groups.[1].Value |> Expect.equal "the ORIGINAL workflow (REPL) is selected again, not Hot Reload" "REPL"
+      selectedBlock.Groups.[1].Value |> Expect.equal "the ORIGINAL workflow (REPL) is selected again, not Hot Reload" "Mode: REPL"
       out |> Expect.stringContains "the failure reason is shown" "worker failed to spawn"
     }
   ]

@@ -332,3 +332,122 @@ let callTests =
         stateOf rows (RowKey.top "answer") |> Expect.equal "not in a file" (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt)
       }) }
   ]
+
+// ── a number's chosen range and step, and the limits of its own type ──
+
+let private limitsFile (sb: Sandbox) : string = Service.limitsPathOf sb.Dir
+
+let private gravityKey : RowKey = RowKey.top "gravity"
+
+/// Choose a row's range and step the way the editor does, from the three texts. The answer is the note the editor shows.
+let private choose (sb: Sandbox) (row: RowKey) (lowest: string) (highest: string) (step: string) : string =
+  Service.setLimits sb.Service sb.Dir row { LowestText = lowest; HighestText = highest; StepText = step }
+
+let private isRefused (state: PersistenceState) : bool =
+  match state with
+  | PersistenceState.Refused _ -> true
+  | _ -> false
+
+[<Tests>]
+let limitsTests =
+  testList "a number's range and step, on a real directory" [
+
+    testTask "WHY — a step past the chosen range is refused, the file is byte-identical, and a step that lands inside it is written" {
+      do! withSandbox (fun sb -> task {
+        choose sb gravityKey "0" "10" "0.1" |> Expect.equal "kept" ""
+        let! rows = view sb [ "gravity", box 9.8 ]
+        let place = placeOf rows gravityKey
+        do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor place gravityKey (TweakVerb.Steps 3))
+        File.ReadAllText sb.Tuning |> Expect.equal "10.1 is outside 0 to 10, so nothing was written" tuningText
+        let! after = view sb [ "gravity", box 9.8 ]
+        stateOf after gravityKey |> isRefused |> Expect.isTrue "the row says it was refused"
+        // A refusal carries the expression the row was showing, so the next click is addressed to it.
+        let again =
+          match stateOf after gravityKey with
+          | PersistenceState.Refused(_, shown) -> shown
+          | other -> failtestf "expected a refusal, got %A" other
+        do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor again gravityKey (TweakVerb.Steps 2))
+        File.ReadAllText sb.Tuning |> Expect.stringContains "10.0 is the highest, and it lands" "let gravity = 10.0"
+      }) }
+
+    testTask "WHY — a step the person chose replaces the step the spelling gives" {
+      do! withSandbox (fun sb -> task {
+        choose sb gravityKey "" "" "0.25" |> Expect.equal "kept" ""
+        let! rows = view sb [ "gravity", box 9.8 ]
+        let place = placeOf rows gravityKey
+        do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor place gravityKey (TweakVerb.Steps 1))
+        File.ReadAllText sb.Tuning |> Expect.stringContains "a quarter up from 9.8" "let gravity = 10.05"
+      }) }
+
+    testTask "WHY — a row's choices are read back into its view, so the slider's ends are the ones that were saved" {
+      do! withSandbox (fun sb -> task {
+        choose sb gravityKey "0" "30" "0.1" |> Expect.equal "kept" ""
+        let! rows = view sb [ "gravity", box 9.8 ]
+        (TweakView.tryRow rows gravityKey).Value.Limits
+        |> Expect.equal "the row carries what was chosen" (NumberLimits.ofNumbers (Edge.At 0.0) (Edge.At 30.0) (StepChoice.Every 0.1) |> Result.defaultValue NumberLimits.unlimited)
+      }) }
+
+    testTask "WHY — choosing a second row keeps the first, and clearing a row takes only its entry out of the file" {
+      do! withSandbox (fun sb -> task {
+        let health = RowKey.top "maxHealth"
+        choose sb gravityKey "0" "30" "0.1" |> Expect.equal "first" ""
+        choose sb health "1" "500" "5" |> Expect.equal "second" ""
+        let both = File.ReadAllText(limitsFile sb)
+        both |> Expect.stringContains "the first row is still there" "gravity"
+        both |> Expect.stringContains "and the second" "maxHealth"
+        choose sb gravityKey "" "" "" |> Expect.equal "cleared" ""
+        let left = File.ReadAllText(limitsFile sb)
+        left.Contains "gravity" |> Expect.isFalse "gravity's entry is gone"
+        left |> Expect.stringContains "maxHealth's stays" "maxHealth"
+      }) }
+
+    testTask "WHY — a choice no number can satisfy is refused with the reason, and the file is not touched" {
+      do! withSandbox (fun sb -> task {
+        choose sb gravityKey "30" "0" "" |> Expect.stringContains "says which is above which" "above the highest"
+        File.Exists(limitsFile sb) |> Expect.isFalse "nothing was written"
+        choose sb gravityKey "abc" "" "" |> Expect.stringContains "names the field" "lowest"
+      }) }
+
+    testTask "WHY — a limits file that cannot be read stops numbers from stepping and is never overwritten, because it holds the person's other choices" {
+      do! withSandbox (fun sb -> task {
+        Directory.CreateDirectory(Path.GetDirectoryName(limitsFile sb)) |> ignore
+        File.WriteAllText(limitsFile sb, "{ not json")
+        let! rows = view sb [ "gravity", box 9.8 ]
+        let place = placeOf rows gravityKey
+        do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor place gravityKey (TweakVerb.Steps 1))
+        File.ReadAllText sb.Tuning |> Expect.equal "no write while the choices cannot be read" tuningText
+        choose sb gravityKey "0" "30" "" |> Expect.stringContains "says why" "tweak-limits.json"
+        File.ReadAllText(limitsFile sb) |> Expect.equal "the broken file is left as it was" "{ not json"
+      }) }
+
+    testTask "WHY — an int stepped past what an int holds is refused by the door, and the file is byte-identical" {
+      do! withSandbox (fun sb -> task {
+        let health = RowKey.top "maxHealth"
+        let! rows = view sb [ "maxHealth", box 100 ]
+        let place = placeOf rows health
+        do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor place health (TweakVerb.Steps 2147483600))
+        File.ReadAllText sb.Tuning |> Expect.equal "2147483700 does not fit an int, so nothing was written" tuningText
+      }) }
+
+    testTask "WHY — an agent's nudge_value is held to the chosen range too, as a literal or as an expression, and a number inside it lands" {
+      do! withSandbox (fun sb -> task {
+        choose sb gravityKey "0" "30" "" |> Expect.equal "kept" ""
+        let! rows = view sb [ "gravity", box 9.8 ]
+        let place = placeOf rows gravityKey
+        let nudge (literal: string) (expression: string) : Task<string> =
+          McpNudge.nudgeWith
+            sb.Owned
+            (McpNudge.productionPorts (Path.Combine(sb.Dir, "tweaks-journal")))
+            McpNudge.locks
+            { Action = "set"; File = place.File; Address = SourceRef.addressText place; Seen = place.Hash; Literal = literal; Expression = expression }
+        let! tooHigh = nudge "31.0" ""
+        tooHigh |> Expect.stringContains "refused as out of range" "ValueOutOfRange"
+        File.ReadAllText sb.Tuning |> Expect.equal "nothing was written" tuningText
+        let! asExpression = nudge "" "31.0"
+        asExpression |> Expect.stringContains "the expression way is no way around" "ValueOutOfRange"
+        File.ReadAllText sb.Tuning |> Expect.equal "still nothing written" tuningText
+        let! inside = nudge "29.5" ""
+        inside |> Expect.stringContains "a number inside lands" "Written"
+        File.ReadAllText sb.Tuning |> Expect.stringContains "in the file" "let gravity = 29.5"
+      }) }
+  ]

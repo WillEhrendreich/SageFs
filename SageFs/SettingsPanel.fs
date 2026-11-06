@@ -62,9 +62,9 @@ module SettingsPanel =
   let private applicabilityChip (a: SettingApplicability) : XmlNode =
     let label, cls, tip =
       match a with
-      | Live -> "⚡ live", "settings-chip settings-chip-live", "Takes effect immediately."
+      | Live -> (Glyphs.lead Glyph.Live + "live"), "settings-chip settings-chip-live", "Takes effect immediately."
       | RestartRequired -> "⟳ restart", "settings-chip settings-chip-restart", "Saved now; applies on the next restart."
-      | Guarded -> "⚠ guarded", "settings-chip settings-chip-guarded", "Editing is guarded (e.g. the loopback bind-host RCE guard)."
+      | Guarded -> (Glyphs.lead Glyph.Warn + "guarded"), "settings-chip settings-chip-guarded", "Editing is guarded (e.g. the loopback bind-host RCE guard)."
     Elem.span [ Attr.class' cls; Attr.title tip ] [ Text.enc label ]
 
   /// A provenance badge naming the layer the effective value came from.
@@ -140,7 +140,7 @@ module SettingsPanel =
           editControl d p ]
       | Error e ->
         [ Elem.div [ Attr.class' "settings-value settings-value-error" ] [
-            Text.enc (sprintf "⚠ %s" (ConfigError.describe e)) ] ]
+            Text.enc (Glyphs.lead Glyph.Warn + ConfigError.describe e) ] ]
     let head =
       [ Elem.div [ Attr.class' "settings-row-head" ] [
           Elem.span [ Attr.class' "settings-name" ] [ Text.enc d.Name ]
@@ -157,7 +157,7 @@ module SettingsPanel =
     | Applied name ->
       Elem.div [ Attr.class' "settings-notice settings-notice-ok" ] [ Text.enc (sprintf "✓ %s saved" name) ]
     | Rejected(name, why) ->
-      Elem.div [ Attr.class' "settings-notice settings-notice-err" ] [ Text.enc (sprintf "⚠ %s: %s" name why) ]
+      Elem.div [ Attr.class' "settings-notice settings-notice-err" ] [ Text.enc (sprintf "%s %s: %s" (Glyphs.text Glyph.Warn) name why) ]
 
   /// The panel body: rows grouped by category, in the DU's display order.
   /// Empty categories are omitted. Carries the `SettingsSaving` indicator signal

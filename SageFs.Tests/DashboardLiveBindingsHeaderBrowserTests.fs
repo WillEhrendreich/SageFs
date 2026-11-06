@@ -50,7 +50,7 @@ let dockHtml (mode: ValueWalk) : string =
       Reload = RowReload.NoWriteYet
       Undo = HistoryStep.NothingToStep
       Redo = HistoryStep.NothingToStep
-      Through = ThroughCall.NoCall }
+      Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
   let notInAFile = view (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl PlaceOf.NotPlaced
   let tweaks : TweakView =
     { Rows =

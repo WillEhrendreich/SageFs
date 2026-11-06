@@ -283,7 +283,7 @@ module Signals =
   let [<Literal>] DockHeight = "dockHeight"
   /// The dock's default ceiling. One home: the signal starts at it, a double-click on the resize handle returns to it, and a
   /// test holds the stylesheet's `--dock-max-height` to the same text.
-  let [<Literal>] DockHeightDefault = "min(56vh, 36rem)"
+  let [<Literal>] DockHeightDefault = "min(72vh, 50rem)"
   /// True while the dock's resize handle is being dragged, so pointermove knows a drag is live.
   let [<Literal>] DockResizing = "dockResizing"
   let [<Literal>] NewSessionDir = "newSessionDir"
@@ -698,8 +698,8 @@ module DiagSeverity =
     | DiagWarning -> "diag-warning"
 
   let toIcon = function
-    | DiagError -> "✗"
-    | DiagWarning -> "⚠"
+    | DiagError -> Glyphs.text Glyph.Fail
+    | DiagWarning -> Glyphs.text Glyph.Warn
 
 /// Parsed diagnostic with typed severity.
 type Diagnostic = {
@@ -1053,16 +1053,16 @@ module ToneStyle =
   /// same thing, so the glyph is never the only signal.
   let glyph (tone: ReadinessTone) : string =
     match tone with
-    | ReadinessTone.Healthy -> "✅"
-    | ReadinessTone.Caution -> "⚠️"
-    | ReadinessTone.Failing -> "❌"
-    | ReadinessTone.Quiet -> "⏹️"
+    | ReadinessTone.Healthy -> Glyphs.text Glyph.Pass
+    | ReadinessTone.Caution -> Glyphs.text Glyph.Warn
+    | ReadinessTone.Failing -> Glyphs.text Glyph.Fail
+    | ReadinessTone.Quiet -> Glyphs.text Glyph.Stopped
 
   /// The glyph for a readiness: warming up and evaluating keep their own, everything else follows its tone.
   let readinessGlyph (readiness: Readiness) : string =
     match readiness with
-    | Readiness.InState SessionState.WarmingUp -> "⏳"
-    | Readiness.InState SessionState.Evaluating -> "⚡"
+    | Readiness.InState SessionState.WarmingUp -> Glyphs.text Glyph.Busy
+    | Readiness.InState SessionState.Evaluating -> Glyphs.text Glyph.Busy
     | Readiness.InState SessionState.Faulted
     | Readiness.InState SessionState.Uninitialized
     | Readiness.InState SessionState.Ready
@@ -1093,7 +1093,29 @@ module SessionInView =
   let badgeLabel (view: SessionInView) : string =
     match view with
     | SessionInView.NoSessionInPlay -> "No session"
-    | SessionInView.InPlay(_, _, readiness) -> Readiness.label readiness
+    | SessionInView.InPlay(_, _, readiness) ->
+      // A Ready session's qualification is the second fact (`liveNote`), so the badge says only the engine's word.
+      match Readiness.qualification readiness with
+      | Some _ -> "Ready"
+      | None -> Readiness.label readiness
+
+  /// The header's second fact, said beside the badge and apart from it. "Ready" is the engine's word: loaded, and able to take
+  /// work. Whether the session runs what the files say is another fact, and it gets its own words, so the badge keeps the word
+  /// clients wait on. Said only when it is true. Every other readiness already names what is wrong in its own words, and a
+  /// session with no session in play has nothing to be live. A Ready session that is not known to run current code says what is
+  /// wrong in the same place, with the caution glyph.
+  let liveNote (view: SessionInView) : (Glyph * string) option =
+    match view with
+    | SessionInView.NoSessionInPlay -> None
+    | SessionInView.InPlay(_, _, readiness) ->
+      match readiness with
+      | Readiness.ReadyCurrent -> Some (Glyph.Pass, "all changes live")
+      | Readiness.ReadyOlderCode
+      | Readiness.ReadyRebuilding
+      | Readiness.ReadyReplBehindApp
+      | Readiness.ReadyUnchecked ->
+        Readiness.qualification readiness |> Option.map (fun phrase -> Glyph.Warn, phrase)
+      | Readiness.InState _ -> None
 
 /// What a sidebar card knows about whether the files on disk are ahead of the build its session runs (`SourceState`).
 /// Reading it takes the worker's own warmup report (a worker round trip), which the push loop pays only for the session
@@ -1133,11 +1155,11 @@ module RebuildRemedy =
       [ Attr.class' cssClass
         Attr.type' "button"
         Attr.create "data-testid" testId
-        Attr.create "aria-label" "Rebuild and reload: hard reset this session with a rebuild, so it runs the code in the files"
+        Attr.create "aria-label" "Rebuild and reload: rebuild the project and restart this session, so everything the files hold is live. Values you set in the session go back to the file's."
         Ds.indicator Signals.ActionLoading
         Ds.attr' ("disabled", "$actionLoading")
         Ds.onClick (Ds.post route) ]
-      [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
+      [ Elem.span [ Ds.show "$actionLoading" ] [ Text.enc (Glyphs.lead Glyph.Busy) ]
         Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "↻ " ]
         Text.raw words ]
 
@@ -1792,19 +1814,19 @@ module PanelVisibility =
       | ViewedSession.NoSession -> PanelVisibility.Hidden "Hot reload: no session is selected"
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.HotReload _, _) -> PanelVisibility.Shown
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.Interactive, _) ->
-        PanelVisibility.Hidden "Hot reload: this session is in REPL mode"
+        PanelVisibility.Hidden "Hot reload is off: this is a REPL session. Start a hot-reload session to patch a running app on save."
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.LiveTesting, _) ->
         PanelVisibility.Hidden "Hot reload: this session is in Live Testing mode"
     | OptionalPanel.LiveTesting ->
       match facts.Viewed with
       | ViewedSession.NoSession -> PanelVisibility.Hidden "Live testing: no session is selected"
       | ViewedSession.Viewing(_, Features.LiveTestActivity.LiveTestActivity.Off) ->
-        PanelVisibility.Hidden "Live testing: it's off for this session"
+        PanelVisibility.Hidden "Live testing is off for this session, so no tests re-run as you edit."
       | ViewedSession.Viewing _ -> PanelVisibility.Shown
     | OptionalPanel.Cohort ->
       match facts.Cohort with
       | CohortPresence.ActiveMembers _ -> PanelVisibility.Shown
-      | CohortPresence.NoActiveMembers -> PanelVisibility.Hidden "Cohort: no cohort is running"
+      | CohortPresence.NoActiveMembers -> PanelVisibility.Hidden "No cohort is running (a cohort is several agents working on one project together)."
     | OptionalPanel.Friction ->
       match facts.Friction with
       | FrictionPanelOptIn.OptedIn -> PanelVisibility.Shown
@@ -1824,11 +1846,20 @@ module PanelVisibility =
       | OptionalPanel.LiveTesting -> DomIds.HiddenReasonLiveTesting
       | OptionalPanel.Cohort -> DomIds.HiddenReasonCohort
       | OptionalPanel.Friction -> DomIds.HiddenReasonFriction
-    Elem.div
+    // One line that opens: the name and the state ("Hot reload: off") are always there, and the sentence that says why and what to do
+    // is a click away. Three of these in a row, each a sentence of its own, made the Sessions column a wall of small text.
+    let name =
+      match panel with
+      | OptionalPanel.HotReload -> "Hot reload: off"
+      | OptionalPanel.LiveTesting -> "Live testing: off"
+      | OptionalPanel.Cohort -> "Agent team: none running"
+      | OptionalPanel.Friction -> "Friction reports: off"
+    Elem.details
       [ Attr.id id
         Attr.class' "panel panel-hidden-reason"
-        Attr.create "role" "status" ]
-      [ Elem.span [ Attr.class' "panel-hidden-why" ] [ Text.raw reason ] ]
+        Ds.preserveAttr "open" ]
+      [ Elem.summary [ Attr.class' "panel-hidden-name" ] [ Text.raw name ]
+        Elem.div [ Attr.class' "panel-hidden-why"; Attr.create "role" "status" ] [ Text.raw reason ] ]
 
   /// A hidden panel renders the line that says why it is not there. A panel that is not offered renders nothing.
   let private keep (facts: PanelFacts) (panel: OptionalPanel) (node: Falco.Markup.XmlNode) =

@@ -1889,14 +1889,14 @@ let tests =
     // landed server-side (the select is server-rendered from the session's
     // real workflow, not just whatever the click left in the DOM).
     let! selectedLabel = switcher.EvaluateAsync<string>("el => el.options[el.selectedIndex].textContent")
-    Expect.equal selectedLabel "Hot Reload" "the switcher itself shows Hot Reload selected after the real switch landed"
+    Expect.equal selectedLabel "Mode: Hot Reload" "the switcher itself shows Hot Reload selected after the real switch landed"
 
     // Put the shared session back the way the other journeys expect it.
     do! switchViaDropdown "interactive"
     do! count "#hot-reload-panel" 0 BrowserWaits.hotReloadBuild
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.hotReloadBuild page "#session-status" "Ready"
     let! selectedLabelBack = switcher.EvaluateAsync<string>("el => el.options[el.selectedIndex].textContent")
-    Expect.equal selectedLabelBack "REPL" "the switcher shows REPL selected again after switching back"
+    Expect.equal selectedLabelBack "Mode: REPL" "the switcher shows REPL selected again after switching back"
 
     let datastarOrConsoleErrors = consoleErrors |> List.ofSeq
     Expect.isEmpty datastarOrConsoleErrors
