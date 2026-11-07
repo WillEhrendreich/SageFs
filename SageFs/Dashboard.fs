@@ -2654,7 +2654,7 @@ let createSessionActionHandler
               return! action sessionId
             })
       // Make this tab view `target`: retarget its stream, carry the new viewing
-      // id, and sync the output, sessions panel and statusline to it.
+      // id, and sync the output, sessions panel and status badge to it.
       let showSession (target: WorkerProtocol.SessionId) = task {
         retargetStream infra channelClientId (Some target)
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value target)
@@ -2686,7 +2686,8 @@ let createSessionActionHandler
           Elem.div [ Attr.id DomIds.SessionStatus ] [
             Elem.span [ Attr.class' (sprintf "status %s" (SessionInView.badgeCssClass inView)); Attr.style "border-radius:0;" ] [ textEnc (SessionInView.badgeLabel inView) ]
           ])
-        do! ssePatchNode ctx (renderStatuslineLeft readiness (q.GetSessionWorkingDir target))
+        // No statusline patch: the page has no `#statusline-left` since the Ready note moved into the header, and a patch to an
+        // element the page does not hold logs PatchElementsNoTargetsFound on every switch (seen in headless Chromium).
       }
       // The viewer's view is left alone: only the sessions panel needs to
       // stop listing (or start flagging) the card the action touched.

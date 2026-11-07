@@ -910,6 +910,9 @@
         <Compile Include="IntegrationRegistryTests.fs" />
         <Compile Include="RatchetRegistryTests.fs" />
         <Compile Include="EvalWriteBackTests.fs" />
+        <!-- Before the browser runner, which lists the journeys this file adds. -->
+        <Compile Include="DashboardPanelVisibilityTests.fs" />
+        <Compile Include="DashboardPanelContextBrowserTests.fs" />
         <Compile Include="DashboardBrowserRunner.fs" />
         <Compile Include="VscodeCommandProofTests.fs" />
         <Compile Include="CoverageTreemapTests.fs" />
@@ -994,7 +997,6 @@
         <Compile Include="MemberRouteGateTests.fs" />
         <Compile Include="CohortPanelTests.fs" />
         <Compile Include="CohortLandingPanelTests.fs" />
-        <Compile Include="DashboardPanelVisibilityTests.fs" />
         <Compile Include="DockPanesTests.fs" />
         <Compile Include="AppOutputPaneTests.fs" />
         <Compile Include="AppOutputViewTests.fs" />

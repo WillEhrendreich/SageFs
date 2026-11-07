@@ -21,10 +21,10 @@ open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 
 let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
-let private alice = MemberId.Minted "alice"
+let alice = MemberId.Minted "alice"
 
 /// The ledger a list of commands produces, one minute apart.
-let private ledgerAfter (commands: CohortCommand<MemberId> list) : LedgerEntry<MemberId> list =
+let ledgerAfter (commands: CohortCommand<MemberId> list) : LedgerEntry<MemberId> list =
   commands
   |> List.fold
     (fun (state, entries: LedgerEntry<MemberId> list) cmd ->
@@ -37,27 +37,27 @@ let private ledgerAfter (commands: CohortCommand<MemberId> list) : LedgerEntry<M
     (CohortState.empty (), [])
   |> snd
 
-let private frameOf (ledger: LedgerEntry<MemberId> list) : CohortFrame<MemberId> =
+let frameOf (ledger: LedgerEntry<MemberId> list) : CohortFrame<MemberId> =
   project (replayHead ledger) [||]
 
 let private frameAfter commands = ledgerAfter commands |> frameOf
 
 /// A present member holding a claim, so the lanes panel has a span to draw.
-let private memberHoldingAClaim =
+let memberHoldingAClaim =
   ledgerAfter
     [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
       CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", CohortScope.Machine) ]
 
-let private hotReload = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
-let private off = Features.LiveTestActivity.LiveTestActivity.Off
-let private running = Features.LiveTestActivity.LiveTestActivity.Running Features.LiveTestActivity.TestTally.empty
+let hotReload = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
+let off = Features.LiveTestActivity.LiveTestActivity.Off
+let running =Features.LiveTestActivity.LiveTestActivity.Running Features.LiveTestActivity.TestTally.empty
 
 /// Facts for a session whose code was checked and found clean, with no alarm and no failing test.
-let private facts viewed cohort friction : PanelFacts =
+let facts viewed cohort friction : PanelFacts =
   { Viewed = viewed; Cohort = cohort; Friction = friction
     Diagnostics = DiagnosticsCheck.Checked 0; Alarms = 0; FailingTests = 0 }
 
-let private replFacts =
+let replFacts =
   facts (ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.Interactive, off)) CohortPresence.NoActiveMembers FrictionPanelOptIn.NotOptedIn
 
 let private isShown facts panel =
@@ -68,7 +68,7 @@ let private isShown facts panel =
 
 /// A snapshot carrying the REAL optional panels, so the render tests see the
 /// same markup the dashboard sends.
-let private snapshotWith (activity: Features.LiveTestActivity.LiveTestActivity) (ledger: LedgerEntry<MemberId> list) : DashboardSnapshot =
+let snapshotWith (activity: Features.LiveTestActivity.LiveTestActivity) (ledger: LedgerEntry<MemberId> list) : DashboardSnapshot =
   { Version = "0.0.0"
     InView = FixtureViews.running
     SessionId = "abcd1234"; WorkingDir = ""
@@ -338,6 +338,52 @@ let dashboardPanelVisibilityTests =
         |> List.map EmptyBecause.text
         |> List.distinct
         |> Expect.hasLength "three reasons, three sentences" 3
+    ]
+
+    testList "parts of a running cohort's panel say why they are empty" [
+      testCase "a ledger with no claim or landing says the lanes have nothing to draw" <| fun _ ->
+        let html = renderCohortLanesPanel [] |> renderNode
+        html |> Expect.stringContains "the note names the part and the reason" (CohortEmptyBecause.text CohortEmptyBecause.NoLaneActivity)
+        html.Contains(idAttr DomIds.CohortLanes) |> Expect.isFalse "and the lanes panel is not drawn"
+
+      testCase "a trunk that followed nothing says so, without the trunk panel" <| fun _ ->
+        let html = renderTrunkPanel Features.TrunkFollow.initial |> renderNode
+        html |> Expect.stringContains "the note" (CohortEmptyBecause.text CohortEmptyBecause.NoLandingFollowed)
+        html.Contains(idAttr DomIds.CohortTrunk) |> Expect.isFalse "and the trunk panel is not drawn"
+
+      testCase "an empty ledger says there is nothing to scrub" <| fun _ ->
+        renderCohortScrubControl None None |> renderNode
+        |> Expect.stringContains "the note" (CohortEmptyBecause.text CohortEmptyBecause.EmptyLedger)
+
+      testCase "a ledger with activity draws the lanes and no note" <| fun _ ->
+        let html = renderCohortLanesPanel memberHoldingAClaim |> renderNode
+        html |> Expect.stringContains "the lanes panel" (idAttr DomIds.CohortLanes)
+        html.Contains "cohort-empty-note" |> Expect.isFalse "no note"
+
+      testCase "WHY — the lane and territory pictures carry no height of auto, which is not an SVG length and logs a console error in a real browser" <| fun _ ->
+        let lanes = renderCohortLanesPanel memberHoldingAClaim |> renderNode
+        lanes |> Expect.stringContains "the lanes picture is on the page" "<svg"
+        lanes.Contains "height=\"auto\"" |> Expect.isFalse "lanes"
+        (Features.CohortTerritory.toSvg 300.0 200.0 []).Contains "height=\"auto\""
+        |> Expect.isFalse "territory"
+
+      testCase "each reason is a different sentence" <| fun _ ->
+        [ CohortEmptyBecause.NoLaneActivity; CohortEmptyBecause.NoLandingFollowed; CohortEmptyBecause.EmptyLedger ]
+        |> List.map CohortEmptyBecause.text
+        |> List.distinct
+        |> Expect.hasLength "three reasons, three sentences" 3
+    ]
+
+    testList "a session card's grid and map are quiet until there is something to draw" [
+      testCase "no discovered test is a quiet grid, any number is a shown one" <| fun _ ->
+        [ PanelContext.testGrid 0; PanelContext.testGrid 1; PanelContext.testGrid 40 ]
+        |> Expect.equal "quiet, shown, shown"
+          [ PanelPresence.Quiet QuietBecause.NoTestsDiscovered; PanelPresence.Shown; PanelPresence.Shown ]
+
+      testCase "no coverage report and zero probes are a quiet map, one probe is a shown one" <| fun _ ->
+        [ PanelContext.coverageMap None; PanelContext.coverageMap (Some 0); PanelContext.coverageMap (Some 1) ]
+        |> Expect.equal "quiet, quiet, shown"
+          [ PanelPresence.Quiet QuietBecause.NoCoverageYet; PanelPresence.Quiet QuietBecause.NoCoverageYet; PanelPresence.Shown ]
     ]
 
     testList "decide first, then build" [

@@ -134,6 +134,8 @@ type QuietBecause =
   | NoFailingTests
   | NoDiagnostics
   | FrictionNotRequested
+  | NoTestsDiscovered
+  | NoCoverageYet
 
 [<RequireQualifiedAccess>]
 type PanelPresence =
@@ -177,6 +179,23 @@ module QuietBecause =
     | QuietBecause.NoFailingTests -> "no failing tests"
     | QuietBecause.NoDiagnostics -> "no diagnostics"
     | QuietBecause.FrictionNotRequested -> "friction reports are off until a tab asks for them"
+    | QuietBecause.NoTestsDiscovered -> "no tests discovered"
+    | QuietBecause.NoCoverageYet -> "no coverage yet"
+
+/// Why a part of the cohort panel that is on the page has nothing in it. The cohort is running, so a missing lane view, trunk
+/// list or scrubber needs a word, or it reads as a broken panel.
+[<RequireQualifiedAccess>]
+type CohortEmptyBecause =
+  | NoLaneActivity
+  | NoLandingFollowed
+  | EmptyLedger
+
+module CohortEmptyBecause =
+  let text (because: CohortEmptyBecause) : string =
+    match because with
+    | CohortEmptyBecause.NoLaneActivity -> "Lanes: no claim or landing has happened yet."
+    | CohortEmptyBecause.NoLandingFollowed -> "Trunk: no landing has been followed yet."
+    | CohortEmptyBecause.EmptyLedger -> "Scrubber: the ledger is empty, so there is nothing to scrub."
 
 module PanelFacts =
   /// The query key and value that opt a tab into the friction panel.
@@ -223,6 +242,19 @@ module PanelContext =
     match optIn with
     | FrictionPanelOptIn.OptedIn -> PanelPresence.Shown
     | FrictionPanelOptIn.NotOptedIn -> PanelPresence.Quiet QuietBecause.FrictionNotRequested
+
+  /// A session card's test grid: there is a grid once a test has been discovered.
+  let testGrid (entries: int) : PanelPresence =
+    match entries with
+    | 0 -> PanelPresence.Quiet QuietBecause.NoTestsDiscovered
+    | _ -> PanelPresence.Shown
+
+  /// A session card's coverage map: there is a map once the instrumented build reports a probe.
+  let coverageMap (probes: int option) : PanelPresence =
+    match probes with
+    | None
+    | Some 0 -> PanelPresence.Quiet QuietBecause.NoCoverageYet
+    | Some _ -> PanelPresence.Shown
 
   let decide (facts: PanelFacts) (panel: ContextPanel) : PanelPresence =
     match panel with

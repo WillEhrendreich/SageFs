@@ -107,7 +107,7 @@ module CohortTerritory =
   let toSvg (width: float) (height: float) (tiles: TerritoryTile list) : string =
     let rects = layout { X = 0.0; Y = 0.0; W = width; H = height } tiles
     let sb = StringBuilder()
-    sb.Append(sprintf "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %g %g\" width=\"100%%\" height=\"auto\">" width height)
+    sb.Append(sprintf "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %g %g\" width=\"100%%\">" width height)
     |> ignore
     for tile, r in rects do
       let color = colorForHolder tile.HolderIndex

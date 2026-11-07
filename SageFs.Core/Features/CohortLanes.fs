@@ -313,7 +313,7 @@ module CohortLanes =
     let totalHeight = max rowHeight totalHeight
 
     let sb = StringBuilder()
-    sb.Append(sprintf "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %g %g\" width=\"100%%\" height=\"auto\">" width totalHeight)
+    sb.Append(sprintf "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %g %g\" width=\"100%%\">" width totalHeight)
     |> ignore
     for lane, laneTop, _laneHeight in rowsWithY do
       sb.Append(

@@ -2219,9 +2219,10 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Attr.create "data-testid" "session-card-hint" ]
                 [ textEnc "Stop unloads the session and keeps its saved state. Close ends it. Delete ends it and removes the saved state, after asking." ] ]
             // Collapsible test status grid (one legible cell per test)
-            match s.TestTreemapEntries.Length with
-            | 0 -> ()
-            | _ ->
+            match PanelContext.testGrid s.TestTreemapEntries.Length with
+            | PanelPresence.Hidden _
+            | PanelPresence.Quiet _ -> ()
+            | PanelPresence.Shown ->
               let totalMs = Features.LiveTesting.TestStatusGrid.totalDurationMs s.TestTreemapEntries
               let timedCount = s.TestTreemapEntries |> Array.filter (fun e -> e.DurationMs > 0.0) |> Array.length
               let durationLabel =
@@ -2244,9 +2245,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
             // Collapsible coverage treemap (WinDirStat/WizTree-style drill-down:
             // solution -> project -> file -> symbol, area = probe count)
             match s.CoverageTreemap with
-            | None -> ()
-            | Some root when root.ProbeCount = 0 -> ()
-            | Some root ->
+            | Some root when PanelContext.coverageMap (Some root.ProbeCount) = PanelPresence.Shown ->
               let pct = coveragePercent root.ProbeCount root.CoveredCount
               signalDetails
                 (sprintf "coverageTreemapOpen_%s" sid)
@@ -2256,6 +2255,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     [ Text.raw "\U0001F5FA "
                       textEnc (sprintf "coverage map · %.0f%% (%d/%d probes)" pct root.CoveredCount root.ProbeCount) ]
                   renderCoverageTreemap sid s.CoverageTreemap ]
+            | Some _
+            | None -> ()
             // (Bound-values explorer removed from the session card — bindings
             // are not a per-card concern; they live in the Bindings panel.)
           ]
@@ -3427,11 +3428,19 @@ let private cohortLaneLabel (member_: MemberTable.MemberId option) : string =
 /// composition as the matrix/territory islands. A ledger with no claim or
 /// landing activity on any lane renders nothing, matching this panel
 /// family's other empty-state conventions.
+/// One muted line for a part of a running cohort's panel that has nothing in it yet, saying which part and why.
+let cohortEmptyNote (because: CohortEmptyBecause) : XmlNode =
+  Elem.div
+    [ Attr.class' "meta cohort-empty-note"
+      Attr.style "font-size: 0.857rem; margin-top: 0.3rem;"
+      testid "cohort-empty-note" ]
+    [ textEnc (CohortEmptyBecause.text because) ]
+
 let renderCohortLanesPanel (ledgerEntries: SageFs.Cohort.LedgerEntry<MemberTable.MemberId> list) : XmlNode =
   let model = Features.CohortLanes.project ledgerEntries
   let hasActivity = model.Lanes |> List.exists (fun lane -> not lane.Spans.IsEmpty)
   match hasActivity with
-  | false -> Elem.div [] []
+  | false -> cohortEmptyNote CohortEmptyBecause.NoLaneActivity
   | true ->
     let laneCount = model.Lanes.Length
     let rowHeight = 16.0
@@ -3472,7 +3481,7 @@ let renderTrunkPanel (machine: Features.TrunkFollow.TrunkMachine) : XmlNode =
       [ landingText l.Landing, sprintf "following: waiting on session %s" (String.concat ", " waiting) ]
   let queued = machine.Queued |> List.map (fun l -> landingText l.Landing, "queued behind the landing in flight")
   match landings, inFlight, queued with
-  | [], [], [] -> Elem.div [] []
+  | [], [], [] -> cohortEmptyNote CohortEmptyBecause.NoLandingFollowed
   | _ ->
     let count = List.length landings
     signalDetails Signals.CohortTrunkOpen [ Attr.id DomIds.CohortTrunk; Attr.class' "panel"; Attr.style "margin-top: 0.4rem;" ] [
@@ -3514,7 +3523,7 @@ let renderTrunkPanel (machine: Features.TrunkFollow.TrunkMachine) : XmlNode =
 /// needing to know about client ids at all.
 let renderCohortScrubControl (viewingSeq: int64<ledgerSeq> option) (latestSeq: int64<ledgerSeq> option) : XmlNode =
   match latestSeq with
-  | None -> Elem.div [] []
+  | None -> cohortEmptyNote CohortEmptyBecause.EmptyLedger
   | Some latest ->
     let latestInt = int64 latest
     let currentInt = viewingSeq |> Option.map int64 |> Option.defaultValue latestInt
