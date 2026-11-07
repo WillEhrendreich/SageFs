@@ -109,6 +109,8 @@ type Intent =
   | IWithdraw of agent: int * landingIdx: int
   | IVeto of by: int * landingIdx: int
   | IDelegate of by: int * toAgent: int
+  /// A person seats `toAgent` (5 is never a member). The operator route is the one issuer of `SeatConductor`.
+  | ISeat of toAgent: int
   | IResolveVeto of by: int * landingIdx: int
   | IAdvance of FrontStep
   /// `OpenCohort`: the cohort's own scope (an idempotent no-op that is still a ledger entry) or another one (refused).
@@ -167,6 +169,7 @@ let genDelegatingIntent =
   Gen.frequency [
     4, genIntent
     4, Gen.map2 (fun b t -> IDelegate(b, t)) (Gen.choose (1, 4)) (Gen.choose (1, 5))
+    4, Gen.map ISeat (Gen.choose (1, 5))
     4, Gen.map2 (fun a c -> IRequestLanding(a, c)) (Gen.choose (1, 4)) (Gen.choose (0, 1000))
     3, Gen.map2 (fun b l -> IVeto(b, l)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
     3, Gen.map2 (fun b l -> IResolveVeto(b, l)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
@@ -189,6 +192,14 @@ let reassignHistory =
   @ [ IAcquire(3, 0)       // the holder takes a claim
       IDepart 3            // the holder leaves, and the claim is orphaned
       IReassign(1, 0, 2) ] // the conductor hands it to a member who is still here
+
+/// The ONE history that ends a vacancy, written out for the reason `reassignHistory` is: the conductor leaves, so the seat is
+/// vacant, and a person seats a member who is still here. A random draw reaches it only by luck, and test 31's claim that every
+/// command is accepted somewhere must not rest on luck.
+let seatHistory =
+  seating
+  @ [ IDepart 1   // the conductor leaves: the seat is vacant
+      ISeat 2 ]   // a person seats a member who is still here
 
 /// The ordinary intents, leaning hard on the landing pipeline: claims by the two implementers, landings requested by
 /// them, and the front landing pushed along. Seated first, as the delegating histories are. This is the history the
@@ -356,6 +367,7 @@ let resolveIntent<'m when 'm: comparison>
   | IVeto(by, l) -> onLanding l (fun lid -> CohortCommand.VetoLanding(who by, lid, "veto reason", machine))
   // `toAgent` 5 is an agent that never joins (`agentOf` maps 1..4), so absent targets are generated too.
   | IDelegate(by, toA) -> now (CohortCommand.DelegateConductor(who by, (if toA = 5 then absent else who toA), machine))
+  | ISeat toA -> now (CohortCommand.SeatConductor((if toA = 5 then absent else who toA), machine))
   | IResolveVeto(by, l) -> onLanding l (fun lid -> CohortCommand.ResolveVeto(who by, lid, machine))
   | IAdvance step ->
     // The landing at the front of the queue, and the command ITS stage calls for. A landing that is not at the front
@@ -1098,7 +1110,7 @@ let cohortPropertyTests =
         let delegating = Gen.sample 300 (Arb.toGen (DelegatingGenerators.History())) |> Array.map (fun (DelegatingHistory intents) -> run intents)
         // The deterministic history LAST, so the corpus is the generated one plus the one path a
         // random draw cannot be relied on to reach (`reassignHistory`).
-        let histories = Array.concat [ pipeline; plain; delegating; [| run reassignHistory |] ]
+        let histories = Array.concat [ pipeline; plain; delegating; [| run reassignHistory; run seatHistory |] ]
         let accepted = histories |> Array.collect (fun h -> h.Steps |> List.map (fun s -> caseOf s.Command) |> Array.ofList) |> Set.ofArray
         // The deterministic history earns its place or it is not there. If `decide` ever stops
         // accepting this path, the corpus falls back on the draw and the claim below becomes a
@@ -1107,6 +1119,10 @@ let cohortPropertyTests =
         |> fun h -> h.Steps |> List.map (fun s -> caseOf s.Command)
         |> List.contains "ReassignClaim"
         |> Expect.isTrue "the deterministic history really reassigns a claim, so the coverage does not rest on the draw"
+        run seatHistory
+        |> fun h -> h.Steps |> List.map (fun s -> caseOf s.Command)
+        |> List.contains "SeatConductor"
+        |> Expect.isTrue "the deterministic history really seats a conductor, so the coverage does not rest on the draw"
         Set.difference allCases accepted
         |> Set.toList
         |> Expect.equal "every CohortCommand case is accepted in some generated history; the ones listed never were" []
@@ -1404,6 +1420,78 @@ let cohortPropertyTests =
             match decide h.Clock [| 9uy |] h.State (CohortCommand.DelegateConductor(by, by, machine)) with
             | Error(CohortError.ConductorVacant _) -> true
             | _ -> false)
+    ]
+
+    testList "a person seats a conductor (32-35)" [
+
+      let seatConfig = { cohortConfig with arbitrary = [ typeof<DelegatingGenerators> ]; replay = Some(0x5EEDUL, 0x5EA7UL, None) }
+      let isPresentIn (state: CohortState<Agent>) (m: Agent) =
+        match Map.tryFind m state.Members with
+        | Some { Presence = MemberPresence.Present } -> true
+        | _ -> false
+      let roster (state: CohortState<Agent>) =
+        state.Members |> Map.toList |> List.choose (fun (m, r) -> match r.Presence with MemberPresence.Present -> Some m | MemberPresence.Departed _ -> None) |> List.sort
+      let everyone = [ for i in 1 .. 5 -> if i = 5 then absentAgent else agentOf i ]
+      let conductorsOf (state: CohortState<Agent>) : Agent list =
+        state.Members |> Map.toList |> List.map fst |> List.filter (fun m -> Authority.present m state = Authority.Conductor m)
+
+      testPropertyWithConfig seatConfig "32: an accepted seating fills an EMPTY seat with a present member, records the vacancy it ended, and leaves exactly one conductor" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        h.Steps
+        |> List.forall (fun step ->
+          match step.Command with
+          | CohortCommand.SeatConductor(target, _) ->
+            let wasEmpty =
+              match step.Before.Conductor with
+              | ConductorBinding.NeverBound
+              | ConductorBinding.Vacant _ -> true
+              | ConductorBinding.Bound _ -> false
+            wasEmpty
+            && isPresentIn step.Before target
+            && step.After.Conductor = ConductorBinding.Bound target
+            && step.Events = [ CohortEvent.ConductorSeated(target, step.Before.Conductor) ]
+            && Authority.present target step.After = Authority.Conductor target
+          | _ -> true)
+
+      testPropertyWithConfig seatConfig "33: at the end of any history a seating is refused for a bound seat (naming the holder) and for an absent member (with the roster), and accepted otherwise" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        everyone
+        |> List.forall (fun target ->
+          match h.State.Conductor, decide h.Clock [| 9uy |] h.State (CohortCommand.SeatConductor(target, machine)) with
+          | ConductorBinding.Bound sitting, Error(CohortError.ConductorSeatTaken named) -> named = sitting
+          | ConductorBinding.Bound _, _ -> false
+          | (ConductorBinding.NeverBound | ConductorBinding.Vacant _), Ok(after, _, _) -> isPresentIn h.State target && after.Conductor = ConductorBinding.Bound target
+          | (ConductorBinding.NeverBound | ConductorBinding.Vacant _), Error(CohortError.SeatTargetAbsent(refused, listed)) ->
+            refused = target && not (isPresentIn h.State target) && List.sort listed = roster h.State
+          | (ConductorBinding.NeverBound | ConductorBinding.Vacant _), Error _ -> false)
+
+      testPropertyWithConfig seatConfig "34: no step ever leaves more than one conductor, and an empty seat is filled by a join of the first member or by a seating, never by anything else" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        h.Steps
+        |> List.forall (fun step ->
+          let conductorsAfter = conductorsOf step.After
+          let fillsEmptySeat =
+            match step.Before.Conductor, step.After.Conductor with
+            | ConductorBinding.Vacant _, ConductorBinding.Bound _
+            | ConductorBinding.NeverBound, ConductorBinding.Bound _ ->
+              (match step.Command with
+               | CohortCommand.SeatConductor _ -> true
+               | CohortCommand.Join _ -> step.Before.Conductor = ConductorBinding.NeverBound
+               | _ -> false)
+            | _ -> true
+          List.length conductorsAfter <= 1 && fillsEmptySeat)
+
+      testPropertyWithConfig seatConfig "35: a ledger with seatings in it replays to the live seat, drops no row and loses no recorded event" <| fun (DelegatingHistory intents) ->
+        let h = run intents
+        let audit = replayAuditIn machine (ledgerOf h)
+        audit.Dropped.IsEmpty && audit.Diverged.IsEmpty && audit.Head.State.Conductor = h.State.Conductor
+
+      testCase "35 (coverage): the generated delegating histories actually seat a conductor, so 32-35 are not vacuous" <| fun _ ->
+        let seatings =
+          Gen.sample 300 (Arb.toGen (DelegatingGenerators.History()))
+          |> Array.sumBy (fun (DelegatingHistory intents) ->
+            (run intents).Steps |> List.filter (fun s -> match s.Command with CohortCommand.SeatConductor _ -> true | _ -> false) |> List.length)
+        Expect.isGreaterThan "seatings are accepted in generated histories" (seatings, 5)
     ]
 
     testList "read model (10)" [

@@ -166,6 +166,7 @@ module TrunkFollow =
     | CohortEvent.LeaseRenewed _
     | CohortEvent.ConductorBound _
     | CohortEvent.ConductorDelegated _
+    | CohortEvent.ConductorSeated _
     | CohortEvent.ClaimAcquired _
     | CohortEvent.ClaimReleased _
     | CohortEvent.ClaimOrphaned _

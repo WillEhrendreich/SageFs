@@ -104,6 +104,19 @@ module CohortErrorMapping =
       failed
         (sprintf "%s already holds the conductor seat, so there is nobody to hand it to." (mid who))
         "Name another present member in delegate_conductor, or keep the seat."
+    | Cohort.CohortError.SeatTargetAbsent(target, present) ->
+      failed
+        (sprintf
+          "%s is not a present member of this cohort, so the conductor seat cannot be given to them. Present members: %s."
+          (mid target)
+          (match present with
+           | [] -> "(none)"
+           | members -> members |> List.map mid |> String.concat ", "))
+        "Run 'sagefs cohort seat' with no member id to list the present members, then name one of them exactly as it is printed."
+    | Cohort.CohortError.ConductorSeatTaken sitting ->
+      failed
+        (sprintf "%s already holds the conductor seat, and a person fills an EMPTY seat." (mid sitting))
+        "Ask the conductor to hand the seat on with delegate_conductor. 'sagefs cohort seat' with no member id shows who holds it."
     | Cohort.CohortError.VetoRefused(by, Cohort.VetoRefusal.NotAMember) ->
       failed
         (sprintf "%s has no seat in this cohort, and a veto is a seated member's objection." (mid by))
@@ -137,7 +150,7 @@ module CohortErrorMapping =
         (sprintf "This is a conductor-only action, and the conductor seat is VACANT %s." seat)
         (match former with
          | Some _ ->
-           "No MCP tool can fill an empty conductor seat: delegate_conductor hands the seat on only from a SITTING conductor, and nothing is auto-promoted into one. A person must restore a conductor before this can run. Meanwhile do the work that needs no conductor: acquire_claim, release_claim, request_landing, withdraw_landing, veto_landing."
+           "No MCP tool can fill an empty conductor seat: delegate_conductor hands the seat on only from a SITTING conductor, and nothing is auto-promoted into one. A person seats one, on the machine that runs the daemon, with 'sagefs cohort seat <member id>' (with no member id it lists who is present). Meanwhile do the work that needs no conductor: acquire_claim, release_claim, request_landing, withdraw_landing, veto_landing."
          | None ->
            "No member has ever been conductor in this cohort. The first member to join binds the seat, so join_cohort (if you have not) is what fills it.")
 
@@ -160,6 +173,13 @@ module CohortErrorMapping =
       failed
         (sprintf "%s acts under a member token, and no member token may call the conductor's tools, so the conductor seat would be stranded with them." (MemberTable.MemberId.display target))
         "Delegate to a member who joined on its own connection (get_cohort_status lists them without a cap: prefix), or keep the seat."
+
+  /// The refusal for seating a member who acts under a minted token. `sagefs cohort seat` makes it: a token holder
+  /// cannot call the conductor's tools, and a bound seat can be moved only by its holder, so the seat would be stuck.
+  let seatTargetHoldsToken (target: MemberTable.MemberId) : SageFsError =
+    failed
+      (sprintf "%s acts under a member token, and no member token may call the conductor's tools, so the conductor seat would be stranded with them." (MemberTable.MemberId.display target))
+      (sprintf "Seat a member that joined on its own connection (get_cohort_status lists them without a cap: prefix). '%s' with no member id lists who is present." Features.CohortStatusText.seatCommandText)
 
   let private scopeText (prefix: Capability.ScopePrefix) =
     match Capability.ScopePrefix.value prefix with

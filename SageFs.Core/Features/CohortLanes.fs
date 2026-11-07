@@ -159,6 +159,7 @@ module CohortLanes =
     | CohortEvent.LeaseRenewed _
     | CohortEvent.ConductorBound _
     | CohortEvent.ConductorDelegated _
+    | CohortEvent.ConductorSeated _
     | CohortEvent.ClaimViolationObserved _
     | CohortEvent.LandingStateChanged _
     | CohortEvent.IntegrationConfigured _

@@ -1040,6 +1040,8 @@
         <Compile Include="CohortLandingCacheOwnerTests.fs" />
         <Compile Include="CohortIntegrationHeadTests.fs" />
         <Compile Include="CohortVacancyTests.fs" />
+        <Compile Include="CohortSeatConductorTests.fs" />
+        <Compile Include="CohortSeatCommandTests.fs" />
         <Compile Include="CohortVetoDelegationTests.fs" />
         <Compile Include="CohortVetoDelegationToolTests.fs" />
         <Compile Include="CohortLandingGitAcceptanceTests.fs" />

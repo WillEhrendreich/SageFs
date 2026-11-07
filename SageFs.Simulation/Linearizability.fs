@@ -92,6 +92,8 @@ module Linearizability =
     /// matters, as for `DuplicateJoin`.
     | DelegateTargetAbsent
     | DelegateToSelf
+    | SeatTargetAbsent
+    | ConductorSeatTaken
     | VetoRefused
     | InvalidVetoReason
     | LandingAlreadyVetoed
@@ -118,6 +120,8 @@ module Linearizability =
     | CohortError.WrongCohortScope _ -> ErrorKind.WrongCohortScope
     | CohortError.DelegateTargetAbsent _ -> ErrorKind.DelegateTargetAbsent
     | CohortError.DelegateToSelf _ -> ErrorKind.DelegateToSelf
+    | CohortError.SeatTargetAbsent _ -> ErrorKind.SeatTargetAbsent
+    | CohortError.ConductorSeatTaken _ -> ErrorKind.ConductorSeatTaken
     | CohortError.VetoRefused _ -> ErrorKind.VetoRefused
     | CohortError.InvalidVetoReason _ -> ErrorKind.InvalidVetoReason
     | CohortError.LandingAlreadyVetoed _ -> ErrorKind.LandingAlreadyVetoed

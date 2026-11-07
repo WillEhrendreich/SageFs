@@ -9,6 +9,15 @@ open SageFs
 /// bounded by `CohortBoundedView` with an explicit "+N more" line.
 module CohortStatusText =
 
+  /// The command a person types to fill an empty conductor seat. One home for the words, because the status text, the
+  /// dashboard panel, the refusals and the docs all send a reader to it.
+  [<Literal>]
+  let seatCommandText = "sagefs cohort seat"
+
+  /// What to do about an empty conductor seat, in one sentence. No MCP tool and no token can fill it, so the answer is a person.
+  let vacantSeatAdvice : string =
+    sprintf "A person fills it: run '%s <member id>' on the machine that runs the daemon (with no member id it lists who is present)." seatCommandText
+
   /// A DURATION, in the minutes a lease is reasoned about in: "27m", "1h03m".
   /// `hh\:mm` wall-clock stamps and bare second counts are both the wrong unit
   /// for "how long have I got" — a reader has to subtract one from the other by
@@ -99,8 +108,8 @@ module CohortStatusText =
       match frame.Conductor with
       | Cohort.ConductorBinding.Bound who -> MemberTable.MemberId.display who
       | Cohort.ConductorBinding.Vacant(former, since, why) ->
-        sprintf "(VACANT since %s — %s held it and left; nobody holds conductor authority)"
-          (since.ToString "u") (MemberTable.MemberId.display former)
+        sprintf "(VACANT since %s — %s held it and left; nobody holds conductor authority. %s)"
+          (since.ToString "u") (MemberTable.MemberId.display former) vacantSeatAdvice
       | Cohort.ConductorBinding.NeverBound -> "(none yet — no member has ever joined this cohort)"
     // The clock every lease stamp on this page is measured against: read once,
     // at render, so all the rows on one page agree with each other.

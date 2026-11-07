@@ -616,6 +616,13 @@ module Cohort =
     /// "delegate conductor to member X rebinds it"). Gated the same way as
     /// `ReassignClaim`.
     | DelegateConductor of by: 'm * toMember: 'm * scope: CohortScope
+    /// A PERSON fills an empty conductor seat. There is no `by`: the pure machine cannot tell who is asking, so the
+    /// authority is the one place that builds this command, the daemon's operator route (`POST /api/cohort/seat`,
+    /// which checks the operator credential before it constructs anything). No MCP tool builds it and no member
+    /// token reaches it, which is why an agent cannot take the seat. Valid only when the seat is `Vacant` or
+    /// `NeverBound`, and only for a member who is `Present` (the `Bound` invariant). A seat that is bound is
+    /// refused: moving it is `DelegateConductor`, by the conductor.
+    | SeatConductor of toMember: 'm * scope: CohortScope
     /// The member's own watcher observed a save; warn (never block — a claim
     /// cannot stop an edit, §5.1) if it landed inside someone else's claim.
     | ObserveSave of who: 'm * path: string * scope: CohortScope
@@ -685,6 +692,10 @@ module Cohort =
     | ConductorBound of 'm
     /// The `Conductor` binding moved from one Present member to another.
     | ConductorDelegated of from: 'm * to': 'm
+    /// A person seated `seated` in an empty seat (`SeatConductor`). `ended` is the vacancy this ended, verbatim:
+    /// `Vacant(former, since, why)` names who held the seat, since when and why it emptied, `NeverBound` says no
+    /// conductor had ever sat. The ledger keeps what the cohort looked like when a person stepped in.
+    | ConductorSeated of seated: 'm * ended: ConductorBinding<'m>
     | ClaimAcquired of ClaimId * ClaimScope * holder: 'm * fence: int64<fence>
     | ClaimReleased of ClaimId * by: 'm * fence: int64<fence>
     | ClaimOrphaned of ClaimId * previousHolder: 'm * fence: int64<fence>
@@ -776,6 +787,12 @@ module Cohort =
     /// `DelegateConductor` named the sitting conductor: the seat would not move, and a handoff that hands
     /// nothing is not recorded.
     | DelegateToSelf of 'm
+    /// `SeatConductor` named a member who is not present, so the seat would have gone to nobody. Carries the roster
+    /// of members who ARE present, so the person can pick one of them.
+    | SeatTargetAbsent of target: 'm * present: 'm list
+    /// `SeatConductor` found the seat already held by `sitting`. A person fills an EMPTY seat; moving a held one is
+    /// the conductor's `DelegateConductor`.
+    | ConductorSeatTaken of sitting: 'm
     /// A veto from a caller who may not veto: a seat-less caller, or an observer. Carries the rule it broke.
     | VetoRefused of by: 'm * VetoRefusal
     /// A veto names a reason, and the reason it was given is blank or longer than a statement may be.
@@ -817,6 +834,7 @@ module Cohort =
     | CohortCommand.ReleaseClaim(_, _, _, scope)
     | CohortCommand.ReassignClaim(_, _, _, scope)
     | CohortCommand.DelegateConductor(_, _, scope)
+    | CohortCommand.SeatConductor(_, scope)
     | CohortCommand.ObserveSave(_, _, scope)
     | CohortCommand.RequestLanding(_, _, _, _, scope)
     | CohortCommand.RebaseCompleted(_, _, scope)
@@ -1370,6 +1388,12 @@ module Cohort =
       // Authority (Member, Anonymous) is refused; an empty seat is
       // `ConductorVacant`.
       | _ -> Error(refuseConductorOnly clock by state)
+
+    | CohortCommand.SeatConductor(toMember, scope) ->
+      // STUB (red): refuses everything, so the tests that pin the rule fail for the right reason.
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () -> Error(CohortError.SeatTargetAbsent(toMember, []))
 
     | CohortCommand.ObserveSave(who, path, scope) ->
       match checkScope scope with

@@ -202,6 +202,7 @@
         <Compile Include="McpCapability.fs" />
         <Compile Include="McpMintRoute.fs" />
         <Compile Include="MemberMintCommand.fs" />
+        <Compile Include="CohortSeatCommand.fs" />
         <!-- The scratch-pad tool's body, out of Mcp.fs (the accretion hub whose line budget only goes down). -->
         <Compile Include="McpScratchPadViews.fs" />
         <Compile Include="McpTools.fs" />
