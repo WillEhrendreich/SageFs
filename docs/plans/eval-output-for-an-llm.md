@@ -70,7 +70,7 @@ Wire impact: `AppState.fs`, `EvalResultSummary.fs`, `SageFs.FsiHost/Program.fs`,
 
 ## Risks and dependencies
 
-- Print limits change what a human sees in the dashboard output. Hence the limits first, type-only echo only on evidence.
+- Print limits change what a human sees in the dashboard output. So the limits come first, and the type-only echo waits for evidence.
 - Two creation sites must agree. Test 3 is the guard.
 - Depends on nothing. The cost line (`eval-cost-line`) appends after the shaped output.
 
