@@ -1237,15 +1237,29 @@ let destructiveTools : Set<ToolName> =
 /// published on `tools/list` so a client KNOWS what it is holding, and for that
 /// the answer should be wide, because a client deciding whether to prompt wants
 /// the full picture. This table is behavioral: asking here costs a human a
-/// click on every call, so the bar is narrower. A tool is in it when it throws
-/// away REPL or local state that cannot be got back from inside SageFs.
+/// click on every call, so the bar is narrow. A tool is in it only when it is
+/// rare, nobody calls it as a step of the everyday loop, and the loss cannot be
+/// got back from inside SageFs.
 ///
 /// The tier is DERIVED from this table rather than listed beside it, on
 /// purpose: a tool cannot join the confirm tier without saying what it costs,
 /// so a prompt can never decay into a bare "allow this?".
 ///
+/// IN: `manage_local_data`, which clears the local stores SageFs keeps on this
+/// machine. Those belong to no session, and an agent has no reason to call it
+/// in the middle of a task.
+///
 /// Deliberately OUT, and the reasons are the design:
 ///
+///   * `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`,
+///     `switch_workflow` and `stop_app` are normal steps of everyday MCP use.
+///     An agent starts a session, works in it, resets it and stops it, and the
+///     stdio bridge makes a new connection per call, so a prompt here asked
+///     nearly every time and cost an agent a timeout. A prompt on a routine
+///     step trains people to click through. They stay in `destructiveTools`,
+///     so a client that wants its own prompt still reads the hint. The refusal
+///     that stops a connection stopping a session another connection made
+///     (`SessionOwnership`) is a different mechanism and stays.
 ///   * `tidy_workspace` deletes, but it already demands `confirm=true` AND the
 ///     plan id from `get_workspace_hygiene`. Asking again would confirm one
 ///     action twice.
@@ -1266,11 +1280,6 @@ let destructiveTools : Set<ToolName> =
 ///     the one command a person reaches for most is how a prompt gets clicked
 ///     without being read.
 ///
-/// IN, because the loss is permanent from the user's side: `stop_session`,
-/// `reset_fsi_session`, `hard_reset_fsi_session` and `switch_workflow` (the
-/// REPL's definitions), `manage_local_data` (the local stores) and `stop_app`
-/// (the running app's state).
-///
 /// No client is ever blocked for BEING a client: a host that never advertised
 /// elicitation support is skipped, and the four gates ahead of this one still
 /// decide everything they decided before. Declining, though, is a refusal.
@@ -1279,35 +1288,7 @@ let destructiveTools : Set<ToolName> =
 /// registered set.
 let confirmationLosses : Map<ToolName, string> =
   Map.ofList
-    [ ToolName.StopSession, "the REPL definitions loaded in this session"
-      ToolName.ResetFsiSession, "the REPL definitions loaded in this session"
-      ToolName.HardResetFsiSession, "the REPL definitions loaded in this session, plus a rebuild of the project"
-      ToolName.SwitchWorkflow, "the REPL definitions loaded in this session, which resets when the workflow changes"
-      ToolName.ManageLocalData, "the local stores SageFs keeps on this machine"
-      ToolName.StopApp, "the running app's state, held in memory" ]
-
-/// The confirm-tier tools whose loss stays inside the ONE session the call acts on, so that a session the
-/// caller created itself, and nobody else has worked in, can skip the prompt (`ConfirmationPolicy.decide`,
-/// #176). A subset of `confirmationLosses`, and judged tool by tool:
-///
-///   * `stop_session` IN: it ends the one session whose id the call names.
-///   * `reset_fsi_session` IN: it clears the REPL of the one session the call routes to.
-///   * `hard_reset_fsi_session` IN: the same session, rebuilt; the session id is kept.
-///   * `switch_workflow` IN: the daemon restarts THIS session id into the other workflow, so the only thing
-///     lost is the REPL of one session.
-///   * `stop_app` OUT: it stops the app of one session, but people may be using that app from outside
-///     SageFs (a browser on its port, a game window), and neither the occupancy table nor the record of who
-///     ran code can see them.
-///   * `manage_local_data` OUT: it clears stores on this machine, which belong to no session.
-///
-/// Every tool outside the confirm tier is out by definition: it never asks. A new confirm-tier tool is out
-/// until someone writes it in here, so a tool added later keeps asking.
-let singleSessionConfirmTools : Set<ToolName> =
-  set
-    [ ToolName.StopSession
-      ToolName.ResetFsiSession
-      ToolName.HardResetFsiSession
-      ToolName.SwitchWorkflow ]
+    [ ToolName.ManageLocalData, "the local stores SageFs keeps on this machine" ]
 
 module AuthorityRefusal =
   /// One sentence: what was refused and by what rule.

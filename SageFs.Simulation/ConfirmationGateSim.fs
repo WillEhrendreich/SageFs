@@ -4,21 +4,19 @@ open System
 open SageFs
 open SageFs.Affordances
 open SageFs.ConfirmationPolicy
-open SageFs.MemberTable
 
-/// Deterministic Simulation Testing for the claim "a confirm-tier tool asks a person unless the caller created that
-/// very session itself and nobody else has run code in it, and then it asks nobody".
+/// Deterministic Simulation Testing for the claim "only manage_local_data asks a person; stop_session,
+/// reset_fsi_session, hard_reset_fsi_session, switch_workflow and stop_app never do, for any session".
 ///
 /// Three callers (two connections and one member token) and three sessions. Sessions are made by a caller or by a
 /// person, have code run in them by a caller or by a person at the dashboard, are stopped, and are forgotten by a
-/// daemon restart (the creator record and the record of who ran code live in memory). Callers then call confirm-tier
-/// tools on a session, and the question at each call is whether a person was asked.
+/// daemon restart (the creator record lives in memory). Callers then call tools on a session, and the question at
+/// each call is whether a person was asked. Who made the session and who ran code in it are the facts the old gate
+/// read to decide; the real decision reads none of them, and the twins that do read them are the bugs the invariants
+/// exist to catch.
 ///
-/// The decision under test is the REAL `ConfirmationPolicy.decide`, fed the way the gate feeds it: the creator is the
-/// recorded `MemberId` itself, the way `SessionOwners` holds it, and who ran code is the set of
-/// `EvalSource`s, the way `SessionEvaluators` holds it, never the sim's own tables. The truth is an independent
-/// bookkeeping that never calls `decide`: who made each session, who ran code in it, whether the daemon still
-/// remembers. Presence (another agent working in it now) is not modelled here; `ConfirmationPolicyTests` pins it.
+/// The decision under test is the REAL `ConfirmationPolicy.decide`. The truth is an independent bookkeeping that
+/// never calls it: which tool was called, and who made and worked in the session.
 ///
 /// Same rules as the other simulations: chaos is data (a `Scenario` is an op list, a seed replays it), and twins put
 /// back the bugs the invariants exist to catch.
@@ -36,12 +34,12 @@ module ConfirmationGateSim =
     | Stops of session: int
     /// The daemon restarts: sessions survive, the record of who made them does not.
     | Restarts
-    /// Caller `caller` calls confirm-tier tool number `tool` (an index into `tools`) on session `session`.
+    /// Caller `caller` calls tool number `tool` (an index into `tools`) on session `session`.
     | Calls of caller: int * tool: int * session: int
 
   type Scenario = { Seed: int; Ops: Op list }
 
-  /// The confirm tier as the sim exercises it: the four one-session tools and the two that are not.
+  /// The tools the sim exercises: the five that are normal steps of everyday use, then the one that asks.
   let tools : ToolName list =
     [ ToolName.StopSession
       ToolName.ResetFsiSession
@@ -53,10 +51,10 @@ module ConfirmationGateSim =
   /// One call's end.
   type Snapshot =
     { Op: Op
-      /// A person was asked (the real decision said `Required`). Only meaningful for `Calls`.
+      /// A person was asked (the decision said `Required`). Only meaningful for `Calls`.
       Asked: bool
-      /// Truth: the call acts on one session.
-      OneSessionTool: bool
+      /// Truth: the tool is `manage_local_data`.
+      IsLocalData: bool
       /// Truth: the session exists, the caller made it, and the daemon still remembers.
       CallerMadeItAndItIsRemembered: bool
       /// Truth: nobody but the caller has run code in the session.
@@ -79,105 +77,54 @@ module ConfirmationGateSim =
   type Policy =
     /// The real decision.
     | Real
-    /// TWIN: the confirmation is skipped for every session, whoever made it.
-    | SkipsEverySession
-    /// TWIN: a session with no creator on record is taken to be the caller's own.
-    | TreatsNoRecordAsOwn
-    /// TWIN: every confirm-tier tool is treated as acting on one session.
-    | TreatsEveryToolAsOneSession
-    /// TWIN: who ran code in the session is never read, so the creator alone decides.
-    | IgnoresWhoRanCode
-
-  /// Callers 1 and 2 are connections, 3 is a member token. The token outranks the connection, so it is a different
-  /// identity from both.
-  let identity (caller: int) : MemberId =
-    match caller with
-    | 1 -> MemberId.ofConnectionHandle "handle-one"
-    | 2 -> MemberId.ofConnectionHandle "handle-two"
-    | _ -> MemberId.Capability "fingerprint-three"
+    /// TWIN: nobody is asked about anything, `manage_local_data` included.
+    | SkipsEveryTool
+    /// TWIN: `manage_local_data` is spared when the caller made the session and nobody else ran code in it, the way
+    /// the old gate spared the session tools.
+    | SparesTheCreator
+    /// TWIN: the old gate. The five session tools ask unless the caller made the session and nobody else ran code in it.
+    | AsksAboutSessionTools
 
   let sessionName (session: int) : string = sprintf "sim-%d" session
 
   let toolOf (index: int) : ToolName = List.item (abs index % List.length tools) tools
 
-  /// Where code from runner `runner` comes from, as the daemon records it: a person at the dashboard, or a caller under
-  /// its bound identity.
-  let sourceOf (runner: int) : EvalSource =
-    match runner with
-    | 0 -> EvalSource.Dashboard
-    | caller -> EvalSource.Member (identity caller)
-
-  /// The decision, per policy. The twins differ from the real one only in what they feed it or what they ignore.
-  let asks (policy: Policy) (tool: ToolName) (session: int) (caller: int) (record: SessionCreator) (ranCode: Set<EvalSource>) : bool =
-    let target = TargetSession.Session (sessionName session)
-    let creator =
-      match record, policy with
-      | SessionCreator.Recorded _, _ -> record
-      | SessionCreator.Unrecorded, Policy.TreatsNoRecordAsOwn -> SessionCreator.Recorded (identity caller)
-      | SessionCreator.Unrecorded, _ -> SessionCreator.Unrecorded
-    let activity =
-      match policy with
-      | Policy.IgnoresWhoRanCode -> SessionActivity.quiet
-      | Policy.Real
-      | Policy.SkipsEverySession
-      | Policy.TreatsNoRecordAsOwn
-      | Policy.TreatsEveryToolAsOneSession -> { SessionActivity.quiet with RanCode = ranCode }
+  /// The decision, per policy. The twins differ from the real one only in what they read or ignore.
+  let asks (policy: Policy) (tool: ToolName) (ownAndAlone: bool) : bool =
     let asked (confirmation: Confirmation) =
       match confirmation with
       | Confirmation.Required _ -> true
-      | Confirmation.NotRequired _ -> false
+      | Confirmation.NotRequired -> false
     match policy with
-    | Policy.SkipsEverySession -> false
-    | Policy.TreatsEveryToolAsOneSession ->
-      ConfirmationPolicy.decide ToolName.StopSession target creator activity (identity caller) |> asked
-    | Policy.Real
-    | Policy.TreatsNoRecordAsOwn
-    | Policy.IgnoresWhoRanCode ->
-      ConfirmationPolicy.decide tool target creator activity (identity caller) |> asked
+    | Policy.Real -> ConfirmationPolicy.decide tool |> asked
+    | Policy.SkipsEveryTool -> false
+    | Policy.SparesTheCreator -> ConfirmationPolicy.decide tool |> asked && not ownAndAlone
+    | Policy.AsksAboutSessionTools -> (ConfirmationPolicy.decide tool |> asked) || not ownAndAlone
 
   let runWith (name: string) (policy: Policy) (scenario: Scenario) : Trace =
     let quietStep (op: Op) =
-      { Op = op; Asked = false; OneSessionTool = false; CallerMadeItAndItIsRemembered = false; NobodyElseRanCode = false }
-    // The daemon's records: session name to the identity the creating call was bound to, and session name to every
-    // source that ran code in it. Both live in memory, so a restart empties both and a stop drops the session's.
-    let step ((sessions: Map<int, Session>, records: Map<string, MemberId>, ranCode: Map<string, Set<EvalSource>>), acc) (op: Op) =
+      { Op = op; Asked = false; IsLocalData = false; CallerMadeItAndItIsRemembered = false; NobodyElseRanCode = false }
+    let step (sessions: Map<int, Session>, acc) (op: Op) =
       match op with
       | Op.Creates(caller, session) ->
         match Map.containsKey session sessions with
-        | true -> (sessions, records, ranCode), quietStep op :: acc
+        | true -> sessions, quietStep op :: acc
         | false ->
-          (Map.add session { Maker = Maker.Caller caller; Remembered = true; RanCodeBy = Set.empty } sessions,
-           Map.add (sessionName session) (identity caller) records,
-           ranCode),
-          quietStep op :: acc
+          Map.add session { Maker = Maker.Caller caller; Remembered = true; RanCodeBy = Set.empty } sessions, quietStep op :: acc
       | Op.PersonCreates session ->
         let next =
           match Map.containsKey session sessions with
           | true -> sessions
           | false -> Map.add session { Maker = Maker.Person; Remembered = false; RanCodeBy = Set.empty } sessions
-        (next, records, ranCode), quietStep op :: acc
+        next, quietStep op :: acc
       | Op.RunsCode(runner, session) ->
         match Map.tryFind session sessions with
-        | None -> (sessions, records, ranCode), quietStep op :: acc
-        | Some s ->
-          let name = sessionName session
-          let sources = ranCode |> Map.tryFind name |> Option.defaultValue Set.empty
-          (Map.add session { s with RanCodeBy = Set.add runner s.RanCodeBy } sessions,
-           records,
-           Map.add name (Set.add (sourceOf runner) sources) ranCode),
-          quietStep op :: acc
-      | Op.Stops session ->
-        (Map.remove session sessions, Map.remove (sessionName session) records, Map.remove (sessionName session) ranCode),
-        quietStep op :: acc
-      | Op.Restarts ->
-        (sessions |> Map.map (fun _ s -> { s with Remembered = false }), Map.empty, Map.empty),
-        quietStep op :: acc
+        | None -> sessions, quietStep op :: acc
+        | Some s -> Map.add session { s with RanCodeBy = Set.add runner s.RanCodeBy } sessions, quietStep op :: acc
+      | Op.Stops session -> Map.remove session sessions, quietStep op :: acc
+      | Op.Restarts -> sessions |> Map.map (fun _ s -> { s with Remembered = false }), quietStep op :: acc
       | Op.Calls(caller, toolIndex, session) ->
         let tool = toolOf toolIndex
-        let record =
-          match Map.tryFind (sessionName session) records with
-          | Some maker -> SessionCreator.Recorded maker
-          | None -> SessionCreator.Unrecorded
         let truthOwn =
           match Map.tryFind session sessions with
           | Some { Maker = Maker.Caller maker; Remembered = true } -> maker = caller
@@ -187,30 +134,27 @@ module ConfirmationGateSim =
           match Map.tryFind session sessions with
           | Some s -> Set.isSubset s.RanCodeBy (Set.singleton caller)
           | None -> false
-        (sessions, records, ranCode),
+        sessions,
         { Op = op
-          Asked = asks policy tool session caller record (ranCode |> Map.tryFind (sessionName session) |> Option.defaultValue Set.empty)
-          OneSessionTool = Set.contains tool singleSessionConfirmTools
+          Asked = asks policy tool (truthOwn && truthAlone)
+          IsLocalData = (tool = ToolName.ManageLocalData)
           CallerMadeItAndItIsRemembered = truthOwn
           NobodyElseRanCode = truthAlone } :: acc
-    let _, snapshots = scenario.Ops |> List.fold step ((Map.empty, Map.empty, Map.empty), [])
+    let _, snapshots = scenario.Ops |> List.fold step (Map.empty, [])
     { Scenario = scenario; Snapshots = List.rev snapshots; Reducer = name }
 
   /// The real decision.
   let run (scenario: Scenario) : Trace = runWith "real (ConfirmationPolicy.decide)" Policy.Real scenario
 
-  /// TWIN: the confirmation is skipped for every session.
-  let runSkipsEverySession (scenario: Scenario) : Trace = runWith "twin-skips-every-session" Policy.SkipsEverySession scenario
+  /// TWIN: nobody is asked about anything.
+  let runSkipsEveryTool (scenario: Scenario) : Trace = runWith "twin-skips-every-tool" Policy.SkipsEveryTool scenario
 
-  /// TWIN: a session nobody recorded is taken as the caller's own.
-  let runTreatsNoRecordAsOwn (scenario: Scenario) : Trace = runWith "twin-treats-no-record-as-own" Policy.TreatsNoRecordAsOwn scenario
+  /// TWIN: manage_local_data is spared for the creator of a session nobody else worked in.
+  let runSparesTheCreator (scenario: Scenario) : Trace = runWith "twin-spares-the-creator" Policy.SparesTheCreator scenario
 
-  /// TWIN: every confirm-tier tool is treated as a one-session tool.
-  let runTreatsEveryToolAsOneSession (scenario: Scenario) : Trace =
-    runWith "twin-treats-every-tool-as-one-session" Policy.TreatsEveryToolAsOneSession scenario
-
-  /// TWIN: who ran code in the session is ignored, so a session someone else worked in is spared.
-  let runIgnoresWhoRanCode (scenario: Scenario) : Trace = runWith "twin-ignores-who-ran-code" Policy.IgnoresWhoRanCode scenario
+  /// TWIN: the old gate, which asks about the session tools unless the caller made the session and worked in it alone.
+  let runAsksAboutSessionTools (scenario: Scenario) : Trace =
+    runWith "twin-asks-about-session-tools" Policy.AsksAboutSessionTools scenario
 
 /// Named invariants over a `ConfirmationGateSim.Trace`.
 module ConfirmationGateInvariants =
@@ -238,9 +182,6 @@ module ConfirmationGateInvariants =
       | Op.Stops _
       | Op.Restarts -> false)
 
-  /// Truth: the one case where nobody should be asked.
-  let ownAndAlone (s: Snapshot) : bool = s.OneSessionTool && s.CallerMadeItAndItIsRemembered && s.NobodyElseRanCode
-
   let firstViolation (t: Trace) (violates: int -> Snapshot -> string option) : Outcome =
     calls t
     |> List.tryPick (fun (i, s) -> violates i s)
@@ -248,40 +189,34 @@ module ConfirmationGateInvariants =
        | Some message -> Outcome.Violated(sprintf "%s (seed=%d, ops=%A)" message t.Scenario.Seed t.Scenario.Ops)
        | None -> Outcome.Holds
 
-  /// nobody-is-spared-a-session-they-did-not-make: if no person was asked, the tool acts on one session and the caller
-  /// made that session and the daemon still remembers.
-  let nobodyIsSparedASessionTheyDidNotMake : Invariant =
-    { Id = "nobody-is-spared-a-session-they-did-not-make"
-      Description = "A call that asked nobody is a one-session tool on a session the caller made and the daemon still remembers."
+  /// normal-workflow-tools-never-ask: a call to one of the five everyday tools asks nobody, whatever the session's
+  /// maker, its record, or who has run code in it.
+  let normalWorkflowToolsNeverAsk : Invariant =
+    { Id = "normal-workflow-tools-never-ask"
+      Description = "A call to stop_session, reset_fsi_session, hard_reset_fsi_session, switch_workflow or stop_app asks nobody."
       Check = fun t ->
         firstViolation t (fun i s ->
-          match s.Asked || (s.OneSessionTool && s.CallerMadeItAndItIsRemembered) with
+          match s.IsLocalData || not s.Asked with
           | true -> None
-          | false -> Some(sprintf "op #%d (%A) asked nobody, but the caller did not make a remembered session with a one-session tool" i s.Op)) }
+          | false -> Some(sprintf "op #%d (%A) asked a person about an everyday tool" i s.Op)) }
 
-  /// nobody-is-spared-a-session-someone-else-worked-in: if no person was asked, nobody but the caller ran code there.
-  let nobodyIsSparedASessionSomeoneElseWorkedIn : Invariant =
-    { Id = "nobody-is-spared-a-session-someone-else-worked-in"
-      Description = "A call that asked nobody is on a session nobody but the caller has run code in."
+  /// local-data-always-asks: a call to manage_local_data asks a person, even on a session its caller made and alone
+  /// worked in, because it clears stores that belong to no session.
+  let localDataAlwaysAsks : Invariant =
+    { Id = "local-data-always-asks"
+      Description = "A call to manage_local_data asks a person every time."
       Check = fun t ->
         firstViolation t (fun i s ->
-          match s.Asked || s.NobodyElseRanCode with
+          match not s.IsLocalData || s.Asked with
           | true -> None
-          | false -> Some(sprintf "op #%d (%A) asked nobody, but someone else had run code in the session" i s.Op)) }
+          | false ->
+            Some(
+              sprintf
+                "op #%d (%A) asked nobody about manage_local_data (caller made the session: %b, nobody else ran code: %b)"
+                i s.Op s.CallerMadeItAndItIsRemembered s.NobodyElseRanCode
+            )) }
 
-  /// asks-exactly-when-the-truth-says: a call asks a person unless it is the one case, so the rule is not an always-ask.
-  let asksExactlyWhenTheTruthSays : Invariant =
-    { Id = "asks-exactly-when-the-truth-says"
-      Description = "A call asks a person exactly when it is not a one-session tool on a remembered session its caller made and alone ran code in."
-      Check = fun t ->
-        firstViolation t (fun i s ->
-          let shouldAsk = not (ownAndAlone s)
-          match s.Asked = shouldAsk with
-          | true -> None
-          | false -> Some(sprintf "op #%d (%A) asked=%b but the truth is %b" i s.Op s.Asked shouldAsk)) }
-
-  let all : Invariant list =
-    [ nobodyIsSparedASessionTheyDidNotMake; nobodyIsSparedASessionSomeoneElseWorkedIn; asksExactlyWhenTheTruthSays ]
+  let all : Invariant list = [ normalWorkflowToolsNeverAsk; localDataAlwaysAsks ]
 
   /// The invariants that failed for a trace, if any (id, message).
   let violations (t: Trace) : (string * string) list =
@@ -309,42 +244,41 @@ module ConfirmationGateGenerators =
           | _ -> Op.Calls(rnd.Next(1, 4), rnd.Next(0, 6), rnd.Next(1, 4)) ]
     { Seed = seed; Ops = ops }
 
-  /// Caller 1 makes session 1 and resets it: nobody is asked.
+  /// Caller `caller` calls every tool in `tools`, in order, on `session`.
+  let private callsEveryTool (caller: int) (session: int) : Op list =
+    [ for tool in 0 .. List.length tools - 1 -> Op.Calls(caller, tool, session) ]
+
+  /// What a call to each tool, in `tools` order, should ask: the five everyday tools nobody, manage_local_data a person.
+  let expectedAsks : bool list = tools |> List.map (fun tool -> tool = ToolName.ManageLocalData)
+
+  /// Caller 1 makes session 1 and calls every tool on it.
   let ownSession : Scenario =
-    { Seed = 900; Ops = [ Op.Creates(1, 1); Op.Calls(1, 2, 1) ] }
+    { Seed = 900; Ops = Op.Creates(1, 1) :: callsEveryTool 1 1 }
 
-  /// Caller 2 resets the session caller 1 made.
+  /// Caller 1 makes session 1, caller 2 calls every tool on it.
   let someoneElsesSession : Scenario =
-    { Seed = 901; Ops = [ Op.Creates(1, 1); Op.Calls(2, 2, 1) ] }
+    { Seed = 901; Ops = Op.Creates(1, 1) :: callsEveryTool 2 1 }
 
-  /// A person made session 1, and caller 1 stops it.
+  /// A person makes session 1, caller 1 calls every tool on it.
   let aPersonsSession : Scenario =
-    { Seed = 902; Ops = [ Op.PersonCreates 1; Op.Calls(1, 0, 1) ] }
+    { Seed = 902; Ops = Op.PersonCreates 1 :: callsEveryTool 1 1 }
 
-  /// Caller 1 made session 1, the daemon restarted, and caller 1 resets it: the daemon forgot, so a person is asked.
+  /// Caller 1 makes session 1, the daemon restarts and forgets who made it, caller 1 calls every tool on it.
   let afterARestart : Scenario =
-    { Seed = 903; Ops = [ Op.Creates(1, 1); Op.Restarts; Op.Calls(1, 2, 1) ] }
+    { Seed = 903; Ops = [ Op.Creates(1, 1); Op.Restarts ] @ callsEveryTool 1 1 }
 
-  /// Caller 3 (a token) made session 1 and clears local data: that tool is not about one session.
-  let localDataIsNeverSpared : Scenario =
-    { Seed = 904; Ops = [ Op.Creates(3, 1); Op.Calls(3, 5, 1) ] }
-
-  /// Caller 1 made session 1 and stops its app: the app may have users SageFs cannot see.
-  let stopAppIsNeverSpared : Scenario =
-    { Seed = 905; Ops = [ Op.Creates(1, 1); Op.Calls(1, 4, 1) ] }
-
-  /// Caller 1 made session 1 and ran code in it, then resets it: still nobody else's work, so nobody is asked.
-  let ownCodeOnly : Scenario =
-    { Seed = 906; Ops = [ Op.Creates(1, 1); Op.RunsCode(1, 1); Op.Calls(1, 2, 1) ] }
-
-  /// Caller 1 made session 1, a person ran code in it from the dashboard, and caller 1 resets it: a person is asked.
+  /// Caller 1 makes session 1, a person runs code in it at the dashboard, caller 1 calls every tool on it.
   let aPersonRanCodeInIt : Scenario =
-    { Seed = 907; Ops = [ Op.Creates(1, 1); Op.RunsCode(0, 1); Op.Calls(1, 2, 1) ] }
+    { Seed = 904; Ops = [ Op.Creates(1, 1); Op.RunsCode(0, 1) ] @ callsEveryTool 1 1 }
 
-  /// Caller 1 made session 1, caller 2 ran code in it, and caller 1 stops it: a person is asked.
+  /// Caller 1 makes session 1, caller 2 runs code in it, caller 1 calls every tool on it.
   let anotherCallerRanCodeInIt : Scenario =
-    { Seed = 908; Ops = [ Op.Creates(1, 1); Op.RunsCode(2, 1); Op.Calls(1, 0, 1) ] }
+    { Seed = 905; Ops = [ Op.Creates(1, 1); Op.RunsCode(2, 1) ] @ callsEveryTool 1 1 }
 
-  /// The session is stopped and made again: who ran code in the old one does not follow it.
-  let aStoppedSessionForgetsWhoRanCode : Scenario =
-    { Seed = 909; Ops = [ Op.Creates(1, 1); Op.RunsCode(0, 1); Op.Stops 1; Op.Creates(1, 1); Op.Calls(1, 2, 1) ] }
+  /// Caller 3 (a token) makes session 1, runs code in it, and calls every tool on it: the one case the old gate spared.
+  let ownCodeOnly : Scenario =
+    { Seed = 906; Ops = [ Op.Creates(3, 1); Op.RunsCode(3, 1) ] @ callsEveryTool 3 1 }
+
+  /// Calls on a session that was never made, or was stopped.
+  let noSuchSession : Scenario =
+    { Seed = 907; Ops = [ Op.Creates(1, 1); Op.Stops 1 ] @ callsEveryTool 1 1 }

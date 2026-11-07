@@ -122,7 +122,7 @@ module McpTools =
   let resolvedKey (agentName: string) : string =
     MemberTable.MemberId.display (memberIdFor agentName)
 
-  /// Whose a session is to stop, from the creator record (`SessionOwners`, in SessionStakeholders.fs).
+  /// Whose a session is to stop, from the creator record (`SessionOwners`, in SessionOwners.fs).
   let sessionOwnership sessionId : ConfirmationPolicy.SessionOwnership =
     ConfirmationPolicy.SessionOwnership.decide
       (Option.isSome currentTransportSessionId.Value) (SessionOwners.ownerOf sessionId) (memberIdFor "mcp")
@@ -1157,7 +1157,6 @@ module McpTools =
           // the MemberId case itself, never by re-classifying the resolved
           // key's text (Phase 0 item 4 of sagefs-multiagent-vision.md §10).
           AgentActivityTracker.recordMemberActivity ctx.ActivityTracker (memberIdFor agentName) sid filePath intent DateTime.UtcNow
-          SessionEvaluators.record sid (ConfirmationPolicy.EvalSource.Member(memberIdFor agentName))
 
           let evalSw = System.Diagnostics.Stopwatch.StartNew()
           let mutable allOutputs = []

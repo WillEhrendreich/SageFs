@@ -4428,7 +4428,6 @@ let run
   let dashboardActions : DashboardActions = {
     EvalCode = fun sid code -> task {
       let sidStr = WorkerProtocol.SessionId.value sid
-      SessionEvaluators.record sidStr ConfirmationPolicy.EvalSource.Dashboard
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
       match result with
       | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _metadata)) ->

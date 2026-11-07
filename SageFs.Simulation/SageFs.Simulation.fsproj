@@ -164,9 +164,9 @@
         <Compile Include="BuildConfirmationInvariants.fs" />
         <Compile Include="BuildConfirmationGenerators.fs" />
         <!-- Confirmation gate DST: folds the real ConfirmationPolicy.decide through sessions made by a connection, a token
-             or a person, stops, daemon restarts that forget who made what, and calls on every confirm-tier tool; twins
-             skip the confirmation for every session, take an unrecorded session as the caller's own and treat every
-             tool as acting on one session. -->
+             or a person, stops, daemon restarts that forget who made what, and calls on the five everyday tools and on
+             manage_local_data; twins skip every tool, spare the creator on manage_local_data, and bring back the old
+             gate that asked about the session tools. -->
         <Compile Include="ConfirmationGateSim.fs" />
         <Compile Include="TweakerVersusProgramSim.fs" />
         <!-- Ready-wait DST: folds the real ReadyWait decisions (plan, ofSession, ofRebuildEnd) through callers

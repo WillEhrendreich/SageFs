@@ -84,10 +84,8 @@
         <Compile Include="LiveTestViewReads.fs" />
         <Compile Include="DependencyGraphRoute.fs" />
         <Compile Include="LiveCheckRelay.fs" />
-        <!-- SessionStakeholders before SageFsEffectHandler: every way in that runs code records itself into it (the
-             TUI's eval here, then Mcp.fs and DaemonMode.fs), Mcp.fs records who created each session, and McpServer
-             reads both. -->
-        <Compile Include="SessionStakeholders.fs" />
+        <!-- SessionOwners: Mcp.fs records who created each session, and `stop_session` refuses another connection's. -->
+        <Compile Include="SessionOwners.fs" />
         <Compile Include="SageFsEffectHandler.fs" />
         <Compile Include="SageFsSseDedup.fs" />
         <Compile Include="SageFsDispatchReduction.fs" />

@@ -512,6 +512,23 @@ let confirmationTierTests =
       |> List.filter (fun name -> not (Set.contains name registered))
       |> Expect.equal "every confirm-tier tool is a registered tool" []
 
+    testCase "WHY — only manage_local_data is in the confirm tier, so no tool an agent calls as a normal step of its loop can ask"
+    <| fun _ ->
+      SageFs.Affordances.confirmationLosses
+      |> Map.toList
+      |> List.map (fst >> SageFs.Affordances.ToolName.toString)
+      |> Expect.equal "the whole confirm tier" [ "manage_local_data" ]
+
+    testCase "WHY — the everyday session tools stay destructive on tools/list but outside the confirm tier, so the hint informs and nothing prompts"
+    <| fun _ ->
+      [ "stop_session"; "reset_fsi_session"; "hard_reset_fsi_session"; "switch_workflow"; "stop_app" ]
+      |> List.choose SageFs.Affordances.ToolName.tryParse
+      |> List.filter (fun tool ->
+        not (Set.contains tool SageFs.Affordances.destructiveTools)
+        || Map.containsKey tool SageFs.Affordances.confirmationLosses)
+      |> List.map SageFs.Affordances.ToolName.toString
+      |> Expect.equal "each is destructive and none is confirmed" []
+
     testCase "WHY — the tools an editor scrubs and an orchestrator drives every run are left out, or a knob and a landing would each need a human click"
     <| fun _ ->
       let tier = SageFs.Affordances.confirmationLosses |> Map.toList |> List.map fst |> Set.ofList
@@ -530,20 +547,20 @@ let confirmationTierTests =
 
     testCase "WHY — a prompt names the tool and what it costs, so the person decides on the loss and not on a string they have to decode"
     <| fun _ ->
-      let loss = SageFs.Affordances.confirmationLosses |> Map.find SageFs.Affordances.ToolName.HardResetFsiSession
-      let text = SageFs.Server.McpServer.confirmationMessage "hard_reset_fsi_session" loss
-      text |> Expect.stringContains "names the tool" "hard_reset_fsi_session"
-      text |> Expect.stringContains "says what is lost" "REPL definitions"
+      let loss = SageFs.Affordances.confirmationLosses |> Map.find SageFs.Affordances.ToolName.ManageLocalData
+      let text = SageFs.Server.McpServer.confirmationMessage "manage_local_data" loss
+      text |> Expect.stringContains "names the tool" "manage_local_data"
+      text |> Expect.stringContains "says what is lost" "local stores"
 
     testCase "WHY — an accepted prompt runs the call and a declined one does not, so the prompt cannot be decorative"
     <| fun _ ->
       let accepted = ModelContextProtocol.Protocol.ElicitResult(Action = "accept")
       let declined = ModelContextProtocol.Protocol.ElicitResult(Action = "decline")
-      SageFs.Server.McpServer.confirmationVerdict "stop_session" accepted
+      SageFs.Server.McpServer.confirmationVerdict "manage_local_data" accepted
       |> Expect.isOk "an accepted confirmation lets the call run"
-      match SageFs.Server.McpServer.confirmationVerdict "stop_session" declined with
+      match SageFs.Server.McpServer.confirmationVerdict "manage_local_data" declined with
       | Ok() -> failtest "a declined confirmation must refuse the call"
-      | Result.Error message -> message |> Expect.stringContains "the refusal names the tool" "stop_session"
+      | Result.Error message -> message |> Expect.stringContains "the refusal names the tool" "manage_local_data"
 
     testCase "WHY — an ordinary tool is never asked about, so the tools outside the tier are untouched by any prompt"
     <| fun _ ->
@@ -558,17 +575,17 @@ let confirmationTierTests =
     <| fun _ ->
       let canAsk =
         ModelContextProtocol.Protocol.ClientCapabilities(Elicitation = ModelContextProtocol.Protocol.ElicitationCapability())
-      match SageFs.Server.McpServer.confirmationStep canAsk "hard_reset_fsi_session" with
+      match SageFs.Server.McpServer.confirmationStep canAsk "manage_local_data" with
       | SageFs.Server.McpServer.NotInTier -> failtest "a confirm-tier tool must be treated as needing a prompt"
       | SageFs.Server.McpServer.ClientCannotAsk -> failtest "this client can answer, so it must not be skipped"
       | SageFs.Server.McpServer.Ask(tool, loss) ->
-        tool |> Expect.equal "the prompt names the tool" "hard_reset_fsi_session"
-        loss |> Expect.stringContains "and carries what is lost" "REPL definitions"
+        tool |> Expect.equal "the prompt names the tool" "manage_local_data"
+        loss |> Expect.stringContains "and carries what is lost" "local stores"
 
     testCase "WHY — a tier tool on a client with nowhere to ask is skipped rather than refused, or every host without elicitation would lose its tools"
     <| fun _ ->
       let cannotAsk = ModelContextProtocol.Protocol.ClientCapabilities()
-      SageFs.Server.McpServer.confirmationStep cannotAsk "stop_session"
+      SageFs.Server.McpServer.confirmationStep cannotAsk "manage_local_data"
       |> Expect.equal "an elicitation-less client skips the prompt" SageFs.Server.McpServer.ClientCannotAsk
   ]
 

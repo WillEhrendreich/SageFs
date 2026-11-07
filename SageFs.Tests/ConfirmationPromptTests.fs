@@ -1,4 +1,4 @@
-/// What a person sees and has to do when a confirm-tier tool (`stop_session`, `hard_reset_fsi_session`) asks. The
+/// What a person sees and has to do when a confirm-tier tool (`manage_local_data`) asks. The
 /// prompt used to carry one boolean field, `confirmed`, marked REQUIRED and not ticked. A form with a required field
 /// cannot be submitted until the field is set, so pressing Accept did nothing until the person found Space to tick
 /// the box first; and the server never read the box at all, only whether Accept was pressed. A person who "could
@@ -37,7 +37,7 @@ let tests =
 
     testTask "WHY - pressing Accept is enough, because the box is not required and starts ticked, so a form that cannot take an Accept never stands between a person and the call" {
       let ask, asked = recording accept
-      let! _ = confirmWithin TestTimeouts.confirmationBudget canAsk ask "stop_session" CancellationToken.None
+      let! _ = confirmWithin TestTimeouts.confirmationBudget canAsk ask "manage_local_data" CancellationToken.None
       match asked () with
       | None -> failtest "the client was never asked"
       | Some parameters ->
@@ -50,19 +50,19 @@ let tests =
 
     testTask "WHY - Accept with the box left alone runs the call, because Accept is the answer" {
       let ask, _ = recording accept
-      let! outcome = confirmWithin TestTimeouts.confirmationBudget canAsk ask "stop_session" CancellationToken.None
+      let! outcome = confirmWithin TestTimeouts.confirmationBudget canAsk ask "manage_local_data" CancellationToken.None
       outcome |> Expect.equal "accepted" (Ok())
     }
 
     testTask "WHY - Accept with the box ticked runs the call" {
       let ask, _ = recording (acceptWith true)
-      let! outcome = confirmWithin TestTimeouts.confirmationBudget canAsk ask "stop_session" CancellationToken.None
+      let! outcome = confirmWithin TestTimeouts.confirmationBudget canAsk ask "manage_local_data" CancellationToken.None
       outcome |> Expect.equal "accepted" (Ok())
     }
 
     testTask "WHY - Accept with the box deliberately unticked does NOT run the call, because a person who removed the tick did not say yes" {
       let ask, _ = recording (acceptWith false)
-      let! outcome = confirmWithin TestTimeouts.confirmationBudget canAsk ask "stop_session" CancellationToken.None
+      let! outcome = confirmWithin TestTimeouts.confirmationBudget canAsk ask "manage_local_data" CancellationToken.None
       outcome |> Expect.equal "refused as a decline, and nothing is done" (Result.Error Declined)
     }
   ]

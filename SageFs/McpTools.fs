@@ -1733,7 +1733,7 @@ USE CASE:
 
 ACTIONS:
 - status (default): row counts, bytes, oldest row per table, and the retention rules with the env vars that change them.
-- clear: delete the stored rows. store=friction clears the friction tables, store=cohort clears the cohort ledger (refused while a cohort is running), store=all (default) does both.
+- clear: delete the stored rows. store=friction clears the friction tables, store=cohort clears the cohort ledger (refused while a cohort is running), store=all (default) does both. Clearing is the one call in SageFs that asks the person at the client to confirm first, when the client can be asked.
 
 Retention runs on its own: friction keeps only the running version's rows, inside an age cap and a row cap; a finished cohort's ledger is cleared on daemon start once it's old enough.""")>]
     member _.manage_local_data(

@@ -9,7 +9,7 @@ open SageFs
 open SageFs.SessionManager
 open SageFs.WorkerProtocol
 
-// `OnSessionRemoved` is how the daemon drops what it keeps per session (`SessionOwners`, `SessionEvaluators`), so it has
+// `OnSessionRemoved` is how the daemon drops what it keeps per session (`SessionOwners`), so it has
 // to fire on every way a session leaves the registry. Each route that stops a session ends in one of these commands. The
 // real mailbox runs with a fake runtime whose stop returns at once. The hook runs once a command is done, so each case
 // asks the loop one more thing first: the loop answers in order, so that answer means the hook has run.

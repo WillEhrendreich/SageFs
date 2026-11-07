@@ -308,7 +308,7 @@ let confirmationMessage (toolName: string) (loss: string) : string =
   sprintf "%s will take away %s. Allow it?" toolName loss
 
 /// Why a confirmation did not happen. Every case means the same thing for the call (it did not run, so NOTHING was
-/// done and the session is still running) and a different thing for the caller, who needs to know whether a person
+/// done and the local data is untouched) and a different thing for the caller, who needs to know whether a person
 /// said no, whether nobody was there to say anything, or whether the question never got out. They are cases and
 /// not one string built in a catch, so a test can tell silence from a decline without parsing a sentence.
 type ConfirmationRefusal =
@@ -325,25 +325,18 @@ type ConfirmationRefusal =
   | CouldNotBeAsked of reason: string
 
 module ConfirmationRefusal =
-  /// The daemon route that does the same job as a confirm-tier tool WITHOUT asking anyone. These are the real
-  /// alternatives for a caller that has no human to answer: the routes sit on the MCP port and skip the tool
+  /// The daemon route that does the same job as a confirm-tier tool WITHOUT asking anyone. This is the real
+  /// alternative for a caller that has no human to answer: the route sits on the MCP port and skips the tool
   /// filter that prompts. A tool outside the tier has none, because it is never asked about.
   let unattendedRoute (toolName: string) : string =
     match SageFs.Affordances.ToolName.tryParse toolName with
-    | Some SageFs.Affordances.ToolName.StopSession -> "POST /api/sessions/stop with {\"sessionId\": \"<id>\"}"
-    | Some SageFs.Affordances.ToolName.ResetFsiSession -> "POST /reset with {\"sessionId\": \"<id>\"}"
-    | Some SageFs.Affordances.ToolName.HardResetFsiSession ->
-      "POST /hard-reset with {\"sessionId\": \"<id>\", \"rebuild\": true}"
-    | Some SageFs.Affordances.ToolName.SwitchWorkflow ->
-      "POST /api/sessions/<id>/workflow with the target workflow in the body"
-    | Some SageFs.Affordances.ToolName.StopApp -> "POST /api/sessions/<id>/stop-app"
     | Some SageFs.Affordances.ToolName.ManageLocalData -> "POST /api/local-data/clear?store=<store>"
     | _ -> "the daemon's HTTP API, which does not ask"
 
   /// What was done, said first and the same for every case: the call did not run. The old text said "not
-  /// confirmed", which reads as a stop that failed; the session was in fact still running.
+  /// confirmed", which reads as an action that failed halfway; nothing had been attempted.
   let nothingDone (toolName: string) : string =
-    sprintf "Nothing was done: %s did not run, and the session is still running." toolName
+    sprintf "Nothing was done: %s did not run, and your local data is untouched." toolName
 
   /// The way out for a caller with no person to answer. There is no switch for the prompt, so it says so rather
   /// than leaving the caller to look for one; the routes are on the daemon's MCP port.
@@ -426,9 +419,9 @@ let confirmationStep (caps: ClientCapabilities) (toolName: string) : Confirmatio
   match SageFs.Affordances.ToolName.tryParse toolName with
   | None -> NotInTier
   | Some name ->
-    match SageFs.Affordances.confirmationLosses |> Map.tryFind name with
-    | None -> NotInTier
-    | Some loss ->
+    match SageFs.ConfirmationPolicy.decide name with
+    | SageFs.ConfirmationPolicy.Confirmation.NotRequired -> NotInTier
+    | SageFs.ConfirmationPolicy.Confirmation.Required loss ->
       if isNull caps || isNull caps.Elicitation then ClientCannotAsk else Ask(toolName, loss)
 
 /// Ask the person at the client before a confirm-tier tool runs, as a typed outcome.
@@ -482,126 +475,25 @@ let confirmWithin
       | ex when not (ex :? OperationCanceledException) -> return Result.Error(CouldNotBeAsked ex.Message)
   }
 
-/// The session a call acts on, as the gate already resolved it. A session that exists is the target in
-/// whatever state it is (a faulted session is the one a hard reset is for). `stop_session` is the one
-/// confirm-tier tool the gate does not resolve, so it is the id the call passed.
-let targetSessionOf (admission: SageFs.McpTools.GateAdmission) : SageFs.ConfirmationPolicy.TargetSession =
-  match admission.Resolution with
-  | SageFs.McpTools.GateResolution.Resolved resolution ->
-    match resolution with
-    | SageFs.McpSessionRouting.Routable sessionId
-    | SageFs.McpSessionRouting.WarmingUp(sessionId, _)
-    | SageFs.McpSessionRouting.Unroutable(sessionId, _)
-    | SageFs.McpSessionRouting.FaultedSession(sessionId, _) -> SageFs.ConfirmationPolicy.TargetSession.Session sessionId
-    | SageFs.McpSessionRouting.Gone _ -> SageFs.ConfirmationPolicy.TargetSession.NoSession
-  | SageFs.McpTools.GateResolution.NotResolved ->
-    match admission.SessionId with
-    | Some sessionId -> SageFs.ConfirmationPolicy.TargetSession.Session sessionId
-    | None -> SageFs.ConfirmationPolicy.TargetSession.NoSession
-
-/// Who the daemon recorded as the maker of a session: the same record `stop_session` already uses to refuse a
-/// session another bound connection created (`SessionOwners`, written when a connection creates one).
-/// The record holds the identity itself, so the lookup compares nothing but identities.
-let creatorOfSession (sessionId: string) : SageFs.ConfirmationPolicy.SessionCreator =
-  match SessionOwners.ownerOf sessionId with
-  | Some owner -> SageFs.ConfirmationPolicy.SessionCreator.Recorded owner
-  | None -> SageFs.ConfirmationPolicy.SessionCreator.Unrecorded
-
-/// Who else has been in a session, from the record of who ran code in it (`SessionEvaluators`) and the occupancy
-/// table. Presence is recorded per connection for its latest session alone, and a dashboard tab is an Observer even
-/// while it runs code, so who ran code decides it and presence only adds to that. Occupancy names a member by
-/// `MemberId.display`, so the caller is compared in that form. Sub-agents that share their parent's connection are the
-/// caller: identity is the connection, and a sub-agent that needs to be told apart presents its own member token.
-let activityOfSession
-  (mcpCtx: McpContext)
-  (caller: SageFs.MemberTable.MemberId)
-  (sessionId: string)
-  : SageFs.ConfirmationPolicy.SessionActivity =
-  { RanCode = SessionEvaluators.ofSession sessionId
-    Presence =
-      match
-        SessionOperations.SessionOccupancy.hasWorkerOtherThan
-          (SageFs.MemberTable.MemberId.display caller)
-          (occupantsForSession mcpCtx sessionId)
-      with
-      | true -> SageFs.ConfirmationPolicy.Presence.AnotherAgentIsIn
-      | false -> SageFs.ConfirmationPolicy.Presence.CallerOnly }
-
-/// Whether this call still has to ask a person: the pure `ConfirmationPolicy.decide`, fed from the gate's admission.
-/// Fails closed. Anything the gate did not resolve to a session, a tool outside the one-session set, a
-/// session with no creator on record and one someone else has been in all come out `Required`. `activityOf` is
-/// read only when every other fact says the session is the caller's own (`ConfirmationPolicy.readsActivity`),
-/// because every admitted call passes through here, evals included.
-let confirmationFor
-  (creatorOf: string -> SageFs.ConfirmationPolicy.SessionCreator)
-  (activityOf: string -> SageFs.ConfirmationPolicy.SessionActivity)
-  (caller: SageFs.MemberTable.MemberId)
-  (admission: SageFs.McpTools.GateAdmission)
-  (toolName: string)
-  : SageFs.ConfirmationPolicy.Confirmation =
-  match SageFs.Affordances.ToolName.tryParse toolName with
-  | None -> SageFs.ConfirmationPolicy.Confirmation.Required SageFs.ConfirmationPolicy.ConfirmationReason.ToolSpansMoreThanOneSession
-  | Some tool ->
-    let target = targetSessionOf admission
-    let creator =
-      match target with
-      | SageFs.ConfirmationPolicy.TargetSession.Session sessionId when not (String.IsNullOrWhiteSpace sessionId) -> creatorOf sessionId
-      | SageFs.ConfirmationPolicy.TargetSession.Session _
-      | SageFs.ConfirmationPolicy.TargetSession.NoSession -> SageFs.ConfirmationPolicy.SessionCreator.Unrecorded
-    let activity =
-      match target, SageFs.ConfirmationPolicy.readsActivity tool target creator caller with
-      | SageFs.ConfirmationPolicy.TargetSession.Session sessionId, true -> activityOf sessionId
-      | SageFs.ConfirmationPolicy.TargetSession.Session _, false
-      | SageFs.ConfirmationPolicy.TargetSession.NoSession, _ -> SageFs.ConfirmationPolicy.SessionActivity.quiet
-    SageFs.ConfirmationPolicy.decide tool target creator activity caller
-
-/// The confirmation step of the gate: a call on a session its caller created itself and nobody else has been in
-/// runs without any elicitation request, and every other call goes through `confirmWithin` exactly as before.
-let confirmCallWithin
-  (budget: TimeSpan)
-  (caps: ClientCapabilities)
-  (ask: ElicitRequestParams -> CancellationToken -> Task<ElicitResult>)
-  (creatorOf: string -> SageFs.ConfirmationPolicy.SessionCreator)
-  (activityOf: string -> SageFs.ConfirmationPolicy.SessionActivity)
-  (caller: SageFs.MemberTable.MemberId)
-  (admission: SageFs.McpTools.GateAdmission)
-  (toolName: string)
-  (ct: CancellationToken)
-  : Task<Result<unit, ConfirmationRefusal>> =
-  match confirmationFor creatorOf activityOf caller admission toolName with
-  | SageFs.ConfirmationPolicy.Confirmation.NotRequired _ -> Task.FromResult(Ok())
-  | SageFs.ConfirmationPolicy.Confirmation.Required _ -> confirmWithin budget caps ask toolName ct
-
-/// `confirmCallWithin` against the live client, for the identity this call is bound to (a member token if it
-/// presented one, else its connection), the daemon's own creator record, and who else has been in the session.
+/// The confirmation step of the gate, against the live client. Only a confirm-tier tool (`manage_local_data`) goes
+/// through `confirmWithin`; every other call is outside the tier and runs at once. Nothing about the session, who
+/// made it or who has run code in it is read: a person is asked about what a tool takes away, and none of the tools
+/// that act on one session ask.
 let confirmCall
-  (mcpCtx: McpContext)
   (server: ModelContextProtocol.Server.McpServer)
-  (admission: SageFs.McpTools.GateAdmission)
   (toolName: string)
   (ct: CancellationToken)
   : Task<Result<unit, string>> =
   task {
     let ask (parameters: ElicitRequestParams) (token: CancellationToken) =
       server.ElicitAsync(parameters, token).AsTask()
-    let caller = SageFs.McpTools.memberIdFor "mcp"
-    let! outcome =
-      confirmCallWithin
-        SageFs.Timeouts.confirmationAnswer
-        server.ClientCapabilities
-        ask
-        creatorOfSession
-        (activityOfSession mcpCtx caller)
-        caller
-        admission
-        toolName
-        ct
+    let! outcome = confirmWithin SageFs.Timeouts.confirmationAnswer server.ClientCapabilities ask toolName ct
     return outcome |> Result.mapError (ConfirmationRefusal.describe toolName)
   }
 
 /// The tools whose body reads a `session_id` argument. The gate reads one only from these: a client may send any
-/// argument with any call, and a `session_id` the body ignores would have the gate, and the prompt, judge a different
-/// session from the one the body acts on.
+/// argument with any call, and a `session_id` the body ignores would have the gate route to a different session from
+/// the one the body acts on.
 let toolsTakingSessionId : Set<string> =
   SageFs.Server.McpTools.RegisteredTools.takingParameter typeof<SageFs.Server.McpTools.SageFsTools> "session_id"
 
@@ -803,9 +695,9 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
                 // Confirmation sits AFTER the four gates and BEFORE the body:
                 // a caller that would be refused anyway never gets to prompt a
                 // human about it, and a decline stops the body exactly the way
-                // a gate rejection does. Who else has been in the session is
-                // read only for a call on the caller's own session.
-                let! confirmation = confirmCall mcpCtx ctx.Server admission requestName ct
+                // a gate rejection does. Only a confirm-tier tool asks, and
+                // that is `manage_local_data` alone.
+                let! confirmation = confirmCall ctx.Server requestName ct
                 match confirmation with
                 | Result.Error confirmError -> return buildGateErrorResult requestName confirmError
                 | Ok () ->
