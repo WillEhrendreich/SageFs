@@ -11,7 +11,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Status | In progress (step 7 of 8) |
 | Size | M |
 | Branch and worktree | `worktree-agent-aeee5e5c5dad3fa70`, `/home/will/Work/SageFs/.claude/worktrees/agent-aeee5e5c5dad3fa70` |
-| Last green commit | see the branch log; the first commit of this item carries the core, the page, the simulation and the browser journey |
+| Last green commit | 69619a5e on the branch: unfiltered default suite Trusted (15033 of 15033), ratchet lane Trusted (522 of 522), browser journey passed (filtered to its one case) |
 | Next action | Steps 1 to 5, 7 and 8 are done for ranks 1 to 5 (the browser journey covers a subset of the matrix: default, saved, after restart, environment override, flag and read-only for five rows; see "Browser journey" below for what it has and has not run). Give the rank 7 retention variables rows (they need a day-sized duration type, `WaitLimit` stops at 24 hours). 68 `SAGEFS_*` variables read in `Timeouts.fs` and `SageFsConfig.fs` still have no row; the count is `NotEditableBudget.budget` in `SettingsExternalTests.fs` and goes down as rows land. |
 | Decisions made | 2026-11-07, taken from this plan's recommendations by the implementing agent, Will not yet asked: (1) option A, saved values imported into the process environment at start (`SettingsBootstrap.importSaved`), because workers inherit the environment; (2) an edit under an overriding variable or flag is accepted and the row says "Saved X. Ignored while NAME is set."; (3) bind host and identity policy stay read-only, and the bind host row now reads `SAGEFS_BIND_HOST`. |
 | Surprises | See "Surprises" below. |
