@@ -554,7 +554,8 @@
         <Compile Include="EvalInOrderTests.fs" />
         <Compile Include="ChangesStripTests.fs" />
         <Compile Include="WatchTabTests.fs" />
-        <Compile Include="WatchExpressionTests.fs" />        <Compile Include="LiveBindingsTweakServiceTests.fs" />
+        <Compile Include="WatchExpressionTests.fs" />
+        <Compile Include="DockCompactionTests.fs" />        <Compile Include="LiveBindingsTweakServiceTests.fs" />
         <Compile Include="LiveBindingsTweakViewTests.fs" />
         <Compile Include="RetentionSimDstTests.fs" />
         <Compile Include="LiveStateEmitTests.fs" />

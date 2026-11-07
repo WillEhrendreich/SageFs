@@ -1376,7 +1376,7 @@ h2 {
 }
 
 .live-dock {
-  /* The view panel opens as a popover anchored to the dock's top edge, so it needs a box to be positioned against. */
+  /* The dock is the box the pane's parts are laid out in; the Display panel is a region of it (see the end of this file). */
   position: relative;
   flex-shrink: 0;
   display: flex;
@@ -5590,5 +5590,170 @@ body {
   .live-tree .live-cell-state,
   .live-tree .live-cell-source {
     display: none;
+  }
+}
+
+/* ── The pane's chrome gives way to the bindings ──
+   The bindings are what the pane is for. Everything above the tree (the title row, the counts and filter, the sentence, the changes strip,
+   the tabs) is one box, `.live-pane-chrome`, that takes at most 40% of the dock's height and scrolls on its own if it must; the tree gets the
+   rest and scrolls on its own. A short dock also compacts the chrome in steps, by the dock's own height (`DockCompaction`, which says which
+   chrome shows at which height; a test holds these limits to its own). The dock is a size container, only while it holds a tree (a collapsed
+   dock is a row sized by its content, which a size container would collapse to nothing). */
+.live-dock:has(.live-tree) {
+  container: dock / size;
+}
+
+/* The Display panel is a region of the pane, not a popover: it sits between the chrome and the tree, takes at most 45% of the dock, and
+   scrolls inside itself. A popover was clipped in a short dock and, on the stacked layout, floated over the Output section. */
+.live-dock .live-view-panel {
+  position: static;
+  width: auto;
+  max-height: 45cqh;
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  box-shadow: none;
+}
+
+.live-pane-chrome {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: 40cqh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* The roomy dock is a little less roomy than it was: the title row, the counts row and the sentence each had padding the text did not need. */
+.live-dock .live-pane-bar {
+  padding: 2px 8px;
+  gap: 0.15rem 0.6rem;
+}
+
+.live-dock .live-pane-sub {
+  padding: 1px 8px 3px;
+}
+
+.live-dock .live-tabs {
+  padding: 2px 8px;
+}
+
+/* The Display panel's heading and its Done button stay at the top of the panel as it scrolls, so Done is always reachable. */
+.live-dock .live-view-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-block: 2px;
+  background: var(--bg-panel);
+}
+
+/* The Watch tab's rows are in the tree's room. */
+.live-dock .live-watch-tab {
+  flex: none;
+}
+
+/* Under 26rem the sentence is gone (its words are the title's tooltip and a note in the Display panel). */
+@container dock (height < 26rem) {
+  .live-dock .live-pane-sub,
+  .live-dock .live-jump {
+    display: none;
+  }
+
+  .live-dock .live-pane-bar {
+    padding-block: 1px;
+    gap: 0.1rem 0.5rem;
+  }
+
+  .live-dock .live-view-panel {
+    padding: 4px 8px;
+  }
+}
+
+/* Under 20rem the counts and the filter join the title's row, and the Display panel takes the tree's place while it is open: a popover
+   over a tree this short left almost nothing of either. */
+@container dock (height < 20rem) {
+  .live-dock .live-pane-bar::after {
+    display: none;
+  }
+
+  .live-dock .live-pane-bar .live-pane-count,
+  .live-dock .live-pane-bar .live-pane-stamp,
+  .live-dock .live-pane-bar .live-repl-chip,
+  .live-dock .live-pane-bar .live-filter {
+    order: 1;
+  }
+
+  .live-dock .live-pane-bar .live-pane-collapse,
+  .live-dock .live-pane-bar .live-pane-view,
+  .live-dock .live-pane-bar .live-pane-pin {
+    order: 2;
+  }
+
+  .live-dock .live-pane-bar .live-filter {
+    flex: 1 1 6rem;
+    min-width: 5rem;
+  }
+
+  .live-dock .live-view-panel {
+    max-height: none;
+    flex: 1 1 auto;
+  }
+
+  .live-dock .live-pane:has(.live-view-panel:not(.live-hidden)) .live-tree {
+    display: none;
+  }
+}
+
+/* Under 14rem the paddings and gaps shrink once more. */
+@container dock (height < 14rem) {
+  .live-dock .live-pane-bar {
+    padding: 0 6px;
+    gap: 0 0.4rem;
+  }
+
+  .live-dock .live-tabs {
+    padding: 1px 6px;
+    gap: 2px 4px;
+  }
+
+  .live-dock .live-pane-bar button.session-btn {
+    padding-inline: 0.35rem;
+  }
+}
+
+/* Under 9rem the three buttons are their icons, still 28px square, with the word as their accessible name and their tooltip. */
+@container dock (height < 9rem) {
+  .live-dock .live-pane-bar .live-pane-collapse .session-btn-word,
+  .live-dock .live-pane-bar .live-pane-view .session-btn-word,
+  .live-dock .live-pane-bar .live-pane-pin .session-btn-word {
+    display: none;
+  }
+
+  .live-dock .live-pane-bar .live-pane-collapse,
+  .live-dock .live-pane-bar .live-pane-view,
+  .live-dock .live-pane-bar .live-pane-pin {
+    width: 28px;
+    min-width: 28px;
+    padding: 0;
+    justify-content: center;
+  }
+}
+
+/* The stacked layout (the same breakpoint as the rules above) has no divider: the dock is as tall as its rows and the page scrolls. A size
+   container would collapse an auto-height dock to nothing, so there is none, the chrome is not capped, and the panel keeps the height
+   its rows need. */
+@media (width < 48.062em) {
+  .live-dock:has(.live-tree) {
+    container: none;
+  }
+
+  .live-pane-chrome {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .live-dock .live-view-panel {
+    max-height: none;
+    flex: 0 0 auto;
   }
 }

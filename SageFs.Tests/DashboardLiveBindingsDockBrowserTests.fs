@@ -121,6 +121,93 @@ let private waitForMorph (daemon: Sw.Daemon) (subject: Sw.Subject) (page: IPage)
   do! waitText page "#output-panel" subject.Marker
 }
 
+/// Measures the dock as it is, with computed layout and no eyeballing: the sizes of the dock, its chrome and what the bindings (or the Display
+/// panel, when it takes the tree's place) get, and every way something could be cut off. A piece of text may be clipped only where its box
+/// scrolls, or where it ends in an ellipsis and carries its full text as a tooltip; every control must be reachable by scrolling; the three
+/// buttons of the bar keep an accessible name at every height. The argument is whether the Display panel is open.
+let private dockMeasureScript =
+  """(panelOpen) => {
+    const problems = [];
+    const dock = document.querySelector('#live-dock');
+    const d = dock.getBoundingClientRect();
+    const shown = sel => { const e = document.querySelector(sel); return e && e.checkVisibility() ? e : null; };
+    const chromeEl = shown('#live-pane-chrome'), treeEl = shown('#live-tree'), panelEl = shown('#live-view-panel');
+    const inside = (r, outer) => r.left >= outer.left - 1 && r.right <= outer.right + 1 && r.top >= outer.top - 1 && r.bottom <= outer.bottom + 1;
+    const name = e => (e.id ? '#' + e.id : e.tagName.toLowerCase() + '.' + String(e.className).split(' ')[0]);
+    for (const e of [chromeEl, treeEl, panelEl]) {
+      if (e && !inside(e.getBoundingClientRect(), d)) problems.push(name(e) + ' is not inside the dock');
+    }
+    if (panelOpen && !panelEl) problems.push('the Display panel is open and not shown');
+    if (!panelOpen && panelEl) problems.push('the Display panel is closed and shown');
+    // every piece of text is inside its box, or its box scrolls, or it ends in an ellipsis with its full text as a tooltip
+    const walker = document.createTreeWalker(dock, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const t = walker.currentNode;
+      if (!t.textContent.trim()) continue;
+      const el = t.parentElement;
+      if (!el || !el.checkVisibility()) continue;
+      const range = document.createRange(); range.selectNodeContents(t);
+      const r = range.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      let scrolls = false;
+      for (let a = el; a; a = a.parentElement) {
+        const cs = getComputedStyle(a);
+        const scrollsY = (cs.overflowY === 'auto' || cs.overflowY === 'scroll') && a.scrollHeight > a.clientHeight;
+        if (scrollsY) scrolls = true;
+        if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') {
+          const ar = a.getBoundingClientRect();
+          const outH = r.right > ar.right + 1 || r.left < ar.left - 1;
+          const outV = r.bottom > ar.bottom + 1 || r.top < ar.top - 1;
+          const tipped = cs.textOverflow === 'ellipsis' && (a.getAttribute('title') || el.getAttribute('title'));
+          if (outH && !tipped) problems.push('text "' + t.textContent.trim().slice(0, 40) + '" is cut off sideways by ' + name(a));
+          if (outV && !scrollsY && !tipped) problems.push('text "' + t.textContent.trim().slice(0, 40) + '" is cut off vertically by ' + name(a));
+        }
+        if (a === dock) break;
+      }
+      if (!scrolls && (r.bottom > d.bottom + 1 || r.top < d.top - 1 || r.right > d.right + 1 || r.left < d.left - 1))
+        problems.push('text "' + t.textContent.trim().slice(0, 40) + '" is outside the dock');
+    }
+    // the three buttons of the bar are always there, named, and reachable
+    for (const id of ['live-pane-collapse', 'live-view-btn', 'live-pane-pin']) {
+      const b = document.getElementById(id);
+      if (!b) { problems.push('the button ' + id + ' is gone'); continue; }
+      if (!(b.getAttribute('aria-label') || '').trim()) problems.push('the button ' + id + ' has no accessible name');
+      b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const br = b.getBoundingClientRect();
+      if (br.width === 0 || br.height === 0) problems.push('the button ' + id + ' has no box');
+      else if (!inside(br, d)) problems.push('the button ' + id + ' is outside the dock after scrolling to it: ' + [br.left, br.top, br.right, br.bottom].map(Math.round).join(','));
+      else if (chromeEl && !inside(br, chromeEl.getBoundingClientRect())) problems.push('the button ' + id + ' is cut by the chrome after scrolling to it');
+      // 28px, or the touch size the stacked (phone) layout gives every button
+      const touch = window.innerWidth < 769 && br.height >= 28;
+      if (Math.abs(br.height - 28) > 1 && !touch) problems.push('the button ' + id + ' is ' + br.height + 'px tall, not 28');
+    }
+    if (chromeEl) chromeEl.scrollTop = 0;
+    // the Display panel is reachable end to end, and its Done button is always in reach
+    if (panelEl) {
+      const done = panelEl.querySelector('.live-view-close');
+      const pr = panelEl.getBoundingClientRect();
+      if (!done) problems.push('the Display panel has no Done button');
+      else if (!inside(done.getBoundingClientRect(), pr)) problems.push('the Done button is outside the Display panel');
+      panelEl.scrollTop = panelEl.scrollHeight;
+      const last = panelEl.lastElementChild;
+      if (last && last.checkVisibility() && last.getBoundingClientRect().bottom > panelEl.getBoundingClientRect().bottom + 1)
+        problems.push('the end of the Display panel cannot be scrolled to');
+      if (done && !inside(done.getBoundingClientRect(), panelEl.getBoundingClientRect())) problems.push('Done is out of reach after scrolling the panel to its end');
+      panelEl.scrollTop = 0;
+    }
+    const heightOf = e => e ? e.getBoundingClientRect().height : 0;
+    return JSON.stringify({
+      problems,
+      dock: d.height,
+      chrome: heightOf(chromeEl),
+      // what the bindings and the settings that change them get: the tree, and the panel when it is open (which may take the tree's place)
+      meat: heightOf(treeEl) + heightOf(panelEl),
+      tree: treeEl ? heightOf(treeEl) : -1,
+      scrollWidth: document.scrollingElement.scrollWidth,
+      innerWidth: window.innerWidth
+    });
+  }"""
+
 let journey () : Task<unit> = task {
   let daemon = Sw.startDaemon ()
   let mutable playwright: IPlaywright option = None
@@ -447,6 +534,71 @@ let journey () : Task<unit> = task {
       do! closePopoverWithButton page
     do! page.SetViewportSizeAsync(1400, 850)
     expectNoErrors errors "across every width"
+
+    // ── 8. the dock at every height the divider allows: the chrome is bounded, the tree has the rest, nothing is cut off ───
+    // The dock is sized the way a person sizes it, by dragging the divider, so the clamp (80px at the smallest) is the product's own.
+    let measure = dockMeasureScript
+    let dragDockTo (heightPx: int) = task {
+      let! handle = page.Locator("#dock-resize").BoundingBoxAsync()
+      if isNull (box handle) then
+        let! described = page.EvaluateAsync<string>("() => { const e = document.querySelector('#dock-resize'); if (!e) return 'there is no #dock-resize in the page'; const r = e.getBoundingClientRect(); const c = getComputedStyle(e); return 'rect ' + [r.left, r.top, r.width, r.height].map(Math.round).join(',') + ' display ' + c.display + ' visibility ' + c.visibility + ' viewport ' + innerWidth + 'x' + innerHeight + ' parent ' + e.parentElement.id; }")
+        Tests.failtestf "the divider (#dock-resize) has no box at %dpx: %s" heightPx described
+      let! viewport = page.EvaluateAsync<int>("() => window.innerHeight")
+      do! page.Mouse.MoveAsync(handle.X + handle.Width / 2.0f, handle.Y + handle.Height / 2.0f)
+      do! page.Mouse.DownAsync()
+      do! page.Mouse.MoveAsync(handle.X + handle.Width / 2.0f, float32 (viewport - heightPx), MouseMoveOptions(Steps = 4))
+      do! page.Mouse.UpAsync()
+      do! waitJs page (sprintf "the dock to be %dpx tall" heightPx) BrowserWaits.panelUpdates
+            "px => Math.abs(document.querySelector('#live-dock').getBoundingClientRect().height - px) <= 1" (box heightPx)
+    }
+    let setPanel (wanted: bool) = task {
+      let! present = page.EvaluateAsync<bool>("() => !!document.querySelector('#live-view-panel')")
+      if not present then Tests.failtestf "the Display panel is not in the page"
+      let! isOpen = page.EvaluateAsync<bool>("() => !document.querySelector('#live-view-panel').classList.contains('live-hidden')")
+      if isOpen <> wanted then do! page.Locator("#live-view-btn").ClickAsync()
+      do! waitJs page (sprintf "the Display panel to be %s" (match wanted with | true -> "open" | false -> "closed")) BrowserWaits.panelUpdates
+            "wanted => document.querySelector('#live-view-panel').classList.contains('live-hidden') === !wanted" (box wanted)
+    }
+    do! page.SetViewportSizeAsync(1400, 900)
+    do! waitVisible page "#bindings-panel"
+    for width in [ 1400; 900; 400 ] do
+      do! page.SetViewportSizeAsync(width, 900)
+      // Under 48rem the page is one stacked column with no divider: the dock is as tall as its rows and the page scrolls, so there is
+      // one height to measure and the share rules do not apply. Cut-off text, reachable buttons and sideways scroll still do.
+      let stacked = width < 769
+      let heights = match stacked with | true -> [ 0 ] | false -> [ 5; 8; 12; 16; 24 ]
+      for rem in heights do
+        let px = rem * 16
+        if not stacked then do! dragDockTo px
+        for panelOpen in [ false; true ] do
+          do! setPanel panelOpen
+          let! json = page.EvaluateAsync<string>(measure, box panelOpen)
+          let report = System.Text.Json.JsonDocument.Parse(json).RootElement
+          let number (name: string) = report.GetProperty(name).GetDouble()
+          let problems = report.GetProperty("problems").EnumerateArray() |> Seq.map (fun p -> p.GetString()) |> List.ofSeq
+          let what = sprintf "%dpx wide, dock %dpx (%drem), Display panel %s" width px rem (match panelOpen with | true -> "open" | false -> "closed")
+          problems |> Expect.isEmpty (sprintf "nothing is cut off at %s: %s" what (String.concat " | " problems))
+          (number "scrollWidth" <= number "innerWidth" + 1.0) |> Expect.isTrue (sprintf "the page does not scroll sideways at %s" what)
+          match stacked with
+          | true -> ()
+          | false ->
+            // the chrome is at most 40% of the dock (DockCompaction.ChromeSharePercent)
+            (number "chrome" <= number "dock" * 0.4 + 1.0) |> Expect.isTrue (sprintf "the chrome takes at most 40%% at %s: chrome %f of dock %f" what (number "chrome") (number "dock"))
+            // the tree and the panel together get at least half the dock; with the panel closed the tree alone does, and with it open the
+            // tree keeps at least a fifth (or the panel has taken its place, below 20rem)
+            (number "meat" >= number "dock" * 0.5 - 2.0) |> Expect.isTrue (sprintf "the tree and panel get at least half the dock at %s: %f of %f" what (number "meat") (number "dock"))
+            match panelOpen with
+            | false ->
+              (number "tree" >= number "dock" * 0.5 - 2.0) |> Expect.isTrue (sprintf "the tree alone gets at least half the dock at %s: %f of %f" what (number "tree") (number "dock"))
+            | true ->
+              match number "tree" >= 0.0 with
+              | true -> (number "tree" >= number "dock" * 0.2 - 2.0) |> Expect.isTrue (sprintf "the tree keeps a fifth of the dock beside the open panel at %s: %f of %f" what (number "tree") (number "dock"))
+              | false -> ()
+          if stacked || rem = 5 || rem = 12 || rem = 24 then
+            do! shot page (sprintf "8-dock-%drem-%d-%s" rem width (match panelOpen with | true -> "panel" | false -> "tree"))
+        do! setPanel false
+    do! page.SetViewportSizeAsync(1400, 850)
+    expectNoErrors errors "at every dock height"
 
     // ── the same facts after a reload: the server's state is what comes back, and nothing breaks ───────────────────────
     let! _ = page.GotoAsync dashboard

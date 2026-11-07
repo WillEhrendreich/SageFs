@@ -520,7 +520,7 @@ let modeRows (sessionId: string) (current: ValueWalk) : XmlNode list =
       yield! ValueWalk.all |> List.map modeButton ]
     renderLegend ]
 
-let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (view: LiveBindingsPane.PaneView) : XmlNode list =
+let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (view: LiveBindingsPane.PaneView) (watchTab: XmlNode list) : XmlNode list =
   // The bindings the Changes tab lists: a fact of the rows, so the server writes it into each binding's expression.
   let changedNames = changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)
   let evaluateEndpoint = sprintf "/api/sessions/%s/live-values/evaluate" (Uri.EscapeDataString sessionId)
@@ -800,6 +800,8 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
         match view.Snapshot.Truncated with
         | true -> Elem.div [ Attr.class' "live-truncated live-truncated-note" ] [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ValuesCutShort) ]
         | false -> ()
+      // The Watch tab's rows share the tree's room and its scroll.
+      yield! watchTab
     ] ]
 
 /// The tab bar: All, Pinned and Changes, each with how many it lists. The open tab is a signal, so a push never closes it, and the pressed
@@ -842,6 +844,10 @@ let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
               count ] ]
 
 /// The open pane: a header (what opened it, when it was read, a filter, the pin), then the tree.
+/// What the pane is for, in a sentence: under the title while the dock is tall, and the title's tooltip and a note in the Display panel
+/// once the dock is too short for the line.
+let [<Literal>] PaneSentence = "The values in this session. Edit one: the file changes now, and the row says how the session catches up."
+
 let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsViewPanel.ViewControls option) (tweaks: TweakView) (sessionId: string) (source: BindingsSource) (because: OpenBecause) (display: PinDisplay) : XmlNode =
   let stamp =
     match source with
@@ -851,11 +857,26 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
       LiveBindingsPane.PaneNote.text (LiveBindingsPane.PaneNote.ValuesAsOf(view.Snapshot.CapturedAt.UtcDateTime.ToString("HH:mm:ss 'UTC'")))
     | PrintedBindings _ -> LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ReadFromPrinted
     | NothingBound -> ""
-  let body =
+  // The Watch tab's expressions are the last thing in the tree, so they scroll with it in the room the tree has.
+  let watchTab : XmlNode list =
+    match controls with
+    | Some viewControls ->
+      [ Elem.div
+          [ Attr.id "live-watch-tab"
+            Attr.class' "live-watch-tab live-hidden"
+            Ds.class' ("live-hidden", sprintf "$%s !== '%s'" DockSignals.LiveTab (WatchTab.token WatchTab.Watch))
+            Ds.preserveAttr "class" ]
+          [ viewControls.Watch.Body ] ]
+    | None -> []
+  // What the walked pane says about itself (`live-pane-head`) is chrome, so it goes with the title row; the rest is the tree.
+  let headNodes, body =
     match source with
-    | WalkedBindings view -> renderTree look sessionId tweaks view
-    | PrintedBindings scope -> [ treeElement look [ renderBindingsPanel (Some scope) ] ]
-    | NothingBound -> [ treeElement look [ renderEmptyState ] ]
+    | WalkedBindings view ->
+      match renderTree look sessionId tweaks view watchTab with
+      | head :: rest -> [ head ], rest
+      | [] -> [], []
+    | PrintedBindings scope -> [], [ treeElement look [ renderBindingsPanel (Some scope) ] ]
+    | NothingBound -> [], [ treeElement look [ renderEmptyState ] ]
   // The text panel carries `bindings-panel` itself, so the wrapper must not repeat it.
   let paneId =
     match source with
@@ -863,8 +884,12 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
     | WalkedBindings _
     | NothingBound -> DomIds.BindingsPanel
   Elem.div (Attr.id paneId :: followPin display "panel live-pane") [
+   // Everything above the tree, in one box that is never more than a share of the dock (`DockCompaction.ChromeSharePercent`) and scrolls
+   // on its own if it must, so the tree always has the rest of the dock.
+   Elem.div [ Attr.id "live-pane-chrome"; Attr.class' "live-pane-chrome"; testid "live-pane-chrome" ] [
     Elem.div [ Attr.class' "live-pane-bar" ] [
-      Elem.span [ Attr.class' "live-pane-title" ] [ Text.raw "Live bindings" ]
+      // The sentence under the title is also the title's tooltip, so a dock too short for the line still has it.
+      Elem.span [ Attr.class' "live-pane-title"; Attr.title (attrEnc PaneSentence) ] [ Text.raw "Live bindings" ]
       Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
       Elem.span [ Attr.class' "live-pane-stamp"; Attr.create "title" (attrEnc (stamp + ". The values are read again after every eval.")) ] [
         textEnc stamp
@@ -908,21 +933,12 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
     // on a phone every line before the first binding is a line of the list pushed down.
     Elem.div [ Attr.class' "live-pane-sub"; testid "live-pane-sub" ] [
       // A phone gets the short form: the long one took three lines of the first screen before the first binding.
-      Elem.span [ Attr.class' "pane-sub-long" ] [
-        Text.raw "The values in this session. Edit one: the file changes now, and the row says how the session catches up." ]
+      Elem.span [ Attr.class' "pane-sub-long" ] [ Text.raw PaneSentence ]
       Elem.span [ Attr.class' "pane-sub-short" ] [ Text.raw "Edit a value: the file changes now." ] ]
     // On a phone the page is one column and Output and Sessions sit below the bindings. These say so, and take you there.
     Elem.nav [ Attr.class' "live-jump"; testid "live-jump"; Attr.create "aria-label" "Jump to another part of the page" ] [
       Elem.a [ Attr.href "#output-section" ] [ Text.raw "Output ↓" ]
       Elem.a [ Attr.href "#sidebar" ] [ Text.raw "Sessions ↓" ] ]
-    // The Display panel carries the mode buttons and the legend when there are walked values to read in a mode.
-    match controls with
-    | Some viewControls ->
-      match source with
-      | WalkedBindings view -> viewControls.PanelWith (modeRows sessionId view.Notes.Mode)
-      | PrintedBindings _
-      | NothingBound -> viewControls.Panel
-    | None -> ()
     // What the session holds that the files do not, and what the program changed: above the tree so it stays in view.
     match look.Changes with
     | On -> yield! changesStrip (Tweak.ChangesStrip.Changes.ofView tweaks)
@@ -933,17 +949,19 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
       tabBar view.Snapshot.Bindings.Length (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count watchCount
     | PrintedBindings _
     | NothingBound -> ()
-    yield! body
-    // The Watch tab's expressions: drawn always and shown while that tab is open, like the bindings the other tabs hide.
-    match controls, source with
-    | Some viewControls, WalkedBindings _ ->
-      Elem.div
-        [ Attr.id "live-watch-tab"
-          Attr.class' "live-watch-tab live-hidden"
-          Ds.class' ("live-hidden", sprintf "$%s !== '%s'" DockSignals.LiveTab (WatchTab.token WatchTab.Watch))
-          Ds.preserveAttr "class" ]
-        [ viewControls.Watch.Body ]
-    | _ -> ()
+    yield! headNodes
+   ]
+   // The Display panel carries the mode buttons and the legend when there are walked values to read in a mode. It sits between the chrome
+   // and the tree: a popover over the tree in a tall dock, and in the tree's place in a short one (`DockCompaction.PanelPlacement`).
+   match controls with
+   | Some viewControls ->
+     match source with
+     | WalkedBindings view ->
+       viewControls.PanelWith (modeRows sessionId view.Notes.Mode @ [ Elem.div [ Attr.class' "live-view-note" ] [ textEnc PaneSentence ] ])
+     | PrintedBindings _
+     | NothingBound -> viewControls.Panel
+   | None -> ()
+   yield! body
   ]
 
 /// The open pane with no remedy note in its bar.

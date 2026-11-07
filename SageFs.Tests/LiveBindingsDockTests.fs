@@ -824,7 +824,7 @@ let dockWordingTests =
       on |> Expect.stringContains "the type column is named while it is shown" ">Type<"
       let off = renderDockWith { View.recommended ViewWorkflow.Repl with Layout = { (View.recommended ViewWorkflow.Repl).Layout with Type = Off } } None TweakView.none SessionInView "abcd1234" (WalkedBindings(view [ person ])) None |> decoded
       off.Contains ">Type<" |> Expect.isFalse "and the label goes when the column is off"
-      let header = Text.RegularExpressions.Regex.Match(on, "<div class=\"live-cols\"[^>]*>").Value
+      let header = Text.RegularExpressions.Regex.Match(on, "<div[^>]*class=\"live-cols\"[^>]*>").Value
       header |> Expect.stringContains "it is hidden from assistive technology, the rows speak for themselves" "aria-hidden=\"true\""
 
     testPropertyWithConfig propConfig "WHY — no sentence the pane says about itself carries a raw case name, a backtick or a format hole"

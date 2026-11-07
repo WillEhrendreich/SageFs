@@ -90,6 +90,7 @@
         <Compile Include="SettingsCatalog.fs" />
         <Compile Include="WatchSettings.fs" />
         <Compile Include="EvalLatencyTrace.fs" />
+        <Compile Include="Features\DockCompaction.fs" />
         <Compile Include="Features\Treemap.fs" />
         <Compile Include="BatchFlusher.fs" />
         <Compile Include="BinaryFormat.fs" />
