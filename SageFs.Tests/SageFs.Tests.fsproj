@@ -274,6 +274,8 @@
         <Compile Include="NewSessionDialogBrowserTests.fs" />
         <!-- The live-bindings knob: a step writes a file through the nudge door, and the file's bytes are the proof. -->
         <Compile Include="DashboardLiveBindingsTweakBrowserTests.fs" />
+        <!-- The pane's bar says how current its values are, from the test loop. -->
+        <Compile Include="LiveBindingsFreshnessBrowserTests.fs" />
         <Compile Include="HygieneBrowserTests.fs" />
         <Compile Include="DashboardSettingsBrowserTests.fs" />
         <Compile Include="DashboardDisconnectIndicatorBrowserTests.fs" />

@@ -77,3 +77,61 @@ let tests =
         chip.Tone |> Expect.equal "the tone" (tone Freshness.Current)
       | None -> failtest "a settled loop has a chip"
   ]
+
+module private PaneDrawing =
+  open System
+  open Falco.Markup
+  open SageFs
+  open SageFs.Features
+  open SageFs.Features.LiveValueTree
+  open SageFs.Features.LiveBindingsPane
+  open SageFs.Server
+  open SageFs.Server.LiveBindingsDock
+
+  let walked : BindingsSource =
+    let leaf : LiveValueNode =
+      { Label = "x"; TypeName = "int"; Preview = "1"; Kind = NodeKind.Leaf; Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = 0 }
+    let view : PaneView =
+      { Snapshot =
+          { SessionId = "abcd1234"
+            Generation = 1L
+            Bindings = [ { Name = "x"; TypeSignature = "int"; Root = leaf } ]
+            Truncated = false
+            CapturedAt = DateTimeOffset.UnixEpoch }
+        Notes = { Mode = ValueWalk.standard; Click = NoClickYet } }
+    WalkedBindings view
+
+  /// The dock with the chip the loop gave, as the page decodes it.
+  let dockWith (chip: Chip option) : string =
+    let look = SageFs.View.recommended SageFs.ViewWorkflow.Repl
+    let controls = { LiveBindingsViewPanel.render "abcd1234" SageFs.ViewWorkflow.Repl { View = look; Sources = Map.empty } with Freshness = chip }
+    renderDockWith look (Some controls) SageFs.Features.Tweak.BindingTweak.TweakView.none DockPanes.SessionInView "abcd1234" walked None
+    |> renderNode
+    |> Net.WebUtility.HtmlDecode
+
+[<Tests>]
+let drawingTests =
+  testList "the pane draws its freshness" [
+
+    testCase "a loop with no say draws no chip, and each freshness draws one chip with its word, its sentence and its tone's class" <| fun _ ->
+      (PaneDrawing.dockWith None).Contains "live-freshness" |> Expect.isFalse "no chip without a loop"
+      for freshness in
+        [ Freshness.Updating
+          Freshness.Current
+          Freshness.HeldByErrors("Game.fs", 2)
+          Freshness.HeldByRebuild "build failed" ] do
+        let chip = { Word = word freshness; Detail = detail freshness; Tone = tone freshness }
+        let html = PaneDrawing.dockWith (Some chip)
+        html |> Expect.stringContains "the chip" "data-testid=\"live-freshness\""
+        html |> Expect.stringContains "the word is markup text" (sprintf ">%s<" chip.Word)
+        html |> Expect.stringContains "the sentence is the tooltip" (sprintf "title=\"%s\"" chip.Detail)
+        html |> Expect.stringContains "the tone's class" (SageFs.Server.LiveBindingsDock.freshnessClass chip.Tone)
+        (html.Split([| "data-testid=\"live-freshness\"" |], System.StringSplitOptions.None).Length - 1) |> Expect.equal "one chip" 1
+
+    testCase "WHY — each tone has its own non-empty class, so a state is never told apart by colour alone and never shares a colour with another" <| fun _ ->
+      let classes =
+        [ FreshnessTone.Current; FreshnessTone.Moving; FreshnessTone.Held; FreshnessTone.Failed ]
+        |> List.map SageFs.Server.LiveBindingsDock.freshnessClass
+      classes |> List.forall (fun c -> c <> "") |> Expect.isTrue "every tone has a class"
+      (List.distinct classes).Length |> Expect.equal "one class each" classes.Length
+  ]

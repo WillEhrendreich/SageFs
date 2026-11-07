@@ -173,6 +173,9 @@ let valueToneClass (tone: ValueTone) : string =
   | ValueTone.NumberTone -> " live-v-number"
   | ValueTone.PlainTone -> ""
 
+/// The class a freshness chip is drawn with, one per tone, from the theme's semantic tokens (pass, info, warn, fail).
+let freshnessClass (tone: Tweak.LoopFreshness.FreshnessTone) : string = ""
+
 /// What a glyph stands for. The glyph drawn on a row and the line that explains it in the legend both come from this, so a glyph
 /// cannot be drawn that the legend does not name.
 [<RequireQualifiedAccess>]
