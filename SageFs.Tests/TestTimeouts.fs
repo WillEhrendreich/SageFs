@@ -1481,6 +1481,18 @@ module HygieneAges =
   /// A retention of one day, for a temp run.
   let oneDay = System.TimeSpan.FromDays 1.
 
+  /// Used an hour ago: a finished agent that may still be resumed, inside any grace the tests use.
+  let anHour = System.TimeSpan.FromHours 1.
+
+  /// Used two days ago: past a one day grace.
+  let twoDays = System.TimeSpan.FromDays 2.
+
+  /// A number of days, for a test that names how long a worktree has been idle in its own words.
+  let days (n: float) = System.TimeSpan.FromDays n
+
+  /// A number of minutes, for a test that lays sweeps out on a timeline.
+  let minutes (n: float) = System.TimeSpan.FromMinutes n
+
   /// Far past every retention in the product.
   let ancient = System.TimeSpan.FromDays 90.
 

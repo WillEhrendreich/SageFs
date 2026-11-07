@@ -9,13 +9,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (step 0 of 9) |
+| Status | In progress (steps 1, 2, 3, 5 done and the pure half of 6; 4, 6 (sweep, setting, daemon timer), 7, 8, 9, 10 remain) |
 | Size | L |
 | Branch and worktree | `worktree-agent-ac5d9cb49225df70f` in `.claude/worktrees/agent-ac5d9cb49225df70f` |
-| Last green commit | none yet |
-| Next action | Step 1: the grace rule in `standingOf`, RED first. |
+| Last green commit | the commit that adds `HygieneAuto.fs` (see `git log` on the branch); `Workspace hygiene` test lists: 166 passed, filtered; `--ratchets` run after the last edit |
+| Next action | Step 4 and the rest of step 6: (a) `HygieneEdge.effectsWith journal` captures the tip (`rev-parse HEAD`, branch tip), makes `refs/sagefs/removed/<name>` for a non-ancestor merge, and journals a `Removal` after each success; (b) `SageFs/HygieneSweep.fs`: observe worktrees (`Ledger.transitions`, `HygieneLedgerStore.append`), salvage each `DirtyReal` worktree that is not in use, run `HygieneAuto.plan` through `Executor.runAsync` with `Confirmation.safeOnly plan plan.Id`; (c) the `hygiene.autoTidy` descriptor (default on, `Live`) in the settings catalog; (d) the daemon timer in `DaemonMode.fs` next to `activityCleanupTimer` (root it, dispose at shutdown), run at start and on `SessionStopped`, repos from live sessions plus `session-owners.json` working directories that still exist. Each RED first. |
 | Decisions made | 2026-11-07, agent on Will's brief: the daemon is the owner of hygiene, not the orchestrator. A merged worktree waits `Timeouts.finishedWorktreeGrace` (24 hours) after it was last in use before the automatic tidy takes it. |
-| Surprises | The plan id is a hash of every step, so it changes between two dry runs minutes apart. The `workspace:` line is shown today and ignored: it quotes 2084 "safe" items (logs and registry files) and no count of work that exists nowhere else. |
+| Surprises | Built so far: the grace rule (`standingOf`, `Retention.KeepFor` on an agent worktree, `LastTouched` from git's admin files and the ledger, `Locations.WorktreeGrace`, `DataRetention.finishedWorktreeGrace`), `Summary.Held` and the `nudge` that leads with held work, `HygieneLedger` (pure), `HygieneLedgerStore`, `HygieneSalvage` (real git, worktree untouched), `HygieneAuto` (the closed list). Not wired yet: nothing calls salvage, the ledger store or `HygieneAuto.plan`, so the product behaves as before apart from the grace and the status line. The domain-budget ratchet forced unions in place of options and bools (`Tip`, `MergeState`, `RecordedActivity`, `Presence`, `HeldWork`); do not undo that. `git status` rewrites a worktree's index, so every hygiene git call now sets `GIT_OPTIONAL_LOCKS=0` (the index mtime is one of the activity signals). Will, 2026-11-07: agent worktrees are the exception and should be cheap to avoid (see Design). The plan id is a hash of every step, so it changes between two dry runs minutes apart. The `workspace:` line is shown today and ignored: it quotes 2084 "safe" items (logs and registry files) and no count of work that exists nowhere else. |
 
 ## Why the pile grew
 
@@ -83,6 +83,14 @@ Pure core, edge at the sides, the same shape as the rest of hygiene.
   recording `HygieneEdge` context, refresh the cache. It takes the same `Locations` and `LiveFacts` the manual path takes.
 - `DaemonMode.fs` owns one timer, rooted like the others and disposed at shutdown, plus a run at start and on `SessionStopped`.
 
+Agent worktrees are the exception, not the default (Will, 2026-11-07: they are why the pile exists). The design therefore treats a
+worktree as something that needs a ledger entry: the sweep writes `FirstSeen` for each one with its maker, and a worktree the
+ledger has no record of is not eligible for the automatic tidy until the ledger has seen it quiet for the grace. Avoiding them is
+made cheap in the same plan: an agent that only reads or edits one file can work in the shared checkout under a claim (the cohort
+scope claims already exist), and the briefs (`skills/sagefs/agents.md`) should say "no worktree unless the work must not touch the
+trunk". That brief change and a `create_*_session` hint ("this directory is an agent worktree; the daemon will salvage and tidy it,
+and `sagefs hygiene` lists it") are step 10.
+
 Decisions:
 
 1. Grace is 24 hours after the worktree was last in use, as the record or the git admin files say. Named `Timeouts.finishedWorktreeGrace`,
@@ -107,6 +115,8 @@ Each step is RED first, committed on its own, green on its own.
 8. The surfaces: the dashboard card and `sagefs hygiene` say the same thing the `workspace:` line does; worktrees outside the
    managed root get git evidence (still never removed).
 9. `sagefs hygiene --rescue <name>` and the MCP tool for it.
+10. Make a worktree the exception: the brief rule in `skills/sagefs/agents.md` ("no worktree unless the work must not touch the
+    trunk"), and the `create_*_session` hint for an agent worktree.
 
 ## Decisions for Will
 

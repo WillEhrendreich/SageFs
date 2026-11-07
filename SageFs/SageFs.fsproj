@@ -103,6 +103,8 @@
         <Compile Include="LocalData.fs" />
         <Compile Include="CohortGit.fs" />
         <Compile Include="HygieneGather.fs" />
+        <Compile Include="HygieneSalvage.fs" />
+        <Compile Include="HygieneLedgerStore.fs" />
         <Compile Include="HygieneEdge.fs" />
         <Compile Include="HygieneService.fs" />
         <Compile Include="FrictionReviewView.fs" />

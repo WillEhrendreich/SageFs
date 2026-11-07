@@ -33,10 +33,16 @@ type Git = string -> string list -> Task<GitResult>
 let killTree (proc: Process) : unit =
   try proc.Kill(true) with _ -> ()
 
+/// `Git` with extra environment variables, for the plumbing that needs `GIT_INDEX_FILE` or an author.
+type GitWithEnv = string -> (string * string) list -> string list -> Task<GitResult>
+
 /// The real git: argument list (never a shell string), both streams drained, bounded by `Timeouts.gitQuick`. It
 /// awaits the process and both reads, so the thread that asked is free while git works.
-let runGitWith (executable: string) (limit: TimeSpan) : Git =
-  fun dir args ->
+///
+/// `GIT_OPTIONAL_LOCKS=0` is always set: a `git status` that refreshes a worktree's index would rewrite that file, and the
+/// index's modification time is one of the things that says when a worktree was last worked in. Looking must not move it.
+let runGitEnvWith (executable: string) (limit: TimeSpan) : GitWithEnv =
+  fun dir env args ->
     task {
       try
         let psi = ProcessStartInfo(executable)
@@ -44,6 +50,8 @@ let runGitWith (executable: string) (limit: TimeSpan) : Git =
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError <- true
         psi.UseShellExecute <- false
+        psi.Environment.["GIT_OPTIONAL_LOCKS"] <- "0"
+        for (name, value) in env do psi.Environment.[name] <- value
         for a in args do psi.ArgumentList.Add a
         use proc = Process.Start psi
         let out = proc.StandardOutput.ReadToEndAsync()
@@ -72,8 +80,15 @@ let runGitWith (executable: string) (limit: TimeSpan) : Git =
       with ex -> return GitResult.Unavailable ex.Message
     }
 
+let runGitWith (executable: string) (limit: TimeSpan) : Git =
+  let run = runGitEnvWith executable limit
+  fun dir args -> run dir [] args
+
 /// The real git, bounded by `Timeouts.gitQuick`.
 let runGit : Git = runGitWith "git" Timeouts.gitQuick
+
+/// The real git with extra environment, bounded by `Timeouts.gitQuick`.
+let runGitEnv : GitWithEnv = runGitEnvWith "git" Timeouts.gitQuick
 
 // ─── Parsing what git prints ───────────────────────────────────────────
 
@@ -266,10 +281,13 @@ type LiveFacts =
     CurrentSdkVersions: string list
     /// Who created the session in each working directory, from the daemon's session ledger, and whether they
     /// are still connected.
-    Owners: (string * Owner * AgentConnection) list }
+    Owners: (string * Owner * AgentConnection) list
+    /// When each worktree was last in use, as the hygiene ledger recorded it (path, then time). A finished worktree's grace
+    /// is measured from the later of this and what git's own files for it say.
+    LastActive: (string * DateTime) list }
 
 module LiveFacts =
-  let none : LiveFacts = { Sessions = []; CurrentSdkVersions = []; Owners = [] }
+  let none : LiveFacts = { Sessions = []; CurrentSdkVersions = []; Owners = []; LastActive = [] }
 
 type Locations =
   { Repo: string
@@ -277,7 +295,9 @@ type Locations =
     DataDir: string
     HostCacheDir: string
     TempDir: string
-    Processes: ProcessScope }
+    Processes: ProcessScope
+    /// How long a merged worktree is kept after it was last in use (`DataRetention.finishedWorktreeGrace` in the product).
+    WorktreeGrace: TimeSpan }
 
 /// A path with every symlink in it followed, the way the OS spells it and the way git prints it (`git worktree list`
 /// prints real paths, so a Mac's `/var/folders/...` comes back as `/private/var/folders/...`). A path that does not
@@ -339,7 +359,8 @@ let canonicalScan (scan: Scan) : Scan =
       Live =
         { scan.Live with
             Sessions = scan.Live.Sessions |> List.map (fun (id, wd) -> id, canonicalPath wd)
-            Owners = scan.Live.Owners |> List.map (fun (wd, owner, presence) -> canonicalPath wd, owner, presence) } }
+            Owners = scan.Live.Owners |> List.map (fun (wd, owner, presence) -> canonicalPath wd, owner, presence)
+            LastActive = scan.Live.LastActive |> List.map (fun (path, at) -> canonicalPath path, at) } }
 
 // ─── Sizes and times ───────────────────────────────────────────────────
 
@@ -353,6 +374,29 @@ let private fileTouched (path: string) : DateTime =
   try File.GetLastWriteTimeUtc path with _ -> DateTime.UtcNow
 
 let private normalize (p: string) : string = Guard.normalize p
+
+/// When a worktree was last worked in: the latest of its directory, and the files git keeps for it (its index, HEAD and
+/// reflog change on every add, commit, checkout and merge there), and when the hygiene ledger last saw it in use.
+let private worktreeActivity (scan: Scan) (path: string) : DateTime =
+  let adminDir =
+    try
+      let gitFile = Path.Combine(path, ".git")
+      match File.Exists gitFile with
+      | false -> None
+      | true ->
+        let text = (File.ReadAllText gitFile).Trim()
+        match text.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase) with
+        | true -> Some(text.Substring(7).Trim())
+        | false -> None
+    with
+    | :? IOException
+    | :? UnauthorizedAccessException -> None
+  let fromGit =
+    match adminDir with
+    | None -> []
+    | Some dir -> [ "index"; "HEAD"; Path.Combine("logs", "HEAD") ] |> List.map (fun f -> fileTouched (Path.Combine(dir, f)))
+  let fromLedger = scan.Live.LastActive |> List.filter (fun (p, _) -> normalize p = normalize path) |> List.map snd
+  (touched path :: fromGit) @ fromLedger |> List.max
 
 let private under (parent: string) (child: string) : bool =
   let p = normalize parent
@@ -511,13 +555,18 @@ let private worktreeCandidate (scan: Scan) (baseRef: Lazy<Task<string option>>) 
           return
             { subjectBase kind target with
                 SizeBytes = directorySize path
-                LastTouched = touched path
+                LastTouched = worktreeActivity scan path
                 Owner = owner
                 Lineage = lineage
                 Repo = RepoLink.InRepo scan.Loc.Repo
                 Branch = entry.Branch
                 Display = Path.GetFileName path
                 Uses = usesOf scan path @ lockUse scan entry.Lock
+                // A merged agent worktree waits out its grace: the agent that made it may be resumed.
+                Retention =
+                  (match kind = LeftoverKind.AgentWorktree with
+                   | true -> Retention.KeepFor scan.Loc.WorktreeGrace
+                   | false -> Retention.NeverExpires)
                 Git = git }
         } }
 

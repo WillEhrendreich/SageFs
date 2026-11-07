@@ -708,6 +708,11 @@ module Timeouts =
   /// died. Generous, because the walk touches the temp directory and nearly
   /// every sweep finds nothing.
   let orphanTempDirSweepInterval = envOrDefaultMinutes "SAGEFS_ORPHAN_SWEEP_MINUTES" 15.0
+  /// How often the daemon runs its workspace hygiene sweep: it saves uncommitted worktree files to a salvage branch, records
+  /// what it saw in the hygiene ledger, and tidies what is provably safe. A finished agent's worktree is judged by a grace
+  /// measured in hours, so a sweep every quarter of an hour finds anything new while it is still fresh and costs a few git
+  /// questions per worktree. It also runs once at start and when a session stops.
+  let hygieneSweepInterval = envOrDefaultMinutes "SAGEFS_HYGIENE_SWEEP_MINUTES" 15.0
   /// How often the daemon makes sure every session has a file watcher and
   /// sweeps stale ones, in case a state change event was missed. A poll that
   /// the state change events already cover. No recorded reason for 5s.
@@ -971,6 +976,7 @@ module DataRetention =
   let gateCheckoutRetentionEnvVar = "SAGEFS_GATE_RETENTION_DAYS"
   let tempRunMaxAgeEnvVar = "SAGEFS_TEMP_RUN_MAX_AGE_DAYS"
   let workerLogMaxAgeEnvVar = "SAGEFS_WORKER_LOG_MAX_AGE_DAYS"
+  let finishedWorktreeGraceEnvVar = "SAGEFS_FINISHED_WORKTREE_GRACE_DAYS"
   let gatePassRecordsKeptEnvVar = "SAGEFS_GATE_PASS_RECORDS_KEPT"
   let gateLogsKeptEnvVar = "SAGEFS_GATE_LOGS_KEPT"
 
@@ -988,6 +994,10 @@ module DataRetention =
   /// A worker's log is kept this long after its last write. Logs are what a person reads after a crash, and
   /// a crash is looked at within days.
   let workerLogMaxAge = envOrDefaultDays workerLogMaxAgeEnvVar 14.0
+  /// A merged agent worktree is kept this long after it was last in use, because the agent that made it may be resumed:
+  /// the release gate often finds a flake in what an agent wrote, and a resume needs the worktree it was in. A day covers a
+  /// merge, a gate run and the fix that follows. Work that is not merged is never removed, whatever this says.
+  let finishedWorktreeGrace = envOrDefaultDays finishedWorktreeGraceEnvVar 1.0
   /// How many of the local gate's pass records are kept, newest first. A record holds a commit's release bundle
   /// (about 270 MB each), and the pre-push hook only ever looks up the commit being pushed, so ten covers a day
   /// of shipping; 75 of them were 20 GB.

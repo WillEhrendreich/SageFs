@@ -47,7 +47,9 @@ type Sandbox(parent: string) =
       DataDir = Path.Combine(root, "data")
       HostCacheDir = Path.Combine(root, "hosts")
       TempDir = Path.Combine(root, "tmp")
-      Processes = ProcessScope.WholeMachine }
+      Processes = ProcessScope.WholeMachine
+      // The existing sandbox journeys tidy a worktree the moment it is merged. The grace is tested on its own.
+      WorktreeGrace = TimeSpan.Zero }
   do
     Directory.CreateDirectory repo |> ignore
     git repo [ "init"; "-b"; "master" ] |> ignore

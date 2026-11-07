@@ -57,6 +57,7 @@
         <Compile Include="SkillInstall.fs" />
         <Compile Include="WorkspaceHygiene.fs" />
         <Compile Include="WorkspaceHygieneRender.fs" />
+        <Compile Include="HygieneAuto.fs" />
         <Compile Include="HygieneFs.fs" />
         <Compile Include="GateReaper.fs" />
         <Compile Include="GateCheckout.fs" />
@@ -67,6 +68,7 @@
         <Compile Include="Tutorial.fs" />
         <Compile Include="SageFsConfig.fs" />
         <Compile Include="Json.fs" />
+        <Compile Include="HygieneLedger.fs" />
         <Compile Include="MachineCalibration.fs" />
         <Compile Include="MachineProfile.fs" />
         <Compile Include="StartLedger.fs" />

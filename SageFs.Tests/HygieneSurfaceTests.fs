@@ -23,6 +23,7 @@ let private summaryWith (worktrees: int) (gateBytes: int64) : Summary =
     SafeBytes = 2L * 1024L * 1024L * 1024L
     ReviewCount = 1
     ReviewBytes = 0L
+    Held = HeldWork.NothingHeld
     PlanId = PlanId "abc" }
 
 [<Tests>]

@@ -57,6 +57,13 @@ let label (leftover: Leftover) : string =
     | Leftover.OrphanProcess(_, info) -> sprintf "pid %d (%s)" pid (if info.CommandLine.Length > 60 then info.CommandLine.Substring(0, 60) + "..." else info.CommandLine)
     | _ -> sprintf "pid %d" pid
 
+/// Worktrees nobody is using that hold commits the base lacks or uncommitted files: work that exists nowhere else.
+[<RequireQualifiedAccess>]
+type HeldWork =
+  | NothingHeld
+  /// How many, how long the longest-idle of them has gone untouched, and how much disk they take.
+  | WorkHeld of count: int * oldest: TimeSpan * bytes: int64
+
 /// The numbers the nudge, the dashboard header and the status tools quote.
 type Summary =
   { LeftoverWorktrees: int
@@ -66,6 +73,7 @@ type Summary =
     SafeBytes: int64
     ReviewCount: int
     ReviewBytes: int64
+    Held: HeldWork
     PlanId: PlanId }
 
 let summarize (leftovers: Leftover list) (plan: Plan) : Summary =
@@ -82,6 +90,12 @@ let summarize (leftovers: Leftover list) (plan: Plan) : Summary =
     leftovers
     |> List.filter (fun l -> match l with | Leftover.GateCheckout _ | Leftover.GateTierClone _ -> true | _ -> false)
     |> List.sumBy (fun l -> (Leftover.entry l).SizeBytes)
+  let holding =
+    leftovers
+    |> List.choose (fun l ->
+      match l with
+      | Leftover.AgentWorktree(e, _) when Standing.holdsWork e.Standing -> Some e
+      | _ -> None)
   let safe = plan.Steps |> List.filter (fun s -> s.Risk = Risk.Safe)
   let review = plan.Steps |> List.filter (fun s -> s.Risk = Risk.UnmergedCommits || s.Risk = Risk.UncommittedWork)
   { LeftoverWorktrees = List.length worktrees
@@ -91,6 +105,10 @@ let summarize (leftovers: Leftover list) (plan: Plan) : Summary =
     SafeBytes = plan.SafeBytes
     ReviewCount = List.length review
     ReviewBytes = plan.ReviewBytes
+    Held =
+      (match holding with
+       | [] -> HeldWork.NothingHeld
+       | _ -> HeldWork.WorkHeld(List.length holding, holding |> List.map (fun e -> e.Age) |> List.max, holding |> List.sumBy (fun e -> e.SizeBytes)))
     PlanId = plan.Id }
 
 /// The line that goes into replies an orchestrator already reads, or nothing while the workspace is tidy enough.
@@ -98,11 +116,25 @@ let summarize (leftovers: Leftover list) (plan: Plan) : Summary =
 let nudge (summary: Summary) : string option =
   let tooManyWorktrees = summary.LeftoverWorktrees > Thresholds.leftoverWorktreeNudge
   let gateTooBig = summary.GateBytes > Thresholds.gateDirNudgeBytes
-  match tooManyWorktrees, gateTooBig with
-  | false, false -> None
-  | _ ->
+  let nothingToSay =
+    match summary.Held with
+    | HeldWork.NothingHeld -> not tooManyWorktrees && not gateTooBig
+    | HeldWork.WorkHeld _ -> false
+  match nothingToSay with
+  | true -> None
+  | false ->
     let parts =
-      [ if tooManyWorktrees then
+      [ // Work that exists nowhere else leads: a pile of merged worktrees costs disk, this costs work.
+        match summary.Held with
+        | HeldWork.WorkHeld(count, oldest, bytes) ->
+          yield
+            sprintf "%d worktree%s work that is nowhere else (oldest idle %s, %s)"
+              count
+              (match count with | 1 -> " holds" | _ -> "s hold")
+              (formatAge oldest)
+              (formatBytes bytes)
+        | HeldWork.NothingHeld -> ()
+        if tooManyWorktrees then
           yield sprintf "%d leftover worktrees (%s)" summary.LeftoverWorktrees (formatBytes summary.LeftoverWorktreeBytes)
         if gateTooBig then
           yield sprintf "the gate dir holds %s" (formatBytes summary.GateBytes) ]

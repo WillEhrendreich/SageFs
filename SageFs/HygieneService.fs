@@ -141,7 +141,8 @@ let locationsFor (repo: string) : Locations =
       DataDir = DaemonState.SageFsDir
       HostCacheDir = IsolatedFsiSession.hostCacheRoot ()
       TempDir = Path.GetTempPath().TrimEnd('/', '\\')
-      Processes = processScope () }
+      Processes = processScope ()
+      WorktreeGrace = DataRetention.finishedWorktreeGrace }
 
 // ─── What the daemon knows ──────────────────────────────────────────────
 
@@ -162,7 +163,8 @@ let private sdkVersionFor (workingDirectory: string) : string option =
 let liveFactsOf (sessions: (string * string) list) (owners: OwnerRecord list) (isConnected: string -> bool) : LiveFacts =
   { Sessions = sessions
     CurrentSdkVersions = sessions |> List.map snd |> List.distinct |> List.choose sdkVersionFor |> List.distinct
-    Owners = OwnerLedger.toLive owners isConnected }
+    Owners = OwnerLedger.toLive owners isConnected
+    LastActive = HygieneLedgerStore.lastActive DaemonState.SageFsDir DateTime.UtcNow }
 
 // ─── Snapshots ──────────────────────────────────────────────────────────
 

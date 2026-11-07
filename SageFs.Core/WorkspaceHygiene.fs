@@ -529,6 +529,37 @@ module Standing =
     | Standing.Superseded keep -> sprintf "superseded: older than the newest %d" keep
     | Standing.Unknown why -> sprintf "unknown: %s" (UnknownReason.describe why)
 
+  /// Whether a worktree with this standing holds work that exists nowhere else: commits the base branch lacks, or uncommitted
+  /// files that are somebody's. A worktree somebody is using is not counted, its work is in front of them.
+  let holdsWork (standing: Standing) : bool =
+    match standing with
+    | Standing.CleanButUnmerged _
+    | Standing.DirtyReal _ -> true
+    | Standing.InUse _
+    | Standing.Merged _
+    | Standing.DirtyGenerated _
+    | Standing.Orphaned _
+    | Standing.Expired _
+    | Standing.WithinRetention _
+    | Standing.Newest _
+    | Standing.Superseded _
+    | Standing.Unknown _ -> false
+
+  /// Whether a standing is one a merged worktree can have, and so one a grace can hold back.
+  let isMerged (standing: Standing) : bool =
+    match standing with
+    | Standing.Merged _
+    | Standing.DirtyGenerated _ -> true
+    | Standing.InUse _
+    | Standing.CleanButUnmerged _
+    | Standing.DirtyReal _
+    | Standing.Orphaned _
+    | Standing.Expired _
+    | Standing.WithinRetention _
+    | Standing.Newest _
+    | Standing.Superseded _
+    | Standing.Unknown _ -> false
+
   let reclaimability (standing: Standing) : Reclaimability =
     match standing with
     | Standing.Merged _
@@ -559,6 +590,21 @@ let private byGit (merge: MergeEvidence) (changes: ChangedFile list) : Standing 
       | Some files -> Standing.DirtyGenerated(files, how)
       | None -> Standing.Merged how
 
+/// A merged worktree is not reclaimable until it has been quiet for its grace. The agent that made it may be resumed (the gate
+/// often finds a flake in what an agent wrote), and a resume needs its worktree. A subject says how long by `Retention.KeepFor`
+/// and when it was last in use by `LastTouched`. Only a merged standing can wait: work that exists nowhere else is judged by
+/// what git says, however recently it was used, and a grace never makes anything more reclaimable than it was.
+let private withinGrace (now: DateTime) (subject: Subject) (standing: Standing) : Standing =
+  match subject.Retention with
+  | Retention.KeepFor grace when subject.Kind = LeftoverKind.AgentWorktree && Standing.isMerged standing ->
+    let until = subject.LastTouched + grace
+    match now < until with
+    | true -> Standing.WithinRetention until
+    | false -> standing
+  | Retention.KeepFor _
+  | Retention.KeepNewest _
+  | Retention.NeverExpires -> standing
+
 let private byLineage (now: DateTime) (subject: Subject) : Standing =
   match subject.Lineage with
   | Lineage.OwnerGone(_, since) -> Standing.Orphaned since
@@ -587,7 +633,7 @@ let standingOf (now: DateTime) (subject: Subject) : Standing =
     match subject.Git with
     | GitEvidence.GitUnreadable why -> Standing.Unknown why
     | GitEvidence.Branch merge -> byGit merge []
-    | GitEvidence.Worktree(merge, changes) -> byGit merge changes
+    | GitEvidence.Worktree(merge, changes) -> byGit merge changes |> withinGrace now subject
     | GitEvidence.NoGitEvidence -> byLineage now subject
 
 /// Classify gathered facts into a leftover of the subject's kind.
