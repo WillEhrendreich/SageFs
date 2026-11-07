@@ -817,6 +817,7 @@
         <Compile Include="LeaseWireTests.fs" />
         <Compile Include="TestDebugTests.fs" />
         <Compile Include="TestDebugSimTests.fs" />
+        <Compile Include="DebugRecordSimTests.fs" />
         <Compile Include="DebugTestRequestTests.fs" />
         <Compile Include="DebugTestRoutesHttpTests.fs" />
         <Compile Include="DebugRunRecordTests.fs" />

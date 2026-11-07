@@ -307,6 +307,10 @@
              through the REAL TestDebug.step; two twins (never expires, runs unattached) prove the teeth. -->
         <Compile Include="TestDebugSim.fs" />
         <Compile Include="TestDebugSimInvariants.fs" />
+        <!-- The daemon's half of debugging a test: a verdict between the host ending a hold and a row changing, over two
+             sessions and three tests, through the REAL HeldTable, verdictFor and DebugRunRecord.plan; three twins (record on
+             every continue, fabricate a failure, resolve the session by default) prove the teeth. -->
+        <Compile Include="DebugRecordSim.fs" />
         <!-- Wedge watchdog DST: the REAL SupervisorWatchdog.decide folded against
              a virtual clock; twins that never alarm / alarm on every tick. -->
         <Compile Include="SupervisorWatchdogSim.fs" />

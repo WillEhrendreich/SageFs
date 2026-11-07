@@ -22,30 +22,20 @@ module McpDebugTest =
       WorkingDirectory: string option
       Ticket: string }
 
-  /// What the daemon keeps between "hold this test" and the end of the hold: which test a ticket holds, so the verdict the
-  /// host reports (it names no test) can be put on that test's row. Bounded like the ticket log that records them, and a
-  /// ticket leaves it the first time its verdict is dispatched, so a repeated continue records nothing.
+  /// The daemon's one table of holds it has granted (`HeldTable`, pure), behind a lock because routes run on many threads.
   [<Sealed>]
   type HeldTargets() =
     let gate = obj ()
-    let held = System.Collections.Generic.Dictionary<string * string, SageFs.HostAgent.TestDebug.DebugTarget>()
-    let order = System.Collections.Generic.Queue<string * string>()
+    let mutable table = HeldTable.empty
     member _.Add(session: string, target: SageFs.HostAgent.TestDebug.DebugTarget) : unit =
-      let (SageFs.HostAgent.TestDebug.DebugTicket ticket) = target.Ticket
+      lock gate (fun () -> table <- HeldTable.add session target table)
+    /// The verdict the host's answer comes to, with the hold taken out of the table.
+    member _.Verdict(session: string, ticket: string, ended: SageFs.HostAgent.TestDebug.DebugEnd) : SageFs.Features.LiveTesting.DebugRunRecord option =
       lock gate (fun () ->
-        held.[(session, ticket)] <- target
-        order.Enqueue((session, ticket))
-        while order.Count > SageFs.Features.LiveTesting.DebugTicketLog.capacity do
-          held.Remove(order.Dequeue()) |> ignore)
-    member _.TryTake(session: string, ticket: string) : SageFs.HostAgent.TestDebug.DebugTarget option =
-      lock gate (fun () ->
-        match held.TryGetValue((session, ticket)) with
-        | true, target ->
-          held.Remove((session, ticket)) |> ignore
-          Some target
-        | false, _ -> None)
+        let rest, record = verdictFor table session ticket ended System.DateTimeOffset.UtcNow
+        table <- rest
+        record)
 
-  /// The daemon's one table of holds it has granted.
   let heldTargets = HeldTargets()
 
   let private selectorText (selector: TestSelector) : string =
@@ -96,11 +86,8 @@ module McpDebugTest =
         // The hold ended with a verdict: it goes on the test's row, where a normal run's would, without a normal run.
         match answer, ctx.Dispatch with
         | DebugAnswer.Progress(SageFs.HostAgent.TestDebug.DebugProgress.Ended ended), Some dispatch ->
-          match heldTargets.TryTake(sid, request.Ticket) with
-          | Some target ->
-            match recordOf sid request.Ticket target ended System.DateTimeOffset.UtcNow with
-            | Some record -> dispatch (SageFsMsg.Event(TuiEvent.DebugRunFinished record))
-            | None -> ()
+          match heldTargets.Verdict(sid, request.Ticket, ended) with
+          | Some record -> dispatch (SageFsMsg.Event(TuiEvent.DebugRunFinished record))
           | None -> ()
         | _ -> ()
         return toWire answer

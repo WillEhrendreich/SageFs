@@ -311,6 +311,37 @@ let recordOf (session: string) (ticket: string) (target: DebugTarget) (ended: De
   | DebugEnd.NoSuchHold
   | DebugEnd.HostLost _ -> None
 
+/// What the daemon keeps between "hold this test" and the end of the hold: which test each ticket holds, because the host's
+/// verdict names none. Keyed by session and ticket (two hosts can issue the same ticket text). Newest first, bounded like
+/// the ticket log that records the verdicts, so nothing accumulates.
+type HeldTable = private HeldTable of ((string * string) * DebugTarget) list
+
+module HeldTable =
+  let empty = HeldTable []
+
+  let ticketText (target: DebugTarget) : string =
+    let (DebugTicket ticket) = target.Ticket
+    ticket
+
+  /// The hold the host just granted for `session`.
+  let add (session: string) (target: DebugTarget) (HeldTable entries) : HeldTable =
+    HeldTable (((session, ticketText target), target) :: entries |> List.truncate DebugTicketLog.capacity)
+
+  /// The target of this session's ticket, and the table without it: a ticket answers once.
+  let take (session: string) (ticket: string) (HeldTable entries) : DebugTarget option * HeldTable =
+    match entries |> List.tryFind (fun (key, _) -> key = (session, ticket)) with
+    | Some (_, target) -> Some target, HeldTable (entries |> List.filter (fun (key, _) -> key <> (session, ticket)))
+    | None -> None, HeldTable entries
+
+  let count (HeldTable entries) : int = entries.Length
+
+/// What the daemon does with the host's answer to a continue: the verdict to record (if the hold ended with one, for a hold
+/// this daemon granted) and the table with that hold taken out.
+let verdictFor (table: HeldTable) (session: string) (ticket: string) (ended: DebugEnd) (at: DateTimeOffset) : HeldTable * DebugRunRecord option =
+  match HeldTable.take session ticket table with
+  | Some target, rest -> rest, recordOf session ticket target ended at
+  | None, rest -> rest, None
+
 // ---- asking the worker ------------------------------------------------------------------------------
 
 let private newReplyId () = Guid.NewGuid().ToString("N").Substring(0, 8)
