@@ -110,6 +110,12 @@ dedicated thread under a deadline and, on Linux x86-64, a syscall filter, answer
 show), and replaces that binding's tree. The event is pushed again after a click and after a mode switch, not only after an eval.
 The last three reasons are what a click came to when it did not give a value: show "unknown" and the reason, never an empty row.
 
+A node also carries `Assign`, which says whether the program can assign the place the value lives in: `{"Case":"Assignable"}` for a
+record field declared `mutable`, `{"Case":"Fixed"}` for a record field without it, and `{"Case":"NotKnown"}` for every other node
+(a binding's root, a list or tuple item, a union field). Whether a top-level binding is `let mutable` is in the file that declares
+it and not in its value, so the walk does not say. The dashboard uses the field to tell a value the program changed from a value
+you tried (`evolved` and `tweaked` in the Live Bindings pane). A reader that does not know the field can ignore it.
+
 Whatever the mode:
 
 - A `Task` is shown by its status. The walk never waits on it, and reads `Result`

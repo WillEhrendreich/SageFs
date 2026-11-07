@@ -31,7 +31,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 let origin = "http://sagefs.test"
 
 let node (label: string) (kind: NodeKind) (preview: string) (typeName: string) (children: LiveValueNode list) : LiveValueNode =
-  { Label = label; TypeName = typeName; Preview = preview; Kind = kind; Children = children; BestEffort = false; Depth = 0 }
+  { Label = label; TypeName = typeName; Preview = preview; Kind = kind; Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = 0 }
 
 /// A pane with one editable row (`gravity`, in a file) and two bindings no file defines.
 let dockHtml (mode: ValueWalk) : string =
@@ -50,7 +50,7 @@ let dockHtml (mode: ValueWalk) : string =
       Reload = RowReload.NoWriteYet
       Undo = HistoryStep.NothingToStep
       Redo = HistoryStep.NothingToStep
-      Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
+      Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited; Storage = Storage.NotKnown; Push = PushOffer.NotOffered; Via = PushVia.RebindBinding }
   let notInAFile = view (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt) Control.NoControl PlaceOf.NotPlaced
   let tweaks : TweakView =
     { Rows =

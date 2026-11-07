@@ -49,20 +49,20 @@ let rec private buildNode
 
   if isCycle visited value then
     { Label = label; TypeName = SageFs.FSharpTypeName.runtimeName t; Preview = "↩ (cycle)"; Kind = NodeKind.Cycle
-      Children = []; BestEffort = false; Depth = depth }
+      Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
   elif depth >= MaxDepth then
     { Label = label; TypeName = SageFs.FSharpTypeName.runtimeName t; Preview = scalarPreview value; Kind = NodeKind.Truncated
-      Children = []; BestEffort = false; Depth = depth }
+      Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
   elif budget.Value <= 0 then
     { Label = label; TypeName = SageFs.FSharpTypeName.runtimeName t; Preview = "… (node budget)"; Kind = NodeKind.Truncated
-      Children = []; BestEffort = false; Depth = depth }
+      Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
   else
     budget.Value <- budget.Value - 1
     try
       let typeName = SageFs.FSharpTypeName.runtimeName t
       let leaf preview kind = {
         Label = label; TypeName = typeName; Preview = preview; Kind = kind
-        Children = []; BestEffort = false; Depth = depth }
+        Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
 
       match value with
       | null -> leaf "null" NodeKind.Leaf
@@ -90,7 +90,7 @@ let rec private buildNode
             |> Array.toList
           with _ -> []
         { Label = label; TypeName = typeName; Preview = "<fun>"; Kind = NodeKind.Closure
-          Children = children; BestEffort = true; Depth = depth }
+          Children = children; BestEffort = true; Assign = Assignment.NotKnown; Depth = depth }
       | :? System.Collections.IDictionary as d ->
         let entries = d |> Seq.cast<DictionaryEntry> |> Seq.truncate (MaxChildren + 1) |> Seq.toList
         let preview = entries |> List.truncate MaxChildren
@@ -100,7 +100,7 @@ let rec private buildNode
           entries |> List.truncate MaxChildren
           |> List.mapi (fun i e -> buildNode visited budget (keyLabel e.Key) (depth + 1) e.Value)
         { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
-          Children = children; BestEffort = false; Depth = depth }
+          Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
       | _ when t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<Map<string, obj>> ->
         let entries =
           (value :?> System.Collections.IEnumerable)
@@ -121,7 +121,7 @@ let rec private buildNode
             let v = kv.GetType().GetProperty("Value").GetValue kv
             buildNode visited budget (keyLabel k) (depth + 1) v)
         { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
-          Children = children; BestEffort = false; Depth = depth }
+          Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
       | :? System.Collections.IEnumerable as e ->
         let items = e |> Seq.cast<obj> |> Seq.truncate (MaxChildren + 1) |> Seq.toList
         let shown = items |> List.truncate MaxChildren
@@ -131,7 +131,7 @@ let rec private buildNode
           |> List.mapi (fun i item -> buildNode visited budget (sprintf "[%d]" i) (depth + 1) item)
         let kind = if t.IsArray then NodeKind.Array else NodeKind.List
         { Label = label; TypeName = typeName; Preview = preview; Kind = kind
-          Children = children; BestEffort = false; Depth = depth }
+          Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
       | _ when FSharpType.IsRecord t ->
         let fields = FSharpValue.GetRecordFields value
         let fieldInfos = FSharpType.GetRecordFields t
@@ -143,11 +143,13 @@ let rec private buildNode
           |> fun s -> "{ " + s + " }"
         let children =
           fields
-          |> Array.mapi (fun i f -> buildNode visited budget fieldInfos.[i].Name (depth + 1) f)
+          |> Array.mapi (fun i f ->
+            let assign = match fieldInfos.[i].CanWrite with | true -> Assignment.Assignable | false -> Assignment.Fixed
+            { buildNode visited budget fieldInfos.[i].Name (depth + 1) f with Assign = assign })
           |> Array.truncate MaxChildren
           |> Array.toList
         { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Record
-          Children = children; BestEffort = false; Depth = depth }
+          Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
       | _ when FSharpType.IsUnion t ->
         let case, caseFields = FSharpValue.GetUnionFields(value, t)
         let preview =
@@ -165,7 +167,7 @@ let rec private buildNode
           |> Array.toList
         let kind = if case.Name = "Some" || case.Name = "None" then NodeKind.Option else NodeKind.Union
         { Label = label; TypeName = typeName; Preview = preview; Kind = kind
-          Children = children; BestEffort = false; Depth = depth }
+          Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
       | _ when FSharpType.IsTuple t ->
         let fields = FSharpValue.GetTupleFields value
         let preview = fields |> Array.map scalarPreview |> Array.toList |> truncateList |> fun s -> "(" + s + ")"
@@ -175,7 +177,7 @@ let rec private buildNode
           |> Array.truncate MaxChildren
           |> Array.toList
         { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Tuple
-          Children = children; BestEffort = false; Depth = depth }
+          Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
       | _ ->
         let props =
           t.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
@@ -194,13 +196,13 @@ let rec private buildNode
           |> Array.mapi (fun i p ->
             try buildNode visited budget p.Name (depth + 1) (p.GetValue value)
             with _ -> { Label = p.Name; TypeName = "error"; Preview = "<error>"; Kind = NodeKind.Leaf
-                        Children = []; BestEffort = false; Depth = depth + 1 })
+                        Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth + 1 })
           |> Array.toList
         { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Class
-          Children = children; BestEffort = false; Depth = depth }
+          Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
     with ex ->
       { Label = label; TypeName = SageFs.FSharpTypeName.runtimeName t; Preview = sprintf "<error: %s>" ex.Message
-        Kind = NodeKind.Leaf; Children = []; BestEffort = false; Depth = depth }
+        Kind = NodeKind.Leaf; Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
 
 /// The pre-caching walker's tree for one binding.
 let buildValueNode (label: string) (value: obj) : LiveValueNode =

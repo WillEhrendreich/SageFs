@@ -37,7 +37,7 @@ let private jsonOpts =
 let private mkSnapshot (sessionId: string) : LiveValueSnapshot =
   let root : LiveValueNode =
     { Label = "x"; TypeName = "int"; Preview = "42"; Kind = NodeKind.Leaf
-      Children = []; BestEffort = false; Depth = 0 }
+      Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = 0 }
   { SessionId = sessionId
     Generation = 1L
     Bindings = [ { Name = "x"; TypeSignature = "int"; Root = root } ]

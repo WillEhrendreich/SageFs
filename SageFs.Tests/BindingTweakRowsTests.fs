@@ -109,7 +109,7 @@ let rowTests =
           Root =
             { Label = "gravity"; TypeName = "t"; Preview = "runs code"
               Kind = LiveValueTree.NodeKind.NotEvaluated LiveValueTree.NotEvaluatedReason.GetterRunsCode
-              Children = []; BestEffort = false; Depth = 0 } }
+              Children = []; BestEffort = false; Assign = LiveValueTree.Assignment.NotKnown; Depth = 0 } }
       let snapshot = { walked [] with Bindings = [ held ] }
       stateOf (buildRows tuningIndex snapshot Memory.empty) gravityKey |> Expect.equal "held" PersistenceState.Held
 
@@ -123,6 +123,64 @@ let rowTests =
         let snapshot = walked (names |> List.map (fun n -> n, value n))
         let view = buildRows tuningIndex snapshot Memory.empty
         view.Rows |> Map.forall (fun key _ -> List.contains key.Binding names)))
+  ]
+
+type Body = { Mass: float; mutable Hp: int }
+
+[<Tests>]
+let storageRowTests =
+  let stamped (index: SourceIndex) : SourceIndex =
+    { index with Files = index.Files |> List.map (fun file -> { file with Revision = FileRevision.Revised "r1" }) }
+  let rowOf (view: TweakView) (key: RowKey) : RowView =
+    match TweakView.tryRow view key with
+    | Some row -> row
+    | None -> failtestf "no row for %A" key
+  testList "whether the program can have changed a row's value, and what the row offers to do about it" [
+
+    testCase "a record field the walk saw a setter on is a mutable place and is assigned in place; one without is fixed and copied" <| fun _ ->
+      let index = indexOf [ inspectedFile "B.fs" "module B\nlet body = { Mass = 80.0; Hp = 100 }\n" [ "body" ] ]
+      let view = buildRows index (walked [ "body", box { Mass = 80.0; Hp = 100 } ]) Memory.empty
+      let hp = rowOf view (RowKey.field (RowKey.top "body") "Hp")
+      let mass = rowOf view (RowKey.field (RowKey.top "body") "Mass")
+      hp.Storage |> Expect.equal "a mutable field" Storage.Mutable
+      hp.Via |> Expect.equal "assigned on the instance the program holds" PushVia.AssignField
+      mass.Storage |> Expect.equal "a field without `mutable`" Storage.Fixed
+      mass.Via |> Expect.equal "copied, because it cannot be assigned" PushVia.RebindWithCopy
+
+    testCase "a binding the file declares `let mutable` that the program then changed is evolved, and the same change to a plain `let` is only a difference" <| fun _ ->
+      let mutableIndex = stamped (indexOf [ inspectedFile "T.fs" "module T\nlet mutable counter = 5\n" [ "counter" ] ])
+      let inStep = buildRows mutableIndex (walked [ "counter", box 5 ]) Memory.empty
+      let seen = Memory.observe mutableIndex inStep Memory.empty
+      let moved = buildRows mutableIndex (walked [ "counter", box 7 ]) seen
+      match stateOf moved (RowKey.top "counter") with
+      | PersistenceState.Evolved(live, EvolvedBy.MovedWhileRunning, _) -> live |> Expect.equal "what the program holds" "7"
+      | other -> failtestf "expected Evolved, got %A" other
+      (rowOf moved (RowKey.top "counter")).Via |> Expect.equal "a mutable binding is assigned" PushVia.AssignBinding
+      let plainIndex = stamped (indexOf [ inspectedFile "T.fs" "module T\nlet counter = 5\n" [ "counter" ] ])
+      let plainSeen = Memory.observe plainIndex (buildRows plainIndex (walked [ "counter", box 5 ]) Memory.empty) Memory.empty
+      let plainMoved = buildRows plainIndex (walked [ "counter", box 7 ]) plainSeen
+      PersistenceState.token (stateOf plainMoved (RowKey.top "counter")) |> Expect.equal "a plain let does not move by itself" "DiffersFromFile"
+      (rowOf plainMoved (RowKey.top "counter")).Storage |> Expect.equal "fixed" Storage.Fixed
+
+    testCase "a file edited since the pane last saw the row in step is never blamed on the program, even for a mutable binding" <| fun _ ->
+      let first = stamped (indexOf [ inspectedFile "T.fs" "module T\nlet mutable counter = 5\n" [ "counter" ] ])
+      let seen = Memory.observe first (buildRows first (walked [ "counter", box 5 ]) Memory.empty) Memory.empty
+      let edited =
+        { first with Files = first.Files |> List.map (fun file -> { file with Revision = FileRevision.Revised "r2" }) }
+      PersistenceState.token (stateOf (buildRows edited (walked [ "counter", box 7 ]) seen) (RowKey.top "counter"))
+      |> Expect.equal "either side could have moved it" "DiffersFromFile"
+
+    testCase "a number and a text field offer to try a value; a switch, a formula and a part nothing spells do not" <| fun _ ->
+      let view = buildRows tuningIndex (walked [ "gravity", box 9.8; "hard", box true; "jump", box 19.6; "title", box "Nudge"; "speed", box 3 ]) Memory.empty
+      (rowOf view (RowKey.top "gravity")).Push |> Expect.equal "a number" PushOffer.Offered
+      (rowOf view (RowKey.top "title")).Push |> Expect.equal "a string field" PushOffer.Offered
+      (rowOf view (RowKey.top "hard")).Push |> Expect.equal "a switch writes the moment it is flipped" PushOffer.NotOffered
+      (rowOf view (RowKey.top "jump")).Push |> Expect.equal "a formula is not a value" PushOffer.NotOffered
+      (rowOf view (RowKey.top "speed")).Push |> Expect.equal "no file holds it" PushOffer.NotOffered
+
+    testCase "a row being written offers nothing until the door answers" <| fun _ ->
+      let memory = Memory.started gravityKey (WriteKind.SetTo "10.0") gravityRef Memory.empty
+      (rowOf (buildRows tuningIndex (walked [ "gravity", box 9.8 ]) memory) gravityKey).Push |> Expect.equal "writing" PushOffer.NotOffered
   ]
 
 [<Tests>]

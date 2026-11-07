@@ -215,9 +215,14 @@ let rec private collect (path: PathStep list) (expr: SynExpr) : (PathStep list *
 /// Every declaration in a parsed file, module path included, regardless of
 /// nesting. Only `let`/`let mutable` bindings at a level produce entries,
 /// this module only ever addresses bindings, never types or members.
+type BindingMutability =
+  | MutableBinding
+  | PlainBinding
+
 type private ModuleBinding =
   { ModulePath: string list
     Name: string
+    Mutability: BindingMutability
     Expr: SynExpr }
 
 let private identText (ids: Ident list) = ids |> List.map _.idText |> String.concat "."
@@ -236,8 +241,16 @@ let rec private bindingsIn (modulePath: string list) (decls: SynModuleDecl list)
   |> List.collect (function
     | SynModuleDecl.Let(bindings = bindings) ->
       bindings
-      |> List.choose (fun (SynBinding(headPat = pat; expr = expr)) ->
-        patName pat |> Option.map (fun name -> { ModulePath = modulePath; Name = name; Expr = expr }))
+      |> List.choose (fun (SynBinding(isMutable = isMutable; headPat = pat; expr = expr)) ->
+        patName pat
+        |> Option.map (fun name ->
+          { ModulePath = modulePath
+            Name = name
+            Mutability =
+              match isMutable with
+              | true -> MutableBinding
+              | false -> PlainBinding
+            Expr = expr }))
     | SynModuleDecl.NestedModule(moduleInfo = SynComponentInfo(longId = ids); decls = inner) ->
       bindingsIn (modulePath @ [ identText ids ]) inner
     | _ -> [])
@@ -278,6 +291,16 @@ let declaredBindings (source: string) : Result<DeclaredBinding list, ResolveErro
   |> Result.map (fun (_, bindings) ->
     bindings
     |> List.map (fun b -> ({ ModulePath = b.ModulePath; Name = b.Name; Rhs = rangeText source b.Expr.Range }: DeclaredBinding)))
+
+/// The names of the bindings a file declares `let mutable`, at any level. The door's listing of tweakable points does not say which
+/// bindings are mutable, and a live value does not either, so this is where the pane learns it.
+let mutableBindings (source: string) : Result<Set<string>, ResolveError> =
+  parse source
+  |> Result.map (fun (_, bindings) ->
+    bindings
+    |> List.filter (fun b -> b.Mutability = MutableBinding)
+    |> List.map (fun b -> b.Name)
+    |> Set.ofList)
 
 /// Every tweakable leaf (numeric, bool, char, string, DU-case-like
 /// identifier) plus every record-field expression, for every binding in the

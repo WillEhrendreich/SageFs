@@ -113,6 +113,7 @@ module TweakerVersusProgramSim =
             Watching = WatchStatus.Watched
             Items = [ placeOf world.File ]
             Wholes = []
+            MutableBindings = Set.empty
             UndoSteps = 0
             RedoSteps = 0
             Revision = revisionOf world } ]
@@ -145,7 +146,10 @@ module TweakerVersusProgramSim =
               Undo = HistoryStep.NothingToStep
               Redo = HistoryStep.NothingToStep
               Through = ThroughCall.NoCall
-              Limits = SageFs.Features.Tweak.NumberLimits.unlimited } ] }
+              Limits = SageFs.Features.Tweak.NumberLimits.unlimited
+              Storage = Storage.Mutable
+              Push = PushOffer.NotOffered
+              Via = PushVia.AssignBinding } ] }
 
   /// The door took a write of `value` into the file.
   let written (world: World) (value: int) : World =

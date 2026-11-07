@@ -5399,3 +5399,55 @@ body {
   color: var(--fg-default) !important;
   font-weight: 700 !important;
 }
+
+/* ── The changes strip and the buttons that act on a tried value ──
+   What the session holds that the files do not, and what the program changed on its own, above the tree. The first line is the count;
+   Save all and Revert all follow it; each file with unsaved tweaks lists them as before and after. A tweak is the notice colour and
+   a value the program changed is the info colour (the program is not wrong, it is something to know), and both are said in words. */
+.live-changes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-normal);
+  border-left: 3px solid var(--color-warn);
+  font-size: 0.857rem;
+  line-height: 1.35;
+  min-width: 0;
+}
+
+.live-changes-count {
+  font-weight: 700;
+  color: var(--fg-default);
+}
+
+.live-changes-file {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.live-changes-name {
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+.live-changes-list {
+  margin: 0;
+  padding-left: 1.2em;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+/* A value tried or moved takes more than one button in its Edit cell, so the group wraps instead of running out of the pane. */
+.live-dock .live-actions {
+  flex-wrap: wrap;
+}
+
+/* The question before a value the program changed is written into the file. */
+.live-adopt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}

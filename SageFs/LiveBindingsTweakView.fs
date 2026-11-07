@@ -39,8 +39,18 @@ module TweakSignals =
   let [<Literal>] LimLow = "twLimLow"
   let [<Literal>] LimHigh = "twLimHigh"
   let [<Literal>] LimStep = "twLimStep"
+  /// How a tried value is put into the session (`PushVia.token`), staged beside the row's request.
+  let [<Literal>] Via = "twVia"
+  /// The requests of "Save all" and "Revert all", as one JSON list, staged for the post.
+  let [<Literal>] Batch = "twBatch"
+  /// The row whose "use this as the initial value" is waiting for its confirmation, or empty when none is.
+  let [<Literal>] Adopt = "twAdopt"
   /// Where a chosen range and step are posted.
   let [<Literal>] LimitsEndpoint = "/dashboard/tweak/limits"
+  /// Where a tried value, and a revert or reset of one, are posted: they evaluate code in the session and write nothing to the file.
+  let [<Literal>] PushEndpoint = "/dashboard/tweak/push"
+  /// Where the strip's "Save all" and "Revert all" are posted.
+  let [<Literal>] BatchEndpoint = "/dashboard/tweak/batch"
   /// Where the knob posts. A dashboard route, because the page posts to the origin it was served from.
   let [<Literal>] Endpoint = "/dashboard/tweak"
   /// How many steps a drag, the buttons or the keys may count from where the row stands, either way.
@@ -57,7 +67,10 @@ module TweakSignals =
       Ds.signal (Value, "")
       Ds.signal (LimLow, "")
       Ds.signal (LimHigh, "")
-      Ds.signal (LimStep, "") ]
+      Ds.signal (LimStep, "")
+      Ds.signal (Via, "")
+      Ds.signal (Batch, "")
+      Ds.signal (Adopt, "") ]
 
   let hexOf (text: string) : string = Convert.ToHexStringLower(Text.Encoding.UTF8.GetBytes text)
 
@@ -75,6 +88,8 @@ module TweakSignals =
   let limStepOf (key: RowKey) : string = named "twStep" key
   let limNoteOf (key: RowKey) : string = named "twLimNote" key
   let limitsId (key: RowKey) : string = named "twl" key
+  /// The question a row asks before the program's value is written into the file. The element keeps a client attribute, so it has an id.
+  let adoptQuestionId (key: RowKey) : string = named "twq" key
 
 // ── said in words ──
 
@@ -1003,6 +1018,201 @@ let applyNodes (key: RowKey) (view: RowView) : XmlNode list =
   | PlaceOf.Placed _, ApplyOffer.NotOffered
   | PlaceOf.NotPlaced, _ -> []
 
+// ── trying a value, saving a tweak, resetting a value the program moved ──
+
+/// What a request to the push route does: try a typed value in the session, or put the file's value back. Neither writes the file.
+[<RequireQualifiedAccess>]
+type PushVerb =
+  | Push
+  | Revert
+
+[<RequireQualifiedAccess>]
+module PushVerb =
+  let [<Literal>] PushToken = "push"
+  let [<Literal>] RevertToken = "revert"
+
+  let token (verb: PushVerb) : string =
+    match verb with
+    | PushVerb.Push -> PushToken
+    | PushVerb.Revert -> RevertToken
+
+  let ofToken (text: string) : Result<PushVerb, ConfigError> =
+    match text with
+    | PushToken -> Ok PushVerb.Push
+    | RevertToken -> Ok PushVerb.Revert
+    | other -> Error(NotAMember(other, [ PushToken; RevertToken ]))
+
+/// The words on the buttons that act on a value the session holds and the file does not. Each says what it writes and where, so a
+/// button never reads as "Save" with the person left to guess what to what.
+module TweakWords =
+  let tryWord : string = "Try"
+  let tryTitle : string = "Put the number in the box into the running session. The file is not changed, and the row says tweaked until you save it."
+
+  /// "Save 9.5 to Tuning.fs:5": the value and the line it goes to.
+  let save (live: string) (place: SourceRef) : string = sprintf "Save %s to %s" live (whereOf place)
+
+  /// What puts the file's own value back into the session.
+  let revert (place: SourceRef) : string = sprintf "Revert to %s" place.Text
+
+  /// The same act on a value the program moved: back to the value it started with.
+  let reset (place: SourceRef) : string = sprintf "Reset to %s" place.Text
+
+  /// The one that writes what the program holds into the file, as the value it starts with.
+  let adopt (live: string) : string = sprintf "Use %s as the initial value" live
+
+  let adoptConfirm : string = "Write it"
+  let adoptCancel : string = "Leave the file as it is"
+
+/// What writing a value the program changed into the file means, said before it is done. It names the line, the function when the
+/// literal is in one, the callers that share it, and that the code that moved the value still runs.
+let adoptConfirmation (key: RowKey) (live: string) (place: SourceRef) (through: ThroughCall) : string =
+  let valueName =
+    match List.tryLast key.Labels with
+    | Some label -> label
+    | None -> key.Binding
+  let inFunction, callers =
+    match through with
+    | ThroughCall.Through followed ->
+      let shared =
+        match followed.Callers with
+        | CallerCount.Counted n when n > 1 -> sprintf " %d callers use this literal." n
+        | CallerCount.Counted _
+        | CallerCount.NotCounted _ -> ""
+      sprintf " in %s" followed.Callee, shared
+    | ThroughCall.NoCall
+    | ThroughCall.CouldNotFollow _ -> "", ""
+  sprintf "Write %s%s so the program starts with %s = %s? The code that changed it still runs, so it can move again.%s" (whereOf place) inFunction valueName live callers
+
+/// The script that stages a push (or a revert) of a row and posts it to the route that evaluates it in the session.
+let pushScript (key: RowKey) (place: SourceRef) (via: PushVia) (verb: string) (valueJs: string) : string =
+  sprintf "$%s = %s; %s" TweakSignals.Via (jsText (PushVia.token via)) (stagePostTo TweakSignals.PushEndpoint key place { Verb = verb; ValueJs = valueJs })
+
+/// Where a row's typed value lives in the page, as a script: the number's box, or the text field's signal.
+let typedValueJs (key: RowKey) (control: Control) : string option =
+  match control with
+  | Control.RealStepper _
+  | Control.IntegerStepper _ -> Some(sprintf "document.getElementById(%s).value" (jsText (TweakSignals.readoutId key)))
+  | Control.LiteralField _ -> Some(sprintf "$%s" (TweakSignals.fieldOf key))
+  | Control.Toggle _
+  | Control.ExpressionField _
+  | Control.NoControl -> None
+
+let private wordButton (testName: string) (title: string) (key: RowKey) (word: string) (onClick: string) : XmlNode =
+  Elem.button
+    [ Attr.class' "session-btn session-btn-labeled live-history live-act"
+      Attr.type' "button"
+      testid testName
+      Attr.title (attrEnc title)
+      Ds.indicator (TweakSignals.busyOf key)
+      Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
+      Ds.onClick (attrEnc onClick) ]
+    [ Elem.span [ Attr.class' "session-btn-label" ] [ textEnc word ] ]
+
+/// The button that tries the typed value in the session, where the row offers it. It changes nothing in the file.
+let tryNodes (key: RowKey) (view: RowView) : XmlNode list =
+  match view.Place, view.Push, typedValueJs key view.Control with
+  | PlaceOf.Placed place, PushOffer.Offered, Some valueJs ->
+    [ wordButton "tweak-try" TweakWords.tryTitle key TweakWords.tryWord (pushScript key place view.Via PushVerb.PushToken valueJs) ]
+  | PlaceOf.Placed _, _, _
+  | PlaceOf.NotPlaced, _, _ -> []
+
+/// What a row offers for a value the session holds that the file does not. A tweak is saved by name and reverted; a value the program
+/// moved is never saved plainly: it is reset, or adopted after the person has read what that writes.
+let savingNodes (key: RowKey) (view: RowView) : XmlNode list =
+  match view.Place with
+  | PlaceOf.NotPlaced -> []
+  | PlaceOf.Placed place ->
+    match SaveOffer.ofState view.State with
+    | SaveOffer.WriteTweak(live, tweakPlace) ->
+      [ wordButton
+          "tweak-save"
+          (sprintf "Write %s into %s. The file changes and the running session keeps the value." live (whereInWords tweakPlace))
+          key
+          (TweakWords.save live tweakPlace)
+          (stagePostJs key place { Verb = "set"; ValueJs = jsText (PushCode.doorText place.Text live) })
+        wordButton "tweak-revert" "Put the file's value back into the running session." key (TweakWords.revert place) (pushScript key place view.Via PushVerb.RevertToken "''") ]
+    | SaveOffer.ResetOrAdopt(live, evolvedPlace) ->
+      let rowText = RowKey.text key
+      let waiting = sprintf "$%s === %s" TweakSignals.Adopt (jsText rowText)
+      [ wordButton "tweak-reset" "Put the value the program started with back into the running session." key (TweakWords.reset place) (pushScript key place view.Via PushVerb.RevertToken "''")
+        wordButton
+          "tweak-adopt"
+          "Write the value the program holds into the file as the value it starts with. This asks first."
+          key
+          (TweakWords.adopt live)
+          (sprintf "$%s = %s" TweakSignals.Adopt (jsText rowText))
+        Elem.div
+          [ Attr.id (TweakSignals.adoptQuestionId key)
+            Attr.class' "live-detail live-tone-notice live-adopt"
+            testid "tweak-adopt-confirm"
+            Attr.style "display:none"
+            Ds.preserveAttr "style"
+            Ds.show (attrEnc waiting) ]
+          [ Elem.span [ testid "tweak-adopt-sentence" ] [ textEnc (adoptConfirmation key live evolvedPlace view.Through) ]
+            wordButton
+              "tweak-adopt-yes"
+              "Write it into the file."
+              key
+              TweakWords.adoptConfirm
+              (sprintf "$%s = ''; %s" TweakSignals.Adopt (stagePostJs key place { Verb = "set"; ValueJs = jsText (PushCode.doorText place.Text live) }))
+            wordButton "tweak-adopt-no" "Close this question and change nothing." key TweakWords.adoptCancel (sprintf "$%s = ''" TweakSignals.Adopt) ] ]
+    | SaveOffer.NothingToSave
+    | SaveOffer.EditFormula _
+    | SaveOffer.NoSave -> []
+
+// ── the changes strip ──
+
+/// The strip above the tree. Nothing when there is nothing to say, because a strip that says "0" on every page is noise. Save all and
+/// Revert all are drawn only when there are tweaks, and act on those alone.
+let changesStrip (changes: ChangesStrip.Changes) : XmlNode list =
+  match ChangesStrip.Changes.isEmpty changes with
+  | true -> []
+  | false ->
+    let batchButton (testName: string) (title: string) (word: string) (items: ChangesStrip.BatchItem list) : XmlNode =
+      let json = Json.serialize Json.camelCase items
+      Elem.button
+        [ Attr.class' "session-btn session-btn-labeled live-history live-act"
+          Attr.type' "button"
+          testid testName
+          Attr.title (attrEnc title)
+          Ds.onClick (attrEnc (sprintf "$%s = %s; %s" TweakSignals.Batch (jsText json) (Ds.post TweakSignals.BatchEndpoint))) ]
+        [ Elem.span [ Attr.class' "session-btn-label" ] [ textEnc word ] ]
+    let tweakLines =
+      ChangesStrip.Changes.byFile changes.Tweaks
+      |> List.map (fun (file, tweaks) ->
+        Elem.div
+          [ Attr.class' "live-changes-file"; testid "live-changes-file" ]
+          [ Elem.span [ Attr.class' "live-changes-name"; Attr.title (attrEnc file) ] [ textEnc (Path.GetFileName file) ]
+            Elem.ul
+              [ Attr.class' "live-changes-list" ]
+              [ for tweak in tweaks ->
+                  Elem.li
+                    [ testid "live-changes-tweak" ]
+                    [ textEnc (sprintf "%s: %s → %s" (RowKey.text tweak.Row) tweak.Before tweak.After) ] ] ])
+    let evolvedLines =
+      match changes.Evolved with
+      | [] -> []
+      | evolved ->
+        [ Elem.div
+            [ Attr.class' "live-changes-file"; testid "live-changes-evolved" ]
+            [ Elem.span [ Attr.class' "live-changes-name" ] [ textEnc "Changed by the program" ]
+              Elem.ul
+                [ Attr.class' "live-changes-list" ]
+                [ for change in evolved ->
+                    Elem.li [] [ textEnc (sprintf "%s: %s → %s" (RowKey.text change.Row) change.Initial change.Now) ] ] ] ]
+    let actions =
+      match changes.Tweaks with
+      | [] -> []
+      | _ ->
+        [ batchButton "live-changes-save-all" "Write every tweak into its file. A value the program changed is not included." "Save all" (ChangesStrip.Batch.saveAll changes)
+          batchButton "live-changes-revert-all" "Put the file's value back for every tweak. A value the program changed is not included." "Revert all" (ChangesStrip.Batch.revertAll changes) ]
+    [ Elem.div
+        [ Attr.class' "live-changes"; testid "live-changes" ]
+        [ Elem.span [ Attr.class' "live-changes-count"; testid "live-changes-count" ] [ textEnc (ChangesStrip.summary changes) ]
+          yield! actions
+          yield! tweakLines
+          yield! evolvedLines ] ]
+
 /// The two numbers of a row whose file and running program disagree. A record, so the two cannot be swapped by mistake.
 type ValuesDiffer = { RunningValue: string; SavedValue: string }
 
@@ -1166,7 +1376,7 @@ let renderStripWith (notes: XmlNode list) (key: RowKey) (view: RowView) (placeme
         | NumberLabels.OneNumber, _ -> []
       // Undo, redo and Apply are one group, so on the wide layout they take one cell under the slider.
       let actions =
-        match historyNodes key view @ applyNodes key view with
+        match historyNodes key view @ applyNodes key view @ tryNodes key view @ savingNodes key view with
         | [] -> []
         | nodes -> [ Elem.span [ Attr.class' "live-actions" ] nodes ]
       fileTag @ knob @ actions

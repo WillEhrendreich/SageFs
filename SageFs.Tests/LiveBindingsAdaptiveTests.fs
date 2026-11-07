@@ -15,7 +15,7 @@ let private mkSnap (sessionId: string) (generation: int64) (names: string list) 
       { Name = name
         TypeSignature = "int"
         Root = { Label = name; TypeName = "int"; Preview = string i; Kind = NodeKind.Leaf
-                 Children = []; BestEffort = false; Depth = 0 } })
+                 Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = 0 } })
   { SessionId = sessionId; Generation = generation; Bindings = bindings
     Truncated = false; CapturedAt = DateTimeOffset.UtcNow }
 

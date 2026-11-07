@@ -188,18 +188,23 @@ module Rows =
     (limits: LimitsBook)
     (key: RowKey)
     (live: LiveShape)
+    (assign: LiveValueTree.Assignment)
     (found: SourceFacts)
     : RowView =
     let facts, through = throughCall index (RowKey.steps key) found
     let place = PlaceOf.ofFacts facts
-    // The walk does not report whether a place is assignable yet, so storage is not known and a row is `Evolved` only from a push.
     let fileNow =
       match place with
       | PlaceOf.Placed source -> Memory.revisionOf index source
       | PlaceOf.NotPlaced -> FileRevision.Unrevised
+    // Where the value lives decides whether the program can have changed it: a binding the file declares `let mutable`, or a record
+    // field the walk saw a setter on. The binding's own declaration is what counts for a part of it, so a field of a call-built value
+    // is the row's binding's, never the callee's.
+    let declared = SourceIndex.declaredAs index key.Binding
+    let storage = Storage.derive declared assign
     let provenance =
       { Pushed = Memory.pushOf memory key
-        Storage = Storage.NotKnown
+        Storage = storage
         Baseline = Memory.baselineOf memory key
         FileNow = fileNow }
     let state, control = stateAndControlWith provenance live facts (Memory.outcomeOf memory key)
@@ -219,12 +224,15 @@ module Rows =
       Undo = FileTrail.undoFor address trail
       Redo = FileTrail.redoFor address trail
       Through = through
-      Limits = LimitsBook.forRow limits (RowKey.text key) }
+      Limits = LimitsBook.forRow limits (RowKey.text key)
+      Storage = storage
+      Push = PushOffer.ofRow control state
+      Via = PushVia.derive key.Labels declared assign }
 
   /// Record fields down from a binding the files hold in exactly one place. Only records are walked: a list's, a tuple's or a map's
   /// items are not mapped, so they get no row, and the binding's own row says it is a container.
   let rec private fieldRows
-    (rowOf: RowKey -> LiveShape -> SourceFacts -> RowView)
+    (rowOf: RowKey -> LiveShape -> LiveValueTree.Assignment -> SourceFacts -> RowView)
     (index: SourceIndex)
     (parent: RowKey)
     (node: LiveValueTree.LiveValueNode)
@@ -235,7 +243,7 @@ module Rows =
       |> List.collect (fun child ->
         let key = RowKey.field parent child.Label
         let facts = SourceIndex.factsFor index parent.Binding (RowKey.steps key)
-        (key, rowOf key (LiveShape.ofNode child) facts) :: fieldRows rowOf index key child)
+        (key, rowOf key (LiveShape.ofNode child) child.Assign facts) :: fieldRows rowOf index key child)
     | _ -> []
 
   /// Every row the pane has something to say about for this session's walked values.
@@ -254,9 +262,9 @@ module Rows =
       |> List.collect (fun binding ->
         let top = RowKey.top binding.Name
         let topFacts = SourceIndex.factsFor index binding.Name []
-        let own = top, rowOf top (LiveShape.ofNode binding.Root) topFacts
+        let own = top, rowOf top (LiveShape.ofNode binding.Root) binding.Root.Assign topFacts
         match topFacts with
-        | SourceFacts.OneSource _ -> own :: fieldRows (fun key live facts -> rowOf key live facts) index top binding.Root
+        | SourceFacts.OneSource _ -> own :: fieldRows rowOf index top binding.Root
         | SourceFacts.NoFileBindsIt
         | SourceFacts.FilesUnknown _
         | SourceFacts.ManySources _

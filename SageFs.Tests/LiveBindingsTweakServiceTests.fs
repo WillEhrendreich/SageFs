@@ -451,3 +451,157 @@ let limitsTests =
         File.ReadAllText sb.Tuning |> Expect.stringContains "in the file" "let gravity = 29.5"
       }) }
   ]
+
+/// What the session was asked to evaluate, and what it said: the stand-in for the worker the push route sends statements to.
+let private sessionThat (answer: Result<string, string>) : ResizeArray<string> * (string -> Task<Result<string, string>>) =
+  let asked = ResizeArray<string>()
+  asked,
+  fun code ->
+    task {
+      asked.Add code
+      return answer
+    }
+
+[<Tests>]
+let pushServiceTests =
+  let gravityKey = RowKey.top "gravity"
+  testList "trying a value in the session: the daemon's half" [
+
+    testTask "a tried value is evaluated in the session, the file is untouched, and the row then reads tweaked with what was tried" {
+      do! withSandbox (fun sb -> task {
+        let! rows = view sb [ "gravity", box 9.8 ]
+        let place = placeOf rows gravityKey
+        let asked, session = sessionThat (Ok "val gravity: float = 9.5")
+        let changes = ref 0
+        do! Service.push sb.Service "s" session (fun () -> changes.Value <- changes.Value + 1) gravityKey place PushVia.RebindBinding SageFs.Server.LiveBindingsTweakView.PushVerb.Push "9.5"
+        asked |> List.ofSeq |> Expect.equal "the statement, ready to evaluate" [ "let gravity = 9.5;;" ]
+        File.ReadAllText sb.Tuning |> Expect.equal "the file is exactly as it was" tuningText
+        changes.Value |> Expect.equal "the page was told" 1
+        let! after = view sb [ "gravity", box 9.5 ]
+        match stateOf after gravityKey with
+        | PersistenceState.Tweaked(live, filePlace) ->
+          live |> Expect.equal "what the session holds" "9.5"
+          filePlace.Text |> Expect.equal "what the file still says" "9.8"
+        | other -> failtestf "expected Tweaked, got %A" other
+      }) }
+
+    testTask "WHY — a session that refuses the statement leaves the row as it was: nothing is remembered as tried" {
+      do! withSandbox (fun sb -> task {
+        let! rows = view sb [ "gravity", box 9.8 ]
+        let place = placeOf rows gravityKey
+        let asked, session = sessionThat (Error "error FS0001: this value is not mutable")
+        do! Service.push sb.Service "s" session ignore gravityKey place PushVia.AssignBinding SageFs.Server.LiveBindingsTweakView.PushVerb.Push "9.5"
+        asked.Count |> Expect.equal "it was asked once" 1
+        let! after = view sb [ "gravity", box 9.8 ]
+        PersistenceState.token (stateOf after gravityKey) |> Expect.equal "still in step with the file" "InSource"
+      }) }
+
+    testTask "a typed value the literal cannot take is refused on the row with the door's rule, and the session is never asked" {
+      do! withSandbox (fun sb -> task {
+        let! rows = view sb [ "gravity", box 9.8 ]
+        let place = placeOf rows gravityKey
+        let asked, session = sessionThat (Ok "")
+        do! Service.push sb.Service "s" session ignore gravityKey place PushVia.RebindBinding SageFs.Server.LiveBindingsTweakView.PushVerb.Push "fast"
+        asked.Count |> Expect.equal "the session was not asked" 0
+        let! after = view sb [ "gravity", box 9.8 ]
+        match stateOf after gravityKey with
+        | PersistenceState.Refused(NudgeRefusal.LiteralNotReadable(kind, given), _) ->
+          kind |> Expect.equal "a real was wanted" LiteralKindName.Real
+          given |> Expect.equal "what was typed" "fast"
+        | other -> failtestf "expected the door's refusal, got %A" other
+      }) }
+
+    testTask "a revert puts the file's literal back and ends the tweak; a push that returns to the file's own value ends it too" {
+      do! withSandbox (fun sb -> task {
+        let! rows = view sb [ "gravity", box 9.8 ]
+        let place = placeOf rows gravityKey
+        let _, session = sessionThat (Ok "ok")
+        do! Service.push sb.Service "s" session ignore gravityKey place PushVia.RebindBinding SageFs.Server.LiveBindingsTweakView.PushVerb.Push "9.5"
+        Memory.pushOf (Service.memoryOf sb.Service "s") gravityKey |> Expect.equal "tried" (PushedValue.Pushed "9.5")
+        let asked, reverting = sessionThat (Ok "ok")
+        do! Service.push sb.Service "s" reverting ignore gravityKey place PushVia.RebindBinding SageFs.Server.LiveBindingsTweakView.PushVerb.Revert ""
+        asked |> List.ofSeq |> Expect.equal "the file's own text" [ "let gravity = 9.8;;" ]
+        Memory.pushOf (Service.memoryOf sb.Service "s") gravityKey |> Expect.equal "nothing tried any more" PushedValue.NoPush
+        do! Service.push sb.Service "s" session ignore gravityKey place PushVia.RebindBinding SageFs.Server.LiveBindingsTweakView.PushVerb.Push "9.5"
+        do! Service.push sb.Service "s" session ignore gravityKey place PushVia.RebindBinding SageFs.Server.LiveBindingsTweakView.PushVerb.Push "9.8"
+        Memory.pushOf (Service.memoryOf sb.Service "s") gravityKey |> Expect.equal "typing the file's value again is not a tweak" PushedValue.NoPush
+      }) }
+
+    testTask "WHY — several reverts are ONE evaluation: the dashboard reads the values after each eval without waiting, and two reads in a row can finish out of order" {
+      do! withSandbox (fun sb -> task {
+        let! rows = view sb [ "gravity", box 9.8; "maxHealth", box 100 ]
+        let gravity = placeOf rows gravityKey
+        let health = placeOf rows (RowKey.top "maxHealth")
+        let _, session = sessionThat (Ok "ok")
+        do! Service.push sb.Service "s" session ignore gravityKey gravity PushVia.RebindBinding SageFs.Server.LiveBindingsTweakView.PushVerb.Push "9.5"
+        do! Service.push sb.Service "s" session ignore (RowKey.top "maxHealth") health PushVia.RebindBinding SageFs.Server.LiveBindingsTweakView.PushVerb.Push "7"
+        let asked, reverting = sessionThat (Ok "ok")
+        do! Service.revertMany sb.Service "s" reverting ignore [ gravityKey, gravity, PushVia.RebindBinding; RowKey.top "maxHealth", health, PushVia.RebindBinding ]
+        asked.Count |> Expect.equal "one evaluation" 1
+        asked.[0] |> Expect.equal "both statements, in order, as one interaction" "let gravity = 9.8\nlet maxHealth = 100;;"
+        let memory = Service.memoryOf sb.Service "s"
+        Memory.pushOf memory gravityKey |> Expect.equal "gravity is no longer tried" PushedValue.NoPush
+        Memory.pushOf memory (RowKey.top "maxHealth") |> Expect.equal "nor is maxHealth" PushedValue.NoPush
+      }) }
+
+    testTask "WHY — a file written while it is being read is read again next time, never served as current under its newer stamp: the row would say the file holds a value it no longer does" {
+      let dir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-tweak-%s" (Guid.NewGuid().ToString("N")))
+      Directory.CreateDirectory dir |> ignore
+      try
+        let tuning = Path.Combine(dir, "Tuning.fs")
+        File.WriteAllText(tuning, tuningText)
+        let writes = ref 0
+        let armed = ref false
+        // A write that lands right after each read of the file, the way the knob's own write lands while the page is still reading the
+        // row it just started. Every text is as long as the one before, so only the stamp can tell them apart.
+        let rewrite () =
+          writes.Value <- writes.Value + 1
+          File.WriteAllText(tuning, tuningText.Replace("let gravity = 9.8", sprintf "let gravity = 9.%d" (writes.Value % 10)))
+        let ports = McpNudge.productionPorts (Path.Combine(dir, "tweaks-journal"))
+        let readThenWrite (path: string) =
+          let answer = ports.Files.ReadBytes path
+          match armed.Value && path = tuning with
+          | true -> rewrite ()
+          | false -> ()
+          answer
+        let env : Env =
+          { Ports = { ports with Files = { ports.Files with ReadBytes = readThenWrite } }
+            Locks = FileLocks()
+            Stamp =
+              fun path ->
+                match path = tuning with
+                | true -> FileStamp.Stamped(int64 (File.ReadAllText path).Length, int64 writes.Value)
+                | false -> FileStamp.Unstamped
+            Now = fun () -> 0L }
+        let service = Service.create env
+        let owned = Service.ownedOf "s" dir [ tuning, HotReloadWatch.Watched ]
+        let look () = Service.viewFor service "s" owned (walked [ "gravity", box 9.8 ]) SessionReload.NoReloadYet
+        let! _ = look ()
+        armed.Value <- true
+        rewrite ()
+        let! _ = look ()
+        armed.Value <- false
+        let! settled = look ()
+        let onDisk = Text.RegularExpressions.Regex.Match(File.ReadAllText tuning, "let gravity = ([0-9.]+)").Groups.[1].Value
+        match stateOf settled (RowKey.top "gravity") with
+        | PersistenceState.DiffersFromFile(_, place)
+        | PersistenceState.InSource place -> place.Text |> Expect.equal "the row says what the file holds now" onDisk
+        | other -> failtestf "gravity: %A" other
+      finally
+        try Directory.Delete(dir, true) with _ -> ()
+    }
+
+    testTask "a binding the file declares `let mutable`, changed by the program, reads evolved from the real file; the same change to a plain `let` does not" {
+      do! withSandbox (fun sb -> task {
+        File.WriteAllText(sb.Tuning, tuningText + "\nlet mutable counter = 5\n")
+        let! inStep = view sb [ "gravity", box 9.8; "counter", box 5 ]
+        PersistenceState.token (stateOf inStep (RowKey.top "counter")) |> Expect.equal "in step first" "InSource"
+        let! moved = view sb [ "gravity", box 9.8; "counter", box 7 ]
+        match stateOf moved (RowKey.top "counter") with
+        | PersistenceState.Evolved(live, EvolvedBy.MovedWhileRunning, _) -> live |> Expect.equal "what the program holds" "7"
+        | other -> failtestf "expected Evolved, got %A" other
+        (TweakView.tryRow moved (RowKey.top "counter")).Value.Via |> Expect.equal "assigned, because the file says mutable" PushVia.AssignBinding
+        let! plain = view sb [ "gravity", box 12.0 ]
+        PersistenceState.token (stateOf plain gravityKey) |> Expect.equal "a plain let is only a difference" "DiffersFromFile"
+      }) }
+  ]

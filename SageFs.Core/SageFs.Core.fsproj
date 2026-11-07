@@ -559,9 +559,11 @@
         <Compile Include="Features\Tweak\NumberLimits.fs" />
         <Compile Include="Features\Tweak\BindingTweak.fs" />
         <!-- A part of a value built by a call, followed to the literal in the callee that gives it its value. Pure, over the index. -->
+        <Compile Include="Features\Tweak\PushCode.fs" />
         <Compile Include="Features\Tweak\CallFollow.fs" />
         <!-- The pane's rows assembled from the files, the walk, what the dashboard did to each row and the last reload. -->
         <Compile Include="Features\Tweak\BindingTweakRows.fs" />
+        <Compile Include="Features\Tweak\ChangesStrip.fs" />
         <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
         <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —

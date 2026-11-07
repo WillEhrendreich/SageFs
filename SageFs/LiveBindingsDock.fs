@@ -830,6 +830,10 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
       | PrintedBindings _
       | NothingBound -> viewControls.Panel
     | None -> ()
+    // What the session holds that the files do not, and what the program changed: above the tree so it stays in view.
+    match look.Changes with
+    | On -> yield! changesStrip (Tweak.ChangesStrip.Changes.ofView tweaks)
+    | Off -> ()
     yield! body
   ]
 

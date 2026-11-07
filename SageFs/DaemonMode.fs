@@ -3948,7 +3948,9 @@ let run
     liveBindingsHub.Notes.Keys
     |> Seq.filter (fun k -> not (liveIds.Contains k))
     |> Seq.toList
-    |> List.iter (SageFs.Features.LiveBindingsPane.PaneStore.remove liveBindingsHub.Notes)
+    |> List.iter (fun k ->
+      SageFs.Features.LiveBindingsPane.PaneStore.remove liveBindingsHub.Notes k
+      SageFs.Features.LiveBindingsPane.Feed.gates.TryRemove k |> ignore)
     tweakService.Memories.Keys
     |> Seq.filter (fun k -> not (liveIds.Contains k))
     |> Seq.toList
@@ -4636,6 +4638,9 @@ let run
       Dashboard.mapPostRaw "/dashboard/tweak" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.handler dashboardQueries dashboardInfra tweakService)
       // The row's "Apply to this session": evaluates the file's value in the session, writes nothing to the file.
       Dashboard.mapPostRaw "/dashboard/tweak/apply" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.applyHandler dashboardInfra dashboardActions.EvalCode)
+      // A row's "Try" (a typed value put into the session, the file untouched) and its revert or reset, and the strip's batch of saves or reverts.
+      Dashboard.mapPostRaw "/dashboard/tweak/push" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.pushHandler dashboardInfra tweakService dashboardActions.EvalCode)
+      Dashboard.mapPostRaw "/dashboard/tweak/batch" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.batchHandler dashboardQueries dashboardInfra tweakService dashboardActions.EvalCode)
       // A number's chosen range and step, kept in .SageFs/tweak-limits.json beside the project.
       Dashboard.mapPostRaw "/dashboard/tweak/limits" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.limitsHandler dashboardQueries dashboardInfra tweakService) ]
 

@@ -70,6 +70,7 @@ let rec private genNode (depth: int) : Gen<LiveValueTree.LiveValueNode> =
     let! preview = genText
     let! kind = Gen.elements allNodeKinds
     let! bestEffort = Gen.elements [ true; false ]
+    let! assign = Gen.elements [ LiveValueTree.Assignment.NotKnown; LiveValueTree.Assignment.Assignable; LiveValueTree.Assignment.Fixed ]
     let! nodeDepth = Gen.choose (0, 6)
     let! children =
       match depth <= 0 with
@@ -82,6 +83,7 @@ let rec private genNode (depth: int) : Gen<LiveValueTree.LiveValueNode> =
         Kind = kind
         Children = children
         BestEffort = bestEffort
+        Assign = assign
         Depth = nodeDepth }
   }
 

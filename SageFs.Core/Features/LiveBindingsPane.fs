@@ -303,9 +303,15 @@ module LiveBindingsPane =
         | Result.Ok other -> return Result.Error(unexpected sessionId other)
       }
 
-    /// Pull a session's live values after an eval. A worker nobody has told a mode is given the config's, once; a worker a
-    /// user has told keeps what it was told. `configuredWalk` is only called when it could matter.
-    let pull (ask: Ask) (adaptive: LiveBindingsAdaptive.State) (notes: PaneStore.T) (sessionId: string) (configuredWalk: unit -> ValueWalk) : Async<unit> =
+    /// One pull at a time for each session. The dashboard starts a pull after every eval and does not wait for the last, so two
+    /// evals in a row start two pulls whose answers can arrive in either order, and the answer that arrives last is the one the
+    /// store keeps: the pull that read the newer values could be overwritten by the one that read the older ones, and the pane
+    /// would keep showing the first eval's values. A pull that waits for the one before it asks the worker after that one has
+    /// finished, so the last answer is the last read.
+    let gates = System.Collections.Concurrent.ConcurrentDictionary<string, System.Threading.SemaphoreSlim>()
+
+    /// One read of a session's live values, and what follows from the mode the worker answered with.
+    let pullNow (ask: Ask) (adaptive: LiveBindingsAdaptive.State) (notes: PaneStore.T) (sessionId: string) (configuredWalk: unit -> ValueWalk) : Async<unit> =
       async {
         match! ask (WorkerProtocol.WorkerMessage.GetLiveValues(sprintf "live-%s" sessionId)) with
         | Result.Error error -> Utils.Log.warn "[LiveBindings] the live values pull for %s failed: %s" sessionId (SageFsError.describe error)
@@ -323,6 +329,18 @@ module LiveBindingsPane =
                 | Result.Ok _ -> ()
                 | Result.Error error -> Utils.Log.warn "[LiveBindings] the configured walk mode for %s could not be applied: %s" sessionId (SageFsError.describe error)
         | Result.Ok other -> Utils.Log.warn "[LiveBindings] %s" (SageFsError.describe (unexpected sessionId other))
+      }
+
+    /// Pull a session's live values after an eval, one pull at a time for the session (`gates`). A worker nobody has told a mode is
+    /// given the config's, once; a worker a user has told keeps what it was told. `configuredWalk` is only called when it could matter.
+    let pull (ask: Ask) (adaptive: LiveBindingsAdaptive.State) (notes: PaneStore.T) (sessionId: string) (configuredWalk: unit -> ValueWalk) : Async<unit> =
+      async {
+        let gate = gates.GetOrAdd(sessionId, fun _ -> new System.Threading.SemaphoreSlim(1, 1))
+        do! gate.WaitAsync() |> Async.AwaitTask
+        try
+          do! pullNow ask adaptive notes sessionId configuredWalk
+        finally
+          gate.Release() |> ignore
       }
 
     /// Run one clicked getter. The answer is remembered, and the binding's new tree replaces the old one. The snapshot is

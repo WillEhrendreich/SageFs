@@ -140,6 +140,8 @@ type FileInspection =
     Watching: WatchStatus
     Items: SourceRef list
     Wholes: SourceRef list
+    /// The names of the bindings this file declares `let mutable`, which the door's listing does not say.
+    MutableBindings: Set<string>
     UndoSteps: int
     RedoSteps: int
     /// Which write of the file this inspection read.
@@ -202,6 +204,14 @@ type ThroughCall =
   | Through of Followed
   | CouldNotFollow of Refusal
 
+/// What the session's files say about how a row's binding is declared: `let mutable`, plain `let`, or not declared in a file the pane
+/// has read. A top-level `let mutable` in FSI is only known from the file, because the live value does not carry it.
+[<RequireQualifiedAccess>]
+type BindingDeclared =
+  | Mutable
+  | Immutable
+  | NotDeclared
+
 /// The session's inspected files, and the files that could not be read. Built by the shell that does the reading.
 type SourceIndex =
   { Files: FileInspection list
@@ -250,6 +260,18 @@ module SourceIndex =
           |> List.filter (fun r -> r.Address.ModulePath = modulePath && List.isEmpty r.Address.Path)
           |> List.distinctBy (fun r -> r.Span)
         { File = file.File; ModulePath = modulePath; Owners = owners }))
+
+  /// How the files declare a binding: `let mutable` in any file that declares it, otherwise plain `let` where a file declares it, and
+  /// not declared where none does. A name declared in two places has an ambiguous row, which offers no control, so which one is meant
+  /// does not matter here.
+  let declaredAs (index: SourceIndex) (binding: string) : BindingDeclared =
+    let declaredIn (file: FileInspection) = (file.Items @ file.Wholes) |> List.exists (fun r -> r.Address.BindingName = binding)
+    match index.Files |> List.exists (fun file -> Set.contains binding file.MutableBindings) with
+    | true -> BindingDeclared.Mutable
+    | false ->
+      match index.Files |> List.exists declaredIn with
+      | true -> BindingDeclared.Immutable
+      | false -> BindingDeclared.NotDeclared
 
   /// The facts for a top-level binding, or for a part of it reached by `steps` (record fields). The binding's own declarations decide
   /// between none, one and several; only a binding in exactly one place has parts to look up, and they are looked up in that
@@ -350,6 +372,63 @@ type Storage =
   | Mutable
   | Fixed
   | NotKnown
+
+module Storage =
+  /// Whether the place a row's value lives in can be assigned after it was made, from how its binding is declared and what the walk
+  /// says about the field. A binding declared mutable can be assigned whole, so every part of it can change. Otherwise only a record
+  /// field the walk saw a setter on can. A binding the files declare plainly has no way for a program to change it (a plain `let`
+  /// does not move), and one no file declares says only what the walk saw.
+  let derive (declared: BindingDeclared) (field: LiveValueTree.Assignment) : Storage =
+    match declared, field with
+    | BindingDeclared.Mutable, _ -> Storage.Mutable
+    | _, LiveValueTree.Assignment.Assignable -> Storage.Mutable
+    | _, LiveValueTree.Assignment.Fixed -> Storage.Fixed
+    | BindingDeclared.Immutable, LiveValueTree.Assignment.NotKnown -> Storage.Fixed
+    | BindingDeclared.NotDeclared, LiveValueTree.Assignment.NotKnown -> Storage.NotKnown
+
+/// How a value is put into the running session for a row without writing the file. The statement differs because the effect does: a
+/// `mutable` place is assigned, so the instance the program already holds changes; anything else is rebound, which the session sees and
+/// an instance the program captured earlier does not.
+[<RequireQualifiedAccess>]
+type PushVia =
+  /// `name <- value`: a binding declared `let mutable`.
+  | AssignBinding
+  /// `name.A.B <- value`: a record field declared `mutable`, on the instance the program holds.
+  | AssignField
+  /// `let name = value`: a plain top-level value.
+  | RebindBinding
+  /// `let name = { name with A = { name.A with B = value } }`: a field that cannot be assigned, so the record is copied.
+  | RebindWithCopy
+  /// `name <- { name with A = value }`: a field that cannot be assigned, inside a binding that can.
+  | AssignBindingWithCopy
+
+module PushVia =
+  let all : PushVia list =
+    [ PushVia.AssignBinding; PushVia.AssignField; PushVia.RebindBinding; PushVia.RebindWithCopy; PushVia.AssignBindingWithCopy ]
+
+  /// The word a page sends to say which way, and the one place it is turned back into the closed set.
+  let token (via: PushVia) : string =
+    match via with
+    | PushVia.AssignBinding -> "assign-binding"
+    | PushVia.AssignField -> "assign-field"
+    | PushVia.RebindBinding -> "rebind"
+    | PushVia.RebindWithCopy -> "rebind-copy"
+    | PushVia.AssignBindingWithCopy -> "assign-binding-copy"
+
+  let ofToken (text: string) : Result<PushVia, ConfigError> =
+    match all |> List.tryFind (fun via -> token via = text) with
+    | Some via -> Ok via
+    | None -> Error(NotAMember(text, all |> List.map token))
+
+  /// The way for a row: `labels` are the record fields down from the binding, `field` is what the walk says about the last one.
+  let derive (labels: string list) (declared: BindingDeclared) (field: LiveValueTree.Assignment) : PushVia =
+    match labels, declared, field with
+    | [], BindingDeclared.Mutable, _ -> PushVia.AssignBinding
+    | [], (BindingDeclared.Immutable | BindingDeclared.NotDeclared), _ -> PushVia.RebindBinding
+    | _ :: _, _, LiveValueTree.Assignment.Assignable -> PushVia.AssignField
+    | _ :: _, BindingDeclared.Mutable, (LiveValueTree.Assignment.Fixed | LiveValueTree.Assignment.NotKnown) -> PushVia.AssignBindingWithCopy
+    | _ :: _, (BindingDeclared.Immutable | BindingDeclared.NotDeclared), (LiveValueTree.Assignment.Fixed | LiveValueTree.Assignment.NotKnown) ->
+      PushVia.RebindWithCopy
 
 /// The revision of the file when the pane last saw a row's live value equal the file's expression. Without it a live value that
 /// differs from the file could be the program's doing or the file's (someone edited it and nothing reloaded), and the pane would be
@@ -878,6 +957,23 @@ module ReloadWatch =
 /// Which row: a top-level binding, or a record field reached by the labels down from it.
 type RowKey = { Binding: string; Labels: string list }
 
+/// Whether a row offers to try a typed value in the running session without writing the file, and how it would put the value there.
+/// A number and a text field offer it, because each has a box to type into before anything is written. A switch writes the moment it
+/// is flipped, so it has no value waiting to be tried; a formula is not a value to put anywhere; a row with no control has nothing
+/// to type.
+[<RequireQualifiedAccess>]
+type PushOffer =
+  | Offered
+  | NotOffered
+
+module PushOffer =
+  let ofRow (control: Control) (state: PersistenceState) : PushOffer =
+    match control, state with
+    | _, PersistenceState.Writing _
+    | _, PersistenceState.StaleAddress _ -> PushOffer.NotOffered
+    | (Control.RealStepper _ | Control.IntegerStepper _ | Control.LiteralField _), _ -> PushOffer.Offered
+    | (Control.Toggle _ | Control.ExpressionField _ | Control.NoControl), _ -> PushOffer.NotOffered
+
 type RowView =
   { State: PersistenceState
     Control: Control
@@ -891,7 +987,13 @@ type RowView =
     /// Whether the row's literal is in a callee, and what a write there reaches.
     Through: ThroughCall
     /// What the person chose for this number: its range and its step. Nothing chosen is `NumberLimits.unlimited`.
-    Limits: NumberLimits }
+    Limits: NumberLimits
+    /// Whether the program can assign the place this row's value lives in, as far as the files and the walk say.
+    Storage: Storage
+    /// Whether the row offers to try a value in the session without saving it.
+    Push: PushOffer
+    /// How a value would be put into the session for this row (the statement differs for a place the program can assign).
+    Via: PushVia }
 
 /// Every row the pane has something to say about. A row not in the map has nothing to say (a part of a REPL-only value: its binding says it).
 type TweakView = { Rows: Map<RowKey, RowView> }

@@ -601,7 +601,7 @@ let sessionIdOnceTests = testList "SSE frame names its session once" [
     let root : SageFs.Features.LiveValueTree.LiveValueNode =
       { Label = "x"; TypeName = "int"; Preview = "42"
         Kind = SageFs.Features.LiveValueTree.NodeKind.Leaf
-        Children = []; BestEffort = false; Depth = 0 }
+        Children = []; BestEffort = false; Assign = SageFs.Features.LiveValueTree.Assignment.NotKnown; Depth = 0 }
     { SessionId = sid
       Generation = 1L
       Bindings = [ { Name = "x"; TypeSignature = "int"; Root = root } ]

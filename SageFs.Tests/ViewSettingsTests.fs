@@ -18,8 +18,10 @@ let catalogTests =
   testList "ViewSettings catalog" [
 
     testCase "WHY — every workflow has every axis as its own setting, with its own key, because a key that two settings share would make one overwrite the other" <| fun _ ->
-      ViewSettings.descriptors |> List.length |> Expect.equal "three workflows by eight axes" 24
-      ViewSettings.descriptors |> List.map (fun d -> d.Key) |> List.distinct |> List.length |> Expect.equal "all keys distinct" 24
+      let expected = ViewWorkflow.all.Length * ViewAxis.all.Length
+      ViewSettings.descriptors |> List.length |> Expect.equal "every workflow by every axis" expected
+      ViewSettings.descriptors |> List.map (fun d -> d.Key) |> List.distinct |> List.length |> Expect.equal "all keys distinct" expected
+      expected |> Expect.equal "three workflows by nine axes: the eight of the plan and the changes strip" 27
       ViewSettings.descriptors
       |> List.forall (fun d -> d.Key.StartsWith "bindings.view.")
       |> Expect.isTrue "all under one prefix, so the panel can group them"

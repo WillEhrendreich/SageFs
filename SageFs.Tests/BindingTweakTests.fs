@@ -52,7 +52,7 @@ let real (file: string) (binding: string) (text: string) : SourceRef =
   sourceAt file binding text (ItemKind.Knob(LiteralValue.Real(Double.Parse(text, Globalization.CultureInfo.InvariantCulture))))
 
 let fileOf (name: string) (items: SourceRef list) : FileInspection =
-  { File = name; Watching = WatchStatus.Watched; Items = items; Wholes = []; UndoSteps = 0; RedoSteps = 0; Revision = FileRevision.Unrevised }
+  { File = name; Watching = WatchStatus.Watched; Items = items; Wholes = []; MutableBindings = Set.empty; UndoSteps = 0; RedoSteps = 0; Revision = FileRevision.Unrevised }
 
 let inspectedWith (file: string) (text: string) (target: InspectTarget) : SourceRef list =
   match inspect file text EventLog.empty target with
@@ -66,7 +66,7 @@ let inspectedFile (file: string) (text: string) (names: string list) : FileInspe
   let wholes =
     SourceIndex.wholesToRead (Set.ofList names) items
     |> List.collect (fun address -> inspectedWith file text (InspectTarget.OneAddress address))
-  { fileOf file items with Wholes = wholes }
+  { fileOf file items with Wholes = wholes; MutableBindings = TweakAddress.mutableBindings text |> Result.defaultValue Set.empty }
 
 let indexOf (files: FileInspection list) : SourceIndex = { Files = files; Unreadable = []; Applied = ApplicationCounts.NotCounted "a test index does not count calls" }
 
@@ -130,7 +130,7 @@ let liveShapeTests =
 
     testCase "a leaf is a scalar, a held value is not read, a part-bearing value is a container, a cut branch is unreadable" <| fun _ ->
       let node kind children : LiveValueTree.LiveValueNode =
-        { Label = "x"; TypeName = "t"; Preview = "p"; Kind = kind; Children = children; BestEffort = false; Depth = 0 }
+        { Label = "x"; TypeName = "t"; Preview = "p"; Kind = kind; Children = children; BestEffort = false; Assign = LiveValueTree.Assignment.NotKnown; Depth = 0 }
       LiveShape.ofNode (node LiveValueTree.NodeKind.Leaf []) |> Expect.equal "leaf" (LiveShape.Scalar "p")
       LiveShape.ofNode (node (LiveValueTree.NodeKind.NotEvaluated LiveValueTree.NotEvaluatedReason.GetterRunsCode) []) |> Expect.equal "held" LiveShape.NotRead
       LiveShape.ofNode (node LiveValueTree.NodeKind.Record [ node LiveValueTree.NodeKind.Leaf [] ]) |> Expect.equal "record" LiveShape.Container

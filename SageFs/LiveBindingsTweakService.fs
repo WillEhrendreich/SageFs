@@ -292,7 +292,20 @@ module Service =
 
   /// Inspect one file through the door, with the whole right-hand side of each of `names` the listing carries only parts of, and of
   /// each of `names` the file builds with a call of one of `known`.
-  let inspectFile (service: Service) (owned: OwnedFiles) (names: Set<string>) (known: Set<string>) (path: string) : Task<Result<Inspected, string>> =
+  ///
+  /// `fileStamp` and `journalStamp` are the stamps taken BEFORE anything is read, and they are what the inspection is cached under. A
+  /// stamp taken after the reading can belong to a file that was written meanwhile (the knob's own write runs while the page renders
+  /// the row it just started): old content under the new stamp would be served as current until the next write, and the row would say
+  /// the file holds a value it no longer does. Stamped first, a file written during the read is simply read again next time.
+  let inspectFile
+    (service: Service)
+    (owned: OwnedFiles)
+    (names: Set<string>)
+    (known: Set<string>)
+    (path: string)
+    (fileStamp: FileStamp)
+    (journalStamp: FileStamp)
+    : Task<Result<Inspected, string>> =
     task {
       let! listed = door service owned (inspectRaw path "")
       match listed with
@@ -321,17 +334,22 @@ module Service =
               match Ownership.tryOwn owned service.Env.Ports.Files.KindOf path with
               | Ok file -> Ownership.watchOf file
               | Error _ -> WatchStatus.NotWatched
-            let journalStamp =
-              match Ownership.tryOwn owned service.Env.Ports.Files.KindOf path with
-              | Ok file -> service.Env.Stamp(service.Env.Ports.JournalPathOf file)
-              | Error _ -> FileStamp.Unstamped
+            // Which bindings the file declares `let mutable`: the listing does not say, and a live value cannot. A file the shell cannot
+            // read again, or that does not parse, adds none, and the rows of its bindings then read as declared plainly.
+            let mutables =
+              match service.Env.Ports.Files.ReadBytes path with
+              | Error _ -> Set.empty
+              | Ok bytes ->
+                match TweakAddress.mutableBindings (Text.Encoding.UTF8.GetString bytes) with
+                | Ok names -> names
+                | Error _ -> Set.empty
             match inspection.Listing with
             | Listing.Truncated(shown, total) ->
               return Error(sprintf "the file has %d tweakable points and one listing holds %d, so a binding may be missing from it" total shown)
             | Listing.Complete ->
               return
                 Ok
-                  { FileStamp = service.Env.Stamp path
+                  { FileStamp = fileStamp
                     JournalStamp = journalStamp
                     Names = names
                     Known = known
@@ -340,9 +358,10 @@ module Service =
                         Watching = watching
                         Items = items
                         Wholes = wholes
+                        MutableBindings = mutables
                         UndoSteps = inspection.UndoSteps
                         RedoSteps = inspection.RedoSteps
-                        Revision = FileStamp.revision (service.Env.Stamp path) } }
+                        Revision = FileStamp.revision fileStamp } }
     }
 
   /// What the session's files say, for the names asked about. A file that does not declare any of them is not parsed; one that does is
@@ -372,7 +391,7 @@ module Service =
             match cachedBefore with
             | true, cached when cached.FileStamp = fileStamp -> Set.union names cached.Names
             | _ -> names
-          let! result = inspectFile service owned wanted known path
+          let! result = inspectFile service owned wanted known path fileStamp journalStamp
           match result with
           | Ok inspected ->
             service.Inspected.[path] <- inspected
@@ -457,30 +476,33 @@ module Service =
 
   /// The expression the row was showing when it was clicked, as the page reported it. The cached inspection has the real one
   /// (with its span and kind) when the hash still matches; otherwise it is what the page said, with no position.
-  let attemptedOf (service: Service) (request: TweakRequest) : SourceRef =
+  let attemptedFrom (service: Service) (row: RowKey) (file: string) (addressText: string) (seen: string) (seenText: string) : SourceRef =
     let known =
-      match service.Inspected.TryGetValue request.File with
+      match service.Inspected.TryGetValue file with
       | true, cached ->
         cached.File.Items @ cached.File.Wholes
-        |> List.tryFind (fun item -> SourceRef.addressText item = request.Address && item.Hash = request.Seen)
+        |> List.tryFind (fun item -> SourceRef.addressText item = addressText && item.Hash = seen)
       | false, _ -> None
     match known with
     | Some item -> item
     | None ->
       let address =
-        match NudgeAddress.tryParse request.Address with
+        match NudgeAddress.tryParse addressText with
         | Ok parsed -> parsed
-        | Error _ -> { ModulePath = []; BindingName = request.Row.Binding; Path = RowKey.steps request.Row }
+        | Error _ -> { ModulePath = []; BindingName = row.Binding; Path = RowKey.steps row }
       let kind =
-        match readLiteralText request.SeenText with
+        match readLiteralText seenText with
         | Ok(value, _) -> ItemKind.Knob value
         | Error _ -> ItemKind.Formula
-      { File = request.File
+      { File = file
         Address = address
-        Text = request.SeenText
-        Hash = request.Seen
+        Text = seenText
+        Hash = seen
         Span = { Line = 0; Column = 0; EndLine = 0; EndColumn = 0 }
         Kind = kind }
+
+  let attemptedOf (service: Service) (request: TweakRequest) : SourceRef =
+    attemptedFrom service request.Row request.File request.Address request.Seen request.SeenText
 
   /// A step count becomes the literal it means, from the number the row showed. Anything else is already what the door takes.
   let resolve (limits: TweakLimitsFile.Read) (attempted: SourceRef) (request: TweakRequest) : Result<TweakRequest, NudgeRefusal> =
@@ -529,6 +551,76 @@ module Service =
         let! result = door service owned (TweakRequest.rawOf resolved)
         update service sessionId (Memory.finished resolved.Row attempted result baseline (service.Env.Now()))
         changed ()
+    }
+
+  /// Put a value into the session for a row, or put the file's value back, and remember what the row holds now. The statement is
+  /// evaluated the way the Evaluate box does it (`evalCode`), so the session's own answer, a value or an error, is the Output pane's
+  /// job. A typed value the literal cannot take is refused with the door's own rule and stays on the row. A value equal to the file's
+  /// ends the row's tweak. `changed` tells the page's stream to draw, whatever came back.
+  let push
+    (service: Service)
+    (sessionId: string)
+    (evalCode: string -> Task<Result<string, string>>)
+    (changed: unit -> unit)
+    (row: RowKey)
+    (attempted: SourceRef)
+    (via: PushVia)
+    (verb: SageFs.Server.LiveBindingsTweakView.PushVerb)
+    (typed: string)
+    : Task<unit> =
+    task {
+      let planned =
+        match verb with
+        | SageFs.Server.LiveBindingsTweakView.PushVerb.Push -> PushCode.plan via row attempted.Text typed
+        | SageFs.Server.LiveBindingsTweakView.PushVerb.Revert -> PushCode.revert via row attempted.Text
+      match planned with
+      | Error refusal ->
+        update service sessionId (Memory.finished row attempted (Error refusal) SessionReload.NoReloadYet (service.Env.Now()))
+        changed ()
+      | Ok plan ->
+        update service sessionId (Memory.forgetRow row)
+        let! answer = evalCode plan.Code
+        match answer with
+        | Ok _ ->
+          match plan.Effect with
+          | PushCode.PushEffect.MatchesFile -> update service sessionId (Memory.unpushed row)
+          | PushCode.PushEffect.StartsTweak -> update service sessionId (Memory.pushed row plan.Printed)
+        // The session refused the statement (a type error, a name that is not there). Its own message is in the Output pane, and
+        // the row still shows what it showed.
+        | Error _ -> ()
+        changed ()
+    }
+
+  /// Put the file's value back for several rows in ONE evaluation, as ONE interaction (`PushCode.oneInteraction`): the dashboard's eval
+  /// runs only the first interaction of the text it is given, so one `;;` per statement would revert the first row and leave the
+  /// rest. One eval is also one read of the session's values afterwards, and the session changes in one step. A row whose file text
+  /// is not a literal is refused on its row.
+  let revertMany
+    (service: Service)
+    (sessionId: string)
+    (evalCode: string -> Task<Result<string, string>>)
+    (changed: unit -> unit)
+    (rows: (RowKey * SourceRef * PushVia) list)
+    : Task<unit> =
+    task {
+      let planned =
+        rows
+        |> List.choose (fun (row, attempted, via) ->
+          match PushCode.revert via row attempted.Text with
+          | Ok plan -> Some(row, plan)
+          | Error refusal ->
+            update service sessionId (Memory.finished row attempted (Error refusal) SessionReload.NoReloadYet (service.Env.Now()))
+            None)
+      match planned with
+      | [] -> ()
+      | _ ->
+        let! answer = evalCode (planned |> List.map (fun (_, plan) -> plan.Code) |> PushCode.oneInteraction)
+        match answer with
+        | Ok _ ->
+          for row, _ in planned do
+            update service sessionId (Memory.unpushed row)
+        | Error _ -> ()
+      changed ()
     }
 
   /// Writes of the limits file are one at a time: each reads the file, changes one row and replaces it, so two at once would lose one.

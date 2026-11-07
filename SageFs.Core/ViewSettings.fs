@@ -30,6 +30,7 @@ type ViewAxis =
   | GroupBy
   | PinnedStrip
   | Inspector
+  | ChangesStrip
   | ValueMode
   | RowHeight
 
@@ -60,6 +61,9 @@ type Layout =
 
 type View =
   { Layout: Layout
+    /// Whether the strip that counts unsaved tweaks and values the program changed is drawn. A preset leaves it alone, like the value
+    /// printing and the row height: whether to see your own unsaved changes is not part of how the tree is laid out.
+    Changes: Toggle
     Values: ValueMode
     Row: RowHeight }
 
@@ -72,6 +76,7 @@ type AxisValue =
   | GroupBy of GroupMode
   | PinnedStrip of Toggle
   | Inspector of Toggle
+  | ChangesStrip of Toggle
   | ValueMode of ValueMode
   | RowHeight of RowHeight
 
@@ -154,6 +159,7 @@ module ViewAxis =
       ViewAxis.GroupBy
       ViewAxis.PinnedStrip
       ViewAxis.Inspector
+      ViewAxis.ChangesStrip
       ViewAxis.ValueMode
       ViewAxis.RowHeight ]
 
@@ -165,7 +171,7 @@ module ViewAxis =
   /// Off beside a State column on screen read as a bug to three reviewers. The settings still exist and persist, and a narrow list
   /// still moves their facts under the row; only the panel stops offering a switch the wide list does not obey.
   let drawn : ViewAxis list =
-    [ ViewAxis.TypeColumn; ViewAxis.ValueMode; ViewAxis.RowHeight ]
+    [ ViewAxis.TypeColumn; ViewAxis.ChangesStrip; ViewAxis.ValueMode; ViewAxis.RowHeight ]
 
   /// The word in a settings key.
   let token (axis: ViewAxis) : string =
@@ -176,6 +182,7 @@ module ViewAxis =
     | ViewAxis.GroupBy -> "group"
     | ViewAxis.PinnedStrip -> "strip"
     | ViewAxis.Inspector -> "inspector"
+    | ViewAxis.ChangesStrip -> "changes"
     | ViewAxis.ValueMode -> "values"
     | ViewAxis.RowHeight -> "row"
 
@@ -187,6 +194,7 @@ module ViewAxis =
     | ViewAxis.GroupBy -> "Group by"
     | ViewAxis.PinnedStrip -> "Pinned strip"
     | ViewAxis.Inspector -> "Inspector"
+    | ViewAxis.ChangesStrip -> "Changes strip"
     | ViewAxis.ValueMode -> "Long values"
     | ViewAxis.RowHeight -> "Row height"
 
@@ -198,6 +206,7 @@ module ViewAxis =
     | ViewAxis.GroupBy -> "Group rows by where the value lives: in a file, REPL only, or not evaluated."
     | ViewAxis.PinnedStrip -> "Keep pinned values in a strip above the tree so they stay in view while it scrolls."
     | ViewAxis.Inspector -> "Show the selected row's type, origin, full value and controls in a panel beside the tree."
+    | ViewAxis.ChangesStrip -> "Show a strip above the tree that counts the values you tried and have not saved, and the values the program changed on its own."
     | ViewAxis.ValueMode -> "Clip each value to one line, or print it in full and wrap it."
     | ViewAxis.RowHeight -> "How tall a row is."
 
@@ -211,6 +220,7 @@ module AxisValue =
     | AxisValue.GroupBy _ -> ViewAxis.GroupBy
     | AxisValue.PinnedStrip _ -> ViewAxis.PinnedStrip
     | AxisValue.Inspector _ -> ViewAxis.Inspector
+    | AxisValue.ChangesStrip _ -> ViewAxis.ChangesStrip
     | AxisValue.ValueMode _ -> ViewAxis.ValueMode
     | AxisValue.RowHeight _ -> ViewAxis.RowHeight
 
@@ -226,7 +236,8 @@ module AxisValue =
     | AxisValue.StateColumn t
     | AxisValue.SourceColumn t
     | AxisValue.PinnedStrip t
-    | AxisValue.Inspector t -> toggleToken t
+    | AxisValue.Inspector t
+    | AxisValue.ChangesStrip t -> toggleToken t
     | AxisValue.GroupBy GroupMode.NoGrouping -> "none"
     | AxisValue.GroupBy GroupMode.ByOrigin -> "origin"
     | AxisValue.ValueMode ValueMode.Clipped -> "clipped"
@@ -241,7 +252,8 @@ module AxisValue =
     | AxisValue.StateColumn t
     | AxisValue.SourceColumn t
     | AxisValue.PinnedStrip t
-    | AxisValue.Inspector t ->
+    | AxisValue.Inspector t
+    | AxisValue.ChangesStrip t ->
       match t with
       | On -> "On"
       | Off -> "Off"
@@ -261,6 +273,7 @@ module AxisValue =
     | ViewAxis.GroupBy -> [ AxisValue.GroupBy GroupMode.NoGrouping; AxisValue.GroupBy GroupMode.ByOrigin ]
     | ViewAxis.PinnedStrip -> [ AxisValue.PinnedStrip On; AxisValue.PinnedStrip Off ]
     | ViewAxis.Inspector -> [ AxisValue.Inspector On; AxisValue.Inspector Off ]
+    | ViewAxis.ChangesStrip -> [ AxisValue.ChangesStrip On; AxisValue.ChangesStrip Off ]
     | ViewAxis.ValueMode -> [ AxisValue.ValueMode ValueMode.Clipped; AxisValue.ValueMode ValueMode.Full ]
     | ViewAxis.RowHeight -> [ AxisValue.RowHeight RowHeight.Compact; AxisValue.RowHeight RowHeight.Roomy ]
 
@@ -324,6 +337,7 @@ module View =
   /// The built-in view for a workflow: its recommended layout, clipped values, compact rows.
   let recommended (workflow: ViewWorkflow) : View =
     { Layout = ViewPreset.layout (ViewPreset.recommendedFor workflow)
+      Changes = On
       Values = ValueMode.Clipped
       Row = RowHeight.Compact }
 
@@ -336,6 +350,7 @@ module View =
     | ViewAxis.GroupBy -> AxisValue.GroupBy view.Layout.Group
     | ViewAxis.PinnedStrip -> AxisValue.PinnedStrip view.Layout.Strip
     | ViewAxis.Inspector -> AxisValue.Inspector view.Layout.Inspector
+    | ViewAxis.ChangesStrip -> AxisValue.ChangesStrip view.Changes
     | ViewAxis.ValueMode -> AxisValue.ValueMode view.Values
     | ViewAxis.RowHeight -> AxisValue.RowHeight view.Row
 
@@ -348,6 +363,7 @@ module View =
     | AxisValue.GroupBy g -> { view with Layout = { view.Layout with Group = g } }
     | AxisValue.PinnedStrip t -> { view with Layout = { view.Layout with Strip = t } }
     | AxisValue.Inspector t -> { view with Layout = { view.Layout with Inspector = t } }
+    | AxisValue.ChangesStrip t -> { view with Changes = t }
     | AxisValue.ValueMode m -> { view with Values = m }
     | AxisValue.RowHeight h -> { view with Row = h }
 
@@ -378,7 +394,8 @@ module ViewSettings =
     | AxisValue.StateColumn t
     | AxisValue.SourceColumn t
     | AxisValue.PinnedStrip t
-    | AxisValue.Inspector t -> VToggle t
+    | AxisValue.Inspector t
+    | AxisValue.ChangesStrip t -> VToggle t
     | AxisValue.GroupBy _
     | AxisValue.ValueMode _
     | AxisValue.RowHeight _ ->

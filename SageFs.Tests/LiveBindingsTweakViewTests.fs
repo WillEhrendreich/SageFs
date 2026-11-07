@@ -44,7 +44,8 @@ let private rowOf (state: PersistenceState) (control: Control) : RowView =
     Reload = RowReload.NoWriteYet
     Undo = HistoryStep.NothingToStep
     Redo = HistoryStep.NothingToStep
-    Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
+    Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited
+    Storage = Storage.NotKnown; Push = PushOffer.NotOffered; Via = PushVia.RebindBinding }
 
 let private strip (view: RowView) = renderStrip key view Placement.OnLeafRow |> decoded
 
@@ -608,7 +609,7 @@ let controlTests =
 module Dock = SageFs.Server.LiveBindingsDock
 
 let private node label kind (preview: string) children : LiveValueTree.LiveValueNode =
-  { Label = label; TypeName = "T"; Preview = preview; Kind = kind; Children = children; BestEffort = false; Depth = 0 }
+  { Label = label; TypeName = "T"; Preview = preview; Kind = kind; Children = children; BestEffort = false; Assign = LiveValueTree.Assignment.NotKnown; Depth = 0 }
 
 let private binding name kind (preview: string) children : LiveValueTree.LiveBindingValue =
   { Name = name; TypeSignature = "T"; Root = node name kind preview children }
@@ -743,4 +744,138 @@ let situationAndTagTests =
         match state with
         | PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt -> badgePlace state |> Expect.equal "on the row" BadgePlace.OnTheRow
         | other -> badgePlace other |> Expect.equal (sprintf "%s is in its strip" (PersistenceState.token other)) BadgePlace.InTheStrip
+  ]
+
+// ── trying a value, saving a tweak, resetting a value the program moved, and the changes strip ──
+
+let private stepperControl = Control.RealStepper(9.8, Step.Fraction 1)
+
+/// The words in the element with this test id. A button keeps its words in a label span inside it, so that span's text is the answer
+/// for a button and the element's own text is the answer for anything else.
+let private wordsOfTestId (testId: string) (html: string) : string option =
+  let m = Regex.Match(html, sprintf "data-testid=\"%s\"[^>]*>(?:\\s*<span[^>]*>)?([^<]*)<" (Regex.Escape testId))
+  match m.Success with
+  | true -> Some m.Groups.[1].Value
+  | false -> None
+
+let private tryable (state: PersistenceState) : RowView =
+  { rowOf state stepperControl with Push = PushOffer.Offered; Via = PushVia.AssignBinding }
+
+[<Tests>]
+let tweakActionTests =
+  let evolved = PersistenceState.Evolved("62", EvolvedBy.MovedWhileRunning, gravity)
+  let tweaked = PersistenceState.Tweaked("9.5", gravity)
+  testList "the buttons that act on a value the session holds and the file does not" [
+
+    testCase "WHY — Save says what it writes and where: the value and the line, because a bare Save leaves the person guessing what goes to what" <| fun _ ->
+      TweakWords.save "9.5" gravity |> Expect.equal "the label" "Save 9.5 to Tuning.fs:3"
+      let drawn = strip (tryable tweaked)
+      wordsOfTestId "tweak-save" drawn |> Expect.equal "on the row" (Some "Save 9.5 to Tuning.fs:3")
+      wordsOfTestId "tweak-revert" drawn |> Expect.equal "and the way back, in the file's own value" (Some "Revert to 9.8")
+
+    testCase "WHY — a row the program changed never offers a plain Save: it offers a reset and an adopt, and the adopt asks first" <| fun _ ->
+      let drawn = strip (tryable evolved)
+      drawn.Contains "data-testid=\"tweak-save\"" |> Expect.isFalse "no plain Save"
+      wordsOfTestId "tweak-reset" drawn |> Expect.equal "reset names the value it goes back to" (Some "Reset to 9.8")
+      wordsOfTestId "tweak-adopt" drawn |> Expect.equal "adopt names the value it writes" (Some "Use 62 as the initial value")
+      attrsOfTestId "tweak-adopt" drawn |> Expect.stringContains "the first click only opens the question" "$twAdopt = 'gravity'"
+      (attrsOfTestId "tweak-adopt" drawn).Contains "/dashboard/tweak" |> Expect.isFalse "and writes nothing"
+      attrsOfTestId "tweak-adopt-confirm" drawn |> Expect.stringContains "the question is hidden until it is asked" "display:none"
+      attrsOfTestId "tweak-adopt-yes" drawn |> Expect.stringContains "only the confirmation writes" "/dashboard/tweak"
+      wordsOfTestId "tweak-adopt-yes" drawn |> Expect.equal "the confirmation's words" (Some TweakWords.adoptConfirm)
+      wordsOfTestId "tweak-adopt-no" drawn |> Expect.equal "and the way out" (Some TweakWords.adoptCancel)
+
+    testCase "a row in step, a formula and a row nothing can be saved to offer neither Save nor adopt" <| fun _ ->
+      for state in [ PersistenceState.InSource gravity
+                     PersistenceState.Derived(gravity, DerivedWhy.AFormula)
+                     PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt
+                     PersistenceState.DiffersFromFile("12", gravity) ] do
+        let drawn = strip (rowOf state Control.NoControl)
+        for testId in [ "tweak-save"; "tweak-adopt"; "tweak-reset"; "tweak-revert" ] do
+          drawn.Contains(sprintf "data-testid=\"%s\"" testId) |> Expect.isFalse (sprintf "%s on %s" testId (PersistenceState.token state))
+
+    testCase "WHY — the confirmation names the line, the value, that the program can move it again, and the function and callers when the literal is in one" <| fun _ ->
+      adoptConfirmation (RowKey.field (RowKey.top "player") "Health") "62" gravity ThroughCall.NoCall
+      |> Expect.equal "a literal in the file" "Write Tuning.fs:3 so the program starts with Health = 62? The code that changed it still runs, so it can move again."
+      let shared = adoptConfirmation (RowKey.field (RowKey.top "player") "Health") "62" callee (followedWith (CallerCount.Counted 2))
+      shared |> Expect.stringContains "the function" "in initPlayer"
+      shared |> Expect.stringContains "the callers" "2 callers use this literal."
+      let alone = adoptConfirmation (RowKey.top "hp") "62" callee (followedWith (CallerCount.Counted 1))
+      alone.Contains "callers" |> Expect.isFalse "one caller is nothing to warn about"
+      alone |> Expect.stringContains "a whole binding is named by itself" "hp = 62"
+
+    testCase "a number offers Try, which posts the box's value to the push route and never to the file's route" <| fun _ ->
+      let drawn = strip (tryable (PersistenceState.InSource gravity))
+      wordsOfTestId "tweak-try" drawn |> Expect.equal "the word" (Some TweakWords.tryWord)
+      let attrs = attrsOfTestId "tweak-try" drawn
+      attrs |> Expect.stringContains "the push route" TweakSignals.PushEndpoint
+      attrs |> Expect.stringContains "the way the value gets in" (PushVia.token PushVia.AssignBinding)
+      attrs |> Expect.stringContains "the verb" PushVerb.PushToken
+      attrs |> Expect.stringContains "the box's value" "document.getElementById("
+      (attrs.Replace(TweakSignals.PushEndpoint, "")).Contains TweakSignals.Endpoint |> Expect.isFalse "never the knob's own route"
+
+    testCase "a row that does not offer Try draws no button, and a switch and a row with no control are among them" <| fun _ ->
+      (strip (rowOf (PersistenceState.InSource gravity) Control.NoControl)).Contains "tweak-try" |> Expect.isFalse "no control"
+      (strip (rowOf (PersistenceState.InSource gravity) (Control.Toggle true))).Contains "tweak-try" |> Expect.isFalse "a switch"
+
+    testCase "WHY — every route the tweak buttons post to is registered by the daemon at exactly that path, so a button cannot post into nothing" <| fun _ ->
+      let daemon = IO.File.ReadAllText(RepoPaths.repoPathFull [| "SageFs"; "DaemonMode.fs" |])
+      for endpoint in [ TweakSignals.Endpoint; TweakSignals.PushEndpoint; TweakSignals.BatchEndpoint; TweakSignals.LimitsEndpoint; ApplyToSession.Endpoint ] do
+        daemon |> Expect.stringContains (sprintf "the daemon registers %s" endpoint) (sprintf "Dashboard.mapPostRaw \"%s\"" endpoint)
+
+    testCase "every state still draws and says what it is, now that two of them carry buttons" <| fun _ ->
+      for state in states do
+        let drawn = strip (rowOf state (Control.RealStepper(9.8, Step.Fraction 1)))
+        drawn |> Expect.stringContains (sprintf "%s keeps its state" (PersistenceState.token state)) (sprintf "data-state=\"%s\"" (PersistenceState.token state))
+  ]
+
+[<Tests>]
+let changesStripViewTests =
+  let tweakOf (name: string) (live: string) : RowKey * RowView =
+    let file = { gravity with Address = addressOf name []; Hash = String('c', 64) }
+    RowKey.top name, { rowOf (PersistenceState.Tweaked(live, file)) stepperControl with Place = PlaceOf.Placed file; Via = PushVia.RebindBinding }
+  let evolvedOf (name: string) (live: string) : RowKey * RowView =
+    let file = { gravity with Address = addressOf name []; Hash = String('d', 64) }
+    RowKey.top name, { rowOf (PersistenceState.Evolved(live, EvolvedBy.MovedWhileRunning, file)) stepperControl with Place = PlaceOf.Placed file }
+  let stripOf (rows: (RowKey * RowView) list) : string =
+    ChangesStrip.Changes.ofView (tweaks rows) |> changesStrip |> List.map decoded |> String.concat ""
+  testList "the changes strip" [
+
+    testCase "nothing to say draws nothing: a strip that says 0 on every page is noise" <| fun _ ->
+      changesStrip ChangesStrip.Changes.empty |> Expect.isEmpty "no strip"
+
+    testCase "the first line counts tweaks and values the program changed, in words, each only when there is one" <| fun _ ->
+      let summary rows = ChangesStrip.Changes.ofView (tweaks rows) |> ChangesStrip.summary
+      summary [ tweakOf "gravity" "9.5" ] |> Expect.equal "one tweak" "1 tweak not saved"
+      summary [ tweakOf "gravity" "9.5"; tweakOf "hp" "7" ] |> Expect.equal "two" "2 tweaks not saved"
+      summary [ evolvedOf "hp" "62" ] |> Expect.equal "one the program changed" "1 value the program changed"
+      summary [ tweakOf "gravity" "9.5"; evolvedOf "hp" "62"; evolvedOf "speed" "3" ] |> Expect.equal "both" "1 tweak not saved · 2 values the program changed"
+
+    testCase "WHY — Save all and Revert all are drawn for tweaks and not for values the program changed, and carry only the tweaks' requests" <| fun _ ->
+      let both = stripOf [ tweakOf "gravity" "9.5"; evolvedOf "hp" "62" ]
+      both |> Expect.stringContains "Save all" "data-testid=\"live-changes-save-all\""
+      both |> Expect.stringContains "Revert all" "data-testid=\"live-changes-revert-all\""
+      both |> Expect.stringContains "the tweak is listed with before and after" "gravity: 9.8 → 9.5"
+      both |> Expect.stringContains "the program's change is listed apart" "Changed by the program"
+      let onlyEvolved = stripOf [ evolvedOf "hp" "62" ]
+      onlyEvolved.Contains "live-changes-save-all" |> Expect.isFalse "nothing to save, so no button"
+      onlyEvolved |> Expect.stringContains "but the change is counted" "1 value the program changed"
+
+    testCase "the batch a button posts is a list the route can read back, with one request for each tweak" <| fun _ ->
+      let html = stripOf [ tweakOf "gravity" "9.5"; tweakOf "hp" "7"; evolvedOf "speed" "3" ]
+      let button = attrsOfTestId "live-changes-save-all" html
+      let json = Regex.Match(button, "\\$twBatch = '(?<json>.*?)'; ").Groups.["json"].Value
+      match Json.deserialize<ChangesStrip.BatchItem list> Json.camelCase (json.Replace("\\\\", "\\")) with
+      | Ok items ->
+        items |> List.map (fun item -> item.Row) |> Expect.equal "gravity and hp, not speed" [ "gravity"; "hp" ]
+        items |> List.forall (fun item -> item.Kind = ChangesStrip.BatchKind.token ChangesStrip.BatchKind.Save) |> Expect.isTrue "all saves"
+      | Error fault -> failtestf "the batch did not read back: %s (%s)" (JsonError.describe fault) json
+
+    testCase "the strip is part of the view: the Changes axis turns it on and off, and the dock draws it only when it is on" <| fun _ ->
+      let rows = tweaks [ tweakOf "gravity" "9.5" ]
+      let drawn (toggle: Toggle) =
+        let look = { SageFs.View.recommended SageFs.ViewWorkflow.Repl with Changes = toggle }
+        Dock.renderDockWith look None rows DockPanes.SessionInView "abcd1234" (Dock.WalkedBindings(paneView [ binding "gravity" LiveValueTree.NodeKind.Leaf "9.5" [] ])) None |> decoded
+      (drawn On).Contains "data-testid=\"live-changes\"" |> Expect.isTrue "on"
+      (drawn Off).Contains "data-testid=\"live-changes\"" |> Expect.isFalse "off"
   ]

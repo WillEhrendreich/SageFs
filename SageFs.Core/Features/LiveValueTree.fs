@@ -62,6 +62,17 @@ module LiveValueTree =
     | Cycle
     | Truncated
 
+  /// Whether the program's own code can assign the place a node's value lives in, as far as the walk can see. Only a record field
+  /// says: a `mutable` field has a setter, and one without has none. Every other node (a binding's root, a list item, a tuple item,
+  /// a union field) is `NotKnown`, because whether a top-level binding is mutable is in the file that declares it, not in its value.
+  [<RequireQualifiedAccess>]
+  type Assignment =
+    | NotKnown
+    /// A record field declared `mutable`.
+    | Assignable
+    /// A record field declared without `mutable`.
+    | Fixed
+
   /// One node in the expanded value tree.
   type LiveValueNode = {
     Label: string
@@ -71,6 +82,8 @@ module LiveValueTree =
     Children: LiveValueNode list
     /// True when the children are a best-effort guess (e.g. closure captures).
     BestEffort: bool
+    /// Whether the program can assign the place this value lives in, when the walk can tell.
+    Assign: Assignment
     Depth: int
   }
 
@@ -444,7 +457,7 @@ module LiveValueTree =
     /// F# Map, enumerated as KeyValuePair entries.
     | FSharpMap of key: PropertyInfo * value: PropertyInfo
     | Sequence of kind: NodeKind * source: SequenceSource
-    | Record of fieldNames: string[] * readFields: (obj -> obj[])
+    | Record of fieldNames: string[] * readFields: (obj -> obj[]) * assignments: Assignment[]
     | Union of readTag: (obj -> int) * cases: UnionCaseShape[]
     | Tuple of readFields: (obj -> obj[])
     /// A Task: shown by its status. `Result` and `Exception` are only read once it has finished,
@@ -487,9 +500,12 @@ module LiveValueTree =
     elif typeof<IEnumerable>.IsAssignableFrom t then
       TypeShape.Sequence ((if t.IsArray then NodeKind.Array else NodeKind.List), sourceOf t)
     elif FSharpType.IsRecord t then
+      let fields = FSharpType.GetRecordFields t
       TypeShape.Record (
-        FSharpType.GetRecordFields t |> Array.map (fun p -> p.Name),
-        FSharpValue.PreComputeRecordReader t)
+        fields |> Array.map (fun p -> p.Name),
+        FSharpValue.PreComputeRecordReader t,
+        // A field declared `mutable` has a setter; one without has none. That is the only place the walk can see assignability.
+        fields |> Array.map (fun p -> match p.CanWrite with | true -> Assignment.Assignable | false -> Assignment.Fixed))
     elif FSharpType.IsUnion t then
       let cases =
         FSharpType.GetUnionCases t
@@ -554,23 +570,23 @@ module LiveValueTree =
     // Cycle protection: reference types seen before are not re-expanded.
     if isCycle visited value then
       { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = "↩ (cycle)"; Kind = NodeKind.Cycle
-        Children = []; BestEffort = false; Depth = depth }
+        Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
     elif depth >= MaxDepth then
       { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = scalarPreview value; Kind = NodeKind.Truncated
-        Children = []; BestEffort = false; Depth = depth }
+        Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
     elif budget.Value <= 0 then
       // Total node budget exhausted — stop the walk for this snapshot. The
       // depth/children limits alone allow a 50^depth blow-up on hostile object
       // graphs; the budget forces a hard stop regardless of graph shape.
       { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = "… (node budget)"; Kind = NodeKind.Truncated
-        Children = []; BestEffort = false; Depth = depth }
+        Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
     else
       budget.Value <- budget.Value - 1
       try
         let typeName = FSharpTypeName.runtimeName t
         let leaf preview kind = {
           Label = label; TypeName = typeName; Preview = preview; Kind = kind
-          Children = []; BestEffort = false; Depth = depth }
+          Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
 
         match value with
         | null -> leaf "null" NodeKind.Leaf
@@ -591,13 +607,13 @@ module LiveValueTree =
               |> Array.toList
             with _ -> []
           { Label = label; TypeName = typeName; Preview = "<fun>"; Kind = NodeKind.Closure
-            Children = children; BestEffort = true; Depth = depth }
+            Children = children; BestEffort = true; Assign = Assignment.NotKnown; Depth = depth }
         // Enumerating a lazy sequence runs the code that produces it, so `Safe` and `Off` leave it alone.
         | TypeShape.Dictionary SequenceSource.MayRunCode
         | TypeShape.Sequence (_, SequenceSource.MayRunCode) when walk.Mode <> WalkMode.Everything ->
           { Label = label; TypeName = typeName; Preview = describe NotEvaluatedReason.SequenceNotEnumerated
             Kind = NodeKind.NotEvaluated NotEvaluatedReason.SequenceNotEnumerated
-            Children = []; BestEffort = false; Depth = depth }
+            Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.Dictionary _ ->
           let d = value :?> IDictionary
           let entries = d |> Seq.cast<DictionaryEntry> |> Seq.truncate (MaxChildren + 1) |> Seq.toList
@@ -608,7 +624,7 @@ module LiveValueTree =
             entries |> List.truncate MaxChildren
             |> List.mapi (fun i e -> buildNode walk (label :: trail) visited budget (keyLabel e.Key) (depth + 1) e.Value)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.FSharpMap (keyProp, valueProp) ->
           let entries =
             (value :?> IEnumerable)
@@ -625,7 +641,7 @@ module LiveValueTree =
             entries
             |> List.map (fun (k, v) -> buildNode walk (label :: trail) visited budget (keyLabel k) (depth + 1) v)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.Sequence (kind, _) ->
           let items = (value :?> IEnumerable) |> Seq.cast<obj> |> Seq.truncate (MaxChildren + 1) |> Seq.toList
           let shown = items |> List.truncate MaxChildren
@@ -634,8 +650,8 @@ module LiveValueTree =
             shown
             |> List.mapi (fun i item -> buildNode walk (label :: trail) visited budget (sprintf "[%d]" i) (depth + 1) item)
           { Label = label; TypeName = typeName; Preview = preview; Kind = kind
-            Children = children; BestEffort = false; Depth = depth }
-        | TypeShape.Record (fieldNames, readFields) ->
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
+        | TypeShape.Record (fieldNames, readFields, assignments) ->
           let fields = readFields value
           let preview =
             fields
@@ -645,11 +661,12 @@ module LiveValueTree =
             |> fun s -> "{ " + s + " }"
           let children =
             fields
-            |> Array.mapi (fun i f -> buildNode walk (label :: trail) visited budget fieldNames.[i] (depth + 1) f)
+            |> Array.mapi (fun i f ->
+              { buildNode walk (label :: trail) visited budget fieldNames.[i] (depth + 1) f with Assign = assignments.[i] })
             |> Array.truncate MaxChildren
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Record
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.Union (readTag, cases) ->
           let case = cases.[readTag value]
           let caseFields = case.ReadFields value
@@ -668,7 +685,7 @@ module LiveValueTree =
             |> Array.toList
           let kind = if case.CaseName = "Some" || case.CaseName = "None" then NodeKind.Option else NodeKind.Union
           { Label = label; TypeName = typeName; Preview = preview; Kind = kind
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.Tuple readFields ->
           let fields = readFields value
           let preview = fields |> Array.map scalarPreview |> Array.toList |> truncateList |> fun s -> "(" + s + ")"
@@ -678,7 +695,7 @@ module LiveValueTree =
             |> Array.truncate MaxChildren
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Tuple
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.Task ->
           let task = value :?> System.Threading.Tasks.Task
           let status = task.Status
@@ -694,10 +711,10 @@ module LiveValueTree =
                 | null -> "faulted"
                 | ex -> ex.GetBaseException().Message
               [ { Label = "Exception"; TypeName = "exn"; Preview = scalarPreview why; Kind = NodeKind.Leaf
-                  Children = []; BestEffort = false; Depth = depth + 1 } ]
+                  Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth + 1 } ]
             | _ -> []
           { Label = label; TypeName = typeName; Preview = sprintf "Task %s" (string status); Kind = NodeKind.Class
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.ValueTask ->
           let read (name: string) =
             match t.GetProperty name with
@@ -714,7 +731,7 @@ module LiveValueTree =
             | "RanToCompletion", p when not (isNull p) -> [ buildNode walk (label :: trail) visited budget "Result" (depth + 1) (p.GetValue value) ]
             | _ -> []
           { Label = label; TypeName = typeName; Preview = sprintf "ValueTask %s" state; Kind = NodeKind.Class
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.Lazy ->
           let created = (t.GetProperty "IsValueCreated").GetValue value :?> bool
           let children =
@@ -723,11 +740,11 @@ module LiveValueTree =
             | false -> []
           { Label = label; TypeName = typeName; Kind = NodeKind.Class
             Preview = (match created with | true -> "Lazy (created)" | false -> "Lazy (not created)")
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.Class _ when walk.Mode = WalkMode.Off ->
           { Label = label; TypeName = typeName; Preview = describe NotEvaluatedReason.ClassesCollapsed
             Kind = NodeKind.NotEvaluated NotEvaluatedReason.ClassesCollapsed
-            Children = []; BestEffort = false; Depth = depth }
+            Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.Class (fields, members) when walk.Mode = WalkMode.Safe ->
           // Fields are the object's real state and reading one runs nothing. A getter runs only when its
           // body is provably harmless. One that merely returns a field already shown is not shown twice.
@@ -761,7 +778,7 @@ module LiveValueTree =
           let rows = Array.append fieldRows memberRows |> Array.truncate MaxChildren
           let errorNode (rowLabel: string) =
             { Label = rowLabel; TypeName = "error"; Preview = "<error>"; Kind = NodeKind.Leaf
-              Children = []; BestEffort = false; Depth = depth + 1 }
+              Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth + 1 }
           let preview =
             rows
             |> Array.map (fun row ->
@@ -782,10 +799,10 @@ module LiveValueTree =
               | Row.Read (l, Error _) -> errorNode l
               | Row.Held (l, heldTypeName, reason) ->
                 { Label = l; TypeName = heldTypeName; Preview = describe reason; Kind = NodeKind.NotEvaluated reason
-                  Children = []; BestEffort = false; Depth = depth + 1 })
+                  Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth + 1 })
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Class
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
         | TypeShape.Class (_, members) ->
           // Class instance — public instance properties (best-effort for .NET types).
           // Each getter is read ONCE: the preview and the child come from the same read, because
@@ -812,7 +829,7 @@ module LiveValueTree =
             |> Array.map (fun (p, read) ->
               let errorNode =
                 { Label = p.Name; TypeName = "error"; Preview = "<error>"; Kind = NodeKind.Leaf
-                  Children = []; BestEffort = false; Depth = depth + 1 }
+                  Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth + 1 }
               match read with
               | Ok v ->
                 try buildNode walk (label :: trail) visited budget p.Name (depth + 1) v
@@ -820,10 +837,10 @@ module LiveValueTree =
               | Error _ -> errorNode)
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Class
-            Children = children; BestEffort = false; Depth = depth }
+            Children = children; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
       with ex ->
         { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = sprintf "<error: %s>" ex.Message
-          Kind = NodeKind.Leaf; Children = []; BestEffort = false; Depth = depth }
+          Kind = NodeKind.Leaf; Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = depth }
 
   /// Build the root node for a binding's value under `walk`.
   let buildValueNodeWith (walk: Walk) (label: string) (value: obj) : LiveValueNode =
@@ -850,7 +867,7 @@ module LiveValueTree =
   let private unreadableNode (label: string) (value: obj) (why: string) : LiveValueNode =
     let t = if isNull value then typeof<obj> else value.GetType()
     { Label = label; TypeName = FSharpTypeName.runtimeName t; Preview = why; Kind = NodeKind.Leaf
-      Children = []; BestEffort = false; Depth = 0 }
+      Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = 0 }
 
   /// Walk `bindings` in order with a deadline for each one.
   ///

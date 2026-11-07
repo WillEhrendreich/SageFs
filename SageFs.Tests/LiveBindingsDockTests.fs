@@ -34,6 +34,7 @@ let private node label kind (preview: string) children : LiveValueNode =
     Kind = kind
     Children = children
     BestEffort = false
+    Assign = Assignment.NotKnown
     Depth = 0 }
 
 let private binding name kind children : LiveBindingValue =
@@ -159,7 +160,7 @@ let dockTreeTests =
           Reload = RowReload.NoWriteYet
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep
-          Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
+          Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited; Storage = Storage.NotKnown; Push = PushOffer.NotOffered; Via = PushVia.RebindBinding }
       let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
       let html = renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None tweaks SessionInView "abcd1234" (WalkedBindings(view [ person; scores ])) None |> decoded
       html |> Expect.stringContains "the count, in the bar, in words that say what it counts" (PaneNote.text (PaneNote.NotInAnyFile 2))
@@ -292,8 +293,18 @@ let private gravityTweaks : TweakView =
       Reload = RowReload.NoWriteYet
       Undo = HistoryStep.NothingToStep
       Redo = HistoryStep.NothingToStep
-      Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
+      Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited
+      Storage = Storage.NotKnown; Push = PushOffer.NotOffered; Via = PushVia.RebindBinding }
   { Rows = Map.ofList [ RowKey.top "gravity", row ] }
+
+/// The same binding with a value tried in the session and not saved: the pane has a tweak to count, so the changes strip has something to say.
+let private gravityTweaked : TweakView =
+  match Map.tryFind (RowKey.top "gravity") gravityTweaks.Rows with
+  | Some row ->
+    match row.Place with
+    | PlaceOf.Placed place -> { Rows = Map.ofList [ RowKey.top "gravity", { row with State = PersistenceState.Tweaked("9.5", place) } ] }
+    | PlaceOf.NotPlaced -> gravityTweaks
+  | None -> gravityTweaks
 
 /// The dock draws from the view it is handed (docs/plans/live-bindings-watch-view.md, phase 1, step 2b).
 [<Tests>]
@@ -413,7 +424,7 @@ let viewPanelTests =
     testCase "WHY — each drawn axis, set to each of its values, changes what the dock draws, so the axis list is true" <| fun _ ->
       let recommended = View.recommended ViewWorkflow.Repl
       let drawn (look: View) =
-        renderDockWith look None TweakView.none SessionInView sessionId (WalkedBindings(view [ person; scores ])) None |> decoded
+        renderDockWith look None gravityTweaked SessionInView sessionId (WalkedBindings(view [ person; scores ])) None |> decoded
       for axis in ViewAxis.drawn do
         let pages = AxisValue.allFor axis |> List.map (fun value -> drawn (View.withValue value recommended))
         (pages |> List.distinct |> List.length) |> Expect.equal (sprintf "%s: each value draws a different dock" (ViewAxis.label axis)) pages.Length
@@ -548,7 +559,7 @@ let dockWordingTests =
               Reload = RowReload.NoWriteYet
               Undo = HistoryStep.NothingToStep
               Redo = HistoryStep.NothingToStep
-              Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited } ] }
+              Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited; Storage = Storage.NotKnown; Push = PushOffer.NotOffered; Via = PushVia.RebindBinding } ] }
   let allNotes : PaneNote list =
     [ PaneNote.NoNameMatchesFilter
       PaneNote.ValuesCutShort
@@ -725,7 +736,7 @@ let dockWordingTests =
           Reload = RowReload.NoWriteYet
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep
-          Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
+          Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited; Storage = Storage.NotKnown; Push = PushOffer.NotOffered; Via = PushVia.RebindBinding }
       let gravity = binding "gravity" NodeKind.Leaf []
       let differing = dockWith { Rows = Map.ofList [ RowKey.top "gravity", rowOf (PersistenceState.DiffersFromFile("9.8", place)) ] } ValueWalk.standard On [ gravity ]
       differing |> Expect.stringContains "the heading's value says running" "data-testid=\"tweak-running-tag\""
@@ -743,7 +754,7 @@ let dockWordingTests =
           Reload = RowReload.NoWriteYet
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep
-          Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
+          Through = ThroughCall.NoCall; Limits = SageFs.Features.Tweak.NumberLimits.unlimited; Storage = Storage.NotKnown; Push = PushOffer.NotOffered; Via = PushVia.RebindBinding }
       let tweaks : TweakView = { Rows = Map.ofList [ RowKey.top "person", replOnly; RowKey.top "scores", replOnly ] }
       let html = dockWith tweaks ValueWalk.standard On [ person; scores ]
       let counted = TweakView.replOnlyCount tweaks [ "person"; "scores" ]
@@ -762,7 +773,7 @@ let dockWordingTests =
           Reload = RowReload.NoWriteYet
           Undo = HistoryStep.NothingToStep
           Redo = HistoryStep.NothingToStep
-          Through = ThroughCall.CouldNotFollow(Refusal.NoCalleeInFiles callee); Limits = SageFs.Features.Tweak.NumberLimits.unlimited }
+          Through = ThroughCall.CouldNotFollow(Refusal.NoCalleeInFiles callee); Limits = SageFs.Features.Tweak.NumberLimits.unlimited; Storage = Storage.NotKnown; Push = PushOffer.NotOffered; Via = PushVia.RebindBinding }
       let fieldKey (label: string) : RowKey = { Binding = "rig"; Labels = [ label ] }
       let tweaks : TweakView =
         { Rows = Map.ofList [ fieldKey "Mass", viaCall "makeRig"; fieldKey "Drag", viaCall "makeRig"; fieldKey "Spin", viaCall "makeSpin" ] }
@@ -795,7 +806,7 @@ let dockWordingTests =
       PaneNote.text PaneNote.ModeGoverns |> Expect.equal "the label" "Show inside objects (Safe skips properties that could run your code):"
 
     testCase "WHY — the view panel offers only the settings the list still obeys: state and source always have their own columns above 900px, so a Show state switch set to Off beside a State column on screen read as a bug" <| fun _ ->
-      ViewAxis.drawn |> Expect.equal "type, long values and row height" [ ViewAxis.TypeColumn; ViewAxis.ValueMode; ViewAxis.RowHeight ]
+      ViewAxis.drawn |> Expect.equal "type, the changes strip, long values and row height" [ ViewAxis.TypeColumn; ViewAxis.ChangesStrip; ViewAxis.ValueMode; ViewAxis.RowHeight ]
 
     testCase "WHY — a value carries its full text as a title, because the cell clips a long one with an ellipsis and the rest was out of reach" <| fun _ ->
       let long = "{ JumpVelocity = 13.2; CoyoteTime = 0.12; Buffer = 0.08; Apex = 0.4 }"

@@ -550,6 +550,8 @@
         <Compile Include="BindingTweakRowsTests.fs" />
         <Compile Include="CallResultTests.fs" />
         <Compile Include="BindingRelationTests.fs" />
+        <Compile Include="TweakPushTests.fs" />
+        <Compile Include="ChangesStripTests.fs" />
         <Compile Include="LiveBindingsTweakServiceTests.fs" />
         <Compile Include="LiveBindingsTweakViewTests.fs" />
         <Compile Include="RetentionSimDstTests.fs" />

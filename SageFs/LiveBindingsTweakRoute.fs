@@ -154,6 +154,153 @@ let applyHandler
     }
     :> Threading.Tasks.Task
 
+/// What a push request said: the row, the expression it showed, how the value gets into the session, whether this is a try or a
+/// revert, and the typed text.
+type PushRequest =
+  { Row: SageFs.Features.Tweak.BindingTweak.RowKey
+    File: string
+    Address: string
+    Seen: string
+    SeenText: string
+    Via: SageFs.Features.Tweak.BindingTweak.PushVia
+    Verb: PushVerb
+    Typed: string }
+
+[<RequireQualifiedAccess>]
+type PushAsked =
+  | Push of sessionId: WorkerProtocol.SessionId * clientId: string * request: PushRequest
+  | NotAPush of reason: string
+
+let pushAskedOf (body: JsonElement) : PushAsked =
+  let text (name: string) : string = signalText body name
+  match WorkerProtocol.SessionId.validate (text Signals.ViewingSessionId), TweakRequest.rowOfText (text TweakSignals.Row) with
+  | Error why, _ -> PushAsked.NotAPush(sprintf "the page is not viewing a session: %s" why)
+  | Ok _, Error fault -> PushAsked.NotAPush(TweakRequest.describe fault)
+  | Ok sessionId, Ok row ->
+    match PushVerb.ofToken (text TweakSignals.Verb), SageFs.Features.Tweak.BindingTweak.PushVia.ofToken (text TweakSignals.Via) with
+    | Error why, _
+    | _, Error why -> PushAsked.NotAPush(ConfigError.describe why)
+    | Ok verb, Ok via ->
+      PushAsked.Push(
+        sessionId,
+        text Signals.ClientId,
+        { Row = row
+          File = text TweakSignals.File
+          Address = text TweakSignals.Address
+          Seen = text TweakSignals.Seen
+          SeenText = text TweakSignals.SeenText
+          Via = via
+          Verb = verb
+          Typed = text TweakSignals.Value }
+      )
+
+/// Try a typed value in the session, or put the file's value back. Nothing is written to the file; the session's own answer goes to
+/// the Output pane, and the page's stream is told to draw either way.
+let pushHandler
+  (infra: DashboardInfra)
+  (service: Service)
+  (evalCode: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>)
+  : HttpHandler =
+  fun ctx ->
+    task {
+      try
+        use! doc = readSignalsJsonSized ctx
+        match pushAskedOf doc.RootElement with
+        | PushAsked.NotAPush reason ->
+          ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
+          do! ctx.Response.WriteAsync reason
+        | PushAsked.Push(sessionId, clientId, request) ->
+          Response.sseStartResponse ctx |> ignore
+          let attempted = Service.attemptedFrom service request.Row request.File request.Address request.Seen request.SeenText
+          do!
+            Service.push
+              service
+              (WorkerProtocol.SessionId.value sessionId)
+              (evalCode sessionId)
+              (fun () -> pushTo infra clientId)
+              request.Row
+              attempted
+              request.Via
+              request.Verb
+              request.Typed
+      with
+      | :? RequestTooLargeException -> ()
+      | :? IO.IOException -> ()
+      | :? ObjectDisposedException -> ()
+    }
+    :> Threading.Tasks.Task
+
+/// What a batch said: the session, the page that asked, and the requests, or why it was not a batch.
+[<RequireQualifiedAccess>]
+type BatchAsked =
+  | Batch of sessionId: WorkerProtocol.SessionId * clientId: string * items: SageFs.Features.Tweak.ChangesStrip.BatchItem list
+  | NotABatch of reason: string
+
+let batchAskedOf (body: JsonElement) : BatchAsked =
+  let text (name: string) : string = signalText body name
+  match WorkerProtocol.SessionId.validate (text Signals.ViewingSessionId) with
+  | Error why -> BatchAsked.NotABatch(sprintf "the page is not viewing a session: %s" why)
+  | Ok sessionId ->
+    match Json.deserialize<SageFs.Features.Tweak.ChangesStrip.BatchItem list> Json.camelCase (text TweakSignals.Batch) with
+    | Error fault -> BatchAsked.NotABatch(sprintf "the batch is not a list of requests: %s" (JsonError.describe fault))
+    | Ok items -> BatchAsked.Batch(sessionId, text Signals.ClientId, items)
+
+/// Save every tweak, or put the file's value back for every tweak, one request after another. Each is the same act a row's own button
+/// does, through the same door or the same evaluation, so the strip has no way to reach a file or a session that a row does not.
+let batchHandler
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  (service: Service)
+  (evalCode: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>)
+  : HttpHandler =
+  fun ctx ->
+    task {
+      try
+        use! doc = readSignalsJsonSized ctx
+        match batchAskedOf doc.RootElement with
+        | BatchAsked.NotABatch reason ->
+          ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
+          do! ctx.Response.WriteAsync reason
+        | BatchAsked.Batch(sessionId, clientId, items) ->
+          Response.sseStartResponse ctx |> ignore
+          let sessionText = WorkerProtocol.SessionId.value sessionId
+          let! hotReload = q.GetHotReloadState sessionId
+          let! sessions = q.GetAllSessions()
+          let reloadNow =
+            sessions
+            |> List.tryFind (fun s -> s.Id = sessionId)
+            |> Option.map (fun s -> s.Reload)
+            |> Option.defaultValue SessionReload.NoReloadYet
+          let files =
+            match hotReload with
+            | Some state -> state.files |> List.map (fun f -> f.path, HotReloadWatch.ofFlag f.watched)
+            | None -> []
+          let owned = Service.ownedOf sessionText (q.GetSessionWorkingDir sessionId) files
+          let changed () = pushTo infra clientId
+          // The saves go through the door one after another; the reverts are one evaluation in the session (`Service.revertMany`).
+          let mutable reverts = []
+          for item in items do
+            match SageFs.Features.Tweak.ChangesStrip.BatchKind.ofToken item.Kind, TweakRequest.rowOfText item.Row with
+            | Error _, _
+            | _, Error _ -> ()
+            | Ok SageFs.Features.Tweak.ChangesStrip.BatchKind.Save, Ok _ ->
+              match TweakRequest.parse item.Row item.File item.Address item.Seen item.SeenText TweakVerb.LiteralToken item.Value with
+              | Ok request -> do! Service.act service sessionText owned (fun () -> reloadNow) changed request
+              | Error _ -> ()
+            | Ok SageFs.Features.Tweak.ChangesStrip.BatchKind.Revert, Ok row ->
+              match SageFs.Features.Tweak.BindingTweak.PushVia.ofToken item.Via with
+              | Ok via -> reverts <- reverts @ [ row, Service.attemptedFrom service row item.File item.Address item.Seen item.SeenText, via ]
+              | Error _ -> ()
+          match reverts with
+          | [] -> ()
+          | _ -> do! Service.revertMany service sessionText (evalCode sessionId) changed reverts
+      with
+      | :? RequestTooLargeException -> ()
+      | :? IO.IOException -> ()
+      | :? ObjectDisposedException -> ()
+    }
+    :> Threading.Tasks.Task
+
 /// Keep a number's range and step. The choice is written beside the project; the page's stream is told to draw (the slider's ends
 /// move), and the row's own note says why when the texts could not be used.
 let limitsHandler (q: DashboardQueries) (infra: DashboardInfra) (service: Service) : HttpHandler =

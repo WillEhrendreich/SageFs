@@ -24,6 +24,7 @@ let private node label kind children : LiveValueNode =
     Kind = kind
     Children = children
     BestEffort = false
+    Assign = Assignment.NotKnown
     Depth = 0 }
 
 let private held label reason =

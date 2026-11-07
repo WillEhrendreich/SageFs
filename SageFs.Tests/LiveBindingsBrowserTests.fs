@@ -128,6 +128,7 @@ let private heldGetter (label: string) (reason: SageFs.Features.LiveValueTree.No
     Kind = SageFs.Features.LiveValueTree.NodeKind.NotEvaluated reason
     Children = []
     BestEffort = false
+    Assign = SageFs.Features.LiveValueTree.Assignment.NotKnown
     Depth = 1 }
 
 /// A class binding with the given getters under it.
@@ -141,6 +142,7 @@ let private classBinding (name: string) (getters: SageFs.Features.LiveValueTree.
         Kind = SageFs.Features.LiveValueTree.NodeKind.Class
         Children = getters
         BestEffort = false
+        Assign = SageFs.Features.LiveValueTree.Assignment.NotKnown
         Depth = 0 } }
 
 /// The pane as the dashboard renders it for two class bindings that each hold a clickable getter, on a page that has only

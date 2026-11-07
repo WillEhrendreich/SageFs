@@ -18,6 +18,7 @@ let private node label kind children : LiveValueNode =
     Kind = kind
     Children = children
     BestEffort = false
+    Assign = Assignment.NotKnown
     Depth = 0 }
 
 let private held label reason = node label (NodeKind.NotEvaluated reason) []
@@ -209,6 +210,42 @@ let feedTests =
       |> List.filter (function WorkerProtocol.WorkerMessage.SetValueWalk _ -> true | _ -> false)
       |> List.length
       |> Expect.equal "told once, not on every eval" 1
+    }
+
+    testAsync "WHY — two pulls started one after the other leave the NEWER reading in the store even when the first one's worker call is slow, because the dashboard starts a pull after every eval without waiting for the last" {
+      let adaptive, notes = stores ()
+      let older = readingOf LiveBindingsPane.ChosenByUser WalkSafe [ binding "older" (node "older" NodeKind.Leaf []) ]
+      let newer = readingOf LiveBindingsPane.ChosenByUser WalkSafe [ binding "newer" (node "newer" NodeKind.Leaf []) ]
+      let calls = ref 0
+      let firstAsked = System.Threading.Tasks.TaskCompletionSource<unit>()
+      let release = System.Threading.Tasks.TaskCompletionSource<unit>()
+      // A call reads the session's values as they are when the call is made. The first call is made before the second eval finished,
+      // so it reads the older ones, and its answer is held up; a call made later reads the newer ones and answers at once.
+      let ask : LiveBindingsPane.Feed.Ask =
+        fun message ->
+          async {
+            match message with
+            | WorkerProtocol.WorkerMessage.GetLiveValues rid ->
+              let call = System.Threading.Interlocked.Increment(&calls.contents)
+              let reading = match call with | 1 -> older | _ -> newer
+              match call with
+              | 1 ->
+                firstAsked.SetResult()
+                do! release.Task |> Async.AwaitTask
+              | _ -> ()
+              return Result.Ok(WorkerProtocol.WorkerResponse.LiveValuesResult(rid, WorkerProtocol.Serialization.serialize reading))
+            | other -> return Result.Error(SageFsError.WorkerCommunicationFailed("s1", sprintf "unexpected %A" other))
+          }
+      let first = LiveBindingsPane.Feed.pull ask adaptive notes "s1" (fun () -> WalkSafe) |> Async.StartAsTask
+      do! firstAsked.Task |> Async.AwaitTask
+      let second = LiveBindingsPane.Feed.pull ask adaptive notes "s1" (fun () -> WalkSafe) |> Async.StartAsTask
+      // Give the second pull the chance to overtake the first. A pull that waits its turn does not finish until the first has.
+      let! _ = System.Threading.Tasks.Task.WhenAny(second, System.Threading.Tasks.Task.Delay TestTimeouts.settle) |> Async.AwaitTask
+      release.SetResult()
+      do! first |> Async.AwaitTask
+      do! second |> Async.AwaitTask
+      (Features.LiveBindingsAdaptive.tryGet adaptive "s1").Value.Bindings |> List.map (fun b -> b.Name)
+      |> Expect.equal "the store ends with what the later pull read" [ "newer" ]
     }
 
     testAsync "a worker whose mode a user chose is never overruled by the config" {

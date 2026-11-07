@@ -106,7 +106,27 @@ let private waitState (page: IPage) (name: string) (state: string) : Task<unit> 
           return! stateOf page name
         with _ -> return "(the row could not be read)"
       }
-    return Tests.failtestf "%s — the row showed '%s' instead" ex.Message observed
+    // And what the row said in words, with the line around it (the binding's own value sits beside the strip, not inside it), because
+    // "DiffersFromFile" alone does not say which of the two values was not what the test expected.
+    let! said =
+      task {
+        try
+          return!
+            page.EvaluateAsync<string>(
+              "sel => { const e = document.querySelector(sel); if (!e) return ''; const line = e.closest('.live-row, .live-node-summary, details') || e; return line.innerText; }",
+              row name)
+        with _ -> return "(the row's words could not be read)"
+      }
+    // And the last of what the session printed, because a row that did not change after an eval is explained there (an error, or an
+    // eval that never ran) more often than in the row.
+    let! outputTail =
+      task {
+        try
+          return!
+            page.EvaluateAsync<string>("() => { const e = document.getElementById('output-section'); return e ? e.innerText.slice(-700) : '(no output pane)'; }")
+        with _ -> return "(the output could not be read)"
+      }
+    return Tests.failtestf "%s — the row showed '%s' instead, saying: %s. The output ended: %s" ex.Message observed (said.Replace("\n", " | ")) (outputTail.Replace("\n", " | "))
 }
 
 let private textIn (page: IPage) (selector: string) : Task<string> =
@@ -459,6 +479,219 @@ let journey () : Task<unit> = task {
   | None -> ()
 }
 
+/// A value the session holds that the file does not, and a value the program changed, on their own daemon and the same fixture:
+///
+///   1. a typed number is tried in the session (Try): the file is not touched, the row reads `tweaked`, the strip counts it and lists
+///      before and after, and Save says what it writes ("Save 9.5 to Tuning.fs:3")
+///   2. Save writes exactly that literal and the tweak ends; Revert puts the file's value back and the row is in step again
+///   3. Save all writes every tweak; Revert all puts every tweak back and writes nothing
+///   4. a value the program assigns (`lives <- 1`, a `let mutable`) reads `evolved`: no plain Save, a Reset to the file's value, and
+///      "Use 1 as the initial value" that asks first (the question names the line and what it means) and writes only when told to
+///   5. a mutable record field is assigned in place and tried like a number
+///   6. a typed value the literal cannot take is refused with the door's own rule
+///   7. at 1400, 900 and 400 wide nothing overflows, and every step has zero console and Datastar errors
+let statesJourney () : Task<unit> = task {
+  let runDir = ref ""
+  let daemon = Sw.startDaemon ()
+  let mutable playwright: IPlaywright option = None
+  let mutable browser: IBrowser option = None
+  let mutable failure: exn option = None
+  try
+    let! built = makeRunCopy ()
+    runDir.Value <- built
+    let tuning = Path.Combine(built, "Tuning.fs")
+    let original = File.ReadAllText tuning
+    let! healthy = Sw.waitHealthy daemon
+    if not healthy then
+      Sw.dumpLogs daemon
+      Tests.failtestf "the daemon on port %d never became healthy" daemon.McpPort
+    do! Sw.createSession daemon (Path.Combine(built, "TweakFixture.fsproj")) built
+    let! ready =
+      Sw.waitUntil (TestTimeouts.asMs SageFs.Timeouts.browserJourneyWarmup) (fun () -> task {
+        try
+          let! now = Sw.sessionsNow daemon
+          return now.Length = 1 && now |> List.forall (fun (_, status, _) -> status = "Ready")
+        with _ -> return false
+      })
+    if not ready then Sw.dumpLogs daemon
+    ready |> Expect.isTrue "the fixture session reached Ready"
+    let dashboardBase = sprintf "http://localhost:%d" daemon.DashboardPort
+    let evalIn (code: string) = Sw.post daemon TestTimeouts.requestPatience "/exec" {| code = code; working_directory = built |}
+    let! evaled =
+      evalIn "let gravity = 9.8;;\nlet mutable lives = 3;;\ntype Player = { Speed: float; mutable Health: int };;\nlet player = { Speed = 4.5; Health = 100 };;"
+    evaled |> Expect.isOk "the REPL took the bindings"
+
+    let! pw = Playwright.CreateAsync()
+    let! chromium = pw.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
+    playwright <- Some pw
+    browser <- Some chromium
+    let! ctx = chromium.NewContextAsync(BrowserNewContextOptions(ViewportSize = ViewportSize(Width = 1400, Height = 1000)))
+    let! page = ctx.NewPageAsync()
+    let errors = watchErrors page
+    let! _ = page.GotoAsync(sprintf "%s/dashboard" dashboardBase)
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
+
+    let boxOf (name: string) = page.Locator(sprintf "%s [data-testid=tweak-readout]" (row name))
+    let press (name: string) (testId: string) = page.Locator(sprintf "%s [data-testid=%s]" (row name) testId).ClickAsync()
+    let countOf (testId: string) (name: string) = page.Locator(sprintf "%s [data-testid=%s]" (row name) testId).CountAsync()
+    let stripText () = textIn page "[data-testid=live-changes-count]"
+    let waitNoStrip () =
+      waitJs page "the changes strip to go" BrowserWaits.daemonWork "() => !document.querySelector('[data-testid=live-changes]')" null
+
+    for name in [ "gravity"; "lives" ] do
+      do! waitState page name "InSource"
+    do! waitJs page "the walk to say the record's field" BrowserWaits.panelUpdates "() => !!document.getElementById('lb_706c61796572')" null
+    expectNoErrors errors "with the rows in step"
+
+    // ── 1. a typed number is tried, not written ───────────────────────────────────────────────────────────────────────
+    do! boxOf("gravity").FillAsync "9.5"
+    do! press "gravity" "tweak-try"
+    do! waitState page "gravity" "Tweaked"
+    File.ReadAllText tuning |> Expect.equal "trying a value does not touch the file" original
+    do! waitJs page "the strip to count the tweak" BrowserWaits.daemonWork
+          "() => { const e = document.querySelector('[data-testid=live-changes-count]'); return !!e && /1 tweak not saved/.test(e.innerText); }" null
+    let! listing = textIn page "[data-testid=live-changes]"
+    listing |> Expect.stringContains "the strip lists before and after" "gravity: 9.8 → 9.5"
+    let! saveWords = textIn page (sprintf "%s [data-testid=tweak-save]" (row "gravity"))
+    saveWords.Trim() |> Expect.equal "Save says what it writes and where" "Save 9.5 to Tuning.fs:3"
+    do! shot page "9-tweaked-and-strip"
+    expectNoErrors errors "after trying a value"
+
+    // ── 2. Save writes that literal; Revert puts the file's value back ────────────────────────────────────────────────
+    do! press "gravity" "tweak-save"
+    let saved = original.Replace("let gravity = 9.8", "let gravity = 9.5")
+    do! waitForFile tuning "the tweak written to its literal" saved
+    do! waitState page "gravity" "InSource"
+    do! waitNoStrip ()
+    do! boxOf("gravity").FillAsync "9.0"
+    do! press "gravity" "tweak-try"
+    do! waitState page "gravity" "Tweaked"
+    do! press "gravity" "tweak-revert"
+    do! waitState page "gravity" "InSource"
+    File.ReadAllText tuning |> Expect.equal "Revert wrote nothing" saved
+    do! waitNoStrip ()
+    expectNoErrors errors "after a save and a revert"
+
+    // ── 3. Save all and Revert all ───────────────────────────────────────────────────────────────────────────────────
+    do! boxOf("gravity").FillAsync "9.0"
+    do! press "gravity" "tweak-try"
+    do! boxOf("lives").FillAsync "7"
+    do! press "lives" "tweak-try"
+    do! waitState page "gravity" "Tweaked"
+    do! waitState page "lives" "Tweaked"
+    do! waitJs page "the strip to count two tweaks" BrowserWaits.daemonWork
+          "() => { const e = document.querySelector('[data-testid=live-changes-count]'); return !!e && /2 tweaks not saved/.test(e.innerText); }" null
+    do! page.Locator("[data-testid=live-changes-revert-all]").ClickAsync()
+    do! waitState page "gravity" "InSource"
+    do! waitState page "lives" "InSource"
+    File.ReadAllText tuning |> Expect.equal "Revert all wrote nothing" saved
+    do! boxOf("gravity").FillAsync "9.0"
+    do! press "gravity" "tweak-try"
+    do! boxOf("lives").FillAsync "7"
+    do! press "lives" "tweak-try"
+    do! waitState page "gravity" "Tweaked"
+    do! waitState page "lives" "Tweaked"
+    do! page.Locator("[data-testid=live-changes-save-all]").ClickAsync()
+    let savedAll = saved.Replace("let gravity = 9.5", "let gravity = 9.0").Replace("let mutable lives = 3", "let mutable lives = 7")
+    do! waitForFile tuning "every tweak written to its own literal" savedAll
+    do! waitState page "gravity" "InSource"
+    do! waitState page "lives" "InSource"
+    do! waitNoStrip ()
+    expectNoErrors errors "after Save all and Revert all"
+
+    // ── 4. a value the program assigned is evolved: reset it, or adopt it after the question ──────────────────────────
+    let! assigned = evalIn "lives <- 1;;"
+    assigned |> Expect.isOk "the program's assignment ran"
+    do! waitState page "lives" "Evolved"
+    do! waitJs page "the strip to count the program's change" BrowserWaits.daemonWork
+          "() => { const e = document.querySelector('[data-testid=live-changes-count]'); return !!e && /1 value the program changed/.test(e.innerText); }" null
+    let! plainSaves = countOf "tweak-save" "lives"
+    plainSaves |> Expect.equal "an evolved value has no plain Save" 0
+    let! resetWords = textIn page (sprintf "%s [data-testid=tweak-reset]" (row "lives"))
+    resetWords.Trim() |> Expect.equal "Reset names the value it goes back to" "Reset to 7"
+    let! adoptWords = textIn page (sprintf "%s [data-testid=tweak-adopt]" (row "lives"))
+    adoptWords.Trim() |> Expect.equal "adopt names the value it writes" "Use 1 as the initial value"
+    do! shot page "10-evolved"
+    do! press "lives" "tweak-adopt"
+    let confirm = page.Locator(sprintf "%s [data-testid=tweak-adopt-confirm]" (row "lives"))
+    do! waitJs page "the question to open" BrowserWaits.panelUpdates
+          "sel => { const e = document.querySelector(sel); return !!e && e.getBoundingClientRect().height > 0; }"
+          (box (sprintf "%s [data-testid=tweak-adopt-confirm]" (row "lives")))
+    let! adoptDisabled = page.Locator(sprintf "%s [data-testid=tweak-adopt]" (row "lives")).IsDisabledAsync()
+    adoptDisabled |> Expect.isFalse "the button that opened the question is still a button, not a dimmed dead control"
+    let! question = confirm.InnerTextAsync()
+    question |> Expect.stringContains "the question names the line" "Write Tuning.fs:"
+    question |> Expect.stringContains "and the value" "lives = 1"
+    question |> Expect.stringContains "and that the program can move it again" "can move again"
+    File.ReadAllText tuning |> Expect.equal "asking wrote nothing" savedAll
+    do! shot page "11-adopt-question"
+    do! press "lives" "tweak-adopt-no"
+    do! waitJs page "the question to close" BrowserWaits.panelUpdates
+          "sel => { const e = document.querySelector(sel); return !!e && e.getBoundingClientRect().height === 0; }"
+          (box (sprintf "%s [data-testid=tweak-adopt-confirm]" (row "lives")))
+    File.ReadAllText tuning |> Expect.equal "declining wrote nothing" savedAll
+    do! press "lives" "tweak-adopt"
+    do! press "lives" "tweak-adopt-yes"
+    let adopted = savedAll.Replace("let mutable lives = 7", "let mutable lives = 1")
+    do! waitForFile tuning "the program's value written as the initial value" adopted
+    do! waitState page "lives" "InSource"
+    let! assignedAgain = evalIn "lives <- 0;;"
+    assignedAgain |> Expect.isOk "the program changed it again"
+    do! waitState page "lives" "Evolved"
+    do! press "lives" "tweak-reset"
+    do! waitState page "lives" "InSource"
+    File.ReadAllText tuning |> Expect.equal "Reset wrote nothing" adopted
+    expectNoErrors errors "after an evolved value was declined, adopted and reset"
+
+    // ── 5. a mutable record field is assigned in place ───────────────────────────────────────────────────────────────
+    do! page.Locator("#lb_706c61796572 summary").First.ClickAsync()
+    let field = "player/Health"
+    do! waitState page field "InSource"
+    do! boxOf(field).FillAsync "70"
+    do! press field "tweak-try"
+    do! waitState page field "Tweaked"
+    File.ReadAllText tuning |> Expect.equal "trying a field wrote nothing" adopted
+    do! press field "tweak-revert"
+    do! waitState page field "InSource"
+    expectNoErrors errors "after a mutable field was tried and reverted"
+
+    // ── 6. a value the literal cannot take is refused with the door's rule ───────────────────────────────────────────
+    do! boxOf("gravity").FillAsync "fast"
+    do! press "gravity" "tweak-try"
+    do! waitState page "gravity" "Refused"
+    let! refusedText = textIn page (row "gravity")
+    refusedText |> Expect.stringContains "the door's own words" "fast"
+    File.ReadAllText tuning |> Expect.equal "a refused value wrote nothing" adopted
+    expectNoErrors errors "after a refused value"
+
+    // ── 7. three widths, with a tweak and the strip on screen ────────────────────────────────────────────────────────
+    do! boxOf("gravity").FillAsync "9.5"
+    do! press "gravity" "tweak-try"
+    do! waitState page "gravity" "Tweaked"
+    for (width, height, name) in [ 1400, 1000, "1400"; 900, 900, "900"; 400, 800, "400" ] do
+      do! page.SetViewportSizeAsync(width, height)
+      do! waitJs page "the dock" BrowserWaits.panelUpdates "() => !!document.querySelector('#live-dock')" null
+      let! problems = layoutProblems page
+      problems |> Expect.equal (sprintf "at %dpx wide nothing overflows sideways: %s" width problems) ""
+      do! shot page (sprintf "12-tweaked-%s" name)
+    do! page.SetViewportSizeAsync(1400, 1000)
+    expectNoErrors errors "across three widths"
+    try do! ctx.CloseAsync() with _ -> ()
+  with ex ->
+    // The daemon's own words about the failure, because a row stuck in a state says what the pane showed and not why.
+    Sw.dumpLogs daemon
+    failure <- Some ex
+  match browser with
+  | Some b -> do! Sw.closeBrowserSafely b
+  | None -> ()
+  playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
+  Sw.killDaemon daemon
+  removeRunCopy runDir.Value
+  match failure with
+  | Some ex -> return raise ex
+  | None -> ()
+}
+
 [<Tests>]
 let tests =
   testSequenced <|
@@ -466,5 +699,9 @@ let tests =
 
     testTask "[Integration] Dashboard knob browser: a row says where its value lives, a step writes exactly that range, undo restores the bytes, a stale click and a refusal say why" {
       do! journey () }
+    |> Integration.register (Integration.Dedicated "--integration-browser")
+
+    testTask "[Integration] Dashboard knob browser: a tried value is tweaked until saved, a value the program assigned is evolved and asks before it is written, and Save all and Revert all act on tweaks only" {
+      do! statesJourney () }
     |> Integration.register (Integration.Dedicated "--integration-browser")
   ]

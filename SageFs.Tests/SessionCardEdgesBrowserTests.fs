@@ -46,7 +46,7 @@ let private card (id: string) (source: CardSource) : ParsedSession =
 /// One live binding, so the pane is open (a pane with nothing bound is a folded strip, and its bar is not on the page).
 let private walked : LiveBindingsDock.BindingsSource =
   let leaf : LiveValueNode =
-    { Label = "x"; TypeName = "int"; Preview = "1"; Kind = NodeKind.Leaf; Children = []; BestEffort = false; Depth = 0 }
+    { Label = "x"; TypeName = "int"; Preview = "1"; Kind = NodeKind.Leaf; Children = []; BestEffort = false; Assign = Assignment.NotKnown; Depth = 0 }
   let binding : LiveBindingValue = { Name = "x"; TypeSignature = "int"; Root = leaf }
   let view : PaneView =
     { Snapshot = { SessionId = viewedId; Generation = 1L; Bindings = [ binding ]; Truncated = false; CapturedAt = DateTimeOffset.UnixEpoch }
