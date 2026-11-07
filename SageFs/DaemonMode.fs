@@ -446,7 +446,7 @@ let private checkMemoryAdmission (readSnapshot: unit -> SessionManager.QuerySnap
   let sessions =
     SessionManager.QuerySnapshot.allSessions (readSnapshot())
     |> List.map (memorySessionSnapshotOf now (fun _ -> false))
-  let rss = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64
+  let rss = Features.MachineMemory.heldBytes (Features.MachineMemory.ownFootprint ())
   let machineMemory = Features.MachineMemory.current ()
   let machine : MemorySupervisor.MachineStats =
     { DaemonRssBytes = rss
@@ -3569,7 +3569,8 @@ let run
            |> List.choose (fun session ->
              WorkerProtocol.SessionLifecycleStatus.workerPid session.Status
              |> Option.map (fun pid -> pid, "worker:" + WorkerProtocol.SessionId.value session.Id))))
-    let rssBytes = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64
+    // Resident plus swapped: the daemon's resident size alone read 640 MB while it held 25 GB, 20 GB of it in swap.
+    let rssBytes = SageFs.Features.MachineMemory.heldBytes (SageFs.Features.MachineMemory.ownFootprint ())
     let memoryMB = int (rssBytes / 1_048_576L)
     let rssVerdict =
       SageFs.Features.HealthWatch.observe
@@ -3960,7 +3961,7 @@ let run
     let sessions =
       SessionManager.QuerySnapshot.allSessions (readSnapshot())
       |> List.map (memorySessionSnapshotOf now isUserActive)
-    let rss = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64
+    let rss = Features.MachineMemory.heldBytes (Features.MachineMemory.ownFootprint ())
     let machineMemory = Features.MachineMemory.current ()
     let machine : MemorySupervisor.MachineStats =
       { DaemonRssBytes = rss

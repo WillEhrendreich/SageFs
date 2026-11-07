@@ -806,6 +806,7 @@
         <Compile Include="ExpensiveWorkLeaseTests.fs" />
         <Compile Include="LeaseSimTests.fs" />
         <Compile Include="McpFanoutTests.fs" />
+        <Compile Include="FootprintPressureTests.fs" />
         <Compile Include="McpConnectionSimTests.fs" />
         <Compile Include="SseReplaySimTests.fs" />
         <Compile Include="AnnotationsSyncSimTests.fs" />

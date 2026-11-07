@@ -1373,11 +1373,11 @@ module McpTools =
         componentFailures = health |> Option.map (fun h -> SageFs.Features.ComponentWatch.wire h.ComponentFailures) |> Option.defaultValue Array.empty
         memoryPressure =
           health |> Option.map (fun h -> SageFs.MemoryPressure.describe h.MemoryPressure) |> Option.defaultValue (SageFs.MemoryPressure.describe SageFs.MemoryPressure.Normal)
-        memoryPressureNote = health |> Option.map (fun h -> SageFs.MemoryPressure.explain h.MemoryPressure) |> Option.defaultValue ""
+        memoryPressureNote = health |> Option.map (fun h -> SageFs.MemoryPressure.explainWith h.MemoryPressure (SageFs.Features.MemoryPressureWatch.currentNote ())) |> Option.defaultValue ""
         machineMemory =
           {| totalBytes = machineMemory.TotalBytes
              availableBytes = machineMemory.AvailableBytes |}
-        daemonResidentBytes = health |> Option.map (fun h -> int64 h.MemoryMB * 1_048_576L) |> Option.defaultValue 0L
+        daemonHeldBytes = health |> Option.map (fun h -> int64 h.MemoryMB * 1_048_576L) |> Option.defaultValue 0L
         aggregateResidentBytes = telemetry |> Option.map (fun t -> t.AggregateResidentBytes) |> Option.defaultValue 0L
         aggregateCpuPercent = telemetry |> Option.map (fun t -> t.AggregateCpuPercent) |> Option.defaultValue 0.0
         telemetrySampledAt = telemetry |> Option.map (fun t -> t.SampledAt) |> Option.defaultValue DateTimeOffset.UtcNow

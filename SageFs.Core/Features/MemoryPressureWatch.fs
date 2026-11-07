@@ -16,6 +16,17 @@ module MemoryPressureWatch =
   let mutable private level = MemoryPressure.Normal
   let private gate = obj ()
 
+  /// The daemon's own footprint and the machine's total memory, read where the level is judged. A test swaps it
+  /// for a fixed reading. The default reads `/proc/self/smaps_rollup` and the GC, a few microseconds.
+  let mutable footprintProbe : unit -> MachineMemory.Footprint * int64 =
+    fun () -> MachineMemory.ownFootprint (), (MachineMemory.current ()).TotalBytes
+
+  /// What the footprint alone says right now, and why.
+  let footprintFloor () : MemoryPressure * string =
+    let footprint, total = footprintProbe ()
+    MemoryPressure.ofFootprint MemoryPressure.defaultFootprintThresholds footprint total,
+    MemoryPressure.describeFootprint footprint total
+
   /// Evaluate the policy against the given machine/session snapshot,
   /// persist the level it produces, and return the full `Decision`. Called
   /// from the admission check (before creating a session) and from the
@@ -23,11 +34,19 @@ module MemoryPressureWatch =
   /// create a new one).
   let evaluate (t: Thresholds) (m: MachineStats) (sessions: SessionSnapshot list) : Decision =
     lock gate (fun () ->
-      let decision = step t level m sessions
+      let floor, why = footprintFloor ()
+      let decision = stepWithFloor t floor why level m sessions
       level <- decision.Level
       decision)
 
-  let currentLevel () : MemoryPressure = lock gate (fun () -> level)
+  /// The level every status surface reads: the last judged level, and never better than the daemon's footprint
+  /// says right now, so a daemon that holds 20 GB in swap is not "normal" between two sweeps.
+  let currentLevel () : MemoryPressure =
+    let floor, _ = footprintFloor ()
+    lock gate (fun () -> MemoryPressure.worseOf level floor)
+
+  /// Why the level is what it is, from the footprint: empty when the footprint says nothing.
+  let currentNote () : string = footprintFloor () |> snd
 
   /// For tests, and for a daemon that wants to start clean.
   let reset () : unit = lock gate (fun () -> level <- MemoryPressure.Normal)

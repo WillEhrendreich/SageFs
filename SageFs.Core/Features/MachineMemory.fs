@@ -47,6 +47,67 @@ module MachineMemory =
     | Some total, Some available -> Some { TotalBytes = total; AvailableBytes = available }
     | _ -> None
 
+  /// What THIS process holds, as opposed to what is resident right now. On 2026-11-07 the daemon held 25 GB
+  /// of managed heap, 20 GB of it swapped out, so its working set read 640 MB and `/health` said `normal`
+  /// while every session creation failed with `OutOfMemoryException`.
+  type Footprint = {
+    /// Pages in RAM now (`Rss` in `/proc/self/smaps_rollup`, `WorkingSet64` elsewhere).
+    ResidentBytes: int64
+    /// Pages the kernel has pushed to swap (`Swap`). Zero where the platform does not say.
+    SwappedBytes: int64
+    /// The managed heap the GC has committed (`GCMemoryInfo.TotalCommittedBytes`).
+    HeapCommittedBytes: int64
+    /// The most the GC may commit: its hard limit when the process runs under a memory limit (a cgroup),
+    /// else the memory it believes the machine has (`GCMemoryInfo.TotalAvailableMemoryBytes`).
+    HeapLimitBytes: int64
+  }
+
+  /// Everything the process holds, in RAM or in swap. The number a status surface calls its memory.
+  let heldBytes (f: Footprint) : int64 = f.ResidentBytes + f.SwappedBytes
+
+  /// Pure parse of `/proc/<pid>/smaps_rollup` into (Rss, Swap) in bytes. Rss is required; a kernel that
+  /// does not print `Swap:` yields zero for it.
+  let parseSmapsRollup (lines: string[]) : (int64 * int64) option =
+    let kb (key: string) =
+      lines
+      |> Array.tryPick (fun (line: string) ->
+        match line.StartsWith(key, StringComparison.Ordinal) with
+        | false -> None
+        | true ->
+          let parts = line.Split([| ' ' |], StringSplitOptions.RemoveEmptyEntries)
+          match parts.Length >= 2 with
+          | false -> None
+          | true ->
+            match UInt64.TryParse parts.[1] with
+            | true, value -> Some(int64 value * 1024L)
+            | false, _ -> None)
+    match kb "Rss:" with
+    | Some rss -> Some(rss, kb "Swap:" |> Option.defaultValue 0L)
+    | None -> None
+
+  let private smapsRollupPath = "/proc/self/smaps_rollup"
+
+  /// This process's footprint. Never throws: a failed read falls back to the working set with nothing
+  /// swapped, which is what the daemon reported before it knew better.
+  let ownFootprint () : Footprint =
+    let gc = GC.GetGCMemoryInfo()
+    let rssAndSwap =
+      try
+        match File.Exists smapsRollupPath with
+        | true -> parseSmapsRollup (File.ReadAllLines smapsRollupPath)
+        | false -> None
+      with
+      | :? IOException
+      | :? UnauthorizedAccessException -> None
+    let resident, swapped =
+      match rssAndSwap with
+      | Some pair -> pair
+      | None -> Diagnostics.Process.GetCurrentProcess().WorkingSet64, 0L
+    { ResidentBytes = resident
+      SwappedBytes = swapped
+      HeapCommittedBytes = gc.TotalCommittedBytes
+      HeapLimitBytes = gc.TotalAvailableMemoryBytes }
+
   let private procMeminfoPath = "/proc/meminfo"
 
   /// Best-effort snapshot of the machine's memory. On Linux, reads

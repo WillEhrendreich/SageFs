@@ -150,9 +150,13 @@ module MemorySupervisor =
   /// The one decision function. Pure: same `current`, `m`, `sessions` in,
   /// same `Decision` out, every time — replayable and DST-able exactly like
   /// `HealthAnomaly.step`.
-  let step (t: Thresholds) (current: MemoryPressure) (m: MachineStats) (sessions: SessionSnapshot list) : Decision =
+  /// `step` with a floor under the level: what the daemon's OWN footprint says (`MemoryPressure.ofFootprint`) and why.
+  /// The level is the worse of that and the machine's, so a daemon whose heap sits at the limit the GC may commit,
+  /// or whose heap is mostly swapped out, refuses new sessions with a reason while the machine still has room.
+  let stepWithFloor (t: Thresholds) (floor: MemoryPressure) (floorWhy: string) (current: MemoryPressure) (m: MachineStats) (sessions: SessionSnapshot list) : Decision =
     let availableFrac = availableFracOf m
-    let level = nextLevel t current availableFrac
+    let machineLevel = nextLevel t current availableFrac
+    let level = MemoryPressure.worseOf machineLevel floor
 
     // Reaping is NOT gated on level: a dead session's retained state is
     // never worth keeping, whether the box is starving or has 90% free.
@@ -184,6 +188,8 @@ module MemorySupervisor =
 
     let refuse =
       match level with
+      | MemoryPressure.Critical when machineLevel <> MemoryPressure.Critical ->
+        [ ShedAction.RefuseNewSessions(sprintf "%s — stop unused sessions, or restart the daemon once its work is saved, and retry" floorWhy) ]
       | MemoryPressure.Critical ->
         [ ShedAction.RefuseNewSessions(
             sprintf
@@ -199,3 +205,7 @@ module MemorySupervisor =
       | [] -> None
       | _ -> Some(sprintf "memory pressure level=%A, %.1f%% of machine memory available" level (availableFrac * 100.0))
     { Level = level; Actions = actions; Reason = reason }
+
+  /// The machine-only decision: no floor from the daemon's own footprint.
+  let step (t: Thresholds) (current: MemoryPressure) (m: MachineStats) (sessions: SessionSnapshot list) : Decision =
+    stepWithFloor t MemoryPressure.Normal "" current m sessions

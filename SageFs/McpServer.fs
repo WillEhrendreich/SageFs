@@ -3036,6 +3036,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
         |> System.Threading.Tasks.Task.WhenAll
       let sessionSummaries = sessionPairs |> Array.map fst |> Array.toList
       let sessionStates = sessionPairs |> Array.map snd
+      let footprint = SageFs.Features.MachineMemory.ownFootprint ()
       let healthSnapshot : SageFs.Features.HealthSnapshot =
         { DaemonPid = Environment.ProcessId
           DaemonPort = 0
@@ -3043,7 +3044,8 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           Version = version
           SessionSummaries = sessionSummaries
           LiveTestingSummary = None
-          MemoryMB = int (daemonProcess.WorkingSet64 / 1024L / 1024L)
+          // Resident plus swapped, from the same read the dashboard's health tick uses (DaemonMode.GetDaemonHealth).
+          MemoryMB = int (SageFs.Features.MachineMemory.heldBytes footprint / 1_048_576L)
           Anomalies = SageFs.Features.HealthWatch.troubled ()
           // RSS is sampled (and a gcdump considered) on the dashboard's own
           // health tick (DaemonMode.GetDaemonHealth) — reported here too so
@@ -3120,13 +3122,19 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
                overall = SageFs.Features.DaemonHealth.healthLabel overall
                componentFailures = SageFs.Features.ComponentWatch.wire componentFailures
                anomalies = anomalies
+               // What the process HOLDS, resident plus swapped. `swappedMB`, `residentMB`, `heapCommittedMB` and
+               // `heapLimitMB` say how it splits and how close the heap is to the most the GC may commit.
                memoryMB = healthSnapshot.MemoryMB
+               residentMB = int (footprint.ResidentBytes / 1_048_576L)
+               swappedMB = int (footprint.SwappedBytes / 1_048_576L)
+               heapCommittedMB = int (footprint.HeapCommittedBytes / 1_048_576L)
+               heapLimitMB = int (footprint.HeapLimitBytes / 1_048_576L)
                // The level-based judgment (§ HealthSnapshot.MemoryPressure's
                // doc comment): "normal"/"tight"/"critical" against the
                // MACHINE's available memory, independent of whether
                // `anomalies` above has anything to say about shape.
                memoryPressure = SageFs.MemoryPressure.describe healthSnapshot.MemoryPressure
-               memoryPressureNote = SageFs.MemoryPressure.explain healthSnapshot.MemoryPressure
+               memoryPressureNote = SageFs.MemoryPressure.explainWith healthSnapshot.MemoryPressure (SageFs.Features.MemoryPressureWatch.currentNote ())
                error = sessionError
                version = version
                apiVersion = SageFs.EndpointContracts.apiVersion

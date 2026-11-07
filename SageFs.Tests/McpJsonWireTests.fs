@@ -148,7 +148,7 @@ let tests =
       text
       |> without [ "daemonVersion"; "coreVersion"; "daemonPid"; "telemetrySampledAt"; "machineMemory"; "leases"; "hatch" ]
       |> Expect.equal "daemon status"
-           """{"aggregateCpuPercent":0,"aggregateResidentBytes":0,"anomalies":[],"available":["get_daemon_status","get_session_status","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","hard_reset_fsi_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"componentFailures":[],"daemonResidentBytes":0,"mcpPort":0,"memoryPressure":"normal","memoryPressureNote":"","overall":"Unknown","processes":[],"scope":"Daemon","sessions":{"evaluating":0,"faulted":0,"ready":0,"stopped":0,"total":0,"warmingUp":0},"state":"Ready","uptimeSeconds":0}"""
+           """{"aggregateCpuPercent":0,"aggregateResidentBytes":0,"anomalies":[],"available":["get_daemon_status","get_session_status","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","hard_reset_fsi_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"componentFailures":[],"daemonHeldBytes":0,"mcpPort":0,"memoryPressure":"normal","memoryPressureNote":"","overall":"Unknown","processes":[],"scope":"Daemon","sessions":{"evaluating":0,"faulted":0,"ready":0,"stopped":0,"total":0,"warmingUp":0},"state":"Ready","uptimeSeconds":0}"""
     }
 
     testTask "WHY — get_daemon_status carries a hatch section, the live ledger's count, beside leases" {
