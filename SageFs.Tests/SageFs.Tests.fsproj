@@ -142,6 +142,7 @@
              that says who, the check that finds them, and the DST over multi-file edit histories. -->
         <Compile Include="CallerStateTests.fs" />
         <Compile Include="CallerCheckTests.fs" />
+        <Compile Include="ProjectCheckTests.fs" />
         <Compile Include="CallerWireTests.fs" />
         <Compile Include="CallerPatchEmitTests.fs" />
         <Compile Include="QualifiedAccessPatchTests.fs" />

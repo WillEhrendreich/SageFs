@@ -225,6 +225,9 @@
         <!-- After ReloadPlanning: finds the callers of a re-signed or removed declaration in the project's other files, by the
              compiler's symbol resolution over the whole project or by name. -->
         <Compile Include="Features\CallerCheck.fs" />
+        <!-- The decisions behind check_project (compiler arguments kept per project, overlays, stale references, the
+             report). Pure: it needs only Json.fs. -->
+        <Compile Include="Features\ProjectCheckCore.fs" />
         <!-- The references rung of the progressive map. SymbolReferences is pure (what scope a reply may claim, and the
              budget shared by a session's projects), before WorkerProtocol, which carries the answer. The compiler call,
              SymbolReferenceCheck, compiles after MemoryPressure.fs, with the retention rule it asks. -->
