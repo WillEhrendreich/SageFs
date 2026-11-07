@@ -25,6 +25,12 @@
         <Compile Include="MachineTier.fs" />
         <Compile Include="RepoPaths.fs" />
     <Compile Include="Timeouts.fs" />
+        <!-- What an eval cost and the one line that says so. BCL and Timeouts only, so it is also compiled into the isolated FSI host. -->
+        <Compile Include="EvalCost.fs" />
+        <!-- How much of a value F# Interactive prints, and the session configuration that applies it. Both are also compiled
+             into the isolated FSI host, so the two session kinds print under one definition. -->
+        <Compile Include="PrintLimits.fs" />
+        <Compile Include="FsiPrintConfig.fs" />
         <Compile Include="Editing.fs" />
         <Compile Include="TestProviderTypes.fs" />
         <Compile Include="WorkflowTypes.fs" />

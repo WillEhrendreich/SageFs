@@ -363,6 +363,11 @@ module Timeouts =
   /// How long disposing an FSI host session waits for the host to exit after the
   /// shutdown request before it kills the process. Was a bare 5000 ms, kept at that.
   let fsiHostShutdownGrace = TimeSpan.FromSeconds(5.0)
+  /// How long an eval has to run before its reply ends with a cost line (`EvalCost.line`). Under half a
+  /// second an agent does not need to be told the time, and a line on every reply would cost tokens on all
+  /// of them. FsiMcp 0.3.0 uses the same 0.5 s; it is a first guess until `get_eval_timeline` history says
+  /// what share of real evals it marks (docs/plans/eval-cost-line.md).
+  let evalCostSlow = TimeSpan.FromSeconds(0.5)
   /// How long the `dotnet build` of the FSI host (a cold build, once per host
   /// version and SDK) may run before FsiHostBuild gives up. No recorded reason
   /// for 5 minutes.
