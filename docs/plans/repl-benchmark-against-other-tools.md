@@ -24,14 +24,14 @@ This plan carries no timing figures. The machine that wrote it was loaded by oth
 
 ## What is known now, without running the other tool
 
-Read from FsiMcp's source and README at commit 8e6cb8f (package 0.3.0), and from SageFs 0.6.939's daemon and tree, on 2026-11-07.
+Read from FsiMcp's source and README at commit 8e6cb8f (package 0.3.0), from one running 0.3.0 server asked for `initialize` and `tools/list` only (the tool-list rows), and from SageFs 0.6.939's daemon and tree, on 2026-11-07.
 
 | Metric | FsiMcp | SageFs today | Where the plan for it is |
 |:--|:--|:--|:--|
 | Tools in `tools/list` | 7 | 72 | `small-default-tool-list` |
 | Characters of tool definitions (minified) | 5,606 | 111,052 | `small-default-tool-list` |
 | Estimated tokens (characters / 4) | about 1,400 | about 27,800 | `small-default-tool-list` |
-| Server `instructions` | 329 characters | ceiling 4,200 | `small-default-tool-list` |
+| Server `instructions` | 322 characters | ceiling 4,200 | `small-default-tool-list` |
 | Tool calls before the first eval | 1 (`load_project`) | 5 (`AgentGuidance.firstMinute`) | `one-command-stdio-setup` |
 | Shell commands to register | 2 | 3 (+1 optional) | `one-command-stdio-setup` |
 | Profile tool (CPU and allocation) | yes | none found in the tree | `profile-tool` |
@@ -46,7 +46,7 @@ Read from FsiMcp's source and README at commit 8e6cb8f (package 0.3.0), and from
 | Sessions and clients | one session per server, one client | many sessions, a daemon, a dashboard, editors, cohorts | not a metric to race on |
 | Author's claim, not reproduced | "in a real 9-step debugging session, 8.8 s against 27.2 s for rerunning scripts; follow-up questions 8 to 40 ms" | the published check figure is 21 to 25 ms on a loaded machine (`docs/repl-loop-benchmarks.md`) | this item |
 
-How the tool-list figures were made, and what they leave out, is in `small-default-tool-list.md`. They are read from FsiMcp's source, not from a running server. A running server's `tools/list` adds only the JSON-RPC envelope, because the source sends the declared JSON unchanged, so I expect the same count. The benchmark run confirms it.
+How the tool-list figures were made, and what they leave out, is in `small-default-tool-list.md`. The FsiMcp figures come from a running 0.3.0 server (`tools/list` result 5,616 characters, 7 tools, 2026-11-07), and they match the count read from its source, 5,606 for the `tools` array. Nothing else of FsiMcp has been run: no eval, no load, no timing.
 
 What the table says: SageFs is behind on size, on steps, and on four features. A second point is about what the table cannot show. FsiMcp serves one agent with one session, and SageFs serves editors, a dashboard and several agents at once, which a head-to-head on one agent's loop does not measure. The page says so in one sentence and claims no win from it.
 
@@ -100,16 +100,16 @@ Fairness rules written into the harness and the page. The same project, built fo
 
 ## Running the other tool safely
 
-I read FsiMcp's `Server.fs`, `Worker.fs`, `Profiler.fs`, `Text.fs`, `Program.fs` and its `.fsproj` and found a stdio server that starts a worker process of itself, runs MSBuild on the project it is given, and loads that project into an FSI session. I did not read `ProjectResolver.fs` or `ProjectChecker.fs` (about 28 KB), the CI and release workflows, or the dependencies' contents. It is a package published hours before this plan, so nothing here vouches for it. It runs the code of whatever project it loads, by design, as every REPL server does.
+I read all of FsiMcp's `src/FsiMcp` sources (`Server.fs`, `Worker.fs`, `Profiler.fs`, `Text.fs`, `Program.fs`, `ProjectResolver.fs`, `ProjectChecker.fs`) and its `.fsproj`, and found a stdio server that starts a worker process of itself, runs `dotnet msbuild -restore` on the project it is given, and loads that project into an FSI session. `ProjectResolver.fs` and `ProjectChecker.fs` hold the MSBuild calls (with `-p:ArtifactsPath=` when an artifacts path is set), the choice of assemblies, a snapshot copy of the project's build output under `<temp>/fsi-mcp`, and the type-check with overlays. They start only `dotnet` and open no network connection of their own. The files they write themselves are under that temp folder (they delete folders there left by dead server processes, and no others), and the build they start writes `bin` and `obj` as any build does. That changes none of this plan's claims, and the artifacts-path call is the same `-p:ArtifactsPath=` that `session-options` proposes. I did not read the CI and release workflows, the tests, `scripts/repl.py`, or the contents of its dependencies. It is a package published hours before this plan, so nothing here vouches for it. It runs the code of whatever project it loads, by design, as every REPL server does. One difference matters for the rebuild scenario: `load_project` runs the restore and the build itself every time, so "rebuild and continue" for it includes MSBuild, and the page says so.
 
 The way I propose, pending Will's decision: install it into a throwaway tool path under a scratch directory, never `-g` and never `~/.dotnet/tools`, recording the exact version; or build it from a pinned commit of its source (8e6cb8f is today's head) in that scratch directory, which lets the source be read before it runs and the package restore be done first. Run it with a minimal environment (`env -i`, a scratch `HOME`, only the variables `dotnet` needs, the scratch directory as its working directory), inside the same `unshare` wrapper the gate tiers use (`TierPlan.isolatedArgv`, a private `/tmp` and a mapped user) and with the network off for the timed runs, after a first restore has filled a throwaway NuGet cache. The project it loads is a tiny one the harness writes, never one of Will's. The harness deletes the tool path, the cache and the scratch home at the end and prints the paths it removed.
 
-On 2026-11-07 Will's approval of a throwaway install for read-only probes was relayed to the author of this plan second-hand, in a message from another agent. It is not recorded here as his decision, and nothing of FsiMcp was installed or run while writing this. The benchmark run itself, with timings, needs his go in his own words on the day, and the decisions below ask for the details.
+On 2026-11-07 Will approved running FsiMcp 0.3.0 for a read-only `initialize` and `tools/list` probe, and the orchestrator did it in a throwaway tool path with a minimal environment and removed it afterwards. That is all that has been run. The latency and behaviour benchmark still needs a quiet machine and Will's go for each run he has not approved, and the decisions below ask for the details.
 
 ## Measure first
 
 - A trial of the harness against SageFs alone on a quiet machine, to see the spread between identical runs. If the spread is wider than the differences the page would report, the harness needs more runs or a quieter machine, and the page says so.
-- Whether `tools/list` from a running FsiMcp equals the declared JSON, byte for byte (expected, from the source). That closes the "read from source" caveat in `small-default-tool-list`.
+- Done on 2026-11-07: `tools/list` from a running FsiMcp 0.3.0 is 5,616 characters for 7 tools, the same count as the source gave.
 - The token counter's figures for both lists, which need an API key.
 - Whether the machine can be made quiet at all while the release gate runs on it. If not, the run waits for a night or a second machine, and the plan says which.
 
@@ -126,7 +126,7 @@ M for the harness. Each run and page is S once it exists.
 
 ## Decisions for Will
 
-- How is FsiMcp run: a throwaway tool path (what the coordinator relayed), a build from a pinned commit in the sandbox, or something else? Recommendation: build from the pinned commit after I read the two files I have not, so the source and the binary match.
+- How is FsiMcp run: a throwaway tool path (what the tools/list probe used), a build from a pinned commit in the sandbox, or something else? Recommendation: build from the pinned commit, so the source and the binary match.
 - Your go to run it for the timed benchmark, on a quiet machine, stated by you.
 - Send Onur Gumus the harness and the page before publishing, so he can correct a misuse of his tool? Recommendation: yes. Outreach is yours; I would draft it in your voice and not send it.
 - The existing page, `docs/repl-loop-benchmarks.md`, was measured on a loaded machine and says so. Re-measure it on a quiet machine with this harness, or leave it as the dated record it is?

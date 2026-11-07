@@ -40,7 +40,7 @@ I merge. This plan becomes the plan of record for the diet, so there is one plac
 
 Read on 2026-11-07. Nothing below was timed.
 
-| | FsiMcp (read from source) | SageFs 0.6.939 (read from the daemon) |
+| | FsiMcp 0.3.0 (from a running server) | SageFs 0.6.939 (read from the daemon) |
 |:--|--:|--:|
 | Tools | 7 | 72 |
 | Characters of the tool definitions | 5,606 | 111,052 |
@@ -48,9 +48,9 @@ Read on 2026-11-07. Nothing below was timed.
 | of which input schemas | 3,009 | 34,676 |
 | Estimated tokens (characters / 4) | about 1,400 | about 27,800 |
 | Longest single definition | `eval`, about 1,050 | `send_fsharp_code`, 6,354 (description 4,030) |
-| Server `instructions` | 329 characters | ceiling 4,200 (test), actual not measured here |
+| Server `instructions` | 322 characters | ceiling 4,200 (test), actual not measured here |
 
-How the figures were made. FsiMcp: the JSON array `toolsJson` declared in `src/FsiMcp/Server.fs` at commit 8e6cb8f (the package is 0.3.0 by that commit's message), minified with `jq -c` and counted. This is read from source, not from a running server. FsiMcp sends `toolsJson` unchanged in `tools/list`, so a running server adds only the JSON-RPC envelope (about 35 characters), and I expect the same count; the benchmark plan confirms it by running the server. SageFs: `tools/list` through `tools/sagefs-call.fsx list` against the daemon, the `result.tools` array minified and counted the same way (the raw response line was 115,098 bytes, because it carries `\uXXXX` escapes and the envelope). The SageFs definitions also carry `annotations` (`destructiveHint` on 18 tools), which FsiMcp's do not.
+How the figures were made. FsiMcp: from a running 0.3.0 server on 2026-11-07, started in a throwaway tool path with a minimal environment for an `initialize` and a `tools/list` and nothing else (done by the orchestrator, with Will's approval for that read-only probe). The `tools/list` result is 5,616 characters, 7 tools, and its `tools` array alone is 5,606, which is the count I had first read from the `toolsJson` array in `src/FsiMcp/Server.fs` at commit 8e6cb8f, so the source and the running server agree. The `instructions` string is 322 characters. The raw output is kept in the orchestrator's scratchpad as `fsimcp-0.3.0-tools-list.jsonl`. SageFs: `tools/list` through `tools/sagefs-call.fsx list` against the daemon, the `result.tools` array minified and counted the same way (the raw response line was 115,098 bytes, because it carries `\uXXXX` escapes and the envelope). The SageFs definitions also carry `annotations` (`destructiveHint` on 18 tools), which FsiMcp's do not.
 
 The token figure is characters divided by four, a rule of thumb. JSON and code usually tokenize worse than prose, so the real figure is probably higher for both, and the ratio (about 20 to 1) is the number to trust. Exact tokens need the API's token counter with the tools passed in. Step 1 does that.
 
