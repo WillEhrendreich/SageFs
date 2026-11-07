@@ -143,6 +143,7 @@
         <Compile Include="CallerStateTests.fs" />
         <Compile Include="CallerCheckTests.fs" />
         <Compile Include="ProjectCheckTests.fs" />
+        <Compile Include="CheckProjectCompilerTests.fs" />
         <Compile Include="CallerWireTests.fs" />
         <Compile Include="CallerPatchEmitTests.fs" />
         <Compile Include="QualifiedAccessPatchTests.fs" />
@@ -784,6 +785,7 @@
         <Compile Include="TierSchedSimTests.fs" />
         <Compile Include="BuildPlanTests.fs" />
         <Compile Include="ContentRevisionTests.fs" />
+        <Compile Include="CheckProjectMsBuildTests.fs" />
         <Compile Include="BuildStampsTests.fs" />
         <Compile Include="PassRecordTests.fs" />
         <Compile Include="PassRecordSimDstTests.fs" />

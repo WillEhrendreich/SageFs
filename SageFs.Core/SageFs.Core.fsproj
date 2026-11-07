@@ -372,6 +372,9 @@
              and MachineMemory. SymbolReferenceCheck, the compiler call, holds its checker through it. -->
         <Compile Include="Features\ReferenceCacheRetention.fs" />
         <Compile Include="Features\SymbolReferenceCheck.fs" />
+        <!-- check_project's effects: the MSBuild process, the build of a stale referenced project, the overlay files and
+             the same ParseAndCheckProject call the two checks above make. The decisions are ProjectCheckCore's. -->
+        <Compile Include="Features\CheckProject.fs" />
         <!-- The supervisor's health DU and the daemon's reading of it, ahead
              of DaemonHealth.fs so overallStatus can degrade the daemon for a
              wedged session manager. The watchdog itself needs WorkerSpawn and

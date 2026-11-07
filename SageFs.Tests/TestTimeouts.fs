@@ -899,6 +899,10 @@ module TestTimeouts =
 module FixtureDurations =
   // --- tests L to R ---
 
+  /// How long a check_project run is said to have waited in the report's timed-out line. Made up, and only printed back: the
+  /// case asserts the line names this many seconds.
+  let projectCheckTimedOutAfter = System.TimeSpan.FromSeconds 30.0
+
   /// What a rebuild-free reset of the FSI host cost on the small run_app fixture, measured 2026-11-07 (2.6 to 3.4 s): under the
   /// level's budget.
   let smallProjectReset = System.TimeSpan.FromSeconds 2.8

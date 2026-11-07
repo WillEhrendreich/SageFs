@@ -605,6 +605,20 @@ module Timeouts =
   /// retention by.
   let referencesCacheSweep = envOrDefault "SAGEFS_REFERENCES_CACHE_SWEEP_SECONDS" 30.0
 
+  // -- Checking a whole project (check_project) --
+  /// How long the design-time MSBuild run that reads a project's compiler arguments may take, for each project (the
+  /// project and each one it references). It evaluates the project and resolves its references and builds nothing, so it is
+  /// seconds on a quiet machine and a large solution's evaluation is most of it. No recorded reason for 2 minutes.
+  let projectArgumentsRun = forMachine (TimeSpan.FromMinutes(2.0))
+  /// How long one referenced project that is behind its sources may take to build before the check gives up on it. A
+  /// project build is the expensive step of the check and the one it exists to avoid for the project itself, so the wait is
+  /// the length of a project build on a loaded machine, not of a design-time run. No recorded reason for 10 minutes.
+  let projectReferenceBuild = forMachine (TimeSpan.FromMinutes(10.0))
+  /// How long the compiler may take to check every file of the project with the overlays in place. A person or an agent is
+  /// waiting for this answer, and a cold check of a large project reads every reference assembly first, so it is longer
+  /// than `referencesCheck`, which has the compiler's cache warm from the last ask. No recorded reason for 3 minutes.
+  let projectCheck = forMachine (TimeSpan.FromMinutes(3.0))
+
   // -- Running an app (run_app) --
   /// How long an app's entry point may run before it builds a host. If it has not by then,
   /// the app is treated as a console app with no server. The wait ends the moment a host

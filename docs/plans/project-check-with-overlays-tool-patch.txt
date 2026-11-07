@@ -1,0 +1,99 @@
+# The `check_project` registration, ready to apply
+
+Part of [project-check-with-overlays](project-check-with-overlays.md). The module that answers the call is in the tree
+(`SageFs.Core/Features/CheckProject.fs`, with its decisions in `ProjectCheckCore.fs`). The tool registration is not applied
+yet: it edits `SageFs/McpTools.fs`, `SageFs.Core/Affordances.fs`, `SageFs.Core/Capability.fs`, `docs/mcp-tools.md` and two test
+tables, and it waits for the tool-list work (`small-default-tool-list`) so the description is held to that budget. Apply this
+after that work lands, then delete this file, set the plan's Status to `Done` and add the landmark (last section).
+
+[Adding a tool](../mcp-tools.md#adding-a-tool) lists seven places, in this order. Written against master 27163dfa, where the
+registered count is 72. If the tool-list work changed a count or a table, apply the same edit to what is there.
+
+## 1. The tool (`SageFs/McpTools.fs`)
+
+After `list_references`. The whole body is `CheckProject.answer`, so nothing longer than a few lines goes in this file.
+`CancellationToken` is bound by the MCP SDK to the request, so a `notifications/cancelled` for the call cancels it, which stops
+the MSBuild process tree or the compiler check. No existing tool takes one, so confirm the SDK version binds it before relying
+on it: call the tool, cancel it from the client, and watch the `dotnet msbuild` child exit.
+
+```fsharp
+    [<McpServerTool>]
+    [<Description("""Type-check a whole F# project, with some files replaced by text you send, without building and without touching any session. Answers "does the project still compile with this change". `overlays` is a JSON array of {"path": ..., "text": ...}, one for each project file you replaced; a path that is not a source file of the project is refused with the project's files. The reply is Clean, or each diagnostic as `path(line,col): severity code: message`, errors first. A referenced project that is behind its sources is built once first and the reply says so. Compiler arguments are kept until the project file, Directory.Build.props, Directory.Build.targets or Directory.Packages.props changes. `__SOURCE_DIRECTORY__` inside an overlaid file names a temporary directory.""")>]
+    member _.check_project(
+        [<Description("Path to the .fsproj, absolute or relative to working_directory.")>]
+        project: string,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description("JSON array of {\"path\": \"...\", \"text\": \"...\"}. Empty checks the project as it is on disk.")>]
+        [<Optional; DefaultParameterValue("")>]
+        overlays: string,
+        [<Description("Build configuration the project is checked in. Empty means Debug.")>]
+        [<Optional; DefaultParameterValue("")>]
+        configuration: string,
+        cancel: System.Threading.CancellationToken
+    ) : Task<string> =
+        let resolved = match System.String.IsNullOrWhiteSpace working_directory with | true -> project | false -> System.IO.Path.GetFullPath(project, working_directory)
+        logger.LogDebug("MCP-TOOL: check_project called, project={Project}", resolved)
+        SageFs.Features.CheckProject.answer resolved configuration overlays cancel |> withEcho ctx "check_project"
+```
+
+The description is about 770 characters. If the tool-list budget is lower, drop the last two sentences first.
+
+## 2. The gate domain (`SageFs.Core/Affordances.fs`)
+
+In `gatingDomain`, with the other tools that do not depend on session state:
+
+```fsharp
+    "check_project", ToolGate.AlwaysAvailable
+```
+
+## 3. The name (`SageFs.Core/Affordances.fs`)
+
+Three lines in `ToolName`: the case `| CheckProject` next to `ListReferences`, the line
+`| ToolName.CheckProject -> "check_project"` in `ToolName.toToolName`, and `ToolName.CheckProject` in `ToolName.all`.
+
+## 4. The routing kind (`SageFs.Core/Capability.fs`)
+
+`ReadsDirectory`: the call names a project on disk and no session, and a token bound to a checkout must pass the directory it
+is checking in.
+
+```fsharp
+      @ tagged RouteKind.ReadsDirectory [ "get_available_projects"; "check_project" ]
+```
+
+## 5. The tool class (`SageFs.Core/Capability.fs`)
+
+Add `"check_project"` to `ToolClass.CodeAnalysis`, the list that starts `"check_fsharp_code"; "diagnose"; ...`. That class has no
+eval and no tests, so an Observer sees the tool and a role without it never does. Do not add it to the `SessionRead` list
+(line 167 at 27163dfa) or to the list of every tool that acts on a session (line 422): it acts on none.
+
+## 6. The docs
+
+A row in the table of `docs/mcp-tools.md`, next to `check_fsharp_code`:
+
+> | `check_project` | Type-check a whole project with some files replaced by overlays, without building and without a session. Arguments `project`, `working_directory`, `overlays` (JSON array of `{path, text}`), `configuration`. Reply is `Clean`, or one line for each diagnostic, `path(line,col): severity code: message`, errors first, at most 50 then a count of the rest; a refusal (an overlay for a file the project does not compile, an argument list with no FSharp.Core) says what it was; a cancelled or timed out check says which stage stopped. Compiler arguments come from a design-time MSBuild run and are kept until the project file, `Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`, `global.json` or the restore's assets change, and the reply's first line says whether they were kept or read and why. A referenced project whose output is missing or older than its inputs is built once, deepest first, and named. Overlays are written to `<temp>/sagefs-project-check/` and the compiler is pointed at them, so `__SOURCE_DIRECTORY__` in an overlaid file names that directory. |
+
+And the tool count, 72 to 73, on every page that writes it: `docs/mcp-tools.md` (line 83 and the table's own count), `Readme.md`
+(lines 59, 431, 553), `docs/architecture.md`, `docs/architecture-decisions.md`, `docs/FEATURE_MATRIX.md`, `docs/agents.md`.
+`ToolSurfaceHonestyTests` holds each to the registered count. Also the "comparison with FsiMcp" wording in any page that says
+SageFs has no whole-project check.
+
+## 7. The test tables
+
+- `SageFs.Tests/ToolDescriptionTests.fs`: `requiredParamsByTool` gets `"check_project", set ["project"]`; the count in
+  "keeps the tool count surgical" goes from 72 to 73 with a line in its comment, `// + check_project: ...`.
+- `SageFs.Tests/McpAffordanceHardeningTests.fs`: `methods.Length |> Expect.equal "MCP tool method count" 72` goes to 73, with the
+  same comment line.
+
+## The commit
+
+`feat(mcp): check_project type-checks a project with files replaced, without a build or a session`, with the body naming the
+plan, and the trailer `Plugin: n/a the editors reach the tool list by name, and check_project is not one the plugin or the VS
+Code extension calls yet` (change it to `Plugin: done` with the change if sagefs.nvim gains a command for it).
+
+## After it lands
+
+In `scripts/roadmap/RoadmapItems.fs`, `project-check-with-overlays` takes the landmark
+`(landmark "SageFs.Core/Features/CheckProject.fs" "answer")`; run `dotnet fsi scripts/gen-roadmap.fsx`; the plan's Status becomes
+`Done` in the same commit, because `RoadmapDocTests` requires Done exactly when the item is Built.

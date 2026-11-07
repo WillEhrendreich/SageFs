@@ -328,9 +328,9 @@ let tests =
       testCase "WHY — errors are listed before warnings, then in path, line and column order" <| fun _ ->
         let ds =
           [ diag "/b.fs" 1 0 Severity.Warning "FS0025" "incomplete"
-            diag "/b.fs" 9 4 Severity.Error "FS0001" "type mismatch"
-            diag "/a.fs" 30 2 Severity.Error "FS0039" "not defined"
-            diag "/a.fs" 30 1 Severity.Error "FS0039" "not defined" ]
+            diag "/b.fs" 9 4 Severity.Errored "FS0001" "type mismatch"
+            diag "/a.fs" 30 2 Severity.Errored "FS0039" "not defined"
+            diag "/a.fs" 30 1 Severity.Errored "FS0039" "not defined" ]
         Report.ordered ds |> List.map (fun d -> d.Path, d.Line, d.Column) |> Expect.equal "order" [ "/a.fs", 30, 1; "/a.fs", 30, 2; "/b.fs", 9, 4; "/b.fs", 1, 0 ]
 
       testCase "WHY — a project with only warnings is Clean, and the headline counts them" <| fun _ ->
@@ -338,12 +338,12 @@ let tests =
         text |> Expect.stringStarts "clean" "Clean: the project compiles (1 warnings)."
 
       testCase "WHY — an error line carries path, line, column, severity, code and message in the form MSBuild prints, on one line" <| fun _ ->
-        let text = Report.render 50 (CheckOutcome.Checked([ diag "/a.fs" 3 5 Severity.Error "FS0001" "this\nis wrong" ], notes))
+        let text = Report.render 50 (CheckOutcome.Checked([ diag "/a.fs" 3 5 Severity.Errored "FS0001" "this\nis wrong" ], notes))
         text.Split('\n') |> Array.item 1 |> Expect.equal "the line" "/a.fs(3,5): error FS0001: this is wrong"
         text |> Expect.stringStarts "headline" "1 errors, 0 warnings."
 
       testCase "WHY — a long list is cut at the limit and the rest is counted, never silently dropped" <| fun _ ->
-        let ds = [ for i in 1..12 -> diag "/a.fs" i 0 Severity.Error "FS0001" "x" ]
+        let ds = [ for i in 1..12 -> diag "/a.fs" i 0 Severity.Errored "FS0001" "x" ]
         let lines = (Report.render 5 (CheckOutcome.Checked(ds, notes))).Split('\n')
         lines.Length |> Expect.equal "headline, five, the count" 7
         lines |> Array.last |> Expect.equal "what was cut" "... 7 more not shown"
@@ -357,8 +357,9 @@ let tests =
       testCase "WHY — a cancelled or timed out check says which stage was stopped and that nothing was concluded" <| fun _ ->
         Report.render 5 (CheckOutcome.Cancelled Stopped.ArgumentsRun) |> Expect.stringContains "msbuild" "MSBuild run"
         Report.render 5 (CheckOutcome.Cancelled(Stopped.ReferenceBuild "core")) |> Expect.stringContains "build" "referenced project core"
-        let timed = Report.render 5 (CheckOutcome.TimedOut(Stopped.Compiler, TimeSpan.FromSeconds 30.0))
-        timed |> Expect.stringContains "after" "30 s"
+        let waited = FixtureDurations.projectCheckTimedOutAfter
+        let timed = Report.render 5 (CheckOutcome.TimedOut(Stopped.Compiler, waited))
+        timed |> Expect.stringContains "after" (sprintf "%.0f s" waited.TotalSeconds)
         timed |> Expect.stringContains "nothing concluded" "Nothing was concluded"
 
       testCase "WHY — a refusal is its own sentence and never a Clean" <| fun _ ->
@@ -400,7 +401,7 @@ let tests =
 
       testCase "WHY — overlays that are not that shape are refused with the shape to send, so a client can correct itself" <| fun _ ->
         match Request.parseOverlays """{ "path": "A.fs" }""" with
-        | Error why -> why |> Expect.stringContains "says what to send" "JSON array"
+        | Error refusal -> Report.describeRefusal refusal |> Expect.stringContains "says what to send" "JSON array"
         | Ok other -> failtestf "expected an error, got %A" other
 
       testCase "WHY — no configuration means Debug, a named one is used as given, and the MSBuild run carries it" <| fun _ ->

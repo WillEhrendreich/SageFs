@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Security.Cryptography
 open System.Text
+open System.Text.Json
 open SageFs
 
 /// The decisions behind `check_project`: type-check a whole project with some files replaced, without building it and
@@ -26,7 +27,12 @@ module ProjectCheckCore =
 
   /// A path made absolute against `baseDir`. Never throws: a path that cannot be resolved stays as written.
   let fullPath (baseDir: string) (path: string) : string =
-    try Path.GetFullPath(path, baseDir) with _ -> path
+    try
+      Path.GetFullPath(path, baseDir)
+    with
+    | :? ArgumentException -> path
+    | :? NotSupportedException -> path
+    | :? PathTooLongException -> path
 
   let samePath (a: string) (b: string) : bool = String.Equals(a, b, pathComparison)
 
@@ -34,7 +40,8 @@ module ProjectCheckCore =
 
   [<RequireQualifiedAccess>]
   type Severity =
-    | Error
+    /// Named for what it is and not `Error`, which would shadow `Result.Error` wherever this module is opened.
+    | Errored
     | Warning
     | Info
     | Hidden
@@ -42,7 +49,7 @@ module ProjectCheckCore =
   module Severity =
     let toWord (severity: Severity) : string =
       match severity with
-      | Severity.Error -> "error"
+      | Severity.Errored -> "error"
       | Severity.Warning -> "warning"
       | Severity.Info -> "info"
       | Severity.Hidden -> "hidden"
@@ -50,7 +57,7 @@ module ProjectCheckCore =
     /// Errors first.
     let rank (severity: Severity) : int =
       match severity with
-      | Severity.Error -> 0
+      | Severity.Errored -> 0
       | Severity.Warning -> 1
       | Severity.Info -> 2
       | Severity.Hidden -> 3
@@ -140,29 +147,31 @@ module ProjectCheckCore =
       /// Every project, props and targets file the evaluation read (`MSBuildAllProjects`).
       Inputs: string list }
 
-  /// The shape of `dotnet msbuild -getTargetResult -getItem -getProperty` output, only the parts that are read.
-  type MsBuildItem =
-    { Identity: string
-      MSBuildSourceProjectFile: string option }
-
-  type MsBuildTargetResult =
-    { Result: string
-      Items: MsBuildItem[] option }
-
-  type MsBuildTargetResults = { CoreCompile: MsBuildTargetResult option }
-
-  type MsBuildItemGroups = { ReferencePathWithRefAssemblies: MsBuildItem[] option }
-
-  type MsBuildProperties =
-    { MSBuildAllProjects: string option
-      Configuration: string option }
-
-  type MsBuildOutput =
-    { TargetResults: MsBuildTargetResults option
-      Items: MsBuildItemGroups option
-      Properties: MsBuildProperties option }
-
   module MsBuildFacts =
+    /// The member `name` of a JSON object, when `element` is an object that has one.
+    let child (element: JsonElement) (name: string) : JsonElement option =
+      match element.ValueKind with
+      | JsonValueKind.Object ->
+        match element.TryGetProperty name with
+        | true, value -> Some value
+        | false, _ -> None
+      | _ -> None
+
+    /// The text of the string member `name`, when there is one.
+    let text (element: JsonElement) (name: string) : string option =
+      child element name
+      |> Option.bind (fun value ->
+        match value.ValueKind with
+        | JsonValueKind.String -> Some(value.GetString())
+        | _ -> None)
+
+    /// The elements of the array member `name`, or none when it is absent or not an array.
+    let elements (element: JsonElement) (name: string) : JsonElement list =
+      match child element name with
+      | Some value when value.ValueKind = JsonValueKind.Array -> value.EnumerateArray() |> Seq.toList
+      | Some _
+      | None -> []
+
     /// The arguments to pass `dotnet msbuild` after the project file. The targets that resolve references and the
     /// reference assemblies run first, because without them `CoreCompile` answers Success with no `-r:` at all.
     let msbuildArguments : string list =
@@ -181,33 +190,43 @@ module ProjectCheckCore =
       msbuildArguments @ [ sprintf "-p:Configuration=%s" configuration ]
 
     /// Reads the JSON the run printed. `projectFile` is the project the run was for.
-    let read (projectFile: string) (json: string) : Result<MsBuildFacts, ArgumentsRefusal> =
-      match Json.deserialize<MsBuildOutput> (Json.omitNulls Json.standard) json with
-      | Error why -> Error(ArgumentsRefusal.Unreadable(JsonError.describe why))
-      | Ok output ->
-        match output.TargetResults |> Option.bind (fun t -> t.CoreCompile) with
-        | None -> Error(ArgumentsRefusal.TargetFailed "CoreCompile did not run")
-        | Some target when target.Result <> "Success" ->
-          Error(ArgumentsRefusal.TargetFailed(sprintf "CoreCompile ended %s" target.Result))
-        | Some target ->
-          let identities = target.Items |> Option.defaultValue [||] |> Array.map (fun i -> i.Identity) |> Array.toList
+    let readDocument (projectFile: string) (root: JsonElement) : Result<MsBuildFacts, ArgumentsRefusal> =
+      let target = child root "TargetResults" |> Option.bind (fun t -> child t "CoreCompile")
+      match target with
+      | None -> Error(ArgumentsRefusal.TargetFailed "CoreCompile did not run")
+      | Some compile ->
+        match text compile "Result" with
+        | Some "Success" ->
+          let identities = elements compile "Items" |> List.choose (fun item -> text item "Identity")
           CompilerArguments.ofIdentities projectFile identities
           |> Result.map (fun arguments ->
             let references =
-              output.Items
-              |> Option.bind (fun g -> g.ReferencePathWithRefAssemblies)
-              |> Option.defaultValue [||]
-              |> Array.choose (fun i ->
-                i.MSBuildSourceProjectFile |> Option.map (fun project -> { Project = project; Output = i.Identity }))
-              |> Array.toList
-            let properties = output.Properties
+              child root "Items"
+              |> Option.map (fun groups -> elements groups "ReferencePathWithRefAssemblies")
+              |> Option.defaultValue []
+              |> List.choose (fun item ->
+                match text item "MSBuildSourceProjectFile", text item "Identity" with
+                | Some project, Some output -> Some { Project = project; Output = output }
+                | _ -> None)
+            let properties = child root "Properties"
+            let property (name: string) = properties |> Option.bind (fun p -> text p name)
             let inputs =
-              properties
-              |> Option.bind (fun p -> p.MSBuildAllProjects)
+              property "MSBuildAllProjects"
               |> Option.map (fun all -> all.Split(';', StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries) |> Array.toList)
               |> Option.defaultValue []
-            let configuration = properties |> Option.bind (fun p -> p.Configuration) |> Option.defaultValue ""
-            { Arguments = arguments; Configuration = configuration; References = references; Inputs = inputs })
+            { Arguments = arguments
+              Configuration = property "Configuration" |> Option.defaultValue ""
+              References = references
+              Inputs = inputs })
+        | Some other -> Error(ArgumentsRefusal.TargetFailed(sprintf "CoreCompile ended %s" other))
+        | None -> Error(ArgumentsRefusal.TargetFailed "CoreCompile ended without a result")
+
+    let read (projectFile: string) (json: string) : Result<MsBuildFacts, ArgumentsRefusal> =
+      try
+        use document = JsonDocument.Parse json
+        readDocument projectFile document.RootElement
+      with :? JsonException as why ->
+        Error(ArgumentsRefusal.Unreadable why.Message)
 
   // ---- arguments kept between calls ----
 
@@ -472,6 +491,15 @@ module ProjectCheckCore =
 
   // ---- what a caller sends ----
 
+  /// Why a check was refused before or instead of answering.
+  [<RequireQualifiedAccess>]
+  type CheckRefusal =
+    | Overlay of OverlayRefusal
+    | OverlaysMalformed of detail: string
+    | Arguments of ArgumentsRefusal
+    | ReferenceBuildFailed of project: string * detail: string
+    | CompilerFailed of detail: string
+
   module Request =
     [<Literal>]
     let defaultConfiguration = "Debug"
@@ -483,14 +511,13 @@ module ProjectCheckCore =
       | false -> given.Trim()
 
     /// The overlays as the tool receives them: a JSON array of `{ "path": ..., "text": ... }`, or nothing for none.
-    let parseOverlays (json: string) : Result<Overlay list, string> =
+    let parseOverlays (json: string) : Result<Overlay list, CheckRefusal> =
       match String.IsNullOrWhiteSpace json with
       | true -> Ok []
       | false ->
         match Json.deserialize<Overlay[]> (Json.omitNulls Json.camelCase) json with
         | Ok items -> Ok(Array.toList items)
-        | Error why ->
-          Error(sprintf "overlays must be a JSON array of { \"path\": \"...\", \"text\": \"...\" } objects: %s" (JsonError.describe why))
+        | Error why -> Error(CheckRefusal.OverlaysMalformed(JsonError.describe why))
 
   // ---- the outcome ----
 
@@ -511,13 +538,6 @@ module ProjectCheckCore =
       Built: string list }
 
   [<RequireQualifiedAccess>]
-  type CheckRefusal =
-    | Overlay of OverlayRefusal
-    | Arguments of ArgumentsRefusal
-    | ReferenceBuildFailed of project: string * detail: string
-    | CompilerFailed of detail: string
-
-  [<RequireQualifiedAccess>]
   type CheckOutcome =
     | Checked of diagnostics: CheckDiagnostic list * notes: RunNotes
     | Refused of CheckRefusal
@@ -534,6 +554,8 @@ module ProjectCheckCore =
     let describeRefusal (refusal: CheckRefusal) : string =
       match refusal with
       | CheckRefusal.Overlay r -> OverlayRefusal.describe r
+      | CheckRefusal.OverlaysMalformed detail ->
+        sprintf "The overlays must be a JSON array of { \"path\": \"...\", \"text\": \"...\" } objects: %s" detail
       | CheckRefusal.Arguments r -> ArgumentsRefusal.describe r
       | CheckRefusal.ReferenceBuildFailed(project, detail) ->
         sprintf "Referenced project %s did not build, so the project cannot be checked: %s" project detail
@@ -544,7 +566,7 @@ module ProjectCheckCore =
       diagnostics |> List.sortBy (fun d -> Severity.rank d.Severity, d.Path, d.Line, d.Column)
 
     let errorCount (diagnostics: CheckDiagnostic list) : int =
-      diagnostics |> List.filter (fun d -> d.Severity = Severity.Error) |> List.length
+      diagnostics |> List.filter (fun d -> d.Severity = Severity.Errored) |> List.length
 
     let line (d: CheckDiagnostic) : string =
       sprintf "%s(%d,%d): %s %s: %s" d.Path d.Line d.Column (Severity.toWord d.Severity) d.Code (d.Message.Replace("\r", "").Replace("\n", " "))
