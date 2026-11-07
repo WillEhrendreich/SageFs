@@ -1696,6 +1696,41 @@ h2 {
   }
 }
 
+/* ── How current the values are, from the test loop (LoopFreshness) ──
+   A square dot in the state's semantic colour and the state in a word. Red is the failed rebuild only. */
+.live-freshness {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  flex: 0 0 auto;
+  color: var(--fg-default);
+  font-size: 0.857rem;
+  white-space: nowrap;
+}
+
+.live-freshness-dot {
+  flex: 0 0 auto;
+  width: 0.6em;
+  height: 0.6em;
+  background: var(--fg-dim);
+}
+
+.live-fresh-current .live-freshness-dot {
+  background: var(--color-pass);
+}
+
+.live-fresh-moving .live-freshness-dot {
+  background: var(--color-info);
+}
+
+.live-fresh-held .live-freshness-dot {
+  background: var(--color-warn);
+}
+
+.live-fresh-failed .live-freshness-dot {
+  background: var(--color-fail);
+}
+
 .live-swatch {
   flex: 0 0 auto;
   align-self: center;

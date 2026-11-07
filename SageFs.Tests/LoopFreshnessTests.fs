@@ -104,7 +104,7 @@ module private PaneDrawing =
   /// The dock with the chip the loop gave, as the page decodes it.
   let dockWith (chip: Chip option) : string =
     let look = SageFs.View.recommended SageFs.ViewWorkflow.Repl
-    let controls = { LiveBindingsViewPanel.render "abcd1234" SageFs.ViewWorkflow.Repl { View = look; Sources = Map.empty } with Freshness = chip }
+    let controls = { LiveBindingsViewPanel.render "abcd1234" SageFs.ViewWorkflow.Repl { View = look; Sources = Map.empty } with Freshness = (match chip with | Some c -> LiveBindingsViewPanel.LoopSaid.Said c | None -> LiveBindingsViewPanel.LoopSaid.NothingSaid) }
     renderDockWith look (Some controls) SageFs.Features.Tweak.BindingTweak.TweakView.none DockPanes.SessionInView "abcd1234" walked None
     |> renderNode
     |> Net.WebUtility.HtmlDecode

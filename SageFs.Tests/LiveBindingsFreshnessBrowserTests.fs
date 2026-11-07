@@ -51,7 +51,7 @@ let private walked : LiveBindingsDock.BindingsSource =
 let private shellHtml (chip: Chip option) : string =
   let empty = Elem.div [] []
   let look = SageFs.View.recommended SageFs.ViewWorkflow.Repl
-  let controls = { LiveBindingsViewPanel.render viewedId SageFs.ViewWorkflow.Repl { View = look; Sources = Map.empty } with Freshness = chip }
+  let controls = { LiveBindingsViewPanel.render viewedId SageFs.ViewWorkflow.Repl { View = look; Sources = Map.empty } with Freshness = (match chip with | Some c -> LiveBindingsViewPanel.LoopSaid.Said c | None -> LiveBindingsViewPanel.LoopSaid.NothingSaid) }
   let snap : DashboardSnapshot =
     { DashboardSnapshot.Version = "0.0.0"
       InView = SessionInView.InPlay(SessionState.Ready, SessionDisplayStatus.Running, Readiness.ReadyOlderCode)

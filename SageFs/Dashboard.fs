@@ -1251,7 +1251,7 @@ let buildDashboardSnapshotWithSessionsFor
             | LiveBindingsDock.WalkedBindings walked -> SageFs.ValueWalk.toWalkMode walked.Notes.Mode, Some walked.Snapshot
             | LiveBindingsDock.PrintedBindings _
             | LiveBindingsDock.NothingBound -> SageFs.Features.LiveValueTree.WalkMode.Safe, None
-          Some { viewControls with Watch = LiveBindingsWatch.partsFor (WorkerProtocol.SessionId.value sessionId) (liveBindingsViewPaths workingDir) mode walk; Formats = look.Formats; Freshness = SageFs.Features.Tweak.LoopFreshness.chipOf (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId)) }
+          Some { viewControls with Watch = LiveBindingsWatch.partsFor (WorkerProtocol.SessionId.value sessionId) (liveBindingsViewPaths workingDir) mode walk; Formats = look.Formats; Freshness = LiveBindingsViewPanel.LoopSaid.ofActivity (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId)) }
         | DockPanes.NoSessionInView -> None
       LiveBindingsDock.renderDockWithRemedy
         (RebuildRemedy.paneNote remedy)

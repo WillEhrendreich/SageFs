@@ -174,7 +174,22 @@ let valueToneClass (tone: ValueTone) : string =
   | ValueTone.PlainTone -> ""
 
 /// The class a freshness chip is drawn with, one per tone, from the theme's semantic tokens (pass, info, warn, fail).
-let freshnessClass (tone: Tweak.LoopFreshness.FreshnessTone) : string = ""
+let freshnessClass (tone: Tweak.LoopFreshness.FreshnessTone) : string =
+  match tone with
+  | Tweak.LoopFreshness.FreshnessTone.Current -> "live-fresh-current"
+  | Tweak.LoopFreshness.FreshnessTone.Moving -> "live-fresh-moving"
+  | Tweak.LoopFreshness.FreshnessTone.Held -> "live-fresh-held"
+  | Tweak.LoopFreshness.FreshnessTone.Failed -> "live-fresh-failed"
+
+/// How current the values are, from the test loop: a square dot in the state's colour and the state in a word, with the sentence as the
+/// tooltip. The word is markup, so the state is never told by colour alone.
+let freshnessChip (chip: Tweak.LoopFreshness.Chip) : XmlNode =
+  Elem.span
+    [ Attr.class' ("live-freshness " + freshnessClass chip.Tone)
+      testid "live-freshness"
+      Attr.title (attrEnc chip.Detail) ]
+    [ Elem.span [ Attr.class' "live-freshness-dot"; Attr.create "aria-hidden" "true" ] []
+      textEnc chip.Word ]
 
 /// What a glyph stands for. The glyph drawn on a row and the line that explains it in the legend both come from this, so a glyph
 /// cannot be drawn that the legend does not name.
@@ -938,6 +953,10 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
       // The sentence under the title is also the title's tooltip, so a dock too short for the line still has it.
       Elem.span [ Attr.class' "live-pane-title"; Attr.title (attrEnc PaneSentence) ] [ Text.raw "Live bindings" ]
       Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
+      match controls |> Option.map (fun viewControls -> viewControls.Freshness) with
+      | Some(LiveBindingsViewPanel.LoopSaid.Said chip) -> freshnessChip chip
+      | Some LiveBindingsViewPanel.LoopSaid.NothingSaid
+      | None -> ()
       Elem.span [ Attr.class' "live-pane-stamp"; Attr.create "title" (attrEnc (stamp + ". The values are read again after every eval.")) ] [
         textEnc stamp
         // How old the reading is, ticking in the browser: an absolute UTC time alone could not tell a frozen display from a current one.
