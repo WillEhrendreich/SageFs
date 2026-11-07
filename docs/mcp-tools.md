@@ -186,7 +186,10 @@ sagefs call stop_session --session_id 1a2b3c4d      # the same member, so it is 
 ```
 
 `--token <token>` does the same for one call; the environment variable keeps the
-token out of the process list. `SAGEFS_OPERATOR_TOKEN` is sent too, so `--list` shows
+token out of the process list. A token lapses after 30 minutes with no call (see
+"Expiry" below), and a session it made can then only be stopped by a token that is
+the same member, which a new mint is not: stop such a session before you leave a
+token idle. `SAGEFS_OPERATOR_TOKEN` is sent too, so `--list` shows
 the full tool list under `TokenRequired`. With neither, `--list` starts with
 `identity: anonymous` and any refusal ends with what to do about it.
 
