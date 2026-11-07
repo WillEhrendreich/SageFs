@@ -2246,26 +2246,26 @@ module McpTools =
       | reaped -> return listed + "\n\n" + (reaped |> List.map SessionReaper.ReapedSession.describe |> String.concat "\n")
     }
 
-  /// Stop a session by ID.
-  let stopSession (ctx: McpContext) (sessionId: string) : Task<string> =
+  /// Stop a session by ID: the text to show, and the named failure when the stop did not happen.
+  let stopSession (ctx: McpContext) (sessionId: string) : Task<string * SageFsError option> =
     task {
       let! result = ctx.SessionOps.StopSession sessionId
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match result with
       | Result.Ok msg ->
-        // The session is gone from the registry — release every agent that
-        // was routed to it so it no longer claims occupancy.
+        // Release every agent routed to the session so it no longer claims occupancy.
         evictSessionEntries ctx sessionId
-        return msg
-      | Result.Error err -> return SageFsError.describeForAgent err
+        return msg, None
+      | Result.Error err -> return SageFsError.describeForAgent err, Some err
     }
 
-  let stopSessionOwned (ctx: McpContext) (sessionId: string) : Task<string> =
+  /// `stop_session`'s answer: a session another connection or member made is refused with the failure named, so the tool answers `isError`.
+  let stopSessionOutcome (ctx: McpContext) (sessionId: string) : Task<string * SageFsError option> =
     task {
       match sessionOwnership sessionId with
       | ConfirmationPolicy.SessionOwnership.RecordedToAnother ->
-        return SageFsError.describeForAgent (
-          SageFsError.SessionStopFailed (sessionId, "the session is owned by another bound MCP connection; use the connection that created it or stop it through a privileged daemon control"))
+        let refusal = SageFsError.SessionStopFailed (sessionId, "the session is owned by another bound MCP connection; use the connection that created it or stop it through a privileged daemon control")
+        return SageFsError.describeForAgent refusal, Some refusal
       | ConfirmationPolicy.SessionOwnership.RecordedToCaller
       | ConfirmationPolicy.SessionOwnership.NoRecord
       | ConfirmationPolicy.SessionOwnership.NotOnAConnection -> return! stopSession ctx sessionId

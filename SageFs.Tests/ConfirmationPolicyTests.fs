@@ -121,7 +121,11 @@ let stopSessionOwnershipTests =
       }
 
     let stopOn (handle: string) (sessionId: string) : Task<string> =
-      onConnection handle (fun () -> SageFs.McpTools.stopSessionOwned (SageFs.Tests.TestInfrastructure.sharedCtx ()) sessionId)
+      onConnection handle (fun () ->
+        task {
+          let! text, _ = SageFs.McpTools.stopSessionOutcome (SageFs.Tests.TestInfrastructure.sharedCtx ()) sessionId
+          return text
+        })
 
     let ownerOn (handle: string) : MemberId =
       SageFs.MemberTable.MemberId.ofConnectionHandle handle
@@ -158,6 +162,24 @@ let stopSessionOwnershipTests =
         let! (reply: string) = stopOn "the-creating-connection" sessionId
         reply.Contains refusal |> Expect.isFalse (sprintf "the creator is not refused: %s" reply)
       finally
+        SessionOwners.release sessionId
+    }
+
+    testTask "WHY — a refused stop carries the named failure, so the tool answers isError and a client that reads the flag sees a refusal" {
+      let sessionId = "refused-is-an-error-184"
+      SessionOwners.claim (ownerOn "the-creating-connection") sessionId
+      let previous = SageFs.McpTools.currentTransportSessionId.Value
+      SageFs.McpTools.currentTransportSessionId.Value <- Some "a-different-connection"
+      try
+        let! text, failure = SageFs.McpTools.stopSessionOutcome (SageFs.Tests.TestInfrastructure.sharedCtx ()) sessionId
+        text |> Expect.stringContains "the text still says whose it is" refusal
+        match failure with
+        | Some(SageFsError.SessionStopFailed(stopped, reason)) ->
+          stopped |> Expect.equal "naming the session" sessionId
+          reason |> Expect.stringContains "and why" refusal
+        | other -> failtestf "the refusal should be a named SessionStopFailed, not %A" other
+      finally
+        SageFs.McpTools.currentTransportSessionId.Value <- previous
         SessionOwners.release sessionId
     }
   ]

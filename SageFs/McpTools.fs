@@ -1631,10 +1631,10 @@ NOTE: Stopping the last (or only) session will leave no active session. Create a
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: stop_session called: id={Id}", session_id)
         task {
-          let! reply = stopSessionOwned ctx session_id
+          let! reply = stopSessionOutcome ctx session_id
           SageFs.McpHygiene.refreshForSessions ctx
           return reply
-        } |> withEcho ctx "stop_session"
+        } |> withEchoOutcome ctx "stop_session"
 
     [<McpServerTool>]
     [<Description("""Switch the active FSI session. All subsequent tool calls that accept working_directory will route to this session.
