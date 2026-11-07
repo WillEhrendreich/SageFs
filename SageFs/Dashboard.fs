@@ -1073,6 +1073,10 @@ let private liveTabOf (clientId: string) : SageFs.WatchTab =
   | null | "" -> SageFs.WatchTab.All
   | id -> liveTabByClient.Find(id, SageFs.WatchTab.All)
 
+/// What a page chose for how the Live Bindings pane looks: its open tab and how it shows each row.
+let private pageLookOf (clientId: string) : LiveBindingsRowFormat.PageLook =
+  { Tab = liveTabOf clientId; Formats = LiveBindingsRowFormat.formatsOf clientId }
+
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
 /// and each SSE push. Returns the snapshot, the resolved session ID, and the
@@ -1099,9 +1103,10 @@ let buildDashboardSnapshotWithSessionsFor
   (cachedWorkerData: DashboardWorkerCache option)
   (sessions: WorkerProtocol.SessionInfo list)
   (frictionOptIn: FrictionPanelOptIn)
-  (tab: SageFs.WatchTab)
+  (look: LiveBindingsRowFormat.PageLook)
   : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
+    let tab = look.Tab
     let sessionId = currentSessionId
     let sid = WorkerProtocol.SessionId.value sessionId
     let lastSid = WorkerProtocol.SessionId.value lastSessionId
@@ -1246,7 +1251,7 @@ let buildDashboardSnapshotWithSessionsFor
             | LiveBindingsDock.WalkedBindings walked -> SageFs.ValueWalk.toWalkMode walked.Notes.Mode, Some walked.Snapshot
             | LiveBindingsDock.PrintedBindings _
             | LiveBindingsDock.NothingBound -> SageFs.Features.LiveValueTree.WalkMode.Safe, None
-          Some { viewControls with Watch = LiveBindingsWatch.partsFor (WorkerProtocol.SessionId.value sessionId) (liveBindingsViewPaths workingDir) mode walk }
+          Some { viewControls with Watch = LiveBindingsWatch.partsFor (WorkerProtocol.SessionId.value sessionId) (liveBindingsViewPaths workingDir) mode walk; Formats = look.Formats }
         | DockPanes.NoSessionInView -> None
       LiveBindingsDock.renderDockWithRemedy
         (RebuildRemedy.paneNote remedy)
@@ -1368,7 +1373,7 @@ let buildDashboardSnapshotWithSessions
   (sessions: WorkerProtocol.SessionInfo list)
   (frictionOptIn: FrictionPanelOptIn)
   =
-  buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn SageFs.WatchTab.All
+  buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn LiveBindingsRowFormat.PageLook.onAll
 
 /// Standalone entry point for callers that do not already have a fresh
 /// session list in hand (e.g. tests, one-off callers) — fetches once, then
@@ -1382,11 +1387,11 @@ let buildDashboardSnapshotFor
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
   (frictionOptIn: FrictionPanelOptIn)
-  (tab: SageFs.WatchTab)
+  (look: LiveBindingsRowFormat.PageLook)
   : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let! sessions = q.GetAllSessions ()
-    return! buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn tab
+    return! buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn look
   }
 
 /// The same for a page on its All tab.
@@ -1400,7 +1405,7 @@ let buildDashboardSnapshot
   (cachedWorkerData: DashboardWorkerCache option)
   (frictionOptIn: FrictionPanelOptIn)
   =
-  buildDashboardSnapshotFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData frictionOptIn SageFs.WatchTab.All
+  buildDashboardSnapshotFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData frictionOptIn LiveBindingsRowFormat.PageLook.onAll
 
 /// Build the full-shell dashboard snapshot for the "no session in play" state:
 /// the complete dashboard chrome (header, daemon health, sidebar Sessions panel,
@@ -1753,7 +1758,7 @@ let createStreamHandler
       // liveSessions was already fetched above for reconciliation — reuse it
       // here instead of paying for a second GetAllSessions read.
       let! snapRaw, newSessionId, newThemeName, rawWorkerData =
-        buildDashboardSnapshotWithSessionsFor q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions (frictionOptInFor clientId) (liveTabOf clientId)
+        buildDashboardSnapshotWithSessionsFor q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions (frictionOptInFor clientId) (pageLookOf clientId)
       let snap =
         applyCohortViewing infra currentCohortViewingSeq snapRaw
         |> PanelVisibility.apply (panelFactsFor q infra (Some newSessionId) clientId)
@@ -2042,7 +2047,7 @@ let createEvalHandler
           // committed snapshot here so Datastar cannot drop an overlapping
           // long-lived stream morph while this POST is still resolving.
           let! snapRaw, _, _, _ =
-            buildDashboardSnapshotFor q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None (frictionOptInFor (clientIdFromSignals doc)) (liveTabOf (clientIdFromSignals doc))
+            buildDashboardSnapshotFor q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None (frictionOptInFor (clientIdFromSignals doc)) (pageLookOf (clientIdFromSignals doc))
           // Same panel visibility the stream uses, so this morph and the next
           // stream push agree on which panels exist.
           let snap =

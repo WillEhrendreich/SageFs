@@ -1650,6 +1650,80 @@ h2 {
   line-height: 1;
 }
 
+/* ── The picker on a row: how a whole number is shown (LiveBindingsRowFormat) ──
+   The button is the page's one button, 28px. A row that is shown as it is keeps the height it has: the button lies over the end of the
+   row, out of the flow, and shows while the row is hovered or holds focus. A row the person chose a format for names it in the
+   button and keeps the button in the row, so the choice is always in words and never only a change in the value. On a screen with
+   no hover the button is always in the row. */
+.live-binding-node {
+  position: relative;
+}
+
+.live-binding-node > .live-fmt-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  height: 28px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.live-binding-node:hover > .live-fmt-btn,
+.live-binding-node:focus-within > .live-fmt-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.live-binding-node[data-format]:not([data-format="as-is"]) > .live-fmt-btn {
+  position: static;
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  align-self: center;
+  flex: 0 0 auto;
+}
+
+@media (hover: none) {
+  .live-binding-node > .live-fmt-btn {
+    position: static;
+    transform: none;
+    opacity: 1;
+    pointer-events: auto;
+    align-self: center;
+    flex: 0 0 auto;
+  }
+}
+
+.live-swatch {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1em;
+  height: 1em;
+  border: 1px solid var(--fg-dim);
+}
+
+.live-meter {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 6em;
+  height: 0.5em;
+  background: var(--border-normal);
+}
+
+.live-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--fg-blue);
+}
+
+.live-fmt-note {
+  flex: 0 1 auto;
+  color: var(--fg-dim);
+  font-size: 0.857rem;
+}
+
 /* The pane bar's buttons are the page's one button height (28px, like Evaluate's neighbours and the card's), not a smaller box of their
    own: 20px next to 28px and 30px made three heights in view at once. */
 .live-pane-pin,

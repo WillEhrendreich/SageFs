@@ -991,7 +991,8 @@ let formatJourney () : Task<unit> = task {
           """() => {
             const tree = document.querySelector('#live-tree').getBoundingClientRect();
             const out = [];
-            for (const el of document.querySelectorAll('.live-binding-node > *')) {
+            // The State chip of a row is drawn in the strip's own column and is not a cell of the row's line.
+            for (const el of document.querySelectorAll('.live-binding-node > *:not(.live-state)')) {
               const r = el.getBoundingClientRect();
               if (r.width === 0 && r.height === 0) continue;
               if (r.right > tree.right + 1 || r.left < tree.left - 1) out.push((el.className || el.tagName) + ' sticks out: ' + Math.round(r.left) + '..' + Math.round(r.right) + ' vs ' + Math.round(tree.left) + '..' + Math.round(tree.right));

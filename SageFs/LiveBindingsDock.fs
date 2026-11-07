@@ -520,7 +520,7 @@ let modeRows (sessionId: string) (current: ValueWalk) : XmlNode list =
       yield! ValueWalk.all |> List.map modeButton ]
     renderLegend ]
 
-let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (view: LiveBindingsPane.PaneView) (watchTab: XmlNode list) : XmlNode list =
+let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (formats: Map<string, Tweak.RowFormatting.FormatChoice>) (view: LiveBindingsPane.PaneView) (watchTab: XmlNode list) : XmlNode list =
   // The bindings the Changes tab lists: a fact of the rows, so the server writes it into each binding's expression.
   let changedNames = changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)
   let evaluateEndpoint = sprintf "/api/sessions/%s/live-values/evaluate" (Uri.EscapeDataString sessionId)
@@ -634,15 +634,55 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
   /// `alreadySaid` is the sentence about a call that the row just before this one (its sibling) said. Rows that owe the same sentence
   /// (the fields of a record built by one call) say it once, on the first: the repeat read as clutter.
   let rec renderNode (binding: string) (path: string list) (node: LiveValueTree.LiveValueNode) (alreadySaid: string option) : XmlNode =
+    // How this page shows the value (`LiveBindingsRowFormat`): a whole number carries a picker that moves it through as it is, hex,
+    // binary and colour, and a number with a range of its own can be a bar. Every other node, and a leaf with nothing else to show,
+    // is the cell it always was.
+    let valueClass = "live-preview" + valueToneClass (valueToneOf node.Kind node.TypeName)
+    let asIs =
+      // The whole value is the tooltip: the cell clips a long one to a line with an ellipsis (always at phone width), and the
+      // rest was out of reach. The pane's own "Long values: Full" setting is the way to see it without hovering.
+      Elem.span [ Attr.class' valueClass; Attr.create "title" (attrEnc node.Preview) ] [ textEnc (sprintf "= %s" node.Preview) ]
+    let shown =
+      match node.Kind with
+      | LiveValueTree.NodeKind.Leaf ->
+        let id = LiveBindingsRowFormat.rowId binding path
+        let range =
+          TweakView.tryRow tweaks { Binding = binding; Labels = path }
+          |> Option.bind (fun rowView -> LiveBindingsRowFormat.rangeOf rowView.Limits)
+        LiveBindingsRowFormat.shownFor formats id node.TypeName range |> Option.map (fun chosen -> id, chosen)
+      | LiveValueTree.NodeKind.NotEvaluated _
+      | LiveValueTree.NodeKind.Record
+      | LiveValueTree.NodeKind.List
+      | LiveValueTree.NodeKind.Map
+      | LiveValueTree.NodeKind.Option
+      | LiveValueTree.NodeKind.Union
+      | LiveValueTree.NodeKind.Tuple
+      | LiveValueTree.NodeKind.Array
+      | LiveValueTree.NodeKind.Class
+      | LiveValueTree.NodeKind.Closure
+      | LiveValueTree.NodeKind.Cycle
+      | LiveValueTree.NodeKind.Truncated -> None
+    let formatAttrs, valueCells =
+      match shown with
+      | None -> [], [ asIs ]
+      | Some(id, chosen) ->
+        let choice = Tweak.RowFormatting.FormatChoice.ofFormat chosen.Current
+        let button = LiveBindingsRowFormat.picker id chosen.Offered choice node.Label
+        let cells =
+          match chosen.Current with
+          | Tweak.RowFormatting.RowFormat.AsIs -> [ asIs ]
+          | Tweak.RowFormatting.RowFormat.Hex
+          | Tweak.RowFormatting.RowFormat.Binary
+          | Tweak.RowFormatting.RowFormat.Colour
+          | Tweak.RowFormatting.RowFormat.Slider _ -> LiveBindingsRowFormat.valueNodes valueClass chosen.Current node.TypeName node.Preview
+        [ Attr.create "data-format" (Tweak.RowFormatting.FormatChoice.token choice) ], cells @ [ button ]
     let row =
       // Text.create escapes: labels, type names and previews are FSI-derived DATA, not trusted markup. A string
       // preview holding <script> must never inject into the dashboard DOM.
-      Elem.div [ Attr.class' "live-binding-node" ] [
+      Elem.div (Attr.class' "live-binding-node" :: formatAttrs) [
         glyphCell node
         nameCell node
-        // The whole value is the tooltip: the cell clips a long one to a line with an ellipsis (always at phone width), and the
-        // rest was out of reach. The pane's own "Long values: Full" setting is the way to see it without hovering.
-        Elem.span [ Attr.class' ("live-preview" + valueToneClass (valueToneOf node.Kind node.TypeName)); Attr.create "title" (attrEnc node.Preview) ] [ textEnc (sprintf "= %s" node.Preview) ]
+        yield! valueCells
         yield! runningTag binding path
         yield! typeCells node
         yield! tweakCells binding path
@@ -872,7 +912,11 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
   let headNodes, body =
     match source with
     | WalkedBindings view ->
-      match renderTree look sessionId tweaks view watchTab with
+      let formats =
+        match controls with
+        | Some viewControls -> viewControls.Formats
+        | None -> Map.empty
+      match renderTree look sessionId tweaks formats view watchTab with
       | head :: rest -> [ head ], rest
       | [] -> [], []
     | PrintedBindings scope -> [], [ treeElement look [ renderBindingsPanel (Some scope) ] ]

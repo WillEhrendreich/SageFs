@@ -46,7 +46,13 @@ let endpoint (sessionId: string) : string = sprintf "/dashboard/bindings-view/%s
 /// (`LiveBindingsWatch.render`) because it needs the session's expressions and values, not the view's settings.
 type WatchTabParts = { Body: XmlNode; Count: int }
 
-type ViewControls = { Button: XmlNode; Panel: XmlNode; PanelWith: XmlNode list -> XmlNode; Watch: WatchTabParts }
+/// `Formats` is how this page chose to show each row (`LiveBindingsRowFormat`): a row that has no entry is shown as it is.
+type ViewControls =
+  { Button: XmlNode
+    Panel: XmlNode
+    PanelWith: XmlNode list -> XmlNode
+    Watch: WatchTabParts
+    Formats: Map<string, Features.Tweak.RowFormatting.FormatChoice> }
 
 /// Where an axis's value came from, in the words a person reads.
 let sourceWords (layer: ConfigLayer) : string =
@@ -208,7 +214,7 @@ let renderFor (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (reso
         Elem.div [ Attr.class' "live-view-note" ] [
           Text.raw "A choice is saved as you click it. \"This project\" writes .SageFs/settings.json in the project folder. \"All projects\" writes your own settings.json."
         ] ]
-  { Button = button; Panel = panelWith []; PanelWith = panelWith; Watch = { Body = Text.raw ""; Count = 0 } }
+  { Button = button; Panel = panelWith []; PanelWith = panelWith; Watch = { Body = Text.raw ""; Count = 0 }; Formats = Map.empty }
 
 /// The button and the panel for a workflow's All tab.
 let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView) : ViewControls =
