@@ -387,7 +387,17 @@ let tryRun (argv: string[]) : ChildRun =
 type ChildResult =
   { ExitCode: int
     Facts: Fact list
-    Stderr: string }
+    Stderr: string
+    /// Everything the child wrote to stdout, facts or not, so a run that parsed to nothing can show what it got.
+    Stdout: string
+    /// How long the child lived, from start to the last byte read.
+    Elapsed: TimeSpan
+    /// The child's process id, so a kernel log line about it can be matched.
+    ProcessId: int
+    /// The directory the script ran in.
+    Directory: string
+    /// The script, as the lines the child read.
+    Script: string list }
 
 /// Whether the child starts with the environment variable that makes modules editable.
 [<RequireQualifiedAccess>]
@@ -424,7 +434,9 @@ let private startInfo (directory: string) (modifiable: ModifiableAssemblies) : P
 /// fills and stops the child before it says anything.
 let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAssemblies) (script: Op list) : Task<ChildResult> =
   task {
-    File.WriteAllLines(Path.Combine(directory, "script.txt"), script |> List.map Op.toLine)
+    let scriptLines = script |> List.map Op.toLine
+    File.WriteAllLines(Path.Combine(directory, "script.txt"), scriptLines)
+    let watch = Stopwatch.StartNew()
     let stdoutPath = Path.Combine(directory, "stdout.txt")
     let stderrPath = Path.Combine(directory, "stderr.txt")
     use stdoutFile = new StreamWriter(stdoutPath)
@@ -446,6 +458,7 @@ let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAsse
     child.WaitForExit()
     stdoutFile.Flush()
     stderrFile.Flush()
+    let stdout = File.ReadAllText stdoutPath
     let facts =
       File.ReadAllLines stdoutPath
       |> Array.choose (fun l -> match parseFact l with | ValueSome fact -> Some fact | ValueNone -> None)
@@ -453,7 +466,12 @@ let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAsse
     return
       { ExitCode = child.ExitCode
         Facts = facts
-        Stderr = File.ReadAllText stderrPath }
+        Stderr = File.ReadAllText stderrPath
+        Stdout = stdout
+        Elapsed = watch.Elapsed
+        ProcessId = child.Id
+        Directory = directory
+        Script = scriptLines }
   }
 
 /// Run a script in a child that is expected to end within `TestTimeouts.patience`.
@@ -478,3 +496,54 @@ let evalBlocks (result: ChildResult) : string list list =
 
 /// What each `Apply` said, in order.
 let applyOutcomes (result: ChildResult) : string list = factsOf FactKind.Apply result
+
+/// How many of the last lines of a stream `describe` quotes.
+let private tailLines = 8
+
+let private tailOf (text: string) : string =
+  match text.Split('\n', StringSplitOptions.RemoveEmptyEntries) with
+  | [||] -> "(nothing)"
+  | lines -> String.Join(" // ", lines |> Array.skip (max 0 (lines.Length - tailLines)) |> Array.map (fun l -> l.TrimEnd '\r'))
+
+/// What the host's descriptor table holds, by kind (`file`, `pipe`, `socket`, `anon_inode`, `other`), from the links
+/// under /proc/self/fd. A table that lost or swapped a descriptor shows up as a kind that is out of proportion, and a
+/// link that cannot be read is counted as `gone` (it was closed while this looked).
+let private descriptorKinds () : string =
+  try
+    Directory.GetFileSystemEntries "/proc/self/fd"
+    |> Array.map (fun entry ->
+      match FileInfo(entry).LinkTarget with
+      | null -> "gone"
+      | target when target.StartsWith("pipe:", StringComparison.Ordinal) -> "pipe"
+      | target when target.StartsWith("socket:", StringComparison.Ordinal) -> "socket"
+      | target when target.StartsWith("anon_inode:", StringComparison.Ordinal) -> "anon_inode"
+      | target when target.StartsWith("/", StringComparison.Ordinal) -> "file"
+      | _ -> "other")
+    |> Array.countBy id
+    |> Array.sortBy fst
+    |> Array.map (fun (kind, n) -> sprintf "%s=%d" kind n)
+    |> String.concat " "
+  with _ -> "unknown"
+
+/// What the machine looked like when the failure was read: the load average, the descriptors the host process holds
+/// and its thread count. The first two are on Linux only; elsewhere the text says so.
+let machineNow () : string =
+  let load = try File.ReadAllText("/proc/loadavg").Trim() with _ -> "no /proc/loadavg"
+  sprintf "load %s, host descriptors [%s], host threads %d" load (descriptorKinds ()) (Process.GetCurrentProcess().Threads.Count)
+
+/// Everything a reader needs to tell a child that said nothing from one that said something the parent did not
+/// parse: how it ended, how long it lived, how much it wrote to each stream and the end of both, and where it ran.
+let describeRun (result: ChildResult) : string =
+  let stdoutBytes = System.Text.Encoding.UTF8.GetByteCount result.Stdout
+  let stderrBytes = System.Text.Encoding.UTF8.GetByteCount result.Stderr
+  let scriptFile =
+    let path = Path.Combine(result.Directory, "script.txt")
+    match File.Exists path with
+    | true -> sprintf "script.txt %d bytes" (FileInfo(path).Length)
+    | false -> "script.txt missing"
+  sprintf
+    "child pid %d exit %d after %.1f s in %s (%s) | stdout %d bytes, %d facts, ends: %s | stderr %d bytes, ends: %s | script: %s | %s"
+    result.ProcessId result.ExitCode result.Elapsed.TotalSeconds result.Directory scriptFile
+    stdoutBytes result.Facts.Length (tailOf result.Stdout)
+    stderrBytes (tailOf result.Stderr)
+    (String.Join("; ", result.Script)) (machineNow ())

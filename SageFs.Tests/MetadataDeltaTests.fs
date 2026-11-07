@@ -170,7 +170,9 @@ let private runCase (twin: Twin) (probing: Probing) (probes: ProbeStripping) (in
   task {
     let directory = scratch ()
     try
-      let paths = compileAll directory versions
+      let paths =
+        try compileAll directory versions
+        with e -> raise (InvalidOperationException(sprintf "compiling the versions in %s failed (%s)" directory (DeltaChild.machineNow ()), e))
       let baselinePath = List.head paths
       if instrument then
         match SageFs.Tests.DeltaInstrumentation.instrumentInPlace baselinePath with
@@ -208,7 +210,7 @@ let private runCase (twin: Twin) (probing: Probing) (probes: ProbeStripping) (in
       // the process to, then the final one (versions after the last delta are unchanged, so it is the same process).
       let evaluationVersions = [ 0 ] @ prepared.Versions @ [ versions.Length - 1 ]
       match blocks.Length = evaluationVersions.Length with
-      | false -> problems.Add(sprintf "the child printed %d evaluations, wanted %d" blocks.Length evaluationVersions.Length)
+      | false -> problems.Add(sprintf "the child printed %d evaluations, wanted %d (%s)" blocks.Length evaluationVersions.Length (DeltaChild.describeRun result))
       | true ->
         evaluationVersions
         |> List.iteri (fun k version ->
