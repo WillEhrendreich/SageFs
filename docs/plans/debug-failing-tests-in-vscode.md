@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress (steps 1 to 5, 7 and the batch done; step 6, the journeys, and the measurements are open) |
 | Size | M for the Next scope, L overall |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: `holdBody` carries the session id. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | `worktree-agent-ad20eb97ce17072e5` at `.claude/worktrees/agent-ad20eb97ce17072e5` (2026-11-07, merge by the orchestrator) |
+| Last green commit | see the branch log: the last `feat(debug)` commit on it |
+| Next action | Step 6: `SageFs.Tests/DebugRowJourneyTests.fs` under `--integration-lt` (reuse `attachAndAsk` from `DebugAttachJourneyTests`), and the `ExtensionHostSuite.fs` case with a `netcoredbg` adapter shim. Then the three "Measure first" runs, which need a machine with `netcoredbg` (this one has `dotnet-debug` only, licence not accepted) and, for the first, a real attach. Slice 4 evaluated-code half waits on `confirm-builds-without-restarting-the-worker`. |
+| Decisions made | 2026-11-07, the implementing agent: (1) several tests are taken one after another by the client under one attach, not by a batch hold in the host. The host slot still holds one test, the debugger stays on the host between tests, so no daemon wire change, no change to `Hold`, and each verdict records as its test ends. The `Hold` head-and-tail design in "Slice 4" is not built. (2) Auto-pause stays client-driven (slice 3) and is skipped when the person had already paused. (3) A debug verdict overwrites the row and records no duration. The plan's open decisions 1 and 2 follow the plan's recommendations, still for Will to confirm. |
+| Surprises | The host's `DebugEnd.Attached` names no test, so the daemon keeps a bounded table of the holds it granted (`McpDebugTest.heldTargets`, keyed by session and ticket, taken on the first `Ended`) to say which row a verdict belongs to; that also gives "exactly one dispatch per ticket" at the route. `DebugRunRecord` fields are `OwnerSession`, `HoldTicket`, `Verdict`, `CodeBasis` because `Session`, `Ticket`, `Result` as field names made record expressions elsewhere in Core infer the wrong type. The per-file annotation push is gated on a key that moves with no row verdict, so `testSummaryProjectionKey` gained a debug-run count (a count of verdicts ever recorded, since the ticket log is bounded). `HostAgent.fs` is embedded in the FSI host, so the host cannot reference `DebugRunRecord`; the record lives in the daemon only. The `run_tests` argument is `pattern`; `tools/sagefs-call.fsx` sends `testPattern`, which the daemon ignores, so a filtered call from that driver starts the whole suite. |
 
 ## What done looks like
 
@@ -147,6 +147,15 @@ First week: steps 1 to 5 are file-disjoint enough for three sub-agents (client a
 - `TestResultsBatchPayload.deriveCompletion` marks a batch Complete when it returned every requested result; a one-test debug record must not look like a full discovery to clients. Clients sweep on `DiscoveryGeneration`, so this should hold. Test 2 should assert the record does not bump `DiscoveryGeneration`.
 - Depends on `confirm-builds-without-restarting-the-worker` for slice 4's evaluated-code half. The Built item `neovim-debug-a-failing-test` shares the routes: any wire change here needs the plugin's `KNOWN_STATUSES` and bodies checked in the same stretch.
 - Enables: nothing in this group depends on it, but the out-of-run record path in step 4 is the pattern `run-tests-reuses-proven-results` follows for a reused verdict.
+
+## What sagefs.nvim needs
+
+Written 2026-11-07. The wire did not change (no field, route or `apiVersion` move), so nothing breaks. These are the things the plugin should take, as its own work, with a busted spec first for each and a check in real Neovim against the daemon:
+
+1. Gutter and lens after a debug run. The daemon now records the verdict on the row, so the `test_results_batch` and `file_annotations` frames carry it. Add a spec that after `:SageFsDebugTest` finishes the sign and the panel row show the verdict with no `:SageFsRunTests`. Check the plugin does not drop a frame whose run generation did not move.
+2. A debug verdict has no duration (the row's duration is zero) and the row's provenance says `Compiled` or `Evaluated`. Make the panel and the virtual text hide a zero duration instead of printing `0ms`, and show the provenance if it already does for normal rows.
+3. Pause while held. VS Code pauses live testing for the session before it holds a test and resumes in every exit path, only when the status `Pause` field read `live` first. Neovim does not. Do the same in `debug_test.lua`: read `GET /api/live-testing/status?session=<id>`, `POST /api/live-testing/pause` with `{ "sessionId": ... }`, resume in the finally path.
+4. Several tests (optional, parity). `debug_test.lua` could take a list and run hold, release, hold, release against the one attach, the way `TestDebugCommand.fs` does. The daemon needs nothing for it.
 
 ## Size
 

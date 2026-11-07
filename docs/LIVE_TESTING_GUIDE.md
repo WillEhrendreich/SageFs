@@ -305,6 +305,11 @@ How it works: the test runs in the process that loaded your code, which is the i
 1. The editor asks the daemon to debug a test. The host holds the test and answers with its process id and a ticket.
 2. The editor attaches its `coreclr` debugger to that process.
 3. The editor continues. The host checks that a debugger is really attached, runs the test under it, and answers when it finishes. The editor then detaches.
+4. The daemon puts the verdict on the test's row, the same row a normal run fills, so the mark, the lens, the Test Explorer row and every other client show what you just saw, with no normal run. The row carries the provenance of the code the test ran against (`Compiled` when it had a PDB, `Evaluated` when an eval defined it) and no duration, because the host's clock ran through every breakpoint. A debug run is not a flake sample, not a line in the run summary and not a discovery. A hold that ended without a verdict (nobody released it, no debugger attached, the host ended) changes no row. The daemon records a ticket once, so a repeated `continue` records nothing more.
+
+While VS Code holds a test, it pauses live testing for the session (when it was running) and resumes it when the debug run ends, however it ends, so no automatic run queues behind a test stopped at a breakpoint. A pause you set yourself stays as it is.
+
+**Several tests.** Select more than one test in the Test Explorer and choose Debug Test. VS Code attaches once, to the first test, and takes the tests in turn: each later test is held and released with the debugger still attached, and each verdict lands on its row as that test ends. A test the daemon does not know is skipped and the rest go on. If the debug session ends, the host is lost or no debugger attaches, the batch stops and the summary says how many did not run. The host still holds one test at a time, so the tests run one after another and never in parallel.
 
 If nobody releases the test within two minutes (`Timeouts.debugHold`), the host drops the hold and the test never runs. Nothing runs without a debugger. An editor can release the test as soon as its attach request is accepted, ahead of the debugger (netcoredbg took longer than 1.5 seconds to finish attaching to the host), so a release that finds no debugger yet is not refused at once: the host waits for one that is still attaching, for `Timeouts.debugAttachGrace` (five seconds on a fast machine, scaled by the machine tier). A debugger that attaches inside that wait runs the test. If none does, the answer is `released_without_debugger` and the test does not run. The host looks for the attach every `Timeouts.debugAttachLook` because the runtime raises no event when a debugger attaches. A host that ends during the wait is told as `host_lost`, not as a missing debugger. The `continue` request stays open through the wait, like it does while the test runs.
 
@@ -320,15 +325,16 @@ If nobody releases the test within two minutes (`Timeouts.debugHold`), the host 
 
 **What it does not do yet.**
 
-- It debugs one test at a time. The host holds one test, and a second request is refused until the first ends.
-- The result of a debug run is shown in the editor. It is not recorded in the live-testing state, so the test marks update on the next normal run.
+- Neovim debugs one test at a time (`:SageFsDebugTest`). VS Code takes several, one after another. The host holds one test, and a second hold request is refused until the first ends.
+- Breakpoints do not bind in a test an eval defined. The daemon says so when it holds the test. Offering the compiled copy waits on [confirm builds without restarting the worker](plans/confirm-builds-without-restarting-the-worker.md).
+- A debug run does not record the coverage it set: the host clears the probes around it, so the next ordinary test's reading starts clean.
 - I have run the host side against a real isolated host, and checked the ptrace door opens and closes on a real process. I have not run a full attach with the C# extension's debugger from this repo's tests. The VS Code side is covered by contract tests that run without VS Code.
 
 The two routes, for any editor client. Both answer the same JSON shape (camelCase) and read the body whatever the status code is.
 
 | Route | Body | Answers |
 |---|---|---|
-| `POST /api/live-testing/debug` | `{ "testId": "<id>" }` or `{ "pattern": "<name>" }`, optional `"sessionId"` | `status` `held` with `pid`, `ticket`, `testName`, `symbols` (`compiled` or `eval`), `symbolsNote`, `access` (`open` or `blocked`), `accessNote`, `holdMs` |
+| `POST /api/live-testing/debug` | `{ "testId": "<id>" }` or `{ "pattern": "<name>" }`, and `"sessionId"` (VS Code and Neovim both send it; without it the daemon picks a session by its fallback rules) | `status` `held` with `pid`, `ticket`, `testName`, `symbols` (`compiled` or `eval`), `symbolsNote`, `access` (`open` or `blocked`), `accessNote`, `holdMs` |
 | `POST /api/live-testing/debug/continue` | `{ "ticket": "<ticket>" }`, optional `"sessionId"` | `still_running` (ask again), or `attached` with `outcome` and `detail`, or one of the dead ends below |
 
 The other statuses are `hold_already_open`, `no_debugger_within`, `released_without_debugger`, `no_such_hold`, `host_lost`, `host_unavailable`, `not_discovered`, `no_test_matched`, `ambiguous_test`, `no_session`, `no_worker`, `worker_failed` and `bad_request`. Every response carries a `message` that says what happened and what to do about it.
