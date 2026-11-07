@@ -240,6 +240,14 @@ module McpCapability =
         | principal -> principal.Identities |> Seq.filter (fun existing -> existing.IsAuthenticated) |> List.ofSeq
       ClaimsPrincipal(kept @ [ identity ])
 
+  /// The request's principal with the member the bridge's client key names: an authenticated identity holding the
+  /// derived member id, never the key. RED stub: leaves the principal as it was.
+  let withClientKey (who: MemberTable.MemberId) (user: ClaimsPrincipal) : ClaimsPrincipal = user
+
+  /// The member the edge derived from a client key on this request, if the request carried one.
+  /// RED stub: reads nothing.
+  let clientKeyMemberOf (user: ClaimsPrincipal) : MemberTable.MemberId option = None
+
   /// What the edge decided about the operator credential on this request, if it was presented.
   let operatorClaimOf (user: ClaimsPrincipal) : EdgeCredential.OperatorClaim option =
     match user with

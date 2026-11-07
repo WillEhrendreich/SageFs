@@ -70,6 +70,10 @@ module MemberTable =
     /// listing carry.
     let ofConnectionHandle (handle: string) : MemberId = MemberId.Mcp (fingerprintOfHandle handle)
 
+    /// The member id of the client that holds `key` (a stdio bridge's `ClientKey`). RED stub: derived exactly like a
+    /// session handle, with nothing to tell the two apart.
+    let ofClientKey (key: string) : MemberId = ofConnectionHandle key
+
     /// What the operator prints as. The colon makes it the prefix form of the other kinds, with nothing after it.
     let operatorDisplay = "operator:"
 
@@ -98,3 +102,54 @@ module MemberTable =
       | _ when raw.StartsWith("mcp:", System.StringComparison.Ordinal) -> MemberId.Mcp(after "mcp:")
       | _ when raw.StartsWith("cap:", System.StringComparison.Ordinal) -> MemberId.Capability(after "cap:")
       | _ -> MemberId.Minted raw
+
+  /// Why a client key the edge was given cannot be one.
+  [<RequireQualifiedAccess>]
+  type ClientKeyRefusal =
+    | Blank
+    | WrongLength of actual: int
+    | NotBase64Url
+
+  /// The key a stdio bridge holds for the life of its process and presents on every request it forwards, so the
+  /// daemon can tell that the same client came back after a reconnect or a daemon restart. The MCP session id cannot
+  /// say so: the daemon mints a new one each time the bridge re-initializes, and the member id used to be a
+  /// fingerprint of that id, so a restart made the conductor a stranger to its own seat.
+  ///
+  /// The key is a bearer secret held by the bridge process, as the session id was. The daemon turns it into a member
+  /// id at its HTTP edge and carries only the id from there on, so the key itself is in no claim, status text,
+  /// ledger row or log line.
+  module ClientKey =
+    /// The HTTP header the bridge sends it in, on every request, including the ones after it re-initializes.
+    let headerName = "X-SageFs-Client-Key"
+    /// The claim the daemon's edge puts the derived member id in, for the MCP request filter to read.
+    let claimType = "urn:sagefs:client-key-member"
+    /// 256 bits.
+    let private randomBytes = 32
+    /// 32 bytes in base64url without padding.
+    let length = 43
+
+    /// RED stub: not a key yet.
+    let generate () : string = ""
+
+    /// The member a key names, or why it names none. A key that is present and wrong is refused at the edge: the
+    /// request is not quietly treated as the session's own member, because that would split one client in two.
+    /// RED stub: names nobody.
+    let toMemberId (raw: string) : Result<MemberId, ClientKeyRefusal> = Result.Error ClientKeyRefusal.Blank
+
+    let describe (refusal: ClientKeyRefusal) : string =
+      match refusal with
+      | ClientKeyRefusal.Blank -> "the client key is blank"
+      | ClientKeyRefusal.WrongLength actual -> sprintf "the client key is %d characters, not the %d a bridge generates" actual length
+      | ClientKeyRefusal.NotBase64Url -> "the client key holds a character outside A-Z, a-z, 0-9, '-' and '_'"
+
+  /// Which name a call's member id comes from, strongest first. A member token IS the member, so sub-agents sharing
+  /// one connection are as many members as they have tokens. Without one, a bridge's client key names the client
+  /// across reconnects. Without that, the connection's own session id does, as it did before the key existed (HTTP
+  /// clients, `sagefs call`). With none of them the caller-supplied name is all there is.
+  module ConnectionIdentity =
+    /// RED stub: the session id only, as before the key existed.
+    let resolve (capability: MemberId option) (clientKey: MemberId option) (transportHandle: string option) (agentName: string) : MemberId =
+      match capability, transportHandle with
+      | Some who, _ -> who
+      | None, Some handle when not (System.String.IsNullOrWhiteSpace handle) -> MemberId.ofConnectionHandle handle
+      | None, _ -> MemberId.Minted agentName

@@ -307,6 +307,11 @@
              revoked hash, never-expiring token, bad token that falls back) prove the invariants' teeth. -->
         <Compile Include="CapabilitySim.fs" />
         <Compile Include="CapabilitySimInvariants.fs" />
+        <!-- A stdio bridge across reconnects, daemon restarts and long quiet spells: the member id it calls as and the seat it
+             keeps, through the REAL ConnectionIdentity.resolve, ClientKey, MemberLiveness and Cohort.decide; two twins (identity
+             from the session id, a lease that ignores the open stream) prove the invariants' teeth. -->
+        <Compile Include="BridgeIdentitySim.fs" />
+        <Compile Include="BridgeIdentityInvariants.fs" />
         <Compile Include="OperatorStoreSim.fs" />
         <!-- Debugging one test DST: holds, expiries, debugger attach, release, finish and a dying host, folded
              through the REAL TestDebug.step; two twins (never expires, runs unattached) prove the teeth. -->

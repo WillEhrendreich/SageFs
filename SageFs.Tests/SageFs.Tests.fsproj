@@ -834,6 +834,8 @@
         <Compile Include="FileAnnotationsBasisTests.fs" />
         <Compile Include="ModelChangePushTests.fs" />
         <Compile Include="CapabilitySimTests.fs" />
+        <Compile Include="ClientKeyIdentityTests.fs" />
+        <Compile Include="BridgeIdentitySimTests.fs" />
         <Compile Include="LeaseWireTests.fs" />
         <Compile Include="TestDebugTests.fs" />
         <Compile Include="TestDebugSimTests.fs" />

@@ -528,6 +528,8 @@
         <Compile Include="SessionRefetch.fs" />
         <Compile Include="SessionOperations.fs" />
         <Compile Include="AgentActivityTracker.fs" />
+        <!-- Whether a cohort member is still there without having evaluated: a recent call or an open push stream. -->
+        <Compile Include="MemberLiveness.fs" />
         <!-- The daemon stops an agent's session once its connection has been gone and it has been idle for the bound.
              Pure decision plus the reaper's memory; the daemon's timer and the stop path are wired in DaemonMode.fs. -->
         <Compile Include="SessionReaper.fs" />
