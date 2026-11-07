@@ -1390,10 +1390,31 @@ module Cohort =
       | _ -> Error(refuseConductorOnly clock by state)
 
     | CohortCommand.SeatConductor(toMember, scope) ->
-      // STUB (red): refuses everything, so the tests that pin the rule fail for the right reason.
+      // A PERSON fills an EMPTY seat. The pure machine cannot tell who is asking, so it does not try: the operator
+      // route is the only place that builds this command (no MCP tool does, and no token reaches the route).
       match checkScope scope with
       | Error e -> Error e
-      | Ok () -> Error(CohortError.SeatTargetAbsent(toMember, []))
+      | Ok () ->
+      match state.Conductor with
+      | ConductorBinding.Bound sitting ->
+        // Moving a HELD seat is the conductor's `DelegateConductor`; a person fills an empty one.
+        Error(CohortError.ConductorSeatTaken sitting)
+      | ConductorBinding.NeverBound
+      | ConductorBinding.Vacant _ ->
+        if not (isPresent state toMember) then
+          // The roster rides on the refusal: who IS here, so the person can pick one of them.
+          let roster =
+            state.Members
+            |> Map.toList
+            |> List.choose (fun (m, r) ->
+              match r.Presence with
+              | MemberPresence.Present -> Some m
+              | MemberPresence.Departed _ -> None)
+          Error(CohortError.SeatTargetAbsent(toMember, roster))
+        else
+          // `toMember` is Present by that guard, which is the `Bound` invariant. The event keeps the vacancy it ended.
+          let newState = { state with Conductor = ConductorBinding.Bound toMember }
+          Ok(newState, [ CohortEvent.ConductorSeated(toMember, state.Conductor) ], [])
 
     | CohortCommand.ObserveSave(who, path, scope) ->
       match checkScope scope with
