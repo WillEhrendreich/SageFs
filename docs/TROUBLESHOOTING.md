@@ -142,6 +142,34 @@ dotnet tool update --global SageFs --version X.Y.Z
 lags the package store by a few minutes after a release. The package can be on
 NuGet while the CLI still can't see it.
 
+### A session on a checkout of SageFs itself answers 500 to everything
+
+Opening a project session on `SageFs.Tests.fsproj` or `SageFs.Host.fsproj` in a worktree of this repository used to
+fault with `Session transport closed - Response status code does not indicate success: 500`. The worker log showed
+`Project assembly loaded only partially ... Could not load file or assembly 'Expecto'`, and that line was a red herring.
+
+What happened: a worktree's `SageFs.Core.dll` has the same assembly version as the daemon's (the version moves on a
+release push, not on a commit) and a different public shape. The daemon used to put that Core into the worker's host
+directory, next to the daemon's own `SageFs.Host.dll`, which was compiled against the other shape. A union whose cases
+moved has new tags, so the host's `match` cast a message to the wrong case and every route answered 500. The worker
+had no log line for a route that threw, so nothing said so.
+
+What SageFs does now:
+
+- Before it adopts a project's own `SageFs.Core`, it compares the public shape of that build with the one in the
+  daemon's host directory (`CoreSurface`). The same shape is adopted, as before. A different shape is not adopted: the
+  worker runs the daemon's own Core, your REPL still loads the project's build, and the daemon log says
+  `did not adopt ... <type> has a different public shape`.
+- A route in the worker that throws now logs the exception to the worker's log (`[WorkerHttp]`) and answers 500 with
+  the route, the exception type and its message. The daemon's error carries that text.
+
+If you want the worker itself to run your Core (to develop the worker), install the build as the daemon:
+`dotnet fsi scripts/install-local.fsx -- --build --force`.
+
+The partial-load line is a separate, smaller fault, and it is fixed as well: the warm-up scan loaded your assemblies
+from the shadow copy without looking in the directory your build wrote their dependencies to, so every type that
+extends something a package brings was skipped when it opened namespaces.
+
 ### Where the logs are
 
 There are three places, and which one you want depends on what broke. Paths

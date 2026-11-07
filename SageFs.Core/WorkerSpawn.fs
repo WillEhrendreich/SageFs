@@ -74,6 +74,9 @@ module WorkerSpawn =
     | Ok launchPlan ->
     let launchRoot = launchPlan.LaunchRoot
     let hostCleanup = launchPlan.Cleanup
+    match launchPlan.Note with
+    | HostCoreAdoption.AdoptionNote.NotAdopted reason -> Log.warn "[SessionManager] session %s: %s" (SessionId.value sessionId) reason
+    | HostCoreAdoption.AdoptionNote.NothingToSay -> ()
     // Visibility (roast: a materialized private launch root costs 680-835MB
     // of /tmp per self-hosting session — worth logging as it happens, not
     // just when a startup/periodic sweep later finds it abandoned).

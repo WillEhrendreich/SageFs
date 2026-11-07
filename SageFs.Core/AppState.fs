@@ -553,7 +553,7 @@ let private discoverWarmupReplayPlan
           Log.warn "[Warmup] %s" msg
           discoveryWarnings.Add(msg)
         | true ->
-          let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
+          let asm = SageFs.ShadowCopy.loadShadowed reflectionAlc project.TargetPath
           // Before the reflection, so the handler below can record the assembly if it throws.
           let stableAssemblyPath =
             stableAssemblyPaths

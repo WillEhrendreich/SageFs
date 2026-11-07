@@ -53,8 +53,8 @@ let private surfaceOfFixture (cases: string list) (publicMethods: string list) (
     let path = Path.Combine(dir, "SurfaceFixture.dll")
     writeSurfaceFixture path cases publicMethods hiddenMethods
     match CoreSurface.surfaceOfFile path with
-    | Ok read -> read
-    | Error reason -> failtestf "the fixture could not be read: %s" reason)
+    | CoreSurface.SurfaceReading.Read read -> read
+    | CoreSurface.SurfaceReading.Unreadable reason -> failtestf "the fixture could not be read: %s" reason)
 
 /// A copy of the real SageFs.Core with two adjacent cases of `WorkerMessage` swapped: the shape of the worktree that broke.
 let private writeCoreWithSwappedCases (dest: string) =
@@ -83,12 +83,12 @@ let coreSurfaceTests =
 
     testCase "WHY — the surface of a real build names its exported types, and reading it twice gives the same answer" <| fun _ ->
       match CoreSurface.surfaceOfFile realCorePath, CoreSurface.surfaceOfFile realCorePath with
-      | Ok first, Ok second ->
+      | CoreSurface.SurfaceReading.Read first, CoreSurface.SurfaceReading.Read second ->
         first |> Expect.equal "the same file gives the same surface" second
         first |> Map.containsKey "SageFs.WorkerProtocol+WorkerMessage" |> Expect.isTrue "the wire's message type is in it"
         (first.Count > 100) |> Expect.isTrue "a build of the Core has hundreds of exported types"
-      | Error reason, _
-      | _, Error reason -> failtestf "the Core could not be read: %s" reason
+      | CoreSurface.SurfaceReading.Unreadable reason, _
+      | _, CoreSurface.SurfaceReading.Unreadable reason -> failtestf "the Core could not be read: %s" reason
 
     testCase "WHY — the cases of a union in another order are a different surface, because every later case has a new tag" <| fun _ ->
       let before = surfaceOfFixture [ "A"; "B"; "C" ] [] []
@@ -119,11 +119,11 @@ let coreSurfaceTests =
         let swapped = Path.Combine(dir, "SageFs.Core.dll")
         writeCoreWithSwappedCases swapped
         match CoreSurface.surfaceOfFile realCorePath, CoreSurface.surfaceOfFile swapped with
-        | Ok real, Ok changed ->
+        | CoreSurface.SurfaceReading.Read real, CoreSurface.SurfaceReading.Read changed ->
           CoreSurface.compareSurfaces real changed
           |> Expect.equal "the message type is the one named" (CoreSurface.SurfaceChange.Changed "SageFs.WorkerProtocol+WorkerMessage")
-        | Error reason, _
-        | _, Error reason -> failtestf "a surface could not be read: %s" reason)
+        | CoreSurface.SurfaceReading.Unreadable reason, _
+        | _, CoreSurface.SurfaceReading.Unreadable reason -> failtestf "a surface could not be read: %s" reason)
   ]
 
 /// The spawn decision: a project's own Core is adopted into the worker when the worker's host can run on it, and left
@@ -155,9 +155,10 @@ let adoptionTests =
           plan.Cleanup |> Option.iter (fun cleanup -> cleanup ())
           plan.LaunchRoot |> Expect.equal "the worker launches from the daemon's own host directory" sharedRoot
           plan.AdoptedCore |> Expect.isNone "nothing was adopted"
-          plan.NotAdopted |> Expect.isSome "the reason is carried"
-          (plan.NotAdopted |> Option.defaultValue "")
-          |> Expect.stringContains "the reason names the type that differs" "SageFs.WorkerProtocol+WorkerMessage"
+          match plan.Note with
+          | HostCoreAdoption.AdoptionNote.NotAdopted reason ->
+            reason |> Expect.stringContains "the reason names the type that differs" "SageFs.WorkerProtocol+WorkerMessage"
+          | HostCoreAdoption.AdoptionNote.NothingToSay -> failtest "the plan must carry the reason"
         | Error reason -> failtestf "expected a plan, got the refusal: %s" reason)
 
     testCase "WHY — the twin: a project's Core with the same surface and different bytes is adopted, the dogfood case the adoption exists for" <| fun _ ->
@@ -166,7 +167,7 @@ let adoptionTests =
         | Ok plan ->
           plan.Cleanup |> Option.iter (fun cleanup -> cleanup ())
           plan.AdoptedCore |> Expect.isSome "the build was adopted"
-          plan.NotAdopted |> Expect.isNone "and there is no reason to give"
+          plan.Note |> Expect.equal "and there is no reason to give" HostCoreAdoption.AdoptionNote.NothingToSay
           (plan.LaunchRoot <> sharedRoot) |> Expect.isTrue "into a private root"
         | Error reason -> failtestf "expected a plan, got the refusal: %s" reason)
   ]

@@ -63,6 +63,17 @@ contributes. What worked: a bare session with `#r` of the worktree's own
 `SageFs.Core/bin/Debug/net11.0/SageFs.Core.dll` and `SageFs.Host/bin/Debug/net11.0/SageFs.Host.dll`. The decision logic, the
 `LevelKeeper` gate order and the `HostBound` clearing were submitted there on real inputs (see the report).
 
+Resolved 2026-11-07 by the `p0-selfhost` packet (issue #153). The cause was the one the log pointed away from. This branch added
+`WorkerMessage.LevelRepl` in the middle of the union, so its `SageFs.Core` carried the daemon's version number and a different public
+shape. The daemon adopted that Core into the worker's host directory beside its own `SageFs.Host.dll`, which was compiled against the
+old shape: its `match` on the old tags cast a message to the wrong case, and every route of the worker answered 500 with nothing in the
+worker log. The partial-load warning is a separate, harmless fault that every healthy session on a test project also logs. Reproduced
+on the daemon built from 27163dfa by swapping two `WorkerMessage` cases in a copy of the Core (a session on `SageFs.Host.fsproj`
+answered 500 to every ready poll); a session on the unchanged tree reached Ready. Now `HostCoreAdoption.surfaceVerdict` compares the
+public shape of the two Cores and a project's Core of another shape is not adopted (the worker runs the daemon's Core, the REPL loads
+the project's, and the daemon log says so), a worker route that throws logs it and says what threw, and the warm-up scan finds a shadow
+copy's dependencies. See `docs/TROUBLESHOOTING.md`.
+
 ## What done looks like
 
 After a metadata delta lands in a `run_app` app, the session brings its FSI host up to the patched build in the background

@@ -302,6 +302,13 @@ module HostCoreAdoption =
       | false -> ()
     with _ -> ()
 
+  /// What a launch plan says about a project's own SageFs.Core beyond the plan itself.
+  [<RequireQualifiedAccess>]
+  type AdoptionNote =
+    | NothingToSay
+    /// A project's SageFs.Core was found and NOT adopted: the worker runs the daemon's own build instead, for this reason.
+    | NotAdopted of reason: string
+
   /// The outcome of resolving where a worker should launch from: the
   /// directory to pass to `Args.resolveHostLaunch`, an optional cleanup
   /// action the caller must run once the spawned process exits, and — when a
@@ -314,9 +321,43 @@ module HostCoreAdoption =
     LaunchRoot: string
     Cleanup: (unit -> unit) option
     AdoptedCore: (string * DateTime) option
-    /// Why a project's own SageFs.Core was found and NOT adopted: the worker runs the daemon's own build instead.
-    NotAdopted: string option
+    /// Whether a project's own SageFs.Core was found and left out, and why.
+    Note: AdoptionNote
   }
+
+  /// Whether a project's own build of the Core can stand in the daemon's host directory.
+  [<RequireQualifiedAccess>]
+  type SurfaceVerdict =
+    | Compatible
+    | Incompatible of reason: string
+
+  /// The daemon's host directory holds a SageFs.Host.dll that was compiled against the SageFs.Core beside it. A Core of
+  /// another public shape is not a drop-in for it, whatever its version says: the version moves on a release push and a
+  /// worktree's Core, edited since, carries the same one. A union whose cases moved has new tags, the host's `match` on the
+  /// old tags casts a message to the wrong case, and every route of the worker answers 500 (reproduced 2026-11-07 with two
+  /// `WorkerMessage` cases swapped). So the two surfaces are compared, and a Core that differs, or whose shape cannot be
+  /// read, is left out: the worker runs the daemon's own Core and the REPL still loads the project's.
+  let surfaceVerdict (hostCorePath: string) (candidatePath: string) : SurfaceVerdict =
+    match CoreSurface.surfaceOfFileCached hostCorePath, CoreSurface.surfaceOfFileCached candidatePath with
+    | CoreSurface.SurfaceReading.Read host, CoreSurface.SurfaceReading.Read candidate ->
+      match CoreSurface.compareSurfaces host candidate with
+      | CoreSurface.SurfaceChange.Unchanged -> SurfaceVerdict.Compatible
+      | change ->
+        SurfaceVerdict.Incompatible(
+          sprintf
+            "The session project's SageFs.Core (read from %s) has a different public shape from the SageFs.Core the daemon's worker host was built against (%s), so the worker runs the daemon's own SageFs.Core and the REPL loads the project's. To run the worker on this build as well, install it as the daemon: dotnet fsi scripts/install-local.fsx -- --build --force"
+            (Path.GetFullPath candidatePath)
+            (CoreSurface.describeChange change))
+    | CoreSurface.SurfaceReading.Unreadable why, _ ->
+      SurfaceVerdict.Incompatible(
+        sprintf
+          "The shape of the daemon's own SageFs.Core (%s) could not be read (%s), so the session project's build (read from %s) was not adopted and the worker runs the daemon's own SageFs.Core."
+          hostCorePath why (Path.GetFullPath candidatePath))
+    | CoreSurface.SurfaceReading.Read _, CoreSurface.SurfaceReading.Unreadable why ->
+      SurfaceVerdict.Incompatible(
+        sprintf
+          "The shape of the session project's SageFs.Core (read from %s) could not be read (%s), so it was not adopted and the worker runs the daemon's own SageFs.Core."
+          (Path.GetFullPath candidatePath) why)
 
   /// The full decision for one worker spawn: given the shared daemon-base
   /// directory (the same one `Args.resolveHostLaunch` would otherwise use
@@ -336,7 +377,7 @@ module HostCoreAdoption =
     : Result<LaunchPlan, string> =
     let projectDirs = projectDirsOf projects
     match findCandidates projectDirs with
-    | [] -> Ok { LaunchRoot = sharedDaemonBaseDir; Cleanup = None; AdoptedCore = None; NotAdopted = None }
+    | [] -> Ok { LaunchRoot = sharedDaemonBaseDir; Cleanup = None; AdoptedCore = None; Note = AdoptionNote.NothingToSay }
     | best :: _ ->
       try
         let candidateVersion = AssemblyName.GetAssemblyName(best).Version
@@ -351,13 +392,17 @@ module HostCoreAdoption =
         | Adoption.Refused reason -> Error reason
         | Adoption.Adopted path ->
           let sharedHostDir = Path.Combine(sharedDaemonBaseDir, "host")
-          let privateRoot =
-            Path.Combine(
-              Path.GetTempPath(),
-              sprintf "%s%s-%s" adoptedRootPrefix sessionId (Guid.NewGuid().ToString("N").[..7]))
-          materialize sharedHostDir privateRoot path
-          let adopted = (candidateVersion.ToString(), File.GetLastWriteTimeUtc path)
-          Ok { LaunchRoot = privateRoot; Cleanup = Some(fun () -> cleanup privateRoot); AdoptedCore = Some adopted; NotAdopted = None }
+          match surfaceVerdict (Path.Combine(sharedHostDir, assemblyName + ".dll")) path with
+          | SurfaceVerdict.Incompatible reason ->
+            Ok { LaunchRoot = sharedDaemonBaseDir; Cleanup = None; AdoptedCore = None; Note = AdoptionNote.NotAdopted reason }
+          | SurfaceVerdict.Compatible ->
+            let privateRoot =
+              Path.Combine(
+                Path.GetTempPath(),
+                sprintf "%s%s-%s" adoptedRootPrefix sessionId (Guid.NewGuid().ToString("N").[..7]))
+            materialize sharedHostDir privateRoot path
+            let adopted = (candidateVersion.ToString(), File.GetLastWriteTimeUtc path)
+            Ok { LaunchRoot = privateRoot; Cleanup = Some(fun () -> cleanup privateRoot); AdoptedCore = Some adopted; Note = AdoptionNote.NothingToSay }
       with ex ->
         Error(sprintf "Could not verify the session project's SageFs.Core build at %s: %s" best ex.Message)
 
