@@ -169,6 +169,30 @@ eval "$(sagefs member mint --role Implementer --dir "$PWD" --print-env SAGEFS_ME
 `--token` does the same for one call. The full description is in
 [mcp-tools.md](mcp-tools.md#reaching-the-tools-without-a-client-sagefs-call).
 
+### What a client sees when the daemon is upgraded
+
+A client registered with `sagefs mcp` keeps its connection across a daemon stop and start, which is what
+`scripts/install-local.fsx` and a release do. Before 2026-11-07 the bridge ended with exit code 1 and
+`sagefs mcp: the daemon became unreachable: server stream closed` on stderr the moment the daemon's push
+stream closed, so the client showed the server as disconnected until someone reloaded it. Now:
+
+- A request in flight when the daemon stops gets a JSON-RPC error that says the daemon became unreachable
+  and to ask again in a few seconds. It is not left without an answer.
+- A request that arrives while the daemon is down waits in the bridge and goes out, in order, when the daemon
+  answers again. It is answered, or rejected with the reason if the bridge gives up (see the last point).
+- When the daemon answers again the bridge opens a new MCP session on it with the `initialize` parameters
+  your client sent, then writes `notifications/tools/list_changed`, `notifications/prompts/list_changed` and
+  `notifications/resources/list_changed` to the client, because the daemon behind it is a new session and
+  may be a new build. The client asks for the lists again. Sessions of the old daemon are gone, as they
+  always were; `list_sessions` shows what the new daemon has.
+- The bridge waits for the old daemon's replacement for up to a minute on a fast machine (`Timeouts.stdioBridgeReconnectWait`,
+  longer on a slower one). After that it starts a daemon itself, the way it does when it finds none at
+  startup, and gives up only by the rules of a cold start.
+
+The installer replaces the tool's files under a running bridge. That does not end the bridge: a process
+that already loaded its assemblies keeps them. Measured on 2026-11-07 against a throwaway daemon: the
+bridge's version directory removed, then `tools/list` and `tools/call` still answered.
+
 ## 4. When the agent drifts
 
 It'll happen. Usually the agent hits something awkward (a version mismatch, a
