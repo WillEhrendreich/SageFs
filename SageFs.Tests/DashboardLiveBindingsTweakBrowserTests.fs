@@ -655,6 +655,31 @@ let statesJourney () : Task<unit> = task {
     do! waitState page field "InSource"
     expectNoErrors errors "after a mutable field was tried and reverted"
 
+    // ── 5b. the Evaluate box runs every statement of what it is given, and names the one that fails ───────────────────
+    let! sessions = Sw.sessionsNow daemon
+    let sessionId = Sw.idFor sessions built
+    use http = new Net.Http.HttpClient(Timeout = TestTimeouts.httpRequest)
+    let evaluateBox (code: string) =
+      task {
+        let body = System.Text.Json.JsonSerializer.Serialize({| code = code; viewingSessionId = sessionId |})
+        use content = new Net.Http.StringContent(body, Text.Encoding.UTF8, "application/json")
+        let! response = http.PostAsync(sprintf "%s/dashboard/eval" dashboardBase, content)
+        response.IsSuccessStatusCode |> Expect.isTrue "the Evaluate box took it"
+      }
+    do! evaluateBox "let evA = 1;;\nlet evB = 2;;"
+    do! waitState page "evA" "NotInAFile"
+    do! waitState page "evB" "NotInAFile"
+    do! evaluateBox "let evC = 3;;\nlet evD = nope;;\nlet evE = 5;;"
+    do! waitState page "evC" "NotInAFile"
+    do! waitJs page "the output to name the statement that failed" BrowserWaits.daemonWork
+          "() => { const e = document.getElementById('output-section'); return !!e && /Statement 2 of 3 failed/.test(e.innerText); }" null
+    let! outputWords = textIn page "#output-section"
+    outputWords |> Expect.stringContains "the statement is named" "let evD = nope;;"
+    outputWords |> Expect.stringContains "and what did not run" "The 1 statement after it did not run."
+    let! ranAfterTheFailure = page.Locator(row "evE").CountAsync()
+    ranAfterTheFailure |> Expect.equal "the statement after the failure never ran" 0
+    expectNoErrors errors "after the Evaluate box ran several statements"
+
     // ── 6. a value the literal cannot take is refused with the door's rule ───────────────────────────────────────────
     do! boxOf("gravity").FillAsync "fast"
     do! press "gravity" "tweak-try"

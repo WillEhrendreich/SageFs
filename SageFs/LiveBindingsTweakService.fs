@@ -591,10 +591,8 @@ module Service =
         changed ()
     }
 
-  /// Put the file's value back for several rows in ONE evaluation, as ONE interaction (`PushCode.oneInteraction`): the dashboard's eval
-  /// runs only the first interaction of the text it is given, so one `;;` per statement would revert the first row and leave the
-  /// rest. One eval is also one read of the session's values afterwards, and the session changes in one step. A row whose file text
-  /// is not a literal is refused on its row.
+  /// Put the file's value back for several rows in ONE evaluation, as ONE interaction (`PushCode.oneInteraction`): the session changes
+  /// in one step, and one eval is one read of its values afterwards. A row whose file text is not a literal is refused on its row.
   let revertMany
     (service: Service)
     (sessionId: string)

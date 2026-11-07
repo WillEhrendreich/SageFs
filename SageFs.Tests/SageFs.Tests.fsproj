@@ -551,6 +551,7 @@
         <Compile Include="CallResultTests.fs" />
         <Compile Include="BindingRelationTests.fs" />
         <Compile Include="TweakPushTests.fs" />
+        <Compile Include="EvalInOrderTests.fs" />
         <Compile Include="ChangesStripTests.fs" />
         <Compile Include="LiveBindingsTweakServiceTests.fs" />
         <Compile Include="LiveBindingsTweakViewTests.fs" />

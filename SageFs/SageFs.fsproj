@@ -141,6 +141,7 @@
         <Compile Include="JupyterKernel.fs" />
         <Compile Include="SessionPathValidation.fs" />
         <Compile Include="McpAdapter.fs" />
+        <Compile Include="EvalSequence.fs" />
         <Compile Include="McpSessionRouting.fs" />
         <Compile Include="McpRouteError.fs" />
         <Compile Include="CreateSessionUx.fs" />

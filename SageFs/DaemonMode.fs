@@ -4451,8 +4451,8 @@ let run
     IsCreatingSession = fun () -> elmRuntime.GetModel().CreatingSession
   }
 
-  let dashboardActions : DashboardActions = {
-    EvalCode = fun sid code -> task {
+  // One statement, as one interaction: the worker runs the first `;;` interaction of the text it is given and answers Ok.
+  let evalOneStatement (sid: WorkerProtocol.SessionId) (code: string) : Threading.Tasks.Task<Result<string, string>> = task {
       let sidStr = WorkerProtocol.SessionId.value sid
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
       match result with
@@ -4486,6 +4486,31 @@ let run
       | Ok other -> return Error (sprintf "Unexpected: %A" other)
       | Error e -> return Error (SageFsError.describe e)
     }
+
+  // The one place every dashboard caller evaluates through (the Evaluate box, eval-file, and the live bindings' Try, Reset and
+  // Revert): a submission of several statements runs them one at a time, in order, and a failure names the statement it was.
+  let evalSubmission (sid: WorkerProtocol.SessionId) (code: string) : Threading.Tasks.Task<Result<string, string>> = task {
+    match McpAdapter.splitStatements code with
+    | []
+    | [ _ ] -> return! evalOneStatement sid code
+    | statements ->
+      let! outcome = EvalSequence.evalInOrder (evalOneStatement sid) statements
+      match outcome with
+      | EvalSequence.SequenceOutcome.Ran messages -> return Ok(String.concat "\n" messages)
+      | EvalSequence.SequenceOutcome.StoppedAt(position, total, statement, reason, _) ->
+        let sidStr = WorkerProtocol.SessionId.value sid
+        let message = EvalSequence.describeStop position total statement reason
+        let! _ =
+          dispatchOutputAndWait
+            elmRuntime
+            stateChangedEvent.Publish
+            sidStr
+            (SageFsMsg.Event (TuiEvent.EvalFailed (sidStr, message)))
+        return Error message
+  }
+
+  let dashboardActions : DashboardActions = {
+    EvalCode = evalSubmission
     CancelEval = fun sid -> task {
       let sidStr = WorkerProtocol.SessionId.value sid
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr WorkerProtocol.WorkerMessage.CancelEval

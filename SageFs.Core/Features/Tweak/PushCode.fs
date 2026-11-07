@@ -44,9 +44,9 @@ let statement (via: PushVia) (key: RowKey) (literal: string) : string =
   | PushVia.RebindWithCopy -> sprintf "let %s = %s;;" key.Binding (updateIn key.Binding key.Labels literal)
   | PushVia.AssignBindingWithCopy -> sprintf "%s <- %s;;" key.Binding (updateIn key.Binding key.Labels literal)
 
-/// Several statements as ONE interaction: each loses its own `;;` and the last carries the only one. The dashboard hands the session
-/// the text it is given as one evaluation, and a second `;;` in it is not evaluated (the eval answers for the first statement and
-/// the rest never runs), so a batch that ends every statement with `;;` would change the first row and silently leave the others.
+/// Several statements as ONE interaction: each loses its own `;;` and the last carries the only one. The batch is then one evaluation
+/// in the session, one line of output and one read of the session's values afterwards, and it changes every row or none. (The
+/// dashboard's shared eval also runs separate `;;` statements one at a time, so this is a choice, not a workaround.)
 let oneInteraction (statements: string list) : string =
   let bare (statement: string) =
     let text = statement.TrimEnd()

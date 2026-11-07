@@ -191,7 +191,7 @@ let planTests =
       oneInteraction [ "lives <- 3;;" ] |> Expect.equal "one statement" "lives <- 3;;"
       oneInteraction [ "lives <- 3 ;; "; "x <- 1" ] |> Expect.equal "trailing spaces and a missing terminator" "lives <- 3\nx <- 1;;"
 
-    testPropertyWithConfig propConfig "WHY — a batch of any statements a push can make is exactly one `;;`, at the end, because the dashboard's eval runs only the first interaction of what it is given"
+    testPropertyWithConfig propConfig "WHY — a batch of any statements a push can make is exactly one `;;`, at the end, so a batch is one evaluation and one read of the session's values"
       (Prop.forAll (Arb.fromGen (Gen.listOfLength 3 (Gen.zip (Gen.elements PushVia.all) (Gen.choose (0, 2))))) (fun parts ->
         let statements =
           parts |> List.mapi (fun i (via, depth) -> statement via { Binding = sprintf "b%d" i; Labels = List.init depth (fun d -> sprintf "F%d" d) } "1")
