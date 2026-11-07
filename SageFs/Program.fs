@@ -114,6 +114,8 @@ type CliCommand =
   | Status
   | Check
   | InstallSkill of args: string list
+  /// `sagefs setup ...`: the arguments after `setup`.
+  | Setup of args: string list
   /// `sagefs member ...`: the arguments after `member`, with `--mcp-port` still among them.
   | Member of args: string list
   /// `sagefs cohort seat ...`: the arguments after `cohort`, with `--mcp-port` still among them.
@@ -141,6 +143,7 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "status" -> Status
     | _ when args.Length > 0 && args.[0] = "check" -> Check
     | _ when args.Length > 0 && args.[0] = "install-skill" -> InstallSkill(args |> Array.skip 1 |> List.ofArray)
+    | _ when args.Length > 0 && args.[0] = "setup" -> Setup(args |> Array.skip 1 |> List.ofArray)
     | _ when args.Length > 0 && args.[0] = "member" -> Member(args |> Array.skip 1 |> List.ofArray)
     | _ when args.Length > 0 && args.[0] = "cohort" -> Cohort(args |> Array.skip 1 |> List.ofArray)
     | _ when args.Length > 0 && args.[0] = "sweep" -> Sweep (hasFlag "--kill")
@@ -610,6 +613,9 @@ let main args =
     printfn "Usage: SageFs [options]                Start daemon (default mode)"
     printfn "       SageFs check                    Check environment before first run"
     printfn "       SageFs install-skill [--force]  Install the sagefs agent skill (~/.claude/skills; --dir <folder>)"
+    printfn "       SageFs setup [--client C] [--dir D] [--write]"
+    printfn "                                       Register SageFs as a stdio server in Claude Code, VS Code, Cursor and Claude Desktop (C is claude-code, vscode,"
+    printfn "                                       cursor or claude-desktop). Prints what it would do; --write merges the entry into the client's config and installs the skill"
     printfn "       SageFs member mint --role R (--dir D | --session ID) [--scope S] [--ttl MINUTES] [--print-env VAR]"
     printfn "                                       Mint a member token with the operator credential (operator.token); --print-env prints an export line"
     printfn "       SageFs cohort seat [<member id>] [--dir D]"
@@ -717,6 +723,13 @@ let main args =
 
   | InstallSkill skillArgs ->
     SkillInstallCommand.run (SkillInstallCommand.parseArgs skillArgs)
+
+  | Setup setupArgs ->
+    match SetupCommand.parseArgs setupArgs with
+    | Ok parsed -> SetupCommand.run parsed
+    | Error error ->
+      eprintfn "sagefs setup: %s" (SetupCommand.describeArgError error)
+      1
 
   | Member memberArgs ->
     // `--mcp-port` names the daemon to ask; the verb's own parser takes only the verb's flags.

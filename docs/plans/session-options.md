@@ -8,13 +8,17 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress (step 3 of 6) |
 | Size | M |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run the first "Measure first" probe (do `DefaultArgs` and the config's `InitScript` reach a session at all?), then write the first failing test: `SessionOptionsTests`, a Server GC choice becomes `DOTNET_gcServer=1` in the host's environment. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | cohort member `p3-setup`, branch `cohort/p3-setup`, checkout `/home/will/scratch/cohort/p3-setup` |
+| Last green commit | see `git log` on that branch: the commit after `test(setup): session options and one-command client setup, red` |
+| Next action | Done so far (2026-11-07): the probe (step 1), the pure types (step 2) and the environment path with Server GC as its first user (step 3: `DefaultArgs`, `Gc` and `SessionEnv` reach the FSI host), and the dead fields are gone (step 6). Left: the artifacts path (step 4). It It needs three things to move together, which is why it was left out of the first pass instead of added as a field nobody reads: `SessionBuild.buildArguments` (`-p:ArtifactsPath=`), the project loader that asks MSBuild for `TargetPath` (Ionide must evaluate with the same property or the output assembly is looked up in `bin`), and the worker that reads the config (`SessionOptionsSource`). Add the field to `DirectoryConfig` in the same commit that wires all three, with test 4 (a real build of a tiny project) in the integration tier. Then the settings catalog and dashboard rows (step 5), and the outcome gate (test 6): a real session reports `GCSettings.IsServerGC = true` and an environment value from inside the host. |
+| Decisions made | `InitScript` is deleted, in favour of the file-name discovery that works (`.SageFs/init.fsx`). `IsRoot` and `SessionName` are deleted with it: the Readme said they were parsed and stored and "not wired to anything", and a grep finds no reader. `DefaultArgs` is wired. `Gc` and `SessionEnv` are config-only, as recommended. The GC cases are `WorkstationGc` and `ServerGc`: a case named `Server` makes the compiler resolve `SageFs.Server.HttpOriginGuard...` in patterns as the case, and `SageFs.Host/WorkerHttpTransport.fs` stopped compiling. |
+| Surprises | The worker reads `.SageFs/config.fsx` itself (`SessionOptionsSource`, evaluated by `ConfigHost`), so a directory with a config pays for one more FSI host start per session, on top of the daemon's own read. Measure it on a quiet machine before deciding whether the daemon should hand the evaluated options to the worker instead; that changes `CreateSession` in about seventy test files, which is why it was not done blind. |
+
+### The probe, 2026-11-07
+
+Question: do `InitScript` and `DefaultArgs` reach a session? Answer from the tree: no. A grep of every `.fs` and `.fsx` file for both names finds the type, the default, the equality check in `DirectoryConfig.ensureAutoOpenNamespacesOptIn` and tests that set them and read them back. The only place the FSI host's arguments are made is `AppState.createFsiSession` (`solutionToFsiArgs`), and it never read a config. The Readme already said `InitScript`, `DefaultArgs`, `IsRoot` and `SessionName` "are parsed and stored but not wired to anything yet". That is a defect by the plan's own rule (accepted and ignored is worse than absent). The guard is `SessionOptionsTests`: every field of `DirectoryConfig` has a row in `SessionOptions.fieldReaders` naming who reads it, and a field that the session host reads must change what the host gets.
 
 ## Why this item exists
 

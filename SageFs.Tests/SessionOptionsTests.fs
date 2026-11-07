@@ -27,8 +27,8 @@ let sessionOptionsTests =
   testList "SessionOptions" [
 
     testCase "WHY - a Server GC choice puts DOTNET_gcServer=1 in the host's environment and Workstation does not" <| fun _ ->
-      let server, _ = hostEnv [] (configWith (fun c -> { c with Gc = Server }))
-      let workstation, _ = hostEnv [] (configWith (fun c -> { c with Gc = Workstation }))
+      let server, _ = hostEnv [] (configWith (fun c -> { c with Gc = ServerGc }))
+      let workstation, _ = hostEnv [] (configWith (fun c -> { c with Gc = WorkstationGc }))
       server |> List.contains ("DOTNET_gcServer", "1") |> Expect.isTrue "Server sets DOTNET_gcServer=1"
       workstation |> List.exists (fun (name, _) -> name = "DOTNET_gcServer") |> Expect.isFalse "Workstation sets nothing"
 
@@ -64,7 +64,7 @@ let sessionOptionsTests =
       clashes |> Expect.equal "reported" [ { SessionOptions.Name = "SAGEFS_PROJECT_OUTPUT"; UserValue = "/mine"; SageFsValue = "/p/bin" } ]
 
     testCase "WHY - Server GC wins over a user's DOTNET_gcServer=0 and the clash is reported" <| fun _ ->
-      let config = configWith (fun c -> { c with Gc = Server; SessionEnv = [ "DOTNET_gcServer", "0" ] })
+      let config = configWith (fun c -> { c with Gc = ServerGc; SessionEnv = [ "DOTNET_gcServer", "0" ] })
       let env, clashes = hostEnv [] config
       env |> List.filter (fun (n, _) -> n = "DOTNET_gcServer") |> Expect.equal "Server's value" [ "DOTNET_gcServer", "1" ]
       clashes |> List.map (fun c -> c.Name) |> Expect.equal "reported" [ "DOTNET_gcServer" ]
@@ -74,9 +74,9 @@ let sessionOptionsTests =
       options.FsiArgs |> Expect.equal "carried" [ "--no-warn:1182" ]
 
     testCase "WHY - an option set for one directory does not reach another" <| fun _ ->
-      let a, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Gc = Server; SessionEnv = [ "A", "1" ] }))
+      let a, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Gc = ServerGc; SessionEnv = [ "A", "1" ] }))
       let b, _ = SessionOptions.ofConfig DirectoryConfigDefaults.empty
-      a.Gc |> Expect.equal "a is Server" Server
+      a.Gc |> Expect.equal "a is Server" ServerGc
       b |> Expect.equal "b is the default" SessionOptions.none
 
     testCase "WHY - every field a config file can set names who reads it, so a dead field fails the build" <| fun _ ->
@@ -91,7 +91,7 @@ let sessionOptionsTests =
       let baseline = SessionOptions.ofConfig DirectoryConfigDefaults.empty |> fst
       let changes =
         [ "DefaultArgs", configWith (fun c -> { c with DefaultArgs = [ "--x" ] })
-          "Gc", configWith (fun c -> { c with Gc = Server })
+          "Gc", configWith (fun c -> { c with Gc = ServerGc })
           "SessionEnv", configWith (fun c -> { c with SessionEnv = [ "A", "1" ] }) ]
       let hostFields =
         SessionOptions.fieldReaders

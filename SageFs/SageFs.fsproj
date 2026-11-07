@@ -217,6 +217,7 @@
         <Compile Include="JupyterDaemonBridge.fs" />
         <Compile Include="EnvCheck.fs" />
         <Compile Include="SkillInstallCommand.fs" />
+        <Compile Include="SetupCommand.fs" />
         <Compile Include="CohortPlay.fs" />
         <Compile Include="CohortExportCommand.fs" />
         <Compile Include="McpStdioBridge.fs" />

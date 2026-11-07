@@ -768,7 +768,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
             logger.LogError (sprintf "  ❌ The session was refused: %s" message)
             failwith message
           let projects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
-          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects planning.Plan.Overrides (SessionAgent.agentInitOf sln hotReload webDevReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) with
+          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects planning.Plan.Overrides (SessionOptionsSource.read logger System.Environment.CurrentDirectory) (SessionAgent.agentInitOf sln hotReload webDevReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) with
           | Ok session -> return session
           | Error reason ->
             let message = IsolatedFsiSession.describeStartError reason

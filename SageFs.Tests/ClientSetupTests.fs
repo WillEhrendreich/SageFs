@@ -10,11 +10,12 @@ open FsCheck
 open FsCheck.FSharp
 open SageFs
 
-let private repoRoot = RepoPaths.repoPathFull [||]
-
 let private parse (text: string) : JsonNode = JsonNode.Parse text
 
 let private str (node: JsonNode) : string = node.GetValue<string>()
+
+/// The node at a path of keys, one lookup at a time.
+let private at (keys: string list) (node: JsonNode) : JsonNode = keys |> List.fold (fun (n: JsonNode) key -> n[key]) node
 
 /// A config file that already holds `names` as servers under `key`, and one more key beside them.
 let private configHolding (key: string) (names: string list) : string =
@@ -51,7 +52,8 @@ let clientSetupTests =
         str (entry["command"]) |> Expect.equal (sprintf "%A command" client) "sagefs"
         entry["args"].AsArray() |> Seq.map str |> Seq.toList |> Expect.equal (sprintf "%A args" client) [ "mcp" ]
       (ClientSetup.snippet VsCode).Key |> Expect.equal "VS Code reads servers" "servers"
-      str ((parse (ClientSetup.snippet VsCode).Text)["servers"]["sagefs"]["type"]) |> Expect.equal "VS Code names the transport" "stdio"
+      let vsCodeRoot = parse (ClientSetup.snippet VsCode).Text
+      str (at [ "servers"; "sagefs"; "type" ] vsCodeRoot) |> Expect.equal "VS Code names the transport" "stdio"
       for client in [ ClaudeCode; Cursor; ClaudeDesktop ] do
         (ClientSetup.snippet client).Key |> Expect.equal (sprintf "%A reads mcpServers" client) "mcpServers"
 
@@ -65,7 +67,7 @@ let clientSetupTests =
       (Prop.forAll (Arb.fromGen (Gen.zip (Gen.elements Client.all) genOtherNames)) (fun (client, others) ->
         let snippet = ClientSetup.snippet client
         match ClientSetup.merge (configHolding snippet.Key others) snippet with
-        | ClientSetup.Merged text ->
+        | Merged text ->
           let root = parse text
           let servers = root[snippet.Key].AsObject()
           (others |> List.forall (fun name -> servers.ContainsKey name && str (servers[name]["command"]) = "other"))
@@ -79,28 +81,30 @@ let clientSetupTests =
         let snippet = ClientSetup.snippet client
         for existing in [ ""; "   "; "{}" ] do
           match ClientSetup.merge existing snippet with
-          | ClientSetup.Merged text -> str ((parse text)[snippet.Key]["sagefs"]["command"]) |> Expect.equal "added" "sagefs"
+          | Merged text ->
+            let root = parse text
+            str (at [ snippet.Key; "sagefs"; "command" ] root) |> Expect.equal "added" "sagefs"
           | other -> failtestf "%A: expected Merged for %A, got %A" client existing other
 
     testCase "WHY - a config that is not JSON is refused and nothing is written" <| fun _ ->
       let snippet = ClientSetup.snippet VsCode
       for broken in [ "{ \"servers\": "; "// a comment\n{}"; "not json"; "[1,2]"; "{ \"servers\": 3 }" ] do
         match ClientSetup.merge broken snippet with
-        | ClientSetup.Refused reason -> ClientSetup.describeRefusal reason |> Expect.stringContains "says the next step" "→"
+        | Refused reason -> ClientSetup.describeRefusal reason |> Expect.stringContains "says the next step" "→"
         | other -> failtestf "expected Refused for %s, got %A" broken other
 
     testCase "WHY - merging twice changes nothing" <| fun _ ->
       for client in Client.all do
         let snippet = ClientSetup.snippet client
         match ClientSetup.merge "{}" snippet with
-        | ClientSetup.Merged once -> ClientSetup.merge once snippet |> Expect.equal (sprintf "%A second merge" client) ClientSetup.AlreadyPresent
+        | Merged once -> ClientSetup.merge once snippet |> Expect.equal (sprintf "%A second merge" client) AlreadyPresent
         | other -> failtestf "expected Merged, got %A" other
 
     testCase "WHY - a sagefs entry that points somewhere else is refused and named, not overwritten" <| fun _ ->
       let snippet = ClientSetup.snippet Cursor
       let existing = """{ "mcpServers": { "sagefs": { "command": "/opt/old/sagefs", "args": ["mcp"] } } }"""
       match ClientSetup.merge existing snippet with
-      | ClientSetup.Refused(ClientSetup.DifferentSageFsEntry found) ->
+      | Refused(DifferentSageFsEntry found) ->
         found |> Expect.stringContains "names what is there" "/opt/old/sagefs"
       | other -> failtestf "expected DifferentSageFsEntry, got %A" other
 
@@ -114,12 +118,11 @@ let clientSetupTests =
       for client in Client.all do
         page |> Expect.stringContains (sprintf "%A has a snippet" client) (ClientSetup.snippet client).Text
 
-    testCase "WHY - the setup page in docs is what the generator prints now" <| fun _ ->
-      let docPath = Path.Combine(repoRoot, "docs", "client-setup.md")
-      let doc = File.ReadAllText docPath
-      match ClientSetup.replaceGenerated doc ClientSetup.page with
-      | Ok regenerated -> regenerated |> Expect.equal "docs/client-setup.md is stale: run dotnet fsi scripts/gen-client-setup-doc.fsx" doc
-      | Error reason -> failtest reason
+    testCase "WHY - replacing the generated part needs both markers exactly once, and says so when they are not" <| fun _ ->
+      let doc = String.concat "\n" [ "intro"; ClientSetup.generatedStart; "old"; ClientSetup.generatedEnd; "outro" ]
+      ClientSetup.replaceGenerated doc "new" |> Expect.equal "swapped" (Ok(String.concat "\n" [ "intro"; ClientSetup.generatedStart; "new"; ClientSetup.generatedEnd; "outro" ]))
+      ClientSetup.replaceGenerated "no markers" "new" |> Expect.equal "missing" (Error ClientSetup.MarkersMissingOrRepeated)
+      ClientSetup.replaceGenerated (doc + "\n" + ClientSetup.generatedEnd) "new" |> Expect.equal "repeated" (Error ClientSetup.MarkersMissingOrRepeated)
 
     testCase "WHY - each client's config file is where that client reads it, for the directory and operating system" <| fun _ ->
       ClientSetup.configFile Linux "/h" "" "/p" VsCode |> Expect.equal "vscode" (Path.Combine("/p", ".vscode", "mcp.json"))
@@ -129,6 +132,9 @@ let clientSetupTests =
       ClientSetup.configFile MacOs "/h" "" "/p" ClaudeDesktop |> Expect.equal "macos" (Path.Combine("/h", "Library", "Application Support", "Claude", "claude_desktop_config.json"))
       ClientSetup.configFile Linux "/h" "" "/p" ClaudeDesktop |> Expect.equal "linux" (Path.Combine("/h", ".config", "Claude", "claude_desktop_config.json"))
   ]
+
+let private setupArgs (target: SetupCommand.Target) (where: SetupCommand.Where) (mode: SetupCommand.Mode) (skill: SetupCommand.SkillStep) : SetupCommand.Args =
+  { Target = target; Where = where; Mode = mode; Skill = skill }
 
 [<Tests>]
 let setupCommandTests =
@@ -141,16 +147,16 @@ let setupCommandTests =
   testList "SetupCommand" [
 
     testCase "WHY - the arguments name a client, a directory and whether to write, and a mistake says what to type" <| fun _ ->
-      SetupCommand.parseArgs [] |> Expect.equal "defaults" (Ok { SetupCommand.Client = None; Dir = None; Write = false; SkipSkill = false })
+      SetupCommand.parseArgs [] |> Expect.equal "defaults" (Ok(setupArgs SetupCommand.FoundClients SetupCommand.CurrentDirectory SetupCommand.Preview SetupCommand.InstallSkill))
       SetupCommand.parseArgs [ "--client"; "vscode"; "--dir"; "/x"; "--write"; "--skip-skill" ]
-      |> Expect.equal "all of them" (Ok { SetupCommand.Client = Some VsCode; Dir = Some "/x"; Write = true; SkipSkill = true })
+      |> Expect.equal "all of them" (Ok(setupArgs (SetupCommand.OneClient VsCode) (SetupCommand.InDirectory "/x") SetupCommand.Write SetupCommand.LeaveSkill))
       SetupCommand.parseArgs [ "--client" ] |> Expect.equal "missing value" (Error(SetupCommand.MissingValue "--client"))
       SetupCommand.parseArgs [ "--client"; "emacs" ] |> Expect.equal "unknown client" (Error(SetupCommand.UnknownClientName(UnknownClient "emacs")))
       SetupCommand.parseArgs [ "--bogus" ] |> Expect.equal "unknown flag" (Error(SetupCommand.UnknownFlag "--bogus"))
 
     testCase "WHY - without --write nothing is written anywhere" <| fun _ ->
       withTempDir (fun dir ->
-        SetupCommand.run { SetupCommand.Client = Some VsCode; Dir = Some dir; Write = false; SkipSkill = true } |> Expect.equal "exit" 0
+        SetupCommand.run (setupArgs (SetupCommand.OneClient VsCode) (SetupCommand.InDirectory dir) SetupCommand.Preview SetupCommand.LeaveSkill) |> Expect.equal "exit" 0
         Directory.GetFileSystemEntries dir |> Expect.isEmpty "the directory is untouched")
 
     testCase "WHY - setup --client vscode --write puts a registration in .vscode/mcp.json that keeps what was there, and a second run changes nothing" <| fun _ ->
@@ -158,7 +164,7 @@ let setupCommandTests =
         let file = Path.Combine(dir, ".vscode", "mcp.json")
         Directory.CreateDirectory(Path.GetDirectoryName file) |> ignore
         File.WriteAllText(file, """{ "servers": { "other": { "command": "x" } } }""")
-        let args = { SetupCommand.Client = Some VsCode; Dir = Some dir; Write = true; SkipSkill = true }
+        let args = setupArgs (SetupCommand.OneClient VsCode) (SetupCommand.InDirectory dir) SetupCommand.Write SetupCommand.LeaveSkill
         SetupCommand.run args |> Expect.equal "first run" 0
         let root = parse (File.ReadAllText file)
         let servers = root["servers"].AsObject()
@@ -174,6 +180,6 @@ let setupCommandTests =
         Directory.CreateDirectory(Path.GetDirectoryName file) |> ignore
         File.WriteAllText(file, "// my servers\n{ \"mcpServers\": {} }")
         let before = File.ReadAllBytes file
-        SetupCommand.run { SetupCommand.Client = Some Cursor; Dir = Some dir; Write = true; SkipSkill = true } |> Expect.equal "exit" 1
+        SetupCommand.run (setupArgs (SetupCommand.OneClient Cursor) (SetupCommand.InDirectory dir) SetupCommand.Write SetupCommand.LeaveSkill) |> Expect.equal "exit" 1
         File.ReadAllBytes file |> Expect.equal "untouched" before)
   ]

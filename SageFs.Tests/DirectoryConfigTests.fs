@@ -31,9 +31,10 @@ let evaluateTests = Integration.hostList "DirectoryConfig.evaluate" [
     let config = evalOk """{ DirectoryConfig.empty with Load = AutoDetect }"""
     config.Load |> Expect.equal "should parse AutoDetect" AutoDetect)
 
-  testCase "loads initScript" (fun () ->
-    let config = evalOk """{ DirectoryConfig.empty with InitScript = Some "setup.fsx" }"""
-    config.InitScript |> Expect.equal "should parse initScript" (Some "setup.fsx"))
+  testCase "loads the garbage collector and the session environment" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with Gc = ServerGc; SessionEnv = [ "DOTNET_TieredPGO", "0" ] }"""
+    config.Gc |> Expect.equal "should parse Gc" ServerGc
+    config.SessionEnv |> Expect.equal "should parse SessionEnv" [ "DOTNET_TieredPGO", "0" ])
 
   testCase "loads defaultArgs" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with DefaultArgs = ["--no-warn:1182"; "--bare"] }"""
@@ -55,26 +56,23 @@ let evaluateTests = Integration.hostList "DirectoryConfig.evaluate" [
     let config = evalOk """
 { DirectoryConfig.empty with
     Load = Solution "BigApp.slnx"
-    InitScript = Some "bootstrap.fsx"
-    DefaultArgs = ["--no-watch"] }"""
+    Gc = ServerGc
+    DefaultArgs = ["--no-warn:1182"] }"""
     config.Load |> Expect.equal "load strategy" (Solution "BigApp.slnx")
-    config.InitScript |> Expect.equal "initScript" (Some "bootstrap.fsx")
-    config.DefaultArgs |> Expect.equal "defaultArgs" ["--no-watch"])
+    config.Gc |> Expect.equal "gc" ServerGc
+    config.DefaultArgs |> Expect.equal "defaultArgs" ["--no-warn:1182"])
 
   testCase "empty expression returns defaults" (fun () ->
     let config = evalOk "DirectoryConfig.empty"
     config |> Expect.equal "should return empty defaults" DirectoryConfig.empty
     config.AutoOpenNamespaces |> Expect.equal "AutoOpenNamespaces defaults to true" true
-    config.IsRoot |> Expect.equal "IsRoot defaults to false" false
-    config.SessionName |> Expect.equal "SessionName defaults to None" None)
+    config.Gc |> Expect.equal "Gc defaults to Workstation" WorkstationGc
+    config.SessionEnv |> Expect.isEmpty "SessionEnv defaults to empty")
 
-  testCase "loads isRoot override" (fun () ->
-    let config = evalOk """{ DirectoryConfig.empty with IsRoot = true }"""
-    config.IsRoot |> Expect.equal "should parse IsRoot" true)
-
-  testCase "loads sessionName" (fun () ->
-    let config = evalOk """{ DirectoryConfig.empty with SessionName = Some "my-service" }"""
-    config.SessionName |> Expect.equal "should parse SessionName" (Some "my-service"))
+  testCase "a config that still sets a removed field does not evaluate" (fun () ->
+    for field in [ "InitScript = Some \"init.fsx\""; "IsRoot = true"; "SessionName = Some \"x\"" ] do
+      DirectoryConfig.evaluate (sprintf "{ DirectoryConfig.empty with %s }" field)
+      |> Expect.isError (sprintf "%s is not a field any more" field))
 
   testCase "loads valueWalk override" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with ValueWalk = WalkOff }"""
@@ -223,23 +221,22 @@ let configHostTests =
 
     testCase "the full record round-trips: every field reaches the daemon" (fun () ->
       let script =
-        """{ DirectoryConfig.empty with Load = Projects ["A.fsproj"]; InitScript = Some "init.fsx"; DefaultArgs = ["--x"]; AutoOpenNamespaces = false; IsRoot = true; SessionName = Some "demo"; ValueWalk = WalkEverything }"""
+        """{ DirectoryConfig.empty with Load = Projects ["A.fsproj"]; DefaultArgs = ["--x"]; AutoOpenNamespaces = false; Gc = ServerGc; SessionEnv = [ "A", "1" ]; ValueWalk = WalkEverything }"""
       match ConfigHost.evaluate Environment.CurrentDirectory script with
       | Ok config ->
         config
         |> Expect.equal
              "all fields"
              { Load = Projects [ "A.fsproj" ]
-               InitScript = Some "init.fsx"
                DefaultArgs = [ "--x" ]
                AutoOpenNamespaces = false
-               IsRoot = true
-               SessionName = Some "demo"
+               Gc = ServerGc
+               SessionEnv = [ "A", "1" ]
                ValueWalk = WalkEverything }
       | Error error -> failtest (ConfigHost.describeError error))
 
     testCase "the same script text is evaluated once: the second answer is cached and identical" (fun () ->
-      let script = """{ DirectoryConfig.empty with SessionName = Some "cached-demo" }"""
+      let script = """{ DirectoryConfig.empty with DefaultArgs = [ "--cached-demo" ] }"""
       let first = ConfigHost.evaluate Environment.CurrentDirectory script
       let second = ConfigHost.evaluate Environment.CurrentDirectory script
       second |> Expect.equal "same result" first

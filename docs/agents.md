@@ -131,7 +131,19 @@ Details are in Claude Code's
 
 ## 3. Connect the MCP server
 
-Point your agent at `http://localhost:37749/` (streamable HTTP), or
+Register the stdio bridge. In Claude Code that is one command, for every project:
+
+```bash
+claude mcp add --scope user sagefs -- sagefs mcp
+```
+
+`sagefs setup` prints the registration for each client it finds (Claude Code, VS Code, Cursor, Claude
+Desktop), and `sagefs setup --client vscode --write` merges it into that client's config file, keeping
+every other server in it and leaving a file it cannot parse alone. The snippet for each client, and why
+the stdio form keeps its tools across a daemon restart while an HTTP one does not, are on
+[client-setup.md](client-setup.md).
+
+A client that can only speak HTTP can point at `http://localhost:37749/` (streamable HTTP), or
 `http://localhost:37749/sse` for older clients. When an agent connects, SageFs
 sends it a short version of the rules, so even an agent without the skill gets
 the core of it. The skill is the full version, and you want both.

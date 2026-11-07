@@ -126,10 +126,9 @@ module DirectoryConfig =
           // the default except for AutoOpenNamespaces.
           let isBareOptOut =
             cfg.Load = empty.Load
-            && cfg.InitScript = empty.InitScript
             && cfg.DefaultArgs = empty.DefaultArgs
-            && cfg.IsRoot = empty.IsRoot
-            && cfg.SessionName = empty.SessionName
+            && cfg.Gc = empty.Gc
+            && cfg.SessionEnv = empty.SessionEnv
             && cfg.ValueWalk = empty.ValueWalk
           match isBareOptOut with
           | true ->
