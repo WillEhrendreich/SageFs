@@ -49,7 +49,10 @@ let private withHarness (run: Harness -> (SessionProxy) -> Task) : Task =
     let callbacks =
       { SessionManagerCallbacks.silent with
           OnTestDiscovery = fun _ _ -> discoveries.Release() |> ignore
-          OnInstrumentationMaps = fun _ _ -> maps.Release() |> ignore }
+          OnInstrumentationMaps = fun _ _ -> maps.Release() |> ignore
+          // The landing gate drives this session, so a save that puts it behind starts no level of its own: these cases are
+          // about what a refetch does, and a level would add asks of its own to the tally.
+          WhoDrives = fun _ -> SessionDriver.LandingGate }
     let mailbox, _ = createWithAlarm (mkRuntime ()) cancellation.Token callbacks
     let proxy : SessionProxy =
       fun (msg: WorkerMessage) ->

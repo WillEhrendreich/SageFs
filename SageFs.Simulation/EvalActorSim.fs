@@ -162,6 +162,9 @@ module EvalActorSim =
       | Activity.Idle | Activity.Evaluating _ | Activity.Cancelling _ | Activity.Reset _ -> { state with Activity = Activity.Idle }
     | EvalDecision.MarkHostCrashed crash -> { state with Activity = Activity.HostCrashed(state.Generation, crash) }
     | EvalDecision.IgnoreHostEnd -> state
+    // A level is not scripted here (`ReplLevelSim` folds it, with the gate and the daemon around it); a refused one changes nothing.
+    | EvalDecision.RunLevel
+    | EvalDecision.DeferLevel _ -> state
     | EvalDecision.DropSupersededFinished -> state
     | EvalDecision.AdvanceGenerationAndReset ->
       let g' = SessionGeneration.next state.Generation

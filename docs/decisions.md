@@ -1239,8 +1239,28 @@ Reopen it if: the FSI host can apply a delta and keep its coverage. The first co
 entry stale: the daemon re-fetches maps and discovery after every in-worker host swap now (`SageFs.Core/SessionRefetch.fs`, the one op
 every reset caller wires, with `WorkerPostReady.RefetchGate` refusing a session whose worker is not settled and dropping an answer from a
 worker that has since been replaced), pinned by `SageFs.Tests/WorkerPostReadyRefetchTests.fs` and `SageFs.Tests/SwapRefetchTests.fs`.
-What still blocks the automatic refresh is the other two pieces named above: the actor-side idle-and-empty check, and the host's in-flight
+What still blocked the automatic refresh was the other two pieces named above: the actor-side idle-and-empty check, and the host's in-flight
 test count.
+
+**Built (2026-11-07): the session levels its own host when that loses nothing.** A save that puts the REPL behind its app now makes
+the manager ask the worker to replace its FSI host (`WorkerMessage.LevelRepl`), in the background, and the state is `Leveling` until
+the worker has answered and the daemon holds the new host's tests and maps (`ReplFreshness.Leveling`; on the wire it is still
+`BehindApp`, with its own message, so no client had to learn a fourth state). The worker's rule is one pure function,
+`ReplLeveling.decide`, and it says yes only when no eval is running, the REPL has started no eval of its own since the host was built,
+no init script defined anything in it, no buffer's live tests point at it and no test run is in flight. The eval actor makes the check
+in the same message as the reset (`EvalLevel`), so no eval can start between them, and the router cancels nothing for it: the point is
+that nothing was running. The test runs are the worker's own gate (`TestRunGate`, held by `RunTests`, `EvalLiveTestFile` and the streamed
+run): a level asked while a run is in flight waits for it, and a run that arrives while a level is pending
+or under way waits for the level and runs on the new host. A test held for a debugger counts as a run in flight that the level
+refuses on instead of waiting for, because an editor may hold it as long as it likes and a level waiting for it would hold every
+other run back. A refusal is `CannotLevel` and names what stopped it (`blockedBy` on the wire).
+The landing gate's session is never leveled. What the actor counts as "the REPL's own evals" excludes the hot reload's `#load`, because a
+new host is built from the saved file; it is a count of evals started since the host was built, and not `EvalStats.EvalCount`, which a
+reset does not clear. Every in-worker hard reset that resolves Ok, whoever asked for it, now also brings a session that was behind
+to `Leveling` and then level: the editor's reset used to leave the banner up after a successful reset.
+Evidence: `SageFs.Core/ReplLeveling.fs`, `SageFs.Core/LevelKeeper.fs`, `SageFs.Core/SessionManager.fs` (`settleLeveling`),
+`SageFs.Tests/ReplLevelingTests.fs`, `ReplFreshnessTests.fs`, `LevelKeeperTests.fs`, `SessionManagerLevelOutcomeTests.fs`,
+`ReplLevelSimTests.fs` (the simulation, five invariants and seven twins) and `RunAppDeltaTests.fs` (`run_app repl leveling`).
 ## A run_tests receipt says whether the build it ran against is behind the files on disk
 
 Nehemiah edited a test file on disk, did not rebuild, and called `run_tests`. The receipt said `3 passed` and nothing else. I

@@ -268,6 +268,13 @@ let handleMessage
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Warmup
       return WorkerResponse.HardResetResult(replyId, result)
 
+    // The worker's own `run` answers this before a message gets here, with its test-run gate and its run-test slot in the
+    // facts. A host with neither (a test harness) has no runs and no buffer tests to lose, so the actor alone decides.
+    | WorkerMessage.LevelRepl replyId ->
+      let outside : OutsideFacts = { DynamicTests = DynamicTests.Absent; TestRuns = TestRuns.Idle }
+      let! answer = actor.PostAndAsyncReply(fun rc -> LevelSession(outside, rc))
+      return WorkerResponse.LevelResult(replyId, answer)
+
     | WorkerMessage.GetStatus replyId ->
       let status = getStatus ()
       let stats = getStats ()
@@ -758,6 +765,16 @@ let run (sessionId: string) (requestedPort: int) = async {
         | found -> return found }
     | None -> projectRunTest
   let setDynamicRunTest v = System.Threading.Interlocked.Exchange(latestDynamicRunTest, Some v) |> ignore
+
+  // The test-run gate, and the level that waits for it. Tests an editor buffer defined in the host are in the slot above, so
+  // a set slot means the host holds something a reset would lose.
+  let levelKeeper =
+    LevelKeeper(
+      actor,
+      fun () ->
+        match System.Threading.Volatile.Read(&latestDynamicRunTest.contents) with
+        | Some _ -> DynamicTests.Defined
+        | None -> DynamicTests.Absent)
 
   // Live-testing-asyoutype-plan.md Brief 3 (the keystone): the live-merged
   // discovery view + identity-preserving buffer-eval handler. Factored out
@@ -2240,9 +2257,30 @@ let run (sessionId: string) (requestedPort: int) = async {
       use cts = new CancellationTokenSource(Timeouts.appChangeAwait)
       return! AppRunner.awaitChange appRunner runId cts.Token |> Async.AwaitTask } }
 
+  // A test held for a debugger runs in the host until the hold ends, so a level must not replace the host under it. The hold is not
+  // a gate entry (the editor may take as long as it likes, and a level waiting for it would hold every other run back): beginning
+  // it enters the gate for the length of the call, sets the keeper's debug hold before leaving, and the level refuses on it.
   let debugTests : DebugTestHandlers = {
-    Begin = fun test -> result.Agent.DebugBegin test
-    Continue = fun ticket park -> result.Agent.DebugContinue ticket park
+    Begin = fun test ->
+      async {
+        let! hold = levelKeeper.Hold.Hold()
+        use _hold = hold
+        let! reply = result.Agent.DebugBegin test
+        match reply with
+        | HostAgent.AgentAnswered (HostAgent.TestDebug.DebugBegin.Held _) -> levelKeeper.SetDebugHold DebugHold.HoldsATest
+        | HostAgent.AgentAnswered (HostAgent.TestDebug.DebugBegin.Unsupported _)
+        | HostAgent.AgentUnavailable _ -> ()
+        return reply
+      }
+    Continue = fun ticket park ->
+      async {
+        let! reply = result.Agent.DebugContinue ticket park
+        match reply with
+        | HostAgent.AgentAnswered HostAgent.TestDebug.DebugProgress.StillRunning -> ()
+        | HostAgent.AgentAnswered (HostAgent.TestDebug.DebugProgress.Ended _)
+        | HostAgent.AgentUnavailable _ -> levelKeeper.SetDebugHold DebugHold.HoldsNothing
+        return reply
+      }
   }
 
   /// Run the save pipeline over the files a landing moved, one at a time and in the order given, and say what it said about each.
@@ -2293,12 +2331,27 @@ let run (sessionId: string) (requestedPort: int) = async {
     }
 
   // Signal readiness over the pipe
-  let handler =
+  let ungatedHandler =
     handleMessage actor result.GetSessionStatus result.GetEvalStats result.GetStatusMessage result.ProjectRoles
       getRunTest setDynamicRunTest getInitialDiscovery evalLiveTestFile appRuns debugTests
 
+  // The messages that run code in the FSI host for a test hold the gate while they do, so a level never replaces the host under one.
+  let handler (msg: WorkerMessage) : Async<WorkerResponse> =
+    match msg with
+    | WorkerMessage.RunTests _
+    | WorkerMessage.EvalLiveTestFile _ ->
+      async {
+        let! hold = levelKeeper.Hold.Hold()
+        use _hold = hold
+        return! ungatedHandler msg
+      }
+    | _ -> ungatedHandler msg
+
   let readyHandler (msg: WorkerMessage) = async {
     match msg with
+    | WorkerMessage.LevelRepl(replyId) ->
+      let! answer = levelKeeper.Level()
+      return WorkerResponse.LevelResult(replyId, answer)
     | WorkerMessage.GetInstrumentationMaps(replyId) ->
       // The LIVE holder, not the array frozen at actor creation: an in-worker hard reset
       // re-instruments a fresh copy and writes the holder (AppState's EvalHardReset), so the
@@ -2375,7 +2428,8 @@ let run (sessionId: string) (requestedPort: int) = async {
     else
       Log.info "Hot reload: off by default (0 files watched)"
     let! server =
-      WorkerHttpTransport.startServerWithShutdown
+      WorkerHttpTransport.startServerGated
+        levelKeeper.Hold
         (fun () -> try cts.Cancel() with :? ObjectDisposedException -> ())
         reservation.Release
         readyHandler result.HotReloadStateRef keptStateAccess projectFiles result.GetWarmupContext getRunTest result.Agent.TakeCoverage port

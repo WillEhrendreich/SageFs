@@ -48,6 +48,9 @@ module HttpWorkerClient =
     | WorkerMessage.HardResetSession(rebuild, rid) ->
       "POST", "/hard-reset",
       Some (Serialization.serialize {| rebuild = rebuild; replyId = rid |})
+    | WorkerMessage.LevelRepl rid ->
+      "POST", "/level-repl",
+      Some (Serialization.serialize {| replyId = rid |})
     | WorkerMessage.RunTests(tests, maxParallelism, rid) ->
       "POST", "/run-tests",
       Some (Serialization.serialize {| tests = tests; maxParallelism = maxParallelism; replyId = rid |})

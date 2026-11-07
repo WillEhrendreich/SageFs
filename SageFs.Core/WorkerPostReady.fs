@@ -136,12 +136,18 @@ module WorkerPostReady =
         onFailed ex.Message
     }
 
-  /// Fetch the instrumentation maps and publish them when there are any.
-  let fetchInstrumentationMaps
+  /// Whether a fetch reached the worker and got an answer it could use.
+  [<RequireQualifiedAccess>]
+  type RefetchOutcome =
+    | Refetched
+    | RefetchFailed of reason: string
+
+  /// Fetch the instrumentation maps and publish them when there are any. The answer says whether the worker was reached.
+  let fetchInstrumentationMapsChecked
     (label: string)
     (proxy: SessionProxy)
     (publish: Features.LiveTesting.InstrumentationMap array -> unit)
-    : Async<unit> =
+    : Async<RefetchOutcome> =
     async {
       try
         let rid = Guid.NewGuid().ToString("N")
@@ -152,10 +158,20 @@ module WorkerPostReady =
         // InstrumentationMapsResult, has nothing to publish: WorkerResponse is
         // the same 18-case wire DU as above.
         | _ -> ()
+        return RefetchOutcome.Refetched
       with ex ->
         Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "instrumentation_maps" :> obj))
         Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s\n%s" label ex.Message (stackOf ex)
+        return RefetchOutcome.RefetchFailed (sprintf "fetching the instrumentation maps failed (%s)" ex.Message)
     }
+
+  /// The same, for a caller that does not need to know.
+  let fetchInstrumentationMaps
+    (label: string)
+    (proxy: SessionProxy)
+    (publish: Features.LiveTesting.InstrumentationMap array -> unit)
+    : Async<unit> =
+    fetchInstrumentationMapsChecked label proxy publish |> Async.Ignore
 
   /// Real health probe: one `GetStatus` round-trip over the worker's own
   /// proxy, hard-timed out via `Async.StartChild`'s timeout overload. Any
@@ -258,6 +274,30 @@ module WorkerPostReady =
     Async.Start(fetchInitialDiscovery f.Label f.Proxy f.OnDiscoveryResponse f.OnDiscoveryFailed, f.Cancel)
     Async.Start(fetchInstrumentationMaps f.Label f.Proxy f.PublishInstrumentationMaps, f.Cancel)
 
+  /// The same two fetches, awaited: the answer says whether both were made, so a caller that must not say "level" before
+  /// the daemon holds the new host's tests and maps can wait for it. Each answer is handed to `answered` as it arrives. A
+  /// fetch that threw is the failure, with the exception's text; an empty maps answer is an answer.
+  let refetchAwaiting (label: string) (proxy: SessionProxy) (answered: RefetchedState -> unit) : Async<RefetchOutcome> =
+    async {
+      let discoveryOutcome = ref RefetchOutcome.Refetched
+      let onDiscoveryFailed (reason: string) =
+        discoveryOutcome.Value <- RefetchOutcome.RefetchFailed (sprintf "fetching the tests failed (%s)" reason)
+        answered (RefetchedState.DiscoveryFailed reason)
+      let discovery =
+        async {
+          do! fetchInitialDiscovery label proxy (fun response -> answered (RefetchedState.Discovery response)) onDiscoveryFailed
+          return discoveryOutcome.Value
+        }
+      let maps = fetchInstrumentationMapsChecked label proxy (fun found -> answered (RefetchedState.InstrumentationMaps found))
+      let! both = Async.Parallel [ discovery; maps ]
+      return
+        both
+        |> Array.tryPick (function
+          | RefetchOutcome.RefetchFailed reason -> Some (RefetchOutcome.RefetchFailed reason)
+          | RefetchOutcome.Refetched -> None)
+        |> Option.defaultValue RefetchOutcome.Refetched
+    }
+
   /// Start the watchdog and both fetches. None of them is awaited.
   let launch (l: Launch) : unit =
     Async.Start(watchUntilReady l.Fetches.Label l.Fetches.Proxy l.Fetches.Cancel l.Outcomes, l.Fetches.Cancel)
@@ -294,6 +334,28 @@ module WorkerPostReady =
       | WorkerReadyCommit.ParkedSwap.Parked _, _ -> Error RefetchRefusal.SwapInProgress
       | WorkerReadyCommit.ParkedSwap.NoSwap, SessionLifecycleStatus.Ready handle -> Ok handle
       | WorkerReadyCommit.ParkedSwap.NoSwap, other -> Error(RefetchRefusal.WorkerNotReady other)
+
+    /// What the manager knows about a session before it asks its worker to level: the landing gate's sessions are never asked,
+    /// and a worker that is not Ready, or has a swap parked, is not asked either. The replacement is built from the current
+    /// build, REPL included, so nothing is lost by not asking.
+    let levelStanding (driver: SessionDriver) (status: SessionLifecycleStatus) (swap: WorkerReadyCommit.ParkedSwap<'S>) : LevelStanding =
+      match driver with
+      | SessionDriver.LandingGate -> LevelStanding.Unservable LevelBlocker.GateDriven
+      | SessionDriver.Everyone ->
+        match decide status swap with
+        | Ok handle -> LevelStanding.Servable handle.Pid
+        | Error RefetchRefusal.SwapInProgress -> LevelStanding.Unservable LevelBlocker.SwapInProgress
+        | Error (RefetchRefusal.WorkerNotReady _)
+        | Error RefetchRefusal.NoSuchSession -> LevelStanding.Unservable LevelBlocker.NotServing
+
+    /// An answer to a level ask belongs to the session for as long as the worker it was asked of is the worker the session names.
+    /// Unlike `judgeReply` it does not need the worker to be Ready: the answer is about that worker's own host, and a swap
+    /// parked behind it does not make the answer wrong.
+    let judgeLevelAnswer (askedWorkerPid: int) (status: SessionLifecycleStatus option) : ReplyFate =
+      match status |> Option.bind SessionLifecycleStatus.workerPid with
+      | Some pid when pid = askedWorkerPid -> ReplyFate.Current
+      | Some _
+      | None -> ReplyFate.Stale
 
     /// `None` is a session that is gone: nothing it was asked can still matter.
     let judgeReply (askedWorkerPid: int) (session: (SessionLifecycleStatus * WorkerReadyCommit.ParkedSwap<'S>) option) : ReplyFate =

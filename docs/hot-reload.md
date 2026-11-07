@@ -682,12 +682,21 @@ I'd rather you hear this from me than find it at 11pm.
   the reason when it could not be read), and it is a field in
   `get_session_status` and `list_sessions`, a warning line after the result of every
   `send_fsharp_code`, `check_fsharp_code` and `run_tests`, and a line on the
-  dashboard's session card. It clears when the worker is replaced. What brings it
-  level is `hard_reset_fsi_session` with `rebuild=true`, and the warning says what it
-  costs: it replaces the worker, so the running app stops with it and its in-memory
-  state is lost, and `run_app` starts it again. I did not make that automatic, and the
+  dashboard's session card. It clears when the worker is replaced. The session also
+  brings the REPL level by itself, in the background, when that loses nothing: no eval
+  is running, the REPL has run none of your own evals since it was built, an init
+  script defined nothing in it, no editor buffer's live tests are in it and no test run
+  is in flight (one in flight finishes first). It replaces the FSI host and leaves the
+  app's process and state alone, which takes about 2 seconds, and the state reads
+  `BehindApp` with a message saying it is being brought level until the tests and
+  coverage maps have been fetched again. When something would be lost it does
+  nothing, and `blockedBy` on the state lists what stopped it (`ReplHoldsDefinitions`,
+  `InitScriptDefined`, `LiveTestsDefined`, `EvalRunning`, `TestsRunning`, `GateDriven`,
+  and the rest). Then `hard_reset_fsi_session` with `rebuild=true` brings it level, and
+  the warning says what it costs: it replaces the worker, so the running app stops
+  with it and its in-memory state is lost, and `run_app` starts it again. The
   [decision](decisions.md#the-repl-is-behind-the-app-after-a-delta-and-the-session-says-so-instead-of-refreshing-it-behind-your-back)
-  says why.
+  says why the leveling is limited to the empty REPL.
 - **The build is the floor.** A save to a `run_app` app waits for `dotnet build`,
   1.6 to 2.4 seconds on my fixture, and everything after it is milliseconds. A
   detour has no build to wait for.

@@ -350,6 +350,10 @@ module WorkerProtocol =
     | LoadScript of filePath: string * replyId: string
     | ResetSession of replyId: string
     | HardResetSession of rebuild: bool * replyId: string
+    /// Bring the FSI host up to the build on disk, by a reset without a rebuild, if that loses nothing the user has in it (no
+    /// eval running, no definitions, no init script values, no buffer's tests, no test run: one in flight finishes first). The
+    /// answer says which.
+    | LevelRepl of replyId: string
     | GetStatus of replyId: string
     /// Pulled by the daemon on demand, AFTER an eval reply — never attached
     /// to one. Building the live-value snapshot (reflection walk + JSON) used
@@ -486,6 +490,8 @@ module WorkerProtocol =
     | EvalCancelled of wasRunning: bool
     | ResetResult of replyId: string * result: Result<unit, SageFsError>
     | HardResetResult of replyId: string * result: Result<string, SageFsError>
+    /// Reply to LevelRepl.
+    | LevelResult of replyId: string * answer: LevelAnswer
     | ScriptLoaded of replyId: string * result: Result<string, SageFsError>
     | TestRunResults of replyId: string * results: Features.LiveTesting.TestRunResult array
     | InitialTestDiscovery of tests: Features.LiveTesting.TestCase array * providers: Features.LiveTesting.ProviderDescription list
@@ -544,6 +550,7 @@ module WorkerProtocol =
       | WorkerMessage.CancelEval
       | WorkerMessage.ResetSession _
       | WorkerMessage.HardResetSession _
+      | WorkerMessage.LevelRepl _
       | WorkerMessage.GetStatus _
       | WorkerMessage.GetLiveValues _
       | WorkerMessage.SetValueWalk _
@@ -553,6 +560,44 @@ module WorkerProtocol =
       | WorkerMessage.DebugTestContinue _
       | WorkerMessage.SetSaveSource _
       | WorkerMessage.Shutdown -> false
+
+  /// Whether a reply says the worker replaced its FSI host.
+  [<RequireQualifiedAccess>]
+  type HostRebuild =
+    | HostRebuilt
+    | HostUntouched
+
+  /// What a reply says about the worker's FSI host. Every case is listed, so a new reply cannot slip by unconsidered.
+  [<RequireQualifiedAccess>]
+  module WorkerResponse =
+    /// A hard reset of the host that resolved Ok: the host now runs the build on disk.
+    let hostRebuild (response: WorkerResponse) : HostRebuild =
+      match response with
+      | WorkerResponse.HardResetResult(_, Result.Ok _) -> HostRebuild.HostRebuilt
+      | WorkerResponse.HardResetResult(_, Result.Error _)
+      | WorkerResponse.EvalResult _
+      | WorkerResponse.CheckResult _
+      | WorkerResponse.TypeCheckWithSymbolsResult _
+      | WorkerResponse.CompletionResult _
+      | WorkerResponse.ReferencesResult _
+      | WorkerResponse.StatusResult _
+      | WorkerResponse.LiveValuesResult _
+      | WorkerResponse.LiveMemberResult _
+      | WorkerResponse.EvalCancelled _
+      | WorkerResponse.ResetResult _
+      | WorkerResponse.LevelResult _
+      | WorkerResponse.ScriptLoaded _
+      | WorkerResponse.TestRunResults _
+      | WorkerResponse.InitialTestDiscovery _
+      | WorkerResponse.EvalLiveTestFileResult _
+      | WorkerResponse.InstrumentationMapsResult _
+      | WorkerResponse.AppRunResult _
+      | WorkerResponse.DebugTestAnswer _
+      | WorkerResponse.SaveSourceSet _
+      | WorkerResponse.SavesApplied _
+      | WorkerResponse.WorkerReady
+      | WorkerResponse.WorkerShuttingDown
+      | WorkerResponse.WorkerError _ -> HostRebuild.HostUntouched
 
   /// Wrapping helpers for `SessionProxy` — kept next to the type so every
   /// place that resolves a proxy from worker URLs (`SessionManagementOps.GetProxy`,
@@ -568,6 +613,20 @@ module WorkerProtocol =
         | true -> touch ()
         | false -> ()
         proxy msg
+
+    /// Wrap a proxy so a hard reset of the worker's own FSI host that resolves Ok calls `rebuilt` before the caller hears the
+    /// answer. The host is then built from the build on disk, so a session that was behind its app is being brought level,
+    /// whoever asked for the reset (an editor, the dashboard, a level). Nothing else the worker says is touched.
+    let observingHostRebuilds (rebuilt: unit -> unit) (proxy: SessionProxy) : SessionProxy =
+      fun msg ->
+        async {
+          let! response = proxy msg
+          // Only a hard reset is answered with a resolved `HardResetResult`, so the reply alone says it.
+          match WorkerResponse.hostRebuild response with
+          | HostRebuild.HostRebuilt -> rebuilt ()
+          | HostRebuild.HostUntouched -> ()
+          return response
+        }
 
   /// Metadata for a managed session — displayed in dashboard, stored in persistence.
   type SessionInfo = {

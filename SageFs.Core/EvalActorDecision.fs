@@ -76,6 +76,9 @@ type EvalInput =
   | Reset
   /// The FSI host of the session incarnation `forGeneration` ended, one way or the other.
   | HostEnded of forGeneration: SessionGeneration * HostEnd
+  /// The worker asks the session to bring its host up to the patched build, if that loses nothing. Unlike `Reset` it cancels
+  /// nothing: the point of it is that nothing was running.
+  | Level of owned: LevelOwned
 
 /// What to do about an `EvalInput`, given the actor's current generation
 /// and phase. A DU — not a bool/Option — so every route is a distinct,
@@ -99,6 +102,20 @@ type EvalDecision =
   /// A host end that changes nothing: a purposeful stop, the host of a session a reset already replaced, one the
   /// session already knows about, or one that arrives when there is no live session to move.
   | IgnoreHostEnd
+  /// Nothing the host holds would be lost: replace it, as a hard reset without a rebuild does.
+  | RunLevel
+  /// Something would be lost, and these are the things. Nothing changes.
+  | DeferLevel of LevelBlocker list
+
+/// What a session's phase says about leveling: only a live host that is idle can be replaced for nothing.
+let replActivityOf (phase: EvalPhase) : ReplActivity =
+  match phase with
+  | EvalPhase.Initializing
+  | EvalPhase.Faulted -> ReplActivity.NotServing
+  | EvalPhase.Active SessionActivity.Idle -> ReplActivity.Quiet
+  | EvalPhase.Active SessionActivity.Evaluating
+  | EvalPhase.Active SessionActivity.Cancelling -> ReplActivity.EvalInFlight
+  | EvalPhase.Active(SessionActivity.HostCrashed _) -> ReplActivity.HostGone
 
 /// The eval gate: can code be evaluated right now? Phase-based — no null
 /// checks, because a live Session/OutStream exist iff phase is Active.
@@ -158,6 +175,19 @@ let decide (generation: SessionGeneration) (phase: EvalPhase) (input: EvalInput)
     | true -> EvalDecision.ApplyFinished
     | false -> EvalDecision.DropSupersededFinished
   | EvalInput.Reset -> EvalDecision.AdvanceGenerationAndReset
+  | EvalInput.Level owned ->
+    // The one rule, `ReplLeveling.decide`, read against the activity the actor holds right now. The actor handles this in the
+    // same message as the reset it may lead to, so no eval can start between the check and the act.
+    match
+      ReplLeveling.decide
+        { Activity = replActivityOf phase
+          EvalsSinceHost = owned.Holds.EvalsSinceHost
+          InitScript = owned.Holds.InitScript
+          DynamicTests = owned.Outside.DynamicTests
+          TestRuns = owned.Outside.TestRuns }
+    with
+    | LevelVerdict.Level -> EvalDecision.RunLevel
+    | LevelVerdict.Deferred blockers -> EvalDecision.DeferLevel blockers
   | EvalInput.HostEnded(forGeneration, hostEnd) ->
     match hostEnd with
     // Our own stop, reset or restart: never a failure.
@@ -188,3 +218,19 @@ let activityAfterFinished (activity: SessionActivity) : SessionActivity =
   match activity with
   | HostCrashed _ -> activity
   | Idle | Evaluating | Cancelling -> Idle
+
+/// What `decide` said to a `Level`, as the verdict the actor acts on. `decide` returns only `RunLevel` or `DeferLevel` for it,
+/// and any other decision (which it never returns) is read as a session that is not serving, so nothing is reset on a guess.
+let levelVerdictOf (decision: EvalDecision) : LevelVerdict =
+  match decision with
+  | EvalDecision.RunLevel -> LevelVerdict.Level
+  | EvalDecision.DeferLevel blockers -> LevelVerdict.Deferred blockers
+  | EvalDecision.RunEval
+  | EvalDecision.RejectEval _
+  | EvalDecision.ServeQuery
+  | EvalDecision.AckCancel
+  | EvalDecision.ApplyFinished
+  | EvalDecision.DropSupersededFinished
+  | EvalDecision.AdvanceGenerationAndReset
+  | EvalDecision.MarkHostCrashed _
+  | EvalDecision.IgnoreHostEnd -> LevelVerdict.Deferred [ LevelBlocker.NotServing ]

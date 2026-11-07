@@ -218,17 +218,17 @@ let gateTests =
 
 [<Tests>]
 let gateMutationTests =
-  let gateOf (apply: (GateStanding -> GateStanding * GateEntry) -> GateStanding -> GateStanding * GateEntry) : Mutant<GateStanding -> GateStanding * GateEntry> =
-    { Name = "admits during a level"; Description = "a run arriving while a level is pending or under way is admitted"; Apply = apply }
+  let gateOf (name: string) (description: string) (apply: (GateStanding -> GateStanding * GateEntry) -> GateStanding -> GateStanding * GateEntry) : Mutant<GateStanding -> GateStanding * GateEntry> =
+    { Name = name; Description = description; Apply = apply }
   testList "TestRunGate mutants" [
     detectsOutputMutant
-      (gateOf (fun real standing ->
+      (gateOf "admits during a level" "a run arriving while a level is under way is admitted" (fun real standing ->
         match standing with
         | GateStanding.Leveling -> GateStanding.Leveling, GateEntry.Admitted
         | other -> real other))
       GateStanding.Leveling TestRunGate.enter (fun (_, entry) -> entry = GateEntry.Held)
     detectsOutputMutant
-      (gateOf (fun real standing ->
+      (gateOf "admits behind a pending level" "a run arriving while a level waits for the last run is admitted, so a stream of runs starves it" (fun real standing ->
         match standing with
         | GateStanding.LevelPending n -> GateStanding.LevelPending n, GateEntry.Admitted
         | other -> real other))

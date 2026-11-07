@@ -384,6 +384,80 @@ let runAppReplTests =
       }
   ]
 
+// -- the worker brings its own host level, or says what stopped it ----------------------------------------------------------------
+
+/// What the worker answers when asked to level its FSI host.
+let private askLevel (app: RunningApp) : Task<SageFs.LevelAnswer> = task {
+  match! app.Proxy (SageFs.WorkerProtocol.WorkerMessage.LevelRepl(Guid.NewGuid().ToString("N"))) |> Async.StartAsTask with
+  | SageFs.WorkerProtocol.WorkerResponse.LevelResult(_, answer) -> return answer
+  | other -> return failwithf "a level ask should be answered with LevelResult, got %A" other
+}
+
+/// The save every level case makes: the app serves the patched body, and the process id is the one it had.
+let private patchTheApp (app: RunningApp) : Task<string> = task {
+  let! pid = get app "pid"
+  let! _ = saveEdits app app.StateSource [ "\"closure:A\"", "\"closure:B\"" ]
+  let! served = settle app "closure" "closure:B!?"
+  served |> Expect.equal "the app serves the patched body" "closure:B!?"
+  return pid
+}
+
+[<Tests>]
+let runAppLevelingTests =
+  Integration.hostList "run_app repl leveling" [
+    for runtime in HostRuntime.all do
+      testTask (sprintf "[%s] a REPL nobody evaluated in is brought level by the worker on its own ask, in the same process" (HostRuntime.moniker runtime)) {
+        let! app = startRunApp runtime
+        try
+          let! pid = patchTheApp app
+          let watch = System.Diagnostics.Stopwatch.StartNew()
+          let! answer = askLevel app
+          let levelMs = watch.Elapsed.TotalMilliseconds
+          answer |> Expect.equal "leveled" SageFs.LevelAnswer.Leveled
+          let! level = replEval app "RunAppDeltaFixture.Handlers.closure ()"
+          level |> Expect.stringContains "the REPL now answers the patched body" "closure:B!?"
+          let! pidAfter = get app "pid"
+          pidAfter |> Expect.equal "the app kept its process" pid
+          eprintfn "REPL-LEVELING [%s] the worker's own level of an untouched REPL took %.0f ms, one run" (HostRuntime.moniker runtime) levelMs
+        finally
+          stop app
+      }
+
+      testTask (sprintf "[%s] a REPL that holds a definition is not leveled, the answer names the eval, and the definition and the old body are still there" (HostRuntime.moniker runtime)) {
+        let! app = startRunApp runtime
+        try
+          let! _ = patchTheApp app
+          let! defined = replEval app "let levelProbe = 41"
+          defined |> Expect.stringContains "the definition was made" "levelProbe"
+          let! answer = askLevel app
+          match answer with
+          | SageFs.LevelAnswer.LevelDeferred blockers ->
+            blockers |> Expect.contains "the eval is named" (SageFs.LevelBlocker.ReplHoldsDefinitions 1)
+          | other -> failtestf "a REPL with a definition must defer, got %A" other
+          let! kept = replEval app "levelProbe + 1"
+          kept |> Expect.stringContains "the definition survived" "42"
+          let! stale = replEval app "RunAppDeltaFixture.Handlers.closure ()"
+          stale |> Expect.stringContains "and the REPL is still on the old body, which the session keeps saying" "closure:A!?"
+        finally
+          stop app
+      }
+
+      testTask (sprintf "[%s] a REPL that an init script defined a value in is not leveled, and the answer names the script" (HostRuntime.moniker runtime)) {
+        let! app = startRunAppWithInitScript "let initValue = 7" runtime
+        try
+          let! _ = patchTheApp app
+          let! answer = askLevel app
+          match answer with
+          | SageFs.LevelAnswer.LevelDeferred [ SageFs.LevelBlocker.InitScriptDefined path ] ->
+            path |> Expect.stringContains "names the init script" "init.fsx"
+          | other -> failtestf "an init script's value must defer the level, got %A" other
+          let! kept = replEval app "initValue + 1"
+          kept |> Expect.stringContains "the script's value survived" "8"
+        finally
+          stop app
+      }
+  ]
+
 // -- what the route costs -------------------------------------------------------------------------------------------
 
 /// How many times each mode runs the call-heavy loop after a warm-up run.

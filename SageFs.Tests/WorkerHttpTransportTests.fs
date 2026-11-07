@@ -73,6 +73,13 @@ let routeMappingTests =
       method |> Expect.equal "method" "POST"
       path |> Expect.equal "path" "/hard-reset"
 
+    testCase "LevelRepl maps to POST /level-repl" <| fun _ ->
+      let method, path, body =
+        WorkerHttpTransport.toRoute (WorkerMessage.LevelRepl "lv1")
+      method |> Expect.equal "method" "POST"
+      path |> Expect.equal "path" "/level-repl"
+      body |> Expect.isSome "the reply id travels in the body"
+
     testCase "SetSaveSource maps to POST /save-source" <| fun _ ->
       let method, path, body =
         WorkerHttpTransport.toRoute (WorkerMessage.SetSaveSource(SageFs.Features.TrunkFollow.SaveSource.LandedOnly, "ss1"))
@@ -132,6 +139,8 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.ResetResult(rid, Ok ())
   | WorkerMessage.HardResetSession(_, rid) ->
     return WorkerResponse.HardResetResult(rid, Ok "Reset complete")
+  | WorkerMessage.LevelRepl rid ->
+    return WorkerResponse.LevelResult(rid, SageFs.LevelAnswer.LevelDeferred [ SageFs.LevelBlocker.ReplHoldsDefinitions 2 ])
   | WorkerMessage.RunTests(_, _, rid) ->
     return WorkerResponse.TestRunResults(rid, [||])
   | WorkerMessage.GetTestDiscovery rid ->
@@ -197,6 +206,20 @@ let httpRoundTripTests =
           rid |> Expect.equal "replyId" "s1"
           snap.Status |> Expect.equal "status" SessionStatus.Ready
           snap.EvalCount |> Expect.equal "eval count" 42
+        | other -> failwithf "unexpected: %A" other
+      finally
+        disposeServer server
+    }
+
+    testTask "LevelRepl round-trips through HTTP, with the blockers a deferral names" {
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+      try
+        let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
+        let! resp = proxy (WorkerMessage.LevelRepl "lv1") |> Async.StartAsTask
+        match resp with
+        | WorkerResponse.LevelResult(rid, answer) ->
+          rid |> Expect.equal "replyId" "lv1"
+          answer |> Expect.equal "the deferral and its blocker arrive intact" (SageFs.LevelAnswer.LevelDeferred [ SageFs.LevelBlocker.ReplHoldsDefinitions 2 ])
         | other -> failwithf "unexpected: %A" other
       finally
         disposeServer server

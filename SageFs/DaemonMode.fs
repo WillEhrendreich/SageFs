@@ -2254,6 +2254,9 @@ let run
   // stream attached so the app-output pane can filter on it.
   let mutable onAppOutputCallback : (string -> SageFs.AppOutput.Stream -> string -> unit) =
     fun _ _ _ -> ()
+  // Assigned after elmRuntime exists (below): whether the landing gate drives a session, which the manager must not level.
+  let mutable whoDrivesCallback : (WorkerProtocol.SessionId -> SessionDriver) =
+    fun _ -> SessionDriver.Everyone
   // Assigned after elmRuntime exists (below): when a session becomes ready,
   // auto-enable live testing if its workflow is LiveTesting, so a LiveTesting
   // session re-runs the affected tests as you type (debounced keystrokes) from
@@ -2275,6 +2278,7 @@ let run
           // Every route that stops a session (MCP, HTTP, the dashboard, the reaper, memory pressure) ends here.
           OnSessionRemoved = fun sid -> SessionOwners.release (WorkerProtocol.SessionId.value sid)
           OnAppOutput = fun sid stream line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) stream line
+          WhoDrives = fun sid -> whoDrivesCallback sid
           OnSupervisorAlarm = fun alarm -> Log.warn "[SessionManager] %s" (SupervisorWatchdog.describe alarm)
           OnSupervisorHealth = SupervisorHealthWatch.report }
 
@@ -2384,6 +2388,12 @@ let run
         match appOutputPending.TryGetValue sidStr with
         | true, pending -> appOutputPending.[sidStr] <- entry :: pending
         | false, _ -> appOutputPending.[sidStr] <- [ entry ])
+  // The cohort's integration session is driven by the landing gate alone; the manager never levels the REPL of such a session.
+  whoDrivesCallback <-
+    fun sid ->
+      match Set.contains (WorkerProtocol.SessionId.value sid) (elmRuntime.GetModel()).VerifyingSessions with
+      | true -> SessionDriver.LandingGate
+      | false -> SessionDriver.Everyone
 
   // The single owner of this daemon's implicit cohort (cohort-integration-plan.md
   // Slice 2, D1/D2/D4/D5): holds the live CohortState, appends every applied

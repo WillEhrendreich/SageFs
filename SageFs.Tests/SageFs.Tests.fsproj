@@ -457,6 +457,8 @@
          <Compile Include="SessionManagerRebuildOutcomeTests.fs" />
          <Compile Include="WorkerPostReadyRefetchTests.fs" />
          <Compile Include="SwapRefetchTests.fs" />
+         <Compile Include="SessionManagerLevelOutcomeTests.fs" />
+         <Compile Include="LevelKeeperTests.fs" />
          <Compile Include="SessionReloadTests.fs" />
          <Compile Include="ReplFreshnessTests.fs" />
          <Compile Include="ReplLevelingTests.fs" />
@@ -655,6 +657,7 @@
         <Compile Include="CohortSpecTests.fs" />
         <Compile Include="CohortVetoSpecTests.fs" />
         <Compile Include="EvalActorSimTests.fs" />
+        <Compile Include="ReplLevelSimTests.fs" />
         <Compile Include="FileReloadRoutingSimTests.fs" />
         <Compile Include="LiveTestFileRoutingTests.fs" />
         <Compile Include="LiveTestFileRoutingSimTests.fs" />

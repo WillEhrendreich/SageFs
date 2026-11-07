@@ -74,6 +74,10 @@
         <Compile Include="EvalActorSim.fs" />
         <Compile Include="EvalActorInvariants.fs" />
         <Compile Include="EvalActorGenerators.fs" />
+        <!-- Leveling the FSI host: the real eval-actor decision, the real test-run gate, the real freshness transitions. -->
+        <Compile Include="ReplLevelSim.fs" />
+        <Compile Include="ReplLevelInvariants.fs" />
+        <Compile Include="ReplLevelGenerators.fs" />
         <Compile Include="ExpectoCasesSim.fs" />
         <!-- Workflow-switch DST (outcome-gate-sweep.md Gap F): folds the real
              WorkerEventGuard pid-classification inside a faithful miniature

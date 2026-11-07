@@ -91,6 +91,11 @@ module SessionManager =
     | RefetchLiveTestingState of SessionId * AsyncReplyChannel<Result<unit, WorkerPostReady.RefetchRefusal>>
     /// A refetch's answer, tagged with the worker asked; dropped unless that worker still serves.
     | LiveTestingStateRefetched of SessionId * askedWorkerPid: int * WorkerPostReady.RefetchedState
+    /// What came of bringing a worker's host up to the build on disk: the worker's answer, and for `Leveled` only once the
+    /// tests and maps were fetched again. Tagged with the worker asked; an answer from one that no longer serves is dropped.
+    | LevelAnswered of SessionId * askedWorkerPid: int * LevelAnswer
+    /// A hard reset of the worker's own FSI host resolved Ok, whoever asked for it (seen on the session's proxy).
+    | HostRebuilt of SessionId * workerPid: int
     | WorkerSpawnFailed of SessionId * workerPid: int * string
     /// A worker went silent for longer than its attempt was given. Not a crash: the manager decides, by
     /// `StartEscalation`, whether to start it again with MORE patience or to give up and say what it waited for.
@@ -147,6 +152,9 @@ module SessionManager =
     Reaping: WorkerReaper.Book<AsyncReplyChannel<WorkerReaper.Settled>>
     /// Replacements held back until their old worker is gone: a session whose startup profile runs at load (#179).
     Respawns: RespawnAfterReap.Book<ManagedSession>
+    /// Sessions with a level, or the fetch after a rebuilt host, out to the worker of this pid. Keyed by the pid so that a
+    /// replaced worker's entry never counts against its successor.
+    Levels: Map<SessionId, int>
   }
 
   module ManagerState =
@@ -159,6 +167,7 @@ module SessionManager =
       ReadyWaiters = Map.empty
       Reaping = WorkerReaper.empty
       Respawns = RespawnAfterReap.empty
+      Levels = Map.empty
     }
 
     let addSession id session state =
@@ -556,6 +565,24 @@ module SessionManager =
         WorkerPostReady.launchFetches
           (WorkerPostReady.Fetches.answeringWith (SessionId.value id) proxy ct (fun answer -> inbox.Post(SessionCommand.LiveTestingStateRefetched(id, workerPid, answer))))
 
+      // Off the loop: ask the worker to level (or take it that something else just did) and fetch again (`LevelingFlow.work`),
+      // then answer through the mailbox with the pid asked.
+      let startLevelWork (id: SessionId) (workerPid: int) (proxy: SessionProxy) (levelWork: LevelWork) =
+        let onFetched answered = inbox.Post(SessionCommand.LiveTestingStateRefetched(id, workerPid, answered))
+        let work = LevelingFlow.work (SessionId.value id) proxy levelWork onFetched
+        Async.Start(async { let! answer = work in inbox.Post(SessionCommand.LevelAnswered(id, workerPid, answer)) }, ct)
+
+      // Move a session's freshness on, and send a level ask if the new state wants one. The one place that starts a level.
+      let settleLeveling (id: SessionId) (session: ManagedSession) (freshness: ReplFreshness) (state: ManagerState) : ManagerState =
+        let standing = WorkerPostReady.RefetchGate.levelStanding (callbacks.WhoDrives id) session.Info.Status (ManagerState.tryGetPendingSwap id state |> WorkerReadyCommit.ParkedSwap.ofOption)
+        let nextFreshness, start = ReplFreshness.beginLeveling freshness standing (LevelingFlow.flightOf state.Levels id session.Info.Status)
+        let moved = ManagerState.addSession id { session with Info = { session.Info with Freshness = nextFreshness } } state
+        match start with
+        | LevelStart.StartLevel pid ->
+          startLevelWork id pid session.Proxy LevelWork.AskWorker
+          { moved with Levels = Map.add id pid moved.Levels }
+        | LevelStart.NoStart -> moved
+
       // Answer callers parked by AwaitReady once their session is Ready or can
       // no longer become Ready — whichever step caused it.
       // ReadyWait is the one decision: a session that is Ready while a rebuild runs is not ready for
@@ -920,7 +947,9 @@ module SessionManager =
             | WorkerReadyCommit.Plan.Commit committed ->
                 // Commit point: the registry points at the NEW pid before the old
                 // worker is retired, so the old worker's exit is stale/inert (P2).
-                let stateAfterInstall = withoutWarmup (ManagerState.addSession id committed.Updated state)
+                // Whoever resets this worker's FSI host in place, the manager hears of it: a rebuilt host is a level one.
+                let installed = { committed.Updated with Proxy = SessionProxy.observingHostRebuilds (fun () -> inbox.Post(SessionCommand.HostRebuilt(id, workerPid))) proxy }
+                let stateAfterInstall = withoutWarmup (ManagerState.addSession id installed state)
                 let newState =
                   match committed.RetireOld with
                   | WorkerReadyCommit.RetireOld.Retire oldSession ->
@@ -1224,7 +1253,36 @@ module SessionManager =
 
         | SessionCommand.ReloadObserved(id, reload) ->
           match ManagerState.tryGetSession id state with
-          | Some session -> return ManagerState.addSession id { session with Info = { session.Info with Reload = reload; Freshness = ReplFreshness.observe session.Info.Freshness reload } } state
+          | Some session ->
+            // A save that puts the REPL behind its app also starts bringing it level, when that loses nothing.
+            let observed = { session with Info = { session.Info with Reload = reload } }
+            return settleLeveling id observed (ReplFreshness.observe session.Info.Freshness reload) state
+          | None -> return state
+
+        | SessionCommand.LevelAnswered(id, askedPid, answer) ->
+          match ManagerState.tryGetSession id state with
+          | None -> return state
+          | Some session ->
+            let withoutFlight = { state with Levels = LevelingFlow.landed state.Levels id askedPid }
+            match LevelingFlow.onAnswer askedPid session.Info.Status session.Info.Freshness answer with
+            | LevelingFlow.AnswerStep.Drop ->
+              Log.warn "[SessionManager] Dropping a level answer from worker pid %d for session %s: it is no longer the session's worker" askedPid (SessionId.value id)
+              return withoutFlight
+            | LevelingFlow.AnswerStep.Settle answered ->
+              Log.info "[SessionManager] Level answer for session %s: %A, the REPL is now %s" (SessionId.value id) answer (ReplFreshness.describe answered)
+              // A save that landed while this ran reopened the gap, and asks again.
+              let settled = settleLeveling id session answered withoutFlight
+              onSessionProgressChanged ()
+              return settled
+
+        | SessionCommand.HostRebuilt(id, workerPid) ->
+          match ManagerState.tryGetSession id state with
+          | Some session when SessionLifecycleStatus.workerPid session.Info.Status = Some workerPid && ReplFreshness.afterHostRebuilt session.Info.Freshness <> session.Info.Freshness ->
+            // The host is new and the daemon does not hold its tests and maps yet: fetch them, and say level when they are here.
+            startLevelWork id workerPid session.Proxy LevelWork.WorkerRebuiltItself
+            let moved = ManagerState.addSession id { session with Info = { session.Info with Freshness = ReplFreshness.afterHostRebuilt session.Info.Freshness } } state
+            return { moved with Levels = Map.add id workerPid moved.Levels }
+          | Some _
           | None -> return state
 
         | SessionCommand.UpdateSessionStatus(id, newStatus) ->
@@ -1480,6 +1538,8 @@ module SessionManager =
           | SessionCommand.WorkerWarmupProgress _
           | SessionCommand.WorkerAppOutput _
           | SessionCommand.ReloadObserved _
+          | SessionCommand.LevelAnswered _
+          | SessionCommand.HostRebuilt _
           | SessionCommand.UpdateSessionStatus _
           | SessionCommand.WorkerReportedReady _
           | SessionCommand.WorkerReportedFaulted _ -> ()

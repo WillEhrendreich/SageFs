@@ -232,7 +232,12 @@ let fileSize : (string * int) list =
     // hard-reset arm writes the FRESH shadow copy's maps into it so GetInstrumentationMaps stops
     // serving the creation-time array — a deliberate, reviewed fix, not silent accretion. Ratchet
     // back DOWN when this file is split; never bump to paper over drift.
-    "SageFs.Core/AppState.fs", 1987
+    // 1987 -> 2017: a one-time bump for leveling the REPL after a patch: the eval actor counts what the host holds
+    // (hostHolds, emptied by each reset), handles `EvalLevel` in one message with the reset it may lead to (the arm
+    // re-enters the hard reset, whose reply is now a function), and the router posts it without cancelling anything.
+    // The rule is ReplLeveling.fs and EvalActorDecision.fs. A deliberate, reviewed feature, not silent accretion.
+    // Ratchet back DOWN when this file is split; never bump to paper over drift.
+    "SageFs.Core/AppState.fs", 2017
     // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
     // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
     // reviewed feature, not silent accretion. Ratchet back DOWN when
@@ -291,13 +296,20 @@ let fileSize : (string * int) list =
     // net), below, which compiles before this file does.
     // 1552 -> 1550: the loop reports each session a command removed (SessionRemoval.fs, one call), and the
     // QuerySnapshot.fromManagerState alias of fromState went.
-    "SageFs.Core/SessionManager.fs", 1550
+    // 1550 -> 1610: a one-time bump for leveling the REPL after a patch (roadmap "Level the REPL after a patch without
+    // losing it"): the manager starts the level when a save puts the REPL behind (ReloadObserved), takes the worker's
+    // answer (LevelAnswered, judged by pid) and sees a hard reset of the host through the session's proxy (HostRebuilt),
+    // with the Levels field and the three commands. The work that asks the worker and the reads around it are already in
+    // LevelingFlow.fs and ReplLeveling.fs. A deliberate, reviewed feature, not silent accretion. Ratchet back DOWN when this
+    // file is split; never bump to paper over drift.
+    "SageFs.Core/SessionManager.fs", 1610
     // Added 2026-10-23 with the split of SessionManager.fs: SessionManagerCallbacks is the seam
     // between the loop and its callers, every event the manager tells the outside world, and it
     // does not reach into the loop, so it compiles before it. Set at the file's true size (measured
     // after the WorkerProtocol open it needs, which is what the first count missed).
     // 50 -> 39: TestDiscoveryReport moved to its own file, net of the OnSessionRemoved hook.
-    "SageFs.Core/SessionManagerCallbacks.fs", 39
+    // 39 -> 41: the WhoDrives hook (a session the landing gate drives is never leveled by the manager).
+    "SageFs.Core/SessionManagerCallbacks.fs", 41
     // Added with the Mcp.fs split (the file-size ratchet asked for it, as it did for SessionManager):
     // the bounded member-listing rung of the progressive map, pure formatter plus its session-routed
     // half. Set at the file's true size.

@@ -73,6 +73,29 @@ type LevelAnswer =
   /// The reset itself failed, or the worker could not be asked.
   | LevelFailed of reason: string
 
+module LevelAnswer =
+  /// What a hard reset of the host (the one a level performs) answers, as the level's answer.
+  let ofReset (result: Result<string, SageFsError>) : LevelAnswer =
+    match result with
+    | Result.Ok _ -> LevelAnswer.Leveled
+    | Result.Error error -> LevelAnswer.LevelFailed (SageFsError.describe error)
+
+/// Who drives a session's live loop, as far as leveling goes.
+[<RequireQualifiedAccess>]
+type SessionDriver =
+  /// The cohort's landing gate drives the session alone, and a reset in the middle of a verification would disturb it.
+  | LandingGate
+  /// A person, an agent, the file watcher: anyone else.
+  | Everyone
+
+/// What the work started for a session does first.
+[<RequireQualifiedAccess>]
+type LevelWork =
+  /// Ask the worker to level its host, then fetch the tests and maps again.
+  | AskWorker
+  /// Something else just replaced the host (a hard reset): only fetch again.
+  | WorkerRebuiltItself
+
 /// What the manager knows about the worker before it asks.
 [<RequireQualifiedAccess>]
 type LevelStanding =
@@ -103,6 +126,35 @@ type LevelFacts =
 type OutsideFacts =
   { DynamicTests: DynamicTests
     TestRuns: TestRuns }
+
+/// What the host holds of the user's, which the eval actor counts for itself: the evals started in this host since it was
+/// built (the REPL's own, never the hot reload's: a reset builds the host from the saved files) and the init script that
+/// ran in it. A reset empties both, because the host they lived in is gone.
+type HostHolds =
+  { EvalsSinceHost: int
+    InitScript: InitScript }
+
+module InitScript =
+  /// The init script that ran in the host, from the path the session recorded when it loaded one.
+  let ofLoaded (loadedPath: string option) : InitScript =
+    match loadedPath with
+    | Some path -> InitScript.Defined path
+    | None -> InitScript.Absent
+
+module HostHolds =
+  let empty : HostHolds = { EvalsSinceHost = 0; InitScript = InitScript.Absent }
+
+  /// An eval was started in the host with these arguments. The REPL's own evals are what a level would lose; a hot reload's
+  /// `#load` (marked `hotReload`) is not, because a new host is built from the saved file.
+  let afterEvalStarted (args: Map<string, obj>) (holds: HostHolds) : HostHolds =
+    match Map.containsKey "hotReload" args with
+    | true -> holds
+    | false -> { holds with EvalsSinceHost = holds.EvalsSinceHost + 1 }
+
+/// What the actor reads when it handles a level: its own counts, and the facts the worker passed with the message.
+type LevelOwned =
+  { Holds: HostHolds
+    Outside: OutsideFacts }
 
 module LevelBlocker =
   /// The wire spelling, one per case.

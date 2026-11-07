@@ -220,6 +220,8 @@ type Command =
   | EnableStdout
   | ResetSession of AsyncReplyChannel<Result<unit, SageFsError>>
   | HardResetSession of rebuild: bool * AsyncReplyChannel<Result<string, SageFsError>>
+  /// Bring the FSI host up to the build on disk if that loses nothing. Cancels nothing: it is refused when anything is running.
+  | LevelSession of OutsideFacts * AsyncReplyChannel<LevelAnswer>
 
 type AppActor = MailboxProcessor<Command>
 
@@ -256,7 +258,10 @@ type internal EvalCommand =
   | EvalAddMiddleware of Middleware list * AsyncReplyChannel<unit>
   | EvalEnableStdout
   | EvalReset of AsyncReplyChannel<Result<unit, SageFsError>>
-  | EvalHardReset of rebuild: bool * AsyncReplyChannel<Result<string, SageFsError>>
+  | EvalHardReset of rebuild: bool * (Result<string, SageFsError> -> unit)
+  /// A level: the same reset as `EvalHardReset(false, _)`, once `decide` has read this actor's own facts and found nothing
+  /// the host holds would be lost. The router posts it without cancelling anything.
+  | EvalLevel of OutsideFacts * AsyncReplyChannel<LevelAnswer>
   /// Serialized on the eval actor because reading the FSI session's bound
   /// values must not race a concurrent eval/reset — but it is no longer on
   /// the eval reply path, so it costs no eval its latency (roast-4 #2).
@@ -1161,6 +1166,9 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
     // The session incarnation. Owned by this actor alone: the reset handlers
     // advance it, EvalRun stamps it on the eval thread's EvalFinished.
     let sessionGeneration = ref SessionGeneration.initial
+    // What the current host holds of the user's (`ReplLeveling`): the evals started in it, the init script that ran in it.
+    // Owned by this actor alone, emptied by every reset because the host they lived in is gone.
+    let hostHolds = ref HostHolds.empty
     let supersededResponse (code: string) =
       let err = SageFsError.EvalSupersededByReset
       emit (Events.EvalFailed {| Code = code; Error = SageFsError.describe err; Diagnostics = [] |})
@@ -1177,7 +1185,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
         let generation = sessionGeneration.Value
         ended.ContinueWith((fun (finished: Task<HostEnd>) -> mailbox.Post(EvalHostEnded(generation, finished.Result))), TaskContinuationOptions.OnlyOnRanToCompletion)
         |> ignore
-    let processEvalCommand (phase: SessionPhase, middleware: Middleware list, evalStats: Affordances.EvalStats) (cmd: EvalCommand) : Async<SessionPhase * Middleware list * Affordances.EvalStats> =
+    let rec processEvalCommand (phase: SessionPhase, middleware: Middleware list, evalStats: Affordances.EvalStats) (cmd: EvalCommand) : Async<SessionPhase * Middleware list * Affordances.EvalStats> =
       async {
         // Test-only fault-injection seam (None in production): a throw here
         // escapes the handler like an unexpected bug — the wrapped loop below
@@ -1217,6 +1225,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             match phase with
             | Active (st, _) ->
               publishSnapshot st Evaluating evalStats
+              hostHolds.Value <- HostHolds.afterEvalStarted request.Args hostHolds.Value
               let sw = System.Diagnostics.Stopwatch.StartNew()
               // Eval-to-pixel latency chain, stage 1/5 (vision §3.4, §7.4): starts a new in-flight
               // sample in THIS PROCESS's tracker (the FSI worker, not the daemon) — see
@@ -1248,8 +1257,10 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           | EvalActorDecision.EvalDecision.DropSupersededFinished
           | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset
           | EvalActorDecision.EvalDecision.MarkHostCrashed _
+          | EvalActorDecision.EvalDecision.RunLevel
+          | EvalActorDecision.EvalDecision.DeferLevel _
           | EvalActorDecision.EvalDecision.IgnoreHostEnd ->
-            // Unreachable: decide only returns these for Query/Cancel/Finished/Reset/HostEnded, never Submit.
+            // Unreachable: decide only returns these for Query/Cancel/Finished/Reset/Level/HostEnded, never Submit.
             return (phase, middleware, evalStats)
         | EvalFinished(_, sw, code, reply, generation)
             when EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) (EvalActorDecision.EvalInput.Finished generation)
@@ -1368,6 +1379,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           match EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) EvalActorDecision.EvalInput.Reset with
           | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset ->
             sessionGeneration.Value <- SessionGeneration.next sessionGeneration.Value
+            hostHolds.Value <- HostHolds.empty
           | _ -> () // unreachable: Reset always advances
           try
             publishPhase (Initializing None) evalStats
@@ -1478,6 +1490,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           match EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) EvalActorDecision.EvalInput.Reset with
           | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset ->
             sessionGeneration.Value <- SessionGeneration.next sessionGeneration.Value
+            hostHolds.Value <- HostHolds.empty
           | _ -> () // unreachable: Reset always advances
           try
             publishPhase (Initializing None) evalStats
@@ -1653,7 +1666,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               let msg = sprintf "Session warmup failed: %s" ex.Message
               logger.LogError (sprintf "  ❌ %s" msg)
               publishPhase (Faulted msg) evalStats
-              reply.Reply(Error (SageFsError.HardResetFailed msg))
+              reply (Error (SageFsError.HardResetFailed msg))
               return (Faulted msg, middleware, evalStats)
             | Ok (newSession, newRecorder, _, warmupFailures, warmupCtx) ->
             warmupCts.Dispose()
@@ -1693,14 +1706,25 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             instrumentationMaps.Value <- instrMaps
             publishSnapshot newSt Idle evalStats
             emit (Events.SessionHardReset {| Rebuild = rebuild |})
-            reply.Reply(Ok "Hard reset complete. Fresh session with re-copied assemblies.")
+            reply (Ok "Hard reset complete. Fresh session with re-copied assemblies.")
             return (Active (newSt, Idle), middleware, evalStats)
           with ex ->
             logger.LogError (sprintf "❌ Hard reset failed: %s" ex.Message)
             let reason = sprintf "Hard reset failed: %s" ex.Message
             publishPhase (Faulted reason) evalStats
-            reply.Reply(Error (SageFsError.HardResetFailed ex.Message))
+            reply (Error (SageFsError.HardResetFailed ex.Message))
             return (Faulted reason, middleware, evalStats)
+        | EvalLevel (outside, reply) ->
+          // The check and the reset are this one message, so no eval can start between them, and nothing is cancelled for it:
+          // a level is only ever wanted when nothing was running. `decide` reads the activity this actor holds right now.
+          let owned : LevelOwned = { Holds = hostHolds.Value; Outside = outside }
+          match EvalActorDecision.levelVerdictOf (EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) (EvalActorDecision.EvalInput.Level owned)) with
+          | LevelVerdict.Level ->
+            logger.LogInfo "Nothing in the FSI host would be lost: bringing it up to the patched build"
+            return! processEvalCommand (phase, middleware, evalStats) (EvalHardReset (false, LevelAnswer.ofReset >> reply.Reply))
+          | LevelVerdict.Deferred blockers ->
+            reply.Reply (LevelAnswer.LevelDeferred blockers)
+            return (phase, middleware, evalStats)
       }
 
     let init () =
@@ -1786,7 +1810,10 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             | StartupProfile.Loaded _ -> ()
 
             StartupProfile.loadedPath outcome
-          
+
+          // What the init script defined is in this host and goes when the host does.
+          hostHolds.Value <- { HostHolds.empty with InitScript = InitScript.ofLoaded startupProfileResult }
+
           emit Events.SessionReady
 
           let st = {
@@ -1933,7 +1960,10 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           match currentEvalThread.Value with
           | Some thread -> try thread.Interrupt() with ex -> logger.LogDebug (sprintf "Hard reset interrupt failed: %s" ex.Message)
           | None -> ()
-          evalActor.Post(EvalHardReset(rebuild, reply))
+          evalActor.Post(EvalHardReset(rebuild, reply.Reply))
+        | LevelSession(outside, reply) ->
+          // No cancel and no interrupt: a level is refused when anything is running, so nothing here may touch the running eval.
+          evalActor.Post(EvalLevel(outside, reply))
       }
     let safeProcessRoute = ResilientActor.wrapLoop logger "router" processRoute
     let rec loop () =

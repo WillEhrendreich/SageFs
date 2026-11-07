@@ -156,8 +156,15 @@ type StartTimes =
     /// This is what a restart pays on top of the build.
     ProcessMs: float }
 
-let startRunAppBuilt (mode: BuildMode) (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp * StartTimes> = task {
+let startRunAppBuiltWith (initScript: string option) (mode: BuildMode) (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp * StartTimes> = task {
   let runDir, project = copyFixture runAppFixture runtime
+  // The init script a session runs when it starts is `.SageFs/init.fsx` in its working directory.
+  match initScript with
+  | Some text ->
+    let dir = Path.Combine(runDir, ".SageFs")
+    Directory.CreateDirectory dir |> ignore
+    File.WriteAllText(Path.Combine(dir, "init.fsx"), text)
+  | None -> ()
   let watch = Stopwatch.StartNew()
   do! buildFixture mode runAppFixture runtime runDir project
   let buildMs = watch.Elapsed.TotalMilliseconds
@@ -193,6 +200,15 @@ let startRunAppBuilt (mode: BuildMode) (deltaMode: SageFs.Features.MetadataDelta
   match answered with
   | true -> return app, { BuildMs = buildMs; ProcessMs = watch.Elapsed.TotalMilliseconds }
   | false -> return failwithf "the run_app fixture never answered /%s.\n%s" runAppFixture.ReadyRoute (RunningApp.log app)
+}
+
+let startRunAppBuilt (mode: BuildMode) (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp * StartTimes> =
+  startRunAppBuiltWith None mode deltaMode runtime
+
+/// The route as a user gets it, in a project that has an init script (`.SageFs/init.fsx`) with this text.
+let startRunAppWithInitScript (initScript: string) (runtime: HostRuntime) : Task<RunningApp> = task {
+  let! app, _ = startRunAppBuiltWith (Some initScript) BuildMode.Cached SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime
+  return app
 }
 
 /// A start that times the build as a real one: the case that reports what a restart pays on top of the build has to

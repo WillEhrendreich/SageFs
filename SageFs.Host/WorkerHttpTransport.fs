@@ -158,6 +158,8 @@ module WorkerHttpTransport =
     let loadScript = WorkerRoute.Post "/load-script"
     let reset = WorkerRoute.Post "/reset"
     let hardReset = WorkerRoute.Post "/hard-reset"
+    /// Replaces the FSI host when nothing in it would be lost, so it changes what the worker runs: a POST like the resets.
+    let levelRepl = WorkerRoute.Post "/level-repl"
     let runTests = WorkerRoute.Post "/run-tests"
     let runTestsStream = WorkerRoute.Post "/run-tests-stream"
     let testDiscovery = WorkerRoute.Get ("/test-discovery", GetAccess.ReadOnly)
@@ -206,7 +208,7 @@ module WorkerHttpTransport =
   let routes : WorkerRoute list = [
     Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.liveValuesEvaluate; Routes.liveValuesMode; Routes.eval; Routes.check
     Routes.typecheckSymbols; Routes.completions; Routes.references; Routes.cancel; Routes.loadScript
-    Routes.reset; Routes.hardReset; Routes.runTests; Routes.runTestsStream
+    Routes.reset; Routes.hardReset; Routes.levelRepl; Routes.runTests; Routes.runTestsStream
     Routes.testDiscovery; Routes.evalLiveTestFile; Routes.instrumentationMaps; Routes.shutdown
     Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle; Routes.hotReloadResetState; Routes.hotReloadReflectionMode
     Routes.hotReloadWatchAll; Routes.hotReloadUnwatchAll
@@ -334,7 +336,8 @@ module WorkerHttpTransport =
   /// Pass port=0 for OS-assigned dynamic port.
   /// `beforeListen` runs after the app is built and its routes are mapped, right before Kestrel binds `port`. The worker
   /// frees the port it reserved there, so the time in which another process could take that port is only the bind.
-  let startServerWithShutdown
+  let startServerGated
+    (runHold: TestRunHold)
     (onShutdown: unit -> unit)
     (beforeListen: unit -> unit)
     (handler: WorkerMessage -> Async<WorkerResponse>)
@@ -511,6 +514,13 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.HardResetSession(rebuild, rid))
       })) |> ignore
 
+      map Routes.levelRepl (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.LevelRepl rid)
+      })) |> ignore
+
       map Routes.runTests (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
@@ -574,6 +584,10 @@ module WorkerHttpTransport =
 
           let executionTask = task {
             try
+              // A run holds the worker's test-run gate for its whole life, so a level that is pending waits for it and a level
+              // that is under way holds it back until the host is replaced.
+              let! hold = Async.StartAsTask(runHold.Hold(), cancellationToken = ctx.RequestAborted)
+              use _hold = hold
               let onResult (result: Features.LiveTesting.TestRunResult) =
                 channel.Writer.TryWrite(StreamItem.Result result) |> ignore
                 match readings.TryRemove result.TestId with
@@ -975,6 +989,21 @@ module WorkerHttpTransport =
       | Some actualUrl -> return new HttpWorkerServer(actualUrl, app)
       | None -> return failwith "Worker server started but reported no addresses"
     }
+
+  /// A server with no test-run gate: every run is admitted at once. The worker's own host passes its gate to `startServerGated`.
+  let startServerWithShutdown
+    (onShutdown: unit -> unit)
+    (beforeListen: unit -> unit)
+    (handler: WorkerMessage -> Async<WorkerResponse>)
+    (hotReloadStateRef: HotReloadState.T ref)
+    (keptState: Features.KeptState.Access)
+    (projectFiles: string list)
+    (getWarmupContext: unit -> WarmupContext)
+    (getRunTest: unit -> Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>)
+    (takeCoverage: unit -> HostAgent.AgentReply<HostAgent.CoverageReading>)
+    (port: int)
+    : Task<HttpWorkerServer> =
+    startServerGated TestRunHold.none onShutdown beforeListen handler hotReloadStateRef keptState projectFiles getWarmupContext getRunTest takeCoverage port
 
   let startServer
     (handler: WorkerMessage -> Async<WorkerResponse>)

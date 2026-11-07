@@ -240,10 +240,12 @@ let reloadTests =
         let info = createSession harness
         freshnessOf harness info.Id |> Expect.equal "a fresh session is level" ReplFreshness.InSync
         harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, deltaPending [ "Handlers.describe" ]))
-        freshnessOf harness info.Id |> Expect.equal "behind after the first save" (ReplFreshness.BehindApp (1, [ "Handlers.describe" ]))
+        // This harness never reports a worker Ready, so there is nothing to ask to level: the session is behind, and says why it stays so.
+        let behind = ReplFreshness.CannotLevel (1, [ "Handlers.describe" ], [ LevelBlocker.NotServing ])
+        freshnessOf harness info.Id |> Expect.equal "behind after the first save" behind
         harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, deltaPatched [ "Handlers.describe" ]))
         harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, restartRequired))
-        freshnessOf harness info.Id |> Expect.equal "the confirmation and an unrelated verdict change nothing" (ReplFreshness.BehindApp (1, [ "Handlers.describe" ])) })
+        freshnessOf harness info.Id |> Expect.equal "the confirmation and an unrelated verdict change nothing" behind })
     }
 
     testTask "WHY — a replacement worker is built fresh, so it is level again, by a respawn and by a rebuild alike" {

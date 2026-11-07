@@ -14,6 +14,7 @@ type SessionManagerCallbacks =
     /// exited cleanly, shutdown. Runs on the loop thread once that command is done (`SessionRemoval.report`).
     OnSessionRemoved: SessionId -> unit
     OnAppOutput: SessionId -> SageFs.AppOutput.Stream -> string -> unit
+    WhoDrives: SessionId -> SessionDriver
     /// The loop is wedged, restarted, or failed a command (see SupervisorWatchdog).
     OnSupervisorAlarm: SupervisorWatchdog.SupervisorAlarm -> unit
     /// Health changed (an alarm degraded it, or a good command cleared it); the daemon feeds SupervisorHealthWatch.
@@ -33,6 +34,7 @@ module SessionManagerCallbacks =
       OnSessionFaulted = fun _ _ -> ()
       OnSessionRemoved = ignore
       OnAppOutput = fun _ _ _ -> ()
+      WhoDrives = fun _ -> SessionDriver.Everyone
       OnSupervisorAlarm = ignore
       OnSupervisorHealth = ignore
       OnCommandStart = ignore

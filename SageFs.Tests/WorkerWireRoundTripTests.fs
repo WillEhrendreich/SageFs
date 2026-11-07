@@ -49,6 +49,7 @@ let samplesWith (text: string) : WorkerMessage list =
     WorkerMessage.LoadScript(text + ".fsx", text + "-5")
     WorkerMessage.ResetSession(text + "-6")
     WorkerMessage.HardResetSession(true, text + "-7")
+    WorkerMessage.LevelRepl(text + "-7b")
     WorkerMessage.GetStatus(text + "-8")
     WorkerMessage.GetLiveValues(text + "-9")
     WorkerMessage.EvaluateLiveMember(text, [ text; text + "/inner" ], text + "-10")
