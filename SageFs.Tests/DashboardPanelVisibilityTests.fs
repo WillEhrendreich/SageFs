@@ -115,6 +115,13 @@ let dashboardPanelVisibilityTests =
           isShown { replFacts with Friction = FrictionPanelOptIn.OptedIn } OptionalPanel.Friction ]
         |> Expect.equal "default no, opted in yes" [ false; true ]
 
+      testCase "WHY — a panel hidden because a workflow is off names the Mode choice that turns it on, because a reason with no next step left reviewers asking how" <| fun _ ->
+        for panel, mode in [ OptionalPanel.HotReload, "Mode: Hot Reload"; OptionalPanel.LiveTesting, "Mode: Live Testing" ] do
+          match PanelVisibility.decide replFacts panel with
+          | PanelVisibility.Hidden reason -> reason |> Expect.stringContains (sprintf "the %A sentence names %s" panel mode) mode
+          | PanelVisibility.Shown
+          | PanelVisibility.NotOffered -> failtestf "a REPL session should hide %A" panel
+
       testCase "every hidden panel says why" <| fun _ ->
         [ OptionalPanel.HotReload; OptionalPanel.LiveTesting; OptionalPanel.Cohort ]
         |> List.forall (fun p ->

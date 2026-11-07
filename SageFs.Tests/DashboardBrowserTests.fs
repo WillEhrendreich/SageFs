@@ -1486,7 +1486,7 @@ let tests =
     // selected indicator in the sidebar sessions panel.
     let sessionCard = page.Locator(".session-row").First
     do! PlaywrightExpect.isVisibleAsync sessionCard "session card visible"
-    do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates sessionCard "● selected"
+    do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates sessionCard "● viewing"
   })
 
   playwrightTest "diagnostics panel renders empty state" (fun page -> task {

@@ -608,6 +608,19 @@ let dockIntegrationTests =
       html |> Expect.stringContains "the leaf's knob" "data-testid=\"tweak-slider\""
       html |> Expect.stringContains "the field's knob too" (TweakSignals.stepsOf (RowKey.field (RowKey.top "tuning") "A"))
 
+    testCase "WHY — a number with no range chosen says so on its knob, so the page can hide a track whose thumb would mean nothing" <| fun _ ->
+      let control = Control.RealStepper(9.8, Step.Fraction 1)
+      let withLimits (limits: NumberLimits) =
+        { rowOf (PersistenceState.InSource gravity) control with Limits = limits }
+      let drawn (limits: NumberLimits) : string =
+        dockWith (tweaks [ RowKey.top "gravity", withLimits limits ]) [ binding "gravity" LiveValueTree.NodeKind.Leaf "9.8" [] ]
+      let chosen =
+        match NumberLimits.ofNumbers (Edge.At 0.0) (Edge.At 30.0) StepChoice.FromSpelling with
+        | Ok limits -> limits
+        | Result.Error refusal -> failwithf "the range 0 to 30 was refused: %A" refusal
+      drawn NumberLimits.unlimited |> Expect.stringContains "no range: the knob is marked unranged" "data-ranged=\"false\""
+      drawn chosen |> Expect.stringContains "a chosen range: the knob is marked ranged" "data-ranged=\"true\""
+
     testCase "a dock with no tweak view draws exactly what it drew before: no strip, no signal, no script" <| fun _ ->
       let html =
         Dock.renderDock DockPanes.SessionInView "abcd1234" (Dock.WalkedBindings(paneView [ binding "gravity" LiveValueTree.NodeKind.Leaf "9.8" [] ]))

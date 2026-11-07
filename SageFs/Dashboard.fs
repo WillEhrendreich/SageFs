@@ -299,7 +299,7 @@ let keyboardHandlerScript () =
       function d(a,v){var b=v?{action:a,value:v}:{action:a};fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});}
       var BINDINGS=%s,TEXT=%s,CARD=%s,STOP=%s,OTHERS=%s;
       function typing(t){return !!t&&(TEXT.indexOf((t.tagName||'').toLowerCase())>=0||t.isContentEditable===true);}
-      var sizes=[62.5,75,87.5,100,112.5,125,150],idx=2;
+      var sizes=[62.5,75,87.5,93.75,100,112.5,125,150],idx=3;
       document.addEventListener('keydown',function(e){
         if(e.ctrlKey&&(e.key==='='||e.key==='+')){e.preventDefault();idx=Math.min(sizes.length-1,idx+1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'%%');}
         if(e.ctrlKey&&e.key==='-'){e.preventDefault();idx=Math.max(0,idx-1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'%%');}

@@ -89,6 +89,15 @@ let tests =
       headerBadge page |> Expect.stringContains "the badge still says Ready" ">Ready"
       (headerBadge page).Contains "all changes live" |> Expect.isFalse "and the note is not inside the badge"
 
+    testCase "WHY — the live note has a short form for a header with no room, because at 400px the state and whether it is live were split across three rows or lost" <| fun _ ->
+      let page (view: SessionInView) = renderMainContent (snapshotOf view) |> render
+      page (readyWith Readiness.ReadyCurrent) |> Expect.stringContains "live: the short form" ("livenote-short\">" + Glyphs.lead Glyph.Pass + "live<")
+      page (readyWith Readiness.ReadyOlderCode) |> Expect.stringContains "not live: the short form" ("livenote-short\">" + Glyphs.lead Glyph.Warn + "not live<")
+
+    testCase "WHY — a count of evaluations is a plain word and agrees with its number, because 'evals' was named jargon by three reviewers" <| fun _ ->
+      [ 0, "0 evaluations"; 1, "1 evaluation"; 12, "12 evaluations" ]
+      |> List.iter (fun (n, expected) -> evaluationsText n |> Expect.equal (sprintf "the count %d" n) expected)
+
     testCase "WHY — a Ready session says what its build is next to the badge, with the caution glyph when it is not current, and a session that is not Ready says nothing there because its badge already names the state" <| fun _ ->
       let page (view: SessionInView) = renderMainContent (snapshotOf view) |> render
       [ "changes not live", readyWith Readiness.ReadyOlderCode

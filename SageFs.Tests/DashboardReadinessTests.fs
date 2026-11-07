@@ -101,17 +101,17 @@ let pageTests =
 
     testTask "WHY — the header counts the evals the card counts, because the worker's tally said 13 while the card said 12 for the same session" {
       let! html = pageFor currentSession 13 12
-      html |> Expect.stringContains "the card" "12 evals</span>"
-      html |> Expect.stringContains "the header" "12 evals"
-      html.Contains "13 evals" |> Expect.isFalse "the worker's own tally is not printed beside the card's"
+      html |> Expect.stringContains "the card" "12 evaluations</span>"
+      html |> Expect.stringContains "the header" "12 evaluations"
+      html.Contains "13 evaluations" |> Expect.isFalse "the worker's own tally is not printed beside the card's"
     }
 
     testTask "WHY — the header and the card agree over every pair of tallies, the worker's and the daemon's" {
       for worker in [ 0; 1; 12; 13; 40 ] do
         for finished in [ 1; 12; 13; 40 ] do
           let! html = pageFor currentSession worker finished
-          html |> Expect.stringContains (sprintf "worker %d, daemon %d: the card" worker finished) (sprintf "%d evals</span>" finished)
-          html |> Expect.stringContains (sprintf "worker %d, daemon %d: the header" worker finished) (sprintf "%d evals" finished)
+          html |> Expect.stringContains (sprintf "worker %d, daemon %d: the card" worker finished) (evaluationsText finished + "</span>")
+          html |> Expect.stringContains (sprintf "worker %d, daemon %d: the header" worker finished) (evaluationsText finished)
     }
   ]
 

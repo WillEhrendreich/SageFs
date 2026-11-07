@@ -132,7 +132,8 @@ let tagLabel (tag: StateTag) : string =
   // What is true about the running app, not a comparison: "differs from the file" sat over a sentence that said "Saved to the
   // file", and read as the file not having been written.
   // "Not running" read as the program being stopped (two reviewers), so the tag says the file's value has not been applied.
-  | StateTag.DiffersFromFile -> "saved, not live"
+  // The banner and the session card say "saved but not live" (LiveBindingsPane, SourceState): the row says it in the same words.
+  | StateTag.DiffersFromFile -> "saved but not live"
   | StateTag.FileChanged -> "file changed"
   | StateTag.Refused -> "refused"
   | StateTag.Writing -> "writing"
@@ -675,7 +676,12 @@ let rangeCaption (chosen: bool) (reach: Reach) : XmlNode =
       // With no range chosen the caption says how to choose one, in words: the caption is the control that opens the editor.
       Elem.span
         [ Attr.class' "live-range-step" ]
-        [ textEnc (match chosen with | true -> sprintf "step %s" (sizeText reach.Size) | false -> sprintf "step %s · no range · edit" (sizeText reach.Size)) ]
+        (match chosen with
+         | true -> [ textEnc (sprintf "step %s" (sizeText reach.Size)) ]
+         // Two short lines, so the caption never leaves one word alone on a second line: the step, then the way to choose a range.
+         | false ->
+           [ Elem.span [ Attr.class' "live-range-line" ] [ textEnc (sprintf "step %s" (sizeText reach.Size)) ]
+             Elem.span [ Attr.class' "live-range-line live-range-action" ] [ textEnc "set a range" ] ])
       Elem.span [ Attr.class' "live-range-hi" ] [ textEnc (endText reach.Above) ] ]
 
 /// A number: a drag handle that counts steps from where the row stands, the two step buttons, and a readout that shows where the
@@ -686,8 +692,16 @@ let stepper (key: RowKey) (place: SourceRef) (reach: Reach) (editor: XmlNode) (c
   let below = stepsOf reach.Below
   let above = stepsOf reach.Above
   let size = sizeText reach.Size
+  // With neither end stopping the handle, where the thumb sits means nothing: the page draws the track out of sight (still reachable
+  // by keyboard) and the row reads as `- value +`. One end chosen gives the track a meaning, so it stays.
+  let ranged =
+    match reach.Below, reach.Above with
+    | Run.Open _, Run.Open _ -> "false"
+    | Run.Ends _, _
+    | _, Run.Ends _ -> "true"
   Elem.span
     [ Attr.class' "live-knob"
+      Attr.create "data-ranged" ranged
       Attr.create "role" "group"
       Attr.create "aria-label" (attrEnc (sprintf "Change %s" label))
       Ds.signal (steps, 0) ]

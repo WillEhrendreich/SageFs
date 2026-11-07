@@ -41,16 +41,21 @@ let tests =
       |> Array.toList
       |> Expect.isEmpty "every @media and @container condition is a relative length"
 
-    testCase "WHY — no text size is under 12px at the default font size, because 7 to 11px text was the most repeated legibility complaint" <| fun () ->
-      // rem sizes at the default root of 14px; 0.857rem is 12px. A size under it is a size nobody asked for.
+    testCase "WHY — the default root size makes the smallest text 13px, because reviewers kept calling 12px helper text too small" <| fun () ->
+      let root = Regex(@"--font-size:\s*([\d.]+)%").Match Dashboard.dashboardCss
+      root.Success |> Expect.isTrue "the stylesheet sets the --font-size token"
+      (float root.Groups.[1].Value / 100.0 * 16.0 * 0.857 > 12.8) |> Expect.isTrue "0.857rem is at least 12.8px at the default root"
+
+    testCase "WHY — no text size is under the 0.857rem floor, so the root token alone decides how small the smallest text is" <| fun () ->
+      // 0.857rem is the floor. A size under it is a size nobody asked for.
       let small = Regex(@"font-size\s*:\s*0?\.(\d+)rem")
       let tooSmall (text: string) =
         small.Matches text
         |> Seq.map (fun m -> m.Value, float ("0." + m.Groups.[1].Value))
-        |> Seq.filter (fun (_, rem) -> rem * 14.0 < 11.99)
+        |> Seq.filter (fun (_, rem) -> rem < 0.856)
         |> Seq.map fst
         |> Seq.toList
-      tooSmall Dashboard.dashboardCss |> Expect.isEmpty "dashboard.css has no font-size under 12px"
+      tooSmall Dashboard.dashboardCss |> Expect.isEmpty "dashboard.css has no font-size under the floor"
       renderingSources
       |> List.collect (fun name -> tooSmall (File.ReadAllText(Path.Combine(sourceDirectory, name))) |> List.map (fun found -> name + ": " + found))
       |> Expect.isEmpty "the inline styles have none either"

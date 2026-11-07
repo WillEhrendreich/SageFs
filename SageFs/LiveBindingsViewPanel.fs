@@ -157,7 +157,7 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         Attr.class' "session-btn live-pane-view"
         Attr.type' "button"
         Attr.create "aria-label" "Change how the live bindings are shown"
-        Attr.title "Table display settings"
+        Attr.title "Binding display settings"
         Attr.create "aria-expanded" "false"
         Ds.attr' ("aria-expanded", sprintf "$%s ? 'true' : 'false'" ViewSignals.Open)
         Ds.class' ("session-btn-on", sprintf "$%s" ViewSignals.Open)
@@ -173,7 +173,7 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         Ds.class' ("live-hidden", sprintf "!$%s" ViewSignals.Open)
         Ds.preserveAttr "class" ]
       [ Elem.div [ Attr.class' "live-view-head" ] [
-          Elem.span [] [ textEnc (sprintf "Table display settings for %s mode" (ViewWorkflow.label workflow)) ]
+          Elem.span [] [ textEnc (sprintf "Binding display settings for %s mode" (ViewWorkflow.label workflow)) ]
           // A way to close it where it is: the panel floats over the table, and the only other way was to find the View button again.
           Elem.button
             [ Attr.class' "live-view-close"

@@ -1814,14 +1814,14 @@ module PanelVisibility =
       | ViewedSession.NoSession -> PanelVisibility.Hidden "Hot reload: no session is selected"
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.HotReload _, _) -> PanelVisibility.Shown
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.Interactive, _) ->
-        PanelVisibility.Hidden "Hot reload is off: this is a REPL session. Start a hot-reload session to patch a running app on save."
+        PanelVisibility.Hidden "Hot reload is off: this is a REPL session. Choose Mode: Hot Reload in the top bar to patch a running app on save."
       | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.LiveTesting, _) ->
         PanelVisibility.Hidden "Hot reload: this session is in Live Testing mode"
     | OptionalPanel.LiveTesting ->
       match facts.Viewed with
       | ViewedSession.NoSession -> PanelVisibility.Hidden "Live testing: no session is selected"
       | ViewedSession.Viewing(_, Features.LiveTestActivity.LiveTestActivity.Off) ->
-        PanelVisibility.Hidden "Live testing is off for this session, so no tests re-run as you edit."
+        PanelVisibility.Hidden "Live testing is off for this session, so no tests re-run as you edit. Choose Mode: Live Testing in the top bar to turn it on."
       | ViewedSession.Viewing _ -> PanelVisibility.Shown
     | OptionalPanel.Cohort ->
       match facts.Cohort with

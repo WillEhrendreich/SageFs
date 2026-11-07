@@ -49,6 +49,12 @@ let htmlEscape (s: string) : string =
 /// literal, which DashboardEscapingTests enforces structurally.
 let textEnc (s: string) : XmlNode = Text.raw (htmlEscape s)
 
+/// How many evaluations, as a person says it. "evals" was jargon to the three reviewers who read it.
+let evaluationsText (count: int) : string =
+  match count with
+  | 1 -> "1 evaluation"
+  | n -> sprintf "%d evaluations" n
+
 /// The device's width at its natural scale. Without a viewport meta a phone lays a page out at about 980 px and shrinks it,
 /// so the stylesheet's width media queries never match on the device they were written for.
 let viewportContent = "width=device-width, initial-scale=1"
@@ -804,7 +810,7 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
 /// unless you're chasing a slowdown, so they stay hidden until asked for.
 let renderEvalStats (stats: EvalStatsView) =
   Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "meta" ] [
-    textEnc (sprintf "%d evals" stats.Count)
+    textEnc (evaluationsText stats.Count)
     Elem.button
       [ Attr.class' "perf-toggle-btn"
         Attr.create "aria-label""Show eval performance detail (avg/min/max, latency percentiles, eval-to-pixel)"
@@ -1789,7 +1795,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     [ textEnc (sprintf "%s %s" glyph (SessionHealth.label s.Health)) ]
                 match isViewing with
                 | true ->
-                  Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● selected" ]
+                  Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● viewing" ]
                 | false -> ()
                 // Agent presence badges (multi-agent coordination)
                 yield! s.AgentBadges |> List.map (fun badge ->
@@ -1960,7 +1966,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 match s.EvalCount > 0 with
                 | true ->
                   Elem.span [ Attr.class' "meta" ] [
-                    textEnc (sprintf "%d evals" s.EvalCount)
+                    textEnc (evaluationsText s.EvalCount)
                   ]
                 | false -> ()
                 // Worker RSS (vision §3.4 "worker RSS" — the first of the
@@ -2307,7 +2313,7 @@ let renderSessionFilmstrip (entries: FilmstripEntry list) =
         |> String.concat ""
       signalDetails Signals.FilmstripOpen [] [
         Elem.summary [ Attr.style "cursor: pointer; font-size: 0.857rem; color: var(--fg-dim); user-select: none;" ] [
-          textEnc (sprintf "%s %d evals  %s" (Glyphs.text Glyph.Time) entries.Length recentIcons)
+          textEnc (sprintf "%s %s  %s" (Glyphs.text Glyph.Time) (evaluationsText entries.Length) recentIcons)
         ]
         Elem.div [ Attr.class' "filmstrip-frames" ] [
           yield! entries |> List.map (fun e ->
@@ -2449,8 +2455,11 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         match SessionInView.liveNote snap.InView with
         | Some (glyph, words) ->
           let tone = match glyph with | Glyph.Pass -> "tabline-livenote-ok" | _ -> "tabline-livenote-warn"
+          // The long form is the sentence; below 62.5em the short one stands in for it (dashboard.css), so the header keeps the fact.
+          let short = match glyph with | Glyph.Pass -> "live" | _ -> "not live"
           Elem.div [ Attr.id "session-live-note"; Attr.class' ("tabline-livenote " + tone); testid "session-live-note" ] [
-            textEnc (Glyphs.lead glyph + words) ]
+            Elem.span [ Attr.class' "livenote-long" ] [ textEnc (Glyphs.lead glyph + words) ]
+            Elem.span [ Attr.class' "livenote-short" ] [ textEnc (Glyphs.lead glyph + short) ] ]
         | None -> ()
         // min-width:0 + overflow:hidden + text-overflow:ellipsis let this
         // shrink instead of overflowing onto the right-side theme picker at

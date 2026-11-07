@@ -35,7 +35,7 @@
   --syn-property: #7fb4ca;
   --syn-string: #98bb6c;
   --syn-number: #d27e99;
-  --font-size: 87.5%;
+  --font-size: 93.75%;
   --sidebar-width: 320px;
   /* The bottom dock holds the live bindings, which is what this page is opened for while a program runs: a watch window you
      can read at a glance. One home for its ceiling, mirroring --sidebar-width, so a resize control has a single value to
@@ -876,6 +876,9 @@ h2 {
 /* ── Session Controls ─────────────────────────────────────────── */
 
 .session-btn {
+  /* A button's own face is the system sans. The page is monospace, and the buttons that set no face themselves read as a second
+     typeface beside the ones that did ("Hide panel" beside "Clear output"). */
+  font-family: inherit;
   background: var(--border-normal);
   color: var(--fg-default);
   border: none;
@@ -1476,6 +1479,55 @@ h2 {
   display: none;
 }
 
+/* The bar has the same two rows at every width: the title and the three buttons on the first, the count, the stamp, the "not in a
+   file" count and the filter on the second. At 13px type they no longer fit on one row at 1080px, and "Keep open" dropped to a row
+   of its own under the filter, which read as an accident. */
+.live-pane-bar .live-pane-collapse,
+.live-pane-bar .live-pane-view,
+.live-pane-bar .live-pane-pin {
+  order: 1;
+}
+
+.live-pane-bar .live-pane-collapse {
+  margin-left: auto;
+}
+
+.live-pane-bar .live-pane-pin {
+  margin-left: 0;
+}
+
+/* The break between the two rows: an empty full-width item between the buttons (order 1) and the second row (order 3). */
+.live-pane-bar::after {
+  content: "";
+  order: 2;
+  flex: 1 1 100%;
+  height: 0;
+  margin: -0.15rem 0;
+}
+
+.live-pane-bar .live-pane-count,
+.live-pane-bar .live-pane-stamp,
+.live-pane-bar .live-repl-chip {
+  order: 3;
+}
+
+/* At phone width the title (130px) and three words-and-icon buttons (330px) do not share a 384px row: the third button fell to a
+   row of its own. The title takes the first row and the three buttons sit together on the second. */
+@media (width < 30.062em) {
+  .live-dock .live-pane-bar .live-pane-title {
+    flex: 1 1 100%;
+  }
+
+  /* One more class than the phone rules further down, which keep the button at the right of a row it shared with the title. */
+  .live-dock .live-pane-bar .live-pane-collapse {
+    margin-left: 0;
+  }
+}
+
+.live-pane-bar .live-filter {
+  order: 4;
+}
+
 /* The note that the session runs older code than its files, with the button that fixes it, is a banner line of its own under the
    pane's controls, only while there is something to act on. Left in the bar with the other pieces it pushed View and Pin onto a
    second line on its own, then (when the bar was made to shrink instead) squeezed the stamp and the filter until neither read.
@@ -1530,7 +1582,9 @@ h2 {
 
 .live-filter {
   flex: 1 1 10rem;
-  min-width: 8rem;
+  /* The bar holds the title, the count, the stamp and three buttons beside this box. At 1080px they need about 1170 with the box at
+     8rem, so the third button dropped to a row of its own. */
+  min-width: 6.5rem;
   max-width: 24rem;
   height: 28px;
   padding: 0 8px;
@@ -2375,7 +2429,7 @@ h2 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.3rem 0.8rem;
+  gap: 0.3rem 0.6rem;
   margin: 0.3rem 0;
   font-size: 0.857rem;
   min-width: 0;
@@ -3373,7 +3427,27 @@ h2 {
   .app-header,
   .session-context {
     overflow-x: auto;
+    /* The bar scrolls if it must, and says nothing about it: its own scrollbar was a stripe at the right edge of the header. */
+    scrollbar-width: none;
   }
+}
+
+/* The evaluation count in the header gives way below 62.5em, where "4 evaluations" was cut to "4 evaluati" beside the theme picker.
+   The session card carries the same count. */
+@media (width < 62.562em) {
+  .tabline-evals {
+    display: none !important;
+  }
+}
+
+/* The page's own selects are the dark page's, not the system's light widget. */
+#workflow-switcher,
+#live-view-scope {
+  background: var(--bg-default);
+  color: var(--fg-default);
+  border: 1px solid var(--border-normal);
+  border-radius: 0;
+  font-family: inherit;
 }
 
 /* The header below 820px. Four segments want about 850px with the longest status badge ("Ready, running older code"): the
@@ -4591,6 +4665,35 @@ body {
   min-width: 0;
 }
 
+/* No range chosen: the thumb's place in the track says nothing, so the track leaves the page but stays a focus stop (arrow keys
+   step it, as before). The caption under it, which opens the range editor, stays in view. */
+.live-dock .live-knob[data-ranged="false"] .live-slider-wrap > .live-slider {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.live-dock .live-knob[data-ranged="false"] .live-slider-wrap {
+  position: relative;
+  align-items: center;
+  /* Wide enough that the caption wraps in two short lines at the narrowest column, instead of running under the value beside it. */
+  flex: 1 1 8rem;
+  /* A wrapping row sizes itself by what its items would take on one line, and a caption this narrow takes about 90px, so the row
+     was sized for less than its parts and the + dropped under the −. A floor equal to the basis makes the row count it whole. */
+  min-width: 8rem;
+}
+
+.live-dock .live-knob[data-ranged="false"] .live-range,
+.live-dock .live-knob[data-ranged="false"] .live-limits-summary {
+  white-space: normal;
+  text-align: center;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
 .live-dock .live-range {
   display: flex;
   justify-content: space-between;
@@ -4775,6 +4878,15 @@ body {
 }
 
 .live-dock .live-slider-wrap .live-limits-summary .live-range-step {
+  text-underline-offset: 3px;
+}
+
+/* The caption of a number with no range chosen is two lines: the step, then "set a range", which is the part that opens the editor. */
+.live-dock .live-range-line {
+  display: block;
+}
+
+.live-dock .live-slider-wrap .live-limits-summary .live-range-action {
   text-decoration: underline dotted;
   text-underline-offset: 3px;
 }
@@ -5100,7 +5212,7 @@ body {
 }
 
 .live-dock .live-binding > .live-binding-pin {
-  font-size: 1rem;
+  font-size: 1.2rem;
   line-height: 1;
 }
 
@@ -5129,8 +5241,33 @@ body {
    count to "12 eva". The health line directly under the header says the same thing in full ("Session ...: Ready, changes not
    live"), so the note folds away there. */
 @media (width < 62.562em) {
+  /* The sentence gives way to its short form ("✓ live", "▲ not live"), which stays in the header's first row beside the badge: at
+     400px a reviewer found the state and whether it was live split across three rows, or lost. The cell takes the right end of the
+     status column, over the empty part of the badge's own cell, so it adds no row. */
   .tabline-livenote {
+    display: flex;
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    align-self: center;
+    height: auto;
+    padding: 0 8px;
+    border-right: none;
+    z-index: 1;
+  }
+
+  .tabline-livenote .livenote-long {
     display: none;
+  }
+}
+
+.tabline-livenote .livenote-short {
+  display: none;
+}
+
+@media (width < 62.562em) {
+  .tabline-livenote .livenote-short {
+    display: inline;
   }
 }
 

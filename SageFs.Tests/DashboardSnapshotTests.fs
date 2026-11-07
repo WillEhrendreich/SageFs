@@ -1293,7 +1293,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
 
   test "EvalStats count appears in rendered output" {
     let html = mkSnap "0.0.0" "s1" "C:\\" FixtureViews.running |> renderMainContent |> renderNode
-    html |> Expect.stringContains "eval count should appear" "7 evals"
+    html |> Expect.stringContains "eval count should appear" "7 evaluations"
   }
 
   test "EvalStats avg appears in rendered output" {
