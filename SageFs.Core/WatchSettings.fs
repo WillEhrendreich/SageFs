@@ -18,6 +18,11 @@ module WatchSettings =
     | VToggle _
     | VPort _
     | VTimeout _
+    | VDuration _
+    | VLimit _
+    | VAge _
+    | VCount _
+    | VOptionalCount _
     | VBindHost _
     | VEnum _
     | VDir _ -> []
@@ -36,6 +41,8 @@ module WatchSettings =
       | _, (line, why) :: _ -> Error (Malformed (sprintf "'%s': %s" line (ExpressionError.describe why)))
     Render = fun value -> WatchExpression.render (expressionsOf value)
     Apply = ignore
+    External = NoExternalSource
+    Current = InUseReadEachTime
   }
 
   /// The list with the expression added at the end, unless it is already there.

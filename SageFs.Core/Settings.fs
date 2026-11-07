@@ -269,42 +269,42 @@ module SettingValue =
   let duration (v: SettingValue) : WaitLimit option =
     match v with
     | VDuration limit -> Some limit
-    | VToggle _ | VPort _ | VTimeout _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
 
   let limit (v: SettingValue) : OptionalLimit option =
     match v with
     | VLimit limit -> Some limit
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
 
   let toggle (v: SettingValue) : Toggle option =
     match v with
     | VToggle t -> Some t
-    | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
+    | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
 
   let enum (v: SettingValue) : EnumValue option =
     match v with
     | VEnum e -> Some e
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VDir _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VDir _ | VExpressions _ -> None
 
   let dir (v: SettingValue) : DirectoryPath option =
     match v with
     | VDir d -> Some d
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VExpressions _ -> None
 
   let age (v: SettingValue) : RetentionAge option =
     match v with
     | VAge a -> Some a
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
 
   let count (v: SettingValue) : WholeCount option =
     match v with
     | VCount c -> Some c
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
 
   let optionalCount (v: SettingValue) : OptionalCount option =
     match v with
     | VOptionalCount c -> Some c
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VBindHost _ | VEnum _ | VDir _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
 
 /// The resolved value plus its provenance: which layer supplied the effective
 /// value, and the value present at every layer that set one (so the UI can

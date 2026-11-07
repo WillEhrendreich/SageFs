@@ -236,9 +236,9 @@ let feedTests =
               return Result.Ok(WorkerProtocol.WorkerResponse.LiveValuesResult(rid, WorkerProtocol.Serialization.serialize reading))
             | other -> return Result.Error(SageFsError.WorkerCommunicationFailed("s1", sprintf "unexpected %A" other))
           }
-      let first = LiveBindingsPane.Feed.pull ask adaptive notes "s1" (fun () -> WalkSafe) |> Async.StartAsTask
+      let first = LiveBindingsPane.Feed.pull ask adaptive notes "s1" (fun () -> WalkSafe) |> Started.asTask
       do! firstAsked.Task |> Async.AwaitTask
-      let second = LiveBindingsPane.Feed.pull ask adaptive notes "s1" (fun () -> WalkSafe) |> Async.StartAsTask
+      let second = LiveBindingsPane.Feed.pull ask adaptive notes "s1" (fun () -> WalkSafe) |> Started.asTask
       // Give the second pull the chance to overtake the first. A pull that waits its turn does not finish until the first has.
       let! _ = System.Threading.Tasks.Task.WhenAny(second, System.Threading.Tasks.Task.Delay TestTimeouts.settle) |> Async.AwaitTask
       release.SetResult()
