@@ -204,6 +204,14 @@ let dashboardPanelVisibilityTests =
         html |> Expect.stringContains "the cohort line" (idAttr DomIds.HiddenReasonCohort)
         html.Contains(idAttr DomIds.HiddenReasonFriction) |> Expect.isFalse "and the friction panel, which is not offered, leaves no line"
 
+      testCase "a hidden live testing panel offers the way to turn it on" <| fun _ ->
+        let html = PanelVisibility.apply replFacts (snapshotWith off joined) |> renderMainContent |> renderNode
+        let start = html.IndexOf(idAttr DomIds.HiddenReasonLiveTesting)
+        start |> Expect.isGreaterThan "the live testing reason line is on the page" -1
+        let line = html.Substring(start, html.IndexOf("</details>", start) - start)
+        line |> Expect.stringContains "the line posts to the enable route, inside the line" "/dashboard/live-testing/enable"
+        line |> Expect.stringContains "and the button says what it does" "Turn on"
+
       testCase "a panel that is shown leaves no reason line behind" <| fun _ ->
         let html =
           PanelVisibility.apply { replFacts with Viewed = ViewedSession.Viewing(hotReload, off) } (snapshotWith off joined)
