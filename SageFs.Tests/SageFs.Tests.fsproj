@@ -309,6 +309,7 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="CallerPendingSimTests.fs" />
+        <Compile Include="ProjectCheckSimTests.fs" />
         <Compile Include="ReferenceScopeSimTests.fs" />
         <Compile Include="ReferenceCacheSimTests.fs" />
         <Compile Include="SessionReaperSimTests.fs" />
