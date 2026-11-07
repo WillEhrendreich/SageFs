@@ -40,7 +40,7 @@ plan has no block or no valid status, so this cannot quietly rot.
   `Plugin: done ...` or `Plugin: n/a ...` (the file list is in `AGENTS.md`), and the plugin lands first.
 - Writing (docs, comments, commit messages) is plain English: no em dashes, no "not X, but Y" pairs, no marketing words.
 - Update "Resume here" in the same commit as the work:
-  - **Status** is `Not started`, `In progress (step N of M)`, `Blocked (on X)` or `Done`.
+  - **Status** is `Not started`, `In progress (step N of M)`, `Blocked (on X)`, `Stopped: <why>` (the work was measured or tried and ended on purpose; the item stays on the roadmap with the reason) or `Done`.
   - **Branch and worktree** (only when you took one) and **Last green commit** say where the work is.
   - **Next action** is stated exactly enough that a stranger could do it.
   - **Decisions made** records each decision with its date and who made it.
@@ -99,7 +99,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 
 | Item | Size | First failing test |
 |:--|:--|:--|
-| [Sessions learn the load order](sessions-learn-the-load-order.md) | S to M | the traced opener reports the round each name opened in |
+| [Sessions learn the load order](sessions-learn-the-load-order.md) | stopped: the premise was not borne out | none, the code is on `archive/2026-11-07/rescue-load-order` |
 | [A Jupyter kernel that installs and works](jupyter-kernel-that-works.md) | M, then M for the value tree | an `execute_request` is answered with `status` ok |
 | [A notebook over a live session](a-notebook-over-a-live-session.md) | L, M for the first slice | `CellSplitter.split` on `;;` and blank-line files |
 | [Faster time to Ready](faster-time-to-ready.md) | S to measure, S to M for the first change | the plan segment excludes FSI creation |

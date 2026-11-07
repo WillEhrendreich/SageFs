@@ -158,7 +158,7 @@ let tests =
 
     TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — every plan carries a Resume here block with every field and a status from the closed set, so someone with no other context can pick the item up" <| fun _ ->
       let fields = [ "Status"; "Size"; "Branch and worktree"; "Last green commit"; "Next action"; "Decisions made"; "Surprises" ]
-      let statuses = [ "Not started"; "In progress"; "Blocked"; "Done" ]
+      let statuses = [ "Not started"; "In progress"; "Blocked"; "Stopped"; "Done" ]
       let problems =
         Directory.GetFiles(Path.Combine(repoRoot, "docs", "plans"), "*.md")
         |> Array.filter (fun path -> Path.GetFileNameWithoutExtension path <> "README")

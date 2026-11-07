@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
-| Size | S to M |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: the traced opener reports the round each name opened in. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Status | Stopped: the premise was not borne out. The measurement under "Measure first" found no project whose opens need a second pass, so a learned order would change nothing today. |
+| Size | S to M, if it were ever picked up again |
+| Branch and worktree | Not merged. The code (steps 1 to 6, green, with its tests) is kept on the branch `archive/2026-11-07/rescue-load-order`, cut from `rescue/load-order` at 255bbe94 on top of master 1f4daeee. |
+| Last green commit | 255bbe94 on that branch (steps 1 to 6 green; step 7, the sim, and step 8, the host-tier gate, were never started). |
+| Next action | None. Pick the branch up only if a project turns up whose opens need a second pass, and run the measurement on it first. |
+| Decisions made | 2026-11-07, Will: the code does not land. The measurement found nothing for it to fix, and it would add a store file, a schema bump and a wired call in `AppState.fs` for no effect. The measurement and this note land; the branch stays. |
+| Surprises | The one project whose retry fires, `SageFs.Simulation`, fails on a discovery gap that learning cannot fix (see the run below). |
 
 ## What done looks like
 
@@ -122,6 +122,28 @@ Experiment. After step 2's traced function, log one line per warmup: names, roun
 
 Reading it. If rounds is 1 and fallback evals is 0 on all five, stop: the item solves nothing we have. If fallback evals plus later rounds are under 5 percent of the opens phase, keep steps 2 and 3 as instrumentation and drop the rest. If they are over 15 percent on any real project, go. These cut-offs are my judgment, not a measured threshold. The 5.5 s and 12 s cold numbers in `docs/repl-loop-benchmarks.md` carry no open breakdown, so I have no basis today to say which side we are on.
 
+### Run 2026-10-26, agent-load-order
+
+Ran in the item worktree at master 1cbf8fc3, with one session per project and the worker logs and replay caches those sessions wrote. The traced function from step 2 did not exist yet and `WarmUp.fs` was outside this agent's file set, so rounds were read from the worker log's batch-failure lines and from checking every plan name against what FSI top level can resolve.
+
+| Project | Plan names | Rounds | Eval calls | Fallback singles | Names that never open | Relative-open edges in sources |
+|:--|--:|--:|--:|--:|--:|--:|
+| samples/counter | 5 | 1 | 1 | 0 | 0 | 0 of 1 file |
+| SageFs.Core | 123 | 1 | 16 | 0 | 0 | 0 of 333 files |
+| SageFs.Simulation | 198 | 2 | 44 | 16 | 2 | 0 of 142 files |
+| SageFs.Tests | not sessioned, no build in this worktree | | | | | 0 of 978 files |
+| ~/Work/SageTech | not measured, outside this agent's workspace | | | | | |
+
+The only project whose retry fires is SageFs.Simulation, and its cause is a discovery gap, not an order problem. Two names, `ConfirmationGateSim` and `ReflectionReadSim`, are bare opens of modules that live directly inside `namespace SageFs.Simulation`, scraped from indented `open` lines inside sibling nested modules. Discovery adds only first-segment root namespaces (`SageFs`), so `SageFs.Simulation` never enters the plan and the bare names can never resolve at FSI's top level. They fail every start, each poisons one chunk of 8, and the measured cost is 19 wasted eval calls out of 44 (about 43 percent of the eval calls, about 23 percent of the opens phase by the log's own durations) plus two warning lines on every start. Learning the order cannot fix them: a name that never opens never earns a rank, and the plan never contains the namespace that would make it resolvable.
+
+No project in this tree has this plan's true second-pass edge (a bare relative namespace open, `open Inner` in a file under `namespace Outer`, resolvable only after `open Outer` has run). A static scan found zero such edges in 1,454 source files across the four in-repo projects, and the live check showed every plan name in SageFs.Core and samples/counter resolved on its first pass.
+
+Reading, against this plan's own cut-offs: no project needs a second pass that learning could fix, so wiring the learning into the open phase would change nothing measurable today. The waste that does exist has two candidate fixes, both in files outside that agent's set: `OpenReplay.resolveWarmupOpens` could drop bare names that can never resolve at top level (one more `DroppedOpenReason` case), or discovery could add full namespace paths to the plan (which needs the schema 6 bump from step 5). Either removes the Simulation waste outright; the second also turns relative namespace opens into round 2 successes that learning could then rank.
+
+### Outcome
+
+Stopped here. The premise (a second pass that a learned order would remove) was not borne out on any project I could measure, so the item stays unbuilt and the code stays on `archive/2026-11-07/rescue-load-order`. The Simulation waste above is real and small (two names, two warning lines per start) and has its own two fixes, which belong to whoever next works on `faster-time-to-ready`, not to this item.
+
 ## Risks and dependencies
 
 - The premise may be false on our projects (step 1 exists for that).
@@ -138,4 +160,4 @@ S to M, about a week if step 1 says go, because the pure core is small and the c
 
 1. Is the retry you mean the open retry in `WarmUp.openWithRetryRichCore`? I found no project-level retry. Recommendation: treat it as the open retry, and if there is another one, name the log line.
 2. Where should the memory live: the project's `.SageFs/` next to the replay cache, or the data directory? Recommendation: `.SageFs/`. Both describe one project, and the gitignore test already guards that directory.
-3. May step 1 end the item? Recommendation: yes, with the 5 and 15 percent cut-offs above.
+3. May step 1 end the item? Recommendation: yes, with the 5 and 15 percent cut-offs above. Answered 2026-11-07: yes. The measurement ended it.

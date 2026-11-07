@@ -333,7 +333,7 @@ let items : Item list =
     item "sessions-learn-the-load-order" "Sessions learn the right load order" Repl Later
       NoLandmarkYet
       [ "docs/plans/sessions-learn-the-load-order.md" ]
-      "A session whose projects load in the wrong order retries and usually recovers. I'd order loads by MSBuild's project graph first, and remember the edges it missed so the second start loads clean on the first pass."
+      "I stopped this one. I measured four projects, 1,454 source files in all, looking for a project whose opens need a second pass, and found none. The one retry that fires, in SageFs.Simulation, comes from two names discovery can never resolve, which a learned order cannot fix. Nothing needs the learned order today, so I did not merge the code. It is kept on the branch `archive/2026-11-07/rescue-load-order` in case a project ever does."
 
     item "jupyter-kernel-that-works" "A Jupyter kernel that installs and works" Repl Later
       NoLandmarkYet
