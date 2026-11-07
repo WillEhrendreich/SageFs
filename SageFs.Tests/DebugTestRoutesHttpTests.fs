@@ -69,7 +69,7 @@ type private Worker(onBegin: TestCase -> DebugBegin, onContinue: string -> Debug
         | other -> return failwithf "the debug routes must only send debug messages, sent %A" other
       }
 
-let private startServer (worker: Worker) (discovered: TestCase list) = task {
+let private startServer (worker: Worker) (discovered: TestCase list) (dispatch: (SageFsMsg -> unit) option) = task {
   let info : SessionInfo =
     { Id = SageFs.McpSessionRouting.toSessionId sidText
       Name = None
@@ -122,7 +122,7 @@ let private startServer (worker: Worker) (discovered: TestCase list) = task {
       SessionOps = ops
       SessionMap = Collections.Concurrent.ConcurrentDictionary<string, string>()
       McpPort = 0
-      Dispatch = None
+      Dispatch = dispatch
       GetElmModel = Some (fun () -> model)
       GetElmRegions = None
       GetWarmupContext = None
@@ -176,11 +176,24 @@ let private post (url: string) (json: string) : Task<int * JsonElement> = task {
 
 let private text (name: string) (root: JsonElement) = root.GetProperty(name).GetString()
 
+/// The server with a dispatch that keeps what the routes dispatch, so a case can read what the Elm loop would have been sent.
+let private withDispatching (worker: Worker) (discovered: TestCase list) (body: string -> (unit -> SageFsMsg list) -> Task<unit>) : Task<unit> = task {
+  let sent = System.Collections.Concurrent.ConcurrentQueue<SageFsMsg>()
+  let! (app: WebApplication), baseUrl = startServer worker discovered (Some sent.Enqueue)
+  try do! body baseUrl (fun () -> sent.ToArray() |> Array.toList)
+  finally (app :> IDisposable).Dispose()
+}
+
 let private withServer (worker: Worker) (discovered: TestCase list) (body: string -> Task<unit>) : Task<unit> = task {
-  let! (app: WebApplication), baseUrl = startServer worker discovered
+  let! (app: WebApplication), baseUrl = startServer worker discovered None
   try do! body baseUrl
   finally (app :> IDisposable).Dispose()
 }
+
+let private recordsOf (sent: unit -> SageFsMsg list) : DebugRunRecord list =
+  sent () |> List.choose (function SageFsMsg.Event(TuiEvent.DebugRunFinished record) -> Some record | _ -> None)
+
+let private failedUnderDebugger = TestResult.Failed(TestFailure.AssertionFailed "expected 3 but got 4", FixtureDurations.usualResult)
 
 let private holds = Worker((fun _ -> DebugBegin.Held target), (fun _ -> DebugProgress.Ended(DebugEnd.Attached passed)))
 
@@ -299,6 +312,48 @@ let tests =
             status |> Expect.equal (sprintf "%s: http status" expectedWire) expectedStatus
             text "status" body |> Expect.equal "wire status" expectedWire
           })
+    }
+
+    testTask "WHY: a verdict is dispatched once however often the editor asks, and it names the test the hold was taken on" {
+      let worker = Worker((fun _ -> DebugBegin.Held target), (fun _ -> DebugProgress.Ended(DebugEnd.Attached failedUnderDebugger)))
+      do!
+        withDispatching worker [ adds; removes ] (fun baseUrl sent -> task {
+          let! _ = post (baseUrl + "/api/live-testing/debug") (JsonSerializer.Serialize {| testId = TestId.value adds.Id; sessionId = sidText |})
+          let release = JsonSerializer.Serialize {| ticket = "debug-4242-1"; sessionId = sidText |}
+          let! first, _ = post (baseUrl + "/api/live-testing/debug/continue") release
+          let! second, secondBody = post (baseUrl + "/api/live-testing/debug/continue") release
+          (first, second) |> Expect.equal "both continues answer the verdict" (200, 200)
+          text "outcome" secondBody |> Expect.equal "the repeated answer is the same verdict" "failed"
+          match recordsOf sent with
+          | [ record ] ->
+            record.OwnerSession |> Expect.equal "the session that held the test" sidText
+            record.HoldTicket |> Expect.equal "the ticket" "debug-4242-1"
+            record.Verdict.TestId |> Expect.equal "the test the hold was taken on" adds.Id
+            record.CodeBasis |> Expect.equal "the target's code was defined by eval" ResultProvenance.Evaluated
+          | other -> failtestf "expected exactly one DebugRunFinished, got %d" other.Length
+        })
+    }
+
+    testTask "WHY: a hold that ended without a verdict, or a ticket this daemon never granted, puts nothing on any row" {
+      for progress in
+        [ DebugProgress.StillRunning
+          DebugProgress.Ended(DebugEnd.NoDebuggerWithin TestTimeouts.patienceInProcess)
+          DebugProgress.Ended DebugEnd.ReleasedWithoutDebugger
+          DebugProgress.Ended DebugEnd.NoSuchHold
+          DebugProgress.Ended(DebugEnd.HostLost "gone") ] do
+        let worker = Worker((fun _ -> DebugBegin.Held target), (fun _ -> progress))
+        do!
+          withDispatching worker [ adds ] (fun baseUrl sent -> task {
+            let! _ = post (baseUrl + "/api/live-testing/debug") (JsonSerializer.Serialize {| testId = TestId.value adds.Id; sessionId = sidText |})
+            let! _ = post (baseUrl + "/api/live-testing/debug/continue") (JsonSerializer.Serialize {| ticket = "debug-4242-1"; sessionId = sidText |})
+            recordsOf sent |> Expect.isEmpty (sprintf "%A records nothing" progress)
+          })
+      let worker = Worker((fun _ -> DebugBegin.Held target), (fun _ -> DebugProgress.Ended(DebugEnd.Attached failedUnderDebugger)))
+      do!
+        withDispatching worker [ adds ] (fun baseUrl sent -> task {
+          let! _ = post (baseUrl + "/api/live-testing/debug/continue") (JsonSerializer.Serialize {| ticket = "debug-9-9"; sessionId = sidText |})
+          recordsOf sent |> Expect.isEmpty "a verdict for a hold this daemon never granted names no test, so it goes nowhere"
+        })
     }
 
     testTask "WHY: continue with no ticket is a 400" {

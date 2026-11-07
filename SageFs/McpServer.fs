@@ -2131,6 +2131,7 @@ let wireModelChangeHandlers
               (RunGeneration.value lt.LastGeneration)
               (TestRunPhase.isAnyRunning lt.RunPhases)
               sessionEntries.Length
+              (SageFs.Features.LiveTesting.DebugTicketLog.recorded model.LiveTesting.DebugTickets)
               activeId
           let recomputeCoverage, mcState' =
             SageFs.McpStateHandlers.shouldRecomputeTestSummary projectionKey modelChangeState.Value

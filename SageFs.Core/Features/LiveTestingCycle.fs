@@ -638,6 +638,8 @@ type LiveTestCycleState = {
   Confirmation: ConfirmationMachine
   /// What the run now in flight runs against, so its results are marked with where they came from.
   RunBasis: RunBasis
+  /// The debug runs already recorded for this session, so a repeated continue records a ticket once.
+  DebugTickets: DebugTicketLog
 }
 
 module LiveTestCycleState =
@@ -661,6 +663,7 @@ module LiveTestCycleState =
     Compile = CompileBlock.NoCompileErrors
     Confirmation = BuildConfirmation.initial
     RunBasis = RunBasis.Compiled
+    DebugTickets = DebugTicketLog.empty
   }
 
   let liveTestingStatusBarForSession (activeSessionId: string) (state: LiveTestCycleState) : string =

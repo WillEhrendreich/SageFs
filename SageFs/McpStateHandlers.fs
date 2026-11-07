@@ -83,11 +83,12 @@ let testSummaryProjectionKey
   (runGeneration: int)
   (anyRunning: bool)
   (entryCount: int)
+  (debugRuns: int)
   (activeId: string)
   : string =
   System.String.Concat
     [| activationTag; "|"; string discoveryGeneration; "|"; string runGeneration
-       "|"; (if anyRunning then "1" else "0"); "|"; string entryCount; "|"; activeId |]
+       "|"; (if anyRunning then "1" else "0"); "|"; string entryCount; "|"; string debugRuns; "|"; activeId |]
 
 /// Decide whether the (expensive) test-summary/coverage projection should run
 /// for this model change. Returns (recompute, updatedState): false skips the

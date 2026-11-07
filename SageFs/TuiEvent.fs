@@ -333,6 +333,8 @@ type TuiEvent =
   | TestRunStartedAt of testIds: Features.LiveTesting.TestId array * sessionId: string * generation: Features.LiveTesting.RunGeneration
   | TestResultsBatch of sessionId: string option * results: Features.LiveTesting.TestRunResult array
   | TestRunCompleted of sessionId: string option
+  /// A test the editor debugged finished with a verdict. It lands on the row without a normal run (`DebugRunRecord`).
+  | DebugRunFinished of record: Features.LiveTesting.DebugRunRecord
   /// The session evaluated `content` (a buffer) and is about to run `testIds` against what it
   /// evaluated. Results that arrive until the run completes ran against evaluated code, not a build.
   | EvaluatedRunBegan of sessionId: string * content: Features.LiveTesting.AnalysisIdentity * testIds: Features.LiveTesting.TestId array

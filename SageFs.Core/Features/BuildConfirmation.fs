@@ -120,6 +120,16 @@ module RunVerdict =
     | TestResult.NotRun -> RunVerdict.NoVerdict "it did not run"
     | TestResult.NoResult reason -> RunVerdict.NoVerdict (NoResultReason.describe reason)
 
+  /// What each of these tests last said in this state, reduced for comparison.
+  let ofTests (tests: TestId seq) (state: LiveTestState) : Map<TestId, RunVerdict> =
+    tests
+    |> Seq.map (fun id ->
+      id,
+      match Map.tryFind id state.LastResults with
+      | Some result -> ofResult result.Result
+      | None -> RunVerdict.NoVerdict "no result")
+    |> Map.ofSeq
+
   /// Whether two verdicts say the same thing. A red is a red whatever its reason says: the question is
   /// whether the build agrees the test fails, not whether it words the failure the same.
   let agree (evaluated: RunVerdict) (built: RunVerdict) : bool =

@@ -260,6 +260,7 @@
         <Compile Include="Features\LiveTestingCategories.fs" />
         <Compile Include="Features\BuildConfirmation.fs" />
         <Compile Include="Features\LiveCheckPump.fs" />
+        <Compile Include="Features\DebugRunRecord.fs" />
         <Compile Include="Features\LiveTestingCycle.fs" />
         <Compile Include="Features\TestExecutionContracts.fs" />
         <Compile Include="Features\RequestedRuns.fs" />

@@ -292,6 +292,25 @@ let toWire (answer: DebugAnswer) : int * DebugWire =
   | DebugAnswer.WorkerFailed message ->
     502, emptyWire DebugStatus.WorkerFailed (sprintf "The worker could not be reached: %s" message)
 
+// ---- recording the verdict --------------------------------------------------------------------------
+
+/// Where the test's code came from, as its row names it: a PDB means a build made it, an eval means no build has seen it.
+let basisOf (symbols: SymbolSupport) : ResultProvenance =
+  match symbols with
+  | SymbolSupport.CompiledWithSymbols -> ResultProvenance.Compiled
+  | SymbolSupport.DefinedByEval -> ResultProvenance.Evaluated
+
+/// What a finished hold puts on the test's row. Only a test that ran under the debugger has a verdict: a hold nobody
+/// released, one released without a debugger, one the host does not know and a host that ended each leave the row as it was.
+let recordOf (session: string) (ticket: string) (target: DebugTarget) (ended: DebugEnd) (at: DateTimeOffset) : DebugRunRecord option =
+  match ended with
+  | DebugEnd.Attached result ->
+    DebugRunRecord.create session ticket target.TestId target.TestName result (basisOf target.Symbols) at
+  | DebugEnd.NoDebuggerWithin _
+  | DebugEnd.ReleasedWithoutDebugger
+  | DebugEnd.NoSuchHold
+  | DebugEnd.HostLost _ -> None
+
 // ---- asking the worker ------------------------------------------------------------------------------
 
 let private newReplyId () = Guid.NewGuid().ToString("N").Substring(0, 8)

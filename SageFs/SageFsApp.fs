@@ -899,19 +899,6 @@ module SageFsUpdate =
     | Features.LiveTesting.RunBasis.Compiled
     | Features.LiveTesting.RunBasis.ConfirmingBuild _ -> Features.LiveTesting.ResultProvenance.Compiled
 
-  /// What each of these tests last said, reduced for comparison.
-  let private verdictsOf
-    (tests: Features.LiveTesting.TestId seq)
-    (state: Features.LiveTesting.LiveTestState)
-    : Map<Features.LiveTesting.TestId, Features.LiveTesting.RunVerdict> =
-    tests
-    |> Seq.map (fun id ->
-      id,
-      match Map.tryFind id state.LastResults with
-      | Some result -> Features.LiveTesting.RunVerdict.ofResult result.Result
-      | None -> Features.LiveTesting.RunVerdict.NoVerdict "no result")
-    |> Map.ofSeq
-
   /// Carry out what a confirmation step asked for: mark the rows it names, and hand the world the effects it
   /// cannot do itself. The run against a finished build is an ordinary run effect, with the basis recorded first.
   let private applyConfirmation
@@ -975,13 +962,13 @@ module SageFsUpdate =
               Features.LiveTesting.ConfirmationEvent.EvaluatedRunFinished
                 { Content = content
                   File = cycle.ActiveFile |> Option.defaultValue ""
-                  Evaluated = verdictsOf tests cycle.TestState })
+                  Evaluated = Features.LiveTesting.RunVerdict.ofTests tests cycle.TestState })
           | Features.LiveTesting.RunBasis.ConfirmingBuild generation ->
             match cycle.Confirmation.Phase with
             | Features.LiveTesting.ConfirmationPhase.RunningBuilt (confirmation, running) when running = generation ->
               ValueSome (
                 Features.LiveTesting.ConfirmationEvent.BuiltRunFinished
-                  (generation, verdictsOf (Map.keys confirmation.Evaluated) cycle.TestState))
+                  (generation, Features.LiveTesting.RunVerdict.ofTests (Map.keys confirmation.Evaluated) cycle.TestState))
             | _ -> ValueNone
         match event with
         | ValueNone -> { cycle with RunBasis = Features.LiveTesting.RunBasis.Compiled }, ([], owner)
@@ -1631,6 +1618,17 @@ module SageFsUpdate =
 
       | TuiEvent.TestResultsBatch (sessionId, results) ->
         applyBufferedTestResults sessionId [ results ] model
+
+      // A debug run's verdict lands on the row of the session that held the test. It is not a flake sample, a line of
+      // the run summary or a discovery, and a ticket records once (DebugRunRecord).
+      | TuiEvent.DebugRunFinished record ->
+        let recorded, _ =
+          tryUpdateLiveTestingState (Some record.OwnerSession) (fun cycle ->
+            match Features.LiveTesting.DebugRunRecord.plan record cycle.DebugTickets with
+            | None -> cycle, ()
+            | Some (changedIds, update, tickets) ->
+              { refreshStatusesForChangedIds cycle changedIds update with DebugTickets = tickets }, ()) model
+        recorded, []
 
       | TuiEvent.TestRunCompleted sessionId ->
         let model', replayEffects =
