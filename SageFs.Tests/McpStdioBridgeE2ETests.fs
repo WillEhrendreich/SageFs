@@ -242,6 +242,132 @@ let private runPipelinedBatchReproTest () : Task<unit> =
       | None -> ()
   }
 
+/// P9: the bridge must outlive the daemon it was talking to. `sagefs stop` ends the daemon an agent's bridge is
+/// connected to, `install-local.fsx` does it on purpose to serve a new build, and a client that sees its MCP
+/// server die on every upgrade has to be restarted by a person. Measured against the 0.6.940 tool on a
+/// throwaway daemon: the bridge answered `sagefs mcp: the daemon became unreachable: server stream closed` on
+/// stderr and exited 1, the instant the daemon's push stream closed.
+///
+/// Real processes throughout: a daemon, the BUILT `sagefs mcp` bridge on its stdio, the daemon killed by its
+/// exact pid, a second daemon on the same port. The bridge has to stay alive, tell the client its lists may
+/// have changed (the new daemon is a new MCP session and may be a new build), and answer the next request.
+let private runDaemonUpgradeTest () : Task<unit> =
+  task {
+    let mcpPort, _dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
+    let workingDir = IO.Path.GetTempPath()
+    let! firstDaemon, firstClient = SageFs.Tests.HttpApiIntegrationTests.startDaemonWithArgs mcpPort workingDir [ "--no-resume" ]
+    firstClient.Dispose()
+    let secondDaemon = ref (None: Process option)
+
+    let psi = ProcessStartInfo()
+    psi.FileName <- sageFsExe
+    psi.ArgumentList.Add("mcp")
+    psi.ArgumentList.Add("--mcp-port")
+    psi.ArgumentList.Add(string mcpPort)
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    psi.RedirectStandardInput <- true
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.StandardOutputEncoding <- Encoding.UTF8
+    psi.StandardInputEncoding <- Encoding.UTF8
+    psi.Environment["SAGEFS_DATA_DIR"] <- IO.Path.Combine(IO.Path.GetTempPath(), "sagefs-test", "mcp-stdio-upgrade", Guid.NewGuid().ToString("N"))
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
+    use bridge = Process.Start(psi)
+    let stderrBuf = Text.StringBuilder()
+    bridge.ErrorDataReceived.Add(fun e -> match e.Data with null -> () | line -> stderrBuf.AppendLine(line) |> ignore)
+    bridge.BeginErrorReadLine()
+
+    let seen = Collections.Generic.List<string>()
+    let describeBridge () =
+      sprintf
+        "bridge exited=%b exitCode=%s\nstdout lines it wrote: %A\nstderr:\n%s"
+        bridge.HasExited
+        (match bridge.HasExited with true -> string bridge.ExitCode | false -> "n/a")
+        (List.ofSeq seen)
+        (stderrBuf.ToString())
+    let send (line: string) =
+      task {
+        do! bridge.StandardInput.WriteLineAsync(line)
+        do! bridge.StandardInput.FlushAsync()
+      }
+    /// Reads stdout until a line carrying `"id":<id>` arrives (notifications on the way are kept in `seen`).
+    let readAnswerTo (id: int) : Task<string option> =
+      task {
+        let deadline = DateTime.UtcNow + TestTimeouts.daemonFirstOutput
+        let mutable answer = None
+        let mutable stop = false
+        while not stop do
+          let remaining = deadline - DateTime.UtcNow
+          match remaining > TimeSpan.Zero with
+          | false -> stop <- true
+          | true ->
+            let readTask = bridge.StandardOutput.ReadLineAsync()
+            let! completed = Task.WhenAny(readTask, Task.Delay remaining)
+            match Object.ReferenceEquals(completed, readTask) with
+            | false -> stop <- true
+            | true ->
+              match readTask.Result with
+              | null -> stop <- true
+              | line ->
+                seen.Add line
+                let answersId =
+                  try
+                    use doc = Text.Json.JsonDocument.Parse line
+                    match doc.RootElement.TryGetProperty "id" with
+                    | true, value -> value.ValueKind = Text.Json.JsonValueKind.Number && value.GetInt32() = id
+                    | false, _ -> false
+                  with _ -> false
+                match answersId with
+                | true ->
+                  answer <- Some line
+                  stop <- true
+                | false -> ()
+        return answer
+      }
+
+    try
+      try
+        do! send """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"upgrade-e2e","version":"0.0.1"}}}"""
+        let! initAnswer = readAnswerTo 1
+        initAnswer |> Option.isSome |> Expect.isTrue (sprintf "the bridge answered initialize against the first daemon\n%s" (describeBridge ()))
+        do! send """{"jsonrpc":"2.0","method":"notifications/initialized"}"""
+        do! send """{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"""
+        let! firstTools = readAnswerTo 2
+        firstTools |> Option.isSome |> Expect.isTrue (sprintf "tools/list answered against the first daemon\n%s" (describeBridge ()))
+
+        // The upgrade: the daemon the bridge talks to goes away, and another one takes its port.
+        firstDaemon.Kill()
+        firstDaemon.WaitForExit(TestTimeouts.patience) |> ignore
+        let! replacement = SageFs.Tests.HttpApiIntegrationTests.startDaemonWithArgs mcpPort workingDir [ "--no-resume" ]
+        secondDaemon.Value <- Some(fst replacement)
+        (snd replacement).Dispose()
+
+        bridge.HasExited |> Expect.isFalse (sprintf "the bridge outlives the daemon it was talking to\n%s" (describeBridge ()))
+
+        do! send """{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}"""
+        let! secondTools = readAnswerTo 3
+        match secondTools with
+        | None -> failwithf "no answer to tools/list after the daemon was replaced\n%s" (describeBridge ())
+        | Some line -> line |> Expect.stringContains "the replacement daemon's tool list reached the client" "\"send_fsharp_code\""
+        seen
+        |> Seq.exists (fun line -> line.Contains "notifications/tools/list_changed")
+        |> Expect.isTrue (sprintf "the client was told its tool list may have changed, because the daemon behind it is a new MCP session\n%s" (describeBridge ()))
+      finally
+        try bridge.StandardInput.Close() with _ -> ()
+        bridge.WaitForExit(TestTimeouts.patience) |> ignore
+        match bridge.HasExited with
+        | false -> (try bridge.Kill() with _ -> ())
+        | true -> ()
+    finally
+      for daemon in [ Some firstDaemon; secondDaemon.Value ] |> List.choose id do
+        try
+          match daemon.HasExited with
+          | false -> daemon.Kill()
+          | true -> ()
+        with _ -> ()
+  }
+
 [<Tests>]
 let tests =
   testList "McpStdioBridge E2E" [
@@ -252,4 +378,8 @@ let tests =
     Integration.hostCase
       "sagefs mcp: issue #138 — initialize, notifications/initialized and tools/list piped in before any reply, tools/list still gets the session id"
       (fun () -> runPipelinedBatchReproTest () |> _.GetAwaiter() |> _.GetResult())
+
+    Integration.hostCase
+      "sagefs mcp: the bridge outlives a daemon upgrade, tells the client its lists changed, and answers the next request"
+      (fun () -> runDaemonUpgradeTest () |> _.GetAwaiter() |> _.GetResult())
   ]
