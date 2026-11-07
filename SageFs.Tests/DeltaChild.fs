@@ -136,12 +136,16 @@ type FactKind =
   | Coverage
   /// The script had a line the child does not know.
   | Unknown
+  /// The last fact of a script that ran to its end, with the number of facts before it. A child that exits 0 without it
+  /// did not finish, whatever else it said.
+  | Done
 
 [<RequireQualifiedAccess>]
 module FactKind =
   let all : FactKind list =
     [ FactKind.EvalBegin; FactKind.EvalEnd; FactKind.EvalLine; FactKind.Apply; FactKind.Check; FactKind.Capability
-      FactKind.Time; FactKind.Bench; FactKind.Second; FactKind.Handler; FactKind.Invoked; FactKind.Probes; FactKind.Coverage; FactKind.Unknown ]
+      FactKind.Time; FactKind.Bench; FactKind.Second; FactKind.Handler; FactKind.Invoked; FactKind.Probes; FactKind.Coverage; FactKind.Unknown
+      FactKind.Done ]
 
   let tag (kind: FactKind) : string =
     match kind with
@@ -159,6 +163,7 @@ module FactKind =
     | FactKind.Probes -> "PROBES"
     | FactKind.Coverage -> "COVERAGE"
     | FactKind.Unknown -> "UNKNOWN"
+    | FactKind.Done -> "DONE"
 
 /// One thing the child said.
 type Fact =
@@ -167,7 +172,22 @@ type Fact =
 
 let private prefix = "DELTACHILD "
 
-let private say (kind: FactKind) (text: string) = printfn "%s%s %s" prefix (FactKind.tag kind) text
+/// The file the child's facts go to, in the script's directory.
+[<Literal>]
+let private factsFileName = "facts.txt"
+
+/// Where a fact is written first. The facts do not travel over stdout: a pipe is read by an event on the parent's pool,
+/// and a parent that lost it saw a child that ran its whole script as one that said nothing. A file the child writes
+/// and flushes line by line is there when the child is gone.
+let mutable private factSink : TextWriter = TextWriter.Null
+let mutable private factsSaid = 0
+
+let private say (kind: FactKind) (text: string) =
+  let line = sprintf "%s%s %s" prefix (FactKind.tag kind) text
+  factSink.WriteLine line
+  factsSaid <- factsSaid + 1
+  // Stdout still carries them, for a person watching and for the failure message's last lines.
+  printfn "%s" line
 
 let private parseFact (line: string) : Fact voption =
   match line.StartsWith(prefix, StringComparison.Ordinal) with
@@ -246,6 +266,7 @@ let private runScript (directory: string) : int =
   let mutable lastChain : (DeltaChain * PeImage) voption = ValueNone
   let mutable allocatedProbes = 0
   let path (name: string) = Path.Combine(directory, name)
+  factSink <- new StreamWriter(path factsFileName, false, Text.UTF8Encoding false, AutoFlush = true)
   for line in File.ReadAllLines(path "script.txt") do
     match Op.parse line with
     | ValueNone -> say FactKind.Unknown line
@@ -363,6 +384,8 @@ let private runScript (directory: string) : int =
           (sprintf "%.3f handlers=%.3f %s" applied watch.Elapsed.TotalMilliseconds (match failures with | [] -> "Applied" | f -> "handlers failed: " + String.Join("; ", f)))
         for run in runs |> List.sortByDescending (fun r -> r.Milliseconds) |> List.truncate 4 do
           say FactKind.Handler (sprintf "%.3f ms %s.%s" run.Milliseconds run.Handler run.Step)
+  say FactKind.Done (string factsSaid)
+  factSink.Dispose()
   0
 
 /// What running an argument list came to.
@@ -386,7 +409,10 @@ let tryRun (argv: string[]) : ChildRun =
 /// What a child printed and how it ended.
 type ChildResult =
   { ExitCode: int
+    /// The facts the child wrote to its file, in order.
     Facts: Fact list
+    /// Whether the last fact is `Done` and it counts the facts before it, so the file is whole.
+    Finished: bool
     Stderr: string
     /// Everything the child wrote to stdout, facts or not, so a run that parsed to nothing can show what it got.
     Stdout: string
@@ -430,9 +456,19 @@ let private startInfo (directory: string) (modifiable: ModifiableAssemblies) : P
   | ModifiableAssemblies.NotSet -> info.Environment.Remove "DOTNET_MODIFIABLE_ASSEMBLIES" |> ignore
   info
 
+/// What the parent does with the read end of the child's stdout pipe.
+[<RequireQualifiedAccess>]
+type StdoutReading =
+  /// It reads every line into `stdout.txt`, as a run always does.
+  | Drained
+  /// It closes the read end straight after the start, the way a parent that lost a descriptor would. The child's
+  /// writes then fail with EPIPE, which the runtime's console ignores, so the child exits 0 and says nothing. This is
+  /// the twin: a harness whose facts depend on the pipe goes red under it.
+  | ClosedAtStart
+
 /// Run a script in a child. Both streams are drained into files while it runs, because a redirected pipe nobody reads
 /// fills and stops the child before it says anything.
-let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAssemblies) (script: Op list) : Task<ChildResult> =
+let runReading (reading: StdoutReading) (budget: TimeSpan) (directory: string) (modifiable: ModifiableAssemblies) (script: Op list) : Task<ChildResult> =
   task {
     let scriptLines = script |> List.map Op.toLine
     File.WriteAllLines(Path.Combine(directory, "script.txt"), scriptLines)
@@ -446,7 +482,9 @@ let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAsse
     child.OutputDataReceived.Add(fun e -> lock stdoutFile (fun () -> match e.Data with | null -> () | line -> stdoutFile.WriteLine line))
     child.ErrorDataReceived.Add(fun e -> lock stderrFile (fun () -> match e.Data with | null -> () | line -> stderrFile.WriteLine line))
     child.Start() |> ignore
-    child.BeginOutputReadLine()
+    match reading with
+    | StdoutReading.Drained -> child.BeginOutputReadLine()
+    | StdoutReading.ClosedAtStart -> child.StandardOutput.Dispose()
     child.BeginErrorReadLine()
     use cts = new CancellationTokenSource(budget)
     try
@@ -459,13 +497,23 @@ let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAsse
     stdoutFile.Flush()
     stderrFile.Flush()
     let stdout = File.ReadAllText stdoutPath
+    // The facts are the child's own file, not what came over the pipe.
+    let factsPath = Path.Combine(directory, factsFileName)
     let facts =
-      File.ReadAllLines stdoutPath
-      |> Array.choose (fun l -> match parseFact l with | ValueSome fact -> Some fact | ValueNone -> None)
-      |> Array.toList
+      match File.Exists factsPath with
+      | false -> []
+      | true ->
+        File.ReadAllLines factsPath
+        |> Array.choose (fun l -> match parseFact l with | ValueSome fact -> Some fact | ValueNone -> None)
+        |> Array.toList
+    let finished =
+      match List.tryLast facts with
+      | Some { Kind = FactKind.Done; Text = count } -> count = string (facts.Length - 1)
+      | _ -> false
     return
       { ExitCode = child.ExitCode
         Facts = facts
+        Finished = finished
         Stderr = File.ReadAllText stderrPath
         Stdout = stdout
         Elapsed = watch.Elapsed
@@ -473,6 +521,10 @@ let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAsse
         Directory = directory
         Script = scriptLines }
   }
+
+/// `runReading` with the pipe read the way a run always reads it.
+let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAssemblies) (script: Op list) : Task<ChildResult> =
+  runReading StdoutReading.Drained budget directory modifiable script
 
 /// Run a script in a child that is expected to end within `TestTimeouts.patience`.
 let run (directory: string) (modifiable: ModifiableAssemblies) (script: Op list) : Task<ChildResult> =
@@ -542,8 +594,8 @@ let describeRun (result: ChildResult) : string =
     | true -> sprintf "script.txt %d bytes" (FileInfo(path).Length)
     | false -> "script.txt missing"
   sprintf
-    "child pid %d exit %d after %.1f s in %s (%s) | stdout %d bytes, %d facts, ends: %s | stderr %d bytes, ends: %s | script: %s | %s"
+    "child pid %d exit %d after %.1f s in %s (%s) | facts file: %d facts, finished %b | stdout %d bytes, ends: %s | stderr %d bytes, ends: %s | script: %s | %s"
     result.ProcessId result.ExitCode result.Elapsed.TotalSeconds result.Directory scriptFile
-    stdoutBytes result.Facts.Length (tailOf result.Stdout)
+    result.Facts.Length result.Finished stdoutBytes (tailOf result.Stdout)
     stderrBytes (tailOf result.Stderr)
     (String.Join("; ", result.Script)) (machineNow ())

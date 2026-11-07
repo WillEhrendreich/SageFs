@@ -201,6 +201,9 @@ let private runCase (twin: Twin) (probing: Probing) (probes: ProbeStripping) (in
       match result.ExitCode with
       | 0 -> ()
       | code -> problems.Add(sprintf "the child exited %d: %s" code result.Stderr)
+      match result.Finished with
+      | true -> ()
+      | false -> problems.Add "the child never wrote its last fact, so its script did not run to the end"
       for outcome in applies do
         match outcome with
         | "Applied" -> ()
@@ -299,7 +302,7 @@ let private fixedProgram : Program =
 let private rewrite (source: string) (target: string) (edit: AssemblyDefinition -> unit) : unit =
   let assembly = AssemblyDefinition.ReadAssembly source
   edit assembly
-  assembly.Write target
+  writeAssembly assembly target
   assembly.Dispose()
 
 let private progType (assembly: AssemblyDefinition) : TypeDefinition = assembly.MainModule.GetType "Gen.Prog"
@@ -762,7 +765,7 @@ let metadataDeltaTests =
             assembly.CustomAttributes.Remove attribute |> ignore
           assembly.CustomAttributes.Add(debuggableAttribute assembly.MainModule)
           edit assembly
-          assembly.Write target
+          writeAssembly assembly target
         // Some method bodies change: a nop in front of the first instruction of the first few plain methods.
         let editFirst (count: int) (assembly: AssemblyDefinition) =
           let plain (m: MethodDefinition) =
@@ -837,6 +840,20 @@ let metadataDeltaTests =
         line |> Expect.stringContains "updates are supported" "support=Supported"
         line |> Expect.stringContains "the environment is the debug one" "environment=Debug"
         line |> Expect.stringContains "and the runtime lists the baseline capability" "Baseline"
+      finally
+        removeQuietly directory
+    }
+
+    testTask "WHY - a child whose stdout nobody reads still reports every fact, so a lost pipe cannot make a run that worked look like one that said nothing" {
+      let directory = scratch ()
+      try
+        compileAll directory [ fixedProgram ] |> ignore
+        let! result =
+          DeltaChild.runReading DeltaChild.StdoutReading.ClosedAtStart TestTimeouts.patience directory ModifiableAssemblies.Debug
+            [ Op.Load "v0/Gen.dll"; Op.Eval ]
+        result.ExitCode |> Expect.equal (sprintf "the child lived: %s" result.Stderr) 0
+        DeltaChild.evalBlocks result |> List.length |> Expect.equal (sprintf "the evaluation came back (%s)" (DeltaChild.describeRun result)) 1
+        result.Finished |> Expect.isTrue "and the child said it reached the end of its script"
       finally
         removeQuietly directory
     }

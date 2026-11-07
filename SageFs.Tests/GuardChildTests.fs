@@ -67,6 +67,7 @@ let private runChild (scenario: GuardScenario) : Task<ChildResult> =
         | Direct executable -> ProcessStartInfo(executable)
       info.ArgumentList.Add "--guard-child"
       info.ArgumentList.Add (GuardScenario.toArgument scenario)
+      info.ArgumentList.Add directory
       info.RedirectStandardOutput <- true
       info.RedirectStandardError <- true
       info.UseShellExecute <- false
@@ -91,9 +92,12 @@ let private runChild (scenario: GuardScenario) : Task<ChildResult> =
       stdoutFile.Flush()
       stderrFile.Flush()
       let stdout = File.ReadAllText stdoutPath
+      // The line is the child's own file, not what came over the pipe.
+      let resultPath = Path.Combine(directory, ResultFileName)
+      let said = match File.Exists resultPath with | true -> File.ReadAllText resultPath | false -> ""
       return
         { ExitCode = child.ExitCode
-          Fields = parseFields stdout
+          Fields = parseFields said
           Stdout = stdout
           Stderr = File.ReadAllText stderrPath }
     finally

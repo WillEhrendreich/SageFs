@@ -159,9 +159,15 @@ type ChildRun =
   /// Not a child: the arguments are the test runner's.
   | NotAChild
 
+/// The file in the run's directory that holds the line the child says. The parent reads it from there: the line also goes
+/// to stdout, but a pipe is read by an event on the parent's pool, and a parent that lost it saw a child that clicked its
+/// getter and lived as one that said nothing.
+[<Literal>]
+let ResultFileName = "result.txt"
+
 let tryRun (argv: string[]) : ChildRun =
   match argv with
-  | [| "--guard-child"; argument |] ->
+  | [| "--guard-child"; argument; directory |] ->
     match GuardScenario.parse argument with
     | Result.Error message ->
       eprintfn "%s" message
@@ -170,7 +176,9 @@ let tryRun (argv: string[]) : ChildRun =
       let evaluator = Evaluator(childLimits scenario, unfiltered, GuardScenario.guardingFor scenario)
       let property = typeof<Victim>.GetProperty (GuardScenario.getterName scenario)
       let evaluated = evaluator.RunGuarded property (box (Victim()))
-      printfn "%s" (outcomeLine scenario evaluated)
+      let line = outcomeLine scenario evaluated
+      System.IO.File.WriteAllText(System.IO.Path.Combine(directory, ResultFileName), line + "\n")
+      printfn "%s" line
       stdout.Flush()
       // A spinning thread that was given up on is a background thread: leaving the process does not wait for it.
       ChildRun.Ran 0

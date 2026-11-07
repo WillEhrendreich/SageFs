@@ -424,6 +424,23 @@ let private emitBody (env: Env) (m: MethodDefinition) (body: Body) : unit =
     handler.CatchType <- env.Module.ImportReference typeof<exn>
     m.Body.ExceptionHandlers.Add handler
 
+/// Write an assembly to `path` from memory, in one call. Cecil's own `Write path` opens a `FileStream` and calls
+/// `SetLength` on it, which throws "Stream does not support seeking" the moment the descriptor does not answer `lseek`
+/// (it did in a gate run, for one of four cases that were all writing at once). A `MemoryStream` always seeks, and
+/// `File.WriteAllBytes` does not ask the file to.
+let writeAssembly (assembly: AssemblyDefinition) (path: string) : unit =
+  use image = new MemoryStream()
+  assembly.Write image
+  File.WriteAllBytes(path, image.ToArray())
+
+/// `writeAssembly` with a portable PDB beside it (`Gen.dll` gets `Gen.pdb`), written from memory the same way.
+let writeAssemblyWithPortablePdb (assembly: AssemblyDefinition) (path: string) : unit =
+  use image = new MemoryStream()
+  use symbols = new MemoryStream()
+  assembly.Write(image, WriterParameters(WriteSymbols = true, SymbolWriterProvider = PortablePdbWriterProvider(), SymbolStream = symbols))
+  File.WriteAllBytes(path, image.ToArray())
+  File.WriteAllBytes(Path.ChangeExtension(path, ".pdb"), symbols.ToArray())
+
 /// Write a program to a DLL.
 let compile (program: Program) (path: string) : unit =
   let assembly = AssemblyDefinition.CreateAssembly(AssemblyNameDefinition("Gen", Version(1, 0, 0, 0)), "Gen", ModuleKind.Dll)
@@ -521,7 +538,7 @@ let compile (program: Program) (path: string) : unit =
   for _, _, invoke, _ in closures do
     invoke.Body.OptimizeMacros()
   Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
-  assembly.Write path
+  writeAssembly assembly path
 
 /// Compile every version of a program into its own folder under `directory`, and say where each DLL is.
 let compileAll (directory: string) (versions: Program list) : string list =

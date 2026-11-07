@@ -243,7 +243,10 @@ let private writeReferenceAssembly (path: string) =
   main.Types.Add marker
   let referenceAssembly = typeof<System.Runtime.CompilerServices.ReferenceAssemblyAttribute>.GetConstructor(Type.EmptyTypes)
   assembly.CustomAttributes.Add(CustomAttribute(main.ImportReference referenceAssembly))
-  assembly.Write path
+  // From memory, as the delta harness writes its assemblies (DeltaProgram.writeAssembly): no FileStream.SetLength to refuse.
+  use image = new MemoryStream()
+  assembly.Write image
+  File.WriteAllBytes(path, image.ToArray())
 
 /// Run `contents` as the working directory's init.fsx in a real session, the way a session's warmup does.
 let private applyInSession (site: string) (contents: string) =

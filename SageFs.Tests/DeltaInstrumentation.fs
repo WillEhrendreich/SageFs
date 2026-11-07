@@ -44,7 +44,7 @@ let private withSequencePoints (path: string) : unit =
           point.EndColumn <- 10
           line <- line + 1
           m.DebugInformation.SequencePoints.Add point
-  assembly.Write(path, WriterParameters(WriteSymbols = true, SymbolWriterProvider = PortablePdbWriterProvider()))
+  SageFs.Tests.DeltaProgram.writeAssemblyWithPortablePdb assembly path
 
 /// Instrument the DLL at `path` in place, with the real instrumenter. The answer is how many probes it wrote.
 let instrumentInPlace (path: string) : Result<int, string> =
