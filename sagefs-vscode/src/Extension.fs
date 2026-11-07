@@ -2862,15 +2862,21 @@ let activate (context: ExtensionContext) =
       |> promiseIgnoreLog logToOutput)
   // Debug ONE test: hold it in the test host, attach a .NET debugger to the host, release it, detach when it finishes. The
   // Debug lens, the failing test's hover link and the Test Explorer's Debug profile all run this with the test's id.
+  // The argument is one test id (the lens and the hover link) or a list of them (the Test Explorer with several tests picked).
   reg "sagefs.debugTest" (fun args ->
-    match tryCastString args |> Option.defaultValue "" with
-    | "" ->
+    let ids =
+      match tryCastStringArray args, tryCastString args with
+      | Some many, _ -> many |> Array.toList
+      | None, Some one -> [ one ]
+      | None, None -> []
+    match TestDebugPure.batchOf ids with
+    | [] ->
       Window.showWarningMessage "No test selected. Use Debug above a failing test, or Debug Test in the Test Explorer." [||] |> ignore
-    | testId ->
+    | testIds ->
       withClient (fun c ->
         promise {
           match! resolveCommandTarget c with
-          | SessionScopePure.CommandTarget.Session sessionId -> do! TestDebugCommand.debugTest c sessionId testId
+          | SessionScopePure.CommandTarget.Session sessionId -> do! TestDebugCommand.debugTests c sessionId testIds
           | SessionScopePure.CommandTarget.NoSessionForThisWindow ->
             Window.showWarningMessage noSessionForThisWindowMessage [||] |> ignore
         })

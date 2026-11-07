@@ -312,6 +312,121 @@ let escapeMarkdown (text: string) : string =
 let hoverWithDebugLink (hover: string) (testId: string) : string =
   sprintf "%s\n\n%s" (escapeMarkdown hover) (debugCommandLink testId)
 
+// ── Several tests under one attach ───────────────────────────────
+
+// The test host holds one test at a time, and one debugger attached to the host stays attached after a test ends. So several
+// tests debug in ONE attach by taking them one after another: hold the first, attach, release it; when it finishes, hold the
+// next with the debugger still attached and release it at once. Each test's verdict lands on its row as it ends (the daemon
+// records it on the continue that ends the hold), so the marks update test by test, not at the end.
+
+/// The ids to debug: in the order they were picked, each once, blanks dropped.
+let batchOf (ids: string list) : string list =
+  ids |> List.filter (fun id -> id <> "") |> List.distinct
+
+/// Whether this batch's debug session has started.
+[<RequireQualifiedAccess>]
+type BatchSession =
+  | NotAttachedYet
+  | Attached
+
+[<RequireQualifiedAccess>]
+type AfterHold =
+  /// The first held test: start the debug session on the host, then release.
+  | AttachThenRelease of configuration: AttachConfiguration * notices: Notice list
+  /// The debugger is already on the host: release the test now.
+  | ReleaseNow of notices: Notice list
+  /// This test cannot be debugged (the daemon does not know it); say so and take the next.
+  | SkipThisTest of Notice
+  /// Nothing after this can work (no host, no session, a hold that is not ours); say why and stop.
+  | StopBatch of Notice
+
+/// What to do with the daemon's answer to "hold this test" when it is one of a batch.
+let afterHold (session: BatchSession) (view: DebugAnswerView) : AfterHold =
+  match beginStep view, statusOfWire view.Status with
+  | BeginStep.AttachDebugger(configuration, notices), _ ->
+    match session with
+    | BatchSession.NotAttachedYet -> AfterHold.AttachThenRelease(configuration, notices)
+    | BatchSession.Attached -> AfterHold.ReleaseNow notices
+  | BeginStep.Refuse notice, (DebugStatus.NotDiscovered | DebugStatus.NoTestMatched | DebugStatus.AmbiguousTest) -> AfterHold.SkipThisTest notice
+  | BeginStep.Refuse notice, _ -> AfterHold.StopBatch notice
+
+[<RequireQualifiedAccess>]
+type AfterTest =
+  | GoOn
+  | StopBatch
+
+/// What to do after "release it and tell me when it finishes" answers in a batch. A test that ran under the debugger, with
+/// whatever verdict, goes on to the next. One that never ran (no debugger, a lost hold, a lost host) would fail the same
+/// way for the rest.
+let afterTest (view: DebugAnswerView) : AfterTest =
+  match statusOfWire view.Status with
+  | DebugStatus.Attached -> AfterTest.GoOn
+  | DebugStatus.StillRunning
+  | DebugStatus.Held
+  | DebugStatus.NoDebuggerWithin
+  | DebugStatus.ReleasedWithoutDebugger
+  | DebugStatus.NoSuchHold
+  | DebugStatus.HostLost
+  | DebugStatus.HoldAlreadyOpen
+  | DebugStatus.HostUnavailable
+  | DebugStatus.NotDiscovered
+  | DebugStatus.NoTestMatched
+  | DebugStatus.AmbiguousTest
+  | DebugStatus.NoWorker
+  | DebugStatus.NoSession
+  | DebugStatus.WorkerFailed
+  | DebugStatus.BadRequest
+  | DebugStatus.Unrecognised _ -> AfterTest.StopBatch
+
+/// How one test ended under the debugger.
+[<RequireQualifiedAccess>]
+type TestEnded =
+  | Passed
+  | Failed
+  | Skipped
+  | NoVerdict
+
+/// How an `attached` answer says its test ended.
+let endedOf (view: DebugAnswerView) : TestEnded =
+  match view.Outcome with
+  | "passed" -> TestEnded.Passed
+  | "failed" -> TestEnded.Failed
+  | "skipped" -> TestEnded.Skipped
+  | _ -> TestEnded.NoVerdict
+
+type BatchTally =
+  { Passed: int
+    Failed: int
+    Skipped: int
+    NoVerdict: int
+    /// Tests that never ran: skipped over, or after the batch stopped.
+    NotRun: int }
+
+/// What a batch of `total` tests came to. Every test is counted once: the ones that ended, and the rest as not run.
+let tally (total: int) (ended: TestEnded list) : BatchTally =
+  let count which = ended |> List.filter (fun e -> e = which) |> List.length
+  { Passed = count TestEnded.Passed
+    Failed = count TestEnded.Failed
+    Skipped = count TestEnded.Skipped
+    NoVerdict = count TestEnded.NoVerdict
+    NotRun = total - ended.Length }
+
+/// One sentence for the whole batch, so a run of tests does not open a message for each. Zero counts are left out.
+let batchSummary (t: BatchTally) : Notice =
+  let total = t.Passed + t.Failed + t.Skipped + t.NoVerdict + t.NotRun
+  let parts =
+    [ t.Passed, "passed"
+      t.Failed, "failed"
+      t.Skipped, "were skipped"
+      t.NoVerdict, "ended without a result"
+      t.NotRun, "did not run" ]
+    |> List.filter (fun (n, _) -> n > 0)
+    |> List.map (fun (n, what) -> sprintf "%d %s" n what)
+  let text = sprintf "Debugged %d tests under one debugger: %s." total (String.concat ", " parts)
+  match t.Failed > 0 || t.NotRun > 0 with
+  | true -> warning text
+  | false -> info text
+
 // ── What the client sends ────────────────────────────────────────
 
 /// The body of "hold this test". It names the session the window shows: with none, the daemon picks one by its own

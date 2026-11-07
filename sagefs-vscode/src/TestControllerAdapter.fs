@@ -140,18 +140,21 @@ let create
       (fun req token -> runHandler req token),
       true)
 
-  // The Debug profile is what puts "Debug Test" on a test's gutter glyph and in the Test Explorer. Debugging holds one test
-  // in the test host at a time, so it debugs the first test the request names.
+  /// The ids of every test the request names, in the order the Test Explorer lists them. The items are flat (one per test).
+  let debugIdsOf (request: TestRunRequest) : string array =
+    match request.``include`` with
+    | Some items -> items |> Array.choose (fun item -> tryOfObj item |> Option.map (fun i -> i.id))
+    | None -> [||]
+
+  // The Debug profile is what puts "Debug Test" on a test's gutter glyph and in the Test Explorer. The test host holds one
+  // test at a time, so several picked tests debug one after another under one debugger attach.
   let debugHandler (request: TestRunRequest) (_token: CancellationToken) : JS.Promise<unit> =
     promise {
-      match request.``include`` with
-      | Some items when items.Length > 0 ->
-        match tryOfObj items.[0] with
-        | Some item ->
-          do! Commands.executeCommandWith SageFs.Vscode.TestDebugPure.DebugCommandId (box item.id) |> Promise.map ignore
-        | None -> ()
-      | _ ->
+      match debugIdsOf request with
+      | [||] ->
         Window.showWarningMessage "Pick a test to debug: use Debug Test on a test in the Test Explorer or on its gutter mark." [||] |> ignore
+      | ids ->
+        do! Commands.executeCommandWith SageFs.Vscode.TestDebugPure.DebugCommandId (box ids) |> Promise.map ignore
     }
 
   let _debugProfile =

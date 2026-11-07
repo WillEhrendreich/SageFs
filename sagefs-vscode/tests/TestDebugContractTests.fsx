@@ -415,9 +415,10 @@ let tests =
       testCase "WHY - the command attaches with the configuration this module builds, and checks for a debugger first" <| fun _ ->
         let source = read "src/TestDebugCommand.fs"
         source |> Expect.stringContains "checks for a debugger" "chooseDebugger"
-        source |> Expect.stringContains "attaches with the pure configuration" "BeginStep.AttachDebugger(configuration"
-        source |> Expect.stringContains "decides each step purely" "beginStep"
+        source |> Expect.stringContains "attaches with the pure configuration" "AfterHold.AttachThenRelease(configuration"
+        source |> Expect.stringContains "decides each step purely" "afterHold"
         source |> Expect.stringContains "decides each step purely" "continueStep"
+        source |> Expect.stringContains "decides whether the batch goes on purely" "afterTest"
     ]
   ]
 
