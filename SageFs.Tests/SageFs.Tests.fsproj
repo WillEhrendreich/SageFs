@@ -553,6 +553,7 @@
         <Compile Include="TweakPushTests.fs" />
         <Compile Include="EvalInOrderTests.fs" />
         <Compile Include="ChangesStripTests.fs" />
+        <Compile Include="WatchTabTests.fs" />
         <Compile Include="LiveBindingsTweakServiceTests.fs" />
         <Compile Include="LiveBindingsTweakViewTests.fs" />
         <Compile Include="RetentionSimDstTests.fs" />

@@ -693,6 +693,40 @@ let statesJourney () : Task<unit> = task {
     do! boxOf("gravity").FillAsync "9.5"
     do! press "gravity" "tweak-try"
     do! waitState page "gravity" "Tweaked"
+    // ── 7b. the tabs list the bindings they are for ───────────────────────────────────────────────────────────────────
+    let bindingBox (name: string) = sprintf "#lb_%s" (Convert.ToHexStringLower(Text.Encoding.UTF8.GetBytes name))
+    let isListed (name: string) =
+      page.EvaluateAsync<bool>("sel => { const e = document.querySelector(sel); return !!e && !e.classList.contains('live-hidden'); }", bindingBox name)
+    let waitListed (name: string) (expected: bool) =
+      waitJs page (sprintf "%s to be %s" name (match expected with | true -> "listed" | false -> "hidden")) BrowserWaits.panelUpdates
+        "([sel, expected]) => { const e = document.querySelector(sel); return !!e && !e.classList.contains('live-hidden') === expected; }"
+        [| box (bindingBox name); box expected |]
+    let openTab (token: string) = page.Locator(sprintf "[data-testid=live-tab-%s]" token).ClickAsync()
+    do! openTab "changes"
+    do! waitListed "gravity" true
+    do! waitListed "lives" false
+    do! waitListed "player" false
+    do! shot page "13-tab-changes"
+    do! openTab "pinned"
+    do! waitListed "gravity" false
+    do! waitJs page "the empty Pinned tab to say so" BrowserWaits.panelUpdates
+          "() => { const e = document.querySelector('[data-testid=live-tab-empty-pinned]'); return !!e && !e.classList.contains('live-hidden') && /Nothing is pinned/.test(e.innerText); }" null
+    // A pin is set on a listed row, so it is set from All, and the Pinned tab then lists it.
+    do! openTab "all"
+    do! waitListed "gravity" true
+    do! page.Locator(sprintf "#lbp_%s" (Convert.ToHexStringLower(Text.Encoding.UTF8.GetBytes "gravity"))).ClickAsync()
+    do! openTab "pinned"
+    do! waitListed "gravity" true
+    do! waitListed "lives" false
+    let! pinnedCount = textIn page "[data-testid=live-tab-count-pinned]"
+    pinnedCount.Trim() |> Expect.equal "the Pinned tab counts the pin" "1"
+    do! shot page "13b-tab-pinned"
+    do! openTab "all"
+    do! waitListed "lives" true
+    let! allListed = isListed "gravity"
+    allListed |> Expect.isTrue "All lists everything again"
+    expectNoErrors errors "after the tabs were opened"
+
     for (width, height, name) in [ 1400, 1000, "1400"; 900, 900, "900"; 400, 800, "400" ] do
       do! page.SetViewportSizeAsync(width, height)
       do! waitJs page "the dock" BrowserWaits.panelUpdates "() => !!document.querySelector('#live-dock')" null

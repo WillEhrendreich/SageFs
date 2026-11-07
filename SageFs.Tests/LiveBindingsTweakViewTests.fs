@@ -871,6 +871,34 @@ let changesStripViewTests =
         items |> List.forall (fun item -> item.Kind = ChangesStrip.BatchKind.token ChangesStrip.BatchKind.Save) |> Expect.isTrue "all saves"
       | Error fault -> failtestf "the batch did not read back: %s (%s)" (JsonError.describe fault) json
 
+    testCase "WHY — the pane has a tab bar of All, Pinned and Changes, the open one marked in the markup, each with how many it lists" <| fun _ ->
+      let rows = tweaks [ tweakOf "gravity" "9.5" ]
+      let html =
+        Dock.renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None rows DockPanes.SessionInView "abcd1234"
+          (Dock.WalkedBindings(paneView [ binding "gravity" LiveValueTree.NodeKind.Leaf "9.5" []; binding "speed" LiveValueTree.NodeKind.Leaf "3" [] ])) None
+        |> decoded
+      for tab in SageFs.Features.Tweak.WatchTabs.WatchTab.all do
+        html |> Expect.stringContains "a button for the tab" (sprintf "data-testid=\"live-tab-%s\"" (SageFs.Features.Tweak.WatchTabs.WatchTab.token tab))
+      attrsOfTestId "live-tab-all" html |> Expect.stringContains "All starts open, said in the markup" "aria-pressed=\"true\""
+      attrsOfTestId "live-tab-changes" html |> Expect.stringContains "a tab sets the signal" "$liveTab = 'changes'"
+      wordsOfTestId "live-tab-count-all" html |> Expect.equal "two bindings" (Some "2")
+      wordsOfTestId "live-tab-count-changes" html |> Expect.equal "one holds a change" (Some "1")
+
+    testCase "WHY — a binding is hidden by the open tab from the same function the model has: the Changes tab hides the one with no change and keeps the one with a change" <| fun _ ->
+      let rows = tweaks [ tweakOf "gravity" "9.5" ]
+      let html =
+        Dock.renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None rows DockPanes.SessionInView "abcd1234"
+          (Dock.WalkedBindings(paneView [ binding "gravity" LiveValueTree.NodeKind.Leaf "9.5" []; binding "speed" LiveValueTree.NodeKind.Leaf "3" [] ])) None
+        |> decoded
+      let hiding (name: string) : string =
+        let tag = Regex.Match(html, sprintf "<div[^>]*id=\"lb_%s\"[^>]*>" (Regex.Escape(String.Join("", System.Text.Encoding.UTF8.GetBytes name |> Array.map (fun b -> b.ToString "x2")))))
+        tag.Value
+      hiding "gravity" |> Expect.stringContains "kept by Changes: the binding holds a change" "$liveTab === 'changes' && !(true)"
+      hiding "speed" |> Expect.stringContains "hidden by Changes: it holds none" "$liveTab === 'changes' && !(false)"
+      hiding "speed" |> Expect.stringContains "Pinned reads the page's pins" "$liveTab === 'pinned' && !($livePins.includes("
+      html |> Expect.stringContains "an empty Pinned tab says so" "Nothing is pinned."
+      html |> Expect.stringContains "an empty Changes tab says so" "Nothing has changed"
+
     testCase "the strip is part of the view: the Changes axis turns it on and off, and the dock draws it only when it is on" <| fun _ ->
       let rows = tweaks [ tweakOf "gravity" "9.5" ]
       let drawn (toggle: Toggle) =

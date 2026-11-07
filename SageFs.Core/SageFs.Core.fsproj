@@ -564,6 +564,7 @@
         <!-- The pane's rows assembled from the files, the walk, what the dashboard did to each row and the last reload. -->
         <Compile Include="Features\Tweak\BindingTweakRows.fs" />
         <Compile Include="Features\Tweak\ChangesStrip.fs" />
+        <Compile Include="Features\Tweak\WatchTabs.fs" />
         <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
         <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —

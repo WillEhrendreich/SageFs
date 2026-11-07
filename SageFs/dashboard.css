@@ -5451,3 +5451,18 @@ body {
   align-items: center;
   gap: 4px 10px;
 }
+
+/* ── The tab bar of the live bindings pane: All, Pinned, Changes ──
+   One style for every button of the pane (28px, square), the open tab filled and marked with `aria-pressed`, each with how many it lists. */
+.live-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 4px 8px;
+}
+
+.live-tab-count {
+  margin-left: 0.5em;
+  color: var(--fg-dim);
+}
