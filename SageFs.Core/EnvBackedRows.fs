@@ -55,8 +55,25 @@ module EnvBackedRows =
     | Ok held -> held
     | Error _ -> failwith "a built-in age default must be within ten years"
 
-  /// How long local data is kept, in days.
-  let private age (key: string) (name: string) (help: string) (variable: string) (defaultDays: float) (inForce: unit -> TimeSpan) : EnvBacked =
+  /// A grace: like an age, but zero is accepted and means no grace.
+  let private parseGrace (raw: string) : Result<SettingValue, ConfigError> =
+    parseNumber raw
+    |> Result.bind (fun days ->
+      match days >= 0.0 && days <= Timeouts.settingAgeLongestDays with
+      | false -> Error (OutOfRange (sprintf "expected zero (no grace) or more, and at most %g days, got %s" Timeouts.settingAgeLongestDays raw))
+      | true -> RetentionAge.createAllowingZero (TimeSpan.FromDays days) |> Result.map VAge)
+
+  /// A row that holds a span of days: `parse` says what text is legal, `make` builds the value from what the subsystem holds.
+  let private ageRowWith
+    (parse: string -> Result<SettingValue, ConfigError>)
+    (make: TimeSpan -> Result<RetentionAge, ConfigError>)
+    (key: string)
+    (name: string)
+    (help: string)
+    (variable: string)
+    (defaultDays: float)
+    (inForce: unit -> TimeSpan)
+    : EnvBacked =
     { Descriptor =
         { Key = sprintf "data.%s" key
           Name = name
@@ -65,17 +82,25 @@ module EnvBackedRows =
           Scope = Global
           Applicability = RestartRequired
           Default = VAge (legalAge defaultDays)
-          Parse = parseAge
+          Parse = parse
           Render = renderAge
           Apply = ignore
           External = FromEnvironment variable
           Current =
             InUseFromConsumer (fun () ->
-              match RetentionAge.create (inForce ()) with
+              match make (inForce ()) with
               | Ok held -> VAge held
               | Error _ -> VAge (legalAge defaultDays)) }
       Variable = variable
       EnvText = (fun v -> match renderAge v with | "" -> None | text -> Some text) }
+
+  /// How long local data is kept, in days. More than zero.
+  let private age key name help variable defaultDays inForce =
+    ageRowWith parseAge RetentionAge.create key name help variable defaultDays inForce
+
+  /// How long something is held back after it qualifies, in days. Zero means it is not held back.
+  let private grace key name help variable defaultDays inForce =
+    ageRowWith parseGrace RetentionAge.createAllowingZero key name help variable defaultDays inForce
 
   let private parseCount (least: int) (raw: string) : Result<SettingValue, ConfigError> =
     match Int32.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture) with
@@ -276,8 +301,8 @@ module EnvBackedRows =
       age "workerLogMaxAgeDays" "Worker logs kept for"
         "A worker's log is kept this long after its last write. It is what you read after a crash."
         "SAGEFS_WORKER_LOG_MAX_AGE_DAYS" 14.0 (fun () -> DataRetention.workerLogMaxAge)
-      age "finishedWorktreeGraceDays" "Merged agent worktrees kept for"
-        "A merged agent worktree is kept this long after it was last in use, because the agent that made it may be resumed. Work that is not merged is never removed, whatever this says."
+      grace "finishedWorktreeGraceDays" "Merged agent worktrees kept for"
+        "A merged agent worktree is kept this long after it was last in use, because the agent that made it may be resumed. 0 means no grace. Work that is not merged is never removed, whatever this says."
         "SAGEFS_FINISHED_WORKTREE_GRACE_DAYS" 1.0 (fun () -> DataRetention.finishedWorktreeGrace) ]
 
   let private countRows : EnvBacked list =

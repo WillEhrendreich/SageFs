@@ -966,6 +966,18 @@ module DataRetention =
       | true, v when v > 0 -> v
       | _ -> defaultValue
 
+  /// A grace period in days, from the text of an environment variable. Zero is an answer (no grace: what it holds back is
+  /// released the moment it qualifies), so unlike every other age here it is accepted. Nothing set, text that is not a
+  /// number, a negative number and one longer than `settingAgeLongestDays` all give `defaultDays`.
+  let graceDaysOf (raw: string) (defaultDays: float) : TimeSpan =
+    match raw with
+    | null
+    | "" -> TimeSpan.FromDays defaultDays
+    | value ->
+      match Double.TryParse(value, Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture) with
+      | true, days when Double.IsFinite days && days >= 0.0 && days <= Timeouts.settingAgeLongestDays -> TimeSpan.FromDays days
+      | _ -> TimeSpan.FromDays defaultDays
+
   let private envOrDefaultDays (varName: string) (defaultDays: float) =
     match Environment.GetEnvironmentVariable(varName) with
     | null | "" -> TimeSpan.FromDays(defaultDays)
@@ -1025,8 +1037,8 @@ module DataRetention =
   let workerLogMaxAge = envOrDefaultDays workerLogMaxAgeEnvVar 14.0
   /// A merged agent worktree is kept this long after it was last in use, because the agent that made it may be resumed:
   /// the release gate often finds a flake in what an agent wrote, and a resume needs the worktree it was in. A day covers a
-  /// merge, a gate run and the fix that follows. Work that is not merged is never removed, whatever this says.
-  let finishedWorktreeGrace = envOrDefaultDays finishedWorktreeGraceEnvVar 1.0
+  /// merge, a gate run and the fix that follows. 0 means no grace. Work that is not merged is never removed, whatever this says.
+  let finishedWorktreeGrace = graceDaysOf (Environment.GetEnvironmentVariable finishedWorktreeGraceEnvVar) 1.0
   /// How many of the local gate's pass records are kept, newest first. A record holds a commit's release bundle
   /// (about 270 MB each), and the pre-push hook only ever looks up the commit being pushed, so ten covers a day
   /// of shipping; 75 of them were 20 GB.
