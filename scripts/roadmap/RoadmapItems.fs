@@ -98,6 +98,11 @@ let items : Item list =
 
     // ---- Next: weeks to a couple of months ----
 
+    item "hygiene-that-runs-itself" "The daemon tidies the workspace by itself" Platform Next
+      NoLandmarkYet
+      [ "docs/agents.md"; "docs/configuration.md"; "docs/plans/hygiene-that-runs-itself.md" ]
+      "Workspace hygiene lists what agents leave behind, but it only tidies when a person or an agent asks, so on my machine about 25 worktrees and 49 GB piled up over five weeks, some holding commits or uncommitted files that exist nowhere else. The daemon will run it on a schedule. It commits uncommitted files to a salvage branch first, removes only what is provably safe once it has been quiet for a day, and writes every action and its tip sha to a ledger. Work that exists nowhere else is named in the status line, the dashboard card and `sagefs hygiene`, with how old the oldest is."
+
     item "repl-eval-reaches-the-running-app" "A REPL eval changes the running app" HotReload Next
       NoLandmarkYet
       [ "docs/how-hot-reload-works.md"; "docs/plans/repl-eval-reaches-the-running-app.md" ]

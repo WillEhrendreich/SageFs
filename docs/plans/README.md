@@ -149,6 +149,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [The getter sandbox beyond Linux x86-64](getter-sandbox-beyond-linux.md) | M | an aarch64 program refuses socket and connect |
 | [Admit heavy work by measured cost](admit-heavy-work-by-measured-cost.md) | M | a 6 GiB build is queued with numbers when 5 GiB is free |
 | [One command to set SageFs up in your agent](one-command-stdio-setup.md) | S for snippets, M with the command | every client's snippet is valid JSON and names `sagefs mcp` |
+| [The daemon tidies the workspace by itself](hygiene-that-runs-itself.md) | L | a merged worktree used an hour ago is kept, one quiet for a day is not |
 
 ## Where to start for hot reload and live testing
 

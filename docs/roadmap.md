@@ -11,9 +11,9 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 9, Later 22, Exploring 20. Already built: 44.
+On the page today: Now 0, Next 10, Later 22, Exploring 20. Already built: 44.
 
-## Next (9)
+## Next (10)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -41,6 +41,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Platform and install
 
+- [ ] **The daemon tidies the workspace by itself.** Workspace hygiene lists what agents leave behind, but it only tidies when a person or an agent asks, so on my machine about 25 worktrees and 49 GB piled up over five weeks, some holding commits or uncommitted files that exist nowhere else. The daemon will run it on a schedule. It commits uncommitted files to a salvage branch first, removes only what is provably safe once it has been quiet for a day, and writes every action and its tip sha to a ledger. Work that exists nowhere else is named in the status line, the dashboard card and `sagefs hygiene`, with how old the oldest is. ([agents.md](agents.md), [configuration.md](configuration.md), [hygiene-that-runs-itself.md](plans/hygiene-that-runs-itself.md))
 - [ ] **One command to set SageFs up in your agent.** The durable way to register SageFs is `claude mcp add sagefs -- sagefs mcp`, and the docs already say why an HTTP registration loses its tools when the daemon restarts: the session id lives in the daemon's memory and the client never asks for a new one. What is missing is the rest of the first minute. There is a Claude Code command and one raw JSON block, nothing for VS Code's differently shaped file, and the skill that keeps an agent off `dotnet build` is a separate command. I plan `sagefs setup`, which prints or writes the right snippet for Claude Code, VS Code, Cursor and Claude Desktop, installs the skill and runs the check, with the docs page generated from the same code. From nothing to a first eval takes three shell commands and five tool calls today, against two and one for FsiMcp; the seconds come from the benchmark, not from me guessing. ([mcp-tools.md](mcp-tools.md), [Readme.md](../Readme.md), [one-command-stdio-setup.md](plans/one-command-stdio-setup.md))
 
 ### Docs and onboarding
