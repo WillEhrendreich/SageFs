@@ -58,6 +58,10 @@ module TestTimeouts =
   /// "few milliseconds" turn well past the 5 s this used to be. Never use it as the length of a
   /// wait that is meant to elapse; that is what the settles below are for.
   let patienceBrief = secs 20.
+  /// How long a call that needs no pool thread gets while every pool thread is blocked. A trivial piece of work
+  /// on a dedicated thread finishes in milliseconds even on a loaded machine, and a pool thread cannot be injected
+  /// that quickly: the pool adds one about every half second once its threads are busy.
+  let starvedPoolBudget = secs 3.
   /// How long a case that repeats an action until an event follows (a save made again until the watcher
   /// reports it) waits for the event after each attempt before it acts again. Longer than the
   /// watcher's own debounce, so an attempt's event has time to arrive before the next attempt can reset it.
