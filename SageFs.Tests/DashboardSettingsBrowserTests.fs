@@ -26,22 +26,21 @@ type private Daemon =
     McpPort: int
     DashboardPort: int
     OutLog: string
-    ErrLog: string }
+    ErrLog: string
+    /// The two threads that copy the daemon's output into the logs. They end when the process's pipes close.
+    Drains: Task<unit> list }
 
-let private drain (stream: StreamReader) (path: string) =
-  let writer = new StreamWriter(path, append = true)
-  let rec loop () =
-    async {
-      let! line = stream.ReadLineAsync() |> Async.AwaitTask
-      if not (isNull line) then
-        do! writer.WriteLineAsync(line) |> Async.AwaitTask
-        return! loop ()
-    }
-  async {
-    try do! loop () with _ -> ()
-    writer.Dispose()
-  }
-  |> Async.Start
+/// Copies one of the daemon's output streams into a log. A blocking `ReadLine` on a thread of its own, so a starved
+/// pool cannot hold the daemon's pipe full.
+let private drain (name: string) (stream: StreamReader) (path: string) : Task<unit> =
+  SageFs.Tests.TestInfrastructure.DedicatedThread.run name (fun () ->
+    use writer = new StreamWriter(path, append = true)
+    try
+      let mutable line = stream.ReadLine()
+      while not (isNull line) do
+        writer.WriteLine line
+        line <- stream.ReadLine()
+    with _ -> ())
 
 /// A daemon whose data directory is the sandbox's, started with the environment variables a cell asks for.
 let private startDaemon (root: string) (generation: int) (extraEnvironment: (string * string) list) : Daemon =
@@ -64,9 +63,10 @@ let private startDaemon (root: string) (generation: int) (extraEnvironment: (str
   let proc = Diagnostics.Process.Start psi
   let outLog = Path.Combine(root, sprintf "daemon%d.stdout.log" generation)
   let errLog = Path.Combine(root, sprintf "daemon%d.stderr.log" generation)
-  drain proc.StandardOutput outLog
-  drain proc.StandardError errLog
-  { Process = proc; McpPort = mcpPort; DashboardPort = dashboardPort; OutLog = outLog; ErrLog = errLog }
+  let drains =
+    [ drain (sprintf "settings-daemon%d-stdout" generation) proc.StandardOutput outLog
+      drain (sprintf "settings-daemon%d-stderr" generation) proc.StandardError errLog ]
+  { Process = proc; McpPort = mcpPort; DashboardPort = dashboardPort; OutLog = outLog; ErrLog = errLog; Drains = drains }
 
 let private dumpLogs (d: Daemon) =
   for path in [ d.OutLog; d.ErrLog ] do
@@ -81,6 +81,12 @@ let private killDaemon (d: Daemon) =
   try if not d.Process.HasExited then d.Process.Kill(entireProcessTree = true) with _ -> ()
   try d.Process.WaitForExit(TestTimeouts.childExit) |> ignore with _ -> ()
   try d.Process.Dispose() with _ -> ()
+
+/// A killed daemon's pipes are closed, so its drain threads end at once; this waits for them to finish the logs.
+let private awaitDrains (d: Daemon) : Task<unit> = task {
+  for drained in d.Drains do
+    try do! drained.WaitAsync TestTimeouts.childExit with _ -> ()
+}
 
 let private healthy (d: Daemon) : Task<bool> = task {
   let sw = Diagnostics.Stopwatch.StartNew()
@@ -320,7 +326,8 @@ let private journey () : Task<unit> = task {
   finally
     if not reachedTheEnd then for d in daemons do dumpLogs d
     for d in daemons do killDaemon d
-    try Directory.Delete(root, true) with _ -> ()
+  for d in daemons do do! awaitDrains d
+  try Directory.Delete(root, true) with _ -> ()
 }
 
 [<Tests>]
