@@ -576,6 +576,8 @@
         <Compile Include="ChangesStripTests.fs" />
         <Compile Include="WatchTabTests.fs" />
         <Compile Include="WatchExpressionTests.fs" />
+        <Compile Include="RowFormatTests.fs" />
+        <Compile Include="LoopFreshnessTests.fs" />
         <Compile Include="DockCompactionTests.fs" />        <Compile Include="LiveBindingsTweakServiceTests.fs" />
         <Compile Include="LiveBindingsTweakViewTests.fs" />
         <Compile Include="RetentionSimDstTests.fs" />

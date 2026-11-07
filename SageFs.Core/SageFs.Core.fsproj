@@ -591,7 +591,12 @@
         <Compile Include="Features\Tweak\BindingTweakRows.fs" />
         <Compile Include="Features\Tweak\ChangesStrip.fs" />
         <Compile Include="Features\Tweak\WatchTabs.fs" />
-        <Compile Include="Features\Tweak\WatchRows.fs" />        <Compile Include="FsiHostBuild.fs" />
+        <Compile Include="Features\Tweak\WatchRows.fs" />
+        <!-- How a row shows its value: as it is, in hex, in binary, as a colour, on a range. Pure. -->
+        <Compile Include="Features\Tweak\RowFormatting.fs" />
+        <!-- How current the pane's values are, said from what the test loop is doing. Pure. -->
+        <Compile Include="Features\Tweak\LoopFreshness.fs" />
+        <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
         <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —
              placed beside it because they're both directory-walk primitives,
