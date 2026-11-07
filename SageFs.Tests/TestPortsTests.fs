@@ -40,6 +40,18 @@ let testPortsTests =
       (fst a, 25300) |> Expect.isLessThan "the first tier's pair stays below the boundary"
       (fst b, 25300) |> Expect.isGreaterThanOrEqual "the second tier's pair stays at or above the boundary"
 
+    testCase "a pair handed out is not handed out again before its daemon has bound it" <| fun _ ->
+      // The gate failed once with "Port 23203 is already in use": journeys in one tier start their daemons
+      // at the same moment, the scan only proves a pair is free right now, and a daemon binds seconds later,
+      // so two journeys were given the same pair. Nothing here binds the pairs it is handed, which is the
+      // state a daemon is in for those seconds. A 41-port line always has room for ten disjoint pairs,
+      // so any shared port is the allocator handing out a pair twice, never a full range.
+      withPortRange (Some "26000-26041") (fun () ->
+        let pairs = List.init 10 (fun _ -> TestPorts.reservePair ())
+        let ports = pairs |> List.collect (fun (mcp, dashboard) -> [ mcp; dashboard ])
+        ports |> List.distinct |> List.length
+        |> Expect.equal "ten pairs use twenty different ports, so no daemon is handed a port another was promised" 20)
+
     testCase "fails with a clear message when the assigned range has no free pair" <| fun _ ->
       // A 2-port range whose only possible pair is already held.
       // The held port is the one the OS hands out, not a number written here that something else on the machine

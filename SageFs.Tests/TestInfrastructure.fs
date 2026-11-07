@@ -181,6 +181,24 @@ module TestPorts =
   ///
   /// Checking both stacks is what makes a port safe to hand out, because the
   /// OS tracks them separately.
+  /// Every port this process has handed out, for the life of the process.
+  ///
+  /// The scan above only proves a pair is free RIGHT NOW, and the caller releases it so a daemon can bind it
+  /// seconds later. Journeys in one tier start their daemons at the same moment, so a second scan in that gap
+  /// saw the pair as free and handed it out again (or a neighbour: pair p holds p and p + 1, pair p + 1 holds
+  /// p + 1 and p + 2), and the daemon that bound second died with "Port 23203 is already in use". A port in
+  /// this set is never offered again, and a pair takes both of its ports. Tiers in other processes cannot
+  /// reach these ports because their ranges are disjoint (`TierPlan.portRangeOf`).
+  let private handedOut = System.Collections.Generic.HashSet<int>()
+
+  let private claimPair (bound: int) : bool =
+    lock handedOut (fun () ->
+      if handedOut.Contains bound || handedOut.Contains(bound + 1) then false
+      else
+        handedOut.Add bound |> ignore
+        handedOut.Add(bound + 1) |> ignore
+        true)
+
   let private tryReservePair (port: int) =
     try
       use mcp = new TcpListener(IPAddress.IPv6Loopback, port)
@@ -194,7 +212,7 @@ module TestPorts =
       mcpV4.Start()
       use dashboardV4 = new TcpListener(IPAddress.Loopback, bound + 1)
       dashboardV4.Start()
-      Some bound
+      if claimPair bound then Some bound else None
     with :? SocketException -> None
 
   /// One (mcpPort, dashboardPort) pair, free right now, from whatever range is assigned at this moment.
