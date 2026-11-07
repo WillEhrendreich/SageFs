@@ -259,6 +259,42 @@ let tests =
         hover |> Expect.stringContains "our own link is intact" "[Debug this test](command:sagefs.debugTest?"
     ]
 
+    testList "the bodies name their session" [
+
+      let parse (body: string) = JsonDocument.Parse(body).RootElement
+
+      testCase "WHY - the hold body carries the test id and the window's session id, the way Neovim's does" <| fun _ ->
+        let body = holdBody "t1" "s1"
+        body |> Expect.stringContains "names the session" "\"sessionId\":\"s1\""
+        body |> Expect.stringContains "names the test" "\"testId\":\"t1\""
+
+      testCase "WHY - the continue body carries the ticket and the same session id, so the release lands where the hold was taken" <| fun _ ->
+        let body = continueBody "debug-1-1" "s1"
+        body |> Expect.stringContains "names the session" "\"sessionId\":\"s1\""
+        body |> Expect.stringContains "names the ticket" "\"ticket\":\"debug-1-1\""
+
+      testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 200 } "WHY - whatever the ids hold, both bodies are JSON that read back as exactly the ids given"
+      <| fun (testId: string) (sessionId: string) (ticket: string) ->
+        let testId, sessionId, ticket = (match testId with null -> "" | s -> s), (match sessionId with null -> "" | s -> s), (match ticket with null -> "" | s -> s)
+        let hold = parse (holdBody testId sessionId)
+        let release = parse (continueBody ticket sessionId)
+        hold.GetProperty("testId").GetString() = testId
+        && hold.GetProperty("sessionId").GetString() = sessionId
+        && release.GetProperty("ticket").GetString() = ticket
+        && release.GetProperty("sessionId").GetString() = sessionId
+
+      testCase "WHY - the client sends the pure bodies, so the contract above is the one on the wire" <| fun _ ->
+        let source = read "src/SageFsClient.fs"
+        source |> Expect.stringContains "hold uses holdBody" "TestDebugPure.holdBody"
+        source |> Expect.stringContains "continue uses continueBody" "TestDebugPure.continueBody"
+
+      testCase "WHY - the command resolves the window's own session before it holds a test, the way runTest does" <| fun _ ->
+        let source = read "src/Extension.fs"
+        let start = source.IndexOf "reg \"sagefs.debugTest\""
+        let section = source.Substring(start, 900)
+        section |> Expect.stringContains "resolves the window's session" "resolveCommandTarget"
+    ]
+
     testList "wiring (sources read as data)" [
 
       let pkg = JsonDocument.Parse(read "package.json").RootElement
