@@ -96,7 +96,6 @@ let pageTests =
       badge.Contains "Ready," |> Expect.isFalse "and nothing added to them"
       badge |> Expect.stringContains "green" "status-ready"
       html.Contains "session-card-source" |> Expect.isFalse "the card says nothing about a build that is current"
-      html.Contains "statusline-readiness" |> Expect.isFalse "and so does the statusline"
     }
 
     testTask "WHY — the header counts the evals the card counts, because the worker's tally said 13 while the card said 12 for the same session" {
@@ -116,30 +115,17 @@ let pageTests =
   ]
 
 [<Tests>]
-let statuslineTests =
-  testList "the statusline repeats a Ready that is not plain, and only that" [
+let readinessWordsTests =
+  testList "the badge and the note beside it say the whole readiness" [
 
-    testCase "WHY — a Ready session with changes not live says so in the statusline, in the badge's words and tone" <| fun _ ->
-      let html = renderStatuslineLeft Readiness.ReadyOlderCode "/w" |> renderNode
-      html |> Expect.stringContains "the words" ">Ready, changes not live<"
-      html |> Expect.stringContains "the caution tone" "status-notice"
-      html |> Expect.stringContains "the working directory is still there" "<div id=\"statusline-file\" class=\"statusline-file\">/w</div>"
-
-    testCase "WHY — a plain Ready, and any other state, add nothing to the statusline, because the header badge already says it" <| fun _ ->
-      for readiness in [ Readiness.ReadyCurrent; Readiness.InState SessionState.Faulted; Readiness.InState SessionState.WarmingUp ] do
-        renderStatuslineLeft readiness "/w" |> renderNode
-        |> fun html -> html.Contains "statusline-readiness" |> Expect.isFalse (sprintf "%A adds no chip" readiness)
-
-    testCase "WHY — the statusline says the whole readiness, and the top bar says the same words in two cells: the badge keeps the engine's word and the note beside it says the rest" <| fun _ ->
+    testCase "WHY — the top bar says the readiness in two cells: the badge keeps the engine's word and the note beside it says the rest" <| fun _ ->
       for readiness in [ Readiness.ReadyOlderCode; Readiness.ReadyRebuilding; Readiness.ReadyReplBehindApp; Readiness.ReadyUnchecked ] do
         let view = SessionInView.InPlay(SessionState.Ready, SessionDisplayStatus.Running, readiness)
-        renderStatuslineLeft readiness "/w" |> renderNode
-        |> Expect.stringContains (sprintf "%A" readiness) (sprintf ">%s<" (Readiness.label readiness))
         let words =
           match SessionInView.liveNote view with
           | Some (_, phrase) -> phrase
           | None -> ""
-        sprintf "%s, %s" (SessionInView.badgeLabel view) words |> Expect.equal (sprintf "badge and note join back into the statusline's words for %A" readiness) (Readiness.label readiness)
+        sprintf "%s, %s" (SessionInView.badgeLabel view) words |> Expect.equal (sprintf "badge and note join back into the readiness label for %A" readiness) (Readiness.label readiness)
   ]
 
 [<Tests>]

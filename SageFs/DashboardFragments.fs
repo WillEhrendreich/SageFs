@@ -2368,29 +2368,6 @@ let renderCurrentDiagnostics (diags: Diagnostic list) =
       ]
   ]
 
-/// Statusline left block: session state + working directory.
-/// Shared by the full-shell render and the switch/teardown SSE patches so the
-/// two can never diverge (the patch once dropped the classes and the encoding).
-let renderStatuslineLeft (readiness: Readiness) (workingDir: string) =
-  Elem.div [ Attr.id "statusline-left"; Attr.class' "statusline-left" ] [
-    // A plain Ready lives in the top status tab and is not repeated here. A Ready that is not known to run current code is,
-    // in the same words and tone as the tab, so the two cannot read differently.
-    match readiness with
-    | Readiness.InState _
-    | Readiness.ReadyCurrent -> ()
-    | Readiness.ReadyOlderCode
-    | Readiness.ReadyRebuilding
-    | Readiness.ReadyReplBehindApp
-    | Readiness.ReadyUnchecked ->
-      Elem.span
-        [ Attr.id "statusline-readiness"
-          Attr.class' (sprintf "status statusline-readiness %s" (ToneStyle.cssClass (Readiness.tone readiness)))
-          testid "statusline-readiness"
-          Attr.create "role" "status" ]
-        [ textEnc (Readiness.label readiness) ]
-    Elem.div [ Attr.id "statusline-file"; Attr.class' "statusline-file" ] [ textEnc workingDir ]
-  ]
-
 /// A word on the Sessions header for a viewed session whose card has something to say. At narrow widths the card is folded away
 /// and only this header shows, so without it the warning is visible and the fix cannot be found. It is a word and not only a colour,
 /// the same short phrase the live bindings pane's note uses, from the same readiness. Nothing for a session with nothing to say.

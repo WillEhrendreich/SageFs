@@ -91,14 +91,6 @@ let dashboardEscapingRenderTests =
       |> Expect.stringContains "the CWD text must carry the escaped dir"
            (sprintf "CWD: %s" (htmlEscape h))
 
-    testProperty "renderStatuslineLeft (session switch patch) never emits a hostile dir raw" <| fun (prefix: string) (pick: int) ->
-      let h = hostile prefix pick
-      let html = renderStatuslineLeft SageFs.Readiness.ReadyOlderCode h |> renderNode
-      html |> expectInert "renderStatuslineLeft"
-      html
-      |> Expect.stringContains "the statusline must show the working dir escaped exactly once"
-           (sprintf "<div id=\"statusline-file\" class=\"statusline-file\">%s</div>" (htmlEscape h))
-
     testProperty "evalResultError never emits a hostile message raw" <| fun (prefix: string) (pick: int) ->
       let h = hostile prefix pick
       let html = evalResultError h |> renderNode

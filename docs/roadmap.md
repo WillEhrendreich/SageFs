@@ -11,9 +11,9 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 10, Later 22, Exploring 20. Already built: 43.
+On the page today: Now 0, Next 9, Later 22, Exploring 20. Already built: 44.
 
-## Next (10)
+## Next (9)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -38,7 +38,6 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 - [ ] **More settings editable from the dashboard.** The Settings panel edits the warm-up, build and abandoned-session limits, the machine tier, two on-off switches, the test timeouts, the MCP port, the default working directory, reflection mode and tiering, each resolved across layers (default, global file, repo file, environment variable, flag) with its source and the value in use shown. The bind host and data directory are shown and read-only. Most of the other environment variables, the local data retention settings among them, still have no row. ([configuration.md](configuration.md), [more-settings-editable.md](plans/more-settings-editable.md))
 - [ ] **A live bindings view you can switch and keep.** The Live Bindings pane draws a badge, a type, a wide pin and the same sentence on every row, so at the default dock two of ten bindings show, and it looks the same in every workflow. It is becoming one configurable watch view with presets, a recommended preset for each workflow, and a choice kept for each app and workflow through the settings layers. A value's relation to its source is one word, and Save says what it writes: a tweak is saved to its literal, a value the program has changed is reset or taken as the new initial value after a confirmation, and a value built by a call points at the literal inside the function that builds it. Watch tabs with expression rows and per-row views follow, and so does what the pane shows while the test loop runs. ([live-bindings-watch-view.md](plans/live-bindings-watch-view.md), [more-settings-editable.md](plans/more-settings-editable.md))
-- [ ] **Dashboard panels that follow your context.** A panel that is not relevant right now says why, in one line where the panel would have been: hot reload, live testing, cohort and friction each leave the reason behind, so a user can tell the dashboard having nothing to say from the dashboard hiding something. The cohort panel shows only while a cohort is running. The live bindings fold away and open again with one click, and the pin opens the pane when there are no bindings yet. What is not built is the live bindings becoming a real pane in REPL mode, and a pane moving between regions. ([dashboard-follows-context.md](plans/dashboard-follows-context.md))
 
 ### Platform and install
 
@@ -134,7 +133,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub. ([command-palette-and-one-timeline.md](plans/command-palette-and-one-timeline.md))
 
-## Built (43)
+## Built (44)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
@@ -189,6 +188,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 
 ### Dashboard
 
+- [x] **Dashboard panels that follow your context.** One pure function decides, for every context panel, whether it is shown, hidden with a reason, or quiet because it has nothing to report: hot reload, live testing, cohort, friction, diagnostics, failing tests and alarms. A hidden panel leaves a one-line reason where it would have been, and offers the next step when there is one: live testing off carries a Turn on button, and hot reload names the workflow switcher. A panel with nothing to report draws nothing, diagnostics that were never checked say so instead of reading as clean, and the cohort panel shows while a cohort is running or still holds an orphaned claim or a landing. A browser matrix checks eleven states at 375, 768 and 1400 px. The live bindings becoming a real pane in REPL mode and a pane moving between regions are not built; they belong to the move and dock item. Code: [`SageFs/DashboardPanelContext.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/DashboardPanelContext.fs)
 - [x] **App output in its own pane.** stdout and stderr from a running app get their own pane with follow, pause and search, so a chatty app stops burying your evals. The daemon holds one AppOutputPane per session, fed the same lines the transcript is fed from; the dock decides from that buffer and draws the answer, so the two cannot disagree about what the app wrote. Code: [`SageFs/AppOutputView.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/AppOutputView.fs)
 - [x] **A guided new-session dialog.** A plus button on the Sessions list opens a dialog that finds projects under a directory you can edit, says in a line what each workflow means, and warns before you make a second session in the same directory, naming the one that exists. A refusal from the daemon shows in the dialog with its next action, and Create closes it into a starting card at once. The no-session picker's Open Directory card still has its own form. Code: [`SageFs/NewSessionDialog.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/NewSessionDialog.fs)
 - [x] **A discovery event fits the stream it rides.** A suite of 2,604 tests reached the editor as one SSE event of about 990 KB: the whole discovery list in a single `data:` line, replayed to every connection that catches up on /events. Size was not what broke it. The reader has no size limit and the daemon writes whole frames; what broke it was a buffer that outlived its connection, so a reconnect inherited the dead connection's partial line, and that is fixed and proven, zero parse errors with the reset and one without. What is left is cost: the daemon already fetches discovery over the worker wire, so a summary on the stream with the list behind a fetch takes a catch-up from 990 KB to a few dozen bytes. I would send the summary first and let a client that wants the list ask for it, and whichever shape I pick the editor, the plugin and the dashboard all have to read it. Code: [`SageFs/SseEvent.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/SseEvent.fs)

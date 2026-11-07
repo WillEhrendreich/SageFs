@@ -3131,12 +3131,6 @@ h2 {
   min-width: 0;
 }
 
-.statusline-left {
-  display: flex;
-  align-items: center;
-  height: 100%;
-}
-
 .statusline-mode {
   display: flex;
   align-items: center;
@@ -3155,15 +3149,6 @@ h2 {
   background: var(--fg-blue);
   color: var(--bg-default);
   font-weight: 700;
-  border-right: 1px solid var(--border-normal);
-}
-
-.statusline-file {
-  display: flex;
-  align-items: center;
-  height: 100%;
-  padding: 0 12px;
-  background: var(--bg-focus);
   border-right: 1px solid var(--border-normal);
 }
 
