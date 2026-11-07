@@ -15,6 +15,7 @@ open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
 open SageFs
+open SageFs.Features
 open SageFs.Cohort
 open SageFs.Features.CohortIntegrationScope
 open SageFs.MemberTable
@@ -135,6 +136,19 @@ let integrationScopeTests =
         (List.isEmpty candidates || not (List.isEmpty narrowed)) && narrowed |> List.forall (fun p -> List.contains p candidates)
     ]
 
+    testList "the projects a conductor names" [
+      test "a list is read from commas, semicolons and lines, with Windows separators and blanks cleaned up" {
+        parseNamedProjects "SageFs.Tests/SageFs.Tests.fsproj, ;Other\\Other.fsproj\n\n SageFs.Tests/SageFs.Tests.fsproj"
+        |> Expect.equal "two projects, once each" [ "SageFs.Tests/SageFs.Tests.fsproj"; "Other/Other.fsproj" ]
+        parseNamedProjects null |> Expect.equal "nothing named" []
+      }
+
+      test "the conductor's own list wins, and no list leaves discovery in charge" {
+        chooseIntegrationProjects [ "A/A.fsproj" ] [ "B/B.fsproj"; "C/C.fsproj" ] |> Expect.equal "named wins" [ "A/A.fsproj" ]
+        chooseIntegrationProjects [] [ "B/B.fsproj" ] |> Expect.equal "discovery otherwise" [ "B/B.fsproj" ]
+      }
+    ]
+
     testList "a faulted integration session says why and what to do" [
       test "the advice carries the cause, the worktree and the retry for the same repository" {
         let advice = failureAdvice "the worktree build failed: error FS0001" "/data/cohort-integration" "repo:/work/repo-a"
@@ -239,5 +253,53 @@ let statusTests =
           text |> Expect.stringContains "and what to do about it" "set_integration_ref"
       finally
         McpCohortIntegration.cohortIntegrationRef.Value <- previous
+    }
+  ]
+
+[<Tests>]
+let guardTests =
+  testList "CohortIntegration: a landing in another cohort is never performed against this integration (P11)" [
+
+    testTask "a performer guarded for another cohort ends every step in the reason and never calls the real one" {
+      let calls = ref 0
+      let counted (result: 'a) = fun () -> async { calls.Value <- calls.Value + 1; return result }
+      let inner : CohortOwner.LandingPerformer<MemberId> =
+        { Rebase = fun _ _ _ -> counted (Ok "new-head") ()
+          ComputeAffected = fun _ _ _ -> counted (Ok []) ()
+          RunTests = fun _ _ -> counted (Ok []) ()
+          FastForward = fun _ _ -> counted (Ok "sha") ()
+          Notify = fun _ _ -> () }
+      let guarded = CohortOwner.LandingPerformer.guardedBy (fun () -> Some "no integration for this cohort") inner
+      let! rebase = guarded.Rebase "l" "onto" [ "c" ]
+      let! affected = guarded.ComputeAffected "l" "b" "h"
+      let! tests = guarded.RunTests "l" []
+      let! forward = guarded.FastForward "l" "sha"
+      rebase |> Expect.equal "rebase says why" (Error [ "no integration for this cohort" ])
+      affected |> Expect.equal "affected says why" (Error "no integration for this cohort")
+      tests |> Expect.equal "tests say why" (Error "no integration for this cohort")
+      forward |> Expect.equal "fast-forward says why" (Error "no integration for this cohort")
+      calls.Value |> Expect.equal "the real performer was never called" 0
+    }
+
+    testTask "a performer guarded for the cohort the integration serves is the real one" {
+      let inner : CohortOwner.LandingPerformer<MemberId> =
+        { CohortOwner.LandingPerformer.stub with Rebase = fun _ _ _ -> async { return Ok "new-head" } }
+      let guarded = CohortOwner.LandingPerformer.guardedBy (fun () -> None) inner
+      let! rebase = guarded.Rebase "l" "onto" [ "c" ]
+      rebase |> Expect.equal "the step goes through" (Ok "new-head")
+    }
+
+    testTask "clearing local data sees a cohort running in a repository the daemon was not started in" {
+      let ctx = ToolAuthorityGateTests.mkContext ()
+      do! ToolAuthorityGateTests.join ctx "molina-agent" "Implementer" ToolAuthorityGateTests.molinaRepo
+      let across = LocalData.liveCohortAcross (CohortOwnerResolution.ownersOf ctx.CohortSupport)
+      let daemonsOwnOnly =
+        match SageFs.McpTools.cohortOwnerFor ctx None with
+        | Some own -> LocalDataRetention.cohortActivity (own.ReadCohortState ())
+        | None -> LocalDataRetention.CohortActivity.Finished
+      daemonsOwnOnly |> Expect.equal "TWIN WITH TEETH: the daemon's own cohort alone sees nothing running" LocalDataRetention.CohortActivity.Finished
+      match across with
+      | LocalDataRetention.CohortActivity.Active(members, _, _) -> members |> Expect.equal "the member in the other repository is seen" 1
+      | LocalDataRetention.CohortActivity.Finished -> failtest "a running cohort in another repository was not seen, so its ledger could be cleared"
     }
   ]

@@ -79,7 +79,14 @@ module ToolAuthorityGate =
           match refusal with
           // No seat: naming a role would blame the one thing that is not wrong.
           | Affordances.AuthorityRefusal.NotSeated _ ->
-            sprintf "%s cannot call %s: %s" (MemberTable.MemberId.display who) toolName (Affordances.AuthorityRefusal.describe refusal)
+            match actedIn with
+            | "" -> sprintf "%s cannot call %s: %s" (MemberTable.MemberId.display who) toolName (Affordances.AuthorityRefusal.describe refusal)
+            | scope ->
+              sprintf
+                "%s cannot call %s: this call acted in the cohort %s, and you have no seat there (you have not joined it)."
+                (MemberTable.MemberId.display who)
+                toolName
+                scope
           | Affordances.AuthorityRefusal.RoleForbids _
           | Affordances.AuthorityRefusal.NotInGrant _
           | Affordances.AuthorityRefusal.CapabilityRequired _ ->
@@ -95,7 +102,7 @@ module ToolAuthorityGate =
 
   /// `decideIn` for a caller that has no cohort to name (a pure unit test, a tool that acts on no cohort).
   let decide (who: MemberTable.MemberId) (authority: Cohort.Authority<MemberTable.MemberId>) (toolName: string) : Decision =
-    decideIn "the cohort this call acts in" who authority toolName
+    decideIn "" who authority toolName
 
   /// The caller's authority, read from the owner's published frame — wait-free, never a mailbox
   /// round trip. `None` owner means `Anonymous`, which `ofAuthority` maps to `Working` for the same

@@ -1345,8 +1345,18 @@ module AuthorityRefusal =
 let checkAuthorityAllowed (authority: Cohort.Authority<'m>) (tool: ToolName) : Result<unit, AuthorityRefusal> =
   let role = ToolRole.ofAuthority authority
   let required = ToolRole.toolsOf role
+  let unseated =
+    match authority with
+    | Cohort.Authority.Anonymous -> true
+    | Cohort.Authority.Member _
+    | Cohort.Authority.Conductor _ -> false
   let verdict =
     if ToolRole.admits role tool then Ok ()
+    // A conductor-only tool from a caller with no seat in the cohort the call acted in. The role is not the fault (an
+    // unseated caller's role is Working, which says nothing about this tool): the caller is not seated THERE. That is
+    // what `install-local` produced for the real conductor, whose call acted in the daemon's own empty cohort, and what
+    // "your role is Working" then told it was a permissions problem.
+    elif unseated && Set.contains tool ToolRole.conductorOnlyTools then Error(AuthorityRefusal.NotSeated tool)
     elif ToolRole.admits ToolRole.Working tool then Error(AuthorityRefusal.RoleForbids(tool, ToolRole.Working))
     else Error(AuthorityRefusal.NotInGrant(tool, role))
   match verdict, ToolName.tryCohortTool tool with

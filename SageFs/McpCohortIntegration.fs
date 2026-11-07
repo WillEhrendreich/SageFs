@@ -79,9 +79,22 @@ module McpCohortIntegration =
         |> Option.map (File.ReadAllText >> Features.CohortIntegrationScope.parseSlnxProjectPaths)
         |> Option.defaultValue []
       with _ -> []
-    Features.CohortIntegrationScope.selectIntegrationProjects declared walked
+    let candidates = Features.CohortIntegrationScope.selectIntegrationProjects declared walked
+    // A landing is verified by tests, so the session needs the test projects and what they test. The samples and demos a solution
+    // also lists (a Rust, a Python, a Java project) can never fail a landing and cost a cold build before the first one.
+    let isTestProject (relative: string) =
+      try Features.CohortIntegrationScope.isTestProjectXml (File.ReadAllText(Path.Combine(dir, relative)))
+      with :? IOException | :? UnauthorizedAccessException -> false
+    Features.CohortIntegrationScope.narrowToTestProjects candidates isTestProject
 
-  let setIntegrationRef (ctx: McpContext) (agentName: string) (integrationRef: string) : Task<Result<string, SageFsError>> =
+  /// The text a faulted integration says: the cause and what to do about it, for the cohort it serves.
+  let private failureText (binding: CohortIntegrationBinding) (reason: string) : string =
+    Features.CohortIntegrationScope.failureAdvice reason binding.WorktreePath (Scope.label binding.Scope)
+
+  /// `workingDirectory` is the repository the call is about, the same `working_directory` every other cohort tool takes. It decides
+  /// the repository the integration worktree is cut from AND the cohort the integration serves, so a conductor whose daemon was
+  /// started somewhere else (install-local starts it in its install folder) configures its own repository's cohort.
+  let setIntegrationRef (ctx: McpContext) (agentName: string) (integrationRef: string) (workingDirectory: string option) (projects: string option) : Task<Result<string, SageFsError>> =
     task {
       let! callerSessionWorkingDirectory = task {
         match activeSessionId ctx agentName with
@@ -90,8 +103,9 @@ module McpCohortIntegration =
           let! infoOpt = ctx.SessionOps.GetSessionInfo (toSessionId sid)
           return infoOpt |> Option.map (fun info -> info.WorkingDirectory)
       }
-      let integrationScope = SageFs.ScopeOf.ofWorkingDirectory callerSessionWorkingDirectory
-      let rootSource = Features.CohortIntegrationScope.chooseMainRepoRootSource callerSessionWorkingDirectory Environment.CurrentDirectory
+      let named = workingDirectory |> Option.filter (String.IsNullOrWhiteSpace >> not)
+      let integrationScope = SageFs.ScopeOf.ofWorkingDirectory (named |> Option.orElse callerSessionWorkingDirectory)
+      let rootSource = Features.CohortIntegrationScope.chooseIntegrationRepoSource named callerSessionWorkingDirectory Environment.CurrentDirectory
       let candidateDir = Features.CohortIntegrationScope.candidateDirectory rootSource
       let mainRepoDir =
         match Checkout.root (Checkout.classify candidateDir) with
@@ -103,11 +117,21 @@ module McpCohortIntegration =
         return Error (SageFsError.SessionCreationFailed (sprintf "could not resolve '%s' to a commit in %s: %s" integrationRef mainRepoDir reason))
       | Ok sha ->
         let worktreePath = integrationWorktreePath ()
+        // A session still running in the worktree about to be replaced would be left with its sources deleted, and its project would
+        // refuse the new session ("a session for this project already exists", F4). Stopping it is what makes calling this again, the
+        // retry a faulted integration asks for, work.
+        let! _stoppedPrevious =
+          match cohortIntegrationRef.Value with
+          | Some { Session = IntegrationSession.Started previous } -> ctx.SessionOps.StopSession previous
+          | _ -> Task.FromResult(Ok "")
         let! _removed =
           match Directory.Exists worktreePath with
           | true -> Features.CohortGit.removeWorktree mainRepoDir worktreePath
           | false -> async { return Ok () }
-        let branch = sprintf "sagefs/cohort-%s" (sha.Substring(0, min 8 sha.Length))
+        // A branch of an earlier call may hold landings, so it is never reset or reused: a repeated call cuts a branch of its own (F7).
+        let! existingBranches = Features.CohortGit.branchNamesUnder mainRepoDir "sagefs/"
+        let takenBranches = existingBranches |> Result.defaultValue Set.empty
+        let branch = Features.CohortIntegrationScope.freshBranchName sha takenBranches.Contains
         let! addResult = Features.CohortGit.addWorktree mainRepoDir worktreePath branch sha
         // The trunk checkout: where landings are carried to once they land. Detached, so the integration branch stays free for the
         // landing step to move, and made fresh here for the same reason the integration worktree is.
@@ -127,17 +151,23 @@ module McpCohortIntegration =
         | Ok (), Error reason ->
           return Error (SageFsError.SessionCreationFailed (sprintf "could not create the trunk checkout at %s: %s" trunkPath reason))
         | Ok (), Ok () ->
+          let namedProjects = Features.CohortIntegrationScope.parseNamedProjects (defaultArg projects "")
+          let missingProjects = namedProjects |> List.filter (fun p -> not (File.Exists(Path.Combine(worktreePath, p))))
+          match missingProjects with
+          | _ :: _ ->
+            return Error (SageFsError.SessionCreationFailed (sprintf "projects not found in the integration worktree %s: %s. Name them relative to the repository root (for example SageFs.Tests/SageFs.Tests.fsproj), or leave projects empty to load the repository's test projects." worktreePath (String.concat ", " missingProjects)))
+          | [] ->
           cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Pending }
           // A new integration tree is a new session to build: nothing is evaluated over it yet.
           forgetFilesEvaluatedOverBuild ()
           let who = memberIdFor agentName
           let! commitResult =
             commitCohort ctx (
-              Cohort.CohortCommand.SetIntegrationHead(who, sha, SageFs.ScopeOf.ofWorkingDirectory callerSessionWorkingDirectory))
+              Cohort.CohortCommand.SetIntegrationHead(who, sha, integrationScope))
           match commitResult with
           | Error e -> return Error e
           | Ok _ ->
-            let projects = discoverProjects worktreePath
+            let projects = Features.CohortIntegrationScope.chooseIntegrationProjects namedProjects (discoverProjects worktreePath)
             let! buildResult = SessionBuild.runBuildAsync projects worktreePath
             let buildOutcome =
               buildResult
@@ -145,12 +175,13 @@ module McpCohortIntegration =
               |> Features.CohortIntegrationScope.worktreeBuildOutcome
             match buildOutcome with
             | Features.CohortIntegrationScope.WorktreeBuildOutcome.BuildFailed reason ->
-              cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
+              let failed = { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
+              cohortIntegrationRef.Value <- Some failed
               Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the worktree build failed before session creation: %s" sha worktreePath branch reason
               return Ok (
                 sprintf
-                  "Integration configured: head=%s worktree=%s branch=%s trunk=%s. WARNING: the worktree build failed (%s) — landings will report this reason until it is retried."
-                  sha worktreePath branch trunkPath reason)
+                  "Integration configured: head=%s worktree=%s branch=%s trunk=%s. WARNING: the worktree build failed, so no integration session was started. %s Landings report this until it is fixed."
+                  sha worktreePath branch trunkPath (failureText failed ("The worktree build failed: " + reason)))
             | Features.CohortIntegrationScope.WorktreeBuildOutcome.ReadyForSession ->
               let targets = SessionProjectTarget.tryCreateMany projects |> Result.defaultValue []
               let! sessionResult = ctx.SessionOps.CreateSession targets worktreePath WorkflowTypes.SessionWorkflow.Interactive
@@ -166,12 +197,13 @@ module McpCohortIntegration =
                     sha worktreePath branch trunkPath sessionId)
               | Error sessionErr ->
                 let reason = SageFsError.describeForAgent sessionErr
-                cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
+                let failed = { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
+                cohortIntegrationRef.Value <- Some failed
                 Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the integration session failed to start: %s" sha worktreePath branch reason
                 return Ok (
                   sprintf
-                    "Integration configured: head=%s worktree=%s branch=%s trunk=%s. WARNING: the integration session failed to start (%s) — landings will report this reason until it is retried."
-                    sha worktreePath branch trunkPath reason)
+                    "Integration configured: head=%s worktree=%s branch=%s trunk=%s. WARNING: the integration session failed to start. %s Landings report this until it is fixed."
+                    sha worktreePath branch trunkPath (failureText failed reason))
     }
 
   let getCohortStatus (ctx: McpContext) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
@@ -183,17 +215,28 @@ module McpCohortIntegration =
       match cohortOwnerFor ctx workingDirectory with
       | None -> return Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
       | Some owner ->
+        // The daemon holds ONE integration, configured for the cohort of the repository `set_integration_ref` named. Reading it for
+        // any other cohort would show a session and a trunk that this cohort's landings never touch.
+        let binding = cohortIntegrationRef.Value
+        let fit = Features.CohortIntegrationScope.bindingFit (binding |> Option.map (fun b -> b.Scope)) owner.Scope
         let integration =
-          match cohortIntegrationRef.Value with
-          | None -> "Integration session: (not configured — call set_integration_ref)"
-          | Some b ->
+          match fit, binding with
+          | Features.CohortIntegrationScope.BindingFit.NotConfigured, _
+          | _, None ->
+            sprintf "Integration session: (not configured for %s — call set_integration_ref with working_directory set to its repository)" (Scope.label owner.Scope)
+          | Features.CohortIntegrationScope.BindingFit.ConfiguredForOther other, _ ->
+            sprintf
+              "Integration session: (none for %s. The daemon's integration is configured for %s: call set_integration_ref with working_directory set to this repository to move it here)"
+              (Scope.label owner.Scope)
+              (Scope.label other)
+          | Features.CohortIntegrationScope.BindingFit.ForThisCohort, Some b ->
             match b.Session with
             | IntegrationSession.Started sid -> sprintf "Integration session: %s (started)" sid
-            | IntegrationSession.Failed reason -> sprintf "Integration session: FAILED to start — %s" reason
+            | IntegrationSession.Failed reason -> sprintf "Integration session: FAILED to start. %s" (failureText b reason)
             | IntegrationSession.Pending -> "Integration session: pending"
         // The trunk: where landings are carried once they land, and what became of each in the sessions that work there.
         let trunk =
-          match cohortIntegrationRef.Value, trunkFollowRef.Value with
+          match (match fit with Features.CohortIntegrationScope.BindingFit.ForThisCohort -> binding | _ -> None), trunkFollowRef.Value with
           | Some binding, Some follower ->
             let machine = follower.Read()
             let lines = Features.TrunkFollow.statusLines machine

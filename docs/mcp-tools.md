@@ -451,7 +451,7 @@ sounds like a chore anyway.
 | `get_friction_summary` | Compact summary of recorded MCP friction. |
 | `get_friction_report` | Structured JSON report of MCP pain points. |
 | `report_friction` | Record structured feedback about a confusing tool call. |
-| `manage_local_data` | See what SageFs stores under its data dir (rows, bytes, oldest row, retention rules), or clear it. Clearing is the one call that asks a person first, on a client that can be asked. |
+| `manage_local_data` | See what SageFs stores under its data dir (rows, bytes, oldest row, retention rules), or clear it. Clearing is the one call that asks a person first, on a client that can be asked. It is refused while ANY cohort the daemon runs is active, not only the daemon's own, and only the conductor of the cohort named by `working_directory` may call it. |
 
 ## Leases for expensive work
 
@@ -534,6 +534,14 @@ cohort of the repository the daemon was started in, so an agent in any other rep
 directory on every cohort call, not just the first. `get_cohort_status` with that directory shows whether
 you are seated there.
 
+A conductor-only tool (`set_integration_ref`, `mint_member`, `revoke_member`, `reassign_claim`, `delegate_conductor`,
+`resolve_veto`, `manage_local_data`, `tidy_workspace`) called by someone with no seat in the cohort the call acted in is
+refused the same way, naming that cohort: `<member> cannot call set_integration_ref: this call acted in the cohort
+repo:/path, and you have no seat there (you have not joined it).` The next action is to join with the same
+`working_directory` and pass it on the call. Daemons up to 0.6.940 said `your role is Working: set_integration_ref is
+not in your grant` here, which read as a permissions problem when the caller was the conductor of the right
+repository and had only called the daemon's own, empty cohort.
+
 Daemons up to 0.6.891 got this wrong in the other direction: an Implementer who had joined a repository
 other than the daemon's own (and was its conductor) was refused `acquire_claim`, `release_claim` and
 `request_landing` with `your role is Working: that needs the Working role`. The gate was reading the
@@ -552,9 +560,9 @@ daemon's own cohort instead of the one the call acts in. If you see that text, t
 | `withdraw_landing` | Take back a landing **you** requested, in any state short of landed or already withdrawn (a vetoed one included). Nobody else can withdraw it, the conductor included. |
 | `veto_landing` | Object to a **live** landing (queued, rebasing or verifying) with a reason. It is blocked, awaiting the conductor, and leaves the queue so it holds nobody behind it. Allowed for a seated Implementer, Verifier or the conductor; refused for an Observer, for someone who never joined and for a member who left. A landing that landed, was withdrawn, is blocked for another reason or is already vetoed is refused, and the first veto and its reason stand. |
 | `resolve_veto` | Conductor-only: clear a veto. The landing queues again as it was, and its claims are checked again when it reaches the front. |
-| `set_integration_ref` | Conductor-only: configure the git ref that landings rebase onto, in a dedicated integration worktree, and the trunk checkout the landings are carried to. The reply names both (`worktree=` and `trunk=`). |
+| `set_integration_ref` | Conductor-only: configure the git ref that landings rebase onto, in a dedicated integration worktree, and the trunk checkout the landings are carried to. Takes `working_directory`, the repository the integration is for: pass it unless the daemon itself was started in that repository (`install-local` starts it in its install folder), and `projects`, the repository-relative project the session loads when you want to name it. The reply names both (`worktree=` and `trunk=`). See [the integration](#the-integration-one-per-daemon-for-one-repository). |
 | `mint_member` | Conductor-only: mint a per-run member token bound to a role, a scope prefix, the one session or checkout it may act on, and an expiry. The token comes back once. See [member tokens](#member-tokens-one-identity-per-agent-run). |
-| `revoke_member` | Conductor-only: cut a member token off. It is refused from the next call, its seat departs and its claims are orphaned. |
+| `revoke_member` | Conductor-only: cut a member token off. It is refused from the next call, its seat departs and its claims are orphaned. Takes `working_directory` for the repository whose cohort the member is in. |
 
 ### Veto, withdraw and delegate
 
@@ -866,6 +874,31 @@ per-call `_meta` can, and Claude Code gives the model no per-call header. The
 conductor on a `ConnectionsAllowed` daemon is still identified by its connection,
 and a connection with no token routes anywhere, which is what lets the conductor
 mint for any session.
+
+### The integration: one per daemon, for one repository
+
+`set_integration_ref working_directory=<repository>` cuts the integration worktree from THAT repository (the daemon's own
+directory only when you name none), records the head in that repository's cohort, builds what the integration session
+needs and starts the session. The daemon holds one integration, so it serves one cohort: the one of the repository named when
+it was configured. `get_cohort_status` for any other cohort says which repository the integration serves and how to move it,
+and a landing in another cohort is blocked with the same words instead of being rebased and verified in the wrong tree.
+
+What the integration session loads is the test projects of the repository (a project that references Expecto, xunit, NUnit,
+MSTest or TUnit, or sets `IsTestProject`) and, through their references, what they test. The other projects a solution lists,
+such as samples that need a Rust, Python or Java toolchain, can never fail a landing and are neither built nor loaded. A
+repository with no test project loads everything the solution declares. A conductor who knows better names the project its
+landings are verified by with `projects=SageFs.Tests/SageFs.Tests.fsproj`, which is what a solution that lists many sample
+test projects wants; a name that is not in the repository is refused with the path it looked in. The worktree is built before the session starts, so
+the session reaches Ready on built outputs; a build that fails ends in `WARNING: the worktree build failed` with the cause,
+the worktree to look at and the retry.
+
+Calling `set_integration_ref` again is the retry. It stops the previous integration session, replaces the integration worktree
+and cuts a branch of its own (`sagefs/cohort-<sha>`, then `-2`, `-3`) because an earlier branch may hold landings and is
+never reset. A session that faulted says why in `get_cohort_status` (`Integration session: FAILED to start. ...`) with the
+same retry.
+
+The repository's own SageFs (a cohort for SageFs itself) also needs the daemon and the integration worktree to be one build:
+see "Self-hosting skew" in `AGENTS.md`.
 
 ### The trunk
 

@@ -3156,7 +3156,10 @@ let run
         async {
           match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
-          | Some binding -> return! Features.CohortGit.fastForwardBranch workingDir binding.Branch toSha
+          // In the integration worktree, which is a worktree of the repository the integration is for and shares its refs. The
+          // daemon's own directory is the repository only when the daemon was started in it: `install-local` starts it in its
+          // install folder, and the branch is then "not a git repository" there.
+          | Some binding -> return! Features.CohortGit.fastForwardBranch binding.WorktreePath binding.Branch toSha
         }
       Notify = fun who event ->
         Log.info "[cohort-landing] notify %s: %A" (MemberTable.MemberId.display who) event
@@ -3240,16 +3243,33 @@ let run
   // was already scope-keyed; the owner was the one thing that could not represent more
   // than one cohort. Each owner reads only its own scope's rows, so sharing the store
   // keeps the cohorts apart.
+  //
+  // The performer above works on the ONE integration worktree and verifying session this daemon holds, which are configured for
+  // the cohort of one repository (`CohortIntegrationBinding.Scope`). Each owner gets that performer guarded for ITS scope, so a
+  // landing in any other cohort ends in an answer that says so instead of being rebased and verified in another repository's tree.
+  let integrationRefusalFor (scope: SageFs.CohortScope) () : string option =
+    let binding = SageFs.McpCohortIntegration.cohortIntegrationRef.Value
+    match Features.CohortIntegrationScope.bindingFit (binding |> Option.map (fun b -> b.Scope)) scope with
+    | Features.CohortIntegrationScope.BindingFit.ForThisCohort -> None
+    | Features.CohortIntegrationScope.BindingFit.NotConfigured ->
+      Some (sprintf "integration not configured for %s — call set_integration_ref with working_directory set to this repository first" (SageFs.Scope.label scope))
+    | Features.CohortIntegrationScope.BindingFit.ConfiguredForOther other ->
+      Some (
+        sprintf
+          "this cohort (%s) has no integration: the daemon's integration is configured for %s — call set_integration_ref with working_directory set to this repository to move it here"
+          (SageFs.Scope.label scope)
+          (SageFs.Scope.label other))
+
   let cohortOwners =
-    Features.CohortOwners.create (
+    Features.CohortOwners.create (fun scope ->
       Features.CohortOwners.factoryOf
         { Ledger = cohortLedgerPort
           Clock = (fun () -> System.DateTime.UtcNow)
           Entropy = Features.CohortOwner.productionEntropy
           GetSessionTestOutcomes = getCohortSessionTestOutcomes
-          Performer = cohortLandingPerformer
+          Performer = Features.CohortOwner.LandingPerformer.guardedBy (integrationRefusalFor scope) cohortLandingPerformer
           Logger = Log.asILogger () }
-    )
+        scope)
 
   // The daemon's OWN scope, seeded eagerly so a caller in the launch directory is never
   // refused for want of an owner. Every other scope gets its owner on first use.
@@ -3400,11 +3420,21 @@ let run
               }
           NewReplyId = fun () -> System.Guid.NewGuid().ToString("N") })
   SageFs.McpCohortIntegration.trunkFollowRef.Value <- Some trunkFollower
-  cohortOwner.Events.Add(fun events ->
-    for ev in events do
-      match Features.TrunkFollow.ofCohortEvent ev with
-      | Some trunkEvent -> trunkFollower.Post trunkEvent
-      | None -> ())
+  // Every cohort's owner, not only the daemon's own: the trunk follows what lands in the cohort the integration is configured
+  // for, and that is the daemon's own only when the daemon was started in that repository.
+  cohortOwners.OnEachOwner(fun scope owner ->
+    owner.Events.Add(fun events ->
+      let serves =
+        match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
+        | Some binding -> binding.Scope = scope
+        | None -> false
+      match serves with
+      | false -> ()
+      | true ->
+        for ev in events do
+          match Features.TrunkFollow.ofCohortEvent ev with
+          | Some trunkEvent -> trunkFollower.Post trunkEvent
+          | None -> ()))
   // A session's reload row finishing a save is the later word on a patch the trunk recorded as pending.
   stateChangedEvent.Publish.Add(fun change ->
     match change with
@@ -3413,7 +3443,12 @@ let run
     | _ -> ())
   // The trunk follower is about the DAEMON's own cohort, so this names that scope rather
   // than leaving a client to guess which cohort went stale.
-  trunkFollower.Changes.Add(fun _ -> stateChangedEvent.Trigger(CohortChanged cohortScope))
+  trunkFollower.Changes.Add(fun _ ->
+    let served =
+      match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
+      | Some binding -> binding.Scope
+      | None -> cohortScope
+    stateChangedEvent.Trigger(CohortChanged served))
   // Sessions that were ready before this line ran.
   SessionManager.QuerySnapshot.allSessions (readSnapshot ())
   |> List.iter (fun info -> ensureReloadRelay info.Id)
@@ -3903,16 +3938,23 @@ let run
         // fire-and-forget `Post`, never awaited, and never on the hot watcher
         // path for a solo/non-cohort session (`resolveSaveObserver` returns
         // `None` immediately for those).
-        match
-          resolveSaveObserver
-            (SessionManager.QuerySnapshot.allSessions (readSnapshot ()))
-            (cohortOwner.ReadCohortState().Members)
-            sessionId
-            path
-        with
-        | Some(observer, relPath) ->
-          cohortOwner.Post(Cohort.CohortCommand.ObserveSave(observer, relPath, cohortOwner.Scope), ignore)
-        | None -> ()),
+        //
+        // In EVERY cohort the daemon runs, not only its own: a daemon started by an installer has an empty cohort of its
+        // own, and the repository people work in is another one, whose members are the ones a save can warn.
+        for scope in cohortOwners.Scopes() do
+          match cohortOwners.TryFind scope with
+          | None -> ()
+          | Some owner ->
+            match
+              resolveSaveObserver
+                (SessionManager.QuerySnapshot.allSessions (readSnapshot ()))
+                (owner.ReadCohortState().Members)
+                sessionId
+                path
+            with
+            | Some(observer, relPath) ->
+              owner.Post(Cohort.CohortCommand.ObserveSave(observer, relPath, owner.Scope), ignore)
+            | None -> ()),
       Some workingDir)
   watcherManagerRef := Some liveTestWatcherManager
   // Seed with any existing session directories (fallback dir handled by the

@@ -739,8 +739,9 @@ module McpTools =
     let who = memberIdFor agent
     // The cohort the CALL ACTS IN (the tool's `working_directory`; the daemon's own only when it names none):
     // membership is per cohort, so reading the daemon's refused a member of any other repository. 097c260d.
-    let authority = ToolAuthorityGate.authorityOf (cohortOwnerFor ctx workingDirectory) who
-    match ToolAuthorityGate.decide who authority toolName with
+    let owner = cohortOwnerFor ctx workingDirectory
+    let actedIn = owner |> Option.map (fun o -> Scope.label o.Scope) |> Option.defaultValue ""
+    match ToolAuthorityGate.decideIn actedIn who (ToolAuthorityGate.authorityOf owner who) toolName with
     | ToolAuthorityGate.Decision.Admitted -> Ok ()
     | ToolAuthorityGate.Decision.Refused(reason, _) -> Error reason
 

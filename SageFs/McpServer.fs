@@ -3231,7 +3231,7 @@ let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
   // What SageFs keeps under its data dir. Same view as manage_local_data.
   app.MapGet("/api/local-data", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let cohort = SageFs.LocalData.liveCohort (SageFs.McpTools.cohortOwnerFor rctx.McpContext None)
+      let cohort = SageFs.LocalData.liveCohortAcross (SageFs.CohortOwnerResolution.ownersOf rctx.McpContext.CohortSupport)
       let report = SageFs.LocalData.report rctx.McpContext.FrictionStore cohort DaemonState.SageFsDir
       do! jsonResponse ctx 200 (SageFs.LocalData.toJson report)
     } :> Task
@@ -3242,7 +3242,7 @@ let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
       match SageFs.LocalData.ClearTarget.parse (string ctx.Request.Query["store"]) with
       | Error message -> do! jsonResponse ctx 400 {| success = false; error = message |}
       | Ok target ->
-        let cohort = SageFs.LocalData.liveCohort (SageFs.McpTools.cohortOwnerFor rctx.McpContext None)
+        let cohort = SageFs.LocalData.liveCohortAcross (SageFs.CohortOwnerResolution.ownersOf rctx.McpContext.CohortSupport)
         let results = SageFs.LocalData.clear target rctx.McpContext.FrictionStore cohort DaemonState.SageFsDir
         do! jsonResponse ctx 200
               {| success = true

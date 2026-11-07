@@ -470,3 +470,9 @@ let moveCheckoutTo (checkoutDir: string) (sha: string) : Async<Result<unit, stri
 let removeWorktree (repoDir: string) (worktreePath: string) : Async<Result<unit, string>> =
   runGit repoDir shortTimeout [ "worktree"; "remove"; "--force"; worktreePath ]
   |> mapOk ignore
+
+/// The names of the local branches under `refs/heads/<prefix>`: what `set_integration_ref` checks so a repeated call for the same commit
+/// cuts a branch of its own instead of failing on the one the first call left, which may hold landings.
+let branchNamesUnder (repoDir: string) (prefix: string) : Async<Result<Set<string>, string>> =
+  runGit repoDir shortTimeout [ "for-each-ref"; "--format=%(refname:short)"; sprintf "refs/heads/%s" prefix ]
+  |> mapOk (splitLines >> List.map trim >> Set.ofList)

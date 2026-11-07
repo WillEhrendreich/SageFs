@@ -198,12 +198,20 @@ let private outcomeText (store: LocalStore) (outcome: ClearOutcome) =
 let renderClear (r: ClearReport) : string =
   r |> List.map (fun (store, outcome) -> outcomeText store outcome) |> String.concat "\n"
 
-/// The live cohort's activity, from the running owner. No owner (a daemon
-/// without cohorts wired) means nothing is running.
-let liveCohort (owner: CohortOwner.Handle option) : LocalDataRetention.CohortActivity =
-  match owner with
-  | Some handle -> LocalDataRetention.cohortActivity (handle.ReadCohortState ())
-  | None -> LocalDataRetention.CohortActivity.Finished
+/// The activity of EVERY cohort the daemon is running, added up. A machine-wide act (clearing the ledger) is refused while any
+/// cohort is running, not only the daemon's own: a daemon started by an installer has an empty cohort of its own, and the
+/// repository people work in is another one.
+let liveCohortAcross (owners: CohortOwner.Handle list) : LocalDataRetention.CohortActivity =
+  owners
+  |> List.map (fun handle -> LocalDataRetention.cohortActivity (handle.ReadCohortState ()))
+  |> List.fold
+    (fun total next ->
+      match total, next with
+      | LocalDataRetention.CohortActivity.Active(members, claims, landings), LocalDataRetention.CohortActivity.Active(m, c, l) ->
+        LocalDataRetention.CohortActivity.Active(members + m, claims + c, landings + l)
+      | LocalDataRetention.CohortActivity.Active _, LocalDataRetention.CohortActivity.Finished -> total
+      | LocalDataRetention.CohortActivity.Finished, other -> other)
+    LocalDataRetention.CohortActivity.Finished
 
 [<RequireQualifiedAccess>]
 type LocalDataAction =

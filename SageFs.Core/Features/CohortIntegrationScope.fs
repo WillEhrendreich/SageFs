@@ -137,13 +137,21 @@ module CohortIntegrationScope =
     | ConfiguredForOther of configuredFor: 'scope
 
   let bindingFit<'scope when 'scope : equality> (configuredFor: 'scope option) (asked: 'scope) : BindingFit<'scope> =
-    BindingFit.NotConfigured
+    match configuredFor with
+    | None -> BindingFit.NotConfigured
+    | Some configured when configured = asked -> BindingFit.ForThisCohort
+    | Some configured -> BindingFit.ConfiguredForOther configured
 
   /// A branch name for the integration branch cut at `sha` that no existing branch has, so calling `set_integration_ref` again
   /// for the same commit (the retry a failed session asks for) starts a fresh branch instead of dying on "a branch named ...
   /// already exists" (F7). A branch that exists may hold landings, so it is never reset or reused.
   let freshBranchName (sha: string) (taken: string -> bool) : string =
-    sprintf "sagefs/cohort-%s" (sha.Substring(0, min 8 sha.Length))
+    let plain = sprintf "sagefs/cohort-%s" (sha.Substring(0, min 8 sha.Length))
+    match taken plain with
+    | false -> plain
+    | true ->
+      Seq.initInfinite (fun i -> sprintf "%s-%d" plain (i + 2))
+      |> Seq.find (taken >> not)
 
   /// The test frameworks whose package a project references to be a test project. One exhaustive to-string function.
   [<RequireQualifiedAccess>]
@@ -167,16 +175,55 @@ module CohortIntegrationScope =
   /// Does this project file (its XML text) reference a test framework, or say it is a test project? Total: text that is not XML
   /// is not a test project.
   let isTestProjectXml (projectXml: string) : bool =
-    false
+    let frameworkPackages =
+      [ TestFramework.Expecto; TestFramework.MicrosoftTestSdk; TestFramework.XUnit; TestFramework.NUnit; TestFramework.MSTest; TestFramework.TUnit ]
+      |> List.map testFrameworkPackage
+    try
+      let doc = XDocument.Parse projectXml
+      let referencesFramework =
+        doc.Descendants(XName.Get "PackageReference")
+        |> Seq.exists (fun el ->
+          match el.Attribute(XName.Get "Include") with
+          | null -> false
+          | attr -> frameworkPackages |> List.exists (fun package -> String.Equals(package, attr.Value, StringComparison.OrdinalIgnoreCase)))
+      let declaresTestProject =
+        doc.Descendants(XName.Get "IsTestProject")
+        |> Seq.exists (fun el -> String.Equals(el.Value.Trim(), "true", StringComparison.OrdinalIgnoreCase))
+      referencesFramework || declaresTestProject
+    with :? System.Xml.XmlException -> false
 
   /// The projects the integration session loads. A landing is verified by tests, so the session needs the test projects and,
   /// through their references, what they test. Every other project of the solution (the samples that need a Rust, Python or Java
   /// toolchain, the demos) can never fail a landing and costs a cold build before the first one. NO-EMPTY-ESCAPE, as above: when
   /// no candidate is a test project the whole candidate list stands, so narrowing can never leave a session with nothing.
   let narrowToTestProjects (candidates: string list) (isTestProject: string -> bool) : string list =
-    candidates
+    match List.filter isTestProject candidates with
+    | [] -> candidates
+    | tests -> tests
+
+  /// The projects a conductor named for the integration session, from the one string a tool argument carries: comma, semicolon or
+  /// line separated, repository-relative, with `\` read as `/`. Blank entries are dropped.
+  let parseNamedProjects (raw: string) : string list =
+    match raw with
+    | null -> []
+    | _ ->
+      raw.Split([| ','; ';'; '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+      |> Array.map (fun p -> p.Trim().Replace('\\', '/'))
+      |> Array.filter (fun p -> p <> "")
+      |> Array.toList
+      |> List.distinct
+
+  /// The conductor's own list when it gave one (it knows which project its landings are verified by), else what discovery found.
+  let chooseIntegrationProjects (named: string list) (discovered: string list) : string list =
+    match named with
+    | [] -> discovered
+    | _ -> named
 
   /// What a faulted integration session says: the cause, and what to do about it. The retry is `set_integration_ref` again for
   /// the same repository, which replaces the integration worktree and starts a fresh session.
   let failureAdvice (reason: string) (worktreePath: string) (repositoryLabel: string) : string =
-    reason
+    sprintf
+      "%s. To retry: look at the integration worktree %s, fix the cause (a build error shows in its build output; a daemon built from a different commit than the worktree has to be reinstalled first), then call set_integration_ref again with working_directory set to the repository of %s. It replaces the worktree and starts a fresh session."
+      (reason.TrimEnd('.', ' '))
+      worktreePath
+      repositoryLabel

@@ -82,3 +82,10 @@ module CohortOwnerResolution =
       // is the "no cohort owner is configured" refusal three capability suites hit.
       Some owner
     | Features.CohortOwners.Wiring.Unwired -> None
+  /// Every cohort this wiring is running, which is the question a machine-wide act has to ask: clearing the cohort ledger must
+  /// not look only at the daemon's own cohort, whose members are not the ones a repository's conductor has.
+  let ownersOf (support: Features.CohortOwners.Wiring) : Features.CohortOwner.Handle list =
+    match support with
+    | Features.CohortOwners.Wiring.Wired(owners, _) -> owners.Scopes() |> List.choose owners.TryFind
+    | Features.CohortOwners.Wiring.Single(owner, _own) -> [ owner ]
+    | Features.CohortOwners.Wiring.Unwired -> []

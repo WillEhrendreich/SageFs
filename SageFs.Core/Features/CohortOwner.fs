@@ -114,6 +114,34 @@ module CohortOwner =
         FastForward = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string>>().Task)
         Notify = fun _ _ -> () }
 
+    /// `inner`, for ONE cohort, when the thing it performs against belongs to another. The daemon holds one integration worktree
+    /// and one verifying session, configured for the cohort of one repository; a landing in any other cohort would be rebased,
+    /// verified and fast-forwarded against that repository's tree. `refusal` is read at the start of every step and says why
+    /// this cohort has no integration to perform against (`None` = it has one); a step then ends in that reason and `inner` is
+    /// not called, so the landing is blocked with an answer instead of landing in the wrong repository.
+    let guardedBy<'m> (refusal: unit -> string option) (inner: LandingPerformer<'m>) : LandingPerformer<'m> =
+      { Rebase =
+          fun landingId onto commits ->
+            match refusal () with
+            | Some why -> async { return Error [ why ] }
+            | None -> inner.Rebase landingId onto commits
+        ComputeAffected =
+          fun landingId baseSha headSha ->
+            match refusal () with
+            | Some why -> async { return Error why }
+            | None -> inner.ComputeAffected landingId baseSha headSha
+        RunTests =
+          fun landingId tests ->
+            match refusal () with
+            | Some why -> async { return Error why }
+            | None -> inner.RunTests landingId tests
+        FastForward =
+          fun landingId toSha ->
+            match refusal () with
+            | Some why -> async { return Error why }
+            | None -> inner.FastForward landingId toSha
+        Notify = inner.Notify }
+
   type internal OwnerState = {
     Cohort: CohortState<MemberId>
     NextSeq: int64<ledgerSeq>

@@ -149,19 +149,20 @@ module McpCapability =
 
   /// Revoke by the member id `get_cohort_status` prints (`cap:<id>`). The token stops working at
   /// once, the seat departs and its claims are orphaned, so the conductor can reassign them.
-  let revokeMember
+  let revokeMemberIn
     (ctx: McpContext)
     (store: CapabilityStore)
     (now: DateTime)
     (agentName: string)
     (memberText: string)
+    (workingDirectory: string option)
     : Task<Result<string, SageFsError>> =
     task {
       // Resolve the caller's directory FIRST, and use it for BOTH the owner and the scope the
       // command is dispatched on. They were resolved separately — the owner with no directory
       // and the scope with one — so the authority check could read a different cohort from the
       // one the revoke landed in, which is the whole bug this feature is about.
-      let! wd = McpCohortTools.callerWorkingDirectory ctx agentName None
+      let! wd = McpCohortTools.callerWorkingDirectory ctx agentName workingDirectory
       match cohortOwnerFor ctx wd with
       | None -> return Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
       | Some owner ->
@@ -182,6 +183,10 @@ module McpCapability =
                 "Revoked %s: its token is refused from now on, its seat departed and its claims are orphaned (reassign_claim can hand them to another member)."
                 (MemberTable.MemberId.display (CapabilityId.memberId target)))
     }
+
+  /// `revokeMemberIn` for a caller that names no repository: the cohort of the session it works in, else the daemon's own.
+  let revokeMember (ctx: McpContext) (store: CapabilityStore) (now: DateTime) (agentName: string) (memberText: string) : Task<Result<string, SageFsError>> =
+    revokeMemberIn ctx store now agentName memberText None
 
   /// What a `tools/list` request presented. A member token that resolved narrows the list to its role, so it outranks
   /// an operator credential on the same request: a launcher that holds both asked to be listed as the member. The

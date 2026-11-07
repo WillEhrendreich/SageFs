@@ -1744,11 +1744,14 @@ Retention runs on its own: friction keeps only the running version's rows, insid
         action: string,
         [<Description("For clear: friction, cohort or all (default)")>]
         [<Optional; DefaultParameterValue("all")>]
-        store: string
+        store: string,
+        [<Description("The repository whose cohort's conductor you are: an absolute path to it or to any checkout of it. Only the conductor of that cohort may clear. Pass it unless the daemon itself was started in that repository.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: manage_local_data called, action={Action}, store={Store}", action, store)
         task {
-          let cohort = SageFs.LocalData.liveCohort (cohortOwnerFor ctx None)
+          let cohort = SageFs.LocalData.liveCohortAcross (SageFs.CohortOwnerResolution.ownersOf ctx.CohortSupport)
           let dataDir = SageFs.DaemonState.SageFsDir
           match SageFs.LocalData.LocalDataAction.parse action with
           | Ok SageFs.LocalData.LocalDataAction.Status ->
@@ -2927,20 +2930,28 @@ Once an integration is configured it ends with the trunk: one `trunk <landing id
     [<McpServerTool>]
     [<Description("""Configure this cohort's integration branch/worktree — the git ref real landings rebase onto and fast-forward into (item 14c of the multi-agent landing pipeline). CONDUCTOR-ONLY — refused with a "not the cohort conductor" error for anyone else.
 
-Resolves integration_ref (a branch, tag, or commit sha) to a commit in the daemon's own working directory, creates a dedicated integration git worktree on a fresh branch at that commit, binds Cohort's IntegrationHead to it, and starts a daemon-owned FSI session on the worktree so landings can be test-verified. It also creates the trunk checkout, a second detached worktree that is moved to each landing's commit once the landing has landed. A session whose working directory is the trunk checkout and that runs an app (create_project_session with workflow hotreload, then run_app) has each landing carried into the running app.
+Resolves integration_ref (a branch, tag, or commit sha) to a commit in the repository named by working_directory (the daemon's own directory only when you name none: pass it, because a daemon started by an installer runs in the installer's folder), creates a dedicated integration git worktree on a fresh branch at that commit, binds Cohort's IntegrationHead to it, builds the test projects the session needs, and starts a daemon-owned FSI session on the worktree so landings can be test-verified. The integration serves the cohort of that repository; get_cohort_status for any other cohort says so. It also creates the trunk checkout, a second detached worktree that is moved to each landing's commit once the landing has landed. A session whose working directory is the trunk checkout and that runs an app (create_project_session with workflow hotreload, then run_app) has each landing carried into the running app.
 
-WHEN TO USE: Once per cohort, before the first request_landing, by whoever is the conductor (the first member to join_cohort). Calling it again re-points the integration worktree/branch at a new ref.
+WHEN TO USE: Once per cohort, before the first request_landing, by whoever is the conductor (the first member to join_cohort). Calling it again re-points the integration worktree at a new ref on a branch of its own (an earlier branch may hold landings and is never reset), stops the previous integration session first, and is the retry a faulted integration session asks for.
 
 OUTPUT: Confirmation text naming the resolved head sha, worktree path, branch, trunk checkout path (trunk=), and session id — or an error naming what failed (an unresolvable ref, a worktree that could not be created, or — non-fatal — an integration session that failed to start).""")>]
     member _.set_integration_ref(
         [<Description("Your agent or model name — must be the cohort's current conductor.")>]
         agentName: string,
-        [<Description("A branch, tag, or commit sha in the daemon's own repo to configure as the integration head.")>]
-        integrationRef: string
+        [<Description("A branch, tag, or commit sha in the repository named by working_directory to configure as the integration head.")>]
+        integrationRef: string,
+        [<Description("The repository this integration is for: an absolute path to it or to any checkout of it. It decides which cohort is configured. Pass it unless the daemon itself was started in that repository.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description("The projects the integration session loads, repository-relative, comma separated (for example SageFs.Tests/SageFs.Tests.fsproj). Empty loads every test project the repository's solution declares, or the repository's projects when it declares no test project. Name the one project your landings are verified by when the solution lists samples that are slow to build.")>]
+        [<Optional; DefaultParameterValue("")>]
+        projects: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: set_integration_ref called by {AgentName}, ref={Ref}", agentName, integrationRef)
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let named = match System.String.IsNullOrWhiteSpace projects with | true -> None | false -> Some projects
         task {
-          let! result = SageFs.McpCohortIntegration.setIntegrationRef ctx agentName integrationRef
+          let! result = SageFs.McpCohortIntegration.setIntegrationRef ctx agentName integrationRef wd named
           return
             match result with
             | Ok text -> text, None
@@ -3006,11 +3017,15 @@ OUTPUT: Confirmation text, or an error saying why (not the conductor, no such me
         [<Description("Your agent or model name. You must be the cohort's conductor.")>]
         agentName: string,
         [<Description("The member id exactly as get_cohort_status or mint_member printed it: 'cap:<id>'.")>]
-        member_id: string
+        member_id: string,
+        [<Description("The repository whose cohort the member is in: an absolute path to it or to any checkout of it. Pass it unless the daemon itself was started in that repository.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: revoke_member called by {AgentName}, member={Member}", agentName, member_id)
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         task {
-          let! result = SageFs.McpCapability.revokeMember ctx SageFs.McpTools.capabilityStore System.DateTime.UtcNow agentName member_id
+          let! result = SageFs.McpCapability.revokeMemberIn ctx SageFs.McpTools.capabilityStore System.DateTime.UtcNow agentName member_id wd
           return
             match result with
             | Ok text -> text, None

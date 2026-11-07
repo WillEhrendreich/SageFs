@@ -258,6 +258,13 @@ let tests =
         | Ok (reply: CohortSeatRoute.SeatReply) -> reply.Seat |> Expect.equal "the seat is bound" "bound"
         | Error failure -> failtestf "seat the conductor: %s" (MemberMintCommand.MintFailure.describe failure)
 
+        // A project the conductor names that is not in the repository is refused with where it looked, before anything is configured.
+        let! unknownProject =
+          callToolPatient second "set_integration_ref"
+            [ "agentName", box "second"; "integrationRef", box "HEAD"; "working_directory", box lab; "projects", box "Nope/Nope.fsproj" ]
+        unknownProject |> Expect.stringContains "a project that is not there is refused" "projects not found in the integration worktree"
+        unknownProject |> Expect.stringContains "naming it" "Nope/Nope.fsproj"
+
         // THE CALL THAT WAS REFUSED: the conductor configures the integration for the repository it names. The daemon's own
         // cohort is about the empty directory it started in, where nobody is seated.
         let! configured =
@@ -340,6 +347,14 @@ let tests =
         let! changed = git lab [ "show"; sprintf "%s:Lab.fs" tipAfterGood ]
         changed |> Expect.stringContains "and holds the member's change" "hello, world"
         ignore goodSha
+
+        // The trunk follows what lands in the cohort the integration serves, which is not the daemon's own cohort here: it says what
+        // it did with the landing.
+        let! trunkSpoke =
+          SageFs.Tests.TestInfrastructure.waitForAsync (int TestTimeouts.saveVerdict.TotalMilliseconds) (fun () -> task {
+            let! run = asMember port token "get_cohort_status" [ "working_directory", memberCheckout ]
+            return run.Out.Contains(sprintf "trunk %s:" goodId) })
+        trunkSpoke |> Expect.isTrue "the trunk reported the landing that landed in the lab cohort"
 
         // A landing that breaks the test: the greeting no longer starts with hello. The gate refuses it.
         let! badId, _ = landEdit "goodbye" "member-bad" tipAfterGood
