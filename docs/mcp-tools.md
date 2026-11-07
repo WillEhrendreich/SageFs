@@ -516,7 +516,41 @@ standing in.
 `create_*_session`, `get_session_status` and `get_daemon_status` add one line
 when a repo has more than a handful of leftover worktrees or the gate dir has
 grown past a threshold: `workspace: N leftover worktrees (X GB), M safe to
-reclaim: call get_workspace_hygiene`.
+reclaim: call get_workspace_hygiene`. Work that exists nowhere else leads the
+line: `workspace: 3 worktrees hold work that is nowhere else, oldest idle 38d`.
+
+The daemon does not wait to be asked. At start, every `SAGEFS_HYGIENE_SWEEP_MINUTES`
+(15 by default) and whenever a session stops, it sweeps each repository it has a
+record of (a live session, or a session it made once, if the directory still
+exists):
+
+1. It writes each agent worktree into `<data dir>/hygiene-ledger.jsonl` when it
+   first appears and when it goes quiet or is resumed, with who made it. The file
+   only grows.
+2. It commits the uncommitted files of a worktree nobody is using to
+   `salvage/<name>`, with a temporary index, so the worktree itself is untouched.
+   A second sweep with nothing changed commits nothing.
+3. When the setting `hygiene.autoTidy` is on (the default), it tidies what is
+   provably safe: a worktree whose work has reached the base branch and that the
+   ledger has seen quiet for `SAGEFS_FINISHED_WORKTREE_GRACE_DAYS` (1 day; `0`
+   means no grace), expired worker logs and temp runs, orphaned registry entries
+   and merged agent branches. A worktree the ledger has never seen waits a full
+   grace from the first sweep, however old git says it is. A commit the base only
+   has by content (a rebase or squash) is kept reachable at
+   `refs/sagefs/removed/<name>` first, and each removal is a ledger line with the
+   tip it had. A worktree that holds commits the base lacks or uncommitted
+   changes, one a session, lease, process or cohort is using, and anything outside
+   the managed directories is never removed.
+
+A checkout a cohort holds (a member token is bound to it, or it is the cohort's
+integration or trunk checkout) reads as `in use: a cohort holds it`, and a
+`<repo>.tiers` directory beside a repository that nothing uses (the CI
+pipeline's tier work) is listed as needing a look. `sagefs hygiene` lists both and
+removes neither.
+
+`sagefs hygiene --rescue <name>` puts a worktree's work on `rescue/<name>`:
+its branch and salvage commit, rebased on the base, and it says whether the base
+already has the change, by patch id and by content.
 
 ## Cohort and multi-agent coordination
 

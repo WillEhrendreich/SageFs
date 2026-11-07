@@ -96,12 +96,12 @@ let items : Item list =
       [ "docs/how-live-testing-works.md"; "docs/decisions.md" ]
       "An edit typed while the confirming build replaces the worker used to be lost. A type-check or an eval now waits for a Ready worker and believes an answer only from the worker it asked."
 
-    // ---- Next: weeks to a couple of months ----
+    item "hygiene-that-runs-itself" "The daemon tidies the workspace by itself" Platform Now
+      (landmark "SageFs/HygieneSweep.fs" "TidyHalf")
+      [ "docs/agents.md"; "docs/configuration.md"; "docs/mcp-tools.md"; "docs/plans/hygiene-that-runs-itself.md" ]
+      "Workspace hygiene used to tidy only when a person or an agent asked, so on my machine about 25 worktrees and 49 GB piled up over five weeks, some holding commits or uncommitted files that exist nowhere else. The daemon now sweeps at start, every quarter of an hour and when a session stops. It writes each agent worktree into a ledger, commits uncommitted files to a salvage branch without touching the worktree, and, with `hygiene.autoTidy` on, removes only what is provably safe once the ledger has seen it quiet for a day, keeping a restore ref for a commit the base only has by content. Work that exists nowhere else leads the status line, the dashboard card and `sagefs hygiene`, with how old the oldest is, and `sagefs hygiene --rescue <name>` puts a worktree's work on a branch. A checkout a cohort holds reads as in use, and a `*.tiers` directory beside the repository that nothing uses is listed as needing a look. A worktree outside the managed directory is asked about its work too and named when it holds some, and is never removed. There is no MCP tool for the rescue yet: it waits for the tool-list work."
 
-    item "hygiene-that-runs-itself" "The daemon tidies the workspace by itself" Platform Next
-      NoLandmarkYet
-      [ "docs/agents.md"; "docs/configuration.md"; "docs/plans/hygiene-that-runs-itself.md" ]
-      "Workspace hygiene lists what agents leave behind, but it only tidies when a person or an agent asks, so on my machine about 25 worktrees and 49 GB piled up over five weeks, some holding commits or uncommitted files that exist nowhere else. The daemon will run it on a schedule. It commits uncommitted files to a salvage branch first, removes only what is provably safe once it has been quiet for a day, and writes every action and its tip sha to a ledger. Work that exists nowhere else is named in the status line, the dashboard card and `sagefs hygiene`, with how old the oldest is."
+    // ---- Next: weeks to a couple of months ----
 
     item "repl-eval-reaches-the-running-app" "A REPL eval changes the running app" HotReload Next
       NoLandmarkYet

@@ -3864,7 +3864,9 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
              avgDurationMs = avgMs
              workflowLabel = SageFs.WorkflowTypes.SessionWorkflow.label sess.Workflow
              app = {| state = appView.State; message = appView.Message; urls = appView.Urls |} |} :> obj)
-      do! jsonResponse ctx 200 {| sessions = results |}
+      // The checkouts a cohort holds, for `sagefs hygiene` run in a shell: that process has no capability table of its own.
+      let cohortHeld = SageFs.HygieneService.CohortHolds.current () |> List.map (fun (path, holder) -> {| path = path; holder = holder |})
+      do! jsonResponse ctx 200 {| sessions = results; cohortHeld = cohortHeld |}
     } :> Task
   ) |> ignore
   app.MapPost("/api/sessions/switch", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

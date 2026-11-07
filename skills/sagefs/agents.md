@@ -35,6 +35,13 @@ loop explicitly:
     change in the REPL before persisting it
 11. finish by removing nothing you do not own, and report your worktree path
     and branch so the orchestrator can reap them (`tidy_workspace`)
+12. no worktree unless the work must not touch the trunk. An agent that reads or
+    edits a file or two works in the shared checkout under a claim (`acquire_claim`).
+    A worktree is the exception that gets a ledger entry: the daemon records who
+    made it, saves its uncommitted files to `salvage/<name>`, and removes it only
+    after its work has reached the base branch and it has been quiet for a day. Work
+    that exists nowhere else is listed first by `sagefs hygiene`, and
+    `sagefs hygiene --rescue <name>` puts it on a branch
 
 The easiest way is to tell it to load this skill.
 
