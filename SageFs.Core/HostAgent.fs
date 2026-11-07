@@ -142,6 +142,19 @@ let private firstAnswer (runners: Runner list) : Runner =
       }
     loop runners
 
+/// Run `run` so that what it leaves in the coverage probes is thrown away: `discard` clears them before it starts (a
+/// reading nobody wanted is not the test's) and again when it ends, however it ends. A test run under a debugger executes
+/// instrumented code and sets probe bits that no reading is waiting for, so without this the next ordinary test's reading
+/// would carry the debugged test's lines.
+let discardingProbeHits (discard: unit -> unit) (run: Async<'result>) : Async<'result> =
+  async {
+    discard ()
+    try
+      return! run
+    finally
+      discard ()
+  }
+
 /// The reload registry for a process that has loaded `init`: resolves dependencies from the given directories and
 /// loads every project output, keeping the ones that failed as typed errors rather than throwing.
 let startState (init: AgentInit) : State =
@@ -697,7 +710,7 @@ module TestDebug =
 /// for tests found in the project assemblies. `debugAttachGrace` is how long a released test waits for a debugger that is
 /// still attaching (`Timeouts.debugAttachGrace` in the product).
 [<Sealed>]
-type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor list, debugAttachGrace: TimeSpan) =
+type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor list, debugAttachGrace: TimeSpan, debugProbe: TestDebug.DebuggerProbe) =
   let gate = obj ()
   let mutable state = startState init
   // Before anything else runs: the probes and the startup window's watch have
@@ -719,20 +732,43 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
   /// The loaded assemblies the instrumented ones were last found among, and the probe arrays found.
   let mutable trackerCache : Assembly array * FieldInfo array = [||], [||]
   let logger = Log.asILogger ()
+  /// Take the coverage the instrumented assemblies recorded, and reset it for the next run.
+  let takeCoverage () : CoverageReading =
+    // A reading is taken after EVERY test, so the instrumented assemblies are found once and reused for as
+    // long as the loaded assemblies are the same ones, instead of a type lookup in each of them per test.
+    let loaded = sources.Loaded()
+    let trackers =
+      let (seen, found) = System.Threading.Volatile.Read(&trackerCache)
+      match seen.Length = loaded.Length && Array.forall2 (fun (a: Assembly) (b: Assembly) -> obj.ReferenceEquals(a, b)) seen loaded with
+      | true -> found
+      | false ->
+        let instrumentable =
+          loaded |> Array.filter (fun a -> try not a.IsDynamic && not (isNull a.Location) && a.Location <> "" with _ -> false)
+        let found = CoverageProbes.findTrackers instrumentable
+        System.Threading.Volatile.Write(&trackerCache, (loaded, found))
+        found
+    match CoverageProbes.readAndClear trackers with
+    | None -> NoCoverage
+    | Some hits ->
+      let bitmap = CoverageBitmap.ofBoolArray hits
+      CoverageTaken(bitmap.Count, CoverageBitmap.toBase64 bitmap)
   let debugHold =
     TestDebug.DebugHold(
       Environment.ProcessId,
-      TestDebug.systemProbe,
+      debugProbe,
       Timeouts.debugHold,
       debugAttachGrace,
       (fun test ->
         let runners = lock gate (fun () -> [ yield! Option.toList dynamicRunner; yield! Option.toList projectRunner ])
-        firstAnswer runners test),
+        // A debug run executes instrumented code and sets probe bits no run's reading is waiting for.
+        discardingProbeHits (fun () -> takeCoverage () |> ignore) (firstAnswer runners test)),
       (fun test ->
         match lock gate (fun () -> Set.contains test.Id evalDefinedTests) with
         | true -> TestDebug.SymbolSupport.DefinedByEval
         | false -> TestDebug.SymbolSupport.CompiledWithSymbols)
     )
+
+  new(init, sources, executors, debugAttachGrace) = Agent(init, sources, executors, debugAttachGrace, TestDebug.systemProbe)
 
   new(init, sources, executors) = Agent(init, sources, executors, Timeouts.debugAttachGrace)
 
@@ -803,25 +839,7 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
 
   /// Take the coverage the instrumented assemblies recorded, and reset it for the next run. Coverage lives in the process
   /// that ran the tests, so only its agent can read it.
-  member _.TakeCoverage() : CoverageReading =
-    // A reading is taken after EVERY test, so the instrumented assemblies are found once and reused for as
-    // long as the loaded assemblies are the same ones, instead of a type lookup in each of them per test.
-    let loaded = sources.Loaded()
-    let trackers =
-      let (seen, found) = System.Threading.Volatile.Read(&trackerCache)
-      match seen.Length = loaded.Length && Array.forall2 (fun (a: Assembly) (b: Assembly) -> obj.ReferenceEquals(a, b)) seen loaded with
-      | true -> found
-      | false ->
-        let instrumentable =
-          loaded |> Array.filter (fun a -> try not a.IsDynamic && not (isNull a.Location) && a.Location <> "" with _ -> false)
-        let found = CoverageProbes.findTrackers instrumentable
-        System.Threading.Volatile.Write(&trackerCache, (loaded, found))
-        found
-    match CoverageProbes.readAndClear trackers with
-    | None -> NoCoverage
-    | Some hits ->
-      let bitmap = CoverageBitmap.ofBoolArray hits
-      CoverageTaken(bitmap.Count, CoverageBitmap.toBase64 bitmap)
+  member _.TakeCoverage() : CoverageReading = takeCoverage ()
 
   /// The simple names of every assembly the process has loaded, sorted and distinct: what a warmup check asks, since only
   /// the process the user's code runs in knows.

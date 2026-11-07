@@ -820,6 +820,7 @@
         <Compile Include="DebugTestRequestTests.fs" />
         <Compile Include="DebugTestRoutesHttpTests.fs" />
         <Compile Include="DebugRunRecordTests.fs" />
+        <Compile Include="HostAgentDebugCoverageTests.fs" />
         <Compile Include="ScratchPadTests.fs" />
         <Compile Include="EvalRippleTests.fs" />
         <Compile Include="EvalLensTests.fs" />
