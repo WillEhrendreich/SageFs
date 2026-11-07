@@ -65,7 +65,10 @@ module ToolAuthorityGate =
   /// governs what a caller may do to its OWN session. That is NOT "no authority at all" — that
   /// would make `join_cohort` unreachable — and it is also not a way around the cohort gate, which
   /// still refuses an `Anonymous` caller every verb that needs a seat.
-  let decide (who: MemberTable.MemberId) (authority: Cohort.Authority<MemberTable.MemberId>) (toolName: string) : Decision =
+  ///
+  /// `actedIn` is the label of the cohort the call acted in, so a refusal for a missing seat can say where the caller is not
+  /// seated.
+  let decideIn (actedIn: string) (who: MemberTable.MemberId) (authority: Cohort.Authority<MemberTable.MemberId>) (toolName: string) : Decision =
     match Affordances.ToolName.tryParse toolName with
     | None -> refuseUnknownTool toolName
     | Some tool ->
@@ -89,6 +92,10 @@ module ToolAuthorityGate =
         Refused(
           SageFsError.describeForAgent (SageFsError.CohortActionFailed(reason, Affordances.AuthorityRefusal.nextAction refusal)),
           Affordances.AuthorityRefusal.nextAction refusal))
+
+  /// `decideIn` for a caller that has no cohort to name (a pure unit test, a tool that acts on no cohort).
+  let decide (who: MemberTable.MemberId) (authority: Cohort.Authority<MemberTable.MemberId>) (toolName: string) : Decision =
+    decideIn "the cohort this call acts in" who authority toolName
 
   /// The caller's authority, read from the owner's published frame — wait-free, never a mailbox
   /// round trip. `None` owner means `Anonymous`, which `ofAuthority` maps to `Working` for the same

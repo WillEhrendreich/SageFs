@@ -35,6 +35,9 @@ module CohortIntegrationScope =
   /// landing changes for.
   [<RequireQualifiedAccess>]
   type MainRepoRootSource =
+    /// The directory the call itself named (`working_directory`). It outranks everything: it is the repository the caller
+    /// means, and the daemon's own directory (install-local starts it in the install folder) says nothing about it.
+    | NamedByCall of workingDirectory: string
     | CallerSession of workingDirectory: string
     | DaemonProcessCwd of cwd: string
 
@@ -52,10 +55,22 @@ module CohortIntegrationScope =
     | Some dir when not (String.IsNullOrWhiteSpace dir) -> MainRepoRootSource.CallerSession dir
     | _ -> MainRepoRootSource.DaemonProcessCwd daemonCwd
 
+  /// Which directory `set_integration_ref` cuts the integration worktree from: the one the call named, else the caller's
+  /// session, else the daemon's own. A blank name is no name.
+  let chooseIntegrationRepoSource
+    (named: string option)
+    (callerSessionWorkingDirectory: string option)
+    (daemonCwd: string)
+    : MainRepoRootSource =
+    match named with
+    | Some dir when not (String.IsNullOrWhiteSpace dir) -> MainRepoRootSource.NamedByCall dir
+    | _ -> chooseMainRepoRootSource callerSessionWorkingDirectory daemonCwd
+
   /// The candidate directory a source names. The caller applies the actual
   /// git-root walk (`SageFs.Checkout.classify`) to this — that is
   /// filesystem IO and stays at the Mcp.fs edge, not here.
   let candidateDirectory = function
+    | MainRepoRootSource.NamedByCall dir -> dir
     | MainRepoRootSource.CallerSession dir -> dir
     | MainRepoRootSource.DaemonProcessCwd dir -> dir
 
@@ -109,3 +124,59 @@ module CohortIntegrationScope =
     match buildResult with
     | Ok _ -> WorktreeBuildOutcome.ReadyForSession
     | Error reason -> WorktreeBuildOutcome.BuildFailed reason
+
+  // ── P11 — which cohort the integration belongs to, and what a retry does ──
+
+  /// Which cohort a configured integration serves, against the cohort a call acts in. The daemon holds ONE integration
+  /// binding (one integration worktree, one trunk checkout), configured for the cohort of the repository named when
+  /// `set_integration_ref` ran. A landing or a status read in any other cohort must not be answered from it.
+  [<RequireQualifiedAccess>]
+  type BindingFit<'scope> =
+    | NotConfigured
+    | ForThisCohort
+    | ConfiguredForOther of configuredFor: 'scope
+
+  let bindingFit<'scope when 'scope : equality> (configuredFor: 'scope option) (asked: 'scope) : BindingFit<'scope> =
+    BindingFit.NotConfigured
+
+  /// A branch name for the integration branch cut at `sha` that no existing branch has, so calling `set_integration_ref` again
+  /// for the same commit (the retry a failed session asks for) starts a fresh branch instead of dying on "a branch named ...
+  /// already exists" (F7). A branch that exists may hold landings, so it is never reset or reused.
+  let freshBranchName (sha: string) (taken: string -> bool) : string =
+    sprintf "sagefs/cohort-%s" (sha.Substring(0, min 8 sha.Length))
+
+  /// The test frameworks whose package a project references to be a test project. One exhaustive to-string function.
+  [<RequireQualifiedAccess>]
+  type TestFramework =
+    | Expecto
+    | MicrosoftTestSdk
+    | XUnit
+    | NUnit
+    | MSTest
+    | TUnit
+
+  let testFrameworkPackage (framework: TestFramework) : string =
+    match framework with
+    | TestFramework.Expecto -> "Expecto"
+    | TestFramework.MicrosoftTestSdk -> "Microsoft.NET.Test.Sdk"
+    | TestFramework.XUnit -> "xunit"
+    | TestFramework.NUnit -> "NUnit"
+    | TestFramework.MSTest -> "MSTest.TestFramework"
+    | TestFramework.TUnit -> "TUnit"
+
+  /// Does this project file (its XML text) reference a test framework, or say it is a test project? Total: text that is not XML
+  /// is not a test project.
+  let isTestProjectXml (projectXml: string) : bool =
+    false
+
+  /// The projects the integration session loads. A landing is verified by tests, so the session needs the test projects and,
+  /// through their references, what they test. Every other project of the solution (the samples that need a Rust, Python or Java
+  /// toolchain, the demos) can never fail a landing and costs a cold build before the first one. NO-EMPTY-ESCAPE, as above: when
+  /// no candidate is a test project the whole candidate list stands, so narrowing can never leave a session with nothing.
+  let narrowToTestProjects (candidates: string list) (isTestProject: string -> bool) : string list =
+    candidates
+
+  /// What a faulted integration session says: the cause, and what to do about it. The retry is `set_integration_ref` again for
+  /// the same repository, which replaces the integration worktree and starts a fresh session.
+  let failureAdvice (reason: string) (worktreePath: string) (repositoryLabel: string) : string =
+    reason

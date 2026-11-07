@@ -1048,6 +1048,8 @@
         <Compile Include="CohortLandingGitAcceptanceTests.fs" />
         <Compile Include="CohortDogfoodIntegrationTests.fs" />
         <Compile Include="TrunkLandingOutcomeTests.fs" />
+        <Compile Include="CohortIntegrationRepoTests.fs" />
+        <Compile Include="CohortIntegrationLabTests.fs" />
         <Compile Include="CohortLedgerExportTests.fs" />
         <Compile Include="CohortPlayTests.fs" />
         <Compile Include="CohortExportCommandTests.fs" />

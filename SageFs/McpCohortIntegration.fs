@@ -23,6 +23,8 @@ module McpCohortIntegration =
     | Pending
 
   type CohortIntegrationBinding = {
+    /// The cohort this integration serves: the repository `set_integration_ref` was called for.
+    Scope: SageFs.CohortScope
     WorktreePath: string
     Branch: string
     /// The trunk checkout: where the cohort's landings are carried to, and the working directory of a trunk session. Detached,
@@ -88,6 +90,7 @@ module McpCohortIntegration =
           let! infoOpt = ctx.SessionOps.GetSessionInfo (toSessionId sid)
           return infoOpt |> Option.map (fun info -> info.WorkingDirectory)
       }
+      let integrationScope = SageFs.ScopeOf.ofWorkingDirectory callerSessionWorkingDirectory
       let rootSource = Features.CohortIntegrationScope.chooseMainRepoRootSource callerSessionWorkingDirectory Environment.CurrentDirectory
       let candidateDir = Features.CohortIntegrationScope.candidateDirectory rootSource
       let mainRepoDir =
@@ -124,7 +127,7 @@ module McpCohortIntegration =
         | Ok (), Error reason ->
           return Error (SageFsError.SessionCreationFailed (sprintf "could not create the trunk checkout at %s: %s" trunkPath reason))
         | Ok (), Ok () ->
-          cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Pending }
+          cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Pending }
           // A new integration tree is a new session to build: nothing is evaluated over it yet.
           forgetFilesEvaluatedOverBuild ()
           let who = memberIdFor agentName
@@ -142,7 +145,7 @@ module McpCohortIntegration =
               |> Features.CohortIntegrationScope.worktreeBuildOutcome
             match buildOutcome with
             | Features.CohortIntegrationScope.WorktreeBuildOutcome.BuildFailed reason ->
-              cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
+              cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
               Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the worktree build failed before session creation: %s" sha worktreePath branch reason
               return Ok (
                 sprintf
@@ -153,7 +156,7 @@ module McpCohortIntegration =
               let! sessionResult = ctx.SessionOps.CreateSession targets worktreePath WorkflowTypes.SessionWorkflow.Interactive
               match sessionResult with
               | Ok sessionId ->
-                cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Started sessionId }
+                cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Started sessionId }
                 // The landing gate drives this session. Saves in its worktree must not also drive its live loop, whose confirming
                 // build would swap the worker under a verification (LiveTestFileRouting.SessionPurpose.Verifying).
                 ctx.Dispatch |> Option.iter (fun dispatch -> dispatch (SageFsMsg.SessionVerifiesLandings sessionId))
@@ -163,7 +166,7 @@ module McpCohortIntegration =
                     sha worktreePath branch trunkPath sessionId)
               | Error sessionErr ->
                 let reason = SageFsError.describeForAgent sessionErr
-                cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
+                cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
                 Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the integration session failed to start: %s" sha worktreePath branch reason
                 return Ok (
                   sprintf
