@@ -424,6 +424,8 @@
         <Compile Include="FsiHostCrash.fs" />
         <Compile Include="SageFsError.fs" />
         <Compile Include="RebuildOutcome.fs" />
+        <!-- Before SessionReload: the freshness state names the blockers that stop a session leveling its own host. Pure. -->
+        <Compile Include="ReplLeveling.fs" />
         <Compile Include="SessionReload.fs" />
         <!-- After SessionReload: the trunk follows what lands. The decision folds reload facts, and WorkerProtocol carries its
              types, so both come before it. -->

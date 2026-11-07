@@ -1813,6 +1813,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               match s.Freshness with
               | ReplFreshness.InSync -> ()
               | ReplFreshness.BehindApp _
+              | ReplFreshness.Leveling _
+              | ReplFreshness.CannotLevel _
               | ReplFreshness.Unknown _ ->
                 Elem.div
                   [ Attr.class' "session-card-freshness"

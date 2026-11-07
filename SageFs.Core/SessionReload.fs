@@ -248,6 +248,9 @@ type FreshnessUnknown =
   | LookupFailed of reason: string
   /// The answer was produced without looking: the call that made it never reached the registry.
   | NotRead
+  /// The session tried to bring the REPL level and the attempt failed (the reset, or fetching the tests and maps again), so
+  /// what the REPL runs is no longer known.
+  | LevelFailed of reason: string
 
 [<RequireQualifiedAccess>]
 type ReplFreshness =
@@ -256,6 +259,11 @@ type ReplFreshness =
   /// The app was patched in place `savesSince` times since the FSI host was built, naming what changed (each once, in the order
   /// it was first saved).
   | BehindApp of savesSince: int * declarations: string list
+  /// The same gap, and the session is closing it: the FSI host is being brought up to the patched build and its tests and maps
+  /// fetched again. Still behind, and loud about it, until that has finished.
+  | Leveling of savesSince: int * declarations: string list
+  /// The same gap, and the session cannot close it by itself because closing it would lose something. Names what.
+  | CannotLevel of savesSince: int * declarations: string list * blockedBy: LevelBlocker list
   /// Nobody could say. This is not `InSync`: a failed lookup, a session that is gone and a call that never looked all used to
   /// answer "level", which is the one answer this state must not guess.
   | Unknown of why: FreshnessUnknown
@@ -268,6 +276,7 @@ module FreshnessUnknown =
     | FreshnessUnknown.SessionGone -> "SessionGone"
     | FreshnessUnknown.LookupFailed _ -> "LookupFailed"
     | FreshnessUnknown.NotRead -> "NotRead"
+    | FreshnessUnknown.LevelFailed _ -> "LevelFailed"
 
   /// Why it could not be read, for a sentence to carry.
   let detail (why: FreshnessUnknown) : string =
@@ -275,6 +284,7 @@ module FreshnessUnknown =
     | FreshnessUnknown.SessionGone -> "the session is no longer registered"
     | FreshnessUnknown.LookupFailed reason -> sprintf "looking the session up failed (%s)" reason
     | FreshnessUnknown.NotRead -> "this answer was produced without looking it up"
+    | FreshnessUnknown.LevelFailed reason -> sprintf "bringing the REPL level failed (%s)" reason
 
 [<RequireQualifiedAccess>]
 module ReplFreshness =
@@ -293,11 +303,19 @@ module ReplFreshness =
       match facts.Case, freshness with
       // A save the worker reported is a fact about the build, so it settles a state that was Unknown the same way it moves InSync.
       | ReloadCase.PatchPending, (ReplFreshness.InSync | ReplFreshness.Unknown _) -> ReplFreshness.BehindApp (1, merged [])
-      | ReloadCase.PatchPending, ReplFreshness.BehindApp (saves, known) -> ReplFreshness.BehindApp (saves + 1, merged known)
+      // A save that lands while the host is being brought level, or after a level that was blocked, is not in the build the
+      // host runs: the gap is open again at the new count, and the session asks again.
+      | ReloadCase.PatchPending, (ReplFreshness.BehindApp (saves, known) | ReplFreshness.Leveling (saves, known) | ReplFreshness.CannotLevel (saves, known, _)) ->
+        ReplFreshness.BehindApp (saves + 1, merged known)
       | (ReloadCase.Patched | ReloadCase.NeverEntered | ReloadCase.KeptLiveState), (ReplFreshness.InSync | ReplFreshness.Unknown _) ->
         ReplFreshness.BehindApp (1, merged [])
       | (ReloadCase.Patched | ReloadCase.NeverEntered | ReloadCase.KeptLiveState), ReplFreshness.BehindApp (saves, known) ->
         ReplFreshness.BehindApp (saves, merged known)
+      // The confirmation of a save the level already covers.
+      | (ReloadCase.Patched | ReloadCase.NeverEntered | ReloadCase.KeptLiveState), ReplFreshness.Leveling (saves, known) ->
+        ReplFreshness.Leveling (saves, merged known)
+      | (ReloadCase.Patched | ReloadCase.NeverEntered | ReloadCase.KeptLiveState), ReplFreshness.CannotLevel (saves, known, blockers) ->
+        ReplFreshness.CannotLevel (saves, merged known, blockers)
       | (ReloadCase.Restarted | ReloadCase.NoEffect | ReloadCase.RestartRequired | ReloadCase.CompileFailed | ReloadCase.EvalFailed), _ -> freshness
     | SessionReload.Finished _
     | SessionReload.Compiling _
@@ -306,10 +324,62 @@ module ReplFreshness =
   /// A replaced worker is built from the current build, REPL included.
   let afterWorkerSwap (_: ReplFreshness) : ReplFreshness = ReplFreshness.InSync
 
+  /// A session whose REPL is behind and whose worker can be asked to level its host starts doing so: the state becomes
+  /// `Leveling` and the caller sends the ask to `workerPid`. A worker that cannot be asked right now (a swap is parked, the
+  /// session is not Ready, the landing gate drives it) leaves the state `CannotLevel`, naming why. Only a plain gap starts a
+  /// level: a level already in flight is not asked for twice, and every other state is left as it is.
+  let beginLeveling (freshness: ReplFreshness) (standing: LevelStanding) (flight: LevelFlight) : ReplFreshness * LevelStart =
+    match freshness, flight with
+    | ReplFreshness.BehindApp (saves, known), LevelFlight.NoLevelInFlight ->
+      match standing with
+      | LevelStanding.Servable pid -> ReplFreshness.Leveling (saves, known), LevelStart.StartLevel pid
+      | LevelStanding.Unservable blocker -> ReplFreshness.CannotLevel (saves, known, [ blocker ]), LevelStart.NoStart
+    | ReplFreshness.BehindApp _, LevelFlight.LevelInFlight
+    | ReplFreshness.InSync, _
+    | ReplFreshness.Unknown _, _
+    | ReplFreshness.Leveling _, _
+    | ReplFreshness.CannotLevel _, _ -> freshness, LevelStart.NoStart
+
+  /// What a worker's answer to a level ask does to the state. `Leveled` is only said once the tests and maps have been fetched
+  /// again, so it is what finishes `Leveling`. A gap a later save reopened (`BehindApp`) stays open: the answer was about the
+  /// build from before that save, and the caller asks again.
+  let afterLevelAnswer (freshness: ReplFreshness) (answer: LevelAnswer) : ReplFreshness =
+    match answer, freshness with
+    | LevelAnswer.Leveled, ReplFreshness.Leveling _ -> ReplFreshness.InSync
+    | LevelAnswer.LevelDeferred blockers, (ReplFreshness.Leveling (saves, known) | ReplFreshness.BehindApp (saves, known)) ->
+      ReplFreshness.CannotLevel (saves, known, blockers)
+    | LevelAnswer.LevelFailed reason, (ReplFreshness.Leveling _ | ReplFreshness.BehindApp _) ->
+      ReplFreshness.Unknown (FreshnessUnknown.LevelFailed reason)
+    | LevelAnswer.Leveled, (ReplFreshness.InSync | ReplFreshness.BehindApp _ | ReplFreshness.CannotLevel _ | ReplFreshness.Unknown _)
+    | LevelAnswer.LevelDeferred _, (ReplFreshness.InSync | ReplFreshness.CannotLevel _ | ReplFreshness.Unknown _)
+    | LevelAnswer.LevelFailed _, (ReplFreshness.InSync | ReplFreshness.CannotLevel _ | ReplFreshness.Unknown _) -> freshness
+
+  /// The worker replaced its own FSI host with one built from the current build (a hard reset that resolved Ok, by any
+  /// caller). A session that was behind is now being brought level: the tests and maps are fetched again, and the state
+  /// is level when that has finished. A state nobody could read is level then too.
+  let afterHostRebuilt (freshness: ReplFreshness) : ReplFreshness =
+    match freshness with
+    | ReplFreshness.BehindApp (saves, known)
+    | ReplFreshness.Leveling (saves, known)
+    | ReplFreshness.CannotLevel (saves, known, _) -> ReplFreshness.Leveling (saves, known)
+    | ReplFreshness.Unknown _ -> ReplFreshness.Leveling (0, [])
+    | ReplFreshness.InSync -> ReplFreshness.InSync
+
   let private plural (n: int) (word: string) : string =
     match n with
     | 1 -> sprintf "1 %s" word
     | _ -> sprintf "%d %ss" n word
+
+  /// The clause that says what the app was patched on, with the declarations named up to a limit.
+  let private gap (saves: int) (declarations: string list) : string =
+    let named =
+      match declarations with
+      | [] -> ""
+      | names when names.Length <= namedInWarning -> sprintf " (%s)" (String.concat ", " names)
+      | names -> sprintf " (%s, and %d more)" (names |> List.truncate namedInWarning |> String.concat ", ") (names.Length - namedInWarning)
+    match saves with
+    | 0 -> sprintf "the app may have been patched in place since the REPL was built%s" named
+    | _ -> sprintf "the app was patched in place on %s%s" (plural saves "save") named
 
   /// What the state says, in a sentence a reader can act on without knowing the history.
   let describe (freshness: ReplFreshness) : string =
@@ -318,21 +388,26 @@ module ReplFreshness =
     | ReplFreshness.Unknown why ->
       sprintf "Whether the REPL runs the same build as the app could not be read: %s. Do not take the REPL for level." (FreshnessUnknown.detail why)
     | ReplFreshness.BehindApp (saves, declarations) ->
-      let named =
-        match declarations with
-        | [] -> ""
-        | names when names.Length <= namedInWarning -> sprintf " (%s)" (String.concat ", " names)
-        | names -> sprintf " (%s, and %d more)" (names |> List.truncate namedInWarning |> String.concat ", ") (names.Length - namedInWarning)
       sprintf
-        "The REPL is BEHIND the app: the app was patched in place on %s%s, and the REPL and live tests still run the build from before it, so a call to what changed runs the OLD code. hard_reset_fsi_session with rebuild=true brings them level, and it replaces the worker, so the running app stops with it and its in-memory state is lost (run_app starts it again)."
-        (plural saves "save")
-        named
+        "The REPL is BEHIND the app: %s, and the REPL and live tests still run the build from before it, so a call to what changed runs the OLD code. hard_reset_fsi_session with rebuild=true brings them level, and it replaces the worker, so the running app stops with it and its in-memory state is lost (run_app starts it again)."
+        (gap saves declarations)
+    | ReplFreshness.Leveling (saves, declarations) ->
+      sprintf
+        "The REPL is BEHIND the app: %s, and SageFs is bringing the REPL and live tests level now, which takes about 2 seconds and leaves the app alone. Until it has finished, a call to what changed runs the OLD code."
+        (gap saves declarations)
+    | ReplFreshness.CannotLevel (saves, declarations, blockers) ->
+      sprintf
+        "The REPL is BEHIND the app: %s, and the REPL and live tests still run the build from before it, so a call to what changed runs the OLD code. SageFs did not bring it level by itself because %s. hard_reset_fsi_session with rebuild=true brings them level, and it replaces the worker, so the running app stops with it and its in-memory state is lost (run_app starts it again)."
+        (gap saves declarations)
+        (ReplLeveling.describeBlockers blockers)
 
   /// The warning a tool result carries, or nothing when the REPL is level.
   let banner (freshness: ReplFreshness) : string =
     match freshness with
     | ReplFreshness.InSync -> ""
     | ReplFreshness.BehindApp _
+    | ReplFreshness.Leveling _
+    | ReplFreshness.CannotLevel _
     | ReplFreshness.Unknown _ -> sprintf "WARNING: %s" (describe freshness)
 
   /// A tool's result, with the warning after it when the REPL is behind. The result stays first and whole.
@@ -340,6 +415,14 @@ module ReplFreshness =
     match banner freshness with
     | "" -> text
     | warning -> sprintf "%s\n\n%s" text warning
+
+  let private behindOnWire (freshness: ReplFreshness) (saves: int) (declarations: string list) (blockers: LevelBlocker list) : obj =
+    box
+      {| state = "BehindApp"
+         savesSince = saves
+         declarations = List.toArray declarations
+         blockedBy = blockers |> List.map LevelBlocker.token |> List.toArray
+         message = describe freshness |}
 
   /// How the state appears in every status shape: always a field, never an absence a client has to read as "fine".
   let toWire (freshness: ReplFreshness) : obj =
@@ -350,9 +433,8 @@ module ReplFreshness =
         {| state = "Unknown"
            reason = {| kind = FreshnessUnknown.kind why; detail = FreshnessUnknown.detail why |}
            message = describe freshness |}
-    | ReplFreshness.BehindApp (saves, declarations) ->
-      box
-        {| state = "BehindApp"
-           savesSince = saves
-           declarations = List.toArray declarations
-           message = describe freshness |}
+    // All three gap states are `BehindApp` on the wire, so a client that knows the one state keeps working. `blockedBy` is the
+    // tokens of what stopped the session leveling itself (empty when nothing did, or it has not tried).
+    | ReplFreshness.BehindApp (saves, declarations) -> behindOnWire freshness saves declarations []
+    | ReplFreshness.Leveling (saves, declarations) -> behindOnWire freshness saves declarations []
+    | ReplFreshness.CannotLevel (saves, declarations, blockers) -> behindOnWire freshness saves declarations blockers

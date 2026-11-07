@@ -52,12 +52,16 @@ module Readiness =
       | SourceState.InSync _
       | SourceState.Unknown UnknownReason.NoProjectLoaded ->
         match freshness with
-        | ReplFreshness.BehindApp _ -> Readiness.ReadyReplBehindApp
+        | ReplFreshness.BehindApp _
+        | ReplFreshness.Leveling _
+        | ReplFreshness.CannotLevel _ -> Readiness.ReadyReplBehindApp
         | ReplFreshness.Unknown _ -> Readiness.ReadyUnchecked
         | ReplFreshness.InSync -> Readiness.ReadyCurrent
       | SourceState.Unknown _ ->
         match freshness with
-        | ReplFreshness.BehindApp _ -> Readiness.ReadyReplBehindApp
+        | ReplFreshness.BehindApp _
+        | ReplFreshness.Leveling _
+        | ReplFreshness.CannotLevel _ -> Readiness.ReadyReplBehindApp
         | ReplFreshness.Unknown _
         | ReplFreshness.InSync -> Readiness.ReadyUnchecked
 

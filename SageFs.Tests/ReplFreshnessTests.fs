@@ -277,7 +277,7 @@ let levelingTests =
     testCase "WHY - while leveling the state is loud and says it is being brought level, with the time it takes and that the app is left alone" <| fun _ ->
       let text = ReplFreshness.describe (ReplFreshness.Leveling (2, [ "A.f" ]))
       text |> Expect.stringContains "still behind" "BEHIND"
-      text |> Expect.stringContains "says it is being brought level" "brought level"
+      text |> Expect.stringContains "says it is being brought level" "bringing the REPL and live tests level"
       text |> Expect.stringContains "says how long" "about 2 seconds"
       text |> Expect.stringContains "says the app is not touched" "leaves the app"
       ReplFreshness.banner (ReplFreshness.Leveling (1, [])) |> Expect.stringStarts "a warning" "WARNING"
@@ -294,7 +294,7 @@ let levelingTests =
       leveling.GetProperty("state").GetString() |> Expect.equal "same state name" "BehindApp"
       leveling.GetProperty("savesSince").GetInt32() |> Expect.equal "the count" 2
       leveling.GetProperty("blockedBy").GetArrayLength() |> Expect.equal "nothing blocks it" 0
-      leveling.GetProperty("message").GetString() |> Expect.stringContains "its own message" "brought level"
+      leveling.GetProperty("message").GetString() |> Expect.stringContains "its own message" "bringing the REPL and live tests level"
       let blocked = wireOf (ReplFreshness.CannotLevel (1, [ "A.f" ], [ LevelBlocker.InitScriptDefined "init.fsx"; LevelBlocker.GateDriven ]))
       blocked.GetProperty("state").GetString() |> Expect.equal "same state name" "BehindApp"
       [ for b in blocked.GetProperty("blockedBy").EnumerateArray() -> b.GetString() ] |> Expect.equal "the tokens" [ "InitScriptDefined"; "GateDriven" ]
