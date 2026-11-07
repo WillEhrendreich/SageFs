@@ -204,3 +204,135 @@ let tests =
         count = landed.Length && declarations = List.distinct (List.concat landed)
       | _ -> false
   ]
+
+// -- leveling: the state a session is in while it brings the host up, and when it cannot -----------------------------------------
+
+let private servable = LevelStanding.Servable 4242
+let private noLevel = LevelFlight.NoLevelInFlight
+let private wireOf (f: ReplFreshness) : JsonElement = JsonDocument.Parse(JsonSerializer.Serialize(ReplFreshness.toWire f)).RootElement
+
+[<Tests>]
+let levelingTests =
+  testList "ReplFreshness leveling" [
+
+    testCase "WHY - a session that has just gone behind and can be leveled starts, and says so while it does: Leveling, not InSync" <| fun _ ->
+      ReplFreshness.beginLeveling (ReplFreshness.BehindApp (1, [ "A.f" ])) servable noLevel
+      |> Expect.equal "asks the worker it asked about" (ReplFreshness.Leveling (1, [ "A.f" ]), LevelStart.StartLevel 4242)
+
+    testCase "WHY - a level already in flight is not asked for twice, and the state stays what it was" <| fun _ ->
+      ReplFreshness.beginLeveling (ReplFreshness.BehindApp (2, [ "A.f" ])) servable LevelFlight.LevelInFlight
+      |> Expect.equal "no second ask" (ReplFreshness.BehindApp (2, [ "A.f" ]), LevelStart.NoStart)
+
+    testCase "WHY - a session that cannot be leveled right now says which of the things stopped it, and does not ask" <| fun _ ->
+      for blocker in [ LevelBlocker.GateDriven; LevelBlocker.SwapInProgress; LevelBlocker.NotServing ] do
+        ReplFreshness.beginLeveling (ReplFreshness.BehindApp (1, [ "A.f" ])) (LevelStanding.Unservable blocker) noLevel
+        |> Expect.equal (sprintf "%A is named" blocker) (ReplFreshness.CannotLevel (1, [ "A.f" ], [ blocker ]), LevelStart.NoStart)
+
+    testCase "WHY - only a session that is behind starts a level: in sync, unknown, leveling and blocked states are left alone" <| fun _ ->
+      for state in
+        [ ReplFreshness.InSync
+          ReplFreshness.Unknown FreshnessUnknown.NotRead
+          ReplFreshness.Leveling (1, [ "A.f" ])
+          ReplFreshness.CannotLevel (1, [ "A.f" ], [ LevelBlocker.GateDriven ]) ] do
+        ReplFreshness.beginLeveling state servable noLevel |> Expect.equal (sprintf "%A is left" state) (state, LevelStart.NoStart)
+
+    testCase "WHY - a worker that answers Leveled and whose refetch is done brings the session level, and only a Leveling one" <| fun _ ->
+      ReplFreshness.afterLevelAnswer (ReplFreshness.Leveling (2, [ "A.f" ])) LevelAnswer.Leveled |> Expect.equal "level" ReplFreshness.InSync
+      ReplFreshness.afterLevelAnswer ReplFreshness.InSync LevelAnswer.Leveled |> Expect.equal "still level" ReplFreshness.InSync
+
+    testCase "WHY - a save that lands while the level runs puts the session behind again, because the host was built before that save" <| fun _ ->
+      let reopened = ReplFreshness.observe (ReplFreshness.Leveling (1, [ "A.f" ])) (deltaPending [ "B.g" ])
+      reopened |> Expect.equal "behind by two saves" (ReplFreshness.BehindApp (2, [ "A.f"; "B.g" ]))
+      ReplFreshness.afterLevelAnswer reopened LevelAnswer.Leveled
+      |> Expect.equal "the answer was about the older build, so the gap stays open" (ReplFreshness.BehindApp (2, [ "A.f"; "B.g" ]))
+
+    testCase "WHY - the confirmation of a save the level already covers does not reopen the gap" <| fun _ ->
+      ReplFreshness.observe (ReplFreshness.Leveling (1, [ "A.f" ])) (deltaPatched [ "A.f" ])
+      |> Expect.equal "still leveling, same save" (ReplFreshness.Leveling (1, [ "A.f" ]))
+
+    testCase "WHY - a worker that defers names the blockers, and the session keeps them with the saves it is behind on" <| fun _ ->
+      let blockers = [ LevelBlocker.ReplHoldsDefinitions 3; LevelBlocker.InitScriptDefined "init.fsx" ]
+      ReplFreshness.afterLevelAnswer (ReplFreshness.Leveling (1, [ "A.f" ])) (LevelAnswer.LevelDeferred blockers)
+      |> Expect.equal "cannot level" (ReplFreshness.CannotLevel (1, [ "A.f" ], blockers))
+      ReplFreshness.afterLevelAnswer (ReplFreshness.BehindApp (2, [ "A.f"; "B.g" ])) (LevelAnswer.LevelDeferred blockers)
+      |> Expect.equal "a reopened gap is blocked at its newer count" (ReplFreshness.CannotLevel (2, [ "A.f"; "B.g" ], blockers))
+
+    testCase "WHY - a level that failed makes the state Unknown with the reason, never in sync" <| fun _ ->
+      ReplFreshness.afterLevelAnswer (ReplFreshness.Leveling (1, [ "A.f" ])) (LevelAnswer.LevelFailed "the host would not start")
+      |> Expect.equal "unknown" (ReplFreshness.Unknown (FreshnessUnknown.LevelFailed "the host would not start"))
+      FreshnessUnknown.detail (FreshnessUnknown.LevelFailed "the host would not start") |> Expect.stringContains "says why" "the host would not start"
+      FreshnessUnknown.kind (FreshnessUnknown.LevelFailed "x") |> Expect.equal "its own kind" "LevelFailed"
+
+    testCase "WHY - a save after a blocked level re-opens it as an ordinary gap, so the next save asks again" <| fun _ ->
+      ReplFreshness.observe (ReplFreshness.CannotLevel (1, [ "A.f" ], [ LevelBlocker.GateDriven ])) (deltaPending [ "B.g" ])
+      |> Expect.equal "behind by two" (ReplFreshness.BehindApp (2, [ "A.f"; "B.g" ]))
+
+    testCase "WHY - a hard reset of the host that resolved Ok brings a session that was behind to Leveling until the refetch finishes, and leaves a level session alone" <| fun _ ->
+      ReplFreshness.afterHostRebuilt (ReplFreshness.BehindApp (4, [ "A.f" ])) |> Expect.equal "behind" (ReplFreshness.Leveling (4, [ "A.f" ]))
+      ReplFreshness.afterHostRebuilt (ReplFreshness.CannotLevel (1, [ "A.f" ], [ LevelBlocker.GateDriven ])) |> Expect.equal "blocked" (ReplFreshness.Leveling (1, [ "A.f" ]))
+      ReplFreshness.afterHostRebuilt (ReplFreshness.Leveling (1, [ "A.f" ])) |> Expect.equal "leveling" (ReplFreshness.Leveling (1, [ "A.f" ]))
+      ReplFreshness.afterHostRebuilt (ReplFreshness.Unknown FreshnessUnknown.NotRead) |> Expect.equal "unknown" (ReplFreshness.Leveling (0, []))
+      ReplFreshness.afterHostRebuilt ReplFreshness.InSync |> Expect.equal "in sync" ReplFreshness.InSync
+
+    testCase "WHY - while leveling the state is loud and says it is being brought level, with the time it takes and that the app is left alone" <| fun _ ->
+      let text = ReplFreshness.describe (ReplFreshness.Leveling (2, [ "A.f" ]))
+      text |> Expect.stringContains "still behind" "BEHIND"
+      text |> Expect.stringContains "says it is being brought level" "brought level"
+      text |> Expect.stringContains "says how long" "about 2 seconds"
+      text |> Expect.stringContains "says the app is not touched" "leaves the app"
+      ReplFreshness.banner (ReplFreshness.Leveling (1, [])) |> Expect.stringStarts "a warning" "WARNING"
+
+    testCase "WHY - a session that cannot level says which things stopped it, in words, and still says how to level by hand" <| fun _ ->
+      let text = ReplFreshness.describe (ReplFreshness.CannotLevel (1, [ "A.f" ], [ LevelBlocker.ReplHoldsDefinitions 3; LevelBlocker.TestsRunning 1 ]))
+      text |> Expect.stringContains "behind" "BEHIND"
+      text |> Expect.stringContains "names the first blocker" "3 evals"
+      text |> Expect.stringContains "names the second" "test run is in flight"
+      text |> Expect.stringContains "still says the manual way" "hard_reset_fsi_session"
+
+    testCase "WHY - on the wire both new states are BehindApp, so no client has to learn a fourth state, and blockedBy lists the tokens" <| fun _ ->
+      let leveling = wireOf (ReplFreshness.Leveling (2, [ "A.f" ]))
+      leveling.GetProperty("state").GetString() |> Expect.equal "same state name" "BehindApp"
+      leveling.GetProperty("savesSince").GetInt32() |> Expect.equal "the count" 2
+      leveling.GetProperty("blockedBy").GetArrayLength() |> Expect.equal "nothing blocks it" 0
+      leveling.GetProperty("message").GetString() |> Expect.stringContains "its own message" "brought level"
+      let blocked = wireOf (ReplFreshness.CannotLevel (1, [ "A.f" ], [ LevelBlocker.InitScriptDefined "init.fsx"; LevelBlocker.GateDriven ]))
+      blocked.GetProperty("state").GetString() |> Expect.equal "same state name" "BehindApp"
+      [ for b in blocked.GetProperty("blockedBy").EnumerateArray() -> b.GetString() ] |> Expect.equal "the tokens" [ "InitScriptDefined"; "GateDriven" ]
+      let plain = wireOf (ReplFreshness.BehindApp (1, [ "A.f" ]))
+      plain.GetProperty("blockedBy").GetArrayLength() |> Expect.equal "a plain gap lists none, and the field is always there" 0
+
+    testProperty "WHY - however saves, level asks and answers, and host rebuilds interleave, the state is InSync only when the host was built at or after the latest save" <| fun (seed: int) ->
+      let rnd = System.Random seed
+      // The model: the app is at save number `saves`, the host was built when the app was at `hostBuiltAt`, and the ask in flight
+      // (if any) was sent when the app was at `asked`.
+      let mutable freshness = ReplFreshness.InSync
+      let mutable saves = 0
+      let mutable hostBuiltAt = 0
+      let mutable asked = 0
+      let mutable ok = true
+      for _ in 1 .. 50 do
+        match rnd.Next 4 with
+        | 0 ->
+          saves <- saves + 1
+          freshness <- ReplFreshness.observe freshness (deltaPending [ sprintf "D.f%d" saves ])
+        | 1 ->
+          let next, start = ReplFreshness.beginLeveling freshness servable noLevel
+          freshness <- next
+          match start with
+          | LevelStart.StartLevel _ -> asked <- saves
+          | LevelStart.NoStart -> ()
+        | 2 ->
+          // The worker answers the ask it was sent: its host is as new as the app was when it was asked.
+          match freshness with
+          | ReplFreshness.Leveling _ ->
+            hostBuiltAt <- max hostBuiltAt asked
+            freshness <- ReplFreshness.afterLevelAnswer freshness LevelAnswer.Leveled
+          | _ -> ()
+        | _ ->
+          hostBuiltAt <- saves
+          freshness <- ReplFreshness.afterHostRebuilt freshness
+        match freshness with
+        | ReplFreshness.InSync when hostBuiltAt < saves -> ok <- false
+        | _ -> ()
+      ok
+  ]
