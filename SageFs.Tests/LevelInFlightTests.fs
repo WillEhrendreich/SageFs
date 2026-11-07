@@ -166,3 +166,40 @@ let costTests =
         (times |> Seq.map (sprintf "%.0f") |> String.concat ", ") sorted[2] sorted[4] loadBefore (loadAverages ()) Environment.ProcessorCount
     }
   ]
+
+[<Tests>]
+let evalWaitsTests =
+  Integration.hostList "An eval sent while a level replaces the host" [
+    testTask "WHY - an eval that arrives while a level is replacing the host waits for it and runs on the new host, and is never refused" {
+      let loadConfig =
+        { SageFs.Args.ProjectLoadConfig.empty with
+            Targets = [ SessionProjectTarget.Project fsharpCoreFixtureProject ]
+            WorkingDir = Path.GetDirectoryName fsharpCoreFixtureProject }
+      let args = { mkCommonActorArgs quietLogger false ignore loadConfig with FsiKind = SessionKinds.Isolated }
+      let! session = within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Async.StartAsTask)
+      let finished = System.Diagnostics.Stopwatch.StartNew()
+      let levelDoneAt = ref -1L
+      let evalDoneAt = ref -1L
+      let outside : OutsideFacts = { DynamicTests = DynamicTests.Absent; TestRuns = TestRuns.Idle }
+      let level =
+        session.Actor.PostAndAsyncReply(fun reply -> LevelSession(outside, reply))
+        |> Async.StartAsTask
+      let levelDone = level.ContinueWith(fun (t: Task<LevelAnswer>) -> Volatile.Write(&levelDoneAt.contents, finished.ElapsedTicks); t.Result)
+      // The actor is replacing the host: the session is no longer Ready.
+      let! replacing = awaitCondition (TestTimeouts.asMs TestTimeouts.patienceBrief) (fun () -> session.GetSessionState() <> SessionState.Ready)
+      replacing |> Expect.isTrue "the level is under way"
+      let cts = new CancellationTokenSource()
+      let eval =
+        session.Actor.PostAndAsyncReply(fun reply -> Eval({ Code = "1 + 1"; Args = Map.empty }, cts.Token, reply))
+        |> Async.StartAsTask
+      let evalDone = eval.ContinueWith(fun (t: Task<EvalResponse>) -> Volatile.Write(&evalDoneAt.contents, finished.ElapsedTicks); t.Result)
+      let! answer = within TestTimeouts.sessionReadyColdBuild levelDone
+      answer |> Expect.equal "the level replaced the host" LevelAnswer.Leveled
+      let! response = within TestTimeouts.sessionReadyColdBuild evalDone
+      match response.EvaluationResult with
+      | Ok text -> text |> Expect.stringContains "the eval ran" "2"
+      | Error error -> failtestf "an eval sent during a level must wait and run, got %s" error.Message
+      (Volatile.Read(&levelDoneAt.contents) <= Volatile.Read(&evalDoneAt.contents))
+      |> Expect.isTrue "and it ran after the level had finished"
+    }
+  ]

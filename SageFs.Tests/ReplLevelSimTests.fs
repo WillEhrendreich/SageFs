@@ -73,6 +73,20 @@ let tests =
         | ReplFreshness.CannotLevel (_, _, [ LevelBlocker.LiveTestsDefined ]) -> ()
         | other -> failtestf "expected CannotLevel naming the live tests, got %A" other
 
+      testCase "a project whose reset is slow levels once and records the cost, and the next level is left to a person" <| fun _ ->
+        let t = run ReplLevelGenerators.largeProjectLevelsOnce
+        assertHolds t
+        match t.Final.Freshness with
+        | ReplFreshness.CannotLevel (_, _, [ LevelBlocker.LevelWouldTakeTooLong took ]) -> (took > Timeouts.replLevelCostBudget) |> Expect.isTrue "the cost it names is over the budget"
+        | other -> failtestf "expected CannotLevel naming the cost, got %A" other
+        t.Final.Resets |> List.filter (fun r -> r.Decision = SageFs.EvalActorDecision.EvalDecision.RunLevel) |> List.length |> Expect.equal "the host was reset by a level once" 1
+
+      testCase "a small project's resets never hold a level back, however often it is asked" <| fun _ ->
+        let t = run ReplLevelGenerators.smallProjectLevelsTwice
+        assertHolds t
+        t.Final.Freshness |> Expect.equal "level" ReplFreshness.InSync
+        t.Final.Resets |> List.filter (fun r -> r.Decision = SageFs.EvalActorDecision.EvalDecision.RunLevel) |> List.length |> Expect.equal "both levels ran" 2
+
       testCase "a level asked while an eval runs is deferred, and the eval is left alone" <| fun _ ->
         let t = run ReplLevelGenerators.levelDuringEval
         assertHolds t
@@ -113,12 +127,13 @@ let tests =
       teeth runNoPidJudgePolicy "L5-level-means-level" ReplLevelGenerators.answerFromReplacedWorker
       teeth runLevelsBlindlyPolicy "L5-level-means-level" ReplLevelGenerators.saveBeforeAnswer
       teeth runDropsHeldPolicy "L2-held-runs-are-served" ReplLevelGenerators.deferredLevelStillServesHeld
+      teeth runIgnoresCostPolicy "L6-no-level-over-budget" ReplLevelGenerators.largeProjectLevelsOnce
 
       testCase "over 2000 seeded scenarios every twin is caught at least once, so no invariant is vacuous on the generator" <| fun _ ->
         let seeds = [ 0 .. 1999 ]
         for twin in
           [ runCancelsFirstPolicy; runCheckThenActPolicy; runAdmitsDuringLevelPolicy; runIgnoresEvalsPolicy
-            runNoPidJudgePolicy; runLevelsBlindlyPolicy; runDropsHeldPolicy ] do
+            runNoPidJudgePolicy; runLevelsBlindlyPolicy; runDropsHeldPolicy; runIgnoresCostPolicy ] do
           seeds
           |> List.exists (fun s -> not (List.isEmpty (violations (runWith twin (ReplLevelGenerators.fromSeed s)))))
           |> Expect.isTrue (sprintf "%s is caught somewhere in the seeded scenarios" twin.Name)
