@@ -62,7 +62,7 @@ let tests =
             Targets = [ SessionProjectTarget.Project fsharpCoreFixtureProject ]
             WorkingDir = Path.GetDirectoryName fsharpCoreFixtureProject }
       let args = { mkCommonActorArgs quietLogger false ignore loadConfig with FsiKind = SessionKinds.Isolated }
-      let! session = within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Async.StartAsTask)
+      let! session = within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Started.asTask)
       let keeper = LevelKeeper(session.Actor, fun () -> DynamicTests.Absent)
       // What each run saw of the host (the maps array is replaced with the host) when it started and when it ended.
       let hostOfRun1AtStart = ref (box null)
@@ -111,7 +111,7 @@ let tests =
       do! withinSignal TestTimeouts.patienceBrief (run1Started.WaitAsync())
       // The level is asked while the run is in flight, over the worker's own route.
       let proxy = HttpWorkerClient.httpProxy server.BaseUrl
-      let level = proxy (WorkerMessage.LevelRepl "lv") |> Async.StartAsTask
+      let level = proxy (WorkerMessage.LevelRepl "lv") |> Started.asTask
       let! pending = awaitCondition (TestTimeouts.asMs TestTimeouts.patienceBrief) (fun () -> keeper.Standing = GateStanding.LevelPending 1)
       pending |> Expect.isTrue "the level is pending behind the run in flight"
       level.IsCompleted |> Expect.isFalse "and has not acted"
@@ -151,24 +151,24 @@ let costTests =
             Targets = [ SessionProjectTarget.Project largestProject ]
             WorkingDir = Path.GetDirectoryName largestProject }
       let args = { mkCommonActorArgs quietLogger false ignore loadConfig with FsiKind = SessionKinds.Isolated }
-      let! session = within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Async.StartAsTask)
+      let! session = within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Started.asTask)
       let loadBefore = loadAverages ()
       let times = ResizeArray<float>()
       let outside : OutsideFacts = { DynamicTests = DynamicTests.Absent; TestRuns = TestRuns.Idle }
       // The first level runs and records its cost. If that is over the budget, the actor refuses the next ones by itself,
       // so the measurement takes the later resets as a person's hard reset would (no rebuild), which costs the same.
       let! first =
-        within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> LevelSession(outside, reply)) |> Async.StartAsTask)
+        within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> LevelSession(outside, reply)) |> Started.asTask)
       first |> Expect.equal "an untouched REPL levels the first time" LevelAnswer.Leveled
       for _ in 1 .. 5 do
         let watch = System.Diagnostics.Stopwatch.StartNew()
         let! reset =
-          within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> HardResetSession(false, reply)) |> Async.StartAsTask)
+          within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> HardResetSession(false, reply)) |> Started.asTask)
         reset |> Result.isOk |> Expect.isTrue "the reset resolved"
         times.Add watch.Elapsed.TotalMilliseconds
       // Whatever the first level cost, a second one is judged by it.
       let! second =
-        within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> LevelSession(outside, reply)) |> Async.StartAsTask)
+        within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> LevelSession(outside, reply)) |> Started.asTask)
       let lastReset = System.TimeSpan.FromMilliseconds times[times.Count - 1]
       match second, lastReset > Timeouts.replLevelCostBudget with
       | LevelAnswer.LevelDeferred [ LevelBlocker.LevelWouldTakeTooLong _ ], true -> ()
@@ -189,14 +189,14 @@ let evalWaitsTests =
             Targets = [ SessionProjectTarget.Project fsharpCoreFixtureProject ]
             WorkingDir = Path.GetDirectoryName fsharpCoreFixtureProject }
       let args = { mkCommonActorArgs quietLogger false ignore loadConfig with FsiKind = SessionKinds.Isolated }
-      let! session = within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Async.StartAsTask)
+      let! session = within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Started.asTask)
       let finished = System.Diagnostics.Stopwatch.StartNew()
       let levelDoneAt = ref -1L
       let evalDoneAt = ref -1L
       let outside : OutsideFacts = { DynamicTests = DynamicTests.Absent; TestRuns = TestRuns.Idle }
       let level =
         session.Actor.PostAndAsyncReply(fun reply -> LevelSession(outside, reply))
-        |> Async.StartAsTask
+        |> Started.asTask
       let levelDone = level.ContinueWith(fun (t: Task<LevelAnswer>) -> Volatile.Write(&levelDoneAt.contents, finished.ElapsedTicks); t.Result)
       // The actor is replacing the host: the session is no longer Ready.
       let! replacing = awaitCondition (TestTimeouts.asMs TestTimeouts.patienceBrief) (fun () -> session.GetSessionState() <> SessionState.Ready)
@@ -204,7 +204,7 @@ let evalWaitsTests =
       let cts = new CancellationTokenSource()
       let eval =
         session.Actor.PostAndAsyncReply(fun reply -> Eval({ Code = "1 + 1"; Args = Map.empty }, cts.Token, reply))
-        |> Async.StartAsTask
+        |> Started.asTask
       let evalDone = eval.ContinueWith(fun (t: Task<EvalResponse>) -> Volatile.Write(&evalDoneAt.contents, finished.ElapsedTicks); t.Result)
       let! answer = within TestTimeouts.sessionReadyColdBuild levelDone
       answer |> Expect.equal "the level replaced the host" LevelAnswer.Leveled

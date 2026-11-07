@@ -30,13 +30,13 @@ let private fakeActor (answer: OutsideFacts -> Task<LevelAnswer>) : FakeActor =
             seen.Value <- outside :: seen.Value
             reached.Release() |> ignore
             // The reply is given from its own task, so the mailbox is free while the test holds the answer.
-            Task.Run(fun () ->
-              task {
+            Started.andForget (
+              async {
                 try
-                  let! result = answer outside
+                  let! result = answer outside |> Async.AwaitTask
                   reply.Reply result
                 with ex -> reply.Reply (LevelAnswer.LevelFailed ex.Message)
-              } :> Task) |> ignore
+              })
           | _ -> ()
           return! loop ()
         }

@@ -277,7 +277,7 @@ let tests =
         // The editor's reset goes through the session's own proxy.
         let proxy = (sessionOf h id).Proxy
         let discoveriesBefore = h.DiscoveryAsks.Value
-        let! reply = within (proxy (WorkerMessage.HardResetSession(false, "rid")) |> Async.StartAsTask)
+        let! reply = within (proxy (WorkerMessage.HardResetSession(false, "rid")) |> Started.asTask)
         match reply with
         | WorkerResponse.HardResetResult(_, Result.Ok _) -> ()
         | other -> failtestf "the reset should resolve Ok, got %A" other
@@ -293,7 +293,7 @@ let tests =
         h.Mailbox.Post(SessionCommand.ReloadObserved(id, deltaPending "Handlers.describe"))
         let before = freshnessOf h id
         before |> Expect.equal "behind, and not asked" (ReplFreshness.CannotLevel (1, [ "Handlers.describe" ], [ LevelBlocker.GateDriven ]))
-        let! reply = withinSignal2 ((sessionOf h id).Proxy (WorkerMessage.LevelRepl "rid") |> Async.StartAsTask)
+        let! reply = withinSignal2 ((sessionOf h id).Proxy (WorkerMessage.LevelRepl "rid") |> Started.asTask)
         match reply with
         | WorkerResponse.LevelResult(_, LevelAnswer.Leveled) -> ()
         | other -> failtestf "the fake worker should answer Leveled, got %A" other
