@@ -99,6 +99,14 @@ let sessionCardHealthRenderingTests =
       let folded = (html.Split("<details class=\"session-card-more\"").Length - 1) + (html.Split("<details class=\"session-card-help\"").Length - 1)
       disclosures |> Expect.equal "every disclosure on the card is the folded facts or the button help, never a health one" folded)
 
+    testCase "WHY — the card's buttons carry their words in the markup, not in CSS content: a word drawn by ::before cannot be selected, searched, translated or read by a test, and it hid a different label for the same button behind a later rule" (fun () ->
+      let s = Fixtures.card SessionHealth.Healthy (Fixtures.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
+      let html = renderSessionsForSession "0a2b3c4d" [ s ] false |> renderNode
+      for word in [ "Stop"; "Close"; "Delete" ] do
+        html |> Expect.stringContains (sprintf "the %s button says its word" word) (sprintf "class=\"session-btn-word\">%s</span>" word)
+      System.Text.RegularExpressions.Regex.IsMatch(html, "class=\"session-btn-word\">Auto-open: (on|off)</span>")
+      |> Expect.isTrue "the auto-open button says whether it is on")
+
     testCase "a Degraded card's reason is plain, unconditional HTML — never behind a <details> or hover-only title" (fun () ->
       let s = Fixtures.card (SessionHealth.Degraded "Session is Ready but nothing was loaded: 0 assemblies, 0 namespaces opened.") (Fixtures.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
       let html = renderSessionsForSession "0a2b3c4d" [ s ] false |> renderNode

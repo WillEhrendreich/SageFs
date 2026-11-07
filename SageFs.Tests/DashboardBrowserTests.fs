@@ -1302,7 +1302,7 @@ let tests =
     let stats = page.Locator("#eval-stats").First
     do! stats.WaitForAsync(
       LocatorWaitForOptions(State = WaitForSelectorState.Attached))
-    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders stats "evals"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders stats "evaluation"
   })
 
   // NOTE: "create session section has all inputs" moved to shellStructureTests in DashboardSnapshotTests.fs

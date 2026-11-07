@@ -84,15 +84,19 @@ let tests =
 
     testCase "WHY — a session whose build is current says so beside the badge, in an element of its own, because \"Ready\" is the engine's word and the badge keeps it" <| fun _ ->
       let page = renderMainContent (snapshotOf (readyWith Readiness.ReadyCurrent)) |> render
-      page |> Expect.stringContains "the note says the second fact" "all changes live"
+      page |> Expect.stringContains "the note says the second fact" "session matches your files"
       page |> Expect.stringContains "it has an element of its own" "data-testid=\"session-live-note\""
       headerBadge page |> Expect.stringContains "the badge still says Ready" ">Ready"
-      (headerBadge page).Contains "all changes live" |> Expect.isFalse "and the note is not inside the badge"
+      (headerBadge page).Contains "session matches your files" |> Expect.isFalse "and the note is not inside the badge"
+
+    testCase "WHY — the header never says 'all changes live': beside 'Hot reload: off' in the sidebar it read as a contradiction, because 'live' there means the session matches the files and not that hot reload is on" <| fun _ ->
+      let page = renderMainContent (snapshotOf (readyWith Readiness.ReadyCurrent)) |> render
+      page.Contains "all changes live" |> Expect.isFalse "the overclaim is gone"
 
     testCase "WHY — the live note has a short form for a header with no room, because at 400px the state and whether it is live were split across three rows or lost" <| fun _ ->
       let page (view: SessionInView) = renderMainContent (snapshotOf view) |> render
-      page (readyWith Readiness.ReadyCurrent) |> Expect.stringContains "live: the short form" ("livenote-short\">" + Glyphs.lead Glyph.Pass + "live<")
-      page (readyWith Readiness.ReadyOlderCode) |> Expect.stringContains "not live: the short form" ("livenote-short\">" + Glyphs.lead Glyph.Warn + "not live<")
+      page (readyWith Readiness.ReadyCurrent) |> Expect.stringContains "in sync: the short form" ("livenote-short\">" + Glyphs.lead Glyph.Pass + "in sync<")
+      page (readyWith Readiness.ReadyOlderCode) |> Expect.stringContains "not in sync: the short form" ("livenote-short\">" + Glyphs.lead Glyph.Warn + "not in sync<")
 
     testCase "WHY — a count of evaluations is a plain word and agrees with its number, because 'evals' was named jargon by three reviewers" <| fun _ ->
       [ 0, "0 evaluations"; 1, "1 evaluation"; 12, "12 evaluations" ]

@@ -483,30 +483,32 @@ let toggleManualProject (current: string) (path: string) : string =
   | true -> existing |> List.filter (isMatch >> not) |> String.concat ", "
   | false -> existing @ [ path ] |> String.concat ", "
 
+/// The word on a button, in the markup. Words drawn by CSS `::before` could not be selected, searched, translated or read by a test,
+/// and a later rule gave the same button a second label.
+let buttonWord (word: string) : XmlNode = Elem.span [ Attr.class' "session-btn-word" ] [ textEnc word ]
+
 /// Small color-coded auto-open state icon for a session card.
 /// Green = auto-open ON (namespaces/modules will be opened during warmup),
 /// dim/red = OFF (skipped). The tooltip spells out the state and action;
 /// clicking toggles the per-directory config.
 let renderAutoOpenToggleIcon (enabled: bool) =
-  let endpoint, glyph, color, tooltip =
+  let endpoint, glyph, tooltip =
     match enabled with
     | true ->
       "/dashboard/config/disable-auto-open",
       "◎",
-      "var(--fg-green)",
       "Warmup auto-open is ON — namespaces/modules in this project are opened automatically during warmup. Click to disable (writes .SageFs/config.fsx with AutoOpenNamespaces = false)."
     | false ->
       "/dashboard/config/enable-auto-open",
       "◌",
-      "var(--fg-red)",
       "Warmup auto-open is OFF — namespaces/modules are NOT opened automatically during warmup. Click to enable (rewrites .SageFs/config.fsx back to AutoOpenNamespaces = true)."
   Elem.button
     [ Attr.class' "session-btn session-btn-autoopen"
       Attr.create "aria-label"tooltip
       Attr.create "title" (attrEnc tooltip)
-      Attr.style (sprintf "color: %s;" color)
       Ds.onClick (Ds.post endpoint) ]
-    [ textEnc glyph ]
+    [ textEnc glyph
+      buttonWord (match enabled with | true -> "Auto-open: on" | false -> "Auto-open: off") ]
 
 /// Context-aware warmup auto-open toggle (full-width variant).
 /// Kept for potential use in panels where a labeled button fits better than
@@ -692,18 +694,26 @@ let renderDaemonHealthWith (readinessOf: Map<string, Readiness>) (view: DaemonHe
       // Daemon facts only (version · uptime · memory), and the word says whose they are: "Daemon healthy" is the daemon's, and a
       // session's readiness is named as the session's in the list that follows. The word is there with no session too, so a
       // glyph is never the only signal.
-      textEnc (sprintf "%s Daemon %s · SageFs %s · " emoji (label.ToLowerInvariant()) view.Version)
+      // Each fact is a unit that wraps whole, and the separator ends the fact it follows: at phone width a line then ends after a
+      // "·" and never starts with one, and the label is never parted from its number ("· daemon memory" alone on a line).
+      Elem.span [ Attr.class' "health-fact" ] [ textEnc (sprintf "%s Daemon %s ·" emoji (label.ToLowerInvariant())) ]
+      textEnc " "
+      Elem.span [ Attr.class' "health-fact" ] [ textEnc (sprintf "SageFs %s ·" view.Version) ]
+      textEnc " "
       // The uptime ticks in the browser (ElapsedClock); the server renders only the moment it started.
       match view.StartedAt with
       | Since.At startedAtMs ->
-        textEnc "up "
-        ElapsedClock.span (ElapsedClock.uptimeExpr startedAtMs)
-        textEnc " · "
+        Elem.span [ Attr.class' "health-fact" ] [
+          textEnc "up "
+          ElapsedClock.span (ElapsedClock.uptimeExpr startedAtMs)
+          textEnc " ·" ]
+        textEnc " "
       | Since.Unknown -> ()
       // The number is telemetry: it arrives as a signal patch on the heartbeat (TelemetrySignals), never in
       // the HTML, so a change of memory alone cannot make the page push.
       Elem.span
-        [ Attr.create "aria-label" "Memory the SageFs daemon process itself is using (refreshes every few seconds)"
+        [ Attr.class' "health-fact"
+          Attr.create "aria-label" "Memory the SageFs daemon process itself is using (refreshes every few seconds)"
           Ds.text (TelemetrySignals.textExpr TelemetrySignals.DaemonMemoryMb "daemon memory ") ]
         []
     ]
@@ -2116,7 +2126,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Attr.create "aria-label""Switch — show this session's output here"
                     Attr.create "title" "Switch — show this session's output here"
                     Ds.onClick (Ds.post (sprintf "/dashboard/session/switch/%s" sid)) ]
-                  [ Text.raw "⇄" ]
+                  [ Text.raw "⇄"; buttonWord "Switch" ]
               | true -> ()
               // Run App — for sessions that own an executable project. Every app
               // state has its own control: starting, running (with a link), and
@@ -2141,7 +2151,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       Attr.rel "noopener"
                       Attr.create "aria-label"(attrEnc (sprintf "Open %s — save a source file to hot reload it" url))
                       Attr.create "title" (attrEnc (sprintf "Open %s — save a source file to hot reload it" url)) ]
-                    [ textEnc (Glyphs.text Glyph.Open) ]
+                    [ textEnc (Glyphs.text Glyph.Open); buttonWord "Open app" ]
                 | AppRun.AppEndpoint.NoServer -> ()
                 Elem.button
                   [ Attr.class' "session-btn session-btn-success"
@@ -2149,14 +2159,14 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Attr.create "aria-label"(attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
                     Attr.create "title" (attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/stop-app/%s" sid)) ]
-                  [ Text.raw "■" ]
+                  [ Text.raw "■"; buttonWord "Stop app" ]
               | _, AppRun.AppRunState.Starting _ ->
                 Elem.button
                   [ Attr.class' "session-btn"
                     Attr.disabled
                     Attr.create "aria-label"(attrEnc (AppRun.describeState s.App))
                     Attr.create "title" (attrEnc (AppRun.describeState s.App)) ]
-                  [ textEnc (Glyphs.text Glyph.Busy) ]
+                  [ textEnc (Glyphs.text Glyph.Busy); buttonWord "Starting" ]
               | [ project ], _ ->
                 Elem.button
                   [ Attr.class' "session-btn session-btn-primary"
@@ -2164,7 +2174,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Attr.create "aria-label"(attrEnc (runTitle (AppRun.projectName project.Path)))
                     Attr.create "title" (attrEnc (runTitle (AppRun.projectName project.Path)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
-                  [ Text.raw "▶" ]
+                  [ Text.raw "▶"; buttonWord "Run app" ]
               | projects, _ ->
                 // Several executables: a dropdown to choose which to run
                 // (defaulting to the session's active/loaded project) plus one
@@ -2197,20 +2207,20 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       Attr.create "aria-label""Run the selected project with hot reload"
                       Attr.create "title" "Run the selected project with hot reload"
                       Ds.onEvent ("click", sprintf "@post('/dashboard/run-app/%s/' + encodeURIComponent(document.getElementById('%s').value))" sid selectId) ]
-                    [ Text.raw "▶" ]
+                    [ Text.raw "▶"; buttonWord "Run app" ]
                 ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.create "aria-label""Stop — unload the session (saved memory kept)"
                   Attr.create "title" "Stop — unload the session (saved memory kept)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" sid)) ]
-                [ Text.raw "■" ]
+                [ Text.raw "■"; buttonWord "Stop" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-warn"
                   Attr.create "aria-label""Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
                   Attr.create "title" "Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
-                [ Text.raw "⌫" ]
+                [ Text.raw "⌫"; buttonWord "Close" ]
               // Purge is the irreversible teardown level — it deletes binaries
               // AND the manifest entry, not just the running session — and it
               // sits 28px from Stop with no other affordance distinguishing
@@ -2223,7 +2233,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Attr.create "aria-label""Purge — dispose and delete binaries + manifest entry (corrupt state)"
                   Attr.create "title" "Purge — dispose and delete binaries + manifest entry (corrupt state)"
                   Ds.onEvent ("click", sprintf "if(confirm('Purge session %s? This deletes its saved binaries and manifest entry. This cannot be undone.')){%s}" sid (Ds.post (sprintf "/dashboard/session/purge/%s" sid))) ]
-                [ textEnc (Glyphs.text Glyph.Remove) ]
+                [ textEnc (Glyphs.text Glyph.Remove); buttonWord "Delete" ]
             ]
             // What the three that take a session down do, in words on the card: three reviewers saw Stop, Dispose and Purge side by
             // side with no hint of how they differ, and a tooltip is not on screen for a person who does not hover.
@@ -2467,7 +2477,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         | Some (glyph, words) ->
           let tone = match glyph with | Glyph.Pass -> "tabline-livenote-ok" | _ -> "tabline-livenote-warn"
           // The long form is the sentence; below 62.5em the short one stands in for it (dashboard.css), so the header keeps the fact.
-          let short = match glyph with | Glyph.Pass -> "live" | _ -> "not live"
+          let short = match glyph with | Glyph.Pass -> "in sync" | _ -> "not in sync"
           Elem.div [ Attr.id "session-live-note"; Attr.class' ("tabline-livenote " + tone); testid "session-live-note" ] [
             Elem.span [ Attr.class' "livenote-long" ] [ textEnc (Glyphs.lead glyph + words) ]
             Elem.span [ Attr.class' "livenote-short" ] [ textEnc (Glyphs.lead glyph + short) ] ]

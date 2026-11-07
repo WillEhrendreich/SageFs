@@ -163,7 +163,7 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         Ds.class' ("session-btn-on", sprintf "$%s" ViewSignals.Open)
         Ds.preserveAttr "class aria-expanded"
         Ds.onClick (sprintf "$%s = !$%s" ViewSignals.Open ViewSignals.Open) ]
-      [ slidersIcon ]
+      [ slidersIcon; Elem.span [ Attr.class' "session-btn-word" ] [ textEnc "Display settings" ] ]
   let panelWith (extras: XmlNode list) : XmlNode =
     Elem.div
       [ Attr.id ViewIds.Panel

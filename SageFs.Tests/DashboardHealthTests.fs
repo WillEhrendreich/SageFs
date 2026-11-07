@@ -168,6 +168,14 @@ let renderDaemonHealthTests =
       html |> Expect.stringContains "a Ds.text over the daemon memory signal" (sprintf "$%s" TelemetrySignals.DaemonMemoryMb)
       html.Contains("312") |> Expect.isFalse "the MB itself is a signal patch, never in the HTML"
 
+    testCase "WHY — each fact on the daemon line is a unit that wraps whole, so at 400px a line never starts with a lone separator or ends with a label whose number is on the next line" <| fun () ->
+      let snap = makeHealthSnapshot [] None unremarkableUptime 128
+      let html = DashboardFragments.renderDaemonHealth (viewOf snap) |> renderNode |> System.Net.WebUtility.HtmlDecode
+      let facts = System.Text.RegularExpressions.Regex.Matches(html, "class=\"health-fact\"")
+      (facts.Count >= 3) |> Expect.isTrue "the label, the version, the uptime and the memory are each a unit"
+      html |> Expect.stringContains "the separator ends a fact, not starts the next" "Daemon healthy ·</span>"
+      html.Contains "· <span class=\"health-fact\"" |> Expect.isFalse "no fact opens with a separator"
+
     testCase "renders uptime in output" <| fun () ->
       let snap = makeHealthSnapshot [] None FixtureDurations.uptimeHoursLabel 128
       let view = viewOf snap

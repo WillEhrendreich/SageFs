@@ -590,6 +590,11 @@ let dockWordingTests =
       TweakView.hasKnob withKnob |> Expect.isTrue "the pure fact: this list has an editable row"
       TweakView.hasKnob TweakView.none |> Expect.isFalse "no rows, no knob"
 
+    testCase "WHY — the line under the title has a one-line form for a phone, because at 400px the full sentence took three lines of the first screen before the first binding" <| fun _ ->
+      let html = dockWith withKnob ValueWalk.standard On [ person ]
+      html |> Expect.stringContains "the short form says where an edit goes" "class=\"pane-sub-short\">Edit a value: the file changes now."
+      html |> Expect.stringContains "the long form is still there for a wide pane" "class=\"pane-sub-long\">The values in this session."
+
     testCase "WHY — when nothing watches the files the rows are in and nothing is pending, the header says nothing about it, and a row nobody has written says nothing: the sentence under every row was noise" <| fun _ ->
       // Seen in a real browser once hot reload was left off (the usual state in a REPL session): after one nudge every row in the file
       // said "Nothing is watching Tuning.fs, so a change saved to it will not reach the running session", ten rows of the same sentence.

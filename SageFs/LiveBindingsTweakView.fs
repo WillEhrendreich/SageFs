@@ -627,7 +627,7 @@ type StepDirection =
   | Up
 
 /// A step button. At the end of the handle's reach it is disabled: it cannot go further, and a button that does nothing says so.
-let stepButton (key: RowKey) (glyph: string) (label: string) (testName: string) (reach: Reach) (direction: StepDirection) : XmlNode =
+let stepButton (key: RowKey) (glyph: string) (label: string) (testName: string) (reach: Reach) (direction: StepDirection) (landing: string) : XmlNode =
   let steps = TweakSignals.stepsOf key
   let below = stepsOf reach.Below
   let above = stepsOf reach.Above
@@ -646,8 +646,9 @@ let stepButton (key: RowKey) (glyph: string) (label: string) (testName: string) 
       Ds.onClick (
         attrEnc (
           sprintf
-            "$%s = Math.max(%d, Math.min(%d, Number($%s || 0) + (%d))); document.getElementById(%s).dispatchEvent(new Event('change'))"
+            "$%s = Math.max(%d, Math.min(%d, Number($%s || 0) + (%d))); document.getElementById(%s).value = %s; document.getElementById(%s).dispatchEvent(new Event('change'))"
             steps (-below) above steps delta
+            (jsText (TweakSignals.readoutId key)) landing
             (jsText (TweakSignals.sliderId key))
         )
       ) ]
@@ -705,7 +706,7 @@ let stepper (key: RowKey) (place: SourceRef) (reach: Reach) (editor: XmlNode) (c
       Attr.create "role" "group"
       Attr.create "aria-label" (attrEnc (sprintf "Change %s" label))
       Ds.signal (steps, 0) ]
-    [ stepButton key "−" (sprintf "Step %s down by %s" label size) "tweak-step-down" reach StepDirection.Down
+    [ stepButton key "−" (sprintf "Step %s down by %s" label size) "tweak-step-down" reach StepDirection.Down landing
       Elem.span [ Attr.class' "live-slider-wrap" ] [
         Elem.input
           [ Attr.id (TweakSignals.sliderId key)
@@ -721,18 +722,38 @@ let stepper (key: RowKey) (place: SourceRef) (reach: Reach) (editor: XmlNode) (c
             Ds.bind steps
             Ds.indicator (TweakSignals.busyOf key)
             Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
+            // While the handle moves the box reads where it would land: set here, from the handle's own value, so no reactive effect
+            // is involved (an effect that wrote the box overflowed the stack in the browser).
+            Ds.onEvent ("input", attrEnc (sprintf "$%s = Number(event.target.value); document.getElementById(%s).value = %s" steps (jsText (TweakSignals.readoutId key)) landing))
             Ds.onEvent ("change", stageAndPost key place { Verb = "steps"; ValueJs = sprintf "String(Number($%s || 0))" steps }, settled) ]
         // Under the track: the lowest, the step and the highest. It is also the button that opens the range editor.
         editor ]
-      Elem.span
+      // The value is a box: type a number and press Enter to write it, Escape to put back what the file holds. The step buttons and the
+      // handle write the same box from their own handlers, so it reads where a step would land. The door holds a typed number to the same range
+      // and the same type as a step, and says why on the row when it refuses one.
+      Elem.input
         [ Attr.id (TweakSignals.readoutId key)
           Attr.class' "live-readout"
-          Attr.title "The value in the file"
+          Attr.type' "text"
+          Attr.create "inputmode" "decimal"
+          Attr.create "autocomplete" "off"
+          Attr.create "spellcheck" "false"
+          Attr.value (attrEnc current)
+          Attr.title "The value in the file. Type a number and press Enter to write it."
           testid "tweak-readout"
-          Attr.create "aria-live" "polite"
-          Ds.text landing ]
-        [ textEnc current ]
-      stepButton key "+" (sprintf "Step %s up by %s" label size) "tweak-step-up" reach StepDirection.Up ]
+          Attr.create "aria-label" (attrEnc (sprintf "%s value. Type a number and press Enter to write it to the file, Escape puts back what the file holds." label))
+          Ds.indicator (TweakSignals.busyOf key)
+          Ds.attr' ("disabled", sprintf "$%s" (TweakSignals.busyOf key))
+          Ds.onEvent (
+            "keydown",
+            attrEnc (
+              sprintf
+                "if (event.key === 'Enter') { event.preventDefault(); %s } else if (event.key === 'Escape') { event.target.value = %s; $%s = 0; event.target.blur() }"
+                (stagePostJs key place { Verb = "set"; ValueJs = "event.target.value" })
+                (jsText current) steps
+            )
+          ) ]
+      stepButton key "+" (sprintf "Step %s up by %s" label size) "tweak-step-up" reach StepDirection.Up landing ]
 
 /// Choose a number's range and step. A small popover under the row: three boxes (lowest, highest, step), Save and Clear. It posts the
 /// three texts, and the route answers with a note when they cannot be used. Empty means none chosen.

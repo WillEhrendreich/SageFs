@@ -1109,7 +1109,9 @@ module SessionInView =
     | SessionInView.NoSessionInPlay -> None
     | SessionInView.InPlay(_, _, readiness) ->
       match readiness with
-      | Readiness.ReadyCurrent -> Some (Glyph.Pass, "all changes live")
+      // "live" here means the session runs what the files say, which is a different fact from the Hot reload and Live testing modes
+      // the sidebar names, so the words say "matches your files": "all changes live" beside "Hot reload: off" read as a contradiction.
+      | Readiness.ReadyCurrent -> Some (Glyph.Pass, "session matches your files")
       | Readiness.ReadyOlderCode
       | Readiness.ReadyRebuilding
       | Readiness.ReadyReplBehindApp

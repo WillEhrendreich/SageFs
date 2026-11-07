@@ -226,10 +226,12 @@ h2 {
   }
 }
 
+/* One button look on the whole page: the filled box `.session-btn` has. These two were outlined, and the page showed filled and
+   outlined buttons side by side (Clear output, + New, Hide beside Hide panel, Stop). */
 .sidebar-header-btn,
 .icon-btn {
-  background: none;
-  border: 1px solid var(--border-normal);
+  background: var(--border-normal);
+  border: 0;
   color: var(--fg-default);
   border-radius: 0;
   width: var(--icon-btn-size);
@@ -278,8 +280,8 @@ h2 {
 
 .sidebar-header-btn:hover,
 .icon-btn:hover {
-  background: var(--bg-selection, #3a3a3a);
-  color: var(--fg-accent, #fff);
+  background: var(--fg-blue);
+  color: var(--bg-default);
 }
 
 .resize-handle {
@@ -326,11 +328,14 @@ h2 {
 }
 
 .panel-header-btn {
-  background: none;
-  border: 1px solid var(--border-normal);
+  background: var(--border-normal);
+  border: 0;
   color: var(--fg-default);
   border-radius: 0;
-  padding: 1px 8px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
   cursor: pointer;
   font-size: 0.857rem;
   font-family: inherit;
@@ -650,7 +655,7 @@ h2 {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  height: 2rem;
+  height: 28px;
   padding: 0 0.75rem;
   flex-shrink: 0;
 
@@ -935,15 +940,8 @@ h2 {
 /* Warmup auto-open state icon on session cards — same box metrics as
    the other session buttons so the row looks uniform. */
 .session-btn-autoopen {
-  background: transparent;
-  border: 1px solid var(--border-normal);
   font-size: 0.857rem;
   line-height: 1;
-
-  &:hover {
-    background: var(--bg-focus);
-    color: inherit;
-  }
 }
 
 /* ── Session cards: pinnacle of responsive design ──────────────────
@@ -1618,12 +1616,21 @@ h2 {
 /* The pane's own buttons, smaller than the toolbar squares on purpose: among 16px row text a 28px
    button is the tallest thing in the row and sets its height — which is what kept a not-yet-read row at
    30px and cost a row of visible values. They stay square, just sized for the row they sit in. */
-.live-pane-pin,
-.live-pane-collapse,
-.live-pane-view,
 .live-held-btn {
   width: 20px;
   height: 20px;
+  padding: 0;
+  font-size: 0.857rem;
+  line-height: 1;
+}
+
+/* The pane bar's buttons are the page's one button height (28px, like Evaluate's neighbours and the card's), not a smaller box of their
+   own: 20px next to 28px and 30px made three heights in view at once. */
+.live-pane-pin,
+.live-pane-collapse,
+.live-pane-view {
+  width: auto;
+  height: 28px;
   padding: 0;
   font-size: 0.857rem;
   line-height: 1;
@@ -1645,20 +1652,8 @@ h2 {
   gap: 4px;
 }
 
-.live-pane-pin::before {
-  content: "Keep open";
-}
-
-.live-pane-view::before {
-  content: "View";
-}
-
-/* The same three words at every width. "Hide" is short enough for the title, the count and all three buttons to share one line on a
-   phone; the words once changed with the window ("Collapse" and "Keep open" wide, "Hide" and "Pin" narrow), and two reviewers
-   noted a user would have to learn them twice, and that "Pin" looks like the pin on every row. */
-.live-pane-collapse::before {
-  content: "Hide";
-}
+/* The same three words at every width, in the markup (`.session-btn-word`): the words once changed with the window ("Collapse" and
+   "Keep open" wide, "Hide" and "Pin" narrow), and two reviewers noted a user would have to learn them twice. */
 
 .live-tree {
   container-type: inline-size;
@@ -1793,12 +1788,6 @@ h2 {
 
   .live-tweak:has(> .live-number-tag) .live-knob {
     flex-wrap: nowrap;
-  }
-
-  .live-tweak:has(> .live-number-tag) .live-readout::before {
-    content: "saved ";
-    font-weight: 400;
-    color: color-mix(in srgb, var(--fg-default) 75%, transparent);
   }
 
   .live-tweak > .live-actions {
@@ -2051,10 +2040,11 @@ h2 {
   color: var(--bg-default);
 }
 
+/* The unchosen options are the page's one button fill, as the Show type, Long values and Row height groups' are. They were outlined
+   here and filled there, and the Display panel read as two designs. The chosen one is told by its colour, its tick and aria-pressed. */
 .live-dock .live-mode-btn[aria-pressed="false"] {
-  background: transparent;
+  background: var(--border-normal);
   color: var(--fg-default);
-  box-shadow: inset 0 0 0 1px var(--fg-dim);
 }
 
 .live-view-scope {
@@ -2568,14 +2558,33 @@ h2 {
   accent-color: var(--border-focus);
 }
 
+/* The number is a box you can type in (Enter writes it, Escape puts back the file's value), so it looks like the page's other text
+   boxes: a border, the dark ground, a focus ring. It was bare bold text, and reviewers read it as a label. */
 .live-readout {
-  min-width: 5ch;
-  padding: 0 0.4em;
+  box-sizing: border-box;
+  min-width: 4.5rem;
+  width: 5.5rem;
+  height: 28px;
+  padding: 0 0.5em;
+  background: var(--bg-default);
   color: var(--fg-default);
+  border: 1px solid var(--border-normal);
+  border-radius: 0;
+  font-family: inherit;
+  font-size: inherit;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: center;
   white-space: nowrap;
+
+  &:focus {
+    outline: 1px solid var(--border-focus);
+    border-color: var(--border-focus);
+  }
+
+  &:disabled {
+    opacity: 0.7;
+  }
 }
 
 /* A boolean is a switch: a track and a thumb, and beside it the word it holds (`.live-switch-word`), so on and off differ in
@@ -3451,15 +3460,51 @@ h2 {
   color: var(--fg-default);
 }
 
+/* One fact per line at every width. They were a wrapping row, which put two on a line at phone width and ran them together:
+   "connected: command line started 2m ago", "last used just now session memory: 322MB". */
 .session-card-more > .flex-row {
+  flex-direction: column;
+  align-items: flex-start;
   padding: 2px 0 4px;
 }
 
+/* The help line starts where the card's facts start (the body's own side padding), so its marker lines up with "About this session". */
+.session-card-help {
+  padding-inline: 0.5rem;
+}
+
 .session-card-help > summary {
-  padding-left: 0.3rem;
   cursor: pointer;
   color: var(--fg-dim);
   padding: 2px 0;
+}
+
+/* The card is the frame: its selected edge is the accent bar. A second 1px box around it drew two borders, so a panel that holds
+   session cards has none of its own. */
+.sidebar .panel:has(.session-row) {
+  border: 0;
+  padding: 0;
+}
+
+.session-btn-word {
+  white-space: nowrap;
+}
+
+/* One disclosure style in the Sessions column: a plain line in the dim colour, with its triangle. "Project loaded" and "Workspace
+   cleanup" were bold lines in boxes of their own, beside "Hot reload: off" and "About this session", which were plain, so the column
+   showed two kinds of disclosure. */
+.sidebar #session-context.panel,
+.sidebar .hygiene-panel {
+  border: 0;
+  padding: 4px;
+}
+
+.sidebar #session-context > details > summary,
+.sidebar .hygiene-panel > summary {
+  /* The markup sets these inline, so the stylesheet needs !important to win. */
+  font-weight: 400 !important;
+  color: var(--fg-dim) !important;
+  font-size: 0.929rem !important;
 }
 
 /* The timing toggle is a word now: dotted like the other words that open something. */
@@ -3845,18 +3890,6 @@ body[data-connected="false"] .statusline-info {
   font-size: 0.857rem;
 }
 
-.session-card-actions > .session-btn[aria-label^="Warmup auto-open"]::before { content: "Auto-open"; order: 1; }
-.session-card-actions > .session-btn[aria-label^="Run "]::before { content: "Run app"; order: 1; }
-.session-card-actions > .session-btn[aria-label^="Stop"]::before { content: "Stop session"; order: 1; }
-.session-card-actions > .session-btn[aria-label^="Dispose"]::before { content: "Dispose"; order: 1; }
-.session-card-actions > .session-btn[aria-label^="Purge"]::before { content: "Purge"; order: 1; }
-
-/* Purge deletes the session's saved state, so it stands apart from the rest of the row. Red is for failure, so it is marked by an
-   outline and its place at the end of the row, not by the failure colour. */
-.session-card-actions > .session-btn[aria-label^="Purge"] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--fg-dim);
-}
 
 /* ── The state column, calm ──
    Nine rows of bordered, uppercase pills in two edge styles and three colours made the State column the loudest thing on the pane,
@@ -4143,17 +4176,30 @@ body[data-connected="false"] .statusline-info {
 .live-view-close {
   white-space: nowrap;
   padding: 2px 8px;
-  border: 1px solid var(--fg-dim);
-  background: transparent;
+  border: 0;
+  background: var(--border-normal);
   color: var(--fg-default);
   font-size: 0.857rem;
   cursor: pointer;
 }
 
-/* The purpose line stays on a phone: a narrow-window user otherwise never learns the pane saves to a file. */
+/* The purpose line stays on a phone, in a one-line form: a narrow-window user otherwise never learns the pane saves to a file, and the
+   full sentence took three lines of the first screen. */
+.pane-sub-short {
+  display: none;
+}
+
 @media (width < 48.062em) {
   .live-pane-sub {
     display: block;
+  }
+
+  .pane-sub-long {
+    display: none;
+  }
+
+  .pane-sub-short {
+    display: inline;
   }
 }
 
@@ -4415,12 +4461,6 @@ body[data-connected="false"] .statusline-info {
   display: none;
 }
 
-.live-dock .live-tweak:has(> .live-number-tag) .live-readout::before {
-  content: "saved ";
-  font-weight: 400;
-  color: color-mix(in srgb, var(--fg-default) 75%, transparent);
-}
-
 /* The note about a call every field came through, above the fields, indented with them. */
 .live-dock .live-shared-note {
   padding: 2px 0 4px 1.7em;
@@ -4641,10 +4681,9 @@ body {
   min-width: 8.8rem;
 }
 
-/* Purge is the irreversible one. It is drawn in the failure colour, with no white outline: the outline read as keyboard focus, and
-   two controls looked focused at once. */
+/* Every button on the card has one shape and one fill. Delete is the irreversible one: its word is in the failure colour and its
+   place is the end of the row. It had an outline of its own, and with Auto-open outlined too the row showed three kinds of button. */
 .session-card-actions > .session-btn[aria-label^="Purge"] {
-  box-shadow: inset 0 0 0 1px var(--fg-red);
   color: var(--fg-red);
 }
 
@@ -4698,6 +4737,17 @@ body {
     overflow-wrap: anywhere;
     line-height: 1.35;
   }
+}
+
+/* A fact on the daemon line wraps whole: the line breaks between facts, never inside one. The session verdict after them is a unit
+   too: it drops to the next line as one piece, and only breaks inside itself when it is longer than the line. */
+.health-fact {
+  white-space: nowrap;
+}
+
+.session-health-list {
+  display: inline-block;
+  max-width: 100%;
 }
 
 /* ── A slider that is a gauge ──
@@ -5050,10 +5100,6 @@ body {
    unloads it, Close ends it, Delete ends it and removes its saved state. The two clocks both read "just now" with no word to say
    which was which, and each floated to the card's right edge on a line of its own. They now say what they count ("started",
    "last used") and sit with the other facts, from the left. */
-.session-card-actions > .session-btn[aria-label^="Stop"]::before { content: "Stop"; }
-.session-card-actions > .session-btn[aria-label^="Dispose"]::before { content: "Close"; }
-.session-card-actions > .session-btn[aria-label^="Purge"]::before { content: "Delete"; }
-
 #sidebar .session-card-body .meta {
   margin-left: 0 !important;
 }
@@ -5237,17 +5283,6 @@ body {
   box-shadow: 0 0 0 2px var(--bg-default);
 }
 
-/* The pane's buttons say what they act on. "Hide" and "Keep open" had no object, and "Auto-open" did not say whether it was on. */
-.live-pane-collapse::before {
-  content: "Hide panel";
-}
-
-.live-pane-pin::before {
-  content: "Keep open";
-}
-
-.session-card-actions > .session-btn[aria-label*="auto-open is ON"]::before { content: "Auto-open: on"; }
-.session-card-actions > .session-btn[aria-label*="auto-open is OFF"]::before { content: "Auto-open: off"; }
 
 /* One heading style for the three regions of the page: the transcript, the panel and the sessions column. They were plain, bold
    mixed-case and spaced capitals. */
@@ -5279,19 +5314,7 @@ body {
   font-size: 0.929rem;
 }
 
-/* On a phone the three buttons and the title share one line: "Keep panel open" dropped the third button to a row of its own. */
-@media (max-width: 48em) {
-  .live-pane-pin::before {
-    content: "Keep open";
-  }
-}
-
-/* The pane's View button says what it opens, and the row's pin is big enough to see and hit: it was an 8px glyph, the smallest
-   control on the page, with no word beside it. */
-.live-pane-view::before {
-  content: "Display settings";
-}
-
+/* The row's pin is big enough to see and hit: it was an 8px glyph, the smallest control on the page, with no word beside it. */
 .live-dock .live-binding > .live-binding-pin {
   font-size: 1.2rem;
   line-height: 1;

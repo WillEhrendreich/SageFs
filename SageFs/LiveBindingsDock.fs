@@ -330,7 +330,8 @@ let private panePinButton (id: string) : XmlNode =
       Ds.class' ("session-btn-on", sprintf "$%s" DockSignals.LivePanePinned)
       Ds.preserveAttr "class aria-pressed"
       Ds.onClick (sprintf "$%s = !$%s" DockSignals.LivePanePinned DockSignals.LivePanePinned) ]
-    [ pinIcon ]
+    // The word is in the markup (it was drawn by CSS `::before`, which no one can select, search or translate).
+    [ pinIcon; Elem.span [ Attr.class' "session-btn-word" ] [ Text.raw "Keep open" ] ]
 
 /// Fold the pane's tree away, or open it again.
 ///
@@ -349,8 +350,11 @@ let private collapseButton () : XmlNode =
       Ds.attr' ("aria-expanded", sprintf "!$%s ? 'true' : 'false'" DockSignals.LivePaneCollapsed)
       Ds.preserveAttr "aria-expanded"
       Ds.onClick (sprintf "$%s = !$%s" DockSignals.LivePaneCollapsed DockSignals.LivePaneCollapsed) ]
+    // The word says what a click does now: "Hide panel" while it is open and "Show panel" once it is folded. It read "Hide panel"
+    // in both states.
     [ Elem.span [ Ds.show (sprintf "!$%s" DockSignals.LivePaneCollapsed) ] [ Text.raw "▼" ]
-      Elem.span [ Ds.show (sprintf "$%s" DockSignals.LivePaneCollapsed) ] [ Text.raw "▲" ] ]
+      Elem.span [ Ds.show (sprintf "$%s" DockSignals.LivePaneCollapsed) ] [ Text.raw "▲" ]
+      Elem.span [ Attr.class' "session-btn-word"; Ds.text (sprintf "$%s ? 'Show panel' : 'Hide panel'" DockSignals.LivePaneCollapsed) ] [ Text.raw "Hide panel" ] ]
 
 /// Where a pane's visibility follows the pin: the extra class it is drawn with, and the attributes that keep it in step with the
 /// signal. Server-rendered in the state the pin starts in, so the first paint is right before Datastar runs.
@@ -810,7 +814,10 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
     // What the pane is for, in one line under its title (reviewers could say what it was only by inference). Wide windows only:
     // on a phone every line before the first binding is a line of the list pushed down.
     Elem.div [ Attr.class' "live-pane-sub"; testid "live-pane-sub" ] [
-      Text.raw "The values in this session. Edit one: the file changes now, and the row says how the session catches up." ]
+      // A phone gets the short form: the long one took three lines of the first screen before the first binding.
+      Elem.span [ Attr.class' "pane-sub-long" ] [
+        Text.raw "The values in this session. Edit one: the file changes now, and the row says how the session catches up." ]
+      Elem.span [ Attr.class' "pane-sub-short" ] [ Text.raw "Edit a value: the file changes now." ] ]
     // On a phone the page is one column and Output and Sessions sit below the bindings. These say so, and take you there.
     Elem.nav [ Attr.class' "live-jump"; testid "live-jump"; Attr.create "aria-label" "Jump to another part of the page" ] [
       Elem.a [ Attr.href "#output-section" ] [ Text.raw "Output ↓" ]

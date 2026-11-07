@@ -55,6 +55,24 @@ let textOfTestId (testId: string) (html: string) : string option =
   | true -> Some m.Groups.[1].Value
   | false -> None
 
+/// The `value` of the first element that carries this test id: what a box holds, whatever order its attributes come in.
+let valueOfTestId (testId: string) (html: string) : string option =
+  let tag = Regex.Match(html, sprintf "<[^>]*data-testid=\"%s\"[^>]*>" (Regex.Escape testId))
+  match tag.Success with
+  | false -> None
+  | true ->
+    let attr = Regex.Match(tag.Value, " value=\"([^\"]*)\"")
+    match attr.Success with
+    | true -> Some attr.Groups.[1].Value
+    | false -> None
+
+/// Every attribute of the first element that carries this test id, joined: for claims about what the element says and does.
+let attrsOfTestId (testId: string) (html: string) : string =
+  let tag = Regex.Match(html, sprintf "<[^>]*data-testid=\"%s\"[^>]*>" (Regex.Escape testId))
+  match tag.Success with
+  | true -> tag.Value
+  | false -> ""
+
 let private states : PersistenceState list =
   [ PersistenceState.InSource gravity
     PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt
@@ -485,7 +503,22 @@ let controlTests =
         let literal = place (FSharpFloat.text value) (ItemKind.Knob(LiteralValue.Real value))
         let step = Step.ofRealText literal.Text
         let html = strip { rowOf (PersistenceState.InSource literal) (Control.RealStepper(value, step)) with Place = PlaceOf.Placed literal }
-        textOfTestId "tweak-readout" html = Some(FSharpFloat.text value)))
+        valueOfTestId "tweak-readout" html = Some(FSharpFloat.text value)))
+
+    testCase "WHY — the number is a box you can type in: a text input that holds the value, takes decimals, and says in its own label that Enter writes it and Escape puts the file's value back" <| fun _ ->
+      for control, spelled in
+        [ Control.RealStepper(9.8, Step.Fraction 1), "9.8"
+          Control.IntegerStepper 100L, "100" ] do
+        let literal = place spelled (match control with | Control.IntegerStepper n -> ItemKind.Knob(LiteralValue.Integer n) | _ -> ItemKind.Knob(LiteralValue.Real 9.8))
+        let html = strip { rowOf (PersistenceState.InSource literal) control with Place = PlaceOf.Placed literal }
+        let readout = attrsOfTestId "tweak-readout" html
+        readout |> Expect.stringContains "it is an input, not a span" "<input"
+        readout |> Expect.stringContains "typed as text, so '-' and '.' are never eaten" "type=\"text\""
+        readout |> Expect.stringContains "the phone keyboard offers digits" "inputmode=\"decimal\""
+        valueOfTestId "tweak-readout" html |> Expect.equal "it holds the file's value" (Some spelled)
+        readout |> Expect.stringContains "Enter writes it" "Enter"
+        readout |> Expect.stringContains "Escape puts it back" "Escape"
+        readout |> Expect.stringContains "Enter posts a literal for the row, the same door the step buttons use" "'set'"
 
     testCase "the reload the write caused is shown on the row; a file hot reload is not watching says so once, in one voice, and says the write happened if it did" <| fun _ ->
       let row = rowOf (PersistenceState.DiffersFromFile("9.8", { gravity with Text = "9.9" })) (Control.RealStepper(9.9, Step.Fraction 1))
@@ -656,7 +689,7 @@ let numberAgreementTests =
       // The file spells it `80.0`; the row's box shows the same text the child row's value shows.
       let literal = place "80.0" (ItemKind.Knob(LiteralValue.Real 80.0))
       let html = strip { rowOf (PersistenceState.InSource literal) (Control.RealStepper(80.0, Step.ofRealText literal.Text)) with Place = PlaceOf.Placed literal }
-      textOfTestId "tweak-readout" html |> Expect.equal "the box agrees with the value text" (Some mass.Preview)
+      valueOfTestId "tweak-readout" html |> Expect.equal "the box agrees with the value text" (Some mass.Preview)
 
     testPropertyWithConfig propConfig "a literal the file spells equals the live value the walk prints for it, for every float, so a row in step is never reported as differing over formatting"
       (Prop.forAll (arbitrary (Gen.map2 (fun whole tenths -> float whole + float tenths / 10.0) (Gen.choose (-500, 500)) (Gen.choose (0, 9)))) (fun value ->

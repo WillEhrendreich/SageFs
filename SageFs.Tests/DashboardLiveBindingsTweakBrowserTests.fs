@@ -229,7 +229,7 @@ let journey () : Task<unit> = task {
     // The row follows the file. Until the REPL's binding is re-evaluated (or hot reload re-evaluates the file into the session)
     // the REPL holds 9.8 and the page says so instead of claiming they agree: either answer is honest, a stale "in source" is not.
     do! waitJs page "the row to say the REPL and the file differ, or that hot reload brought them back in step" BrowserWaits.daemonWork
-          "sel => { const e = document.querySelector(sel); return !!e && ['DiffersFromFile', 'InSource'].includes(e.getAttribute('data-state')) && /9\\.9/.test(e.innerText); }"
+          "sel => { const e = document.querySelector(sel); return !!e && ['DiffersFromFile', 'InSource'].includes(e.getAttribute('data-state')) && /9\\.9/.test(e.innerText + ' ' + Array.from(e.querySelectorAll('input')).map(i => i.value).join(' ')); }"
           (box (row "gravity"))
     // What hot reload did with the write is on the row: its verdict, or, when it is not watching the file, the one sentence that says so.
     do! waitJs page "the reload verdict, or the not-watching sentence, on the gravity row" BrowserWaits.daemonWork
@@ -258,7 +258,7 @@ let journey () : Task<unit> = task {
     let slider = page.Locator(sprintf "%s [data-testid=tweak-slider]" (row "gravity"))
     let! _ = slider.EvaluateAsync("el => { el.value = '5'; el.dispatchEvent(new Event('input', { bubbles: true })); }")
     do! waitJs page "the readout to follow the drag" BrowserWaits.panelUpdates
-          "sel => document.querySelector(sel + ' [data-testid=tweak-readout]').innerText.trim() === '10.4'" (box (row "gravity"))
+          "sel => document.querySelector(sel + ' [data-testid=tweak-readout]').value.trim() === '10.4'" (box (row "gravity"))
     File.ReadAllText tuning |> Expect.equal "nothing is written while the handle is moving" afterStep
     do! shot page "3-drag-in-progress"
     let! _ = slider.EvaluateAsync("el => el.dispatchEvent(new Event('change', { bubbles: true }))")
@@ -325,6 +325,19 @@ let journey () : Task<unit> = task {
     do! shot page "5-record-field-and-bool"
     expectNoErrors errors "after a bool, a string, a formula and a record field"
 
+    // The number is a box: a typed number and Enter write it through the door the step buttons use, and text that is not a number
+    // changes nothing and says why on the row.
+    let health = page.Locator(sprintf "%s [data-testid=tweak-readout]" (row "maxHealth"))
+    do! health.FillAsync "250"
+    do! health.PressAsync "Enter"
+    expected <- expected.Replace("let maxHealth = 100", "let maxHealth = 250")
+    do! waitForFile tuning "a typed number written, and only that literal changed" expected
+    do! health.FillAsync "lots"
+    do! health.PressAsync "Enter"
+    do! waitState page "maxHealth" "Refused"
+    File.ReadAllText tuning |> Expect.equal "text that is not a number wrote nothing" expected
+    expectNoErrors errors "after typing a number and typing words into one"
+
     // A field of a value the file builds with a call is the callee's literal: the group says once, above its fields, which callee builds
     // it and how many calls a write reaches (it is not repeated under every field), and the step changes the one literal in `makeRig`,
     // never the two calls.
@@ -349,7 +362,7 @@ let journey () : Task<unit> = task {
     File.WriteAllText(tuning, edited)
     let waitForTheEditsRepaint () =
       waitJs page "the row repainted for the edit" BrowserWaits.daemonWork
-        "sel => { const e = document.querySelector(sel); return !!e && e.getAttribute('data-state') === 'DiffersFromFile' && /7\\.7/.test(e.innerText); }"
+        "sel => { const e = document.querySelector(sel); return !!e && e.getAttribute('data-state') === 'DiffersFromFile' && /7\\.7/.test(e.innerText + ' ' + Array.from(e.querySelectorAll('input')).map(i => i.value).join(' ')); }"
         (box (row "gravity"))
     let forgeTheOldHash () =
       slider.EvaluateAsync("(el, [name, value]) => el.setAttribute(name, value)", [| box handler; box shown |])
