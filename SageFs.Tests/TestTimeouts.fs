@@ -81,6 +81,9 @@ module TestTimeouts =
   let settle = ms 50.
   /// A gap long enough for a stopwatch to read a positive elapsed time, and no longer.
   let measurableGap = ms 2.
+  /// A wait that uses no CPU, for the perf budget clock's case: long enough that a clock which counted the wait would
+  /// read most of it, short enough that the case costs the suite nothing.
+  let cpuClockWait = ms 100.
   /// How often the pool sampler (`SAGEFS_POOL_SAMPLE`) queues its marker item. Short against the stalls it looks for
   /// (a second and more), long enough that sampling costs the run nothing.
   let poolSampleEvery = ms 50.
@@ -1277,6 +1280,8 @@ module TestMagnitudes =
   /// cases hold every thread at times, and a queued item then waited more than a second (measured with the pool
   /// sampler, 1.36 s at most in one run). With this floor a thread is made at once, up to this many.
   let poolMinWorkerThreads = 256
+  /// The loop length the perf budget clock's case spins for, long enough for a thread CPU clock to read a positive time.
+  let clockSpinIterations = 2_000_000
   /// How many times the pool sampler captures the process's stacks when it sees a stall.
   let poolStackCaptures = 3
   /// The count of probes a coverage bitmap case packs.

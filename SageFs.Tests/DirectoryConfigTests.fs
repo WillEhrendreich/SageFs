@@ -243,8 +243,9 @@ let configHostTests =
       let first = ConfigHost.evaluate Environment.CurrentDirectory script
       let second = ConfigHost.evaluate Environment.CurrentDirectory script
       second |> Expect.equal "same result" first
-      // A cached answer is a map lookup and a started host is a process; the fastest of several reads is the one a
-      // loaded machine has not stretched (it only ever adds time), so it says which of the two happened.
-      let fastestRead = PerfBudget.minMs 5 (fun () -> ConfigHost.evaluate Environment.CurrentDirectory script |> ignore)
-      Expect.isLessThan "no second host was started" (fastestRead, 100.0))
+      // A cached answer is the very value the first call stored, and an evaluation builds a new one: the same object
+      // says no second host was started, whatever the machine's load and however long a host takes to start.
+      Object.ReferenceEquals(first, second) |> Expect.isTrue "no second host was started: the second answer is the first one's stored value"
+      let third = ConfigHost.evaluate Environment.CurrentDirectory script
+      Object.ReferenceEquals(first, third) |> Expect.isTrue "and a third read is that value too")
   ]

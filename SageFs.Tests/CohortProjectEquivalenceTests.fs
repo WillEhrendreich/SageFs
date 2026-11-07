@@ -41,7 +41,8 @@ open SageFs.Tests.SharedGenerators
 
 // ── The oracle ──────────────────────────────────────────────────────────
 
-module private Reference =
+/// Not private: `CohortPerfBudgetTests` times it as the twin of its budget, the implementation that cost 80 ms.
+module Reference =
   /// Verbatim copy of `Cohort.project` as it existed before the perf
   /// optimization — do not "fix" this to match a future `Cohort.project`;
   /// its entire job is to stay the pre-optimization behavior.

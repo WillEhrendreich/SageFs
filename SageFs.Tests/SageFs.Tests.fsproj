@@ -32,6 +32,7 @@
         <Compile Include="Started.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="PerfBudget.fs" />
+        <Compile Include="PerfBudgetClockTests.fs" />
         <Compile Include="StartedTests.fs" />
         <Compile Include="SourceStateFixtures.fs" />
         <Compile Include="RunnerLogging.fs" />
@@ -1016,8 +1017,8 @@
         <Compile Include="CohortLedgerExportTests.fs" />
         <Compile Include="CohortPlayTests.fs" />
         <Compile Include="CohortExportCommandTests.fs" />
-        <Compile Include="CohortPerfBudgetTests.fs" />
         <Compile Include="CohortProjectEquivalenceTests.fs" />
+        <Compile Include="CohortPerfBudgetTests.fs" />
         <Compile Include="InputHashCoverageTests.fs" />
         <Compile Include="LandingCacheTests.fs" />
         <Compile Include="AffectedTestsTests.fs" />

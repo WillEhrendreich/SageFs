@@ -18,8 +18,14 @@
 /// "no daemon" discipline `CohortPanelTests.fs`/`CohortOwnerTests.fs` use.
 ///
 /// This list is NOT tagged `[Benchmark]`, so it runs in the default suite and
-/// gates every run. Each budget gets one test case reading a shared `Lazy`
-/// measurement (computed once per test run, thread-safe). Load can only make a
+/// gates every run, as a `testSequenced` list: it runs after the parallel pool, alone, so the
+/// rest of the suite is not computing beside it. It is also measured on the calling thread's
+/// CPU time (`PerfBudget.nowMs`) and not on wall time. One case failed once at 35.9 s of wall
+/// time in another agent's default run because the box was busy, while the work it timed had
+/// not changed; CPU time does not count the time a thread waits for a core. What the budgets
+/// claim is what the code costs: the work, in the time a core spends on it. Each budget gets
+/// one test case reading a shared `Lazy` measurement (computed once per test run, on the thread
+/// that first reads it, which is the thread the clock is read on). Load can only make a
 /// timing slower, never faster, so each budget judges a statistic that a busy
 /// box moves little: decide+project judges the median of its quietest block,
 /// and the claim probe judges its BEST batch (the cheapest of hundreds of timed
@@ -136,9 +142,11 @@ let private observeSaveCommand =
 
 // ── Measurement plumbing ───────────────────────────────────────────────
 
-/// Per-iteration wall time via raw `Stopwatch` timestamps — not `.Elapsed`
-/// nor a fresh `Stopwatch` per iteration, both of which carry allocation/
-/// object overhead that would dwarf a sub-10µs measurement. Warms the JIT
+/// Per-iteration time on `PerfBudget.nowMs`, the calling thread's CPU time, so a box
+/// that is busy with other work (the rest of the suite, a neighbour's build) does not
+/// count against the budget: only the time this thread spent computing does. It is a
+/// raw reading, not `.Elapsed` nor a fresh `Stopwatch` per iteration, both of which
+/// carry allocation/object overhead that would dwarf a sub-10µs measurement. Warms the JIT
 /// for `warmup` iterations first (discarded, matters most for tiered
 /// compilation), forces a clean GC generation before sampling so a warmup
 /// collection does not land inside the timed loop, then samples `iterations`
@@ -149,13 +157,12 @@ let private measureMs (warmup: int) (iterations: int) (f: unit -> unit) : float[
   GC.Collect()
   GC.WaitForPendingFinalizers()
   GC.Collect()
-  let freq = float Stopwatch.Frequency
   let samples = Array.zeroCreate<float> iterations
   for i in 0 .. iterations - 1 do
-    let t0 = Stopwatch.GetTimestamp()
+    let t0 = PerfBudget.nowMs ()
     f ()
-    let t1 = Stopwatch.GetTimestamp()
-    samples.[i] <- float (t1 - t0) / freq * 1000.0
+    let t1 = PerfBudget.nowMs ()
+    samples.[i] <- t1 - t0
   Array.sortInPlace samples
   samples
 
@@ -201,14 +208,13 @@ let measureBatches (warmup: int) (batches: int) (callsPerBatch: int) (f: unit ->
   GC.Collect()
   GC.WaitForPendingFinalizers()
   GC.Collect()
-  let freq = float Stopwatch.Frequency
   let perCallMs = Array.zeroCreate<float> batches
   for i in 0 .. batches - 1 do
-    let t0 = Stopwatch.GetTimestamp()
+    let t0 = PerfBudget.nowMs ()
     for _ in 1 .. callsPerBatch do
       f ()
-    let t1 = Stopwatch.GetTimestamp()
-    perCallMs.[i] <- float (t1 - t0) / freq * 1000.0 / float callsPerBatch
+    let t1 = PerfBudget.nowMs ()
+    perCallMs.[i] <- (t1 - t0) / float callsPerBatch
   Array.sortInPlace perCallMs
   { BestBatchMs = perCallMs.[0]
     TypicalBatchMs = percentile perCallMs 0.50
@@ -248,6 +254,20 @@ let private decideProjectSamples : Lazy<float[]> =
       match decide epoch [||] head.State observeSaveCommand with
       | Ok _ -> project head snapshots |> ignore
       | Error err -> failwithf "unexpected refusal in the decide+project perf loop: %A" err))
+
+/// The twin of the decide+project budget: the same measurement over the same fixture with the frozen
+/// pre-optimization `project` (`CohortProjectEquivalenceTests.Reference`, a `Set` per bitplane, 77-84 ms a call when the
+/// budget was first written). A budget that the implementation it was written to keep out passes is not a budget. Fewer
+/// samples than the real measurement: each call costs about 16 times as much.
+let private decideProjectTwinWarmup = 2
+let private decideProjectTwinSamplesPerBlock = 5
+
+let private decideProjectTwinSamples : Lazy<float[]> =
+  lazy
+    (quietestBlock decideProjectTwinWarmup decideProjectTwinSamplesPerBlock (fun () ->
+      match decide epoch [||] head.State observeSaveCommand with
+      | Ok _ -> CohortProjectEquivalenceTests.Reference.project head snapshots |> ignore
+      | Error err -> failwithf "unexpected refusal in the decide+project twin loop: %A" err))
 
 /// §3.4 / §7.4: "the save-observed claim probe under 10 µs." `decide` alone,
 /// isolating the `ObserveSave` linear scan over the fixture's 10 held claims
@@ -415,11 +435,19 @@ let private assertWithinBound (label: string) (idealMs: float) (boundMs: float) 
 
 [<Tests>]
 let cohortPerfBudgetTests =
-  testList "Cohort perf budgets (sagefs-multiagent-vision.md §3.4, §7.4)" [
+  testSequenced <| testList "Cohort perf budgets (sagefs-multiagent-vision.md §3.4, §7.4)" [
 
     testCase "decide + project: ten members, 7,000 tests" <| fun _ ->
       let samples = decideProjectSamples.Value
       assertWithinBound "decide+project (10 members, 7000 tests)" idealDecideProjectMsP99 regressionBoundDecideProjectMsP50 ("p50", percentile samples 0.50) samples
+
+    testCase "WHY — the decide+project budget has teeth: the pre-optimization project over the same fixture is over the bound" <| fun _ ->
+      let samples = decideProjectTwinSamples.Value
+      let median = percentile samples 0.50
+      printfn "[perf] decide+project twin (pre-optimization project): p50=%.4fms (regression bound %.4fms)" median regressionBoundDecideProjectMsP50
+      (median, regressionBoundDecideProjectMsP50)
+      |> Expect.isGreaterThan
+        (sprintf "WHY — the frozen implementation's median is %.4fms and the bound is %.4fms. A bound that passes the implementation it exists to keep out cannot catch a regression: tighten the bound or change what is judged." median regressionBoundDecideProjectMsP50)
 
     testCase "the save-observed claim probe (decide's ObserveSave branch)" <| fun _ ->
       let reading = claimProbeReading.Value

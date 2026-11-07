@@ -188,8 +188,6 @@ let daemonResumeOutcomeTests =
       let mutable firstClient : HttpClient = null
       let mutable second : Process = null
       let mutable secondClient : HttpClient = null
-      let wall = Stopwatch.StartNew()
-
       try
         // ── Daemon 1: create a session ──────────────────────────────────────
         let portOne = Harness.reserveLoopbackPort ()
@@ -285,12 +283,8 @@ let daemonResumeOutcomeTests =
         evalResult
         |> Expect.stringContains "the rebuilt session is a real FSI" "42"
 
-        wall.Stop()
-        // Not an assertion about speed — a tripwire. If this ever approaches
-        // the ceilings above, the gate is about to start flaking and the
-        // reason will be in this message rather than a bare timeout.
-        (wall.Elapsed < manifestDurabilityCeiling + resumeCeiling)
-        |> Expect.isTrue (sprintf "resume round trip stayed inside its budget (took %O)" wall.Elapsed)
+        // No total-time assertion: each stage above waits on its own event with its own ceiling and names what it
+        // waited for, and a sum of those ceilings fails on a machine that was only slow, naming nothing.
       finally
         for c in [ firstClient; secondClient ] do
           match isNull c with
