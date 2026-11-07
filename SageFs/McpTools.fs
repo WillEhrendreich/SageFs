@@ -315,6 +315,28 @@ let frictionReportJson
   payload["ObservedSignals"] <- observedSignalsJson
   payload.ToJsonString()
 
+/// The counters, the audit line and the log lines for a call that finished. Best effort: they decorate the
+/// call, so a failure here is counted by `EchoGuard` and never reaches the caller.
+let echoSuccess (toolName: string) (sw: System.Diagnostics.Stopwatch) (result: string) : unit =
+  SageFs.EchoGuard.attemptSync SageFs.EchoSink.ToolCounters (fun () ->
+    SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+    auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
+    Log.info ">> %s" toolName
+    Log.debug "%s" (result.Replace("\r\n", "\n").Replace("\n", "\r\n")))
+
+/// The counters, the audit line and the closed span for a call that failed, with the same best-effort rule.
+let echoFailure (toolName: string) (sw: System.Diagnostics.Stopwatch) (span: System.Diagnostics.Activity) (message: string) : unit =
+  SageFs.EchoGuard.attemptSync SageFs.EchoSink.ToolCounters (fun () ->
+    SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+    auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure))
+  SageFs.EchoGuard.attemptSync SageFs.EchoSink.Span (fun () -> SageFs.Instrumentation.failSpan span message)
+
+/// The friction record for a call, best effort: a store that throws (or a heap with no room to append
+/// to it) is counted once and the call still answers.
+let echoRecord (ctx: McpContext) (toolName: string) (outcome: Result<string, SageFs.SageFsError>) (sw: System.Diagnostics.Stopwatch) : Task =
+  SageFs.EchoGuard.attempt SageFs.EchoSink.Friction (fun () ->
+    recordToolResult ctx toolName outcome (int sw.Elapsed.TotalMilliseconds) :> Task)
+
 let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =
   task {
     SageFs.Instrumentation.mcpToolInvocations.Add(1L)
@@ -324,30 +346,27 @@ let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<strin
     try
       let! result = t
       sw.Stop()
-      SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
-      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
-      Log.info ">> %s" toolName
-      Log.debug "%s" normalized
+      // Everything between here and the return decorates the call (counters, audit, log, friction
+      // record, span). Each is best effort (`EchoGuard`): a decoration that throws never replaces
+      // the tool's own result.
+      echoSuccess toolName sw result
       // The tool body only handed back display text here — no structured
       // outcome — so a body that reached this line without throwing is
       // recorded as a clean completion. Tools that can fail without
       // throwing (session routing, reset/cancel/verify, ...) go through
       // withEchoOutcome instead, which carries the real SageFsError.
-      let! _ = recordToolResult ctx toolName (Ok result) (int sw.Elapsed.TotalMilliseconds)
-      SageFs.Instrumentation.succeedSpan span
+      do! echoRecord ctx toolName (Ok result) sw
+      SageFs.EchoGuard.attemptSync SageFs.EchoSink.Span (fun () -> SageFs.Instrumentation.succeedSpan span)
       // Outbound size cap (roast-7 §13): friction/audit recording above kept
       // the full text; only what actually reaches the agent is bounded.
       return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
     with ex ->
       sw.Stop()
-      SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
-      SageFs.Instrumentation.failSpan span ex.Message
+      echoFailure toolName sw span ex.Message
       // The exception itself IS the SageFsError case — record it directly
       // instead of formatting it to text and having classifyFrictionOutcome
       // re-parse the formatted string back out.
-      let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
+      do! echoRecord ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) sw
       return raise ex
   }
 
@@ -360,21 +379,15 @@ let withEchoNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string>)
     try
       let! result = t
       sw.Stop()
-      SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
-      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
-      Log.info ">> %s" toolName
-      Log.debug "%s" normalized
-      SageFs.Instrumentation.succeedSpan span
-      let! _ = recordToolResult ctx toolName (Ok result) (int sw.Elapsed.TotalMilliseconds)
+      echoSuccess toolName sw result
+      SageFs.EchoGuard.attemptSync SageFs.EchoSink.Span (fun () -> SageFs.Instrumentation.succeedSpan span)
+      do! echoRecord ctx toolName (Ok result) sw
       return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
     with ex ->
       sw.Stop()
-      SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
-      SageFs.Instrumentation.failSpan span ex.Message
+      echoFailure toolName sw span ex.Message
       // See withEcho above — the exception IS the typed case.
-      let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
+      do! echoRecord ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) sw
       return raise ex
   }
 
@@ -410,28 +423,25 @@ let withEchoOutcome (ctx: McpContext) (toolName: string) (t: Task<string * SageF
     match awaited with
     | Error ex ->
       sw.Stop()
-      SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
-      SageFs.Instrumentation.failSpan span ex.Message
-      let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
+      echoFailure toolName sw span ex.Message
+      do! echoRecord ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) sw
       return raise ex
     | Ok(result, blocker) ->
       sw.Stop()
-      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
-      Log.info ">> %s" toolName
-      Log.debug "%s" normalized
+      SageFs.EchoGuard.attemptSync SageFs.EchoSink.ToolCounters (fun () ->
+        Log.info ">> %s" toolName
+        Log.debug "%s" (result.Replace("\r\n", "\n").Replace("\n", "\r\n")))
       let outcome = match blocker with Some err -> Error err | None -> Ok result
-      let! _ = recordToolResult ctx toolName outcome (int sw.Elapsed.TotalMilliseconds)
+      do! echoRecord ctx toolName outcome sw
       match blocker with
       | None ->
-        SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-        auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
-        SageFs.Instrumentation.succeedSpan span
+        SageFs.EchoGuard.attemptSync SageFs.EchoSink.ToolCounters (fun () ->
+          SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+          auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success))
+        SageFs.EchoGuard.attemptSync SageFs.EchoSink.Span (fun () -> SageFs.Instrumentation.succeedSpan span)
         return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
       | Some err ->
-        SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-        auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
-        SageFs.Instrumentation.failSpan span (SageFs.SageFsError.describe err)
+        echoFailure toolName sw span (SageFs.SageFsError.describe err)
         return raise (SageFs.SageFsErrorException(err))
   }
 
@@ -472,28 +482,20 @@ let withEchoOutcomeNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<s
     match awaited with
     | Error ex ->
       sw.Stop()
-      SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
-      SageFs.Instrumentation.failSpan span ex.Message
-      let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
+      echoFailure toolName sw span ex.Message
+      do! echoRecord ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) sw
       return raise ex
     | Ok(result, blocker) ->
       sw.Stop()
       match blocker with
       | None ->
-        SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-        auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
-        let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
-        Log.info ">> %s" toolName
-        Log.debug "%s" normalized
-        SageFs.Instrumentation.succeedSpan span
-        let! _ = recordToolResult ctx toolName (Ok result) (int sw.Elapsed.TotalMilliseconds)
+        echoSuccess toolName sw result
+        SageFs.EchoGuard.attemptSync SageFs.EchoSink.Span (fun () -> SageFs.Instrumentation.succeedSpan span)
+        do! echoRecord ctx toolName (Ok result) sw
         return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
       | Some err ->
-        SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-        auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
-        SageFs.Instrumentation.failSpan span (SageFs.SageFsError.describe err)
-        let! _ = recordToolResult ctx toolName (Error err) (int sw.Elapsed.TotalMilliseconds)
+        echoFailure toolName sw span (SageFs.SageFsError.describe err)
+        do! echoRecord ctx toolName (Error err) sw
         return raise (SageFs.SageFsErrorException(err))
   }
 

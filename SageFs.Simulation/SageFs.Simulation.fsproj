@@ -287,6 +287,7 @@
         <Compile Include="MemoryShedInvariants.fs" />
         <Compile Include="LeaseSim.fs" />
         <Compile Include="LeaseSimInvariants.fs" />
+        <Compile Include="McpConnectionSim.fs" />
         <Compile Include="SseReplaySim.fs" />
         <Compile Include="SseReplayInvariants.fs" />
         <Compile Include="AnnotationsSyncSim.fs" />

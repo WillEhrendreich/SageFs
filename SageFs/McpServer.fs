@@ -42,6 +42,18 @@ type McpServerTracker() =
   /// an empty set) is subscribed to nothing.
   let resourceSubscriptions = ConcurrentDictionary<string, ConcurrentDictionary<string, byte>>()
 
+  /// `key` as the notification fan-out sees it. Releasing it forgets the connection here and then disposes
+  /// the server, which closes the SDK transport and returns the SSE write buffer it holds. A connection that
+  /// is already gone from `servers` was released by an earlier failed send, so this releases it once.
+  let fanoutTargetOf (key: string) (server: McpServer) (send: CancellationToken -> Task) : FanoutTarget =
+    { Id = key
+      Send = send
+      Release = fun () ->
+        resourceSubscriptions.TryRemove(key) |> ignore
+        match servers.TryRemove(key) with
+        | true, _ -> server.DisposeAsync().AsTask()
+        | false, _ -> Task.CompletedTask }
+
   member _.Register(server: McpServer) =
     servers.[server.SessionId] <- server
 
@@ -83,27 +95,16 @@ type McpServerTracker() =
       match subscribed.Length with
       | 0 -> return ()
       | _ ->
-        let! results =
+        let targets =
           subscribed
-          |> Array.map (fun (key, server) -> task {
-            use cts = new System.Threading.CancellationTokenSource(500)
-            try
+          |> Array.map (fun (key, server) ->
+            fanoutTargetOf key server (fun token ->
               let payload = ResourceUpdatedNotificationParams(Uri = uri)
-              do! server.SendNotificationAsync(
+              server.SendNotificationAsync(
                 NotificationMethods.ResourceUpdatedNotification, payload,
-                cancellationToken = cts.Token)
-              return None
-            with
-            | :? System.IO.IOException | :? ObjectDisposedException -> return Some key
-            | :? System.OperationCanceledException -> return Some key
-            | ex ->
-              Log.error "[MCP] NotifyResourceUpdated error for %s (%s): %s\n%s" key uri ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-              return Some key
-          })
-          |> System.Threading.Tasks.Task.WhenAll
-        for deadId in results |> Array.choose id do
-          servers.TryRemove(deadId) |> ignore
-          resourceSubscriptions.TryRemove(deadId) |> ignore
+                cancellationToken = token)))
+        let! _ = McpFanout.broadcast SageFs.Timeouts.mcpNotificationSend SageFs.Timeouts.mcpConnectionRelease targets
+        ()
     }
 
   /// Broadcast a structured logging notification to all connected MCP clients.
@@ -117,29 +118,19 @@ type McpServerTracker() =
           let json = Json.serialize Json.standard data
           use doc = JsonDocument.Parse(json)
           doc.RootElement.Clone()
-        let snapshot = servers |> Seq.map (fun kvp -> kvp.Key, kvp.Value) |> Seq.toArray
-        let! results =
-          snapshot
-          |> Array.map (fun (key, server) -> task {
-            use cts = new System.Threading.CancellationTokenSource(500)
-            try
+        let targets =
+          servers
+          |> Seq.map (fun kvp ->
+            fanoutTargetOf kvp.Key kvp.Value (fun token ->
               let payload =
                 LoggingMessageNotificationParams(
                   Level = level, Logger = logger, Data = jsonElement)
-              do! server.SendNotificationAsync(
+              kvp.Value.SendNotificationAsync(
                 NotificationMethods.LoggingMessageNotification, payload,
-                cancellationToken = cts.Token)
-              return None
-            with
-            | :? System.IO.IOException | :? ObjectDisposedException -> return Some key
-            | :? System.OperationCanceledException -> return Some key
-            | ex ->
-              Log.error "[MCP] NotifyLog error for %s: %s\n%s" key ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-              return Some key
-          })
-          |> System.Threading.Tasks.Task.WhenAll
-        for deadId in results |> Array.choose id do
-          servers.TryRemove(deadId) |> ignore
+                cancellationToken = token)))
+          |> Seq.toArray
+        let! _ = McpFanout.broadcast SageFs.Timeouts.mcpNotificationSend SageFs.Timeouts.mcpConnectionRelease targets
+        ()
     }
 
   /// Accumulate a structured event for delivery on the next tool response,

@@ -43,6 +43,10 @@
         <Compile Include="ModelSnapshot.fs" />
         <Compile Include="TimeTravel.fs" />
         <Compile Include="Utils.fs" />
+        <!-- The best-effort decoration guard and the MCP notification fan-out: pure of the SDK, so a test drives them with fake connections. -->
+        <!-- Guarded before McpFanout, ReadyWait and SessionRemoval: each hands control to a callback that may throw through it. -->
+        <Compile Include="Guarded.fs" />
+        <Compile Include="McpFanout.fs" />
         <!-- Before everything that words a state for a person: the dashboard and the session output draw their icons from it. -->
         <Compile Include="Glyphs.fs" />
         <Compile Include="WorkerLogFile.fs" />
@@ -488,8 +492,6 @@
         <Compile Include="SessionBuild.fs" />
         <!-- What a caller waiting on a session is told, and when. After WorkerProtocol and RebuildOutcome; the session
              manager settles its parked callers with it and the status tool decides to park with it. -->
-        <!-- Guarded before ReadyWait and SessionRemoval: both hand the session manager's loop to a callback through it. -->
-        <Compile Include="Guarded.fs" />
         <Compile Include="ReadyWait.fs" />
         <Compile Include="ProjectResolution.fs" />
         <Compile Include="WorkerSpawn.fs" />
