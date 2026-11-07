@@ -215,6 +215,13 @@ module McpBridge =
         """{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sagefs-mcp-bridge","version":"1"}}"""
     sprintf """{"jsonrpc":"2.0","id":"sagefs-mcp-bridge-rehandshake","method":"initialize","params":%s}""" paramsJson
 
+  /// What a bridge that lost its daemon still holds of the MCP session it had: an id (stale now, the new daemon never
+  /// minted it) or nothing, because the client had not finished its handshake.
+  [<RequireQualifiedAccess>]
+  type HeldSession =
+    | Never
+    | Id of sessionId: string
+
   /// Where the bridge is in getting the daemon up and answering. One DU,
   /// not a bool "already started" flag next to an attempt counter that
   /// could drift out of sync with it — that drift is exactly how "started
@@ -230,6 +237,11 @@ module McpBridge =
     /// per bridge — `Probing` is never re-entered — so this case existing
     /// at all is proof the start happened at most once.
     | Starting of attempts: int
+    /// The daemon this bridge was talking to went away (an upgrade stops it, installs the new build and starts
+    /// it again). The bridge stays up and keeps probing, holding the MCP session id it had so the first request
+    /// after the daemon is back re-runs the handshake. It asks for a daemon itself only once
+    /// `Policy.MaxReconnectProbes` probes have found none, which moves it to `Starting`.
+    | Reconnecting of attempts: int * held: HeldSession
 
   /// The bridge's overall transport state.
   [<RequireQualifiedAccess>]
@@ -271,6 +283,9 @@ module McpBridge =
     /// response came back at all (connection refused, timed out, stream
     /// torn down). This IS "the daemon is gone."
     | HttpFailed of reason: string
+    /// The server-push stream opened for `sessionId` ended. Only the stream of the session the bridge holds now
+    /// means the daemon is gone: a stream of an older session ending after the bridge moved on says nothing.
+    | ServerStreamClosed of sessionId: string * reason: string
     | StdinClosed
 
   /// What the bridge should DO. A DU, never a tuple of independent flags —
@@ -287,15 +302,23 @@ module McpBridge =
     | RejectMessage of RpcMessage * reason: string
     | ReportFatal of reason: string
     | TerminateSession of sessionId: string
+    /// The daemon is back and the bridge holds the id of a session it no longer has: mint a fresh one with the
+    /// client's own `initialize` parameters, open the push stream on it and tell the client its lists may have
+    /// changed. Runs before the messages queued while the daemon was away, so they go out under the new id.
+    | Rehandshake
     | Shutdown
 
-  type Policy = { MaxProbeAttempts: int }
+  type Policy =
+    { MaxProbeAttempts: int
+      /// Probes a bridge makes after it lost its daemon before it starts one itself.
+      MaxReconnectProbes: int }
 
   /// As many probes as fit in `Timeouts.daemonStartWait` at `Timeouts.stdioBridgeProbeInterval` apart: 30 on a
   /// fast machine (15 s), more on a slow one. Matches `Program.fs`'s `waitForDaemonReady`, which this bridge
-  /// replaces the client-side half of.
+  /// replaces the client-side half of. A lost daemon gets `Timeouts.stdioBridgeReconnectWait` of probes.
   let defaultPolicy =
-    { MaxProbeAttempts = int (System.Math.Ceiling(Timeouts.daemonStartWait / Timeouts.stdioBridgeProbeInterval)) }
+    { MaxProbeAttempts = int (System.Math.Ceiling(Timeouts.daemonStartWait / Timeouts.stdioBridgeProbeInterval))
+      MaxReconnectProbes = int (System.Math.Ceiling(Timeouts.stdioBridgeReconnectWait / Timeouts.stdioBridgeProbeInterval)) }
 
   let private giveUpReason (policy: Policy) =
     sprintf
@@ -344,6 +367,27 @@ module McpBridge =
       | false ->
         { state with Transport = TransportState.AwaitingDaemon(DaemonReadiness.Starting(n + 1)) }, [ Action.Probe ]
 
+    // ---- The daemon went away under a connected bridge: keep serving, wait for it ----
+    | TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(n, held)), Event.Probe ->
+      { state with Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(n + 1, held)) }, [ Action.Probe ]
+
+    | TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(_, held)), Event.ProbeResult true ->
+      // A held id is the id of a session the new daemon never minted. `Rehandshake` replaces it before the queue
+      // drains, so the queued messages go out under the new one.
+      let next, drained = drain state
+      let transport, first =
+        match held with
+        | HeldSession.Id sid -> TransportState.Ready(Some sid), [ Action.Rehandshake ]
+        | HeldSession.Never -> next.Transport, []
+      { next with Transport = transport }, first @ drained
+
+    | TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(n, _)), Event.ProbeResult false ->
+      match n >= policy.MaxReconnectProbes with
+      | true -> { state with Transport = TransportState.AwaitingDaemon(DaemonReadiness.Starting 0) }, [ Action.StartDaemon ]
+      | false -> state, []
+
+    | TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting _), Event.DaemonStartFailed _ -> state, []
+
     | TransportState.AwaitingDaemon _, Event.ProbeResult true -> drain state
 
     | TransportState.AwaitingDaemon(DaemonReadiness.Probing _), Event.ProbeResult false ->
@@ -384,11 +428,13 @@ module McpBridge =
     // ---- Session id capture (idempotent: captured exactly once) ----
     | TransportState.Ready None, Event.SessionIdCaptured sid -> { state with Transport = TransportState.Ready(Some sid) }, []
 
-    | TransportState.Ready(Some _), Event.SessionIdCaptured _ ->
-      // Already have one — ignored, not reapplied. Keeps "captured exactly
-      // once" true even if the IO edge reads the header off more than one
-      // response.
-      state, []
+    | TransportState.Ready(Some held), Event.SessionIdCaptured sid ->
+      // The same id again (the IO edge reads the header off more than one response) changes nothing. A DIFFERENT
+      // id is the daemon's answer to a re-handshake: the held session is gone, and every later request must
+      // carry the new one.
+      match sid = held with
+      | true -> state, []
+      | false -> { state with Transport = TransportState.Ready(Some sid) }, []
 
     | TransportState.AwaitingDaemon _, Event.SessionIdCaptured _
     | TransportState.Closed, Event.SessionIdCaptured _
@@ -401,6 +447,11 @@ module McpBridge =
     // with your request" shape. The bridge stays exactly where it was.
     | TransportState.Ready _, Event.RequestRejected(msg, reason) -> state, [ Action.RejectMessage(msg, reason) ]
 
+    | TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting _), Event.RequestRejected(msg, reason) ->
+      // A request that was in flight when the daemon went away: its failure can arrive after the push stream's
+      // end already moved the bridge here, and the client is still owed an answer.
+      state, [ Action.RejectMessage(msg, reason) ]
+
     | TransportState.AwaitingDaemon _, Event.RequestRejected _
     | TransportState.Closed, Event.RequestRejected _
     | TransportState.Fatal _, Event.RequestRejected _ ->
@@ -409,12 +460,24 @@ module McpBridge =
       state, []
 
     // ---- Daemon dies mid-session ----
-    | TransportState.Ready _, Event.HttpFailed reason ->
-      let msg = sprintf "the daemon became unreachable: %s" reason
-      // Shutdown here too — same reasoning as `giveUp`'s doc comment: Fatal
-      // is a terminal state the process should actually leave on its own,
-      // not one it sits in until stdin happens to close.
-      { state with Transport = TransportState.Fatal msg }, [ Action.ReportFatal msg; Action.Shutdown ]
+    | TransportState.Ready sessionId, Event.HttpFailed _ ->
+      // The daemon is gone, and an upgrade makes it gone on purpose: it stops the daemon, installs the new build
+      // and starts the daemon again. The client's process is still here and owns this bridge, so the bridge waits
+      // for the daemon (`Reconnecting`) and gives up only by the rules of a cold start. Ending here made every
+      // upgrade end every client's SageFs connection (measured: exit code 1, "server stream closed").
+      let held =
+        match sessionId with
+        | Some sid -> HeldSession.Id sid
+        | None -> HeldSession.Never
+      { state with Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, held)) }, [ Action.Probe ]
+
+    | TransportState.Ready(Some held), Event.ServerStreamClosed(sid, _) when sid = held ->
+      { state with Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id held)) }, [ Action.Probe ]
+
+    | TransportState.Ready _, Event.ServerStreamClosed _
+    | TransportState.AwaitingDaemon _, Event.ServerStreamClosed _
+    | TransportState.Closed, Event.ServerStreamClosed _
+    | TransportState.Fatal _, Event.ServerStreamClosed _ -> state, []
 
     | TransportState.AwaitingDaemon _, Event.HttpFailed _ ->
       // A probe's own failure arrives as `ProbeResult false`, not

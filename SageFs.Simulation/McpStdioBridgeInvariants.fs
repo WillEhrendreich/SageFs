@@ -129,6 +129,7 @@ module McpStdioBridgeInvariants =
               | Action.StartDaemon
               | Action.ReportFatal _
               | Action.TerminateSession _
+              | Action.Rehandshake
               | Action.Shutdown -> false)
             |> List.length
           let violations =

@@ -809,6 +809,11 @@ module Timeouts =
   /// How often the `mcp-stdio` bridge asks whether the daemon it just started is
   /// up yet. A poll: there is nothing to wait on until the daemon listens.
   let stdioBridgeProbeInterval = TimeSpan.FromMilliseconds(500.0)
+  /// How long a stdio bridge whose daemon went away keeps probing for it to come back before it starts one
+  /// itself. An upgrade stops the daemon, installs the new tool and starts the daemon again, which takes
+  /// seconds, and a bridge that starts its own daemon in that gap leaves two. A minute covers a slow install;
+  /// a person who ran `sagefs stop` and left gets a daemon again after it.
+  let stdioBridgeReconnectWait = forMachine (TimeSpan.FromSeconds(60.0))
   /// How long a Jupyter kernel socket receive (shell, and the heartbeat echo)
   /// blocks before it rechecks for cancellation. A poll; it bounds how long
   /// kernel shutdown can wait on a quiet socket.

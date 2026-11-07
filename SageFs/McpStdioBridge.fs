@@ -123,6 +123,9 @@ type Io =
     /// Open the server-push SSE stream (GET) once a session id exists, and
     /// write every message it carries to stdout until it closes or errors.
     OpenServerStream: string -> Task<Result<unit, string>>
+    /// Mint a session on the daemon that is back (`Action.Rehandshake`), calling the capture callback with its
+    /// id; the bridge then opens the push stream on it and tells the client its lists may have changed.
+    Rehandshake: (string -> unit) -> Task<Result<unit, string>>
     TerminateSession: string -> Task<unit>
     /// Read stdin until EOF, calling `post` with each `Event.StdinLine` and
     /// finally `Event.StdinClosed`. Takes the poster as a parameter instead
@@ -152,6 +155,13 @@ let internal writeRejection (stdout: StdoutWriter) (msg: RpcMessage) (reason: st
   | RpcMessage.Notification _
   | RpcMessage.Response _
   | RpcMessage.Unparseable _ -> Log.warn "[mcp-stdio] dropped an unanswerable message (%s): %s" reason (rawOf msg)
+
+/// What the bridge tells the client when the daemon behind it became a new MCP session. The daemon declares
+/// `listChanged` for all three lists in its `initialize` result, and a new build can have different ones.
+let internal listChangedNotices : string list =
+  [ """{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"""
+    """{"jsonrpc":"2.0","method":"notifications/prompts/list_changed"}"""
+    """{"jsonrpc":"2.0","method":"notifications/resources/list_changed"}""" ]
 
 [<RequireQualifiedAccess>]
 type private Cmd =
@@ -205,7 +215,18 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
           | Ok() -> ()
           | Error(ForwardError.Rejected reason) -> post mailbox (Event.RequestRejected(msg, reason))
           | Error(ForwardError.SessionInvalid reason) -> post mailbox (Event.RequestRejected(msg, reason))
-          | Error(ForwardError.Unreachable reason) -> post mailbox (Event.HttpFailed reason)
+          | Error(ForwardError.Unreachable reason) ->
+            // The daemon went away with this request in flight, and the client is owed an answer to it: the
+            // bridge no longer ends, so nothing else tells the client. The rejection is posted BEFORE the
+            // failure, because the failure moves the bridge to Reconnecting, where a rejection is a no-op.
+            post mailbox (Event.RequestRejected(msg, sprintf "the daemon became unreachable while this request was in flight (%s); the bridge is waiting for it, ask again in a few seconds" reason))
+            post mailbox (Event.HttpFailed reason)
+        | Action.Rehandshake ->
+          // The result needs no event of its own: success is the capture callback, which the mailbox turns into a
+          // new session id, and a failure leaves the held id stale, which the next request heals.
+          match! io.Rehandshake onSessionId with
+          | Ok() -> ()
+          | Error reason -> Log.warn "[mcp-stdio] re-handshake after the daemon came back failed: %s" reason
         | Action.RejectMessage(msg, reason) -> writeRejection stdout msg reason
         | Action.ReportFatal reason -> eprintfn "sagefs mcp: %s" reason
         | Action.TerminateSession sid -> do! io.TerminateSession sid
@@ -215,6 +236,7 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
         | Action.StartDaemon -> post mailbox (Event.DaemonStartFailed ex.Message)
         | Action.Probe
         | Action.ForwardToDaemon _ -> post mailbox (Event.HttpFailed ex.Message)
+        | Action.Rehandshake
         | Action.RejectMessage _
         | Action.ReportFatal _
         | Action.TerminateSession _
@@ -234,15 +256,21 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
           // The moment a session id is first captured, open the
           // server-push stream — not on bare "daemon reachable", since the
           // streamable-HTTP GET endpoint is scoped to a session.
+          // The same happens when the id is REPLACED (a re-handshake after the daemon came back): the old
+          // session's stream died with the old daemon, and the client is told that the daemon behind it is a
+          // new session, whose tools, prompts and resources may differ from the last build's.
           match state.Transport, state'.Transport with
-          | TransportState.Ready None, TransportState.Ready(Some sid) ->
+          | TransportState.Ready held, TransportState.Ready(Some sid) when held <> Some sid ->
             Task.Run<unit>(fun () ->
               task {
                 match! io.OpenServerStream sid with
                 | Ok() -> ()
-                | Error reason -> post inbox (Event.HttpFailed reason)
+                | Error reason -> post inbox (Event.ServerStreamClosed(sid, reason))
               })
             |> ignore
+            match held with
+            | Some _ -> for notice in listChangedNotices do stdout.WriteLine notice
+            | None -> ()
           | _ -> ()
           // `decide` deliberately answers a "still waiting, nothing to do
           // yet" probe result with an EMPTY action list — it's the IO
@@ -445,6 +473,41 @@ let private postOnce
         return Written
   }
 
+/// Run the bridge's own handshake against the daemon: the client's `initialize` parameters (or the empty
+/// declaration when none was seen), nothing written to stdout, and the id the daemon minted for it, if it
+/// answered with one. Shared by the heal inside `forward` and by the re-handshake after a daemon upgrade, so
+/// both mint a session the same way.
+let private mintSession (client: HttpClient) (port: int) (heldInitializeParams: string option) : Task<string option> =
+  task {
+    use content = new StringContent(reHandshakeBodyFor heldInitializeParams, Encoding.UTF8, "application/json")
+    use req = new HttpRequestMessage(HttpMethod.Post, sprintf "http://localhost:%d/" port, Content = content)
+    req.Headers.Accept.ParseAdd("application/json")
+    req.Headers.Accept.ParseAdd("text/event-stream")
+    use! resp = client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
+    return
+      match resp.IsSuccessStatusCode, resp.Headers.TryGetValues(sessionIdHeader) with
+      | true, (true, values) -> Seq.tryHead values
+      | _ -> None
+  }
+
+/// The daemon behind this bridge is back and it is a new process (an upgrade): mint a session on it with the
+/// client's own declaration and hand the id to `captureSessionId`. An `Error` says what the daemon answered
+/// instead; the messages queued behind this one still heal themselves, so a failure here costs only the push
+/// stream and the list-changed notice until the next request. A thrown exception reaches `run`'s own handler.
+let rehandshake
+  (client: HttpClient)
+  (port: int)
+  (captureSessionId: string -> unit)
+  (heldInitializeParams: string option)
+  : Task<Result<unit, string>> =
+  task {
+    match! mintSession client port heldInitializeParams with
+    | Some fresh ->
+      captureSessionId fresh
+      return Ok()
+    | None -> return Error "the daemon did not answer the re-handshake with a session id"
+  }
+
 /// POST one JSON-RPC message to the daemon's streamable-HTTP endpoint and
 /// write whatever it answers with to stdout — a single JSON object, or an
 /// SSE stream carrying one message or several before the daemon closes it.
@@ -504,15 +567,7 @@ let forward
           // client's, though, or the new session starts with fewer rights than
           // the client declared and nothing says so.
           Log.warn "[mcp-stdio] daemon no longer knows session %A (it restarted); re-running the handshake and re-sending this request" sessionId
-          use content = new StringContent(reHandshakeBodyFor heldInitializeParams, Encoding.UTF8, "application/json")
-          use req = new HttpRequestMessage(HttpMethod.Post, sprintf "http://localhost:%d/" port, Content = content)
-          req.Headers.Accept.ParseAdd("application/json")
-          req.Headers.Accept.ParseAdd("text/event-stream")
-          use! resp = client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
-          let freshSid =
-            match resp.IsSuccessStatusCode, resp.Headers.TryGetValues(sessionIdHeader) with
-            | true, (true, values) -> Seq.tryHead values
-            | _ -> None
+          let! freshSid = mintSession client port heldInitializeParams
           match freshSid with
           | Some fresh ->
             // Captured before the re-send below, and before anything that
@@ -627,6 +682,7 @@ let runMcpStdio (mcpPort: int) : Task<int> =
             | None -> ()
             forward client mcpPort stdout.WriteLine captureSessionId sessionId heldInitializeParams.Value msg
         OpenServerStream = openServerStream client mcpPort stdout
+        Rehandshake = fun captureSessionId -> rehandshake client mcpPort captureSessionId heldInitializeParams.Value
         TerminateSession = terminateSession client mcpPort
         PumpStdin = pumpStdin
         ProbeInterval = Timeouts.stdioBridgeProbeInterval }

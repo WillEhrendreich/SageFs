@@ -90,11 +90,12 @@ let tests =
         assertHolds t
         t.Bridges.[0].StartDaemonCount |> Expect.equal "never asked to start an already-running daemon" 0
 
-      testCase "daemon dies mid-session: a clear Fatal, not a hang" <| fun _ ->
+      testCase "the connection drops mid-session and the daemon answers again: the bridge is Ready, not ended" <| fun _ ->
         let t = run McpStdioBridgeGenerators.daemonDiesMidSession
+        assertHolds t
         match t.Bridges.[0].State.Transport with
-        | SageFs.McpBridge.TransportState.Fatal _ -> ()
-        | other -> failtestf "expected Fatal after the connection dies, got %A" other
+        | SageFs.McpBridge.TransportState.Ready _ -> ()
+        | other -> failtestf "expected Ready after the connection drops and the daemon answers, got %A" other
     ]
 
     testList "the twin has teeth" [
@@ -135,6 +136,58 @@ let tests =
             match daemonStartAttempted.Check t with
             | Outcome.Violated _ -> ()
             | Outcome.Holds -> failtestf "twin should violate daemon-start-attempted for seed %d" scenario.Seed
+    ]
+
+    testList "a daemon upgrade under a connected bridge (P9)" [
+      let sent (tag: int) : RpcMessage =
+        RpcMessage.Request(RpcId.N(int64 tag), "tools/list", sprintf """{"jsonrpc":"2.0","id":%d,"method":"tools/list"}""" tag)
+
+      /// Today's behaviour, the twin: the end of the push stream of the held session ends the bridge.
+      let decideEndsOnLoss (policy: Policy) (state: State) (event: Event) : State * Action list =
+        match state.Transport, event with
+        | TransportState.Ready _, Event.ServerStreamClosed(_, reason) ->
+          { state with Transport = TransportState.Fatal reason }, [ Action.ReportFatal reason; Action.Shutdown ]
+        | _ -> decide policy state event
+
+      /// A connected bridge loses its daemon, `queued` requests arrive while it is gone, `probesDown` probes find
+      /// no daemon, then one finds it. Returns the final state and every action decided on the way.
+      let outage (decideFn: Policy -> State -> Event -> State * Action list) (probesDown: int) (queued: int) =
+        let step (state: State, actions: Action list) (event: Event) =
+          let next, more = decideFn defaultPolicy state event
+          next, actions @ more
+        let lost = step ({ Transport = TransportState.Ready(Some "sid"); Pending = [] }, []) (Event.ServerStreamClosed("sid", "server stream closed"))
+        let queuedSends = [ for i in 1..queued -> Event.StdinLine(sent i) ]
+        let downProbes = [ for _ in 1..probesDown do yield Event.Probe; yield Event.ProbeResult false ]
+        List.fold step lost (queuedSends @ downProbes @ [ Event.Probe; Event.ProbeResult true ])
+
+      testPropertyWithConfig simConfig "an outage shorter than the window ends Ready, forwards every queued request once in order, and starts no daemon" <| fun () ->
+        let probesDown = Gen.choose (0, defaultPolicy.MaxReconnectProbes - 1) |> pick
+        let queued = Gen.choose (0, 5) |> pick
+        let state, actions = outage decide probesDown queued
+        state.Transport |> Expect.equal (sprintf "Ready again for %d probes down" probesDown) (TransportState.Ready(Some "sid"))
+        actions
+        |> List.choose (function Action.ForwardToDaemon m -> Some m | _ -> None)
+        |> Expect.equal "every queued request forwarded once, in arrival order" [ for i in 1..queued -> sent i ]
+        actions |> List.contains Action.StartDaemon |> Expect.isFalse "the bridge does not start a daemon while one may still come back"
+        actions |> List.contains Action.Shutdown |> Expect.isFalse "the bridge never shuts down over a lost daemon"
+        let positionOf predicate = actions |> List.tryFindIndex predicate
+        match positionOf ((=) Action.Rehandshake), positionOf (function Action.ForwardToDaemon _ -> true | _ -> false) with
+        | Some handshake, Some firstForward -> handshake < firstForward |> Expect.isTrue "the re-handshake is decided before the first queued request is forwarded"
+        | Some _, None -> ()
+        | None, _ -> failtest "a bridge that held a session id re-handshakes when the daemon is back"
+
+      testCase "an outage past the window starts one daemon and stays alive" <| fun _ ->
+        let state, actions = outage decide (defaultPolicy.MaxReconnectProbes + 5) 2
+        actions |> List.filter ((=) Action.StartDaemon) |> List.length |> Expect.equal "one start, after the window" 1
+        state.Transport
+        |> Expect.equal "Ready on the daemon the bridge started, with no id to heal because the old session died with the old daemon" (TransportState.Ready None)
+
+      testPropertyWithConfig simConfig "the twin (the bridge ends when the stream ends) is Fatal for every outage, so the property has teeth" <| fun () ->
+        let probesDown = Gen.choose (0, defaultPolicy.MaxReconnectProbes - 1) |> pick
+        let state, _ = outage decideEndsOnLoss probesDown (Gen.choose (0, 5) |> pick)
+        match state.Transport with
+        | TransportState.Fatal _ -> ()
+        | other -> failtestf "the twin should have ended the bridge, got %A" other
     ]
 
     testList "the Mcp-Session-Id capture-ordering race (issue #138)" [

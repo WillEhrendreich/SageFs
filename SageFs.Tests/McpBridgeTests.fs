@@ -4,7 +4,7 @@ open Expecto
 open Expecto.Flip
 open SageFs.McpBridge
 
-let private policy = { MaxProbeAttempts = 3 }
+let private policy = { MaxProbeAttempts = 3; MaxReconnectProbes = 4 }
 
 let private req id method =
   RpcMessage.Request(RpcId.N(int64 id), method, sprintf """{"jsonrpc":"2.0","id":%d,"method":"%s"}""" id method)
@@ -246,11 +246,17 @@ let tests =
         state.Transport |> Expect.equal "session id is now set" (TransportState.Ready(Some "abc"))
         actions |> Expect.equal "capture has no side effect of its own" []
 
-      testCase "a second capture is ignored — captured exactly once" <| fun _ ->
+      testCase "the same id captured again changes nothing" <| fun _ ->
+        let readyWithSid = { Transport = TransportState.Ready(Some "abc"); Pending = [] }
+        let state, actions = decide policy readyWithSid (Event.SessionIdCaptured "abc")
+        state |> Expect.equal "the state is untouched" readyWithSid
+        actions |> Expect.equal "no action from a repeat capture" []
+
+      testCase "a different id replaces the held one, because it is the daemon's answer to a re-handshake" <| fun _ ->
         let readyWithSid = { Transport = TransportState.Ready(Some "abc"); Pending = [] }
         let state, actions = decide policy readyWithSid (Event.SessionIdCaptured "zzz")
-        state.Transport |> Expect.equal "the original id is kept" (TransportState.Ready(Some "abc"))
-        actions |> Expect.equal "no action from a repeat capture" []
+        state.Transport |> Expect.equal "every later request carries the new id" (TransportState.Ready(Some "zzz"))
+        actions |> Expect.equal "no action of its own" []
     ]
 
     testList "a protocol-level rejection stays alive (issue #138, defect 2)" [
@@ -276,15 +282,55 @@ let tests =
     ]
 
     testList "the daemon dies mid-session" [
-      testCase "an HttpFailed while Ready becomes a clear Fatal" <| fun _ ->
+      testCase "an HttpFailed while Ready waits for the daemon and keeps the session id it held" <| fun _ ->
         let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = [] }
         let state, actions = decide policy readyState (Event.HttpFailed "connection reset")
-        match state.Transport with
-        | TransportState.Fatal reason -> reason |> Expect.stringContains "carries the underlying reason" "connection reset"
-        | other -> failtestf "expected Fatal, got %A" other
-        match actions with
-        | [ Action.ReportFatal _; Action.Shutdown ] -> ()
-        | other -> failtestf "expected ReportFatal then Shutdown — Fatal must terminate the process on its own, not hang waiting for stdin to close, got %A" other
+        state.Transport
+        |> Expect.equal "the bridge is reconnecting, not Fatal" (TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")))
+        actions |> Expect.equal "it probes at once" [ Action.Probe ]
+
+      testCase "the end of the push stream of the held session is the daemon going away" <| fun _ ->
+        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = [] }
+        let state, _ = decide policy readyState (Event.ServerStreamClosed("sid", "server stream closed"))
+        state.Transport
+        |> Expect.equal "reconnecting, holding the id" (TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")))
+
+      testCase "the end of an OLDER session's push stream says nothing about the daemon" <| fun _ ->
+        let readyState = { Transport = TransportState.Ready(Some "new"); Pending = [] }
+        let state, actions = decide policy readyState (Event.ServerStreamClosed("old", "server stream closed"))
+        state |> Expect.equal "unchanged" readyState
+        actions |> Expect.equal "nothing to do" []
+
+      testCase "a request that was in flight when the daemon went away is still answered, even when the stream's end got there first" <| fun _ ->
+        let lost = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")); Pending = [] }
+        let msg = req 5 "tools/call"
+        let state, actions = decide policy lost (Event.RequestRejected(msg, "the daemon became unreachable"))
+        state |> Expect.equal "still reconnecting" lost
+        actions |> Expect.equal "the client gets its error" [ Action.RejectMessage(msg, "the daemon became unreachable") ]
+
+      testCase "a daemon that answers again gets a re-handshake first, then the queued messages, under the new id" <| fun _ ->
+        let waiting =
+          { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(2, HeldSession.Id "stale"))
+            Pending = [ req 7 "tools/list" ] }
+        let state, actions = decide policy waiting (Event.ProbeResult true)
+        state.Transport |> Expect.equal "ready, still holding the stale id until the re-handshake replaces it" (TransportState.Ready(Some "stale"))
+        state.Pending |> Expect.isEmpty "the queue drained"
+        actions
+        |> Expect.equal "re-handshake runs before the queued request" [ Action.Rehandshake; Action.ForwardToDaemon(req 7 "tools/list") ]
+
+      testCase "a lost daemon is waited for, and one that never returns is started after MaxReconnectProbes probes" <| fun _ ->
+        let lost = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")); Pending = [] }
+        let probeOnce (s: State, started: int) =
+          let s1, a1 = decide policy s Event.Probe
+          let s2, a2 = decide policy s1 (Event.ProbeResult false)
+          s2, started + (a1 @ a2 |> List.filter ((=) Action.StartDaemon) |> List.length)
+        let beforeWindowEnds, startedEarly = List.fold (fun acc _ -> probeOnce acc) (lost, 0) [ 1 .. policy.MaxReconnectProbes - 1 ]
+        startedEarly |> Expect.equal "no daemon is started while probes still fit the window" 0
+        beforeWindowEnds |> isTerminal |> Expect.isFalse "the bridge is still alive"
+        let finalState, started = probeOnce (beforeWindowEnds, startedEarly)
+        started |> Expect.equal "the daemon is started once the window of probes has found none" 1
+        finalState.Transport
+        |> Expect.equal "now in the cold start's Starting state" (TransportState.AwaitingDaemon(DaemonReadiness.Starting 0))
 
       testCase "a DaemonStartFailed while Starting becomes a clear Fatal naming the failure" <| fun _ ->
         let starting = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Starting 1); Pending = [] }
