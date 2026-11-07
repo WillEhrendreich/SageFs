@@ -133,17 +133,15 @@ implying the command closes it.
 - **A filtered test run is never the acceptance check.** A filter that matches
   nothing prints `0 failed` and exits 0 in plain Expecto. SageFs's trust line
   says `NothingRan` or `NarrowedRun`. Only an unfiltered run counts.
-- **A reset or stop that waits a minute and then says "needs a person to
-  confirm".** `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`,
-  `switch_workflow` and `stop_app` ask a person first, except on a session your own
-  connection (or member token) created: those run at once. So this message means the
-  session is not yours (a person made it from the dashboard or an editor, another
-  connection made it, or the daemon restarted and forgot who did). Create your own
-  session instead of resetting that one. If you must act on it with nobody to answer, the
-  daemon's HTTP route on the same port does not ask: `POST /hard-reset`
-  `{"sessionId": "<id>", "rebuild": true}`, `POST /reset`,
-  `POST /api/sessions/stop`. The list is in `docs/mcp-tools.md`.
-- **Clean up.** `stop_session` on every session you created; it does not ask for those.
+- **A call that waits a minute and then says "needs a person to confirm".** Only
+  `manage_local_data` asks (clearing the local stores that belong to no session).
+  `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`, `switch_workflow` and
+  `stop_app` never ask, for any session. A `stop_session` on a session another bound
+  connection created is refused with a message saying so, which is a different thing
+  from a prompt. If you must clear local data with nobody to answer, the daemon's HTTP
+  route on the same port does not ask: `POST /api/local-data/clear?store=<store>`. The
+  list is in `docs/mcp-tools.md`.
+- **Clean up.** `stop_session` on every session you created; it does not ask.
   Kill only processes you started, by exact PID, never by name.
 
 ## Busy versus broken: the distinction that matters most

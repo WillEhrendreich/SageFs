@@ -13,7 +13,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Branch and worktree | none yet |
 | Last green commit | none yet |
 | Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: each destructive tool is `HostMustAsk` or `ServerWillAsk`. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
+| Decisions made | 2026-11-07, Will: stopping and resetting sessions are normal everyday MCP use and never prompt, for any session. The server's confirm tier is `manage_local_data` alone (`Affordances.confirmationLosses`), and the self-created-session skip (`singleSessionConfirmTools`, `SessionCreator`, `SessionActivity`, `SessionEvaluators`) is deleted. Everything below that lists six tools, a per-session `decide`, or a preview route over `{ tool, sessionId, caller }` describes the code before that change. Re-scope this item to the one tool that asks before building any of it (the other open ones are under "Decisions for Will"). |
 | Surprises | none yet |
 
 ## What done looks like

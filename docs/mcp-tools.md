@@ -36,40 +36,30 @@ every hand-typed list without a sound. The eighteen live in
 `Affordances.destructiveTools`, and a test holds them to the tools that are
 actually registered.
 
-Six of those eighteen go further and stop to ask you. A client that advertises
-MCP elicitation gets a prompt naming the tool and what it is about to take
-away, and a decline stops the call the same way a gate rejection does. The six
-are `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`,
-`switch_workflow`, `manage_local_data` and `stop_app`, because those take the
-REPL or your local state and cannot hand it back. The other twelve stay out on
-purpose: `tidy_workspace` already demands its plan id, `nudge_value` is scrubbed
-one step at a time from the editor, the cohort verbs are the loop an
-unattended agent runs in where nobody is sitting there to click, and `run_app`
-is listed as destructive but not asked about, because running the app is what
-you asked for and the REPL loss is written on the tool itself.
+One of those eighteen goes further and stops to ask you: `manage_local_data`.
+A client that advertises MCP elicitation gets a prompt naming the tool and what
+it is about to take away, and a decline stops the call the same way a gate
+rejection does. It asks because it clears the local stores SageFs keeps on your
+machine, which belong to no session, and an agent has no reason to call it in
+the middle of a task.
 
-A session the calling agent created itself, and is alone in, does not ask. If
-your connection (or your member token, which outranks the connection) made the
-session, every eval it has had came from you, and no other agent is in it now,
-then `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session` and
-`switch_workflow` run at once on it, because nobody else put anything in it.
-That lets an agent clean up after itself from a host that never shows the
-prompt (a phone on Remote Control, a headless run). A dashboard tab that only
-watches the session does not count. One that has run code in it does, and so
-does an editor that sent code over `/exec` (VS Code, Neovim, Jupyter), a
-buffer sent through `POST /api/dispatch`, and another agent that ran code there
-and has since moved on.
-`manage_local_data` acts on your machine's stores and `stop_app` stops an app
-people may be using from outside SageFs (a browser on its port, a game window),
-so both ask every time. Everything else asks as before: a session you made
-through the dashboard, the CLI or an editor, a session another connection or
-token made, one anyone else has run code in or another agent is in, a session
-the daemon has no record of (a daemon restart forgets who made what), and any
-call that names no session it can find. The match uses the connection or token
-the daemon bound to the call. The `agentName` a caller passes plays no part.
-Sub-agents that share one connection and use no tokens count as one caller, so
-they can reset each other's sessions without a prompt; give each its own
-[member token](#member-tokens-one-identity-per-agent-run) if that matters.
+The other seventeen never ask. `stop_session`, `reset_fsi_session`,
+`hard_reset_fsi_session`, `switch_workflow` and `stop_app` are normal steps of
+everyday MCP use: an agent starts a session, works in it, resets it and stops
+it. A prompt on those would fire nearly every time, because the stdio bridge
+makes a new connection per call, and it would train people to click through. So
+they run at once on any session, whoever made it and whoever has run code in it
+(a dashboard tab, an editor over `/exec`, another agent). They keep their
+`destructiveHint`, which is information on `tools/list` and not a prompt.
+`tidy_workspace` already demands its plan id, `nudge_value` is scrubbed one step
+at a time from the editor, the cohort verbs are the loop an unattended agent
+runs in where nobody is sitting there to click, and `run_app` is listed as
+destructive but not asked about, because running the app is what you asked for
+and the REPL loss is written on the tool itself.
+
+Asking is separate from refusing. `stop_session` still refuses a session another
+bound MCP connection created, and says so (see the `stop_session` row); that
+check never prompts anyone.
 
 The part worth knowing: a client that never advertised elicitation is neither
 prompted nor refused. The prompt is skipped, and the four gates ahead of it
@@ -80,18 +70,15 @@ again. If you are not being asked, that is why. `SAGEFS_CONFIRM_ANSWER_SECONDS`
 raises the wait if you read slowly; running out refuses the call rather than
 letting it through.
 
-A refusal says plainly that nothing was done and the session is still running.
+A refusal says plainly that nothing was done and your local data is untouched.
 A client that advertises elicitation but cannot answer (a headless agent, or a
-UI whose prompt never takes an answer) waits the full 60 seconds and then
-gets "needs a person to confirm it, and no answer came within 00:01:00", with
-the way out spelled out. That only happens on a session the caller did not
-create. There is no setting that turns the prompt off, so a caller with nobody
-to answer, working on a session it did not create, uses the daemon's HTTP API on
-the same port, which does not ask: `POST /api/sessions/stop` with `{"sessionId": "<id>"}` for
-`stop_session`, `POST /reset` and `POST /hard-reset` for the two resets,
-`POST /api/sessions/<id>/workflow`, `POST /api/sessions/<id>/stop-app` and
-`POST /api/local-data/clear?store=<store>` for the rest. (`sagefs stop` stops
-the whole daemon, not one session.)
+UI whose prompt never takes an answer) waits the full 60 seconds on
+`manage_local_data` and then gets "needs a person to confirm it, and no answer
+came within 00:01:00", with the way out spelled out. There is no setting that
+turns the prompt off, so a caller with nobody to answer uses the daemon's HTTP
+API on the same port, which does not ask:
+`POST /api/local-data/clear?store=<store>`. (`sagefs stop` stops the whole
+daemon, not one session.)
 
 The full advertised set is 72 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
@@ -256,7 +243,7 @@ columns from 0 (counted in characters, not bytes), and `endColumn` is one past t
 | `create_bare_session` | Create an isolated project-free REPL. It never auto-discovers. |
 | `list_sessions` | List active sessions. Every entry ends with a `Source:` line: in sync with the build, no project loaded, or the same warning `get_session_status` carries as `sourceState` when files changed after the build, a rebuild is running, or it could not be told. A session an agent created also carries an `Owner:` line above that one: whether the connection that made it is still here, or how long it has been gone, and how long the session has been idle. That is what the daemon's reaper reads (see `stop_session`). A session a person made, from the dashboard, the CLI or an editor, has no `Owner:` line. |
 | `switch_session` | Change which session your calls route to. |
-| `stop_session` | Stop a session by id. A session another MCP connection created can only be stopped by that connection. A session with no record of a maker can be stopped from any connection, after the usual confirmation: one made from the dashboard, the CLI or an editor, or one a daemon restart resumed (the record of makers lives in memory). If the creating connection never does, the daemon stops the session for you once the connection has been gone for 12 hours and the session has been idle for 12 hours (`SAGEFS_ABANDONED_SESSION_HOURS`, `0` turns it off). It writes one log line saying why, and `list_sessions` shows the stop under the live sessions. A session with no record of an agent maker, one made from the dashboard, the CLI or an editor, is never stopped this way. Stop your own sessions when you are done. |
+| `stop_session` | Stop a session by id. A session another MCP connection created can only be stopped by that connection. A session with no record of a maker can be stopped from any connection, and nobody is asked first: one made from the dashboard, the CLI or an editor, or one a daemon restart resumed (the record of makers lives in memory). If the creating connection never does, the daemon stops the session for you once the connection has been gone for 12 hours and the session has been idle for 12 hours (`SAGEFS_ABANDONED_SESSION_HOURS`, `0` turns it off). It writes one log line saying why, and `list_sessions` shows the stop under the live sessions. A session with no record of an agent maker, one made from the dashboard, the CLI or an editor, is never stopped this way. Stop your own sessions when you are done. |
 | `reset_fsi_session` | Soft reset: clears definitions, keeps loaded DLLs. |
 | `hard_reset_fsi_session` | Full reset: rebuilds the project, reloads, starts fresh. Needed after `.fsproj` or package changes. With `rebuild=true` it answers at once and builds in the background; call `get_session_status` with `wait_seconds=60` to wait for the outcome. In a repo that builds its own SageFs.Core, the build compiles against that Core, not the daemon's. |
 | `get_available_projects` | Discover `.fsproj` / `.sln` / `.slnx` files under a directory. |
@@ -418,7 +405,7 @@ sounds like a chore anyway.
 | `get_friction_summary` | Compact summary of recorded MCP friction. |
 | `get_friction_report` | Structured JSON report of MCP pain points. |
 | `report_friction` | Record structured feedback about a confusing tool call. |
-| `manage_local_data` | See what SageFs stores under its data dir (rows, bytes, oldest row, retention rules), or clear it. |
+| `manage_local_data` | See what SageFs stores under its data dir (rows, bytes, oldest row, retention rules), or clear it. Clearing is the one call that asks a person first, on a client that can be asked. |
 
 ## Leases for expensive work
 

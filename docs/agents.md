@@ -41,7 +41,7 @@ The other files in the folder are read only when their trigger comes up:
 - `testing.md`: running tests and slow gates
 - `leases.md`: leases before a full build, test run or app run
 - `troubleshooting.md`: stale daemons, busy versus broken, when the REPL fights you,
-  and the "needs a person to confirm" wait (a session your own connection made never asks)
+  and the "needs a person to confirm" wait (only `manage_local_data` asks; stopping and resetting sessions never does)
 - `claude-code.md`: permission prompts and auto mode
 - `agents.md`: briefing a sub-agent
 

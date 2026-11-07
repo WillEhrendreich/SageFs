@@ -375,10 +375,10 @@ let items : Item list =
       [ "docs/mcp-tools.md"; "docs/plans/tokens-survive-a-restart.md" ]
       "Tokens live in the daemon's memory, so a restart drops every one and the orchestrator mints new ones. Keeping their hashes would let a run survive a restart, but only in a store that is not the cohort ledger, and I'd rather see someone need it first."
 
-    item "ask-before-a-destructive-tool-runs" "Ask you before a destructive tool runs" Agents Later
+    item "ask-before-a-destructive-tool-runs" "Ask you before a tool clears your local data" Agents Later
       (landmark "SageFs/McpServer.fs" "confirmationStep")
       [ "docs/mcp-tools.md" ]
-      "The server asks you itself now, over MCP's own elicitation request: a confirm-tier tool stops after the four gates already there and before its body, names what it is about to take away, and a decline refuses the call the way a gate rejection does. The tier sits on the same `ToolName` the authority gate reads rather than in another string list, and it says out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into. A session an agent created itself does not ask when that same connection (or member token) resets or stops it, because nobody else put anything in it. Sessions a person or another agent made still ask."
+      "The server asks you itself, over MCP's own elicitation request, for exactly one tool: `manage_local_data`, which clears the local stores SageFs keeps on your machine. Those belong to no session and an agent has no reason to clear them mid-task. The call stops after the four gates already there and before its body, names what it is about to take away, and a decline refuses it the way a gate rejection does. The tier sits on the same `ToolName` the authority gate reads rather than in another string list, and it says out loud that a client which never offers elicitation gets no prompt at all, which is the case the stdio bridge re-handshakes into. `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`, `switch_workflow` and `stop_app` never ask, for any session: an agent calls them as normal steps of its loop, and a prompt on a routine step gets clicked through. They stay marked destructive on `tools/list`, which is information and not a prompt."
 
     // ---- Exploring: ideas, no promise ----
 
@@ -480,7 +480,7 @@ let items : Item list =
     item "confirmation-gates-in-every-agent-host" "Confirmation gates in every agent host" Agents Exploring
       NoLandmarkYet
       [ "docs/agents.md"; "docs/plans/confirmation-gates-in-every-agent-host.md" ]
-      "Where a host can prompt before a tool call, a small plugin can hold the destructive list and ask there, which covers the clients a server-side prompt can never reach. It would be one shared policy compiled into four thin shells rather than four copies of the same list, and none of the four hosts has been run yet."
+      "Where a host can prompt before a tool call, a small plugin could ask there, which covers the clients a server-side prompt can never reach. Since 2026-11-07 the server asks about one tool only, `manage_local_data`, because stopping and resetting sessions are normal steps of the loop and no longer prompt anywhere. That shrank this item to one tool, so the plan needs re-scoping before anyone builds it. None of the hosts has been run yet."
 
     item "bake-the-build-env-into-the-tooling" "Builds SageFs starts no longer die on a leftover MSBuild node" Platform Next
       (landmark "SageFs.Core/ProcessEnvironment.fs" "buildEnvironment")
