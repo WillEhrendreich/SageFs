@@ -104,6 +104,11 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [A notebook over a live session](a-notebook-over-a-live-session.md) | L, M for the first slice | `CellSplitter.split` on `;;` and blank-line files |
 | [Faster time to Ready](faster-time-to-ready.md) | S to measure, S to M for the first change | the plan segment excludes FSI creation |
 | [Rider, Zed, Helix and Emacs](editors-beyond-vscode-and-neovim.md) | S for the contract, M for Emacs, L for Rider | the thin-editor endpoints exist and are mapped |
+| [Eval output shaped for the agent that reads it](eval-output-for-an-llm.md) | S for head and tail, M for the print limits | a clipped result keeps its head and its tail |
+| [A cost line on a slow or allocation-heavy eval](eval-cost-line.md) | S | a fast small eval carries no line |
+| [A profile tool](profile-tool.md) | M | the rows of a CPU report sum to the sampled total |
+| [Session options you can set](session-options.md) | M | a Server GC choice becomes `DOTNET_gcServer=1` in the host's environment |
+| [A head-to-head benchmark for REPL servers](repl-benchmark-against-other-tools.md) | M, then one run per page | a result with no machine, load or version is refused |
 
 ### Agents and cohorts
 
@@ -123,6 +128,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [A cohort across machines](a-cohort-across-machines.md) | L | a duplicated `AcquireClaim` envelope returns the first outcome |
 | [Ask the live codebase in F#](ask-the-live-codebase-in-fsharp.md) | M to L, then S | every role's verdict equals `admitTool` for the matching tool |
 | [Drive real agents as cohort members](drive-real-agents-as-members.md) | L | an edit at `../outside.fs` is rejected `OutsideCheckout` |
+| [A small tool list for a first session](small-default-tool-list.md) | M, M | the registered tools' definitions weigh no more than the recorded budget |
 
 ### Dashboard
 
@@ -142,6 +148,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [Start on login for Windows](start-on-login-windows.md) | S for files and tests, M with a Windows check | the task definition parses |
 | [The getter sandbox beyond Linux x86-64](getter-sandbox-beyond-linux.md) | M | an aarch64 program refuses socket and connect |
 | [Admit heavy work by measured cost](admit-heavy-work-by-measured-cost.md) | M | a 6 GiB build is queued with numbers when 5 GiB is free |
+| [One command to set SageFs up in your agent](one-command-stdio-setup.md) | S for snippets, M with the command | every client's snippet is valid JSON and names `sagefs mcp` |
 
 ## Where to start for hot reload and live testing
 

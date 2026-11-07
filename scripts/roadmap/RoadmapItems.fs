@@ -235,6 +235,44 @@ let items : Item list =
       [ "docs/mcp-tools.md" ]
       "SageFs could say who may call a tool, but nothing said what calling it does to your work. There is now one `Set<ToolName>` on the same DU the authority gate reads, held to the registered tools by a test so a renamed tool cannot leave a stale name behind, and `tools/list` publishes it as MCP's own `destructiveHint`, so a client asks the server instead of keeping a copy of the list itself."
 
+    // ---- Opened 2026-11-07 after reading FsiMcp (github.com/OnurGumus/FsiMcp, by Onur Gumus), a small F# REPL server for
+    // agents. Will's rule is that SageFs does not lose to another tool on something a user feels. The first four are in
+    // Next because a stranger meets them in the first minutes, and the benchmark is how the rest get checked.
+    item "small-default-tool-list" "A small tool list for a first session" Agents Next
+      NoLandmarkYet
+      [ "docs/mcp-tools.md"; "docs/plans/small-default-tool-list.md" ]
+      "A client that connects to SageFs is shown 72 tools, 111,052 characters of definitions, about 27,800 tokens by the usual rough count, before its first message. FsiMcp, a seven-tool F# REPL server I read the day it appeared, declares 5,606 characters, about 1,400. Even the ten tools a first session needs weigh 22,365 today, so cutting tools is not enough and the descriptions have to shrink too. I want a starter list for someone who has done nothing else, chosen through the authorization on the request so it stays inside the MCP rule that a list never varies by connection, with every other tool still callable by name and found through `discover_features`. A size ratchet that can only go down holds the whole catalog. It ships opt-in, and only becomes the default once a measured pass rate on a fixed task set is no lower than with today's list."
+
+    item "one-command-stdio-setup" "One command to set SageFs up in your agent" Platform Next
+      NoLandmarkYet
+      [ "docs/mcp-tools.md"; "Readme.md"; "docs/plans/one-command-stdio-setup.md" ]
+      "The durable way to register SageFs is `claude mcp add sagefs -- sagefs mcp`, and the docs already say why an HTTP registration loses its tools when the daemon restarts: the session id lives in the daemon's memory and the client never asks for a new one. What is missing is the rest of the first minute. There is a Claude Code command and one raw JSON block, nothing for VS Code's differently shaped file, and the skill that keeps an agent off `dotnet build` is a separate command. I plan `sagefs setup`, which prints or writes the right snippet for Claude Code, VS Code, Cursor and Claude Desktop, installs the skill and runs the check, with the docs page generated from the same code. From nothing to a first eval takes three shell commands and five tool calls today, against two and one for FsiMcp; the seconds come from the benchmark, not from me guessing."
+
+    item "eval-output-for-an-llm" "Eval output shaped for the agent that reads it" Repl Next
+      NoLandmarkYet
+      [ "docs/mcp-tools.md"; "docs/plans/eval-output-for-an-llm.md" ]
+      "Part of this is already here. A result over 4,000 characters is cut, with a note that the whole value is still bound as `it`, and `printfn` from any thread cannot reach the MCP stream because the bridge and the host never share it. What is left: the cut keeps the start and drops the end, where an error or the last value usually sits; both kinds of session print with FSI's own limits, so a `let` of a large value echoes up to the cap every time; and I have not checked whether output a background thread writes between calls reaches the agent's next reply. I plan to keep head and tail, set print limits once for both session kinds, and pin the between-calls case with a test that drives the real stdio bridge. Echoing only the type of a `let` waits for a measurement."
+
+    item "repl-benchmark-against-other-tools" "A head-to-head benchmark for REPL servers" Docs Next
+      NoLandmarkYet
+      [ "docs/repl-loop-benchmarks.md"; "docs/plans/repl-benchmark-against-other-tools.md" ]
+      "I want to be able to say where SageFs is ahead of another REPL server and where it is behind, with numbers I can defend. The harness drives each server over stdio on the same small project: time to ready, first and follow-up eval, rebuild and continue, a hang, a stack overflow, a failed build, tool-list tokens, and steps from nothing to a first eval. It runs only on a quiet machine, refuses to record a number without the machine, load and versions, and publishes a dated page that credits each tool's author and links each loss to its plan. FsiMcp is the first comparison. Running someone else's package needs my go and a sandbox, so the plan says how, and no timing is written until then."
+
+    item "eval-cost-line" "A cost line on a slow or allocation-heavy eval" Repl Later
+      NoLandmarkYet
+      [ "docs/plans/eval-cost-line.md" ]
+      "FsiMcp ends an eval that took half a second or allocated 100 MB with one line of time, bytes allocated and GC counts, which tells an agent comparing two versions of a function which one did less. SageFs times every eval on the daemon, but that time includes the queue and the wire, and nothing records bytes or collections, so an agent has no such line. The wrapper in `Instrumentation.fs` that would have recorded eval durations has no caller. I plan to read the counters in the host around the eval, return them on the wire as typed fields, and print a line only above a threshold so a light eval costs no extra tokens. Whether to count the whole process or only the eval thread is something I will measure first."
+
+    item "profile-tool" "A profile tool: where the time and allocations went" Repl Later
+      NoLandmarkYet
+      [ "docs/plans/profile-tool.md" ]
+      "FsiMcp has a `profile` tool that runs your F# like an eval and reports where CPU time or allocations went, recorded over EventPipe from outside the process that runs your code. SageFs has nothing like it, and an agent that wonders why an eval is slow has to guess. I plan the same shape: methods by self time, your own code by total time, bytes by type and by the nearest frame of yours, recorded from the worker against the FSI host's process id, with the diagnostics libraries never loaded into the host. It adds two Microsoft packages, which I want to talk about first, and it is classed as an eval tool so a role without eval never sees it."
+
+    item "session-options" "Session options you can set" Repl Later
+      NoLandmarkYet
+      [ "docs/configuration.md"; "docs/plans/session-options.md" ]
+      "FsiMcp lets you set Server GC, an artifacts path that keeps build output out of the project, environment variables for the session process, and a prelude. SageFs already has the prelude, as `.SageFs/init.fsx`. It has no Server GC setting and no artifacts path for its own builds, and the host's environment list has a slot that nothing a user writes can reach. I also found that `config.fsx` accepts `InitScript` and `DefaultArgs` and I could not find anything that reads them, so the first step is a probe that settles whether they do anything. Then each option becomes one named field with a closed type, refused with a reason when it cannot be honored, and checked from inside a real session."
+
     // ---- Later: months to a year ----
 
     item "type-change-keeps-state" "Type changes keep your running state" HotReload Later
