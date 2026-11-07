@@ -59,8 +59,9 @@ module SettingsStore =
       Map.empty
 
   /// Atomically replace a layer file with `m` (tmp + move), creating the
-  /// directory if needed.
-  let private writeLayer (path: string) (m: Map<string, string>) : Result<unit, ConfigError> =
+  /// directory if needed. Public so a simulation can run the read and the write of an edit as two steps; the
+  /// product only reaches it through `update`, which holds the lock across both.
+  let commit (path: string) (m: Map<string, string>) : Result<unit, ConfigError> =
     try
       let dir = Path.GetDirectoryName path
       match String.IsNullOrEmpty dir || Directory.Exists dir with
@@ -76,14 +77,54 @@ module SettingsStore =
       Ok ()
     with ex -> Error (PersistFailed (sprintf "failed to write %s: %s" path ex.Message))
 
+  /// One edit of a layer, as data, so the read-modify-write can be driven step by step.
+  type LayerChange =
+    | SetValue of key: string * raw: string
+    | ClearValue of key: string
+
+  /// The layer after one change. Clearing an absent key changes nothing.
+  let applyChange (change: LayerChange) (layer: Map<string, string>) : Map<string, string> =
+    match change with
+    | SetValue(key, raw) -> Map.add key raw layer
+    | ClearValue key -> Map.remove key layer
+
+  /// Every edit reads a layer, changes it and writes it back, and two of them at once (two tabs saving different keys)
+  /// would each write the layer they read and drop the other's key. The lock makes the three steps one. The process is
+  /// the unit: the daemon is the only writer of its own layer files while it runs.
+  let private gate = obj ()
+
+  /// What a layer file that cannot be read is saved as before a write replaces it, so a hand-edited file with a typo
+  /// keeps the person's other keys somewhere they can read them.
+  let corruptCopyPath (path: string) : string = path + ".corrupt"
+
+  /// Apply one change to a layer file under the lock. A layer that cannot be read is replaced, as it always was, and its
+  /// bytes are kept beside it first (`corruptCopyPath`), so saving from the page repairs the file without destroying
+  /// what was in it.
+  let update (path: string) (change: LayerChange) : Result<unit, ConfigError> =
+    lock gate (fun () ->
+      let layer =
+        match readLayerChecked path with
+        | LayerRead.Layer layer -> Ok layer
+        | LayerRead.Unreadable reason ->
+          try
+            File.Copy(path, corruptCopyPath path, true)
+            Ok Map.empty
+          with
+          | :? IOException as ex -> Error (PersistFailed (sprintf "%s It could not be kept as %s: %s" reason (corruptCopyPath path) ex.Message))
+          | :? UnauthorizedAccessException as ex -> Error (PersistFailed (sprintf "%s It could not be kept as %s: %s" reason (corruptCopyPath path) ex.Message))
+      match layer with
+      | Error why -> Error why
+      | Ok layer ->
+        let changed = applyChange change layer
+        match changed = layer with
+        | true -> Ok ()
+        | false -> commit path changed)
+
   /// Set (or overwrite) one key in a layer, preserving every other key.
   let setKey (path: string) (key: string) (rawValue: string) : Result<unit, ConfigError> =
-    readLayer path |> Map.add key rawValue |> writeLayer path
+    update path (SetValue(key, rawValue))
 
   /// Clear one key from a layer so its value falls back to the next-lower
   /// layer. Clearing an absent key is a no-op success.
   let clearKey (path: string) (key: string) : Result<unit, ConfigError> =
-    let m = readLayer path
-    match Map.containsKey key m with
-    | false -> Ok ()
-    | true -> m |> Map.remove key |> writeLayer path
+    update path (ClearValue key)

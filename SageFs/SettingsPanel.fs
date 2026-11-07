@@ -26,7 +26,24 @@ module SettingsPanel =
   type SettingRow = {
     Descriptor: SettingDescriptor
     Resolved: Result<Provenance, ConfigError>
+    /// What the subsystem is using now, read from the consumer, so the row can say when it differs from what is saved.
+    InUse: InUse
+    /// Whether an environment variable or a flag wins over what was saved, and which.
+    Override: SettingsCatalog.OverrideNote
   }
+
+  /// A row for one descriptor: resolved across the files, the environment and the flags, with the in-use value read
+  /// from its consumer. The IO is the layer file reads and the consumer read; the inputs are the caller's.
+  let rowFor (inputs: ExternalInputs) (paths: ConfigPaths) (d: SettingDescriptor) : SettingRow =
+    let resolved = SettingsCatalog.resolveWith inputs paths d
+    match resolved with
+    | Ok p ->
+      { Descriptor = d
+        Resolved = resolved
+        InUse = SettingsCatalog.inUse d p
+        Override = SettingsCatalog.overrideNote d p }
+    | Error _ ->
+      { Descriptor = d; Resolved = resolved; InUse = InUseSameAsSaved; Override = SettingsCatalog.NotOverridden }
 
   /// The outcome of the last edit, shown as a banner after a morph. A DU (not a
   /// bool/string option) so success and rejection each carry their own detail.
@@ -63,9 +80,16 @@ module SettingsPanel =
     let label, cls, tip =
       match a with
       | Live -> (Glyphs.lead Glyph.Live + "live"), "settings-chip settings-chip-live", "Takes effect immediately."
-      | RestartRequired -> "⟳ restart", "settings-chip settings-chip-restart", "Saved now; applies on the next restart."
-      | Guarded -> (Glyphs.lead Glyph.Warn + "guarded"), "settings-chip settings-chip-guarded", "Editing is guarded (e.g. the loopback bind-host RCE guard)."
+      | RestartRequired -> "restart", "settings-chip settings-chip-restart", "Saved now; applies on the next restart."
+      | ReadOnly reason -> "read-only", "settings-chip settings-chip-readonly", ReadOnlyReason.describe reason
     Elem.span [ Attr.class' cls; Attr.title tip ] [ Text.enc label ]
+
+  /// What saving a value does, in a sentence, so a row never leaves the person guessing when it applies.
+  let private effectLine (a: SettingApplicability) : string =
+    match a with
+    | Live -> "Saving applies it now."
+    | RestartRequired -> "Saving keeps it. It applies after the daemon restarts."
+    | ReadOnly reason -> ReadOnlyReason.describe reason
 
   /// A provenance badge naming the layer the effective value came from.
   let private sourceBadge (source: ConfigLayer) : XmlNode =
@@ -75,7 +99,34 @@ module SettingsPanel =
       | LGlobal -> "settings-badge settings-badge-global"
       | LRepo -> "settings-badge settings-badge-repo"
       | LSession -> "settings-badge settings-badge-session"
+      | LEnvironment -> "settings-badge settings-badge-environment"
+      | LCommandLine -> "settings-badge settings-badge-flag"
     Elem.span [ Attr.class' cls ] [ Text.enc (ConfigLayer.label source) ]
+
+  /// The sentence under a value when an environment variable or a flag wins over what was saved.
+  let private overrideLine (render: SettingValue -> string) (note: SettingsCatalog.OverrideNote) : XmlNode =
+    match note with
+    | SettingsCatalog.NotOverridden -> Elem.span [] []
+    | SettingsCatalog.OverriddenBy(layer, name, saved) ->
+      let how =
+        match layer with
+        | LCommandLine -> sprintf "while the daemon runs with %s" name
+        | LEnvironment | LDefault | LGlobal | LRepo | LSession -> sprintf "while %s is set" name
+      Elem.div
+        [ Attr.class' "settings-override" ]
+        [ Text.enc (sprintf "Saved %s. Ignored %s." (render saved) how) ]
+
+  /// The sentence that says what the subsystem is using when that differs from what the layers resolve to.
+  let private inUseLine (d: SettingDescriptor) (p: Provenance) (inUse: InUse) : XmlNode =
+    match inUse with
+    | InUseSameAsSaved -> Elem.span [] []
+    | InUseDiffers value ->
+      let text =
+        match p.Source, d.Applicability with
+        | LDefault, _ -> sprintf "In use now: %s." (d.Render value)
+        | _, Live -> sprintf "In use now: %s." (d.Render value)
+        | _, (RestartRequired | ReadOnly _) -> sprintf "In use now: %s. The saved value applies after a restart." (d.Render value)
+      Elem.div [ Attr.class' "settings-inuse" ] [ Text.enc text ]
 
   /// The per-layer base-vs-override line: when more than one layer sets a
   /// value, show each layer's value so the override is explicit (requirement
@@ -98,16 +149,26 @@ module SettingsPanel =
   /// `Ds.*` builders — no hand-written data-* strings.
   let private editControl (d: SettingDescriptor) (p: Provenance) : XmlNode =
     let sigName = signalName d.Key
-    let current = d.Render p.Effective
+    // What a file holds, highest layer last. The input starts from it, so an environment variable that wins does not
+    // overwrite the box with its own value; Reset is offered only when a file holds something to clear.
+    let savedInFiles =
+      p.PerLayer
+      |> List.filter (fun (layer, _) ->
+        match layer with
+        | LGlobal | LRepo -> true
+        | LDefault | LSession | LEnvironment | LCommandLine -> false)
+      |> List.tryLast
+    let current =
+      match savedInFiles with
+      | Some(_, saved) -> d.Render saved
+      | None -> d.Render p.Effective
     match d.Applicability with
-    | Guarded ->
-      Elem.span [ Attr.class' "settings-guarded-note" ] [ Text.raw "guarded — edit via config, not casually" ]
+    | ReadOnly _ -> Elem.span [] []
     | Live | RestartRequired ->
-      // Reset is offered only when a layer above default set the value.
       let resetButton =
-        match p.Source with
-        | LDefault -> Elem.span [] []
-        | LGlobal | LRepo | LSession ->
+        match savedInFiles with
+        | None -> Elem.span [] []
+        | Some _ ->
           Elem.button
             [ Attr.class' "settings-btn settings-btn-clear"
               Ds.onClick (Ds.post (sprintf "/dashboard/settings/clear/%s" sigName)) ]
@@ -137,6 +198,8 @@ module SettingsPanel =
             Elem.span [ Attr.class' "settings-effective" ] [ Text.enc (d.Render p.Effective) ]
             sourceBadge p.Source
             perLayerLine d.Render p ]
+          overrideLine d.Render row.Override
+          inUseLine d p row.InUse
           editControl d p ]
       | Error e ->
         [ Elem.div [ Attr.class' "settings-value settings-value-error" ] [
@@ -145,7 +208,8 @@ module SettingsPanel =
       [ Elem.div [ Attr.class' "settings-row-head" ] [
           Elem.span [ Attr.class' "settings-name" ] [ Text.enc d.Name ]
           applicabilityChip d.Applicability ]
-        Elem.div [ Attr.class' "settings-desc" ] [ Text.enc d.Description ] ]
+        Elem.div [ Attr.class' "settings-desc" ] [ Text.enc d.Description ]
+        Elem.div [ Attr.class' "settings-effect" ] [ Text.enc (effectLine d.Applicability) ] ]
     Elem.div
       [ Attr.class' "settings-row"; Attr.create "data-setting-key" d.Key ]
       (head @ valueAndEdit)
@@ -174,30 +238,42 @@ module SettingsPanel =
   /// The edit-target scope toggle. Writes land in the chosen layer (repo only
   /// applies to RepoOverridable settings). Bound to the scope signal, sent with
   /// every Save/Reset @post.
-  let private scopeSelector : XmlNode =
+  /// The repo target names the directory it writes. A page opened with no session, or for a session with no
+  /// directory, has no repo layer to write, so it offers only the global target and says why.
+  let private scopeSelector (repo: RepoLayerLocation) : XmlNode =
+    let repoOption, repoNote =
+      match repo with
+      | RepoRootAt root ->
+        [ Elem.option [ Attr.value ScopeRepo ] [ Text.enc (sprintf "This repo (%s)" root) ] ], Elem.span [] []
+      | NoRepoCheckout ->
+        [], Elem.span [ Attr.class' "settings-effect" ] [ Text.raw "Open Settings from a session to edit that repo's layer." ]
     Elem.div [ Attr.class' "settings-scope" ] [
       Elem.span [ Attr.class' "settings-scope-label" ] [ Text.raw "Edit target:" ]
-      Elem.select [ Attr.class' "settings-scope-select"; Ds.bind Signals.SettingsScope ] [
-        Elem.option [ Attr.value ScopeGlobal ] [ Text.raw "Global" ]
-        Elem.option [ Attr.value ScopeRepo ] [ Text.raw "This repo" ]
-      ]
+      Elem.select [ Attr.class' "settings-scope-select"; Ds.bind Signals.SettingsScope ] (
+        Elem.option [ Attr.value ScopeGlobal ] [ Text.raw "Global" ] :: repoOption)
+      repoNote
     ]
 
-  let renderPanel (notice: PanelNotice) (rows: SettingRow list) : XmlNode =
+  let renderPanel (notice: PanelNotice) (repo: RepoLayerLocation) (rows: SettingRow list) : XmlNode =
     let groups = SettingCategory.displayOrder |> List.collect (renderGroup rows)
+    let repoDir =
+      match repo with
+      | RepoRootAt root -> root
+      | NoRepoCheckout -> ""
     Elem.div
       [ Attr.id PanelDomId; Attr.class' "panel settings-panel"
         Ds.signal (Signals.SettingsSaving, false)
-        Ds.signal (Signals.SettingsScope, ScopeGlobal) ]
+        Ds.signal (Signals.SettingsScope, ScopeGlobal)
+        Ds.signal (Signals.SettingsRepoDir, repoDir) ]
       [ Elem.h2 [] [ Text.raw "Settings" ]
-        scopeSelector
+        scopeSelector repo
         noticeBanner notice
         Elem.div [ Attr.class' "settings-groups" ] groups ]
 
   /// The full standalone page `GET /dashboard/settings` serves. Includes the
   /// self-hosted, pinned Datastar bundle so the Phase-B2 edit controls work,
   /// and the shared dashboard stylesheet.
-  let renderPage (rows: SettingRow list) : XmlNode =
+  let renderPage (repo: RepoLayerLocation) (rows: SettingRow list) : XmlNode =
     Elem.html [ Attr.lang "en" ] [
       Elem.head [] [
         yield! DashboardFragments.pageHeadMetas
@@ -208,7 +284,7 @@ module SettingsPanel =
       Elem.body [] [
         Elem.div [ Attr.class' "settings-page" ] [
           Elem.p [] [ Elem.a [ Attr.href "/dashboard" ] [ Text.raw "← Dashboard" ] ]
-          renderPanel Quiet rows
+          renderPanel Quiet repo rows
         ]
       ]
     ]

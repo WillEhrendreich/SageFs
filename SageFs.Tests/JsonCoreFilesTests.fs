@@ -204,7 +204,8 @@ let tests =
           File.WriteAllText(path, "[1, 2, 3]")
           SettingsStore.readLayer path |> Expect.isEmpty "wrong shape reads as empty"
           SettingsStore.setKey path "a.key" "one" |> Expect.isOk "set"
-          SettingsStore.readLayer path |> Expect.equal "repaired" (Map.ofList [ "a.key", "one" ]))
+          SettingsStore.readLayer path |> Expect.equal "repaired" (Map.ofList [ "a.key", "one" ])
+          File.ReadAllText (SettingsStore.corruptCopyPath path) |> Expect.equal "the old bytes are kept beside it" "[1, 2, 3]")
     ]
 
     testList "WarmupReplayCache (warmup-replay-cache.json)" [

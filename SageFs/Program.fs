@@ -22,7 +22,12 @@ do
     |> Array.exists (fun a -> a = "--help" || a = "-h" || a = "--version" || a = "-v")
   match asksForNothing with
   | true -> ()
-  | false -> MachineStartup.establish (DataDirChoice.dataDirectory ()) |> ignore
+  | false ->
+    // What the Settings page saved becomes the environment this process and its workers start from, before the tier
+    // is worked out (a saved tier is a person's choice, like the variable) and before `Timeouts` is first read.
+    // It reads the layer file and nothing else: `SettingsBootstrap` and `EnvBackedSettings` do not touch `Timeouts`.
+    SettingsBootstrap.importSaved (DataDirChoice.dataDirectory ()) |> ignore
+    MachineStartup.establish (DataDirChoice.dataDirectory ()) |> ignore
 
 /// Wraps a TextWriter to normalize lone LF to CRLF.
 /// Some console modes on Windows cause \n alone to not carriage-return.
@@ -255,6 +260,8 @@ let runDaemon (args: string array) =
   | Ok bindHost ->
   let mcpPort = resolveMcpPort args
   let flags = Args.DaemonFlags.parse (Array.toList args)
+  // What this daemon was started with, so the Settings page can show the port it bound and the flags in force.
+  SettingsBootstrap.recordLaunch mcpPort (Array.toList args)
   match resolveOwnership args Environment.CurrentDirectory with
   | Error errors ->
     eprintfn "%s" (describeOwnershipRefusal errors)

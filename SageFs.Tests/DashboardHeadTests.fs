@@ -15,7 +15,7 @@ let private shell : string =
   Dashboard.renderShell "0.0.0" "client-1" "" "" (Elem.div [] []) |> renderNode
 
 let private settings : string =
-  SettingsPanel.renderPage [] |> renderNode
+  SettingsPanel.renderPage SageFs.NoRepoCheckout [] |> renderNode
 
 let private headOf (page: string) : string =
   let start = page.IndexOf "<head"

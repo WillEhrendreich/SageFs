@@ -52,6 +52,7 @@ let run
         RedirectStandardError = false)
     // This process worked its own tier out and published it; the daemon works out its own, from the same profile.
     MachineStartup.withoutDerivedTier psi.Environment
+    SettingsBootstrap.withoutImported psi.Environment
     psi.Environment["SAGEFS_SUPERVISED"] <- "1"
     psi.Environment["SAGEFS_RESTART_COUNT"] <- state.RestartState.RestartCount.ToString()
     let proc = Process.Start(psi)

@@ -237,6 +237,8 @@
         <Compile Include="RewriteValidationInvariants.fs" />
         <Compile Include="RetentionSim.fs" />
         <Compile Include="RetentionSimInvariants.fs" />
+        <Compile Include="SettingsStoreSim.fs" />
+        <Compile Include="SettingsStoreSimInvariants.fs" />
         <!-- sagefs mcp stdio bridge: startup-race DST folding the real
              McpBridge.decide for several independent bridge instances against
              one shared, seeded daemon-liveness oracle; a twin reproduces a

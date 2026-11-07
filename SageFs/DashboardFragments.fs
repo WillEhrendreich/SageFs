@@ -2513,7 +2513,10 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         // not up here by app-level settings — see the sidebar-header below.
         Elem.a
           [ Attr.class' "expand-toggle-btn"
-            Attr.href "/dashboard/settings"
+            // The session in view goes along, so "this repo" on the Settings page is that session's directory.
+            Attr.href (match snap.SessionId with
+                       | "" -> "/dashboard/settings"
+                       | id -> sprintf "/dashboard/settings?session=%s" (System.Uri.EscapeDataString id))
             Attr.create "aria-label""Runtime settings"
             Attr.style "text-decoration:none;display:inline-flex;align-items:center;justify-content:center;" ]
           [ textEnc (Glyphs.text Glyph.Settings) ]

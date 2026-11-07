@@ -329,6 +329,7 @@ let startDaemonProcess (mcpPort: int) : Task<Result<unit, string>> =
         )
       // This process worked its own tier out and published it; the daemon works out its own, from the same profile.
       MachineStartup.withoutDerivedTier psi.Environment
+      SettingsBootstrap.withoutImported psi.Environment
       psi.ArgumentList.Add("--mcp-port")
       psi.ArgumentList.Add(string mcpPort)
       ownerArguments (DaemonPort.configured ()) mcpPort (Process.GetCurrentProcess().Id)

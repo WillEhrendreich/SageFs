@@ -34,7 +34,9 @@ let reflectionReadModeSetting : SettingDescriptor =
         match v with
         | VEnum e -> EnumValue.value e
         | _ -> ""
-    Apply = ignore }
+    Apply = ignore
+    External = NoExternalSource
+    Current = InUseReadEachTime }
 
 /// Rule 2's tiering choice, as a setting: RestartRequired because it's an
 /// env var the isolated host only reads when the process starts. Read
@@ -62,7 +64,9 @@ let tieredCompilationSetting : SettingDescriptor =
         match v with
         | VEnum e -> EnumValue.value e
         | _ -> ""
-    Apply = ignore }
+    Apply = ignore
+    External = NoExternalSource
+    Current = InUseReadEachTime }
 
 /// The reflection settings a new session starts with, from the config layers
 /// at `paths`. A value that doesn't parse falls back to the default and says

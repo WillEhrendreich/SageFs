@@ -305,6 +305,8 @@ module Signals =
   let [<Literal>] SettingsSaving = "settingsSaving"
   /// Which layer a Settings edit targets: "global" or "repo" (Phase C1).
   let [<Literal>] SettingsScope = "settingsScope"
+  /// The directory a "this repo" Settings edit writes to, set by the page from the session it was opened for.
+  let [<Literal>] SettingsRepoDir = "settingsRepoDir"
   let [<Literal>] LiveTestingLoading = "liveTestingLoading"
   let [<Literal>] TempLoading = "tempLoading"
   let [<Literal>] Theme = "theme"

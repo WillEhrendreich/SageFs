@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress (step 7 of 8) |
 | Size | M |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: a saved per-test timeout is in force after a restart. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | `worktree-agent-aeee5e5c5dad3fa70`, `/home/will/Work/SageFs/.claude/worktrees/agent-aeee5e5c5dad3fa70` |
+| Last green commit | see the branch log; the first commit of this item carries the core, the page, the simulation and the browser journey |
+| Next action | Steps 1 to 5, 7 and 8 are done for ranks 1 to 5 (the browser journey covers a subset of the matrix: default, saved, after restart, environment override, flag and read-only for five rows; see "Browser journey" below for what it has and has not run). Give the rank 7 retention variables rows (they need a day-sized duration type, `WaitLimit` stops at 24 hours). 68 `SAGEFS_*` variables read in `Timeouts.fs` and `SageFsConfig.fs` still have no row; the count is `NotEditableBudget.budget` in `SettingsExternalTests.fs` and goes down as rows land. |
+| Decisions made | 2026-11-07, taken from this plan's recommendations by the implementing agent, Will not yet asked: (1) option A, saved values imported into the process environment at start (`SettingsBootstrap.importSaved`), because workers inherit the environment; (2) an edit under an overriding variable or flag is accepted and the row says "Saved X. Ignored while NAME is set."; (3) bind host and identity policy stay read-only, and the bind host row now reads `SAGEFS_BIND_HOST`. |
+| Surprises | See "Surprises" below. |
 
 ## What done looks like
 
@@ -225,3 +225,37 @@ journey and one simulation. Ranks 6 to 8 are S each afterwards.
 - Should an edit be refused or accepted when an environment variable overrides it? Recommend accepted, with the row saying it is
   ignored until the variable is unset.
 - Keep bind host and identity policy read-only? Recommend yes, and correct the roadmap sentence.
+
+## Measure first: results (2026-11-07)
+
+- When does `Timeouts` initialise in the `sagefs` exe? It does not initialise before `main`: a library file's values run the first time something in that file is used, and a top-level `do` in the last file (`Program.fs`) runs at entry, ahead of `main`. `Program.fs` already relied on this for the machine tier (its own comment records the earlier attempt inside `main`, which was too late). Option A works as long as the import touches nothing in `Timeouts.fs`, `SageFsConfig.fs` or `SettingsCatalog.fs` (the last one calls `ValidTimeout.create`, which loads `Timeouts.fs`). So the settings that are saved as environment values live in their own file, `EnvBackedSettings.fs`, which compiles before the catalog and only builds closures that read `Timeouts` when a row is drawn, and `SettingsBootstrap.fs` uses only that file and `SettingsStore`. The browser journey checks it end to end: a saved warm-up limit of 90 is the value in use after a restart (the row has no "In use now" line).
+- Do workers read the values the daemon sets? Workers read their own `Timeouts` from the environment they inherit (`ProcessEnvironment.poisonedVariables` strips MSBuild variables only), so option A reaches them and an in-memory hook (option B) would not.
+- How long does the page take to resolve its rows? 0.515 ms for 17 rows, each resolved against both files, the environment and the flags, with the in-use value read (mean of 200 runs in the REPL). No caching.
+
+## Surprises
+
+- `SettingsCatalog.resolve` treated an unreadable layer file as an empty layer, so a corrupt `settings.json` made every row read "default" with a line on stderr. It now returns an error that names the file, which the row shows. A save over a corrupt file still repairs it (a test held that contract), and the old bytes are kept beside it as `settings.json.corrupt`.
+- A pasted `Infinity` or `1e999` for a timeout made `TimeSpan.FromSeconds` throw inside the page's edit handler. The parsers now bound the number first.
+- `SAGEFS_DEVRELOAD` has three readers that disagree (`SageFsConfig.DevReloadEnabled` defaults to off, the worker's injector treats everything but `0` and `false` as on, the MCP tool reads it again). A row would have to pick one of them, so it has none until the readers share a rule. `SAGEFS_EDITOR` is free text that falls back to `$EDITOR`, so a closed set of choices would be untrue; it has no row either.
+- The bind host row read only the layer files, so with `SAGEFS_BIND_HOST=::1` it showed `localhost` from `default`. It is now read-only, takes its value from the variable, and a bind host key in a layer file is never read. The roadmap sentence that listed bind host among the edited settings was wrong and is corrected below.
+- The Settings page chose "this repo" from the daemon's own working directory. It now takes the directory of the session the gear link was clicked from (`?session=`), says the directory in the target selector, and offers no repo target when there is none.
+- Tests for `Timeouts`-backed rows depend on what the test process started with, so they compare against `Timeouts.buildCompletion` instead of a literal.
+
+## Browser journey (2026-11-07)
+
+`SageFs.Tests/DashboardSettingsBrowserTests.fs`, registered as `--integration-browser` and added to the list in `DashboardBrowserRunner.fs`. It starts three daemons of its own on one throwaway `SAGEFS_DATA_DIR` (the second and third are restarts), drives the page in headless Chromium and asserts the value shown and the source badge in each cell:
+
+| Row | default | saved from the page, before restart | after restart | variable overrides | flag | read-only |
+|:--|:-:|:-:|:-:|:-:|:-:|:-:|
+| Warm-up inactivity limit | yes | yes, with "In use now" and "applies after a restart" | yes, no "In use now" | yes, "Saved 90. Ignored while SAGEFS_WARMUP_INACTIVITY_SECONDS is set." | none | |
+| Abandoned agent sessions (0 is off) | yes | yes | yes | | none | |
+| Metadata-delta hot reload | yes | saved | yes | | none | |
+| Build timeout | | saved | yes, no "In use now" | yes, "Saved 25. Ignored while SAGEFS_BUILD_TIMEOUT_MINUTES is set." | none | |
+| Stop asking NuGet for updates | | saved | yes, no "In use now" | | none | |
+| Machine tier (typed as `Fast`, shown as `fast`) | | saved | yes, no "In use now" | | none | |
+| MCP port | | | | | yes, source "flag" | |
+| Bind host | yes | | | yes, source "environment" | none | yes, no control |
+
+Also at 375 px: the page does not scroll sideways, and zero console or page errors over the run. The run on this branch passed (one case, filtered with `--filter-test-case "Settings browser:"`, so it is a `NarrowedRun`, not the acceptance signal).
+
+Not in the journey, and so gated only by unit tests and the simulation: the saved repo layer cells (they need a session, which the journey does not start), the FSI host build row, the per-test timeout restart cell (a Live row: `applyAtStart` is tested directly and the simulation restarts it), and an environment variable overriding a flag. Each is a few lines in the same pattern.

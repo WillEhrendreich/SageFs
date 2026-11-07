@@ -52,6 +52,8 @@ let sourceWords (layer: ConfigLayer) : string =
   | LGlobal -> "saved for all projects"
   | LRepo -> "saved for this project"
   | LSession -> "this session only"
+  | LEnvironment -> "set by an environment variable"
+  | LCommandLine -> "set by a flag"
 
 let private slidersIcon : XmlNode =
   Text.raw "<svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" aria-hidden=\"true\"><path d=\"M2 4h12M2 8h12M2 12h12\" stroke=\"currentColor\" stroke-width=\"1.2\" fill=\"none\"/><circle cx=\"5\" cy=\"4\" r=\"1.6\" fill=\"currentColor\"/><circle cx=\"11\" cy=\"8\" r=\"1.6\" fill=\"currentColor\"/><circle cx=\"6\" cy=\"12\" r=\"1.6\" fill=\"currentColor\"/></svg>"
@@ -124,7 +126,9 @@ let private axisRow (sessionId: string) (resolved: ResolvedView) (axis: ViewAxis
     | LDefault -> ()
     | LGlobal
     | LRepo
-    | LSession ->
+    | LSession
+    | LEnvironment
+    | LCommandLine ->
       Elem.span [ Attr.class' "live-view-source" ] [ textEnc (sourceWords source) ]
       Elem.button
         [ Attr.class' "session-btn session-btn-labeled live-view-reset"

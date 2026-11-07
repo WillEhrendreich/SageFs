@@ -397,6 +397,8 @@ module ViewSettings =
     | VEnum chosen -> AxisValue.parse axis (EnumValue.value chosen) |> Result.toOption
     | VPort _
     | VTimeout _
+    | VDuration _
+    | VLimit _
     | VBindHost _
     | VDir _ -> None
 
@@ -416,7 +418,9 @@ module ViewSettings =
           match axisValueOf axis value with
           | Some v -> AxisValue.token v
           | None -> ""
-      Apply = ignore }
+      Apply = ignore
+      External = NoExternalSource
+      Current = InUseReadEachTime }
 
   /// All 24 settings: three workflows by eight axes, each key distinct.
   let descriptors : SettingDescriptor list =

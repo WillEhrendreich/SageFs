@@ -2396,53 +2396,58 @@ let mapGetRaw (route: string) (read: HttpContext -> 'T) (handler: 'T -> HttpHand
 
 // ── Phase B2: Settings panel edit/clear (server-authoritative, Ds.post + morph) ──
 
-/// Config paths for the settings page: the global store, plus the daemon's own
-/// working directory as the repo layer (its `.SageFs/settings.json`). The
-/// fail-safe read means a cwd with no repo settings simply contributes nothing,
-/// so the panel shows global/default until a repo override is written.
-let private settingsPaths () : SageFs.ConfigPaths =
-  { GlobalDir = DaemonState.SageFsDir
-    Repo = SageFs.RepoRootAt (System.Environment.CurrentDirectory) }
+/// Config paths for the settings page: the global store, plus the directory of the session the page was opened for
+/// as the repo layer (its `.SageFs/settings.json`). A page opened for no session has no repo layer, and the page
+/// says so instead of writing into the daemon's own working directory.
+let private settingsPaths (workingDir: string) : SageFs.ConfigPaths =
+  SageFs.SettingsCatalog.pathsFor DaemonState.SageFsDir workingDir
+
+/// Every setting with a row: the catalog's own, plus the two the session agent declares.
+let private settingsCatalog () : SageFs.SettingDescriptor list =
+  SageFs.SettingsCatalog.all @ [ SageFs.SessionAgent.reflectionReadModeSetting; SageFs.SessionAgent.tieredCompilationSetting ]
 
 let private settingsRows (paths: SageFs.ConfigPaths) : SettingsPanel.SettingRow list =
-  (SageFs.SettingsCatalog.pilots @ [ SageFs.SessionAgent.reflectionReadModeSetting; SageFs.SessionAgent.tieredCompilationSetting ])
-  |> List.map (fun d -> { Descriptor = d; Resolved = SageFs.SettingsCatalog.resolve paths d })
+  let inputs = SageFs.SettingsBootstrap.processInputs ()
+  settingsCatalog () |> List.map (SettingsPanel.rowFor inputs paths)
 
 /// The persisted default working directory (session.defaultWorkingDirectory),
 /// resolved across the config layers, used to pre-fill the New Session form.
 /// Fail-safe: any resolution error yields "" (no default).
 let private resolveDefaultWorkingDir () : string =
   let d = SageFs.SettingsCatalog.sessionDefaultWorkingDir
-  match SageFs.SettingsCatalog.resolve (settingsPaths ()) d with
+  match SageFs.SettingsCatalog.resolve (settingsPaths "") d with
   | Ok p -> d.Render p.Effective
   | Error _ -> ""
 
 let private descriptorForSignal (sigName: string) : SageFs.SettingDescriptor option =
-  (SageFs.SettingsCatalog.pilots @ [ SageFs.SessionAgent.reflectionReadModeSetting; SageFs.SessionAgent.tieredCompilationSetting ]) |> List.tryFind (fun d -> SettingsPanel.signalName d.Key = sigName)
+  settingsCatalog () |> List.tryFind (fun d -> SettingsPanel.signalName d.Key = sigName)
 
 /// Morph the whole panel back with the given notice — the one authoritative
 /// re-render after an edit (Tao of Datastar).
 let private morphSettingsPanel (ctx: HttpContext) (notice: SettingsPanel.PanelNotice) (paths: SageFs.ConfigPaths) =
   task {
     Response.sseStartResponse ctx |> ignore
-    do! ssePatchNode ctx (SettingsPanel.renderPanel notice (settingsRows paths))
+    do! ssePatchNode ctx (SettingsPanel.renderPanel notice paths.Repo (settingsRows paths))
   }
+
+/// The string a signal holds in a posted signals document, or "" when it is absent.
+let private settingsSignal (doc: System.Text.Json.JsonDocument) (name: string) : string =
+  match doc.RootElement.TryGetProperty(name) with
+  | true, prop ->
+    match prop.ValueKind with
+    | System.Text.Json.JsonValueKind.String -> prop.GetString()
+    | _ -> prop.GetRawText()
+  | _ -> ""
 
 let createSettingsEditHandler : string -> HttpHandler =
   fun sigName ctx -> task {
     try
-      let paths = settingsPaths ()
       match descriptorForSignal sigName with
-      | None -> do! morphSettingsPanel ctx (SettingsPanel.Rejected("Unknown setting", sigName)) paths
+      | None -> do! morphSettingsPanel ctx (SettingsPanel.Rejected("Unknown setting", sigName)) (settingsPaths "")
       | Some d ->
         use! doc = readSignalsJsonSized ctx
-        let readSignal (name: string) =
-          match doc.RootElement.TryGetProperty(name) with
-          | true, prop ->
-            match prop.ValueKind with
-            | System.Text.Json.JsonValueKind.String -> prop.GetString()
-            | _ -> prop.GetRawText()
-          | _ -> ""
+        let readSignal = settingsSignal doc
+        let paths = settingsPaths (readSignal Signals.SettingsRepoDir)
         let rawValue = readSignal sigName
         let layer = SettingsPanel.layerForScope (readSignal Signals.SettingsScope) d
         let notice =
@@ -2459,15 +2464,15 @@ let createSettingsEditHandler : string -> HttpHandler =
 let createSettingsClearHandler : string -> HttpHandler =
   fun sigName ctx -> task {
     try
-      let paths = settingsPaths ()
       match descriptorForSignal sigName with
-      | None -> do! morphSettingsPanel ctx (SettingsPanel.Rejected("Unknown setting", sigName)) paths
+      | None -> do! morphSettingsPanel ctx (SettingsPanel.Rejected("Unknown setting", sigName)) (settingsPaths "")
       | Some d ->
         use! doc = readSignalsJsonSized ctx
+        let paths = settingsPaths (settingsSignal doc Signals.SettingsRepoDir)
         let scope =
-          match doc.RootElement.TryGetProperty(Signals.SettingsScope) with
-          | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String -> prop.GetString()
-          | _ -> SettingsPanel.ScopeGlobal
+          match settingsSignal doc Signals.SettingsScope with
+          | "" -> SettingsPanel.ScopeGlobal
+          | chosen -> chosen
         let layer = SettingsPanel.layerForScope scope d
         let notice =
           match SageFs.SettingsCatalog.clear paths layer d with
@@ -3591,8 +3596,16 @@ let createEndpoints
     // config catalog. Global-scoped for this standalone page (the repo-override
     // layer is surfaced per-session; the resolver + store already support it).
     yield get "/dashboard/settings" (fun ctx -> task {
-      let rows = settingsRows (settingsPaths ())
-      return! FalcoResponse.ofHtml (SettingsPanel.renderPage rows) ctx
+      // `?session=` names the session the page was opened for; its directory is the repo layer.
+      let workingDir =
+        match ctx.Request.Query.TryGetValue "session" with
+        | true, values when values.Count > 0 ->
+          match WorkerProtocol.SessionId.validate values.[0] with
+          | Ok sessionId -> q.GetSessionWorkingDir sessionId
+          | Error _ -> ""
+        | _ -> ""
+      let paths = settingsPaths workingDir
+      return! FalcoResponse.ofHtml (SettingsPanel.renderPage paths.Repo (settingsRows paths)) ctx
     })
     // Edit/clear a setting: Ds.post from the panel -> SettingsCatalog -> morph
     // the whole panel back with a notice. Route param is the sanitised signal

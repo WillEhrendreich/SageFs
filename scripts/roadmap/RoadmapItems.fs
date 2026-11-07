@@ -183,7 +183,7 @@ let items : Item list =
     item "more-settings-editable" "More settings editable from the dashboard" Dashboard Next
       NoLandmarkYet
       [ "docs/configuration.md"; "docs/plans/more-settings-editable.md" ]
-      "The Settings panel edits a handful of settings today (test timeouts, the MCP port, bind host, default working directory, reflection mode and tiering), each resolved across layers with its source shown. Most environment variables and CLI flags still have to be routed through it before you can edit them at runtime."
+      "The Settings panel edits the warm-up, build and abandoned-session limits, the machine tier, two on-off switches, the test timeouts, the MCP port, the default working directory, reflection mode and tiering, each resolved across layers (default, global file, repo file, environment variable, flag) with its source and the value in use shown. The bind host and data directory are shown and read-only. Most of the other environment variables, the local data retention settings among them, still have no row."
 
     item "live-bindings-watch-view" "A live bindings view you can switch and keep" Dashboard Next
       NoLandmarkYet

@@ -102,6 +102,17 @@ module Timeouts =
     | true -> envOrDefaultMinutes varName defaultMinutes
     | false -> forMachine (TimeSpan.FromMinutes(defaultMinutes))
 
+  // -- The bounds of a wait the Settings page accepts --
+  // Literals, so reading one runs no static initialiser: the start-up import of saved settings has to finish before
+  // this module is first read.
+
+  /// The shortest: a second.
+  [<Literal>]
+  let settingWaitShortestSeconds = 1.0
+  /// The longest: a day. Past that a wait is a hang, and a number that large overflows `TimeSpan` long before.
+  [<Literal>]
+  let settingWaitLongestHours = 24.0
+
   // -- Build & Warmup --
   let warmupAbsoluteMax = envOrDefaultMachineMinutes "SAGEFS_WARMUP_MAX_MINUTES" 10.0
   let warmupInactivityLimit = envOrDefaultMachine "SAGEFS_WARMUP_INACTIVITY_SECONDS" 30.0

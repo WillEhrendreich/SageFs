@@ -201,13 +201,9 @@ let catalogTests =
         SettingsStore.readLayer (SettingsStore.globalPath dir) |> Map.tryFind SettingsCatalog.bindHost.Key
         |> Expect.isNone "a refused bind host persists nothing")
 
-    testCase "WHY — a loopback bind host edit resolves to the typed LoopbackHost, because loopback values are legal" <| fun _ ->
-      withTempDir (fun dir ->
-        let paths = { GlobalDir = dir; Repo = NoRepoCheckout }
-        match SettingsCatalog.edit paths LGlobal "127.0.0.1" SettingsCatalog.bindHost with
-        | Error why -> failtestf "expected Ok, got Error %A" why
-        | Ok prov ->
-          prov.Effective |> Expect.equal "resolves to the IPv4 loopback" (VBindHost SageFsConfig.LoopbackHost.Ipv4))
+    testCase "WHY — a loopback bind host parses to the typed LoopbackHost, because loopback values are legal (the row is read-only, so the parse is the whole guard)" <| fun _ ->
+      SettingsCatalog.bindHost.Parse "127.0.0.1"
+      |> Expect.equal "parses to the IPv4 loopback" (Ok (VBindHost SageFsConfig.LoopbackHost.Ipv4))
 
     testCase "WHY — a repo override beats the global value, then clearing it falls back, because that is the base-vs-override contract" <| fun _ ->
       withTempDir (fun dir ->

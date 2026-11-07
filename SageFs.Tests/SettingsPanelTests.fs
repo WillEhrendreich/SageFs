@@ -22,9 +22,8 @@ let tests =
       try
         let paths : ConfigPaths = { GlobalDir = dir; Repo = NoRepoCheckout }
         let rows : SettingsPanel.SettingRow list =
-          SettingsCatalog.pilots
-          |> List.map (fun d -> { Descriptor = d; Resolved = SettingsCatalog.resolve paths d })
-        renderNode (SettingsPanel.renderPanel SettingsPanel.Quiet rows)
+          SettingsCatalog.pilots |> List.map (SettingsPanel.rowFor ExternalInputs.none paths)
+        renderNode (SettingsPanel.renderPanel SettingsPanel.Quiet NoRepoCheckout rows)
       finally
         try Directory.Delete(dir, true) with _ -> ()
 
@@ -38,11 +37,11 @@ let tests =
       html |> Expect.stringContains "Live testing group header" "Live testing"
       html |> Expect.stringContains "Daemon group header" "Daemon"
 
-    testCase "WHY — the applicability chip class matches the DU case, so live/restart/guarded read distinctly" <| fun _ ->
+    testCase "WHY — the applicability chip class matches the DU case, so live/restart/read-only read distinctly" <| fun _ ->
       let html = renderAllDefault ()
       html |> Expect.stringContains "a live chip (per-test timeout)" "settings-chip-live"
       html |> Expect.stringContains "a restart chip (MCP port)" "settings-chip-restart"
-      html |> Expect.stringContains "a guarded chip (bind host)" "settings-chip-guarded"
+      html |> Expect.stringContains "a read-only chip (bind host)" "settings-chip-readonly"
 
     testCase "WHY — an all-default resolution shows the default provenance badge, so the source is explicit" <| fun _ ->
       let html = renderAllDefault ()
@@ -69,9 +68,10 @@ let tests =
       SettingsPanel.layerForScope SettingsPanel.ScopeRepo globalD
       |> Expect.equal "a Global setting ignores the repo toggle" LGlobal
 
-    testCase "WHY — the scope selector offers both edit targets, so the user can choose where a write lands" <| fun _ ->
+    testCase "WHY — the scope selector offers the global target, and the repo target when the page has a repo to write" <| fun _ ->
       let html = renderAllDefault ()
       html |> Expect.stringContains "scope selector present" "settings-scope-select"
       html |> Expect.stringContains "global target option" ">Global<"
-      html |> Expect.stringContains "repo target option" ">This repo<"
+      let withRepo = renderNode (SettingsPanel.renderPanel SettingsPanel.Quiet (RepoRootAt "/work/app") [])
+      withRepo |> Expect.stringContains "repo target option names its directory" ">This repo (/work/app)<"
   ]

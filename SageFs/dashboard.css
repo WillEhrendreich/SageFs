@@ -3767,7 +3767,7 @@ body[data-connected="false"] .statusline-info {
 }
 
 /* ── Settings panel (unified-settings-design.md Phase B) ───────────────── */
-.settings-page { padding: 1rem 1.25rem; max-width: 900px; margin: 0 auto; }
+.settings-page { padding: 1rem 1.25rem; max-width: 56rem; margin: 0 auto; }
 .settings-page > p { margin: 0 0 0.75rem; }
 .settings-groups { display: flex; flex-direction: column; gap: 1.25rem; }
 .settings-group { display: flex; flex-direction: column; gap: 0.5rem; }
@@ -3797,7 +3797,11 @@ body[data-connected="false"] .statusline-info {
 .settings-badge-session { color: var(--fg-yellow); border-color: var(--fg-yellow); }
 .settings-chip-live { color: var(--fg-green); border-color: var(--fg-green); }
 .settings-chip-restart { color: var(--fg-yellow); border-color: var(--fg-yellow); }
-.settings-chip-guarded { color: var(--fg-red); border-color: var(--fg-red); }
+.settings-badge-environment { color: var(--fg-yellow); border-color: var(--fg-yellow); }
+.settings-badge-flag { color: var(--fg-yellow); border-color: var(--fg-yellow); }
+.settings-chip-readonly { color: var(--fg-dim); }
+.settings-effect, .settings-inuse, .settings-override { font-size: 0.857rem; color: var(--fg-dim); overflow-wrap: anywhere; }
+.settings-override { color: var(--fg-yellow); }
 
 /* Settings scope toggle (Phase C1) */
 .settings-scope { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0 0.75rem; font-size: 0.857rem; }

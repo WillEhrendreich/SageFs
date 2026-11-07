@@ -29,6 +29,41 @@ I made these settable because a test or a slow CI box needed one, not because I
 expect anyone to live in this file. If a default is wrong for you in a way that
 isn't a slow machine, tell me, because then the default is the bug.
 
+## Settings you can change from the dashboard
+
+`/dashboard/settings` has a row for each setting below. A row shows the value in use, which layer it came from
+(default, global file, repo file, environment variable or command-line flag), the value you saved when that differs,
+and a word for when a change applies: `live` takes effect on save, `restart` applies after the daemon restarts,
+`read-only` is shown and never edited there.
+
+A saved value is written to `settings.json` in the data directory (`~/.SageFs`, or `SAGEFS_DATA_DIR`). The next
+`sagefs` process reads it first thing and puts it in its own environment, unless you set the variable yourself, so
+the variable and the page never disagree and the workers the daemon starts inherit it. A variable you set wins, and
+the row says which one: "Saved 25. Ignored while SAGEFS_WARMUP_MAX_MINUTES is set." A flag on the command line wins
+over both.
+
+| Row | Variable or flag | Applies |
+|:---|:---|:---|
+| Warm-up inactivity limit | `SAGEFS_WARMUP_INACTIVITY_SECONDS` | restart |
+| Warm-up ceiling | `SAGEFS_WARMUP_MAX_MINUTES` | restart |
+| Build timeout | `SAGEFS_BUILD_TIMEOUT_MINUTES` | restart |
+| FSI host build timeout | `SAGEFS_HOST_BUILD_MINUTES` | restart |
+| Machine tier (`auto` or a tier) | `SAGEFS_MACHINE_TIER` | restart |
+| Abandoned agent sessions (`0` is off) | `SAGEFS_ABANDONED_SESSION_HOURS` | restart |
+| Stop asking NuGet for updates | `SAGEFS_UPDATE_CHECK_DISABLED` | restart |
+| Metadata-delta hot reload | `SAGEFS_METADATA_DELTA` | restart (read when a worker starts) |
+| Per-test timeout | `SAGEFS_PER_TEST_TIMEOUT_SECONDS` | live |
+| Test-run timeout | none | live |
+| MCP port | `SAGEFS_MCP_PORT`, `--mcp-port` | restart |
+| Default working directory | none | live |
+| Bind host | `SAGEFS_BIND_HOST` | read-only |
+| Data directory | `SAGEFS_DATA_DIR` | read-only |
+| Skip restoring sessions at start | `--no-resume` | read-only |
+
+The bind host stays read-only on purpose. A loopback bind is the only thing between SageFs, which evaluates F#, and the
+network, and changing it from a page the daemon serves points the trust the wrong way. `SAGEFS_IDENTITY_POLICY`
+and `SAGEFS_MEMBER_TOKEN` have no row for the same reason.
+
 ## Variables that are not durations
 
 | Variable | Default | What it does |

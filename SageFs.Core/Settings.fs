@@ -15,22 +15,29 @@ open System
 
 /// The layers a value can come from, lowest precedence first. A higher layer
 /// overrides a lower one; `LSession` is a transient in-memory override, the
-/// two file layers persist, and `LDefault` is the descriptor's built-in.
+/// two file layers persist, `LDefault` is the descriptor's built-in, and the
+/// last two are what the person set outside the settings files: an environment
+/// variable, and a flag on the command line the daemon was started with.
 type ConfigLayer =
   | LDefault
   | LGlobal
   | LRepo
   | LSession
+  | LEnvironment
+  | LCommandLine
 
 [<RequireQualifiedAccess>]
 module ConfigLayer =
-  /// Higher rank wins. Total and injective over the four cases.
+  /// Higher rank wins. Total and injective over the six cases. The order is the one
+  /// `SageFsConfig.chooseMcpPort` already uses: flag, environment, saved, default.
   let rank (layer: ConfigLayer) : int =
     match layer with
     | LDefault -> 0
     | LGlobal -> 1
     | LRepo -> 2
     | LSession -> 3
+    | LEnvironment -> 4
+    | LCommandLine -> 5
 
   let label (layer: ConfigLayer) : string =
     match layer with
@@ -38,6 +45,8 @@ module ConfigLayer =
     | LGlobal -> "global"
     | LRepo -> "repo"
     | LSession -> "session"
+    | LEnvironment -> "environment"
+    | LCommandLine -> "flag"
 
 /// Why a setting operation failed — a typed error, never a bare string, so
 /// consumers can dispatch on the cause and a boundary can map it to the
@@ -144,6 +153,58 @@ module DirectoryPath =
   /// Whether an actual directory is set (an empty path means "no default").
   let isSet (DirectoryPath p) = p <> ""
 
+/// How long SageFs waits for something: at least a second and at most a day. `ValidTimeout` stops at ten
+/// minutes, which is the default of the warm-up and build waits, so it cannot hold the number a person on a
+/// big repository needs. A `WaitLimit` is never zero and never negative, so no consumer re-checks it.
+type WaitLimit = private WaitLimit of TimeSpan
+
+[<RequireQualifiedAccess>]
+module WaitLimit =
+  let private shortestWait = TimeSpan.FromSeconds Timeouts.settingWaitShortestSeconds
+
+  /// The most a wait may be, for a parser that has to bound a number before it becomes a span.
+  let longest : TimeSpan = TimeSpan.FromHours Timeouts.settingWaitLongestHours
+
+  let create (t: TimeSpan) : Result<WaitLimit, ConfigError> =
+    match t >= shortestWait && t <= longest with
+    | true -> Ok (WaitLimit t)
+    | false -> Error (OutOfRange (sprintf "a wait must be between 1 second and 24 hours, got %gs" t.TotalSeconds))
+
+  let value (WaitLimit t) : TimeSpan = t
+
+/// The unit a duration setting is written in. It is the unit of the environment variable behind the setting,
+/// so the saved text and the variable are the same text.
+type DurationUnit =
+  | Seconds
+  | Minutes
+  | Hours
+
+[<RequireQualifiedAccess>]
+module DurationUnit =
+  let label (unit: DurationUnit) : string =
+    match unit with
+    | Seconds -> "seconds"
+    | Minutes -> "minutes"
+    | Hours -> "hours"
+
+  let toSpan (unit: DurationUnit) (amount: float) : TimeSpan =
+    match unit with
+    | Seconds -> TimeSpan.FromSeconds amount
+    | Minutes -> TimeSpan.FromMinutes amount
+    | Hours -> TimeSpan.FromHours amount
+
+  let amountOf (unit: DurationUnit) (span: TimeSpan) : float =
+    match unit with
+    | Seconds -> span.TotalSeconds
+    | Minutes -> span.TotalMinutes
+    | Hours -> span.TotalHours
+
+/// A bound that may be switched off: `0` is a real answer for the abandoned-session reaper, and it means "never".
+/// A case name says so where a zero span would have to be remembered.
+type OptionalLimit =
+  | LimitOff
+  | LimitAfter of WaitLimit
+
 /// The unified value of any setting. Every case's payload is already a type
 /// whose only inhabitants are legal, so a `SettingValue` cannot carry an
 /// illegal configuration.
@@ -151,9 +212,40 @@ type SettingValue =
   | VToggle of Toggle
   | VPort of Port
   | VTimeout of ValidTimeout
+  | VDuration of WaitLimit
+  | VLimit of OptionalLimit
   | VBindHost of SageFsConfig.LoopbackHost
   | VEnum of EnumValue
   | VDir of DirectoryPath
+
+/// What a `SettingValue` holds when it is a given kind. Each function names every other case, so a new kind of value
+/// breaks the build here once and not at every descriptor that reads one kind.
+[<RequireQualifiedAccess>]
+module SettingValue =
+  let duration (v: SettingValue) : WaitLimit option =
+    match v with
+    | VDuration limit -> Some limit
+    | VToggle _ | VPort _ | VTimeout _ | VLimit _ | VBindHost _ | VEnum _ | VDir _ -> None
+
+  let limit (v: SettingValue) : OptionalLimit option =
+    match v with
+    | VLimit limit -> Some limit
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VBindHost _ | VEnum _ | VDir _ -> None
+
+  let toggle (v: SettingValue) : Toggle option =
+    match v with
+    | VToggle t -> Some t
+    | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VBindHost _ | VEnum _ | VDir _ -> None
+
+  let enum (v: SettingValue) : EnumValue option =
+    match v with
+    | VEnum e -> Some e
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VBindHost _ | VDir _ -> None
+
+  let dir (v: SettingValue) : DirectoryPath option =
+    match v with
+    | VDir d -> Some d
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VBindHost _ | VEnum _ -> None
 
 /// The resolved value plus its provenance: which layer supplied the effective
 /// value, and the value present at every layer that set one (so the UI can
@@ -172,6 +264,8 @@ type SettingCategory =
   | LiveTesting
   /// The Live Bindings view: which columns, grouping, strip, inspector, value printing and row height, for each workflow.
   | LiveBindingsView
+  /// How long SageFs waits for a warm-up, a build or a stopped agent, and how the waits scale for the machine.
+  | WaitsAndLimits
   | DaemonSettings
 
 [<RequireQualifiedAccess>]
@@ -182,11 +276,12 @@ module SettingCategory =
     | SessionSettings -> "Session"
     | LiveTesting -> "Live testing"
     | LiveBindingsView -> "Live bindings view"
+    | WaitsAndLimits -> "Waits and limits"
     | DaemonSettings -> "Daemon"
 
   /// Display order for the panel — exhaustive over the DU.
   let displayOrder : SettingCategory list =
-    [ Appearance; SessionSettings; LiveTesting; LiveBindingsView; DaemonSettings ]
+    [ Appearance; SessionSettings; LiveTesting; LiveBindingsView; WaitsAndLimits; DaemonSettings ]
 
 /// Where a setting may be set.
 type SettingScope =
@@ -203,9 +298,92 @@ type SettingApplicability =
   | Live
   /// Persisted now, applied on the next restart.
   | RestartRequired
-  /// Editable only through an explicit, explained confirm (e.g. the bind host
-  /// RCE guard).
-  | Guarded
+  /// Shown with its value and where the value came from, and never edited here.
+  | ReadOnly of ReadOnlyReason
+
+/// Why a row has no edit control. A closed set, so the page says which reason in words.
+and ReadOnlyReason =
+  /// Changing it from a page the daemon serves points the trust the wrong way (the bind host, the identity policy).
+  | SecurityBoundary
+  /// The settings file lives inside it, so a saved value could never be read back.
+  | HoldsTheSettingsFile
+  /// A credential: its value is never drawn.
+  | Secret
+  /// SageFs sets it for the processes it starts; a person's value would be overwritten.
+  | SetBySageFs
+  /// Only a flag on the command line sets it, so it is read when the daemon is started.
+  | LaunchOnly
+
+[<RequireQualifiedAccess>]
+module ReadOnlyReason =
+  let describe (reason: ReadOnlyReason) : string =
+    match reason with
+    | SecurityBoundary -> "read-only here: changing it from a page the daemon serves would point the trust the wrong way. Set it where you start the daemon."
+    | HoldsTheSettingsFile -> "read-only here: the settings file lives inside it. Set it where you start the daemon."
+    | Secret -> "read-only here: it is a credential, so its value is never shown."
+    | SetBySageFs -> "read-only here: SageFs sets it for the processes it starts."
+    | LaunchOnly -> "read-only here: only a flag on the command line sets it. Start the daemon with the flag."
+
+/// Where a setting can also be set from outside the settings files. The environment variable and the flag are
+/// the names a person types, and the row shows them when one of them wins.
+type ExternalSource =
+  | NoExternalSource
+  | FromEnvironment of variable: string
+  | FromFlag of flag: string
+  | FromEnvironmentOrFlag of variable: string * flag: string
+
+[<RequireQualifiedAccess>]
+module ExternalSource =
+  let variable (source: ExternalSource) : string option =
+    match source with
+    | FromEnvironment v
+    | FromEnvironmentOrFlag(v, _) -> Some v
+    | NoExternalSource
+    | FromFlag _ -> None
+
+  let flag (source: ExternalSource) : string option =
+    match source with
+    | FromFlag f
+    | FromEnvironmentOrFlag(_, f) -> Some f
+    | NoExternalSource
+    | FromEnvironment _ -> None
+
+/// What reading one environment variable found. A DU, so "unset" and "set to the empty string" are not the same
+/// null; the reader is injected so a test never touches the process environment.
+type EnvRead =
+  | EnvUnset
+  | EnvSet of raw: string
+
+/// What the settings resolve against besides the two files: the environment, and the flags the daemon was started with.
+type ExternalInputs = {
+  Environment: string -> EnvRead
+  /// Flag name (`--mcp-port`) to its raw value. A switch such as `--no-resume` maps to `on`.
+  Flags: Map<string, string>
+}
+
+[<RequireQualifiedAccess>]
+module ExternalInputs =
+  /// Nothing outside the files: the inputs a caller that only cares about the saved layers passes.
+  let none : ExternalInputs = { Environment = (fun _ -> EnvUnset); Flags = Map.empty }
+
+  let ofEnvironment (read: string -> string | null) : string -> EnvRead =
+    fun name ->
+      match read name with
+      | null -> EnvUnset
+      | "" -> EnvUnset
+      | raw -> EnvSet raw
+
+/// Where the value the subsystem is using NOW comes from. A setting whose consumer reads the layers every time it
+/// needs the value is in use as soon as it is saved; one that read it once at start has to be asked, and the answer
+/// is read from the consumer, never from the file, so the in-use column is evidence and not an echo of what was saved.
+type CurrentUse =
+  | InUseReadEachTime
+  | InUseFromConsumer of (unit -> SettingValue)
+
+/// How the value in use compares with the value the layers resolve to.
+type InUse =
+  | InUseSameAsSaved
+  | InUseDiffers of inUse: SettingValue
 
 /// The authority for one setting: how to parse/render its raw form, its
 /// default (already a legal `SettingValue`), and how to apply it live. One
@@ -226,6 +404,10 @@ type SettingDescriptor = {
   Render: SettingValue -> string
   /// Push an already-legal value into the live subsystem.
   Apply: SettingValue -> unit
+  /// The environment variable and flag that can set it from outside the files.
+  External: ExternalSource
+  /// How to read what the subsystem is using now.
+  Current: CurrentUse
 }
 
 [<RequireQualifiedAccess>]

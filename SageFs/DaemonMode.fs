@@ -2171,6 +2171,18 @@ let private reportMachineTierAndOpenLedger (log: Microsoft.Extensions.Logging.IL
   | MachineStartup.Established.NotYet ->
     log.LogWarning("The machine tier was not established at startup; waits are scaled for {Tier}.", MachineTier.toString Timeouts.machineTier)
 
+/// Say what the start-up import did with the values the Settings page saved, then push the saved `Live` ones into the
+/// subsystems that hold them. Until this ran, a saved per-test timeout was written to the file, shown on the page, and
+/// never read: the daemon used the default.
+let private applySavedSettings (log: Microsoft.Extensions.Logging.ILogger) : unit =
+  for outcome in SettingsBootstrap.lastImport () do
+    match outcome with
+    | ImportOutcome.Imported(variable, text) -> log.LogInformation("Settings: {Variable}={Text} comes from the saved settings.", variable, text)
+    | ImportOutcome.LeftToEnvironment variable -> log.LogInformation("Settings: {Variable} is set in the environment, so the saved value is not used.", variable)
+    | ImportOutcome.SavedMeansUnset _ -> ()
+    | ImportOutcome.NotUsable(variable, reason) -> log.LogWarning("Settings: {Variable} was left as it was: {Reason}", variable, reason)
+  SettingsCatalog.applyAtStart (SettingsBootstrap.processInputs ()) { GlobalDir = DaemonState.SageFsDir; Repo = NoRepoCheckout } SettingsCatalog.all
+
 let run
   (bindHost: SageFs.SageFsConfig.LoopbackHost)
   (mcpPort: int)
@@ -2198,6 +2210,7 @@ let run
   log.LogInformation("SageFs daemon v{Version} starting on port {Port}", version, mcpPort)
 
   reportMachineTierAndOpenLedger log
+  applySavedSettings log
 
   // Handle --prune: mark all alive sessions as stopped and exit
   // W36+W42(R14): handlePrune now returns Result<bool,string> and takes Task-returning checkFn.
