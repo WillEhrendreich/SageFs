@@ -372,4 +372,40 @@ let tests =
         text |> Expect.stringContains "counted" "and 25 more"
         text.Contains "/p/F21.fs" |> Expect.isFalse "the 21st is not listed"
     ]
+
+    testList "what a project is built from" [
+      testCase "WHY — a project's inputs are its files and the outputs of what it references, each with its write time, and a file that is not there is left out" <| fun _ ->
+        let times = Map.ofList [ "/p/A.fs", 5L; "/p/P.fsproj", 3L; "/q/ref/Q.dll", 9L ]
+        Staleness.inputsOf (fun f -> Map.tryFind f times) [ "/p/A.fs"; "/p/Gone.fs"; "/p/P.fsproj" ] [ "/q/ref/Q.dll"; "/r/ref/R.dll" ]
+        |> Expect.equal "the three that exist" [ "/p/A.fs", 5L; "/p/P.fsproj", 3L; "/q/ref/Q.dll", 9L ]
+
+      testCase "WHY — a newer output of a referenced project puts the project behind, though none of its own files changed" <| fun _ ->
+        let inputs = Staleness.inputsOf (fun f -> Map.tryFind f (Map.ofList [ "/p/A.fs", 5L; "/q/ref/Q.dll", 9L ])) [ "/p/A.fs" ] [ "/q/ref/Q.dll" ]
+        Staleness.decide (OutputState.OutputAt("/p/ref/P.dll", 7L)) inputs |> Expect.equal "behind the reference" (Staleness.OlderThan "/q/ref/Q.dll")
+
+      testCase "WHY — what the evaluation writes under the project's obj directory is not an edit, and nothing else is treated as generated" <| fun _ ->
+        let objFile = Path.Combine("/work/p", "obj", "Debug", "net10.0", "P.AssemblyInfo.fs")
+        Staleness.isGeneratedIn "/work/p" objFile |> Expect.isTrue "under obj"
+        Staleness.isGeneratedIn "/work/p" "/work/p/Program.fs" |> Expect.isFalse "a source"
+        Staleness.isGeneratedIn "/work/p" "/work/p/objects/X.fs" |> Expect.isFalse "a directory that only starts with obj"
+        Staleness.isGeneratedIn "/work/p" "/work/q/obj/X.fs" |> Expect.isFalse "another project's obj"
+    ]
+
+    testList "what a caller sends" [
+      testCase "WHY — the overlays arrive as a JSON array of path and text, and nothing at all means none" <| fun _ ->
+        Request.parseOverlays """[ { "path": "A.fs", "text": "module A" }, { "path": "/x/B.fs", "text": "" } ]"""
+        |> Expect.equal "two overlays" (Ok [ { Path = "A.fs"; Text = "module A" }; { Path = "/x/B.fs"; Text = "" } ])
+        Request.parseOverlays "" |> Expect.equal "empty means none" (Ok [])
+        Request.parseOverlays "   " |> Expect.equal "blank means none" (Ok [])
+
+      testCase "WHY — overlays that are not that shape are refused with the shape to send, so a client can correct itself" <| fun _ ->
+        match Request.parseOverlays """{ "path": "A.fs" }""" with
+        | Error why -> why |> Expect.stringContains "says what to send" "JSON array"
+        | Ok other -> failtestf "expected an error, got %A" other
+
+      testCase "WHY — no configuration means Debug, a named one is used as given, and the MSBuild run carries it" <| fun _ ->
+        Request.configurationOf "" |> Expect.equal "default" "Debug"
+        Request.configurationOf " Release " |> Expect.equal "trimmed" "Release"
+        MsBuildFacts.msbuildArgumentsFor "Release" |> Expect.contains "carries the configuration" "-p:Configuration=Release"
+    ]
   ]

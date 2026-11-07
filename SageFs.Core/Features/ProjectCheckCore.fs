@@ -97,7 +97,7 @@ module ProjectCheckCore =
       Sources: string list }
 
   module CompilerArguments =
-    let private isOption (identity: string) : bool = identity.StartsWith("-", StringComparison.Ordinal)
+    let isOption (identity: string) : bool = identity.StartsWith("-", StringComparison.Ordinal)
 
     /// The path of a `-r:` or `--reference:` option, or none for any other option.
     let referencePath (option: string) : string option =
@@ -111,7 +111,6 @@ module ProjectCheckCore =
     /// The identities of `CoreCompile`'s result are the arguments, one each. Sources are relative to the project directory.
     /// The output path (`-o:`) is dropped: nothing is written.
     let ofIdentities (projectFile: string) (identities: string list) : Result<CompilerArguments, ArgumentsRefusal> =
-      raise (NotImplementedException "RED stub")
       let directory = Path.GetDirectoryName projectFile
       let options =
         identities
@@ -177,9 +176,12 @@ module ProjectCheckCore =
         "-getItem:ReferencePathWithRefAssemblies"
         "-getProperty:MSBuildAllProjects,Configuration" ]
 
+    /// The arguments for one configuration.
+    let msbuildArgumentsFor (configuration: string) : string list =
+      msbuildArguments @ [ sprintf "-p:Configuration=%s" configuration ]
+
     /// Reads the JSON the run printed. `projectFile` is the project the run was for.
     let read (projectFile: string) (json: string) : Result<MsBuildFacts, ArgumentsRefusal> =
-      raise (NotImplementedException "RED stub")
       match Json.deserialize<MsBuildOutput> (Json.omitNulls Json.standard) json with
       | Error why -> Error(ArgumentsRefusal.Unreadable(JsonError.describe why))
       | Ok output ->
@@ -226,7 +228,7 @@ module ProjectCheckCore =
       Stamps: FileStamp list }
 
   module Fingerprint =
-    let private ancestors (directory: string) : string list =
+    let ancestors (directory: string) : string list =
       let rec up (dir: string) (acc: string list) =
         match Path.GetDirectoryName dir with
         | null
@@ -239,7 +241,6 @@ module ProjectCheckCore =
     /// assets, and the places a file would be read from if it existed (props, targets, central package versions and
     /// `global.json`, in the project's directory and every one above it).
     let paths (facts: MsBuildFacts) : string list =
-      raise (NotImplementedException "RED stub")
       let projectFile = facts.Arguments.ProjectFile
       let directory = Path.GetDirectoryName projectFile
       let probed =
@@ -275,7 +276,6 @@ module ProjectCheckCore =
   module ArgumentCache =
     /// Reuse the kept arguments when every file of their fingerprint is as it was, and otherwise say which file moved.
     let decide (entry: CacheEntry option) (current: string -> StampState) : CacheDecision =
-      raise (NotImplementedException "RED stub")
       match entry with
       | None -> CacheDecision.Refresh RefreshReason.NotCached
       | Some kept ->
@@ -307,7 +307,6 @@ module ProjectCheckCore =
 
     /// A run that was cancelled read half a picture, so it keeps nothing.
     let record (entry: CacheEntry) (ending: RunEnd) (store: ArgumentStore) : ArgumentStore =
-      raise (NotImplementedException "RED stub")
       match ending with
       | RunEnd.Completed -> Map.add entry.Key entry store
       | RunEnd.Cancelled -> store
@@ -325,7 +324,6 @@ module ProjectCheckCore =
     let empty : Inflight = Set.empty
 
     let join (key: CacheKey) (inflight: Inflight) : Joined * Inflight =
-      raise (NotImplementedException "RED stub")
       match Set.contains key inflight with
       | true -> Joined.Follows, inflight
       | false -> Joined.Starts, Set.add key inflight
@@ -349,7 +347,6 @@ module ProjectCheckCore =
   module Staleness =
     /// An output with no file is missing, and an output older than any input is behind it. The same time is current.
     let decide (output: OutputState) (inputs: (string * int64) list) : Staleness =
-      raise (NotImplementedException "RED stub")
       match output with
       | OutputState.NoOutput path -> Staleness.Missing path
       | OutputState.OutputAt(_, built) ->
@@ -361,11 +358,22 @@ module ProjectCheckCore =
           | Some(path, _) -> Staleness.OlderThan path
           | None -> Staleness.Current
 
+    /// What a project is built from, with the write time of each file that exists: the files named, and the output of each
+    /// project it references (it is compiled against them, so a newer one puts it behind). `writeTime` is none for a file
+    /// that is not there.
+    let inputsOf (writeTime: string -> int64 option) (files: string list) (referenceOutputs: string list) : (string * int64) list =
+      files @ referenceOutputs |> List.choose (fun path -> writeTime path |> Option.map (fun ticks -> path, ticks))
+
+    /// A file under the project's own `obj` directory is written by the evaluation (the assembly info, the attributes file),
+    /// not edited, so it is not something the output can be behind.
+    let isGeneratedIn (projectDirectory: string) (path: string) : bool =
+      let objDirectory = Path.Combine(projectDirectory, "obj") + string Path.DirectorySeparatorChar
+      path.StartsWith(objDirectory, pathComparison)
+
     /// The projects to build, deepest first. A project is built when it is stale itself or when anything it references
     /// is, because its inputs include the output of what it references. `references` says what each project references
     /// (every project of the closure is a key).
     let buildOrder (references: Map<string, string list>) (own: Map<string, Staleness>) : string list =
-      raise (NotImplementedException "RED stub")
       let isStale (project: string) =
         match Map.tryFind project own with
         | Some Staleness.Current
@@ -430,7 +438,6 @@ module ProjectCheckCore =
       Path.Combine(root, projectKey projectFile, string index, Path.GetFileName source)
 
     let resolve (root: string) (arguments: CompilerArguments) (overlays: Overlay list) : Result<OverlayPlan, OverlayRefusal> =
-      raise (NotImplementedException "RED stub")
       let directory = Path.GetDirectoryName arguments.ProjectFile
       let named = overlays |> List.map (fun o -> fullPath directory o.Path, o.Text)
       let duplicate =
@@ -458,11 +465,32 @@ module ProjectCheckCore =
 
     /// The project's own path for a diagnostic's file, so the caller reads the path it sent.
     let mapBack (plan: OverlayPlan) (path: string) : string =
-      raise (NotImplementedException "RED stub")
       plan.Replaced
       |> List.tryFind (fun (_, overlay) -> samePath overlay path)
       |> Option.map fst
       |> Option.defaultValue path
+
+  // ---- what a caller sends ----
+
+  module Request =
+    [<Literal>]
+    let defaultConfiguration = "Debug"
+
+    /// The configuration to check, or Debug when the caller named none.
+    let configurationOf (given: string) : string =
+      match String.IsNullOrWhiteSpace given with
+      | true -> defaultConfiguration
+      | false -> given.Trim()
+
+    /// The overlays as the tool receives them: a JSON array of `{ "path": ..., "text": ... }`, or nothing for none.
+    let parseOverlays (json: string) : Result<Overlay list, string> =
+      match String.IsNullOrWhiteSpace json with
+      | true -> Ok []
+      | false ->
+        match Json.deserialize<Overlay[]> (Json.omitNulls Json.camelCase) json with
+        | Ok items -> Ok(Array.toList items)
+        | Error why ->
+          Error(sprintf "overlays must be a JSON array of { \"path\": \"...\", \"text\": \"...\" } objects: %s" (JsonError.describe why))
 
   // ---- the outcome ----
 
@@ -497,7 +525,7 @@ module ProjectCheckCore =
     | TimedOut of Stopped * after: TimeSpan
 
   module Report =
-    let private stoppedWords (stopped: Stopped) : string =
+    let stoppedWords (stopped: Stopped) : string =
       match stopped with
       | Stopped.ArgumentsRun -> "the MSBuild run that reads the compiler arguments"
       | Stopped.ReferenceBuild project -> sprintf "the build of referenced project %s" project
@@ -513,16 +541,15 @@ module ProjectCheckCore =
 
     /// Errors first, then by path, line and column.
     let ordered (diagnostics: CheckDiagnostic list) : CheckDiagnostic list =
-      raise (NotImplementedException "RED stub")
       diagnostics |> List.sortBy (fun d -> Severity.rank d.Severity, d.Path, d.Line, d.Column)
 
     let errorCount (diagnostics: CheckDiagnostic list) : int =
       diagnostics |> List.filter (fun d -> d.Severity = Severity.Error) |> List.length
 
-    let private line (d: CheckDiagnostic) : string =
+    let line (d: CheckDiagnostic) : string =
       sprintf "%s(%d,%d): %s %s: %s" d.Path d.Line d.Column (Severity.toWord d.Severity) d.Code (d.Message.Replace("\r", "").Replace("\n", " "))
 
-    let private notesLine (notes: RunNotes) : string =
+    let notesLine (notes: RunNotes) : string =
       let arguments =
         match notes.Arguments with
         | ArgumentsSource.Kept -> "compiler arguments kept from an earlier call"
@@ -533,7 +560,6 @@ module ProjectCheckCore =
 
     /// The one place the reply's text is written. At most `maxLines` diagnostics are listed, and what was cut is counted.
     let render (maxLines: int) (outcome: CheckOutcome) : string =
-      raise (NotImplementedException "RED stub")
       match outcome with
       | CheckOutcome.Refused refusal -> describeRefusal refusal
       | CheckOutcome.Cancelled stopped -> sprintf "Cancelled: stopped %s." (stoppedWords stopped)
