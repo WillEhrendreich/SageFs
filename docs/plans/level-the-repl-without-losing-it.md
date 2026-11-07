@@ -50,6 +50,19 @@ and master moved to 0.6.940 (`dbfc472a chore: release v0.6.940`). A fresh `dotne
 So a REPL session on this worktree is possible only once the branch is on master (0.6.940 or later); then the worktree's own Core carries
 the new types too. Until then they are proved by build and tests. The earlier 500 and partial-load fault above was against the 0.6.939 daemon.
 
+After `git rebase master` (tree and daemon both 0.6.940, version check passes) the project session still faults, so the version was one
+cause and not the only one. `create_project_session` on `SageFs.Tests.fsproj` and a second one on `SageFs.Host.fsproj` (session
+`d2724d23`) both get from the daemon:
+
+    Cannot reach session '...': Session transport closed - Response status code does not indicate success: 500 (Internal Server Error).
+
+and the worker log again carries `Project assembly loaded only partially ... Could not load file or assembly 'Expecto ...'` and
+`'Falco.Markup ...'` for the copy in `/tmp/sagefs-shadow-*`. The cause of the 500 is not found: the shadow copy is missing the third-party
+assemblies that sit next to the project's output, and this run did not check whether the daemon's wire without `LevelRepl` also
+contributes. What worked: a bare session with `#r` of the worktree's own
+`SageFs.Core/bin/Debug/net11.0/SageFs.Core.dll` and `SageFs.Host/bin/Debug/net11.0/SageFs.Host.dll`. The decision logic, the
+`LevelKeeper` gate order and the `HostBound` clearing were submitted there on real inputs (see the report).
+
 ## What done looks like
 
 After a metadata delta lands in a `run_app` app, the session brings its FSI host up to the patched build in the background
