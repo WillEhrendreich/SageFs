@@ -191,7 +191,7 @@ let httpRoundTripTests =
       let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
-        let! resp = proxy (WorkerMessage.GetStatus "s1") |> Async.StartAsTask
+        let! resp = proxy (WorkerMessage.GetStatus "s1") |> Started.asTask
         match resp with
         | WorkerResponse.StatusResult(rid, snap) ->
           rid |> Expect.equal "replyId" "s1"
@@ -206,7 +206,7 @@ let httpRoundTripTests =
       let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
-        let! resp = proxy (WorkerMessage.EvalCode("hello", "e1")) |> Async.StartAsTask
+        let! resp = proxy (WorkerMessage.EvalCode("hello", "e1")) |> Started.asTask
         match resp with
         | WorkerResponse.EvalResult(rid, Ok output, _, _) ->
           rid |> Expect.equal "replyId" "e1"
@@ -220,7 +220,7 @@ let httpRoundTripTests =
       let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
-        let! resp = proxy WorkerMessage.CancelEval |> Async.StartAsTask
+        let! resp = proxy WorkerMessage.CancelEval |> Started.asTask
         resp
         |> Expect.equal "cancel response" (WorkerResponse.EvalCancelled true)
       finally
@@ -236,7 +236,7 @@ let httpRoundTripTests =
           testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
-        let! resp = proxy WorkerMessage.Shutdown |> Async.StartAsTask
+        let! resp = proxy WorkerMessage.Shutdown |> Started.asTask
         resp
         |> Expect.equal "shutdown response precedes callback" WorkerResponse.WorkerShuttingDown
         callbackCalled.Value
@@ -262,7 +262,7 @@ let concurrencyTests =
         // Start a long eval in the background; it stays in flight until this test releases it
         let evalTask =
           proxy (WorkerMessage.EvalCode("slow", "eval-1"))
-          |> Async.StartAsTask
+          |> Started.asTask
 
         // The server says when the eval is running, so no guess at how long it takes to get there
         do! evalStarted.Task.WaitAsync TestTimeouts.patience
@@ -270,7 +270,7 @@ let concurrencyTests =
         // GetStatus answers while the eval is still in flight: the eval cannot finish before the release below
         // (A server that queued the status behind the eval would never answer it, because the release
         // comes after: the ceiling turns that into a failure instead of a hang.)
-        let! statusResp = (proxy (WorkerMessage.GetStatus "s1") |> Async.StartAsTask).WaitAsync TestTimeouts.patience
+        let! statusResp = (proxy (WorkerMessage.GetStatus "s1") |> Started.asTask).WaitAsync TestTimeouts.patience
         evalTask.IsCompleted
         |> Expect.isFalse "the status was answered while the eval was still running"
 

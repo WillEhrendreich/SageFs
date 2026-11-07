@@ -61,10 +61,10 @@ let private completesWithin (timeoutMs: int) (work: Task<'a>) : Task<'a option> 
 /// PostAndReply bounded by a timeout — returns None when the mailbox is dead or
 /// blocked (the failure mode this suite exists to prevent).
 let private tryPostAndReply (timeoutMs: int) (mailbox: MailboxProcessor<SessionCommand>) (build: AsyncReplyChannel<'a> -> SessionCommand) : Task<'a option> =
-  mailbox.PostAndAsyncReply(build) |> Async.StartAsTask |> completesWithin timeoutMs
+  mailbox.PostAndAsyncReply(build) |> Started.asTask |> completesWithin timeoutMs
 
 let private postAndReply (mailbox: MailboxProcessor<SessionCommand>) (build: AsyncReplyChannel<'a> -> SessionCommand) : Task<'a> =
-  mailbox.PostAndAsyncReply(build) |> Async.StartAsTask
+  mailbox.PostAndAsyncReply(build) |> Started.asTask
 
 let private withHarness runtime (run: Harness -> Task<unit>) : Task<unit> =
   task {

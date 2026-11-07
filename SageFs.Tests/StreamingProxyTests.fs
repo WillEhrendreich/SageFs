@@ -85,7 +85,7 @@ let private serveOnce (write: IO.Stream -> Async<unit>) =
         ctx.Response.Close()
       with _ -> ()
     }
-  Async.Start serve
+  Started.andForget serve
   sprintf "http://127.0.0.1:%d" port, listener
 
 let private sendLine (stream: IO.Stream) (text: string) =
@@ -145,12 +145,12 @@ let streamingProxyTests =
               ctx.Response.Close()
             with _ -> ()
           }
-        Async.Start serve
+        Started.andForget serve
         try
           let proxy = streamingTestProxy TestTimeouts.streamWindowCleanEnd (sprintf "http://127.0.0.1:%d" port)
           let! outcome =
             proxy [| sampleTestCase "a" |] 1 (fun _ -> ()) CancellationToken.None
-            |> Async.StartAsTask
+            |> Started.asTask
           outcome |> Expect.equal "completed on event: done" StreamOutcome.Completed
         finally
           listener.Stop()
@@ -178,12 +178,12 @@ let streamingProxyTests =
               ctx.Response.Close()
             with _ -> ()
           }
-        Async.Start serve
+        Started.andForget serve
         try
           let proxy = streamingTestProxy TestTimeouts.streamWindowStalled (sprintf "http://127.0.0.1:%d" port)
           let work =
             proxy [| sampleTestCase "a" |] 1 (fun _ -> ()) CancellationToken.None
-            |> Async.StartAsTask
+            |> Started.asTask
           let! _ = Task.WhenAny(work, Task.Delay TestTimeouts.patience) :> Task
           if not work.IsCompleted then
             failtest "proxy did not time out within the deadline"
@@ -218,7 +218,7 @@ let streamingProxyTests =
           // own forced-cancellation against that token the instant it is
           // called, independent of the proxy's own graceful handling, and
           // races it — see HttpWorkerClient.fs's safeAwait doc comment.
-          let work = Async.StartAsTask(proxy [| sampleTestCase "a" |] 1 ignore run.Token)
+          let work = Started.asTask (proxy [| sampleTestCase "a" |] 1 ignore run.Token)
           let! _ = started.Task
           run.Cancel()
           let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.patience)
@@ -252,7 +252,7 @@ let streamingProxyTests =
         try
           let proxy = streamingTestProxy TestTimeouts.streamWindowNeverWaitedOut url
           run.Cancel()
-          let work = Async.StartAsTask(proxy [| sampleTestCase "a" |] 1 ignore run.Token)
+          let work = Started.asTask (proxy [| sampleTestCase "a" |] 1 ignore run.Token)
           let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.patience)
           obj.ReferenceEquals(winner, work)
           |> Expect.isTrue "a run cancelled before it starts still resolves within the ceiling"
@@ -281,7 +281,7 @@ let streamingProxyTests =
           // re-arms lets it through. The window is wide (`streamWindowSteady`) so that a starved turn of either
           // side, which a loaded machine produces, does not by itself make a gap as long as the window.
           let proxy = streamingTestProxy TestTimeouts.streamWindowSteady url
-          let! outcome = proxy [| sampleTestCase "a" |] 1 ignore CancellationToken.None |> Async.StartAsTask
+          let! outcome = proxy [| sampleTestCase "a" |] 1 ignore CancellationToken.None |> Started.asTask
           outcome |> Expect.equal "steady stream completes" StreamOutcome.Completed
         finally
           listener.Stop()

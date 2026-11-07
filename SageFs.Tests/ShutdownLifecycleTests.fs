@@ -117,7 +117,7 @@ let shutdownLifecycleTests =
       let pid = proc.Id
       let session = mkHangingSession proc
       try
-        let stop = SessionManager.stopWorker session |> Async.StartAsTask
+        let stop = SessionManager.stopWorker session |> Started.asTask
         let! winner = Task.WhenAny(stop, Task.Delay TestTimeouts.hungWorkerStopBudget)
         obj.ReferenceEquals(winner, stop)
         |> Expect.isTrue
@@ -179,10 +179,9 @@ let timerStopTests =
   testList "Daemon timer stop" [
     testTask "WHY — DaemonMode.disposeTimerAndWait — an idle timer is joined at once because every daemon shutdown used to sit out the full wait timeouts" {
       let timer = new System.Threading.Timer((fun _ -> ()), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
-      let watch = Stopwatch.StartNew()
+      // The answer is the evidence, not a stopwatch: waiting out the timeout ends in `StillRunning`, so `Joined` is
+      // an idle timer joined at once, however loaded the machine is.
       let! stop = SageFs.Server.DaemonMode.disposeTimerAndWait timer TestTimeouts.timerJoinTimeout
-      watch.Stop()
-      stop |> Expect.equal "an idle timer has no callback to wait for" SageFs.Server.DaemonMode.TimerStop.Joined
-      (watch.Elapsed < TestTimeouts.timerJoinTimeout * 0.75) |> Expect.isTrue (sprintf "joined without sitting out the timeout (took %O)" watch.Elapsed)
+      stop |> Expect.equal "an idle timer has no callback to wait for, so it is joined and the wait is not sat out" SageFs.Server.DaemonMode.TimerStop.Joined
     }
   ]

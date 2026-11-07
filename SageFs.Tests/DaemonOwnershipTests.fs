@@ -558,7 +558,7 @@ let daemonOwnerWatchdogTests = testList "daemon owner watchdog (OwnerMonitor.run
       let owner : SageFs.OwnerMonitor.Owner =
         { Pid = daemonOwner.Pid; StartTimeTicks = OwnerFence.toTicks daemonOwner.Fence }
       let monitor = SageFs.OwnerMonitor.run (fun _ -> None) owner cts ignore
-      let running = monitor |> Async.StartAsTask
+      let running = monitor |> Started.asTask
       let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay TestTimeouts.monitorNotice)
       cts.IsCancellationRequested
       |> Expect.isTrue "the daemon's own cts should be cancelled once its owner is gone"

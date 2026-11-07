@@ -107,12 +107,12 @@ let private createReady (harness: Harness) : SessionId =
 let private startRebuild (harness: Harness) (id: SessionId) : Task<Result<string, SageFsError>> =
   harness.Mailbox.PostAndAsyncReply(fun reply ->
     SessionCommand.RestartSession(id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply))
-  |> Async.StartAsTask
+  |> Started.asTask
 
 /// Parks a caller the way the status tool does. Posted before this returns.
 let private awaitReady (harness: Harness) (id: SessionId) : Task<Result<unit, SageFsError>> =
   harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.AwaitReady(id, reply))
-  |> Async.StartAsTask
+  |> Started.asTask
 
 /// Whether the task answered within the window a wrong answer would have arrived in.
 let private answersSoon (window: TimeSpan) (answer: Task<'a>) : Task<bool> =

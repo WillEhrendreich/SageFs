@@ -38,14 +38,14 @@ let helperTests =
     testTask "an answer of Ok is Ready" {
       let! outcome =
         RebuildReadyWait.await (async { return Result.Ok () }) RebuildWaitTimeouts.deadlineNotHit CancellationToken.None
-        |> Async.StartAsTask
+        |> Started.asTask
       outcome |> Expect.equal "a session that turned Ready is Ready" (RebuildReadyWait.Outcome<string>.Ready)
     }
 
     testTask "an answer of Error is Failed with that error" {
       let! outcome =
         RebuildReadyWait.await (async { return Result.Error "worker faulted" }) RebuildWaitTimeouts.deadlineNotHit CancellationToken.None
-        |> Async.StartAsTask
+        |> Started.asTask
       outcome |> Expect.equal "the manager's reason is carried through" (RebuildReadyWait.Outcome.Failed "worker faulted")
     }
 
@@ -53,7 +53,7 @@ let helperTests =
       let never = newSignal<Result<unit, string>> ()
       let! outcome =
         RebuildReadyWait.await (Async.AwaitTask never.Task) RebuildWaitTimeouts.deadlineToHit CancellationToken.None
-        |> Async.StartAsTask
+        |> Started.asTask
         |> within TestTimeouts.patienceBrief "the deadline outcome"
       outcome |> Expect.equal "a wait nobody answers ends at its deadline" (RebuildReadyWait.Outcome<string>.DeadlineReached)
     }
@@ -63,7 +63,7 @@ let helperTests =
       let cancellation = new CancellationTokenSource()
       let waiting =
         RebuildReadyWait.await (Async.AwaitTask never.Task) RebuildWaitTimeouts.deadlineNotHit cancellation.Token
-        |> Async.StartAsTask
+        |> Started.asTask
       cancellation.Cancel()
       let! outcome = waiting |> within TestTimeouts.patienceBrief "the cancelled outcome"
       outcome |> Expect.equal "a cancelled wait reports Cancelled, not a deadline" (RebuildReadyWait.Outcome<string>.Cancelled)
@@ -75,7 +75,7 @@ let helperTests =
       cancellation.Cancel()
       let! outcome =
         RebuildReadyWait.await (Async.AwaitTask never.Task) RebuildWaitTimeouts.deadlineNotHit cancellation.Token
-        |> Async.StartAsTask
+        |> Started.asTask
         |> within TestTimeouts.patienceBrief "the cancelled outcome"
       outcome |> Expect.equal "already cancelled" (RebuildReadyWait.Outcome<string>.Cancelled)
     }
@@ -379,7 +379,7 @@ let private runTrial (manager: Manager) (seed: int) (trial: Trial) : string list
   let becomeReady () =
     manager.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionLifecycleStatus.Ready { Pid = pid; Port = Some 4123 }))
   let awaitReady () =
-    manager.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.AwaitReady(info.Id, reply)) |> Async.StartAsTask
+    manager.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.AwaitReady(info.Id, reply)) |> Started.asTask
   // Where AwaitReady is issued: before WorkerReady, between it and Ready, or after both.
   let waiter =
     match random.Next 3 with

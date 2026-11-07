@@ -42,7 +42,7 @@ let private drain (stream: StreamReader) (path: string) =
     try do! loop () with _ -> ()
     writer.Dispose()
   }
-  |> Async.Start
+  |> Started.andForget
 
 /// A daemon whose every directory is inside the sandbox, so nothing it tidies can be anything real.
 let private startDaemon (sb: Sandbox) : Daemon =

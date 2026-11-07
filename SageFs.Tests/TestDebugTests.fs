@@ -136,7 +136,7 @@ let private held (answer: DebugBegin) : DebugTarget =
   | other -> failtestf "expected Held, got %A" other
 
 let private continueFor (hold: DebugHold) (ticket: DebugTicket) (park: TimeSpan) : Task<DebugProgress> =
-  hold.Continue(ticket, park) |> Async.StartAsTask
+  hold.Continue(ticket, park) |> Started.asTask
 
 /// The case is about a process with no debugger, and a debugger attached to the test process itself would make the real
 /// probe answer differently, so it is registered only for a process that has none. Under a debugger it does not exist;
@@ -147,7 +147,7 @@ let private noDebuggerCases : Test list =
   | false ->
     [ testTask "WHY: the real probe, in a process with no debugger, says none came only once the whole wait is spent" {
         let clock = System.Diagnostics.Stopwatch.StartNew()
-        let! presence = systemProbe.AwaitAttach TestTimeouts.settle |> Async.StartAsTask
+        let! presence = systemProbe.AwaitAttach TestTimeouts.settle |> Started.asTask
         presence |> Expect.equal "no debugger came" DebuggerPresence.NoDebugger
         (clock.Elapsed >= TestTimeouts.settle) |> Expect.isTrue "it waited the whole span before saying so"
       } ]
@@ -515,7 +515,7 @@ let tests =
         let agent = newAgentWaiting TestTimeouts.settle
         agent.AfterEval afterEval |> ignore
         let target = agent.DebugBegin evalTest |> held
-        let! ended = agent.DebugContinue(target.Ticket, TestTimeouts.patienceInProcess) |> Async.StartAsTask
+        let! ended = agent.DebugContinue(target.Ticket, TestTimeouts.patienceInProcess) |> Started.asTask
         ended |> Expect.equal "the test process has no debugger" (DebugProgress.Ended DebugEnd.ReleasedWithoutDebugger)
       }
     ]

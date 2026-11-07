@@ -204,7 +204,7 @@ let private serveOnce (write: IO.Stream -> Async<unit>) =
         ctx.Response.Close()
       with _ -> ()
     }
-  Async.Start serve
+  Started.andForget serve
   sprintf "http://127.0.0.1:%d" port, listener
 
 let private sendText (stream: IO.Stream) (text: string) =
@@ -236,7 +236,7 @@ let clientTests =
         let proxy = HttpWorkerClient.streamingTestProxyWithCoverage TestTimeouts.streamReadPatience url
         let! outcome =
           proxy [| first; second |] 4 ignore (fun id hits -> received.Enqueue((id, hits))) CancellationToken.None
-          |> Async.StartAsTask
+          |> Started.asTask
         outcome |> Expect.equal "the stream completed" HttpWorkerClient.StreamOutcome.Completed
         received
         |> Seq.toList

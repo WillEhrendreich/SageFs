@@ -81,6 +81,11 @@ module TestTimeouts =
   let settle = ms 50.
   /// A gap long enough for a stopwatch to read a positive elapsed time, and no longer.
   let measurableGap = ms 2.
+  /// How often the pool sampler (`SAGEFS_POOL_SAMPLE`) queues its marker item. Short against the stalls it looks for
+  /// (a second and more), long enough that sampling costs the run nothing.
+  let poolSampleEvery = ms 50.
+  /// How long the pool sampler's marker waits before it records a stall and has the process's stacks captured.
+  let poolStallAfter = secs 1.
   /// The delay inside a timed piece of work, when the test then asserts the measured time is at
   /// least this much.
   let timedWork = ms 20.
@@ -696,11 +701,6 @@ module TestTimeouts =
   /// before the new text shows, so this is longer than the first line.
   let appOutputAfterSave = System.TimeSpan.FromSeconds 180.
 
-  /// How long the eval route may take, in seconds, from the eval to the running app serving what
-  /// it evaluated. The route pays a build, so this is generous next to the save-to-served figure
-  /// the hot-reload gate measures: it is here to catch a route that stopped working, not to
-  /// police a millisecond.
-  let evalToAppServedSeconds = 60.
 
   /// How long the tool layer's read caches (list_tests, coverage_intel, and the narrative
   /// cache behind explain_test_failure and diagnose) may lag a state change the status endpoint
@@ -1272,6 +1272,13 @@ module TestMagnitudes =
   let megabyte = 1_000_000L
   /// The upper bound of the seeds a simulation property draws.
   let seedBound = 1_000_000
+  /// The least number of worker threads the test host's pool starts at the moment it needs them. The pool normally adds
+  /// one about every half second once its threads are busy; the suite's CPU-bound simulation cases and its blocking
+  /// cases hold every thread at times, and a queued item then waited more than a second (measured with the pool
+  /// sampler, 1.36 s at most in one run). With this floor a thread is made at once, up to this many.
+  let poolMinWorkerThreads = 256
+  /// How many times the pool sampler captures the process's stacks when it sees a stall.
+  let poolStackCaptures = 3
   /// The count of probes a coverage bitmap case packs.
   let packedProbeCount = 10_000
   /// The panel width the dashboard's test status grid is laid out inside.

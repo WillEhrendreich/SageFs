@@ -145,7 +145,7 @@ let liveCheckRelayTests =
       testTask "a request that finds no worker waits for one, and is asked of it the moment it is Ready" {
         let world = World()
         let relay = relayOver world (fun _ _ -> true)
-        do! relay.Submit "a" |> Async.StartAsTask
+        do! relay.Submit "a" |> Started.asTask
         world.Asked |> Seq.isEmpty |> Expect.isTrue "nothing was asked while no worker was Ready"
         let! (wake: TaskCompletionSource<LiveCheckRelay.WaitEnded>) = nextParked world
         world.View <- WorkerView.Serving 7
@@ -168,7 +168,7 @@ let liveCheckRelayTests =
               WorkerReply.Silent "the worker was retired"
             | _ -> WorkerReply.Replied (request + "!"))
         let relay = relayOver world (fun _ _ -> true)
-        do! relay.Submit "a" |> Async.StartAsTask
+        do! relay.Submit "a" |> Started.asTask
         let! (wake: TaskCompletionSource<LiveCheckRelay.WaitEnded>) = nextParked world
         world.View <- WorkerView.Serving 2
         wake.SetResult LiveCheckRelay.WaitEnded.SessionAnswered
@@ -182,7 +182,7 @@ let liveCheckRelayTests =
         world.View <- WorkerView.Serving 3
         world.Reply <- (fun _ _ -> WorkerReply.Silent "no answer")
         let relay = relayOver world (fun _ _ -> true)
-        do! relay.Submit "a" |> Async.StartAsTask
+        do! relay.Submit "a" |> Started.asTask
         let! (_, outcome) = nextEnd world
         outcome |> Expect.equal "unanswered, with why" (PumpOutcome.Unanswered (UnansweredWhy.WorkerSilent "no answer"))
         world.Asked |> Seq.length |> Expect.equal "one call, not a loop" 1
@@ -191,9 +191,9 @@ let liveCheckRelayTests =
       testTask "a newer request replaces an older one that waited, and only the newer is asked" {
         let world = World()
         let relay = relayOver world (fun _ _ -> true)
-        do! relay.Submit "old" |> Async.StartAsTask
+        do! relay.Submit "old" |> Started.asTask
         let! (wake: TaskCompletionSource<LiveCheckRelay.WaitEnded>) = nextParked world
-        do! relay.Submit "new" |> Async.StartAsTask
+        do! relay.Submit "new" |> Started.asTask
         world.Replaced |> Seq.toList |> Expect.equal "the older one was closed, not reported" [ "old" ]
         world.View <- WorkerView.Serving 4
         wake.SetResult LiveCheckRelay.WaitEnded.SessionAnswered
@@ -205,7 +205,7 @@ let liveCheckRelayTests =
       testTask "a wait that reaches its deadline ends the request unanswered, saying no worker came in time" {
         let world = World()
         let relay = relayOver world (fun _ _ -> true)
-        do! relay.Submit "a" |> Async.StartAsTask
+        do! relay.Submit "a" |> Started.asTask
         let! (wake: TaskCompletionSource<LiveCheckRelay.WaitEnded>) = nextParked world
         wake.SetResult LiveCheckRelay.WaitEnded.DeadlineReached
         let! (_, outcome) = nextEnd world
@@ -216,7 +216,7 @@ let liveCheckRelayTests =
       testTask "a session that faults while a request waits ends it unanswered, with the reason" {
         let world = World()
         let relay = relayOver world (fun _ _ -> true)
-        do! relay.Submit "a" |> Async.StartAsTask
+        do! relay.Submit "a" |> Started.asTask
         let! (wake: TaskCompletionSource<LiveCheckRelay.WaitEnded>) = nextParked world
         world.View <- WorkerView.Gone "the session faulted"
         wake.SetResult LiveCheckRelay.WaitEnded.SessionAnswered
@@ -287,7 +287,7 @@ let liveCheckRelayTests =
               | SageFsMsg.FcsTypeCheckCompleted _ -> completed.TrySetResult() |> ignore
               | _ -> ())
             (SageFsEffect.TestCycle checkEffect)
-          |> Async.StartAsTask
+          |> Started.asTask
         // The replacement reports its port: a proxy exists, and the session is Starting. It must not be asked yet.
         status.Value <- SessionLifecycleStatus.Starting { Pid = 2; Port = Some 1234 }
         proxy.Value <- Some answering
@@ -332,7 +332,7 @@ let liveCheckRelayTests =
               | SageFsMsg.FcsTypeCheckCompleted _ -> completed.TrySetResult() |> ignore
               | _ -> ())
             (SageFsEffect.TestCycle checkEffect)
-          |> Async.StartAsTask
+          |> Started.asTask
         warmed.Value <- true
         status.Value <- SessionLifecycleStatus.Ready { Pid = 2; Port = Some 1234 }
         ready.SetResult()
@@ -361,7 +361,7 @@ let liveCheckRelayTests =
               | SageFsMsg.FcsTypeCheckCompleted _ -> completed.TrySetResult() |> ignore
               | _ -> ())
             (SageFsEffect.TestCycle checkEffect)
-          |> Async.StartAsTask
+          |> Started.asTask
         status.Value <- SessionLifecycleStatus.Faulted (FaultReason.report "the host crashed")
         ready.SetResult()
         do! within "the check ending" completed.Task

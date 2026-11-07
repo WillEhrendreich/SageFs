@@ -129,7 +129,7 @@ let runTests = testList "OwnerMonitor.run" [
       let logLines = ref []
       let monitor =
         run (fun _ -> None) (Owner.ofPid 999999) cts (fun msg -> logLines.Value <- msg :: logLines.Value)
-      let running = monitor |> Async.StartAsTask
+      let running = monitor |> Started.asTask
       let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay TestTimeouts.monitorNotice)
       cts.IsCancellationRequested
       |> Expect.isTrue "cts should be cancelled after owner death detected"
@@ -145,7 +145,7 @@ let runTests = testList "OwnerMonitor.run" [
       let self = Process.GetCurrentProcess()
       let owner = { Pid = self.Id; StartTimeTicks = Some (startTimeTicksOf self) }
       let monitor = run (fun _ -> Some self) owner cts ignore
-      let _running = monitor |> Async.StartAsTask
+      let _running = monitor |> Started.asTask
       do! Tasks.Task.Delay(pollIntervalMs * 3)
       cts.IsCancellationRequested
       |> Expect.isFalse "should not cancel while the fenced owner is alive"
@@ -161,7 +161,7 @@ let runTests = testList "OwnerMonitor.run" [
       let staleStartTicks = startTimeTicksOf self - TestTimeouts.pidReuseGap.Ticks
       let owner = { Pid = self.Id; StartTimeTicks = Some staleStartTicks }
       let monitor = run (fun _ -> Some self) owner cts ignore
-      let running = monitor |> Async.StartAsTask
+      let running = monitor |> Started.asTask
       let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay TestTimeouts.monitorNotice)
       cts.IsCancellationRequested
       |> Expect.isTrue "a recycled pid must not keep the monitor from cancelling — the fence must detect it within a couple of poll intervals"

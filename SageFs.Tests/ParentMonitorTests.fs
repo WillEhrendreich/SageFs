@@ -53,7 +53,7 @@ let parentMonitorRunTests = testList "ParentMonitor.run" [
       let logLines = ref []
       let monitor =
         ParentMonitor.run (fun _ -> None) 999999 cts (fun msg -> logLines.Value <- msg :: logLines.Value)
-      let running = monitor |> Async.StartAsTask
+      let running = monitor |> Started.asTask
       let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay TestTimeouts.monitorNotice)
       cts.IsCancellationRequested
       |> Expect.isTrue "cts should be cancelled after daemon death detected"
@@ -69,7 +69,7 @@ let parentMonitorRunTests = testList "ParentMonitor.run" [
       let self = Process.GetCurrentProcess()
       let monitor =
         ParentMonitor.run (fun _ -> Some self) self.Id cts ignore
-      let _running = monitor |> Async.StartAsTask
+      let _running = monitor |> Started.asTask
       // Give it a few poll cycles while the daemon (us) stays alive.
       do! Tasks.Task.Delay(ParentMonitor.pollIntervalMs * 3)
       cts.IsCancellationRequested

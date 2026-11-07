@@ -122,7 +122,7 @@ module private IsolatedDaemon =
       try do! loop () with _ -> ()
       writer.Dispose()
     }
-    |> Async.Start
+    |> Started.andForget
 
   /// Spawn a fresh daemon process on `mcpPort`/`dashPort` (both must already
   /// be free — the caller reuses the SAME pair across kill+respawn so the

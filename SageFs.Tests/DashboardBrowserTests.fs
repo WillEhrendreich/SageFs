@@ -555,7 +555,7 @@ module private NoSessionLanding =
       try do! loop () with _ -> ()
       writer.Dispose()
     }
-    |> Async.Start
+    |> Started.andForget
 
   /// Boot a fresh, session-free daemon on its own port pair and data dir.
   /// `--no-resume` so it never inherits another run's manifest — the

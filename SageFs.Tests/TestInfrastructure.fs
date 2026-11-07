@@ -359,6 +359,95 @@ module DedicatedThread =
     System.Threading.Thread(System.Threading.ThreadStart body, IsBackground = true, Name = name).Start()
     completion.Task
 
+/// A diagnostic that answers "does this run starve its thread pool, and when". Off unless `SAGEFS_POOL_SAMPLE` names
+/// a file. A sampler thread of its own (never a pool thread) queues a trivial work item every `interval`, and the
+/// time that item waited before a pool thread started it is the queue delay a deadline on pool work would be charged.
+/// Each sample is one line: seconds since start, queue delay in ms, pool thread count, pending work items. An item
+/// that has waited `stallAfter` without starting writes a `STALL` line at once (so the file shows a stall that has not
+/// ended yet), and with `SAGEFS_POOL_SAMPLE_STACKS` set to a directory it runs `dotnet-stack report` on this process
+/// into that directory, at most `stackLimit` times, to name what holds the pool.
+module PoolSampler =
+  type Sample = { At: float; DelayMs: float; Threads: int; Pending: int64 }
+
+  type Summary = { Count: int; MaxDelayMs: float; MaxAt: float; P99DelayMs: float; MaxThreads: int; MaxPending: int64 }
+
+  /// The sorted-rank 99th percentile: the smallest delay that at least 99 % of the samples are at or under.
+  let summarize (samples: Sample list) : Summary option =
+    match samples with
+    | [] -> None
+    | _ ->
+      let delays = samples |> List.map (fun s -> s.DelayMs) |> List.sort |> Array.ofList
+      let rank = int (System.Math.Ceiling(0.99 * float delays.Length)) - 1
+      let worst = samples |> List.maxBy (fun s -> s.DelayMs)
+      Some
+        { Count = samples.Length
+          MaxDelayMs = worst.DelayMs
+          MaxAt = worst.At
+          P99DelayMs = delays.[max 0 rank]
+          MaxThreads = samples |> List.map (fun s -> s.Threads) |> List.max
+          MaxPending = samples |> List.map (fun s -> s.Pending) |> List.max }
+
+  /// Reads the lines `start` wrote. A `STALL` line and anything else that is not a sample is skipped.
+  let parse (lines: string seq) : Sample list =
+    [ for line in lines do
+        match line.Split(' ') with
+        | [| at; delay; threads; pending |] ->
+          match System.Double.TryParse at, System.Double.TryParse delay, System.Int32.TryParse threads, System.Int64.TryParse pending with
+          | (true, a), (true, d), (true, t), (true, p) -> yield { At = a; DelayMs = d; Threads = t; Pending = p }
+          | _ -> ()
+        | _ -> () ]
+
+  let private interval = TestTimeouts.poolSampleEvery
+  let private stallAfter = TestTimeouts.poolStallAfter
+  let private stackLimit = TestMagnitudes.poolStackCaptures
+
+  let private captureStacks (directory: string) (index: int) : unit =
+    let pid = System.Environment.ProcessId
+    let psi = System.Diagnostics.ProcessStartInfo("dotnet-stack", sprintf "report -p %d" pid)
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    SpawnEnvironment.apply psi
+    use proc = System.Diagnostics.Process.Start psi
+    let out = proc.StandardOutput.ReadToEndAsync()
+    proc.WaitForExit()
+    System.IO.File.WriteAllText(System.IO.Path.Combine(directory, sprintf "stall-%d.txt" index), out.Result)
+
+  /// Starts the sampler when `SAGEFS_POOL_SAMPLE` names a file; does nothing otherwise.
+  let startIfRequested () : unit =
+    match System.Environment.GetEnvironmentVariable "SAGEFS_POOL_SAMPLE" with
+    | null | "" -> ()
+    | requested ->
+      // A test can start this assembly again (and the child inherits the variable), so each process writes its own file.
+      let path = sprintf "%s.%d" requested System.Environment.ProcessId
+      let stacks = System.Environment.GetEnvironmentVariable "SAGEFS_POOL_SAMPLE_STACKS"
+      let clock = System.Diagnostics.Stopwatch.StartNew()
+      let body () =
+        use writer = new System.IO.StreamWriter(path, false)
+        let mutable captured = 0
+        use pause = new ManualResetEventSlim(false)
+        while true do
+          let queuedAt = clock.Elapsed
+          let started = new ManualResetEventSlim(false)
+          let startedAt = ref queuedAt
+          ThreadPool.UnsafeQueueUserWorkItem((fun _ -> startedAt.Value <- clock.Elapsed; started.Set()), null, false) |> ignore
+          match started.Wait stallAfter with
+          | true -> ()
+          | false ->
+            writer.WriteLine(sprintf "STALL queued-at=%.2f threads=%d pending=%d" queuedAt.TotalSeconds ThreadPool.ThreadCount ThreadPool.PendingWorkItemCount)
+            writer.Flush()
+            match stacks with
+            | null | "" -> ()
+            | directory when captured < stackLimit ->
+              captured <- captured + 1
+              captureStacks directory captured
+            | _ -> ()
+            started.Wait Timeout.InfiniteTimeSpan |> ignore
+          let delay = startedAt.Value - queuedAt
+          writer.WriteLine(sprintf "%.2f %.1f %d %d" queuedAt.TotalSeconds delay.TotalMilliseconds ThreadPool.ThreadCount ThreadPool.PendingWorkItemCount)
+          writer.Flush()
+          pause.Wait interval |> ignore
+      System.Threading.Thread(System.Threading.ThreadStart body, IsBackground = true, Name = "pool-sampler").Start()
+
 /// Structural registry of [Integration] suites. Every integration suite is
 /// registered here together with the runner that owns it, so:
 ///  - the default run excludes registered suites by the IDENTITY of their test

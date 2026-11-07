@@ -89,20 +89,21 @@ let private spawnHost (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMod
     | false -> psi.EnvironmentVariables[k] <- v
   let proc = Process.Start psi
   let port = TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously)
+  // The reader is a hot task: it runs on this thread up to its first read and goes on from the read's completion, so
+  // the wait for the port below times the child and never a queued pool item.
   let drain (reader: StreamReader) =
-    Task.Run(fun () ->
-      task {
-        let mutable line = ""
-        let! first = reader.ReadLineAsync()
-        line <- first
-        while not (isNull line) do
-          lock hostLog (fun () -> hostLog.AppendLine line |> ignore)
-          match line.StartsWith("WORKER_PORT=", StringComparison.Ordinal) with
-          | true -> port.TrySetResult(line.Substring("WORKER_PORT=".Length)) |> ignore
-          | false -> ()
-          let! next = reader.ReadLineAsync()
-          line <- next
-      } :> Task)
+    task {
+      let mutable line = ""
+      let! first = reader.ReadLineAsync()
+      line <- first
+      while not (isNull line) do
+        lock hostLog (fun () -> hostLog.AppendLine line |> ignore)
+        match line.StartsWith("WORKER_PORT=", StringComparison.Ordinal) with
+        | true -> port.TrySetResult(line.Substring("WORKER_PORT=".Length)) |> ignore
+        | false -> ()
+        let! next = reader.ReadLineAsync()
+        line <- next
+    }
     |> ignore
   drain proc.StandardOutput
   drain proc.StandardError

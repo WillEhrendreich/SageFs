@@ -199,7 +199,7 @@ let private isFaulted = function SessionLifecycleStatus.Faulted _ -> true | _ ->
 
 /// The workers a stopped session left behind are all seen gone: the mailbox has handled every WorkerReaped by then.
 let private workersGone (harness: Harness) (id: SessionId) : Task<WorkerReaper.Settled> =
-  harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.AwaitWorkersGone(id, reply)) |> Async.StartAsTask
+  harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.AwaitWorkersGone(id, reply)) |> Started.asTask
 
 let private within (what: string) (waited: Task) : Task =
   task {

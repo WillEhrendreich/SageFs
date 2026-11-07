@@ -72,7 +72,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
       with _ -> ()
       writer.Dispose()
     }
-    |> Async.Start
+    |> Started.andForget
   drain daemon.StandardOutput daemonOutLog
   drain daemon.StandardError daemonErrLog
 
@@ -305,18 +305,18 @@ let prebuildCopyWith (extraArgs: string list) (dest: string) (logDir: string) (p
   let buildErr = Path.Combine(logDir, "build.stderr.log")
   let outWriter = new System.IO.StreamWriter(buildOut)
   let errWriter = new System.IO.StreamWriter(buildErr)
-  let drain (stream: System.IO.StreamReader) (writer: System.IO.StreamWriter) =
-    async {
-      try
-        let mutable line = stream.ReadLine()
-        while not (isNull line) do
-          writer.WriteLine(line)
-          line <- stream.ReadLine()
-      with _ -> ()
-      writer.Dispose()
-    }
-  let outDrain = drain build.StandardOutput outWriter |> Async.StartAsTask
-  let errDrain = drain build.StandardError errWriter |> Async.StartAsTask
+  // Each drain reads with a blocking `ReadLine`, so each gets a thread of its own (the waits below start their clock
+  // after the thread exists).
+  let drain (stream: System.IO.StreamReader) (writer: System.IO.StreamWriter) : unit =
+    try
+      let mutable line = stream.ReadLine()
+      while not (isNull line) do
+        writer.WriteLine(line)
+        line <- stream.ReadLine()
+    with _ -> ()
+    writer.Dispose()
+  let outDrain = SageFs.Tests.TestInfrastructure.DedicatedThread.run "build-stdout-drain" (fun () -> drain build.StandardOutput outWriter)
+  let errDrain = SageFs.Tests.TestInfrastructure.DedicatedThread.run "build-stderr-drain" (fun () -> drain build.StandardError errWriter)
   if not (build.WaitForExit(SageFs.Timeouts.webAppHotReloadBuild)) then
     failwithf "runner: pre-build of %s in %s timed out after %O" projectFile dest SageFs.Timeouts.webAppHotReloadBuild
   try outDrain.Wait(TestTimeouts.childExit) |> ignore with _ -> ()
@@ -487,7 +487,7 @@ let runHotReloadRunner (kind: HotReloadRunnerKind) (cliArgs: string array) : int
       with _ -> ()
       writer.Dispose()
     }
-    |> Async.Start
+    |> Started.andForget
   drain daemon.StandardOutput daemonOutLog
   drain daemon.StandardError daemonErrLog
 
@@ -755,7 +755,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
       with _ -> ()
       writer.Dispose()
     }
-    |> Async.Start
+    |> Started.andForget
   drain daemon.StandardOutput daemonOutLog
   drain daemon.StandardError daemonErrLog
 

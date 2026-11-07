@@ -63,7 +63,7 @@ let drain (stream: StreamReader) (path: string) =
     try do! loop () with _ -> ()
     writer.Dispose()
   }
-  |> Async.Start
+  |> Started.andForget
 
 let startDaemon () : Daemon =
   let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()

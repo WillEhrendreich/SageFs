@@ -22,6 +22,12 @@ let main argv =
   // ANSI writer whose two paths lock in opposite orders, which hung gate runs (see
   // RunnerLogging). One plain logger for every entry point below.
   SageFs.Tests.RunnerLogging.install argv (new SageFs.Tests.RunnerLogging.ConsoleOutWriter())
+  // Off unless SAGEFS_POOL_SAMPLE names a file: records how long a trivial pool work item waits to start.
+  SageFs.Tests.TestInfrastructure.PoolSampler.startIfRequested ()
+  // The pool adds a thread about every half second once its threads are busy, and the suite's CPU-bound and blocking
+  // cases hold them at times (a marker item waited 1.36 s in one measured run). A floor makes a thread at once.
+  let _, ioThreads = System.Threading.ThreadPool.GetMinThreads()
+  System.Threading.ThreadPool.SetMinThreads(SageFs.Tests.TestMagnitudes.poolMinWorkerThreads, ioThreads) |> ignore
   // Restamp the README test-count badge + property count from the live source.
   let isUpdateBadge = argv |> Array.exists (fun a -> a = "--update-badge")
   match isUpdateBadge with

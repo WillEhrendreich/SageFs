@@ -117,17 +117,17 @@ let private attach (executable: string) (pid: int) : Attached =
   let said = StringBuilder()
   SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
   let proc = Process.Start psi
+  // A hot task: it runs on this thread up to its first read, so nothing here waits for a queued pool item.
   let drain (reader: StreamReader) =
-    Task.Run(fun () ->
-      task {
-        let mutable line = ""
-        let! first = reader.ReadLineAsync()
-        line <- first
-        while not (isNull line) do
-          lock said (fun () -> said.AppendLine line |> ignore)
-          let! next = reader.ReadLineAsync()
-          line <- next
-      } :> Task)
+    task {
+      let mutable line = ""
+      let! first = reader.ReadLineAsync()
+      line <- first
+      while not (isNull line) do
+        lock said (fun () -> said.AppendLine line |> ignore)
+        let! next = reader.ReadLineAsync()
+        line <- next
+    }
     |> ignore
   drain proc.StandardOutput
   drain proc.StandardError
@@ -136,7 +136,7 @@ let private attach (executable: string) (pid: int) : Attached =
 /// Ask the app's own process whether a debugger is attached to it. FSI evaluates in that process, so the
 /// answer is about the process the route table lives in. A stopped process cannot answer, hence the bound.
 let private isAttached (app: RunningApp) : Task<bool> = task {
-  let ask = app.Proxy (WorkerMessage.EvalCode("System.Diagnostics.Debugger.IsAttached", Guid.NewGuid().ToString("N"))) |> Async.StartAsTask
+  let ask = app.Proxy (WorkerMessage.EvalCode("System.Diagnostics.Debugger.IsAttached", Guid.NewGuid().ToString("N"))) |> Started.asTask
   let! winner = Task.WhenAny(ask, Task.Delay TestTimeouts.patienceBrief)
   match obj.ReferenceEquals(winner, ask) with
   | false -> return false

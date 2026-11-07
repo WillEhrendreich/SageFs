@@ -32,7 +32,7 @@ let private cleanupSession (mgr: MailboxProcessor<SageFs.SessionManager.SessionC
       try
         let! _ =
           mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.StopSession(id, reply)), TestTimeouts.asMs TestTimeouts.patience)
-          |> Async.StartAsTask
+          |> Started.asTask
         ()
       with _ -> ()
   }
@@ -78,7 +78,7 @@ let tests =
           mgr.PostAndAsyncReply(fun reply ->
             SageFs.SessionManager.SessionCommand.CreateSession(
               [ SageFs.SessionProjectTarget.Project unresolvableProject ], workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
-          |> Async.StartAsTask
+          |> Started.asTask
 
         match createResult with
         | Error err ->
@@ -96,7 +96,7 @@ let tests =
           let! (ready: Result<unit, SageFsError>) =
             mgr.PostAndAsyncReply(fun reply ->
               SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
-            |> Async.StartAsTask
+            |> Started.asTask
 
           // THE CLAIM (part 1): a stated failure, never a silent "Starting".
           match ready with
@@ -110,7 +110,7 @@ let tests =
           // "status must never disagree with itself").
           let! (afterAwait: SageFs.SessionManager.ManagedSession option) =
             mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.GetSession(info.Id, reply))
-            |> Async.StartAsTask
+            |> Started.asTask
           match afterAwait with
           | Some session ->
             match session.Info.Status with
@@ -121,14 +121,16 @@ let tests =
 
           // THE CLAIM (part 2): stop_session returns promptly — never the
           // 300-second hang fcs-trial-b/c reported for a faulted session.
-          let sw = System.Diagnostics.Stopwatch.StartNew()
-          let! (stopResult: Result<unit, SageFsError>) =
+          // The stop is asked for on this thread, and the wait is on its answer with a ceiling far under the
+          // reported hang: it is an event, not a speed budget, so a busy machine that is only slow still passes.
+          let stopping =
             mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.StopSession(info.Id, reply))
-            |> Async.StartAsTask
-          sw.Stop()
+            |> Started.asTask
+          let! answered = System.Threading.Tasks.Task.WhenAny(stopping, System.Threading.Tasks.Task.Delay TestTimeouts.patienceInProcess)
+          obj.ReferenceEquals(answered, stopping)
+          |> Expect.isTrue "stop_session answers instead of waiting out the 300s hang a faulted session once caused"
+          let! (stopResult: Result<unit, SageFsError>) = stopping
           stopResult |> Expect.isOk "stop_session succeeds even on a faulted/never-ready session"
-          (sw.Elapsed.TotalSeconds, 15.0)
-          |> Expect.isLessThan "stop_session returns promptly, nowhere near the reported 300s hang"
       finally
         try Directory.Delete(workingDir, true) with _ -> ()
     }

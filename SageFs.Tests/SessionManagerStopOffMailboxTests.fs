@@ -84,7 +84,7 @@ let private withRuntime (runtimeOver: Gates -> SessionManagerRuntime) (run: Harn
       }
     // Open every gate so no worker is left waiting, then bound the teardown: a mailbox the scenario wedged must not hang the suite.
     gates.OpenAll()
-    let teardown = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.StopAll reply) |> Async.StartAsTask
+    let teardown = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.StopAll reply) |> Started.asTask
     let! _ = Task.WhenAny(teardown, Task.Delay TestTimeouts.patience)
     cancellation.Cancel()
     match failure with
@@ -104,9 +104,11 @@ let private runtimeOver (start: unit -> Process) (stop: ManagedSession -> Async<
       RunBuildAsync = fun _ _ -> async { return Ok "build ok" } }
 
 /// The reply if the mailbox gives one within the bound, None otherwise: "answered at once" versus "left pending".
+/// The post is made on the calling thread (`Started.asTask`) before the bound starts, so "left pending" means the
+/// mailbox held the command back and never that a pool thread was late to send it.
 let private answeredWithin (mailbox: MailboxProcessor<SessionCommand>) (build: AsyncReplyChannel<'a> -> SessionCommand) : Task<'a option> =
   task {
-    let work = mailbox.PostAndAsyncReply(build) |> Async.StartAsTask
+    let work = mailbox.PostAndAsyncReply(build) |> Started.asTask
     let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.stalledWorkBound)
     match Object.ReferenceEquals(winner, work) with
     | true ->
@@ -128,7 +130,7 @@ let private createIn (dir: string) (harness: Harness) : Task<SessionInfo> =
     let! created =
       harness.Mailbox.PostAndAsyncReply(fun reply ->
         SessionCommand.CreateSession([ SessionProjectTarget.Project "Test.fsproj" ], dir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
-      |> Async.StartAsTask
+      |> Started.asTask
     match created with
     | Ok info -> return info
     | Error err -> return failtestf "create session failed: %s" (SageFsError.describe err)
@@ -248,7 +250,7 @@ let sessionManagerStopOffMailboxTests =
         let! a = createIn (dirFor 1) harness
         let! b = createIn (dirFor 2) harness
         // Start the stop of A without awaiting it: its worker will not leave until the gate opens.
-        let stopA = harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.StopSession(a.Id, r)) |> Async.StartAsTask
+        let stopA = harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.StopSession(a.Id, r)) |> Started.asTask
         do! awaitSignals "the stop began stopping A's worker" (harness.Gates.For a.Id).Began 1
         match! answeredWithin harness.Mailbox (fun r -> SessionCommand.ListSessions r) with
         | Some infos ->
@@ -266,9 +268,9 @@ let sessionManagerStopOffMailboxTests =
       do! withHarness (fun harness -> task {
         let! a = createIn (dirFor 1) harness
         let! b = createIn (dirFor 2) harness
-        let stopA = harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.StopSession(a.Id, r)) |> Async.StartAsTask
+        let stopA = harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.StopSession(a.Id, r)) |> Started.asTask
         do! awaitSignals "the worker of A began leaving" (harness.Gates.For a.Id).Began 1
-        let stopB = harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.StopSession(b.Id, r)) |> Async.StartAsTask
+        let stopB = harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.StopSession(b.Id, r)) |> Started.asTask
         // B's worker must begin leaving while A's is still leaving: stops that queue behind one another never get here.
         let! began = (harness.Gates.For b.Id).Began.WaitAsync TestTimeouts.stalledWorkBound
         Expect.isTrue "the worker of B began leaving while A's was still leaving" began
@@ -291,7 +293,7 @@ let sessionManagerStopOffMailboxTests =
   ]
 
 let private awaitGone (harness: Harness) (id: SessionId) : Task<WorkerReaper.Settled> =
-  harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.AwaitWorkersGone(id, r)) |> Async.StartAsTask
+  harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.AwaitWorkersGone(id, r)) |> Started.asTask
 
 /// Kill and reap a real child the test started, whatever state the scenario left it in.
 let private disposeChild (child: Process) : unit =
@@ -324,7 +326,7 @@ let workerReapingTests =
       try
         do! withRuntime (runtimeOver (fun () -> child) stop) (fun harness -> task {
           let! info = createIn (dirFor 1) harness
-          let stopped = harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.StopSession(info.Id, r)) |> Async.StartAsTask
+          let stopped = harness.Mailbox.PostAndAsyncReply(fun r -> SessionCommand.StopSession(info.Id, r)) |> Started.asTask
           do! stopsStarted "the stop is answered while the worker is still running" stopped
           child.HasExited |> Expect.isFalse "the worker is still running when the stop is answered"
           let gone = awaitGone harness info.Id

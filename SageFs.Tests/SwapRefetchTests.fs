@@ -57,7 +57,7 @@ let workerHalfTests =
       let args =
         { mkCommonActorArgs quietLogger false ignore loadConfig with FsiKind = SessionKinds.Isolated }
       let! session =
-        within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Async.StartAsTask)
+        within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Started.asTask)
       // Capture the creation-time array through the live holder — the actor returns a ref, not a bare
       // array, because an in-worker hard reset re-instruments a FRESH shadow copy into the same holder.
       let creationMaps = session.InstrumentationMapsRef.Value
@@ -65,7 +65,7 @@ let workerHalfTests =
       |> Expect.isNonEmpty "the fixture must instrument to real maps, or this case measures nothing"
       let! reset =
         within TestTimeouts.sessionReadyColdBuild (
-          session.Actor.PostAndAsyncReply(fun reply -> HardResetSession(false, reply)) |> Async.StartAsTask)
+          session.Actor.PostAndAsyncReply(fun reply -> HardResetSession(false, reply)) |> Started.asTask)
       match reset with
       | Ok _ -> ()
       | Error err -> failtestf "the in-worker hard reset must resolve Ok, got: %s" (SageFsError.describe err)

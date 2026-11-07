@@ -41,9 +41,10 @@ let tests =
           OnFaulted = fun reason -> timedOut.TrySetException(Exception(sprintf "faulted instead: %s" reason)) |> ignore
           OnTimedOut = fun reason -> timedOut.TrySetResult reason |> ignore }
       let cts = new CancellationTokenSource()
-      // StartAsTask, not Async.Start: an exception that escapes the loop faults this task instead of reaching the
-      // thread pool's unhandled-exception path and taking the whole test process with it.
-      let _watch = Async.StartAsTask(WorkerPostReady.watchUntilReady "guard-test" readyProxy cts.Token outcomes, cancellationToken = cts.Token)
+      // A task, not a fire-and-forget start: an exception that escapes the loop faults this task instead of reaching the
+      // thread pool's unhandled-exception path and taking the whole test process with it. It starts on this thread, so
+      // the wait below times the watchdog and never the pool's queue.
+      let _watch = Started.asTaskWith cts.Token (WorkerPostReady.watchUntilReady "guard-test" readyProxy cts.Token outcomes)
       let! finished = Task.WhenAny(timedOut.Task, Task.Delay TestTimeouts.patience)
       cts.Cancel()
       match obj.ReferenceEquals(finished, timedOut.Task) with
@@ -60,7 +61,7 @@ let tests =
           OnFaulted = ignore
           OnTimedOut = fun reason -> timedOut.TrySetResult reason |> ignore }
       let cts = new CancellationTokenSource()
-      let _watch = Async.StartAsTask(WorkerPostReady.watchUntilReady "guard-test" readyProxy cts.Token outcomes, cancellationToken = cts.Token)
+      let _watch = Started.asTaskWith cts.Token (WorkerPostReady.watchUntilReady "guard-test" readyProxy cts.Token outcomes)
       let! finished = Task.WhenAny(ready.Task, timedOut.Task, Task.Delay TestTimeouts.patience)
       cts.Cancel()
       obj.ReferenceEquals(finished, ready.Task) |> Expect.isTrue "Ready reached OnReady and nothing else"

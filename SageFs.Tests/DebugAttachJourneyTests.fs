@@ -60,12 +60,12 @@ let private attachAndAsk (debugger: string) (pid: int) : Task<Process * string *
     // The debugger stays attached until it is told to leave, so its streams never close. Read
     // them on their own threads and watch what arrives.
     let said = ConcurrentBag<string>()
-    Task.Run(fun () ->
+    SageFs.Tests.TestInfrastructure.DedicatedThread.run "debugger-stdout" (fun () ->
       while not proc.StandardOutput.EndOfStream do
         said.Add(proc.StandardOutput.ReadLine())
       )
     |> ignore
-    Task.Run(fun () ->
+    SageFs.Tests.TestInfrastructure.DedicatedThread.run "debugger-stderr" (fun () ->
       while not proc.StandardError.EndOfStream do
         said.Add("stderr: " + proc.StandardError.ReadLine())
       )

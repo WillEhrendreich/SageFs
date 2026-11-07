@@ -68,7 +68,9 @@ let private startFake (onShutdown: ShutdownOrder) : FakeHost =
             go <- false
           | _ -> ()
     with _ -> ()
-  Task.Run serve |> ignore
+  // The host's end reads the wire with a blocking `ReadLine`, so it gets a thread of its own: the cases below wait on
+  // what it does, and a queued pool item could start late.
+  TestInfrastructure.DedicatedThread.run "fake-fsi-host" serve |> ignore
   let proc : HostProcess = { Id = 4242; Exit = exit.Task; Kill = fun () -> exit.TrySetResult -9 |> ignore }
   let reader = new StreamReader(client.GetStream(), UTF8Encoding false)
   let session = new FsiHostSession(proc, client, reader, ".NET fake", "0.0", "", (fun _ _ -> ()), ignore, output)
@@ -139,7 +141,7 @@ let tests =
     for shutdown in [ ExitThenClose; CloseThenExit ] do
       testTask (sprintf "disposing the session is a purposeful end, never a crash, whichever of the exit and the close the client sees first (%A)" shutdown) {
         let host = startFake shutdown
-        do! Task.Run(fun () -> (host.Session :> IDisposable).Dispose())
+        do! TestInfrastructure.DedicatedThread.run "dispose-session" (fun () -> (host.Session :> IDisposable).Dispose())
         let! ended = within TestTimeouts.patienceBrief host.Session.Ended
         ended |> Expect.equal "a requested stop is Retired" Retired
       }
@@ -148,7 +150,7 @@ let tests =
       let host = startFake ExitThenClose
       die host 134 crashText ExitFirst
       let! first = within TestTimeouts.patienceBrief host.Session.Ended
-      do! Task.Run(fun () -> (host.Session :> IDisposable).Dispose())
+      do! TestInfrastructure.DedicatedThread.run "dispose-session" (fun () -> (host.Session :> IDisposable).Dispose())
       let! second = within TestTimeouts.patienceBrief host.Session.Ended
       second |> Expect.equal "Ended completes once, with the crash" first
       crashedWith 134 second |> ignore
@@ -156,7 +158,7 @@ let tests =
 
     testTask "an eval running when the host dies is answered with the same crash that Ended reports" {
       let host = startFake ExitThenClose
-      let running = host.Session.Eval("while true do ()", CancellationToken.None) |> Async.StartAsTask
+      let running = host.Session.Eval("while true do ()", CancellationToken.None) |> Started.asTask
       do! withinSignal TestTimeouts.patienceBrief host.RequestSeen
       die host 134 crashText ExitFirst
       let! call = within TestTimeouts.patienceBrief running
@@ -180,7 +182,8 @@ let tests =
     testTask "RemoteFsiSession reports a host that crashed under an eval as the typed FsiHostCrashed error" {
       let host = startFake ExitThenClose
       let remote = new RemoteFsiSession.RemoteFsiSession(host.Session, startedStub)
-      let running = Task.Run(fun () -> (remote :> IFsiSession).Eval("while true do ()", CancellationToken.None))
+      // `Eval` here blocks its caller until the host answers, so it runs on a thread of its own.
+      let running = TestInfrastructure.DedicatedThread.run "remote-eval" (fun () -> (remote :> IFsiSession).Eval("while true do ()", CancellationToken.None))
       do! withinSignal TestTimeouts.patienceBrief host.RequestSeen
       die host 134 crashText ExitFirst
       let! result = within TestTimeouts.patienceBrief running

@@ -21,7 +21,7 @@ let private crashTheHost = "System.Threading.Thread((fun () -> failwith \"host-c
 
 let private eval (result: ActorResult) (code: string) : Task<EvalResponse> =
   result.Actor.PostAndAsyncReply(fun reply -> Eval({ Code = code; Args = Map.empty }, CancellationToken.None, reply))
-  |> Async.StartAsTask
+  |> Started.asTask
 
 let private within (bound: TimeSpan) (pending: Task<'a>) : Task<'a> =
   task {
@@ -69,7 +69,7 @@ let tests =
       | other -> failtestf "expected a refusal, got %A" other
 
       // A hard reset starts a fresh host, and the session is usable again.
-      let! reset = within TestTimeouts.patience (session.Actor.PostAndAsyncReply(fun reply -> HardResetSession(false, reply)) |> Async.StartAsTask)
+      let! reset = within TestTimeouts.patience (session.Actor.PostAndAsyncReply(fun reply -> HardResetSession(false, reply)) |> Started.asTask)
       reset |> Result.isOk |> Expect.isTrue "the hard reset succeeds"
       session.GetSessionStatus() |> Expect.equal "Ready again" SessionStatus.Ready
       let! again = within TestTimeouts.patience (eval session "1 + 1;;")
@@ -84,7 +84,7 @@ let tests =
         | _ -> ()
       let args = { mkCommonActorArgs TestInfrastructure.quietLogger false onEvent SageFs.Args.ProjectLoadConfig.empty with FsiKind = SessionKinds.Isolated }
       let! session = createActor args
-      let! reset = within TestTimeouts.patience (session.Actor.PostAndAsyncReply(fun reply -> HardResetSession(false, reply)) |> Async.StartAsTask)
+      let! reset = within TestTimeouts.patience (session.Actor.PostAndAsyncReply(fun reply -> HardResetSession(false, reply)) |> Started.asTask)
       reset |> Result.isOk |> Expect.isTrue "the hard reset succeeds"
       // The reset retired the old host. Anything it posted reaches the actor before this eval does.
       let! after = within TestTimeouts.patience (eval session "1 + 1;;")

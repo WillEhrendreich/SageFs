@@ -900,15 +900,16 @@ let private startSeriesDaemon (series: Series) : Task<SeriesDaemon> =
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
     let daemon = Process.Start psi
-    // Files drained by async readers: a redirected pipe nobody reads fills and stalls the child.
+    // Files drained by readers of their own: a redirected pipe nobody reads fills and stalls the child, and the
+    // blocking `ReadLine` gets a thread to itself (the stop below waits on the drains with a timeout).
     let drainTo (reader: StreamReader) (file: string) =
-      Task.Run(fun () ->
+      TestInfrastructure.DedicatedThread.run (sprintf "daemon-drain-%s" file) (fun () ->
         use writer = new StreamWriter(Path.Combine(dataDir, file), append = true)
         let mutable line = reader.ReadLine()
         while not (isNull line) do
           writer.WriteLine line
           line <- reader.ReadLine())
-    let drains = [ drainTo daemon.StandardOutput "daemon.stdout.log"; drainTo daemon.StandardError "daemon.stderr.log" ]
+    let drains : Task list = [ drainTo daemon.StandardOutput "daemon.stdout.log" :> Task; drainTo daemon.StandardError "daemon.stderr.log" :> Task ]
     let stop (runEnd: RunnerDirs.RunEnd) =
       try
         match daemon.HasExited with
@@ -950,7 +951,7 @@ let private measureRunAppSavesOn (seriesDaemon: SeriesDaemon) : Task<Sample list
     let original = File.ReadAllText pagePath
     requireOnce "Page.fs" (sprintf "\"%s\"" restartShipped) original
     use http = new HttpClient(Timeout = TestTimeouts.toolCallThatRestarts)
-    let! built = SageFs.SessionBuild.runBuildAsync [ project ] dir |> Async.StartAsTask
+    let! built = SageFs.SessionBuild.runBuildAsync [ project ] dir |> Started.asTask
     match built with
     | Ok _ -> ()
     | Result.Error err -> failwithf "the restart fixture must build through SageFs's own build path: %s" (SageFs.SageFsError.describe err)

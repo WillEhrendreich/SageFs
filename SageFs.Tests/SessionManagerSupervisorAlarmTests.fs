@@ -82,7 +82,7 @@ let private createSession (harness: Harness) : Task<SessionInfo> =
     let! created =
       harness.Mailbox.PostAndAsyncReply(fun reply ->
         SessionCommand.CreateSession([ SessionProjectTarget.Project "Test.fsproj" ], @"C:\Test", true, WorkflowTypes.SessionWorkflow.Interactive, reply))
-      |> Async.StartAsTask
+      |> Started.asTask
     match created with
     | Ok info -> return info
     | Error err -> return failtestf "create session failed: %s" (SageFsError.describe err)
@@ -91,7 +91,7 @@ let private createSession (harness: Harness) : Task<SessionInfo> =
 /// A reply from the loop, proving it is draining again.
 let private loopAnswers (harness: Harness) : Task<unit> =
   task {
-    let! _ = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.ListSessions reply) |> Async.StartAsTask
+    let! _ = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.ListSessions reply) |> Started.asTask
     return ()
   }
 
@@ -113,7 +113,7 @@ let sessionManagerSupervisorAlarmTests =
         // gate. StopSession no longer does: it reaps aside (SessionManagerStopOffMailboxTests.fs). The caller is never answered.
         ignore info
         harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.StopAll reply)
-        |> Async.StartAsTask
+        |> Started.asTask
         |> ignore
 
         let! alarm = awaitAlarm harness
@@ -148,7 +148,7 @@ let sessionManagerSupervisorAlarmTests =
         let! info = createSession harness
         for _ in 1 .. failures do
           harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.SwitchWorkflow(info.Id, hotReload, reply))
-          |> Async.StartAsTask
+          |> Started.asTask
           |> ignore
         for _ in 1 .. failures do
           let! alarm = awaitAlarm harness

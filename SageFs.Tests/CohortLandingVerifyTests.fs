@@ -131,7 +131,7 @@ let private mkRealRuntime
             |> Array.map (fun tc -> mkResult tc.Id (outcomes |> Map.tryFind tc.Id |> Option.defaultValue (TestResult.Passed TimeSpan.Zero)))
           dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch (req.SessionId, results)))
           dispatch (SageFsMsg.Event (TuiEvent.TestRunCompleted req.SessionId))
-        } |> Async.Start
+        } |> Started.andForget
       | None -> ()
   let runtime : ElmRuntime<SageFsModel, SageFsMsg, RenderRegion> =
     { Dispatch = dispatch

@@ -148,11 +148,10 @@ let tests =
           withHost (fun started ->
             async {
               use cancel = new CancellationTokenSource(TestTimeouts.cancelAfter)
-              let stopwatch = Stopwatch.StartNew()
+              // The outcome is the evidence that the sleep was cut short: a sleep that ran to its end is EvalSucceeded.
               match! started.Session.Eval(runawayEvalCode, cancel.Token) with
               | Completed(EvalInterrupted, _) -> ()
               | other -> failtestf "expected EvalInterrupted, got %A" other
-              Expect.isLessThan "interrupted long before the sleep would end" (stopwatch.Elapsed, TestTimeouts.patience)
               do! evalOk started.Session "1 + 1;;"
             })
       }
@@ -161,7 +160,7 @@ let tests =
         do!
           withHost (fun started ->
             async {
-              let running = started.Session.Eval(runawayEvalCode, CancellationToken.None) |> Async.StartAsTask
+              let running = started.Session.Eval(runawayEvalCode, CancellationToken.None) |> Started.asTask
               do! Async.Sleep (TestTimeouts.asMs TestTimeouts.cancelAfter)
               Process.GetProcessById(started.Session.ProcessId).Kill true
               let! finished = Task.WhenAny(running, Task.Delay(TestTimeouts.patience)) |> Async.AwaitTask

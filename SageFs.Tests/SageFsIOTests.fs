@@ -31,7 +31,7 @@ let private mkResult (isOk: bool) (n: int) : Result<int, SageFsError> =
 /// raced against `TestTimeouts.briefPatience`, so a hung effect fails the case instead of hanging the run.
 let private runIO (io: SageFsIO<'A>) : Task<Result<'A, SageFsError>> =
   task {
-    let running = Async.StartAsTask io
+    let running = Started.asTask io
     let! winner = Task.WhenAny(running, Task.Delay TestTimeouts.briefPatience)
     match obj.ReferenceEquals(winner, running) with
     | true -> return! running
@@ -107,7 +107,7 @@ let ofExnTests =
         }
       let classify (_: exn) = SageFsError.Unexpected (Exception "must not classify a cancellation")
       let io = SageFsIO.ofExn classify neverCompletes
-      let running = Async.StartAsTask(io, cancellationToken = cts.Token)
+      let running = Started.asTaskWith cts.Token io
       cts.CancelAfter(TestTimeouts.settle)
       let! cancelled =
         task {
