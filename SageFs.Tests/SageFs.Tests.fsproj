@@ -459,6 +459,7 @@
          <Compile Include="SwapRefetchTests.fs" />
          <Compile Include="SessionManagerLevelOutcomeTests.fs" />
          <Compile Include="LevelKeeperTests.fs" />
+         <Compile Include="HostBoundTests.fs" />
          <Compile Include="SessionReloadTests.fs" />
          <Compile Include="ReplFreshnessTests.fs" />
          <Compile Include="ReplLevelingTests.fs" />

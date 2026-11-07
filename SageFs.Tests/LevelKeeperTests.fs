@@ -153,6 +153,26 @@ let tests =
       hold.Dispose()
     }
 
+    testTask "WHY - tests an editor buffer defined block the level, and once an editor's hard reset has replaced the host the level proceeds" {
+      let bound = SageFs.Server.HostBound()
+      let fake =
+        fakeActor (fun outside ->
+          match outside.DynamicTests with
+          | DynamicTests.Defined -> Task.FromResult (LevelAnswer.LevelDeferred [ LevelBlocker.LiveTestsDefined ])
+          | DynamicTests.Absent -> Task.FromResult LevelAnswer.Leveled)
+      let keeper =
+        LevelKeeper(fake.Actor, fun () -> match bound.RunTest with | Some _ -> DynamicTests.Defined | None -> DynamicTests.Absent)
+      bound.SetRunTest (fun _ -> async { return SageFs.Features.LiveTesting.TestResult.NotRun })
+      let! blocked = within (keeper.Level() |> Async.StartImmediateAsTask)
+      blocked |> Expect.equal "the buffer's tests are in the host" (LevelAnswer.LevelDeferred [ LevelBlocker.LiveTestsDefined ])
+      // The editor's hard reset, answered Ok by the worker, seen through the wrapper that forgets a replaced host.
+      let handler =
+        SageFs.Server.WorkerMain.forgettingHost bound (fun _ -> async { return SageFs.WorkerProtocol.WorkerResponse.HardResetResult("r", Ok "Hard reset complete.") })
+      let! _ = handler (SageFs.WorkerProtocol.WorkerMessage.HardResetSession(false, "r")) |> Async.StartAsTask
+      let! proceeded = within (keeper.Level() |> Async.StartImmediateAsTask)
+      proceeded |> Expect.equal "the host holds nothing of it now, so the level proceeds" LevelAnswer.Leveled
+    }
+
     testTask "WHY - a test held for a debugger counts as a run in flight, and the level does not wait for it: the actor is told and refuses" {
       let fake = fakeActor (fun _ -> Task.FromResult (LevelAnswer.LevelDeferred [ LevelBlocker.TestsRunning 1 ]))
       let keeper = LevelKeeper(fake.Actor, noDynamicTests)
