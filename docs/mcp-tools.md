@@ -283,6 +283,15 @@ the daemon talking. Agents still get the echo, because their client shows every 
 Positions in a reply (`line`, `column`, `endLine`, `endColumn`) are the parser's own: lines count from 1,
 columns from 0 (counted in characters, not bytes), and `endColumn` is one past the last character.
 
+### What an eval reply looks like
+
+The reply of `send_fsharp_code` is sized for the agent that reads it ([`EvalPrintSettings`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/PrintLimits.fs), applied by both session kinds through `FsiPrintConfig`).
+
+- A printed value is held to 20 list items, depth 6, width 78 and size 600, for a `let` (`val people: Person list = [...]`) and for a bare expression (`val it: ...`) alike. A `let` of 24 nested records echoes about 780 characters where FSI's defaults echo about 4,500. To see more of a value, evaluate a slice of it as an expression. A `let` that echoes only its type is a setting (`EvalPrintSettings.forAgentTypeOnly`) that nothing turns on yet, because the editors show the value beside a `let`.
+- A reply longer than 4,000 characters keeps its first 2,666 and its last 1,334, with a line between them that says how many characters were cut. `it` still holds the whole value, and the line says how to read the middle.
+- Output that a background thread wrote between two calls (a timer, an app's log line) comes back with the next successful reply, after its own result, under `[output written since your last call]`. The session keeps the last 2,000 characters of it. Every production session runs its FSI in an isolated host, which is where that output is caught.
+- An eval that took 0.5 s or more, or allocated 100 MB or more, ends with one line: `[0.84 s · 312.4 MB allocated · GCs gen0 14 / gen1 3 / gen2 1]`. The time is taken around the eval in the process that ran it, without the queue wait or the wire. The bytes are the whole process's, so the tasks the eval starts are counted, and so is anything a background thread allocated meanwhile. A failed eval carries the line too. A quick, light eval carries none. The thresholds are `Timeouts.evalCostSlow` and `EvalCost.HeavyAllocationBytes`.
+
 ## Execution and status
 
 | Tool | What it does |

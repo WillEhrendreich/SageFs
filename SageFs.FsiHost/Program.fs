@@ -193,7 +193,8 @@ let private run (fsiArgs: string list) : int =
   let nativeFacts = installNativeResolution ()
   AppDomain.CurrentDomain.UnhandledException.Add(explainFatalNativeFailure nativeFacts)
 
-  let config = FsiEvaluationSession.GetDefaultConfiguration()
+  // The same printing limits the in-process session applies (FsiPrintConfig is compiled into both).
+  let config = FsiPrintConfig.forSession EvalPrintSettings.forAgent
   use session =
     FsiEvaluationSession.Create(config, List.toArray fsiArgs, new StreamReader(Stream.Null), outWriter, errWriter, collectible = true)
 
@@ -323,6 +324,8 @@ let private run (fsiArgs: string list) : int =
         | RunEval(id, code) ->
           use cancel = new CancellationTokenSource()
           lock runningLock (fun () -> running <- Some { Cancel = cancel; Thread = Thread.CurrentThread })
+          // What the eval cost, read around the eval alone: not the queue wait, not the wire. A failed eval is measured too.
+          let before = EvalCost.take ()
           let outcome, diagnostics =
             try
               let result, diagnostics = session.EvalInteractionNonThrowing(code, cancel.Token)
@@ -335,10 +338,11 @@ let private run (fsiArgs: string list) : int =
             with
             | :? ThreadInterruptedException -> EvalInterrupted, []
             | ex -> EvalFailed ex.Message, []
+          let cost = EvalCost.between before (EvalCost.take ())
           lock runningLock (fun () -> running <- None)
           outWriter.Flush()
           errWriter.Flush()
-          send (EvalResult(id, outcome, diagnostics))
+          send (EvalResult(id, outcome, diagnostics, cost))
       with
       | :? ThreadInterruptedException -> () // an Interrupt that arrived between evals
       | :? InvalidOperationException -> alive <- false // requests completed: shutting down

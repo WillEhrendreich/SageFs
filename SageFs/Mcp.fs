@@ -905,7 +905,7 @@ module McpTools =
   /// Format a WorkerResponse.EvalResult for display, with workflow-aware error enhancement.
   let formatWorkerEvalResult (workflow: WorkflowTypes.SessionWorkflow) (response: WorkerProtocol.WorkerResponse) : string =
     match response with
-    | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags, _) ->
+    | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags, metadata) ->
       let diagStr =
         match List.isEmpty diags with
         | true -> ""
@@ -929,15 +929,15 @@ module McpTools =
         // reading this and actively corrupt an agent trying to parse the
         // result — strip them at the one place every eval-returning tool's
         // text output already funnels through.
-        sprintf "%s%s%s" Features.CellDependencyGraph.McpResultPrefix (stripAnsi output) diagStr
+        sprintf "%s%s" (EvalReply.withCost metadata (sprintf "%s%s" Features.CellDependencyGraph.McpResultPrefix (stripAnsi output))) diagStr
       | Error err ->
         let errText = SageFsError.describeForAgent err
         // A typed crash already says what to do; guessing at its text would add the wrong advice.
         let suggestion = match err with SageFsError.FsiHostCrashed _ -> "" | _ -> errText |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
         let enhanced = WorkflowErrorContext.enhance workflow errText suggestion
         match String.IsNullOrEmpty enhanced with
-        | true -> sprintf "Error: %s%s" errText diagStr
-        | false -> sprintf "Error: %s\n%s%s" errText enhanced diagStr
+        | true -> sprintf "%s%s" (EvalReply.withCost metadata (sprintf "Error: %s" errText)) diagStr
+        | false -> sprintf "%s%s" (EvalReply.withCost metadata (sprintf "Error: %s\n%s" errText enhanced)) diagStr
     | WorkerProtocol.WorkerResponse.WorkerError err ->
       sprintf "Error: %s" (SageFsError.describeForAgent err)
     | other ->

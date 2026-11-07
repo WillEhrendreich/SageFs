@@ -20,7 +20,7 @@ open SageFs.ProcessEnvironment
 
 /// How one eval call ended from the caller's point of view.
 type EvalCall =
-  | Completed of outcome: EvalOutcome * diagnostics: FsiDiagnostic list
+  | Completed of outcome: EvalOutcome * diagnostics: FsiDiagnostic list * cost: EvalCost
   | HostLost of reason: string
   /// The host process went away on its own while in service. Its state, and the session's, are gone.
   | HostCrashed of crash: HostCrash
@@ -167,7 +167,7 @@ type FsiHostSession
           | Result.Ok(Output(stream, text)) -> (try onOutput stream text with _ -> ())
           // Every request/response pair is matched by id. Listing the cases (no wildcard) means a new
           // Response case is a compile error here until it is routed.
-          | Result.Ok(EvalResult(id, _, _) as answer) -> complete id answer
+          | Result.Ok(EvalResult(id, _, _, _) as answer) -> complete id answer
           | Result.Ok(FlagResult(id, _) as answer) -> complete id answer
           | Result.Ok(ValueResult(id, _) as answer) -> complete id answer
           | Result.Ok(LiveValuesResult(id, _) as answer) -> complete id answer
@@ -246,7 +246,7 @@ type FsiHostSession
   member _.Eval(code: string, cancellationToken: CancellationToken) : Async<EvalCall> =
     async {
       match! roundTrip cancellationToken (fun id -> Eval(id, code)) with
-      | Got(EvalResult(_, outcome, diagnostics)) -> return Completed(outcome, diagnostics)
+      | Got(EvalResult(_, outcome, diagnostics, cost)) -> return Completed(outcome, diagnostics, cost)
       | Got other -> return HostLost(unexpected "eval" other)
       | Gone(Crashed crash) -> return HostCrashed crash
       | Gone Retired -> return HostLost(describeEnd Retired)

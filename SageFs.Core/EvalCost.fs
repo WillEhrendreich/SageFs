@@ -32,12 +32,16 @@ module EvalCost =
 
   /// How many bytes make one kilobyte, megabyte and gigabyte in the line (decimal, so "100 MB" is 100,000,000 bytes).
   [<Literal>]
-  let BytesPerKilobyte = 1_000L
+  let BytesPerKilobyte = 1000L
+
+  /// The key an eval's cost travels under in its reply metadata, from the eval actor through the worker to the daemon.
+  [<Literal>]
+  let MetadataKey = "evalCost"
 
   /// An eval that allocated this much is annotated even when it was quick: allocation volume is what an agent
   /// comparing two versions of a function wants to see. FsiMcp 0.3.0 uses the same 100 MB.
   [<Literal>]
-  let HeavyAllocationBytes = 100_000_000L
+  let HeavyAllocationBytes = 100L * BytesPerKilobyte * BytesPerKilobyte
 
   /// The thresholds the product uses.
   let productThresholds : CostThresholds =
@@ -62,11 +66,41 @@ module EvalCost =
       Gen1 = int (rise (int64 (fst gen1)) (int64 (snd gen1)))
       Gen2 = int (rise (int64 (fst gen2)) (int64 (snd gen2))) }
 
+  /// The counters of this process, read at one moment. The eval host and the in-process session read them before an eval and
+  /// after it, and `between` turns the two readings into a cost.
+  ///
+  /// Bytes are the whole process's (`GC.GetTotalAllocatedBytes`), so an eval that starts its own tasks or threads is charged
+  /// for them. The thread-local counter misses those: 100 MB allocated by a `Parallel.For` read 2 KB there. The price is that a
+  /// background thread's allocation during the eval is counted too (12 MB of 72 MB in a measured string-builder loop).
+  type Readings =
+    { Timestamp: int64
+      Allocated: int64
+      Gen0: int
+      Gen1: int
+      Gen2: int }
+
+  /// Read the counters now.
+  let take () : Readings =
+    { Timestamp = System.Diagnostics.Stopwatch.GetTimestamp()
+      Allocated = GC.GetTotalAllocatedBytes false
+      Gen0 = GC.CollectionCount 0
+      Gen1 = GC.CollectionCount 1
+      Gen2 = GC.CollectionCount 2 }
+
+  /// What happened between two readings.
+  let between (before: Readings) (after: Readings) : EvalCost =
+    measured
+      (System.Diagnostics.Stopwatch.GetElapsedTime(before.Timestamp, after.Timestamp))
+      (before.Allocated, after.Allocated)
+      (before.Gen0, after.Gen0)
+      (before.Gen1, after.Gen1)
+      (before.Gen2, after.Gen2)
+
   /// Whether this cost is past either threshold. At the threshold counts as past it.
   let isNotable (thresholds: CostThresholds) (cost: EvalCost) : bool =
     cost.Elapsed >= thresholds.Slow || cost.Allocated >= thresholds.HeavyAllocation
 
-  let private inv = CultureInfo.InvariantCulture
+  let inv = CultureInfo.InvariantCulture
 
   /// The units a byte count is written in.
   type ByteUnit =
@@ -83,7 +117,7 @@ module EvalCost =
     | Megabytes -> "MB"
     | Gigabytes -> "GB"
 
-  let private allUnits = [ Bytes; Kilobytes; Megabytes; Gigabytes ]
+  let allUnits =[ Bytes; Kilobytes; Megabytes; Gigabytes ]
 
   /// How many bytes one of the unit is.
   let bytesIn (unit: ByteUnit) : int64 =
@@ -97,7 +131,7 @@ module EvalCost =
   let tryUnitOfLabel (label: string) : ByteUnit option = allUnits |> List.tryFind (fun u -> unitLabel u = label)
 
   /// The largest unit the count reaches one of, so the figure has one digit or more before the point.
-  let private unitFor (bytes: int64) : ByteUnit =
+  let unitFor (bytes: int64) : ByteUnit =
     allUnits |> List.rev |> List.tryFind (fun u -> bytes >= bytesIn u) |> Option.defaultValue Bytes
 
   /// Bytes as a short figure: `812 B`, `4.2 KB`, `312.4 MB`, `1.5 GB`.
@@ -110,9 +144,20 @@ module EvalCost =
   /// The one line: `[0.84 s · 312.4 MB allocated · GCs gen0 14 / gen1 3 / gen2 1]`. Nothing when the eval was under both thresholds.
   let line (thresholds: CostThresholds) (cost: EvalCost) : string option =
     match isNotable thresholds cost with
-    | _ -> None // RED: the line is not written yet
+    | false -> None
+    | true ->
+      String.Format(
+        inv,
+        "[{0:F2} s · {1} allocated · GCs gen0 {2} / gen1 {3} / gen2 {4}]",
+        cost.Elapsed.TotalSeconds,
+        describeBytes cost.Allocated,
+        cost.Gen0,
+        cost.Gen1,
+        cost.Gen2
+      )
+      |> Some
 
-  let private linePattern =
+  let linePattern =
     System.Text.RegularExpressions.Regex(
       @"^\[(?<s>\d+\.\d{2}) s · (?<n>\d+(?:\.\d+)?) (?<u>[A-Z]+) allocated · GCs gen0 (?<g0>\d+) / gen1 (?<g1>\d+) / gen2 (?<g2>\d+)\]$",
       System.Text.RegularExpressions.RegexOptions.Compiled
@@ -121,5 +166,14 @@ module EvalCost =
   /// The figures a line carries, read back. Time is to the hundredth of a second and bytes to the precision the line
   /// printed, so a line read and written again is the same line. The reader exists for the tests and for a client that wants the numbers.
   let tryParseLine (text: string) : EvalCost option =
-    match linePattern.Match(text.Trim()), text with
-    | _ -> None // RED: the reader is not written yet
+    let m = linePattern.Match(text.Trim())
+    match m.Success, tryUnitOfLabel m.Groups["u"].Value with
+    | true, Some unit ->
+      let number = Double.Parse(m.Groups["n"].Value, inv)
+      Some
+        { Elapsed = TimeSpan.FromSeconds(Double.Parse(m.Groups["s"].Value, inv))
+          Allocated = int64 (Math.Round(number * float (bytesIn unit)))
+          Gen0 = int m.Groups["g0"].Value
+          Gen1 = int m.Groups["g1"].Value
+          Gen2 = int m.Groups["g2"].Value }
+    | _ -> None

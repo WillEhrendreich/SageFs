@@ -266,7 +266,7 @@ let items : Item list =
     item "eval-output-for-an-llm" "Eval output shaped for the agent that reads it" Repl Next
       NoLandmarkYet
       [ "docs/mcp-tools.md"; "docs/plans/eval-output-for-an-llm.md" ]
-      "Part of this is already here. A result over 4,000 characters is cut, with a note that the whole value is still bound as `it`, and `printfn` from any thread cannot reach the MCP stream because the bridge and the host never share it. What is left: the cut keeps the start and drops the end, where an error or the last value usually sits; both kinds of session print with FSI's own limits, so a `let` of a large value echoes up to the cap every time; and I have not checked whether output a background thread writes between calls reaches the agent's next reply. I plan to keep head and tail, set print limits once for both session kinds, and pin the between-calls case with a test that drives the real stdio bridge. Echoing only the type of a `let` waits for a measurement."
+      "A result over 4,000 characters keeps its first two thirds and its last third with a line between that says how many characters were cut, and the whole value is still bound as `it`. Both kinds of session print under one set of limits (20 items, depth 6, width 78, size 600), which cut the echo of a `let` of 24 nested records from 4,521 characters to 781. Output a background thread writes between calls was dropped before; it now leads the next successful reply under a label. Echoing only the type of a `let` is built and off, because the editors show the value. Still to do: a test that drives the real stdio bridge for the between-calls case, and a per-directory field for the limits."
 
     item "repl-benchmark-against-other-tools" "A head-to-head benchmark for REPL servers" Docs Next
       NoLandmarkYet
@@ -276,7 +276,7 @@ let items : Item list =
     item "eval-cost-line" "A cost line on a slow or allocation-heavy eval" Repl Later
       NoLandmarkYet
       [ "docs/plans/eval-cost-line.md" ]
-      "FsiMcp ends an eval that took half a second or allocated 100 MB with one line of time, bytes allocated and GC counts, which tells an agent comparing two versions of a function which one did less. SageFs times every eval on the daemon, but that time includes the queue and the wire, and nothing records bytes or collections, so an agent has no such line. The wrapper in `Instrumentation.fs` that would have recorded eval durations has no caller. I plan to read the counters in the host around the eval, return them on the wire as typed fields, and print a line only above a threshold so a light eval costs no extra tokens. Whether to count the whole process or only the eval thread is something I will measure first."
+      "An eval that took half a second or allocated 100 MB ends its reply, failed or not, with one line of time, bytes allocated and GC counts, in the shape FsiMcp prints. The isolated host reads the counters around each eval and returns them as a typed field of the protocol; the daemon writes the line, so a light eval costs no extra tokens. Bytes are the whole process's, because the eval thread's own counter read 2 KB for 100 MB allocated by four tasks. Still to do: the cost in `get_eval_timeline`, the thresholds checked against real timeline history, and the run with a hot-reload save landing during an eval. The wrapper in `Instrumentation.fs` that would have recorded eval durations still has no caller."
 
     item "profile-tool" "A profile tool: where the time and allocations went" Repl Later
       NoLandmarkYet

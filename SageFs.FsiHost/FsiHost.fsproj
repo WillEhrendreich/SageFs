@@ -44,6 +44,11 @@
     <Compile Include="FsiNaming.fs" />
     <Compile Include="MachineTier.fs" />
     <Compile Include="Timeouts.fs" />
+    <!-- What an eval cost (measured around each eval here, carried by the protocol) and how much a value prints (the session's
+         configuration, shared with the in-process session). -->
+    <Compile Include="EvalCost.fs" />
+    <Compile Include="PrintLimits.fs" />
+    <Compile Include="FsiPrintConfig.fs" />
     <!-- The dev-reload switch and the editor choice, which DevReloadInjector and DevReloadMiddleware read. BCL only. -->
     <Compile Include="DevReloadMode.fs" />
     <Compile Include="EditorLink.fs" />

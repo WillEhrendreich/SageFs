@@ -83,20 +83,23 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
 
     member _.Eval(code, cancellationToken) =
       match wait (host.Eval(code, cancellationToken)) with
-      | Completed(outcome, diagnostics) ->
+      | Completed(outcome, diagnostics, cost) ->
         { Outcome =
             match outcome with
             | EvalSucceeded -> FsiSucceeded
             | EvalFailed message -> FsiFailed(Exception message)
             | EvalInterrupted -> FsiInterrupted
-          Diagnostics = diagnostics |> List.map toDiagnostic |> List.toArray }
+          Diagnostics = diagnostics |> List.map toDiagnostic |> List.toArray
+          Cost = cost }
       | HostLost reason ->
         { Outcome = FsiFailed(InvalidOperationException reason)
-          Diagnostics = [||] }
+          Diagnostics = [||]
+          Cost = EvalCost.unmeasured }
       // The structured case, so the worker boundary and the agent see a crash, not a sentence to classify.
       | HostCrashed crash ->
         { Outcome = FsiFailed(SageFsErrorException(SageFsError.FsiHostCrashed crash))
-          Diagnostics = [||] }
+          Diagnostics = [||]
+          Cost = EvalCost.unmeasured }
 
     member _.ReadFlag(name) =
       match wait (host.ReadFlag name) with

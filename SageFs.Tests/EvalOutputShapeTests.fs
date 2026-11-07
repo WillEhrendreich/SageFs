@@ -69,7 +69,8 @@ let private printedUnder (settings: SageFs.EvalPrintSettings) (submissions: stri
   use session =
     FSharp.Compiler.Interactive.Shell.FsiEvaluationSession.Create(
       SageFs.FsiPrintConfig.forSession settings,
-      [| "fsi"; "--noninteractive"; "--nologo"; "--readline-" |],
+      // --multiemit- is what the contract tests and a hot-reload session run with: without it a type defined in one submission does not load in the next in a hosted session.
+      [| "fsi"; "--noninteractive"; "--nologo"; "--readline-"; "--multiemit-" |],
       new System.IO.StreamReader(System.IO.Stream.Null),
       out,
       new System.IO.StringWriter(),
@@ -95,15 +96,70 @@ let printLimitTests =
       (itemsShown underAgent <= limits.Length) |> Expect.isTrue (sprintf "at most %d items under the agent limits, got %d" limits.Length (itemsShown underAgent))
       (underAgent.Length < underDefaults.Length) |> Expect.isTrue "and the print is shorter"
 
-    testCase "WHY - a let echoes its type and not its value under the agent settings, and keeps the value under FSI's defaults" <| fun _ ->
+    testCase "WHY - a let echoes a value cut to the limits under the agent settings, a fifth of what FSI's defaults echo" <| fun _ ->
       let echoOf settings = printedUnder settings recordSetup |> List.last
       let underAgent = echoOf SageFs.EvalPrintSettings.forAgent
       let underDefaults = echoOf SageFs.EvalPrintSettings.asFsiDefaults
       underAgent |> Expect.stringContains "the type is named" "val people: Person list"
-      itemsShown underAgent |> Expect.equal "no value under the agent settings" 0
+      (itemsShown underAgent <= SageFs.EvalPrintSettings.agentLimits.Length) |> Expect.isTrue "no more items than the limit"
+      (itemsShown underAgent > 0) |> Expect.isTrue "the value is still shown, because the editors and the dashboard read it"
+      (underAgent.Length * 5 < underDefaults.Length) |> Expect.isTrue (sprintf "the echo is cut from %d to %d characters" underDefaults.Length underAgent.Length)
+
+    testCase "WHY - a let echoes only its type when the settings say so, and keeps the value under FSI's defaults" <| fun _ ->
+      let echoOf settings = printedUnder settings recordSetup |> List.last
+      let typeOnly = echoOf SageFs.EvalPrintSettings.forAgentTypeOnly
+      let underDefaults = echoOf SageFs.EvalPrintSettings.asFsiDefaults
+      typeOnly |> Expect.stringContains "the type is named" "val people: Person list"
+      itemsShown typeOnly |> Expect.equal "no value" 0
       (itemsShown underDefaults > 0) |> Expect.isTrue "the twin: FSI's defaults echo the value"
 
     testCase "WHY - a bare expression's value is still printed under the agent settings, because TypeOnly is about a let" <| fun _ ->
       let printed = printedUnder SageFs.EvalPrintSettings.forAgent [ "1 + 2;;" ] |> List.last
       printed |> Expect.stringContains "the value of a bare expression" "val it: int = 3"
+  ]
+
+/// A recorder that passes nothing on, so a test reads only what the recorder keeps.
+let private newRecorder () = new SageFs.TextWriterRecorder(System.IO.TextWriter.Null)
+
+[<Tests>]
+let betweenCallsTests =
+  testList "Eval output written between calls" [
+
+    testCase "WHY - output a background thread writes between two evals is kept for the second reply" <| fun _ ->
+      let recorder = newRecorder ()
+      recorder.WatchBetweenCalls()
+      recorder.Write "tick from a timer\n"
+      recorder.TakeBetweenCalls() |> Expect.stringContains "kept" "tick from a timer"
+      recorder.TakeBetweenCalls() |> Expect.equal "and handed over once" ""
+
+    testCase "WHY - before watching begins nothing is kept, so warm-up's own output does not lead the first reply" <| fun _ ->
+      let recorder = newRecorder ()
+      recorder.Write "--> Referenced a warm-up assembly\n"
+      recorder.WatchBetweenCalls()
+      recorder.TakeBetweenCalls() |> Expect.equal "nothing from before" ""
+
+    testCase "WHY - output written while an eval is recording belongs to that eval and is not also kept for the next one" <| fun _ ->
+      let recorder = newRecorder ()
+      recorder.WatchBetweenCalls()
+      recorder.StartRecording()
+      recorder.Write "printed during the eval\n"
+      recorder.StopRecording() |> Expect.stringContains "recorded for this eval" "printed during the eval"
+      recorder.TakeBetweenCalls() |> Expect.equal "not kept twice" ""
+
+    testProperty "WHY - a chatty app cannot grow the kept output without limit: only the last characters stay" <| fun (lines: PositiveInt) ->
+      let recorder = newRecorder ()
+      recorder.WatchBetweenCalls()
+      let count = 1 + lines.Get % 2000
+      for i in 1..count do recorder.Write(sprintf "line %d\n" i)
+      let kept = recorder.TakeBetweenCalls()
+      kept.Length <= maxBetweenCallChars && kept.Contains(sprintf "line %d\n" count)
+
+    testCase "WHY - the reply puts that output last, under a label, so the first line stays the eval's own result, and a reply with nothing between calls is as it was" <| fun _ ->
+      let reply = withBetweenCalls "BG-LINE\n" "val it: int = 2\n"
+      reply |> Expect.stringContains "the label" BetweenCallsLabel
+      reply.StartsWith "val it: int = 2" |> Expect.isTrue "the eval's own result is still the first line"
+      (reply.IndexOf "val it" < reply.IndexOf BetweenCallsLabel && reply.IndexOf BetweenCallsLabel < reply.IndexOf "BG-LINE")
+      |> Expect.isTrue "the result, then the label, then the between-call output"
+      withBetweenCalls "" "val it: int = 2\n" |> Expect.equal "untouched" "val it: int = 2\n"
+      withBetweenCalls "  \n" "val it: int = 2\n" |> Expect.equal "blank output adds nothing" "val it: int = 2\n"
   ]

@@ -146,6 +146,9 @@
         <EmbeddedResource Include="FsiNaming.fs" LogicalName="FsiHost/FsiNaming.fs" />
         <EmbeddedResource Include="MachineTier.fs" LogicalName="FsiHost/MachineTier.fs" />
         <EmbeddedResource Include="Timeouts.fs" LogicalName="FsiHost/Timeouts.fs" />
+        <EmbeddedResource Include="EvalCost.fs" LogicalName="FsiHost/EvalCost.fs" />
+        <EmbeddedResource Include="PrintLimits.fs" LogicalName="FsiHost/PrintLimits.fs" />
+        <EmbeddedResource Include="FsiPrintConfig.fs" LogicalName="FsiHost/FsiPrintConfig.fs" />
         <EmbeddedResource Include="DevReloadMode.fs" LogicalName="FsiHost/DevReloadMode.fs" />
         <EmbeddedResource Include="EditorLink.fs" LogicalName="FsiHost/EditorLink.fs" />
         <EmbeddedResource Include="NativeResolution.fs" LogicalName="FsiHost/NativeResolution.fs" />
@@ -646,6 +649,7 @@
              for the reason given on the line below: one coherent block, its own testable file, and
              the budget goes DOWN instead of up. -->
         <Compile Include="AssemblyLoadVerification.fs" />
+        <Compile Include="TextWriterRecorder.fs" />
         <Compile Include="AppState.fs" />
         <!-- After AppState (it asks the eval actor): the worker's test-run gate and the level that waits for it. -->
         <Compile Include="LevelKeeper.fs" />

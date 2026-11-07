@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress (step 5 of 6) |
 | Size | S for head and tail, M for the print limits in both session kinds |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run the baseline probe in "Measure first" against a throwaway daemon (port 38300 to 38399), then write the first failing test: `EvalOutputShapeTests`, a clipped result keeps its head and its tail. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | `cohort/p2-eval-output`, `/home/will/scratch/cohort/p2-eval-output` |
+| Last green commit | see `git log master..cohort/p2-eval-output`; the red commit is `77e2ca01` |
+| Next action | Built and committed on the branch, not landed (2026-11-07): head and tail, print limits in both session kinds, the between-calls output. Land through the cohort. Then write the bridge-level test (plan test 4): drive the real `sagefs mcp` with a background `printfn`, read until the response id, and assert the label and valid JSON-RPC. Then give `DirectoryConfig` a field for the limits once `session-options` has its shape. |
+| Decisions made | `let` keeps its value under the limits (`EvalPrintSettings.forAgent`); `TypeOnly` is built and tested as `forAgentTypeOnly` and nothing turns it on. Width is 78, not FsiMcp's 140. Between-calls output rides the next successful reply under a label. |
+| Surprises | The worker never forwarded `resultTruncated`, `resultOriginalLength` or `resultKeptLength` to the daemon (`WorkerMain` copies only typed DTOs from the metadata), so they exist inside the worker and nowhere else; the reply text carries the exact cut. A background thread's output between calls was dropped entirely (the worker's recorder writes to `TextWriter.Null` when no eval records). Width 140 makes FSI print a list in more characters, not fewer. |
 
 ## Why this item exists
 
@@ -67,6 +67,23 @@ Wire impact: `AppState.fs`, `EvalResultSummary.fs`, `SageFs.FsiHost/Program.fs`,
 - Characters and tokens for three fixed evals (24 nested records, a 10,000 element list, a 50,000 character string), today and after, from `resultOriginalLength` and the kept length. The tokens by the method named in `small-default-tool-list` (the API counter for exactness, characters over four for an estimate).
 - What the dashboard transcript shows for the same evals under the new limits. Compare with today's by eye, and record the screenshot headless.
 - Whether the same session's other clients (editors, `sagefs call`) read the reply text for values. Check `sagefs.nvim` and the VS Code extension before touching `let` echo.
+
+### Measured 2026-11-07
+
+Daemon 0.6.940-local, a bare isolated session, the machine under load (no timings taken). Characters of what FSI printed, from a session and from `EvalOutputShapeTests`; tokens are characters over four.
+
+| Eval | FSI's defaults (before) | Agent limits, value kept (now) | Agent limits, type only |
+|:--|--:|--:|--:|
+| `let` of 24 nested records | 4,521 (about 1,130 tokens) | 781 (about 195) | 25 |
+| `let` of a 10,000 item list | 436 | 100 | 19 |
+| `let` of a 50,000 character string | 110 | 110 | 28 |
+| bare expression, 24 nested records | 4,517 | 3,770 (20 of 24 items) | not applicable |
+| bare expression, 50,000 character string | 50,023, clipped to its first 4,000 | clipped to the first 2,666 and the last 1,334 | not applicable |
+
+- The reply bound already held a reply to 4,000 characters plus a notice, so what shrinks is the cost of a `let`, and what changes for a clipped reply is that its end survives.
+- Width 78 (FSI's own), not 140. Twenty records took 3,770 characters at width 78, 5,690 at 100 and 7,436 at 140: the layout puts several records on a line and pads each continuation with spaces. Size 300, 600 and 1,200 changed the length by 5 characters, so the item count is what bounds a list.
+- Type-only echo: it would save 756 more characters on the 24-record `let`, and it takes `= 5` out of the editors' ghost text and the dashboard. `sagefs.nvim`'s `parse_bindings` reads both shapes. The VS Code ghost text shows the first line of the reply, so it would lose the value. So the default keeps the value, and `forAgentTypeOnly` waits for a per-directory field.
+- Between calls: before this change a background thread's `printfn` three seconds after a call did not reach the next reply. The worker's recorder writes to `TextWriter.Null` when no eval is recording. Now the isolated host's output between evals is kept (the last 2,000 characters) and the next successful reply ends with it under `[output written since your last call]`. Watching starts at the first eval, so warm-up's own output is not carried. The stdio-bridge test is not written.
 
 ## Risks and dependencies
 
