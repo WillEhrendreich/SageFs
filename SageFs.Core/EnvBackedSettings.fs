@@ -22,10 +22,9 @@ type EnvBacked = {
   EnvText: SettingValue -> string option
 }
 
-[<RequireQualifiedAccess>]
 module EnvBackedSettings =
 
-  let private parseAmount (unit: DurationUnit) (raw: string) : Result<SettingValue, ConfigError> =
+  let parseAmount (unit: DurationUnit) (raw: string) : Result<SettingValue, ConfigError> =
     match Double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture) with
     | false, _ -> Error (Malformed (sprintf "expected a number of %s, got '%s'" (DurationUnit.label unit) raw))
     | true, n ->
@@ -35,24 +34,27 @@ module EnvBackedSettings =
       | false -> Error (OutOfRange (sprintf "expected more than zero and at most %g %s, got %s" most (DurationUnit.label unit) raw))
       | true -> WaitLimit.create (DurationUnit.toSpan unit n) |> Result.map VDuration
 
-  let private renderAmount (unit: DurationUnit) (span: TimeSpan) : string =
+  let renderAmount (unit: DurationUnit) (span: TimeSpan) : string =
     DurationUnit.amountOf unit span |> sprintf "%g"
 
-  let private legal (result: Result<WaitLimit, ConfigError>) : WaitLimit =
+  let legal (result: Result<WaitLimit, ConfigError>) : WaitLimit =
     match result with
     | Ok limit -> limit
     | Error _ -> failwith "a built-in wait default must be within a second and a day"
 
-  let private durationDefault (unit: DurationUnit) (amount: float) : SettingValue =
+  let durationDefault (unit: DurationUnit) (amount: float) : SettingValue =
     VDuration (legal (WaitLimit.create (DurationUnit.toSpan unit amount)))
 
-  let private asDuration (span: TimeSpan) : SettingValue =
-    match WaitLimit.create span with
+  /// The wait a subsystem holds, as a value. One outside the legal range (a variable can hold any positive number)
+  /// is shown at the nearest end of it, so the row never reads a number the daemon is not near.
+  let asDuration (span: TimeSpan) : SettingValue =
+    let shortest = TimeSpan.FromSeconds Timeouts.settingWaitShortestSeconds
+    match WaitLimit.create (max shortest (min span WaitLimit.longest)) with
     | Ok limit -> VDuration limit
-    | Error _ -> durationDefault Seconds 1.0
+    | Error _ -> durationDefault Seconds Timeouts.settingWaitShortestSeconds
 
   /// One wait, in the unit its variable is written in. `inForce` reads the live value from `Timeouts`.
-  let private duration
+  let duration
     (key: string)
     (name: string)
     (description: string)
@@ -199,13 +201,13 @@ module EnvBackedSettings =
       Variable = "SAGEFS_ABANDONED_SESSION_HOURS"
       EnvText = (fun v -> SettingValue.limit v |> Option.map (fun _ -> renderLimitHours v)) }
 
-  let private toggleOf (raw: string) : Result<SettingValue, ConfigError> =
+  let toggleOf (raw: string) : Result<SettingValue, ConfigError> =
     match raw.Trim().ToLowerInvariant() with
     | "on" | "1" | "true" | "yes" -> Ok (VToggle On)
     | "off" | "0" | "false" | "no" -> Ok (VToggle Off)
     | other -> Error (NotAMember(other, [ "on"; "off" ]))
 
-  let private renderToggle (v: SettingValue) : string =
+  let renderToggle (v: SettingValue) : string =
     match SettingValue.toggle v with
     | Some On -> "on"
     | Some Off -> "off"
@@ -270,9 +272,9 @@ module EnvBackedSettings =
           | Some Off -> Some (MetadataDeltaMode.toText MetadataDeltaMode.Off)
           | None -> None) }
 
-  /// Every setting that is saved as a file value and imported into the environment at start. The order is the
-  /// order the rows are drawn in within a group.
-  let all : EnvBacked list =
+  /// The first batch of settings that are saved as a file value and imported into the environment at start.
+  /// `EnvBackedRows.all` is these and the rest.
+  let firstBatch : EnvBacked list =
     [ warmupInactivity
       warmupMax
       buildTimeout
@@ -281,5 +283,3 @@ module EnvBackedSettings =
       abandonedSessionHours
       updateCheckDisabled
       metadataDelta ]
-
-  let descriptors : SettingDescriptor list = all |> List.map (fun e -> e.Descriptor)

@@ -354,6 +354,64 @@ module SettingsCatalog =
       External = FromEnvironment DataDirChoice.envVar
       Current = InUseFromConsumer (fun () -> valueOf (DataDirChoice.dataDirectory ())) }
 
+  /// Read-only: whether a connection with no token may act. Changing it from a page the daemon serves would point the
+  /// trust the wrong way, so it is set where the daemon starts. An unreadable value fails closed in the daemon
+  /// (`TokenRequired`); the row says the value could not be read.
+  let identityPolicy : SettingDescriptor =
+    let names = Capability.IdentityPolicy.all |> List.map Capability.IdentityPolicy.toToken
+    let valueOf (policy: Capability.IdentityPolicy) : SettingValue =
+      match EnumValue.create names (Capability.IdentityPolicy.toToken policy) with
+      | Ok e -> VEnum e
+      | Error _ -> failwith "every identity policy is one of the names"
+    { Key = "daemon.identityPolicy"
+      Name = "Identity policy"
+      Description = "Whether a connection with no member token may act. TokenRequired lets it read status and nothing more. A value that cannot be read is treated as TokenRequired."
+      Category = DaemonSettings
+      Scope = Global
+      Applicability = ReadOnly SecurityBoundary
+      Default = valueOf Capability.IdentityPolicy.defaultPolicy
+      Parse =
+        fun raw ->
+          match Capability.IdentityPolicy.tryParse raw with
+          | Ok policy -> Ok (valueOf policy)
+          | Error unknown -> Error (NotAMember(unknown.Given, unknown.Expected))
+      Render = fun v -> SettingValue.enum v |> Option.map EnumValue.value |> Option.defaultValue ""
+      Apply = ignore
+      External = FromEnvironment Capability.CapabilityTransport.policyEnvVar
+      Current =
+        InUseFromConsumer (fun () ->
+          valueOf (Capability.CapabilityTransport.policyFromEnvironment (fun name -> match Environment.GetEnvironmentVariable name with | null -> "" | v -> v))) }
+
+  /// A credential shown as set or not set, never as itself: it has no external source for the resolver to read, because
+  /// a refused parse of a secret would quote it. The row only asks whether the variable is there.
+  let private credential (key: string) (name: string) (help: string) (variable: string) : SettingDescriptor =
+    { Key = key
+      Name = name
+      Description = help
+      Category = DaemonSettings
+      Scope = Global
+      Applicability = ReadOnly Secret
+      Default = VToggle Off
+      Parse = fun _ -> Error (Malformed "a credential is never read or written here")
+      Render = fun v -> match SettingValue.toggle v with Some On -> "set" | Some Off -> "not set" | None -> ""
+      Apply = ignore
+      External = NoExternalSource
+      Current =
+        InUseFromConsumer (fun () ->
+          match Environment.GetEnvironmentVariable variable with
+          | null | "" -> VToggle Off
+          | _ -> VToggle On) }
+
+  let memberToken : SettingDescriptor =
+    credential "daemon.memberToken" "Member token (SAGEFS_MEMBER_TOKEN)"
+      "The token `sagefs mcp` sends so its connection acts as a minted member. Its value is never shown; the row says only whether it is set in this process."
+      Capability.CapabilityTransport.bridgeEnvVar
+
+  let operatorToken : SettingDescriptor =
+    credential "daemon.operatorToken" "Operator token (SAGEFS_OPERATOR_TOKEN)"
+      "The operator credential `sagefs mcp` sends so `tools/list` shows the full list. Its value is never shown; the row says only whether it is set in this process."
+      Capability.CapabilityTransport.operatorEnvVar
+
   /// Read-only: whether the daemon skipped restoring the previous sessions at start. Only the flag sets it.
   let noResume : SettingDescriptor = {
     Key = "daemon.noResume"
@@ -401,7 +459,7 @@ module SettingsCatalog =
   /// environment variable when a process starts, and the read-only rows. The two session-agent settings are added by
   /// the page, because they are declared in `SessionAgent`, which compiles after this file.
   let all : SettingDescriptor list =
-    pilots @ EnvBackedSettings.descriptors @ [ dataDirectory; noResume ]
+    pilots @ EnvBackedRows.descriptors @ [ dataDirectory; noResume; identityPolicy; memberToken; operatorToken ]
 
   /// The Live Bindings view a workflow shows for the app at `paths`: each axis resolved across the layers, and an axis nobody set
   /// follows the workflow's recommended view. An axis whose stored value will not parse (a layer file edited by hand) also falls

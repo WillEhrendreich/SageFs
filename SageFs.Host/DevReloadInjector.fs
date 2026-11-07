@@ -39,9 +39,9 @@ let enableForSession () =
 
 /// True if either the env var disables DevReload or the session disabled it.
 let private isEffectivelyDisabled () =
-  match Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD") with
-  | "0" | "false" -> true
-  | _ -> sessionDisabled
+  match SageFs.DevReloadMode.fromEnvironment () with
+  | SageFs.DevReloadMode.Disabled -> true
+  | SageFs.DevReloadMode.Enabled -> sessionDisabled
 
 /// Track which WebApplication instances already have the middleware injected.
 /// Prevents duplicate injection when Run() is called multiple times in the REPL.

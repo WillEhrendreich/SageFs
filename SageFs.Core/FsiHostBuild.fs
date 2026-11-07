@@ -23,6 +23,8 @@ let hostSourceNames =
     "FsiNaming.fs"
     "MachineTier.fs"
     "Timeouts.fs"
+    "DevReloadMode.fs"
+    "EditorLink.fs"
     "NativeResolution.fs"
     "Instrumentation.fs"
     "FSharpSpelling.fs"

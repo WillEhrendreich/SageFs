@@ -201,9 +201,7 @@ let IsSupervised : bool =
 let RestartCount : int =
   envInt "SAGEFS_RESTART_COUNT" 0
 
-/// Whether browser dev-reload (live page refresh) is enabled.
-let DevReloadEnabled : bool =
-  envBool "SAGEFS_DEVRELOAD" false
+/// The browser dev-reload switch (`SAGEFS_DEVRELOAD`) is `DevReloadMode`, in its own file.
 
 /// OTLP exporter endpoint. Empty string means OTEL is not configured.
 let OtelEndpoint : string =

@@ -73,7 +73,12 @@
         <!-- Before DaemonState.fs on purpose: the data directory has to be found without running its static
              initialiser, which reads Timeouts (see the file). Up here so the Settings catalog can show it. -->
         <Compile Include="DataDirChoice.fs" />
+        <!-- These two are BCL only and the isolated FSI host compiles them too (its DevReloadInjector and
+             DevReloadMiddleware read them), so each is embedded below and listed in FsiHost.fsproj. -->
+        <Compile Include="DevReloadMode.fs" />
+        <Compile Include="EditorLink.fs" />
         <Compile Include="EnvBackedSettings.fs" />
+        <Compile Include="EnvBackedRows.fs" />
         <Compile Include="SettingsBootstrap.fs" />
         <Compile Include="FSharpSpelling.fs" />
         <Compile Include="ViewSettings.fs" />
@@ -124,6 +129,8 @@
         <EmbeddedResource Include="FsiNaming.fs" LogicalName="FsiHost/FsiNaming.fs" />
         <EmbeddedResource Include="MachineTier.fs" LogicalName="FsiHost/MachineTier.fs" />
         <EmbeddedResource Include="Timeouts.fs" LogicalName="FsiHost/Timeouts.fs" />
+        <EmbeddedResource Include="DevReloadMode.fs" LogicalName="FsiHost/DevReloadMode.fs" />
+        <EmbeddedResource Include="EditorLink.fs" LogicalName="FsiHost/EditorLink.fs" />
         <EmbeddedResource Include="NativeResolution.fs" LogicalName="FsiHost/NativeResolution.fs" />
         <EmbeddedResource Include="Instrumentation.fs" LogicalName="FsiHost/Instrumentation.fs" />
         <EmbeddedResource Include="DirectoryConfigTypes.fs" LogicalName="FsiHost/DirectoryConfigTypes.fs" />

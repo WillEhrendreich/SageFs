@@ -65,7 +65,7 @@ module SettingsBootstrap =
         (ExternalInputs.ofEnvironment Environment.GetEnvironmentVariable)
         (fun name text -> Environment.SetEnvironmentVariable(name, text))
         globalDir
-        EnvBackedSettings.all
+        EnvBackedRows.all
     lock importedNames (fun () ->
       for outcome in outcomes do
         match outcome with

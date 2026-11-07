@@ -59,10 +59,20 @@ over both.
 | Bind host | `SAGEFS_BIND_HOST` | read-only |
 | Data directory | `SAGEFS_DATA_DIR` | read-only |
 | Skip restoring sessions at start | `--no-resume` | read-only |
+| Browser dev-reload | `SAGEFS_DEVRELOAD` | restart (read when a worker starts) |
+| Editor for file links (`auto`, `vscode`, `cursor`, `jetbrains`) | `SAGEFS_EDITOR` | restart |
+| Every other wait and interval, in the "Waits and limits" group | the variables in [Timeouts and intervals](#timeouts-and-intervals) | restart |
+| Limits on reply sizes, queues and the compiler's memory | `SAGEFS_SESSION_MANAGER_QUEUE_CAPACITY`, `SAGEFS_LIST_MEMBERS_MAX`, `SAGEFS_REFERENCES_PROJECT_CACHE`, `SAGEFS_LIST_REFERENCES_MAX`, `SAGEFS_REFERENCES_RESIDENT_CEILING_MB` | restart |
+| How long local data is kept, and how many of each, in the "Local data" group | the variables in [Local data retention](#local-data-retention) | restart |
+| SageFs's own test runner, in the "Test harness" group | the `SAGEFS_TEST_*` variables | read-only |
+| Set by SageFs: the watchdog flag and restart count, the superseded worker start-up timeout | `SAGEFS_SUPERVISED`, `SAGEFS_RESTART_COUNT`, `SAGEFS_WORKER_STARTUP_TIMEOUT_MS` | read-only |
+| Identity policy, member token, operator token | `SAGEFS_IDENTITY_POLICY`, `SAGEFS_MEMBER_TOKEN`, `SAGEFS_OPERATOR_TOKEN` | read-only |
 
-The bind host stays read-only on purpose. A loopback bind is the only thing between SageFs, which evaluates F#, and the
-network, and changing it from a page the daemon serves points the trust the wrong way. `SAGEFS_IDENTITY_POLICY`
-and `SAGEFS_MEMBER_TOKEN` have no row for the same reason.
+Every variable `Timeouts.fs` and `SageFsConfig.fs` read has a row, and a test fails when a new one does not. A row
+that is read-only says why in its own words: the bind host and the identity policy stay where the daemon starts
+because a loopback bind and a token policy are what stand between SageFs, which evaluates F#, and the network, and
+changing them from a page the daemon serves points the trust the wrong way. A token's row says only whether it is
+set, never its value.
 
 ## Variables that are not durations
 
@@ -76,10 +86,10 @@ and `SAGEFS_MEMBER_TOKEN` have no row for the same reason.
 | `SAGEFS_MEMBER_TOKEN` | unset | Read by `sagefs mcp`, not by the daemon: a member token from `mint_member`, sent as the `X-SageFs-Member-Token` header on every request the bridge makes, so it never appears in a JSON-RPC message ([`McpStdioBridge.fs`](../SageFs/McpStdioBridge.fs)). |
 | `SAGEFS_HOT_RELOAD` | unset | `1` or `true` runs the hot-reload flow. `all` is the older spelling of "on, and watch every project file", kept so a setup that used it keeps working. Any other value leaves hot reload off until you turn it on from the dashboard ([`Args.fs`](../SageFs.Core/Args.fs)). |
 | `SAGEFS_HOT_RELOAD_ALL_FILES` | unset | `1` or `true` runs the hot-reload flow and watches every project file, not only the session's own. This is the watch-all half of `SAGEFS_HOT_RELOAD`, which used to say `all` and so said two things at once: one variable read two ways meant a value the other reader could not parse, and it warned about it on every start ([`Args.fs`](../SageFs.Core/Args.fs), [`WorkerMain.fs`](../SageFs.Host/WorkerMain.fs)). |
-| `SAGEFS_DEVRELOAD` | on | `0` or `false` turns the browser dev-reload injection off, and `enable_hot_reload` then answers `disabledByEnvVar` ([`DevReloadInjector.fs`](../SageFs.Host/DevReloadInjector.fs), [`McpTools.fs`](../SageFs/McpTools.fs)). Any other value leaves it on. |
+| `SAGEFS_DEVRELOAD` | on | `0` or `false`, in any case, turns the browser dev-reload injection off, and `enable_hot_reload` then answers `disabledByEnvVar`. Any other value leaves it on. One rule reads it for the injector, the tool and the Settings row ([`DevReloadMode.fs`](../SageFs.Core/DevReloadMode.fs)). |
 | `SAGEFS_UPDATE_CHECK_DISABLED` | unset | Any non-empty value other than `0` or `false` stops the daemon asking NuGet whether a newer SageFs exists. A daemon running from a local build never asks anyway ([`UpdateCheckService.fs`](../SageFs/UpdateCheckService.fs)). |
 | `SAGEFS_METADATA_DELTA` | on | `on`, `1` or `true` makes a hot reload worker patch a `run_app` app's saves into the running process by metadata delta; `off`, `0` or `false` restarts the app on a save, as it did before. The daemon reads it when it starts a worker and gives that worker `DOTNET_MODIFIABLE_ASSEMBLIES=debug` and the choice, spelled out. See [how it works](how-hot-reload-works.md#a-run_app-app-the-same-save-as-a-metadata-delta) ([`MetadataDeltaFlag.fs`](../SageFs.Core/Features/MetadataDelta/MetadataDeltaFlag.fs), [`Args.fs`](../SageFs.Core/Args.fs)). |
-| `SAGEFS_EDITOR` | `EDITOR`, then `code` | Picks the link scheme for clickable `file:line:column` links: a name containing `rider` or `jetbrains` gives a JetBrains link, `cursor` gives a Cursor link, anything else a VS Code link ([`DevReloadMiddleware.fs`](../SageFs.Host/DevReloadMiddleware.fs)). |
+| `SAGEFS_EDITOR` | `EDITOR`, then `code` | Picks the link scheme for clickable `file:line:column` links: a name containing `rider` or `jetbrains` gives a JetBrains link, `cursor` gives a Cursor link, anything else a VS Code link. One function reads it for the page script and the Settings row ([`EditorLink.fs`](../SageFs.Core/EditorLink.fs)). |
 | `SAGEFS_FORWARD_PREFIXES` | unset | A `;` or `:` separated list of name prefixes. Environment variables starting with one of them are passed into every process SageFs spawns, so a profiler or tracer can reach a worker it did not launch. SageFs does not read or check the values ([`ProcessEnvironment.fs`](../SageFs.Core/ProcessEnvironment.fs)). |
 | `SAGEFS_HOST_CACHE_DIR` | `<data dir>/hosts` | Where built FSI hosts are cached. A host is addressed by its content, so daemons can share one cache, and a test harness whose daemons each get a fresh data dir uses this to build the host once ([`IsolatedFsiSession.fs`](../SageFs.Core/IsolatedFsiSession.fs)). |
 | `SAGEFS_REPO_ROOT` | unset | Where the SageFs repository is, for code that has to read a file out of it, such as the test suite's fixtures. A value wins when you set it, and SageFs looks upward from it for the checkout. Unset, it looks upward from the assembly it runs from, then from the working directory. The error it raises when it finds nothing says to set this ([`RepoPaths.fs`](../SageFs.Core/RepoPaths.fs)). |

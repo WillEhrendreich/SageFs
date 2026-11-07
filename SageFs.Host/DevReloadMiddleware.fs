@@ -22,17 +22,7 @@ let private devReloadJsTemplate =
 /// and return the URL pattern for clickable file:line:column links.
 /// Defaults to VS Code scheme.
 let editorUrlPattern () =
-  let editor =
-    match Environment.GetEnvironmentVariable("SAGEFS_EDITOR") with
-    | null | "" -> Environment.GetEnvironmentVariable("EDITOR") |> Option.ofObj |> Option.defaultValue "code"
-    | e -> e
-  let lower = editor.ToLowerInvariant()
-  match lower.Contains("rider") || lower.Contains("jetbrains") with
-  | true -> "jetbrains://rider/navigate/reference?path={file}&line={line}&column={col}"
-  | false ->
-    match lower.Contains("cursor") with
-    | true -> "cursor://file/{file}:{line}:{col}"
-    | false -> "vscode://file/{file}:{line}:{col}"
+  SageFs.EditorChoice.urlPattern (SageFs.EditorChoice.fromEnvironment ())
 
 /// Escape a string for safe embedding in a JavaScript string literal.
 /// Prevents </script> injection and JS string escaping issues.

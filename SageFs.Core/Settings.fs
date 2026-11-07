@@ -178,6 +178,7 @@ type DurationUnit =
   | Seconds
   | Minutes
   | Hours
+  | Days
 
 [<RequireQualifiedAccess>]
 module DurationUnit =
@@ -186,18 +187,56 @@ module DurationUnit =
     | Seconds -> "seconds"
     | Minutes -> "minutes"
     | Hours -> "hours"
+    | Days -> "days"
 
   let toSpan (unit: DurationUnit) (amount: float) : TimeSpan =
     match unit with
     | Seconds -> TimeSpan.FromSeconds amount
     | Minutes -> TimeSpan.FromMinutes amount
     | Hours -> TimeSpan.FromHours amount
+    | Days -> TimeSpan.FromDays amount
 
   let amountOf (unit: DurationUnit) (span: TimeSpan) : float =
     match unit with
     | Seconds -> span.TotalSeconds
     | Minutes -> span.TotalMinutes
     | Hours -> span.TotalHours
+    | Days -> span.TotalDays
+
+/// How long local data is kept: more than zero and at most ten years. A wait (`WaitLimit`) tops out at a day, which is
+/// shorter than any retention period, so a retention row cannot use it.
+type RetentionAge = private RetentionAge of TimeSpan
+
+[<RequireQualifiedAccess>]
+module RetentionAge =
+  /// The most an age may be, for a parser that has to bound a number before it becomes a span.
+  let longest : TimeSpan = TimeSpan.FromDays Timeouts.settingAgeLongestDays
+
+  let create (t: TimeSpan) : Result<RetentionAge, ConfigError> =
+    match t > TimeSpan.Zero && t <= longest with
+    | true -> Ok (RetentionAge t)
+    | false -> Error (OutOfRange (sprintf "an age must be more than zero and at most %g days, got %gd" Timeouts.settingAgeLongestDays t.TotalDays))
+
+  let value (RetentionAge t) : TimeSpan = t
+
+/// A whole number of things (rows, versions, records, members). `least` is the smallest the setting allows, which is 1
+/// for a cap and 0 for a count the daemon itself writes, so a count of zero is only constructable where it is legal.
+type WholeCount = private WholeCount of int
+
+[<RequireQualifiedAccess>]
+module WholeCount =
+  let create (least: int) (n: int) : Result<WholeCount, ConfigError> =
+    match n >= least && n <= Timeouts.settingCountLargest with
+    | true -> Ok (WholeCount n)
+    | false -> Error (OutOfRange (sprintf "expected a whole number from %d to %d, got %d" least Timeouts.settingCountLargest n))
+
+  let value (WholeCount n) : int = n
+
+/// A whole number that may be left to SageFs: the ceiling of the compiler's cache is a share of the machine's memory
+/// until a person names a number of megabytes.
+type OptionalCount =
+  | CountLeftToSageFs
+  | CountIs of WholeCount
 
 /// A bound that may be switched off: `0` is a real answer for the abandoned-session reaper, and it means "never".
 /// A case name says so where a zero span would have to be remembered.
@@ -214,6 +253,9 @@ type SettingValue =
   | VTimeout of ValidTimeout
   | VDuration of WaitLimit
   | VLimit of OptionalLimit
+  | VAge of RetentionAge
+  | VCount of WholeCount
+  | VOptionalCount of OptionalCount
   | VBindHost of SageFsConfig.LoopbackHost
   | VEnum of EnumValue
   | VDir of DirectoryPath
@@ -225,27 +267,42 @@ module SettingValue =
   let duration (v: SettingValue) : WaitLimit option =
     match v with
     | VDuration limit -> Some limit
-    | VToggle _ | VPort _ | VTimeout _ | VLimit _ | VBindHost _ | VEnum _ | VDir _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
 
   let limit (v: SettingValue) : OptionalLimit option =
     match v with
     | VLimit limit -> Some limit
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VBindHost _ | VEnum _ | VDir _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
 
   let toggle (v: SettingValue) : Toggle option =
     match v with
     | VToggle t -> Some t
-    | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VBindHost _ | VEnum _ | VDir _ -> None
+    | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
 
   let enum (v: SettingValue) : EnumValue option =
     match v with
     | VEnum e -> Some e
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VBindHost _ | VDir _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VDir _ -> None
 
   let dir (v: SettingValue) : DirectoryPath option =
     match v with
     | VDir d -> Some d
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VBindHost _ | VEnum _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ -> None
+
+  let age (v: SettingValue) : RetentionAge option =
+    match v with
+    | VAge a -> Some a
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
+
+  let count (v: SettingValue) : WholeCount option =
+    match v with
+    | VCount c -> Some c
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ -> None
+
+  let optionalCount (v: SettingValue) : OptionalCount option =
+    match v with
+    | VOptionalCount c -> Some c
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VBindHost _ | VEnum _ | VDir _ -> None
 
 /// The resolved value plus its provenance: which layer supplied the effective
 /// value, and the value present at every layer that set one (so the UI can
@@ -266,7 +323,11 @@ type SettingCategory =
   | LiveBindingsView
   /// How long SageFs waits for a warm-up, a build or a stopped agent, and how the waits scale for the machine.
   | WaitsAndLimits
+  /// How long SageFs keeps what it writes on this machine, and how many of each thing.
+  | LocalData
   | DaemonSettings
+  /// Settings only SageFs's own test runner uses.
+  | TestHarness
 
 [<RequireQualifiedAccess>]
 module SettingCategory =
@@ -277,11 +338,13 @@ module SettingCategory =
     | LiveTesting -> "Live testing"
     | LiveBindingsView -> "Live bindings view"
     | WaitsAndLimits -> "Waits and limits"
+    | LocalData -> "Local data"
+    | TestHarness -> "Test harness"
     | DaemonSettings -> "Daemon"
 
   /// Display order for the panel — exhaustive over the DU.
   let displayOrder : SettingCategory list =
-    [ Appearance; SessionSettings; LiveTesting; LiveBindingsView; WaitsAndLimits; DaemonSettings ]
+    [ Appearance; SessionSettings; LiveTesting; LiveBindingsView; WaitsAndLimits; LocalData; DaemonSettings; TestHarness ]
 
 /// Where a setting may be set.
 type SettingScope =
@@ -313,11 +376,17 @@ and ReadOnlyReason =
   | SetBySageFs
   /// Only a flag on the command line sets it, so it is read when the daemon is started.
   | LaunchOnly
+  /// Only the test runner sets it, to shorten a wait a test has to prove.
+  | TestHarnessOnly
+  /// Replaced by newer settings; still read so an old environment does not break.
+  | Superseded
 
 [<RequireQualifiedAccess>]
 module ReadOnlyReason =
   let describe (reason: ReadOnlyReason) : string =
     match reason with
+    | TestHarnessOnly -> "read-only here: only SageFs's own test runner sets it, to prove a wait without waiting for it."
+    | Superseded -> "read-only here: the warm-up limits replaced it, and it is no longer read. It stays listed so an old environment is not a mystery."
     | SecurityBoundary -> "read-only here: changing it from a page the daemon serves would point the trust the wrong way. Set it where you start the daemon."
     | HoldsTheSettingsFile -> "read-only here: the settings file lives inside it. Set it where you start the daemon."
     | Secret -> "read-only here: it is a credential, so its value is never shown."

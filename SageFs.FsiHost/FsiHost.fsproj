@@ -44,6 +44,9 @@
     <Compile Include="FsiNaming.fs" />
     <Compile Include="MachineTier.fs" />
     <Compile Include="Timeouts.fs" />
+    <!-- The dev-reload switch and the editor choice, which DevReloadInjector and DevReloadMiddleware read. BCL only. -->
+    <Compile Include="DevReloadMode.fs" />
+    <Compile Include="EditorLink.fs" />
     <!-- Where a package's native libraries are, and what to say when one will not load. BCL only. The loader never
          searches the NuGet cache's runtimes/<rid>/native, so this process has to be told. -->
     <Compile Include="NativeResolution.fs" />

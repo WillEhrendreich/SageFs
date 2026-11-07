@@ -113,6 +113,13 @@ module Timeouts =
   [<Literal>]
   let settingWaitLongestHours = 24.0
 
+  /// The longest an age the Settings page accepts may be: ten years.
+  [<Literal>]
+  let settingAgeLongestDays = 3650.0
+  /// The largest whole number a count row accepts.
+  [<Literal>]
+  let settingCountLargest = 1000000
+
   // -- Build & Warmup --
   let warmupAbsoluteMax = envOrDefaultMachineMinutes "SAGEFS_WARMUP_MAX_MINUTES" 10.0
   let warmupInactivityLimit = envOrDefaultMachine "SAGEFS_WARMUP_INACTIVITY_SECONDS" 30.0

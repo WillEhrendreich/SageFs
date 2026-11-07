@@ -1260,9 +1260,9 @@ process-wide kill switch for hot reload.""")>]
             result.["nextSteps"] <- JsonValue.Create(nextSteps)
             HotReloadReply.ofJson outcome result
         let disabledByEnvVar =
-            match System.Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD") with
-            | "0" | "false" -> true
-            | _ -> false
+            match SageFs.DevReloadMode.fromEnvironment () with
+            | SageFs.DevReloadMode.Disabled -> true
+            | SageFs.DevReloadMode.Enabled -> false
         let healthToString (h: SageFs.DevReload.DevReloadHealth) =
             match h with
             | SageFs.DevReload.PatchPending -> "PatchPending"

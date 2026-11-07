@@ -132,6 +132,29 @@ let private save (page: IPage) (key: string) (value: string) : Task<unit> = task
   do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates (page.Locator ".settings-notice-ok") "saved"
 }
 
+/// A bare session whose working directory is `dir`, and its id. The page only needs the daemon to know the session and
+/// its directory, so this does not wait for the session to warm up.
+let private createSessionIn (d: Daemon) (dir: string) : Task<string> = task {
+  use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.McpPort), Timeout = TestTimeouts.httpRequest)
+  let payload = System.Text.Json.JsonSerializer.Serialize({| projects = Array.empty<string>; workingDirectory = dir |})
+  use content = new StringContent(payload, Text.Encoding.UTF8, "application/json")
+  use! resp = client.PostAsync("/api/sessions/create", content)
+  let! body = resp.Content.ReadAsStringAsync()
+  match resp.IsSuccessStatusCode with
+  | false -> return failwithf "creating the session was refused: HTTP %d: %s" (int resp.StatusCode) body
+  | true ->
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let mutable found = ""
+    while found = "" && sw.ElapsedMilliseconds < int64 BrowserWaits.panelUpdates do
+      let! listed = client.GetStringAsync "/api/sessions"
+      use doc = System.Text.Json.JsonDocument.Parse listed
+      match doc.RootElement.GetProperty("sessions").EnumerateArray() |> Seq.tryHead with
+      | Some s -> found <- s.GetProperty("id").GetString()
+      | None -> do! Task.Delay(TestTimeouts.pollPage)
+    return found
+}
+
+let private perTestKey = "livetest.perTestTimeoutSeconds"
 let private warmup = "waits.warmupInactivitySeconds"
 let private abandoned = "waits.abandonedSessionHours"
 let private delta = "hotreload.metadataDelta"
@@ -210,6 +233,30 @@ let private journey () : Task<unit> = task {
     let! facts = factsOf page tierKey
     expectCell "machine tier saved, before the restart" facts "fast" "global"
 
+    // 2b. The repo layer. A session in a working directory gives the page a repo to write: the edit target names that
+    // directory, a per-test timeout saved there beats the global one, and the file is the directory's own.
+    let work = Path.Combine(root, "work")
+    Directory.CreateDirectory work |> ignore
+    let! sessionId = createSessionIn first work
+    Expect.isFalse (String.IsNullOrEmpty sessionId) "the daemon lists the session it was asked to create"
+    let! _ = page.GotoAsync(sprintf "http://localhost:%d/dashboard/settings?session=%s" first.DashboardPort sessionId)
+    do! waitForSource page perTestKey "default"
+    let! scopeText = page.Locator(".settings-scope").TextContentAsync()
+    Expect.stringContains scopeText (sprintf "This repo (%s)" work) "the edit target names the session's directory"
+    do! save page perTestKey "42"
+    do! waitForSource page perTestKey "global"
+    let! facts = factsOf page perTestKey
+    expectCell "per-test timeout saved globally" facts "42" "global"
+    Expect.isFalse (facts.Text.Contains "In use now") "a live row is in use as soon as it is saved"
+    let! _ = page.Locator(".settings-scope-select").SelectOptionAsync("repo")
+    do! save page perTestKey "33"
+    do! waitForSource page perTestKey "repo"
+    let! facts = factsOf page perTestKey
+    expectCell "per-test timeout saved for the repo" facts "33" "repo"
+    let repoFile = Path.Combine(work, ".SageFs", "settings.json")
+    Expect.isTrue (File.Exists repoFile) "the repo layer is the session directory's own .SageFs/settings.json"
+    Expect.stringContains (File.ReadAllText repoFile) perTestKey "the repo file holds the per-test timeout"
+
     // 3. The same rows after a restart: what the page saved is what the daemon uses, so nothing more is said about in use.
     killDaemon first
     let second = start []
@@ -219,6 +266,11 @@ let private journey () : Task<unit> = task {
     let! facts = factsOf page warmup
     expectCell "warm-up limit saved, after the restart" facts "90" "global"
     Expect.isFalse (facts.Text.Contains "In use now") "after the restart the saved 90 is the one in use"
+    // A live setting saved from the page is the one in force after a restart: `applyAtStart` pushed it into Timeouts.
+    do! waitForSource page perTestKey "global"
+    let! facts = factsOf page perTestKey
+    expectCell "per-test timeout, after the restart" facts "42" "global"
+    Expect.isFalse (facts.Text.Contains "In use now") "after the restart the saved 42 is the per-test timeout in force"
     let! facts = factsOf page abandoned
     expectCell "reaper off, after the restart" facts "0" "global"
     Expect.isFalse (facts.Text.Contains "In use now") "after the restart the reaper is off, as saved"

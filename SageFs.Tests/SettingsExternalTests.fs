@@ -210,7 +210,7 @@ let repoLayerTests =
       (without.Contains "This repo") |> Expect.isFalse "no repo option"
   ]
 
-let private firstBatch : EnvBacked list = EnvBackedSettings.all
+let private firstBatch : EnvBacked list = EnvBackedRows.all
 
 [<Tests>]
 let roundTripTests =
@@ -267,7 +267,7 @@ let bootstrapTests =
             (fun name -> match List.tryFind (fun (n, _) -> n = name) set with Some (_, v) -> EnvSet v | None -> EnvUnset)
             (fun name text -> written.Add((name, text)))
             dir
-            EnvBackedSettings.all
+            EnvBackedRows.all
         f outcomes (List.ofSeq written))
 
     testCase "WHY — a saved wait becomes the variable when the person set none, so Timeouts reads what the page saved" <| fun _ ->
@@ -306,7 +306,7 @@ let bootstrapTests =
       withTempDir (fun dir ->
         File.WriteAllText(SettingsStore.globalPath dir, "{ this is not json")
         let outcomes =
-          SettingsBootstrap.importSavedWith (fun _ -> EnvUnset) (fun _ _ -> failtest "nothing may be written") dir EnvBackedSettings.all
+          SettingsBootstrap.importSavedWith (fun _ -> EnvUnset) (fun _ _ -> failtest "nothing may be written") dir EnvBackedRows.all
         match outcomes with
         | [ ImportOutcome.NotUsable(_, reason) ] -> reason |> Expect.stringContains "names the file" "settings.json"
         | other -> failtestf "expected one NotUsable, got %A" other)
@@ -316,7 +316,7 @@ let bootstrapTests =
       |> Expect.equal "the port and the switch" (Map.ofList [ "--mcp-port", "4000"; "--no-resume", "on" ])
 
     testCase "WHY — every setting the import writes names the variable its row shows, so the page and the import cannot disagree" <| fun _ ->
-      for setting in EnvBackedSettings.all do
+      for setting in EnvBackedRows.all do
         ExternalSource.variable setting.Descriptor.External
         |> Expect.equal (sprintf "%s names its variable" setting.Descriptor.Key) (Some setting.Variable)
   ]
@@ -392,10 +392,144 @@ let rowTextTests =
           (html.Contains word || html.Contains ("live<")) |> Expect.isTrue (sprintf "%s shows its chip" d.Key))
   ]
 
-/// Every `SAGEFS_*` variable that `Timeouts.fs` and `SageFsConfig.fs` read is either the variable of a row on the
-/// Settings page or counted here as not editable yet. The count only goes down: a variable that gains a row lowers it,
-/// and a budget above the real count fails, so the number cannot sit loose while the page grows.
-module private NotEditableBudget =
+/// The rows the first batch did not cover: every wait, age, count and switch that `Timeouts.fs` and `SageFsConfig.fs`
+/// read, with the read-only rows for the ones that are not for editing.
+[<Tests>]
+let moreRowsTests =
+  testList "Settings — every variable has a row of its own" [
+
+    testCase "WHY — every row has a key, a name, a help line and a variable of its own, so none is a copy of another" <| fun _ ->
+      let all = SettingsCatalog.all @ [ SessionAgent.reflectionReadModeSetting; SessionAgent.tieredCompilationSetting ]
+      let keys = all |> List.map (fun d -> d.Key)
+      keys |> List.distinct |> List.length |> Expect.equal "keys are distinct" keys.Length
+      let variables = all |> List.choose (fun d -> ExternalSource.variable d.External)
+      variables |> List.distinct |> List.length |> Expect.equal "variables are distinct" variables.Length
+      for d in all do
+        String.IsNullOrWhiteSpace d.Name |> Expect.isFalse (sprintf "%s has a name" d.Key)
+        (d.Description.Trim().Length > 20) |> Expect.isTrue (sprintf "%s has a help line" d.Key)
+        d.Description.EndsWith "." |> Expect.isTrue (sprintf "the help line of %s is a sentence" d.Key)
+
+    testCase "WHY — a row that is read-only says why, and the reason is one of the closed set" <| fun _ ->
+      let readOnly = SettingsCatalog.all |> List.choose (fun d -> match d.Applicability with ReadOnly reason -> Some (d, reason) | Live | RestartRequired -> None)
+      (List.length readOnly > 8) |> Expect.isTrue "there are read-only rows"
+      for d, reason in readOnly do
+        ReadOnlyReason.describe reason |> Expect.stringStarts (sprintf "%s says read-only" d.Key) "read-only here:"
+
+    testCase "WHY — the test-harness variables are read-only rows in their own group, so a person is not offered a knob that only the runner turns" <| fun _ ->
+      let harness = SettingsCatalog.all |> List.filter (fun d -> d.Category = TestHarness)
+      harness |> List.length |> Expect.equal "five harness deadlines" 5
+      for d in harness do
+        d.Applicability |> Expect.equal (sprintf "%s is read-only for the harness" d.Key) (ReadOnly TestHarnessOnly)
+
+    testProperty "WHY — a row's parser never throws, whatever text it is given, and what it accepts it renders back to the same value" <| fun (text: string) ->
+      let text = match text with null -> "" | t -> t
+      EnvBackedRows.all
+      |> List.forall (fun setting ->
+        let d = setting.Descriptor
+        match d.Parse text with
+        | Error _ -> true
+        | Ok v ->
+          // Rendering keeps six significant digits, so the first render may round; after that it is stable.
+          d.Parse (d.Render v) |> Result.map d.Render = Ok (d.Render v))
+
+    testProperty "WHY — a count is accepted exactly between its least and the largest, so no count row holds an illegal number" <| fun (n: int) ->
+      let d = EnvBackedRows.descriptors |> List.find (fun d -> d.Key = "data.gateLogsKept")
+      match d.Parse (string n) with
+      | Ok _ -> n >= 1 && n <= Timeouts.settingCountLargest
+      | Error _ -> n < 1 || n > Timeouts.settingCountLargest
+
+    testProperty "WHY — an age is accepted exactly when it is more than zero days and at most ten years" <| fun (days: float) ->
+      let d = EnvBackedRows.descriptors |> List.find (fun d -> d.Key = "data.frictionMaxAgeDays")
+      let text = days.ToString("R", Globalization.CultureInfo.InvariantCulture)
+      match d.Parse text with
+      | Ok _ -> days > 0.0 && days <= Timeouts.settingAgeLongestDays
+      // A number of days too small to be one tick of a span is refused, too: it would be zero.
+      | Error _ -> not (days > 0.0 && days <= Timeouts.settingAgeLongestDays) || TimeSpan.FromDays days = TimeSpan.Zero
+
+    testCase "WHY — a number that would overflow a span is refused by every row, not thrown" <| fun _ ->
+      // The editor row accepts any text on purpose (text naming no editor is VS Code, as the links already did).
+      let refusing = EnvBackedRows.all |> List.filter (fun s -> s.Descriptor.Key <> EnvBackedRows.editor.Descriptor.Key)
+      for text in [ "Infinity"; "-Infinity"; "NaN"; "1e999"; "1e308"; "9223372036854775807" ] do
+        for setting in refusing do
+          setting.Descriptor.Parse text |> Expect.isError (sprintf "%s refuses %s" setting.Descriptor.Key text)
+
+    testCase "WHY — the memory ceiling is auto until a positive number of megabytes is named" <| fun _ ->
+      let d = EnvBackedRows.referencesResidentCeiling.Descriptor
+      d.Parse "auto" |> Expect.equal "auto" (Ok d.Default)
+      d.Parse "" |> Expect.equal "blank is auto" (Ok d.Default)
+      d.Parse "4096" |> Result.map d.Render |> Expect.equal "4096 round-trips" (Ok "4096")
+      d.Parse "0" |> Expect.isError "zero would drop the cache on every ask"
+      EnvBackedRows.referencesResidentCeiling.EnvText d.Default |> Expect.isNone "auto leaves the variable unset"
+
+    testCase "WHY — the retention rows write days as the variable reads them, so a saved 45 is 45 days in the daemon" <| fun _ ->
+      let row = EnvBackedRows.all |> List.find (fun s -> s.Variable = "SAGEFS_FRICTION_MAX_AGE_DAYS")
+      match row.Descriptor.Parse "45" with
+      | Error why -> failtestf "expected Ok, got %A" why
+      | Ok v -> row.EnvText v |> Expect.equal "the variable text" (Some "45")
+
+    testCase "WHY — the variable's own spelling of zero minutes is not a wait, so a saved 0 is refused instead of switching a timer off" <| fun _ ->
+      let row = EnvBackedRows.all |> List.find (fun s -> s.Variable = "SAGEFS_ORPHAN_SWEEP_MINUTES")
+      row.Descriptor.Parse "0" |> Expect.isError "zero is refused"
+
+    testCase "WHY — every row of a wait that is scaled by the machine tier says so, and no row that is not scaled does" <| fun _ ->
+      let scaledDefaults = [ "SAGEFS_FSI_HOST_STARTUP_SECONDS"; "SAGEFS_STOP_GRACEFUL_SECONDS"; "SAGEFS_GIT_QUICK_SECONDS" ]
+      let unscaledDefaults = [ "SAGEFS_CONFIRM_ANSWER_SECONDS"; "SAGEFS_AGENT_CLEANUP_SECONDS"; "SAGEFS_WATCHER_SYNC_SECONDS" ]
+      let help (variable: string) = (EnvBackedRows.all |> List.find (fun s -> s.Variable = variable)).Descriptor.Description
+      for v in scaledDefaults do help v |> Expect.stringContains (sprintf "%s names the tier" v) "scaled for slower ones"
+      for v in unscaledDefaults do (help v).Contains "scaled" |> Expect.isFalse (sprintf "%s is not scaled" v)
+  ]
+
+/// One reader for a variable that several places must agree on.
+[<Tests>]
+let oneReaderTests =
+  testList "Settings — one reader for each variable that several places read" [
+
+    testCase "WHY — SAGEFS_DEVRELOAD: unset is on, 0 and false in any case are off, anything else is on" <| fun _ ->
+      let parse (text: string | null) = DevReloadMode.parse text
+      parse null |> Expect.equal "unset" DevReloadMode.Enabled
+      for off in [ "0"; "false"; "FALSE"; " False "; " 0 " ] do
+        parse off |> Expect.equal (sprintf "'%s' is off" off) DevReloadMode.Disabled
+      for on in [ "1"; "true"; "yes"; ""; "banana" ] do
+        parse on |> Expect.equal (sprintf "'%s' is on" on) DevReloadMode.Enabled
+
+    testCase "WHY — SAGEFS_EDITOR wins over EDITOR, EDITOR is read when it is blank, and neither means VS Code" <| fun _ ->
+      EditorChoice.choose "cursor" "rider" |> Expect.equal "SAGEFS_EDITOR wins" EditorChoice.Cursor
+      EditorChoice.choose "" "rider" |> Expect.equal "blank falls to EDITOR" EditorChoice.JetBrains
+      EditorChoice.choose null "/opt/jetbrains/bin/idea" |> Expect.equal "a path names its editor" EditorChoice.JetBrains
+      EditorChoice.choose null null |> Expect.equal "neither is VS Code" EditorChoice.VsCode
+      EditorChoice.choose "nvim" "cursor" |> Expect.equal "an editor with no link scheme is VS Code" EditorChoice.VsCode
+
+    testProperty "WHY — an editor text always names one of the three, so the link is never undefined" <| fun (a: string) (b: string) ->
+      List.contains (EditorChoice.choose a b) EditorChoice.all
+
+    testCase "WHY — the editor row judges text the way the links do, so a variable holding a path shows the editor the links open" <| fun _ ->
+      let d = EnvBackedRows.editor.Descriptor
+      d.Parse "/usr/bin/nvim" |> Result.map d.Render |> Expect.equal "unknown editor" (Ok "vscode")
+      d.Parse "Cursor" |> Result.map d.Render |> Expect.equal "any case" (Ok "cursor")
+      d.Parse "auto" |> Expect.equal "auto" (Ok d.Default)
+
+    testCase "WHY — each of these variables is read by one function, so no other file reads it from the environment" <| fun _ ->
+      let root = RepoPaths.repoPathFull [||]
+      let readers (variable: string) =
+        [ for project in [ "SageFs"; "SageFs.Core"; "SageFs.Host" ] do
+            for file in Directory.EnumerateFiles(Path.Combine(root, project), "*.fs", SearchOption.AllDirectories) do
+              let relative = Path.GetRelativePath(root, file).Replace('\\', '/')
+              match relative.Contains "/obj/" || relative.Contains "/bin/" with
+              | true -> ()
+              | false ->
+                let text = File.ReadAllText file
+                match text.Contains (sprintf "GetEnvironmentVariable(\"%s\")" variable) || text.Contains (sprintf "GetEnvironmentVariable \"%s\"" variable) with
+                | true -> yield relative
+                | false -> () ]
+      readers "SAGEFS_DEVRELOAD" |> Expect.isEmpty "SAGEFS_DEVRELOAD is read through DevReloadMode"
+      readers "SAGEFS_EDITOR" |> Expect.isEmpty "SAGEFS_EDITOR is read through EditorChoice"
+  ]
+  |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
+
+/// Every `SAGEFS_*` variable that `Timeouts.fs` and `SageFsConfig.fs` read is the variable of a row on the Settings
+/// page. The count of those without a row is a budget table, so a new variable fails until it has a row, and
+/// `--ratchets --tighten` is how the number goes down.
+module private WithoutARow =
   open System.Text.RegularExpressions
 
   let private repoRoot = RepoPaths.repoPathFull [||]
@@ -423,7 +557,7 @@ module private NotEditableBudget =
         let dir = Path.Combine(repoRoot, project)
         for file in Directory.EnumerateFiles(dir, "*.fs", SearchOption.AllDirectories) do
           let relative = Path.GetRelativePath(repoRoot, file).Replace('\\', '/')
-          let own = relative.EndsWith "EnvBackedSettings.fs" || relative.EndsWith "SettingsCatalog.fs"
+          let own = relative.EndsWith "EnvBackedSettings.fs" || relative.EndsWith "EnvBackedRows.fs" || relative.EndsWith "SettingsCatalog.fs"
           match own || relative.Contains "/obj/" || relative.Contains "/bin/" with
           | true -> ()
           | false ->
@@ -433,22 +567,30 @@ module private NotEditableBudget =
               | false -> for m in quoted.Matches line do yield m.Groups.[1].Value ]
     |> Set.ofList
 
-  /// The count at the first run of this test: the duration variables and the others nobody has moved onto the page yet.
-  let budget = 68
+/// The budget table as data, so `--ratchets --tighten` can lower it.
+let budgets : (string * int) list =
+  [ "variables read without a row", 0 ]
+
+let _withoutARowTable =
+  TestInfrastructure.Ratchet.table
+    { Name = "variables without a settings row"
+      SourceFile = "SageFs.Tests/SettingsExternalTests.fs"
+      Budgets = budgets
+      Actual = fun () -> [ "variables read without a row", WithoutARow.withoutARow.Count ] }
 
 [<Tests>]
 let notEditableRatchet =
-  testList "Settings — every variable has a row or is counted" [
-    testCase "WHY — the variables without a row stay within their budget, and the budget is not above the count" <| fun _ ->
-      let count = NotEditableBudget.withoutARow.Count
-      (count <= NotEditableBudget.budget)
-      |> Expect.isTrue (sprintf "%d variables are read without a row (budget %d). Give the new one a row, or it is a new variable nobody can change from the page: %A" count NotEditableBudget.budget (Set.toList NotEditableBudget.withoutARow))
-      (count = NotEditableBudget.budget)
-      |> Expect.isTrue (sprintf "the budget is %d but %d variables are without a row: lower the budget" NotEditableBudget.budget count)
+  testList "Settings — every variable has a row" [
+    testCase "WHY — no variable Timeouts.fs or SageFsConfig.fs reads is without a row, and a new one fails until it has one" <| fun _ ->
+      let allowed = budgets |> List.head |> snd
+      (WithoutARow.withoutARow.Count <= allowed)
+      |> Expect.isTrue (sprintf "%d variables are read without a row (budget %d). Give each a row, or a read-only row that says why: %A" WithoutARow.withoutARow.Count allowed (Set.toList WithoutARow.withoutARow))
+      (WithoutARow.withoutARow.Count = allowed)
+      |> Expect.isTrue (sprintf "the budget is %d but %d variables are without a row: run --ratchets --tighten" allowed WithoutARow.withoutARow.Count)
 
     testCase "WHY — every variable a row names is read by the product outside the row's own file, so a row cannot name a variable nothing reads" <| fun _ ->
-      for variable in NotEditableBudget.withARow do
-        NotEditableBudget.readByTheProduct |> Set.contains variable |> Expect.isTrue (sprintf "%s is read somewhere besides its row" variable)
+      for variable in WithoutARow.withARow do
+        WithoutARow.readByTheProduct |> Set.contains variable |> Expect.isTrue (sprintf "%s is read somewhere besides its row" variable)
 
     testCase "WHY — a duration row's default is the number Timeouts.fs spells next to its variable, so the page starts from the real default" <| fun _ ->
       let pattern = System.Text.RegularExpressions.Regex("\"(SAGEFS_[A-Z0-9_]+)\"\\s+([0-9_.]+)\\s*$")
@@ -461,10 +603,18 @@ let notEditableRatchet =
           | true -> Some (m.Groups.[1].Value, float (m.Groups.[2].Value.Replace("_", "")))
           | false -> None)
         |> Map.ofArray
-      for setting in [ EnvBackedSettings.warmupInactivity; EnvBackedSettings.warmupMax; EnvBackedSettings.buildTimeout; EnvBackedSettings.hostBuildTimeout; EnvBackedSettings.abandonedSessionHours ] do
-        let shown = float (setting.Descriptor.Render setting.Descriptor.Default)
-        inSource
-        |> Map.tryFind setting.Variable
-        |> Expect.equal (sprintf "%s: the row's default" setting.Variable) (Some shown)
+      let durations =
+        EnvBackedRows.all
+        |> List.filter (fun s -> (SettingValue.duration s.Descriptor.Default).IsSome || (SettingValue.limit s.Descriptor.Default).IsSome)
+      let checkedAgainstSource =
+        durations
+        |> List.choose (fun setting ->
+          inSource
+          |> Map.tryFind setting.Variable
+          |> Option.map (fun expected -> setting, expected))
+      (checkedAgainstSource.Length >= 40) |> Expect.isTrue (sprintf "the scan found the numbers of at least 40 duration rows, found %d" checkedAgainstSource.Length)
+      for setting, expected in checkedAgainstSource do
+        float (setting.Descriptor.Render setting.Descriptor.Default)
+        |> Expect.equal (sprintf "%s: the row's default" setting.Variable) expected
   ]
   |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant

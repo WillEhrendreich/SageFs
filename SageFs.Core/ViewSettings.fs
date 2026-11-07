@@ -399,6 +399,9 @@ module ViewSettings =
     | VTimeout _
     | VDuration _
     | VLimit _
+    | VAge _
+    | VCount _
+    | VOptionalCount _
     | VBindHost _
     | VDir _ -> None
 
