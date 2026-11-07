@@ -92,10 +92,9 @@ let summarize (leftovers: Leftover list) (plan: Plan) : Summary =
     |> List.sumBy (fun l -> (Leftover.entry l).SizeBytes)
   let holding =
     leftovers
-    |> List.choose (fun l ->
-      match l with
-      | Leftover.AgentWorktree(e, _) when Standing.holdsWork e.Standing -> Some e
-      | _ -> None)
+    |> List.filter (fun l -> Leftover.kind l = LeftoverKind.AgentWorktree)
+    |> List.map Leftover.entry
+    |> List.filter (fun e -> Standing.holdsWork e.Standing)
   let safe = plan.Steps |> List.filter (fun s -> s.Risk = Risk.Safe)
   let review = plan.Steps |> List.filter (fun s -> s.Risk = Risk.UnmergedCommits || s.Risk = Risk.UncommittedWork)
   { LeftoverWorktrees = List.length worktrees
