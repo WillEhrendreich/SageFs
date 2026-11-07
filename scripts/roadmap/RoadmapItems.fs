@@ -288,6 +288,11 @@ let items : Item list =
       [ "docs/configuration.md"; "docs/plans/session-options.md" ]
       "FsiMcp lets you set Server GC, an artifacts path that keeps build output out of the project, environment variables for the session process, and a prelude. SageFs already has the prelude, as `.SageFs/init.fsx`. It has no Server GC setting and no artifacts path for its own builds, and the host's environment list has a slot that nothing a user writes can reach. I also found that `config.fsx` accepts `InitScript` and `DefaultArgs` and I could not find anything that reads them, so the first step is a probe that settles whether they do anything. Then each option becomes one named field with a closed type, refused with a reason when it cannot be honored, and checked from inside a real session."
 
+    item "project-check-with-overlays" "Check the whole project with a file replaced, without building" Repl Next
+      NoLandmarkYet
+      [ "docs/mcp-tools.md"; "docs/plans/project-check-with-overlays.md" ]
+      "FsiMcp has `check_project`: it type-checks a whole project with some files replaced by text you send, without a build and without touching the REPL session, so an agent can ask \"does this still compile\" before it lands an edit. SageFs has `check_fsharp_code` for a snippet and a build for the project, which costs minutes on a loaded machine. The compiler call that would answer it is in the tree twice, for the caller check and for `list_references`, and both need a loaded session. I plan a project check that gets the compiler arguments from a design-time MSBuild run, keeps them until the project file, `Directory.Build.props`, `Directory.Build.targets` or `Directory.Packages.props` changes, builds a stale referenced project once, stops when the client cancels, and returns diagnostics with path, line, column, severity, code and message. The pure core, its tests and a simulation come first, and the tool registration waits for the tool-list work."
+
     // ---- Later: months to a year ----
 
     item "type-change-keeps-state" "Type changes keep your running state" HotReload Later

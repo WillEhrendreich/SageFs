@@ -11,9 +11,9 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 10, Later 22, Exploring 20. Already built: 46.
+On the page today: Now 0, Next 11, Later 22, Exploring 20. Already built: 46.
 
-## Next (10)
+## Next (11)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -29,6 +29,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 ### The REPL
 
 - [ ] **Eval output shaped for the agent that reads it.** Part of this is already here. A result over 4,000 characters is cut, with a note that the whole value is still bound as `it`, and `printfn` from any thread cannot reach the MCP stream because the bridge and the host never share it. What is left: the cut keeps the start and drops the end, where an error or the last value usually sits; both kinds of session print with FSI's own limits, so a `let` of a large value echoes up to the cap every time; and I have not checked whether output a background thread writes between calls reaches the agent's next reply. I plan to keep head and tail, set print limits once for both session kinds, and pin the between-calls case with a test that drives the real stdio bridge. Echoing only the type of a `let` waits for a measurement. ([mcp-tools.md](mcp-tools.md), [eval-output-for-an-llm.md](plans/eval-output-for-an-llm.md))
+- [ ] **Check the whole project with a file replaced, without building.** FsiMcp has `check_project`: it type-checks a whole project with some files replaced by text you send, without a build and without touching the REPL session, so an agent can ask "does this still compile" before it lands an edit. SageFs has `check_fsharp_code` for a snippet and a build for the project, which costs minutes on a loaded machine. The compiler call that would answer it is in the tree twice, for the caller check and for `list_references`, and both need a loaded session. I plan a project check that gets the compiler arguments from a design-time MSBuild run, keeps them until the project file, `Directory.Build.props`, `Directory.Build.targets` or `Directory.Packages.props` changes, builds a stale referenced project once, stops when the client cancels, and returns diagnostics with path, line, column, severity, code and message. The pure core, its tests and a simulation come first, and the tool registration waits for the tool-list work. ([mcp-tools.md](mcp-tools.md), [project-check-with-overlays.md](plans/project-check-with-overlays.md))
 
 ### Agents and cohorts
 

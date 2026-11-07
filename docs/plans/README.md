@@ -108,6 +108,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [A cost line on a slow or allocation-heavy eval](eval-cost-line.md) | S | a fast small eval carries no line |
 | [A profile tool](profile-tool.md) | M | the rows of a CPU report sum to the sampled total |
 | [Session options you can set](session-options.md) | M | a Server GC choice becomes `DOTNET_gcServer=1` in the host's environment |
+| [Check the whole project with a file replaced](project-check-with-overlays.md) | M | an overlay for a file the project does not compile is refused with the project's files |
 | [A head-to-head benchmark for REPL servers](repl-benchmark-against-other-tools.md) | M, then one run per page | a result with no machine, load or version is refused |
 
 ### Agents and cohorts
