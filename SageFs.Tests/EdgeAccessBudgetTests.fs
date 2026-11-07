@@ -47,7 +47,7 @@ let tests =
     ]
     |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
 
-    test "WHY - the member mint is the one operator-only route" {
-      operatorOnlyRoutes () |> Expect.equal "only the mint" [ POST, "/api/members/mint" ]
+    test "WHY - the member mint and the cohort seat are the operator-only routes" {
+      operatorOnlyRoutes () |> Expect.equal "only the mint and the seat" [ POST, "/api/members/mint"; GET, "/api/cohort/seat"; POST, "/api/cohort/seat" ]
     }
   ]

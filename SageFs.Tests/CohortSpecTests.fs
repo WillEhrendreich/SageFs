@@ -100,6 +100,30 @@ let membershipTests =
       |> Expect.contains "a departed conductor keeping the seat must violate the bound-implies-present rule"
                     "BOUND-IS-PRESENT"
 
+    testCase "FAULTS — a seating that skips the presence check VIOLATES BOUND-IS-PRESENT and SEATING-NAMES-A-PRESENT-MEMBER, so SeatConductor's rules have teeth" <| fun _ ->
+      let r = CohortVacancySpec.seatFaultsAbsent ()
+      r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
+      r.Violations |> Expect.contains "seating an absent member breaks the bound-implies-present rule" "BOUND-IS-PRESENT"
+      r.Violations |> Expect.contains "and the seating rule" "SEATING-NAMES-A-PRESENT-MEMBER"
+
+    testCase "FAULTS — a seating that takes a held seat VIOLATES SEATING-FILLS-ONLY-AN-EMPTY-SEAT, so the rule has teeth" <| fun _ ->
+      let r = CohortVacancySpec.seatFaultsOverBound ()
+      r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
+      r.Violations |> Expect.contains "seating over a bound conductor breaks the empty-seat rule" "SEATING-FILLS-ONLY-AN-EMPTY-SEAT"
+
+    testCase "the seating states are REACHABLE — the proof's alphabet really seats a member, so its silence about SeatConductor is not vacuous" <| fun _ ->
+      let seats =
+        [ for clock in [ System.DateTime(2020, 1, 1) ] do
+            let machine = SageFs.CohortScope.Machine
+            let run (s: Cohort.CohortState<string>) (c: Cohort.CohortCommand<string>) =
+              match Cohort.decide clock [||] s c with
+              | Ok(s', _, _) -> s'
+              | Error e -> failwithf "expected %A to succeed: %A" c e
+            let joined = run (run (Cohort.CohortState.empty ()) (Cohort.CohortCommand.Join("a", Cohort.JoinableRole.Implementer, None, machine))) (Cohort.CohortCommand.Join("b", Cohort.JoinableRole.Implementer, None, machine))
+            let vacant = run joined (Cohort.CohortCommand.Depart("a", machine))
+            yield run vacant (Cohort.CohortCommand.SeatConductor("b", machine)) ]
+      seats |> List.map (fun s -> s.Conductor) |> Expect.equal "b holds the seat after a person seated them" [ Cohort.ConductorBinding.Bound "b" ]
+
     testCase "the vacancy states are REACHABLE — the proof is not vacuous about them" <| fun _ ->
       // A rule can hold over a space that never contains the state it is about.
       // Drive the real core to both vacancies and check the DU says what it says.

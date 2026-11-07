@@ -3642,6 +3642,66 @@ let mapMemberRoutes (operatorAccess: SageFs.OperatorStore.OperatorAccess) (app: 
     } :> Task
   ) |> ignore
 
+/// Look at a cohort's conductor seat and fill an empty one (`sagefs cohort seat`), for the person who runs the daemon.
+/// This is the only place a `Cohort.SeatConductor` is built: the operator credential is checked first (the same
+/// check as the mint route), no MCP tool builds the command and no member token reaches the route, so an agent cannot
+/// take the seat. The rules are `Cohort.decide`'s; the route resolves the name, dispatches and says what happened.
+let mapCohortSeatRoutes (operatorAccess: SageFs.OperatorStore.OperatorAccess) (app: WebApplication) (rctx: RouteContext) =
+  let authorizationOf (ctx: Microsoft.AspNetCore.Http.HttpContext) =
+    match ctx.Request.Headers.TryGetValue "Authorization" with
+    | true, values when values.Count > 0 -> Some(string values.[0])
+    | _ -> None
+  let refuse (ctx: Microsoft.AspNetCore.Http.HttpContext) (status: int) (body: SageFs.McpMintRoute.EdgeBody) =
+    task {
+      ctx.Response.StatusCode <- status
+      do! rawJsonResponse ctx (Json.serialize Json.camelCase body)
+    }
+  let noOwner =
+    SageFs.CohortSeatRoute.edgeBodyOf (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+  app.MapGet("/api/cohort/seat", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      match SageFs.McpMintRoute.verdictOf operatorAccess (authorizationOf ctx) with
+      | SageFs.McpMintRoute.Verdict.Refused(status, body) -> do! refuse ctx status body
+      | SageFs.McpMintRoute.Verdict.Admitted ->
+        let directory =
+          match ctx.Request.Query.TryGetValue "working_directory" with
+          | true, values when values.Count > 0 -> string values.[0]
+          | _ -> ""
+        match SageFs.McpTools.cohortOwnerFor rctx.McpContext (SageFs.McpMintRoute.given directory) with
+        | None -> do! refuse ctx 503 noOwner
+        | Some owner -> do! rawJsonResponse ctx (Json.serialize Json.camelCase (SageFs.CohortSeatRoute.viewOf (owner.ReadFrame())))
+    } :> Task
+  ) |> ignore
+  app.MapPost("/api/cohort/seat", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      match SageFs.McpMintRoute.verdictOf operatorAccess (authorizationOf ctx) with
+      | SageFs.McpMintRoute.Verdict.Refused(status, body) -> do! refuse ctx status body
+      | SageFs.McpMintRoute.Verdict.Admitted ->
+        use! doc = readJsonBody ctx
+        match SageFs.CohortSeatRoute.parseRequest (doc.RootElement.GetRawText()) with
+        | Error err -> do! refuse ctx (SageFsError.toHttpStatus err) (SageFs.CohortSeatRoute.edgeBodyOf err)
+        | Ok request ->
+          let directory = SageFs.McpMintRoute.given request.WorkingDirectory
+          match SageFs.McpTools.cohortOwnerFor rctx.McpContext directory with
+          | None -> do! refuse ctx 503 noOwner
+          | Some owner ->
+            let frame = owner.ReadFrame()
+            // The cohort of the checkout the person named, or the daemon's own when they named none.
+            let scope =
+              match directory with
+              | Some _ -> SageFs.ScopeOf.ofWorkingDirectory directory
+              | None -> frame.Scope
+            match SageFs.CohortSeatRoute.commandFor frame scope request.Member with
+            | Error err -> do! refuse ctx (SageFsError.toHttpStatus err) (SageFs.CohortSeatRoute.edgeBodyOf err)
+            | Ok command ->
+              let! committed = SageFs.McpTools.commitCohort rctx.McpContext command
+              match committed with
+              | Error err -> do! refuse ctx (SageFsError.toHttpStatus err) (SageFs.CohortSeatRoute.edgeBodyOf err)
+              | Ok(events, _) ->
+                do! rawJsonResponse ctx (Json.serialize Json.camelCase (SageFs.CohortSeatRoute.seatedReply (owner.ReadFrame()) events))
+    } :> Task
+  ) |> ignore
+
 let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
@@ -4777,6 +4837,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       mapSessionRoutes app rctx
       mapHatchRoutes SageFs.Features.HatchWatch.record app
       mapMemberRoutes operatorAccess app rctx
+      mapCohortSeatRoutes operatorAccess app rctx
       mapLiveBindingsRoutes app rctx
       mapLiveTestingRoutes app rctx
       mapAnalysisRoutes app rctx

@@ -3231,6 +3231,15 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
         Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
           textEnc (sprintf "Ledger v%d" (int64 frame.Version))
         ]
+        // An empty conductor seat stays empty until a person fills it: no tool and no token can. Say so where the
+        // person looks, and name the command, so the panel is not a dead end.
+        match frame.Conductor with
+        | SageFs.Cohort.ConductorBinding.Vacant(former, since, _) ->
+          Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; overflow-wrap: anywhere;" ] [
+            textEnc (sprintf "Conductor seat vacant since %s (%s held it). %s" (since.ToString "u") (MemberTable.MemberId.display former) Features.CohortStatusText.vacantSeatAdvice)
+          ]
+        | SageFs.Cohort.ConductorBinding.Bound _
+        | SageFs.Cohort.ConductorBinding.NeverBound -> ()
         Elem.div [] [
           Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; margin-bottom: 0.2rem;" ] [
             Text.raw "Members"

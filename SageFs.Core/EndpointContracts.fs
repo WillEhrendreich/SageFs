@@ -71,9 +71,12 @@ module EndpointContracts =
     Endpoint.create POST "/api/lease/release" "Leases" "Give a lease back"
   ]
 
-  /// Minting a member token from outside an MCP connection, for the person who runs the daemon or a launcher they trust.
+  /// What only the person who runs the daemon does, from outside an MCP connection: mint a member token (for a launcher
+  /// they trust) and look at or fill a cohort's conductor seat. No tool and no member token reaches either.
   let memberEndpoints = [
     Endpoint.createOperatorOnly POST "/api/members/mint" "Members" "Mint a member token with the operator credential (sagefs member mint)"
+    Endpoint.createOperatorOnly GET "/api/cohort/seat" "Members" "Read a cohort's conductor seat and the members present (sagefs cohort seat)"
+    Endpoint.createOperatorOnly POST "/api/cohort/seat" "Members" "Seat a present member in an empty conductor seat (sagefs cohort seat <member id>)"
   ]
 
   /// The escape hatch's count: the agent hook reports each dotnet build, test, run or fsi it let through, and get_daemon_status reads the count.

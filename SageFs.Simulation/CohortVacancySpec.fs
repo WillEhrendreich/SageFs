@@ -141,6 +141,25 @@ module CohortVacancySpec =
     |> Map.toList
     |> List.choose (fun (cid, c) -> match c.State with ClaimState.Held h when h = m -> Some(cid, c.Fence) | _ -> None)
 
+  // ── Named rules over ONE accepted step (before, command, after) ───────────
+
+  /// A person fills an EMPTY seat. `SeatConductor` over a seat that is bound would move a held seat, which is the
+  /// conductor's `DelegateConductor`, so an accepted seating over a `Bound` binding is the rule broken.
+  let seatingFillsOnlyAnEmptySeat (before: CohortState<Member>) (command: CohortCommand<Member>) (_after: CohortState<Member>) : bool =
+    match command, before.Conductor with
+    | CohortCommand.SeatConductor _, ConductorBinding.Bound _ -> false
+    | _ -> true
+
+  /// A seating names a member who was present, and the seat is bound to exactly that member afterwards.
+  let seatingNamesAPresentMember (before: CohortState<Member>) (command: CohortCommand<Member>) (after: CohortState<Member>) : bool =
+    match command with
+    | CohortCommand.SeatConductor(target, _) -> isPresent before target && after.Conductor = ConductorBinding.Bound target
+    | _ -> true
+
+  let stepRules : (string * (CohortState<Member> -> CohortCommand<Member> -> CohortState<Member> -> bool)) list =
+    [ "SEATING-FILLS-ONLY-AN-EMPTY-SEAT", seatingFillsOnlyAnEmptySeat
+      "SEATING-NAMES-A-PRESENT-MEMBER", seatingNamesAPresentMember ]
+
   /// The dedup key: exactly the projection the two rules above read. See the
   /// module doc for why this is the key and not the whole state.
   let private keyOf (s: CohortState<Member>) : string =
@@ -184,6 +203,10 @@ module CohortVacancySpec =
         | ConductorBinding.NeverBound
         | ConductorBinding.Bound _
         | ConductorBinding.Vacant _ -> ()
+    // A person's seating, offered for EVERY member in EVERY state (a bound seat, an absent member, a vacancy), so the
+    // refusals are explored as well as the acceptances.
+    for m in members do
+      acc.Add(CohortCommand.SeatConductor(m, cohortScope), [||])
     // "everything silent lapses", in one edge
     acc.Add(CohortCommand.Tick cohortScope, [||])
     List.ofSeq acc
@@ -215,6 +238,8 @@ module CohortVacancySpec =
         for cmd, ent in enabled s do
           match decide clock ent s cmd with
           | Result.Ok(s', _, _) ->
+            for name, rule in stepRules do
+              if not (rule s cmd s') then violations.Add name |> ignore
             if visited.Add(keyOf s') then
               if visited.Count > cap then capped <- true else frontier.Enqueue s'
           | Result.Error _ -> ()
@@ -252,6 +277,27 @@ module CohortVacancySpec =
   /// that no broken world can violate is not proving anything, so this is the
   /// half of the module that says the other half is real.
   let faults () : ExploreResult = explore faultDepartedConductorKeepsSeat defaultCap
+
+  /// A careless seating: whoever is named gets the empty seat, present or not. The world where `SeatConductor` skips
+  /// the presence check, which is the `Bound m` invariant ("m is Present") broken by the one command a person types.
+  let faultSeatsAbsentMember : Decide =
+    fun clk ent state command ->
+      match command, state.Conductor with
+      | CohortCommand.SeatConductor(target, _), (ConductorBinding.Vacant _ | ConductorBinding.NeverBound) when not (isPresent state target) ->
+        Ok({ state with Conductor = ConductorBinding.Bound target }, [ CohortEvent.ConductorSeated(target, state.Conductor) ], [])
+      | _ -> Cohort.decide clk ent state command
+
+  /// A careless seating the other way: it takes a seat that is held. The person's command would then move a conductor
+  /// who never agreed to go, which only the conductor may do (`DelegateConductor`).
+  let faultSeatsOverBoundConductor : Decide =
+    fun clk ent state command ->
+      match command, state.Conductor with
+      | CohortCommand.SeatConductor(target, _), ConductorBinding.Bound _ when isPresent state target ->
+        Ok({ state with Conductor = ConductorBinding.Bound target }, [ CohortEvent.ConductorSeated(target, state.Conductor) ], [])
+      | _ -> Cohort.decide clk ent state command
+
+  let seatFaultsAbsent () : ExploreResult = explore faultSeatsAbsentMember defaultCap
+  let seatFaultsOverBound () : ExploreResult = explore faultSeatsOverBoundConductor defaultCap
 
   /// The OLD lookup, frozen as a regression witness: the conductor binding
   /// checked BEFORE presence, which is the whole defect in four lines. NOT wired

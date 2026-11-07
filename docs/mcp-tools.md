@@ -574,7 +574,7 @@ explores every command against every landing and target, with a twin for each ru
 - **Who may withdraw.** Only the landing's requester.
 - **Who may clear a veto or delegate.** Only the sitting conductor. An empty seat is refused as `VACANT`, and
   nothing in the tool surface fills one: delegating needs a conductor to do it, and nobody gets promoted by a
-  timer. A person has to restore a conductor.
+  timer. A person seats one with `sagefs cohort seat <member id>` (see "Seat a conductor" below).
 - **One conductor at a time.** The seat is a single binding. A delegation moves it from the caller to a present
   member in one step and the caller is an ordinary member after. A target who isn't present gets refused with
   the list of members who are. A member acting under a token can't take the seat, because no token may call
@@ -654,6 +654,32 @@ sandboxed agent (bwrap, a container with host networking), another OS user on a 
 machine, a forwarded dev-container port. The file's owner-only mode is set and read
 back on Unix. On Windows the file gets an ACL for the current user alone when it is
 made, and that is not read back, because it has not been run there.
+
+**Seat a conductor.** When the conductor leaves or goes silent the seat is empty, and an empty seat stays empty until
+a person fills it. `delegate_conductor` cannot: only a sitting conductor can issue it. The person's way in is a
+command on the machine that runs the daemon:
+
+```sh
+sagefs cohort seat                                   # who is present, and where the seat stands
+sagefs cohort seat mcp:m-0123456789abcdef            # seat that member
+sagefs cohort seat mcp:m-0123456789abcdef --dir /abs/path/to/checkout
+```
+
+With no member id it prints the cohort's scope, the seat (`held by`, `vacant since ... (who held it: why)` or `never bound`)
+and the present members with their roles. With one it seats that member and prints the vacancy it ended. `--dir` names
+the checkout whose cohort it is and defaults to the current directory; `--mcp-port` picks the daemon. The member id is
+the one `get_cohort_status` prints.
+
+The rules are `Cohort.decide`'s, for `SeatConductor`: the seat must be `Vacant` or `NeverBound`, and the member must be
+present. A bound seat is refused and names its holder (moving a held seat is the conductor's `delegate_conductor`). An
+absent member is refused with the roster of those who are present. A member acting under a minted token (`cap:<id>`) is
+refused too: no token may call the conductor's tools, so the seat would be stuck with it. The ledger records
+`ConductorSeated` with the vacancy it ended, and replay reproduces the seat after a restart.
+
+It uses the operator credential, exactly as `member mint` does: `GET` and `POST /api/cohort/seat` with
+`Authorization: Bearer sfo_...`, refused with the table of statuses above for anything else. No MCP tool builds a
+`SeatConductor`, and no member token reaches the route, which is why an agent cannot take the seat. The `POST` body is
+`{"working_directory": "...", "member": "mcp:m-..."}`.
 
 **Route.** Every token names the one place it may act, and you say where with
 exactly one of two parameters:

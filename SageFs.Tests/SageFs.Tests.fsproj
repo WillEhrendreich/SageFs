@@ -996,6 +996,7 @@
         <Compile Include="SmokeRulesTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
+        <Compile Include="CohortSeatIntegrationTests.fs" />
         <Compile Include="CapabilityHttpIntegrationTests.fs" />
         <Compile Include="McpCallIntegrationTests.fs" />
         <Compile Include="HardResetStartupProfileIntegrationTests.fs" />

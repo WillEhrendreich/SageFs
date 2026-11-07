@@ -116,6 +116,8 @@ type CliCommand =
   | InstallSkill of args: string list
   /// `sagefs member ...`: the arguments after `member`, with `--mcp-port` still among them.
   | Member of args: string list
+  /// `sagefs cohort seat ...`: the arguments after `cohort`, with `--mcp-port` still among them.
+  | Cohort of args: string list
   /// `sagefs call ...`: the words after `call`, with every flag still among them. A tool's own flags are read against
   /// the tool's input schema, so none of them may be taken for the CLI's here (`-v` is a value as often as a flag).
   | Call of args: string list
@@ -140,6 +142,7 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "check" -> Check
     | _ when args.Length > 0 && args.[0] = "install-skill" -> InstallSkill(args |> Array.skip 1 |> List.ofArray)
     | _ when args.Length > 0 && args.[0] = "member" -> Member(args |> Array.skip 1 |> List.ofArray)
+    | _ when args.Length > 0 && args.[0] = "cohort" -> Cohort(args |> Array.skip 1 |> List.ofArray)
     | _ when args.Length > 0 && args.[0] = "sweep" -> Sweep (hasFlag "--kill")
     | _ when args.Length > 0 && args.[0] = "hygiene" ->
       let repo =
@@ -609,6 +612,8 @@ let main args =
     printfn "       SageFs install-skill [--force]  Install the sagefs agent skill (~/.claude/skills; --dir <folder>)"
     printfn "       SageFs member mint --role R (--dir D | --session ID) [--scope S] [--ttl MINUTES] [--print-env VAR]"
     printfn "                                       Mint a member token with the operator credential (operator.token); --print-env prints an export line"
+    printfn "       SageFs cohort seat [<member id>] [--dir D]"
+    printfn "                                       Fill an empty conductor seat with a present member (operator.token); with no member id, list who is present and where the seat stands"
     printfn "       SageFs call --list              List the daemon's tools (name and first line of the description)"
     printfn "       SageFs call <tool> [--<parameter> <value> ...] | --json '{...}'"
     printfn "                                       Call one tool and print its answer. Values are typed from the tool's own input schema;"
@@ -732,6 +737,26 @@ let main args =
     | Error refusal ->
       eprintfn "sagefs member: %s" (MemberMintCommand.UsageRefusal.describe refusal)
       eprintfn "%s" MemberMintCommand.usage
+      2
+
+  | Cohort cohortArgs ->
+    let port = resolveMcpPort (Array.ofList cohortArgs)
+    let verbArgs =
+      cohortArgs
+      |> List.fold
+        (fun (kept, skipNext) arg ->
+          match skipNext, arg with
+          | true, _ -> kept, false
+          | false, "--mcp-port" -> kept, true
+          | false, _ -> arg :: kept, false)
+        ([], false)
+      |> fst
+      |> List.rev
+    match CohortSeatCommand.parseArgs Environment.CurrentDirectory verbArgs with
+    | Ok ask -> CohortSeatCommand.run port (DataDirChoice.dataDirectory ()) ask |> awaitAtEntryPoint
+    | Error refusal ->
+      eprintfn "sagefs cohort: %s" (CohortSeatCommand.UsageRefusal.describe refusal)
+      eprintfn "%s" CohortSeatCommand.usage
       2
 
   | Call callArgs ->

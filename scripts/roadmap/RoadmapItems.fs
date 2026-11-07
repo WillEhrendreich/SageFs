@@ -185,6 +185,11 @@ let items : Item list =
       [ "docs/mcp-tools.md" ]
       "The conductor can hand the seat to a present member with `delegate_conductor`. A seated Implementer, Verifier or the conductor can `veto_landing` with a reason, the conductor clears it with `resolve_veto`, and a landing's own requester can `withdraw_landing`. A veto on a landing that already landed is refused, not ignored, and `get_cohort_status` and the dashboard panel show who vetoed and why. A vacant seat still can't be filled from the tool surface."
 
+    item "cohort-seat-a-conductor" "A person can seat a conductor" Agents Now
+      (landmark "SageFs/CohortSeatCommand.fs" "CohortSeatCommand")
+      [ "docs/mcp-tools.md" ]
+      "When a cohort's conductor leaves or goes silent the seat stays empty, and no tool can fill it, so a cohort whose conductor left could only be reset by wiping its ledger. `sagefs cohort seat <member id>` fills it: the person who runs the daemon names a present member, the operator credential is checked, and the ledger records `ConductorSeated` with the vacancy it ended. A held seat, an absent member and a member under a token are refused with the reason, and no MCP tool or token can build the command, so an agent cannot take the seat. With no member id the command lists who is present and where the seat stands."
+
     item "more-settings-editable" "More settings editable from the dashboard" Dashboard Next
       NoLandmarkYet
       [ "docs/configuration.md"; "docs/plans/more-settings-editable.md" ]
