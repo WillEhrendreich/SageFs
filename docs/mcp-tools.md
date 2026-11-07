@@ -147,6 +147,49 @@ your client ever sees an empty tool list. If you want to stay on HTTP,
 check `sagefs status`, if it says no daemon is running, start one with
 `sagefs` and restart your client.
 
+### Reaching the tools without a client: `sagefs call`
+
+A script, a hook, CI, or an agent whose client has no SageFs tools can call
+any tool from a shell. `sagefs call` talks to the daemon's HTTP endpoint
+itself, with the same client code the stdio bridge uses, so it has no child
+process and heals a session the daemon has forgotten.
+
+```sh
+sagefs call --list                                    # each tool and the first line of what it does
+sagefs call get_session_status --session_id 1a2b3c4d
+sagefs call run_tests --pattern Foo --timeout_seconds 60
+sagefs call stop_session --json '{"session_id":"1a2b3c4d"}'
+```
+
+A flag is typed from the tool's own input schema (a string stays a string, a
+number a number, a boolean flag alone is `true`; `--ids='[1,2]'` is an array).
+A name the tool does not have is refused before anything is sent, with the names
+it does have. The tool's answer is on stdout. A tool that answers with an error
+goes to stderr with exit code 1, its full text kept: a refusal by a gate names the
+next action. A usage mistake is exit code 2. A daemon that is not running gets the
+words `sagefs status` uses and exit code 1. `--port` or `SAGEFS_MCP_PORT` picks the
+daemon (`--mcp-port` works too). The command's own options (`--list`, `--json`,
+`--token`, `--port`, `--mcp-port`, `--help`) are never tool parameters, and no tool
+has a parameter with one of those names.
+
+**Who is calling.** Every `sagefs call` is a new process, so the daemon sees a new
+connection each time, and what one call makes (a session, a claim) belongs to that
+connection. With no token the next call cannot stop the session the last one made:
+`stop_session` answers an error, "owned by another bound MCP connection". A member
+token outranks the connection (see "Member tokens" below), so pass one and every
+call is the same member:
+
+```sh
+eval "$(sagefs member mint --role Implementer --dir "$PWD" --print-env SAGEFS_MEMBER_TOKEN)"
+sagefs call create_bare_session --working_directory "$PWD"
+sagefs call stop_session --session_id 1a2b3c4d      # the same member, so it is allowed
+```
+
+`--token <token>` does the same for one call; the environment variable keeps the
+token out of the process list. `SAGEFS_OPERATOR_TOKEN` is sent too, so `--list` shows
+the full tool list under `TokenRequired`. With neither, `--list` starts with
+`identity: anonymous` and any refusal ends with what to do about it.
+
 ## "404 Session not found": the daemon was replaced under a live client
 
 The single most confusing failure here, and it is not what it looks like. Read
@@ -243,7 +286,7 @@ columns from 0 (counted in characters, not bytes), and `endColumn` is one past t
 | `create_bare_session` | Create an isolated project-free REPL. It never auto-discovers. |
 | `list_sessions` | List active sessions. Every entry ends with a `Source:` line: in sync with the build, no project loaded, or the same warning `get_session_status` carries as `sourceState` when files changed after the build, a rebuild is running, or it could not be told. A session an agent created also carries an `Owner:` line above that one: whether the connection that made it is still here, or how long it has been gone, and how long the session has been idle. That is what the daemon's reaper reads (see `stop_session`). A session a person made, from the dashboard, the CLI or an editor, has no `Owner:` line. |
 | `switch_session` | Change which session your calls route to. |
-| `stop_session` | Stop a session by id. A session another MCP connection created can only be stopped by that connection. A session with no record of a maker can be stopped from any connection, and nobody is asked first: one made from the dashboard, the CLI or an editor, or one a daemon restart resumed (the record of makers lives in memory). If the creating connection never does, the daemon stops the session for you once the connection has been gone for 12 hours and the session has been idle for 12 hours (`SAGEFS_ABANDONED_SESSION_HOURS`, `0` turns it off). It writes one log line saying why, and `list_sessions` shows the stop under the live sessions. A session with no record of an agent maker, one made from the dashboard, the CLI or an editor, is never stopped this way. Stop your own sessions when you are done. |
+| `stop_session` | Stop a session by id. A session another MCP connection created can only be stopped by that connection; the refusal is an error result (`isError` is true). A session with no record of a maker can be stopped from any connection, and nobody is asked first: one made from the dashboard, the CLI or an editor, or one a daemon restart resumed (the record of makers lives in memory). If the creating connection never does, the daemon stops the session for you once the connection has been gone for 12 hours and the session has been idle for 12 hours (`SAGEFS_ABANDONED_SESSION_HOURS`, `0` turns it off). It writes one log line saying why, and `list_sessions` shows the stop under the live sessions. A session with no record of an agent maker, one made from the dashboard, the CLI or an editor, is never stopped this way. Stop your own sessions when you are done. |
 | `reset_fsi_session` | Soft reset: clears definitions, keeps loaded DLLs. |
 | `hard_reset_fsi_session` | Full reset: rebuilds the project, reloads, starts fresh. Needed after `.fsproj` or package changes. With `rebuild=true` it answers at once and builds in the background; call `get_session_status` with `wait_seconds=60` to wait for the outcome. In a repo that builds its own SageFs.Core, the build compiles against that Core, not the daemon's. |
 | `get_available_projects` | Discover `.fsproj` / `.sln` / `.slnx` files under a directory. |

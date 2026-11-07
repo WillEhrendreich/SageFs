@@ -155,6 +155,8 @@
         <Compile Include="StaleSessionRecoveryTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="McpBridgeTests.fs" />
+        <Compile Include="McpCallTests.fs" />
+        <Compile Include="McpCallCommandTests.fs" />
         <Compile Include="HttpOriginGuardTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />
         <Compile Include="DogfoodReplTests.fs" />
@@ -966,6 +968,7 @@
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="CapabilityHttpIntegrationTests.fs" />
+        <Compile Include="McpCallIntegrationTests.fs" />
         <Compile Include="HardResetStartupProfileIntegrationTests.fs" />
         <Compile Include="CohortIdentityLeakTests.fs" />
         <Compile Include="ClaimPathTests.fs" />

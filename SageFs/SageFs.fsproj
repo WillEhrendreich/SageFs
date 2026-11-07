@@ -212,6 +212,8 @@
         <Compile Include="CohortPlay.fs" />
         <Compile Include="CohortExportCommand.fs" />
         <Compile Include="McpStdioBridge.fs" />
+        <!-- `sagefs call`: one tool call from a shell, over the stdio bridge's own client code (forward). -->
+        <Compile Include="McpCallCommand.fs" />
         <Compile Include="Program.fs" />
         <None Include="..\Readme.md">
           <Pack>true</Pack>

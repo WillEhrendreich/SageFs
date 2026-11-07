@@ -48,6 +48,27 @@ module DaemonPresence =
     | None, Some pid -> DaemonPresence.Wedged pid
     | None, None -> DaemonPresence.NotRunning
 
+  /// What `sagefs status` says when there is no daemon to report on, one line each, and what any command that needs
+  /// the daemon (`sagefs call`) says in its place: the same words, so a person is told one thing. Empty for a daemon
+  /// that is running, which has nothing to say about itself being absent.
+  let unreachableLines (port: int) (presence: DaemonPresence) : string list =
+    match presence with
+    | DaemonPresence.Running _ -> []
+    | DaemonPresence.Wedged pid ->
+      [ "SageFs daemon is wedged"
+        sprintf "  PID:        %d" pid
+        sprintf "  Port:       %d" port
+        "  It is holding the port but has not answered a request."
+        sprintf "  Recover it with: sagefs stop --mcp-port %d" port ]
+    | DaemonPresence.NotRunning ->
+      [ "No daemon running"
+        ""
+        "  To start one, run `sagefs` in a terminal and leave it there."
+        "  Or register it with an agent and let the agent start it:"
+        "    claude mcp add sagefs -- sagefs mcp"
+        "  That is local scope (this project only). Add -s user to make it global."
+        "  A daemon an agent starts exits when that agent does. More in docs/mcp-tools.md." ]
+
   let describe =
     function
     | DaemonPresence.NotRunning -> "no daemon running"

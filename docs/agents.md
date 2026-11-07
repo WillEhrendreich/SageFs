@@ -136,6 +136,39 @@ Point your agent at `http://localhost:37749/` (streamable HTTP), or
 sends it a short version of the rules, so even an agent without the skill gets
 the core of it. The skill is the full version, and you want both.
 
+### When the client has no SageFs tools
+
+A client configured with a URL asks for its tools once, when it connects, and holds one session id. A
+daemon restart ends that session, and installing a build restarts the daemon, so the client is left with
+no SageFs tools or a `404 Session not found` on every call until someone reloads it. A client that
+started while the daemon was down never got the tools at all. The durable fix is on the client's side:
+`claude mcp add sagefs -- sagefs mcp` registers the stdio bridge, which owns the handshake, so the client
+never holds an id that can go stale.
+
+Until the client is reconnected, `sagefs call` reaches the same tools from a shell, a script, a hook or
+CI:
+
+```bash
+sagefs call --list                                     # each tool, and who you are calling as
+sagefs call get_session_status --session_id 1a2b3c4d
+sagefs call run_tests --pattern Foo --timeout_seconds 60
+sagefs call stop_session --json '{"session_id":"1a2b3c4d"}'
+```
+
+Flags are typed from the tool's own input schema, and a name the tool does not have is refused with the
+names it does. The answer is on stdout. A tool that answers with an error goes to stderr with exit code 1.
+
+Each `sagefs call` is a new process, and the daemon ties a session to the connection that made it, so
+with no token the next call cannot stop what the last one made. Mint a member token once and every call is
+the same member:
+
+```bash
+eval "$(sagefs member mint --role Implementer --dir "$PWD" --print-env SAGEFS_MEMBER_TOKEN)"
+```
+
+`--token` does the same for one call. The full description is in
+[mcp-tools.md](mcp-tools.md#reaching-the-tools-without-a-client-sagefs-call).
+
 ## 4. When the agent drifts
 
 It'll happen. Usually the agent hits something awkward (a version mismatch, a

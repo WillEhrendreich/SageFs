@@ -157,7 +157,7 @@ let tests =
                 )
               // Forward under a session id the daemon has never heard of.
               let! result =
-                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout captured.Add (Some "sid-from-the-old-daemon") None msg
+                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout.WriteLine captured.Add (Some "sid-from-the-old-daemon") None msg
               result |> Expect.equal "the bridge healed the restart in place — the client's one request got its answer" (Ok())
               let written = Encoding.UTF8.GetString(stdoutStream.ToArray())
               written
@@ -194,7 +194,7 @@ let tests =
               let msg = RpcMessage.Request(RpcId.N 2L, "tools/call", """{"jsonrpc":"2.0","id":2,"method":"tools/call"}""")
 
               let! result =
-                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout captured.Add (Some "sid-1") None msg
+                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout.WriteLine captured.Add (Some "sid-1") None msg
 
               match result with
               | Error(SageFs.Server.McpStdioBridge.ForwardError.Rejected reason) ->
@@ -240,7 +240,7 @@ let tests =
               use client = new HttpClient(Timeout = TestTimeouts.daemonRequest)
 
               let! result =
-                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout captured.Add (Some "sid-1") None parsed
+                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout.WriteLine captured.Add (Some "sid-1") None parsed
 
               match result with
               | Error(SageFs.Server.McpStdioBridge.ForwardError.Rejected reason) ->
@@ -272,7 +272,7 @@ let tests =
               let msg = RpcMessage.Request(RpcId.N 2L, "tools/call", """{"jsonrpc":"2.0","id":2,"method":"tools/call"}""")
 
               let! result =
-                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout captured.Add (Some "sid-1") None msg
+                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout.WriteLine captured.Add (Some "sid-1") None msg
 
               match result with
               | Error(SageFs.Server.McpStdioBridge.ForwardError.Rejected _) -> ()
@@ -301,7 +301,7 @@ let tests =
               let msg = RpcMessage.Request(RpcId.N 2L, "tools/call", """{"jsonrpc":"2.0","id":2,"method":"tools/call"}""")
 
               let! result =
-                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout captured.Add None (None: string option) msg
+                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout.WriteLine captured.Add None (None: string option) msg
 
               match result with
               | Error(SageFs.Server.McpStdioBridge.ForwardError.Rejected _) -> ()
@@ -337,7 +337,7 @@ let tests =
                 SageFs.Server.McpStdioBridge.forward
                   client
                   daemon.Port
-                  stdout
+                  stdout.WriteLine
                   (fun sid -> timeline.Add(sprintf "capture:%s" sid))
                   (Some "stale")
                   None

@@ -184,6 +184,10 @@ module Timeouts =
   /// The longest `sagefs member mint` waits for the daemon. A mint reads the cohort, seats the member and answers,
   /// which takes well under a second, so a daemon silent for this long is not coming back for this call.
   let memberMintRequest = forMachine (TimeSpan.FromSeconds(30.0))
+  /// The longest `sagefs call` waits for the daemon to answer `initialize` or `tools/list`. Both are answered from
+  /// memory, so a daemon silent this long is wedged and the caller should hear it now, not after
+  /// `workerHttpRequest`'s ten minutes, which the tool call itself (a test run, a build) may need.
+  let callHandshakeRequest = forMachine (TimeSpan.FromSeconds(30.0))
   let sseKeepAlive = TimeSpan.FromHours(24.0)
   /// How long an `/events` connection may sit idle before a keepalive comment is written, and the
   /// reconnect delay a client is told to wait (`retry:`). A half-open socket or a proxy that drops idle

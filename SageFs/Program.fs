@@ -111,6 +111,9 @@ type CliCommand =
   | InstallSkill of args: string list
   /// `sagefs member ...`: the arguments after `member`, with `--mcp-port` still among them.
   | Member of args: string list
+  /// `sagefs call ...`: the words after `call`, with every flag still among them. A tool's own flags are read against
+  /// the tool's input schema, so none of them may be taken for the CLI's here (`-v` is a value as often as a flag).
+  | Call of args: string list
   | Sweep of kill: bool
   | Hygiene of tidy: bool * repo: string
   | DeprecatedClient of name: string
@@ -124,6 +127,7 @@ module CliCommand =
   let parse (args: string array) =
     let hasFlag flag = args |> Array.exists (fun a -> a = flag)
     match () with
+    | _ when args.Length > 0 && args.[0] = "call" -> Call(args |> Array.skip 1 |> List.ofArray)
     | _ when hasFlag "--help" || hasFlag "-h" -> ShowHelp
     | _ when hasFlag "--version" || hasFlag "-v" -> ShowVersion
     | _ when args.Length > 0 && args.[0] = "stop" -> Stop
@@ -547,21 +551,11 @@ let statusCommand
       for f in failures do
         printfn "    - %s" f
       1
-  | DaemonPresence.Wedged pid ->
-    printfn "SageFs daemon is wedged"
-    printfn "  PID:        %d" pid
-    printfn "  Port:       %d" mcpPort
-    printfn "  It is holding the port but has not answered a request."
-    printfn "  Recover it with: sagefs stop --mcp-port %d" mcpPort
+  | DaemonPresence.Wedged _ as presence ->
+    DaemonPresence.unreachableLines mcpPort presence |> List.iter (printfn "%s")
     1
-  | DaemonPresence.NotRunning ->
-    printfn "No daemon running"
-    printfn ""
-    printfn "  To start one, run `sagefs` in a terminal and leave it there."
-    printfn "  Or register it with an agent and let the agent start it:"
-    printfn "    claude mcp add sagefs -- sagefs mcp"
-    printfn "  That is local scope (this project only). Add -s user to make it global."
-    printfn "  A daemon an agent starts exits when that agent does. More in docs/mcp-tools.md."
+  | DaemonPresence.NotRunning as presence ->
+    DaemonPresence.unreachableLines mcpPort presence |> List.iter (printfn "%s")
     1
 
 /// The pid a wedged-daemon recovery targets: a daemon-info file recorded
@@ -608,6 +602,11 @@ let main args =
     printfn "       SageFs install-skill [--force]  Install the sagefs agent skill (~/.claude/skills; --dir <folder>)"
     printfn "       SageFs member mint --role R (--dir D | --session ID) [--scope S] [--ttl MINUTES] [--print-env VAR]"
     printfn "                                       Mint a member token with the operator credential (operator.token); --print-env prints an export line"
+    printfn "       SageFs call --list              List the daemon's tools (name and first line of the description)"
+    printfn "       SageFs call <tool> [--<parameter> <value> ...] | --json '{...}'"
+    printfn "                                       Call one tool and print its answer. Values are typed from the tool's own input schema;"
+    printfn "                                       a tool error goes to stderr with exit code 1. --token T or SAGEFS_MEMBER_TOKEN is the member"
+    printfn "                                       it calls as (none is anonymous); --port P picks the daemon. Reaches the tools when the client has none."
     printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
     printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
     printfn "       SageFs mcp                      Speak MCP over stdio (spawns the daemon if needed)"
@@ -727,6 +726,17 @@ let main args =
       eprintfn "sagefs member: %s" (MemberMintCommand.UsageRefusal.describe refusal)
       eprintfn "%s" MemberMintCommand.usage
       2
+
+  | Call callArgs ->
+    // A port named by `--port`/`--mcp-port` is read by the command itself; with none, the configured one answers.
+    SageFs.Server.McpCallCommand.execute
+      (fun port -> DaemonPresence.classify (DaemonState.readOnPort port) (wedgedPidFor port))
+      (fun () -> resolveMcpPort [||])
+      Environment.GetEnvironmentVariable
+      callArgs
+      Console.Out
+      Console.Error
+    |> awaitAtEntryPoint
 
   | Sweep kill ->
     sweepCommand kill

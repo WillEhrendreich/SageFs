@@ -402,7 +402,7 @@ type private PostOutcome =
 let private postOnce
   (client: HttpClient)
   (port: int)
-  (stdout: StdoutWriter)
+  (emit: string -> unit)
   (captureSessionId: string -> unit)
   (sessionId: string option)
   (msg: RpcMessage)
@@ -434,13 +434,13 @@ let private postOnce
       | "text/event-stream" ->
         use! stream = resp.Content.ReadAsStreamAsync()
         use reader = new StreamReader(stream)
-        do! drainSse reader stdout.WriteLine
+        do! drainSse reader emit
         return Written
       | _ ->
         let! body = resp.Content.ReadAsStringAsync()
         match String.IsNullOrWhiteSpace body with
         | true -> () // 202 Accepted for a notification/response the client sent — nothing to write
-        | false -> stdout.WriteLine(body.Trim())
+        | false -> emit (body.Trim())
         return Written
   }
 
@@ -474,10 +474,15 @@ let private postOnce
 /// function's business at all (it is `Unreachable`, which `decide` turns into
 /// a probe/`StartDaemon` cycle — see `Io.StartDaemon`). Only the narrow
 /// `isSessionInvalid` answer is healed, and only once.
+///
+/// `emit` is handed each JSON-RPC message the daemon answers with, one call per message. The stdio bridge passes
+/// its stdout writer, so the client reads them as they come; `sagefs call` passes a collector and reads the
+/// answer to the request it sent. Both get the capture-before-emit ordering and the heal, because both are this
+/// function.
 let forward
   (client: HttpClient)
   (port: int)
-  (stdout: StdoutWriter)
+  (emit: string -> unit)
   (captureSessionId: string -> unit)
   (sessionId: string option)
   (heldInitializeParams: string option)
@@ -485,7 +490,7 @@ let forward
   : Task<Result<unit, ForwardError>> =
   task {
     try
-      let! outcome = postOnce client port stdout captureSessionId sessionId msg
+      let! outcome = postOnce client port emit captureSessionId sessionId msg
       match outcome with
       | Written -> return Ok()
       | Answered(statusCode, body) ->
@@ -512,7 +517,7 @@ let forward
             // Captured before the re-send below, and before anything that
             // could write to stdout — the same #138 ordering, unchanged.
             captureSessionId fresh
-            let! retry = postOnce client port stdout captureSessionId (Some fresh) msg
+            let! retry = postOnce client port emit captureSessionId (Some fresh) msg
             match retry with
             | Written -> return Ok()
             | Answered(code, retryBody) ->
@@ -619,7 +624,7 @@ let runMcpStdio (mcpPort: int) : Task<int> =
             match initializeParamsOf msg with
             | Some declared -> heldInitializeParams.Value <- Some declared
             | None -> ()
-            forward client mcpPort stdout captureSessionId sessionId heldInitializeParams.Value msg
+            forward client mcpPort stdout.WriteLine captureSessionId sessionId heldInitializeParams.Value msg
         OpenServerStream = openServerStream client mcpPort stdout
         TerminateSession = terminateSession client mcpPort
         PumpStdin = pumpStdin
