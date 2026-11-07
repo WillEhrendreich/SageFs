@@ -745,6 +745,7 @@
         <Compile Include="RatchetBudgets.fs" />
         <Compile Include="ArchitectureTests.fs" />
         <Compile Include="BlockingReaderRatchetTests.fs" />
+        <Compile Include="PoolDeadlineRatchetTests.fs" />
         <Compile Include="SkipSitesRatchetTests.fs" />
         <Compile Include="UnionCaseShadowingTests.fs" />
         <Compile Include="UnionCaseShadowingFsiRegressionTests.fs" />

@@ -37,11 +37,11 @@ let private readPattern = Regex(@"\bRead(Line|ToEnd|Block)?(Async)?\s*\(", Regex
 
 /// `//` and `///` comments carry the pattern's name all over the product ("the Task.Run+ReadLine pattern");
 /// only code counts. A `//` inside `http://` is preceded by `:`, not whitespace, so it stays.
-let private withoutComments (text: string) : string =
+let withoutComments (text: string) : string =
   Regex.Replace(text, @"(^|\s)//[^\n]*", "$1", RegexOptions.Multiline)
 
 /// The text from `start` to the `)` that closes the `(` at `start`.
-let private parenthesized (text: string) (start: int) : string =
+let parenthesized (text: string) (start: int) : string =
   let rec walk (i: int) (depth: int) : int =
     match i >= text.Length with
     | true -> text.Length

@@ -344,6 +344,7 @@ module SpawnEnvironment =
 /// pool thread is free. The test process runs thousands of cases at once and some of them block, so the queue can
 /// outlast the deadline while `work` itself takes a fraction of a second: the case then fails with a timeout that
 /// says nothing about `work`. A thread made for the work starts at once, so the deadline times the work.
+/// `PoolDeadlineRatchetTests` counts the `Task.Run` calls that still carry a deadline.
 module DedicatedThread =
   /// Runs `work` on a new background thread called `name` and answers with a task that completes with its result
   /// or its exception. The task's continuations run on the pool, never on the dedicated thread.

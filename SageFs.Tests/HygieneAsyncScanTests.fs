@@ -81,7 +81,7 @@ let drive (start: Scan -> Task<'a>) : Task<string list list * 'a> =
     let! scanning =
       awaitWithin
         "the scan handing control back while git is outstanding"
-        (Task.Run<Task<'a>>(fun () -> Task.FromResult(start (scanWith gated.Git))))
+        (TestInfrastructure.DedicatedThread.run "sagefs-hygiene-scan-start" (fun () -> start (scanWith gated.Git)))
     let asked = ResizeArray<string list>()
     let mutable finished = false
     while not finished do
