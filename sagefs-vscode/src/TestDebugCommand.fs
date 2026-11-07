@@ -68,9 +68,9 @@ let private detach (state: SessionState ref) : JS.Promise<unit> =
   | SessionState.Ended -> Promise.lift ()
 
 /// Release the test and wait for it, asking again for as long as it runs under the debugger.
-let rec private waitForTest (c: Client.Client) (view: DebugAnswerView) (state: SessionState ref) : JS.Promise<unit> =
+let rec private waitForTest (c: Client.Client) (sessionId: string) (view: DebugAnswerView) (state: SessionState ref) : JS.Promise<unit> =
   promise {
-    let! answer = Client.debugContinue view.Ticket c
+    let! answer = Client.debugContinue view.Ticket sessionId c
     match answer with
     | Result.Error detail ->
       do! detach state
@@ -81,14 +81,14 @@ let rec private waitForTest (c: Client.Client) (view: DebugAnswerView) (state: S
         match state.Value with
         | SessionState.Ended -> say (sessionEndedNotice view.TestName)
         | SessionState.NotStarted
-        | SessionState.Started _ -> return! waitForTest c view state
+        | SessionState.Started _ -> return! waitForTest c sessionId view state
       | ContinueStep.Finished notice
       | ContinueStep.Abandon notice ->
         do! detach state
         say notice
   }
 
-let private attachAndWait (c: Client.Client) (view: DebugAnswerView) (configuration: AttachConfiguration) : JS.Promise<unit> =
+let private attachAndWait (c: Client.Client) (sessionId: string) (view: DebugAnswerView) (configuration: AttachConfiguration) : JS.Promise<unit> =
   promise {
     let state = ref SessionState.NotStarted
     let started =
@@ -111,7 +111,7 @@ let private attachAndWait (c: Client.Client) (view: DebugAnswerView) (configurat
         ]
       let! attached = Debug.startDebugging None options
       match attached with
-      | true -> do! waitForTest c view state
+      | true -> do! waitForTest c sessionId view state
       | false -> say (attachFailedNotice view)
     finally
       started.dispose () |> ignore
@@ -119,31 +119,56 @@ let private attachAndWait (c: Client.Client) (view: DebugAnswerView) (configurat
   }
 
 /// What a debug run does once it has the daemon's answer to "hold this test".
-let private begin' (c: Client.Client) (testId: string) : JS.Promise<unit> =
+let private holdAndAttach (c: Client.Client) (sessionId: string) (testId: string) : JS.Promise<unit> =
+  promise {
+    let! answer = Client.debugTest testId sessionId c
+    match answer with
+    | Result.Error detail -> say (unreachableNotice detail)
+    | Result.Ok view ->
+      match beginStep view with
+      | BeginStep.Refuse notice -> say notice
+      | BeginStep.AttachDebugger(configuration, notices) ->
+        notices |> List.iter say
+        do! attachAndWait c sessionId view configuration
+  }
+
+/// Run `work` with live testing paused for the session when it was running, and put it back on every way out: the test
+/// finishing, a refusal, a detach, a debugger that never attached, a thrown error. A pause the person set is left alone.
+let private whilePaused (c: Client.Client) (sessionId: string) (work: unit -> JS.Promise<unit>) : JS.Promise<unit> =
+  promise {
+    let! prior = Client.getLiveTestingPause sessionId c
+    match pausePlan prior with
+    | PausePlan.LeaveAlone -> do! work ()
+    | PausePlan.PauseThenResume ->
+      let! paused = Client.pauseLiveTesting sessionId c
+      match paused with
+      | Client.Failed _ -> do! work ()
+      | Client.Succeeded _ ->
+        let resume () = Client.resumeLiveTesting sessionId c |> Promise.map ignore
+        let! outcome = work () |> Promise.map Result.Ok |> Promise.catch Result.Error
+        do! resume ()
+        match outcome with
+        | Result.Ok () -> ()
+        | Result.Error err -> raise err
+  }
+
+let private begin' (c: Client.Client) (sessionId: string) (testId: string) : JS.Promise<unit> =
   promise {
     match chooseDebugger (Extensions.all () |> Array.map debuggersOf |> Array.toList) with
     | DebuggerAvailability.Missing -> offerInstall ()
-    | DebuggerAvailability.Installed _ ->
-      let! answer = Client.debugTest testId c
-      match answer with
-      | Result.Error detail -> say (unreachableNotice detail)
-      | Result.Ok view ->
-        match beginStep view with
-        | BeginStep.Refuse notice -> say notice
-        | BeginStep.AttachDebugger(configuration, notices) ->
-          notices |> List.iter say
-          do! attachAndWait c view configuration
+    | DebuggerAvailability.Installed _ -> do! whilePaused c sessionId (fun () -> holdAndAttach c sessionId testId)
   }
 
-/// Debug the test with this id (a test id the daemon reported, which is what the lens, the hover and the Test Explorer carry).
-let debugTest (c: Client.Client) (testId: string) : JS.Promise<unit> =
+/// Debug the test with this id (a test id the daemon reported, which is what the lens, the hover and the Test Explorer carry),
+/// in the session this window shows.
+let debugTest (c: Client.Client) (sessionId: string) (testId: string) : JS.Promise<unit> =
   match run with
   | Run.Debugging _ ->
     say { Severity = Severity.Warning; Text = "A test is already being debugged. Stop that debug session first." }
     Promise.lift ()
   | Run.Idle ->
     run <- Run.Debugging testId
-    begin' c testId
+    begin' c sessionId testId
     |> Promise.map (fun () -> run <- Run.Idle)
     |> Promise.catch (fun err ->
       run <- Run.Idle

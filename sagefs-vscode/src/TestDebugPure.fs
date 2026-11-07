@@ -311,3 +311,38 @@ let escapeMarkdown (text: string) : string =
 /// The hover of a failing test's gutter mark, shown as markdown, with the Debug link under it.
 let hoverWithDebugLink (hover: string) (testId: string) : string =
   sprintf "%s\n\n%s" (escapeMarkdown hover) (debugCommandLink testId)
+
+// ── What the client sends ────────────────────────────────────────
+
+/// The body of "hold this test". It names the session the window shows: with none, the daemon picks one by its own
+/// fallback rules, which on a shared daemon is rarely this window's. Mirrors sagefs.nvim's `build_hold_body`.
+let holdBody (testId: string) (sessionId: string) : string =
+  sprintf "{\"testId\":\"%s\",\"sessionId\":\"%s\"}" (escapeJson testId) (escapeJson sessionId)
+
+/// The body of "release the held test and tell me when it finishes". It names the same session as the hold, so the release
+/// lands on the host that holds the test. Mirrors sagefs.nvim's `build_continue_body`.
+let continueBody (ticket: string) (sessionId: string) : string =
+  sprintf "{\"ticket\":\"%s\",\"sessionId\":\"%s\"}" (escapeJson ticket) (escapeJson sessionId)
+
+/// The body of pause and resume: the session whose automatic runs wait.
+let pauseBody (sessionId: string) : string =
+  sprintf "{\"sessionId\":\"%s\"}" (escapeJson sessionId)
+
+// ── Automatic runs wait while a test is held ─────────────────────
+
+/// A held or running debug test stops the whole test host at a breakpoint, so an automatic run sent to that host would
+/// queue behind it. The command pauses live testing for the session while it debugs, and puts it back after.
+[<RequireQualifiedAccess>]
+type PausePlan =
+  /// Live testing was running: pause it for the debug run, and resume it on every way out.
+  | PauseThenResume
+  /// It was already paused (the person did that, and keeps it), or the daemon could not say: change nothing, because a
+  /// resume would undo a pause that is not ours.
+  | LeaveAlone
+
+/// What to do about live testing, from the `Pause` field of the session's live-testing status ("live" or "paused").
+let pausePlan (priorPause: string option) : PausePlan =
+  match priorPause with
+  | Some "live" -> PausePlan.PauseThenResume
+  | Some _
+  | None -> PausePlan.LeaveAlone

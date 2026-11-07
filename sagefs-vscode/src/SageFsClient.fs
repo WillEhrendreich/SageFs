@@ -766,13 +766,35 @@ let private postDebug (path: string) (body: string) (timeout: int) (c: Client) :
   }
 
 /// Hold one test in its host for a debugger. The answer names the process to attach to and the ticket that releases the test.
-let debugTest (testId: string) (c: Client) =
-  postDebug "/api/live-testing/debug" (jsonStringify {| testId = testId |}) 30000 c
+let debugTest (testId: string) (sessionId: string) (c: Client) =
+  postDebug "/api/live-testing/debug" (TestDebugPure.holdBody testId sessionId) 30000 c
 
 /// Release the held test (the debugger is attached) and wait for it to finish. The daemon waits up to 20 seconds and answers
 /// "still running" if the test is still going, so a test stopped on a breakpoint is asked about again and again.
-let debugContinue (ticket: string) (c: Client) =
-  postDebug "/api/live-testing/debug/continue" (jsonStringify {| ticket = ticket |}) 60000 c
+let debugContinue (ticket: string) (sessionId: string) (c: Client) =
+  postDebug "/api/live-testing/debug/continue" (TestDebugPure.continueBody ticket sessionId) 60000 c
+
+/// Whether live testing runs automatically for the session: the `Pause` field of its status ("live" or "paused"). `None`
+/// when the daemon cannot say.
+let getLiveTestingPause (sessionId: string) (c: Client) : JS.Promise<string option> =
+  promise {
+    let! pause =
+      getJson
+        "getLiveTestingPause"
+        (sprintf "/api/live-testing/status?session=%s" (JS.encodeURIComponent sessionId))
+        5000
+        (fun parsed -> fieldString "Pause" parsed)
+        c
+    return pause |> Option.flatten
+  }
+
+/// Make live testing wait for the session while a test is held for a debugger.
+let pauseLiveTesting (sessionId: string) (c: Client) =
+  postCommand c "/api/live-testing/pause" (TestDebugPure.pauseBody sessionId) 5000
+
+/// Let live testing run again for the session.
+let resumeLiveTesting (sessionId: string) (c: Client) =
+  postCommand c "/api/live-testing/resume" (TestDebugPure.pauseBody sessionId) 5000
 
 /// Live testing is a per-session toggle. The body names the session: with none, the daemon acts on its
 /// own active session, which on a shared daemon is rarely the one this window is showing.

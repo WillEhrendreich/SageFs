@@ -2867,7 +2867,13 @@ let activate (context: ExtensionContext) =
     | "" ->
       Window.showWarningMessage "No test selected. Use Debug above a failing test, or Debug Test in the Test Explorer." [||] |> ignore
     | testId ->
-      withClient (fun c -> TestDebugCommand.debugTest c testId)
+      withClient (fun c ->
+        promise {
+          match! resolveCommandTarget c with
+          | SessionScopePure.CommandTarget.Session sessionId -> do! TestDebugCommand.debugTest c sessionId testId
+          | SessionScopePure.CommandTarget.NoSessionForThisWindow ->
+            Window.showWarningMessage noSessionForThisWindowMessage [||] |> ignore
+        })
       |> promiseIgnoreLog logToOutput)
   reg "sagefs.setRunPolicy" (fun _ ->
     withClient (fun c ->

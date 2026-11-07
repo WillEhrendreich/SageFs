@@ -295,6 +295,32 @@ let tests =
         section |> Expect.stringContains "resolves the window's session" "resolveCommandTarget"
     ]
 
+    testList "automatic runs wait while a test is held" [
+
+      testCase "WHY - a running live-testing session is paused for the debug run and resumed after" <| fun _ ->
+        pausePlan (Some "live") |> Expect.equal "pause then resume" PausePlan.PauseThenResume
+
+      testCase "WHY - a pause the person set is theirs: it is left alone, and so is one the daemon could not report" <| fun _ ->
+        pausePlan (Some "paused") |> Expect.equal "already paused" PausePlan.LeaveAlone
+        pausePlan None |> Expect.equal "unknown" PausePlan.LeaveAlone
+
+      testCase "WHY - the words the plan reads are the words the daemon writes for LivePause, so a rename fails here" <| fun _ ->
+        let source = File.ReadAllText(Path.Combine(repoRoot, "SageFs.Core", "Features", "LiveTestingTypes.fs"))
+        let start = source.IndexOf "module LivePause ="
+        let section = source.Substring(start, 300)
+        section |> Expect.stringContains "live" "-> \"live\""
+        section |> Expect.stringContains "paused" "-> \"paused\""
+
+      testCase "WHY - the pause body names the session" <| fun _ ->
+        pauseBody "s1" |> Expect.equal "session only" "{\"sessionId\":\"s1\"}"
+
+      testCase "WHY - the resume is on every way out of the run, not only the happy one" <| fun _ ->
+        let source = read "src/TestDebugCommand.fs"
+        source |> Expect.stringContains "resumes after the work" "do! resume ()"
+        source |> Expect.stringContains "resumes before it rethrows a failure of the work" "Promise.catch Result.Error"
+        source |> Expect.stringContains "pauses only when the plan says so" "PausePlan.PauseThenResume"
+    ]
+
     testList "wiring (sources read as data)" [
 
       let pkg = JsonDocument.Parse(read "package.json").RootElement
