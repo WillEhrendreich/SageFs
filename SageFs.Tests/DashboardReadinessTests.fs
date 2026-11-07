@@ -61,7 +61,7 @@ let private queriesFor (session: WorkerProtocol.SessionInfo) (workerEvals: int) 
 let private pageFor (session: WorkerProtocol.SessionInfo) (workerEvals: int) (finishedEvals: int) : Task<string> =
   task {
     let! snap, _, _, _ =
-      buildDashboardSnapshotWithSessions (queriesFor session workerEvals finishedEvals) (mkInfra ()) session.Id session.Id "" "default" None [ session ]
+      buildDashboardSnapshotWithSessions (queriesFor session workerEvals finishedEvals) (mkInfra ()) session.Id session.Id "" "default" None [ session ] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
     return renderMainContent snap |> renderNode
   }
 

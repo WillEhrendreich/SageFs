@@ -12,6 +12,7 @@ open SageFs.Measures
 open SageFs.WarmUp
 open SageFs.Affordances
 open SageFs.ErrorMessages
+open SageFs.Server.DashboardPanelContext
 open SageFs.Server.DashboardTypes
 open SageFs.Server.TeardownRegistry
 
@@ -1051,32 +1052,6 @@ let renderOutputNewEvalsPill () =
       Ds.text OutputFollow.pillLabelExpr
       Ds.onClick OutputFollow.jumpExpr ]
     []
-
-/// Render diagnostics as an HTML fragment.
-let renderDiagnostics (diags: Diagnostic list) =
-  Elem.div [ Attr.id DomIds.DiagnosticsPanel; Attr.class' "log-box" ] [
-    match diags.IsEmpty with
-    | true ->
-      Elem.span [ Attr.class' "meta" ] [ Text.raw "No diagnostics" ]
-    | false ->
-      yield! diags |> List.map (fun diag ->
-        let cls = DiagSeverity.toCssClass diag.Severity
-        Elem.div [ Attr.class' (sprintf "diag %s" cls) ] [
-          Elem.span [ Attr.style "margin-right: 0.25rem;" ] [
-            textEnc (DiagSeverity.toIcon diag.Severity)
-          ]
-          match diag.Line > 0 || diag.Col > 0 with
-          | true ->
-            Elem.span [ Attr.class' "diag-location" ] [
-              textEnc (sprintf "L%d:%d" diag.Line diag.Col)
-            ]
-          | false -> ()
-          Elem.span [] [
-            textEnc (sprintf " %s" diag.Message)
-          ]
-        ])
-  ]
-
 
 /// How the "Resume Previous" list is ordered. A closed set of choices becomes
 /// a DU with one exhaustive to-string/of-string pair (AGENTS.md: no magic
@@ -2944,12 +2919,12 @@ let renderHotReloadPanelWithKept
 let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: bool |} list) (watchedCount: int) =
   renderHotReloadPanelWithKept sessionId files watchedCount []
 
-/// Render empty hot-reload panel when no session is active.
-let renderHotReloadEmpty =
+/// Render the hot-reload panel when there is nothing to list, and say which of the reasons it is.
+let renderHotReloadEmpty (because: EmptyBecause) =
   Elem.div [ Attr.id DomIds.HotReloadPanel; Attr.class' "panel" ] [
     Elem.h2 [] [ Text.raw "Hot Reload: OFF" ]
     Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
-      Text.raw "No active session"
+      textEnc (EmptyBecause.text because)
     ]
   ]
 
@@ -3210,7 +3185,13 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
   signalDetails Signals.CohortPanelOpen [ Attr.id DomIds.CohortPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
     Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.857rem; user-select: none; color: var(--fg-blue);" ] [
       textEnc (Glyphs.lead Glyph.Members)
-      textEnc (sprintf "Agent team — %d member%s" memberCount (if memberCount = 1 then "" else "s"))
+      // Nobody present but something on record: the header says so, because the claim or landing below is real state.
+      match PanelFacts.cohortPresence frame with
+      | CohortPresence.OnlyHistory(orphanedClaims, landings) ->
+        textEnc (sprintf "Agent team — %s" (CohortPresence.historyLine orphanedClaims landings))
+      | CohortPresence.NoActiveMembers
+      | CohortPresence.ActiveMembers _ ->
+        textEnc (sprintf "Agent team — %d member%s" memberCount (if memberCount = 1 then "" else "s"))
     ]
     // "Show the detail" is NOT "are there members". Claims and landings outlive the members
     // who made them — an orphaned claim must still render as neutral territory, and that is
@@ -3621,8 +3602,8 @@ module private LiveTestActivityView =
 let renderLiveTestingPanel (activity: Features.LiveTestActivity.LiveTestActivity) =
   let endpoint, label, pending =
     match activity with
-    | Features.LiveTestActivity.LiveTestActivity.Off -> "/dashboard/live-testing/enable", "Enable", "Turning on…"
-    | _ -> "/dashboard/live-testing/disable", "Disable", "Turning off…"
+    | Features.LiveTestActivity.LiveTestActivity.Off -> DashboardRoutes.LiveTestingEnable, "Enable", "Turning on…"
+    | _ -> DashboardRoutes.LiveTestingDisable, "Disable", "Turning off…"
   Elem.div [ Attr.id DomIds.LiveTestingPanel; Attr.class' "panel" ] [
     Elem.h2 [] (LiveTestActivityView.header activity)
     Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
@@ -3802,11 +3783,11 @@ let renderSessionContextPanel (ctx: SessionContext) =
     ]
   ]
 
-/// Render empty session context panel when no session is active.
-let renderSessionContextEmpty =
+/// Render the session context panel when there is nothing to list, and say which of the reasons it is.
+let renderSessionContextEmpty (because: EmptyBecause) =
   Elem.div [ Attr.id DomIds.SessionContext; Attr.class' "panel" ] [
     Elem.div [ Attr.style "font-size: 0.857rem; opacity: 0.6;" ] [
-      Text.raw "No session context"
+      textEnc (EmptyBecause.text because)
     ]
   ]
 

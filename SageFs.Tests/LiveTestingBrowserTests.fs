@@ -66,21 +66,32 @@ let private ltPlaywrightTest name (body: IPage -> Task<unit>) =
     t.GetAwaiter().GetResult())
   |> Integration.register (Integration.Dedicated "--integration-lt")
 
-/// Click Enable until the panel shows ON. The #live-testing-panel is a plain
-/// div (not a collapsible <details>), always visible in the sidebar.
+/// Turn live testing on until the panel shows ON. A session with live testing off has no #live-testing-panel:
+/// the sidebar shows the line "Live testing: off" with a "Turn on" button on it (`#hidden-reason-live-testing`),
+/// and the panel replaces that line once live testing is on. A session that started with it on already has the panel.
 let private ensureLiveTestingOn (page: IPage) = task {
   let panel = page.Locator("#live-testing-panel")
-  do! PlaywrightExpect.isVisibleAsync panel "live testing panel visible"
+  let turnOn =
+    page.Locator("#hidden-reason-live-testing")
+      .GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Turn on"))
   let mutable on = false
   let sw = Diagnostics.Stopwatch.StartNew()
   while not on && sw.ElapsedMilliseconds < int64 BrowserWaits.panelUpdates do
-    let! text = panel.TextContentAsync()
+    let! panelCount = panel.CountAsync()
+    let! text =
+      match panelCount with
+      | 0 -> Task.FromResult ""
+      | _ -> panel.TextContentAsync()
     if text.Contains("Live Testing: ON") then on <- true
     else
-      let enableBtn =
-        panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Enable"))
-      let! count = enableBtn.CountAsync()
-      if count > 0 then do! enableBtn.ClickAsync()
+      let! turnOnCount = turnOn.CountAsync()
+      match turnOnCount with
+      | 0 ->
+        let enableBtn =
+          panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Enable"))
+        let! count = enableBtn.CountAsync()
+        if count > 0 then do! enableBtn.ClickAsync()
+      | _ -> do! turnOn.ClickAsync()
       do! Task.Delay(TestTimeouts.pollInterval)
   Expect.isTrue on "live testing should reach ON within 15s"
 }

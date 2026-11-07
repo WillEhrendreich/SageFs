@@ -12,6 +12,7 @@ open SageFs.Affordances
 open SageFs.ProjectLoading
 open SageFs.Features.LiveTesting
 open SageFs.Server.TeardownRegistry
+open SageFs.Server.DashboardPanelContext
 open Falco.Markup
 open Falco.Datastar
 open StarFederation.Datastar.FSharp
@@ -223,6 +224,9 @@ module DomIds =
   let [<Literal>] HiddenReasonLiveTesting = "hidden-reason-live-testing"
   let [<Literal>] HiddenReasonCohort = "hidden-reason-cohort"
   let [<Literal>] HiddenReasonFriction = "hidden-reason-friction"
+  let [<Literal>] HiddenReasonDiagnostics = "hidden-reason-diagnostics"
+  let [<Literal>] HiddenReasonFailureNarratives = "hidden-reason-failure-narratives"
+  let [<Literal>] HiddenReasonAlarms = "hidden-reason-alarms"
   let [<Literal>] TestTrace = "test-trace"
   let [<Literal>] ThemeVars = "theme-vars"
   let [<Literal>] ThemePicker = "theme-picker"
@@ -308,6 +312,8 @@ module Signals =
   /// The directory a "this repo" Settings edit writes to, set by the page from the session it was opened for.
   let [<Literal>] SettingsRepoDir = "settingsRepoDir"
   let [<Literal>] LiveTestingLoading = "liveTestingLoading"
+  /// In flight while the button in a hidden panel's reason line is waiting for its post to answer.
+  let [<Literal>] PanelActionLoading = "panelActionLoading"
   let [<Literal>] TempLoading = "tempLoading"
   let [<Literal>] Theme = "theme"
   /// The "Resume Previous" list's chosen sort order (`PreviousSessionSort`,
@@ -1735,106 +1741,55 @@ type DashboardSnapshot = {
   EvalToPixelP99Ms: float option
 }
 
-/// The sidebar panels that only show up when they're relevant. Everything
-/// else in the dashboard always renders; these four used to render all the
-/// time too, which put hot reload on a REPL session, a live-testing toggle on
-/// a session that never asked for it, and cohort lanes built from stale
-/// ledger rows in front of everyone.
-[<RequireQualifiedAccess>]
-type OptionalPanel =
-  | HotReload
-  | LiveTesting
-  /// The cohort panel and its lanes, together.
-  | Cohort
-  | Friction
-
-[<RequireQualifiedAccess>]
-type PanelVisibility =
-  | Shown
-  /// Carries why, for the View menu the redesign adds later.
-  | Hidden of reason: string
-  /// Not part of this page for this tab, and nothing a user could do about it: it renders nothing, and says nothing. A
-  /// panel that is off until it is asked for (`?panels=friction`) is not a missing panel, so a note about how to ask for it
-  /// would be a note written for developers.
-  | NotOffered
-
-/// What the viewed session is doing, as far as panel visibility cares.
-[<RequireQualifiedAccess>]
-type ViewedSession =
-  | NoSession
-  | Viewing of workflow: WorkflowTypes.SessionWorkflow * liveTesting: Features.LiveTestActivity.LiveTestActivity
-
-/// Whether a cohort is running right now: members actually present, never
-/// just rows sitting in the ledger.
-[<RequireQualifiedAccess>]
-type CohortPresence =
-  | NoActiveMembers
-  | ActiveMembers of count: int
-
-/// The friction panel is off by default until reporting has a real endpoint.
-/// A tab can still ask for it, deliberately, with `/dashboard?panels=friction`.
-[<RequireQualifiedAccess>]
-type FrictionPanelOptIn =
-  | NotOptedIn
-  | OptedIn
-
-type PanelFacts = {
-  Viewed: ViewedSession
-  Cohort: CohortPresence
-  Friction: FrictionPanelOptIn
-}
-
-module PanelFacts =
-  /// The query key and value that opt a tab into the friction panel.
-  let panelsQueryKey = "panels"
-  let frictionPanelValue = "friction"
-
-  /// `?panels=friction` (comma-separated, case-insensitive) opts in.
-  let frictionOptInOfQuery (panels: string) : FrictionPanelOptIn =
-    let requested =
-      (if isNull panels then "" else panels).Split([| ','; ' ' |], StringSplitOptions.RemoveEmptyEntries)
-      |> Array.exists (fun p -> String.Equals(p, frictionPanelValue, StringComparison.OrdinalIgnoreCase))
-    match requested with
-    | true -> FrictionPanelOptIn.OptedIn
-    | false -> FrictionPanelOptIn.NotOptedIn
-
-  let cohortPresence (frame: SageFs.Cohort.CohortFrame<'m>) : CohortPresence =
-    let present =
-      frame.MemberSeat
-      |> Array.filter (fun seat ->
-        match seat with
-        | SageFs.Cohort.SeatState.Present -> true
-        | SageFs.Cohort.SeatState.Departed _ -> false)
-      |> Array.length
-    match present with
-    | 0 -> CohortPresence.NoActiveMembers
-    | n -> CohortPresence.ActiveMembers n
-
+/// Draws what `DashboardPanelContext.PanelContext.decide` decided. The decision (and the sentence each
+/// reason says) is pure and lives there; this module only turns it into markup.
 module PanelVisibility =
-  let decide (facts: PanelFacts) (panel: OptionalPanel) : PanelVisibility =
+  /// The id a hidden panel's reason line carries. One per panel, because the morph matches an element
+  /// by its id and several of them sharing one id would be matched by position.
+  let reasonId (panel: ContextPanel) : string =
     match panel with
-    | OptionalPanel.HotReload ->
-      match facts.Viewed with
-      | ViewedSession.NoSession -> PanelVisibility.Hidden "Hot reload: no session is selected"
-      | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.HotReload _, _) -> PanelVisibility.Shown
-      | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.Interactive, _) ->
-        PanelVisibility.Hidden "Hot reload is off: this is a REPL session. Choose Mode: Hot Reload in the top bar to patch a running app on save."
-      | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.LiveTesting, _) ->
-        PanelVisibility.Hidden "Hot reload: this session is in Live Testing mode"
-    | OptionalPanel.LiveTesting ->
-      match facts.Viewed with
-      | ViewedSession.NoSession -> PanelVisibility.Hidden "Live testing: no session is selected"
-      | ViewedSession.Viewing(_, Features.LiveTestActivity.LiveTestActivity.Off) ->
-        PanelVisibility.Hidden "Live testing is off for this session, so no tests re-run as you edit. Choose Mode: Live Testing in the top bar to turn it on."
-      | ViewedSession.Viewing _ -> PanelVisibility.Shown
-    | OptionalPanel.Cohort ->
-      match facts.Cohort with
-      | CohortPresence.ActiveMembers _ -> PanelVisibility.Shown
-      | CohortPresence.NoActiveMembers -> PanelVisibility.Hidden "No cohort is running (a cohort is several agents working on one project together)."
-    | OptionalPanel.Friction ->
-      match facts.Friction with
-      | FrictionPanelOptIn.OptedIn -> PanelVisibility.Shown
-      | FrictionPanelOptIn.NotOptedIn -> PanelVisibility.NotOffered
+    | ContextPanel.HotReload -> DomIds.HiddenReasonHotReload
+    | ContextPanel.LiveTesting -> DomIds.HiddenReasonLiveTesting
+    | ContextPanel.Cohort -> DomIds.HiddenReasonCohort
+    | ContextPanel.Friction -> DomIds.HiddenReasonFriction
+    | ContextPanel.Diagnostics -> DomIds.HiddenReasonDiagnostics
+    | ContextPanel.FailureNarratives -> DomIds.HiddenReasonFailureNarratives
+    | ContextPanel.Alarms -> DomIds.HiddenReasonAlarms
+
+  /// The one line that is always there: the name and the state. The sentence that says why is a click away.
+  let reasonName (panel: ContextPanel) : string =
+    match panel with
+    | ContextPanel.HotReload -> "Hot reload: off"
+    | ContextPanel.LiveTesting -> "Live testing: off"
+    | ContextPanel.Cohort -> "Agent team: none running"
+    | ContextPanel.Friction -> "Friction reports: off"
+    | ContextPanel.Diagnostics -> "Diagnostics: not checked yet"
+    | ContextPanel.FailureNarratives -> "Failing tests: hidden"
+    | ContextPanel.Alarms -> "Alarms: hidden"
+
+  /// A next step that is a button posts with the signal that shows it is in flight, the way the live testing panel's own
+  /// toggle does. It sits on the line that is always visible (the summary), so the step is there without opening anything.
+  let nextStepButton (next: NextStep) : Falco.Markup.XmlNode =
+    match next with
+    | NextStep.NoNextStep
+    | NextStep.UseControl _ -> Text.raw ""
+    | NextStep.PostAction(label, route) ->
+      Elem.button
+        [ Attr.class' "eval-btn panel-hidden-action"
+          Attr.create "data-testid" "panel-hidden-action"
+          Ds.indicator Signals.PanelActionLoading
+          Ds.attr' ("disabled", "$" + Signals.PanelActionLoading)
+          Ds.onClick (Ds.post route) ]
+        [ Elem.span [ Ds.show ("$" + Signals.PanelActionLoading) ] [ Text.enc "Working…" ]
+          Elem.span [ Ds.show ("!$" + Signals.PanelActionLoading) ] [ Text.enc label ] ]
+
+  /// A next step that names a control that already exists on the page is text, inside the opened sentence.
+  let nextStepNote (next: NextStep) : Falco.Markup.XmlNode =
+    match next with
+    | NextStep.NoNextStep
+    | NextStep.PostAction _ -> Text.raw ""
+    | NextStep.UseControl controlName ->
+      Elem.div [ Attr.class' "panel-hidden-next" ] [ Text.enc (sprintf "Next step: use %s." controlName) ]
 
   /// A hidden panel says why, in one line, in the place the panel would have been.
   ///
@@ -1842,44 +1797,50 @@ module PanelVisibility =
   /// was not there, and a user could not tell whether the dashboard had nothing to say or was
   /// hiding something. The bar is the same one the bottom dock uses for a pane with nothing in
   /// it, so the vocabulary is the dashboard's own. The reason names the panel, so the line says
-  /// which one is missing.
-  let private reasonBar (panel: OptionalPanel) (reason: string) : Falco.Markup.XmlNode =
-    let id =
-      match panel with
-      | OptionalPanel.HotReload -> DomIds.HiddenReasonHotReload
-      | OptionalPanel.LiveTesting -> DomIds.HiddenReasonLiveTesting
-      | OptionalPanel.Cohort -> DomIds.HiddenReasonCohort
-      | OptionalPanel.Friction -> DomIds.HiddenReasonFriction
+  /// which one is missing, and it offers the next step when there is one.
+  let reasonBar (panel: ContextPanel) (because: HiddenBecause) (next: NextStep) : Falco.Markup.XmlNode =
     // One line that opens: the name and the state ("Hot reload: off") are always there, and the sentence that says why and what to do
     // is a click away. Three of these in a row, each a sentence of its own, made the Sessions column a wall of small text.
-    let name =
-      match panel with
-      | OptionalPanel.HotReload -> "Hot reload: off"
-      | OptionalPanel.LiveTesting -> "Live testing: off"
-      | OptionalPanel.Cohort -> "Agent team: none running"
-      | OptionalPanel.Friction -> "Friction reports: off"
     Elem.details
-      [ Attr.id id
+      [ Attr.id (reasonId panel)
         Attr.class' "panel panel-hidden-reason"
         Ds.preserveAttr "open" ]
-      [ Elem.summary [ Attr.class' "panel-hidden-name" ] [ Text.raw name ]
-        Elem.div [ Attr.class' "panel-hidden-why"; Attr.create "role" "status" ] [ Text.raw reason ] ]
+      [ Elem.summary [ Attr.class' "panel-hidden-name" ] [ Text.raw (reasonName panel); nextStepButton next ]
+        Elem.div [ Attr.class' "panel-hidden-why"; Attr.create "role" "status" ] [
+          Text.raw (HiddenBecause.text because)
+          nextStepNote next
+        ] ]
 
-  /// A hidden panel renders the line that says why it is not there. A panel that is not offered renders nothing.
-  let private keep (facts: PanelFacts) (panel: OptionalPanel) (node: Falco.Markup.XmlNode) =
-    match decide facts panel with
-    | PanelVisibility.Shown -> node
-    | PanelVisibility.Hidden reason -> reasonBar panel reason
-    | PanelVisibility.NotOffered -> Text.raw ""
+  /// A panel with nothing to report keeps its place on the page as an empty element, so the morph and anything
+  /// that looks the panel up by id still find it. The friction panel is the exception: a tab that did not ask for
+  /// it has no such element.
+  let quietNode (panel: ContextPanel) : Falco.Markup.XmlNode =
+    match panel with
+    | ContextPanel.Friction -> Text.raw ""
+    | ContextPanel.Alarms -> Elem.div [ Attr.id DomIds.AlarmBanner; Attr.style "display:none;" ] []
+    | ContextPanel.HotReload -> Elem.div [ Attr.id DomIds.HotReloadPanel ] []
+    | ContextPanel.LiveTesting -> Elem.div [ Attr.id DomIds.LiveTestingPanel ] []
+    | ContextPanel.Cohort -> Elem.div [ Attr.id DomIds.CohortPanel ] []
+    | ContextPanel.Diagnostics -> Elem.div [ Attr.id DomIds.DiagnosticsPanel ] []
+    | ContextPanel.FailureNarratives -> Elem.div [ Attr.id DomIds.FailureNarratives ] []
 
-  /// Drop the panels that aren't relevant from a built snapshot. Still one
-  /// snapshot and one fat morph; hidden panels just aren't in it.
+  /// What a panel draws for the decision made about it: itself, the line that says why it is not there, or nothing.
+  let keep (facts: PanelFacts) (panel: ContextPanel) (node: Falco.Markup.XmlNode) : Falco.Markup.XmlNode =
+    match PanelContext.decide facts panel with
+    | PanelPresence.Shown -> node
+    | PanelPresence.Hidden(because, next) -> reasonBar panel because next
+    | PanelPresence.Quiet _ -> quietNode panel
+
+  /// Swap each panel for what its decision says. Still one snapshot and one fat morph.
   let apply (facts: PanelFacts) (snap: DashboardSnapshot) : DashboardSnapshot =
     { snap with
-        HotReloadPanel = keep facts OptionalPanel.HotReload snap.HotReloadPanel
-        LiveTestingPanel = keep facts OptionalPanel.LiveTesting snap.LiveTestingPanel
-        CohortPanel = keep facts OptionalPanel.Cohort snap.CohortPanel
-        FrictionPanel = keep facts OptionalPanel.Friction snap.FrictionPanel }
+        HotReloadPanel = keep facts ContextPanel.HotReload snap.HotReloadPanel
+        LiveTestingPanel = keep facts ContextPanel.LiveTesting snap.LiveTestingPanel
+        CohortPanel = keep facts ContextPanel.Cohort snap.CohortPanel
+        FrictionPanel = keep facts ContextPanel.Friction snap.FrictionPanel
+        DiagnosticsPanel = keep facts ContextPanel.Diagnostics snap.DiagnosticsPanel
+        FailureNarrativesPanel = keep facts ContextPanel.FailureNarratives snap.FailureNarrativesPanel
+        AlarmPanel = keep facts ContextPanel.Alarms snap.AlarmPanel }
 
 
 type DaemonInfoContract = {

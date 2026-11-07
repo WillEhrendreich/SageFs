@@ -77,7 +77,7 @@ let private pageWith (info: WorkerProtocol.SessionInfo) (state: SessionState) (s
       { mkQueries (ref 0) [ info ] with
           GetSessionState = fun _ -> state
           GetDaemonHealth = fun () -> Some (healthSnapshot summaries) }
-    let! snap, _, _, _ = buildDashboardSnapshotWithSessions queries (mkInfra ()) info.Id info.Id "" "default" None [ info ]
+    let! snap, _, _, _ = buildDashboardSnapshotWithSessions queries (mkInfra ()) info.Id info.Id "" "default" None [ info ] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
     return renderMainContent snap |> renderNode
   }
 

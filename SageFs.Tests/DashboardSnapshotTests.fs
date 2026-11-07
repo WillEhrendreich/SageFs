@@ -83,20 +83,6 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
     do! verifyDashboard "dashboard_output_foldedFrames" html
   }
 
-  testTask "renderDiagnostics with errors and warnings" {
-    let diags = [
-      { Severity = DiagError; Message = "Type mismatch"; Line = 5; Col = 10 }
-      { Severity = DiagWarning; Message = "Unused binding"; Line = 1; Col = 1 }
-    ]
-    let html = renderDiagnostics diags |> renderNode
-    do! verifyDashboard "dashboard_diagnostics" html
-  }
-
-  testTask "renderDiagnostics empty" {
-    let html = renderDiagnostics [] |> renderNode
-    do! verifyDashboard "dashboard_diagnostics_empty" html
-  }
-
   testTask "renderSessions with active and inactive" {
     let sessions : ParsedSession list = [
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
@@ -252,7 +238,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
 
   let panelFor (activity: SageFs.Features.LiveTestActivity.LiveTestActivity) = task {
     let! snap, _, _, _ =
-      buildDashboardSnapshot (mkQueries activity) (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None
+      buildDashboardSnapshot (mkQueries activity) (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
     return snap.LiveTestingPanel |> renderNode
   }
 
@@ -348,13 +334,13 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     }
     // Uncached: all three fetches run.
     let! _, _, _, _ =
-      buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" None
+      buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" None SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
     evalFetches |> Expect.equal "uncached push fetches eval stats" 1
     hrFetches |> Expect.equal "uncached push fetches hot-reload state" 1
     wCtxFetches |> Expect.equal "uncached push fetches warmup context" 1
     // Cached (same session): all three fetches are skipped.
     let! _, _, _, _ =
-      buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" (Some cache)
+      buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" (Some cache) SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
     evalFetches |> Expect.equal "cached push must not re-fetch eval stats" 1
     hrFetches |> Expect.equal "cached push must not re-fetch hot-reload state" 1
     wCtxFetches |> Expect.equal "cached push must not re-fetch warmup context" 1
@@ -445,14 +431,6 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
   }
-  testTask "renderDiagnostics with zero line col" {
-    let diags = [
-      { Severity = DiagError; Message = "General compilation error"; Line = 0; Col = 0 }
-    ]
-    let html = renderDiagnostics diags |> renderNode
-    do! verifyDashboard "dashboard_diagnostics_zeroLineCol" html
-  }
-
   testTask "renderEvalStats zero evals" {
     let html = renderEvalStats FixtureStats.noEvals |> renderNode
     do! verifyDashboard "dashboard_evalStats_zero" html

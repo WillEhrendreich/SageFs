@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress (steps 1 to 5 and 9 built; the browser matrix, step 8, and the empty-state reasons of step 7 are next) |
 | Size | M |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: the hidden live-testing panel's reason links to enable it. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | `worktree-agent-a1a5c9a8ceb72df95`, `.claude/worktrees/agent-a1a5c9a8ceb72df95` |
+| Last green commit | the newest commit that touches this file (`git log -1 -- docs/plans/dashboard-follows-context.md`) |
+| Next action | Step 8: the in-memory browser matrix (`DashboardPanelContextBrowserTests.fs`, `--integration-browser`), then the daemon journey in `--integration-lt`. Then step 7: cohort lanes, trunk, scrub control and the per-card grid and map say why when empty. |
+| Decisions made | 2026-11-07, taken as recommended by the roadmap agent, Will to overrule: (1) alarms, failure narratives and a clean diagnostics check stay `Quiet`, silent on the page, and show as "none" in the future View menu; (2) a cohort holding only orphaned claims or landings keeps its panel, collapsed, headed by "no cohort is running; 1 orphaned claim remains"; (3) finding 1 is a bug, and the reason line carries a "Turn on" button. |
+| Surprises | The plan was written against a tree where `PanelVisibility` had two cases. By the time of the work it had a third, `NotOffered` (friction nobody asked for), so the friction panel became `Quiet FrictionNotRequested` rather than `Hidden`. The reason bar was already a `details` element, so the "Turn on" button rides on its summary line, the part that is visible while the sentence is closed. `renderDiagnostics` had no production caller (only three snapshot tests), so it was deleted instead of consolidated. The route scan test rejects a route registered through a constant, so `Dashboard.fs` keeps the literal paths and a test checks that `DashboardRoutes` names the same ones. |
 
 ## What done looks like
 
@@ -196,6 +196,20 @@ Plus one daemon journey in the `--integration-lt` tier: REPL session, live testi
 9. Measure first result applied: decide-before-build, if it pays.
 
 ## Measure first
+
+Measured 2026-11-07, in a SageFs REPL session on this worktree, with a throwaway SQLite store holding 5000 rows (the
+`SAGEFS_FRICTION_MAX_ROWS` cap) and a concurrent `dotnet build` running on the machine:
+
+- Hidden friction build: `reportDirect` plus `FrictionReviewView.build` plus `renderFrictionPanel` plus `renderNode` took
+  32 to 78 ms warm (median 55 ms over 10 runs, 322 ms cold, 6620 characters out). That is several milliseconds, so step 9 applies:
+  the decision runs before the build, and a tab that did not opt in never reads the store (`PanelContext.frictionPresence`, tested by
+  counting `GetFrictionStore` calls).
+- The live testing "Enable" button was unreachable for a session with live testing off: the RED test showed the reason line holding
+  no route (REPL eval on the unmodified tree printed `false` and the markup of a bare `details`). Confirmed as a bug.
+- `Ds.indicator` inside the swapped-in node: the reason line's button carries its own indicator signal (`panelActionLoading`), the
+  same pattern as the live testing panel. The browser matrix (step 8) is where this is checked across a morph.
+
+The original questions, kept for the record:
 
 - What does the hidden friction build cost per snapshot? Experiment: time `buildDashboardSnapshotWithSessions` on a daemon
   whose store holds the 5000-row cap (`SAGEFS_FRICTION_MAX_ROWS`), with and without `?panels=friction`. If it is under a

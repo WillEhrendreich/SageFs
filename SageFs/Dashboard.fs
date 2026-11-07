@@ -46,6 +46,7 @@ open System.Text.RegularExpressions
 open SageFs
 open SageFs.Affordances
 open SageFs.Utils
+open SageFs.Server.DashboardPanelContext
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 open SageFs.Server.CohortInspector
@@ -1019,6 +1020,13 @@ let private previousSessionSortByClient = PageChoices<PreviousSessionSort>(pageC
 /// default layout, which has no friction panel.
 let private frictionOptInByClient = PageChoices<FrictionPanelOptIn>(pageChoiceCapacity)
 
+/// Whether this tab asked for the friction panel. Read before the snapshot is built, so a tab that did not ask
+/// never pays for the panel's SQLite read and signal pass.
+let private frictionOptInFor (clientId: string) : FrictionPanelOptIn =
+  match clientId with
+  | null | "" -> FrictionPanelOptIn.NotOptedIn
+  | id -> frictionOptInByClient.Find(id, FrictionPanelOptIn.NotOptedIn)
+
 /// Everything panel visibility needs, read fresh on every push, so the
 /// panels follow the session: switch to Hot Reload and its panel appears on
 /// the next morph, a cohort's last member leaves and the cohort panel goes.
@@ -1033,10 +1041,17 @@ let private panelFactsFor
       | None -> ViewedSession.NoSession
       | Some sid -> ViewedSession.Viewing(q.GetSessionWorkflow sid, q.GetLiveTestActivity (WorkerProtocol.SessionId.value sid))
     Cohort = PanelFacts.cohortPresence (infra.ReadCohortFrame ())
-    Friction =
-      match clientId with
-      | null | "" -> FrictionPanelOptIn.NotOptedIn
-      | id -> frictionOptInByClient.Find(id, FrictionPanelOptIn.NotOptedIn) }
+    Friction = frictionOptInFor clientId
+    // Code is checked once a session is in view; with none in view there is nothing that could have been checked.
+    Diagnostics =
+      match viewed with
+      | None -> DiagnosticsCheck.NotChecked
+      | Some _ -> DiagnosticsCheck.Checked (q.GetCurrentDiagnostics () |> List.length)
+    Alarms = infra.SystemAlarmBuffer.Value |> List.length
+    FailingTests =
+      match viewed with
+      | None -> 0
+      | Some sid -> (FailureNarrativesPanelView.fromNarratives (q.GetFailureNarratives sid)).TotalFailureCount }
 
 /// The Live Bindings view this session shows: its workflow's axes, resolved across the global settings and the app's own
 /// `.SageFs/settings.json` (the session's working directory is "this app"). A session with no working directory has only the
@@ -1076,6 +1091,7 @@ let buildDashboardSnapshotWithSessions
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
   (sessions: WorkerProtocol.SessionInfo list)
+  (frictionOptIn: FrictionPanelOptIn)
   : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let sessionId = currentSessionId
@@ -1140,8 +1156,8 @@ let buildDashboardSnapshotWithSessions
       | true ->
         match hrState with
         | Some hr -> renderHotReloadPanelFull sid hr.files hr.watchedCount hr.kept hr.reflection
-        | None -> renderHotReloadEmpty
-      | false -> renderHotReloadEmpty
+        | None -> renderHotReloadEmpty EmptyBecause.HotReloadStateUnanswered
+      | false -> renderHotReloadEmpty EmptyBecause.NoSessionInView
     let scPanel =
       match sid.Length > 0 with
       | true ->
@@ -1166,8 +1182,8 @@ let buildDashboardSnapshotWithSessions
               FileStatuses = fileStatuses
               Workflow = WorkflowTypes.SessionWorkflow.Interactive
               AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory (q.GetSessionWorkingDir sessionId) }
-        | None -> renderSessionContextEmpty
-      | false -> renderSessionContextEmpty
+        | None -> renderSessionContextEmpty EmptyBecause.WarmupNotReported
+      | false -> renderSessionContextEmpty EmptyBecause.NoSessionInView
     // The cards come first: the header badge, the daemon health bar, the card and the live bindings pane's note all read the
     // viewed card's own reading, so they are built from it and cannot differ by a poll.
     let warmupProgress = q.GetWarmupProgress sessionId
@@ -1239,13 +1255,17 @@ let buildDashboardSnapshotWithSessions
     // an SSE stream reuses its last-built panel within the worker-data TTL
     // (the view only changes via friction-tool events that arrive through
     // their own push path, and the render-diff guard prevents stale sends).
+    // The decision comes first: a tab that did not ask for the panel gets no read at all. Measured on a store at its
+    // 5000-row cap, the build took about 35 to 55 ms per snapshot, and `PanelVisibility.apply` threw it away.
     let frictionPanelTask =
-      match cachedWorkerData with
-      | Some cache ->
+      match PanelContext.frictionPresence frictionOptIn, cachedWorkerData with
+      | (PanelPresence.Hidden _ | PanelPresence.Quiet _), _ ->
+        System.Threading.Tasks.Task.FromResult (Elem.div [ Attr.id DomIds.FrictionPanel ] [])
+      | PanelPresence.Shown, Some cache ->
         match cache.FrictionPanel with
         | Some panel -> System.Threading.Tasks.Task.FromResult panel
         | None -> System.Threading.Tasks.Task.FromResult (Elem.div [ Attr.id DomIds.FrictionPanel ] [])
-      | None ->
+      | PanelPresence.Shown, None ->
         task {
           let! frictionStore = q.GetFrictionStore () |> Async.AwaitTask
           match frictionStore with
@@ -1332,10 +1352,11 @@ let buildDashboardSnapshot
   (lastWorkingDir: string)
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
+  (frictionOptIn: FrictionPanelOptIn)
   : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let! sessions = q.GetAllSessions ()
-    return! buildDashboardSnapshotWithSessions q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions
+    return! buildDashboardSnapshotWithSessions q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn
   }
 
 /// Build the full-shell dashboard snapshot for the "no session in play" state:
@@ -1423,9 +1444,9 @@ let buildNoSessionSnapshotWithSessionsSorted
       FilmstripPanel = Elem.div [] []
       ThemeName = defaultThemeName
       ConnectionLabel = connectionLabel
-      HotReloadPanel = renderHotReloadEmpty
+      HotReloadPanel = renderHotReloadEmpty EmptyBecause.NoSessionInView
       LiveTestingPanel = liveTestingPanel
-      SessionContextPanel = renderSessionContextEmpty
+      SessionContextPanel = renderSessionContextEmpty EmptyBecause.NoSessionInView
       OutputPanel = renderOutputForSession "" 0 [] "No session in play — create or resume one to start."
       SessionsPanel = renderSessionsForSession "" liveRows false
       // The picker always shows in the no-session state (it is the "no session
@@ -1689,7 +1710,7 @@ let createStreamHandler
       // liveSessions was already fetched above for reconciliation — reuse it
       // here instead of paying for a second GetAllSessions read.
       let! snapRaw, newSessionId, newThemeName, rawWorkerData =
-        buildDashboardSnapshotWithSessions q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions
+        buildDashboardSnapshotWithSessions q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions (frictionOptInFor clientId)
       let snap =
         applyCohortViewing infra currentCohortViewingSeq snapRaw
         |> PanelVisibility.apply (panelFactsFor q infra (Some newSessionId) clientId)
@@ -1978,7 +1999,7 @@ let createEvalHandler
           // committed snapshot here so Datastar cannot drop an overlapping
           // long-lived stream morph while this POST is still resolving.
           let! snapRaw, _, _, _ =
-            buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None
+            buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None (frictionOptInFor (clientIdFromSignals doc))
           // Same panel visibility the stream uses, so this morph and the next
           // stream push agree on which panels exist.
           let snap =
@@ -3520,7 +3541,7 @@ let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: st
       let! sessions = q.GetAllSessions ()
       match firstLiveSession sessions with
       | Some firstId ->
-        let! snapRaw, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
+        let! snapRaw, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None (frictionOptInFor clientId)
         let snap = PanelVisibility.apply (panelFactsFor q infra (Some resolvedId) clientId) snapRaw |> DashboardNewSession.apply clientId
         return renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContent snap)
       | None ->
@@ -3782,6 +3803,8 @@ let createEndpoints
     yield get "/api/state" (createApiStateHandler q infra)
     yield post "/api/dispatch" (createApiDispatchHandler a.Dispatch)
     yield post "/dashboard/cohort/scrub" (createCohortScrubHandler infra)
+    // The route scan reads these as literals; `DashboardRoutes` holds the same strings for the buttons that post to them, and a
+    // test (`DashboardPanelVisibilityTests`) fails when the two disagree.
     yield post "/dashboard/live-testing/enable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.EnableLiveTesting)
     yield post "/dashboard/live-testing/disable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.DisableLiveTesting)
     // The app-output pane's four controls. Each writes one setting and lets the state change re-render,

@@ -115,6 +115,8 @@
         <Compile Include="AppOutputPane.fs" />
         <!-- Before DashboardTypes: a sidebar card carries the teardown its session is in, and the infra record holds the registry. -->
         <Compile Include="TeardownRegistry.fs" />
+        <!-- Before DashboardTypes: the pure decision of which panels follow the viewer's context (types and rules, no markup). -->
+        <Compile Include="DashboardPanelContext.fs" />
         <Compile Include="DashboardTypes.fs" />
         <Compile Include="DashboardConnection.fs" />
         <Compile Include="DockPanes.fs" />

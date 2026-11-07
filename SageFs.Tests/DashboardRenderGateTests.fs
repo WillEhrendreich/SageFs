@@ -95,7 +95,7 @@ let tests = testList "Dashboard render gate — no redundant GetAllSessions per 
     let sid = WorkerProtocol.SessionId.validate "0a000001" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
     let queries = mkQueries counter []
     let! _ =
-      buildDashboardSnapshotWithSessions queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" None []
+      buildDashboardSnapshotWithSessions queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" None [] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
     counter.Value |> Expect.equal "must not re-fetch sessions — the caller already has them" 0
   }
 
@@ -117,7 +117,7 @@ let tests = testList "Dashboard render gate — no redundant GetAllSessions per 
     let counter = ref 0
     let sid = WorkerProtocol.SessionId.validate "0a000001" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
     let queries = mkQueries counter []
-    let! _ = buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" None
+    let! _ = buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" None SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
     counter.Value |> Expect.equal "the standalone entry point fetches sessions exactly once" 1
   }
 

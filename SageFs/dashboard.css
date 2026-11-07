@@ -5248,6 +5248,24 @@ body {
   content: none;
 }
 
+/* The next step a hidden panel offers: a button that turns the thing on, or the name of the control that does. It sits under the sentence and
+   wraps with it, so a narrow window makes the line taller and never wider. */
+.panel-hidden-next {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  overflow-wrap: anywhere;
+}
+
+/* The button rides on the line that is always visible, after the name, so the step is there without opening the sentence. */
+.panel-hidden-action {
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.857rem;
+  margin-inline-start: 0.5rem;
+}
+
 /* A row no file holds has no strip, but its Source cell says "n/a", so the column has an answer in every row. The marker is hidden in the
    stacked layout, where there are no columns to fill, and takes its cell in the grid. */
 @container (width >= 64.286rem) {
