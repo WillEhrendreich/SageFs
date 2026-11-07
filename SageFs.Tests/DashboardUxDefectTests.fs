@@ -1,8 +1,9 @@
 /// The four screenshot-verified dashboard UI defects, pinned where a pure fragment test can pin them:
 ///
-/// 1. A session card's build/source lines print Core's full diagnostic wall as card body. The pin: the
-///    card body carries a compact chip, the full sentence survives one disclosure away, and nothing
-///    (paths, timestamps, remediation) is dropped.
+/// 1. A session card's app line prints Core's full diagnostic wall as card body. The pin: the card body
+///    carries a compact chip, the full sentence survives one disclosure away, and nothing (compiler
+///    output, remediation) is dropped. The card's source line was redone on master (a headline with a
+///    Details list), so only the app line is pinned here.
 /// 2. The app-output toolbar states its line count twice ("450 lines of app output" and "450 lines").
 ///    The pin: one fact, one home: the count is stated once, and the stamp only appears when it adds
 ///    a fact of its own (held while paused, filtered).
@@ -27,8 +28,6 @@ open SageFs.Server.DockPanes
 module private Fixtures =
   let now = DateTime(2026, 9, 20, 12, 0, 0, DateTimeKind.Utc)
 
-  let builtAt = DateTime(2026, 10, 2, 0, 1, 0, DateTimeKind.Utc)
-
   let info (id: string) : WorkerProtocol.SessionInfo =
     { Id = WorkerProtocol.SessionId.validate id |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
       Name = None
@@ -45,15 +44,6 @@ module private Fixtures =
       Rebuild = LastRebuild.NeverRebuilt
       Reload = SessionReload.NoReloadYet
       Freshness = ReplFreshness.InSync }
-
-  /// The defect as it shipped: two files edited after the build the session runs.
-  let staleSource : CardSource =
-    CardSource.Read (
-      SourceState.Stale
-        [ { Path = "/repo/store-falco/Program.fs"
-            Because = StaleBecause.EditedAfterBuild (builtAt.AddMinutes 5.0, builtAt) }
-          { Path = "/repo/store-falco/Domain.fs"
-            Because = StaleBecause.EditedAfterBuild (builtAt.AddMinutes 6.0, builtAt) } ])
 
   /// The defect as it shipped: a failed rebuild whose reason is real compiler output.
   let buildFailed : AppRun.AppRunState =
@@ -126,20 +116,6 @@ let private cssRule (selector: string) : string =
 [<Tests>]
 let cardStateChipTests =
   testList "the session card's state lines are compact chips, with the full text one disclosure away" [
-
-    testCase "WHY - a stale source states its fact in one line: the card body carries no paths, no timestamps and no remediation wall" <| fun _ ->
-      let html = Fixtures.htmlOf [ Fixtures.cardWith "397e8400" AppRun.AppRunState.NotRunning Fixtures.staleSource ]
-      html |> Expect.stringContains "the chip states the fact compactly" "STALE SOURCE - 2 files"
-      let body = bodyBeforeDisclosure html "session-card-source"
-      body.Contains "/repo/" |> Expect.isFalse "no absolute path in the card body outside the disclosure"
-      body.Contains "HARD_RESET" |> Expect.isFalse "the remediation sentence is not card body"
-      body.Contains "2026-" |> Expect.isFalse "no timestamps in the card body outside the disclosure"
-
-    testCase "WHY - the full warning is never dropped: it is one click away, whole" <| fun _ ->
-      let html = Fixtures.htmlOf [ Fixtures.cardWith "397e8400" AppRun.AppRunState.NotRunning Fixtures.staleSource ]
-      html |> Expect.stringContains "the disclosure still carries the full warning" "WARNING: STALE SOURCE"
-      html |> Expect.stringContains "the changed file is still named" "/repo/store-falco/Program.fs"
-      html |> Expect.stringContains "the remediation survives" "hard_reset_fsi_session"
 
     testCase "WHY - a failed rebuild states where it broke in one line: the compiler wall never renders as card body" <| fun _ ->
       let html = Fixtures.htmlOf [ Fixtures.cardWith "397e8400" Fixtures.buildFailed CardSource.NotReadOnThisCard ]
@@ -216,15 +192,15 @@ let calmAlarmStripTests =
     testCase "WHY - the strip's own box paints no alarm red: a faulted session is a report and the strip reads as one" <| fun _ ->
       let rule = cssRule ".alarm-banner"
       rule.Contains "--fg-red" |> Expect.isFalse "no alarm red on the strip"
-      rule.Contains "var(--bg-panel)" |> Expect.isTrue "the strip sits on the panel's own background"
-      rule.Contains "var(--fg-yellow)" |> Expect.isTrue "the strip is still marked, calmly"
+      rule.Contains "--bg-panel" |> Expect.isTrue "the strip sits on the panel's own background"
+      rule.Contains "--fg-yellow" |> Expect.isTrue "the strip is still marked, calmly"
 
     testCase "WHY - the alarm title is plain text at the chrome's own volume" <| fun _ ->
       let rule = cssRule ".alarm-title"
       rule.Contains "--fg-red" |> Expect.isFalse "no alarm red on the title"
 
     testCase "calming the strip removed no information: count, phase, message, timestamp and dismiss all still render" <| fun _ ->
-      let alarm = { Phase = "update"; Message = "null ref in render"; Timestamp = DateTimeOffset(2026, 10, 26, 20, 0, 0, TimeSpan.FromHours 1.0) }
+      let alarm = { Phase = "update"; Message = "null ref in render"; Timestamp = DateTimeOffset(2026, 10, 26, 20, 0, 0, TimeSpan.Zero) }
       let html = renderAlarmBanner [ alarm ] |> renderNode
       html |> Expect.stringContains "the count" "System Alarm (1)"
       html |> Expect.stringContains "the phase" "[update]"

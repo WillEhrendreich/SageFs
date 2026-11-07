@@ -1122,6 +1122,32 @@ h2 {
   padding-left: 1.2em;
 }
 
+/* The compact state chip a card's app line leads with when its sentence is a diagnostic wall (the disclosure's summary), and
+   the full text under it. The chip is the fact in one line and keeps its line's colour; the body is the whole Core sentence
+   (paths, compiler errors, remediation), wrapped so it can never widen the card and dimmed so the card reads as a chip until
+   opened. */
+.card-state-disclosure {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.card-state-chip {
+  cursor: pointer;
+  font-weight: bold;
+  /* Wraps, never clips: at a phone-width card the chip grows taller instead of spilling past its box. */
+  white-space: normal;
+  user-select: none;
+}
+
+.card-state-full {
+  margin-top: 0.125rem;
+  font-weight: normal;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--fg-dim);
+}
+
 .session-stopping {
   color: var(--fg-dim);
   font-style: italic;
@@ -2879,9 +2905,14 @@ h2 {
 
 /* ── Alarm Banner ─────────────────────────────────────────────── */
 
+/* The top chrome's alarm strip. A faulted session is a reportable event, and the strip says every fact it always said: the
+   count, each entry with its phase and timestamp, and the dismiss action. What changed is the volume. The panel background
+   and a thin amber rule replace the red flood, the title reads at the chrome's own weight and colour, and the dismiss button
+   matches the rest of the chrome, so an honest, transient fault no longer paints the whole header as an emergency. When the
+   alarm clears the strip hides entirely (renderAlarmBanner's empty placeholder). */
 .alarm-banner {
-  background: color-mix(in srgb, var(--fg-red, #e06c75) 12%, var(--bg-panel, #1e1e2e));
-  border-left: 3px solid var(--fg-red, #e06c75);
+  background: var(--bg-panel, #1e1e2e);
+  border-left: 3px solid var(--fg-yellow, #e5c07b);
   padding: 0.5rem 1rem;
   margin: 0.5rem 0;
   border-radius: 0;
@@ -2894,15 +2925,15 @@ h2 {
 }
 
 .alarm-title {
-  font-weight: bold;
-  color: var(--fg-red, #e06c75);
+  font-weight: 600;
+  color: var(--fg-default);
 }
 
 .alarm-dismiss {
   margin-left: auto;
   background: transparent;
-  border: 1px solid var(--fg-red, #e06c75);
-  color: var(--fg-red, #e06c75);
+  border: 1px solid var(--border-normal);
+  color: var(--fg-dim);
   cursor: pointer;
   padding: 2px 8px;
   border-radius: 0;
@@ -2911,7 +2942,8 @@ h2 {
 }
 
 .alarm-dismiss:hover {
-  background: color-mix(in srgb, var(--fg-red, #e06c75) 20%, transparent);
+  background: var(--bg-focus);
+  color: var(--fg-default);
 }
 
 .alarm-entry {

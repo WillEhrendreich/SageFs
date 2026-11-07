@@ -1677,6 +1677,40 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
                 [ textEnc (sprintf "→%d" n) ] ]
     ]
 
+/// The first `file(line,col)` a build-failure reason names, so the chip can say where the build
+/// broke without carrying the whole compiler output. None when the reason names no location.
+let private firstErrorLocation (reason: string) : string option =
+  let m = System.Text.RegularExpressions.Regex.Match(reason, @"\S+\(\d+,\d+\)")
+  match m.Success with
+  | true -> Some m.Value
+  | false -> None
+
+/// The compact chip for an app state whose full sentence is a diagnostic wall, or None for a state
+/// whose sentence is already one line (those render it directly, without a disclosure).
+let appChipText (app: AppRun.AppRunState) : string option =
+  match app with
+  | AppRun.AppRunState.BuildFailed (_, reason, _, _) ->
+    match firstErrorLocation reason with
+    | Some at -> Some (sprintf "Build failed: %s" at)
+    | None -> Some "Build failed"
+  | AppRun.AppRunState.CouldNotStart _ -> Some "Could not start"
+  | AppRun.AppRunState.LostTrack _ -> Some "Lost track of the app"
+  | AppRun.AppRunState.RestartRequired _ -> Some "Restart required"
+  | AppRun.AppRunState.NotRunning
+  | AppRun.AppRunState.Starting _
+  | AppRun.AppRunState.Running _
+  | AppRun.AppRunState.Exited _
+  | AppRun.AppRunState.Crashed _ -> None
+
+/// One line of card state as a compact chip with the full text a disclosure away. The chip states
+/// the fact in the line's own words and colours; the disclosure body carries the whole string the
+/// Core built, so the sentence is never dropped and a click reads all of it.
+let private cardStateDisclosure (signalName: string) (chip: string) (full: string) : XmlNode =
+  signalDetails signalName [ Attr.class' "card-state-disclosure" ] [
+    Elem.summary [ Attr.class' "card-state-chip" ] [ textEnc chip ]
+    Elem.div [ Attr.class' "card-state-full" ] [ textEnc full ]
+  ]
+
 /// Render the "◐ Stopping session id:[id]..." card that replaces a session's
 /// display card while it unloads/disposes/purges itself.
 /// Shares the session-card-<id> DOM id with the card in renderSessions so
@@ -1952,10 +1986,19 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     | AppRun.AppRunState.Running _ -> "var(--fg-green)"
                     | AppRun.AppRunState.Crashed _ | AppRun.AppRunState.CouldNotStart _ | AppRun.AppRunState.BuildFailed _ | AppRun.AppRunState.LostTrack _ -> "var(--fg-red)"
                     | _ -> "var(--fg-dim)"
+                  // A state whose sentence is one line renders it directly. A state whose sentence is a diagnostic wall (a failed
+                  // rebuild carrying compiler output and a call to action) leads with a compact chip (appChipText) and keeps the
+                  // whole sentence in the chip's disclosure, so the card body stays one line and nothing is dropped.
                   Elem.div
                     [ Attr.class' "session-card-app"
                       Attr.style (sprintf "flex-basis: 100%%; font-size: 0.857rem; color: %s; overflow-wrap: anywhere;" color) ]
-                    [ textEnc (AppRun.describeState app) ]
+                    [ match appChipText app with
+                      | None -> textEnc (AppRun.describeState app)
+                      | Some chip ->
+                        cardStateDisclosure
+                          (sprintf "appState_%s" (signalIdent sid))
+                          chip
+                          (AppRun.describeState app) ]
               ]
               // The facts a person reads once and rarely again, folded: who is connected, when it started, the folder, the memory and
               // the last use. The state, the project, the tests and the buttons stay in view. A reviewer called the card's dozen small

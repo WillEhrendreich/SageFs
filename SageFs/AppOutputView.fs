@@ -65,7 +65,10 @@ let private controls (pane: AppOutputPane) : XmlNode list =
   let toggle (id: string) (testId: string) (label: string) (onLabel: string) (offLabel: string) (isOn: bool) (target: string) =
     Elem.button [
       Attr.id id
-      Attr.class' ("session-btn" + (if isOn then " session-btn-on" else ""))
+      // `session-btn-labeled` instead of the bare uniform square: these controls carry WORDS ("following"/"held still",
+      // "paused"/"showing"), and at the 28px square a word spills over the next button. The labeled class sizes the button to
+      // its own label; the accessible name stays the full sentence.
+      Attr.class' ("session-btn session-btn-labeled" + (if isOn then " session-btn-on" else ""))
       Attr.type' "button"
       Attr.create "aria-label" label
       Attr.create "aria-pressed" (if isOn then "true" else "false")
@@ -78,7 +81,8 @@ let private controls (pane: AppOutputPane) : XmlNode list =
   let streamChoice (value: string) (label: string) (wanted: OutputStreamFilter) =
     let chosen = (filter = wanted)
     Elem.button [
-      Attr.class' ("session-btn" + (if chosen then " session-btn-on" else ""))
+      // Words again, so label-sized again (see the toggle above).
+      Attr.class' ("session-btn session-btn-labeled" + (if chosen then " session-btn-on" else ""))
       Attr.type' "button"
       Attr.create "aria-label" (sprintf "Show %s" label)
       Attr.create "aria-pressed" (if chosen then "true" else "false")
@@ -116,8 +120,13 @@ let renderBody (pane: AppOutputPane) (because: OpenBecause) : XmlNode =
   Elem.div [ Attr.id AppOutputIds.Pane; Attr.class' "panel live-pane"; testid "app-output-pane" ] [
     Elem.div [ Attr.class' "live-pane-bar" ] [
       Elem.span [ Attr.class' "live-pane-title" ] [ textEnc "App output" ]
+      // One fact, one home: the line count lives in the badge. The stamp earns its place only when it says something the
+      // badge cannot: the pane is holding output back, or the view is filtered. A stamp that only restated the count
+      // ("450 lines of app output" next to "450 lines") is gone.
       Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
-      Elem.span [ Attr.class' "live-pane-stamp" ] [ textEnc (AppOutputPane.header pane) ]
+      match AppOutputPane.paused pane, AppOutputPane.searching pane, AppOutputPane.buffered pane with
+      | false, false, buffered when buffered > 0 -> ()
+      | _ -> Elem.span [ Attr.class' "live-pane-stamp" ] [ textEnc (AppOutputPane.header pane) ]
       yield! controls pane
     ]
     // A search that matched nothing says so. Without this it is indistinguishable from an app that
