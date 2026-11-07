@@ -465,35 +465,38 @@ module SettingsCatalog =
   /// follows the workflow's recommended view. An axis whose stored value will not parse (a layer file edited by hand) also falls
   /// back to the recommendation and says its source is the default, because a page that cannot draw its bindings over a typo is
   /// worse than one that draws the recommended view. The Settings panel still surfaces the bad value for the pilots.
-  let viewFor (paths: ConfigPaths) (workflow: ViewWorkflow) : ResolvedView =
+  let viewForTab (paths: ConfigPaths) (workflow: ViewWorkflow) (tab: WatchTab) : ResolvedView =
     let provenanceOf (axis: ViewAxis) : Provenance =
-      let descriptor = ViewSettings.descriptor workflow axis
+      let descriptor = ViewSettings.descriptorIn workflow tab axis
       match resolve paths descriptor with
       | Ok provenance -> provenance
       | Error _ -> { Effective = descriptor.Default; Source = LDefault; PerLayer = [] }
-    ViewSettings.resolveView workflow provenanceOf
+    ViewSettings.resolveViewIn workflow tab provenanceOf
+
+  /// The view of a workflow's All tab.
+  let viewFor (paths: ConfigPaths) (workflow: ViewWorkflow) : ResolvedView = viewForTab paths workflow WatchTab.All
 
   /// Carries out one view edit against the layer files. The layer is the scope's (this app's file, or the global one), except that
   /// resetting one axis clears whichever layer holds it, because a reset that left the value in the other layer would look like it
   /// did nothing. What each write does is `ViewEdit.writes`' to say, measured against the view the layer below gives: for this app
   /// that is the global layer over the recommendation, for everywhere it is the recommendation. Stops at the first write that fails.
-  let applyViewEdit (paths: ConfigPaths) (workflow: ViewWorkflow) (scope: ViewScope) (change: ViewEdit) : Result<unit, ConfigError> =
+  let applyViewEditIn (paths: ConfigPaths) (workflow: ViewWorkflow) (tab: WatchTab) (scope: ViewScope) (change: ViewEdit) : Result<unit, ConfigError> =
     let layer =
       match change, scope with
       | ViewEdit.Reset axis, _ ->
-        (viewFor paths workflow).Sources |> Map.tryFind axis |> Option.defaultValue LDefault
+        (viewForTab paths workflow tab).Sources |> Map.tryFind axis |> Option.defaultValue LDefault
       | _, ViewScope.ThisApp -> LRepo
       | _, ViewScope.Everywhere -> LGlobal
     let below =
       match layer with
-      | LRepo -> (viewFor { paths with Repo = NoRepoCheckout } workflow).View
+      | LRepo -> (viewForTab { paths with Repo = NoRepoCheckout } workflow tab).View
       | LGlobal
       | LDefault
       | LSession
       | LEnvironment
-      | LCommandLine -> View.recommended workflow
+      | LCommandLine -> View.recommendedIn workflow tab
     let run (write: AxisWrite) : Result<unit, ConfigError> =
-      let descriptor = ViewSettings.descriptor workflow write.Axis
+      let descriptor = ViewSettings.descriptorIn workflow tab write.Axis
       match write.Write with
       | Write.Store value -> edit paths layer (AxisValue.token value) descriptor |> Result.map ignore
       | Write.ClearOverride -> clear paths layer descriptor |> Result.map ignore
@@ -506,6 +509,10 @@ module SettingsCatalog =
     | LCommandLine ->
       ViewEdit.writes below change
       |> List.fold (fun outcome write -> outcome |> Result.bind (fun () -> run write)) (Ok())
+
+  /// The same, for a workflow's All tab.
+  let applyViewEdit (paths: ConfigPaths) (workflow: ViewWorkflow) (scope: ViewScope) (change: ViewEdit) : Result<unit, ConfigError> =
+    applyViewEditIn paths workflow WatchTab.All scope change
 
   /// The MCP port the persisted layers hold, if they hold one that parses. The
   /// Settings panel writes this value and its row says it applies on the next

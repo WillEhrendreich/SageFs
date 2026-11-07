@@ -727,6 +727,33 @@ let statesJourney () : Task<unit> = task {
     allListed |> Expect.isTrue "All lists everything again"
     expectNoErrors errors "after the tabs were opened"
 
+    // ── 7c. each tab has a view of its own, and a choice made on one tab is kept for that tab only ───────────────────────
+    let waitCols (what: string) (check: string) =
+      waitJs page what BrowserWaits.panelUpdates (sprintf "() => { const t = document.getElementById('live-tree'); const c = t ? t.getAttribute('data-cols') || '' : ''; return %s; }" check) null
+    do! waitCols "the All tab to draw the workflow's own view: the type column and no more" "c.trim() === 'type'"
+    do! openTab "changes"
+    do! waitCols "the Changes tab to draw its own view: the type, the source and the state" "c.includes('type') && c.includes('source') && c.includes('state')"
+    do! shot page "14-changes-tab-own-view"
+    for (width, height) in [ 900, 900; 400, 800 ] do
+      do! page.SetViewportSizeAsync(width, height)
+      let! overflow = layoutProblems page
+      overflow |> Expect.equal (sprintf "the Changes tab at %dpx wide has nothing sticking out: %s" width overflow) ""
+      do! shot page (sprintf "14-changes-tab-own-view-%d" width)
+    do! page.SetViewportSizeAsync(1400, 1000)
+    do! page.Locator("#live-view-btn").ClickAsync()
+    do! waitJs page "the panel to say it is for the Changes tab" BrowserWaits.panelUpdates
+          "() => { const e = document.querySelector('[data-testid=live-view-heading]'); return !!e && /Changes tab/.test(e.innerText); }" null
+    do! page.Locator("[aria-label='Show type'] button", PageLocatorOptions(HasText = "Off")).ClickAsync()
+    do! waitCols "the Changes tab to lose its type column" "!c.includes('type') && c.includes('state')"
+    do! openTab "all"
+    do! waitCols "the All tab to keep its type column: the choice was the Changes tab's" "c.trim() === 'type'"
+    let! _ = page.ReloadAsync()
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
+    do! waitCols "a reloaded page to start on All" "c.trim() === 'type'"
+    do! openTab "changes"
+    do! waitCols "the Changes tab to still have the choice after a reload: it is kept for the app" "!c.includes('type') && c.includes('state') && c.includes('source')"
+    expectNoErrors errors "after each tab drew its own view"
+
     for (width, height, name) in [ 1400, 1000, "1400"; 900, 900, "900"; 400, 800, "400" ] do
       do! page.SetViewportSizeAsync(width, height)
       do! waitJs page "the dock" BrowserWaits.panelUpdates "() => !!document.querySelector('#live-dock')" null

@@ -5466,3 +5466,18 @@ body {
   margin-left: 0.5em;
   color: var(--fg-dim);
 }
+
+/* Wide trees: the State and Source columns are the strip's own cells, which the row grid already lays out in aligned tracks, so the row's inline copies
+   (made for the stacked layout under this width) are hidden and the strip's cells are shown. Without this a row asked for both columns packed
+   its name, value, type, source and state into the first track, and the name read "gra...". Below this width the generated rules above rule. */
+@container (width >= 64.286rem) {
+  .live-tree[data-cols~="state"] .live-state,
+  .live-tree[data-cols~="source"] .live-where {
+    display: inline;
+  }
+
+  .live-tree .live-cell-state,
+  .live-tree .live-cell-source {
+    display: none;
+  }
+}

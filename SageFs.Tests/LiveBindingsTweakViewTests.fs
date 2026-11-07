@@ -877,8 +877,8 @@ let changesStripViewTests =
         Dock.renderDockWith (SageFs.View.recommended SageFs.ViewWorkflow.Repl) None rows DockPanes.SessionInView "abcd1234"
           (Dock.WalkedBindings(paneView [ binding "gravity" LiveValueTree.NodeKind.Leaf "9.5" []; binding "speed" LiveValueTree.NodeKind.Leaf "3" [] ])) None
         |> decoded
-      for tab in SageFs.Features.Tweak.WatchTabs.WatchTab.all do
-        html |> Expect.stringContains "a button for the tab" (sprintf "data-testid=\"live-tab-%s\"" (SageFs.Features.Tweak.WatchTabs.WatchTab.token tab))
+      for tab in SageFs.WatchTab.all do
+        html |> Expect.stringContains "a button for the tab" (sprintf "data-testid=\"live-tab-%s\"" (SageFs.WatchTab.token tab))
       attrsOfTestId "live-tab-all" html |> Expect.stringContains "All starts open, said in the markup" "aria-pressed=\"true\""
       attrsOfTestId "live-tab-changes" html |> Expect.stringContains "a tab sets the signal" "$liveTab = 'changes'"
       wordsOfTestId "live-tab-count-all" html |> Expect.equal "two bindings" (Some "2")

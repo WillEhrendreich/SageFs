@@ -1063,8 +1063,20 @@ let private liveBindingsViewPaths (workingDir: string) : SageFs.ConfigPaths =
     | false -> SageFs.RepoRootAt workingDir
   { GlobalDir = DaemonState.SageFsDir; Repo = repo }
 
-let private liveBindingsResolved (workflow: WorkflowTypes.SessionWorkflow) (workingDir: string) : SageFs.ResolvedView =
-  SageFs.SettingsCatalog.viewFor (liveBindingsViewPaths workingDir) (SageFs.ViewWorkflow.ofSessionWorkflow workflow)
+let private liveBindingsResolved (workflow: WorkflowTypes.SessionWorkflow) (workingDir: string) (tab: SageFs.WatchTab) : SageFs.ResolvedView =
+  SageFs.SettingsCatalog.viewForTab (liveBindingsViewPaths workingDir) (SageFs.ViewWorkflow.ofSessionWorkflow workflow) tab
+
+/// The tab each page has open in the Live Bindings pane, keyed by page client id like the sort choice above: the tab-bar click posts it
+/// and the stream reads it on every push, for as long as the page lives. A page that reloads has a new client id and starts on All,
+/// which is the view its workflow gives. The page's `liveTab` signal says the same tab, so what the page hides at once and what the
+/// server draws for it agree.
+let private liveTabByClient = PageChoices<SageFs.WatchTab>(pageChoiceCapacity)
+
+/// The tab a page has open, or All.
+let private liveTabOf (clientId: string) : SageFs.WatchTab =
+  match clientId with
+  | null | "" -> SageFs.WatchTab.All
+  | id -> liveTabByClient.Find(id, SageFs.WatchTab.All)
 
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
@@ -1082,7 +1094,7 @@ let private liveBindingsResolved (workflow: WorkflowTypes.SessionWorkflow) (work
 /// push loop already fetches the session list once per tick (to reconcile
 /// the viewed session before rendering) and must not pay for a second
 /// `GetAllSessions` read just to build the sidebar cards.
-let buildDashboardSnapshotWithSessions
+let buildDashboardSnapshotWithSessionsFor
   (q: DashboardQueries)
   (infra: DashboardInfra)
   (currentSessionId: WorkerProtocol.SessionId)
@@ -1092,6 +1104,7 @@ let buildDashboardSnapshotWithSessions
   (cachedWorkerData: DashboardWorkerCache option)
   (sessions: WorkerProtocol.SessionInfo list)
   (frictionOptIn: FrictionPanelOptIn)
+  (tab: SageFs.WatchTab)
   : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let sessionId = currentSessionId
@@ -1226,12 +1239,12 @@ let buildDashboardSnapshotWithSessions
         | true -> DockPanes.SessionInView
         | false -> DockPanes.NoSessionInView
       let sessionWorkflow = q.GetSessionWorkflow sessionId
-      let resolved = liveBindingsResolved sessionWorkflow workingDir
+      let resolved = liveBindingsResolved sessionWorkflow workingDir tab
       // The view button and panel exist for a session whose view they would change.
       let controls =
         match session with
         | DockPanes.SessionInView ->
-          Some(LiveBindingsViewPanel.render (WorkerProtocol.SessionId.value sessionId) (SageFs.ViewWorkflow.ofSessionWorkflow sessionWorkflow) resolved)
+          Some(LiveBindingsViewPanel.renderFor (WorkerProtocol.SessionId.value sessionId) (SageFs.ViewWorkflow.ofSessionWorkflow sessionWorkflow) tab resolved)
         | DockPanes.NoSessionInView -> None
       LiveBindingsDock.renderDockWithRemedy
         (RebuildRemedy.paneNote remedy)
@@ -1341,9 +1354,40 @@ let buildDashboardSnapshotWithSessions
     return snap, sessionId, themeName, {| EvalStats = stats; HotReloadState = hrState; WarmupContext = wCtx; FrictionPanel = frictionPanel |}
   }
 
+/// The snapshot with the Live Bindings pane on its All tab, which is where a page starts.
+let buildDashboardSnapshotWithSessions
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  (currentSessionId: WorkerProtocol.SessionId)
+  (lastSessionId: WorkerProtocol.SessionId)
+  (lastWorkingDir: string)
+  (lastThemeName: string)
+  (cachedWorkerData: DashboardWorkerCache option)
+  (sessions: WorkerProtocol.SessionInfo list)
+  (frictionOptIn: FrictionPanelOptIn)
+  =
+  buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn SageFs.WatchTab.All
+
 /// Standalone entry point for callers that do not already have a fresh
 /// session list in hand (e.g. tests, one-off callers) — fetches once, then
-/// delegates to `buildDashboardSnapshotWithSessions`.
+/// delegates to `buildDashboardSnapshotWithSessionsFor`, for the tab the page has open.
+let buildDashboardSnapshotFor
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  (currentSessionId: WorkerProtocol.SessionId)
+  (lastSessionId: WorkerProtocol.SessionId)
+  (lastWorkingDir: string)
+  (lastThemeName: string)
+  (cachedWorkerData: DashboardWorkerCache option)
+  (frictionOptIn: FrictionPanelOptIn)
+  (tab: SageFs.WatchTab)
+  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
+  task {
+    let! sessions = q.GetAllSessions ()
+    return! buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn tab
+  }
+
+/// The same for a page on its All tab.
 let buildDashboardSnapshot
   (q: DashboardQueries)
   (infra: DashboardInfra)
@@ -1353,11 +1397,8 @@ let buildDashboardSnapshot
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
   (frictionOptIn: FrictionPanelOptIn)
-  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
-  task {
-    let! sessions = q.GetAllSessions ()
-    return! buildDashboardSnapshotWithSessions q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn
-  }
+  =
+  buildDashboardSnapshotFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData frictionOptIn SageFs.WatchTab.All
 
 /// Build the full-shell dashboard snapshot for the "no session in play" state:
 /// the complete dashboard chrome (header, daemon health, sidebar Sessions panel,
@@ -1710,7 +1751,7 @@ let createStreamHandler
       // liveSessions was already fetched above for reconciliation — reuse it
       // here instead of paying for a second GetAllSessions read.
       let! snapRaw, newSessionId, newThemeName, rawWorkerData =
-        buildDashboardSnapshotWithSessions q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions (frictionOptInFor clientId)
+        buildDashboardSnapshotWithSessionsFor q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions (frictionOptInFor clientId) (liveTabOf clientId)
       let snap =
         applyCohortViewing infra currentCohortViewingSeq snapRaw
         |> PanelVisibility.apply (panelFactsFor q infra (Some newSessionId) clientId)
@@ -1999,7 +2040,7 @@ let createEvalHandler
           // committed snapshot here so Datastar cannot drop an overlapping
           // long-lived stream morph while this POST is still resolving.
           let! snapRaw, _, _, _ =
-            buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None (frictionOptInFor (clientIdFromSignals doc))
+            buildDashboardSnapshotFor q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None (frictionOptInFor (clientIdFromSignals doc)) (liveTabOf (clientIdFromSignals doc))
           // Same panel visibility the stream uses, so this morph and the next
           // stream push agree on which panels exist.
           let snap =
@@ -2517,15 +2558,18 @@ let createBindingsViewHandler (q: DashboardQueries) (infra: DashboardInfra) : Wo
       let signal (name: string) (kebab: string) = getSignalString doc name kebab
       let workflow = SageFs.ViewWorkflow.ofSessionWorkflow (q.GetSessionWorkflow sessionId)
       let paths = liveBindingsViewPaths (q.GetSessionWorkingDir sessionId)
+      // The choice is the open tab's: the page's own tab, as the server recorded it when the tab bar was clicked.
+      let tab = liveTabOf (clientIdFromSignals doc)
       let outcome =
         SageFs.ViewScope.parse (signal LiveBindingsViewPanel.ViewSignals.Scope "bv-scope")
         |> Result.bind (fun scope ->
-          SageFs.ViewEdit.parse
+          SageFs.ViewEdit.parseIn
             workflow
+            tab
             { Verb = signal LiveBindingsViewPanel.ViewSignals.Action "bv-action"
               Setting = signal LiveBindingsViewPanel.ViewSignals.Axis "bv-axis"
               Choice = signal LiveBindingsViewPanel.ViewSignals.Value "bv-value" }
-          |> Result.bind (SageFs.SettingsCatalog.applyViewEdit paths workflow scope))
+          |> Result.bind (SageFs.SettingsCatalog.applyViewEditIn paths workflow tab scope))
       match outcome with
       | Ok() ->
         Response.sseStartResponse ctx |> ignore
@@ -2534,6 +2578,31 @@ let createBindingsViewHandler (q: DashboardQueries) (infra: DashboardInfra) : Wo
         ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
         ctx.Response.ContentType <- "text/plain; charset=utf-8"
         do! ctx.Response.WriteAsync(sprintf "The view was not changed: %s" (SageFs.ConfigError.describe why))
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
+/// The tab bar's one route: a click sets the page's `liveTab` signal and posts it here, and the server records it for that page's stream
+/// (keyed by the page's client id, as the stream is) and draws the pane again, so the open tab has the view the server resolves for it.
+/// A token that is not a tab is refused with the set it should have been.
+let createLiveTabHandler (infra: DashboardInfra) : HttpHandler =
+  fun ctx -> task {
+    try
+      use! doc = readSignalsJsonSized ctx
+      let clientId = clientIdFromSignals doc
+      match SageFs.WatchTab.ofToken (getSignalString doc "liveTab" "live-tab") with
+      | Ok tab ->
+        match clientId with
+        | null | "" -> ()
+        | id -> liveTabByClient.Set(id, tab)
+        Response.sseStartResponse ctx |> ignore
+        infra.TriggerStateChange ()
+      | Error why ->
+        ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
+        ctx.Response.ContentType <- "text/plain; charset=utf-8"
+        do! ctx.Response.WriteAsync(sprintf "The tab was not changed: %s" (SageFs.ConfigError.describe why))
     with
     | :? RequestTooLargeException -> ()
     | :? System.IO.IOException -> ()
@@ -3635,6 +3704,7 @@ let createEndpoints
     yield mapPostRaw "/dashboard/settings/edit/{sig}" (routeValue "sig") createSettingsEditHandler
     yield mapPostRaw "/dashboard/settings/clear/{sig}" (routeValue "sig") createSettingsClearHandler
     yield mapPostRaw "/dashboard/bindings-view/{id}" (routeValue "id") (SessionIdRoute.handle (createBindingsViewHandler q infra))
+    yield post "/dashboard/live-tab" (createLiveTabHandler infra)
     yield post "/dashboard/eval" (createEvalHandler q infra a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
     yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)

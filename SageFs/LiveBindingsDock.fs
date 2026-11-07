@@ -42,6 +42,8 @@ module DockSignals =
   let [<Literal>] LivePaneCollapsed = "livePaneCollapsed"
   /// The open tab (`WatchTab.token`): which of the bindings are listed.
   let [<Literal>] LiveTab = "liveTab"
+  /// Where a tab click posts, so the server knows which tab the page has open.
+  let [<Literal>] LiveTabEndpoint = "/dashboard/live-tab"
 
   /// The initial value of every signal above, for the page shell.
   let initial : XmlAttribute list =
@@ -815,7 +817,9 @@ let tabBar (bindingCount: int) (changedCount: int) : XmlNode =
             Ds.attr' ("aria-pressed", sprintf "%s ? 'true' : 'false'" (open' tab))
             Ds.class' ("session-btn-on", open' tab)
             Ds.preserveAttr "class aria-pressed"
-            Ds.onClick (sprintf "$%s = '%s'" DockSignals.LiveTab (WatchTab.token tab)) ]
+            // The page hides what the tab does not list at once, and the post tells the server which tab the page has open, so it draws
+            // the view that tab has.
+            Ds.onClick (sprintf "$%s = '%s'; %s" DockSignals.LiveTab (WatchTab.token tab) (Ds.post DockSignals.LiveTabEndpoint)) ]
           [ Elem.span [ Attr.class' "session-btn-word" ] [ textEnc (WatchTab.label tab) ]
             Elem.span
               ([ Attr.class' "live-tab-count"; testid (sprintf "live-tab-count-%s" (WatchTab.token tab)) ]

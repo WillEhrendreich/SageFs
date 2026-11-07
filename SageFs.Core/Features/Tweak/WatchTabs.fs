@@ -8,44 +8,7 @@ open SageFs
 open SageFs.Features.Tweak.BindingTweak
 open SageFs.Features.Tweak.ChangesStrip
 
-[<RequireQualifiedAccess>]
-type WatchTab =
-  /// Every binding.
-  | All
-  /// The bindings the person pinned.
-  | Pinned
-  /// The bindings that hold a tweak, or a value the program changed.
-  | Changes
-
-module WatchTab =
-  let all : WatchTab list = [ WatchTab.All; WatchTab.Pinned; WatchTab.Changes ]
-
-  /// The word a page stores for the open tab, and the one place it is read back.
-  let token (tab: WatchTab) : string =
-    match tab with
-    | WatchTab.All -> "all"
-    | WatchTab.Pinned -> "pinned"
-    | WatchTab.Changes -> "changes"
-
-  let label (tab: WatchTab) : string =
-    match tab with
-    | WatchTab.All -> "All"
-    | WatchTab.Pinned -> "Pinned"
-    | WatchTab.Changes -> "Changes"
-
-  let ofToken (text: string) : Result<WatchTab, ConfigError> =
-    match all |> List.tryFind (fun tab -> token tab = text) with
-    | Some tab -> Ok tab
-    | None -> Error(NotAMember(text, all |> List.map token))
-
-  /// What the tab says when nothing is listed on it, so an empty tab is never a blank pane.
-  let emptyWords (tab: WatchTab) : string =
-    match tab with
-    | WatchTab.All -> "No values are bound in this session yet."
-    | WatchTab.Pinned -> "Nothing is pinned. Pin a value with the pin at the end of its row."
-    | WatchTab.Changes -> "Nothing has changed: no value was tried and not saved, and the program has not changed one."
-
-/// Whether a binding is listed on a tab.
+/// Whether a binding is listed on a tab. (The tab type is in `ViewSettings`, beside the workflow a view's settings are keyed by.)
 let lists (tab: WatchTab) (pinned: bool) (changed: bool) : bool =
   match tab with
   | WatchTab.All -> true

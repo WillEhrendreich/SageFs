@@ -80,12 +80,12 @@ let private choice (sessionId: string) (pressed: bool) (label: string) (action: 
 
 /// The presets worth offering while some of the axes are not drawn: the workflow's own, and the plain watch window. The others set
 /// axes nothing draws yet, so a button for them would change nothing the person can see.
-let private offeredPresets (workflow: ViewWorkflow) : ViewPreset list =
-  [ ViewPreset.recommendedFor workflow; ViewPreset.WatchWindow ] |> List.distinct
+let private offeredPresets (workflow: ViewWorkflow) (tab: WatchTab) : ViewPreset list =
+  [ ViewPreset.recommendedIn workflow tab; ViewPreset.WatchWindow ] |> List.distinct
 
-let private presetRow (sessionId: string) (workflow: ViewWorkflow) (view: View) : XmlNode =
-  let recommended = ViewPreset.recommendedFor workflow
-  let detected = View.detect workflow view.Layout
+let private presetRow (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (view: View) : XmlNode =
+  let recommended = ViewPreset.recommendedIn workflow tab
+  let detected = View.detectIn workflow tab view.Layout
   let isPressed (preset: ViewPreset) =
     match detected with
     | DetectedPreset.IsRecommended -> preset = recommended
@@ -94,7 +94,7 @@ let private presetRow (sessionId: string) (workflow: ViewWorkflow) (view: View) 
   Elem.div [ Attr.class' "live-view-row"; Attr.create "role" "group"; Attr.create "aria-label" "Preset" ] [
     Elem.span [ Attr.class' "live-view-label" ] [ Text.raw "Preset" ]
     yield!
-      offeredPresets workflow
+      offeredPresets workflow tab
       |> List.map (fun preset ->
         let value =
           match preset = recommended with
@@ -153,8 +153,9 @@ let private scopeRow (sessionId: string) : XmlNode =
       [ Text.raw "Reset to recommended" ]
   ]
 
-/// The button and the panel, for one session's workflow and its resolved view.
-let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView) : ViewControls =
+/// The button and the panel, for one session's workflow, the tab the page has open, and that tab's resolved view. The choices the
+/// panel makes are the open tab's, and its heading says which tab that is.
+let renderFor (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (resolved: ResolvedView) : ViewControls =
   let button =
     Elem.button
       [ Attr.id ViewIds.Button
@@ -177,7 +178,13 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
         Ds.class' ("live-hidden", sprintf "!$%s" ViewSignals.Open)
         Ds.preserveAttr "class" ]
       [ Elem.div [ Attr.class' "live-view-head" ] [
-          Elem.span [] [ textEnc (sprintf "Binding display settings for %s mode" (ViewWorkflow.label workflow)) ]
+          Elem.span
+            [ testid "live-view-heading" ]
+            [ textEnc
+                (match tab with
+                 | WatchTab.All -> sprintf "Binding display settings for %s mode" (ViewWorkflow.label workflow)
+                 | WatchTab.Pinned
+                 | WatchTab.Changes -> sprintf "Binding display settings for %s mode, %s tab" (ViewWorkflow.label workflow) (WatchTab.label tab)) ]
           // A way to close it where it is: the panel floats over the table, and the only other way was to find the View button again.
           Elem.button
             [ Attr.class' "live-view-close"
@@ -187,10 +194,10 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
             // "Close" ends a session on the Sessions card, so this one says what it does to the panel.
             [ Text.raw "✕ Done" ] ]
         // One preset that is already chosen is not a choice, so the row appears only when there is something to pick.
-        match offeredPresets workflow, View.detect workflow resolved.View.Layout with
+        match offeredPresets workflow tab, View.detectIn workflow tab resolved.View.Layout with
         | [ _ ], DetectedPreset.IsRecommended
         | [ _ ], DetectedPreset.IsPreset _ -> ()
-        | _ -> presetRow sessionId workflow resolved.View
+        | _ -> presetRow sessionId workflow tab resolved.View
         yield! ViewAxis.drawn |> List.map (axisRow sessionId resolved)
         yield! extras
         scopeRow sessionId
@@ -198,3 +205,7 @@ let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView)
           Text.raw "A choice is saved as you click it. \"This project\" writes .SageFs/settings.json in the project folder. \"All projects\" writes your own settings.json."
         ] ]
   { Button = button; Panel = panelWith []; PanelWith = panelWith }
+
+/// The button and the panel for a workflow's All tab.
+let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView) : ViewControls =
+  renderFor sessionId workflow WatchTab.All resolved

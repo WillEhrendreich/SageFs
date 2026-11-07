@@ -150,6 +150,46 @@ module ViewWorkflow =
     | WorkflowTypes.SessionWorkflow.LiveTesting -> ViewWorkflow.LiveTesting
     | WorkflowTypes.SessionWorkflow.HotReload _ -> ViewWorkflow.HotReload
 
+/// The tabs of the live bindings pane. A tab has a view of its own, kept per app and workflow, so it lives here beside the workflow
+/// that a view's settings are keyed by; which binding a tab lists is `WatchTabs.lists`.
+[<RequireQualifiedAccess>]
+type WatchTab =
+  /// Every binding.
+  | All
+  /// The bindings the person pinned.
+  | Pinned
+  /// The bindings that hold a tweak, or a value the program changed.
+  | Changes
+
+[<RequireQualifiedAccess>]
+module WatchTab =
+  let all : WatchTab list = [ WatchTab.All; WatchTab.Pinned; WatchTab.Changes ]
+
+  /// The word a page stores for the open tab, and the one place it is read back.
+  let token (tab: WatchTab) : string =
+    match tab with
+    | WatchTab.All -> "all"
+    | WatchTab.Pinned -> "pinned"
+    | WatchTab.Changes -> "changes"
+
+  let label (tab: WatchTab) : string =
+    match tab with
+    | WatchTab.All -> "All"
+    | WatchTab.Pinned -> "Pinned"
+    | WatchTab.Changes -> "Changes"
+
+  let ofToken (text: string) : Result<WatchTab, ConfigError> =
+    match all |> List.tryFind (fun tab -> token tab = text) with
+    | Some tab -> Ok tab
+    | None -> Error(NotAMember(text, all |> List.map token))
+
+  /// What the tab says when nothing is listed on it, so an empty tab is never a blank pane.
+  let emptyWords (tab: WatchTab) : string =
+    match tab with
+    | WatchTab.All -> "No values are bound in this session yet."
+    | WatchTab.Pinned -> "Nothing is pinned. Pin a value with the pin at the end of its row."
+    | WatchTab.Changes -> "Nothing has changed: no value was tried and not saved, and the program has not changed one."
+
 [<RequireQualifiedAccess>]
 module ViewAxis =
   let all : ViewAxis list =
@@ -332,14 +372,26 @@ module ViewPreset =
     | ViewWorkflow.LiveTesting -> ViewPreset.WatchWindow
     | ViewWorkflow.HotReload -> ViewPreset.Tuner
 
+  /// The preset recommended for a tab of a workflow. The All tab is the workflow's own. Pinned is the few values you chose to watch,
+  /// so it is the plain watch window. Changes is where a tweak is saved or reset, which needs the state and the source beside each
+  /// value, so it is the Tuner in every workflow.
+  let recommendedIn (workflow: ViewWorkflow) (tab: WatchTab) : ViewPreset =
+    match tab with
+    | WatchTab.All -> recommendedFor workflow
+    | WatchTab.Pinned -> ViewPreset.WatchWindow
+    | WatchTab.Changes -> ViewPreset.Tuner
+
 [<RequireQualifiedAccess>]
 module View =
-  /// The built-in view for a workflow: its recommended layout, clipped values, compact rows.
-  let recommended (workflow: ViewWorkflow) : View =
-    { Layout = ViewPreset.layout (ViewPreset.recommendedFor workflow)
+  /// The built-in view for a tab of a workflow: its recommended layout, clipped values, compact rows.
+  let recommendedIn (workflow: ViewWorkflow) (tab: WatchTab) : View =
+    { Layout = ViewPreset.layout (ViewPreset.recommendedIn workflow tab)
       Changes = On
       Values = ValueMode.Clipped
       Row = RowHeight.Compact }
+
+  /// The built-in view for a workflow's All tab.
+  let recommended (workflow: ViewWorkflow) : View = recommendedIn workflow WatchTab.All
 
   /// A view's value on one axis.
   let valueOf (view: View) (axis: ViewAxis) : AxisValue =
@@ -373,19 +425,29 @@ module View =
   /// A preset sets the six layout axes and leaves value printing and row height as they are.
   let withPreset (preset: ViewPreset) (view: View) : View = { view with Layout = ViewPreset.layout preset }
 
-  let detect (workflow: ViewWorkflow) (layout: Layout) : DetectedPreset =
-    match layout = ViewPreset.layout (ViewPreset.recommendedFor workflow) with
+  let detectIn (workflow: ViewWorkflow) (tab: WatchTab) (layout: Layout) : DetectedPreset =
+    match layout = ViewPreset.layout (ViewPreset.recommendedIn workflow tab) with
     | true -> DetectedPreset.IsRecommended
     | false ->
       match ViewPreset.all |> List.tryFind (fun preset -> ViewPreset.layout preset = layout) with
       | Some preset -> DetectedPreset.IsPreset preset
       | None -> DetectedPreset.IsCustom
 
+  let detect (workflow: ViewWorkflow) (layout: Layout) : DetectedPreset = detectIn workflow WatchTab.All layout
+
 [<RequireQualifiedAccess>]
 module ViewSettings =
-  /// The settings key for one axis of one workflow's view.
-  let key (workflow: ViewWorkflow) (axis: ViewAxis) : string =
-    sprintf "bindings.view.%s.%s" (ViewWorkflow.token workflow) (ViewAxis.token axis)
+  /// The settings key for one axis of one tab of one workflow's view. The All tab keeps the key it always had
+  /// (`bindings.view.hotreload.type`), so nothing a person already saved moves; the other tabs put their name before the axis
+  /// (`bindings.view.hotreload.changes.type`).
+  let keyIn (workflow: ViewWorkflow) (tab: WatchTab) (axis: ViewAxis) : string =
+    match tab with
+    | WatchTab.All -> sprintf "bindings.view.%s.%s" (ViewWorkflow.token workflow) (ViewAxis.token axis)
+    | WatchTab.Pinned
+    | WatchTab.Changes -> sprintf "bindings.view.%s.%s.%s" (ViewWorkflow.token workflow) (WatchTab.token tab) (ViewAxis.token axis)
+
+  /// The settings key for one axis of a workflow's All tab.
+  let key (workflow: ViewWorkflow) (axis: ViewAxis) : string = keyIn workflow WatchTab.All axis
 
   /// The setting value an axis value is held as: a toggle for the on/off axes, a member of the axis's closed set for the rest.
   let settingValueOf (value: AxisValue) : SettingValue =
@@ -424,14 +486,18 @@ module ViewSettings =
 
   /// The descriptor of one axis of one workflow's view. The default is the recommended view's value, so an untouched axis
   /// follows the recommendation and nothing is stored.
-  let descriptor (workflow: ViewWorkflow) (axis: ViewAxis) : SettingDescriptor =
-    { Key = key workflow axis
-      Name = sprintf "%s: %s" (ViewWorkflow.label workflow) (ViewAxis.label axis)
+  let descriptorIn (workflow: ViewWorkflow) (tab: WatchTab) (axis: ViewAxis) : SettingDescriptor =
+    { Key = keyIn workflow tab axis
+      Name =
+        match tab with
+        | WatchTab.All -> sprintf "%s: %s" (ViewWorkflow.label workflow) (ViewAxis.label axis)
+        | WatchTab.Pinned
+        | WatchTab.Changes -> sprintf "%s, %s tab: %s" (ViewWorkflow.label workflow) (WatchTab.label tab) (ViewAxis.label axis)
       Description = ViewAxis.description axis
       Category = LiveBindingsView
       Scope = RepoOverridable
       Applicability = Live
-      Default = settingValueOf (View.valueOf (View.recommended workflow) axis)
+      Default = settingValueOf (View.valueOf (View.recommendedIn workflow tab) axis)
       Parse = fun raw -> AxisValue.parse axis raw |> Result.map settingValueOf
       Render =
         fun value ->
@@ -442,15 +508,19 @@ module ViewSettings =
       External = NoExternalSource
       Current = InUseReadEachTime }
 
-  /// All 24 settings: three workflows by eight axes, each key distinct.
+  /// The descriptor of one axis of a workflow's All tab.
+  let descriptor (workflow: ViewWorkflow) (axis: ViewAxis) : SettingDescriptor = descriptorIn workflow WatchTab.All axis
+
+  /// Every setting: each workflow by each tab by each axis, each key distinct.
   let descriptors : SettingDescriptor list =
     [ for workflow in ViewWorkflow.all do
-        for axis in ViewAxis.all -> descriptor workflow axis ]
+        for tab in WatchTab.all do
+          for axis in ViewAxis.all -> descriptorIn workflow tab axis ]
 
-  /// The view a workflow resolves to, given each axis's resolved setting. An axis whose stored value is not one of that axis's
+  /// The view a tab of a workflow resolves to, given each axis's resolved setting. An axis whose stored value is not one of that axis's
   /// (a layer file edited by hand) keeps the recommended value and says its source is the default.
-  let resolveView (workflow: ViewWorkflow) (provenanceOf: ViewAxis -> Provenance) : ResolvedView =
-    let recommended = View.recommended workflow
+  let resolveViewIn (workflow: ViewWorkflow) (tab: WatchTab) (provenanceOf: ViewAxis -> Provenance) : ResolvedView =
+    let recommended = View.recommendedIn workflow tab
     let step (view, sources) axis =
       let provenance = provenanceOf axis
       match axisValueOf axis provenance.Effective with
@@ -458,6 +528,10 @@ module ViewSettings =
       | None -> view, Map.add axis LDefault sources
     let view, sources = ViewAxis.all |> List.fold step (recommended, Map.empty)
     { View = view; Sources = sources }
+
+  /// The view a workflow's All tab resolves to.
+  let resolveView (workflow: ViewWorkflow) (provenanceOf: ViewAxis -> Provenance) : ResolvedView =
+    resolveViewIn workflow WatchTab.All provenanceOf
 
   /// What a write of `chosen` should do, given what the layer below would give for the axis. Equal means nothing to store.
   let planWrite (below: AxisValue) (chosen: AxisValue) : Write =
@@ -550,15 +624,16 @@ module ViewEdit =
     | ViewPreset.GroupedByOrigin -> "groupedbyorigin"
     | ViewPreset.Tuner -> "tuner"
 
-  /// The edit a posted request means, for one workflow: the axis and value tokens are read only for the actions that use them.
-  let parse (workflow: ViewWorkflow) (posted: PostedViewEdit) : Result<ViewEdit, ConfigError> =
+  /// The edit a posted request means, for one tab of one workflow: the axis and value tokens are read only for the actions that use
+  /// them, and the recommended preset is the tab's own.
+  let parseIn (workflow: ViewWorkflow) (tab: WatchTab) (posted: PostedViewEdit) : Result<ViewEdit, ConfigError> =
     let axisOf (raw: string) : Result<ViewAxis, ConfigError> =
       match ViewAxis.all |> List.tryFind (fun candidate -> ViewAxis.token candidate = raw) with
       | Some found -> Ok found
       | None -> Error(NotAMember(raw, ViewAxis.all |> List.map ViewAxis.token))
     let presetOf (raw: string) : Result<ViewPreset, ConfigError> =
       match raw = RecommendedToken with
-      | true -> Ok(ViewPreset.recommendedFor workflow)
+      | true -> Ok(ViewPreset.recommendedIn workflow tab)
       | false ->
         match ViewPreset.all |> List.tryFind (fun candidate -> presetToken candidate = raw) with
         | Some found -> Ok found
@@ -570,6 +645,9 @@ module ViewEdit =
       | ViewAction.ResetAxis -> axisOf posted.Setting |> Result.map ViewEdit.Reset
       | ViewAction.ApplyPreset -> presetOf posted.Choice |> Result.map ViewEdit.Preset
       | ViewAction.ResetEverything -> Ok ViewEdit.ResetAll)
+
+  /// The edit a posted request means, for a workflow's All tab.
+  let parse (workflow: ViewWorkflow) (posted: PostedViewEdit) : Result<ViewEdit, ConfigError> = parseIn workflow WatchTab.All posted
 
   /// The axes a preset sets.
   let private layoutAxes : ViewAxis list =

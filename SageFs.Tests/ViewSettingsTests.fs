@@ -18,10 +18,10 @@ let catalogTests =
   testList "ViewSettings catalog" [
 
     testCase "WHY — every workflow has every axis as its own setting, with its own key, because a key that two settings share would make one overwrite the other" <| fun _ ->
-      let expected = ViewWorkflow.all.Length * ViewAxis.all.Length
-      ViewSettings.descriptors |> List.length |> Expect.equal "every workflow by every axis" expected
+      let expected = ViewWorkflow.all.Length * WatchTab.all.Length * ViewAxis.all.Length
+      ViewSettings.descriptors |> List.length |> Expect.equal "every workflow by every tab by every axis" expected
       ViewSettings.descriptors |> List.map (fun d -> d.Key) |> List.distinct |> List.length |> Expect.equal "all keys distinct" expected
-      expected |> Expect.equal "three workflows by nine axes: the eight of the plan and the changes strip" 27
+      expected |> Expect.equal "three workflows by three tabs by nine axes: the eight of the plan and the changes strip" 81
       ViewSettings.descriptors
       |> List.forall (fun d -> d.Key.StartsWith "bindings.view.")
       |> Expect.isTrue "all under one prefix, so the panel can group them"
@@ -512,4 +512,67 @@ let applyViewEditTests =
         let noRepo = { paths with Repo = NoRepoCheckout }
         SettingsCatalog.applyViewEdit noRepo ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
         |> Expect.isError "there is no app layer to write")
+  ]
+
+/// A view of its own for each tab of the live bindings pane: kept per app and workflow, and not shared between tabs.
+[<Tests>]
+let tabViewTests =
+  let withApp (body: ConfigPaths -> unit) =
+    let root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-tabview-%s" (System.Guid.NewGuid().ToString "N"))
+    let globalDir = System.IO.Path.Combine(root, "global")
+    System.IO.Directory.CreateDirectory globalDir |> ignore
+    try body { GlobalDir = globalDir; Repo = RepoRootAt root }
+    finally (try System.IO.Directory.Delete(root, true) with _ -> ())
+  let applied (paths: ConfigPaths) (workflow: ViewWorkflow) (tab: WatchTab) (edit: ViewEdit) =
+    match SettingsCatalog.applyViewEditIn paths workflow tab ViewScope.ThisApp edit with
+    | Result.Ok() -> ()
+    | Result.Error e -> failtestf "the edit should apply: %s" (ConfigError.describe e)
+  testList "a view for each tab" [
+
+    testCase "WHY — the All tab keeps the keys it always had, so nothing a person saved moves, and the other tabs name themselves before the axis" <| fun _ ->
+      ViewSettings.keyIn ViewWorkflow.HotReload WatchTab.All ViewAxis.TypeColumn |> Expect.equal "unchanged" "bindings.view.hotreload.type"
+      ViewSettings.key ViewWorkflow.HotReload ViewAxis.TypeColumn |> Expect.equal "the old function is the All tab" "bindings.view.hotreload.type"
+      ViewSettings.keyIn ViewWorkflow.HotReload WatchTab.Changes ViewAxis.TypeColumn |> Expect.equal "Changes" "bindings.view.hotreload.changes.type"
+      ViewSettings.keyIn ViewWorkflow.Repl WatchTab.Pinned ViewAxis.RowHeight |> Expect.equal "Pinned" "bindings.view.repl.pinned.row"
+
+    testCase "WHY — every workflow has every axis once for each tab, each with its own key" <| fun _ ->
+      let expected = ViewWorkflow.all.Length * WatchTab.all.Length * ViewAxis.all.Length
+      ViewSettings.descriptors |> List.map (fun d -> d.Key) |> List.distinct |> List.length |> Expect.equal "distinct keys" expected
+
+    testCase "each tab is recommended a view that suits it: Pinned is the plain watch window, Changes is the Tuner, and All is the workflow's own" <| fun _ ->
+      for workflow in ViewWorkflow.all do
+        ViewPreset.recommendedIn workflow WatchTab.Pinned |> Expect.equal "Pinned" ViewPreset.WatchWindow
+        ViewPreset.recommendedIn workflow WatchTab.Changes |> Expect.equal "Changes" ViewPreset.Tuner
+        ViewPreset.recommendedIn workflow WatchTab.All |> Expect.equal "All" (ViewPreset.recommendedFor workflow)
+      (View.recommendedIn ViewWorkflow.Repl WatchTab.Changes).Layout.State |> Expect.equal "the state is beside each value where a tweak is saved" On
+
+    testCase "WHY — a choice made on one tab does not change another: the same axis, saved on Changes, leaves All and Pinned as they were" <| fun _ ->
+      withApp (fun paths ->
+        applied paths ViewWorkflow.Repl WatchTab.Changes (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        (SettingsCatalog.viewForTab paths ViewWorkflow.Repl WatchTab.Changes).View.Row |> Expect.equal "Changes took it" RowHeight.Roomy
+        (SettingsCatalog.viewForTab paths ViewWorkflow.Repl WatchTab.All).View.Row |> Expect.equal "All did not" RowHeight.Compact
+        (SettingsCatalog.viewForTab paths ViewWorkflow.Repl WatchTab.Pinned).View.Row |> Expect.equal "Pinned did not" RowHeight.Compact
+        (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View.Row |> Expect.equal "the old function reads the All tab" RowHeight.Compact)
+
+    testCase "WHY — a reset on a tab clears that tab's choices and no other's" <| fun _ ->
+      withApp (fun paths ->
+        applied paths ViewWorkflow.Repl WatchTab.All (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        applied paths ViewWorkflow.Repl WatchTab.Changes (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
+        applied paths ViewWorkflow.Repl WatchTab.Changes ViewEdit.ResetAll
+        (SettingsCatalog.viewForTab paths ViewWorkflow.Repl WatchTab.Changes).View.Row |> Expect.equal "Changes is back to the recommendation" RowHeight.Compact
+        (SettingsCatalog.viewForTab paths ViewWorkflow.Repl WatchTab.All).View.Row |> Expect.equal "All keeps its choice" RowHeight.Roomy)
+
+    testCase "a choice equal to the tab's own recommendation is not stored, so a tab follows its recommendation when it improves" <| fun _ ->
+      withApp (fun paths ->
+        // State is already on for Changes (the Tuner), so choosing On stores nothing.
+        applied paths ViewWorkflow.Repl WatchTab.Changes (ViewEdit.Set(AxisValue.StateColumn On))
+        let root = match paths.Repo with | RepoRootAt root -> root | NoRepoCheckout -> ""
+        let stored = SettingsStore.readLayer (SettingsStore.repoPath root)
+        Map.containsKey (ViewSettings.keyIn ViewWorkflow.Repl WatchTab.Changes ViewAxis.StateColumn) stored |> Expect.isFalse "nothing stored")
+
+    testCase "the recommended preset on a tab is that tab's: the Changes tab's recommended token is the Tuner" <| fun _ ->
+      ViewEdit.parseIn ViewWorkflow.Repl WatchTab.Changes { Verb = ViewAction.token ViewAction.ApplyPreset; Setting = ""; Choice = ViewEdit.RecommendedToken }
+      |> Expect.equal "the Tuner" (Ok(ViewEdit.Preset ViewPreset.Tuner))
+      ViewEdit.parse ViewWorkflow.Repl { Verb = ViewAction.token ViewAction.ApplyPreset; Setting = ""; Choice = ViewEdit.RecommendedToken }
+      |> Expect.equal "the old function is the All tab" (Ok(ViewEdit.Preset(ViewPreset.recommendedFor ViewWorkflow.Repl)))
   ]
