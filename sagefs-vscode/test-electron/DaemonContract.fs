@@ -48,3 +48,25 @@ let ofHotReloadResponse (response: HotReloadStatusResponse) : HotReloadWatchStat
 type ProofOutcome =
   | Proven
   | DisprovenBy of reason: string
+
+/// Whether the daemon's automatic test runs are waiting for the session, once decoded off the wire. A debug run pauses live
+/// testing while it holds a test and puts it back afterwards, so this is the observable edge of the extension's sequence.
+type LivePauseState =
+  | LiveRunning
+  | LivePaused
+  | PauseUnreadable of wire: string
+
+/// Shape of the raw JSON body from `GET /api/live-testing/status?session=` — only the `Pause` field ("live" or "paused").
+type LiveTestingPauseResponse =
+  abstract Pause: string
+
+let ofPauseResponse (response: LiveTestingPauseResponse) : LivePauseState =
+  match response.Pause with
+  | "live" -> LiveRunning
+  | "paused" -> LivePaused
+  | other -> PauseUnreadable other
+
+/// One test's row as the daemon serves it, once decoded: the status case and the provenance case, or no row.
+type RowVerdict =
+  | NoRow
+  | Row of status: string * provenance: string

@@ -417,6 +417,11 @@ let private runProofSuite (f: Fixture) : Task<int * string> = task {
   match VscodeExtensionTests.VscodeFixture.codeExePath with
   | Some codePath -> psi.Environment["SAGEFS_TE_VSCODE_PATH"] <- codePath
   | None -> ()
+  // The debug case in the suite needs a real debug adapter: the shim extension (netcoredbg as a coreclr adapter), offered
+  // only when netcoredbg is on this machine. Without it the case says so, or fails when SAGEFS_REQUIRE_DEBUGGER=1.
+  match findOnPath [ "netcoredbg" ] with
+  | Some _ -> psi.Environment["SAGEFS_TE_DEBUGGER_SHIM"] <- Path.Combine(vscodeExtensionDir, "test-electron", "coreclr-shim")
+  | None -> ()
   match virtualDisplay with
   | Some (_, display) ->
     // Point this child at our private X server, and remove the Wayland

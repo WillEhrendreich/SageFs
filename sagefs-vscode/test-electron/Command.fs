@@ -18,6 +18,7 @@ type Command =
   | DisableLiveTesting
   | HotReloadWatchAll
   | HotReloadUnwatchAll
+  | DebugTest
 
 /// The command id declared in package.json's contributes.commands — the
 /// exact string `vscode.commands.executeCommand` dispatches on.
@@ -27,3 +28,4 @@ let id =
   | DisableLiveTesting -> "sagefs.disableLiveTesting"
   | HotReloadWatchAll -> "sagefs.hotReloadWatchAll"
   | HotReloadUnwatchAll -> "sagefs.hotReloadUnwatchAll"
+  | DebugTest -> "sagefs.debugTest"

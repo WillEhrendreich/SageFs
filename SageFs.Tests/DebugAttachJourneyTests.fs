@@ -24,11 +24,11 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 /// The debugger is netcoredbg, the one the plugin's own end-to-end test drives. A machine
 /// without it, or with its licence unaccepted, has nothing to check here and says so.
 
-let private client () = new HttpClient(BaseAddress = baseUrl (), Timeout = TestTimeouts.debugHoldRequest)
+let client () = new HttpClient(BaseAddress = baseUrl (), Timeout = TestTimeouts.debugHoldRequest)
 
 /// The debugger, if this machine has one. `dotnet-debug` is the command the tool installs;
 /// `netcoredbg` is the name it had.
-let private debuggerOnPath () : string option =
+let debuggerOnPath () : string option =
   let path = Environment.GetEnvironmentVariable "PATH" |> Option.ofObj |> Option.defaultValue ""
   [ "dotnet-debug"; "netcoredbg" ]
   |> List.tryPick (fun name ->
@@ -41,14 +41,14 @@ let private debuggerOnPath () : string option =
 
 /// The tool asks for its licence the first time it runs. A machine that has not accepted it has
 /// nothing to check here, and the test says which file would say so.
-let private licenceAccepted () =
+let licenceAccepted () =
   let marker = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "dotnet-debug", "license-accepted.txt")
   File.Exists marker
 
 /// Attach the debugger to the process the daemon named, and ask it about the threads it finds
 /// there. The answer is the proof: only a debugger with the process under its hand can list its
 /// threads.
-let private attachAndAsk (debugger: string) (pid: int) : Task<Process * string * string list> =
+let attachAndAsk (debugger: string) (pid: int) : Task<Process * string * string list> =
   task {
     let psi = ProcessStartInfo(debugger, sprintf "attach %d" pid)
     psi.RedirectStandardInput <- true
@@ -100,13 +100,13 @@ let private attachAndAsk (debugger: string) (pid: int) : Task<Process * string *
     return (proc, answer, List.ofSeq said)
   }
 
-let private text (body: string) (name: string) : string =
+let text (body: string) (name: string) : string =
   use doc = JsonDocument.Parse body
   match doc.RootElement.TryGetProperty name with
   | true, el -> el.ToString()
   | _ -> "<missing>"
 
-let private number (body: string) (name: string) : int =
+let number (body: string) (name: string) : int =
   use doc = JsonDocument.Parse body
   match doc.RootElement.TryGetProperty name with
   | true, el when el.ValueKind = JsonValueKind.Number -> el.GetInt32()
@@ -117,7 +117,7 @@ let private number (body: string) (name: string) : int =
 /// host's work and the file watch, so a request on a loaded machine can outlast its budget.
 /// That is a fact about this run, so it is reported and the case steps out, rather than the
 /// whole tier going red over a machine that is busy with something else.
-let private postOrTimeout (http: HttpClient) (path: string) (payload: obj) : Task<(int * string) option> =
+let postOrTimeout (http: HttpClient) (path: string) (payload: obj) : Task<(int * string) option> =
   task {
     try
       let! status, body = postJson http path payload
@@ -129,7 +129,7 @@ let private postOrTimeout (http: HttpClient) (path: string) (payload: obj) : Tas
 
 /// The same for a read. `GetStringAsync` wraps a timeout in an `HttpRequestException`, where the
 /// post path throws the cancellation itself, so both are caught.
-let private getOrTimeout (http: HttpClient) (path: string) : Task<string option> =
+let getOrTimeout (http: HttpClient) (path: string) : Task<string option> =
   task {
     try
       let! body = http.GetStringAsync path
@@ -155,7 +155,7 @@ let private tryAttach (debugger: string) (pid: int) : Task<(string * string list
 
 /// The attach, or None when this machine cannot make one. A machine with no debugger, or with the
 /// debugger's licence unaccepted, has nothing to check here, and says so.
-let private attachOrNothing (pid: int) : Task<(string * string list) option> =
+let attachOrNothing (pid: int) : Task<(string * string list) option> =
   task {
     match debuggerOnPath () with
     | None ->
@@ -170,7 +170,7 @@ let private attachOrNothing (pid: int) : Task<(string * string list) option> =
 /// The daemon's own answer when the machine, rather than the attach, is what went wrong: the
 /// worker could not be reached, or the host was not there. That is a fact about this run, not a
 /// verdict on the attach, so the case reports it and steps out.
-let private machineCondition (status: int) (body: string) : bool =
+let machineCondition (status: int) (body: string) : bool =
   if status = 200 then
     false
   else

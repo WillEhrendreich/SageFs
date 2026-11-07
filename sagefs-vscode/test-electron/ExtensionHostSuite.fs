@@ -14,6 +14,7 @@
 module SageFs.VscodeTestElectron.ExtensionHostSuite
 
 open Fable.Core
+open Fable.Core.JsInterop
 open Vscode
 open SageFs.VscodeTestElectron.Command
 open SageFs.VscodeTestElectron.DaemonContract
@@ -71,10 +72,83 @@ let private assertProven (outcome: JS.Promise<ProofOutcome>) : JS.Promise<unit> 
     | DisprovenBy reason -> failwith reason
   }
 
+// ── Debugging a test through a real debug adapter ────────────────────────
+//
+// NEVER RUN YET (written 2026-11-07 on a machine with no netcoredbg). It compiles and is wired in, and until it has run it is
+// a hypothesis. It runs the real `sagefs.debugTest` command in this extension host with a `coreclr` debug adapter that
+// `test-electron/coreclr-shim` contributes (it execs netcoredbg as a DAP server), and watches the daemon, not the screen:
+// the extension pauses live testing while it holds the test and resumes it once the debug session ends, so seeing the
+// pause and then the resume is the extension's whole hold, attach, release, detach sequence. Then the test's row must carry
+// a verdict and the provenance the daemon names. It proves the extension's sequence against a real adapter. It does not
+// prove Microsoft's adapter attaches.
+
+/// The shim's folder, from the environment the .NET runner sets when netcoredbg is on the machine.
+let private debuggerShim () : string option =
+  let value = NodeProcess.getEnv "SAGEFS_TE_DEBUGGER_SHIM"
+  match box value with
+  | null -> None
+  | _ -> Some value
+
+let private debuggerRequired () : bool = NodeProcess.getEnv "SAGEFS_REQUIRE_DEBUGGER" = "1"
+
+let private installAdvice =
+  "install netcoredbg (https://github.com/Samsung/netcoredbg/releases) and put it on PATH"
+
+/// A test id as a string: the daemon sends a plain string or a one-field union.
+let private idText (testId: obj) : string =
+  match testId with
+  | :? string as text -> text
+  | union -> ((union?Fields: obj array).[0]) :?> string
+
+let private awaitPause (wanted: LivePauseState) (maxAttempts: int) : JS.Promise<unit> =
+  promise {
+    let rec poll attemptsLeft =
+      promise {
+        let! current = getLivePause (mcpPort ()) (sessionId ())
+        match current = wanted, attemptsLeft with
+        | true, _ -> ()
+        | false, 0 -> failwithf "live testing never became %A, it is %A" wanted current
+        | false, _ ->
+          do! sleep 500
+          return! poll (attemptsLeft - 1)
+      }
+    return! poll maxAttempts
+  }
+
+let private debugTestSequence () : JS.Promise<unit> =
+  promise {
+    match debuggerShim () with
+    | None ->
+      match debuggerRequired () with
+      | true -> failwithf "prerequisite missing: no netcoredbg for the debug adapter shim. To fix: %s" installAdvice
+      | false -> printfn "SKIPPED the debug case: no netcoredbg on this machine (%s)" installAdvice
+    | Some _ ->
+      let! before = getEntries (mcpPort ()) (sessionId ())
+      match Array.tryHead before with
+      | None -> failwith "the daemon has no discovered test to debug in this session"
+      | Some entry ->
+        let name = entry.DisplayName
+        let! _ = Commands.executeCommandWith (Command.id DebugTest) (box (idText entry.TestId))
+        do! awaitPause LivePaused 120
+        do! awaitPause LiveRunning 240
+        let! after = getEntries (mcpPort ()) (sessionId ())
+        let row =
+          after
+          |> Array.tryFind (fun e -> e.DisplayName = name)
+          |> Option.map (fun e ->
+            let provenance = match box e.Provenance with | null -> "" | _ -> e.Provenance.Case
+            Row(e.Status.Case, provenance))
+          |> Option.defaultValue NoRow
+        match row with
+        | Row(("Passed" | "Failed"), ("Compiled" | "Evaluated")) -> ()
+        | other -> failwithf "after debugging %s its row should hold a verdict and a provenance, and holds %A" name other
+  }
+
 let run () : JS.Promise<unit> =
   promise {
     let liveTesting () = getLiveTestingState (mcpPort ())
     do! proveCommandReachesState EnableLiveTesting liveTesting ((=) Enabled) "Enabled" 20 |> assertProven
+    do! debugTestSequence ()
     do! proveCommandReachesState DisableLiveTesting liveTesting ((=) Disabled) "Disabled" 20 |> assertProven
 
     let hotReload () = getHotReloadWatchState (dashboardPort ()) (sessionId ())

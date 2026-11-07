@@ -37,6 +37,12 @@ let private options () : TestOptions =
     [| requireEnv "SAGEFS_TE_WORKSPACE"
        sprintf "--user-data-dir=%s" (requireEnv "SAGEFS_TE_USER_DATA_DIR")
        "--disable-workspace-trust" |]
+    // The coreclr debug adapter shim, when the runner found netcoredbg: a second extension in development, so the extension
+    // under test finds a debugger that contributes the `coreclr` type.
+    |> fun args ->
+      match tryEnv "SAGEFS_TE_DEBUGGER_SHIM" with
+      | Some shim -> Array.append args [| sprintf "--extensionDevelopmentPath=%s" shim |]
+      | None -> args
   o.extensionTestsEnv <- NodeProcess.env
   match tryEnv "SAGEFS_TE_VSCODE_PATH" with
   | Some path -> o.vscodeExecutablePath <- path

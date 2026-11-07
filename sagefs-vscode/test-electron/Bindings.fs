@@ -74,3 +74,29 @@ let private fetchHotReloadJson (url: string) : JS.Promise<HotReloadStatusRespons
 let getHotReloadWatchState (mcpPort: string) (sessionId: string) : JS.Promise<HotReloadWatchState> =
   fetchHotReloadJson (sprintf "http://localhost:%s/api/sessions/%s/hotreload" mcpPort sessionId)
   |> Promise.map ofHotReloadResponse
+
+[<Emit("fetch($0).then(r => r.json())")>]
+let private fetchPauseJson (url: string) : JS.Promise<LiveTestingPauseResponse> = jsNative
+
+let getLivePause (mcpPort: string) (sessionId: string) : JS.Promise<LivePauseState> =
+  fetchPauseJson (sprintf "http://localhost:%s/api/live-testing/status?session=%s" mcpPort sessionId)
+  |> Promise.map ofPauseResponse
+
+/// A union case as it is on the wire: `{ Case: "Passed", ... }`.
+type CaseResponse =
+  abstract Case: string
+
+/// One row of `GET /api/live-testing/entries?session=`. `TestId` is a union on the wire, so it stays an `obj` here and is
+/// read by `ExtensionHostSuite`. `Provenance` is absent on a row that has none.
+type EntryResponse =
+  abstract DisplayName: string
+  abstract TestId: obj
+  abstract Status: CaseResponse
+  abstract Provenance: CaseResponse
+
+[<Emit("fetch($0).then(r => r.json())")>]
+let private fetchEntriesJson (url: string) : JS.Promise<EntryResponse array> = jsNative
+
+let getEntries (mcpPort: string) (sessionId: string) : JS.Promise<EntryResponse array> =
+  fetchEntriesJson (sprintf "http://localhost:%s/api/live-testing/entries?session=%s" mcpPort sessionId)
+

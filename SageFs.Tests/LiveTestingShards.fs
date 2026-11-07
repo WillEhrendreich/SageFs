@@ -27,7 +27,8 @@ let tree () : Test =
       [ LiveTestingJourneyTests.journeyTests
         LiveTestingBrowserTests.tests
         LiveTestingLatencyTests.latencyTests
-        DebugAttachJourneyTests.journeyTests ])
+        DebugAttachJourneyTests.journeyTests
+        DebugRowJourneyTests.journeyTests ])
 
 /// The name of a case: its own, which is unique across the tier.
 let nameOf (flat: FlatTest) : string = List.last flat.name

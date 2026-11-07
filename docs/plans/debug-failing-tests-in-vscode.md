@@ -8,12 +8,12 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (steps 1 to 5, 7 and the batch done; step 6, the journeys, and the measurements are open) |
+| Status | In progress (steps 1 to 5, 7, the batch, the simulation, the mutation cases and both journeys are written; the journeys and the measurements have never run) |
 | Size | M for the Next scope, L overall |
 | Branch and worktree | `worktree-agent-ad20eb97ce17072e5` at `.claude/worktrees/agent-ad20eb97ce17072e5` (2026-11-07, merge by the orchestrator) |
 | Last green commit | see the branch log: the last `feat(debug)` commit on it |
-| Next action | Step 6: `SageFs.Tests/DebugRowJourneyTests.fs` under `--integration-lt` (reuse `attachAndAsk` from `DebugAttachJourneyTests`), and the `ExtensionHostSuite.fs` case with a `netcoredbg` adapter shim. Then the three "Measure first" runs, which need a machine with `netcoredbg` (this one has `dotnet-debug` only, licence not accepted) and, for the first, a real attach. Slice 4 evaluated-code half waits on `confirm-builds-without-restarting-the-worker`. |
-| Decisions made | 2026-11-07, the implementing agent: (1) several tests are taken one after another by the client under one attach, not by a batch hold in the host. The host slot still holds one test, the debugger stays on the host between tests, so no daemon wire change, no change to `Hold`, and each verdict records as its test ends. The `Hold` head-and-tail design in "Slice 4" is not built. (2) Auto-pause stays client-driven (slice 3) and is skipped when the person had already paused. (3) A debug verdict overwrites the row and records no duration. The plan's open decisions 1 and 2 follow the plan's recommendations, still for Will to confirm. |
+| Next action | Run the two journeys and the extension-host case on a machine with a debugger (commands under "Written and never run"), then the two "Measure first" runs that still need a real attach (under "Measure first: what it takes to run"). Slice 4's evaluated-code half waits on `confirm-builds-without-restarting-the-worker`. |
+| Decisions made | 2026-11-07, the implementing agent: (1) Accepted by the coordinator 2026-11-07: several tests are taken one after another by the client under one attach, not by a batch hold in the host. The host slot still holds one test, the debugger stays on the host between tests, so no daemon wire change, no change to `Hold`, and each verdict records as its test ends. The `Hold` head-and-tail design in "Slice 4" is not built. (2) Auto-pause stays client-driven (slice 3) and is skipped when the person had already paused. (3) A debug verdict overwrites the row and records no duration. The plan's open decisions 1 and 2 follow the plan's recommendations, still for Will to confirm. |
 | Surprises | The host's `DebugEnd.Attached` names no test, so the daemon keeps a bounded table of the holds it granted (`McpDebugTest.heldTargets`, keyed by session and ticket, taken on the first `Ended`) to say which row a verdict belongs to; that also gives "exactly one dispatch per ticket" at the route. `DebugRunRecord` fields are `OwnerSession`, `HoldTicket`, `Verdict`, `CodeBasis` because `Session`, `Ticket`, `Result` as field names made record expressions elsewhere in Core infer the wrong type. The per-file annotation push is gated on a key that moves with no row verdict, so `testSummaryProjectionKey` gained a debug-run count (a count of verdicts ever recorded, since the ticket log is bounded). `HostAgent.fs` is embedded in the FSI host, so the host cannot reference `DebugRunRecord`; the record lives in the daemon only. The `run_tests` argument is `pattern`; `tools/sagefs-call.fsx` sends `testPattern`, which the daemon ignores, so a filtered call from that driver starts the whole suite. |
 
 ## What done looks like
@@ -147,6 +147,29 @@ First week: steps 1 to 5 are file-disjoint enough for three sub-agents (client a
 - `TestResultsBatchPayload.deriveCompletion` marks a batch Complete when it returned every requested result; a one-test debug record must not look like a full discovery to clients. Clients sweep on `DiscoveryGeneration`, so this should hold. Test 2 should assert the record does not bump `DiscoveryGeneration`.
 - Depends on `confirm-builds-without-restarting-the-worker` for slice 4's evaluated-code half. The Built item `neovim-debug-a-failing-test` shares the routes: any wire change here needs the plugin's `KNOWN_STATUSES` and bodies checked in the same stretch.
 - Enables: nothing in this group depends on it, but the out-of-run record path in step 4 is the pattern `run-tests-reuses-proven-results` follows for a reused verdict.
+
+## Written and never run
+
+Both cases below were written on 2026-11-07 on a machine with no usable debugger (`dotnet-debug` is installed, its licence is not accepted, and there is no `netcoredbg`). They compile and are registered in their tiers. Neither has executed, so each is a hypothesis until it has. The simulation, the mutation cases and every case named in the commit log as passing did run.
+
+| Case | What it checks | Command that runs it |
+|:--|:--|:--|
+| `SageFs.Tests/DebugRowJourneyTests.fs`, two cases in `--integration-lt` | One test debugged: its row in `GET /api/live-testing/entries` shows the verdict the release answered and the provenance the hold named, with no normal run between. Three tests debugged one after another under one attach: each row shows its own verdict. | `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-lt --summary` |
+| `sagefs-vscode/test-electron/ExtensionHostSuite.fs`, `debugTestSequence`, run by the `--integration-host` proof in `VscodeCommandProofTests.fs` | `sagefs.debugTest` in a real extension host, with the `coreclr` adapter the shim in `test-electron/coreclr-shim` contributes (it execs `netcoredbg --interpreter=vscode`). It watches the daemon: live testing goes paused while the test is held and live again after the debug session ends, then the test's row holds a verdict and a provenance. | `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary` (the runner offers the shim only when `netcoredbg` is on PATH) |
+
+With `SAGEFS_REQUIRE_DEBUGGER=1` a machine without a debugger fails both with the install command. Without it they print `SKIPPED` and pass, which is why the gate that wants them sets it. What they cannot show: that Microsoft's `ms-dotnettools.csharp` adapter attaches. That is checked by hand, per release, with the second measurement below.
+
+Guesses in them that the first run will confirm or break: the shape of a `TestId` in the entries JSON (a string or a one-field union), `program` in the shim's `package.json` running a shell script as the adapter, and `netcoredbg` accepting `attach` with `processId` over its `vscode` interpreter.
+
+## Measure first: what it takes to run
+
+Measurement 3 is answered from source and needs no run: a session is never in-process in production (`SageFs.Host/WorkerMain.fs` sets `FsiKind = SessionKinds.Isolated`, and `SageFs.Core/SessionKinds.fs` says production never constructs `InProcess`), so a breakpoint stops the FSI host and the worker's HTTP server keeps answering. The `continue` route is not frozen.
+
+Measurements 1 and 2 need a real attach and a debugger. Will accepts the licence, not an agent:
+
+1. Accept the licence once: `dotnet-debug attach --accept-license-agreement 1`. Put `netcoredbg` on PATH too if the extension-host case is to run (https://github.com/Samsung/netcoredbg/releases).
+2. Measurement 1, a test stopped at a breakpoint for longer than `Timeouts.watchdogGracePeriod` (30 s, scaled): start a daemon and a session on a project with a test, `POST /api/live-testing/debug` with `{ "pattern": "<test name>", "sessionId": "<id>" }`, attach `dotnet-debug attach <pid>` (or `netcoredbg`) to the pid it names, set a breakpoint in the test with the debugger's own command, release with `POST /api/live-testing/debug/continue`, wait two minutes, then `get_session_status` for the session and read the daemon log for a recycle of the host or worker. A recycled host answers whether slice 3 must also teach the watchdog about a held host.
+3. Measurement 2, how long `ms-dotnettools.csharp` takes to attach: in Microsoft's VS Code with the C# extension, run `sagefs.debugTest` on a test of a running session, and read the notification. A `released without debugger` answer means the attach took longer than `Timeouts.debugAttachGrace` (5 s, scaled), and the number to record is the Debug Console's time from the attach request to `Attached`. Repeat three times and write the three numbers here.
 
 ## What sagefs.nvim needs
 
