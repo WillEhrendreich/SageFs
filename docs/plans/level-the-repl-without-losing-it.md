@@ -40,6 +40,16 @@ wire (a 0.6.939 daemon talking to a 0.6.940 worker) or the shadow copy, and this
 `The namespace or module 'SageFs' is not defined.` To check after the upgrade: create a project session on `SageFs.Tests.fsproj` in this
 worktree and read `get_session_status`; Ready means the skew was the daemon's.
 
+Retried 2026-11-07 after the daemon was restarted on master 0.6.940-local (from 4827ab9a). The project session now fails at once, with a
+different and plain cause (`create_project_session` on `SageFs.Tests.fsproj` in this worktree):
+
+    Failed to start worker: The running SageFs daemon (SageFs.Core 0.6.940.0) and the session project's own build (SageFs.Core 0.6.939.0, read from /home/will/Work/SageFs/.claude/worktrees/agent-a9111e89c20aeb7f4/SageFs.Tests/bin/Debug/net11.0/SageFs.Core.dll) come from different builds - rebuild SageFs so both come from one build, then retry.
+
+The cause is this branch's base, not a stale build: `Directory.Build.props` here says `<Version>0.6.939</Version>` (branch base `24ec1101`),
+and master moved to 0.6.940 (`dbfc472a chore: release v0.6.940`). A fresh `dotnet build SageFs.Tests` (Debug) leaves it at 0.6.939.0.
+So a REPL session on this worktree is possible only once the branch is on master (0.6.940 or later); then the worktree's own Core carries
+the new types too. Until then they are proved by build and tests. The earlier 500 and partial-load fault above was against the 0.6.939 daemon.
+
 ## What done looks like
 
 After a metadata delta lands in a `run_app` app, the session brings its FSI host up to the patched build in the background
