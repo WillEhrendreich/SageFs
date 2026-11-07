@@ -11,7 +11,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Status | In progress (step 8 of 8) |
 | Size | M |
 | Branch and worktree | `worktree-agent-aeee5e5c5dad3fa70`, `/home/will/Work/SageFs/.claude/worktrees/agent-aeee5e5c5dad3fa70` |
-| Last green commit | 69619a5e on the branch: unfiltered default suite Trusted (15033 of 15033), ratchet lane Trusted (522 of 522), browser journey passed (filtered to its one case) |
+| Last green commit | 1d187af6 on the branch: unfiltered default suite Trusted (15049 of 15049), ratchet lane Trusted (527 of 527), browser journey passed (filtered to its one case) |
 | Next action | Ship it with the next release (the gate, then `scripts/ship.fsx`, with the maintainer's go). Every `SAGEFS_*` variable `Timeouts.fs` and `SageFsConfig.fs` read has a row, and the count of those without one is 0: a budget table (`variables without a settings row`) that `--ratchets --tighten` can lower and that a new variable fails. The cells the browser journey does not yet cover are listed under "Browser journey". |
 | Decisions made | 2026-11-07, taken from this plan's recommendations by the implementing agent, Will not yet asked: (1) option A, saved values imported into the process environment at start (`SettingsBootstrap.importSaved`), because workers inherit the environment; (2) an edit under an overriding variable or flag is accepted and the row says "Saved X. Ignored while NAME is set."; (3) bind host and identity policy stay read-only, and the bind host row now reads `SAGEFS_BIND_HOST`. |
 | Surprises | See "Surprises" below. |
