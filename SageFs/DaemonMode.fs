@@ -3872,6 +3872,86 @@ let run
   // Create the multi-agent coordination tracker (in-memory, daemon-lifetime)
   let activityTracker = AgentActivityTracker.create ()
 
+  // ── Workspace hygiene that runs itself (docs/plans/hygiene-that-runs-itself.md) ──
+  // The checkouts a cohort holds: a member token bound to a checkout (while its lease has not lapsed), and the cohort's own
+  // integration and trunk checkouts. Every surface that builds the hygiene live facts reads this, so a checkout the conductor
+  // manages reads as in use by a cohort and nothing tidies it.
+  HygieneService.CohortHolds.register (fun () ->
+    let now = DateTime.UtcNow
+    let bound =
+      SageFs.McpTools.capabilityStore.Records
+      |> List.choose (fun record ->
+        match record.Status, record.Grant.Route with
+        | Capability.CapabilityStatus.Active, Capability.RouteBinding.BoundToCheckout root when now < record.Grant.NotAfter && now - record.LastSeen < Cohort.leaseWindow ->
+          Some(Capability.CheckoutRoot.value root, sprintf "member token %s" (Capability.idText record.Id))
+        | Capability.CapabilityStatus.Active, Capability.RouteBinding.BoundToCheckout _
+        | Capability.CapabilityStatus.Active, Capability.RouteBinding.BoundToSession _
+        | Capability.CapabilityStatus.Active, Capability.RouteBinding.Unbound
+        | Capability.CapabilityStatus.Revoked _, _ -> None)
+    let integration =
+      match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
+      | Some binding -> [ binding.WorktreePath, "the cohort's integration checkout"; binding.TrunkPath, "the cohort's trunk checkout" ]
+      | None -> []
+    bound @ integration)
+
+  // The sweep: observe the agent worktrees, save uncommitted work to a salvage branch, and (when `hygiene.autoTidy` is on)
+  // tidy what is provably safe. Once at start, on a timer, and whenever a session stops. One at a time: a pass that is still
+  // running makes the next trigger a no-op, and the timer is rooted until shutdown.
+  let hygieneSweepGate = new System.Threading.SemaphoreSlim(1, 1)
+  let hygieneSessionPairs () : (string * string) list =
+    SessionManager.QuerySnapshot.allSessions (readSnapshot())
+    |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, s.WorkingDirectory)
+  /// The repositories the daemon has a record of: where a live session is, and where a session it made once ran, if the
+  /// directory still exists.
+  let hygieneRepositories () : string list =
+    let owners = HygieneService.OwnerLedger.read DaemonState.SageFsDir
+    (hygieneSessionPairs () |> List.map snd) @ (owners |> List.map (fun r -> r.WorkingDirectory) |> List.filter System.IO.Directory.Exists)
+    |> List.choose HygieneService.mainRepoOf
+    |> List.distinct
+  let sweepWorkspace () : unit =
+    match hygieneSweepGate.Wait 0 with
+    | false -> ()
+    | true ->
+      Task.Run(fun () ->
+        task {
+          try
+            try
+              for repo in hygieneRepositories () do
+                let loc = HygieneService.locationsFor repo
+                let live () = HygieneService.liveFactsWith (hygieneSessionPairs ()) (Some activityTracker)
+                let! report = HygieneSweep.sweep (HygieneSweep.realContext loc live)
+                match HygieneSweep.describe report with
+                | Some line ->
+                  log.LogInformation("{Sweep}", line)
+                  let! _ = HygieneService.Cache.refresh loc live
+                  ()
+                | None -> ()
+            with ex when not (ex :? OutOfMemoryException) -> log.LogWarning("Workspace hygiene sweep failed: {Error}", ex.Message)
+          finally
+            hygieneSweepGate.Release() |> ignore
+        } :> Task)
+      |> ignore
+  let hygieneSweepIntervalMs = int Timeouts.hygieneSweepInterval.TotalMilliseconds
+  let mutable hygieneSweepTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let hygieneSweepCallback _ =
+    try
+      sweepWorkspace ()
+    finally
+      if not (isNull hygieneSweepTimerRef) then
+        try hygieneSweepTimerRef.Change(hygieneSweepIntervalMs, System.Threading.Timeout.Infinite) |> ignore
+        with :? System.ObjectDisposedException -> ()
+  let hygieneSweepTimer =
+    let t = new System.Threading.Timer(
+      System.Threading.TimerCallback(hygieneSweepCallback),
+      null, hygieneSweepIntervalMs, System.Threading.Timeout.Infinite)
+    hygieneSweepTimerRef <- t
+    t
+  sweepWorkspace ()
+  stateChangedEvent.Publish.Add(fun change ->
+    match change with
+    | SessionStopped _ -> sweepWorkspace ()
+    | other -> ())
+
   let getDaemonHealth () : SageFs.Features.HealthSnapshot option =
     let model = elmRuntime.GetModel()
     let sessions =
@@ -5245,6 +5325,9 @@ let run
   | TimerStop.Joined -> ()
   // Dispose activity cleanup timer (best-effort, no wait needed — cleanup is idempotent)
   try activityCleanupTimer.Dispose()
+  with :? System.ObjectDisposedException -> ()
+  // Dispose the hygiene sweep timer (best-effort — a pass is safe to cut short: every step looks again before it acts)
+  try hygieneSweepTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
   // Dispose the orphaned-temp-dir sweep timer (best-effort — the sweep itself is idempotent)
   try orphanTempDirSweepTimer.Dispose()

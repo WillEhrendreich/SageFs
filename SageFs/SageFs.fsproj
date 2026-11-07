@@ -108,6 +108,8 @@
         <Compile Include="HygieneLedgerStore.fs" />
         <Compile Include="HygieneEdge.fs" />
         <Compile Include="HygieneService.fs" />
+        <Compile Include="HygieneSweep.fs" />
+        <Compile Include="HygieneRescue.fs" />
         <Compile Include="FrictionReviewView.fs" />
         <Compile Include="McpFrictionRecorder.fs" />
         <Compile Include="PageChoices.fs" />

@@ -67,6 +67,9 @@ type UnknownReason =
   | NotReadable of detail: string
   /// Nothing says how long this kind of thing is kept or who owns it.
   | NoRuleToJudgeBy
+  /// A directory that looks like the leftover of a tool's run (gate tier work) with no process using it and nothing in
+  /// the current layout that owns it. SageFs lists it so a person looks, and never removes it.
+  | NoCurrentOwner of detail: string
 
 /// What proves a leftover is still being used.
 [<RequireQualifiedAccess>]
@@ -84,6 +87,9 @@ type InUseReason =
   | RunsFrom of pid: int * name: string
   /// A gate run for this repo is about to use it.
   | InvokingGate of repo: string
+  /// A cohort knows it as a member's checkout (a member token is bound to it, or it is the cohort's own integration or
+  /// trunk checkout), so the conductor manages it and nothing else may tidy it.
+  | HeldByCohort of holder: string
 
 /// What the world says about who made a leftover and whether they are still around.
 [<RequireQualifiedAccess>]
@@ -457,6 +463,7 @@ module UnknownReason =
     | UnknownReason.OwnerLivenessUndecidable detail -> sprintf "whether its owner is alive could not be decided (%s)" detail
     | UnknownReason.NotReadable detail -> sprintf "it could not be read (%s)" detail
     | UnknownReason.NoRuleToJudgeBy -> "nothing says how long it is kept or who owns it"
+    | UnknownReason.NoCurrentOwner detail -> sprintf "no process uses it and nothing in the gate's current layout owns it (%s); look before removing it" detail
 
 module InUseReason =
   let describe (reason: InUseReason) : string =
@@ -472,6 +479,7 @@ module InUseReason =
     | InUseReason.LockedByLiveProcess(pid, reason) -> sprintf "locked by a live process (pid %d): %s" pid reason
     | InUseReason.RunsFrom(pid, name) -> sprintf "%s (pid %d) is running from it" name pid
     | InUseReason.InvokingGate repo -> sprintf "the gate run for %s is about to use it" repo
+    | InUseReason.HeldByCohort holder -> sprintf "a cohort holds it (%s), so the conductor manages it" holder
 
 module MergeHow =
   let describe (how: MergeHow) : string =
@@ -552,6 +560,36 @@ module Standing =
     | Standing.DirtyGenerated _ -> true
     | Standing.InUse _
     | Standing.CleanButUnmerged _
+    | Standing.DirtyReal _
+    | Standing.Orphaned _
+    | Standing.Expired _
+    | Standing.WithinRetention _
+    | Standing.Newest _
+    | Standing.Superseded _
+    | Standing.Unknown _ -> false
+
+  /// Whether the worktree has uncommitted files that are somebody's work: the ones a salvage commit holds.
+  let hasUncommittedWork (standing: Standing) : bool =
+    match standing with
+    | Standing.DirtyReal _ -> true
+    | Standing.InUse _
+    | Standing.Merged _
+    | Standing.CleanButUnmerged _
+    | Standing.DirtyGenerated _
+    | Standing.Orphaned _
+    | Standing.Expired _
+    | Standing.WithinRetention _
+    | Standing.Newest _
+    | Standing.Superseded _
+    | Standing.Unknown _ -> false
+
+  /// Whether something is using it right now, which is what makes a worktree "in use" and not "quiet" in the ledger.
+  let isInUse (standing: Standing) : bool =
+    match standing with
+    | Standing.InUse _ -> true
+    | Standing.Merged _
+    | Standing.CleanButUnmerged _
+    | Standing.DirtyGenerated _
     | Standing.DirtyReal _
     | Standing.Orphaned _
     | Standing.Expired _

@@ -160,11 +160,46 @@ let private sdkVersionFor (workingDirectory: string) : string option =
       Some v
     | Result.Error _ -> None
 
+/// What `GET /api/sessions` says that hygiene needs: the sessions as (id, working directory) and the checkouts a cohort holds
+/// as (path, who). A daemon that sends no `cohortHeld` holds none, and a reply that is not that shape says nothing.
+let parseSessionsReply (json: string) : (string * string) list * (string * string) list =
+  try
+    use doc = System.Text.Json.JsonDocument.Parse json
+    let root = doc.RootElement
+    let sessions =
+      [ for s in root.GetProperty("sessions").EnumerateArray() ->
+          s.GetProperty("id").GetString(), s.GetProperty("workingDirectory").GetString() ]
+    let held =
+      match root.TryGetProperty "cohortHeld" with
+      | true, entries -> [ for h in entries.EnumerateArray() -> h.GetProperty("path").GetString(), h.GetProperty("holder").GetString() ]
+      | false, _ -> []
+    sessions, held
+  with
+  | :? System.Text.Json.JsonException
+  | :? System.Collections.Generic.KeyNotFoundException
+  | :? InvalidOperationException -> [], []
+
+/// Where the daemon says which checkouts a cohort holds. Registered once, at daemon start, by the code that can see the cohort
+/// (the capability table and the integration binding are compiled after this file); every surface that builds live facts
+/// reads it here, so the dashboard, the MCP tools, the CLI and the sweep agree. Nothing registered means no cohort holds
+/// anything, which is what a process that is not a daemon should say.
+module CohortHolds =
+  let private source = ConcurrentDictionary<int, unit -> (string * string) list>()
+
+  let register (read: unit -> (string * string) list) : unit = source.[0] <- read
+
+  /// The checkouts held now, as (path, who holds it).
+  let current () : (string * string) list =
+    match source.TryGetValue 0 with
+    | true, read -> read ()
+    | false, _ -> []
+
 let liveFactsOf (sessions: (string * string) list) (owners: OwnerRecord list) (isConnected: string -> bool) : LiveFacts =
   { Sessions = sessions
     CurrentSdkVersions = sessions |> List.map snd |> List.distinct |> List.choose sdkVersionFor |> List.distinct
     Owners = OwnerLedger.toLive owners isConnected
-    LastActive = HygieneLedgerStore.lastActive DaemonState.SageFsDir DateTime.UtcNow }
+    LastActive = HygieneLedgerStore.lastActive DaemonState.SageFsDir DateTime.UtcNow
+    CohortHeld = CohortHolds.current () }
 
 // ─── Snapshots ──────────────────────────────────────────────────────────
 
@@ -369,6 +404,10 @@ let liveFactsWith (sessions: (string * string) list) (tracker: AgentActivityTrac
 
 // ─── Tidy ───────────────────────────────────────────────────────────────
 
+/// The journal every real tidy writes to: one line per removal, in the ledger under the repository's data directory.
+let ledgerJournal (loc: Locations) : HygieneEdge.Journal =
+  fun line -> HygieneLedgerStore.append loc.DataDir [ line ]
+
 [<RequireQualifiedAccess>]
 type TidyOutcome =
   | Tidied of Report * Snapshot
@@ -387,7 +426,7 @@ let tidy (spelled: Locations) (live: unit -> LiveFacts) (shown: PlanId) : Task<T
     | Result.Ok confirmation ->
       Cache.beginTidy loc.Repo
       try
-        let effects = HygieneEdge.effects (HygieneEdge.realContext loc live)
+        let effects = HygieneEdge.effectsWith (ledgerJournal loc) (HygieneEdge.realContext loc live)
         let! report = Executor.runAsync effects (rootsOf loc) confirmation plan
         let! after = take loc (live ())
         Cache.put after
@@ -416,7 +455,7 @@ let pruneHostCacheWith (ctx: HygieneEdge.EdgeContext) (loc: Locations) : Task<Re
     let plan = Planner.plan leftovers
     match Confirmation.safeOnly plan plan.Id with
     | Result.Error _ -> return { Executed = []; ReclaimedBytes = 0L }
-    | Result.Ok confirmation -> return! Executor.runAsync (HygieneEdge.effects ctx) (rootsOf loc) confirmation plan
+    | Result.Ok confirmation -> return! Executor.runAsync (HygieneEdge.effectsWith (ledgerJournal loc) ctx) (rootsOf loc) confirmation plan
   }
 
 let pruneHostCache (loc: Locations) (live: unit -> LiveFacts) : Task<Report> =

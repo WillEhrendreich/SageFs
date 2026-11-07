@@ -127,3 +127,55 @@ let graceTests =
         | _ -> true
       | _ -> true
   ]
+
+[<Tests>]
+let graceZeroTests =
+  testList "Workspace hygiene: a grace of zero means no grace" [
+
+    testCase "WHY — the grace setting row accepts 0, where every other age row refuses it" <| fun _ ->
+      let row = SageFs.EnvBackedRows.descriptors |> List.find (fun d -> d.Key = "data.finishedWorktreeGraceDays")
+      match row.Parse "0" with
+      | Ok value -> row.Render value |> Expect.equal "0 reads back as 0, not as the default" "0"
+      | Error why -> failtestf "the plan says 0 means no grace, and the row refused it: %A" why
+      let other = SageFs.EnvBackedRows.descriptors |> List.find (fun d -> d.Key = "data.workerLogMaxAgeDays")
+      other.Parse "0" |> Expect.isError "an ordinary age still refuses 0"
+
+    testPropertyWithConfig cfg "PROPERTY: the grace row accepts exactly the days from zero to the longest age" <| fun (days: float) ->
+      let row = SageFs.EnvBackedRows.descriptors |> List.find (fun d -> d.Key = "data.finishedWorktreeGraceDays")
+      let text = days.ToString("R", Globalization.CultureInfo.InvariantCulture)
+      match row.Parse text with
+      | Ok _ -> days >= 0.0 && days <= SageFs.Timeouts.settingAgeLongestDays
+      | Error _ -> not (days >= 0.0 && days <= SageFs.Timeouts.settingAgeLongestDays)
+
+    testCase "WHY — the environment variable's 0 is zero, not the one-day default" <| fun _ ->
+      SageFs.DataRetention.graceDaysOf "0" 1.0 |> Expect.equal "zero stays zero" TimeSpan.Zero
+      SageFs.DataRetention.graceDaysOf "0.5" 1.0 |> Expect.equal "half a day" (HygieneAges.days 0.5)
+      for unusable in [ null; ""; "soon"; "-1"; "NaN"; "1e999" ] do
+        SageFs.DataRetention.graceDaysOf unusable 1.0 |> Expect.equal (sprintf "%A falls back to the default" unusable) HygieneAges.oneDay
+
+    testCase "a worktree merged a moment ago is reclaimable at once when the grace is zero" <| fun _ ->
+      let s = { worktree "a" with LastTouched = now; Retention = Retention.KeepFor TimeSpan.Zero }
+      standingOf now s |> Expect.equal "no grace, no wait" (Standing.Merged MergeHow.Ancestor)
+  ]
+
+[<Tests>]
+let heldLineTests =
+  testList "Workspace hygiene: work that exists nowhere else is said the same way everywhere" [
+
+    testCase "the status line, the plan text and the dashboard card all lead with the same sentence" <| fun _ ->
+      let leftovers = [ worktree "unmerged" |> unmergedWith [] |> idleFor (HygieneAges.days 38.0) ] |> List.map (classify now)
+      let plan = Planner.plan leftovers
+      let summary = SageFs.WorkspaceHygieneRender.summarize leftovers plan
+      let held = SageFs.WorkspaceHygieneRender.heldLine summary |> Option.defaultWith (fun () -> failtest "expected a held line")
+      held |> Expect.equal "the sentence" "1 worktree holds work that is nowhere else (oldest idle 38d, 1000 B)"
+      (SageFs.WorkspaceHygieneRender.nudge summary |> Option.defaultValue "") |> Expect.stringContains "the status line carries it" held
+      let rendered = SageFs.WorkspaceHygieneRender.renderPlan leftovers plan
+      let lines = rendered.Split('\n')
+      lines.[1] |> Expect.stringContains "the plan text leads with it, right after its title" held
+      lines.[1] |> Expect.stringContains "and names the way to keep the work" "sagefs hygiene --rescue"
+
+    testCase "with nothing held there is no such line" <| fun _ ->
+      let leftovers = [ worktree "merged" ] |> List.map (classify now)
+      let summary = SageFs.WorkspaceHygieneRender.summarize leftovers (Planner.plan leftovers)
+      SageFs.WorkspaceHygieneRender.heldLine summary |> Expect.isNone "nothing to say"
+  ]

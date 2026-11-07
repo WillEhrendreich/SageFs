@@ -100,16 +100,38 @@ let refreshSoon (ctx: McpContext) (workingDirectory: string) : unit =
     HygieneService.Cache.refreshAsync loc (fun () -> daemonLiveFacts ctx) |> ignore
   | _ -> ()
 
-/// The line for a reply about a session in `workingDirectory`: the nudge from the cached snapshot, and a refresh in
-/// the background when there is none yet.
+/// What a session in an agent worktree is told about it: the daemon records the worktree, saves its uncommitted files, and
+/// removes it only after its work has reached the base branch and it has been quiet for the grace. Nothing for a directory
+/// that is not under the repository's agent worktree area.
+let agentWorktreeNote (repo: string) (workingDirectory: string) : string option =
+  let area = Guard.normalize (IO.Path.Combine(repo, ".claude", "worktrees"))
+  let directory = Guard.normalize workingDirectory
+  match directory.StartsWith(area + "/", StringComparison.Ordinal) with
+  | false -> None
+  | true ->
+    let name = directory.Substring(area.Length + 1).Split('/').[0]
+    Some(
+      sprintf
+        "this directory is an agent worktree (%s): the daemon records it, saves its uncommitted files to salvage/%s, and removes it only after its work has reached the base branch and it has been quiet for %s. `sagefs hygiene` lists it, and `sagefs hygiene --rescue %s` keeps its work on a branch."
+        name name (formatAge DataRetention.finishedWorktreeGrace) name)
+
+/// The line for a reply about a session in `workingDirectory`: the note when it is an agent worktree, then the nudge from
+/// the cached snapshot, and a refresh in the background when there is none yet.
 let hygieneLine (ctx: McpContext) (workingDirectory: string) : string option =
   match ctx.Dispatch, HygieneService.mainRepoOf workingDirectory with
   | Some _, Some repo ->
-    match HygieneService.Cache.tryGet repo with
-    | Some snapshot -> nudge snapshot.Summary
-    | None ->
-      refreshSoon ctx workingDirectory
-      None
+    let note = agentWorktreeNote repo (HygieneGather.canonicalPath workingDirectory)
+    let nudgeLine =
+      match HygieneService.Cache.tryGet repo with
+      | Some snapshot -> nudge snapshot.Summary
+      | None ->
+        refreshSoon ctx workingDirectory
+        None
+    match note, nudgeLine with
+    | None, None -> None
+    | Some n, None -> Some n
+    | None, Some l -> Some l
+    | Some n, Some l -> Some(n + "\n" + l)
   | _ -> None
 
 /// Refresh the snapshot of every repository a live session is in: called when a session is stopped.

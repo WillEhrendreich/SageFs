@@ -284,10 +284,13 @@ type LiveFacts =
     Owners: (string * Owner * AgentConnection) list
     /// When each worktree was last in use, as the hygiene ledger recorded it (path, then time). A finished worktree's grace
     /// is measured from the later of this and what git's own files for it say.
-    LastActive: (string * DateTime) list }
+    LastActive: (string * DateTime) list
+    /// The checkouts a cohort holds, as (path, who holds it): a member token bound to a checkout, the cohort's integration and
+    /// trunk checkouts. A directory here is managed by the conductor, so it is in use and nothing tidies it.
+    CohortHeld: (string * string) list }
 
 module LiveFacts =
-  let none : LiveFacts = { Sessions = []; CurrentSdkVersions = []; Owners = []; LastActive = [] }
+  let none : LiveFacts = { Sessions = []; CurrentSdkVersions = []; Owners = []; LastActive = []; CohortHeld = [] }
 
 type Locations =
   { Repo: string
@@ -360,7 +363,8 @@ let canonicalScan (scan: Scan) : Scan =
         { scan.Live with
             Sessions = scan.Live.Sessions |> List.map (fun (id, wd) -> id, canonicalPath wd)
             Owners = scan.Live.Owners |> List.map (fun (wd, owner, presence) -> canonicalPath wd, owner, presence)
-            LastActive = scan.Live.LastActive |> List.map (fun (path, at) -> canonicalPath path, at) } }
+            LastActive = scan.Live.LastActive |> List.map (fun (path, at) -> canonicalPath path, at)
+            CohortHeld = scan.Live.CohortHeld |> List.map (fun (path, holder) -> canonicalPath path, holder) } }
 
 // ─── Sizes and times ───────────────────────────────────────────────────
 
@@ -469,7 +473,9 @@ let private usesOf (scan: Scan) (path: string) : InUseReason list =
     for p in scan.Processes do
       match p.Cwd with
       | CwdState.At cwd when under path cwd -> yield InUseReason.ProcessWorkingDirectory(p.Pid, (if p.Name = "" then "process" else p.Name))
-      | _ -> () ]
+      | _ -> ()
+    for (held, holder) in scan.Live.CohortHeld do
+      if under path held then yield InUseReason.HeldByCohort holder ]
 
 /// Who made the session that ran in this path, and whether they are gone, so the plan can say "made by agent X, which is gone".
 let private ownerOf (scan: Scan) (path: string) : Owner * Lineage =
@@ -570,22 +576,50 @@ let private worktreeCandidate (scan: Scan) (baseRef: Lazy<Task<string option>>) 
                 Git = git }
         } }
 
-/// A worktree git reports that is under no root SageFs manages: listed so the orchestrator sees it, never touched.
-let private outsideCandidate (scan: Scan) (entry: WorktreeEntry) : Candidate =
+/// A worktree git reports that is under no root SageFs manages: listed so the orchestrator sees it, never removed. It is
+/// asked about its work all the same, so work that exists nowhere else is named wherever it sits: commits the base lacks and
+/// uncommitted files make it `CleanButUnmerged` or `DirtyReal`, which are only ever presented with the command that keeps the
+/// work. A clean worktree that is merged stays `Unknown`: it is not SageFs's to say it is safe to remove, and the path gate
+/// would refuse the removal anyway.
+let private outsideCandidate (scan: Scan) (baseRef: Lazy<Task<string option>>) (entry: WorktreeEntry) : Candidate =
   let path = normalize entry.Path
   let target = Target.Directory path
+  let notOurs = GitEvidence.GitUnreadable(UnknownReason.PathOutsideKnownRoots path)
   { Target = target
     Kind = LeftoverKind.AgentWorktree
     Build =
-      immediately (fun () ->
-        { subjectBase LeftoverKind.AgentWorktree target with
-            SizeBytes = directorySize path
-            LastTouched = touched path
-            Repo = RepoLink.InRepo scan.Loc.Repo
-            Branch = entry.Branch
-            Display = path
-            Uses = usesOf scan path
-            Git = GitEvidence.GitUnreadable(UnknownReason.PathOutsideKnownRoots path) }) }
+      fun () ->
+        task {
+          let! baseRefIs = baseRef.Value
+          let! evidence =
+            task {
+              match baseRefIs with
+              | None -> return notOurs
+              | Some b ->
+                let! merge = mergeEvidence scan.Git scan.Loc.Repo b (match entry.Branch with | BranchLabel.OnBranch n -> n | _ -> entry.Head)
+                match! changedFiles scan.Git path with
+                | Result.Error _ -> return notOurs
+                | Result.Ok files ->
+                  let unmerged =
+                    match merge with
+                    | MergeEvidence.UnmergedCommits _ -> true
+                    | MergeEvidence.MergedInto _
+                    | MergeEvidence.MergeNotDecidable _ -> false
+                  let changed = files |> List.exists (fun f -> f.Origin = ChangeOrigin.Real)
+                  match unmerged || changed with
+                  | true -> return GitEvidence.Worktree(merge, files)
+                  | false -> return notOurs
+            }
+          return
+            { subjectBase LeftoverKind.AgentWorktree target with
+                SizeBytes = directorySize path
+                LastTouched = touched path
+                Repo = RepoLink.InRepo scan.Loc.Repo
+                Branch = entry.Branch
+                Display = path
+                Uses = usesOf scan path
+                Git = evidence }
+        } }
 
 let private branchCandidates (scan: Scan) (baseRef: Lazy<Task<string option>>) (entries: WorktreeEntry list) : Task<Candidate list> =
   task {
@@ -656,6 +690,55 @@ let private gateCandidates (scan: Scan) : Candidate list =
         immediately (fun () ->
           let subject = GateReaper.describe fs scan.Now scan.Loc.GateDir [ scan.Loc.Repo ] None entry
           { subject with Uses = subject.Uses @ usesOf scan dir }) })
+
+/// The directory beside the repository where tier work would sit, or nothing for a repository at a filesystem root.
+let private besideRepo (repo: string) : string =
+  match Path.GetDirectoryName(repo.TrimEnd('/', '\\')) with
+  | null -> ""
+  | parent -> normalize parent
+
+/// Whether a path is a `*.tiers` directory directly beside the repository.
+let private isTiersBeside (repo: string) (path: string) : bool =
+  let beside = besideRepo repo
+  let p = normalize path
+  beside <> "" && p.EndsWith(".tiers", StringComparison.Ordinal) && normalize (Path.GetDirectoryName p) = beside
+
+/// A process that is running a pipeline from the repository: its tier work is in use whatever its working directory is.
+let private pipelineUses (scan: Scan) : InUseReason list =
+  scan.Processes
+  |> List.choose (fun p ->
+    match p.Cwd with
+    | CwdState.At cwd when under scan.Loc.Repo cwd && (p.CommandLine.Contains "ci-pipeline" || p.CommandLine.Contains "local-gate") ->
+      Some(InUseReason.GateRunning p.Pid)
+    | CwdState.At _
+    | CwdState.Deleted _
+    | CwdState.Unreadable -> None)
+
+/// The `<name>.tiers` directories beside the repository: where `ci-pipeline.fsx` keeps each tier's private clone, log and data
+/// directory when it is run from a checkout by hand (`tierWork`). The gate SageFs reaps keeps its own tier work inside its
+/// state directory, so it never lands here. One of these that no process uses and that no pipeline run from the repository is
+/// producing is listed as a thing to look at (one measured 138 GB), and never removed by SageFs on its own: its name says
+/// what wrote it and nothing says it is finished.
+let private tiersCandidates (scan: Scan) : Candidate list =
+  let gateRoot = normalize scan.Loc.GateDir
+  match besideRepo scan.Loc.Repo with
+  | "" -> []
+  | beside ->
+    childDirs beside
+    |> List.filter (fun dir -> isTiersBeside scan.Loc.Repo dir && not (under gateRoot dir))
+    |> List.map (fun dir ->
+      let target = Target.Directory dir
+      { Target = target
+        Kind = LeftoverKind.GateTierClone
+        Build =
+          immediately (fun () ->
+            { subjectBase LeftoverKind.GateTierClone target with
+                SizeBytes = directorySize dir
+                LastTouched = touched dir
+                Repo = RepoLink.InRepo scan.Loc.Repo
+                Display = dir
+                Uses = usesOf scan dir @ pipelineUses scan
+                Git = GitEvidence.GitUnreadable(UnknownReason.NoCurrentOwner(sprintf "pipeline tier work beside %s" scan.Loc.Repo)) }) })
 
 /// The SDK version a host was built with, from its content-addressed name: `sdk-<version>-<hash>`.
 let sdkVersionOfHostKey (key: string) : string =
@@ -889,7 +972,7 @@ let candidatesOf (scan: Scan) (wanted: LeftoverKind -> bool) : Task<Candidate li
                 match under managedRoot p, under gateRoot p with
                 | true, _ -> Some(worktreeCandidate scan baseRef e LeftoverKind.AgentWorktree)
                 | _, true -> None // a gate checkout: the gate's candidates own it
-                | _ -> Some(outsideCandidate scan e)))
+                | _ -> Some(outsideCandidate scan baseRef e)))
           let! branches =
             match wanted LeftoverKind.StaleBranch with
             | true -> branchCandidates scan baseRef all
@@ -901,6 +984,7 @@ let candidatesOf (scan: Scan) (wanted: LeftoverKind -> bool) : Task<Candidate li
       @ (match [ LeftoverKind.GateCheckout; LeftoverKind.GateTierClone; LeftoverKind.GatePassRecord ] |> List.exists wanted with
          | true -> gateCandidates scan |> List.filter (fun c -> wanted c.Kind)
          | false -> [])
+      @ kindIf LeftoverKind.GateTierClone (fun () -> tiersCandidates scan)
       @ kindIf LeftoverKind.HostCacheEntry (fun () -> hostCandidates scan)
       @ kindIf LeftoverKind.WorkerLogFile (fun () -> workerLogCandidates scan)
       @ kindIf LeftoverKind.TempRunDir (fun () -> tempCandidates scan)
@@ -929,6 +1013,7 @@ let kindsOfTarget (loc: Locations) (target: Target) : LeftoverKind list =
         yield LeftoverKind.GateTierClone
         yield LeftoverKind.GatePassRecord
       if under loc.HostCacheDir p then yield LeftoverKind.HostCacheEntry
+      if isTiersBeside loc.Repo p then yield LeftoverKind.GateTierClone
       if under loc.TempDir p then yield LeftoverKind.TempRunDir ]
     |> List.distinct
     |> function

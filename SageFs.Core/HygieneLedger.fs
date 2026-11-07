@@ -31,6 +31,8 @@ type Tip =
 type MergeState =
   | MergedBy of MergeHow
   | NotMerged
+  /// What was removed holds no work (a log, a temp run, a registry entry), so there is no merge to speak of.
+  | NotAboutWork
 
 /// One thing removed, with where its tip was, so it can be restored.
 type Removal =
@@ -129,6 +131,13 @@ module Maker =
     | Maker.SessionOwner(name, _) -> sprintf "session owner %s" name
     | Maker.MakerUnrecorded -> "unknown maker"
 
+/// Whether the automatic tidy may take a merged worktree yet, by what the ledger has seen of it.
+[<RequireQualifiedAccess>]
+type Clearance =
+  | Cleared
+  /// The ledger has not seen it quiet for the whole grace (or has not seen it at all): not before then.
+  | NotYet of until: DateTime
+
 module Ledger =
   let private apply (records: Map<string, WorktreeRecord>) (line: LedgerLine) : Map<string, WorktreeRecord> =
     let update (path: string) (f: WorktreeRecord -> WorktreeRecord) =
@@ -198,6 +207,40 @@ module Ledger =
     match record.Presence with
     | Presence.RemovedByHygiene -> false
     | Presence.OnDisk -> now < resumableUntil grace now record
+
+  /// Agent worktrees are the exception that needs a ledger entry (Will, 2026-11-07: they are why the pile exists). The
+  /// automatic tidy takes a merged worktree only when the ledger has a record of it, has seen it quiet, and has seen it quiet
+  /// for the whole grace. A worktree the ledger has never seen waits a full grace from now, however old git says it is.
+  let clearance (grace: TimeSpan) (now: DateTime) (known: Map<string, WorktreeRecord>) (path: string) : Clearance =
+    match Map.tryFind path known with
+    | None -> Clearance.NotYet(now + grace)
+    | Some record ->
+      match record.Presence, record.Activity with
+      | Presence.RemovedByHygiene, _
+      | Presence.OnDisk, RecordedActivity.RecordedInUse -> Clearance.NotYet(now + grace)
+      | Presence.OnDisk, RecordedActivity.RecordedQuietSince since ->
+        let until = since + grace
+        match now >= until with
+        | true -> Clearance.Cleared
+        | false -> Clearance.NotYet until
+
+  /// The leftovers as the automatic tidy sees them: a merged agent worktree the ledger has not cleared is shown as kept until
+  /// the time it could be, so the plan the sweep makes, and says, is the plan it runs. Nothing else is changed, and nothing
+  /// becomes more reclaimable than it was.
+  let holdBack (grace: TimeSpan) (now: DateTime) (known: Map<string, WorktreeRecord>) (leftovers: Leftover list) : Leftover list =
+    leftovers
+    |> List.map (fun leftover ->
+      match leftover with
+      | Leftover.AgentWorktree(entry, detail) when Standing.isMerged entry.Standing ->
+        match entry.Target with
+        | Target.Directory path ->
+          match clearance grace now known path with
+          | Clearance.Cleared -> leftover
+          | Clearance.NotYet until -> Leftover.AgentWorktree({ entry with Standing = Standing.WithinRetention until }, detail)
+        | Target.File _
+        | Target.GitBranch _
+        | Target.RunningProcess _ -> leftover
+      | other -> other)
 
   // ─── Lines as text ────────────────────────────────────────────────────
 

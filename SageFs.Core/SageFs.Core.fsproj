@@ -77,6 +77,7 @@
         <Compile Include="WatchExpression.fs" />
         <Compile Include="Settings.fs" />
         <Compile Include="SettingsStore.fs" />
+        <Compile Include="HygieneSwitch.fs" />
         <!-- Before DaemonState.fs on purpose: the data directory has to be found without running its static
              initialiser, which reads Timeouts (see the file). Up here so the Settings catalog can show it. -->
         <Compile Include="DataDirChoice.fs" />
