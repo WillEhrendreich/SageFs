@@ -295,6 +295,64 @@ let tests =
         section |> Expect.stringContains "resolves the window's session" "resolveCommandTarget"
     ]
 
+    testList "several tests, one attach" [
+
+      testCase "WHY - the batch is the tests the person picked, in that order, each once, with blanks dropped" <| fun _ ->
+        batchOf [ "b"; ""; "a"; "b"; "c"; "a" ] |> Expect.equal "first sighting order" [ "b"; "a"; "c" ]
+
+      testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 200 } "WHY - a batch holds no repeat and no blank, and every picked id is in it"
+      <| fun (ids: string list) ->
+        let ids = ids |> List.map (fun s -> match s with null -> "" | s -> s)
+        let batch = batchOf ids
+        batch |> List.distinct |> List.length = batch.Length
+        && batch |> List.forall (fun id -> id <> "")
+        && ids |> List.filter (fun id -> id <> "") |> List.forall (fun id -> List.contains id batch)
+
+      testCase "WHY - the first held test starts the debug session and the later ones reuse it" <| fun _ ->
+        match afterHold BatchSession.NotAttachedYet (withStatus "held") with
+        | AfterHold.AttachThenRelease(config, _) -> config.ProcessId |> Expect.equal "the host's pid" 4242
+        | other -> failtestf "expected AttachThenRelease, got %A" other
+        match afterHold BatchSession.Attached (withStatus "held") with
+        | AfterHold.ReleaseNow notices -> notices |> Expect.isEmpty "nothing to warn about"
+        | other -> failtestf "expected ReleaseNow, got %A" other
+
+      testCase "WHY - a test the daemon cannot find is skipped and the batch goes on, but a host that is gone stops it" <| fun _ ->
+        for status in [ "not_discovered"; "no_test_matched"; "ambiguous_test" ] do
+          match afterHold BatchSession.Attached (withStatus status) with
+          | AfterHold.SkipThisTest notice -> notice.Text |> Expect.equal (sprintf "%s: the daemon's words" status) view.Message
+          | other -> failtestf "%s should skip, got %A" status other
+        for status in [ "hold_already_open"; "no_session"; "no_worker"; "host_unavailable"; "worker_failed"; "bad_request"; "host_lost" ] do
+          match afterHold BatchSession.Attached (withStatus status) with
+          | AfterHold.StopBatch notice -> notice.Text |> Expect.equal (sprintf "%s: the daemon's words" status) view.Message
+          | other -> failtestf "%s should stop the batch, got %A" status other
+
+      testCase "WHY - a test that finished goes on to the next whatever it said, and one that never ran stops the batch" <| fun _ ->
+        for outcome in [ "passed"; "failed"; "skipped"; "not_run"; "no_result" ] do
+          afterTest (withStatus "attached" |> fun v -> { v with Outcome = outcome }) |> Expect.equal (sprintf "%s goes on" outcome) AfterTest.GoOn
+        for status in [ "no_debugger_within"; "released_without_debugger"; "no_such_hold"; "host_lost" ] do
+          afterTest (withStatus status) |> Expect.equal (sprintf "%s stops" status) AfterTest.StopBatch
+
+      testCase "WHY - the summary counts what happened and says how many never ran" <| fun _ ->
+        let summary = batchSummary { Passed = 2; Failed = 1; Skipped = 0; NoVerdict = 0; NotRun = 3 }
+        summary.Severity |> Expect.equal "failures and unrun tests are a warning" Severity.Warning
+        for part in [ "6 tests"; "2 passed"; "1 failed"; "3 did not run" ] do
+          summary.Text |> Expect.stringContains part part
+        let clean = batchSummary { Passed = 3; Failed = 0; Skipped = 0; NoVerdict = 0; NotRun = 0 }
+        clean.Severity |> Expect.equal "all passed is information" Severity.Info
+        clean.Text.Contains "did not run" |> Expect.isFalse "nothing to say about unrun tests"
+
+      testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 200 } "WHY - the tally accounts for every test: ended plus not run is the batch size"
+      <| fun (outcomes: bool list) (extra: PositiveInt) ->
+        let ended = outcomes |> List.map (fun passed -> if passed then TestEnded.Passed else TestEnded.Failed)
+        let total = ended.Length + (extra.Get % 5)
+        let t = tally total ended
+        t.Passed + t.Failed + t.Skipped + t.NoVerdict + t.NotRun = total
+
+      testCase "WHY - the Test Explorer's Debug profile and the command carry every picked test, not the first" <| fun _ ->
+        read "src/TestControllerAdapter.fs" |> Expect.stringContains "all ids passed" "debugIdsOf"
+        read "src/Extension.fs" |> Expect.stringContains "the command takes a list" "debugTests c sessionId"
+    ]
+
     testList "automatic runs wait while a test is held" [
 
       testCase "WHY - a running live-testing session is paused for the debug run and resumed after" <| fun _ ->
