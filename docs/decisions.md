@@ -1258,6 +1258,12 @@ The landing gate's session is never leveled. What the actor counts as "the REPL'
 new host is built from the saved file; it is a count of evals started since the host was built, and not `EvalStats.EvalCount`, which a
 reset does not clear. Every in-worker hard reset that resolves Ok, whoever asked for it, now also brings a session that was behind
 to `Leveling` and then level: the editor's reset used to leave the banner up after a successful reset.
+A level costs what the last reset did, and that grows with the project: 2.6 to 3.4 s on the small run_app fixture, 25 to 39 s on
+SageFs.Tests (a loaded machine, load average 24 to 37 on 16 cores). So the actor records how long its last rebuild-free reset took and
+`ReplLeveling.decide` defers with `LevelWouldTakeTooLong` when that is over `Timeouts.replLevelCostBudget` (10 s); a host that has not
+reset yet levels once and records. The banner then says the last reset's time and the bound and names `hard_reset_fsi_session`, so a
+person on a big project chooses when to pay. An eval sent during a level waits for it and runs on the new host, because the eval actor
+is a serial mailbox (`An eval sent while a level replaces the host` pins it); I had wrongly written that it was refused.
 Evidence: `SageFs.Core/ReplLeveling.fs`, `SageFs.Core/LevelKeeper.fs`, `SageFs.Core/SessionManager.fs` (`settleLeveling`),
 `SageFs.Tests/ReplLevelingTests.fs`, `ReplFreshnessTests.fs`, `LevelKeeperTests.fs`, `SessionManagerLevelOutcomeTests.fs`,
 `ReplLevelSimTests.fs` (the simulation, five invariants and seven twins) and `RunAppDeltaTests.fs` (`run_app repl leveling`).

@@ -1169,6 +1169,8 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
     // What the current host holds of the user's (`ReplLeveling`): the evals started in it, the init script that ran in it.
     // Owned by this actor alone, emptied by every reset because the host they lived in is gone.
     let hostHolds = ref HostHolds.empty
+    // How long the last hard reset of the host took, which a level costs about as much as. A reset does not clear it.
+    let lastResetCost = ref ResetCost.NeverReset
     let supersededResponse (code: string) =
       let err = SageFsError.EvalSupersededByReset
       emit (Events.EvalFailed {| Code = code; Error = SageFsError.describe err; Diagnostics = [] |})
@@ -1486,6 +1488,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             reply.Reply(Error (SageFsError.ResetFailed ex.Message))
             return (Faulted reason, middleware, evalStats)
         | EvalHardReset (rebuild, reply) ->
+          let resetWatch = System.Diagnostics.Stopwatch.StartNew()
           // See EvalReset above: routed through decide for one source of truth.
           match EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) EvalActorDecision.EvalInput.Reset with
           | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset ->
@@ -1706,6 +1709,10 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             instrumentationMaps.Value <- instrMaps
             publishSnapshot newSt Idle evalStats
             emit (Events.SessionHardReset {| Rebuild = rebuild |})
+            // A reset that built the project first is not what a level costs, so only the rebuild-free ones are recorded.
+            match rebuild with
+            | false -> lastResetCost.Value <- ResetCost.ResetTook resetWatch.Elapsed
+            | true -> ()
             reply (Ok "Hard reset complete. Fresh session with re-copied assemblies.")
             return (Active (newSt, Idle), middleware, evalStats)
           with ex ->
@@ -1717,7 +1724,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
         | EvalLevel (outside, reply) ->
           // The check and the reset are this one message, so no eval can start between them, and nothing is cancelled for it:
           // a level is only ever wanted when nothing was running. `decide` reads the activity this actor holds right now.
-          let owned : LevelOwned = { Holds = hostHolds.Value; Outside = outside }
+          let owned : LevelOwned = { Holds = hostHolds.Value; Outside = outside; LastReset = lastResetCost.Value }
           match EvalActorDecision.levelVerdictOf (EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) (EvalActorDecision.EvalInput.Level owned)) with
           | LevelVerdict.Level ->
             logger.LogInfo "Nothing in the FSI host would be lost: bringing it up to the patched build"

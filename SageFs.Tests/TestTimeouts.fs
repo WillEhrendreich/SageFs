@@ -899,6 +899,14 @@ module TestTimeouts =
 module FixtureDurations =
   // --- tests L to R ---
 
+  /// What a rebuild-free reset of the FSI host cost on the small run_app fixture, measured 2026-11-07 (2.6 to 3.4 s): under the
+  /// level's budget.
+  let smallProjectReset = System.TimeSpan.FromSeconds 2.8
+
+  /// What it cost on SageFs.Tests, the largest project here, measured the same day (25.1 to 39.1 s under load, 14.9 to 19.7 s at
+  /// half the load): over the level's budget.
+  let largeProjectReset = System.TimeSpan.FromSeconds 26.
+
   /// A result so fast that only the fact it finished matters.
   let fastResult = System.TimeSpan.FromMilliseconds 1.
 

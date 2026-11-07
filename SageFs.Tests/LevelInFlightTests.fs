@@ -154,13 +154,26 @@ let costTests =
       let! session = within TestTimeouts.sessionReadyColdBuild (createActor args |> Async.AwaitTask |> Async.StartAsTask)
       let loadBefore = loadAverages ()
       let times = ResizeArray<float>()
+      let outside : OutsideFacts = { DynamicTests = DynamicTests.Absent; TestRuns = TestRuns.Idle }
+      // The first level runs and records its cost. If that is over the budget, the actor refuses the next ones by itself,
+      // so the measurement takes the later resets as a person's hard reset would (no rebuild), which costs the same.
+      let! first =
+        within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> LevelSession(outside, reply)) |> Async.StartAsTask)
+      first |> Expect.equal "an untouched REPL levels the first time" LevelAnswer.Leveled
       for _ in 1 .. 5 do
         let watch = System.Diagnostics.Stopwatch.StartNew()
-        let outside : OutsideFacts = { DynamicTests = DynamicTests.Absent; TestRuns = TestRuns.Idle }
-        let! answer =
-          within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> LevelSession(outside, reply)) |> Async.StartAsTask)
-        answer |> Expect.equal "an untouched REPL levels" LevelAnswer.Leveled
+        let! reset =
+          within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> HardResetSession(false, reply)) |> Async.StartAsTask)
+        reset |> Result.isOk |> Expect.isTrue "the reset resolved"
         times.Add watch.Elapsed.TotalMilliseconds
+      // Whatever the first level cost, a second one is judged by it.
+      let! second =
+        within TestTimeouts.sessionReadyColdBuild (session.Actor.PostAndAsyncReply(fun reply -> LevelSession(outside, reply)) |> Async.StartAsTask)
+      let lastReset = System.TimeSpan.FromMilliseconds times[times.Count - 1]
+      match second, lastReset > Timeouts.replLevelCostBudget with
+      | LevelAnswer.LevelDeferred [ LevelBlocker.LevelWouldTakeTooLong _ ], true -> ()
+      | LevelAnswer.Leveled, false -> ()
+      | other, _ -> failtestf "the second level should follow what a reset costs on this project, got %A" other
       let sorted = times |> Seq.sort |> Array.ofSeq
       eprintfn "REPL-LEVELING large project: SageFs.Tests, five levels (ms): %s; p50 %.0f, max %.0f; load average before %s, after %s; %d logical cores"
         (times |> Seq.map (sprintf "%.0f") |> String.concat ", ") sorted[2] sorted[4] loadBefore (loadAverages ()) Environment.ProcessorCount

@@ -290,14 +290,14 @@ let levelingTests =
       text |> Expect.stringContains "still says the manual way" "hard_reset_fsi_session"
 
     testCase "WHY - a REPL that SageFs left alone because a level would take too long says how long, what the bound is, and the one action that does it now" <| fun _ ->
-      let slow = System.TimeSpan.FromSeconds 26.
+      let slow = FixtureDurations.largeProjectReset
       let text = ReplFreshness.describe (ReplFreshness.CannotLevel (2, [ "A.f" ], [ LevelBlocker.LevelWouldTakeTooLong slow ]))
       text |> Expect.stringContains "still behind" "BEHIND"
       text |> Expect.stringContains "how long the last reset took, so how long a level is expected to" "26 s"
-      text |> Expect.stringContains "the bound it is held to" (sprintf "%.0f s" Timeouts.replLevelCostBudget.TotalSeconds)
+      text |> Expect.stringContains "the bound it is held to" (sprintf "%.0f s" (Timeouts.replLevelCostBudget.TotalSeconds))
       text |> Expect.stringContains "the action that does it now" "hard_reset_fsi_session"
-      (wireOf (ReplFreshness.CannotLevel (2, [ "A.f" ], [ LevelBlocker.LevelWouldTakeTooLong slow ]))).GetProperty("blockedBy")[0].GetString()
-      |> Expect.equal "its own wire token" "LevelWouldTakeTooLong"
+      let tokens = (wireOf (ReplFreshness.CannotLevel (2, [ "A.f" ], [ LevelBlocker.LevelWouldTakeTooLong slow ]))).GetProperty("blockedBy")
+      [ for token in tokens.EnumerateArray() -> token.GetString() ] |> Expect.equal "its own wire token" [ "LevelWouldTakeTooLong" ]
 
     testCase "WHY - on the wire both new states are BehindApp, so no client has to learn a fourth state, and blockedBy lists the tokens" <| fun _ ->
       let leveling = wireOf (ReplFreshness.Leveling (2, [ "A.f" ]))

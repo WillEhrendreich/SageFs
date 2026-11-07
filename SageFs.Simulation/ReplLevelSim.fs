@@ -22,6 +22,7 @@ open SageFs.Features.ReloadOutcome
 ///       defined something in
 ///   L4  an answer to a level ask is applied only if the worker it was asked of still serves the session
 ///   L5  the state is `InSync` only when the host was built at or after the latest save
+///   L6  a level never resets a host whose last reset took longer than `Timeouts.replLevelCostBudget`
 ///
 /// Each twin breaks one of them, so a green run of the real fold means something: `runCancelsFirst` (today's
 /// `HardResetSession`: cancel the running eval, then reset), `runCheckThenAct` (read the facts, act later),
@@ -58,6 +59,8 @@ module ReplLevelSim =
     | WorkerSwap
     /// Something else resets the worker's FSI host in place (a hard reset from an editor).
     | HostRebuilt
+    /// The project grows until a reset of its host is slow (SageFs.Tests: 26 s where the small fixture took 3 s).
+    | ProjectGrows
 
   type Scenario = { Seed: int; Ops: Op list }
 
@@ -72,7 +75,8 @@ module ReplLevelSim =
 
   /// What the actor saw when it handled a level, taken at the moment it handled it.
   type ResetRecord =
-    { ActivityAtAct: SessionActivity
+    { CostAtAct: ResetCost
+      ActivityAtAct: SessionActivity
       RunsOnHost: int
       EvalsSinceHost: int
       InitScriptDefined: bool
@@ -85,8 +89,16 @@ module ReplLevelSim =
       ServingPid: int
       Answer: LevelAnswer }
 
+  /// How big the project is, which decides what a reset of its host costs: 3 s, or 26 s (the measured small fixture and SageFs.Tests).
+  [<RequireQualifiedAccess>]
+  type ProjectSize =
+    | Small
+    | Large
+
   type World =
     { // -- the worker
+      Project: ProjectSize
+      LastResetCost: ResetCost
       WorkerPid: int
       Generation: SessionGeneration
       Activity: SessionActivity
@@ -119,7 +131,9 @@ module ReplLevelSim =
       RunsKilledByReset: int }
 
   let initial : World =
-    { WorkerPid = 100
+    { Project = ProjectSize.Small
+      LastResetCost = ResetCost.NeverReset
+      WorkerPid = 100
       Generation = SessionGeneration.initial
       Activity = SessionActivity.Idle
       EvalsSinceHost = 0
@@ -180,7 +194,8 @@ module ReplLevelSim =
           InitScript = (match w.InitScriptDefined with | true -> InitScript.Defined "init.fsx" | false -> InitScript.Absent) }
       Outside =
         { DynamicTests = (match w.DynamicTestsDefined with | true -> DynamicTests.Defined | false -> DynamicTests.Absent)
-          TestRuns = TestRunGate.runsOf w.Gate } }
+          TestRuns = TestRunGate.runsOf w.Gate }
+      LastReset = w.LastResetCost }
 
   let private phaseOf (w: World) : EvalPhase = EvalPhase.Active w.Activity
 
@@ -193,6 +208,8 @@ module ReplLevelSim =
         InitScriptDefined = false
         DynamicTestsDefined = false
         RunsOnHost = []
+        LastResetCost =
+          ResetCost.ResetTook (match w.Project with | ProjectSize.Small -> Timeouts.replLevelCostBudget / 3. | ProjectSize.Large -> Timeouts.replLevelCostBudget * 2.6)
         HostBuiltAt = w.Saves }
 
   /// The held runs enter again once the level has ended, in arrival order. Under the real gate every one is admitted.
@@ -219,7 +236,8 @@ module ReplLevelSim =
       | false, Some (LevelVerdict.Deferred blockers) -> EvalDecision.DeferLevel blockers
       | _ -> policy.DecideLevel (phaseOf w) owned
     let record =
-      { ActivityAtAct = w.Activity
+      { CostAtAct = w.LastResetCost
+        ActivityAtAct = w.Activity
         RunsOnHost = List.length w.RunsOnHost
         EvalsSinceHost = w.EvalsSinceHost
         InitScriptDefined = w.InitScriptDefined
@@ -276,6 +294,7 @@ module ReplLevelSim =
         | GateExit.NotRunning, _
         | GateExit.LevelMayStart, _ -> w
     | Op.DefineDynamicTests -> { w with DynamicTestsDefined = true }
+    | Op.ProjectGrows -> { w with Project = ProjectSize.Large }
     | Op.RunInitScript -> { w with InitScriptDefined = true }
     | Op.Save ->
       let saves = w.Saves + 1
@@ -356,6 +375,8 @@ module ReplLevelSim =
           Held = 0
           Stage = Stage.NoLevel
           Asks = []
+          // A new worker has not reset its host yet.
+          LastResetCost = ResetCost.NeverReset
           Freshness = ReplFreshness.afterWorkerSwap w.Freshness
           LevelInFlight = LevelFlight.NoLevelInFlight
           HostBuiltAt = w.Saves }
@@ -417,6 +438,12 @@ module ReplLevelSim =
             match reply, freshness with
             | LevelAnswer.Leveled, ReplFreshness.BehindApp _ -> ReplFreshness.InSync
             | _ -> ReplFreshness.afterLevelAnswer freshness reply }
+
+  /// TWIN 8: the level does not read what the last reset cost.
+  let runIgnoresCostPolicy : Policy =
+    { real with
+        Name = "twin-ignores-cost"
+        DecideLevel = fun phase owned -> decide SessionGeneration.initial phase (EvalInput.Level { owned with LastReset = ResetCost.NeverReset }) }
 
   /// TWIN 7: the runs a level held are never served when it ends.
   let runDropsHeldPolicy : Policy = { real with Name = "twin-drops-held"; ServesHeld = false }

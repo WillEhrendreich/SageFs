@@ -22,7 +22,8 @@ module ReplLevelGenerators =
       5, Op.LevelAct
       4, Op.AnswerArrives
       1, Op.WorkerSwap
-      1, Op.HostRebuilt ]
+      1, Op.HostRebuilt
+      1, Op.ProjectGrows ]
 
   let private total = weighted |> List.sumBy fst
 
@@ -64,6 +65,20 @@ module ReplLevelGenerators =
   let evalThenLevel : Scenario =
     { Seed = 4
       Ops = [ Op.Submit; Op.EvalFinished; Op.Save; Op.DaemonAsks; Op.LevelBegin; Op.LevelAct; Op.AnswerArrives ] }
+
+  /// A project whose reset is slow: the first level runs and records 26 s, the next is left to a person.
+  let largeProjectLevelsOnce : Scenario =
+    { Seed = 12
+      Ops =
+        [ Op.ProjectGrows; Op.Save; Op.DaemonAsks; Op.LevelBegin; Op.LevelAct; Op.AnswerArrives
+          Op.Save; Op.DaemonAsks; Op.LevelBegin; Op.LevelAct; Op.AnswerArrives ] }
+
+  /// A small project: every level runs, however often it is asked.
+  let smallProjectLevelsTwice : Scenario =
+    { Seed = 13
+      Ops =
+        [ Op.Save; Op.DaemonAsks; Op.LevelBegin; Op.LevelAct; Op.AnswerArrives
+          Op.Save; Op.DaemonAsks; Op.LevelBegin; Op.LevelAct; Op.AnswerArrives ] }
 
   /// The init script defined values in the host.
   let initScriptThenLevel : Scenario =

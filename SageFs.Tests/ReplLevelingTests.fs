@@ -75,16 +75,16 @@ let decideTests =
           LevelBlocker.TestsRunning 1 ]
 
     testCase "WHY - a project whose last host reset took longer than the automatic level's budget is not leveled, and the blocker carries how long it took, so the banner can say what a level costs" <| fun _ ->
-      let slow = System.TimeSpan.FromSeconds 26.
+      let slow = FixtureDurations.largeProjectReset
       blockersOf { quiet with LastReset = ResetCost.ResetTook slow } |> Expect.equal "SageFs.Tests' 26 s level is left to a person" [ LevelBlocker.LevelWouldTakeTooLong slow ]
 
     testCase "WHY - a small project's level still happens by itself: the 2.8 s level measured on the run_app fixture and a host never reset are both under the budget" <| fun _ ->
-      ReplLeveling.decide { quiet with LastReset = ResetCost.ResetTook (System.TimeSpan.FromSeconds 2.8) } |> Expect.equal "2.8 s levels" LevelVerdict.Level
+      ReplLeveling.decide { quiet with LastReset = ResetCost.ResetTook (FixtureDurations.smallProjectReset) } |> Expect.equal "2.8 s levels" LevelVerdict.Level
       ReplLeveling.decide { quiet with LastReset = ResetCost.NeverReset } |> Expect.equal "a host that has not reset yet levels once, and records" LevelVerdict.Level
 
     testCase "WHY - the budget's own boundary levels, and a millisecond over does not, so the comparison is pinned" <| fun _ ->
       ReplLeveling.decide { quiet with LastReset = ResetCost.ResetTook Timeouts.replLevelCostBudget } |> Expect.equal "exactly the budget" LevelVerdict.Level
-      let over = Timeouts.replLevelCostBudget + System.TimeSpan.FromMilliseconds 1.
+      let over = Timeouts.replLevelCostBudget + FixtureDurations.fastResult
       blockersOf { quiet with LastReset = ResetCost.ResetTook over } |> Expect.equal "a millisecond over" [ LevelBlocker.LevelWouldTakeTooLong over ]
 
     testProperty "WHY - for any facts the verdict is Level exactly when the blocker list is empty, and a Deferred is never empty" <| fun (seed: int) ->
@@ -107,13 +107,13 @@ let decideTests =
         [ LevelBlocker.NotServing; LevelBlocker.EvalRunning; LevelBlocker.HostGone; LevelBlocker.ReplHoldsDefinitions 2
           LevelBlocker.InitScriptDefined "init.fsx"; LevelBlocker.LiveTestsDefined; LevelBlocker.TestsRunning 2
           LevelBlocker.LevelAlreadyRunning; LevelBlocker.SwapInProgress; LevelBlocker.GateDriven
-          LevelBlocker.LevelWouldTakeTooLong (System.TimeSpan.FromSeconds 26.) ]
+          LevelBlocker.LevelWouldTakeTooLong (FixtureDurations.largeProjectReset) ]
       all |> List.map LevelBlocker.token |> List.distinct |> List.length |> Expect.equal "one token each" all.Length
       for blocker in all do
         LevelBlocker.describe blocker |> Expect.isNotEmpty (sprintf "%A is described" blocker)
       LevelBlocker.describe (LevelBlocker.InitScriptDefined "init.fsx") |> Expect.stringContains "names the script" "init.fsx"
       LevelBlocker.describe (LevelBlocker.ReplHoldsDefinitions 5) |> Expect.stringContains "carries the count" "5 evals"
-      LevelBlocker.describe (LevelBlocker.LevelWouldTakeTooLong (System.TimeSpan.FromSeconds 26.)) |> Expect.stringContains "carries how long" "26 s"
+      LevelBlocker.describe (LevelBlocker.LevelWouldTakeTooLong (FixtureDurations.largeProjectReset)) |> Expect.stringContains "carries how long" "26 s"
   ]
 
 /// Each mutant breaks exactly one branch of the rule, and an assertion above must notice.
@@ -144,10 +144,10 @@ let decideMutationTests =
       { quiet with TestRuns = TestRuns.InFlight 1 } ReplLeveling.decide (fun v -> not (isLevel v))
     detectsOutputMutant
       (mutate "ignores the cost" "a reset that took 26 s no longer blocks the level" (ignoring (fun f -> { f with LastReset = ResetCost.NeverReset })))
-      { quiet with LastReset = ResetCost.ResetTook (System.TimeSpan.FromSeconds 26.) } ReplLeveling.decide (fun v -> not (isLevel v))
+      { quiet with LastReset = ResetCost.ResetTook (FixtureDurations.largeProjectReset) } ReplLeveling.decide (fun v -> not (isLevel v))
     detectsOutputMutant
-      (mutate "budget boundary shifted" "a reset of exactly the budget plus a millisecond is taken as within it" (ignoring (fun f -> match f.LastReset with | ResetCost.ResetTook took -> { f with LastReset = ResetCost.ResetTook (took - System.TimeSpan.FromMilliseconds 2.) } | ResetCost.NeverReset -> f)))
-      { quiet with LastReset = ResetCost.ResetTook (Timeouts.replLevelCostBudget + System.TimeSpan.FromMilliseconds 1.) } ReplLeveling.decide (fun v -> not (isLevel v))
+      (mutate "budget boundary shifted" "a reset of exactly the budget plus a millisecond is taken as within it" (ignoring (fun f -> match f.LastReset with | ResetCost.ResetTook took -> { f with LastReset = ResetCost.ResetTook (took - FixtureDurations.fastResult - FixtureDurations.fastResult) } | ResetCost.NeverReset -> f)))
+      { quiet with LastReset = ResetCost.ResetTook (Timeouts.replLevelCostBudget + FixtureDurations.fastResult) } ReplLeveling.decide (fun v -> not (isLevel v))
     detectsOutputMutant
       (mutate "levels on a deferred list" "a Deferred with blockers is reported as Level" (fun real facts -> match real facts with | LevelVerdict.Deferred _ -> LevelVerdict.Level | other -> other))
       { quiet with EvalsSinceHost = 4; TestRuns = TestRuns.InFlight 1 } ReplLeveling.decide (fun v -> not (isLevel v))

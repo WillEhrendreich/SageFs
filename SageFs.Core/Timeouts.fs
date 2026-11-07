@@ -628,6 +628,17 @@ module Timeouts =
   /// that it timed out and goes on. No recorded reason for 15s.
   let appRunnerShutdown = forMachine (TimeSpan.FromSeconds(15.0))
 
+  // -- Leveling the REPL --
+  /// The longest a host reset may have taken for the session to level the REPL by itself the next time. A level replaces the FSI
+  /// host, and while it runs the eval actor serves nothing else (an eval sent meanwhile waits for it). The cost scales with the
+  /// project and nothing else is known about it ahead of time, so the session records how long its last reset took and holds
+  /// the automatic level to that. Measured 2026-11-07 on a machine with a load average of 24 to 37 on 16 cores: the small run_app
+  /// fixture took 2.6 to 3.4 s, SageFs.Tests took 25.1 to 39.1 s (p50 26.1 s), and 14.9 to 19.7 s (p50 16.3 s) at a load average
+  /// of 11 to 12. Ten seconds is three times the small project's worst, so a small project levels by itself even on a loaded
+  /// machine, and under SageFs.Tests' best, so a large one is left to the person, who chooses when to pay. It is not scaled by `forMachine`: the number it is compared with was measured
+  /// on the same machine, which already carries the machine's speed.
+  let replLevelCostBudget = TimeSpan.FromSeconds 10.
+
   // -- Debugging a test --
   /// How long a host keeps a test held for a debugger. The client has to get the
   /// attach going (the C# debugger starts its adapter on first use, which takes a

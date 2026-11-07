@@ -85,8 +85,21 @@ module ReplLevelInvariants =
         | Some w -> violated t (sprintf "InSync with the host built at save %d and the app at save %d" w.HostBuiltAt w.Saves)
         | None -> Outcome.Holds }
 
+  /// L6: a level never resets a host whose last reset took longer than the budget.
+  let noLevelOverBudget : Invariant =
+    { Id = "L6-no-level-over-budget"
+      Description = "A level never resets a host whose last reset took longer than Timeouts.replLevelCostBudget."
+      Check = fun t ->
+        let overBudget (r: ResetRecord) =
+          match r.CostAtAct with
+          | ResetCost.ResetTook took -> took > Timeouts.replLevelCostBudget
+          | ResetCost.NeverReset -> false
+        match levelResets t |> List.tryFind overBudget with
+        | Some r -> violated t (sprintf "a level reset a host whose last reset took %A" r.CostAtAct)
+        | None -> Outcome.Holds }
+
   let all : Invariant list =
-    [ noResetUnderWork; heldRunsAreServed; noResetOverDefinitions; answersAreJudgedByPid; levelMeansLevel ]
+    [ noResetUnderWork; heldRunsAreServed; noResetOverDefinitions; answersAreJudgedByPid; levelMeansLevel; noLevelOverBudget ]
 
   /// Every violation, as `id: message`.
   let violations (t: Trace) : string list =

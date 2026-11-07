@@ -184,7 +184,8 @@ let decide (generation: SessionGeneration) (phase: EvalPhase) (input: EvalInput)
           EvalsSinceHost = owned.Holds.EvalsSinceHost
           InitScript = owned.Holds.InitScript
           DynamicTests = owned.Outside.DynamicTests
-          TestRuns = owned.Outside.TestRuns }
+          TestRuns = owned.Outside.TestRuns
+          LastReset = owned.LastReset }
     with
     | LevelVerdict.Level -> EvalDecision.RunLevel
     | LevelVerdict.Deferred blockers -> EvalDecision.DeferLevel blockers

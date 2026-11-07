@@ -39,6 +39,14 @@ type TestRuns =
   | Idle
   | InFlight of count: int
 
+/// How long the host's last reset took, as the session measured it. A level replaces the host, so it costs about what the last
+/// reset did, and a project whose resets are slow is left to a person.
+[<RequireQualifiedAccess>]
+type ResetCost =
+  /// No reset yet in this worker: a level is allowed once, and records its own cost.
+  | NeverReset
+  | ResetTook of duration: System.TimeSpan
+
 /// Why a session cannot level itself now. A closed set: one description, one wire token.
 [<RequireQualifiedAccess>]
 type LevelBlocker =
@@ -56,6 +64,8 @@ type LevelBlocker =
   | SwapInProgress
   /// The cohort's landing gate drives this session, and a reset in the middle of a verification would disturb it.
   | GateDriven
+  /// The host's last reset took this long, over what a level may cost by itself (`Timeouts.replLevelCostBudget`).
+  | LevelWouldTakeTooLong of lastReset: System.TimeSpan
 
 [<RequireQualifiedAccess>]
 type LevelVerdict =
@@ -120,7 +130,8 @@ type LevelFacts =
     EvalsSinceHost: int
     InitScript: InitScript
     DynamicTests: DynamicTests
-    TestRuns: TestRuns }
+    TestRuns: TestRuns
+    LastReset: ResetCost }
 
 /// The facts the eval actor cannot see for itself: the worker's init script path and run-test slot, and its test-run gate.
 type OutsideFacts =
@@ -154,7 +165,8 @@ module HostHolds =
 /// What the actor reads when it handles a level: its own counts, and the facts the worker passed with the message.
 type LevelOwned =
   { Holds: HostHolds
-    Outside: OutsideFacts }
+    Outside: OutsideFacts
+    LastReset: ResetCost }
 
 module LevelBlocker =
   /// The wire spelling, one per case.
@@ -170,6 +182,7 @@ module LevelBlocker =
     | LevelBlocker.LevelAlreadyRunning -> "LevelAlreadyRunning"
     | LevelBlocker.SwapInProgress -> "SwapInProgress"
     | LevelBlocker.GateDriven -> "GateDriven"
+    | LevelBlocker.LevelWouldTakeTooLong _ -> "LevelWouldTakeTooLong"
 
   /// What stopped it and what to do about it, in a clause a sentence can carry.
   let describe (blocker: LevelBlocker) : string =
@@ -186,6 +199,8 @@ module LevelBlocker =
     | LevelBlocker.LevelAlreadyRunning -> "the REPL is already being brought level"
     | LevelBlocker.SwapInProgress -> "a replacement worker is starting"
     | LevelBlocker.GateDriven -> "the cohort's landing gate drives this session"
+    | LevelBlocker.LevelWouldTakeTooLong took ->
+      sprintf "the last reset of the FSI host took %.0f s, so a level is expected to take about as long, and SageFs only levels by itself when that is within %.0f s" took.TotalSeconds Timeouts.replLevelCostBudget.TotalSeconds
 
 module ReplLeveling =
   /// The one rule: the session levels itself exactly when nothing the host holds would be lost. Every blocker is listed, in a
@@ -208,7 +223,11 @@ module ReplLeveling =
         | DynamicTests.Absent -> ()
         match facts.TestRuns with
         | TestRuns.InFlight count -> yield LevelBlocker.TestsRunning count
-        | TestRuns.Idle -> () ]
+        | TestRuns.Idle -> ()
+        match facts.LastReset with
+        | ResetCost.ResetTook took when took > Timeouts.replLevelCostBudget -> yield LevelBlocker.LevelWouldTakeTooLong took
+        | ResetCost.ResetTook _
+        | ResetCost.NeverReset -> () ]
     match blockers with
     | [] -> LevelVerdict.Level
     | _ -> LevelVerdict.Deferred blockers

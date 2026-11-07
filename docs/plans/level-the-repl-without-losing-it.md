@@ -8,13 +8,37 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (built and measured; one decision for Will is open: the cost on a large project, see Measure first item 2 below) |
+| Status | In progress (built, measured, and the large-project cost is decided and built; what is left is an idle-machine measurement and the daemon upgrade, below) |
 | Size | M |
 | Branch and worktree | `worktree-agent-a9111e89c20aeb7f4`, `/home/will/Work/SageFs/.claude/worktrees/agent-a9111e89c20aeb7f4` |
-| Last green commit | the commit that carries this block: `dotnet SageFs.Tests.dll --summary` (unfiltered) 15068 of 15068, `--ratchets` 517 of 517, both Trusted. The host tier ran, filtered: the six `run_app repl leveling` cells (net10 and net11), the in-flight cell and the large-project measurement, all green. |
-| Next action | Decide what a level may cost on a large project (item 2 below: 25 to 40 s on SageFs.Tests, under load average 25 to 37 on 16 cores, and an eval sent meanwhile is refused). Options: leave it; skip the level when the last measured reset was over a bound; or hold an eval behind the level instead of refusing it. Measure again on an idle machine. Then set Status to Done with the landmark `SageFs.Core/ReplLeveling.fs` `ReplLeveling`. |
-| Decisions made | 2026-11-07, the agent on this item, from the plan's recommendations: defer-only (no replay of definitions); `Leveling` and `CannotLevel` are `BehindApp` on the wire, with an additive `blockedBy` array; leveling is always on, with no setting. A level waits for a test run in flight instead of answering `TestsRunning` and being retried: the worker's gate holds the level until the last run leaves, so no timer and no second channel from the worker to the daemon are needed. |
+| Last green commit | the commit that carries this block: `dotnet SageFs.Tests.dll --summary` (unfiltered) 15077 of 15077, `--ratchets` 517 of 517, both Trusted. The host tier ran, filtered: the six `run_app repl leveling` cells (net10 and net11), the in-flight cell and the large-project measurement, all green. |
+| Next action | After the daemon is upgraded to 0.6.940, check the self-hosting skew below (a project session on this worktree should reach Ready), then repeat the large-project measurement on an idle machine: the budget is 10 s (`Timeouts.replLevelCostBudget`) and SageFs.Tests measured 25 to 39 s under load, so if idle it is still over 10 s the bound stands; if idle it is under, lower the doubt and say so here. Then set Status to Done with the landmark `SageFs.Core/ReplLeveling.fs` `ReplLeveling`. |
+| Decisions made | 2026-11-07, the agent on this item, from the plan's recommendations: defer-only (no replay of definitions); `Leveling` and `CannotLevel` are `BehindApp` on the wire, with an additive `blockedBy` array; leveling is always on, with no setting. 2026-11-07, Will, through the orchestrator: the automatic level does not start when the host's last reset took longer than a named bound (`Timeouts.replLevelCostBudget`, 10 s: a small project's 2.6 to 3.4 s levels, SageFs.Tests' 25 to 39 s does not), and a host that has not reset yet levels once and records. An eval that arrives during a level was meant to be made to wait; it already does (see item 2 below). A level waits for a test run in flight instead of answering `TestsRunning` and being retried: the worker's gate holds the level until the last run leaves, so no timer and no second channel from the worker to the daemon are needed. |
 | Surprises | See "What changed from the plan" below. |
+
+### Self-hosting skew (for the orchestrator)
+
+A project session on this worktree faulted against the 0.6.939 daemon (tree 0.6.940), 2026-11-07, session `8ec59e5f`, created with
+`create_project_session /home/will/Work/SageFs/.claude/worktrees/agent-a9111e89c20aeb7f4/SageFs.Tests/SageFs.Tests.fsproj`. The daemon's
+status said:
+
+    Cannot reach session '8ec59e5f': Session transport closed - Response status code does not indicate success: 500 (Internal Server Error).. The worker may have crashed - try hard_reset_fsi_session. -> Next: Run hard_reset_fsi_session
+
+The worker's own log, `/home/will/.SageFs/workers/8ec59e5f.log`, says, before that:
+
+    [WRN] [Warmup] Project assembly loaded only partially: /tmp/sagefs-shadow-3074228-13b7d10a/SageFs.Tests.dll - 3285 of its type(s) could not be loaded (Could not load file or assembly 'Expecto, Version=11.0.0.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+    ; Could not load file or assembly 'SageFs, Version=0.6.939.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+    ; Could not load file or assembly 'SageFs.Simulation, Version=0.6.939.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+    ; Could not load file or assembly 'FsCheck, Version=3.3.2.0, ...'. ; 'ModelContextProtocol.Core, Version=1.0.0.0, ...'. ; 'Microsoft.Data.Sqlite, Version=9.0.1.0, ...'. ; 'Falco.Markup, Version=1.4.0.0, ...'. ; 'Microsoft.Playwright, Version=1.58.0.0, ...'.
+    [WRN] [Warmup] Project assembly loaded only partially: /tmp/sagefs-shadow-3074228-13b7d10a/SageFs.dll - 80 of its type(s) could not be loaded (... 'ModelContextProtocol.Core, Version=1.0.0.0 ...', 'Falco.Markup, Version=1.4.0.0 ...', 'Falco, Version=5.2.0.0 ...')
+
+The assemblies it names are in `SageFs.Tests/bin/Debug/net11.0` and `bin/Release/net11.0` of the worktree, so they are missing from the
+shadow copy in `/tmp/sagefs-shadow-3074228-13b7d10a/`, not from the build. The first project session on the same worktree reached
+Ready, before this change touched the worker wire (`WorkerMessage.LevelRepl`, `WorkerResponse.LevelResult`), so the skew may be the
+wire (a 0.6.939 daemon talking to a 0.6.940 worker) or the shadow copy, and this run did not separate the two. A bare session
+(`create_bare_session`) on the worktree reached Ready and has no SageFs assemblies loaded: loading `HostBoundState.fs` in it fails with
+`The namespace or module 'SageFs' is not defined.` To check after the upgrade: create a project session on `SageFs.Tests.fsproj` in this
+worktree and read `get_session_status`; Ready means the skew was the daemon's.
 
 ## What done looks like
 
@@ -218,9 +242,22 @@ Measure first:
    runs the real `LevelSession` through the actor against `SageFs.Tests.fsproj`, five levels in one process): 26101, 26738, 25133,
    25122 and 39068 ms, p50 26.1 s, max 39.1 s. The machine was loaded by other agents' builds and the release gate: load averages
    24.45 26.73 31.66 before and 37.18 30.40 32.27 after, 16 logical cores. The small `run_app` fixture on the same machine took
-   3444 ms on net10 and 2599 and 2822 ms on net11. So the "about 2 seconds" budget holds for a small project and does not hold for a
-   large one: the level is a background step the user does not trigger, but the actor refuses an eval sent during it ("Session is
-   resetting"), for 25 seconds or more. The banner now says the time grows with the project. An idle-machine number is still to take.
+   3444 ms on net10 and 2599 and 2822 ms on net11. A second run of the large measurement, after the cost rule was built and with the
+   load lower (load averages 12.32 13.83 20.69 before, 11.38 13.33 19.82 after): 19745 ms for the first level, then 16620, 16277,
+   14927 and 16015 ms for four rebuild-free hard resets, p50 16.3 s; and the second `LevelSession` was answered
+   `LevelDeferred [LevelWouldTakeTooLong]`, as it should be. So even at half the load SageFs.Tests is over the 10 s bound, and the
+   small fixture's worst (3.4 s) is under a third of it. So the "about 2 seconds" budget holds for a small project and does not hold for a
+   large one. Decided from these numbers: the session records how long its last rebuild-free reset took (`lastResetCost` in the
+   eval actor) and `ReplLeveling.decide` defers with `LevelWouldTakeTooLong` when that is over 10 s (`Timeouts.replLevelCostBudget`,
+   three times the small project's worst, under SageFs.Tests' best). The banner then says the last reset's time and the bound, and
+   names `hard_reset_fsi_session`. A host that has not reset yet is not estimated: it levels once and records, so a large project
+   pays one level and is then left to the person. An idle-machine number is still to take.
+   An eval sent during a level already waits for it and runs on the new host, and is never refused: the eval actor is a serial
+   mailbox that awaits the whole reset before it reads the next message, so `Submit` is queued behind it. The `Session is resetting`
+   refusal in `EvalActorDecision.decide` is only reachable during the first warm-up. Pinned by `An eval sent while a level replaces
+   the host` (`LevelInFlightTests.fs`, host tier), which sends an eval once the session has left Ready and requires it to run after
+   the level finished, on the new host. The wait is bounded by the 10 minutes the worker gives an eval (`Timeouts.workerHttpRequest`),
+   which is the repo's one rule for a request parked behind a swap, so no second bound was added.
 3. Nothing cleared `BehindApp` after an in-worker reset, as expected. `SessionProxy.observingHostRebuilds` now sees every
    `HardResetSession` that resolves Ok on the session's own proxy (the editor's reset, the smart reset, a level) and posts
    `HostRebuilt`. A soft `ResetSession` does not rebuild the shadow copy (`EvalReset` re-warms on the existing one), so it leaves the
