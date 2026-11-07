@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (phase A of C: the pure core, its tests and a simulation) |
+| Status | In progress (the core, its simulation and the effect module are in; the tool registration waits for the tool-list work) |
 | Size | M |
 | Branch and worktree | `cohort/p4-projectcheck` in `/home/will/scratch/cohort/p4-projectcheck` |
-| Last green commit | none yet |
-| Next action | Phase A is the pure `ProjectCheckCore` (arguments, overlays, cache decision, staleness, diagnostics, report), its Expecto tests and `ProjectCheckSim`. Phase B is the effect module `ProjectCheck` (MSBuild process, held checker, overlay files) and one real-compiler case. Phase C is the `check_project` registration, ready as a patch in `docs/plans/project-check-with-overlays-tool-patch.md`, applied after the tool-list work lands. |
-| Decisions made | 2026-11-07, the packet agent: overlays are written as stable files under a per-project cache directory and the compiler is given those paths, instead of the transparent compiler's in-memory snapshot (see "Overlays"). Arguments come from a child `dotnet msbuild` process, never from MSBuild loaded into the daemon. |
-| Surprises | The design-time MSBuild run writes `obj/<config>/<tfm>/<Project>.AssemblyInfo.fs` and the `AssemblyAttributes.fs` file when they are missing. It builds nothing else. The plan keeps those two files as the cost of the run. |
+| Last green commit | ee598f22 (the decisions), a0189416 (the simulation). The effect module and its compiler cases are the commit after them. |
+| Next action | Apply `docs/plans/project-check-with-overlays-tool-patch.txt` once `small-default-tool-list` has landed (it holds the seven declarations in the order `docs/mcp-tools.md` gives, the description, and the commit trailer). Then run the real `dotnet msbuild` path once against `SageFs.Tests.fsproj` on a quiet machine for the "Measure first" numbers, and add an `--integration-host` journey that starts from a restored fixture project, since the in-process cases build their arguments by hand. Then the roadmap landmark and Status `Done`. |
+| Decisions made | 2026-11-07, the packet agent: overlays are written as stable files under a per-project directory in the temp folder and the compiler is given those paths, instead of the transparent compiler's in-memory snapshot (see "Overlays"). Arguments come from a child `dotnet msbuild` process, never from MSBuild loaded into the daemon. The held checker lives in the daemon and reuses the resident-bytes ceiling and idle retention that `list_references` uses. The three new waits in `Timeouts` (`projectArgumentsRun`, `projectReferenceBuild`, `projectCheck`) take no environment override yet: a variable needs a line in `docs/configuration.md`, which `scripts/gen-configuration-doc.fsx` writes with a link to a landed commit. |
+| Surprises | The design-time MSBuild run writes `obj/<config>/<tfm>/<Project>.AssemblyInfo.fs` and the `AssemblyAttributes.fs` file when they are missing. It builds nothing else, and the plan keeps those two files as the cost of the run. A module named `ProjectCheck` cannot exist beside `SymbolReferences.ProjectCheck`, the union the `list_references` path already has (FS0250), so the effect module is `CheckProject`. `ReferencePathWithRefAssemblies` carries `MSBuildSourceProjectFile` on every project reference, direct or not, so one run gives the project-to-output pairs and `-getItem:ProjectReference` is not needed. A project built from outside after the one above it leaves the one above behind its reference, so a project's inputs include the outputs of what it references (`Staleness.inputsOf`). |
 
 ## Why this item exists
 
@@ -32,7 +32,7 @@ SageFs cannot answer that question today. `check_fsharp_code` checks a snippet a
 
 ## What was probed (2026-11-07, throwaway two-project lab under the scratchpad, SDK 11.0.100-rc)
 
-`dotnet msbuild App.fsproj -t:ResolveReferences,FindReferenceAssembliesForReferences,BeforeBuild,BeforeCompile,CoreCompile -p:DesignTimeBuild=true -p:SkipCompilerExecution=true -p:ProvideCommandLineArgs=true -p:BuildProjectReferences=false -getTargetResult:CoreCompile -getItem:ProjectReference -getProperty:MSBuildAllProjects,TargetPath,Configuration` run from the project directory:
+`dotnet msbuild App.fsproj -t:ResolveReferences,FindReferenceAssembliesForReferences,BeforeBuild,BeforeCompile,CoreCompile -p:DesignTimeBuild=true -p:SkipCompilerExecution=true -p:ProvideCommandLineArgs=true -p:BuildProjectReferences=false -getTargetResult:CoreCompile -getItem:ReferencePathWithRefAssemblies -getProperty:MSBuildAllProjects,Configuration` run from the project directory:
 
 - `CoreCompile` succeeds without compiling and returns the Fsc command line as items. Each item's `Identity` is one argument: `--define:...`, `--langversion:11`, `-r:<path>` (169 of them, framework reference assemblies, FSharp.Core and the referenced project's reference assembly under its `obj/<config>/<tfm>/ref/`), and the source files last, relative to the project directory (`A.fs`, `Program.fs`) plus the generated `obj/.../App.AssemblyInfo.fs` and `.NETCoreApp,Version=v10.0.AssemblyAttributes.fs`.
 - `FullPath` on the items resolves against the process's current directory, so it is wrong for options and cannot be used for sources. The run starts in the project directory and the reader resolves each source from `Identity` itself.
@@ -60,15 +60,16 @@ Pure, `SageFs.Core/Features/ProjectCheckCore.fs`, no dependency past FSharp.Core
 - `Severity` (closed DU, one `Severity.toWord`), `CheckDiagnostic` (path, line, column, end line, end column, severity, code, message), `Overlay`, `OverlayRefusal`.
 - `CompilerArguments.ofIdentities`: splits the identities of `CoreCompile` into options and sources, resolves sources against the project directory, and refuses an empty source list or a list with no FSharp.Core reference, each with its own reason.
 - `MsBuildFacts.read`: reads the JSON of the design-time run (through `SageFs.Json`) into the arguments, the project references, the fingerprint inputs and the configuration, or a typed refusal when the target failed.
-- `Fingerprint`: the (path, last write, length) of every file in `MSBuildAllProjects`. `ArgumentCache.decide` takes the stored entry and the current fingerprint and answers `Reuse` or `Refresh of reason` (`NotCached`, `FileChanged of path`, `FileGone of path`). The key is project path plus configuration.
-- `Staleness.decide`: a referenced project's output time against the newest of its inputs, answering `Current`, `Missing` or `OlderThan of path`.
+- `Fingerprint`: the (path, last write, length) of every file in `MSBuildAllProjects`, the project file, the restore's `project.assets.json`, and the places a file would be read from if it existed (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props` and `global.json` in the project's directory and every one above it), so creating one refreshes the arguments. `ArgumentCache.decide` takes the stored entry and a function that reads a file's current state and answers `Reuse` or `Refresh of reason` (`NotCached`, `FileChanged`, `FileAppeared`, `FileGone`, each with the path). The key is project path plus configuration. `ArgumentStore.record` keeps nothing from a run that was cancelled, and `Inflight` makes calls for one key share one run.
+- `Staleness.decide`: a referenced project's output time against its inputs (`Staleness.inputsOf`: its files and the outputs of the projects it references; `isGeneratedIn` leaves out what the evaluation writes under `obj`), answering `Current`, `Missing` or `OlderThan of path`. `Staleness.buildOrder` gives the projects to build, deepest first, including what stands on a rebuilt project.
 - `Overlays.resolve`: validates overlays against the project's sources and answers the source list the compiler gets, with the stable overlay path for each replaced file, or an `OverlayRefusal`. `Overlays.mapBack` turns a diagnostic's overlay path into the project path the caller sent.
-- `Report.verdict` and `Report.render`: diagnostics sorted by path, line, column; capped lines with a count of the rest; the one function that writes the text.
+- `Request.parseOverlays` and `Request.configurationOf`: what the tool receives, an overlay JSON array (through `SageFs.Json`) and a configuration that defaults to Debug.
+- `Report.render`: diagnostics sorted errors first, then by path, line, column; a cap with a count of the rest; the one function that writes the text.
 
-Edge, `SageFs.Core/Features/ProjectCheck.fs`, built on the `ParseAndCheckProject` call `CallerCheck` and `SymbolReferenceCheck` already make:
+Edge, `SageFs.Core/Features/CheckProject.fs`, built on the `ParseAndCheckProject` call `CallerCheck` and `SymbolReferenceCheck` already make:
 
-- `MsBuildRunner`: starts `dotnet msbuild` as a child process in the project directory with the command above, reads stdout and drains stderr on its own thread (an unread stderr pipe fills and blocks the child), and on cancellation kills the whole process tree. Named waits in `Timeouts`: `projectArgumentsRun`, `projectCheck`, `projectReferenceBuild`.
-- `ProjectCheck.run`: reads the cached or fresh arguments, builds a stale referenced project once (`dotnet build <ref> --no-dependencies`, same cancellation), writes the overlays, builds `FSharpProjectOptions` with `GetProjectOptionsFromCommandLineArgs`, and calls `ParseAndCheckProject` on a `CacheHolder<FSharpChecker>` with the same resident-bytes ceiling and idle retention `SymbolReferenceCheck` uses. Two concurrent calls for the same key share one MSBuild run.
+- `runDotnet`: starts `dotnet` as a child process in the project directory, reads stdout and drains stderr on its own handler (an unread stderr pipe fills and blocks the child), and on cancellation or the bound kills the whole process tree. Named waits in `Timeouts`: `projectArgumentsRun`, `projectReferenceBuild`, `projectCheck`.
+- `CheckProject.run`: reads the cached or fresh arguments, builds a stale referenced project once (`dotnet build <ref> --no-dependencies`, same cancellation), writes the overlays, builds `FSharpProjectOptions` with `GetProjectOptionsFromCommandLineArgs`, and calls `ParseAndCheckProject` on a `CacheHolder<FSharpChecker>` with the same resident-bytes ceiling and idle retention `SymbolReferenceCheck` uses. Two concurrent calls for the same key share one MSBuild run.
 
 ### Overlays
 
@@ -87,7 +88,7 @@ The compiler reads source files from disk. The classic checker has no in-memory 
 7. `WHY - a referenced project with no output, or an output older than an input, is stale; a newer output is current`.
 8. `WHY - diagnostics from an overlay file report the path the caller sent`.
 9. `WHY - the report lists errors before warnings, in path, line, column order, and counts what it cut`.
-10. Real compiler (`--integration-host` is not needed, this is the compiler in process, like `CallerCheckTests`): a fixture project of two files on disk checks clean; the overlay that breaks the second file's use of the first reports the error at the right line and column in the project's path; the overlay that fixes it reports `Clean`; the disk files are unchanged afterwards.
+10. Real compiler (`CheckProjectCompilerTests`, in process like `CallerCheckTests`, with arguments built by hand): a fixture project of two files on disk checks clean; the overlay that breaks the second file's use of the first reports the error at the right line in the project's path; the overlay that fixes it checks clean; the disk files are unchanged afterwards; an overlay for a file outside the project is refused; a cancelled call says so.
 
 `SageFs.Simulation/ProjectCheckSim.fs` and `SageFs.Tests/ProjectCheckSimTests.fs`: a seeded history of project-file edits, props edits, source edits, calls with overlays, calls that are cancelled mid-run and a concurrent pair of calls, over the real `ArgumentCache.decide` and `Staleness.decide`. Invariants: the arguments a call used are never older than a file in its fingerprint; a cancelled run leaves no entry; two concurrent calls for one key run MSBuild once; a referenced project is built at most once between two edits of its inputs. The twins: a cache that ignores `Directory.Packages.props`, a cache that stores an entry from a cancelled run, a coalescer that starts one run per call, and a staleness rule that always says Current. Each must violate its invariant, so the test has teeth.
 
@@ -97,7 +98,7 @@ The compiler reads source files from disk. The classic checker has no in-memory 
 2. Tests 1 to 9 and `ProjectCheckCore.fs`, one RED commit then one GREEN.
 3. `ProjectCheckSim` and its tests with the twins.
 4. `Timeouts` entries, the effect module, and test 10 against a fixture project.
-5. The tool patch file for the conductor (`docs/plans/project-check-with-overlays-tool-patch.md`).
+5. The tool patch file for the conductor (`docs/plans/project-check-with-overlays-tool-patch.txt`; a `.txt` because `docs/plans/*.md` must each be an item's plan).
 6. After the tool lands: the roadmap landmark, `docs/mcp-tools.md`, and Status `Done`.
 
 Wire impact: none in phase A. The tool patch touches `SageFs/McpTools.fs`, `SageFs.Core/Affordances.fs`, `SageFs.Core/Capability.fs`, `docs/mcp-tools.md` and two test tables, so its commit carries a `Plugin:` trailer.
