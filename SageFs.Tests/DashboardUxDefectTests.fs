@@ -11,8 +11,10 @@
 ///    The pin: every worded control carries the label-sizing class, and the stylesheet's rule for that
 ///    class sizes to content.
 /// 4. The top chrome's alarm strip paints an honest, transient fault as a page-wide emergency. The pin:
-///    the stylesheet paints no alarm red on the strip or its title, and the calming removed no
-///    information (count, phase, message, timestamp, dismiss are all still rendered).
+///    the strip is a thin rule in the failure token (a faulted session is a failure, and red is for failure
+///    only) on the panel's own background, with no red tint across its box and a title at the chrome's own
+///    colour, and the calming removed no information (count, phase, message, timestamp, dismiss are all
+///    still rendered).
 module SageFs.Tests.DashboardUxDefectTests
 
 open System
@@ -189,11 +191,12 @@ let wordedControlSizingTests =
 let calmAlarmStripTests =
   testList "the top chrome's alarm strip keeps every fact and stops painting an emergency" [
 
-    testCase "WHY - the strip's own box paints no alarm red: a faulted session is a report and the strip reads as one" <| fun _ ->
+    testCase "WHY - the strip is a thin rule in the failure token on the panel's own background: a faulted session is a failure, and red means failure only" <| fun _ ->
       let rule = cssRule ".alarm-banner"
-      rule.Contains "--fg-red" |> Expect.isFalse "no alarm red on the strip"
+      rule.Contains "border-left: 3px solid var(--fg-red" |> Expect.isTrue "the thin rule is the failure token"
       rule.Contains "--bg-panel" |> Expect.isTrue "the strip sits on the panel's own background"
-      rule.Contains "--fg-yellow" |> Expect.isTrue "the strip is still marked, calmly"
+      rule.Contains "color-mix" |> Expect.isFalse "no red tint floods the strip's box"
+      rule.Contains "--fg-yellow" |> Expect.isFalse "a failure is not marked in a warning colour"
 
     testCase "WHY - the alarm title is plain text at the chrome's own volume" <| fun _ ->
       let rule = cssRule ".alarm-title"

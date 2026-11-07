@@ -2907,12 +2907,13 @@ h2 {
 
 /* The top chrome's alarm strip. A faulted session is a reportable event, and the strip says every fact it always said: the
    count, each entry with its phase and timestamp, and the dismiss action. What changed is the volume. The panel background
-   and a thin amber rule replace the red flood, the title reads at the chrome's own weight and colour, and the dismiss button
-   matches the rest of the chrome, so an honest, transient fault no longer paints the whole header as an emergency. When the
-   alarm clears the strip hides entirely (renderAlarmBanner's empty placeholder). */
+   and a thin rule replace the red flood, the title reads at the chrome's own weight and colour, and the dismiss button
+   matches the rest of the chrome, so an honest, transient fault no longer paints the whole header as an emergency. The rule
+   stays red: a faulted session is a failure, and red means failure only. When the alarm clears the strip hides entirely
+   (renderAlarmBanner's empty placeholder). */
 .alarm-banner {
   background: var(--bg-panel, #1e1e2e);
-  border-left: 3px solid var(--fg-yellow, #e5c07b);
+  border-left: 3px solid var(--fg-red, #e06c75);
   padding: 0.5rem 1rem;
   margin: 0.5rem 0;
   border-radius: 0;
