@@ -314,6 +314,8 @@ module HostCoreAdoption =
     LaunchRoot: string
     Cleanup: (unit -> unit) option
     AdoptedCore: (string * DateTime) option
+    /// Why a project's own SageFs.Core was found and NOT adopted: the worker runs the daemon's own build instead.
+    NotAdopted: string option
   }
 
   /// The full decision for one worker spawn: given the shared daemon-base
@@ -334,7 +336,7 @@ module HostCoreAdoption =
     : Result<LaunchPlan, string> =
     let projectDirs = projectDirsOf projects
     match findCandidates projectDirs with
-    | [] -> Ok { LaunchRoot = sharedDaemonBaseDir; Cleanup = None; AdoptedCore = None }
+    | [] -> Ok { LaunchRoot = sharedDaemonBaseDir; Cleanup = None; AdoptedCore = None; NotAdopted = None }
     | best :: _ ->
       try
         let candidateVersion = AssemblyName.GetAssemblyName(best).Version
@@ -355,7 +357,7 @@ module HostCoreAdoption =
               sprintf "%s%s-%s" adoptedRootPrefix sessionId (Guid.NewGuid().ToString("N").[..7]))
           materialize sharedHostDir privateRoot path
           let adopted = (candidateVersion.ToString(), File.GetLastWriteTimeUtc path)
-          Ok { LaunchRoot = privateRoot; Cleanup = Some(fun () -> cleanup privateRoot); AdoptedCore = Some adopted }
+          Ok { LaunchRoot = privateRoot; Cleanup = Some(fun () -> cleanup privateRoot); AdoptedCore = Some adopted; NotAdopted = None }
       with ex ->
         Error(sprintf "Could not verify the session project's SageFs.Core build at %s: %s" best ex.Message)
 

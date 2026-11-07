@@ -904,6 +904,7 @@
         <Compile Include="HostAdaptationTests.fs" />
         <Compile Include="HostConcernTests.fs" />
         <Compile Include="HostCoreAdoptionTests.fs" />
+        <Compile Include="CoreSurfaceTests.fs" />
         <Compile Include="HostCoreAdoptionStalenessTests.fs" />
         <Compile Include="OrphanTempDirSweepTests.fs" />
         <Compile Include="HostCoreAdoptionMarkerTests.fs" />

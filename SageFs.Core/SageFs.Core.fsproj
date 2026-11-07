@@ -478,6 +478,7 @@
         <Compile Include="HostManifest.fs" />
         <Compile Include="HostAdaptation.fs" />
         <Compile Include="OrphanTempDirSweep.fs" />
+        <Compile Include="CoreSurface.fs" />
         <Compile Include="HostCoreAdoption.fs" />
         <Compile Include="Supervisor.fs" />
         <Compile Include="Features\RestartSubjectDecision.fs" />

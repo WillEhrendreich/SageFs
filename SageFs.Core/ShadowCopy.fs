@@ -142,6 +142,10 @@ let tryReadOriginDir (shadowedFilePath: string) : string option =
       | dir -> Some dir
   with _ -> None
 
+/// Loads a shadow-copied assembly into `alc` for inspection.
+let loadShadowed (alc: System.Runtime.Loader.AssemblyLoadContext) (shadowedPath: string) : System.Reflection.Assembly =
+  alc.LoadFromAssemblyPath shadowedPath
+
 /// Rewrites a Solution's project TargetPaths to point at shadow copies.
 /// References (dependency DLLs) are intentionally left in place — see below.
 let shadowCopySolution (shadowDir: string) (sln: Solution) : Solution =
