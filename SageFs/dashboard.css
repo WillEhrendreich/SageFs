@@ -1518,6 +1518,14 @@ h2 {
     flex: 1 1 100%;
   }
 
+  /* Three buttons of 110, 150 and 110px do not fit a 384px row with their gaps: tighter padding puts them side by side. */
+  /* The element name raises the rule above the touch-size rule near the end of the file, which sets the padding to 10px. */
+  .live-dock .live-pane-bar button.session-btn {
+    padding-inline: 0.4rem;
+    gap: 0.25rem;
+    white-space: nowrap;
+  }
+
   /* One more class than the phone rules further down, which keep the button at the right of a row it shared with the title. */
   .live-dock .live-pane-bar .live-pane-collapse {
     margin-left: 0;
@@ -3432,6 +3440,51 @@ h2 {
   }
 }
 
+/* The card's folded facts: one disclosure line in the dim text colour, which turns to the text colour when it is open. */
+.session-card-more > summary {
+  cursor: pointer;
+  color: var(--fg-dim);
+  padding: 2px 0;
+}
+
+.session-card-more[open] > summary {
+  color: var(--fg-default);
+}
+
+.session-card-more > .flex-row {
+  padding: 2px 0 4px;
+}
+
+.session-card-help > summary {
+  padding-left: 0.3rem;
+  cursor: pointer;
+  color: var(--fg-dim);
+  padding: 2px 0;
+}
+
+/* The timing toggle is a word now: dotted like the other words that open something. */
+.perf-toggle-btn {
+  margin-left: 0.5rem;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.session-card-help[open] > summary {
+  color: var(--fg-default);
+}
+
+/* A connection is a fact about the session, not a control: plain text, with no box to mistake for a button. */
+.sidebar .badge-agent {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+}
+
+/* A card with none of the folded facts has nothing to disclose, so it draws no disclosure line. */
+.session-card-more:not(:has(.meta, .badge-agent, .session-dir)) {
+  display: none;
+}
+
 /* The evaluation count in the header gives way below 62.5em, where "4 evaluations" was cut to "4 evaluati" beside the theme picker.
    The session card carries the same count. */
 @media (width < 62.562em) {
@@ -4088,6 +4141,7 @@ body[data-connected="false"] .statusline-info {
 }
 
 .live-view-close {
+  white-space: nowrap;
   padding: 2px 8px;
   border: 1px solid var(--fg-dim);
   background: transparent;
@@ -4676,9 +4730,36 @@ body {
   pointer-events: none;
 }
 
+/* The value sits between its two buttons, and the caption (the step and the way to choose a range) takes the line under them. With the
+   caption between the buttons the value was a whole screen-width from the + beside it, and the row stood taller than its neighbours. */
+.live-dock .live-knob[data-ranged="false"] {
+  flex-wrap: wrap !important;
+  align-items: center !important;
+}
+
+.live-dock .live-knob[data-ranged="false"] > .live-step:first-child {
+  order: 1;
+}
+
+.live-dock .live-knob[data-ranged="false"] > .live-readout {
+  order: 2;
+  min-width: 3rem;
+  text-align: center;
+}
+
+.live-dock .live-knob[data-ranged="false"] > .live-step:last-child {
+  order: 3;
+}
+
+.live-dock .live-knob[data-ranged="false"] > .live-slider-wrap {
+  order: 4;
+  flex: 1 1 100% !important;
+  min-width: 0 !important;
+}
+
 .live-dock .live-knob[data-ranged="false"] .live-slider-wrap {
   position: relative;
-  align-items: center;
+  align-items: flex-start;
   /* Wide enough that the caption wraps in two short lines at the narrowest column, instead of running under the value beside it. */
   flex: 1 1 8rem;
   /* A wrapping row sizes itself by what its items would take on one line, and a caption this narrow takes about 90px, so the row
@@ -4689,7 +4770,7 @@ body {
 .live-dock .live-knob[data-ranged="false"] .live-range,
 .live-dock .live-knob[data-ranged="false"] .live-limits-summary {
   white-space: normal;
-  text-align: center;
+  text-align: left;
   overflow-wrap: anywhere;
   line-height: 1.25;
 }

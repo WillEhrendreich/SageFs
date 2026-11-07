@@ -114,6 +114,24 @@ let tests =
          html |> Expect.stringContains "counts from the last activity" (string lastActive)
        | _ -> failtest "a built card always knows both moments")
 
+    testCase "WHY — a card keeps its secondary facts (who is connected, when it started, its folder, its memory, its last use) in one closed section, because a column of a dozen small facts was the page's densest region in every review" <| fun () ->
+      let info = SageFs.Tests.DashboardParsingTests.SidebarCards.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
+      let card = sessionCardOf SageFs.Tests.DashboardParsingTests.SidebarCards.now None 0 SessionHealth.Healthy info
+      let html = renderSessionsForSession "" [ card ] false |> renderNode
+      let section = html.IndexOf "session-card-more"
+      (section >= 0) |> Expect.isTrue "the card has the section"
+      html.Contains "<details" |> Expect.isTrue "it is a details element"
+      for fact in [ "started "; "last used "; "session-dir"; "session-rss" ] do
+        let at = html.IndexOf fact
+        (at > section) |> Expect.isTrue (sprintf "%s sits inside the section, after its start" fact)
+
+    testCase "WHY — the card's live-text facts each have an id, because without one a morph matches the memory line to the last-used line by position and both lines then print the memory" <| fun () ->
+      let info = SageFs.Tests.DashboardParsingTests.SidebarCards.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
+      let card = sessionCardOf SageFs.Tests.DashboardParsingTests.SidebarCards.now None 0 SessionHealth.Healthy info
+      let html = renderSessionsForSession "" [ card ] false |> renderNode
+      html |> Expect.stringContains "started has an id" "id=\"session-started-0a2b3c4d\""
+      html |> Expect.stringContains "last used has an id" "id=\"session-last-used-0a2b3c4d\""
+
     testCase "WHY — the memory the HTML no longer carries still reaches the browser, as one signal sample per live process" <| fun () ->
       let session = SageFs.Tests.DashboardParsingTests.SidebarCards.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
       let megabytes (mb: int) = int64 mb * 1024L * 1024L

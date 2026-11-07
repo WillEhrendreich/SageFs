@@ -94,7 +94,10 @@ let sessionCardHealthRenderingTests =
       let html = renderSessionsForSession "0a2b3c4d" [ s ] false |> renderNode
       html.Contains("session-health-badge") |> Expect.isFalse "no badge for Healthy"
       html.Contains("session-health-reason") |> Expect.isFalse "no reason line for Healthy"
-      html.Contains("<details") |> Expect.isFalse "the card itself never needs a disclosure for health")
+      // The one disclosure a card has holds its secondary facts (session-card-more). Health is never in it.
+      let disclosures = html.Split("<details").Length - 1
+      let folded = (html.Split("<details class=\"session-card-more\"").Length - 1) + (html.Split("<details class=\"session-card-help\"").Length - 1)
+      disclosures |> Expect.equal "every disclosure on the card is the folded facts or the button help, never a health one" folded)
 
     testCase "a Degraded card's reason is plain, unconditional HTML — never behind a <details> or hover-only title" (fun () ->
       let s = Fixtures.card (SessionHealth.Degraded "Session is Ready but nothing was loaded: 0 assemblies, 0 namespaces opened.") (Fixtures.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])

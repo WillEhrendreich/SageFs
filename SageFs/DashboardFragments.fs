@@ -815,7 +815,8 @@ let renderEvalStats (stats: EvalStatsView) =
       [ Attr.class' "perf-toggle-btn"
         Attr.create "aria-label""Show eval performance detail (avg/min/max, latency percentiles, eval-to-pixel)"
         Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.PerfStatsOpen Signals.PerfStatsOpen) ]
-      [ textEnc (Glyphs.text Glyph.Chart) ]
+      // A word: the chart glyph drew as a row of empty boxes in the page's font, and three reviewers took it for a missing character.
+      [ textEnc "timing" ]
     Elem.span [ Attr.class' "eval-perf-detail meta"; Ds.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
       textEnc (sprintf " · avg %.0fms · min %.0fms · max %.0fms" stats.AvgMs stats.MinMs stats.MaxMs)
       match stats.Sparkline with
@@ -1797,42 +1798,6 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 | true ->
                   Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● viewing" ]
                 | false -> ()
-                // Agent presence badges (multi-agent coordination)
-                yield! s.AgentBadges |> List.map (fun badge ->
-                  Elem.span
-                    [ Attr.class' badge.CssClass
-                      // What the chip is, on hover: the names are connection ids ("browser:427f5871", "cli-integrated") that three
-                      // reviewers could not place, and a chip dimmed for being stale said nothing about why.
-                      Attr.title (attrEnc (
-                        match badge.CssClass.Contains "badge-agent-stale" with
-                        | true -> sprintf "%s is an agent connected to this session and has not acted for a while" badge.Name
-                        | false -> sprintf "%s is an agent connected to this session" badge.Name))
-                      Attr.create "aria-label"(attrEnc (
-                        match badge.DetailLabel.Length > 0 with
-                        | true -> sprintf "%s — files: %s" badge.Name badge.DetailLabel
-                        | false -> badge.Name)) ]
-                    [ textEnc (Glyphs.lead Glyph.Members)
-                      textEnc (
-                        // The chip names a connection, so it says so: the raw ids ("cli-integrated", "browser:427f5871") were
-                        // unreadable to every reviewer who met them.
-                        let shown =
-                          match badge.Name with
-                          | "cli-integrated" -> "command line"
-                          // The browser's id means nothing to a person, and the chip's title still names the connection.
-                          | name when name.StartsWith "browser:" -> "browser"
-                          | name -> name
-                        // A chip drawn dim says why in its words: a connection that has not acted for a while is idle, not absent.
-                        let word = match badge.CssClass.Contains "badge-agent-stale" with | true -> "connected, idle" | false -> "connected"
-                        match badge.IntentLabel.Length > 0 with
-                        | true -> sprintf "%s: %s (%s)" word shown badge.IntentLabel
-                        | false -> sprintf "%s: %s" word shown) ])
-                match s.Uptime with
-                | Since.At createdAtMs ->
-                  Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
-                    textEnc "started "
-                    ElapsedClock.span (ElapsedClock.agoExpr createdAtMs)
-                  ]
-                | Since.Unknown -> ()
               ]
               // Transient status message (warmup, discovery, etc.) on its own
               // line so it never cramps the badges row
@@ -1930,25 +1895,6 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Attr.style "font-size: 0.857rem; color: var(--fg-yellow); font-weight: bold; overflow-wrap: anywhere; margin-top: 2px;" ]
                   [ textEnc line ]
               | None -> ()
-              // Row 2: working directory
-              match s.WorkingDir.Length > 0 with
-              | true ->
-                Elem.div
-                  [ Attr.class' "session-dir"
-                    Attr.style "font-size: 0.857rem; color: var(--fg-dim);"
-                    Attr.create "aria-label"(attrEnc s.WorkingDir)
-                    // The full path, for a card that wraps it.
-                    Attr.create "title" (attrEnc s.WorkingDir) ]
-                  [ textEnc (Glyphs.lead Glyph.Folder)
-                    // A break opportunity after each separator, so a narrow card wraps the path between its parts and never in
-                    // the middle of a word ("fixture" / "s").
-                    // Split after a `/` or a `\` (the separator stays with the part before it).
-                    yield! System.Text.RegularExpressions.Regex.Split(s.WorkingDir, @"(?<=[/\\])") |> Array.toList |> List.mapi (fun index part ->
-                      match index with
-                      | 0 -> [ textEnc part ]
-                      | _ -> [ Text.raw "<wbr>"; textEnc part ])
-                      |> List.concat ]
-              | false -> ()
               // Row 3: projects as tags + evals + last activity
               Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem; flex-wrap: wrap;" ] [
                 match s.ProjectsText.Length > 0 with
@@ -1969,20 +1915,6 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     textEnc (evaluationsText s.EvalCount)
                   ]
                 | false -> ()
-                // Worker RSS (vision §3.4 "worker RSS" — the first of the
-                // four numbers that decide cohort member count). Live from
-                // the worker's own pid; absent while starting/faulted/stopped
-                // or if the pid has already exited (never a fault).
-                // Whether there is a worker to measure is state (it renders); how many MB it holds is
-                // telemetry (it arrives as a signal patch, TelemetrySignals), so memory alone never pushes.
-                match s.WorkerRssBytes with
-                | Some _ ->
-                  Elem.span
-                    [ Attr.class' "meta"; testid "session-rss"
-                      Attr.create "aria-label" "Memory this session's FSI worker process is using (resident set size)"
-                      Ds.text (TelemetrySignals.textExpr (TelemetrySignals.workerRssMb s.Id) "session memory: ") ]
-                    []
-                | None -> ()
                 match s.TestSummary with
                 | Some ts when ts.Total > 0 ->
                   let badge = Features.LiveTesting.TestSummary.toInlineBadge ts
@@ -2025,13 +1957,6 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       [ textEnc pct ]
                   ]
                 | _ -> ()
-                match s.LastActivity with
-                | Since.At lastActiveAtMs ->
-                  Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
-                    textEnc "last used "
-                    ElapsedClock.span (ElapsedClock.agoExpr lastActiveAtMs)
-                  ]
-                | Since.Unknown -> ()
                 match s.App with
                 | AppRun.AppRunState.NotRunning -> ()
                 | app ->
@@ -2044,6 +1969,90 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     [ Attr.class' "session-card-app"
                       Attr.style (sprintf "flex-basis: 100%%; font-size: 0.857rem; color: %s; overflow-wrap: anywhere;" color) ]
                     [ textEnc (AppRun.describeState app) ]
+              ]
+              // The facts a person reads once and rarely again, folded: who is connected, when it started, the folder, the memory and
+              // the last use. The state, the project, the tests and the buttons stay in view. A reviewer called the card's dozen small
+              // lines the densest region on the page, in all three rounds.
+              Elem.details [ Attr.class' "session-card-more"; testid "session-card-more" ] [
+                Elem.summary [] [ textEnc "About this session" ]
+                Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem; flex-wrap: wrap;" ] [
+                  // Agent presence badges (multi-agent coordination)
+                  yield! s.AgentBadges |> List.map (fun badge ->
+                    Elem.span
+                      [ Attr.class' badge.CssClass
+                        // What the chip is, on hover: the names are connection ids ("browser:427f5871", "cli-integrated") that three
+                        // reviewers could not place, and a chip dimmed for being stale said nothing about why.
+                        Attr.title (attrEnc (
+                          match badge.CssClass.Contains "badge-agent-stale" with
+                          | true -> sprintf "%s is an agent connected to this session and has not acted for a while" badge.Name
+                          | false -> sprintf "%s is an agent connected to this session" badge.Name))
+                        Attr.create "aria-label"(attrEnc (
+                          match badge.DetailLabel.Length > 0 with
+                          | true -> sprintf "%s — files: %s" badge.Name badge.DetailLabel
+                          | false -> badge.Name)) ]
+                      [ textEnc (Glyphs.lead Glyph.Members)
+                        textEnc (
+                          // The chip names a connection, so it says so: the raw ids ("cli-integrated", "browser:427f5871") were
+                          // unreadable to every reviewer who met them.
+                          let shown =
+                            match badge.Name with
+                            | "cli-integrated" -> "command line"
+                            // The browser's id means nothing to a person, and the chip's title still names the connection.
+                            | name when name.StartsWith "browser:" -> "browser"
+                            | name -> name
+                          // A chip drawn dim says why in its words: a connection that has not acted for a while is idle, not absent.
+                          let word = match badge.CssClass.Contains "badge-agent-stale" with | true -> "connected, idle" | false -> "connected"
+                          match badge.IntentLabel.Length > 0 with
+                          | true -> sprintf "%s: %s (%s)" word shown badge.IntentLabel
+                          | false -> sprintf "%s: %s" word shown) ])
+                  match s.Uptime with
+                  | Since.At createdAtMs ->
+                    Elem.span [ Attr.id (sprintf "session-started-%s" sid); Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
+                      textEnc "started "
+                      ElapsedClock.span (ElapsedClock.agoExpr createdAtMs)
+                    ]
+                  | Since.Unknown -> ()
+                  match s.LastActivity with
+                  | Since.At lastActiveAtMs ->
+                    Elem.span [ Attr.id (sprintf "session-last-used-%s" sid); Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
+                      textEnc "last used "
+                      ElapsedClock.span (ElapsedClock.agoExpr lastActiveAtMs)
+                    ]
+                  | Since.Unknown -> ()
+                  // Worker RSS (vision §3.4 "worker RSS" — the first of the
+                  // four numbers that decide cohort member count). Live from
+                  // the worker's own pid; absent while starting/faulted/stopped
+                  // or if the pid has already exited (never a fault).
+                  // Whether there is a worker to measure is state (it renders); how many MB it holds is
+                  // telemetry (it arrives as a signal patch, TelemetrySignals), so memory alone never pushes.
+                  match s.WorkerRssBytes with
+                  | Some _ ->
+                    Elem.span
+                      [ Attr.id (sprintf "session-rss-%s" sid); Attr.class' "meta"; testid "session-rss"
+                        Attr.create "aria-label" "Memory this session's FSI worker process is using (resident set size)"
+                        Ds.text (TelemetrySignals.textExpr (TelemetrySignals.workerRssMb s.Id) "session memory: ") ]
+                      []
+                  | None -> ()
+                ]
+                // Row 2: working directory
+                match s.WorkingDir.Length > 0 with
+                | true ->
+                  Elem.div
+                    [ Attr.class' "session-dir"
+                      Attr.style "font-size: 0.857rem; color: var(--fg-dim);"
+                      Attr.create "aria-label"(attrEnc s.WorkingDir)
+                      // The full path, for a card that wraps it.
+                      Attr.create "title" (attrEnc s.WorkingDir) ]
+                    [ textEnc (Glyphs.lead Glyph.Folder)
+                      // A break opportunity after each separator, so a narrow card wraps the path between its parts and never in
+                      // the middle of a word ("fixture" / "s").
+                      // Split after a `/` or a `\` (the separator stays with the part before it).
+                      yield! System.Text.RegularExpressions.Regex.Split(s.WorkingDir, @"(?<=[/\\])") |> Array.toList |> List.mapi (fun index part ->
+                        match index with
+                        | 0 -> [ textEnc part ]
+                        | _ -> [ Text.raw "<wbr>"; textEnc part ])
+                        |> List.concat ]
+                | false -> ()
               ]
             ]
             // Which project this session is on, and a way to change it. A session
@@ -2218,10 +2227,12 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
             ]
             // What the three that take a session down do, in words on the card: three reviewers saw Stop, Dispose and Purge side by
             // side with no hint of how they differ, and a tooltip is not on screen for a person who does not hover.
-            Elem.div
-              [ Attr.class' "session-card-hint"
-                Attr.create "data-testid" "session-card-hint" ]
-              [ textEnc "Stop unloads the session and keeps its saved state. Close ends it. Delete ends it and removes the saved state, after asking." ]
+            Elem.details [ Attr.class' "session-card-help" ] [
+              Elem.summary [] [ textEnc "What do these buttons do?" ]
+              Elem.div
+                [ Attr.class' "session-card-hint"
+                  Attr.create "data-testid" "session-card-hint" ]
+                [ textEnc "Stop unloads the session and keeps its saved state. Close ends it. Delete ends it and removes the saved state, after asking." ] ]
             // Collapsible test status grid (one legible cell per test)
             match s.TestTreemapEntries.Length with
             | 0 -> ()
