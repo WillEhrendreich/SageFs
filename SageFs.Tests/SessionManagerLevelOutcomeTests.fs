@@ -137,6 +137,8 @@ let private withinSignal (pending: Task) : Task =
     | false -> failtestf "did not happen within %A" TestTimeouts.patienceInProcess
   } :> Task
 
+let private withinSignal2 (pending: Task<WorkerResponse>) : Task<WorkerResponse> = within pending
+
 let private readySession (h: Harness) : Task<SessionId * int> =
  task {
   let info =
@@ -282,6 +284,21 @@ let tests =
         let! final = untilFreshness h id isInSync
         final |> Expect.equal "level" ReplFreshness.InSync
         h.DiscoveryAsks.Value |> Expect.equal "the tests were fetched again" (discoveriesBefore + 1) })
+    }
+
+    testTask "WHY - a level that answers Leveled is not taken as a rebuilt host by the session's proxy: the manager judges that answer itself, because a save may have landed after the host was built" {
+      do! withHarness (fun h -> task {
+        let! id, _ = readySession h
+        h.GateDriven.Value <- true
+        h.Mailbox.Post(SessionCommand.ReloadObserved(id, deltaPending "Handlers.describe"))
+        let before = freshnessOf h id
+        before |> Expect.equal "behind, and not asked" (ReplFreshness.CannotLevel (1, [ "Handlers.describe" ], [ LevelBlocker.GateDriven ]))
+        let! reply = withinSignal2 ((sessionOf h id).Proxy (WorkerMessage.LevelRepl "rid") |> Async.StartAsTask)
+        match reply with
+        | WorkerResponse.LevelResult(_, LevelAnswer.Leveled) -> ()
+        | other -> failtestf "the fake worker should answer Leveled, got %A" other
+        // The proxy posts what it saw before the caller hears the answer, so this round trip is after it.
+        freshnessOf h id |> Expect.equal "the proxy did not clear it" before })
     }
 
     testTask "WHY - a fetch that fails after the host was replaced leaves the state Unknown with the reason, never level" {

@@ -8,11 +8,11 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (steps 1 to 8 built; the outcome gate's in-flight cell and the large-solution reset time are open) |
+| Status | In progress (built and measured; one decision for Will is open: the cost on a large project, see Measure first item 2 below) |
 | Size | M |
 | Branch and worktree | `worktree-agent-a9111e89c20aeb7f4`, `/home/will/Work/SageFs/.claude/worktrees/agent-a9111e89c20aeb7f4` |
-| Last green commit | the commit that carries this block: `dotnet SageFs.Tests.dll --summary` (unfiltered) 15060 of 15060, `--ratchets` 517 of 517, both Trusted. The host tier ran only the three `run_app repl leveling` cells on net11 (green); the net10 cells need the net10 host built (`dotnet build build/GateProducts.proj -c Release`) and were not run here. |
-| Next action | Run the host tier's `run_app repl leveling` cells on a machine that is not loaded (they were run once, filtered, here). Add the in-flight cell: it needs a fixture project with a test that blocks until released, so a `RunTests` is in flight while `LevelRepl` is asked. Measure the host reset on a large solution (Measure first, item 2). Then set Status to Done with the landmark `SageFs.Core/ReplLeveling.fs` `ReplLeveling`. |
+| Last green commit | the commit that carries this block: `dotnet SageFs.Tests.dll --summary` (unfiltered) 15068 of 15068, `--ratchets` 517 of 517, both Trusted. The host tier ran, filtered: the six `run_app repl leveling` cells (net10 and net11), the in-flight cell and the large-project measurement, all green. |
+| Next action | Decide what a level may cost on a large project (item 2 below: 25 to 40 s on SageFs.Tests, under load average 25 to 37 on 16 cores, and an eval sent meanwhile is refused). Options: leave it; skip the level when the last measured reset was over a bound; or hold an eval behind the level instead of refusing it. Measure again on an idle machine. Then set Status to Done with the landmark `SageFs.Core/ReplLeveling.fs` `ReplLeveling`. |
 | Decisions made | 2026-11-07, the agent on this item, from the plan's recommendations: defer-only (no replay of definitions); `Leveling` and `CannotLevel` are `BehindApp` on the wire, with an additive `blockedBy` array; leveling is always on, with no setting. A level waits for a test run in flight instead of answering `TestsRunning` and being retried: the worker's gate holds the level until the last run leaves, so no timer and no second channel from the worker to the daemon are needed. |
 | Surprises | See "What changed from the plan" below. |
 
@@ -214,17 +214,24 @@ Measure first:
    But a hard reset keeps `evalStats`, so once any eval has run the count never returns to 0, and a hot reload's `#load` counts as
    an eval. The actor now keeps its own `hostHolds` (`ReplLeveling.HostHolds`): evals started since the host was built, leaving out
    the hot reload's (`hotReload` argument), and the init script that ran in the host. Every reset empties it.
-2. The host reset on a large solution is not measured. The host-tier cell prints `REPL-LEVELING [...] ... took N ms` for the
-   run_app fixture; that is the same tiny project as the plan's 2 to 2.7 s figure.
+2. The host reset on a large project, measured 2026-11-07 (`A level on the largest project here` in `LevelInFlightTests.fs`, which
+   runs the real `LevelSession` through the actor against `SageFs.Tests.fsproj`, five levels in one process): 26101, 26738, 25133,
+   25122 and 39068 ms, p50 26.1 s, max 39.1 s. The machine was loaded by other agents' builds and the release gate: load averages
+   24.45 26.73 31.66 before and 37.18 30.40 32.27 after, 16 logical cores. The small `run_app` fixture on the same machine took
+   3444 ms on net10 and 2599 and 2822 ms on net11. So the "about 2 seconds" budget holds for a small project and does not hold for a
+   large one: the level is a background step the user does not trigger, but the actor refuses an eval sent during it ("Session is
+   resetting"), for 25 seconds or more. The banner now says the time grows with the project. An idle-machine number is still to take.
 3. Nothing cleared `BehindApp` after an in-worker reset, as expected. `SessionProxy.observingHostRebuilds` now sees every
    `HardResetSession` that resolves Ok on the session's own proxy (the editor's reset, the smart reset, a level) and posts
    `HostRebuilt`. A soft `ResetSession` does not rebuild the shadow copy (`EvalReset` re-warms on the existing one), so it leaves the
    state alone.
 4. What a test run in flight does when its host is disposed is not measured. The gate makes it unreachable for a level (a level
    waits), so the answer only matters for a user's own hard reset while a run is in flight. That case is unchanged.
-5. A reset does not clear `latestDynamicRunTest`, so after a hard reset it still points at the disposed host. Not fixed here: a level
-   never resets while it is set (`LiveTestsDefined`), and the editor's hard reset still leaves it. The buffer's discovered tests have
-   the same problem, in `mkLiveTestEvalSupport`'s closure.
+5. A reset did not clear `latestDynamicRunTest`, so after a hard reset it still pointed at the disposed host, and a level that
+   followed was refused for tests that were gone. Fixed: `HostBound` (`SageFs.Host/HostBoundState.fs`) holds what the worker keeps
+   about the host's code: the run-test slot, the tests a buffer discovered, the buffer evals' record of evaluated modules and the file
+   watcher's (the last two were the same omission, found by sweeping). `WorkerMain.forgettingHost` empties it after a hard reset, a
+   soft reset or a level that answers Ok, and the level proceeds afterwards (`HostBoundTests`, `LevelKeeperTests`).
 
 Built differently from the steps:
 
@@ -240,6 +247,14 @@ Built differently from the steps:
   until the editor ends the hold would have a pending level hold every other run behind a hold nobody may ever end.
 - `ReplFreshness` gained `Leveling` and `CannotLevel` (and `FreshnessUnknown.LevelFailed`). `DashboardFragments.fs` and
   `SessionReadiness.fs` each needed one match arm, so the card line shows the blockers without any other dashboard change.
+- The host tier ran on both runtimes: the three `run_app repl leveling` cells pass on net10 (level took 3444 ms) and net11 (2599 ms),
+  after `dotnet build build/GateProducts.proj -c Release` built the net10 host. Nothing differed between them.
+- The in-flight cell is `A level and a test run in flight` (`LevelInFlightTests.fs`, host tier). It is not a spawned worker
+  process: a run_app fixture has no test that can block, so it wires the worker's real parts (a real FSI host behind the real
+  eval actor, `WorkerHttpTransport.startServerGated` with the streamed run and the level route, the real `LevelKeeper`) and a test
+  runner that blocks until the case lets it go. It proves: the level waits (`LevelPending 1`), a run that arrives meanwhile is
+  held (the runner is not reached), the run in flight ends on the host it started on, the level answers Leveled, and the held run
+  then runs on the new host. Breaking `LevelKeeper` so a pending level acts at once makes it fail.
 - Three file budgets rose with comments in `RatchetBudgets.fs` (`SessionManager.fs`, `AppState.fs`, `SessionManagerCallbacks.fs`).
 
 What sagefs.nvim and the VS Code extension need: nothing to keep working. Both read `replFreshness.state == "BehindApp"` and

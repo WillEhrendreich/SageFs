@@ -393,7 +393,7 @@ module ReplFreshness =
         (gap saves declarations)
     | ReplFreshness.Leveling (saves, declarations) ->
       sprintf
-        "The REPL is BEHIND the app: %s, and SageFs is bringing the REPL and live tests level now, which takes about 2 seconds and leaves the app alone. Until it has finished, a call to what changed runs the OLD code."
+        "The REPL is BEHIND the app: %s, and SageFs is bringing the REPL and live tests level now, which takes about 2 seconds on a small project and tens of seconds on a large one, and leaves the app alone. Until it has finished, a call to what changed runs the OLD code."
         (gap saves declarations)
     | ReplFreshness.CannotLevel (saves, declarations, blockers) ->
       sprintf

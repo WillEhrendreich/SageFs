@@ -687,7 +687,7 @@ I'd rather you hear this from me than find it at 11pm.
   is running, the REPL has run none of your own evals since it was built, an init
   script defined nothing in it, no editor buffer's live tests are in it and no test run
   is in flight (one in flight finishes first). It replaces the FSI host and leaves the
-  app's process and state alone, which takes about 2 seconds, and the state reads
+  app's process and state alone, which takes about 2 seconds on a small project and about 25 to 40 seconds on SageFs.Tests under load (an eval sent meanwhile is refused with "Session is resetting"), and the state reads
   `BehindApp` with a message saying it is being brought level until the tests and
   coverage maps have been fetched again. When something would be lost it does
   nothing, and `blockedBy` on the state lists what stopped it (`ReplHoldsDefinitions`,

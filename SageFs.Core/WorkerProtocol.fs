@@ -561,20 +561,31 @@ module WorkerProtocol =
       | WorkerMessage.SetSaveSource _
       | WorkerMessage.Shutdown -> false
 
-  /// Whether a reply says the worker replaced its FSI host.
+  /// What a reply says happened to the worker's FSI host.
   [<RequireQualifiedAccess>]
-  type HostRebuild =
+  type HostChange =
+    /// Replaced by a host built from the build on disk, by a hard reset: the manager takes it as a rebuilt host.
     | HostRebuilt
+    /// The same, by a level the manager asked for: the manager judges that answer itself (a save that landed meanwhile reopens the gap).
+    | HostLeveled
+    /// Replaced by a host warmed on the build the old one ran (a soft reset).
+    | HostRewarmed
     | HostUntouched
 
   /// What a reply says about the worker's FSI host. Every case is listed, so a new reply cannot slip by unconsidered.
   [<RequireQualifiedAccess>]
   module WorkerResponse =
-    /// A hard reset of the host that resolved Ok: the host now runs the build on disk.
-    let hostRebuild (response: WorkerResponse) : HostRebuild =
+    /// What a reply says happened to the host: a hard reset that resolved Ok, or a level that answered Leveled, built it from the
+    /// build on disk; a soft reset that resolved Ok warmed a new one on the build it had.
+    let hostChange (response: WorkerResponse) : HostChange =
       match response with
-      | WorkerResponse.HardResetResult(_, Result.Ok _) -> HostRebuild.HostRebuilt
+      | WorkerResponse.HardResetResult(_, Result.Ok _) -> HostChange.HostRebuilt
+      | WorkerResponse.LevelResult(_, LevelAnswer.Leveled) -> HostChange.HostLeveled
+      | WorkerResponse.ResetResult(_, Result.Ok _) -> HostChange.HostRewarmed
       | WorkerResponse.HardResetResult(_, Result.Error _)
+      | WorkerResponse.ResetResult(_, Result.Error _)
+      | WorkerResponse.LevelResult(_, LevelAnswer.LevelDeferred _)
+      | WorkerResponse.LevelResult(_, LevelAnswer.LevelFailed _)
       | WorkerResponse.EvalResult _
       | WorkerResponse.CheckResult _
       | WorkerResponse.TypeCheckWithSymbolsResult _
@@ -584,8 +595,6 @@ module WorkerProtocol =
       | WorkerResponse.LiveValuesResult _
       | WorkerResponse.LiveMemberResult _
       | WorkerResponse.EvalCancelled _
-      | WorkerResponse.ResetResult _
-      | WorkerResponse.LevelResult _
       | WorkerResponse.ScriptLoaded _
       | WorkerResponse.TestRunResults _
       | WorkerResponse.InitialTestDiscovery _
@@ -597,7 +606,7 @@ module WorkerProtocol =
       | WorkerResponse.SavesApplied _
       | WorkerResponse.WorkerReady
       | WorkerResponse.WorkerShuttingDown
-      | WorkerResponse.WorkerError _ -> HostRebuild.HostUntouched
+      | WorkerResponse.WorkerError _ -> HostChange.HostUntouched
 
   /// Wrapping helpers for `SessionProxy` — kept next to the type so every
   /// place that resolves a proxy from worker URLs (`SessionManagementOps.GetProxy`,
@@ -622,9 +631,11 @@ module WorkerProtocol =
         async {
           let! response = proxy msg
           // Only a hard reset is answered with a resolved `HardResetResult`, so the reply alone says it.
-          match WorkerResponse.hostRebuild response with
-          | HostRebuild.HostRebuilt -> rebuilt ()
-          | HostRebuild.HostUntouched -> ()
+          match WorkerResponse.hostChange response with
+          | HostChange.HostRebuilt -> rebuilt ()
+          | HostChange.HostLeveled
+          | HostChange.HostRewarmed
+          | HostChange.HostUntouched -> ()
           return response
         }
 

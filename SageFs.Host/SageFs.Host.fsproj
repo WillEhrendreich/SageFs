@@ -41,6 +41,7 @@
         <Compile Include="AppRunner.fs" />
         <Compile Include="RunAppDelta.fs" />
         <Compile Include="WorkerHttpTransport.fs" />
+        <Compile Include="HostBoundState.fs" />
         <Compile Include="WorkerMain.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>

@@ -278,7 +278,7 @@ let levelingTests =
       let text = ReplFreshness.describe (ReplFreshness.Leveling (2, [ "A.f" ]))
       text |> Expect.stringContains "still behind" "BEHIND"
       text |> Expect.stringContains "says it is being brought level" "bringing the REPL and live tests level"
-      text |> Expect.stringContains "says how long" "about 2 seconds"
+      text |> Expect.stringContains "says how long, and that it grows with the project" "tens of seconds on a large one"
       text |> Expect.stringContains "says the app is not touched" "leaves the app"
       ReplFreshness.banner (ReplFreshness.Leveling (1, [])) |> Expect.stringStarts "a warning" "WARNING"
 

@@ -390,7 +390,8 @@ let handleMessage
 ///    (discovery, run-test) is written — the last-good live view is left
 ///    exactly as it was, and the caller sees `Error`. A broken intermediate
 ///    keystroke can never wipe or falsely flip prior results.
-let mkLiveTestEvalSupport
+let mkLiveTestEvalSupportOn
+  (bound: HostBound)
   (actor: AppActor)
   (initialDiscoveredTests: Features.LiveTesting.TestCase array)
   (initialProviders: Features.LiveTesting.ProviderDescription list)
@@ -400,27 +401,20 @@ let mkLiveTestEvalSupport
   // Dynamic test DISCOVERY from FSI evals — the live-merged sibling of the
   // worker's `latestDynamicRunTest` slot. Same ref + Volatile/Interlocked
   // discipline: writer is the eval path (HTTP handler thread via
-  // `EvalLiveTestFile`), reader is any thread calling `GetTestDiscovery`.
-  let dynamicDiscovery : Features.LiveTesting.TestCase array ref = ref [||]
-  let setDynamicDiscovery (tests: Features.LiveTesting.TestCase array) =
-    System.Threading.Interlocked.Exchange(dynamicDiscovery, tests) |> ignore
-
+  // `EvalLiveTestFile`), reader is any thread calling `GetTestDiscovery`. It lives in `bound`, which a reset empties.
   let getInitialDiscovery () =
-    let dynamic = System.Threading.Volatile.Read(&dynamicDiscovery.contents)
-    SageFs.Features.LiveTesting.TestDiscoveryMerge.merge initialDiscoveredTests dynamic, initialProviders
+    SageFs.Features.LiveTesting.TestDiscoveryMerge.merge initialDiscoveredTests bound.Discovery, initialProviders
 
   // Per-eval-file CompilationContext state for `EvalLiveTestFile`, tracking
   // this handler's own EvaluatedModules/FileCache — deliberately separate
   // from the file watcher's own `compilationState` (that one only exists
   // when a watcher is running; buffer-changed evals must work with the
-  // watcher off, e.g. Interactive workflow sessions with live testing on).
-  let liveTestFileCompilationState : Middleware.CompilationContext.CompilationState ref =
-    ref Middleware.CompilationContext.CompilationState.empty
+  // watcher off, e.g. Interactive workflow sessions with live testing on). Also in `bound`.
 
   let evalLiveTestFile (filePath: string) (content: string)
     : Async<Result<Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list, SageFsError>> =
     async {
-      let cacheState = System.Threading.Volatile.Read(&liveTestFileCompilationState.contents)
+      let cacheState = bound.BufferEvals
       try
         let! fileStructure, updatedCache =
           Middleware.CompilationContext.parseFileStructureCached filePath content cacheState.FileCache
@@ -447,9 +441,7 @@ let mkLiveTestEvalSupport
         | Ok _ ->
           // Only commit identity-tracking state on a CONFIRMED-good eval —
           // a failed submission must never be "remembered" as evaluated.
-          System.Threading.Volatile.Write(
-            &liveTestFileCompilationState.contents,
-            { cacheState with EvaluatedModules = updatedModules; FileCache = updatedCache })
+          bound.SetBufferEvals { cacheState with EvaluatedModules = updatedModules; FileCache = updatedCache }
           match response.Metadata |> Map.tryFind "liveTestRunTest" with
           | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
             setDynamicRunTest runTest
@@ -457,8 +449,8 @@ let mkLiveTestEvalSupport
           let freshDynamic =
             match response.Metadata |> Map.tryFind "liveTestHookResult" with
             | Some (:? Features.LiveTesting.LiveTestHookResultDto as dto) -> dto.DiscoveredTests
-            | _ -> System.Threading.Volatile.Read(&dynamicDiscovery.contents)
-          setDynamicDiscovery freshDynamic
+            | _ -> bound.Discovery
+          bound.SetDiscovery freshDynamic
           let merged = SageFs.Features.LiveTesting.TestDiscoveryMerge.merge initialDiscoveredTests freshDynamic
           return Ok (merged, initialProviders)
       with ex ->
@@ -468,6 +460,30 @@ let mkLiveTestEvalSupport
     }
 
   getInitialDiscovery, evalLiveTestFile
+
+/// The same, with a `HostBound` of its own: for a host that has nothing else to forget with it (a test harness).
+let mkLiveTestEvalSupport
+  (actor: AppActor)
+  (initialDiscoveredTests: Features.LiveTesting.TestCase array)
+  (initialProviders: Features.LiveTesting.ProviderDescription list)
+  (setDynamicRunTest: (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) -> unit)
+  =
+  mkLiveTestEvalSupportOn (HostBound()) actor initialDiscoveredTests initialProviders setDynamicRunTest
+
+/// Wrap a worker's handler so a reset it answers Ok (or a level it answers Leveled) empties what the worker holds about the old
+/// host. The new host holds none of it: a run-test function from a disposed host, the tests a buffer discovered, and the records
+/// of which modules were evaluated into it.
+let forgettingHost (bound: HostBound) (handler: WorkerMessage -> Async<WorkerResponse>) : WorkerMessage -> Async<WorkerResponse> =
+  fun message ->
+    async {
+      let! response = handler message
+      match WorkerResponse.hostChange response with
+      | HostChange.HostRebuilt
+      | HostChange.HostLeveled
+      | HostChange.HostRewarmed -> bound.Forget()
+      | HostChange.HostUntouched -> ()
+      return response
+    }
 
 /// Make this process's stdout line-unbuffered for the rest of its life.
 ///
@@ -751,12 +767,12 @@ let run (sessionId: string) (requestedPort: int) = async {
   // Writer (file watcher async on ThreadPool) and reader (HTTP handler thread) are
   // on different threads. Plain mutable has no memory barrier — on ARM64 .NET the
   // store may not be visible to the reader without volatile semantics.
-  let latestDynamicRunTest : (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) option ref =
-    ref None
+  // It lives in `bound` with the other things the worker holds about the host's code, which a reset empties (`forgettingHost`).
+  let bound = HostBound()
 
   // Composed RunTest: try dynamic first (for interactively defined tests), fall back to project
   let getRunTest () =
-    match System.Threading.Volatile.Read(&latestDynamicRunTest.contents) with
+    match bound.RunTest with
     | Some dynamicRt ->
       fun (tc: Features.LiveTesting.TestCase) -> async {
         let! result = dynamicRt tc
@@ -764,7 +780,7 @@ let run (sessionId: string) (requestedPort: int) = async {
         | Features.LiveTesting.TestResult.NotRun -> return! projectRunTest tc
         | found -> return found }
     | None -> projectRunTest
-  let setDynamicRunTest v = System.Threading.Interlocked.Exchange(latestDynamicRunTest, Some v) |> ignore
+  let setDynamicRunTest v = bound.SetRunTest v
 
   // The test-run gate, and the level that waits for it. Tests an editor buffer defined in the host are in the slot above, so
   // a set slot means the host holds something a reset would lose.
@@ -772,7 +788,7 @@ let run (sessionId: string) (requestedPort: int) = async {
     LevelKeeper(
       actor,
       fun () ->
-        match System.Threading.Volatile.Read(&latestDynamicRunTest.contents) with
+        match bound.RunTest with
         | Some _ -> DynamicTests.Defined
         | None -> DynamicTests.Absent)
 
@@ -782,7 +798,7 @@ let run (sessionId: string) (requestedPort: int) = async {
   // testable against a real FSI actor without spinning up the whole worker
   // process (project loading, HTTP server, file watcher).
   let getInitialDiscovery, evalLiveTestFile =
-    mkLiveTestEvalSupport actor initialDiscoveredTests initialProviders setDynamicRunTest
+    mkLiveTestEvalSupportOn bound actor initialDiscoveredTests initialProviders setDynamicRunTest
 
   let appRunner = AppRunner.create AppRunner.defaultTimeouts AppRunner.processEnv
 
@@ -1071,7 +1087,7 @@ let run (sessionId: string) (requestedPort: int) = async {
       // across hot-reload cycles. Without this, each reload is context-free —
       // preprocessForFsi can't determine which modules are already `open`'d,
       // leading to duplicate module errors or missing opens.
-      let mutable compilationState = Middleware.CompilationContext.CompilationState.empty
+      // It is held in `bound`, so a reset of the FSI host empties it with the rest of what described the old host.
       // Chesterton's fence: SemaphoreSlim(1,1) serializes file change processing.
       // Without this, two different files changing within the debounce window spawn
       // two async workflows that race on `compilationState` — the mutable
@@ -1990,7 +2006,7 @@ let run (sessionId: string) (requestedPort: int) = async {
                   try
                     let! fs, cache =
                       Middleware.CompilationContext.parseFileStructureCached
-                        filePath fileContent compilationState.FileCache
+                        filePath fileContent bound.WatcherEvals.FileCache
                       |> Async.AwaitTask
                     return Some fs, cache
                   with exn ->
@@ -2004,7 +2020,7 @@ let run (sessionId: string) (requestedPort: int) = async {
                     Features.ReloadBroadcast.broadcastOutcome
                       (Features.ReloadOutcome.ReloadOutcome.CompileFailed
                         (sprintf "%s does not parse: %s" (IO.Path.GetFileName filePath) exn.Message))
-                    return None, compilationState.FileCache
+                    return None, bound.WatcherEvals.FileCache
                 }
                 match fileStructure with
                 | None -> () // parse failed — error already broadcast, skip reload
@@ -2015,10 +2031,10 @@ let run (sessionId: string) (requestedPort: int) = async {
                     fileStructure
                     Middleware.CompilationContext.EvalMode.File
                     None
-                    compilationState.EvaluatedModules
+                    bound.WatcherEvals.EvaluatedModules
                     fileContent
-                compilationState <-
-                  { compilationState with
+                bound.SetWatcherEvals
+                  { bound.WatcherEvals with
                       EvaluatedModules = updatedModules
                       FileCache = updatedCache }
                 let code = preprocessed.Code
@@ -2332,8 +2348,9 @@ let run (sessionId: string) (requestedPort: int) = async {
 
   // Signal readiness over the pipe
   let ungatedHandler =
-    handleMessage actor result.GetSessionStatus result.GetEvalStats result.GetStatusMessage result.ProjectRoles
-      getRunTest setDynamicRunTest getInitialDiscovery evalLiveTestFile appRuns debugTests
+    forgettingHost bound (
+      handleMessage actor result.GetSessionStatus result.GetEvalStats result.GetStatusMessage result.ProjectRoles
+        getRunTest setDynamicRunTest getInitialDiscovery evalLiveTestFile appRuns debugTests)
 
   // The messages that run code in the FSI host for a test hold the gate while they do, so a level never replaces the host under one.
   let handler (msg: WorkerMessage) : Async<WorkerResponse> =
@@ -2350,8 +2367,8 @@ let run (sessionId: string) (requestedPort: int) = async {
   let readyHandler (msg: WorkerMessage) = async {
     match msg with
     | WorkerMessage.LevelRepl(replyId) ->
-      let! answer = levelKeeper.Level()
-      return WorkerResponse.LevelResult(replyId, answer)
+      let level (_: WorkerMessage) = async { let! answer = levelKeeper.Level() in return WorkerResponse.LevelResult(replyId, answer) }
+      return! forgettingHost bound level msg
     | WorkerMessage.GetInstrumentationMaps(replyId) ->
       // The LIVE holder, not the array frozen at actor creation: an in-worker hard reset
       // re-instruments a fresh copy and writes the holder (AppState's EvalHardReset), so the
