@@ -56,6 +56,8 @@ module DockSignals =
     @ LiveBindingsViewPanel.ViewSignals.initial
     // What a row's knob stages before it posts (LiveBindingsTweakView): declared once, with the dock's own.
     @ TweakSignals.initial
+    // What the Watch tab's box holds and its last note (LiveBindingsWatch).
+    @ LiveBindingsWatch.WatchSignals.initial
 
 module DockIds =
   let [<Literal>] Dock = "live-dock"
@@ -322,7 +324,7 @@ let private filteredOutExpr (binding: string) : string =
 let private tabHidesExpr (binding: string) (changed: bool) : string =
   let open' (tab: WatchTab) = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
   let changedLiteral = match changed with | true -> "true" | false -> "false"
-  [ WatchTab.Pinned; WatchTab.Changes ]
+  [ WatchTab.Pinned; WatchTab.Changes; WatchTab.Watch ]
   |> List.map (fun tab -> sprintf "(%s && !(%s))" (open' tab) (Tweak.WatchTabs.listsJs tab (isPinnedExpr binding) changedLiteral))
   |> String.concat " || "
 
@@ -334,7 +336,9 @@ let private hiddenExpr (binding: string) (changed: bool) : string =
 let private tabEmptyExpr (tab: WatchTab) (bindings: string list) (changedNames: Set<string>) : string =
   let open' = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
   match tab with
-  | WatchTab.All -> "false"
+  | WatchTab.All
+  // the Watch tab has its own empty words, drawn with its rows
+  | WatchTab.Watch -> "false"
   | WatchTab.Changes ->
     let any = bindings |> List.exists (fun name -> Tweak.WatchTabs.lists tab false (Set.contains name changedNames))
     sprintf "%s && %s" open' (match any with | true -> "false" | false -> "true")
@@ -469,7 +473,13 @@ let private treeElement (look: View) (children: XmlNode list) : XmlNode =
 /// state; the file and line; the knob), and a column nobody names is one a reader has to guess at. It is decoration for the eye, so
 /// it is hidden from assistive technology: every row carries its own accessible names. The type label follows the Type setting.
 let private columnHeader (look: View) : XmlNode =
-  Elem.div [ Attr.class' "live-cols"; Attr.create "aria-hidden" "true" ] [
+  Elem.div
+    [ Attr.id "live-cols"
+      Attr.class' "live-cols"
+      Attr.create "aria-hidden" "true"
+      // The Watch tab lists no bindings, so the columns of a binding's row have nothing under them there.
+      Ds.class' ("live-hidden", sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token WatchTab.Watch))
+      Ds.preserveAttr "class" ] [
     Elem.span [ Attr.class' "live-cols-name" ] [
       Elem.span [] [ Text.raw "Name · running value" ]
       match look.Layout.Type with
@@ -773,7 +783,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
         Elem.div
           [ Attr.id DockIds.NoMatch
             Attr.class' "live-empty live-hidden"
-            Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" (nothingMatchesExpr names)))
+            Ds.class' ("live-hidden", attrEnc (sprintf "!(%s) || $%s === '%s'" (nothingMatchesExpr names) DockSignals.LiveTab (WatchTab.token WatchTab.Watch)))
             Ds.preserveAttr "class" ]
           [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.NoNameMatchesFilter) ]
         // An open tab with nothing on it says so, in words, instead of showing an empty pane.
@@ -795,7 +805,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
 /// The tab bar: All, Pinned and Changes, each with how many it lists. The open tab is a signal, so a push never closes it, and the pressed
 /// state is read from the signal and said in the markup (`aria-pressed`) as well as in the fill. The Pinned count is the page's own, from
 /// the pins it holds; the other two are the server's.
-let tabBar (bindingCount: int) (changedCount: int) : XmlNode =
+let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
   let open' (tab: WatchTab) = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
   Elem.div
     [ Attr.class' "live-tabs"
@@ -807,13 +817,14 @@ let tabBar (bindingCount: int) (changedCount: int) : XmlNode =
           match tab with
           | WatchTab.All -> [ textEnc (string bindingCount) ]
           | WatchTab.Changes -> [ textEnc (string changedCount) ]
+          | WatchTab.Watch -> [ textEnc (string watchCount) ]
           | WatchTab.Pinned -> [ textEnc "0" ]
         Elem.button
           [ Attr.id (sprintf "live-tab-%s" (WatchTab.token tab))
             Attr.class' "session-btn session-btn-labeled live-tab"
             Attr.type' "button"
             testid (sprintf "live-tab-%s" (WatchTab.token tab))
-            Attr.create "aria-pressed" (match tab with | WatchTab.All -> "true" | WatchTab.Pinned | WatchTab.Changes -> "false")
+            Attr.create "aria-pressed" (match tab with | WatchTab.All -> "true" | WatchTab.Pinned | WatchTab.Changes | WatchTab.Watch -> "false")
             Ds.attr' ("aria-pressed", sprintf "%s ? 'true' : 'false'" (open' tab))
             Ds.class' ("session-btn-on", open' tab)
             Ds.preserveAttr "class aria-pressed"
@@ -826,7 +837,8 @@ let tabBar (bindingCount: int) (changedCount: int) : XmlNode =
                @ (match tab with
                   | WatchTab.Pinned -> [ Ds.text (sprintf "$%s.split(',').filter(Boolean).length" DockSignals.LivePins) ]
                   | WatchTab.All
-                  | WatchTab.Changes -> []))
+                  | WatchTab.Changes
+                  | WatchTab.Watch -> []))
               count ] ]
 
 /// The open pane: a header (what opened it, when it was read, a filter, the pin), then the tree.
@@ -916,10 +928,22 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
     | On -> yield! changesStrip (Tweak.ChangesStrip.Changes.ofView tweaks)
     | Off -> ()
     match source with
-    | WalkedBindings view -> tabBar view.Snapshot.Bindings.Length (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count
+    | WalkedBindings view ->
+      let watchCount = match controls with | Some c -> c.Watch.Count | None -> 0
+      tabBar view.Snapshot.Bindings.Length (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count watchCount
     | PrintedBindings _
     | NothingBound -> ()
     yield! body
+    // The Watch tab's expressions: drawn always and shown while that tab is open, like the bindings the other tabs hide.
+    match controls, source with
+    | Some viewControls, WalkedBindings _ ->
+      Elem.div
+        [ Attr.id "live-watch-tab"
+          Attr.class' "live-watch-tab live-hidden"
+          Ds.class' ("live-hidden", sprintf "$%s !== '%s'" DockSignals.LiveTab (WatchTab.token WatchTab.Watch))
+          Ds.preserveAttr "class" ]
+        [ viewControls.Watch.Body ]
+    | _ -> ()
   ]
 
 /// The open pane with no remedy note in its bar.

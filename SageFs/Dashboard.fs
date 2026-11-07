@@ -1056,12 +1056,7 @@ let private panelFactsFor
 /// The Live Bindings view this session shows: its workflow's axes, resolved across the global settings and the app's own
 /// `.SageFs/settings.json` (the session's working directory is "this app"). A session with no working directory has only the
 /// global layer.
-let private liveBindingsViewPaths (workingDir: string) : SageFs.ConfigPaths =
-  let repo =
-    match System.String.IsNullOrWhiteSpace workingDir with
-    | true -> SageFs.NoRepoCheckout
-    | false -> SageFs.RepoRootAt workingDir
-  { GlobalDir = DaemonState.SageFsDir; Repo = repo }
+let private liveBindingsViewPaths (workingDir: string) : SageFs.ConfigPaths = LiveBindingsWatch.pathsFor workingDir
 
 let private liveBindingsResolved (workflow: WorkflowTypes.SessionWorkflow) (workingDir: string) (tab: SageFs.WatchTab) : SageFs.ResolvedView =
   SageFs.SettingsCatalog.viewForTab (liveBindingsViewPaths workingDir) (SageFs.ViewWorkflow.ofSessionWorkflow workflow) tab
@@ -1244,7 +1239,14 @@ let buildDashboardSnapshotWithSessionsFor
       let controls =
         match session with
         | DockPanes.SessionInView ->
-          Some(LiveBindingsViewPanel.renderFor (WorkerProtocol.SessionId.value sessionId) (SageFs.ViewWorkflow.ofSessionWorkflow sessionWorkflow) tab resolved)
+          let viewControls = LiveBindingsViewPanel.renderFor (WorkerProtocol.SessionId.value sessionId) (SageFs.ViewWorkflow.ofSessionWorkflow sessionWorkflow) tab resolved
+          // The Watch tab's list is read from the same layers as the view, and answered from the values this push already holds.
+          let mode, walk =
+            match bindingsSource with
+            | LiveBindingsDock.WalkedBindings walked -> SageFs.ValueWalk.toWalkMode walked.Notes.Mode, Some walked.Snapshot
+            | LiveBindingsDock.PrintedBindings _
+            | LiveBindingsDock.NothingBound -> SageFs.Features.LiveValueTree.WalkMode.Safe, None
+          Some { viewControls with Watch = LiveBindingsWatch.partsFor (WorkerProtocol.SessionId.value sessionId) (liveBindingsViewPaths workingDir) mode walk }
         | DockPanes.NoSessionInView -> None
       LiveBindingsDock.renderDockWithRemedy
         (RebuildRemedy.paneNote remedy)

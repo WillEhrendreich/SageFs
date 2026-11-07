@@ -14,6 +14,8 @@ let lists (tab: WatchTab) (pinned: bool) (changed: bool) : bool =
   | WatchTab.All -> true
   | WatchTab.Pinned -> pinned
   | WatchTab.Changes -> changed
+  // the Watch tab lists expressions (`WatchRows`), not bindings
+  | WatchTab.Watch -> false
 
 /// `lists` as an expression the page evaluates: the same three cases, with the pin and the change given as the page's own expressions.
 /// A test puts `true` and `false` where the expressions go and holds the answer to `lists`, so the page cannot list a binding the
@@ -23,6 +25,7 @@ let listsJs (tab: WatchTab) (pinnedJs: string) (changedJs: string) : string =
   | WatchTab.All -> "true"
   | WatchTab.Pinned -> pinnedJs
   | WatchTab.Changes -> changedJs
+  | WatchTab.Watch -> "false"
 
 /// The names of the top-level bindings that hold a tweak or a value the program changed, whether the row is the binding itself or one
 /// of its record fields.

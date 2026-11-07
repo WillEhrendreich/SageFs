@@ -42,8 +42,11 @@ let endpoint (sessionId: string) : string = sprintf "/dashboard/bindings-view/%s
 
 /// The pane bar's button and the panel it opens, drawn together because they share one signal. `PanelWith` is the same panel with
 /// more rows the pane has for how the bindings are read (the mode buttons and the legend), which it draws after the axes: they
-/// govern the display too, and the pane's own bar has no room for them on a phone.
-type ViewControls = { Button: XmlNode; Panel: XmlNode; PanelWith: XmlNode list -> XmlNode }
+/// govern the display too, and the pane's own bar has no room for them on a phone. `Watch` is the Watch tab, which the page fills in
+/// (`LiveBindingsWatch.render`) because it needs the session's expressions and values, not the view's settings.
+type WatchTabParts = { Body: XmlNode; Count: int }
+
+type ViewControls = { Button: XmlNode; Panel: XmlNode; PanelWith: XmlNode list -> XmlNode; Watch: WatchTabParts }
 
 /// Where an axis's value came from, in the words a person reads.
 let sourceWords (layer: ConfigLayer) : string =
@@ -184,7 +187,8 @@ let renderFor (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (reso
                 (match tab with
                  | WatchTab.All -> sprintf "Binding display settings for %s mode" (ViewWorkflow.label workflow)
                  | WatchTab.Pinned
-                 | WatchTab.Changes -> sprintf "Binding display settings for %s mode, %s tab" (ViewWorkflow.label workflow) (WatchTab.label tab)) ]
+                 | WatchTab.Changes
+                 | WatchTab.Watch -> sprintf "Binding display settings for %s mode, %s tab" (ViewWorkflow.label workflow) (WatchTab.label tab)) ]
           // A way to close it where it is: the panel floats over the table, and the only other way was to find the View button again.
           Elem.button
             [ Attr.class' "live-view-close"
@@ -204,7 +208,7 @@ let renderFor (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (reso
         Elem.div [ Attr.class' "live-view-note" ] [
           Text.raw "A choice is saved as you click it. \"This project\" writes .SageFs/settings.json in the project folder. \"All projects\" writes your own settings.json."
         ] ]
-  { Button = button; Panel = panelWith []; PanelWith = panelWith }
+  { Button = button; Panel = panelWith []; PanelWith = panelWith; Watch = { Body = Text.raw ""; Count = 0 } }
 
 /// The button and the panel for a workflow's All tab.
 let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView) : ViewControls =

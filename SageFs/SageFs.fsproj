@@ -130,6 +130,7 @@
         <Compile Include="LiveBindingsTweakView.fs" />
         <!-- The view panel: the pane bar's button and the panel of choices it opens. Posts one request per click. -->
         <Compile Include="LiveBindingsViewPanel.fs" />
+        <Compile Include="LiveBindingsWatch.fs" />
         <Compile Include="LiveBindingsDock.fs" />
         <Compile Include="NewSessionDialogView.fs" />
         <Compile Include="DashboardNewSession.fs" />
@@ -170,6 +171,7 @@
         <!-- After McpNudge: the dashboard's live-bindings knob writes through the same door (its ports, its shared file locks). -->
         <Compile Include="LiveBindingsTweakService.fs" />
         <Compile Include="LiveBindingsTweakRoute.fs" />
+        <Compile Include="LiveBindingsWatchRoute.fs" />
         <Compile Include="McpRunTests.fs" />
         <!-- The completions routes, out of Mcp.fs: the symbol ladder (McpListMembers) and the editors' HTTP routes share them. -->
         <Compile Include="McpCompletions.fs" />

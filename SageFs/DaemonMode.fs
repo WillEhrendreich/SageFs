@@ -4666,6 +4666,10 @@ let run
       // A row's "Try" (a typed value put into the session, the file untouched) and its revert or reset, and the strip's batch of saves or reverts.
       Dashboard.mapPostRaw "/dashboard/tweak/push" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.pushHandler dashboardInfra tweakService dashboardActions.EvalCode)
       Dashboard.mapPostRaw "/dashboard/tweak/batch" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.batchHandler dashboardQueries dashboardInfra tweakService dashboardActions.EvalCode)
+      // The Watch tab: add an expression to the app's list, remove one, or run one that is held (the Evaluate box's own path).
+      Dashboard.mapPostRaw "/dashboard/watch/add" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsWatchRoute.handler SageFs.Server.LiveBindingsWatchRoute.WatchVerb.Add dashboardQueries dashboardInfra dashboardActions.EvalCode)
+      Dashboard.mapPostRaw "/dashboard/watch/remove" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsWatchRoute.handler SageFs.Server.LiveBindingsWatchRoute.WatchVerb.Remove dashboardQueries dashboardInfra dashboardActions.EvalCode)
+      Dashboard.mapPostRaw "/dashboard/watch/run" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsWatchRoute.handler SageFs.Server.LiveBindingsWatchRoute.WatchVerb.Run dashboardQueries dashboardInfra dashboardActions.EvalCode)
       // A number's chosen range and step, kept in .SageFs/tweak-limits.json beside the project.
       Dashboard.mapPostRaw "/dashboard/tweak/limits" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.limitsHandler dashboardQueries dashboardInfra tweakService) ]
 

@@ -259,6 +259,8 @@ type SettingValue =
   | VBindHost of SageFsConfig.LoopbackHost
   | VEnum of EnumValue
   | VDir of DirectoryPath
+  /// The expressions a watch tab lists: each one the parser accepted.
+  | VExpressions of WatchExpression list
 
 /// What a `SettingValue` holds when it is a given kind. Each function names every other case, so a new kind of value
 /// breaks the build here once and not at every descriptor that reads one kind.

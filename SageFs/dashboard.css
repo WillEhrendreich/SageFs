@@ -5467,6 +5467,117 @@ body {
   color: var(--fg-dim);
 }
 
+/* The open tab is filled, and a dim count on that fill could not be read. */
+.live-tab[aria-pressed="true"] .live-tab-count {
+  color: inherit;
+}
+
+/* ── The Watch tab: a box to add an expression, and one row for each ──
+   A row is the expression, a word for its state, its answer and its buttons, wrapping onto more lines as the pane narrows. */
+.live-watch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+.live-watch-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.live-watch-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 40rem;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-default);
+  color: var(--fg-default);
+  border: 1px solid var(--border-normal);
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 0.857rem;
+
+  &:focus {
+    outline: 1px solid var(--border-focus);
+  }
+}
+
+.live-watch-note {
+  color: var(--fg-yellow);
+  font-weight: 700;
+  font-size: 0.857rem;
+
+  &:empty {
+    display: none;
+  }
+}
+
+.live-watch-help {
+  color: var(--fg-dim);
+  font-size: 0.857rem;
+}
+
+.live-watch-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.live-watch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border-normal);
+}
+
+.live-watch-expression {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--syn-property);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.live-watch-state {
+  flex: none;
+  min-width: 4.5rem;
+  color: var(--fg-dim);
+  font-size: 0.857rem;
+}
+
+.live-watch-answer {
+  flex: 2 1 10rem;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  overflow-wrap: anywhere;
+}
+
+.live-watch-type {
+  color: var(--fg-dim);
+  font-size: 0.857rem;
+}
+
+.live-watch-why {
+  color: var(--fg-dim);
+}
+
+.live-watch-failed {
+  color: var(--fg-red);
+}
+
+.live-watch-actions {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+
 /* Wide trees: the State and Source columns are the strip's own cells, which the row grid already lays out in aligned tracks, so the row's inline copies
    (made for the stacked layout under this width) are hidden and the strip's cells are shown. Without this a row asked for both columns packed
    its name, value, type, source and state into the first track, and the name read "gra...". Below this width the generated rules above rule. */

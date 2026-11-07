@@ -754,6 +754,60 @@ let statesJourney () : Task<unit> = task {
     do! waitCols "the Changes tab to still have the choice after a reload: it is kept for the app" "!c.includes('type') && c.includes('state') && c.includes('source')"
     expectNoErrors errors "after each tab drew its own view"
 
+    // ── 7d. the Watch tab: expressions the person keeps; a name is read, code waits for Run, a bad one is refused ───────────
+    let watchRows = "[data-testid=live-watch-row]"
+    let waitWatch (what: string) (check: string) =
+      waitJs page what BrowserWaits.panelUpdates (sprintf "() => { const rows = [...document.querySelectorAll('%s')].map(r => ({ expr: r.querySelector('[data-testid=live-watch-expression]')?.innerText ?? '', state: r.querySelector('[data-testid=live-watch-state]')?.innerText ?? '', text: r.innerText })); return %s; }" watchRows check) null
+    let addExpression (text: string) =
+      task {
+        do! page.Locator("[data-testid=live-watch-input]").FillAsync text
+        do! page.Locator("[data-testid=live-watch-add]").ClickAsync()
+      }
+    do! openTab "watch"
+    do! waitJs page "the Watch tab to show" BrowserWaits.panelUpdates
+          "() => { const e = document.getElementById('live-watch-tab'); return !!e && !e.classList.contains('live-hidden'); }" null
+    do! waitListed "gravity" false
+    let! emptyWords = textIn page "[data-testid=live-watch-empty]"
+    emptyWords |> Expect.stringContains "an empty Watch tab says so" "Nothing is watched"
+    // a name is read from the session's values: the tweaked gravity, with no code run
+    do! addExpression "gravity"
+    do! waitWatch "a row for gravity that reads 9.5" "rows.length === 1 && rows[0].expr === 'gravity' && rows[0].state === 'value' && /9\\.5/.test(rows[0].text)"
+    // code is held until Run: the sentinel is printed only if it ran, and the row's own text does not spell it
+    do! addExpression "printfn \"ran-%s\" \"a63f\"; gravity"
+    do! waitWatch "a held row for the expression that runs code" "rows.length === 2 && rows[1].state === 'held' && /not run/.test(rows[1].text)"
+    let! outputBefore = page.EvaluateAsync<string>("() => document.body.innerText")
+    outputBefore.Contains "ran-a63f" |> Expect.isFalse "the held expression has not run"
+    do! shot page "15-watch-tab"
+    do! page.Locator(sprintf "%s:nth-child(2) [data-testid=live-watch-run]" watchRows).ClickAsync()
+    do! waitWatch "the second row to say it ran" "rows.length === 2 && rows[1].state === 'ran'"
+    let! outputAfter = page.EvaluateAsync<string>("() => document.body.innerText")
+    outputAfter |> Expect.stringContains "the click ran the expression: its output is in the session's output" "ran-a63f"
+    // an expression that does not parse is refused with the parser's reason, and the list stays as it was
+    do! addExpression "player.("
+    do! waitJs page "the note to say it does not parse" BrowserWaits.panelUpdates
+          "() => { const e = document.querySelector('[data-testid=live-watch-note]'); return !!e && /does not parse/.test(e.innerText); }" null
+    do! waitWatch "the list unchanged by the refused add" "rows.length === 2"
+    // the list is saved for the app, and a reloaded page has it
+    let appSettings = Path.Combine(built, ".SageFs", "settings.json")
+    File.Exists appSettings |> Expect.isTrue "the list is saved in the app's own settings file"
+    File.ReadAllText appSettings |> Expect.stringContains "under its key" "bindings.watch.expressions"
+    let! _ = page.ReloadAsync()
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
+    do! openTab "watch"
+    do! waitWatch "both expressions after a reload" "rows.length === 2 && rows[0].expr === 'gravity'"
+    let! watchCount = textIn page "[data-testid=live-tab-count-watch]"
+    watchCount.Trim() |> Expect.equal "the tab counts the expressions" "2"
+    // a row can be removed
+    do! page.Locator(sprintf "%s:nth-child(2) [data-testid=live-watch-remove]" watchRows).ClickAsync()
+    do! waitWatch "one row left after a remove" "rows.length === 1 && rows[0].expr === 'gravity'"
+    for (width, height) in [ 900, 900; 400, 800; 1400, 1000 ] do
+      do! page.SetViewportSizeAsync(width, height)
+      let! overflow = layoutProblems page
+      overflow |> Expect.equal (sprintf "the Watch tab at %dpx wide has nothing sticking out: %s" width overflow) ""
+      do! shot page (sprintf "15-watch-tab-%d" width)
+    expectNoErrors errors "after the Watch tab was used"
+    do! openTab "all"
+
     for (width, height, name) in [ 1400, 1000, "1400"; 900, 900, "900"; 400, 800, "400" ] do
       do! page.SetViewportSizeAsync(width, height)
       do! waitJs page "the dock" BrowserWaits.panelUpdates "() => !!document.querySelector('#live-dock')" null

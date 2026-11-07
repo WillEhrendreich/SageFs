@@ -160,10 +160,12 @@ type WatchTab =
   | Pinned
   /// The bindings that hold a tweak, or a value the program changed.
   | Changes
+  /// The person's own list of expressions (`WatchExpression`), each one a row. It lists no binding as such.
+  | Watch
 
 [<RequireQualifiedAccess>]
 module WatchTab =
-  let all : WatchTab list = [ WatchTab.All; WatchTab.Pinned; WatchTab.Changes ]
+  let all : WatchTab list = [ WatchTab.All; WatchTab.Pinned; WatchTab.Changes; WatchTab.Watch ]
 
   /// The word a page stores for the open tab, and the one place it is read back.
   let token (tab: WatchTab) : string =
@@ -171,12 +173,14 @@ module WatchTab =
     | WatchTab.All -> "all"
     | WatchTab.Pinned -> "pinned"
     | WatchTab.Changes -> "changes"
+    | WatchTab.Watch -> "watch"
 
   let label (tab: WatchTab) : string =
     match tab with
     | WatchTab.All -> "All"
     | WatchTab.Pinned -> "Pinned"
     | WatchTab.Changes -> "Changes"
+    | WatchTab.Watch -> "Watch"
 
   let ofToken (text: string) : Result<WatchTab, ConfigError> =
     match all |> List.tryFind (fun tab -> token tab = text) with
@@ -189,6 +193,7 @@ module WatchTab =
     | WatchTab.All -> "No values are bound in this session yet."
     | WatchTab.Pinned -> "Nothing is pinned. Pin a value with the pin at the end of its row."
     | WatchTab.Changes -> "Nothing has changed: no value was tried and not saved, and the program has not changed one."
+    | WatchTab.Watch -> "Nothing is watched. Type an expression above and press Add."
 
 [<RequireQualifiedAccess>]
 module ViewAxis =
@@ -378,7 +383,8 @@ module ViewPreset =
   let recommendedIn (workflow: ViewWorkflow) (tab: WatchTab) : ViewPreset =
     match tab with
     | WatchTab.All -> recommendedFor workflow
-    | WatchTab.Pinned -> ViewPreset.WatchWindow
+    | WatchTab.Pinned
+    | WatchTab.Watch -> ViewPreset.WatchWindow
     | WatchTab.Changes -> ViewPreset.Tuner
 
 [<RequireQualifiedAccess>]
@@ -444,7 +450,8 @@ module ViewSettings =
     match tab with
     | WatchTab.All -> sprintf "bindings.view.%s.%s" (ViewWorkflow.token workflow) (ViewAxis.token axis)
     | WatchTab.Pinned
-    | WatchTab.Changes -> sprintf "bindings.view.%s.%s.%s" (ViewWorkflow.token workflow) (WatchTab.token tab) (ViewAxis.token axis)
+    | WatchTab.Changes
+    | WatchTab.Watch -> sprintf "bindings.view.%s.%s.%s" (ViewWorkflow.token workflow) (WatchTab.token tab) (ViewAxis.token axis)
 
   /// The settings key for one axis of a workflow's All tab.
   let key (workflow: ViewWorkflow) (axis: ViewAxis) : string = keyIn workflow WatchTab.All axis
@@ -482,7 +489,8 @@ module ViewSettings =
     | VCount _
     | VOptionalCount _
     | VBindHost _
-    | VDir _ -> None
+    | VDir _
+    | VExpressions _ -> None
 
   /// The descriptor of one axis of one workflow's view. The default is the recommended view's value, so an untouched axis
   /// follows the recommendation and nothing is stored.
@@ -492,7 +500,8 @@ module ViewSettings =
         match tab with
         | WatchTab.All -> sprintf "%s: %s" (ViewWorkflow.label workflow) (ViewAxis.label axis)
         | WatchTab.Pinned
-        | WatchTab.Changes -> sprintf "%s, %s tab: %s" (ViewWorkflow.label workflow) (WatchTab.label tab) (ViewAxis.label axis)
+        | WatchTab.Changes
+        | WatchTab.Watch -> sprintf "%s, %s tab: %s" (ViewWorkflow.label workflow) (WatchTab.label tab) (ViewAxis.label axis)
       Description = ViewAxis.description axis
       Category = LiveBindingsView
       Scope = RepoOverridable
