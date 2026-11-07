@@ -252,7 +252,10 @@ module EnvBackedRows =
         "SAGEFS_WORKER_PROXY_WAIT_SECONDS" 15.0 true (fun () -> Timeouts.workerProxyRegister)
       minutes "dataPruneMinutes" "Friction prune interval"
         "How often a running daemon prunes friction data again. It also prunes once at start."
-        "SAGEFS_DATA_PRUNE_INTERVAL_MINUTES" 60.0 false (fun () -> DataRetention.pruneInterval) ]
+        "SAGEFS_DATA_PRUNE_INTERVAL_MINUTES" 60.0 false (fun () -> DataRetention.pruneInterval)
+      minutes "hygieneSweepMinutes" "Workspace hygiene sweep"
+        "How often the daemon looks at what agents left behind in the workspace: it saves uncommitted worktree files to a salvage branch, records what it saw and tidies what is provably safe. It also runs once at start and when a session stops."
+        "SAGEFS_HYGIENE_SWEEP_MINUTES" 15.0 false (fun () -> Timeouts.hygieneSweepInterval) ]
 
   let private ageRows : EnvBacked list =
     [ age "frictionMaxAgeDays" "Friction rows kept for"
@@ -272,7 +275,10 @@ module EnvBackedRows =
         "SAGEFS_TEMP_RUN_MAX_AGE_DAYS" 2.0 (fun () -> DataRetention.tempRunMaxAge)
       age "workerLogMaxAgeDays" "Worker logs kept for"
         "A worker's log is kept this long after its last write. It is what you read after a crash."
-        "SAGEFS_WORKER_LOG_MAX_AGE_DAYS" 14.0 (fun () -> DataRetention.workerLogMaxAge) ]
+        "SAGEFS_WORKER_LOG_MAX_AGE_DAYS" 14.0 (fun () -> DataRetention.workerLogMaxAge)
+      age "finishedWorktreeGraceDays" "Merged agent worktrees kept for"
+        "A merged agent worktree is kept this long after it was last in use, because the agent that made it may be resumed. Work that is not merged is never removed, whatever this says."
+        "SAGEFS_FINISHED_WORKTREE_GRACE_DAYS" 1.0 (fun () -> DataRetention.finishedWorktreeGrace) ]
 
   let private countRows : EnvBacked list =
     [ count WaitsAndLimits "limits.sessionManagerQueueCapacity" "Session manager queue size"
