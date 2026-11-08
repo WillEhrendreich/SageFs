@@ -91,6 +91,12 @@ let renderCurrentDiagnosticsTests =
       (html.Contains("No diagnostics")) |> Expect.isFalse "should NOT show no-diagnostics message when empty (progressive disclosure)"
     }
 
+    test "a panel with findings carries the diagnostics-panel class (a quiet one is an empty placeholder with the id alone)" {
+      let diags = [ { Severity = DiagError; Message = "type error"; Line = 3; Col = 5 } ]
+      let html = renderCurrentDiagnostics diags |> renderToString
+      html |> Expect.stringContains "the panel with findings has the class" "class=\"diagnostics-panel\""
+    }
+
     test "error diagnostic renders error CSS class" {
       let diags = [ { Severity = DiagError; Message = "type error"; Line = 3; Col = 5 } ]
       let html = renderCurrentDiagnostics diags |> renderToString

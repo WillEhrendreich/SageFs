@@ -1289,13 +1289,6 @@ let tests =
     do! PlaywrightExpect.waitForText BrowserWaits.pageRenders sessionInfo "Session:"
   })
 
-  playwrightTest "diagnostics panel has diagnostics-panel class" (fun page -> task {
-    // A healthy session renders the panel empty, so check the class via JS evaluation rather than visibility.
-    let! cls = page.EvaluateAsync<string>(
-      "() => { var el = document.querySelector('#diagnostics-panel'); return el ? el.className : ''; }")
-    Expect.isTrue (cls.Contains("diagnostics-panel")) "diagnostics-panel class"
-  })
-
   playwrightTest "eval stats panel renders" (fun page -> task {
     // #eval-stats is duplicated in the shell — wait for the attached element
     // rather than relying on one copy being visible.
@@ -1489,12 +1482,13 @@ let tests =
     do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates sessionCard "● viewing"
   })
 
-  playwrightTest "diagnostics panel renders empty state" (fun page -> task {
-    // A healthy session has no diagnostics to show.
+  playwrightTest "a healthy session's diagnostics panel is an empty placeholder, so the morph finds it and nothing is drawn" (fun page -> task {
+    // A checked session with nothing to report is `Quiet` (PanelVisibility.quietNode): the element keeps its place by id and has no
+    // content. The `diagnostics-panel` class belongs to the panel when it has findings (DashboardDiagnosticsTests pins that).
     do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
-    let! panelExists = page.EvaluateAsync<bool>(
-      "() => { var el = document.querySelector('#diagnostics-panel'); return el !== null && el !== undefined; }")
-    Expect.isTrue panelExists "diagnostics panel exists"
+    let! children = page.EvaluateAsync<int>(
+      "() => { var el = document.querySelector('#diagnostics-panel'); return el ? el.childElementCount : -1; }")
+    Expect.equal children 0 "the placeholder exists (not -1) and draws nothing"
   })
 
   // --- Connection banner: server-heartbeat + client-staleness design ---
@@ -1824,41 +1818,59 @@ let tests =
       do! count selector 0 BrowserWaits.panelUpdates
     do! shot "1-repl"
 
-    // 2. A cohort with a present member holding a claim: cohort and lanes.
-    let opts =
-      ModelContextProtocol.Client.HttpClientTransportOptions(
-        Endpoint = Uri(sprintf "http://localhost:%d/" PlaywrightFixture.mcpPort))
-    let transport = new ModelContextProtocol.Client.HttpClientTransport(opts, (null: Microsoft.Extensions.Logging.ILoggerFactory))
-    let! client = ModelContextProtocol.Client.McpClient.CreateAsync(transport, null, null, Threading.CancellationToken.None)
-    // The RESULT is checked, not discarded. It used to `return ()`, so a join or a claim
-    // refused by the cohort was invisible and the next assertion failed on the PANEL being
-    // absent — which reads as a dashboard bug and is actually the tool saying no. The panel
-    // assertion can only be believed if the calls it depends on are known to have landed.
-    let call (name: string) (args: (string * obj) list) = task {
-      let! result = client.CallToolAsync(name, readOnlyDict args, null, null, Threading.CancellationToken.None)
-      let text =
-        result.Content
-        |> Seq.choose (function
-             | :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text
-             | _ -> None)
-        |> String.concat ""
-      if (result.IsError |> Option.ofNullable |> Option.defaultValue false) then
-        return failtestf "%s was refused: %s" name text
-      else
-        return text
+    // One MCP connection to the daemon is one cohort member, whatever name it declares; it is closed afterwards. The RESULT of
+    // every call is checked, not discarded. It used to `return ()`, so a join or a claim refused by the cohort was invisible and
+    // the next assertion failed on the PANEL being absent — which reads as a dashboard bug and is actually the tool saying no.
+    // The panel assertion can only be believed if the calls it depends on are known to have landed.
+    let withMember (body: (string -> (string * obj) list -> Task<string>) -> Task<unit>) : Task<unit> = task {
+      let opts =
+        ModelContextProtocol.Client.HttpClientTransportOptions(
+          Endpoint = Uri(sprintf "http://localhost:%d/" PlaywrightFixture.mcpPort))
+      let transport = new ModelContextProtocol.Client.HttpClientTransport(opts, (null: Microsoft.Extensions.Logging.ILoggerFactory))
+      let! client = ModelContextProtocol.Client.McpClient.CreateAsync(transport, null, null, Threading.CancellationToken.None)
+      let call (name: string) (args: (string * obj) list) = task {
+        let! result = client.CallToolAsync(name, readOnlyDict args, null, null, Threading.CancellationToken.None)
+        let text =
+          result.Content
+          |> Seq.choose (function
+               | :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text
+               | _ -> None)
+          |> String.concat ""
+        if (result.IsError |> Option.ofNullable |> Option.defaultValue false) then
+          return failtestf "%s was refused: %s" name text
+        else
+          return text
+      }
+      try
+        do! body call
+      finally
+        (client :> IAsyncDisposable).DisposeAsync().AsTask().GetAwaiter().GetResult()
     }
-    try
+    /// `acquire_claim` answers "Acquired claim c-XXXX over <scope> (fence=N)." (McpCohortTools.fs): our own tool's reply, read for
+    /// the two values `release_claim` takes.
+    let claimOf (acquired: string) : string * int64 =
+      let m = Text.RegularExpressions.Regex.Match(acquired, @"Acquired claim (\S+) over .* \(fence=(\d+)\)")
+      match m.Success with
+      | true -> m.Groups.[1].Value, int64 m.Groups.[2].Value
+      | false -> failtestf "acquire_claim did not report a claim and its fence: %s" acquired
+
+    // 2. A cohort with a present member holding a claim: cohort and lanes. A member who leaves with nothing outstanding takes the
+    // panel with them: a released claim is not history.
+    do! withMember (fun call -> task {
       let! _ = call "join_cohort" [ "agentName", box "panel-journey"; "role", box "Implementer" ]
-      let! _ = call "acquire_claim" [ "agentName", box "panel-journey"; "scope", box "file:src/Panels.fs"; "purpose", box "panel journey" ]
+      let! _ = call "leave_cohort" [ "agentName", box "panel-journey" ]
+      do! count "#cohort-panel" 0 BrowserWaits.daemonWork
+      let! _ = call "join_cohort" [ "agentName", box "panel-journey"; "role", box "Implementer" ]
+      let! acquired = call "acquire_claim" [ "agentName", box "panel-journey"; "scope", box "file:src/Panels.fs"; "purpose", box "panel journey" ]
       do! count "#cohort-panel" 1 BrowserWaits.daemonWork
       do! count "#cohort-lanes" 1 BrowserWaits.daemonWork
       do! shot "2-cohort"
-      // The member leaves: nobody is present, so both go, whatever the ledger still holds.
+      // The member lets go of the claim and leaves: nobody is present and nothing waits on anyone, so both go.
+      let claimId, fence = claimOf acquired
+      let! _ = call "release_claim" [ "agentName", box "panel-journey"; "claimId", box claimId; "fence", box fence ]
       let! _ = call "leave_cohort" [ "agentName", box "panel-journey" ]
       do! count "#cohort-panel" 0 BrowserWaits.daemonWork
-      do! count "#cohort-lanes" 0 BrowserWaits.daemonWork
-    finally
-      (client :> IAsyncDisposable).DisposeAsync().AsTask().GetAwaiter().GetResult()
+      do! count "#cohort-lanes" 0 BrowserWaits.daemonWork })
 
     // 3. Switch the session to Hot Reload through the REAL dashboard control
     // — the workflow <select> in the sidebar — not the raw HTTP route.
@@ -1898,6 +1910,16 @@ let tests =
     do! PlaywrightExpect.waitForSelectorText BrowserWaits.hotReloadBuild page "#session-status" "Ready"
     let! selectedLabelBack = switcher.EvaluateAsync<string>("el => el.options[el.selectedIndex].textContent")
     Expect.equal selectedLabelBack "Mode: REPL" "the switcher shows REPL selected again after switching back"
+
+    // 4. Last, because it leaves history behind in the shared daemon. A member who leaves while holding a claim leaves nobody
+    // present, but the claim is orphaned and waits for a conductor to reassign it, so the panel stays on the page and says exactly
+    // that (CohortPresence.OnlyHistory). It is never hidden: another agent can trip on that claim.
+    do! withMember (fun call -> task {
+      let! _ = call "join_cohort" [ "agentName", box "panel-journey-orphan"; "role", box "Implementer" ]
+      let! _ = call "acquire_claim" [ "agentName", box "panel-journey-orphan"; "scope", box "file:src/Orphan.fs"; "purpose", box "leaves holding it" ]
+      let! _ = call "leave_cohort" [ "agentName", box "panel-journey-orphan" ]
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#cohort-panel" "no cohort is running; 1 orphaned claim remains"
+      do! shot "4-orphaned-claim" })
 
     let datastarOrConsoleErrors = consoleErrors |> List.ofSeq
     Expect.isEmpty datastarOrConsoleErrors
