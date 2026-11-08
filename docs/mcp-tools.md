@@ -921,6 +921,20 @@ and cuts a branch of its own (`sagefs/cohort-<sha>`, then `-2`, `-3`) because an
 never reset. A session that faulted says why in `get_cohort_status` (`Integration session: FAILED to start. ...`) with the
 same retry.
 
+**A landing in the queue forbids it.** Replacing the integration stops the session that verifies landings and deletes the
+sources it reads, so the call is refused while the cohort's landing queue is not empty (a landing that is queued, rebasing or
+verifying). The refusal names the landings in front and the two ways out: wait for them to land, or have each requester take
+theirs back with `withdraw_landing`. Nothing is stopped or removed when it is refused. The call is also made under the gate
+every landing step takes, so a landing's rebase waits behind a replacement that is under way and cannot move the worktree
+while it is rebuilt.
+
+**One worktree per cohort.** The integration worktree and the trunk checkout live under the data dir at
+`cohort-integration-<repository>-<hash>` and `cohort-trunk-<repository>-<hash>`, derived from the cohort's repository, so two
+repositories never share a path. Moving the integration to another repository removes the old worktree from the repository
+that made it (git refuses to remove one repository's worktree from another), reads git's answer, and ends in an error that
+names the path and what git said when the removal fails: the binding then reads `FAILED` with that text, never a session that
+is gone. The old repository's trunk checkout is left where it is, because a session may be running an app in it.
+
 The repository's own SageFs (a cohort for SageFs itself) also needs the daemon and the integration worktree to be one build:
 see "Self-hosting skew" in `AGENTS.md`.
 
@@ -932,23 +946,36 @@ which acts):
 
 - **Only a test project's own files** (and documents, scripts, data): the files are re-evaluated into the integration session
   over its build and the tests the diff can affect run. This is the cheap path and it is unchanged.
-- **Source of a project the session loads that is not a test project** (the code the tests call into), or anything that changes
-  what the build makes (a project file, props, targets, a lock file, `global.json`): the integration worktree is rebuilt at the
+- **Source of a project the session loads that is not a test project** (the code the tests call into: F#, C# or Visual Basic),
+  or anything that changes what the build makes (a project file of any of the three languages, props, targets, a lock file,
+  `global.json`, and a resource or content file of a project in the session's closure, whatever its extension; only notes and
+  scripts in a project folder are inert). The classifier fails closed: an F# or C# file whose project the index could not
+  find, and a project file the index does not know, count as compiled source and a build input: the integration worktree is rebuilt at the
   rebased commit, the session restarts on what the build made, the session's tests are asked of the new worker, and the
   tests run against the rebuilt assemblies. A re-evaluation cannot do this job: the session's project already holds the file's
   types from its compiled assembly, and the first landing of `SageFs.Core/AppState.fs` was blocked three times on exactly that.
   The tests that run are the ones the session's coverage says the diff can affect, plus every test the rebuild found that was
   not known before; a diff that selects nothing runs the whole suite.
-- **A rebuild that fails** refuses the landing with the first compiler error and its file (`Blocked`, `Inconclusive`, reason
-  `the build of the rebased commit failed. First error: <file>(<line>,<col>): error FS....`). The session keeps serving the
-  build it had.
+- **The rebuild trusts nothing it did not check.** It reads the integration worktree's head first and refuses (Inconclusive,
+  `the integration worktree is at <sha>, not at the rebased commit <sha>`) when something moved it since the rebase. It records
+  the attempt before it builds, success or not: a build that fails still writes the refused commit's output, so from that
+  moment the session's build is off the head and the next landing rebuilds, even a test-only one.
+- **A rebuild that fails** refuses the landing as one of two kinds, and the status line says which:
+  - `Blocked(the landing does not compile: <file>(<line>,<col>): error FS....) fix it in your commit and request the landing
+    again`: the first compiler error (F#, C# or Visual Basic) of the rebased commit, with its file and code. The next action is
+    `FixTheBuild`, and the SSE wire carries blocker kind `compile_error_in_landing` and next action `fix_the_build`.
+  - `Blocked(verification inconclusive: ...) nothing is known to be wrong with your commit: request the landing again`:
+    everything else. A restore that cannot reach its feed (`NU1301`), any other `NU` error (a failed restore means the compile
+    did not run against the commit's packages), a locked file (`MSB3027`), a build that did not run, a session that is not
+    ready. The error is quoted, and the member is not told to fix their commit.
+  The session keeps serving the build it had.
 - **After a landing that was refused or withdrawn**, once nothing else is queued, the integration worktree is put back at the
   integration branch's tip. The session may still hold the build of the refused commit; the next verification sees that the
   commit is not in the head's history and rebuilds before it trusts the session, even when that landing only touches tests.
   Calling `set_integration_ref` is not needed.
 - **Generated pages** (`docs/roadmap.md`, `docs/configuration.md`, `docs/client-setup.md`) need no claim, so no member waits on
   one. After the rebase the daemon regenerates the pages whose inputs the landing touched (`dotnet fsi scripts/gen-roadmap.fsx`,
-  `dotnet fsi scripts/gen-configuration-doc.fsx <rebased head>`) and commits the result on top of the rebased head, which is the
+  `dotnet fsi scripts/gen-configuration-doc.fsx <rebased head>`, `dotnet fsi scripts/gen-client-setup-doc.fsx`) and commits the result on top of the rebased head, which is the
   head that is verified and landed. A rebase conflict that touches only generated pages is settled by taking the integration
   head's page and regenerating. A generator that fails refuses the landing and names the command to run yourself.
 - **Claims** a landing names are released when it lands.
