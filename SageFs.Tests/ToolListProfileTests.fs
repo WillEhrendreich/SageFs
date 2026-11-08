@@ -127,6 +127,11 @@ let profileTests =
         | Ok manual -> manual |> Expect.stringContains (sprintf "the manual for %s opens with the tool's name" tool) tool
         | Error refusal -> failtestf "%s has no manual: %A" tool refusal
 
+    testCase "WHY - discover_features is callable in every session state, with no session at all, because a stranger on the starter list has none yet" <| fun () ->
+      for state in [ SessionState.Uninitialized; SessionState.WarmingUp; SessionState.Ready; SessionState.Evaluating; SessionState.Faulted ] do
+        Affordances.checkToolCallAllowed state "discover_features"
+        |> Expect.isOk (sprintf "the doorway answers in %A" state)
+
     testCase "WHY - the manual carries what the list left out: the rules text and every parameter with its description" <| fun () ->
       match manualOf "send_fsharp_code" with
       | Error refusal -> failtestf "send_fsharp_code has no manual: %A" refusal

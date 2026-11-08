@@ -436,3 +436,55 @@ let tests =
         SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
     }
   ]
+
+/// The tools the connection is listed, as (name, description), in the order the daemon sent them.
+let private listDefinitions (client: McpClient) : Task<(string * string) list> =
+  task {
+    let! result = client.ListToolsAsync(ListToolsRequestParams(), CancellationToken.None)
+    return result.Tools |> Seq.map (fun tool -> tool.Name, tool.Description) |> List.ofSeq
+  }
+
+[<Tests>]
+let starterListTests =
+  Integration.hostList "The starter tool list over HTTP" [
+
+    testTask "WHY - a daemon started with SAGEFS_TOOL_LIST=Starter shows a caller that presents nothing nine tools with one sentence each, the operator credential still lists every tool, and a tool outside the list is called by name" {
+      let dataDir = freshDataDir ()
+      let! proc, port =
+        SageFs.Tests.CohortMcpToolsIntegrationTests.startIsolatedDaemonWith [ "SAGEFS_DATA_DIR", dataDir; ToolListProfile.envVar, "Starter" ]
+      try
+        use! plain = connectWith port []
+        let! listed = listDefinitions plain
+        listed |> List.map fst |> List.sort
+        |> Expect.equal "exactly the starter tools" (ToolList.starterNames |> Set.toList |> List.sort)
+        for (name, description) in listed do
+          match Affordances.ToolName.tryParse name with
+          | Some tool -> description |> Expect.equal (sprintf "%s lists its sentence" name) (ToolSummaries.sentenceOf tool)
+          | None -> failtestf "%s is listed and is not a tool" name
+
+        // Not listed, and callable: the list is what a client is shown, not what it may call.
+        let! statusError, status = call plain "get_daemon_status" [] []
+        statusError |> Expect.isFalse (sprintf "a hidden tool answers when named: %s" status)
+
+        // The manual for it is one call away.
+        let! manualError, manual = call plain "discover_features" [ "tool", box "get_daemon_status" ] []
+        manualError |> Expect.isFalse (sprintf "discover_features answers with a tool name: %s" manual)
+        manual |> Expect.stringContains "the manual opens with the tool's name" "get_daemon_status"
+        let! typoError, typo = call plain "discover_features" [ "tool", box "get_daemon_statu" ] []
+        typoError |> Expect.isFalse "a misspelled name is an answer, not a crash"
+        typo |> Expect.stringContains "that lists the real names" "get_daemon_status"
+
+        // The operator credential keeps the full list under the same daemon.
+        let operator = operatorCredentialIn dataDir
+        use! asOperator = connectWith port [ "Authorization", sprintf "Bearer %s" operator ]
+        let! operatorListed = listDefinitions asOperator
+        operatorListed |> List.length |> Expect.equal "every registered tool" (List.length Affordances.declaredGateTools)
+        operatorListed |> List.map fst |> Expect.contains "mint_member is there" "mint_member"
+        // Two connections, same answer, and creating no session moved nothing.
+        use! another = connectWith port []
+        let! again = listDefinitions another
+        again |> Expect.equal "the starter list is the same for a second connection" listed
+      finally
+        SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
+    }
+  ]

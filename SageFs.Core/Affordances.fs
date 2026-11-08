@@ -61,13 +61,16 @@ let availableTools (state: SessionState) : string list =
     [ "get_daemon_status"; "get_session_status"; "get_friction_report"; "get_available_projects"
       "list_sessions"; "switch_session"; "create_project_session"; "create_solution_session"; "create_bare_session"
       "hard_reset_fsi_session"
-      "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"; "decompose_pipeline" ]
+      "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"; "decompose_pipeline"
+      // The doorway to every tool the starter list leaves out. It answers with no session at all.
+      "discover_features" ]
   | WarmingUp ->
     [ "get_session_status"; "get_recent_fsi_events"; "get_friction_report"
       "get_available_projects"; "list_sessions"; "switch_session"
       "create_project_session"; "create_solution_session"; "create_bare_session"
       "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"
-      "decompose_pipeline" ]
+      "decompose_pipeline"
+      "discover_features" ]
   | Ready ->
     [ "send_fsharp_code"
       "get_session_status"
@@ -126,7 +129,8 @@ let availableTools (state: SessionState) : string list =
       // it so an agent whose active session is mid-eval knows it can switch away.
       "switch_session"
       "check_fsharp_code"
-      "decompose_pipeline" ]
+      "decompose_pipeline"
+      "discover_features" ]
   | Faulted ->
     [ "get_session_status"
       "get_recent_fsi_events"
@@ -142,7 +146,8 @@ let availableTools (state: SessionState) : string list =
       "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"
       "reset_fsi_session"
       "hard_reset_fsi_session"
-      "decompose_pipeline" ]
+      "decompose_pipeline"
+      "discover_features" ]
 
 /// Check if a tool is available in the current state.
 /// Returns Ok () if available, Error with SageFsError.ToolNotAvailable.
@@ -284,7 +289,9 @@ let private gatingDomain : Map<string, ToolGate> =
     "manage_scratch_pad", ToolGate.StateGated
     "get_eval_diff", ToolGate.StateGated
     "get_cell_dependencies", ToolGate.StateGated
-    "discover_features", ToolGate.StateGated
+    // The doorway to the tools a starter tool list leaves out, so it is callable before any session exists, and it
+    // reads a session's state only when it can resolve one (it says "Not ranked by session state" when it cannot).
+    "discover_features", ToolGate.AlwaysAvailable
     "suggest_repair", ToolGate.StateGated
     // Running the session's executable project needs a Ready worker.
     "list_runnable_projects", ToolGate.StateGated

@@ -421,7 +421,7 @@ the final gate before you push.
 | `preview_what_if` | Preview what would change if a binding had a different value, without executing. |
 | `decompose_pipeline` | Break an F# pipeline into stages, each classified pure / effectful / unknown. |
 | `get_cell_dependencies` | The cell dependency graph of one session: what each eval produced and consumed, and the edges between them. Reports staleness as `NotMeasured`. |
-| `discover_features` | Ranks the tools this daemon registers by the session's state. The list is read from the registered set, so it cannot name a tool that is not there. With `tool` it returns that one tool's full manual (its rules and every parameter), which `tools/list` no longer carries. |
+| `discover_features` | Ranks the tools this daemon registers by the session's state. The list is read from the registered set, so it cannot name a tool that is not there. With `tool` it returns that one tool's full manual (its rules and every parameter), which `tools/list` no longer carries. It is callable in every session state, with no session at all, because a client on the starter list has none yet. |
 
 ### Measured, or not available
 

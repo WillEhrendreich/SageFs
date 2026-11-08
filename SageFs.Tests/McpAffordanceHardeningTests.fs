@@ -483,7 +483,7 @@ let affordanceSupersetSubsetTests =
       // already starting up, so they are no longer the same length.
       (availableTools Uninitialized |> List.length,
        availableTools WarmingUp |> List.length)
-      |> Expect.equal "peers, differing by the one tool that recovers" (15, 14)
+      |> Expect.equal "peers, differing by the one tool that recovers" (16, 15)
 
       (availableTools Uninitialized)
       |> List.contains "hard_reset_fsi_session"
