@@ -136,6 +136,8 @@
         <Compile Include="LiveBindingsWatch.fs" />
         <!-- The Since green tab's comparison point, kept for each session. -->
         <Compile Include="LiveBindingsSinceGreen.fs" />
+        <!-- What a browser page chose for the pane (its tab, how it shows each row): one owner, one lock, absent means the default. -->
+        <Compile Include="PageState.fs" />
         <!-- The picker on a row: how a whole number is shown (as it is, hex, binary, colour, range) and the page's choice of it. -->
         <Compile Include="LiveBindingsRowFormat.fs" />
         <Compile Include="LiveBindingsDock.fs" />
