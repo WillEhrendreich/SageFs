@@ -171,7 +171,7 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or
 dotnet tool install --global SageFs
 ```
 
-To update later: `dotnet tool update --global SageFs`. If that says "already installed" when you know a newer version is out, add `--version X.Y.Z` because `dotnet tool update` resolves through NuGet's search index, which lags the package store by a few minutes.
+To update later: run `sagefs stop` first, then `dotnet tool update --global SageFs`. A running daemon holds the installed executable, and on Windows the update then fails with "The file exists" (see [Troubleshooting](docs/TROUBLESHOOTING.md)). If the update says "already installed" when you know a newer version is out, add `--version X.Y.Z` because `dotnet tool update` resolves through NuGet's search index, which lags the package store by a few minutes.
 
 ### 2. Check your environment (optional)
 

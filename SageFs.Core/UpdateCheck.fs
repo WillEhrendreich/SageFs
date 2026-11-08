@@ -161,7 +161,7 @@ module UpdateCheck =
   /// 0.6.822): `--version X.Y.Z` gets past that.
   let remediation (latest: Version) : string =
     sprintf
-      "Restart the SageFs daemon. If it's installed as a global tool: dotnet tool update -g sagefs (or, if that reports \"already installed\" because the search index hasn't caught up yet, dotnet tool update -g sagefs --version %s)."
+      "Stop the daemon first with sagefs stop: a running daemon holds the installed sagefs executable, and on Windows the update then fails with \"The file exists\". Then, if it's installed as a global tool: dotnet tool update -g sagefs (or, if that reports \"already installed\" because the search index hasn't caught up yet, dotnet tool update -g sagefs --version %s), and start it again with sagefs."
       (latest.ToString())
 
   /// A one-line, user- and agent-facing rendering. `None` for every outcome

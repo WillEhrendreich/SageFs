@@ -632,6 +632,11 @@ let openWorkspace () =
 /// install action and the clipboard action can never drift apart.
 let installCliCommand = "dotnet tool install --global SageFs"
 
+/// The commands that update the CLI, in order. The daemon is stopped first: a running daemon holds the installed
+/// executable, and on Windows `dotnet tool update` then fails with "The file exists". Each line is sent to the terminal
+/// in turn, so it works in bash, PowerShell and cmd alike (no `&&`).
+let updateCliCommands = [ "sagefs stop"; "dotnet tool update --global SageFs" ]
+
 let checkInstallation () =
   let term = Window.createTerminal "SageFs Version Check"
   terminalShow term
@@ -3579,7 +3584,8 @@ let activate (context: ExtensionContext) =
           | Some "Update Now" ->
             let term = Window.createTerminal "SageFs Update"
             terminalShow term
-            terminalSendText term "dotnet tool update --global SageFs"
+            for command in updateCliCommands do
+              terminalSendText term command
           | Some "Show Output" -> showOutputPanel ()
           | _ -> ()
     } |> promiseIgnoreLog logToOutput

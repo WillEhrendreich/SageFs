@@ -195,6 +195,15 @@ let tests =
         text |> Expect.stringContains "names the --version escape hatch" "--version 0.6.690"
         text |> Expect.stringContains "names how far behind" "43"
 
+      testCase "WHY - tells the user to stop the daemon before updating, because a running daemon holds sagefs.exe and Windows will not replace it" <| fun _ ->
+        let text =
+          UpdateCheck.describe (UpdateOutcome.UpdateAvailable(v "0.6.919", v "0.6.940", 21))
+          |> Option.defaultValue ""
+        text |> Expect.stringContains "names the stop command" "sagefs stop"
+        text.IndexOf "sagefs stop" < text.IndexOf "dotnet tool update"
+        |> Expect.isTrue "and says it before the update command"
+        text |> Expect.stringContains "and says why, in the words the failure shows" "The file exists"
+
       testCase "singular wording for exactly one version behind" <| fun _ ->
         UpdateCheck.describe (UpdateOutcome.UpdateAvailable(v "0.6.822", v "0.6.823", 1))
         |> Option.defaultValue ""

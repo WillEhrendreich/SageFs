@@ -621,7 +621,7 @@ let [<Literal>] expectedApiVersion = 4
 let checkVersion (status: SystemStatus) : Result<unit, string> =
   match status.apiVersion with
   | v when v = expectedApiVersion -> Ok ()
-  | v -> Error $"SageFs daemon apiVersion={v} is incompatible with this extension (requires apiVersion={expectedApiVersion}). Run 'dotnet tool update --global SageFs' then reload VS Code."
+  | v -> Error $"SageFs daemon apiVersion={v} is incompatible with this extension (requires apiVersion={expectedApiVersion}). Run 'sagefs stop', then 'dotnet tool update --global SageFs' (a running daemon holds the executable, and on Windows the update fails with \"The file exists\"), then reload VS Code."
 
 let getSystemStatus (c: Client) =
   promise {

@@ -21,7 +21,9 @@ Read this when you are starting on a repo, creating or choosing a session, check
 
    If it's behind, **tell the user and ask them to restart it**. Don't stop,
    restart or reinstall it yourself. It's theirs, and other agents may be on
-   it. If they ask you how: `dotnet tool update -g sagefs`, then restart. If
+   it. If they ask you how: `sagefs stop`, then `dotnet tool update -g sagefs` (a
+   running daemon holds the executable, and on Windows the update fails with "The
+   file exists"), then `sagefs` to start it again. If
    that reports "already installed" while a newer version is on NuGet, pass
    `--version X.Y.Z` explicitly. `dotnet tool update` resolves through NuGet's
    search index, which lags the package store by a few minutes.

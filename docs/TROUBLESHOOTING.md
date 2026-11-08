@@ -154,6 +154,34 @@ dotnet tool update --global SageFs --version X.Y.Z
 lags the package store by a few minutes after a release. The package can be on
 NuGet while the CLI still can't see it.
 
+### On Windows, the update or the uninstall fails with "The file exists"
+
+`dotnet tool update --global SageFs` (or `uninstall`) ends with `Unhandled exception: The file exists.`, or the install says
+`Failed to create shell shim for tool 'sagefs': Command 'sagefs' conflicts with an existing command from another tool.`
+
+A running daemon holds `sagefs.exe` in your tools folder, and Windows will not replace or delete a file a process is
+running. An update that was interrupted can also leave a stale `sagefs.exe` and a `.store\sagefs\<version>` folder behind, which
+the next install reports as a conflict. Stop the daemon first, then retry:
+
+```powershell
+sagefs stop
+dotnet tool update --global SageFs
+```
+
+If it still fails, remove what is left and install again. The tools folder is `%USERPROFILE%\.dotnet\tools`, and a user name
+with a space in it (`C:\Users\Windows 8\.dotnet\tools`) needs the quotes shown here:
+
+```powershell
+Get-Process sagefs -ErrorAction SilentlyContinue | Stop-Process -Force
+dotnet tool uninstall --global SageFs
+Remove-Item -LiteralPath "$env:USERPROFILE\.dotnet\tools\sagefs.exe" -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath "$env:USERPROFILE\.dotnet\tools\.store\sagefs" -Recurse -Force -ErrorAction SilentlyContinue
+dotnet tool install --global SageFs
+```
+
+In Git Bash the same cleanup is `rm -f "$USERPROFILE/.dotnet/tools/sagefs.exe"` and `rm -rf "$USERPROFILE/.dotnet/tools/.store/sagefs"`.
+If it fails after that, open an issue with the exact output and the result of `dir "%USERPROFILE%\.dotnet\tools"`.
+
 ### A session on a checkout of SageFs itself answers 500 to everything
 
 Opening a project session on `SageFs.Tests.fsproj` or `SageFs.Host.fsproj` in a worktree of this repository used to
