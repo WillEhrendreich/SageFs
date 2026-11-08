@@ -820,8 +820,17 @@ so it departs from that, in one function with a test that pins the status. The
 refusal applies to a token in the `X-SageFs-Member-Token` header. A token in
 `_meta` is refused per call inside the JSON-RPC reply.
 
-**Scope.** A prefix such as `src/Foo/`. The token can claim only inside it, and
-the path is canonicalized first, so `src/Foo/../Bar` counts as `src/Bar`. This is
+**Scope.** ONE directory prefix such as `src/Foo/`. The token can claim only inside it, and
+the path is canonicalized first, so `src/Foo/../Bar` counts as `src/Bar`. Leave the scope
+out for the whole repo. A list (`SageFs.Core/,SageFs/,docs/`, or one split by `;`) is
+refused by `mint_member`, by `POST /api/members/mint` and by `sagefs member mint --scope`
+before any token exists: a comma is not a path separator, so a list read as one prefix
+would cover no path and every claim by the token would be refused. A token carries one
+prefix on purpose (decided 2026-11-08): the grant order (`isWithin`, the "never wider than
+its minter" rule, the simulation's invariants) is defined over one directory, and a
+run that needs two directories can take their common parent or the whole repo, because a
+file claim stays exclusive per file whatever the scope. A directory whose name holds a
+comma or a semicolon cannot be a scope for that reason. This is
 policy, not a sandbox: it refuses claims, and it does not stop a process from
 writing a file. Containment is the sandbox's job. And `Implementer` includes
 `send_fsharp_code`, which runs arbitrary F# as the daemon's OS user, so against a

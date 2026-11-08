@@ -178,6 +178,9 @@ the same member:
 eval "$(sagefs member mint --role Implementer --dir "$PWD" --print-env SAGEFS_MEMBER_TOKEN)"
 ```
 
+`--scope` takes ONE directory prefix (`--scope src/Foo/`), and leaving it out means the whole repo. A
+comma list is refused with the reason, because a token's scope is a single directory.
+
 `--token-file <path>` (or `--token-file -` for standard input) does the same for one call without putting the token on
 the command line. `--token <token>` still works and prints a warning. The full description is in
 [mcp-tools.md](mcp-tools.md#reaching-the-tools-without-a-client-sagefs-call).

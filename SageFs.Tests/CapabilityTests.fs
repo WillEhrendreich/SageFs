@@ -100,8 +100,12 @@ let scopeTests =
       ScopePrefix.tryParse "src\\Foo" |> Result.map ScopePrefix.value |> Expect.equal "backslash" (Ok "src/Foo")
 
     testCase "WHY - a prefix that leaves the repo is refused" <| fun () ->
-      ScopePrefix.tryParse "../Foo" |> Expect.equal "escape" (Error(PathRefusal.EscapesRoot "../Foo"))
-      ScopePrefix.tryParse "/src/Foo" |> Expect.equal "absolute" (Error(PathRefusal.Absolute "/src/Foo"))
+      ScopePrefix.tryParse "../Foo" |> Expect.equal "escape" (Error(ScopeParseRefusal.Path(PathRefusal.EscapesRoot "../Foo")))
+      ScopePrefix.tryParse "/src/Foo" |> Expect.equal "absolute" (Error(ScopeParseRefusal.Path(PathRefusal.Absolute "/src/Foo")))
+
+    testCase "WHY - a list is refused as a list, carrying the text it was given" <| fun () ->
+      ScopePrefix.tryParse "a/,b/" |> Expect.equal "comma" (Error(ScopeParseRefusal.ListOfPrefixes "a/,b/"))
+      ScopePrefix.tryParse "a/;b/" |> Expect.equal "semicolon" (Error(ScopeParseRefusal.ListOfPrefixes "a/;b/"))
 
     testCase "WHY - a token minted for src/Foo/ covers src/Foo and nothing beside it" <| fun () ->
       let foo = prefix "src/Foo/"

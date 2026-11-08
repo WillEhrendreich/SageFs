@@ -75,6 +75,28 @@ let tests =
           text |> Expect.stringContains "names the next action" "whole repo"
       }
 
+      testPropertyWithConfig SageFs.Tests.SharedGenerators.propConfig "WHY - the command accepts a scope exactly when the daemon would, and a refused scope names a next action" <| fun (seed: FsCheck.PositiveInt) ->
+        let names = [| "src"; "Foo"; "SageFs.Core"; "docs"; "a b"; ".."; "."; "" |]
+        let rng = Random(seed.Get)
+        let path () = String.concat "/" [ for _ in 1 .. 1 + rng.Next 3 -> names.[rng.Next names.Length] ]
+        let scope =
+          match rng.Next 4 with
+          | 0 -> path ()
+          | 1 -> path () + [| ","; ";"; ", " |].[rng.Next 3] + path ()
+          | 2 -> "/" + path ()
+          | _ -> "../" + path ()
+        let daemonSays = Capability.ScopePrefix.tryParse scope
+        match parseArgs [ "mint"; "--role"; "Implementer"; "--dir"; "/repo"; "--scope"; scope ], daemonSays with
+        | Ok args, Ok _ -> args.Request.Scope = scope
+        | Error(UsageRefusal.BadScope refusal), Error daemonRefusal ->
+          let text = UsageRefusal.describe (UsageRefusal.BadScope refusal)
+          let next =
+            match CohortErrorMapping.scopeParseRefusalToSageFsError refusal with
+            | SageFsError.CohortActionFailed(_, suggestion) -> suggestion
+            | other -> failwithf "unexpected error shape %A" other
+          refusal = daemonRefusal && text.Contains "--scope" && text.Contains "whole repo" && next.Contains "whole repo"
+        | _ -> false
+
       test "WHY - a variable name is letters, digits and underscores, and does not start with a digit" {
         isVariableName "SAGEFS_MEMBER_TOKEN" |> Expect.isTrue "plain"
         isVariableName "_x1" |> Expect.isTrue "underscore first"
