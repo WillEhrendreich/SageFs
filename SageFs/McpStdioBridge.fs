@@ -659,6 +659,11 @@ let runMcpStdio (mcpPort: int) : Task<int> =
     match Capability.CapabilityTransport.headerFromEnvironment Environment.GetEnvironmentVariable with
     | Some(name, value) -> client.DefaultRequestHeaders.Add(name, value)
     | None -> ()
+    // This bridge's client key: 256 random bits made once, here, and sent on every request the bridge makes for as long as the
+    // process lives, including the ones after it re-initializes against a daemon that came back. The daemon names the member
+    // after the key, so a reconnect or a daemon upgrade leaves the same client the same member, and a second bridge (another
+    // client) has a key of its own and is its own member. Like the token, it travels in a header and never in a message.
+    client.DefaultRequestHeaders.Add(MemberTable.ClientKey.headerName, MemberTable.ClientKey.generate ())
     // The daemon's operator credential, when the process that started `sagefs mcp` set one (#181). It goes in the standard
     // Authorization header the same way, so a conductor that holds it is listed the full tool list under TokenRequired.
     match Capability.CapabilityTransport.operatorHeaderFromEnvironment Environment.GetEnvironmentVariable with

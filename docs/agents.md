@@ -185,6 +185,12 @@ stream closed, so the client showed the server as disconnected until someone rel
   `notifications/resources/list_changed` to the client, because the daemon behind it is a new session and
   may be a new build. The client asks for the lists again. Sessions of the old daemon are gone, as they
   always were; `list_sessions` shows what the new daemon has.
+- You are the same cohort member afterwards. The bridge sends the same random client key on every request, so the new
+  MCP session is the same member as the old one, and a conductor stays the conductor through an upgrade. Before
+  2026-11-07 each upgrade turned the conductor into a new member and the old one held the seat for up to 30 minutes.
+  While the bridge is connected, its open push stream also keeps your seat's lease renewed, so a conductor that spends
+  an hour waiting on its agents does not lose the seat. See "Which name the id is a fingerprint of" in
+  [mcp-tools.md](mcp-tools.md#cohort-and-multi-agent-coordination).
 - The bridge waits for the old daemon's replacement for up to a minute on a fast machine (`Timeouts.stdioBridgeReconnectWait`,
   longer on a slower one). After that it starts a daemon itself, the way it does when it finds none at
   startup, and gives up only by the rules of a cold start.

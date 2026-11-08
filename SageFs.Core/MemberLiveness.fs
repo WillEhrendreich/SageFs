@@ -22,17 +22,30 @@ module MemberLiveness =
 
   let empty : Liveness = { Streams = Map.empty; LastCall = Map.empty }
 
-  /// RED stub: remembers nothing.
-  let streamOpened (key: string) (state: Liveness) : Liveness = state
+  let streamOpened (key: string) (state: Liveness) : Liveness =
+    let open' = Map.tryFind key state.Streams |> Option.defaultValue 0
+    { state with Streams = Map.add key (open' + 1) state.Streams }
 
-  /// RED stub: remembers nothing.
-  let streamClosed (key: string) (state: Liveness) : Liveness = state
+  /// A close that has no open stream to match is dropped, so it can never leave a debt that hides the next stream.
+  let streamClosed (key: string) (state: Liveness) : Liveness =
+    match Map.tryFind key state.Streams with
+    | Some count when count > 1 -> { state with Streams = Map.add key (count - 1) state.Streams }
+    | Some _ -> { state with Streams = Map.remove key state.Streams }
+    | None -> state
 
-  /// RED stub: remembers nothing.
-  let callMade (key: string) (now: DateTime) (state: Liveness) : Liveness = state
+  /// The latest call wins: a call recorded with an earlier clock than one already held does not move it back.
+  let callMade (key: string) (now: DateTime) (state: Liveness) : Liveness =
+    match Map.tryFind key state.LastCall with
+    | Some latest when latest >= now -> state
+    | Some _
+    | None -> { state with LastCall = Map.add key now state.LastCall }
 
-  /// RED stub: nobody is live.
-  let isLive (key: string) (now: DateTime) (window: TimeSpan) (state: Liveness) : bool = false
+  /// Live is an open stream, or a call inside `window` of `now`.
+  let isLive (key: string) (now: DateTime) (window: TimeSpan) (state: Liveness) : bool =
+    Map.containsKey key state.Streams
+    || (match Map.tryFind key state.LastCall with
+        | Some at -> now - at <= window
+        | None -> false)
 
   /// The daemon's one table: the pure state behind a lock, for the HTTP edge (which opens and closes streams) and the
   /// reaper (which asks).

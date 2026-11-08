@@ -88,13 +88,8 @@ module McpTools =
   /// many members as they have tokens. None for a call that presented no token.
   let currentCapability = new System.Threading.AsyncLocal<ResolvedCapability option>()
 
-  /// The member the request's client key names (`MemberTable.ClientKey`), bound by the request filter like the two
-  /// above. The edge derived the id and kept the key to itself. None for a call from a client that sent no key.
+  /// The member a stdio bridge's client key names (`MemberTable.ClientKey`), bound by the request filter like the two above.
   let currentClientKeyMember = new System.Threading.AsyncLocal<MemberTable.MemberId option>()
-
-  /// Which members are still there: an open push stream, or a call in the window. The cohort reaper renews a seat for
-  /// every member it says is live, so a conductor that only waits and reads does not lose its seat.
-  let memberLiveness = MemberLiveness.Table()
 
   /// The daemon's one capability table and identity policy. The policy is `SAGEFS_IDENTITY_POLICY`:
   /// unset is `ConnectionsAllowed` (nothing existing changes), and a value that is set but unreadable
@@ -112,17 +107,11 @@ module McpTools =
   /// name (MemberTable.MemberId.display) — every existing name-keyed test
   /// and call site keeps working unchanged.
   let memberIdFor (agentName: string) : MemberTable.MemberId =
-    // A token outranks the connection: it IS the member. Sub-agents sharing one connection are as
-    // many members as they have tokens. A call that presented a bad token never gets here, because
-    // the request filter refuses it before any identity is bound. Next comes the client key a stdio
-    // bridge presents (the same client after a reconnect or a daemon restart), then the connection's
-    // session id. Either is a fingerprint, never the handle: both are bearer credentials, and every
-    // cohort output prints member ids.
+    // A token IS the member (a bad one never gets here: the request filter refuses it first), then a stdio bridge's
+    // client key (the same client across a reconnect or restart), then the session id. Each is a fingerprint, never the handle.
     MemberTable.ConnectionIdentity.resolve
       (currentCapability.Value |> Option.map (fun capability -> Capability.memberIdOf capability.Id))
-      currentClientKeyMember.Value
-      currentTransportSessionId.Value
-      agentName
+      currentClientKeyMember.Value currentTransportSessionId.Value agentName
 
   /// The resolved routing/presence key for a self-declared agent name — see
   /// `memberIdFor`. This is what SessionMap and ActivityTracker are keyed by,

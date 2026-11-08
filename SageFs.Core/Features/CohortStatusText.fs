@@ -43,7 +43,7 @@ module CohortStatusText =
   /// cannot drift from the behaviour it describes.
   let private leaseHeader : string =
     sprintf
-      "Lease: %s window; the reaper runs every %s and departs a silent member on the first tick at or after %s; it renews only a member the activity tracker saw in the last %s"
+      "Lease: %s window; the reaper runs every %s and departs a silent member on the first tick at or after %s; it renews a member that holds an open push stream, or that evaluated or made a call in the last %s"
       (durationText Timeouts.cohortLeaseWindow)
       (durationText Timeouts.cohortReaperInterval)
       (durationText Timeouts.cohortLeaseWindow)

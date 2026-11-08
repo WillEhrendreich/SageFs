@@ -92,7 +92,7 @@ let cohortLeaseVisibilityTests =
       let text = Features.CohortStatusText.render (frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine) ])
       text |> Expect.stringContains "the window is stated" "Lease: 30m window"
       text |> Expect.stringContains "the reaper cadence is stated" "the reaper runs every 1m"
-      text |> Expect.stringContains "the renewal window is stated" "the activity tracker saw in the last 2m"
+      text |> Expect.stringContains "the renewal rule and its window are stated" "holds an open push stream, or that evaluated or made a call in the last 2m"
 
       // The header quotes the named homes rather than numbers written into the
       // renderer, so a wrong number fails here instead of misleading a reader.

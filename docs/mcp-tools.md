@@ -518,6 +518,30 @@ id itself, which is the SDK's bearer handle: anyone who could read the status
 could present it as `Mcp-Session-Id` and act as that member, the conductor
 included. The id names a member now and cannot be used to be one.
 
+**Which name the id is a fingerprint of.** A member token, if the call presented one (the id is then `cap:<id>`).
+Otherwise the **client key** of the stdio bridge, if the request carried one. Otherwise the connection's session id,
+as before (HTTP clients, `sagefs call`, the dashboard).
+
+`sagefs mcp` makes 256 random bits once, when the process starts, and sends them on every request it forwards in the
+`X-SageFs-Client-Key` header, including the requests after it re-initializes against a daemon that came back. The daemon
+derives the member id from the key (a SHA-256 fingerprint under its own domain, the same `mcp:m-<16 hex>` shape) at its
+HTTP edge and carries only the id from there: the key is in no claim, status text, ledger row or log line. So a daemon
+upgrade, a restart or a dropped connection leaves the same client the same member. It stays the conductor, and its
+claims stay its own. Before 2026-11-07 every restart made the bridge a new member (`mcp:m-ed00…` became `mcp:m-ac28…`),
+the old member kept the seat until its lease lapsed and `sagefs cohort seat` refuses a seat that is bound, so the
+conductor was locked out for up to 30 minutes. A second bridge is a second client with a key of its own, and is its own
+member. A key that is present and is not a key (wrong length, a character outside base64url) is refused with a 400 that says
+why.
+
+The key is a bearer secret held by the bridge process, as the session id was, and it goes only to the local daemon. Anyone
+who can read the bridge's memory or its requests can speak as it. A client key never outranks a member token.
+
+**What keeps a seat.** A member's lease is renewed by the daemon's reaper every minute for each member it can see is there:
+one that evaluated lately, made a tool call lately (any call the daemon admitted), or holds an open push stream. A stdio
+bridge keeps its stream open for as long as its client lives, so a conductor that is only waiting on its agents keeps its
+seat. A member with no open stream and no call for 30 minutes (`Timeouts.cohortLeaseWindow`) is departed, as before. A
+member that presents a token has the token's own lease (30 minutes without a call), and the stream does not renew it.
+
 **Every cohort tool below takes `working_directory`.** Cohorts are scoped per repository,
 so a tool needs to know WHICH repository's cohort you mean: `join_cohort` in Nehemiah and
 `join_cohort` in Molina are different cohorts with different conductor seats, and one global
@@ -549,7 +573,7 @@ daemon's own cohort instead of the one the call acts in. If you see that text, t
 
 | Tool | What it does |
 |:---|:---|
-| `join_cohort` | Join your repository's coordination session. The first joiner **of that repository** becomes its conductor. Takes `working_directory`: cohorts are per repository, so an agent in a second repository joins a second cohort with its own conductor seat instead of colliding with a cohort it never asked for. The reply always says which seat you hold: that you are the conductor, who the conductor is, or that the seat is vacant and why (the conductor left, its lease lapsed, or it was revoked). After a daemon restart your connection is a new identity, so a reply naming a conductor that is not you means your old self still holds the seat until its lease lapses. |
+| `join_cohort` | Join your repository's coordination session. The first joiner **of that repository** becomes its conductor. Takes `working_directory`: cohorts are per repository, so an agent in a second repository joins a second cohort with its own conductor seat instead of colliding with a cohort it never asked for. The reply always says which seat you hold: that you are the conductor, who the conductor is, or that the seat is vacant and why (the conductor left, its lease lapsed, or it was revoked). Through `sagefs mcp` your identity survives a daemon restart (it comes from the bridge's client key), so you are still the conductor afterwards. A client that talks HTTP directly gets a new identity after a restart, and a reply naming a conductor that is not you means your old self still holds the seat until its lease lapses. |
 | `leave_cohort` | Leave. Any claims you still hold are orphaned (the conductor must reassign them). |
 | `get_cohort_status` | Members, claims and fences, the test matrix, the landing queue, and what the trunk did with each landing (see below). Wait-free: reads a published snapshot. The `cohort://status` MCP resource is the frame as JSON for subscription, and doesn't carry the trunk lines. Takes an optional `working_directory`: one daemon holds one cohort **per repository**, so pass the directory you are working in to read that repository's cohort. Omit it and you read the cohort of the directory the daemon itself started in. |
 | `acquire_claim` | Take an exclusive claim over a file or project (`file:<path>` or `project:<path>`) so others know it's yours to edit. |

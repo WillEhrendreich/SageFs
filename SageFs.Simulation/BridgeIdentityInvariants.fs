@@ -45,24 +45,37 @@ module BridgeIdentityInvariants =
     | ConductorBinding.NeverBound
     | ConductorBinding.Vacant _ -> []
 
-  /// A bridge with an open stream is connected, and a connected member is not departed for being quiet (finding C5: an LLM
-  /// conductor that waits on its agents makes no call for longer than the lease).
-  let connectedBridgeStaysPresent (state: State) : string list =
-    [ for KeyValue(index, bridge) in state.Bridges do
-        match bridge.Session, bridge.StreamOpen, Map.tryFind index state.LastId with
-        | Some _, true, Some who when not (isPresent state.Cohort who) ->
-          yield sprintf "bridge %d is connected with an open stream but %s was departed (step %d)" index (MemberId.display who) state.Step
-        | _ -> () ]
-
   let invariants : (string * (State -> string list)) list =
     [ "IDENTITY-IS-STABLE", identityIsStable
       "IDENTITIES-ARE-DISTINCT", identitiesAreDistinct
-      "SEAT-HOLDER-IS-STILL-THE-BRIDGE", seatHolderIsStillTheBridge
-      "CONNECTED-BRIDGE-STAYS-PRESENT", connectedBridgeStaysPresent ]
+      "SEAT-HOLDER-IS-STILL-THE-BRIDGE", seatHolderIsStillTheBridge ]
 
-  /// Every violation across the trace, tagged with the invariant that found it.
+  /// A bridge that was connected with an open stream, and a member that was Present, is not departed by the quiet that
+  /// follows while the stream stays open (finding C5: an LLM conductor that waits on its agents makes no call for longer
+  /// than the lease). Over a step, not a state: a member that lapsed while its stream was down is rightly departed, and
+  /// reopening the stream does not bring it back until it calls.
+  let connectedBridgeStaysPresent (before: State) (after: State) : string list =
+    [ for KeyValue(index, bridge) in before.Bridges do
+        let stillOpen =
+          match Map.tryFind index after.Bridges with
+          | Some next -> next.Session.IsSome && next.StreamOpen
+          | None -> false
+        match bridge.Session, bridge.StreamOpen, stillOpen, Map.tryFind index before.LastId with
+        | Some _, true, true, Some who when isPresent before.Cohort who && not (isPresent after.Cohort who) ->
+          yield sprintf "bridge %d kept its stream open but %s was departed (step %d)" index (MemberId.display who) after.Step
+        | _ -> () ]
+
+  let stepInvariants : (string * (State -> State -> string list)) list =
+    [ "CONNECTED-BRIDGE-STAYS-PRESENT", connectedBridgeStaysPresent ]
+
+  /// Every violation across the trace, tagged with the invariant that found it. The trace is the states after each event; the
+  /// first event is judged against the state before any event, which is `initialState`.
   let violations (states: State list) : string list =
     [ for state in states do
         for (name, check) in invariants do
           for message in check state do
+            yield sprintf "%s: %s" name message
+      for (before, after) in List.pairwise (initialState :: states) do
+        for (name, check) in stepInvariants do
+          for message in check before after do
             yield sprintf "%s: %s" name message ]

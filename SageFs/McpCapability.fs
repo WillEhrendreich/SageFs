@@ -15,6 +15,11 @@ open SageFs.Capability
 /// the table and commits the member's seat to the cohort.
 module McpCapability =
 
+  /// Which members are still there: an open push stream, or a call inside the activity window. The HTTP edge and the call
+  /// filter write it, and the cohort reaper renews the seat of every member it says is live, so a conductor that only waits
+  /// and reads keeps its seat (finding C5).
+  let memberLiveness = MemberLiveness.Table()
+
   /// What `mint_member` hands back: the token itself, shown once, and the record behind it.
   type MintedMember = {
     Token: string
@@ -241,12 +246,25 @@ module McpCapability =
       ClaimsPrincipal(kept @ [ identity ])
 
   /// The request's principal with the member the bridge's client key names: an authenticated identity holding the
-  /// derived member id, never the key. RED stub: leaves the principal as it was.
-  let withClientKey (who: MemberTable.MemberId) (user: ClaimsPrincipal) : ClaimsPrincipal = user
+  /// derived member id, never the key. The identities that were not authenticated are dropped, as
+  /// `withOperatorPresentation` does, because the SDK carries a principal only when its primary identity is authenticated.
+  let withClientKey (who: MemberTable.MemberId) (user: ClaimsPrincipal) : ClaimsPrincipal =
+    let identity = ClaimsIdentity(authenticationType)
+    identity.AddClaim(Claim(MemberTable.ClientKey.claimType, MemberTable.MemberId.display who))
+    let kept =
+      match user with
+      | null -> []
+      | principal -> principal.Identities |> Seq.filter (fun existing -> existing.IsAuthenticated) |> List.ofSeq
+    ClaimsPrincipal(kept @ [ identity ])
 
   /// The member the edge derived from a client key on this request, if the request carried one.
-  /// RED stub: reads nothing.
-  let clientKeyMemberOf (user: ClaimsPrincipal) : MemberTable.MemberId option = None
+  let clientKeyMemberOf (user: ClaimsPrincipal) : MemberTable.MemberId option =
+    match user with
+    | null -> None
+    | principal ->
+      match principal.FindFirst MemberTable.ClientKey.claimType with
+      | null -> None
+      | claim -> Some(MemberTable.MemberId.ofDisplay claim.Value)
 
   /// What the edge decided about the operator credential on this request, if it was presented.
   let operatorClaimOf (user: ClaimsPrincipal) : EdgeCredential.OperatorClaim option =

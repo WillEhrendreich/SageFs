@@ -1575,3 +1575,46 @@ with eight twins that each break one invariant), `ClaimPathTests.fs` and `Cohort
 Reopen it if: persisting tokens across a restart becomes necessary (then the hashes go in a store that is not the cohort ledger),
 a harness gives the model a per-call header (then the per-connection header can retire), or a role needs a tool list the classes
 cannot express.
+
+## A stdio bridge names its client with a key, and a member with an open push stream is present
+
+Observed on 2026-11-07, when the orchestrator upgraded the daemon in the middle of a cohort run (findings C3 and C5). The
+bridge survived (it re-initializes by itself), but the daemon minted a new MCP session for it, and a member's id was a fingerprint
+of the session id, so the same client became a new member: `mcp:m-ed00…` became `mcp:m-ac28…`. The old member kept the conductor
+seat until its lease lapsed, and `sagefs cohort seat` refuses a seat that is bound, so every upgrade cost the conductor its seat for up
+to 30 minutes. Separately, the reaper renewed a lease only for a member that had evaluated code in the last two minutes, so an LLM
+conductor that waited on its agents lost the seat after 30 minutes of good work.
+
+The decision:
+
+- **The bridge makes 256 random bits at process start** (`MemberTable.ClientKey.generate`) and sends them in `X-SageFs-Client-Key` on
+  every request it makes, including the ones after it re-initializes. The daemon turns the key into a member id at its HTTP edge
+  (`McpServer.useClientKey`): a SHA-256 fingerprint taken under its own domain string, so a key and a session id that are the same text
+  name two members, with the same `mcp:m-<16 hex>` shape. Only the id goes into the principal. The key is in no claim, status line,
+  ledger row or log line. `ConnectionIdentity.resolve` is the one place that picks the name: a member token, then the client key, then
+  the session id, then the caller's name.
+- **A key that is present and wrong is refused**, with a 400 that says why. Reading it as absent would quietly split one client into two.
+- **Presence follows the push stream.** The edge records an open GET that carries an `Mcp-Session-Id` against the member it belongs to
+  (`MemberLiveness`), and the call filter records every admitted call. The reaper renews a Present member that evaluated lately, called
+  lately or has a stream open, and departs one that has none of the three for the lease window. The daemon can tell a live stream from a
+  dead one because the stream is a request that stays open until the client goes, and Kestrel ends it when the client does.
+  `ClientKeyEdgeTests` runs this against a real Kestrel.
+- **A member that presents a token is left as it was.** The token is the member and has its own lease, which a stream does not renew.
+
+Threat model. The key is a bearer secret, as the session id was, and it has the same reach: anyone who can read the bridge's memory or
+its requests can speak as it. It goes only to the daemon on loopback, over the header, and is never in a message or a log, so the
+bridge's warning log, which prints raw messages, cannot hold it. The fingerprint is one-way, so nothing the cohort prints lets a reader
+present the key. A second bridge has its own key and is its own member (F15). HTTP clients, `sagefs call` and the dashboard send no
+key and are unchanged: a new session is a new member, as before. The key does not outlive the bridge process, so a restarted client is a
+new member; that is deliberate, because a key written to disk would be a credential at rest.
+
+What it does not do. A client that talks HTTP directly (not through `sagefs mcp`) still becomes a new member after a daemon restart and
+can still be locked out of its own seat until its lease lapses. The stream does not renew a token's lease. A conductor whose bridge is
+connected but whose model is wedged keeps its seat: presence says the process is there and nothing about whether the model is working.
+
+Evidence: `SageFs.Core/MemberTable.fs` (`ClientKey`, `ConnectionIdentity`), `SageFs.Core/MemberLiveness.fs`, `SageFs/McpServer.fs`
+(`useClientKey`, the call filter), `SageFs/McpStdioBridge.fs`, `SageFs/DaemonMode.fs` (`cohortReaperCallback`); `SageFs.Tests/ClientKeyIdentityTests.fs`,
+`ClientKeyEdgeTests.fs`, `BridgeIdentitySimTests.fs` (the DST over restarts and quiet spells, with two twins) and
+`BridgeIdentityIntegrationTests.fs` (a real daemon killed and started again under two real bridges).
+Reopen it if: a client other than `sagefs mcp` needs the same survival (then the key is a documented header for HTTP clients), or the
+lease should follow something other than presence.

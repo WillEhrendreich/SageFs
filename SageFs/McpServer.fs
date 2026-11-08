@@ -509,6 +509,9 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
       // through the await chain below exactly like Activity.Current already
       // does in this codebase. See SageFs.McpTools.memberIdFor.
       SageFs.McpTools.currentTransportSessionId.Value <- Some ctx.Server.SessionId
+      // The member a stdio bridge's client key names (`useClientKey` derived it at the HTTP edge and kept the key). It
+      // names the same client across a re-initialize and a daemon restart, which the session id cannot.
+      SageFs.McpTools.currentClientKeyMember.Value <- SageFs.McpCapability.clientKeyMemberOf ctx.User
       // Bind the member token this call presented, if any, the same way: a token outranks the connection,
       // and one that is presented but bad is refused below, before any tool body or gate runs, never
       // quietly downgraded to the connection's own identity.
@@ -521,6 +524,15 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
         (match presented with
          | Ok capability -> capability
          | Error _ -> None)
+      // Any call from a member that is admitted shows it is there, whether or not it evaluated: the cohort reaper
+      // renews a seat for a member that called inside the activity window (an LLM conductor that reads status and
+      // lands what its agents send never evals).
+      match presented with
+      | Ok _ ->
+        SageFs.McpCapability.memberLiveness.CallMade(
+          SageFs.MemberTable.MemberId.display (SageFs.McpTools.memberIdFor "mcp"),
+          DateTime.UtcNow)
+      | Error _ -> ()
       match presented with
       | Ok(Some capability) ->
         // A token that only reads never evals, and the reaper renews a seat from recorded activity, so
@@ -826,6 +838,55 @@ let useMemberToken (app: WebApplication) : unit =
         }
         :> Task
     | _ -> next.Invoke())) |> ignore
+
+/// The client key a stdio bridge sends on every request (`MemberTable.ClientKey`), read at the HTTP edge. A valid key becomes an
+/// authenticated identity holding the MEMBER ID derived from it, and the key goes no further: no claim, log line or status
+/// text holds it. A key that is present and wrong is refused with a 400 that says why, because treating the request as the
+/// session's own member would split one client in two. A request that sent no key (HTTP clients, `sagefs call`) is untouched.
+///
+/// The same middleware tells `memberLiveness` when a member's push stream is open: a GET that carries an `Mcp-Session-Id` is
+/// the stream, it stays open for as long as the client lives, and a member with one open is present however long it is quiet.
+/// A request that presents a member token is not counted here, because the token is the member and has its own lease.
+/// Installed after `useMemberToken` (it adds an identity to that principal) and ahead of `useOperatorCredential`.
+let useClientKey (liveness: SageFs.MemberLiveness.Table) (app: WebApplication) : unit =
+  let sessionHeader = "Mcp-Session-Id"
+  app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
+    let proceed (clientKey: SageFs.MemberTable.MemberId option) : Task =
+      let presentsToken = ctx.Request.Headers.ContainsKey SageFs.Capability.CapabilityTransport.headerName
+      match Microsoft.AspNetCore.Http.HttpMethods.IsGet ctx.Request.Method, ctx.Request.Headers.TryGetValue sessionHeader, presentsToken with
+      | true, (true, sessionIds), false when sessionIds.Count > 0 ->
+        let who =
+          match clientKey with
+          | Some member' -> member'
+          | None -> SageFs.MemberTable.MemberId.ofConnectionHandle (string sessionIds.[0])
+        let key = SageFs.MemberTable.MemberId.display who
+        task {
+          liveness.StreamOpened key
+          try
+            do! next.Invoke()
+          finally
+            liveness.StreamClosed key
+        }
+        :> Task
+      | _ -> next.Invoke()
+    match ctx.Request.Headers.TryGetValue SageFs.MemberTable.ClientKey.headerName with
+    | true, values when values.Count > 0 ->
+      match SageFs.MemberTable.ClientKey.toMemberId (string values.[0]) with
+      | Ok who ->
+        ctx.User <- SageFs.McpCapability.withClientKey who ctx.User
+        proceed (Some who)
+      | Error refusal ->
+        task {
+          ctx.Response.StatusCode <- Microsoft.AspNetCore.Http.StatusCodes.Status400BadRequest
+          ctx.Response.ContentType <- "application/json"
+          let body =
+            Json.serialize
+              Json.snakeCase
+              ({ Error = "invalid_client_key"; ErrorDescription = SageFs.MemberTable.ClientKey.describe refusal }: SageFs.McpCapability.InvalidTokenBody)
+          do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes body)
+        }
+        :> Task
+    | _ -> proceed None)) |> ignore
 
 /// The operator credential, read at the HTTP edge (#181). A request whose `Authorization` header carries the daemon's own
 /// credential gets an authenticated identity holding the operator claim, which `tools/list` reads to list everything.
@@ -4771,6 +4832,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
         errorHandlingMiddleware ctx next :> Task)) |> ignore
       useOriginGuard cfg.OwnOrigins app
       useMemberToken app
+      useClientKey SageFs.McpCapability.memberLiveness app
       // The operator credential is made (or read back) before the first request can present it. A daemon that cannot make
       // it says why in its log and answers the mint route with the fix.
       let operatorAccess = SageFs.OperatorStore.accessOf (SageFs.OperatorStore.load SageFs.DaemonState.SageFsDir)

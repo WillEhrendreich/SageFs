@@ -66,7 +66,7 @@ module BridgeIdentitySim =
   /// A number of reaper ticks that covers one and a half lease windows: a quiet spell that outlasts the lease.
   let pastTheLease : int = int (Math.Ceiling(1.5 * Cohort.leaseWindow.TotalSeconds / tick.TotalSeconds))
 
-  let private initial : State =
+  let initialState : State =
     { Clock = t0
       Cohort = CohortState.empty ()
       Bridges = Map.empty
@@ -188,7 +188,7 @@ module BridgeIdentitySim =
     (events: SimEvent list)
     : State list =
     events
-    |> List.scan (apply behavior renewable window seed) initial
+    |> List.scan (apply behavior renewable window seed) initialState
     |> List.tail
 
   /// A seeded lifecycle of `bridges` clients: calls, dropped streams, daemon restarts and long quiet spells that run past the lease.

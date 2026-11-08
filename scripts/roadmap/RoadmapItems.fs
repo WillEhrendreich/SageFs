@@ -175,6 +175,11 @@ let items : Item list =
       [ "docs/mcp-tools.md"; "docs/decisions.md" ]
       "A member's id in `get_cohort_status`, the cohort frame and the ledger was the MCP session id, which is the credential a request is bound to, so anyone who read the status could act as the conductor. The id is a fingerprint of it now, and a test fails if any cohort output carries a handle."
 
+    item "bridge-keeps-its-member-id" "A stdio bridge stays the same cohort member across a daemon restart" Agents Now
+      (landmark "SageFs.Core/MemberTable.fs" "ClientKey")
+      [ "docs/agents.md"; "docs/mcp-tools.md"; "docs/decisions.md" ]
+      "After a daemon upgrade the stdio bridge re-initialized with a new MCP session, and a member's id was a fingerprint of the session id, so the conductor came back as a stranger while its old self held the seat for up to 30 minutes. The bridge now makes a random key when it starts and sends it on every request, the daemon names the member after a fingerprint of that key, and the same client is the same member through a restart or a reconnect. The reaper also counts an open push stream and any admitted call as presence, where it used to count only an eval, so a conductor that waits on its agents keeps its seat."
+
     item "a-claim-path-means-one-thing" "A claim path means one thing" Agents Now
       (landmark "SageFs.Core/Cohort.fs" "ClaimPath")
       [ "docs/mcp-tools.md" ]

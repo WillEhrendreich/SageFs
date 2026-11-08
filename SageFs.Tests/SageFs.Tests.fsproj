@@ -836,6 +836,8 @@
         <Compile Include="CapabilitySimTests.fs" />
         <Compile Include="ClientKeyIdentityTests.fs" />
         <Compile Include="BridgeIdentitySimTests.fs" />
+        <Compile Include="ClientKeyEdgeTests.fs" />
+        <Compile Include="BridgeIdentityIntegrationTests.fs" />
         <Compile Include="LeaseWireTests.fs" />
         <Compile Include="TestDebugTests.fs" />
         <Compile Include="TestDebugSimTests.fs" />

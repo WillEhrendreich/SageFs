@@ -3874,7 +3874,11 @@ let run
         AgentActivityTracker.getActivePresences activityTracker None cohortReaperRenewWindow now
         |> List.map (fun p -> p.AgentName)
         |> Set.ofList
-      let isActive (m: MemberTable.MemberId) = Set.contains (MemberTable.MemberId.display m) freshKeys
+      // A member is there when it evaluated lately, made a call lately, or holds an open push stream (a bridge keeps
+      // one for as long as its client lives, so an LLM conductor that is only waiting on its agents stays seated).
+      let isActive (m: MemberTable.MemberId) =
+        let key = MemberTable.MemberId.display m
+        Set.contains key freshKeys || McpCapability.memberLiveness.IsLive(key, now, cohortReaperRenewWindow)
 
       // EVERY scope's cohort, not just the daemon's own. A reaper that ticked one owner
       // would leave a second repository's departed member holding its claims forever — the

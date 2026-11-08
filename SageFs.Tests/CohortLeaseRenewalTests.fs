@@ -1,6 +1,11 @@
 /// REGRESSION: "any tool call and any eval renews the lease"
 /// (`Timeouts.fs` `cohortLeaseWindow`'s doc comment, restated in `Cohort.fs`).
 ///
+/// FIXED 2026-11-07 (P13) at the daemon, not at `admitToolCallWithinStore`: the call filter in `McpServer.fs` records every
+/// admitted call in `McpCapability.memberLiveness`, the HTTP edge records each open push stream there, and the reaper's `isActive`
+/// (`DaemonMode.cohortReaperCallback`) counts both next to the activity tracker. The cases below still hold what they
+/// always held, the reaper's selection given an `isActive`; `BridgeIdentitySimTests` runs the whole loop.
+///
 /// MEASURED FALSE, on the real reaper (`DaemonMode.fs`'s
 /// `cohortMembersToRenew` + `getActivePresences tracker None
 /// agentActivityFresh` + `Post Tick`), over 90 simulated minutes of 60s reaper

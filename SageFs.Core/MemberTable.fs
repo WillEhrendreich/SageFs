@@ -70,9 +70,12 @@ module MemberTable =
     /// listing carry.
     let ofConnectionHandle (handle: string) : MemberId = MemberId.Mcp (fingerprintOfHandle handle)
 
-    /// The member id of the client that holds `key` (a stdio bridge's `ClientKey`). RED stub: derived exactly like a
-    /// session handle, with nothing to tell the two apart.
-    let ofClientKey (key: string) : MemberId = ofConnectionHandle key
+    /// What the key is hashed under, so a key and a session id that happen to be the same text still name two members.
+    let private clientKeyDomain = "sagefs-client-key:"
+
+    /// The member id of the client that holds `key` (a stdio bridge's `ClientKey`): the same one-way fingerprint shape
+    /// as a connection's, taken over the key under its own domain. The key stays with the bridge and the HTTP edge.
+    let ofClientKey (key: string) : MemberId = MemberId.Mcp (fingerprintOfHandle (clientKeyDomain + key))
 
     /// What the operator prints as. The colon makes it the prefix form of the other kinds, with nothing after it.
     let operatorDisplay = "operator:"
@@ -128,13 +131,21 @@ module MemberTable =
     /// 32 bytes in base64url without padding.
     let length = 43
 
-    /// RED stub: not a key yet.
-    let generate () : string = ""
+    let generate () : string =
+      System.Security.Cryptography.RandomNumberGenerator.GetBytes randomBytes
+      |> System.Convert.ToBase64String
+      |> fun text -> text.TrimEnd('=').Replace('+', '-').Replace('/', '_')
 
     /// The member a key names, or why it names none. A key that is present and wrong is refused at the edge: the
     /// request is not quietly treated as the session's own member, because that would split one client in two.
-    /// RED stub: names nobody.
-    let toMemberId (raw: string) : Result<MemberId, ClientKeyRefusal> = Result.Error ClientKeyRefusal.Blank
+    let toMemberId (raw: string) : Result<MemberId, ClientKeyRefusal> =
+      match raw with
+      | null -> Result.Error ClientKeyRefusal.Blank
+      | text when System.String.IsNullOrWhiteSpace text -> Result.Error ClientKeyRefusal.Blank
+      | text when text.Length <> length -> Result.Error(ClientKeyRefusal.WrongLength text.Length)
+      | text when not (text |> Seq.forall (fun c -> System.Char.IsAsciiLetterOrDigit c || c = '-' || c = '_')) ->
+        Result.Error ClientKeyRefusal.NotBase64Url
+      | text -> Result.Ok(MemberId.ofClientKey text)
 
     let describe (refusal: ClientKeyRefusal) : string =
       match refusal with
@@ -147,9 +158,9 @@ module MemberTable =
   /// across reconnects. Without that, the connection's own session id does, as it did before the key existed (HTTP
   /// clients, `sagefs call`). With none of them the caller-supplied name is all there is.
   module ConnectionIdentity =
-    /// RED stub: the session id only, as before the key existed.
     let resolve (capability: MemberId option) (clientKey: MemberId option) (transportHandle: string option) (agentName: string) : MemberId =
-      match capability, transportHandle with
-      | Some who, _ -> who
-      | None, Some handle when not (System.String.IsNullOrWhiteSpace handle) -> MemberId.ofConnectionHandle handle
-      | None, _ -> MemberId.Minted agentName
+      match capability, clientKey, transportHandle with
+      | Some who, _, _ -> who
+      | None, Some who, _ -> who
+      | None, None, Some handle when not (System.String.IsNullOrWhiteSpace handle) -> MemberId.ofConnectionHandle handle
+      | None, None, _ -> MemberId.Minted agentName
