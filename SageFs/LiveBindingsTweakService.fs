@@ -259,7 +259,7 @@ module Service =
     | Error refusal -> Task.FromResult(Error refusal)
     | Ok request -> execute service.Env.Ports service.Env.Locks Timeouts.nudgeFileLock request
 
-  let inspectRaw (path: string) (address: string) : RawNudge =
+  let inspectRaw (FilePath path) (address: string) : RawNudge =
     { Action = NudgeAction.toToken NudgeAction.Inspect; File = path; Address = address; Seen = ""; Literal = ""; Expression = "" }
 
   let itemsOf (path: string) (ran: Ran) : Result<SourceRef list * Inspection, string> =
@@ -307,7 +307,7 @@ module Service =
     (journalStamp: FileStamp)
     : Task<Result<Inspected, string>> =
     task {
-      let! listed = door service owned (inspectRaw path "")
+      let! listed = door service owned (inspectRaw (FilePath path) "")
       match listed with
       | Error refusal -> return Error(NudgeRefusal.rule refusal)
       | Ok ran ->
@@ -320,7 +320,7 @@ module Service =
             match failure with
             | Some _ -> ()
             | None ->
-              let! answered = door service owned (inspectRaw path (NudgeAddress.format address))
+              let! answered = door service owned (inspectRaw (FilePath path) (NudgeAddress.format address))
               match answered with
               | Error refusal -> failure <- Some(NudgeRefusal.rule refusal)
               | Ok whole ->

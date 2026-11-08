@@ -46,12 +46,12 @@ module DirectoryConfig =
   /// so it runs in an isolated FSI host (SageFs.ConfigHost), never in this process; `workingDir` picks the SDK.
   /// The config file should contain a DirectoryConfig expression, e.g.:
   ///   { DirectoryConfig.empty with Load = Solution "MyApp.slnx" }
-  let evaluateIn (workingDir: string) (content: string) : Result<DirectoryConfig, string> =
+  let evaluateIn (DirPath workingDir) (content: string) : Result<DirectoryConfig, string> =
     ConfigHost.evaluate workingDir content |> Result.mapError ConfigHost.describeError
 
   /// `evaluateIn` for the current directory.
   let evaluate (content: string) : Result<DirectoryConfig, string> =
-    evaluateIn Environment.CurrentDirectory content
+    evaluateIn (DirPath Environment.CurrentDirectory) content
 
   /// What a config file's evaluation means for the directory: its config, or the defaults with the reason logged.
   let configOfEvaluation (path: string) (evaluated: Result<DirectoryConfig, string>) : DirectoryConfig =
@@ -64,7 +64,7 @@ module DirectoryConfig =
   let load (workingDir: string) : DirectoryConfig option =
     let path = configPath workingDir
     match File.Exists path with
-    | true -> Some(configOfEvaluation path (evaluateIn workingDir (File.ReadAllText path)))
+    | true -> Some(configOfEvaluation path (evaluateIn (DirPath workingDir) (File.ReadAllText path)))
     | false -> None
 
   /// `load`, awaiting the evaluation of the config instead of blocking on it. The answer lands in the same cache, so a

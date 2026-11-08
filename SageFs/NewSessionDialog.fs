@@ -314,7 +314,7 @@ module Overlap =
       try Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
       with :? ArgumentException | :? NotSupportedException | :? PathTooLongException -> directory
 
-  let sameDirectory (a: string) (b: string) =
+  let sameDirectory (DirPath a) (DirPath b) =
     String.Equals(canonical a, canonical b, comparison)
 
   /// Which of `sessions` already work where a new one is about to be made. The same directory is named first,
@@ -323,13 +323,13 @@ module Overlap =
   let decide (directory: string) (boundary: Boundary) (sessions: LiveSession list) : Overlap list =
     let here =
       sessions
-      |> List.filter (fun s -> sameDirectory s.WorkingDirectory directory)
+      |> List.filter (fun s -> sameDirectory (DirPath s.WorkingDirectory) (DirPath directory))
       |> List.map (fun s -> { Session = s; Relation = Relation.SameDirectory })
     let sharedRoot =
       match Boundary.root boundary with
       | Some root ->
         sessions
-        |> List.filter (fun s -> not (sameDirectory s.WorkingDirectory directory))
+        |> List.filter (fun s -> not (sameDirectory (DirPath s.WorkingDirectory) (DirPath directory)))
         |> List.choose (fun s ->
           match Boundary.root s.Boundary with
           | Some other when String.Equals(canonical other, canonical root, comparison) ->

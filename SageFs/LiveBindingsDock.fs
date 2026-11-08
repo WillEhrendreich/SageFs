@@ -908,10 +908,17 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
       yield! watchTab
     ] ]
 
+/// How many bindings each counted tab lists. Four counts of the same kind in one record, so the call site names each.
+type TabCounts =
+  { Bindings: int
+    Changed: int
+    Moved: int
+    Watched: int }
+
 /// The tab bar: All, Pinned and Changes, each with how many it lists. The open tab is a signal, so a push never closes it, and the pressed
 /// state is read from the signal and said in the markup (`aria-pressed`) as well as in the fill. The Pinned count is the page's own, from
 /// the pins it holds; the other two are the server's.
-let tabBar (bindingCount: int) (changedCount: int) (movedCount: int) (watchCount: int) : XmlNode =
+let tabBar (counts: TabCounts) : XmlNode =
   let open' (tab: WatchTab) = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
   Elem.div
     [ Attr.class' "live-tabs"
@@ -921,10 +928,10 @@ let tabBar (bindingCount: int) (changedCount: int) (movedCount: int) (watchCount
     [ for tab in WatchTab.all ->
         let count =
           match tab with
-          | WatchTab.All -> [ textEnc (string bindingCount) ]
-          | WatchTab.Changes -> [ textEnc (string changedCount) ]
-          | WatchTab.SinceGreen -> [ textEnc (string movedCount) ]
-          | WatchTab.Watch -> [ textEnc (string watchCount) ]
+          | WatchTab.All -> [ textEnc (string counts.Bindings) ]
+          | WatchTab.Changes -> [ textEnc (string counts.Changed) ]
+          | WatchTab.SinceGreen -> [ textEnc (string counts.Moved) ]
+          | WatchTab.Watch -> [ textEnc (string counts.Watched) ]
           | WatchTab.Pinned -> [ textEnc "0" ]
         Elem.button
           [ Attr.id (sprintf "live-tab-%s" (WatchTab.token tab))
@@ -1071,7 +1078,11 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
           | LiveBindingsViewPanel.GreenSaid.Moved moved -> (Tweak.SinceGreen.movedBindings moved).Count
           | LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet -> 0
         | None -> 0
-      tabBar view.Snapshot.Bindings.Length (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count movedCount watchCount
+      tabBar
+        { Bindings = view.Snapshot.Bindings.Length
+          Changed = (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count
+          Moved = movedCount
+          Watched = watchCount }
     | PrintedBindings _
     | NothingBound -> ()
     yield! headNodes

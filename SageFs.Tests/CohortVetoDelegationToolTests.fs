@@ -141,7 +141,7 @@ let toolBodyTests =
 
     testTask "a veto after the landing was withdrawn is refused, not swallowed" {
       let! ctx, lid = scene ()
-      let! withdrawn = McpCohortTools.withdrawLanding ctx "bob" lid wd
+      let! withdrawn = McpCohortTools.withdrawLanding ctx "bob" (LandingId lid) wd
       ok "withdraw_landing" withdrawn |> ignore
       let! result = McpCohortTools.vetoLanding ctx "vera" lid "too late" wd
       refused "a veto of a withdrawn landing" result |> Expect.stringContains "names the landing" lid
@@ -149,18 +149,18 @@ let toolBodyTests =
 
     testTask "only the requester withdraws, and the refusal says who may" {
       let! ctx, lid = scene ()
-      let! result = McpCohortTools.withdrawLanding ctx "alice" lid wd
+      let! result = McpCohortTools.withdrawLanding ctx "alice" (LandingId lid) wd
       refused "the conductor withdrawing bob's landing" result |> Expect.stringContains "points at the requester" "requester"
-      let! mine = McpCohortTools.withdrawLanding ctx "bob" lid wd
+      let! mine = McpCohortTools.withdrawLanding ctx "bob" (LandingId lid) wd
       ok "the requester withdrawing" mine |> Expect.stringContains "confirms" lid
     }
 
     testTask "only the conductor clears a veto, and then the landing is queued again" {
       let! ctx, lid = scene ()
       let! _ = McpCohortTools.vetoLanding ctx "vera" lid "hold" wd
-      let! notConductor = McpCohortTools.resolveVeto ctx "bob" lid wd
+      let! notConductor = McpCohortTools.resolveVeto ctx "bob" (LandingId lid) wd
       refused "a member clearing a veto" notConductor |> Expect.stringContains "says conductor-only" "conductor"
-      let! cleared = McpCohortTools.resolveVeto ctx "alice" lid wd
+      let! cleared = McpCohortTools.resolveVeto ctx "alice" (LandingId lid) wd
       ok "resolve_veto" cleared |> Expect.stringContains "confirms" lid
       let! (text: string) = status ctx
       text.Contains("hold") |> Expect.isFalse "the veto is gone from the status"

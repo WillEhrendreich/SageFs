@@ -1629,7 +1629,7 @@ SAFETY:
         logger.LogDebug("MCP-TOOL: create_project_session called: project={Project}, dir={Dir}, workflow={Workflow}", project, working_directory, workflow)
         task {
           let! reply = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Project project ] working_directory workflow
-          let withLine = SageFs.McpHygiene.withHygieneLine ctx working_directory reply
+          let withLine = SageFs.McpHygiene.withHygieneLine ctx (SageFs.DirPath working_directory) reply
           SageFs.McpHygiene.refreshSoon ctx working_directory
           return withLine
         } |> withEcho ctx "create_project_session"
@@ -1646,7 +1646,7 @@ SAFETY:
         logger.LogDebug("MCP-TOOL: create_solution_session called: solution={Solution}, dir={Dir}, workflow={Workflow}", solution, working_directory, workflow)
         task {
           let! reply = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Solution solution ] working_directory workflow
-          let withLine = SageFs.McpHygiene.withHygieneLine ctx working_directory reply
+          let withLine = SageFs.McpHygiene.withHygieneLine ctx (SageFs.DirPath working_directory) reply
           SageFs.McpHygiene.refreshSoon ctx working_directory
           return withLine
         } |> withEcho ctx "create_solution_session"
@@ -1662,7 +1662,7 @@ SAFETY:
         logger.LogDebug("MCP-TOOL: create_bare_session called: dir={Dir}, workflow={Workflow}", working_directory, workflow)
         task {
           let! reply = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Bare ] working_directory workflow
-          let withLine = SageFs.McpHygiene.withHygieneLine ctx working_directory reply
+          let withLine = SageFs.McpHygiene.withHygieneLine ctx (SageFs.DirPath working_directory) reply
           SageFs.McpHygiene.refreshSoon ctx working_directory
           return withLine
         } |> withEcho ctx "create_bare_session"
@@ -1866,7 +1866,7 @@ NEVER touches: anything a session or process is using, a worktree with uncommitt
         working_directory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: tidy_workspace called, plan={Plan}, confirm={Confirm}", plan, confirm)
-        SageFs.McpHygiene.tidyWorkspace ctx working_directory plan confirm |> withEcho ctx "tidy_workspace"
+        SageFs.McpHygiene.tidyWorkspace ctx (SageFs.DirPath working_directory) plan confirm |> withEcho ctx "tidy_workspace"
 
     [<McpServerTool>]
     [<Description("""Get a compact local summary of MCP friction recorded by SageFs.
@@ -2555,7 +2555,7 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
     ) : Task<string> =
         let target = RouteTarget.ofArgument working_directory
         logger.LogDebug("MCP-TOOL: list_members called, name={Name}, offset={Offset}", qualified_name, offset)
-        SageFs.McpMembersRoute.listMembers ctx "mcp" qualified_name offset target |> withEcho ctx "list_members"
+        SageFs.McpMembersRoute.listMembers ctx "mcp" (SageFs.QualifiedName qualified_name) offset target |> withEcho ctx "list_members"
 
     [<McpServerTool>]
     [<Description("""Every definition and use of a qualified name across the session's projects, one rung below list_members on the symbol ladder. The first line of the reply is the scope: "project-wide" when the compiler checked every project of the session, "partial" naming the projects it did not reach, or "unavailable" with the reason. A count never appears without that line, so a count under "partial" covers only the projects it names. The compiler's own full name decides what matches, so a call through an alias, an open or a pipeline counts and a same-spelled name in another module does not; overloads of one method count together. One budget covers all projects together, and a failure states the budget used. Lists file, line, column and whether each is a definition or a use, a page at a time, ending with the offset for the next page.""")>]
@@ -2571,7 +2571,7 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
     ) : Task<string> =
         let target = RouteTarget.ofArgument working_directory
         logger.LogDebug("MCP-TOOL: list_references called, name={Name}, offset={Offset}", qualified_name, offset)
-        SageFs.McpReferencesRoute.listReferences ctx "mcp" qualified_name offset target |> withEcho ctx "list_references"
+        SageFs.McpReferencesRoute.listReferences ctx "mcp" (SageFs.QualifiedName qualified_name) offset target |> withEcho ctx "list_references"
 
     [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.
@@ -2770,7 +2770,7 @@ OUTPUT: Confirmation text, or an error naming why the release was refused.""")>]
           let wd =
             if System.String.IsNullOrWhiteSpace working_directory then None
             else Some working_directory
-          let! result = SageFs.McpCohortTools.releaseClaim ctx agentName claimId fence wd
+          let! result = SageFs.McpCohortTools.releaseClaim ctx agentName (SageFs.Cohort.ClaimId claimId) fence wd
           return
             match result with
             | Ok text -> text, None
@@ -2891,7 +2891,7 @@ OUTPUT: Confirmation, or a refusal: not the requester, no such landing, or the l
           let wd =
             if System.String.IsNullOrWhiteSpace working_directory then None
             else Some working_directory
-          let! result = SageFs.McpCohortTools.withdrawLanding ctx agentName landingId wd
+          let! result = SageFs.McpCohortTools.withdrawLanding ctx agentName (SageFs.Cohort.LandingId landingId) wd
           return
             match result with
             | Ok text -> text, None
@@ -2953,7 +2953,7 @@ OUTPUT: Confirmation, or a refusal: not the conductor, no such landing, or the l
           let wd =
             if System.String.IsNullOrWhiteSpace working_directory then None
             else Some working_directory
-          let! result = SageFs.McpCohortTools.resolveVeto ctx agentName landingId wd
+          let! result = SageFs.McpCohortTools.resolveVeto ctx agentName (SageFs.Cohort.LandingId landingId) wd
           return
             match result with
             | Ok text -> text, None

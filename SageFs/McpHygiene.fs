@@ -68,7 +68,7 @@ let getWorkspaceHygieneAt (locate: string -> Locations) (ctx: McpContext) (worki
 let getWorkspaceHygiene (ctx: McpContext) (workingDirectory: string) : Task<string> =
   getWorkspaceHygieneAt HygieneService.locationsFor ctx workingDirectory
 
-let tidyWorkspaceAt (locate: string -> Locations) (ctx: McpContext) (workingDirectory: string) (planId: string) (confirm: bool) : Task<string> =
+let tidyWorkspaceAt (locate: string -> Locations) (ctx: McpContext) (DirPath workingDirectory) (planId: string) (confirm: bool) : Task<string> =
   task {
     match String.IsNullOrWhiteSpace planId, confirm with
     | true, _
@@ -90,7 +90,7 @@ let tidyWorkspaceAt (locate: string -> Locations) (ctx: McpContext) (workingDire
           return sprintf "Error: plan %s is not the plan that exists now (%s): the workspace changed since you looked. Nothing was touched. Call get_workspace_hygiene again, read the new plan, and pass its id as `plan`.\n(%d steps now, %s safe to reclaim)" s c (List.length plan.Steps) (formatBytes plan.SafeBytes)
   }
 
-let tidyWorkspace (ctx: McpContext) (workingDirectory: string) (planId: string) (confirm: bool) : Task<string> =
+let tidyWorkspace (ctx: McpContext) (workingDirectory: DirPath) (planId: string) (confirm: bool) : Task<string> =
   tidyWorkspaceAt HygieneService.locationsFor ctx workingDirectory planId confirm
 
 /// Make the cached snapshot for a repo current, in the background. Event-driven: called when something that
@@ -106,7 +106,7 @@ let refreshSoon (ctx: McpContext) (workingDirectory: string) : unit =
 /// What a session in an agent worktree is told about it: the daemon records the worktree, saves its uncommitted files, and
 /// removes it only after its work has reached the base branch and it has been quiet for the grace. Nothing for a directory
 /// that is not under the repository's agent worktree area.
-let agentWorktreeNote (repo: string) (workingDirectory: string) : string option =
+let agentWorktreeNote (DirPath repo) (DirPath workingDirectory) : string option =
   let area = Guard.normalize (IO.Path.Combine(repo, ".claude", "worktrees"))
   let directory = Guard.normalize workingDirectory
   match directory.StartsWith(area + "/", StringComparison.Ordinal) with
@@ -123,7 +123,7 @@ let agentWorktreeNote (repo: string) (workingDirectory: string) : string option 
 let hygieneLine (ctx: McpContext) (workingDirectory: string) : string option =
   match ctx.Dispatch, HygieneService.mainRepoOf workingDirectory with
   | Some _, Some repo ->
-    let note = agentWorktreeNote repo (HygieneGather.canonicalPath workingDirectory)
+    let note = agentWorktreeNote (DirPath repo) (DirPath (HygieneGather.canonicalPath workingDirectory))
     let nudgeLine =
       match HygieneService.Cache.tryGet repo with
       | Some snapshot -> nudge snapshot.Summary
@@ -147,7 +147,7 @@ let refreshForSessions (ctx: McpContext) : unit =
   |> ignore
 
 /// A reply with the hygiene line under it, when there is one.
-let withHygieneLine (ctx: McpContext) (workingDirectory: string) (reply: string) : string =
+let withHygieneLine (ctx: McpContext) (DirPath workingDirectory) (reply: string) : string =
   match hygieneLine ctx workingDirectory with
   | Some line -> reply + "\n\n" + line
   | None -> reply

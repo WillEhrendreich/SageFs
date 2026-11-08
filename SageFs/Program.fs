@@ -951,9 +951,9 @@ let main args =
               Timeout = Timeouts.workerHttpRequest)
           let proxy =
             JupyterDaemonBridge.makeSessionProxy
-              (JupyterDaemonBridge.httpPostJson httpClient "/exec")
-              (JupyterDaemonBridge.httpPostJson httpClient "/api/sessions/create")
-              (JupyterDaemonBridge.httpGetJson httpClient "/api/sessions")
+              (JupyterDaemonBridge.httpPostJson httpClient (ApiPath "/exec"))
+              (JupyterDaemonBridge.httpPostJson httpClient (ApiPath "/api/sessions/create"))
+              (JupyterDaemonBridge.httpGetJson httpClient (ApiPath "/api/sessions"))
               Environment.CurrentDirectory
               Timeouts.jupyterSessionWarmup
           let exec, complete, isComplete = JupyterKernel.FsiBridge.fromProxy proxy

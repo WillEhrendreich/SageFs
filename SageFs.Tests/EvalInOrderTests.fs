@@ -72,7 +72,7 @@ let tests =
         statement |> Expect.equal "what it was" "let b = boom;;"
         reason |> Expect.equal "what it said" "boom is not defined"
         before |> Expect.equal "what ran before it" [ "ran let a = 1" ]
-        EvalSequence.describeStop position total statement reason
+        EvalSequence.describeStop { Position = position; Total = total } { Statement = statement; Reason = reason }
         |> Expect.equal "said in words" "Statement 2 of 3 failed: let b = boom;;\nThe error: boom is not defined\nThe 1 statement after it did not run."
       | other -> failtestf "expected a stop, got %A" other
     }
@@ -89,8 +89,8 @@ let tests =
     }
 
     testCase "the words for a stop say how many did not run, and say nothing when the last one failed" <| fun _ ->
-      (EvalSequence.describeStop 1 3 "x;;" "bad").Contains "The 2 statements after it did not run." |> Expect.isTrue "two"
-      (EvalSequence.describeStop 3 3 "x;;" "bad").Contains "did not run" |> Expect.isFalse "the last one has nothing after it"
+      (EvalSequence.describeStop { Position = 1; Total = 3 } { Statement = "x;;"; Reason = "bad" }).Contains "The 2 statements after it did not run." |> Expect.isTrue "two"
+      (EvalSequence.describeStop { Position = 3; Total = 3 } { Statement = "x;;"; Reason = "bad" }).Contains "did not run" |> Expect.isFalse "the last one has nothing after it"
 
     testList "a submission to a session" [
 

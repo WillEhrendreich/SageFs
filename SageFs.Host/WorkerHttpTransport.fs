@@ -231,13 +231,17 @@ module WorkerHttpTransport =
       | WorkerRoute.Post _ -> ()
     d
 
+  /// The two things that name a request: its HTTP method and its path. One record, so a call site says which is which.
+  type RequestRoute = { HttpMethod: string; Path: string }
+
   /// Classify one request. Method-driven: every non-GET/HEAD request is
   /// Mutating, whatever its path — so a newly mapped POST (or a path the table
   /// does not know, or `/EVAL` in any casing) can never land on a weaker check.
   /// GET/HEAD take the declared access of their route; unknown GETs 404 and
   /// are read-only.
-  let classify (httpMethod: string) (path: string) : RouteAccess =
-    match httpMethod.Trim().ToUpperInvariant() with
+  let classify (route: RequestRoute) : RouteAccess =
+    let path = route.Path
+    match route.HttpMethod.Trim().ToUpperInvariant() with
     | "GET" | "HEAD" ->
       let normalized =
         match path.Length > 1 && path.EndsWith("/", StringComparison.Ordinal) with
@@ -276,7 +280,7 @@ module WorkerHttpTransport =
     | Some h when not (SageFs.Server.HttpOriginGuard.isLoopbackHost h) ->
       GuardVerdict.Reject (SageFs.Server.HttpOriginGuard.Rejection.ForeignHost h)
     | _ ->
-      match classify request.Method path with
+      match classify { HttpMethod = request.Method; Path = path } with
       | RouteAccess.Mutating ->
         match SageFs.Server.HttpOriginGuard.decide own request with
         | SageFs.Server.HttpOriginGuard.Verdict.Allow -> GuardVerdict.Allow
@@ -320,8 +324,8 @@ module WorkerHttpTransport =
 
   /// What a route that threw tells its caller: the route, the exception's type and its message (the message of a
   /// failed assembly load names the assembly). The full exception, with its stack, goes to the worker log.
-  let describeRouteFailure (httpMethod: string) (path: string) (ex: exn) : string =
-    sprintf "the worker threw while handling %s %s: %s: %s" httpMethod path (ex.GetType().Name) ex.Message
+  let describeRouteFailure (route: RequestRoute) (ex: exn) : string =
+    sprintf "the worker threw while handling %s %s: %s: %s" route.HttpMethod route.Path (ex.GetType().Name) ex.Message
 
   /// Outermost middleware: a route that throws is logged through the worker's own log (this host has no `ILogger`
   /// provider, so ASP.NET's own record of the exception goes nowhere) and answered as a 500 whose body says what threw.
@@ -332,7 +336,7 @@ module WorkerHttpTransport =
     with
     | ex when not (ex :? OperationCanceledException) ->
       let path = ctx.Request.Path.Value |> Option.ofObj |> Option.defaultValue ""
-      let text = describeRouteFailure ctx.Request.Method path ex
+      let text = describeRouteFailure { HttpMethod = ctx.Request.Method; Path = path } ex
       Log.error "[WorkerHttp] %s\n%s" text (ex.ToString())
       match ctx.Response.HasStarted with
       | true -> ()

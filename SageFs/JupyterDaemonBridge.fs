@@ -114,7 +114,7 @@ module JupyterDaemonBridge =
   /// daemon's MCP port. Kept separate from `makeSessionProxy` so the
   /// decision logic above is fully testable without a socket; this is the
   /// only part of the bridge that actually touches the network.
-  let httpPostJson (client: System.Net.Http.HttpClient) (path: string) : PostJson =
+  let httpPostJson (client: System.Net.Http.HttpClient) (ApiPath path) : PostJson =
     fun body ->
       async {
         try
@@ -130,7 +130,7 @@ module JupyterDaemonBridge =
   /// reports every session with its directory and its status. Same shape as
   /// `PostJson` (so the bridge's decision tree stays testable without a
   /// socket), but it reads rather than writes, and it sends no body.
-  let httpGetJson (client: System.Net.Http.HttpClient) (path: string) : PostJson =
+  let httpGetJson (client: System.Net.Http.HttpClient) (ApiPath path) : PostJson =
     fun _body ->
       async {
         try
@@ -148,7 +148,7 @@ module JupyterDaemonBridge =
   /// says so, and only a `Ready` one can be evaluated. The comparison is on
   /// the normalized path, because the daemon reports an absolute path and
   /// the kernel's own working directory is whatever it was started in.
-  let sessionIsReady (body: string) (workingDirectory: string) : bool =
+  let sessionIsReady (body: string) (DirPath workingDirectory) : bool =
     try
       use doc = JsonDocument.Parse(body)
       let expected =
@@ -224,7 +224,7 @@ module JupyterDaemonBridge =
         while not ready && DateTime.UtcNow < deadline do
           let! outcome = waitForReadyPost ""
           match outcome with
-          | Ok (status, respBody) when status = 200 -> ready <- sessionIsReady respBody workingDirectory
+          | Ok (status, respBody) when status = 200 -> ready <- sessionIsReady respBody (DirPath workingDirectory)
           | Ok (_, _) -> ()
           | Error transportMessage ->
             Utils.Log.warn "[JupyterDaemonBridge] session wait unreachable: %s" transportMessage

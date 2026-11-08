@@ -88,8 +88,18 @@ module EvalSequence =
         return outcome
       })
 
+  /// Where a submission stopped: the 1-based position of the failed statement, and how many statements the submission had.
+  type StopPoint = { Position: int; Total: int }
+
+  /// The statement that failed, as the person wrote it, and what the worker said about it.
+  type StatementFailure = { Statement: string; Reason: string }
+
   /// What a person is told when a statement of several failed: which one, what it was, what it said, and what did not run.
-  let describeStop (position: int) (total: int) (statement: string) (reason: string) : string =
+  let describeStop (stop: StopPoint) (failure: StatementFailure) : string =
+    let position = stop.Position
+    let total = stop.Total
+    let statement = failure.Statement
+    let reason = failure.Reason
     let skipped = total - position
     let after =
       match skipped with

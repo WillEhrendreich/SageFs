@@ -291,7 +291,7 @@ module McpCohortIntegration =
           return Error (SageFsError.SessionCreationFailed text)
         | ReplaceOutcome.Replaced ->
         // A branch of an earlier call may hold landings, so it is never reset or reused: a repeated call cuts a branch of its own (F7).
-        let! existingBranches = Features.CohortGit.branchNamesUnder mainRepoDir "sagefs/"
+        let! existingBranches = Features.CohortGit.branchNamesUnder (DirPath mainRepoDir) "sagefs/"
         let takenBranches = existingBranches |> Result.defaultValue Set.empty
         let branch = Features.CohortIntegrationScope.freshBranchName sha takenBranches.Contains
         let! addResult = Features.CohortGit.addWorktree mainRepoDir worktreePath branch sha

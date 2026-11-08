@@ -114,7 +114,7 @@ module McpCompletions =
       return completionAnswerOf routeResult
     }
 
-  let exploreQualifiedName (ctx: McpContext) (agent: string) (qualifiedName: string) (workingDirectory: string option) : Task<string> =
+  let exploreQualifiedName (ctx: McpContext) (agent: string) (QualifiedName qualifiedName) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       let code = sprintf "%s." qualifiedName
       let cursor = code.Length
@@ -140,4 +140,4 @@ module McpCompletions =
     })
 
   let exploreNamespace (ctx: McpContext) (agent: string) (namespaceName: string) (workingDirectory: string option) : Task<string> =
-    exploreQualifiedName ctx agent namespaceName workingDirectory
+    exploreQualifiedName ctx agent (QualifiedName namespaceName) workingDirectory

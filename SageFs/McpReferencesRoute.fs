@@ -64,7 +64,7 @@ module McpReferencesRoute =
   let listReferences
     (ctx: McpContext)
     (agent: string)
-    (qualifiedName: string)
+    (QualifiedName qualifiedName)
     (offset: int)
     (target: McpSessionRouting.RouteTarget)
     : Task<string> =

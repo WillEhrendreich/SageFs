@@ -131,14 +131,14 @@ let worktreeNoteTests =
   testList "Workspace hygiene: a session in an agent worktree is told what happens to it" [
 
     testCase "a worktree under the agent area gets the note, naming its salvage branch and the rescue command" <| fun _ ->
-      let note = SageFs.McpHygiene.agentWorktreeNote "/work/repo" "/work/repo/.claude/worktrees/agent-1/src" |> Option.defaultValue ""
+      let note = SageFs.McpHygiene.agentWorktreeNote (DirPath "/work/repo") (DirPath "/work/repo/.claude/worktrees/agent-1/src") |> Option.defaultValue ""
       note |> Expect.stringContains "says it is an agent worktree" "agent worktree (agent-1)"
       note |> Expect.stringContains "names the salvage branch" "salvage/agent-1"
       note |> Expect.stringContains "names the way to keep the work" "sagefs hygiene --rescue agent-1"
 
     testCase "the main checkout and the agent area itself get nothing" <| fun _ ->
-      SageFs.McpHygiene.agentWorktreeNote "/work/repo" "/work/repo/src" |> Expect.isNone "the main checkout"
-      SageFs.McpHygiene.agentWorktreeNote "/work/repo" "/work/repo/.claude/worktrees" |> Expect.isNone "the area itself"
+      SageFs.McpHygiene.agentWorktreeNote (DirPath "/work/repo") (DirPath "/work/repo/src") |> Expect.isNone "the main checkout"
+      SageFs.McpHygiene.agentWorktreeNote (DirPath "/work/repo") (DirPath "/work/repo/.claude/worktrees") |> Expect.isNone "the area itself"
   ]
 
 [<Tests>]

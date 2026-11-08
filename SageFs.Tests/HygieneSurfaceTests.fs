@@ -166,9 +166,9 @@ let toolTests =
     testTask "tidy_workspace without confirm, or without a plan id, does nothing and says so" {
       use sb = new Sandbox()
       let paths = populate sb
-      let! noConfirm = McpHygiene.tidyWorkspaceAt (fun _ -> sb.Locations) context sb.Repo "whatever" false
+      let! noConfirm = McpHygiene.tidyWorkspaceAt (fun _ -> sb.Locations) context (DirPath sb.Repo) "whatever" false
       noConfirm |> Expect.stringContains "refuses" "Nothing was touched"
-      let! noPlan = McpHygiene.tidyWorkspaceAt (fun _ -> sb.Locations) context sb.Repo "" true
+      let! noPlan = McpHygiene.tidyWorkspaceAt (fun _ -> sb.Locations) context (DirPath sb.Repo) "" true
       noPlan |> Expect.stringContains "refuses" "Nothing was touched"
       for path in paths |> Map.toList |> List.map snd do
         Directory.Exists path |> Expect.isTrue "nothing was removed"
@@ -177,7 +177,7 @@ let toolTests =
     testTask "tidy_workspace with a plan id that is not the current plan is refused and touches nothing" {
       use sb = new Sandbox()
       let paths = populate sb
-      let! text = McpHygiene.tidyWorkspaceAt (fun _ -> sb.Locations) context sb.Repo "000000000000" true
+      let! text = McpHygiene.tidyWorkspaceAt (fun _ -> sb.Locations) context (DirPath sb.Repo) "000000000000" true
       text |> Expect.stringContains "says the plan changed" "not the plan that exists now"
       for path in paths |> Map.toList |> List.map snd do
         Directory.Exists path |> Expect.isTrue "nothing was removed"
@@ -187,7 +187,7 @@ let toolTests =
       use sb = new Sandbox()
       let paths = populate sb
       let! shown = McpHygiene.getWorkspaceHygieneAt (fun _ -> sb.Locations) context sb.Repo
-      let! report = McpHygiene.tidyWorkspaceAt (fun _ -> sb.Locations) context sb.Repo (planIdIn shown) true
+      let! report = McpHygiene.tidyWorkspaceAt (fun _ -> sb.Locations) context (DirPath sb.Repo) (planIdIn shown) true
       report |> Expect.stringContains "reports what it did" "Tidied:"
       for name in [ "clean-merged"; "ff-merged"; "squashed"; "dirty-generated" ] do
         Directory.Exists paths.[name] |> Expect.isFalse (sprintf "%s is gone" name)
@@ -198,7 +198,7 @@ let toolTests =
     testTask "a reply gets the hygiene line once the cached snapshot says the repo is buried, and not before" {
       use sb = new Sandbox()
       let reply = "Session created."
-      McpHygiene.withHygieneLine context sb.Repo reply |> Expect.equal "no snapshot yet: nothing added" reply
+      McpHygiene.withHygieneLine context (DirPath sb.Repo) reply |> Expect.equal "no snapshot yet: nothing added" reply
       let buried = { summaryWith (Thresholds.leftoverWorktreeNudge + 2) 0L with PlanId = PlanId "x" }
       HygieneService.Cache.put
         { Repo = sb.Repo
@@ -207,7 +207,7 @@ let toolTests =
           Plan = Planner.plan []
           Summary = buried
           Salvage = SalvageRefs.Listing.Listed [] }
-      let withLine = McpHygiene.withHygieneLine context sb.Repo reply
+      let withLine = McpHygiene.withHygieneLine context (DirPath sb.Repo) reply
       withLine |> Expect.stringStarts "keeps the reply as it was" reply
       withLine |> Expect.stringContains "adds the line" "call get_workspace_hygiene"
     }
@@ -233,6 +233,6 @@ let toolTests =
 
     testTask "a context that is not a running daemon never scans the machine for a reply" {
       let quiet = { context with Dispatch = None }
-      McpHygiene.withHygieneLine quiet "/anywhere" "reply" |> Expect.equal "unchanged" "reply"
+      McpHygiene.withHygieneLine quiet (DirPath "/anywhere") "reply" |> Expect.equal "unchanged" "reply"
     }
   ]

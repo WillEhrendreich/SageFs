@@ -2621,7 +2621,7 @@ let run
         match remaining with
         | [] -> return acc
         | full :: rest ->
-          let! blob = Features.CohortGit.hashObject worktree full
+          let! blob = Features.CohortGit.hashObject (DirPath worktree) full
           match blob with
           | Ok id when id.Length = 40 -> return! hash rest ((full, id) :: acc)
           | _ -> return! hash rest acc
@@ -2787,7 +2787,7 @@ let run
               // `content` came from), so the record tracks what the session holds. The worktree
               // root is the integration checkout, which is the same git object store the file
               // belongs to.
-              let! blob = Features.CohortGit.hashObject (System.IO.Path.GetDirectoryName full) full
+              let! blob = Features.CohortGit.hashObject (DirPath (System.IO.Path.GetDirectoryName full)) full
               match blob with
               | Ok id when id.Length = 40 -> noteIntegrationSourceBound full id
               | _ -> ()
@@ -3019,7 +3019,7 @@ let run
       // Every project language the session can load: a project the index misses makes its files unowned.
       let! tracked =
         Features.CohortLandingPlan.projectFilePatterns
-        |> List.map (Features.CohortGit.trackedFiles worktree)
+        |> List.map (Features.CohortGit.trackedFiles (DirPath worktree))
         |> Async.Sequential
       let relatives = tracked |> Array.toList |> List.collect (function Ok found -> found | Error _ -> [])
       return
@@ -3209,7 +3209,7 @@ let run
               match remaining with
               | [] -> return Ok ()
               | (page, script, extra) :: rest ->
-                let! outcome = Features.CohortGit.runTool worktree Timeouts.buildCompletion "dotnet" ("fsi" :: script :: extra)
+                let! outcome = Features.CohortGit.runTool (DirPath worktree) Timeouts.buildCompletion "dotnet" ("fsi" :: script :: extra)
                 match outcome with
                 | Error reason ->
                   return Error (sprintf "regenerating %s after the rebase failed. Run %s yourself and commit the page. %s" (Features.ClaimExempt.path page) (Features.ClaimExempt.command page) reason)
@@ -3219,7 +3219,7 @@ let run
           | Error reason -> return Error (Features.CohortGit.infraFailureOf reason)
           | Ok () ->
             let pages = runners |> List.map (fun (page, _, _) -> Features.ClaimExempt.path page)
-            match! Features.CohortGit.commitPaths worktree pages "chore(docs): regenerate the generated pages after the rebase" with
+            match! Features.CohortGit.commitPaths (DirPath worktree) pages "chore(docs): regenerate the generated pages after the rebase" with
             | Error reason -> return Error (Features.CohortGit.infraFailureOf (sprintf "could not commit the regenerated pages: %s" reason))
             | Ok None -> return Ok rebasedHead
             | Ok (Some regeneratedHead) ->
@@ -3267,7 +3267,7 @@ let run
             // Bring the member's OWN commits onto the integration head — the
             // realistic model: a member's commits live on their own branch, not
             // pre-positioned in the integration worktree.
-            let! result = Features.CohortGit.rebaseCommitsOntoSettling Features.ClaimExempt.conflictIsOnlyGeneratedPages binding.WorktreePath onto commits
+            let! result = Features.CohortGit.rebaseCommitsOntoSettling Features.ClaimExempt.conflictIsOnlyGeneratedPages (DirPath binding.WorktreePath) onto commits
             Log.info "[cohort-landing] Rebase result=%A" result
             match result with
             | Ok rebasedHead -> return! regenerateGeneratedPages binding.WorktreePath onto rebasedHead
@@ -4983,7 +4983,7 @@ let run
       match outcome with
       | EvalSequence.SequenceOutcome.Ran messages -> return Ok(String.concat "\n" messages)
       | EvalSequence.SequenceOutcome.StoppedAt(position, total, statement, reason, _) ->
-        let message = EvalSequence.describeStop position total statement reason
+        let message = EvalSequence.describeStop { Position = position; Total = total } { Statement = statement; Reason = reason }
         let! _ =
           dispatchOutputAndWait
             elmRuntime

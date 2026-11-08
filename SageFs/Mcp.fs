@@ -383,7 +383,7 @@ module McpTools =
               | [] ->
                 return Error (sprintf "%s '%s'. Running sessions: %s. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session for that directory, or switch_session to an existing matching session." McpSessionRouting.noSessionMatchesWorkingDirectoryOpener wd (formatExistingSessionsHint sessions))
               | matches ->
-                return Error (formatWorkingDirectoryAmbiguity "Multiple sessions match workingDirectory" wd matches)
+                return Error (formatWorkingDirectoryAmbiguity "Multiple sessions match workingDirectory" (DirPath wd) matches)
             | _ ->
               return Ok (activeSessionId ctx agent)
           }
@@ -445,7 +445,7 @@ module McpTools =
               let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
               return classifySessionAvailability info false
           | _ :: _ :: _ as matches ->
-            return Gone (formatWorkingDirectoryAmbiguity "Multiple sessions match the current working directory" currentDir matches)
+            return Gone (formatWorkingDirectoryAmbiguity "Multiple sessions match the current working directory" (DirPath currentDir) matches)
           | [] ->
             match sessions with
             | [ singleSession ] ->
@@ -2193,7 +2193,7 @@ module McpTools =
         setActiveSessionId ctx agent sid
         SessionOwners.claim (memberIdFor agent) sid
         // So a worktree left behind can say which connection made it (the connection is the identity).
-        HygieneService.OwnerLedger.recordCreation DaemonState.SageFsDir ctx.ActivityTracker (resolvedKey agent) agent sid workingDir
+        HygieneService.OwnerLedger.recordCreation DaemonState.SageFsDir ctx.ActivityTracker { Connection = resolvedKey agent; FallbackName = agent; Session = sid; Directory = workingDir }
         let perProject =
           targets
           |> List.choose (function

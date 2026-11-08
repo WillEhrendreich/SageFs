@@ -65,7 +65,7 @@ module McpSessionRouting =
   /// I/O — mirrors SageFs.FileWatcher.isInNestedCheckout's semantics
   /// (root's own marker never counts) but is kept independent since Mcp.fs
   /// does not depend on FileWatcher.
-  let crossesCheckoutBoundaryWith (hasCheckoutMarker: string -> bool) (root: string) (target: string) : bool =
+  let crossesCheckoutBoundaryWith (hasCheckoutMarker: string -> bool) (DirPath root) (DirPath target) : bool =
     let rootNorm = normalizePath root
     let rec walk (dirOpt: string option) =
       match dirOpt with
@@ -106,7 +106,7 @@ module McpSessionRouting =
         let baseDir = normalizePath s.WorkingDirectory
         not (String.IsNullOrWhiteSpace baseDir)
         && isPathAncestorOf baseDir target
-        && not (crossesCheckoutBoundaryWith hasCheckoutMarker baseDir target))
+        && not (crossesCheckoutBoundaryWith hasCheckoutMarker (DirPath baseDir) (DirPath target)))
     | matched -> matched
 
   let sessionsMatchingWorkingDirDeep (sessions: WorkerProtocol.SessionInfo list) (workingDir: string) =
@@ -178,7 +178,7 @@ module McpSessionRouting =
       session.WorkingDirectory
 
   /// Public because McpTools' resolveSessionId formats this ambiguity error.
-  let formatWorkingDirectoryAmbiguity (prefix: string) (workingDir: string) (sessions: WorkerProtocol.SessionInfo list) =
+  let formatWorkingDirectoryAmbiguity (prefix: string) (DirPath workingDir) (sessions: WorkerProtocol.SessionInfo list) =
     let matches =
       sessions
       |> List.map formatSessionRoutingChoice

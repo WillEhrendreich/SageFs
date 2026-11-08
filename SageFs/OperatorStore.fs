@@ -47,7 +47,7 @@ module OperatorStore =
       System.IO.FileSystemAclExtensions.SetAccessControl(info, security)
 
   /// Created with owner-only mode in the same call that creates it, so there is no moment it is wider.
-  let writeOwnerOnly (path: string) (text: string) : unit =
+  let writeOwnerOnly (FilePath path) (text: string) : unit =
     let options = FileStreamOptions(Mode = System.IO.FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None)
     match OperatingSystem.IsWindows() with
     | true -> ()
@@ -68,7 +68,7 @@ module OperatorStore =
 
   /// Move `temp` to `target` only if `target` does not exist, atomically. On Published `temp` is gone; on any other
   /// answer it is still there, and the machine discards it.
-  let publishExclusive (temp: string) (target: string) : Answer =
+  let publishExclusive (FilePath temp) (FilePath target) : Answer =
     match OperatingSystem.IsWindows() with
     | true ->
       // MoveFileEx without MOVEFILE_REPLACE_EXISTING fails when the target exists, atomically.
@@ -100,10 +100,10 @@ module OperatorStore =
           | true -> Answer.Observed(Observation.Present(File.ReadAllText target, modeOf target))
         | Effect.WriteTemp credential ->
           Directory.CreateDirectory dataDir |> ignore
-          writeOwnerOnly temp credential
+          writeOwnerOnly (FilePath temp) credential
           Answer.TempWritten
         | Effect.ReadTempMode -> Answer.TempModeIs(modeOf temp)
-        | Effect.PublishExclusive -> publishExclusive temp target
+        | Effect.PublishExclusive -> publishExclusive (FilePath temp) (FilePath target)
         | Effect.DiscardTemp ->
           File.Delete temp
           Answer.Discarded

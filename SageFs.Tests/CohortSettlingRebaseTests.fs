@@ -5,6 +5,7 @@ open System.Diagnostics
 open System.IO
 open Expecto
 open Expecto.Flip
+open SageFs
 open SageFs.Features
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
@@ -72,7 +73,7 @@ let tests =
       testAsync "a conflict only in a generated page is settled by taking the integration head's page, and the member's other work lands" {
         let! repo, mainTip, memberTip = conflictingRepo false
         try
-          let! result = CohortGit.rebaseCommitsOntoSettling ClaimExempt.conflictIsOnlyGeneratedPages repo mainTip [ memberTip ]
+          let! result = CohortGit.rebaseCommitsOntoSettling ClaimExempt.conflictIsOnlyGeneratedPages (DirPath repo) mainTip [ memberTip ]
           match result with
           | Error files -> failtestf "expected the page conflict to settle, got %A" files
           | Ok head ->
@@ -89,7 +90,7 @@ let tests =
       testAsync "a conflict in a file somebody wrote is still refused, naming it, and nothing is left half done" {
         let! repo, mainTip, memberTip = conflictingRepo true
         try
-          let! result = CohortGit.rebaseCommitsOntoSettling ClaimExempt.conflictIsOnlyGeneratedPages repo mainTip [ memberTip ]
+          let! result = CohortGit.rebaseCommitsOntoSettling ClaimExempt.conflictIsOnlyGeneratedPages (DirPath repo) mainTip [ memberTip ]
           match result with
           | Ok head -> failtestf "expected a refusal, landed at %s" head
           | Error files ->
@@ -101,7 +102,7 @@ let tests =
       testAsync "without the settle rule the same page conflict is a refusal (the old behaviour)" {
         let! repo, mainTip, memberTip = conflictingRepo false
         try
-          let! result = CohortGit.rebaseCommitsOnto repo mainTip [ memberTip ]
+          let! result = CohortGit.rebaseCommitsOnto (DirPath repo) mainTip [ memberTip ]
           match result with
           | Ok head -> failtestf "expected a refusal, landed at %s" head
           | Error files -> files |> Expect.contains "names the page" "docs/roadmap.md"
@@ -123,10 +124,10 @@ let tests =
         let! repo, mainTip, _ = conflictingRepo false
         try
           let! _ = git repo [ "checkout"; "--quiet"; "--detach"; mainTip ]
-          let! nothing = CohortGit.commitPaths repo [ "docs/roadmap.md" ] "regenerate"
+          let! nothing = CohortGit.commitPaths (DirPath repo) [ "docs/roadmap.md" ] "regenerate"
           nothing |> function Ok None -> () | other -> failtestf "expected nothing to commit, got %A" other
           write repo "docs/roadmap.md" "regenerated\n"
-          let! committed = CohortGit.commitPaths repo [ "docs/roadmap.md" ] "regenerate"
+          let! committed = CohortGit.commitPaths (DirPath repo) [ "docs/roadmap.md" ] "regenerate"
           match committed with
           | Ok (Some sha) ->
             let! shown = git repo [ "show"; sprintf "%s:docs/roadmap.md" sha ]

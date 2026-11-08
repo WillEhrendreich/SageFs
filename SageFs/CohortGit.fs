@@ -33,6 +33,7 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Threading.Tasks
+open SageFs
 
 let private shortTimeout = SageFs.Timeouts.gitQuick
 let private rebaseTimeout = SageFs.Timeouts.gitRebase
@@ -294,7 +295,7 @@ let commonRepositoryRoot (repoDir: string) : string option =
 ///
 /// `repoDir` is the directory git runs in and `filePath` is passed to git as given, so a caller
 /// with an absolute path passes that and a caller in the checkout passes the relative one.
-let hashObject (repoDir: string) (filePath: string) : Async<Result<string, string>> =
+let hashObject (DirPath repoDir) (filePath: string) : Async<Result<string, string>> =
   runGit repoDir shortTimeout [ "hash-object"; filePath ]
   |> mapOk (fun text -> text.Split('\n', StringSplitOptions.RemoveEmptyEntries) |> Array.tryFind (fun l -> l.Trim().Length = 40) |> Option.map (fun l -> l.Trim()) |> Option.defaultValue "")
 
@@ -384,7 +385,7 @@ let rebase (repoDir: string) (onto: string) : Async<Result<string, string list>>
 /// replayed — never `onto`'s own history. Returns the new head sha (the
 /// FastForward target) or the conflicting files, exactly like `rebase`. A
 /// landing with no commits is a caller error, never a silent no-op land.
-let rebaseCommitsOntoSettling (settles: string list -> bool) (repoDir: string) (onto: string) (commits: string list) : Async<Result<string, string list>> =
+let rebaseCommitsOntoSettling (settles: string list -> bool) (DirPath repoDir) (onto: string) (commits: string list) : Async<Result<string, string list>> =
   async {
     match commits |> List.tryLast with
     | None -> return Error(infraError "landing carries no commits to replay onto the integration head")
@@ -460,7 +461,7 @@ let rebaseCommitsOntoSettling (settles: string list -> bool) (repoDir: string) (
   }
 
 /// Replay the member's commits onto `onto`; any conflict refuses the landing. See `rebaseCommitsOntoSettling`.
-let rebaseCommitsOnto (repoDir: string) (onto: string) (commits: string list) : Async<Result<string, string list>> =
+let rebaseCommitsOnto (repoDir: DirPath) (onto: string) (commits: string list) : Async<Result<string, string list>> =
   rebaseCommitsOntoSettling (fun _ -> false) repoDir onto commits
 
 /// Fast-forwards `refs/heads/<branch>` to `toSha` without ever creating a
@@ -518,7 +519,7 @@ let removeWorktree (repoDir: string) (worktreePath: string) : Async<Result<unit,
 
 /// The names of the local branches under `refs/heads/<prefix>`: what `set_integration_ref` checks so a repeated call for the same commit
 /// cuts a branch of its own instead of failing on the one the first call left, which may hold landings.
-let branchNamesUnder (repoDir: string) (prefix: string) : Async<Result<Set<string>, string>> =
+let branchNamesUnder (DirPath repoDir) (prefix: string) : Async<Result<Set<string>, string>> =
   runGit repoDir shortTimeout [ "for-each-ref"; "--format=%(refname:short)"; sprintf "refs/heads/%s" prefix ]
   |> mapOk (splitLines >> List.map trim >> Set.ofList)
 
@@ -531,7 +532,7 @@ let isAncestor (repoDir: string) (commit: string) (descendant: string) : Async<b
   }
 
 /// The files git tracks in `repoDir` that match `pattern`, as paths relative to it (`git ls-files <pattern>`).
-let trackedFiles (repoDir: string) (pattern: string) : Async<Result<string list, string>> =
+let trackedFiles (DirPath repoDir) (pattern: string) : Async<Result<string list, string>> =
   runGit repoDir shortTimeout [ "ls-files"; "--full-name"; pattern ]
   |> mapOk splitLines
 
@@ -541,7 +542,7 @@ let infraFailureOf (reason: string) : string list = infraError reason
 
 /// Run `exe args` in `dir` and answer its exit code and combined output, bounded by `timeout`. For the one external tool a
 /// landing runs after a rebase: the script that regenerates a page. Total: a failure to start is an `Error`.
-let runTool (dir: string) (timeout: TimeSpan) (exe: string) (args: string list) : Async<Result<string, string>> =
+let runTool (DirPath dir) (timeout: TimeSpan) (exe: string) (args: string list) : Async<Result<string, string>> =
   async {
     let! exitCode, stdout, stderr = runExeExitCode exe dir timeout args
     match exitCode with
@@ -556,7 +557,7 @@ let runTool (dir: string) (timeout: TimeSpan) (exe: string) (args: string list) 
 
 /// Commit the working-tree changes to `paths` on the checked-out (detached) HEAD and answer the new head. `Ok None` when
 /// nothing changed, so the caller can tell a page that was already right from one that had to be rewritten.
-let commitPaths (dir: string) (paths: string list) (message: string) : Async<Result<string option, string>> =
+let commitPaths (DirPath dir) (paths: string list) (message: string) : Async<Result<string option, string>> =
   async {
     let! status = runGit dir shortTimeout ([ "status"; "--porcelain"; "--" ] @ paths)
     match status with

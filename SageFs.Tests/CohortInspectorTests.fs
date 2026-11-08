@@ -250,13 +250,13 @@ let cohortInspectorTests =
     testList "inspectRaw" [
 
       testCase "an unrecognized kind segment is NotFound(None, id), never an exception" <| fun _ ->
-        match inspectRaw "bogus" "x" emptyFrame [] [] with
+        match inspectRaw { KindSegment = "bogus"; IdSegment = "x" } emptyFrame [] [] with
         | InspectorModel.NotFound(None, "x") -> ()
         | other -> failwithf "expected NotFound(None, x), got %A" other
 
       testCase "a recognized kind segment delegates to inspect" <| fun _ ->
         let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine) ]
-        match inspectRaw "member" "alice" emptyFrame ledger [] with
+        match inspectRaw { KindSegment = "member"; IdSegment = "alice" } emptyFrame ledger [] with
         | InspectorModel.Found(EntityKind.Member, "alice", _, _) -> ()
         | other -> failwithf "expected Found via inspectRaw, got %A" other
     ]

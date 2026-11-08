@@ -295,7 +295,7 @@ module McpCohortTools =
             | None -> Error (SageFsError.Unexpected (exn "acquire_claim committed with no ClaimAcquired event")))
     }
 
-  let releaseClaim (ctx: McpContext) (agentName: string) (claimId: string) (fence: int64) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+  let releaseClaim (ctx: McpContext) (agentName: string) (Cohort.ClaimId claimId) (fence: int64) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       let who = memberIdFor agentName
       let fenceMeasure = LanguagePrimitives.Int64WithMeasure<Measures.fence> fence
@@ -369,7 +369,7 @@ module McpCohortTools =
 
   /// The landing's own requester takes it back. `Cohort.decide` refuses `NotLandingRequester` for anyone else and
   /// `LandingNotInExpectedState` for a landing that is already over.
-  let withdrawLanding (ctx: McpContext) (agentName: string) (landingId: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+  let withdrawLanding (ctx: McpContext) (agentName: string) (Cohort.LandingId landingId) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       let who = memberIdFor agentName
       let! result = commitCohort ctx (Cohort.CohortCommand.WithdrawLanding(who, Cohort.LandingId landingId, scopeOf workingDirectory))
@@ -391,7 +391,7 @@ module McpCohortTools =
     }
 
   /// Conductor-only: clear a veto, and the landing queues again as it was.
-  let resolveVeto (ctx: McpContext) (agentName: string) (landingId: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+  let resolveVeto (ctx: McpContext) (agentName: string) (Cohort.LandingId landingId) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       let by = memberIdFor agentName
       let! result = commitCohort ctx (Cohort.CohortCommand.ResolveVeto(by, Cohort.LandingId landingId, scopeOf workingDirectory))

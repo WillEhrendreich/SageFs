@@ -3533,12 +3533,12 @@ let createAppOutputControlHandler
 /// `infra.ReadCohortLedger`, `q.GetAllSessions`), then hands them to the
 /// pure `CohortInspector.inspectRaw` projection. An unrecognized kind or a
 /// missing id is a clean 404 page, never a 500.
-let createInspectHandler (q: DashboardQueries) (infra: DashboardInfra) (kindRaw: string, idRaw: string) : HttpHandler =
+let createInspectHandler (q: DashboardQueries) (infra: DashboardInfra) (segments: InspectSegments) : HttpHandler =
   fun ctx -> task {
     let! sessions = q.GetAllSessions ()
     let frame = infra.ReadCohortFrame ()
     let ledger = infra.ReadCohortLedger ()
-    let model = inspectRaw kindRaw idRaw frame ledger sessions
+    let model = inspectRaw segments frame ledger sessions
     match model with
     | InspectorModel.NotFound _ -> ctx.Response.StatusCode <- 404
     | InspectorModel.Found _ -> ()
@@ -3791,7 +3791,7 @@ let createEndpoints
     // `routeValue`'s own doc comment) so an id that looks numeric (a test
     // named "1", say) round-trips as the literal string it is.
     yield mapGetRaw "/dashboard/inspect/{kind}/{id}"
-      (fun ctx -> routeValue "kind" ctx, routeValue "id" ctx)
+      (fun ctx -> { KindSegment = routeValue "kind" ctx; IdSegment = routeValue "id" ctx })
       (createInspectHandler q infra)
     yield get "/dashboard/inspect" (createInspectSearchHandler q infra)
     // Phase B: the runtime Settings panel, server-rendered from the resolved

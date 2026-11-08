@@ -283,18 +283,20 @@ let inspect
   | Some fields -> InspectorModel.Found(kind, id, sprintf "%s %s" (EntityKind.label kind) id, fields)
   | None -> InspectorModel.NotFound(Some kind, id)
 
+/// The two URL segments of `/dashboard/inspect/{kind}/{id}`, as the request spelled them.
+type InspectSegments = { KindSegment: string; IdSegment: string }
+
 /// `inspect` plus the URL-segment parse the route handler needs — an
 /// unrecognized `kind` segment is a clean not-found, never a 500.
 let inspectRaw
-  (kindRaw: string)
-  (id: string)
+  (segments: InspectSegments)
   (frame: CohortFrame<MemberId>)
   (ledgerEntries: LedgerEntry<MemberId> list)
   (sessions: SessionInfo list)
   : InspectorModel =
-  match EntityKind.tryParse kindRaw with
-  | Some kind -> inspect kind id frame ledgerEntries sessions
-  | None -> InspectorModel.NotFound(None, id)
+  match EntityKind.tryParse segments.KindSegment with
+  | Some kind -> inspect kind segments.IdSegment frame ledgerEntries sessions
+  | None -> InspectorModel.NotFound(None, segments.IdSegment)
 
 /// Server-side substring search (the vision's "prefix trie" is a later
 /// engine swap for cockpit scale — see this module's doc comment) across

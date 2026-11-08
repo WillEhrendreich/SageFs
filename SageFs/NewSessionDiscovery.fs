@@ -38,7 +38,7 @@ let frameworksFromProps (directory: string) : Frameworks =
 
 /// What a project file says about the frameworks it builds for, and when it says nothing, what the props file
 /// above it says.
-let frameworksOf (projectDirectory: string) (projectXml: string) : Frameworks =
+let frameworksOf (DirPath projectDirectory) (projectXml: string) : Frameworks =
   match ProjectCompatibility.readTargetFrameworks projectXml with
   | Ok tfms -> Frameworks.Declared tfms
   | Error _ -> frameworksFromProps projectDirectory
@@ -68,7 +68,7 @@ let candidatesOf (directory: string) : Candidate list * string list list =
     |> List.map (fun (relative, xml) ->
       { Path = relative
         Kind = CandidateKind.Project
-        Frameworks = frameworksOf (Path.GetDirectoryName(Path.GetFullPath(Path.Combine(directory, relative)))) xml })
+        Frameworks = frameworksOf (DirPath(Path.GetDirectoryName(Path.GetFullPath(Path.Combine(directory, relative))))) xml })
   solutions @ projects, projectXml |> List.map (snd >> packageNamesOf)
 
 /// A web project suggests Hot Reload. It only suggests: nothing is chosen for the person.

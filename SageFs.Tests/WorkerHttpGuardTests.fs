@@ -306,7 +306,7 @@ let workerRouteTableTests =
       for r in posts do
         let path = WorkerHttpTransport.WorkerRoute.path r
         for p in [ path; path.ToUpperInvariant(); upperFirstHalf path ] do
-          WorkerHttpTransport.classify "POST" p
+          WorkerHttpTransport.classify { HttpMethod = "POST"; Path = p }
           |> Expect.equal (sprintf "POST %s must be mutating" p) WorkerHttpTransport.RouteAccess.Mutating
 
     testCase "the route table declares the eval/reset/test/completion routes as mutating" <| fun _ ->
@@ -322,7 +322,7 @@ let workerRouteTableTests =
       match m.ToUpperInvariant() with
       | "GET" | "HEAD" -> ()
       | _ ->
-        WorkerHttpTransport.classify m p
+        WorkerHttpTransport.classify { HttpMethod = m; Path = p }
         |> Expect.equal (sprintf "%s %s must be mutating" m p) WorkerHttpTransport.RouteAccess.Mutating
 
     testCase "GET routes keep their declared access under any casing; unknown GETs are read-only" <| fun _ ->
@@ -331,10 +331,10 @@ let workerRouteTableTests =
         | "GET" ->
           let path = WorkerHttpTransport.WorkerRoute.path r
           for p in [ path; path.ToUpperInvariant(); path + "/" ] do
-            WorkerHttpTransport.classify "GET" p
+            WorkerHttpTransport.classify { HttpMethod = "GET"; Path = p }
             |> Expect.equal (sprintf "GET %s keeps its declared access" p) (WorkerHttpTransport.WorkerRoute.access r)
         | _ -> ()
-      WorkerHttpTransport.classify "GET" "/no-such-route"
+      WorkerHttpTransport.classify { HttpMethod = "GET"; Path = "/no-such-route" }
       |> Expect.equal "an unknown GET is read-only (it 404s)" WorkerHttpTransport.RouteAccess.ReadOnly
 
     testCase "HttpWorkerClient only targets routes declared in the worker table" <| fun _ ->

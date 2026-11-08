@@ -156,7 +156,7 @@ let private writeAndCommit (dir: string) (relPath: string) (content: string) (me
 let private gitBackedPerformer (integrationWorktree: string) (mainRepo: string) (branch: string) : CohortOwner.LandingPerformer<MemberId> =
   { Rebase = fun _ onto commits ->
       async {
-        let! result = CohortGit.rebaseCommitsOnto integrationWorktree onto commits
+        let! result = CohortGit.rebaseCommitsOnto (DirPath integrationWorktree) onto commits
         match result with
         | Ok realNewHead -> return Ok realNewHead
         | Error files -> return Error files

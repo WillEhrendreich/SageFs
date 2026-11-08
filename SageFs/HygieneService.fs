@@ -65,25 +65,26 @@ module OwnerLedger =
 
   let record (dataDir: string) (entry: OwnerRecord) : unit = recordKeeping maxRecords dataDir entry
 
-  /// Record a session a connection just created, under the name that connection has been using (else `fallbackName`).
-  let recordCreation
-    (dataDir: string)
-    (tracker: AgentActivityTracker.Tracker)
-    (connectionId: string)
-    (fallbackName: string)
-    (sessionId: string)
-    (workingDirectory: string)
-    : unit =
+  /// A session a connection just created: the connection, the name to record when the tracker knows none for it, the
+  /// session and the directory it works in. One record, so the four strings are named at the call site.
+  type SessionCreation =
+    { Connection: string
+      FallbackName: string
+      Session: string
+      Directory: string }
+
+  /// Record a session a connection just created, under the name that connection has been using (else the creation's `FallbackName`).
+  let recordCreation (dataDir: string) (tracker: AgentActivityTracker.Tracker) (creation: SessionCreation) : unit =
     let name =
-      AgentActivityTracker.getPresence tracker connectionId
+      AgentActivityTracker.getPresence tracker creation.Connection
       |> Option.map (fun p -> p.AgentName)
-      |> Option.defaultValue fallbackName
+      |> Option.defaultValue creation.FallbackName
     record
       dataDir
-      { SessionId = sessionId
-        WorkingDirectory = workingDirectory
+      { SessionId = creation.Session
+        WorkingDirectory = creation.Directory
         AgentName = name
-        ConnectionId = connectionId
+        ConnectionId = creation.Connection
         CreatedAt = DateTime.UtcNow }
 
   /// The owners as the scan wants them: by working directory, with whether the connection is still around.

@@ -67,14 +67,14 @@ type McpServerTracker() =
   /// Record that `sessionId` wants `notifications/resources/updated` for
   /// `uri` (the server's `resources/subscribe` handler, McpServer.fs's
   /// `configureMcpProtocol`).
-  member _.Subscribe(sessionId: string, uri: string) =
+  member _.Subscribe(sessionId: string, ResourceUri uri) =
     let uris = resourceSubscriptions.GetOrAdd(sessionId, fun _ -> ConcurrentDictionary<string, byte>())
     uris.[uri] <- 0uy
 
   /// Idempotent — unsubscribing a URI that was never subscribed (or an
   /// unknown sessionId) is a no-op, per the protocol's own unsubscribe
   /// contract (`UnsubscribeRequestParams` doc).
-  member _.Unsubscribe(sessionId: string, uri: string) =
+  member _.Unsubscribe(sessionId: string, ResourceUri uri) =
     match resourceSubscriptions.TryGetValue(sessionId) with
     | true, uris -> uris.TryRemove(uri) |> ignore
     | false, _ -> ()
@@ -2616,12 +2616,12 @@ let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContex
     .WithResources<SageFs.Server.McpResources.SageFsResources>()
     .WithSubscribeToResourcesHandler(fun (rc: RequestContext<SubscribeRequestParams>) (_ct: CancellationToken) ->
       match Option.ofObj rc.Server.SessionId, Option.ofObj rc.Params with
-      | Some sessionId, Some p -> serverTracker.Subscribe(sessionId, p.Uri)
+      | Some sessionId, Some p -> serverTracker.Subscribe(sessionId, ResourceUri p.Uri)
       | _ -> ()
       ValueTask<EmptyResult>(EmptyResult()))
     .WithUnsubscribeFromResourcesHandler(fun (rc: RequestContext<UnsubscribeRequestParams>) (_ct: CancellationToken) ->
       match Option.ofObj rc.Server.SessionId, Option.ofObj rc.Params with
-      | Some sessionId, Some p -> serverTracker.Unsubscribe(sessionId, p.Uri)
+      | Some sessionId, Some p -> serverTracker.Unsubscribe(sessionId, ResourceUri p.Uri)
       | _ -> ()
       ValueTask<EmptyResult>(EmptyResult()))
     .WithRequestFilters(fun filters ->

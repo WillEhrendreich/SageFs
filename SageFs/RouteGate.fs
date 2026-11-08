@@ -52,7 +52,7 @@ module RouteGate =
       directoryNormal = rootNormal
       || directoryNormal.StartsWith(rootNormal + "/", System.StringComparison.Ordinal)
       || directoryNormal.StartsWith(rootNormal + "\\", System.StringComparison.Ordinal)
-    underRoot && not (McpSessionRouting.crossesCheckoutBoundaryWith hasCheckoutMarker rootNormal directoryNormal)
+    underRoot && not (McpSessionRouting.crossesCheckoutBoundaryWith hasCheckoutMarker (DirPath rootNormal) (DirPath directoryNormal))
 
   /// `directoryWithin`, with the disk as the source of truth for what a checkout is.
   let productionWithin : string -> string -> bool = directoryWithin Checkout.hasCheckoutMarker
