@@ -589,7 +589,7 @@ let createSessionOpsWithRecovery
                 match stillMissing with
                 | _ :: _ -> return Result.Error (SageFsError.NeedsRebuild stillMissing)
                 | [] ->
-                  let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
+                  let autoOpenNamespaces = DirectoryConfig.prepareForCreate workingDir
                   let! result =
                     sessionManager.PostAndAsyncReply(fun reply ->
                       SessionManager.SessionCommand.CreateSession(targets, workingDir, autoOpenNamespaces, workflow, reply))
@@ -600,7 +600,7 @@ let createSessionOpsWithRecovery
                     let! recorded = recordCreated info
                     return Result.map WorkerProtocol.SessionId.value recorded
           | [] ->
-            let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
+            let autoOpenNamespaces = DirectoryConfig.prepareForCreate workingDir
             let! result =
               sessionManager.PostAndAsyncReply(fun reply ->
                 SessionManager.SessionCommand.CreateSession(targets, workingDir, autoOpenNamespaces, workflow, reply))
@@ -1990,7 +1990,7 @@ let createElmRuntime
       Error err
 
   let effectDeps =
-    { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.autoOpenNamespacesForDirectory configureWarmupAutoOpen with
+    { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.prepareForCreate configureWarmupAutoOpen with
         GetWarmupContext = Some (fun sid -> getWarmupContextForElm (WorkerProtocol.SessionId.value sid))
         GetStreamingTestProxy = fun sid ->
           let snapshot = readSnapshot()

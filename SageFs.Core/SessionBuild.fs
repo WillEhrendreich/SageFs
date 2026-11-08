@@ -282,7 +282,7 @@ module SessionBuild =
   /// session's own build resolves the SDK from `workingDir` and not from whichever project SageFs last loaded
   /// internally (see SageFs.ProcessEnvironment), plus `buildEnvironment`. Public so a test can read the
   /// environment a real rebuild would start with, without starting one.
-  let buildStartInfo (args: string list) (workingDir: string) : ProcessStartInfo =
+  let buildStartInfoWith (lookup: string -> string) (args: string list) (workingDir: string) : ProcessStartInfo =
     let psi = ProcessStartInfo(
       "dotnet",
       RedirectStandardOutput = true,
@@ -291,18 +291,18 @@ module SessionBuild =
       WorkingDirectory = workingDir)
     for arg in args do
       psi.ArgumentList.Add(arg)
-    // Where the directory's config says the build writes: what the daemon read for this directory, or, in a worker,
-    // what the daemon told it in its own environment.
-    let artifacts =
-      match SessionOptionsRegistry.artifactsFor workingDir with
-      | ProjectChooses -> ArtifactsChannel.pathOf Environment.GetEnvironmentVariable
-      | chosen -> chosen
-    let artifactsEnvironment =
-      match artifacts with
-      | ArtifactsIn path -> [ ArtifactsChannel.msbuildProperty, path ]
-      | ProjectChooses -> []
-    applyTo psi (buildEnvironment @ artifactsEnvironment)
+    // What the session's options say about the build: what the daemon holds for this directory, or, in a worker (which holds
+    // nothing), the carrier the daemon started it with. Either way it is the one set of options resolved at create.
+    let properties =
+      match SessionOptionsRegistry.optionsFor workingDir with
+      | held when held <> SessionOptions.none -> SessionOptions.buildProperties held
+      | _ -> SessionOptions.propertiesFromEnvironment lookup
+    applyTo psi (buildEnvironment @ properties)
     psi
+
+  /// `buildStartInfoWith`, reading this process's own environment.
+  let buildStartInfo (args: string list) (workingDir: string) : ProcessStartInfo =
+    buildStartInfoWith Environment.GetEnvironmentVariable args workingDir
 
   /// Whether a failed build's output says a NuGet restore is required, so the
   /// build is worth retrying WITH a restore instead of being reported as a

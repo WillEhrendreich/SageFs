@@ -41,7 +41,7 @@ module SessionOptions =
   type Options =
     { Gc: GcMode
       /// The user's variables that passed the checks, in the order written, the last of a repeated name kept.
-      Env: (string * string) list
+      Env: EnvEntry list
       /// Where the session's builds write `bin` and `obj`; absolute, or the project's own choice.
       Artifacts: ArtifactsDir
       /// Extra arguments for the FSI host, after the ones SageFs builds.
@@ -89,6 +89,7 @@ module SessionOptions =
       |> List.rev
       |> List.distinctBy fst
       |> List.rev
+      |> List.map EnvEntry
     let artifacts, refusedArtifacts =
       match config.Artifacts with
       | ProjectChooses -> ProjectChooses, []
@@ -108,24 +109,55 @@ module SessionOptions =
     | ServerGc -> [ "DOTNET_gcServer", "1" ]
     | WorkstationGc -> []
 
-  /// The environment the worker is started with for these options: the one variable the artifacts path travels in.
+  /// The one variable the options travel to a worker in. A session's options are resolved once, when it is created, and this
+  /// is the only way a worker, the builds it starts and its project loader learn them: they read this and nothing else, so they
+  /// cannot disagree with each other or with the daemon.
+  let carrierVariable : string = "SAGEFS_SESSION_OPTIONS"
+
+  let encode (options: Options) : string = Json.serialize Json.standard options
+
+  let decode (text: string) : Result<Options, JsonError> = Json.deserialize<Options> Json.standard text
+
+  /// The environment a worker is started with for these options: the carrier, or nothing when the options ask for nothing.
   let workerEnvironment (options: Options) : (string * string) list =
+    match options = none with
+    | true -> []
+    | false -> [ carrierVariable, encode options ]
+
+  /// The options a process was started with. No carrier is no options; a carrier that cannot be read is an error that says why,
+  /// not read as no options.
+  let fromEnvironment (lookup: string -> string) : Result<Options, JsonError> =
+    match lookup carrierVariable with
+    | null
+    | "" -> Ok none
+    | text -> decode text
+
+  /// The MSBuild properties the options set, for a build's environment and the project loader's global properties.
+  let buildProperties (options: Options) : (string * string) list =
     match options.Artifacts with
-    | ArtifactsIn path -> [ ArtifactsChannel.variable, path ]
+    | ArtifactsIn path -> [ "ArtifactsPath", path ]
     | ProjectChooses -> []
+
+  /// `buildProperties` of the carrier in a process's environment; none when there is no carrier or it cannot be read (the worker
+  /// reports an unreadable one when it starts, in `SessionOptionsSource`).
+  let propertiesFromEnvironment (lookup: string -> string) : (string * string) list =
+    match fromEnvironment lookup with
+    | Ok options -> buildProperties options
+    | Error _ -> []
 
   /// The host's environment: what SageFs built (`sageFsEnv`), then the collector's, then the user's, where a
   /// name SageFs sets keeps SageFs's value and is reported as a clash.
   let hostEnvironment (sageFsEnv: (string * string) list) (options: Options) : (string * string) list * Clash list =
     let owned = sageFsEnv @ gcEnvironment options.Gc
+    let userEnv = options.Env |> List.map (fun (EnvEntry(name, value)) -> name, value)
     let ownedValue name = owned |> List.tryFindBack (fun (n, _) -> String.Equals(n, name, StringComparison.Ordinal)) |> Option.map snd
     let clashes =
-      options.Env
+      userEnv
       |> List.choose (fun (name, value) ->
         match ownedValue name with
         | Some sageFsValue -> Some { Name = name; UserValue = value; SageFsValue = sageFsValue }
         | None -> None)
-    let userOnly = options.Env |> List.filter (fun (name, _) -> (ownedValue name).IsNone)
+    let userOnly = userEnv |> List.filter (fun (name, _) -> (ownedValue name).IsNone)
     owned @ userOnly, clashes
 
   /// Who reads a field of the config. Every field of `DirectoryConfig` has a row, and a test fails when one does not.

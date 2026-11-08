@@ -61,21 +61,11 @@ module DirectoryConfig =
       Log.warn "Failed to load %s: %s (using defaults)" path msg
       empty
 
-  /// What the daemon remembers of a directory's options for the builds and the worker it starts there (see
-  /// `SessionOptionsRegistry`). A directory with no config, or one that no longer asks for anything, is forgotten.
-  let private remember (workingDir: string) (config: DirectoryConfig option) : DirectoryConfig option =
-    let options =
-      match config with
-      | Some cfg -> fst (SessionOptions.ofConfig cfg)
-      | None -> SessionOptions.none
-    SessionOptionsRegistry.remember workingDir options
-    config
-
   let load (workingDir: string) : DirectoryConfig option =
     let path = configPath workingDir
     match File.Exists path with
-    | true -> remember workingDir (Some(configOfEvaluation path (evaluateIn workingDir (File.ReadAllText path))))
-    | false -> remember workingDir None
+    | true -> Some(configOfEvaluation path (evaluateIn workingDir (File.ReadAllText path)))
+    | false -> None
 
   /// `load`, awaiting the evaluation of the config instead of blocking on it. The answer lands in the same cache, so a
   /// synchronous `load` of the same config straight after returns at once.
@@ -85,14 +75,27 @@ module DirectoryConfig =
       match File.Exists path with
       | true ->
         let! evaluated = ConfigHost.evaluateAsync workingDir (File.ReadAllText path)
-        return remember workingDir (Some(configOfEvaluation path (evaluated |> Result.mapError ConfigHost.describeError)))
-      | false -> return remember workingDir None
+        return Some(configOfEvaluation path (evaluated |> Result.mapError ConfigHost.describeError))
+      | false -> return None
     }
 
   let autoOpenNamespacesForDirectory (workingDir: string) =
     load workingDir
     |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
     |> Option.defaultValue true
+
+  /// Resolve a directory's config for a session that is being created there, and answer whether warmup auto-opens namespaces.
+  /// This is the one place the options a session's builds and worker use are recorded (`SessionOptionsRegistry`); reading a
+  /// config (`load`, `loadAsync`, a page that shows it) never records anything. A directory with no config, or one that no longer
+  /// asks for anything, is forgotten.
+  let prepareForCreate (workingDir: string) : bool =
+    let config = load workingDir
+    let options =
+      match config with
+      | Some cfg -> fst (SessionOptions.ofConfig cfg)
+      | None -> SessionOptions.none
+    SessionOptionsRegistry.remember workingDir options
+    config |> Option.map (fun cfg -> cfg.AutoOpenNamespaces) |> Option.defaultValue true
 
   let ensureAutoOpenNamespacesOptOut (workingDir: string) =
     try

@@ -163,24 +163,25 @@ let sessionOptionsTests =
     testCase "WHY - a worker's own build reads the carrier it was started with, so its rebuild goes where the daemon's build went" <| fun _ ->
       let options, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn "/tmp/art-worker" }))
       let carrier = SessionOptions.workerEnvironment options |> List.head
-      TestInfrastructure.withEnvVar (fst carrier) (Some(snd carrier)) (fun () ->
-        let psi = SessionBuild.buildStartInfo [ "build" ] (Path.Combine(Path.GetTempPath(), "registry-nobody-knows"))
-        psi.Environment["ArtifactsPath"] |> Expect.equal "the worker's build builds under the artifacts path" "/tmp/art-worker")
+      let lookup (name: string) = if name = fst carrier then snd carrier else null
+      let psi = SessionBuild.buildStartInfoWith lookup [ "build" ] (Path.Combine(Path.GetTempPath(), "registry-nobody-knows"))
+      psi.Environment["ArtifactsPath"] |> Expect.equal "the worker's build builds under the artifacts path" "/tmp/art-worker"
 
-    Integration.hostCase "WHY - reading a directory's config returns it and writes nothing, and only preparing a session writes the options its builds and worker use" (fun () ->
+    Integration.hostCaseTask "WHY - reading a directory's config returns it and writes nothing, and only preparing a session writes the options its builds and worker use" (fun () -> task {
       let dir = Path.Combine(Path.GetTempPath(), "sagefs-pure-load-" + Guid.NewGuid().ToString "N")
       Directory.CreateDirectory(Path.Combine(dir, ".SageFs")) |> ignore
       try
         File.WriteAllText(Path.Combine(dir, ".SageFs", "config.fsx"), "{ DirectoryConfig.empty with Artifacts = ArtifactsIn \"/tmp/pure-art\" }")
         (DirectoryConfig.load dir |> Option.map (fun c -> c.Artifacts)) |> Expect.equal "load returns the config" (Some(ArtifactsIn "/tmp/pure-art"))
         SessionOptionsRegistry.optionsFor dir |> Expect.equal "load wrote nothing" SessionOptions.none
-        (DirectoryConfig.loadAsync dir |> Async.RunSynchronously |> Option.map (fun c -> c.Artifacts)) |> Expect.equal "loadAsync returns the config" (Some(ArtifactsIn "/tmp/pure-art"))
+        let! loaded = DirectoryConfig.loadAsync dir |> Async.StartAsTask
+        (loaded |> Option.map (fun c -> c.Artifacts)) |> Expect.equal "loadAsync returns the config" (Some(ArtifactsIn "/tmp/pure-art"))
         SessionOptionsRegistry.optionsFor dir |> Expect.equal "loadAsync wrote nothing" SessionOptions.none
         DirectoryConfig.prepareForCreate dir |> Expect.isTrue "auto-open is still on"
         (SessionOptionsRegistry.optionsFor dir).Artifacts |> Expect.equal "preparing the session wrote them" (ArtifactsIn "/tmp/pure-art")
       finally
         SessionOptionsRegistry.remember dir SessionOptions.none
-        try Directory.Delete(dir, true) with :? IOException -> ())
+        try Directory.Delete(dir, true) with :? IOException -> () })
 
     Integration.hostCase "WHY - a real build of a small project with the session's artifacts path writes its output there and leaves the project's bin and obj untouched" (fun () ->
       let project = Path.Combine(Path.GetTempPath(), "sagefs-artifacts-" + Guid.NewGuid().ToString "N")
