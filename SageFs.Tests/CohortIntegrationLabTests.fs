@@ -28,10 +28,10 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 let private sageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
-let private repoRoot = RepoPaths.repoPathFull [||]
+let repoRoot = RepoPaths.repoPathFull [||]
 
 /// The Expecto the repo pins, read from the one place that pins it, so the lab restores from the same cache the repo does.
-let private expectoVersion () : string =
+let expectoVersion (): string =
   let props = XDocument.Load(Path.Combine(repoRoot, "Directory.Packages.props"))
   props.Descendants(XName.Get "PackageVersion")
   |> Seq.find (fun e -> e.Attribute(XName.Get "Include").Value = "Expecto")
@@ -86,7 +86,7 @@ let private labProgram =
 
 let private labGreeting (greeting: string) = sprintf "module Lab.Greeting\n\nlet greeting () : string = \"%s\"\n" greeting
 
-let private gitAvailable () : bool =
+let gitAvailable (): bool =
   try
     let psi = ProcessStartInfo("git", "--version", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
     SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
@@ -96,7 +96,7 @@ let private gitAvailable () : bool =
   with _ -> false
 
 /// Plain git for the fixture and every oracle: never through the daemon's own git code.
-let private git (dir: string) (args: string list) : Task<string> =
+let git (dir: string) (args: string list) : Task<string> =
   task {
     let psi = ProcessStartInfo("git", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = dir)
     for a in args do psi.ArgumentList.Add a
@@ -111,7 +111,7 @@ let private git (dir: string) (args: string list) : Task<string> =
     | code -> return failwithf "git %s failed (%d) in %s: %s" (String.concat " " args) code dir stderr
   }
 
-let private killProcess (proc: Process) =
+let killProcess (proc: Process) =
   try
     if not proc.HasExited then
       proc.Kill(entireProcessTree = true)
@@ -119,7 +119,7 @@ let private killProcess (proc: Process) =
   with _ -> ()
 
 /// A daemon whose working directory is `neutralDir`, an empty directory that is no repository: the shape `install-local` gives.
-let private startDaemonIn (neutralDir: string) (dataDir: string) : Task<Process * int> =
+let startDaemonIn (neutralDir: string) (dataDir: string) : Task<Process * int> =
   task {
     let port, _dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
     let psi = ProcessStartInfo()
@@ -160,18 +160,18 @@ let private startDaemonIn (neutralDir: string) (dataDir: string) : Task<Process 
       return failwithf "the lab daemon failed to start on port %d within %.0fs" port Timeouts.integrationDaemonReady.TotalSeconds
   }
 
-let private textOf (result: CallToolResult) : string =
+let textOf (result: CallToolResult) : string =
   result.Content
   |> Seq.choose (function :? TextContentBlock as t -> Some t.Text | _ -> None)
   |> Seq.tryHead
   |> Option.defaultValue ""
 
-let private connect (port: int) : Task<McpClient> =
+let connect (port: int) : Task<McpClient> =
   let opts = HttpClientTransportOptions(Endpoint = Uri(sprintf "http://localhost:%d/" port))
   let transport = HttpClientTransport(opts, (null: Microsoft.Extensions.Logging.ILoggerFactory))
   McpClient.CreateAsync(transport, null, null, CancellationToken.None)
 
-let private callWithin (budget: TimeSpan) (client: McpClient) (name: string) (args: (string * obj) list) : Task<string> =
+let callWithin (budget: TimeSpan) (client: McpClient) (name: string) (args: (string * obj) list) : Task<string> =
   task {
     use cts = new CancellationTokenSource(budget)
     try
@@ -181,17 +181,17 @@ let private callWithin (budget: TimeSpan) (client: McpClient) (name: string) (ar
       return failtestf "tool '%s' did not answer within %.0fs (test budget)" name budget.TotalSeconds
   }
 
-let private callTool = callWithin TestTimeouts.toolCall
-let private callToolPatient = callWithin TestTimeouts.toolCallThatRestarts
+let callTool = callWithin TestTimeouts.toolCall
+let callToolPatient =callWithin TestTimeouts.toolCallThatRestarts
 
-let private field (marker: string) (text: string) : string =
+let field (marker: string) (text: string) : string =
   let m = Regex.Match(text, Regex.Escape marker + @"(\S+)")
   match m.Success with
   | true -> m.Groups[1].Value
   | false -> failwithf "the reply names no '%s': %s" marker text
 
 /// The one line of `get_cohort_status` for a landing, with its continuation lines.
-let private landingLine (status: string) (landingId: string) : string option =
+let landingLine (status: string) (landingId: string) : string option =
   let lines = status.Split('\n')
   match lines |> Array.tryFindIndex (fun (l: string) -> l.TrimStart().StartsWith(sprintf "- %s " landingId, StringComparison.Ordinal)) with
   | None -> None
@@ -203,10 +203,10 @@ let private landingLine (status: string) (landingId: string) : string option =
     Some (String.Join("\n", Array.append [| lines.[first] |] continuation))
 
 /// `sagefs call <tool>` as the member whose token it carries, the way an agent's shell runs it.
-let private asMember (port: int) (token: string) (tool: string) (args: (string * string) list) : Task<McpCallIntegrationTests.Run> =
+let asMember (port: int) (token: string) (tool: string) (args: (string * string) list) : Task<McpCallIntegrationTests.Run> =
   McpCallIntegrationTests.callAs port (Some token) (tool :: (args |> List.collect (fun (name, value) -> [ "--" + name; value ])))
 
-let private succeeded (what: string) (run: McpCallIntegrationTests.Run) : string =
+let succeeded (what: string) (run: McpCallIntegrationTests.Run) : string =
   run.ExitCode |> Expect.equal (sprintf "%s (stderr: %s)" what run.Err) 0
   run.Out
 
