@@ -34,9 +34,10 @@ module ListedDefinitions =
     |> Array.map (fun m -> McpServerTool.Create(m, Func<RequestContext<CallToolRequestParams>, obj>(fun _ -> null), null).ProtocolTool)
     |> List.ofArray
 
-  /// The list a caller that is shown everything receives.
+  /// The list a caller that is shown everything receives: each tool's one sentence, then the hints, as the list filter applies them.
   let full () : Tool list =
     let tools = Collections.Generic.List<Tool>(registered ())
+    SageFs.McpToolCatalog.present tools
     SageFs.Server.McpServer.applyDestructiveHints tools
     List.ofSeq tools
 
@@ -56,10 +57,13 @@ module ListedDefinitions =
     | _ -> (tools |> List.sumBy characters) + (List.length tools - 1) + 2
 
 let private fullCatalogKey = "full catalog characters"
+let private starterKey = "starter list characters"
 
 /// The live weights, by the key `RatchetBudgets.toolList` uses.
 let private actual () : (string * int) list =
-  [ fullCatalogKey, ListedDefinitions.weight (ListedDefinitions.full ()) ]
+  let full = ListedDefinitions.full ()
+  [ fullCatalogKey, ListedDefinitions.weight full
+    starterKey, ListedDefinitions.weight (full |> List.filter (fun tool -> Set.contains tool.Name SageFs.ToolList.starterNames)) ]
 
 let private budgetTable =
   TestInfrastructure.Ratchet.table
@@ -76,5 +80,11 @@ let weightBudgets =
         let live = actual () |> List.find (fun (k, _) -> k = key) |> snd
         (live <= budget)
         |> Expect.isTrue (sprintf "%s is %d, over its budget of %d. Shorten a description or a parameter sentence; never raise the budget." key live budget)
+
+    for (key, budget) in budgetTable.Budgets ->
+      testCase (sprintf "WHY - the budget for %s is no higher than its weight, so room that was won is not left for a description to grow back into" key) <| fun () ->
+        let live = actual () |> List.find (fun (k, _) -> k = key) |> snd
+        (budget <= live)
+        |> Expect.isTrue (sprintf "%s weighs %d and its budget is %d: run `dotnet SageFs.Tests.dll --ratchets --tighten` to lower it" key live budget)
   ]
   |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant

@@ -436,7 +436,8 @@ let analyzerFindings : (string * int) list =
 /// `.WithTools<SageFsTools>()` does. Lowering is `--ratchets --tighten`, never by hand; a budget above the real weight fails.
 /// Measured 2026-11-08 on master 4285a037: 72 tools, 112,840 characters. FsiMcp 0.3.0's seven tools are 5,606.
 let toolList : (string * int) list =
-  [ "full catalog characters", 55000 ]
+  [ "full catalog characters", 55000
+    "starter list characters", 8400 ]
 
 let lineCount (repoRoot: string) (rel: string) : int =
   File.ReadAllLines(Path.Combine(repoRoot, rel)).Length
