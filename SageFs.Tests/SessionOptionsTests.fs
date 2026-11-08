@@ -92,7 +92,8 @@ let sessionOptionsTests =
       let changes =
         [ "DefaultArgs", configWith (fun c -> { c with DefaultArgs = [ "--x" ] })
           "Gc", configWith (fun c -> { c with Gc = ServerGc })
-          "SessionEnv", configWith (fun c -> { c with SessionEnv = [ "A", "1" ] }) ]
+          "SessionEnv", configWith (fun c -> { c with SessionEnv = [ "A", "1" ] })
+          "Artifacts", configWith (fun c -> { c with Artifacts = ArtifactsIn "/tmp/art" }) ]
       let hostFields =
         SessionOptions.fieldReaders
         |> List.choose (fun (name, reader) -> match reader with SessionOptions.SessionHost -> Some name | _ -> None)
@@ -100,4 +101,67 @@ let sessionOptionsTests =
       hostFields |> Expect.equal "the host-read fields" (changes |> List.map fst |> List.sort)
       for name, config in changes do
         (SessionOptions.ofConfig config |> fst) <> baseline |> Expect.isTrue (sprintf "%s changes the options" name)
+
+    testCase "WHY - an artifacts path must be absolute, and an empty one, a relative one or one under /proc is refused with its reason" <| fun _ ->
+      let artifacts = Path.Combine(Path.GetTempPath(), "sagefs-art")
+      let kept, noRefusals = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn artifacts }))
+      kept.Artifacts |> Expect.equal "kept" (ArtifactsIn artifacts)
+      noRefusals |> Expect.isEmpty "nothing refused"
+      for given, refusal in [ "  ", SessionOptions.ArtifactsPathEmpty
+                              "out/art", SessionOptions.ArtifactsPathNotAbsolute "out/art"
+                              "/proc/x", SessionOptions.ArtifactsPathUnderProc "/proc/x" ] do
+        let dropped, refusals = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn given }))
+        dropped.Artifacts |> Expect.equal (sprintf "%s is dropped" given) ProjectChooses
+        refusals |> Expect.equal (sprintf "%s is named" given) [ refusal ]
+        SessionOptions.describe refusal |> Expect.stringContains "says the next step" "→"
+
+    testCase "WHY - the artifacts path reaches the worker as one SageFs variable, and the loader turns that variable into the MSBuild property" <| fun _ ->
+      let options, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn "/tmp/art" }))
+      SessionOptions.workerEnvironment options |> Expect.equal "the worker's variable" [ ArtifactsChannel.variable, "/tmp/art" ]
+      SessionOptions.workerEnvironment SessionOptions.none |> Expect.isEmpty "none, nothing"
+      ArtifactsChannel.properties (fun name -> if name = ArtifactsChannel.variable then "/tmp/art" else null)
+      |> Expect.equal "the property the loader passes" [ "ArtifactsPath", "/tmp/art" ]
+      ArtifactsChannel.properties (fun _ -> null) |> Expect.isEmpty "unset is no property"
+      ArtifactsChannel.properties (fun _ -> "") |> Expect.isEmpty "empty is no property"
+
+    testCase "WHY - a directory's options are remembered by the daemon for its builds and its worker, and another directory does not see them" <| fun _ ->
+      let a = Path.Combine(Path.GetTempPath(), "registry-a")
+      let b = Path.Combine(Path.GetTempPath(), "registry-b")
+      let options, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn "/tmp/art-a" }))
+      SessionOptionsRegistry.remember a options
+      SessionOptionsRegistry.artifactsFor a |> Expect.equal "a has it" (ArtifactsIn "/tmp/art-a")
+      SessionOptionsRegistry.artifactsFor b |> Expect.equal "b does not" ProjectChooses
+      SessionOptionsRegistry.workerEnvironment a |> Expect.equal "a's worker gets the variable" [ ArtifactsChannel.variable, "/tmp/art-a" ]
+      SessionOptionsRegistry.workerEnvironment b |> Expect.isEmpty "b's worker gets nothing"
+      let psi = SessionBuild.buildStartInfo [ "build" ] a
+      psi.Environment["ArtifactsPath"] |> Expect.equal "a's build builds under the artifacts path" "/tmp/art-a"
+      (SessionBuild.buildStartInfo [ "build" ] b).Environment.ContainsKey "ArtifactsPath" |> Expect.isFalse "b's build is the project's own"
+      SessionOptionsRegistry.remember a SessionOptions.none
+      SessionOptionsRegistry.artifactsFor a |> Expect.equal "a config that stops asking is forgotten" ProjectChooses
+
+    Integration.hostCase "WHY - a real build of a small project with the session's artifacts path writes its output there and leaves the project's bin and obj untouched" (fun () ->
+      let project = Path.Combine(Path.GetTempPath(), "sagefs-artifacts-" + Guid.NewGuid().ToString "N")
+      let artifacts = Path.Combine(project, "art")
+      Directory.CreateDirectory project |> ignore
+      try
+        File.WriteAllText(Path.Combine(project, "Small.fsproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup><ItemGroup><Compile Include=\"Lib.fs\" /></ItemGroup></Project>")
+        File.WriteAllText(Path.Combine(project, "Lib.fs"), "module Lib\nlet answer = 42\n")
+        let options, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn artifacts }))
+        SessionOptionsRegistry.remember project options
+        let psi = SessionBuild.buildStartInfo [ "build"; "Small.fsproj"; "-nodeReuse:false" ] project
+        use proc = Diagnostics.Process.Start psi
+        let output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd()
+        proc.WaitForExit()
+        proc.ExitCode |> Expect.equal (sprintf "the build succeeds: %s" output) 0
+        Directory.GetFiles(artifacts, "Small.dll", SearchOption.AllDirectories) |> Expect.isNonEmpty "the assembly is under the artifacts path"
+        Directory.Exists(Path.Combine(project, "bin")) |> Expect.isFalse "the project has no bin"
+        Directory.Exists(Path.Combine(project, "obj")) |> Expect.isFalse "the project has no obj"
+        // The loader must look where the build wrote: it is given the same path as an MSBuild property.
+        TestInfrastructure.withEnvVar ArtifactsChannel.variable (Some artifacts) (fun () ->
+          let loaded = ProjectLoading.loadSolution TestInfrastructure.quietLogger { Targets = [ SessionProjectTarget.Project(Path.Combine(project, "Small.fsproj")) ]; WorkingDir = project } (fun _ _ _ -> ())
+          loaded.Projects |> List.map (fun p -> p.TargetPath.StartsWith(artifacts, StringComparison.Ordinal))
+          |> Expect.equal "the loaded project's output is under the artifacts path" [ true ])
+      finally
+        SessionOptionsRegistry.remember project SessionOptions.none
+        try Directory.Delete(project, true) with :? IOException -> ())
   ]
