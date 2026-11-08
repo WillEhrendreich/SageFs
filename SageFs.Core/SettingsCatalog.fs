@@ -235,7 +235,7 @@ module SettingsCatalog =
   let private defaultTimeout (seconds: float) : SettingValue =
     match ValidTimeout.create (TimeSpan.FromSeconds seconds) with
     | Ok t -> VTimeout t
-    | Error _ -> VTimeout (match ValidTimeout.create Timeouts.perTestTimeoutFallback with Ok t -> t | Error _ -> failwith "the per-test timeout fallback must be valid")
+    | Error _ -> VTimeout (ValidTimeout.clamped Timeouts.perTestTimeoutFallback)
 
   /// The timeout a running subsystem holds, as a value. One outside the legal range (an environment variable can
   /// hold any positive number of seconds) has no `ValidTimeout`, so it is shown as the fallback and the row's
@@ -287,7 +287,7 @@ module SettingsCatalog =
     Category = DaemonSettings
     Scope = Global
     Applicability = RestartRequired
-    Default = VPort (match Port.create SageFsConfig.DefaultMcpPort with Ok p -> p | Error _ -> failwith "default MCP port must be valid")
+    Default = VPort (Port.clamped SageFsConfig.DefaultMcpPort)
     Parse = fun raw ->
       match Int32.TryParse raw with
       | false, _ -> Error (Malformed (sprintf "expected a port number, got '%s'" raw))
@@ -300,7 +300,7 @@ module SettingsCatalog =
       InUseFromConsumer (fun () ->
         match SettingsBootstrap.launch () |> Option.map (fun l -> Port.create l.McpPort) with
         | Some (Ok p) -> VPort p
-        | Some (Error _) | None -> VPort (match Port.create SageFsConfig.DefaultMcpPort with Ok p -> p | Error _ -> failwith "default MCP port must be valid"))
+        | Some (Error _) | None -> VPort (Port.clamped SageFsConfig.DefaultMcpPort))
   }
 
   /// Read-only: the HTTP bind host. Typed as LoopbackHost, whose parse refuses
@@ -340,7 +340,7 @@ module SettingsCatalog =
     let valueOf (path: string) : SettingValue =
       match DirectoryPath.create path with
       | Ok d -> VDir d
-      | Error _ -> VDir (match DirectoryPath.create "" with Ok d -> d | Error _ -> failwith "the empty directory must be valid")
+      | Error _ -> VDir DirectoryPath.unset
     { Key = "daemon.dataDirectory"
       Name = "Data directory"
       Description = "Where this daemon keeps its settings, sessions, logs and caches."
@@ -360,9 +360,7 @@ module SettingsCatalog =
   let identityPolicy : SettingDescriptor =
     let names = Capability.IdentityPolicy.all |> List.map Capability.IdentityPolicy.toToken
     let valueOf (policy: Capability.IdentityPolicy) : SettingValue =
-      match EnumValue.create names (Capability.IdentityPolicy.toToken policy) with
-      | Ok e -> VEnum e
-      | Error _ -> failwith "every identity policy is one of the names"
+      VEnum (EnumValue.createOrElse names (Capability.IdentityPolicy.toToken policy) (Capability.IdentityPolicy.toToken policy))
     { Key = "daemon.identityPolicy"
       Name = "Identity policy"
       Description = "Whether a connection with no member token may act. TokenRequired lets it read status and nothing more. A value that cannot be read is treated as TokenRequired."
@@ -474,7 +472,7 @@ module SettingsCatalog =
     Category = SessionSettings
     Scope = RepoOverridable
     Applicability = Live
-    Default = (match DirectoryPath.create "" with Ok d -> VDir d | Error _ -> failwith "the empty directory must be valid")
+    Default = VDir DirectoryPath.unset
     Parse = fun raw -> DirectoryPath.create raw |> Result.map VDir
     Render = fun v -> match v with VDir d -> DirectoryPath.value d | _ -> ""
     Apply = ignore

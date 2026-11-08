@@ -198,20 +198,26 @@ module McpCohortIntegration =
         let targets =
           Features.CohortIntegrationScope.removalTargets old newRepository newWorktreePath
           |> List.filter (fun (_, worktree) -> ports.DirectoryExists worktree)
-        let failure : string option ref = ref None
-        for repository, worktree in targets do
-          match failure.Value with
-          | Some _ -> ()
-          | None ->
-            match! ports.RemoveWorktree repository worktree |> Async.StartAsTask with
-            | Ok () -> ()
-            | Error said ->
-              failure.Value <-
-                Some(
-                  sprintf
-                    "could not remove the old integration worktree %s: git (run in %s) said: %s. Nothing was replaced. Remove it by hand with `git -C %s worktree remove --force %s` once nothing uses it, then call set_integration_ref again."
-                    worktree repository said repository worktree)
-        match failure.Value with
+        // Each removal runs only when every one before it succeeded; the first that fails ends the run and says why.
+        let! failure =
+          targets
+          |> List.fold
+            (fun (earlier: Task<string option>) (repository, worktree) ->
+              task {
+                match! earlier with
+                | Some _ as failed -> return failed
+                | None ->
+                  match! ports.RemoveWorktree repository worktree |> Async.StartAsTask with
+                  | Ok () -> return None
+                  | Error said ->
+                    return
+                      Some(
+                        sprintf
+                          "could not remove the old integration worktree %s: git (run in %s) said: %s. Nothing was replaced. Remove it by hand with `git -C %s worktree remove --force %s` once nothing uses it, then call set_integration_ref again."
+                          worktree repository said repository worktree)
+              })
+            (Task.FromResult None)
+        match failure with
         | Some text -> return ReplaceOutcome.RemovalFailed text
         | None -> return ReplaceOutcome.Replaced
     }

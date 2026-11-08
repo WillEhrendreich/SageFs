@@ -83,9 +83,12 @@ module SettingsSnapshot =
 
   /// The snapshot a worker's argument holds, or the first thing wrong with it.
   let decode (encoded: string) : Result<SettingsSnapshot, SnapshotError> =
+    // Base 64 never decodes to more bytes than it has characters, so this buffer always fits.
+    let buffer : byte[] = Array.zeroCreate encoded.Length
     let bytes =
-      try Ok (Convert.FromBase64String encoded)
-      with :? FormatException as e -> Error (NotBase64 e.Message)
+      match Convert.TryFromBase64String(encoded, Span<byte>(buffer)) with
+      | true, written -> Ok (Array.sub buffer 0 written)
+      | false, _ -> Error (NotBase64 "the text is not valid base 64")
     bytes
     |> Result.bind (fun raw ->
       Encoding.UTF8.GetString(raw).Split('\n', StringSplitOptions.RemoveEmptyEntries)

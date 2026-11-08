@@ -1152,18 +1152,18 @@ module McpTools =
           AgentActivityTracker.recordMemberActivity ctx.ActivityTracker (memberIdFor agentName) sid filePath intent DateTime.UtcNow
 
           let evalSw = System.Diagnostics.Stopwatch.StartNew()
-          let mutable allOutputs = []
-          let mutable outcome = Evaluated false
-          let mutable allDiags : WorkerProtocol.WorkerDiagnostic list = []
-          let mutable lastError : SageFsError option = None
-          let mutable totalCost = EvalCost.unmeasured
-          for statement in statements do
-            let! output, stmtOutcome, diags, errOpt, cost = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset (EvalLimit.span limit) (EvalLimit.span limit - evalSw.Elapsed) statement
-            allOutputs <- output :: allOutputs
-            outcome <- EvalExecOutcome.combine outcome stmtOutcome
-            allDiags <- allDiags @ diags
-            totalCost <- EvalCost.sum totalCost cost
-            lastError <- (match errOpt with Some _ -> errOpt | None -> lastError)
+          let! progress =
+            statements
+            |> List.fold
+              (fun (earlier: Task<EvalProgress<EvalExecOutcome>>) statement ->
+                task {
+                  let! sofar = earlier
+                  let! output, stmtOutcome, diags, errOpt, cost = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset (EvalLimit.span limit) (EvalLimit.span limit - evalSw.Elapsed) statement
+                  return EvalProgress.add EvalExecOutcome.combine output stmtOutcome diags errOpt cost sofar
+                })
+              (Task.FromResult (EvalProgress.start (Evaluated false)))
+          let allOutputs, outcome, allDiags = progress.Outputs, progress.Outcome, progress.Diagnostics
+          let lastError, totalCost = EvalProgress.lastError progress, progress.Cost
 
           let finalOutput =
             match format with

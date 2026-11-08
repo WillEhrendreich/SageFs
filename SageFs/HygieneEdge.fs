@@ -59,18 +59,7 @@ let tipOf (git: Git) (dir: string) (revision: string) : Task<Tip> =
   }
 
 /// The branch the base is judged by (`master`, else `main`), when the repository has one.
-let private findBase (ctx: EdgeContext) (repo: string) : Task<string option> =
-  task {
-    let mutable found = None
-    for b in baseBranchCandidates do
-      match found with
-      | Some _ -> ()
-      | None ->
-        match! ctx.Git repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + b ] with
-        | GitResult.Output _ -> found <- Some b
-        | _ -> ()
-    return found
-  }
+let private findBase (ctx: EdgeContext) (repo: string) : Task<string option> = baseBranch ctx.Git repo
 
 /// How a revision reached the base right now, for the record and for deciding whether a restore point is needed.
 let mergeStateAt (ctx: EdgeContext) (repo: string) (revision: string) : Task<MergeState> =

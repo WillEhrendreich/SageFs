@@ -1,5 +1,5 @@
 /// What a browser page chose for how the Live Bindings pane looks: the tab it has open and how it shows each row. This is the one owner
-/// of those choices, with one lock. A choice is a convenience of the page that made it and nothing about a session's truth lives here: a
+/// of those choices, atomic per change. A choice is a convenience of the page that made it and nothing about a session's truth lives here: a
 /// page that has chosen nothing, a page whose entry was evicted and a page with no id all read the default, so a reader never needs to
 /// know whether an entry exists. A page that reloads has a new client id and starts at the default.
 module SageFs.Server.PageState
@@ -20,42 +20,24 @@ let [<Literal>] PageCapacity = 256
 
 /// The choices of the pages that have made any, bounded.
 type PageStore(capacity: int) =
-  let gate = obj ()
-  let looks = Dictionary<string, PageLook>()
-  let arrival = Queue<string>()
-
-  do
-    match capacity > 0 with
-    | true -> ()
-    | false -> invalidArg (nameof capacity) "a store that can hold nothing evicts every choice as it is made"
+  // The bounded, evicting, never-removing store of a page's choice is `PageChoices`, so this type keeps one copy of that rule
+  // (and of the refusal of a capacity that could hold nothing) and adds only what a page's look is.
+  let looks = PageChoices<PageLook>(capacity)
 
   /// Change what a page chose. A page with no id has nowhere to keep it, so the change is dropped. A page seen for the first time joins the
-  /// eviction order, and past `capacity` the page seen longest ago goes. The whole change is under the one lock, so two changes arriving at
-  /// once are both applied, one after the other.
+  /// eviction order, and past `capacity` the page seen longest ago goes. Two changes arriving at once are both applied, one after the other.
   let change (clientId: string) (apply: PageLook -> PageLook) : unit =
     match clientId with
     | null
     | "" -> ()
-    | id ->
-      lock gate (fun () ->
-        match looks.TryGetValue id with
-        | true, current -> looks.[id] <- apply current
-        | false, _ ->
-          looks.[id] <- apply PageLook.onAll
-          arrival.Enqueue id
-          while looks.Count > capacity do
-            looks.Remove(arrival.Dequeue()) |> ignore)
+    | id -> looks.Update(id, PageLook.onAll, apply) |> ignore
 
   /// What the page chose, or the default.
   member _.Look(clientId: string) : PageLook =
     match clientId with
     | null
     | "" -> PageLook.onAll
-    | id ->
-      lock gate (fun () ->
-        match looks.TryGetValue id with
-        | true, found -> found
-        | false, _ -> PageLook.onAll)
+    | id -> looks.Find(id, PageLook.onAll)
 
   /// The page opened this tab.
   member _.SetTab(clientId: string, tab: WatchTab) : unit = change clientId (fun look -> { look with Tab = tab })
@@ -65,4 +47,4 @@ type PageStore(capacity: int) =
     change clientId (fun look -> { look with Formats = Map.add row choice look.Formats })
 
   /// How many pages have a choice held.
-  member _.Count : int = lock gate (fun () -> looks.Count)
+  member _.Count : int = looks.Count

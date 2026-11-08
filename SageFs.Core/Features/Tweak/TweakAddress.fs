@@ -72,19 +72,16 @@ type ResolvedTweak =
 // mixed stays mixed, because nothing ever gets normalized and rebuilt.
 
 let private lineStartOffsets (source: string) : int array =
-  let offsets = ResizeArray [ 0 ]
-  let mutable i = 0
-  while i < source.Length do
-    match source.[i] with
-    | '\r' when i + 1 < source.Length && source.[i + 1] = '\n' ->
-      offsets.Add(i + 2)
-      i <- i + 2
-    | '\r'
-    | '\n' ->
-      offsets.Add(i + 1)
-      i <- i + 1
-    | _ -> i <- i + 1
-  offsets.ToArray()
+  let rec scan (i: int) (starts: int list) : int list =
+    match i < source.Length with
+    | false -> starts
+    | true ->
+      match source.[i] with
+      | '\r' when i + 1 < source.Length && source.[i + 1] = '\n' -> scan (i + 2) ((i + 2) :: starts)
+      | '\r'
+      | '\n' -> scan (i + 1) ((i + 1) :: starts)
+      | _ -> scan (i + 1) starts
+  scan 0 [ 0 ] |> List.rev |> List.toArray
 
 let private offsetOf (starts: int array) (line: int) (col: int) : int =
   let idx = max 0 (min (starts.Length - 1) (line - 1))

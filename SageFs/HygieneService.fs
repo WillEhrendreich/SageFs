@@ -477,12 +477,12 @@ let pruneHostCacheWith (ctx: HygieneEdge.EdgeContext) (loc: Locations) : Task<Re
 let pruneHostCache (loc: Locations) (live: unit -> LiveFacts) : Task<Report> =
   pruneHostCacheWith (HygieneEdge.realContext loc live) loc
 
-let private pruning : int ref = ref 0
+let mutable private pruning : int = 0
 
 /// Prune the host cache in the background, at most one at a time. Event-driven: the daemon calls it at start and when a
 /// session stops, never on a timer. `report` hears what it did.
 let pruneHostCacheInBackground (loc: Locations) (live: unit -> LiveFacts) (report: Report -> unit) (failed: exn -> unit) : unit =
-  match System.Threading.Interlocked.CompareExchange(&pruning.contents, 1, 0) with
+  match System.Threading.Interlocked.CompareExchange(&pruning, 1, 0) with
   | 0 ->
     Task.Run(fun () ->
       task {
@@ -492,7 +492,7 @@ let pruneHostCacheInBackground (loc: Locations) (live: unit -> LiveFacts) (repor
             report pruned
           with ex -> failed ex
         finally
-          System.Threading.Interlocked.Exchange(&pruning.contents, 0) |> ignore
+          System.Threading.Interlocked.Exchange(&pruning, 0) |> ignore
       } :> Task)
     |> ignore
   | _ -> ()

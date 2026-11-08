@@ -37,13 +37,8 @@ module EnvBackedSettings =
   let renderAmount (unit: DurationUnit) (span: TimeSpan) : string =
     DurationUnit.amountOf unit span |> sprintf "%g"
 
-  let legal (result: Result<WaitLimit, ConfigError>) : WaitLimit =
-    match result with
-    | Ok limit -> limit
-    | Error _ -> failwith "a built-in wait default must be within a second and a day"
-
   let durationDefault (unit: DurationUnit) (amount: float) : SettingValue =
-    VDuration (legal (WaitLimit.create (DurationUnit.toSpan unit amount)))
+    VDuration (WaitLimit.clamped (DurationUnit.toSpan unit amount))
 
   /// The wait a subsystem holds, as a value. One outside the legal range (a variable can hold any positive number)
   /// is shown at the nearest end of it, so the row never reads a number the daemon is not near.
@@ -137,10 +132,7 @@ module EnvBackedSettings =
     EnumValue.create tierNames (raw.Trim().ToLowerInvariant()) |> Result.map VEnum
 
   let machineTier : EnvBacked =
-    let auto =
-      match tierOf "auto" with
-      | Ok v -> v
-      | Error _ -> failwith "auto is one of the tier choices"
+    let auto = VEnum (EnumValue.createOrElse tierNames "auto" "auto")
     { Descriptor =
         { Key = "waits.machineTier"
           Name = "Machine tier"
@@ -185,7 +177,7 @@ module EnvBackedSettings =
           Category = WaitsAndLimits
           Scope = Global
           Applicability = RestartRequired
-          Default = VLimit (LimitAfter (legal (WaitLimit.create (DurationUnit.toSpan Hours 12.0))))
+          Default = VLimit (LimitAfter (WaitLimit.clamped (DurationUnit.toSpan Hours 12.0)))
           Parse = limitHours
           Render = renderLimitHours
           Apply = ignore

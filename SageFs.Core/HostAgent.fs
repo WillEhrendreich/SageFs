@@ -595,7 +595,7 @@ module TestDebug =
     ) =
     let gate = obj ()
     let mutable hold = Hold.Idle
-    let counter = ref 0L
+    let mutable counter = 0L
     let mutable settled = System.Threading.Tasks.TaskCompletionSource<unit>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
     let mutable expiry = new System.Threading.CancellationTokenSource()
 
@@ -663,7 +663,7 @@ module TestDebug =
 
     /// Hold the test for a debugger. The answer says which process to attach to and how to release the test.
     member _.Begin(test: TestCase) : DebugBegin =
-      let ticket = DebugTicket(sprintf "debug-%d-%d" pid (System.Threading.Interlocked.Increment(&counter.contents)))
+      let ticket = DebugTicket(sprintf "debug-%d-%d" pid (System.Threading.Interlocked.Increment(&counter)))
       match apply (HoldEvent.Begin(ticket, test)) with
       | HoldEffect.RefuseOpen holder -> DebugBegin.Unsupported(UnsupportedReason.HoldAlreadyOpen holder)
       | _ ->

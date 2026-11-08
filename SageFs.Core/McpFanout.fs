@@ -38,15 +38,14 @@ module EchoSink =
 /// `EchoLedger.Shared`, which `EchoGuard` reads. A case that asserts an exact count makes a ledger of its own, because the
 /// shared one is moved by every other case in the process that fails an echo, the connection simulation among them.
 type EchoLedger() =
-  let counts = ConcurrentDictionary<struct (EchoSink * string), int64 ref>()
+  let counts = ConcurrentDictionary<struct (EchoSink * string), int64>()
 
   /// The daemon's ledger.
   static member val Shared : EchoLedger = EchoLedger() with get
 
   /// Count a failure. True when it is the first of its (sink, exception type): the caller logs only then.
   member _.Note(sink: EchoSink, ex: exn) : bool =
-    let cell = counts.GetOrAdd(struct (sink, ex.GetType().Name), fun _ -> ref 0L)
-    Interlocked.Increment(&cell.contents) = 1L
+    counts.AddOrUpdate(struct (sink, ex.GetType().Name), 1L, fun _ seen -> seen + 1L) = 1L
 
   /// How many times `sink` has failed, over every exception type.
   member _.FailureCount(sink: EchoSink) : int64 =
@@ -54,14 +53,14 @@ type EchoLedger() =
     |> Seq.filter (fun kvp ->
       let struct (counted, _) = kvp.Key
       counted = sink)
-    |> Seq.sumBy (fun kvp -> Volatile.Read(&kvp.Value.contents))
+    |> Seq.sumBy (fun kvp -> kvp.Value)
 
   /// Every sink with its failure count, for a status surface. Sinks that never failed are left out.
   member _.Snapshot() : (EchoSink * int64) list =
     counts
     |> Seq.map (fun kvp ->
       let struct (sink, _) = kvp.Key
-      sink, Volatile.Read(&kvp.Value.contents))
+      sink, kvp.Value)
     |> Seq.groupBy fst
     |> Seq.map (fun (sink, rows) -> sink, rows |> Seq.sumBy snd)
     |> Seq.toList
@@ -107,13 +106,10 @@ module EchoGuard =
   /// Run `work` and say how it ended: `None` when it completed, `Some` with what it threw (a synchronous throw, a faulted
   /// task, or a cancelled one). Never throws itself. The catch is `Guarded.call`'s, so this module adds no handler of its own.
   let observe (work: unit -> Task) : Task<exn option> =
-    let started = ref Task.CompletedTask
-    let thrown = ref None
-    Guarded.call (fun ex -> thrown.Value <- Some ex) (fun () -> started.Value <- work ())
-    match thrown.Value with
-    | Some ex -> Task.FromResult(Some ex)
-    | None ->
-      started.Value.ContinueWith(
+    match Guarded.attempt work with
+    | Guarded.Attempt.Threw ex -> Task.FromResult(Some ex)
+    | Guarded.Attempt.Completed started ->
+      started.ContinueWith(
         (fun (finished: Task) ->
           match finished.IsFaulted, finished.IsCanceled with
           | true, _ -> Some(finished.Exception.GetBaseException())

@@ -1,4 +1,4 @@
-/// What a page chose for the Live Bindings pane has one owner and one lock, and nothing about a session's truth is in it: an absent entry,
+/// What a page chose for the Live Bindings pane has one owner and applies each change atomically, and nothing about a session's truth is in it: an absent entry,
 /// an evicted one and a page with no id all read the default.
 module SageFs.Tests.PageStateTests
 

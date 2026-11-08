@@ -189,21 +189,6 @@ let private salvageAll
     return List.ofSeq notes
   }
 
-/// The branch the base is judged by, when the repository has one.
-let private baseBranchOf (git: Git) (repo: string) : Task<string option> =
-  task {
-    let mutable found = None
-    for candidate in baseBranchCandidates do
-      match found with
-      | Some _ -> ()
-      | None ->
-        match! git repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + candidate ] with
-        | GitResult.Output _ -> found <- Some candidate
-        | GitResult.Exit _
-        | GitResult.Unavailable _ -> ()
-    return found
-  }
-
 /// Reap the salvage refs that are finished with (`SalvageRefs.decide`): the worktree they came from is gone and the base has
 /// everything on them, or it has been gone for the retention. Each reap is written to the ledger with the commit it pointed at.
 let private reapSalvage
@@ -225,7 +210,7 @@ let private reapSalvage
           | GitResult.Exit _
           | GitResult.Unavailable _ -> return None
         }
-      let! baseRef = baseBranchOf ctx.Git loc.Repo
+      let! baseRef = baseBranch ctx.Git loc.Repo
       for salvageRef in refs do
         let worktree =
           match names with

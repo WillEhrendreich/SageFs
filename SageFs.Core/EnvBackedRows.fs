@@ -51,9 +51,7 @@ module EnvBackedRows =
     |> Option.defaultValue ""
 
   let private legalAge (days: float) : RetentionAge =
-    match RetentionAge.create (TimeSpan.FromDays days) with
-    | Ok held -> held
-    | Error _ -> failwith "a built-in age default must be within ten years"
+    RetentionAge.clamped (TimeSpan.FromDays days)
 
   /// A grace: like an age, but zero is accepted and means no grace.
   let private parseGrace (raw: string) : Result<SettingValue, ConfigError> =
@@ -111,9 +109,7 @@ module EnvBackedRows =
     SettingValue.count v |> Option.map (WholeCount.value >> string) |> Option.defaultValue ""
 
   let private legalCount (least: int) (n: int) : WholeCount =
-    match WholeCount.create least n with
-    | Ok c -> c
-    | Error _ -> failwith "a built-in count default must be within its bounds"
+    WholeCount.clamped least n
 
   /// A cap or a count, a whole number of at least one.
   let private count
@@ -329,13 +325,8 @@ module EnvBackedRows =
   let editor : EnvBacked =
     let names = "auto" :: (EditorChoice.all |> List.map EditorChoice.name)
     let valueOf (choice: EditorChoice) : SettingValue =
-      match EnumValue.create names (EditorChoice.name choice) with
-      | Ok e -> VEnum e
-      | Error _ -> failwith "every editor choice is one of the names"
-    let auto =
-      match EnumValue.create names "auto" with
-      | Ok e -> VEnum e
-      | Error _ -> failwith "auto is one of the names"
+      VEnum (EnumValue.createOrElse names (EditorChoice.name choice) (EditorChoice.name choice))
+    let auto = VEnum (EnumValue.createOrElse names "auto" "auto")
     let parse (raw: string) : Result<SettingValue, ConfigError> =
       match raw.Trim().ToLowerInvariant() with
       | ""

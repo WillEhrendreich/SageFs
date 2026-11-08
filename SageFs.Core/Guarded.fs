@@ -5,7 +5,20 @@ namespace SageFs
 /// command did, so each one goes through here.
 module Guarded =
 
+  /// How a piece of work ended: with its answer, or with what it threw.
+  [<RequireQualifiedAccess>]
+  type Attempt<'a> =
+    | Completed of 'a
+    | Threw of exn
+
+  /// Run `work` and say how it ended, so a caller reads the outcome as a value and keeps no cell to be filled in by
+  /// a handler.
+  let attempt (work: unit -> 'a) : Attempt<'a> =
+    try Attempt.Completed (work ())
+    with ex -> Attempt.Threw ex
+
   /// Run `action`; if it throws, hand the exception to `onFailure` instead of to the caller.
   let call (onFailure: exn -> unit) (action: unit -> unit) : unit =
-    try action ()
-    with ex -> onFailure ex
+    match attempt action with
+    | Attempt.Completed () -> ()
+    | Attempt.Threw ex -> onFailure ex

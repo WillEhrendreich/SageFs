@@ -93,6 +93,9 @@ module Port =
     | true -> Ok (Port n)
     | false -> Error (OutOfRange (sprintf "port must be between 1024 and 65535, got %d" n))
 
+  /// The nearest legal port to `n`. Total, so a built-in default needs no "this cannot fail" refusal.
+  let clamped (n: int) : Port = Port (max 1024 (min 65535 n))
+
   let value (Port n) = n
 
 /// A member of a closed set of strings (a theme name, a workflow, a run
@@ -108,6 +111,14 @@ module EnumValue =
     match List.contains raw allowed with
     | true -> Ok (EnumValue(allowed, raw))
     | false -> Error (NotAMember(raw, allowed))
+
+  /// A member of `allowed`, or `fallback` when `raw` is not one. `fallback` joins the allowed set when it is missing,
+  /// so the answer is always a member and a built-in choice needs no "this cannot fail" refusal.
+  let createOrElse (allowed: string list) (fallback: string) (raw: string) : EnumValue =
+    let allowed = if List.contains fallback allowed then allowed else fallback :: allowed
+    match List.contains raw allowed with
+    | true -> EnumValue(allowed, raw)
+    | false -> EnumValue(allowed, fallback)
 
   let value (EnumValue(_, chosen)) = chosen
   let allowed (EnumValue(a, _)) = a
@@ -149,6 +160,9 @@ module DirectoryPath =
     | p when System.IO.Path.IsPathRooted p -> Ok (DirectoryPath p)
     | p -> Error (Malformed(sprintf "working directory must be an absolute path, got '%s'" p))
 
+  /// No directory set, which is the one value every `create` accepts for an empty path.
+  let unset : DirectoryPath = DirectoryPath ""
+
   let value (DirectoryPath p) = p
   /// Whether an actual directory is set (an empty path means "no default").
   let isSet (DirectoryPath p) = p <> ""
@@ -169,6 +183,9 @@ module WaitLimit =
     match t >= shortestWait && t <= longest with
     | true -> Ok (WaitLimit t)
     | false -> Error (OutOfRange (sprintf "a wait must be between 1 second and 24 hours, got %gs" t.TotalSeconds))
+
+  /// The nearest legal wait to `t`. Total, so a built-in default needs no "this cannot fail" refusal.
+  let clamped (t: TimeSpan) : WaitLimit = WaitLimit (max shortestWait (min longest t))
 
   let value (WaitLimit t) : TimeSpan = t
 
@@ -223,6 +240,10 @@ module RetentionAge =
     | true -> Ok (RetentionAge t)
     | false -> Error (OutOfRange (sprintf "a grace must be zero or more and at most %g days, got %gd" Timeouts.settingAgeLongestDays t.TotalDays))
 
+  /// The nearest legal age to `t`: more than zero, at most `longest`. Total, so a built-in default needs no
+  /// "this cannot fail" refusal.
+  let clamped (t: TimeSpan) : RetentionAge = RetentionAge (max (TimeSpan.FromTicks 1L) (min longest t))
+
   let value (RetentionAge t) : TimeSpan = t
 
 /// A whole number of things (rows, versions, records, members). `least` is the smallest the setting allows, which is 1
@@ -235,6 +256,10 @@ module WholeCount =
     match n >= least && n <= Timeouts.settingCountLargest with
     | true -> Ok (WholeCount n)
     | false -> Error (OutOfRange (sprintf "expected a whole number from %d to %d, got %d" least Timeouts.settingCountLargest n))
+
+  /// The nearest legal count to `n` for a setting whose smallest is `least`. Total, so a built-in default needs no
+  /// "this cannot fail" refusal.
+  let clamped (least: int) (n: int) : WholeCount = WholeCount (max least (min Timeouts.settingCountLargest n))
 
   let value (WholeCount n) : int = n
 

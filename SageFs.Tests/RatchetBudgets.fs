@@ -229,7 +229,7 @@ let fileSize : (string * int) list =
     // 2270 -> 2509: the reducer cases and helpers for result provenance, build confirmation, pause and
     // scope. Deliberate and reviewed; still below the 3079 this file stood at before the effect handler
     // moved out. Ratchet back DOWN when this file is split; never bump to paper over drift.
-    "SageFs/SageFsApp.fs", 2463
+    "SageFs/SageFsApp.fs", 2460
     // 1999 -> 2003: a one-time bump for the swap-refetch slice (roadmap "Level the REPL after a
     // patch without losing it"): mkAppStateActor now threads an InstrumentationMapsRef, and the
     // hard-reset arm writes the FRESH shadow copy's maps into it so GetInstrumentationMaps stops
@@ -412,7 +412,7 @@ let ignoredPerTier : (string * int) list =
 /// Measured 2026-11-03 with `scripts/analyzer-counts.fsx`, pack built against SDK 0.41.0, no faults in any project.
 let analyzerFindings : (string * int) list =
   [ "SageFs.Core/SAGE-003", 1
-    "SageFs.Core/SAGE-004", 65
+    "SageFs.Core/SAGE-004", 64
     "SageFs.Core/SAGE-005", 179
     "SageFs.Core/SAGE-006", 4
     "SageFs.Core/SAGE-007", 137
@@ -427,7 +427,7 @@ let analyzerFindings : (string * int) list =
     "SageFs/SAGE-004", 40
     "SageFs/SAGE-005", 211
     "SageFs/SAGE-006", 3
-    "SageFs/SAGE-007", 101
+    "SageFs/SAGE-007", 100
     "SageFs/SAGE-009", 42 ]
 
 /// What `tools/list` weighs, in characters of the minified JSON the daemon sends (each tool's name, description and input

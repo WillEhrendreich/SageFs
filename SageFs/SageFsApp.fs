@@ -1832,14 +1832,11 @@ module SageFsUpdate =
               // set until the worker actually starts it: until then another
               // run's results may still be arriving and must not be stamped
               // with this run's generation.
-              let allocated = ref (Features.LiveTesting.RunGeneration 0)
+              let requested, allocated = Features.LiveTesting.RequestedRuns.request requestId sid (List.ofArray testIds) cycle.TestState
               let lt =
-                refreshStatusesForChangedIds cycle changedIds (fun s ->
-                  let s', gen = Features.LiveTesting.RequestedRuns.request requestId sid (List.ofArray testIds) s
-                  allocated.Value <- gen
-                  { s' with AffectedTests = changedIds })
+                refreshStatusesForChangedIds cycle changedIds (fun _ -> { requested with AffectedTests = changedIds })
               lt,
-              [ Features.LiveTesting.TestCycleEffect.RunRequestedTests (request (mapsFor lt), allocated.Value)
+              [ Features.LiveTesting.TestCycleEffect.RunRequestedTests (request (mapsFor lt), allocated)
                 |> SageFsEffect.TestCycle ]
             | None, false ->
               // No session to own the run's identity: the legacy path, bumped

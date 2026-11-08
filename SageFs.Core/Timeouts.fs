@@ -16,6 +16,9 @@ module ValidTimeout =
     | true -> Ok (ValidTimeout t)
     | false -> Error (sprintf "Timeout must be between 1s and 10min, got %A" t)
 
+  /// The nearest legal timeout to `t`. Total, so a built-in default needs no "this cannot fail" refusal.
+  let clamped (t: TimeSpan) : ValidTimeout = ValidTimeout (max minTimeout (min maxTimeout t))
+
   let value (ValidTimeout t) = t
 
 /// Centralized timeout and interval constants.

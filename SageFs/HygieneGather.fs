@@ -428,18 +428,22 @@ let private under (parent: string) (child: string) : bool =
 
 // ─── Merge evidence ────────────────────────────────────────────────────
 
-let private baseBranch (git: Git) (repo: string) : Task<string option> =
-  task {
-    let mutable found = None
-    for name in baseBranchCandidates do
-      match found with
-      | Some _ -> ()
-      | None ->
-        match! git repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + name ] with
-        | GitResult.Output _ -> found <- Some name
-        | _ -> ()
-    return found
-  }
+/// The branch the base is judged by (the first of `baseBranchCandidates` the repository has), when it has one. A later
+/// candidate is not asked about once an earlier one answered.
+let baseBranch (git: Git) (repo: string) : Task<string option> =
+  baseBranchCandidates
+  |> List.fold
+    (fun (found: Task<string option>) name ->
+      task {
+        match! found with
+        | Some _ as hit -> return hit
+        | None ->
+          match! git repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + name ] with
+          | GitResult.Output _ -> return Some name
+          | GitResult.Exit _
+          | GitResult.Unavailable _ -> return None
+      })
+    (Task.FromResult None)
 
 /// Whether `head` has reached `baseRef`, and how: an ancestor, every commit patch-equivalent (rebased or
 /// squashed), or an identical tree. What is left is the commits it lacks.

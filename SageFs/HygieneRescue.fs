@@ -82,16 +82,7 @@ let private leaf (path: string) : string = Path.GetFileName(path.TrimEnd('/', '\
 
 let private findBase (git: Git) (repo: string) : Task<Result<string, string>> =
   task {
-    let mutable found = None
-    for candidate in baseBranchCandidates do
-      match found with
-      | Some _ -> ()
-      | None ->
-        match! git repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + candidate ] with
-        | GitResult.Output _ -> found <- Some candidate
-        | GitResult.Exit _
-        | GitResult.Unavailable _ -> ()
-    match found with
+    match! baseBranch git repo with
     | Some b -> return Result.Ok b
     | None -> return Result.Error "the repository has no master or main branch to rebase onto"
   }
@@ -152,17 +143,23 @@ let private replay (ctx: RescueContext) (baseRef: string) (shas: string list) : 
       return Replayed.Failed(sprintf "could not make a temporary worktree (git exited %d: %s)" code stderr), TempWorktree.NoneNeeded
     | GitResult.Unavailable detail -> return Replayed.Failed detail, TempWorktree.NoneNeeded
     | GitResult.Output _ ->
-      let mutable outcome : Replayed option = None
-      for sha in shas do
-        match outcome with
-        | Some _ -> ()
-        | None ->
-          match! step [ "cherry-pick"; "--keep-redundant-commits"; sha ] with
-          | GitResult.Output _ -> ()
-          | GitResult.Exit _ ->
-            let! _ = step [ "cherry-pick"; "--abort" ]
-            outcome <- Some(Replayed.Conflicted sha)
-          | GitResult.Unavailable detail -> outcome <- Some(Replayed.Failed detail)
+      // Each pick runs only when every pick before it went through; the first one that does not ends the replay.
+      let! outcome =
+        shas
+        |> List.fold
+          (fun (stopped: Task<Replayed option>) sha ->
+            task {
+              match! stopped with
+              | Some _ as halted -> return halted
+              | None ->
+                match! step [ "cherry-pick"; "--keep-redundant-commits"; sha ] with
+                | GitResult.Output _ -> return None
+                | GitResult.Exit _ ->
+                  let! _ = step [ "cherry-pick"; "--abort" ]
+                  return Some(Replayed.Conflicted sha)
+                | GitResult.Unavailable detail -> return Some(Replayed.Failed detail)
+            })
+          (Task.FromResult None)
       let! finished =
         task {
           match outcome with

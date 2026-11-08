@@ -1189,11 +1189,6 @@ let private hiddenUsesViaIdentifiers (patches: SourceDecl list) (hidden: SourceD
 /// construction cost per save.
 let checker = lazy FSharp.Compiler.CodeAnalysis.FSharpChecker.Create()
 
-/// A counter folded into the synthetic file name/version of every check, so
-/// FSharpChecker's own internal (fileName, version) result cache can never
-/// serve a stale answer for a changed body under a reused name.
-let checkCounter = ref 0
-
 /// Runs a compiler call and gives up on it when `limit` passes: the call is cancelled and a `TimeoutException` is
 /// raised, so a stuck check delays whoever waits by that bound and no more.
 let withinBound (limit: TimeSpan) (call: Async<'a>) : Async<'a> =
@@ -1225,14 +1220,15 @@ let private symbolUsesOfAsync (source: string) : Async<Result<FSharp.Compiler.Co
   let withinCheckBound (call: Async<'a>) : Async<'a> = withinBound SageFs.Timeouts.reloadPlanningCheck call
   async {
     try
-      let n = System.Threading.Interlocked.Increment checkCounter
-      let fileName = sprintf "reload-planning-check-%d.fs" n
+      // A fresh name for every check, so FSharpChecker's own (fileName, version) result cache can never serve a stale
+      // answer for a changed body under a reused name. The name is unique, so the version has nothing left to tell apart.
+      let fileName = sprintf "reload-planning-check-%s.fs" (Guid.NewGuid().ToString "N")
       let sourceText = FSharp.Compiler.Text.SourceText.ofString source
       let! projOptions, _ =
         checker.Value.GetProjectOptionsFromScript(fileName, sourceText, assumeDotNetFramework = false)
         |> withinCheckBound
       let! parseResults, answer =
-        checker.Value.ParseAndCheckFileInProject(fileName, n, sourceText, projOptions)
+        checker.Value.ParseAndCheckFileInProject(fileName, 0, sourceText, projOptions)
         |> withinCheckBound
       match answer with
       | FSharp.Compiler.CodeAnalysis.FSharpCheckFileAnswer.Aborted ->

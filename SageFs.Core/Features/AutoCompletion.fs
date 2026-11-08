@@ -297,14 +297,13 @@ module DirectiveCompletions =
 
   open System.IO
 
-  let mkReplacement wordToReplace entry =
-    let maxVal = min (String.length entry) (String.length wordToReplace)
-    let mutable i = 0
+  let mkReplacement (wordToReplace: string) (entry: string) =
+    let sharedPrefix =
+      Seq.zip wordToReplace entry
+      |> Seq.takeWhile (fun (typed, offered) -> typed = offered)
+      |> Seq.length
 
-    while i < maxVal && wordToReplace[i] = entry[i] do
-      i <- i + 1
-
-    entry.Substring(i)
+    entry.Substring(sharedPrefix)
 
   let commandCompletions (text: string) carret (wordToReplace: string) =
     match text.Contains(' ') with
