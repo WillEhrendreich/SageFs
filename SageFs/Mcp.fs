@@ -1452,7 +1452,7 @@ module McpTools =
              target = targets |> List.map SessionProjectTarget.toWire
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid status
-             workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status
+             workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid)
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
@@ -1466,7 +1466,7 @@ module McpTools =
           {| state = "Faulted"
              scope = "Session"
              sessionId = sid
-             faultReason = FaultCause.describe cause
+             faultReason = FaultCause.describe cause; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid)
              target = targets |> List.map SessionProjectTarget.toWire
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
@@ -1521,8 +1521,7 @@ module McpTools =
               // never shown, so it read exactly like one still running.
               LastRestart = SessionStatusPayload.lastRestartOfSession info (Some snapshot.CoreVersion)
               LastReload = sessionInfo.Reload; ReplFreshness = sessionInfo.Freshness
-              SourceState = SourceStateProbe.ofSession sessionInfo warmup
-              CoreAdoption = HostCoreAdoption.noteFor sid }
+              SourceState = SourceStateProbe.ofSession sessionInfo warmup; CoreAdoption = HostCoreAdoption.noteFor sid }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
@@ -2209,7 +2208,7 @@ module McpTools =
         let packageRefs = perProject |> List.map snd |> WorkflowTypes.WorkflowDetection.extractPackageNames
         let lines =
           Option.toList (formatDetectionHint packageRefs workflow)
-          @ ProjectCompatibility.formatToolchainAdvisories perProject
+          @ ProjectCompatibility.formatToolchainAdvisories perProject @ Option.toList (CreateSessionUx.adoptionHintOfTargets targets)
         let hint = match lines with [] -> None | ls -> Some(String.concat "\n\n" ls)
         return CreateSessionUx.formatCreateSessionReply sid targets hint
       | Result.Error err -> return SageFsError.describeForAgent err

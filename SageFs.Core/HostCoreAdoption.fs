@@ -359,14 +359,79 @@ module HostCoreAdoption =
           "The shape of the session project's SageFs.Core (read from %s) could not be read (%s), so it was not adopted and the worker runs the daemon's own SageFs.Core."
           (Path.GetFullPath candidatePath) why)
 
-  /// What a session's last spawn said about its project's SageFs.Core (stub).
-  let recordNote (_sessionId: string) (_note: AdoptionNote) : unit = ()
-  let noteFor (_sessionId: string) : AdoptionNote = AdoptionNote.NothingToSay
-  let forgetNote (_sessionId: string) : unit = ()
+  /// What each live session's last spawn said about its project's SageFs.Core, with a token for the spawn that said it. A
+  /// session that adopted its Core, or has none of its own, has no entry. The spawn's own exit removes its entry
+  /// (`forgetNoteOf`), so the book holds one line per live worker with something to say.
+  let notes = System.Collections.Concurrent.ConcurrentDictionary<string, Guid * string>()
 
-  /// What a spawn for these projects would say about the project's own Core, without spawning (stub).
-  let previewNote (_sharedDaemonBaseDir: string) (_projects: string list) (_hostVersion: Version) : AdoptionNote =
-    AdoptionNote.NothingToSay
+  /// Records what a spawn said, replacing the session's earlier entry; `NothingToSay` clears it. The token identifies the spawn.
+  let recordNoteForSpawn (sessionId: string) (note: AdoptionNote) : Guid =
+    let token = Guid.NewGuid()
+    match note with
+    | AdoptionNote.NotAdopted reason -> notes[sessionId] <- (token, reason)
+    | AdoptionNote.NothingToSay -> notes.TryRemove sessionId |> ignore
+    token
+
+  let recordNote (sessionId: string) (note: AdoptionNote) : unit = recordNoteForSpawn sessionId note |> ignore
+
+  /// What the session's last spawn said, as a status payload and a create reply tell it.
+  let noteFor (sessionId: string) : AdoptionNote =
+    match notes.TryGetValue sessionId with
+    | true, (_, reason) -> AdoptionNote.NotAdopted reason
+    | false, _ -> AdoptionNote.NothingToSay
+
+  let forgetNote (sessionId: string) : unit = notes.TryRemove sessionId |> ignore
+
+  /// Removes the entry only when it is still the one this spawn wrote: a restart records a newer spawn before the old
+  /// worker's exit is seen, and that exit must not erase the newer entry.
+  let forgetNoteOf (sessionId: string) (token: Guid) : unit =
+    match notes.TryGetValue sessionId with
+    | true, (current, _) when current = token -> notes.TryRemove sessionId |> ignore
+    | _ -> ()
+
+  /// What the daemon decides for a spawn, before anything is materialized. One rule for the spawn and for the preview.
+  [<RequireQualifiedAccess>]
+  type Judgement =
+    | NoProjectCore
+    | Refused of reason: string
+    | Adopt of path: string * version: Version
+    | LeaveOut of reason: string
+
+  /// The daemon's decision for these projects. Raises what reading an assembly raises: a caller names it.
+  let judge (sharedDaemonBaseDir: string) (projects: string list) (hostVersion: Version) : Judgement =
+    match findCandidates (projectDirsOf projects) with
+    | [] -> Judgement.NoProjectCore
+    | best :: _ ->
+      let candidateVersion = AssemblyName.GetAssemblyName(best).Version
+      // The daemon's OWN copy of the Core, the one it loaded and the one its own code was
+      // built against. The host directory holds a second copy, taken when the tool was
+      // installed, and comparing against that one would date every project by the install
+      // rather than by the build.
+      let hostCorePath = Path.Combine(sharedDaemonBaseDir, assemblyName + ".dll")
+      match decide (factsOf hostCorePath hostVersion) best (factsOf best candidateVersion) with
+      | Adoption.Refused reason -> Judgement.Refused reason
+      | Adoption.Adopted path ->
+        match surfaceVerdict (Path.Combine(sharedDaemonBaseDir, "host", assemblyName + ".dll")) path with
+        | SurfaceVerdict.Incompatible reason -> Judgement.LeaveOut reason
+        | SurfaceVerdict.Compatible -> Judgement.Adopt(path, candidateVersion)
+
+  /// What a spawn for these projects would say about the project's own Core, without spawning: the create reply's line. A
+  /// build that cannot be read is the spawn's refusal to report, not the preview's.
+  let previewNote (sharedDaemonBaseDir: string) (projects: string list) (hostVersion: Version) : AdoptionNote =
+    try
+      match judge sharedDaemonBaseDir projects hostVersion with
+      | Judgement.LeaveOut reason -> AdoptionNote.NotAdopted reason
+      | Judgement.NoProjectCore
+      | Judgement.Refused _
+      | Judgement.Adopt _ -> AdoptionNote.NothingToSay
+    with
+    | :? IOException
+    | :? BadImageFormatException
+    | :? UnauthorizedAccessException -> AdoptionNote.NothingToSay
+
+  /// `previewNote` for the daemon this code runs in.
+  let previewNoteForDaemon (projects: string list) : AdoptionNote =
+    previewNote AppContext.BaseDirectory projects (Assembly.GetExecutingAssembly().GetName().Version)
 
   /// The full decision for one worker spawn: given the shared daemon-base
   /// directory (the same one `Args.resolveHostLaunch` would otherwise use
@@ -384,36 +449,23 @@ module HostCoreAdoption =
     (projects: string list)
     (hostVersion: Version)
     : Result<LaunchPlan, string> =
-    let projectDirs = projectDirsOf projects
-    match findCandidates projectDirs with
-    | [] -> Ok { LaunchRoot = sharedDaemonBaseDir; Cleanup = None; AdoptedCore = None; Note = AdoptionNote.NothingToSay }
-    | best :: _ ->
-      try
-        let candidateVersion = AssemblyName.GetAssemblyName(best).Version
-        // The daemon's OWN copy of the Core, the one it loaded and the one its own code was
-        // built against. The host directory holds a second copy, taken when the tool was
-        // installed, and comparing against that one would date every project by the install
-        // rather than by the build.
-        let hostCorePath = Path.Combine(sharedDaemonBaseDir, assemblyName + ".dll")
-        let host = factsOf hostCorePath hostVersion
-        let candidate = factsOf best candidateVersion
-        match decide host best candidate with
-        | Adoption.Refused reason -> Error reason
-        | Adoption.Adopted path ->
-          let sharedHostDir = Path.Combine(sharedDaemonBaseDir, "host")
-          match surfaceVerdict (Path.Combine(sharedHostDir, assemblyName + ".dll")) path with
-          | SurfaceVerdict.Incompatible reason ->
-            Ok { LaunchRoot = sharedDaemonBaseDir; Cleanup = None; AdoptedCore = None; Note = AdoptionNote.NotAdopted reason }
-          | SurfaceVerdict.Compatible ->
-            let privateRoot =
-              Path.Combine(
-                Path.GetTempPath(),
-                sprintf "%s%s-%s" adoptedRootPrefix sessionId (Guid.NewGuid().ToString("N").[..7]))
-            materialize sharedHostDir privateRoot path
-            let adopted = (candidateVersion.ToString(), File.GetLastWriteTimeUtc path)
-            Ok { LaunchRoot = privateRoot; Cleanup = Some(fun () -> cleanup privateRoot); AdoptedCore = Some adopted; Note = AdoptionNote.NothingToSay }
-      with ex ->
-        Error(sprintf "Could not verify the session project's SageFs.Core build at %s: %s" best ex.Message)
+    let leaveShared (note: AdoptionNote) =
+      Ok { LaunchRoot = sharedDaemonBaseDir; Cleanup = None; AdoptedCore = None; Note = note }
+    try
+      match judge sharedDaemonBaseDir projects hostVersion with
+      | Judgement.NoProjectCore -> leaveShared AdoptionNote.NothingToSay
+      | Judgement.Refused reason -> Error reason
+      | Judgement.LeaveOut reason -> leaveShared (AdoptionNote.NotAdopted reason)
+      | Judgement.Adopt(path, candidateVersion) ->
+        let privateRoot =
+          Path.Combine(
+            Path.GetTempPath(),
+            sprintf "%s%s-%s" adoptedRootPrefix sessionId (Guid.NewGuid().ToString("N").[..7]))
+        materialize (Path.Combine(sharedDaemonBaseDir, "host")) privateRoot path
+        let adopted = (candidateVersion.ToString(), File.GetLastWriteTimeUtc path)
+        Ok { LaunchRoot = privateRoot; Cleanup = Some(fun () -> cleanup privateRoot); AdoptedCore = Some adopted; Note = AdoptionNote.NothingToSay }
+    with ex ->
+      Error(sprintf "Could not verify the session project's SageFs.Core build under %s: %s" (String.concat ", " (projectDirsOf projects)) ex.Message)
 
   /// Record the worker process that owns a materialized private launch
   /// root, as soon as its pid is known. The directory itself was already

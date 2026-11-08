@@ -74,6 +74,9 @@ module WorkerSpawn =
     | Ok launchPlan ->
     let launchRoot = launchPlan.LaunchRoot
     let hostCleanup = launchPlan.Cleanup
+    // What this spawn says about the project's Core goes to the daemon log and, kept for as long as this worker lives, to the
+    // status payload and the create reply of the session.
+    let noteToken = HostCoreAdoption.recordNoteForSpawn (SessionId.value sessionId) launchPlan.Note
     match launchPlan.Note with
     | HostCoreAdoption.AdoptionNote.NotAdopted reason -> Log.warn "[SessionManager] session %s: %s" (SessionId.value sessionId) reason
     | HostCoreAdoption.AdoptionNote.NothingToSay -> ()
@@ -88,6 +91,7 @@ module WorkerSpawn =
         (SessionId.value sessionId) launchRoot sizeMb)
     match Args.resolveHostLaunch launchRoot (OperatingSystem.IsWindows()) dotnetMuxer File.Exists with
     | Error reason ->
+      HostCoreAdoption.forgetNoteOf (SessionId.value sessionId) noteToken
       hostCleanup |> Option.iter (fun cleanup -> try cleanup () with _ -> ())
       Error (SageFsError.WorkerSpawnFailed reason)
     | Ok launch ->
@@ -131,6 +135,7 @@ module WorkerSpawn =
 
     match proc.Start() with
     | false ->
+      HostCoreAdoption.forgetNoteOf (SessionId.value sessionId) noteToken
       hostCleanup |> Option.iter (fun cleanup -> try cleanup () with _ -> ())
       Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
     | true ->
@@ -147,6 +152,7 @@ module WorkerSpawn =
         try
           onExited workerPid proc.ExitCode
         with _ -> ()
+        HostCoreAdoption.forgetNoteOf (SessionId.value sessionId) noteToken
         // The private per-session host copy (if one was materialized) is
         // only needed while this worker process is running — once it has
         // exited, its own SageFs.Host.dll/SageFs.Core.dll are no longer

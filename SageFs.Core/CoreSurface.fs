@@ -95,23 +95,35 @@ module CoreSurface =
     finally
       context.Unload()
 
-  /// What `surfaceOfFileCached` has read, by the file's path, write time and size: a read takes about two seconds on a
-  /// loaded machine, and the daemon's own host copy is read for every session it spawns.
-  let readCache =
-    System.Collections.Concurrent.ConcurrentDictionary<string * int64 * int64, SurfaceReading>()
-
-  /// How many readings the cache keeps (stub: it keeps all).
+  /// How many readings the cache keeps. The daemon reads two files per spawn (its own host copy and a project's build) and
+  /// the host copy is the one worth keeping, so a handful covers every live project build and the oldest reading goes first.
   let cacheCapacity = 8
 
-  /// How many readings the cache holds now.
-  let cachedCount () : int = readCache.Count
+  /// What `surfaceOfFileCached` has read, oldest first, by the file's path, write time and size: a read takes about two
+  /// seconds on a loaded machine, and the daemon's own host copy is read for every session it spawns.
+  let readings = ResizeArray<(string * int64 * int64) * SurfaceReading>()
 
-  /// `surfaceOfFile`, remembered for as long as the file is the same file.
+  /// How many readings the cache holds now.
+  let cachedCount () : int = lock readings (fun () -> readings.Count)
+
+  /// `surfaceOfFile`, remembered for as long as the file is the same file and the cache has room: a file that changed
+  /// replaces its earlier reading, and past `cacheCapacity` the oldest reading is dropped.
   let surfaceOfFileCached (path: string) : SurfaceReading =
     let info = FileInfo(Path.GetFullPath path)
     match info.Exists with
     | false -> surfaceOfFile path
-    | true -> readCache.GetOrAdd((info.FullName, info.LastWriteTimeUtc.Ticks, info.Length), fun _ -> surfaceOfFile path)
+    | true ->
+      let key = (info.FullName, info.LastWriteTimeUtc.Ticks, info.Length)
+      match lock readings (fun () -> readings |> Seq.tryFind (fun (known, _) -> known = key)) with
+      | Some(_, reading) -> reading
+      | None ->
+        let reading = surfaceOfFile path
+        lock readings (fun () ->
+          readings.RemoveAll(fun ((fullName, _, _), _) -> fullName = info.FullName) |> ignore
+          readings.Add(key, reading)
+          while readings.Count > cacheCapacity do
+            readings.RemoveAt 0)
+        reading
 
   /// The first difference between two surfaces, in the order of the type names, or `Unchanged`.
   let compareSurfaces (before: Surface) (after: Surface) : SurfaceChange =

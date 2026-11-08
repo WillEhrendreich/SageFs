@@ -144,6 +144,13 @@ module SessionStatusPayload =
     | LastRestart.NoneRecorded -> null
     | LastRestart.Recorded (kind, message) -> box {| outcome = RestartKind.label kind; message = message |}
 
+  /// How `coreAdoption` appears: absent (null) unless the session's own SageFs.Core was left out of the worker, and then a named
+  /// state with the reason, which already says what to do.
+  let coreAdoptionJson (note: HostCoreAdoption.AdoptionNote) : obj | null =
+    match note with
+    | HostCoreAdoption.AdoptionNote.NothingToSay -> null
+    | HostCoreAdoption.AdoptionNote.NotAdopted reason -> box {| state = "NotAdopted"; reason = reason |}
+
   /// Build the `get_session_status` payload.
   ///
   /// One status drives every field. `available` is derived from the same
@@ -167,6 +174,7 @@ module SessionStatusPayload =
          averageDurationMs = facts.AverageDurationMs
          health = facts.Health
          lastRestart = lastRestartJson facts.LastRestart
+         coreAdoption = coreAdoptionJson facts.CoreAdoption
          lastReload = SessionReload.toWire facts.LastReload
          replFreshness = ReplFreshness.toWire facts.ReplFreshness
          sourceState = SourceState.toWire facts.SourceState

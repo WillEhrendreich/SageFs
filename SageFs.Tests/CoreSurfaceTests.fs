@@ -176,6 +176,7 @@ let adoptionTests =
         match HostCoreAdoption.previewNote sharedRoot [ project ] realVersion with
         | HostCoreAdoption.AdoptionNote.NotAdopted reason ->
           reason |> Expect.stringContains "names the type that differs" "SageFs.WorkerProtocol+WorkerMessage"
+          reason |> Expect.stringContains "and the next action" "install-local.fsx"
         | HostCoreAdoption.AdoptionNote.NothingToSay -> failtest "a Core of another shape is not adopted, and the preview must say so")
 
     testCase "the twin of previewNote: a Core of the same shape has nothing to say" <| fun _ ->
@@ -198,11 +199,11 @@ let adoptionSurfaceTests =
       HostCoreAdoption.forgetNote sid
       HostCoreAdoption.noteFor sid |> Expect.equal "and gone once the session's worker is" HostCoreAdoption.AdoptionNote.NothingToSay
 
-    testCase "WHY — the create reply line names the reason and the next action, and a Core that was adopted adds no line" <| fun _ ->
+    testCase "WHY — the create reply line names the reason, and a Core that was adopted adds no line" <| fun _ ->
       match CreateSessionUx.adoptionHint notAdopted with
       | Some line ->
         line |> Expect.stringContains "the reason" "has a different public shape"
-        line |> Expect.stringContains "the next action" "install-local.fsx"
+        line |> Expect.stringContains "it is a Core-not-adopted line" "Core not adopted"
       | None -> failtest "a Core that is not adopted must be told"
       CreateSessionUx.adoptionHint HostCoreAdoption.AdoptionNote.NothingToSay |> Expect.isNone "silent when adopted"
 
