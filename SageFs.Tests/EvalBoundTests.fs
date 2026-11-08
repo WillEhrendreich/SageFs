@@ -101,18 +101,30 @@ let tests =
 
       testTask "reply puts the cancelled-at-limit note before an answer that came after the cancel" {
         let call = TaskCompletionSource<Result<int, string>>()
-        let! answer, note = EvalWait.reply (secs 30.) (millis 50.) (secs 5.) id (fun () -> call.Task) (fun () -> call.TrySetResult(Result.Ok 1) |> ignore; Task.CompletedTask)
+        let! answer, note = EvalWait.reply (secs 30.) (millis 50.) (secs 5.) id (fun _ -> call.Task) (fun _ -> call.TrySetResult(Result.Ok 1) |> ignore; Task.CompletedTask)
         answer |> Expect.equal "the eval's own answer" (Result.Ok 1)
         note |> Expect.stringContains "the figure the caller asked for, not the time left" "timeout_seconds (30 s)"
       }
 
+      testTask "reply hands the cancel the id the eval was started with, so a cancel names its own request" {
+        let started = TaskCompletionSource<string>()
+        let cancelled = TaskCompletionSource<string>()
+        let call = TaskCompletionSource<Result<int, string>>()
+        let! _ =
+          EvalWait.reply (secs 30.) (millis 50.) (millis 200.) id
+            (fun requestId -> started.TrySetResult requestId |> ignore; call.Task)
+            (fun requestId -> cancelled.TrySetResult requestId |> ignore; call.TrySetResult(Result.Ok 1) |> ignore; Task.CompletedTask)
+        started.Task.Result |> Expect.equal "the cancel names the request that was started" cancelled.Task.Result
+        started.Task.Result |> Expect.isNotEmpty "an id was issued"
+      }
+
       testTask "reply turns a silent eval into a refusal that says what to do, and a spent budget into one that says it was not run" {
         let silent = TaskCompletionSource<Result<int, string>>()
-        let! gaveUp, _ = EvalWait.reply (secs 30.) (millis 50.) (millis 50.) id (fun () -> silent.Task) (fun () -> Task.CompletedTask)
+        let! gaveUp, _ = EvalWait.reply (secs 30.) (millis 50.) (millis 50.) id (fun _ -> silent.Task) (fun _ -> Task.CompletedTask)
         match gaveUp with
         | Result.Error text -> text |> Expect.stringContains "the way out" "hard_reset_fsi_session"
         | Result.Ok _ -> failtest "a silent eval has no answer"
-        let! unstarted, _ = EvalWait.reply (secs 30.) TimeSpan.Zero (millis 50.) id (fun () -> silent.Task) (fun () -> Task.CompletedTask)
+        let! unstarted, _ = EvalWait.reply (secs 30.) TimeSpan.Zero (millis 50.) id (fun _ -> silent.Task) (fun _ -> Task.CompletedTask)
         match unstarted with
         | Result.Error text -> text |> Expect.stringContains "that it did not run" "Not run"
         | Result.Ok _ -> failtest "a spent budget runs nothing"

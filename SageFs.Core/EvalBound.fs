@@ -171,11 +171,13 @@ module EvalWait =
     (left: TimeSpan)
     (answerWait: TimeSpan)
     (refuse: string -> 'refusal)
-    (start: unit -> Task<Result<'answer, 'refusal>>)
-    (cancel: unit -> Task)
+    (start: string -> Task<Result<'answer, 'refusal>>)
+    (cancel: string -> Task)
     : Task<Result<'answer, 'refusal> * string> =
     task {
-      let! waited = run left answerWait logCancelFailure start cancel
+      // One request id for the call, handed to both: the cancel names the request it is for and no other.
+      let requestId = Guid.NewGuid().ToString "N"
+      let! waited = run left answerWait logCancelFailure (fun () -> start requestId) (fun () -> cancel requestId)
       return
         match waited with
         | Waited.Finished answer -> answer, ""
