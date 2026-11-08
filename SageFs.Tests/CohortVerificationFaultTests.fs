@@ -88,6 +88,24 @@ let classifyTests =
       | other -> failtestf "expected Environment, got %A" other
     }
 
+    test "a restore error that reaches the diagnostics as a bare line is still the restore's" {
+      let bare =
+        SageFsError.BuildFailed(1, [ diagnostic None None "/w/Lab.Core/Lab.Core.fsproj : error NU1301: Unable to load the service index for source http://127.0.0.1:9/v3/index.json." ])
+      match CohortLandingPlan.classifyBuildFailure bare with
+      | CohortOwner.VerificationFault.Environment reason -> reason |> Expect.stringContains "quotes it" "NU1301"
+      | other -> failtestf "expected Environment, got %A" other
+    }
+
+    test "a restore error on a bare line beside a compiler error is still the environment" {
+      let error =
+        SageFsError.BuildFailed(1, [
+          diagnostic (Some "/w/Lab.Core/Greeting.fs") (Some "FS0001") "type mismatch"
+          diagnostic None None "/w/Lab.Core/Lab.Core.fsproj : error NU1301: Unable to load the service index" ])
+      match CohortLandingPlan.classifyBuildFailure error with
+      | CohortOwner.VerificationFault.Environment _ -> ()
+      | other -> failtestf "expected Environment, got %A" other
+    }
+
     test "a bare build line with no file or code is the environment" {
       match CohortLandingPlan.classifyBuildFailure (SageFsError.BuildFailed(1, [ diagnostic None None "Build FAILED." ])) with
       | CohortOwner.VerificationFault.Environment _ -> ()
@@ -199,6 +217,7 @@ let private gatePorts
   : CohortRebuildGate.Ports =
   { WorktreeHead = fun () -> async { calls.Add "head"; return head }
     NoteAttempt = fun sha -> calls.Add(sprintf "note %s" sha)
+    Restore = fun () -> async { calls.Add "restore"; return Ok() }
     Restart = fun () -> async { calls.Add "restart"; return restart }
     AwaitSettled = fun () -> async { calls.Add "settle"; return settle } }
 
@@ -208,7 +227,7 @@ let gateTests =
 
     testAsync "a worktree that is not at the rebased commit is refused before anything is built or recorded" {
       let calls = List<string>()
-      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "bbbb") (Ok ()) (Ok ())) "aaaa"
+      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "bbbb") (Ok ()) (Ok ())) false "aaaa"
       match result with
       | Error(CohortOwner.VerificationFault.Environment reason) ->
         reason |> Expect.stringContains "names the rebased commit" "aaaa"
@@ -219,7 +238,7 @@ let gateTests =
 
     testAsync "a worktree whose head cannot be read is refused: fail closed" {
       let calls = List<string>()
-      let! result = CohortRebuildGate.restartAt (gatePorts calls (Error "not a git repository") (Ok ()) (Ok ())) "aaaa"
+      let! result = CohortRebuildGate.restartAt (gatePorts calls (Error "not a git repository") (Ok ()) (Ok ())) false "aaaa"
       match result with
       | Error(CohortOwner.VerificationFault.Environment reason) -> reason |> Expect.stringContains "says why" "not a git repository"
       | other -> failtestf "expected Environment, got %A" other
@@ -228,7 +247,7 @@ let gateTests =
 
     testAsync "the attempt is recorded BEFORE the build, so a build that fails still counts against the session" {
       let calls = List<string>()
-      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Error compilerError) (Ok ())) "aaaa"
+      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Error compilerError) (Ok ())) false "aaaa"
       match result with
       | Error(CohortOwner.VerificationFault.CompileErrorInLanding _) -> ()
       | other -> failtestf "expected CompileErrorInLanding, got %A" other
@@ -237,7 +256,7 @@ let gateTests =
 
     testAsync "an offline restore is recorded as attempted and is the environment" {
       let calls = List<string>()
-      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Error offlineRestore) (Ok ())) "aaaa"
+      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Error offlineRestore) (Ok ())) false "aaaa"
       match result with
       | Error(CohortOwner.VerificationFault.Environment _) -> ()
       | other -> failtestf "expected Environment, got %A" other
@@ -246,18 +265,51 @@ let gateTests =
 
     testAsync "a success reads the head, notes, restarts and waits for the session, in that order" {
       let calls = List<string>()
-      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Ok ()) (Ok ())) "aaaa"
+      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Ok ()) (Ok ())) false "aaaa"
       result |> Expect.equal "built" (Ok ())
       Seq.toList calls |> Expect.equal "the order" [ "head"; "note aaaa"; "restart"; "settle" ]
     }
 
     testAsync "a session that does not settle is the environment, and the attempt stays recorded" {
       let calls = List<string>()
-      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Ok ()) (Error "still warming up")) "aaaa"
+      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Ok ()) (Error "still warming up")) false "aaaa"
       match result with
       | Error(CohortOwner.VerificationFault.Environment reason) -> reason |> Expect.stringContains "says why" "warming up"
       | other -> failtestf "expected Environment, got %A" other
       Seq.toList calls |> Expect.contains "noted" "note aaaa"
+    }
+
+    testAsync "a landing that carries a build input restores after the attempt is noted and before the session is rebuilt" {
+      let calls = List<string>()
+      let! result = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Ok ()) (Ok ())) true "aaaa"
+      result |> Expect.equal "built" (Ok ())
+      Seq.toList calls |> Expect.equal "the order" [ "head"; "note aaaa"; "restore"; "restart"; "settle" ]
+    }
+
+    testAsync "a restore that cannot reach its feed is the environment, and nothing is rebuilt" {
+      let calls = List<string>()
+      let ports = { gatePorts calls (Ok "aaaa") (Ok ()) (Ok ()) with Restore = fun () -> async { calls.Add "restore"; return Error offlineRestore } }
+      let! result = CohortRebuildGate.restartAt ports true "aaaa"
+      match result with
+      | Error(CohortOwner.VerificationFault.Environment reason) ->
+        reason |> Expect.stringContains "quotes the restore error" "NU1301"
+      | other -> failtestf "expected Environment, got %A" other
+      Seq.toList calls |> Expect.equal "the restore failed, so no restart" [ "head"; "note aaaa"; "restore" ]
+    }
+
+    testAsync "a compiler error found while restoring and building is the member's" {
+      let calls = List<string>()
+      let ports = { gatePorts calls (Ok "aaaa") (Ok ()) (Ok ()) with Restore = fun () -> async { return Error compilerError } }
+      let! result = CohortRebuildGate.restartAt ports true "aaaa"
+      match result with
+      | Error(CohortOwner.VerificationFault.CompileErrorInLanding _) -> ()
+      | other -> failtestf "expected CompileErrorInLanding, got %A" other
+    }
+
+    testAsync "a landing that carries no build input does not restore" {
+      let calls = List<string>()
+      let! _ = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") (Ok ()) (Ok ())) false "aaaa"
+      Seq.toList calls |> List.contains "restore" |> Expect.isFalse "no restore was run"
     }
 
     testAsync "whatever the build and the settle answer, a rebuild notes exactly one attempt and notes it before it restarts" {
@@ -266,12 +318,12 @@ let gateTests =
           let calls = List<string>()
           let restart = match restartFails with | true -> Error offlineRestore | false -> Ok ()
           let settle = match settleFails with | true -> Error "x" | false -> Ok ()
-          let! _ = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") restart settle) "aaaa"
+          let! _ = CohortRebuildGate.restartAt (gatePorts calls (Ok "aaaa") restart settle) false "aaaa"
           let log = Seq.toList calls
           let notes = log |> List.filter (fun c -> c.StartsWith "note")
           let noteAt = log |> List.findIndex (fun c -> c.StartsWith "note")
           let restartAt = log |> List.findIndex (fun c -> c = "restart")
           notes |> List.length |> Expect.equal (sprintf "one note (restartFails=%b settleFails=%b)" restartFails settleFails) 1
-          noteAt |> Expect.isLessThan "the note comes before the restart" restartAt
+          (noteAt, restartAt) |> Expect.isLessThan "the note comes before the restart"
     }
   ]

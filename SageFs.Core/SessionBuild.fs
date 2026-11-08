@@ -455,7 +455,10 @@ module SessionBuild =
         return Error (SageFsError.Unexpected ex)
     }
 
-  let runBuildAsync (projects: string list) (workingDir: string) : Async<Result<string, SageFsError>> =
+  /// `restoreFirst` makes the first attempt a build WITH a restore. The fast path (`--no-restore`) cannot see a change to a
+  /// package list, a props file or a feed (a build that does not use the new package succeeds), which a landing that carries
+  /// a build input must not read as a green build.
+  let private runBuildWith (restoreFirst: bool) (projects: string list) (workingDir: string) : Async<Result<string, SageFsError>> =
     async {
       let primaryProject = projects |> List.tryHead
       match primaryProject with
@@ -540,10 +543,10 @@ module SessionBuild =
           // NuGet restore is needed (fresh .fsproj → NETSDK1004, or a changed
           // package list), self-heal by retrying WITH a restore rather than
           // reporting a restore gap as a compile failure.
-          let! first = runOnce (withInjection (buildArguments false buildProject))
+          let! first = runOnce (withInjection (buildArguments restoreFirst buildProject))
           match first with
           | Ok msg -> return Ok msg
-          | Error (BuildFailure.ExitedWith (_, stdout, stderr)) when buildOutputNeedsRestore (stdout @ stderr) ->
+          | Error (BuildFailure.ExitedWith (_, stdout, stderr)) when not restoreFirst && buildOutputNeedsRestore (stdout @ stderr) ->
             let! second = runOnce (withInjection (buildArguments true buildProject))
             match second with
             | Ok msg -> return Ok msg
@@ -553,3 +556,10 @@ module SessionBuild =
           cleanupInjection ()
           buildSemaphore.Release() |> ignore
     }
+
+  let runBuildAsync (projects: string list) (workingDir: string) : Async<Result<string, SageFsError>> =
+    runBuildWith false projects workingDir
+
+  /// A build that restores first: for a rebuild whose inputs include a project file, props, a lock file or a feed.
+  let runBuildRestoringAsync (projects: string list) (workingDir: string) : Async<Result<string, SageFsError>> =
+    runBuildWith true projects workingDir

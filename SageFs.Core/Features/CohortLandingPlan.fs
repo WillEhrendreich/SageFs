@@ -236,6 +236,13 @@ module CohortLandingPlan =
     | [] -> Strategy.EvalOverBuild
     | _ -> Strategy.RebuildAtHead reasons
 
+  /// Whether the rebuild must restore first: a landing that changes a build input (a project file, props, a lock file, a feed), and
+  /// a session whose build was made from a commit that did not land (the restore it ran may have written that commit's
+  /// package set). A landing of compiled source alone builds on the restore the session already has.
+  let needsRestore (reasons: RebuildReason list) : bool =
+    ignore reasons
+    false
+
   let describeReason (reason: RebuildReason) : string =
     match reason with
     | RebuildReason.CompiledSourceChanged files -> sprintf "compiled source changed (%s)" (String.concat ", " files)

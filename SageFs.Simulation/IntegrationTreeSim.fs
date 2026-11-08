@@ -109,6 +109,7 @@ module IntegrationTreeSim =
       let holds = ref world.SessionHolds
       let ports : CohortRebuildGate.Ports =
         { WorktreeHead = fun () -> async { return Ok rebased.Name }
+          Restore = fun () -> async { return Ok() }
           NoteAttempt =
             fun _ ->
               match behaviour with
@@ -123,7 +124,7 @@ module IntegrationTreeSim =
                 | false -> return Ok()
               }
           AwaitSettled = fun () -> async { return Ok() } }
-      let result = CohortRebuildGate.restartAt ports rebased.Name |> Async.RunSynchronously
+      let result = CohortRebuildGate.restartAt ports false rebased.Name |> Async.RunSynchronously
       let succeeded = Result.isOk result
       // The behaviour that noted only successes records the commit once the build has succeeded.
       let rebuiltFor =

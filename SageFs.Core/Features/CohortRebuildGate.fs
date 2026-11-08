@@ -10,6 +10,9 @@ module CohortRebuildGate =
     /// Record that a build of this commit was ATTEMPTED. Read at the next landing: a commit that did not land makes the session's
     /// build off the head, so the next landing rebuilds.
     NoteAttempt: string -> unit
+    /// Restore and build the worktree, so a changed package list, props file or feed takes effect. Run only when the landing
+    /// carries a build input (`CohortLandingPlan.needsRestore`).
+    Restore: unit -> Async<Result<unit, SageFs.SageFsError>>
     /// Rebuild and restart the session on the result.
     Restart: unit -> Async<Result<unit, SageFs.SageFsError>>
     /// Wait for the restarted session to settle.
@@ -25,7 +28,7 @@ module CohortRebuildGate =
   /// trusts: the worktree must be AT `headSha` (the rebase put it there, and nothing else may have moved it since), or nothing
   /// is built. The attempt is recorded before the build starts: a build that fails still writes the refused commit's output, so
   /// the session's build is off the head from that moment, and the next landing rebuilds.
-  let restartAt (ports: Ports) (headSha: string) : Async<Result<unit, CohortOwner.VerificationFault>> =
+  let restartAt (ports: Ports) (restore: bool) (headSha: string) : Async<Result<unit, CohortOwner.VerificationFault>> =
     async {
       match! ports.WorktreeHead() with
       | Error reason ->
@@ -40,6 +43,7 @@ module CohortRebuildGate =
               sprintf "the integration worktree is at %s, not at the rebased commit %s: something moved it since the rebase. Request the landing again." at headSha))
       | Ok _ ->
         ports.NoteAttempt headSha
+        ignore restore
         match! ports.Restart() with
         | Error error -> return Error(CohortLandingPlan.classifyBuildFailure error)
         | Ok () ->

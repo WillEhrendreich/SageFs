@@ -3061,11 +3061,19 @@ let run
   /// build path does the build (one build at a time through its build slot, and a failed build leaves the session serving
   /// the build it had). A failed build refuses the landing with the FIRST compiler error and its file. The session's tests
   /// are then asked of the new worker, so a test the landing added or removed is the session's view and not the old one.
-  let rebuildIntegrationAtRebasedHead (sessionId: string) (worktree: string) (headSha: string) : Async<Result<unit, Features.CohortOwner.VerificationFault>> =
+  let rebuildIntegrationAtRebasedHead (sessionId: string) (worktree: string) (headSha: string) (restore: bool) : Async<Result<unit, Features.CohortOwner.VerificationFault>> =
     async {
       let ports : Features.CohortRebuildGate.Ports =
         { WorktreeHead = fun () -> Features.CohortGit.currentHead worktree
           NoteAttempt = SageFs.McpCohortIntegration.noteSessionRebuiltFor
+          Restore =
+            fun () ->
+              async {
+                let! loaded = integrationLoadedProjects sessionId worktree
+                match! SessionBuild.runBuildRestoringAsync loaded worktree with
+                | Ok _ -> return Ok ()
+                | Error err -> return Error err
+              }
           Restart =
             fun () ->
               async {
@@ -3082,7 +3090,7 @@ let run
                 | Ok _ -> return Ok ()
                 | Error reason -> return Error reason
               } }
-      match! Features.CohortRebuildGate.restartAt ports headSha with
+      match! Features.CohortRebuildGate.restartAt ports restore headSha with
       | Error fault ->
         Log.warn "[cohort-landing] the rebuild of session %s at %s did not succeed: %A" sessionId headSha fault
         return Error fault
@@ -3124,7 +3132,7 @@ let run
       let knownBefore = knownIds ()
       let affectedBefore = affectedTestsFor sessionId changedFiles knownBefore |> Set.ofList
       let known = Set.ofList knownBefore
-      match! rebuildIntegrationAtRebasedHead sessionId worktree headSha with
+      match! rebuildIntegrationAtRebasedHead sessionId worktree headSha (Features.CohortLandingPlan.needsRestore reasons) with
       | Error reason -> return Error reason
       | Ok () ->
         let allNow = knownIds ()

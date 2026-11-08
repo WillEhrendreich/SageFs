@@ -343,6 +343,17 @@ let private mixedClassified (path: string) = classify mixedIndex loaded path Cla
 let failClosedTests =
   testList "CohortLandingPlan (P16, roast performance): the classifier fails closed to a rebuild" [
 
+    test "a build input, or a session off the head, restores first; compiled source alone does not" {
+      needsRestore [ RebuildReason.BuildInputChanged [ "Lab.Core/Lab.Core.fsproj" ] ] |> Expect.isTrue "a project file restores"
+      needsRestore [ RebuildReason.SessionBuildIsOffHead "abc" ] |> Expect.isTrue "a build made from a refused commit restores"
+      needsRestore [ RebuildReason.CompiledSourceChanged [ "Lab.Core/Greeting.fs" ] ] |> Expect.isFalse "source alone does not"
+      needsRestore [] |> Expect.isFalse "nothing to rebuild, nothing to restore"
+    }
+
+    testProperty "any build input among the reasons restores, whatever else is there" <| fun (others: bool) ->
+      let rest = match others with | true -> [ RebuildReason.CompiledSourceChanged [ "a.fs" ] ] | false -> []
+      needsRestore (rest @ [ RebuildReason.BuildInputChanged [ "Directory.Packages.props" ] ])
+
     test "the project index reads every project language the session can load" {
       for pattern in [ "*.fsproj"; "*.csproj"; "*.vbproj" ] do
         projectFilePatterns |> Expect.contains (sprintf "%s is indexed" pattern) pattern
