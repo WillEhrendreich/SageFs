@@ -3277,7 +3277,6 @@ let rec renderCohortPanelCore
                   [ textEnc (sprintf "Seat %s" name) ]
               | SageFs.Cohort.SeatState.Departed _, _ -> ()
           ]
-        | SageFs.Cohort.ConductorBinding.Bound _
         | SageFs.Cohort.ConductorBinding.Bound holder ->
           // A holder whose connection is gone keeps the seat until its lease lapses. Say so, and name the command a
           // person runs to replace it.

@@ -200,6 +200,11 @@ let items : Item list =
       [ "docs/mcp-tools.md"; "docs/decisions.md" ]
       "The person who had to leave their conversation to type `sagefs cohort seat` can now be asked in it. `seat_conductor` is a tool a seated Implementer calls; the daemon asks the person at the client through MCP elicitation, naming the repository, who would sit, who held the seat and why it is empty, and seats nobody without a ticked box. A decline, a dismissal, silence, a failed question, an accept with nothing ticked and a client that offers no elicitation all refuse and change nothing, and the refusal names the command and the dashboard's new Seat button, which asks first and needs the one-use ticket its page was rendered with. The command is built from a `SeatApproval` that only the accepted question can make, so no MCP tool seats anyone without it, and a member under a token neither asks nor is seated. The daemon knows the client accepted and cannot know a person did, and the page's ticket does not authenticate a person: a process that can load the page can read it."
 
+    item "seat-replace-by-asking" "A seated member can ask to replace a silent conductor, and a person answers" Agents Next
+      NoLandmarkYet
+      [ "docs/plans/seat-replace-by-asking.md"; "docs/mcp-tools.md" ]
+      "`seat_conductor` fills an empty seat. A conductor whose connection is gone still holds a bound seat until its lease lapses, and replacing it needs `sagefs cohort seat --replace` from a shell. I plan to give the tool a `replaces` parameter that names the holder, put the same question to the person with the holder and how long it has been silent, and build `ReplaceConductor` from a `SeatApproval` that carries the holder, so it takes the person's ticked yes and no agent can replace a conductor on its own say-so. The dashboard's panel, which already names the command for a silent holder, gets a Replace button with its own one-use ticket. The cohort's compare-and-swap on the holder stays."
+
     item "cohort-replace-a-conductor" "A person can replace a conductor whose connection is gone" Agents Now
       (landmark "SageFs/CohortSeatCommand.fs" "commandForReplace")
       [ "docs/mcp-tools.md"; "docs/agents.md" ]
