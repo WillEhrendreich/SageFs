@@ -351,12 +351,9 @@ let evalFn (token: CancellationToken) =
           match String.IsNullOrWhiteSpace stdout with
           | true -> fsiOutput
           | false -> sprintf "%s\n%s" fsiOutput stdout
-        // Bound the printed result — see Features/EvalResultSummary.fs.
-        let bounded =
-          Features.EvalResultSummary.bound
-            Features.EvalResultSummary.maxResultChars
-            (Features.EvalResultSummary.withBetweenCalls betweenCalls combined)
-        Ok bounded.Text, Features.EvalResultSummary.metadata bounded
+        // The eval's own output is bounded first, the between-calls block follows it counted apart, and a clipped text is held in the session — see Features/EvalResultSummary.fs.
+        let reply = Features.EvalResultSummary.compose Features.EvalResultSummary.maxResultChars (OutputHold.bind st.Session st.OutStream token) combined betweenCalls
+        Ok reply.Text, Features.EvalResultSummary.metadata reply.Own
       | FsiSession.FsiFailed ex -> Error <| ex, Map.empty
       | FsiSession.FsiInterrupted -> Error <| (OperationCanceledException("the evaluation was interrupted") :> exn), Map.empty
 

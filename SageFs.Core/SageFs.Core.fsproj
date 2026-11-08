@@ -650,6 +650,7 @@
              the budget goes DOWN instead of up. -->
         <Compile Include="AssemblyLoadVerification.fs" />
         <Compile Include="TextWriterRecorder.fs" />
+        <Compile Include="OutputHold.fs" />
         <Compile Include="AppState.fs" />
         <!-- After AppState (it asks the eval actor): the worker's test-run gate and the level that waits for it. -->
         <Compile Include="LevelKeeper.fs" />

@@ -241,7 +241,7 @@ let fileSize : (string * int) list =
     // The rule is ReplLeveling.fs and EvalActorDecision.fs. A deliberate, reviewed feature, not silent accretion.
     // Ratchet back DOWN when this file is split; never bump to paper over drift.
     // 2017 -> 2024: the actor records how long its last rebuild-free hard reset took (lastResetCost), which a level is judged by.
-    "SageFs.Core/AppState.fs", 1979
+    "SageFs.Core/AppState.fs", 1976
     // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
     // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
     // reviewed feature, not silent accretion. Ratchet back DOWN when

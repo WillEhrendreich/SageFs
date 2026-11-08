@@ -40,9 +40,11 @@ let clipTests =
       let own = trickyText ownSeed.Get (maxResultChars + 1 + extra.Get % 3000)
       let between = "BG:" + trickyText betweenSeed.Get (1 + betweenSeed.Get % 900)
       let reply = compose maxResultChars (fun _ -> true) own between
-      let tailLength = maxResultChars - headChars maxResultChars
       let blockAtEnd = reply.Text.EndsWith(BetweenCallsLabel + "\n" + between.TrimEnd(), StringComparison.Ordinal)
-      let ownEndBeforeBlock = reply.Text.Contains(own.Substring(own.Length - tailLength + 1))
+      // The reply joins the block to the clipped text with its trailing white space trimmed, so the check reads the last
+      // characters of the own text that are not white space; the kept end is a third of the bound, far longer than that.
+      let ownEnd = own.TrimEnd()
+      let ownEndBeforeBlock = reply.Text.Contains(ownEnd.Substring(ownEnd.Length - 100))
       blockAtEnd && ownEndBeforeBlock
 
     testProperty "WHY - the lengths and the truncated flag describe the eval's own output alone, not the between-calls block" <| fun (ownSeed: PositiveInt) (extra: PositiveInt) ->

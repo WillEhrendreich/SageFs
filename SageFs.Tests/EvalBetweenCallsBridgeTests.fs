@@ -138,6 +138,16 @@ let private runBetweenCallsTest () : Task<unit> =
         let! timeline = tool TestTimeouts.patience "get_eval_timeline" "{}"
         (toolText timeline) |> Expect.stringContains "get_eval_timeline shows the bytes beside the duration" "MB allocated"
 
+        // A clipped reply's notice names an expression, and running it over the same bridge gives back the characters that were cut.
+        // The printed text is 6,000 x's, a newline and FSI's own `val it` line, so the cut lies inside the x's and is all x's.
+        let! clipped = eval "printfn \"%s\" (String.replicate 6000 \"x\");;"
+        let clippedReply = toolText clipped
+        let notice = Text.RegularExpressions.Regex.Match(clippedReply, @"lastEvalOutput\.Substring\((\d+), (\d+)\)")
+        notice.Success |> Expect.isTrue (sprintf "the notice of a clipped reply names the expression: %s" clippedReply)
+        let cutLength = int notice.Groups[2].Value
+        let! cutRead = eval (sprintf "%s;;" notice.Value)
+        (toolText cutRead) |> Expect.stringContains "the expression returns the characters that were cut" (String('x', cutLength))
+
         let! _ = tool TestTimeouts.patience "stop_session" (sprintf """{"session_id":"%s"}""" sessionId)
         ()
       finally

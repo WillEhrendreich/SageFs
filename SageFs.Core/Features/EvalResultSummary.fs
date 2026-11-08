@@ -60,11 +60,21 @@ type BoundedResult =
     /// How many of the kept characters are the start. The cut begins at this offset of the original.
     HeadLength: int }
 
+/// The name the session binds a clipped reply's whole text to.
+[<Literal>]
+let OutputBinding = "lastEvalOutput"
+
+/// The expression that gives back exactly the characters a clip cut: the cut starts at `headLength` and is `cut` long.
+let readingTheCut (headLength: int) (cut: int) : string = sprintf "%s.Substring(%d, %d)" OutputBinding headLength cut
+
 /// Bound `raw` to at most `maxChars` kept characters: its start, a notice that says exactly how many characters were
 /// cut from the middle, and its end. `maxChars <= 0` is treated as 0 (an all-notice response) rather than raising — a
 /// defensive floor, since this runs on the eval reply path and must never itself throw. A cut never splits a
 /// surrogate pair, so one character fewer than `maxChars` may be kept.
-let bound (maxChars: int) (raw: string) : BoundedResult =
+///
+/// `held` says the session now holds `raw` whole under `OutputBinding`: only then does the notice name that binding and an
+/// expression that reads the cut. Otherwise it promises nothing it cannot keep.
+let boundHolding (held: bool) (maxChars: int) (raw: string) : BoundedResult =
   let maxChars = max 0 maxChars
   match raw.Length <= maxChars with
   | true ->
@@ -81,15 +91,19 @@ let bound (maxChars: int) (raw: string) : BoundedResult =
       | true -> raw.Length - wantedTail + 1
       | false -> raw.Length - wantedTail
     let cut = tailStart - headLength
+    let counted = sprintf "cut %d characters from the middle: kept the first %d and the last %d of %d." cut headLength (raw.Length - tailStart) raw.Length
     let notice =
-      sprintf
-        "\n… [cut %d characters from the middle: kept the first %d and the last %d of %d. The whole value is still bound as `it` in this session — read the middle with `(sprintf \"%%A\" it).Substring(%d, 2000)` or a targeted projection (`it |> List.truncate 20`, `it.SomeField`).]\n"
-        cut headLength (raw.Length - tailStart) raw.Length headLength
+      match held with
+      | true -> sprintf "\n… [%s The whole text is bound as `%s` in this session: read the middle with `%s`.]\n" counted OutputBinding (readingTheCut headLength cut)
+      | false -> sprintf "\n… [%s If the last statement was an expression, its value is still bound as `it`: slice it (`it |> List.truncate 20`, `it.SomeField`).]\n" counted
     { Text = raw.Substring(0, headLength) + notice + raw.Substring tailStart
       WasTruncated = true
       OriginalLength = raw.Length
       KeptLength = headLength + (raw.Length - tailStart)
       HeadLength = headLength }
+
+/// `boundHolding` for a text the session does not hold.
+let bound (maxChars: int) (raw: string) : BoundedResult = boundHolding false maxChars raw
 
 /// The eval-reply metadata for a bounded result — empty unless truncated,
 /// else the three-field record `AppState.evalFn` attaches to `EvalResponse`.
@@ -98,15 +112,35 @@ let metadata (bounded: BoundedResult) : Map<string, objnull> =
   | true -> Map.ofList [ "resultTruncated", box true; "resultOriginalLength", box bounded.OriginalLength; "resultKeptLength", box bounded.KeptLength ]
   | false -> Map.empty
 
-/// The name the session binds a clipped reply's whole text to.
-[<Literal>]
-let OutputBinding = "lastEvalOutput"
+/// The most characters of a clipped reply's text the session is asked to hold under `OutputBinding`. A longer text is cut
+/// and counted as before, and the notice does not promise a binding it did not make.
+let maxHeldOutputChars = 1000000
 
-/// F# source that binds `raw`, whole, to `OutputBinding`. RED: not written yet.
-let bindingCode (raw: string) : string = "()"
+/// F# source that binds `raw`, whole, to `OutputBinding`: one string literal, with every character that could end it or
+/// change its meaning escaped, so what the session holds is `raw` exactly.
+let bindingCode (raw: string) : string =
+  let literal = System.Text.StringBuilder(raw.Length + 16)
+  let escaped (c: char) = literal.AppendFormat("\\u{0:X4}", int c) |> ignore
+  for i in 0 .. raw.Length - 1 do
+    match raw.[i] with
+    | '\\' -> literal.Append "\\\\" |> ignore
+    | '"' -> literal.Append "\\\"" |> ignore
+    | '\n' -> literal.Append "\\n" |> ignore
+    | '\r' -> literal.Append "\\r" |> ignore
+    | '\t' -> literal.Append "\\t" |> ignore
+    | c when System.Char.IsControl c -> escaped c
+    // A surrogate that has its other half beside it is written as it is; one that has not is written as its code unit.
+    | c when System.Char.IsHighSurrogate c && i + 1 < raw.Length && System.Char.IsLowSurrogate raw.[i + 1] -> literal.Append c |> ignore
+    | c when System.Char.IsLowSurrogate c && i > 0 && System.Char.IsHighSurrogate raw.[i - 1] -> literal.Append c |> ignore
+    | c when System.Char.IsSurrogate c -> escaped c
+    | c -> literal.Append c |> ignore
+  sprintf "let %s = \"%s\"" OutputBinding (literal.ToString())
 
-/// The expression that gives back exactly the characters a clipped reply cut. RED: not written yet.
-let suggestedExpression (bounded: BoundedResult) : string option = None
+/// The expression that gives back exactly the characters a clipped reply cut, when there was a cut.
+let suggestedExpression (bounded: BoundedResult) : string option =
+  match bounded.WasTruncated with
+  | true -> Some(readingTheCut bounded.HeadLength (bounded.OriginalLength - bounded.KeptLength))
+  | false -> None
 
 /// A reply's text, and the bound of the eval's own output inside it.
 type ReplyText =
@@ -114,10 +148,18 @@ type ReplyText =
     /// The bound of the eval's own output, which is what `resultTruncated` and the lengths describe.
     Own: BoundedResult }
 
-/// The reply for an eval: its own output bounded, then the output written between calls under its label. RED: it still bounds the two together.
+/// The reply for an eval: its own output bounded first, then the output written between calls under its label. The block is
+/// counted apart, so the kept end of a clipped reply is the eval's own end. When the eval's output had to be clipped,
+/// `bind` is asked to hold the whole text in the session (true when it did), and the notice names the binding only then.
 let compose (maxChars: int) (bind: string -> bool) (own: string) (between: string) : ReplyText =
-  let bounded = bound maxChars (withBetweenCalls between own)
-  { Text = bounded.Text; Own = bounded }
+  let plain = bound maxChars own
+  let bounded =
+    match plain.WasTruncated with
+    | false -> plain
+    | true ->
+      let held = own.Length <= maxHeldOutputChars && bind own
+      boundHolding held maxChars own
+  { Text = withBetweenCalls between bounded.Text; Own = bounded }
 
 /// What F# Interactive prints for a binding: `val it: unit = ()`, `val x: int = 3`. A program's own output and FSI's report share
 /// one stream, and `printf "5"` writes no line break, so the stream held `5val it: unit = ()` (issue #132). The report starts
