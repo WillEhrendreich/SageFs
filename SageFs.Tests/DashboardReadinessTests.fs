@@ -60,9 +60,9 @@ let private queriesFor (session: WorkerProtocol.SessionInfo) (workerEvals: int) 
 
 let private pageFor (session: WorkerProtocol.SessionInfo) (workerEvals: int) (finishedEvals: int) : Task<string> =
   task {
-    let! snap, _, _, _ =
-      buildDashboardSnapshotWithSessions (queriesFor session workerEvals finishedEvals) (mkInfra ()) session.Id session.Id "" "default" None [ session ] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
-    return renderMainContent snap |> renderNode
+    let! built =
+      buildDashboardSnapshotWithSessions (SageFs.Tests.DashboardSnapshotTests.snapshotInput (queriesFor session workerEvals finishedEvals) (mkInfra ()) session.Id session.Id None [ session ] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn)
+    return renderMainContent built.Snapshot |> renderNode
   }
 
 let private between (html: string) (start: string) (finish: string) : string =

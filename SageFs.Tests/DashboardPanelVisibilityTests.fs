@@ -397,7 +397,7 @@ let dashboardPanelVisibilityTests =
                 GetFrictionStore = fun () ->
                   storeReads.Value <- storeReads.Value + 1
                   Threading.Tasks.Task.FromResult None }
-          let! _ = Dashboard.buildDashboardSnapshotWithSessions queries (DashboardRenderGateTests.mkInfra ()) session.Id session.Id "" "default" None [ session ] optIn
+          let! _ = Dashboard.buildDashboardSnapshotWithSessions (DashboardSnapshotTests.snapshotInput queries (DashboardRenderGateTests.mkInfra ()) session.Id session.Id None [ session ] optIn)
           return storeReads.Value
         }
 
