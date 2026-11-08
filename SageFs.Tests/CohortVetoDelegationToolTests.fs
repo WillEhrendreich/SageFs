@@ -157,21 +157,25 @@ let toolBodyTests =
 
     testTask "only the conductor clears a veto, and then the landing is queued again" {
       let! ctx, lid = scene ()
-      let! _ = McpCohortTools.vetoLanding ctx "vera" lid "hold" wd
+      // A reason no other status line can contain: "hold" is in the lease line of every status ("a member that holds an open push stream").
+      let vetoReason = "veto-reason-7f3a91"
+      let! _ = McpCohortTools.vetoLanding ctx "vera" lid vetoReason wd
       let! notConductor = McpCohortTools.resolveVeto ctx "bob" (LandingId lid) wd
       refused "a member clearing a veto" notConductor |> Expect.stringContains "says conductor-only" "conductor"
       let! cleared = McpCohortTools.resolveVeto ctx "alice" (LandingId lid) wd
       ok "resolve_veto" cleared |> Expect.stringContains "confirms" lid
       let! (text: string) = status ctx
-      text.Contains("hold") |> Expect.isFalse "the veto is gone from the status"
+      text.Contains vetoReason |> Expect.isFalse "the veto is gone from the status"
     }
 
     testTask "delegate_conductor moves the seat, and get_cohort_status says who holds it now" {
       let! ctx, _ = scene ()
       let! moved = McpCohortTools.delegateConductor ctx "alice" "bob" wd
       ok "delegate_conductor" moved |> Expect.stringContains "names the new conductor" "bob"
-      let! text = status ctx
-      text |> Expect.stringContains "the seat is bob's" "Conductor: bob"
+      let! (text: string) = status ctx
+      // The line names the holder; a holder whose lease is silent is shown as "held by bob, silent for ...", so the line is read for the name.
+      let conductorLine = text.Split '\n' |> Array.find (fun line -> line.StartsWith "Conductor: ")
+      conductorLine |> Expect.stringContains "the seat is bob's" "bob"
       let! again = McpCohortTools.delegateConductor ctx "alice" "vera" wd
       refused "the old conductor delegating again" again |> Expect.stringContains "says conductor-only" "conductor"
     }
