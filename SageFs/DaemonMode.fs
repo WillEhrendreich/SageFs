@@ -5068,6 +5068,7 @@ let run
     // Wait-free (D4): dereferences CohortOwner's published frame pointer
     // directly — no mailbox round-trip, no IO.
     ReadCohortFrame = cohortOwner.ReadFrame
+    ReadHolderSilence = fun () -> SageFs.Features.CohortStatusText.HolderSilence.ofState (cohortOwner.ReadCohortState()) DateTime.UtcNow
     // The ledger is per-scope, and the dashboard inspector reads the cohort this daemon owns. The
     // scope is the OWNER's own rather than pushed through `DashboardTypes`, because every dashboard
     // reader wants "the cohort I am showing" and none of them has a second scope to ask about.

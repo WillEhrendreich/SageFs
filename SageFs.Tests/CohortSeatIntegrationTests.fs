@@ -31,6 +31,15 @@ let private callTool (client: ModelContextProtocol.Client.McpClient) (name: stri
       |> Option.defaultValue ""
   }
 
+/// A connection that presents `key` the way the stdio bridge does, so the same key is the same member across
+/// connections: a client that comes back is the member it was.
+let private connectKeyed (port: int) (key: string) : Task<ModelContextProtocol.Client.McpClient> =
+  let opts = ModelContextProtocol.Client.HttpClientTransportOptions(Endpoint = Uri(sprintf "http://localhost:%d/" port))
+  opts.AdditionalHeaders <-
+    System.Collections.Generic.Dictionary<string, string>(dict [ MemberTable.ClientKey.headerName, key ])
+  let transport = ModelContextProtocol.Client.HttpClientTransport(opts, (null: Microsoft.Extensions.Logging.ILoggerFactory))
+  ModelContextProtocol.Client.McpClient.CreateAsync(transport, null, null, Threading.CancellationToken.None)
+
 let private expectReply (what: string) (result: Result<CohortSeatRoute.SeatReply, MemberMintCommand.MintFailure>) : CohortSeatRoute.SeatReply =
   match result with
   | Ok reply -> reply
@@ -90,6 +99,81 @@ let cohortSeatIntegrationTests =
         let after = expectReply "look after the restart" afterRestart
         after.Seat |> Expect.equal "the seat is still bound after a restart" "bound"
         after.Holder |> Expect.equal "to the same member" secondId
+      finally
+        match running with
+        | Some p -> SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon p
+        | None -> ()
+    }
+
+    testTask "a conductor whose connection is gone is replaced by a person without waiting for its lease, and the replaced member is an ordinary member" {
+      let dataDir = Path.Combine(Path.GetTempPath(), "sagefs-test-cohort-replace", Guid.NewGuid().ToString "N")
+      Directory.CreateDirectory dataDir |> ignore
+      let! proc, port = daemonIn dataDir
+      let mutable running = Some proc
+      try
+        // A is a client with a key of its own, so it can come back as the same member. B is a second member.
+        let keyA = MemberTable.ClientKey.generate ()
+        let! firstConnection = connectKeyed port keyA
+        use! second = SageFs.Tests.CohortMcpToolsIntegrationTests.connect port
+        let! _ = callTool firstConnection "join_cohort" [ "agentName", box "first"; "role", box "Implementer" ]
+        let! _ = callTool second "join_cohort" [ "agentName", box "second"; "role", box "Implementer" ]
+
+        // A's connection is gone. Its lease has not lapsed, so the seat is still bound to it.
+        do! firstConnection.DisposeAsync().AsTask()
+        let! looked = CohortSeatCommand.call port dataDir (CohortSeatCommand.Ask.Look repoRoot)
+        let look = expectReply "look at the seat" looked
+        look.Seat |> Expect.equal "the seat is still bound to the member whose connection is gone" "bound"
+        look.Present |> List.length |> Expect.equal "both members are present" 2
+        let holderId = look.Holder
+        let secondId = (look.Present |> List.find (fun m -> m.Id <> holderId)).Id
+
+        // A plain seating is refused, and the refusal prints the exact command to run.
+        let! plain = CohortSeatCommand.call port dataDir (CohortSeatCommand.Ask.Seat(repoRoot, secondId))
+        match plain with
+        | Error(MemberMintCommand.MintFailure.Refused(_, message, suggestion)) ->
+          message |> Expect.stringContains "the refusal names the holder" holderId
+          suggestion |> Expect.stringContains "and prints the command to replace it" (sprintf "%s --replace %s" secondId holderId)
+        | other -> failwithf "expected a refusal for a held seat, got %A" other
+
+        // The person replaces the holder, naming it.
+        let! stale = CohortSeatCommand.call port dataDir (CohortSeatCommand.Ask.Replace(repoRoot, secondId, secondId))
+        match stale with
+        | Error(MemberMintCommand.MintFailure.Refused(_, message, _)) ->
+          message |> Expect.stringContains "a holder that is not the holder is refused, and the refusal says who holds the seat" holderId
+        | other -> failwithf "expected a refusal for a stale holder, got %A" other
+        let! replacedResult = CohortSeatCommand.call port dataDir (CohortSeatCommand.Ask.Replace(repoRoot, secondId, holderId))
+        let replaced = expectReply "replace the holder" replacedResult
+        replaced.Seat |> Expect.equal "the seat is bound" "bound"
+        replaced.Holder |> Expect.equal "to the member the person put in it" secondId
+        replaced.Replaced |> Expect.equal "the reply says who was replaced" holderId
+
+        // The same command again names a holder that no longer holds the seat: refused, nothing moves.
+        let! again = CohortSeatCommand.call port dataDir (CohortSeatCommand.Ask.Replace(repoRoot, secondId, holderId))
+        match again with
+        | Error(MemberMintCommand.MintFailure.Refused(_, message, _)) -> message |> Expect.stringContains "the replaced member is not the holder any more" secondId
+        | other -> failwithf "expected a refusal for a stale holder, got %A" other
+
+        // B holds conductor authority: a conductor-only call reaches the rule that refuses it as a hand-off to itself.
+        let! asConductor = callTool second "delegate_conductor" [ "agentName", box "second"; "toMember", box secondId ]
+        asConductor |> Expect.stringContains "B is the conductor, so the refusal is the one only a conductor reaches" "already holds the conductor seat"
+
+        // A comes back as the same member (same key) and is an ordinary member: it is told who the conductor is and
+        // its conductor-only calls are refused.
+        use! returned = connectKeyed port keyA
+        let! status = callTool returned "get_cohort_status" [ "working_directory", box repoRoot ]
+        status |> Expect.stringContains "A reads that B is the conductor" (sprintf "Conductor: %s" secondId)
+        let! (asMember: string) = callTool returned "delegate_conductor" [ "agentName", box "first"; "toMember", box holderId ]
+        asMember.Contains("is the conductor now") |> Expect.isFalse "A holds no conductor authority any more"
+        asMember.Contains("already holds the conductor seat") |> Expect.isFalse "A is refused before the hand-off rule, as an ordinary member is"
+
+        // The restart: the ledger replays the replacement.
+        SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
+        running <- None
+        let! restarted, port2 = daemonIn dataDir
+        running <- Some restarted
+        let! afterRestart = CohortSeatCommand.call port2 dataDir (CohortSeatCommand.Ask.Look repoRoot)
+        let after = expectReply "look after the restart" afterRestart
+        after.Holder |> Expect.equal "the replacement is still the conductor after a restart" secondId
       finally
         match running with
         | Some p -> SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon p

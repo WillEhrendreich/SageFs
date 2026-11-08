@@ -1341,7 +1341,7 @@ let buildDashboardSnapshotWithSessions (input: SnapshotInput) : System.Threading
     // renderCohortPanel itself — see renderCohortLanesPanel's doc comment.
     let cohortPanel =
       Elem.div [] [
-        renderCohortPanel (infra.ReadCohortFrame ())
+        renderCohortPanelFor (infra.ReadHolderSilence ()) DateTime.UtcNow (infra.ReadCohortFrame ())
         renderCohortLanesPanel (infra.ReadCohortLedger ())
         renderTrunkPanel (infra.ReadTrunk ())
       ]

@@ -66,9 +66,9 @@ let seatCommandTests =
 
     test "the request body names the member, and the checkout is optional" {
       CohortSeatRoute.parseRequest """{"working_directory": "/repo", "member": " mcp:m-00000000000000aa "}"""
-      |> Expect.equal "read" (Ok({ WorkingDirectory = "/repo"; Member = "mcp:m-00000000000000aa" }: CohortSeatRoute.SeatRequest))
+      |> Expect.equal "read" (Ok({ WorkingDirectory = "/repo"; Member = "mcp:m-00000000000000aa"; Replace = "" }: CohortSeatRoute.SeatRequest))
       CohortSeatRoute.parseRequest """{"member": "x"}"""
-      |> Expect.equal "no directory is the daemon's own cohort" (Ok({ WorkingDirectory = ""; Member = "x" }: CohortSeatRoute.SeatRequest))
+      |> Expect.equal "no directory is the daemon's own cohort" (Ok({ WorkingDirectory = ""; Member = "x"; Replace = "" }: CohortSeatRoute.SeatRequest))
       match CohortSeatRoute.parseRequest """{"working_directory": "/repo"}""" with
       | Error(SageFsError.JsonParseError _) -> ()
       | other -> failwithf "a body with no member is refused, got %A" other
@@ -144,10 +144,126 @@ let seatCommandTests =
       text |> Expect.stringContains "the command is in the status" Features.CohortStatusText.seatCommandText
     }
 
-    test "no tool path builds SeatConductor: the MCP tool files never name it" {
+    test "no tool path builds SeatConductor or ReplaceConductor: the MCP tool files never name them" {
       for file in [ "SageFs/McpCohortTools.fs"; "SageFs/McpTools.fs"; "SageFs/McpCohortIntegration.fs"; "SageFs/Mcp.fs" ] do
         let text = File.ReadAllText(RepoPaths.repoPathFull [| file |])
         text.Contains "SeatConductor"
         |> Expect.isFalse (sprintf "%s must not build SeatConductor: only the operator route does, so an agent cannot take the seat" file)
+        text.Contains "ReplaceConductor"
+        |> Expect.isFalse (sprintf "%s must not build ReplaceConductor: only the operator route does, so an agent cannot unseat a conductor" file)
+    }
+
+    // ── P15: a person replaces a conductor whose connection is gone ──────────────────────────────────────────────
+
+    test "--replace names the holder: seat <id> --replace <holder> is a replacement, and the flag needs a member and a value" {
+      CohortSeatCommand.parseArgs "/repo" [ "seat"; "mcp:m-00000000000000bb"; "--replace"; "mcp:m-00000000000000aa" ]
+      |> Expect.equal "a replacement in the current directory" (Ok(CohortSeatCommand.Ask.Replace("/repo", "mcp:m-00000000000000bb", "mcp:m-00000000000000aa")))
+      CohortSeatCommand.parseArgs "/repo" [ "seat"; "--replace"; "mcp:m-00000000000000aa"; "--dir"; "/other"; "mcp:m-00000000000000bb" ]
+      |> Expect.equal "the flag may come first, and --dir still wins" (Ok(CohortSeatCommand.Ask.Replace("/other", "mcp:m-00000000000000bb", "mcp:m-00000000000000aa")))
+      CohortSeatCommand.parseArgs "/repo" [ "seat"; "mcp:m-00000000000000bb"; "--replace" ]
+      |> Expect.equal "--replace needs the holder after it" (Error(CohortSeatCommand.UsageRefusal.FlagNeedsValue "--replace"))
+      CohortSeatCommand.parseArgs "/repo" [ "seat"; "--replace"; "mcp:m-00000000000000aa" ]
+      |> Expect.equal "naming the holder with nobody to put in the seat is a mistake" (Error CohortSeatCommand.UsageRefusal.ReplaceNeedsMember)
+    }
+
+    test "the request body carries the holder to replace, and no holder is a plain seating" {
+      CohortSeatRoute.parseRequest """{"working_directory": "/repo", "member": "b", "replace": " a "}"""
+      |> Expect.equal "read" (Ok({ WorkingDirectory = "/repo"; Member = "b"; Replace = "a" }: CohortSeatRoute.SeatRequest))
+    }
+
+    test "a replacement is built for a present member and the holder the person named, and never for a member under a token" {
+      let frame = vacantFrame ()
+      CohortSeatRoute.commandForReplace frame machine (MemberId.display grace) (MemberId.display ada)
+      |> Expect.equal "both printed ids find their members" (Ok(CohortCommand.ReplaceConductor(ada, grace, machine)))
+      CohortSeatRoute.commandForReplace frame machine (MemberId.display grace) "mcp:m-ffffffffffffffff"
+      |> Expect.equal "a holder the cohort does not know stays a name, and decide refuses it as stale"
+        (Ok(CohortCommand.ReplaceConductor(MemberId.Minted "mcp:m-ffffffffffffffff", grace, machine)))
+      let withToken =
+        { frame with
+            MemberIds = [| token; ada |]
+            MemberRole = [| JoinableRole.Implementer; JoinableRole.Implementer |]
+            MemberSeat = [| SeatState.Present; SeatState.Present |] }
+      match CohortSeatRoute.commandForReplace withToken machine (MemberId.display token) (MemberId.display ada) with
+      | Error(SageFsError.CohortActionFailed(reason, _)) -> reason |> Expect.stringContains "a token member cannot take the seat" "stranded"
+      | other -> failwithf "expected a refusal for a member under a token, got %A" other
+      CohortSeatRoute.commandForReplace withToken machine (MemberId.display ada) (MemberId.display token)
+      |> Expect.equal "a token member may be the one replaced: that is the point" (Ok(CohortCommand.ReplaceConductor(token, ada, machine)))
+    }
+
+    /// Ada holds the seat and grace is present: the state the person finds when ada's bridge is gone and her lease has not lapsed.
+    let adaHolds () =
+      [ join ada JoinableRole.Implementer; join grace JoinableRole.Implementer ] |> List.fold step (CohortState.empty ())
+
+    let request: CohortSeatRoute.SeatRequest = { WorkingDirectory = "/repo"; Member = MemberId.display grace; Replace = "" }
+
+    test "a seating over a held seat says who holds it, whether it is silent and since when, when its lease lapses, and the exact command" {
+      let state = adaHolds ()
+      let now = epoch.AddMinutes 12.0
+      match CohortSeatRoute.refusalFor state now request (CohortError.ConductorSeatTaken ada) with
+      | SageFsError.CohortActionFailed(reason, suggestion) ->
+        reason |> Expect.stringContains "names the holder" (MemberId.display ada)
+        reason |> Expect.stringContains "says it is silent, and for how long" "silent for 12 min"
+        reason |> Expect.stringContains "says when the lease lapses" ((epoch.Add leaseWindow).ToString "u")
+        suggestion
+        |> Expect.stringContains
+          "prints the command to run, with the member the person named, the holder and the directory"
+          (sprintf "sagefs cohort seat %s --replace %s --dir /repo" (MemberId.display grace) (MemberId.display ada))
+      | other -> failwithf "expected a cohort refusal, got %A" other
+    }
+
+    test "a held seat whose holder is not silent says so, so a person does not replace a live conductor by habit" {
+      let state = adaHolds ()
+      match CohortSeatRoute.refusalFor state (epoch.AddSeconds 30.0) request (CohortError.ConductorSeatTaken ada) with
+      | SageFsError.CohortActionFailed(reason, _) ->
+        reason |> Expect.stringContains "names the holder" (MemberId.display ada)
+        reason.Contains "silent for" |> Expect.isFalse "a holder renewed half a minute ago is not silent"
+      | other -> failwithf "expected a cohort refusal, got %A" other
+    }
+
+    test "every other refusal keeps its own mapping" {
+      let state = adaHolds ()
+      CohortSeatRoute.refusalFor state epoch request (CohortError.SeatTargetAbsent(grace, [ ada ]))
+      |> Expect.equal "the roster refusal is the mapping's" (CohortErrorMapping.toSageFsError (CohortError.SeatTargetAbsent(grace, [ ada ])))
+      match CohortSeatRoute.refusalFor state epoch request (CohortError.ConductorHolderChanged(grace, state.Conductor)) with
+      | SageFsError.CohortActionFailed(reason, suggestion) ->
+        reason |> Expect.stringContains "a stale holder says who holds the seat now" (MemberId.display ada)
+        suggestion |> Expect.stringContains "and the way on is to look again" "sagefs cohort seat"
+      | other -> failwithf "expected a cohort refusal, got %A" other
+    }
+
+    test "the view of a held seat carries the silence, and the listing prints the exact replace command for a silent holder" {
+      let state = adaHolds ()
+      let frame = project { Seq = 2L<ledgerSeq>; State = state } [||]
+      let now = epoch.AddMinutes 12.0
+      let silence = Features.CohortStatusText.HolderSilence.ofState state now
+      let reply = CohortSeatRoute.viewWithSilence silence now frame
+      reply.Silent |> Expect.stringContains "the reply says it" "silent for 12 min"
+      let text = CohortSeatCommand.render reply
+      text |> Expect.stringContains "the listing says the holder is silent" "silent for 12 min"
+      text |> Expect.stringContains "and prints the command with the holder filled in" (sprintf "--replace %s" (MemberId.display ada))
+      let live = CohortSeatCommand.render (CohortSeatRoute.viewWithSilence Features.CohortStatusText.HolderSilence.NotSilent now frame)
+      live.Contains "--replace" |> Expect.isFalse "a holder that is not silent is not offered for replacing"
+    }
+
+    test "a replacement's reply says who was seated and who was replaced, and the listing prints both" {
+      let state = adaHolds ()
+      let frame = project { Seq = 2L<ledgerSeq>; State = state } [||]
+      let ended = ConductorBinding.Vacant(ada, epoch, VacancyReason.Replaced)
+      let reply = CohortSeatRoute.seatedReply frame [ CohortEvent.ConductorReplaced(grace, ended) ]
+      reply.Seated |> Expect.equal "grace is seated" (MemberId.display grace)
+      reply.Replaced |> Expect.equal "ada was replaced" (MemberId.display ada)
+      let text = CohortSeatCommand.render reply
+      text |> Expect.stringContains "the listing says who is the conductor now" (sprintf "%s is the conductor now" (MemberId.display grace))
+      text |> Expect.stringContains "and who was replaced" (sprintf "%s was replaced" (MemberId.display ada))
+    }
+
+    test "the status text for a silent holder says how long, when the lease lapses, and the replace command" {
+      let state = adaHolds ()
+      let frame = project { Seq = 2L<ledgerSeq>; State = state } [||]
+      let silent = Features.CohortStatusText.HolderSilence.SilentSince(epoch, epoch.Add leaseWindow)
+      let text = Features.CohortStatusText.renderWithSilence silent frame
+      text |> Expect.stringContains "the conductor line names the holder and the silence" (sprintf "Conductor: held by %s, silent for" (MemberId.display ada))
+      text |> Expect.stringContains "and the command" (sprintf "a person can replace it: sagefs cohort seat <member id> --replace %s" (MemberId.display ada))
+      (Features.CohortStatusText.render frame).Contains "can replace it" |> Expect.isFalse "a holder nobody calls silent is shown as it always was"
     }
   ]

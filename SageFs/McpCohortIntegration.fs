@@ -335,5 +335,7 @@ module McpCohortIntegration =
             String.concat "\n" (header :: lines) + "\n"
           | Some _, None
           | None, _ -> ""
-        return Ok (Features.CohortStatusText.renderWith failingTestReportFor (owner.ReadFrame()) + integration + "\n" + trunk)
+        // The holder's standing is read off the cohort's own state (a frame carries no lease), at the clock of this read.
+        let silence = Features.CohortStatusText.HolderSilence.ofState (owner.ReadCohortState()) DateTime.UtcNow
+        return Ok (Features.CohortStatusText.renderWithSilenceAndReports silence failingTestReportFor (owner.ReadFrame()) + integration + "\n" + trunk)
     }

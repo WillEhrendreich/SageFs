@@ -670,7 +670,9 @@ explores every command against every landing and target, with a twin for each ru
 - **Who may withdraw.** Only the landing's requester.
 - **Who may clear a veto or delegate.** Only the sitting conductor. An empty seat is refused as `VACANT`, and
   nothing in the tool surface fills one: delegating needs a conductor to do it, and nobody gets promoted by a
-  timer. A person seats one with `sagefs cohort seat <member id>` (see "Seat a conductor" below).
+  timer. A person seats one with `sagefs cohort seat <member id>` (see "Seat a conductor" below). A seat that is held
+  by a conductor whose connection is gone is replaced by a person too, with `sagefs cohort seat <member id> --replace
+  <holder id>` (see "Replace a conductor whose connection is gone" below). No tool does either.
 - **One conductor at a time.** The seat is a single binding. A delegation moves it from the caller to a present
   member in one step and the caller is an ordinary member after. A target who isn't present gets refused with
   the list of members who are. A member acting under a token can't take the seat, because no token may call
@@ -776,6 +778,38 @@ It uses the operator credential, exactly as `member mint` does: `GET` and `POST 
 `Authorization: Bearer sfo_...`, refused with the table of statuses above for anything else. No MCP tool builds a
 `SeatConductor`, and no member token reaches the route, which is why an agent cannot take the seat. The `POST` body is
 `{"working_directory": "...", "member": "mcp:m-..."}`.
+
+**Replace a conductor whose connection is gone.** A conductor whose bridge changed or whose daemon restarted onto a
+different identity keeps the seat until its lease lapses, which is 30 minutes (`Timeouts.cohortLeaseWindow`), and a
+plain seating refuses a seat that is bound. The person at the machine does not have to wait:
+
+```sh
+sagefs cohort seat mcp:m-bbbbbbbbbbbbbbbb --replace mcp:m-aaaaaaaaaaaaaaaa
+sagefs cohort seat mcp:m-bbbbbbbbbbbbbbbb --replace mcp:m-aaaaaaaaaaaaaaaa --dir /abs/path/to/checkout
+```
+
+The first id is the present member who takes the seat, the id after `--replace` is the holder it replaces. Naming the
+holder is the safeguard: the command is refused when that member no longer holds the seat, so a person who looked at the
+seat cannot move one that changed under them (the refusal says who holds it now). The other rules are the seating's:
+the target must be present (an absent one is refused with the roster of those who are), a member acting under a minted
+token (`cap:<id>`) cannot take the seat, and a holder cannot replace itself. A replaced holder becomes an ordinary member:
+it stays present or departed as it was, the claims it holds stay its own and follow the normal orphan rules when it
+leaves, and its calls to conductor-only tools are refused as any member's are. The ledger records `ConductorReplaced`,
+which carries the former holder and the moment (as the seat it lost, with the reason `Replaced`), and replay reproduces
+the seat after a restart.
+
+Without `--replace`, `sagefs cohort seat <member id>` over a bound seat is still refused, and the refusal now says who holds
+the seat, whether that member is silent and for how long, when its lease lapses, and prints the exact command to run. A
+holder counts as silent when its lease was not renewed for two reaper passes (`Timeouts.cohortHolderSilentAfter`): the
+reaper renews a member that holds an open push stream or made a call lately on every pass, so a holder that was not
+renewed has neither. With no member id the listing carries the same line. `get_cohort_status` prints it on the
+`Conductor:` line (`held by X, silent for 42 min, lapses at 2026-11-07 19:30:00Z; a person can replace it: sagefs cohort
+seat <member id> --replace X`), and so does the dashboard's cohort panel. A holder that is not silent is shown as before,
+and the refusal says it renewed its lease lately, so a live conductor is not replaced by habit.
+
+It is the same route and the same operator credential: `POST /api/cohort/seat` takes an optional `"replace": "mcp:m-..."`
+in the body. No MCP tool builds a `ReplaceConductor` and no member token reaches the route, so an agent cannot unseat a
+conductor.
 
 **Route.** Every token names the one place it may act, and you say where with
 exactly one of two parameters:
