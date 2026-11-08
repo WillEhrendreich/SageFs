@@ -14,6 +14,12 @@ type ImportOutcome =
   | SavedMeansUnset of variable: string
   /// The layer file or the saved value could not be read, so the variable is left as it was. The daemon logs why.
   | NotUsable of variable: string * reason: string
+  /// The key belongs to a retired setting (`RetiredSettings`): the value stays in the file and nothing reads it. The note
+  /// says what decides that wait now.
+  | IgnoredRetired of key: string * note: string
+  /// The key is in a family only env-backed rows own, and no row or retired setting has it: it stays in the file and
+  /// nothing reads it.
+  | IgnoredUnknown of key: string
 
 /// What the saved settings come to: the snapshot to run on, and what became of each saved value.
 type SavedSettings =
@@ -63,7 +69,22 @@ module SettingsBootstrap =
                 | Error why ->
                   snapshot, ImportOutcome.NotUsable(setting.Variable, sprintf "%s: the text %A cannot be carried (%A)" d.Key text why) :: outcomes
       let snapshot, outcomes = settings |> List.fold step (SettingsSnapshot.empty, [])
-      { Snapshot = snapshot; Outcomes = List.rev outcomes }
+      // A key no row reads: retired ones say what decides the wait now, and an unknown one in a family these rows own
+      // is named. Nothing is removed from the file, so downgrading never loses a value.
+      let rowKeys = settings |> List.map (fun s -> s.Descriptor.Key) |> Set.ofList
+      let ignored =
+        saved
+        |> Map.toList
+        |> List.map fst
+        |> List.filter (fun key -> not (Set.contains key rowKeys))
+        |> List.choose (fun key ->
+          match RetiredSettings.all |> List.tryFind (fun r -> r.Key = key) with
+          | Some retired -> Some (ImportOutcome.IgnoredRetired(key, RetiredSettings.describe retired))
+          | None ->
+            match RetiredSettings.ownsKey key with
+            | true -> Some (ImportOutcome.IgnoredUnknown key)
+            | false -> None)
+      { Snapshot = snapshot; Outcomes = List.rev outcomes @ ignored }
 
   let private gate = obj ()
   let mutable private lastOutcomes : ImportOutcome list = []

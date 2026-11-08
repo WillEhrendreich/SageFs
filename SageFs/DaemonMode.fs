@@ -2186,6 +2186,11 @@ let private applySavedSettings (log: Microsoft.Extensions.Logging.ILogger) : uni
     | ImportOutcome.LeftToEnvironment variable -> log.LogInformation("Settings: {Variable} is set in the environment, so the saved value is not used.", variable)
     | ImportOutcome.SavedMeansUnset _ -> ()
     | ImportOutcome.NotUsable(variable, reason) -> log.LogWarning("Settings: {Variable} was left as it was: {Reason}", variable, reason)
+    | ImportOutcome.IgnoredRetired(key, note) -> log.LogInformation("Settings: the saved key {Key} is ignored. {Note}", key, note)
+    | ImportOutcome.IgnoredUnknown key -> log.LogInformation("Settings: the saved key {Key} is not a setting this build knows, so it is ignored and kept in the file.", key)
+  // A variable a person still has set that nothing reads any more is named once, with what decides that wait now.
+  for retired in RetiredSettings.inEnvironment (ExternalInputs.ofEnvironment Environment.GetEnvironmentVariable) do
+    log.LogWarning("Settings: {Note}", RetiredSettings.describe retired)
   SettingsCatalog.applyAtStart (SettingsBootstrap.processInputs ()) { GlobalDir = DaemonState.SageFsDir; Repo = NoRepoCheckout } SettingsCatalog.all
 
 let run

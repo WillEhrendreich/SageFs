@@ -359,15 +359,12 @@ let moreRowsTests =
 
     testCase "WHY — a row that is read-only says why, and the reason is one of the closed set" <| fun _ ->
       let readOnly = SettingsCatalog.all |> List.choose (fun d -> match d.Applicability with ReadOnly reason -> Some (d, reason) | Live | RestartRequired -> None)
-      (List.length readOnly > 8) |> Expect.isTrue "there are read-only rows"
+      (List.length readOnly > 5) |> Expect.isTrue "there are read-only rows"
       for d, reason in readOnly do
         ReadOnlyReason.describe reason |> Expect.stringStarts (sprintf "%s says read-only" d.Key) "read-only here:"
 
-    testCase "WHY — the test-harness variables are read-only rows in their own group, so a person is not offered a knob that only the runner turns" <| fun _ ->
-      let harness = SettingsCatalog.all |> List.filter (fun d -> d.Category = TestHarness)
-      harness |> List.length |> Expect.equal "five harness deadlines" 5
-      for d in harness do
-        d.Applicability |> Expect.equal (sprintf "%s is read-only for the harness" d.Key) (ReadOnly TestHarnessOnly)
+    testCase "WHY — the test-harness deadlines have no row, so a person is not shown a number that only the runner picks" <| fun _ ->
+      SettingsCatalog.all |> List.filter (fun d -> d.Category = TestHarness) |> Expect.isEmpty "no harness row"
 
     testProperty "WHY — a row's parser never throws, whatever text it is given, and what it accepts it renders back to the same value" <| fun (text: string) ->
       let text = match text with null -> "" | t -> t
@@ -416,12 +413,12 @@ let moreRowsTests =
       | Ok v -> row.EnvText v |> Expect.equal "the variable text" (Some "45")
 
     testCase "WHY — the variable's own spelling of zero minutes is not a wait, so a saved 0 is refused instead of switching a timer off" <| fun _ ->
-      let row = EnvBackedRows.all |> List.find (fun s -> s.Variable = "SAGEFS_ORPHAN_SWEEP_MINUTES")
+      let row = EnvBackedRows.all |> List.find (fun s -> s.Variable = "SAGEFS_HYGIENE_SWEEP_MINUTES")
       row.Descriptor.Parse "0" |> Expect.isError "zero is refused"
 
     testCase "WHY — every row of a wait that is scaled by the machine tier says so, and no row that is not scaled does" <| fun _ ->
-      let scaledDefaults = [ "SAGEFS_FSI_HOST_STARTUP_SECONDS"; "SAGEFS_STOP_GRACEFUL_SECONDS"; "SAGEFS_GIT_QUICK_SECONDS" ]
-      let unscaledDefaults = [ "SAGEFS_CONFIRM_ANSWER_SECONDS"; "SAGEFS_AGENT_CLEANUP_SECONDS"; "SAGEFS_WATCHER_SYNC_SECONDS" ]
+      let scaledDefaults = [ "SAGEFS_FSI_HOST_STARTUP_SECONDS"; "SAGEFS_STOP_GRACEFUL_SECONDS"; "SAGEFS_DOTNET_SDK_QUERY_SECONDS" ]
+      let unscaledDefaults = [ "SAGEFS_CONFIRM_ANSWER_SECONDS"; "SAGEFS_DASHBOARD_HEARTBEAT_SECONDS"; "SAGEFS_MANIFEST_SAVE_INTERVAL_SECONDS" ]
       let help (variable: string) = (EnvBackedRows.all |> List.find (fun s -> s.Variable = variable)).Descriptor.Description
       for v in scaledDefaults do help v |> Expect.stringContains (sprintf "%s names the tier" v) "scaled for slower ones"
       for v in unscaledDefaults do (help v).Contains "scaled" |> Expect.isFalse (sprintf "%s is not scaled" v)
@@ -560,7 +557,7 @@ let notEditableRatchet =
           inSource
           |> Map.tryFind setting.Variable
           |> Option.map (fun expected -> setting, expected))
-      (checkedAgainstSource.Length >= 40) |> Expect.isTrue (sprintf "the scan found the numbers of at least 40 duration rows, found %d" checkedAgainstSource.Length)
+      (checkedAgainstSource.Length >= 20) |> Expect.isTrue (sprintf "the scan found the numbers of at least 20 duration rows, found %d" checkedAgainstSource.Length)
       for setting, expected in checkedAgainstSource do
         float (setting.Descriptor.Render setting.Descriptor.Default)
         |> Expect.equal (sprintf "%s: the row's default" setting.Variable) expected

@@ -63,11 +63,10 @@ let DefaultDashboardPort = 37750
 /// Superseded by Timeouts.warmupInactivityLimit / Timeouts.warmupAbsoluteMax,
 /// which awaitWorkerPort now actually reads: a flat "no port within N ms"
 /// bound couldn't tell a stuck worker from a large repo genuinely still
-/// discovering projects (fcs-trial-a/b/c, 2026-09-22). Kept — not read by
-/// awaitWorkerPort any more — because SAGEFS_WORKER_STARTUP_TIMEOUT_MS may
-/// still be set in someone's environment; do not repurpose this name.
-let WorkerStartupTimeoutMs : int =
-  envInt "SAGEFS_WORKER_STARTUP_TIMEOUT_MS" (int Timeouts.legacyWorkerStartup.TotalMilliseconds)
+/// discovering projects (fcs-trial-a/b/c, 2026-09-22). Kept as a constant, not read
+/// from the environment: the variable is retired (`RetiredSettings`), and a daemon
+/// that finds it set says so at start. Do not repurpose this name.
+let WorkerStartupTimeoutMs : int = int Timeouts.legacyWorkerStartup.TotalMilliseconds
 
 /// Admission ceiling for the SessionManager mailbox's queue
 /// (`MailboxProcessor<SessionCommand>.CurrentQueueLength`), mirroring
@@ -76,9 +75,9 @@ let WorkerStartupTimeoutMs : int =
 /// (create/stop/restart session) check this BEFORE posting and refuse with
 /// `SageFsError.SupervisorBusy` instead of queueing indefinitely behind
 /// whatever is already backed up. Sized generously so it never engages
-/// under real usage — only under genuine overload.
-let SessionManagerQueueCapacity : int =
-  envInt "SAGEFS_SESSION_MANAGER_QUEUE_CAPACITY" 256
+/// under real usage — only under genuine overload, so it has no override.
+[<Literal>]
+let SessionManagerQueueCapacity = 256
 
 /// Members any one `list_members` reply carries (the rung cap of the progressive map,
 /// docs/progressive-map-research-2026-10-24.md). The reply always states the total and names the

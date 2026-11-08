@@ -98,6 +98,7 @@
         <Compile Include="EditorLink.fs" />
         <Compile Include="EnvBackedSettings.fs" />
         <Compile Include="EnvBackedRows.fs" />
+        <Compile Include="RetiredSettings.fs" />
         <Compile Include="SettingsBootstrap.fs" />
         <Compile Include="FSharpSpelling.fs" />
         <Compile Include="ViewSettings.fs" />

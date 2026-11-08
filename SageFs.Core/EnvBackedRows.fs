@@ -152,15 +152,6 @@ module EnvBackedRows =
       seconds "dotnetSdkQuerySeconds" "SDK query limit"
         "How long `dotnet --version` and `dotnet --list-sdks` may each take while SageFs picks the SDK to build the FSI host with. A wait this long means a hung dotnet."
         "SAGEFS_DOTNET_SDK_QUERY_SECONDS" 30.0 true (fun () -> Timeouts.dotnetSdkQuery)
-      seconds "ambientSdkProbeSeconds" "SDK pre-check limit"
-        "How long the `dotnet --version` pre-check made while a project loads may take before it is killed. A failure only means the normal in-process load runs."
-        "SAGEFS_AMBIENT_SDK_PROBE_SECONDS" 15.0 true (fun () -> Timeouts.ambientSdkProbe)
-      seconds "targetFrameworkEvaluationSeconds" "Target framework lookup limit"
-        "How long SageFs may spend asking MSBuild for a project's target framework, when the project file does not name one, before the worker's own evaluation decides."
-        "SAGEFS_TARGET_FRAMEWORK_EVALUATION_SECONDS" 60.0 true (fun () -> Timeouts.targetFrameworkEvaluation)
-      seconds "gcDumpCaptureSeconds" "Memory dump limit"
-        "How long one `dotnet-gcdump collect` may run."
-        "SAGEFS_GC_DUMP_CAPTURE_SECONDS" 120.0 true (fun () -> Timeouts.gcDumpCapture)
       seconds "stopGracefulSeconds" "Daemon stop wait"
         "How long `sagefs stop` waits for the daemon to exit after the shutdown request, before it kills the process."
         "SAGEFS_STOP_GRACEFUL_SECONDS" 30.0 true (fun () -> Timeouts.stopGracefulExit)
@@ -173,90 +164,24 @@ module EnvBackedRows =
       seconds "confirmAnswerSeconds" "Confirmation answer wait"
         "How long a confirmation prompt waits for the person to answer before the call is refused. A slow reader is who would raise it."
         "SAGEFS_CONFIRM_ANSWER_SECONDS" 60.0 false (fun () -> Timeouts.confirmationAnswer)
-      seconds "daemonSessionsProbeSeconds" "Daemon probe limit"
-        "How long the CLI waits for the daemon's session list (`sagefs status` and the environment check) before it reports the daemon as wedged."
-        "SAGEFS_DAEMON_SESSIONS_PROBE_SECONDS" 3.0 true (fun () -> Timeouts.daemonSessionsProbe)
-      seconds "frictionPostSeconds" "Friction report post limit"
-        "How long posting a friction report to the configured endpoint may take. The dashboard shows the failure."
-        "SAGEFS_FRICTION_POST_SECONDS" 15.0 false (fun () -> Timeouts.frictionReportPost)
-      seconds "updateCheckTimeoutSeconds" "Update check limit"
-        "How long the NuGet update check may take. A failure is swallowed, so it never delays a session."
-        "SAGEFS_UPDATE_CHECK_TIMEOUT_SECONDS" 3.0 false (fun () -> Timeouts.updateCheckFetch)
-      minutes "updateCheckIntervalMinutes" "Update check interval"
-        "How often a running daemon asks NuGet whether a newer SageFs exists. It also asks once at start when its cache is older than this."
-        "SAGEFS_UPDATE_CHECK_INTERVAL_MINUTES" 360.0 false (fun () -> Timeouts.updateCheckInterval)
       seconds "rebuildReadySeconds" "Rebuild ready wait"
         "How long live testing waits, after a rebuild restart, for the session to be Ready before it reports the rebuild as failed."
         "SAGEFS_REBUILD_READY_SECONDS" 30.0 true (fun () -> Timeouts.rebuildReadyWait)
-      seconds "gitQuickSeconds" "Quick git command limit"
-        "How long a quick git command (rev-parse, diff, update-ref, worktree remove) may take."
-        "SAGEFS_GIT_QUICK_SECONDS" 30.0 true (fun () -> Timeouts.gitQuick)
-      minutes "gitRebaseMinutes" "Git rebase limit"
-        "How long a git rebase may take, hooks included."
-        "SAGEFS_GIT_REBASE_MINUTES" 5.0 true (fun () -> Timeouts.gitRebase)
-      minutes "gitWorktreeAddMinutes" "Git worktree add limit"
-        "How long `git worktree add`, which checks out a whole tree, may take."
-        "SAGEFS_GIT_WORKTREE_ADD_MINUTES" 2.0 true (fun () -> Timeouts.gitWorktreeAdd)
-      seconds "cohortSettleSeconds" "Cohort trunk settle wait"
-        "How long the trunk follower waits for a session in the trunk checkout to settle after the checkout moves to a landed commit. The landing gate's own wait on the integration session has no deadline: it ends when the session is ready, dead, or stuck in one phase."
-        "SAGEFS_COHORT_SETTLE_SECONDS" 120.0 true (fun () -> Timeouts.cohortIntegrationSettle)
       seconds "patchConfirmSeconds" "Patch confirmation wait"
         "How long a patched function may go without its new body running before the save reports it as never entered."
         "SAGEFS_PATCH_CONFIRM_SECONDS" 10.0 false (fun () -> Timeouts.patchConfirmation)
       seconds "hotReloadCompileQueueSeconds" "Hot reload compile queue wait"
         "How long one save waits for the previous save's compile before it gives up and says so."
         "SAGEFS_HOT_RELOAD_COMPILE_QUEUE_SECONDS" 60.0 true (fun () -> Timeouts.compileQueueWait)
-      minutes "hotReloadCompileBudgetMinutes" "Hot reload compile budget"
-        "The ceiling on one save's re-evaluation, so a wedged submission cannot hold the compiler forever."
-        "SAGEFS_HOT_RELOAD_COMPILE_BUDGET_MINUTES" 5.0 true (fun () -> Timeouts.compileBudget)
       seconds "referencesCheckSeconds" "List references check limit"
         "How long the compiler checks behind `list_references` may take, all of a session's projects together. Raise it on a very large solution."
         "SAGEFS_REFERENCES_CHECK_SECONDS" 60.0 true (fun () -> Timeouts.referencesCheck)
-      seconds "referencesCacheRetentionSeconds" "List references cache retention"
-        "How long the compiler's cache behind `list_references` is kept after the last question. The cache can hold gigabytes on a large session."
-        "SAGEFS_REFERENCES_CACHE_RETENTION_SECONDS" 600.0 false (fun () -> Timeouts.referencesCacheRetention)
-      seconds "referencesCacheSweepSeconds" "List references cache sweep"
-        "How often the worker checks whether that cache has outlived its retention."
-        "SAGEFS_REFERENCES_CACHE_SWEEP_SECONDS" 30.0 false (fun () -> Timeouts.referencesCacheSweep)
-      seconds "appHostAppearSeconds" "App host appear grace"
-        "How long an app's entry point may run before it builds a host. If it has not by then, the app is treated as a console app with no server."
-        "SAGEFS_APP_HOST_APPEAR_SECONDS" 10.0 true (fun () -> Timeouts.appHostAppearGrace)
-      seconds "appHostStartSeconds" "App host start limit"
-        "How long a host that has been built may take to start listening."
-        "SAGEFS_APP_HOST_START_SECONDS" 90.0 true (fun () -> Timeouts.appHostStart)
-      seconds "workerProbeIntervalSeconds" "Worker health probe interval"
-        "How often a Ready worker is probed for health."
-        "SAGEFS_WORKER_PROBE_INTERVAL_SECONDS" 5.0 false (fun () -> Timeouts.workerHealthProbeInterval)
-      seconds "workerProbeTimeoutSeconds" "Worker health probe limit"
-        "How long one health probe may take before it counts as missed. Three misses in a row restart the worker."
-        "SAGEFS_WORKER_PROBE_TIMEOUT_SECONDS" 3.0 true (fun () -> Timeouts.workerHealthProbeTimeout)
-      seconds "workerReadyPollSeconds" "Worker ready poll"
-        "How often the watchdog asks a starting worker for its status until it is Ready."
-        "SAGEFS_WORKER_READY_POLL_SECONDS" 1.0 false (fun () -> Timeouts.workerReadyPoll)
-      seconds "ownerPollSeconds" "Owner liveness poll"
-        "How often a worker checks that the process that owns it is still alive, so a killed owner cannot orphan it."
-        "SAGEFS_OWNER_POLL_SECONDS" 2.0 false (fun () -> Timeouts.ownerLivenessPoll)
-      seconds "agentCleanupSeconds" "Agent activity cleanup"
-        "How often the daemon drops agents that have gone silent from the activity tracker."
-        "SAGEFS_AGENT_CLEANUP_SECONDS" 60.0 false (fun () -> Timeouts.agentActivityCleanupInterval)
-      seconds "cohortReaperSeconds" "Cohort reaper interval"
-        "How often the cohort reaper renews each active member's lease and lets silent members depart."
-        "SAGEFS_COHORT_REAPER_SECONDS" 60.0 false (fun () -> Timeouts.cohortReaperInterval)
-      minutes "orphanSweepMinutes" "Orphan temp folder sweep"
-        "How often the daemon sweeps the temp directory for `sagefs-host-adopt-*` and `sagefs-test` folders that dead processes left."
-        "SAGEFS_ORPHAN_SWEEP_MINUTES" 15.0 false (fun () -> Timeouts.orphanTempDirSweepInterval)
-      seconds "watcherSyncSeconds" "File watcher sync"
-        "How often the daemon makes sure every session has a file watcher and drops stale ones, in case a state-change event was missed."
-        "SAGEFS_WATCHER_SYNC_SECONDS" 5.0 false (fun () -> Timeouts.sessionWatcherSyncInterval)
       seconds "dashboardHeartbeatSeconds" "Dashboard heartbeat"
         "How often the dashboard stream sends a heartbeat, so the page can tell the daemon is alive."
         "SAGEFS_DASHBOARD_HEARTBEAT_SECONDS" 5.0 false (fun () -> Timeouts.dashboardHeartbeat)
       seconds "dashboardStaleAfterSeconds" "Dashboard stale after"
         "How long the page waits without a heartbeat before it asks the daemon directly whether it is running."
         "SAGEFS_DASHBOARD_STALE_AFTER_SECONDS" 15.0 false (fun () -> Timeouts.dashboardStaleAfter)
-      seconds "jupyterWarmupSeconds" "Jupyter session warm-up wait"
-        "How long the Jupyter kernel waits for a session it just created to warm up before it retries an eval the daemon refused."
-        "SAGEFS_JUPYTER_WARMUP_SECONDS" 600.0 true (fun () -> Timeouts.jupyterSessionWarmup)
       seconds "stopSessionSeconds" "Stop session reply limit"
         "How long `stop_session` waits for the session manager's reply before it fails with an error instead of hanging."
         "SAGEFS_STOP_SESSION_TIMEOUT_SECONDS" 20.0 true (fun () -> Timeouts.stopSessionMailboxTimeout)
@@ -266,15 +191,9 @@ module EnvBackedRows =
       seconds "manifestSaveSeconds" "Manifest save interval"
         "How often the daemon saves its session manifest, which is what a restart resumes from."
         "SAGEFS_MANIFEST_SAVE_INTERVAL_SECONDS" 60.0 false (fun () -> Timeouts.manifestSaveInterval)
-      minutes "idleSessionMinutes" "Idle session threshold"
-        "How long a Ready session can go untouched before the dashboard calls it idle instead of running."
-        "SAGEFS_IDLE_SESSION_THRESHOLD_MINUTES" 10.0 false (fun () -> Timeouts.idleSessionThreshold)
       seconds "warmupReadyPollSeconds" "Warm-up ready poll ceiling"
         "The longest SageFs polls a worker for Ready after a spawn or restart before it faults the session."
         "SAGEFS_WARMUP_READY_POLL_SECONDS" 120.0 true (fun () -> Timeouts.warmupReadyPollMax)
-      seconds "workerProxyWaitSeconds" "Test proxy registration wait"
-        "How long a live-testing run waits for the worker to register its test proxy before it runs with none, which reports every test as not run."
-        "SAGEFS_WORKER_PROXY_WAIT_SECONDS" 15.0 true (fun () -> Timeouts.workerProxyRegister)
       minutes "dataPruneMinutes" "Friction prune interval"
         "How often a running daemon prunes friction data again. It also prunes once at start."
         "SAGEFS_DATA_PRUNE_INTERVAL_MINUTES" 60.0 false (fun () -> DataRetention.pruneInterval)
@@ -306,10 +225,7 @@ module EnvBackedRows =
         "SAGEFS_FINISHED_WORKTREE_GRACE_DAYS" 1.0 (fun () -> DataRetention.finishedWorktreeGrace) ]
 
   let private countRows : EnvBacked list =
-    [ count WaitsAndLimits "limits.sessionManagerQueueCapacity" "Session manager queue size"
-        "How many commands may wait for the session manager before create, stop and restart are refused as busy. It is sized never to engage in normal use."
-        "SAGEFS_SESSION_MANAGER_QUEUE_CAPACITY" 256 (fun () -> SageFsConfig.SessionManagerQueueCapacity)
-      count WaitsAndLimits "limits.listMembersMax" "Members per list_members reply"
+    [ count WaitsAndLimits "limits.listMembersMax" "Members per list_members reply"
         "How many members one `list_members` reply carries. The reply states the total and names the offset for the rest."
         "SAGEFS_LIST_MEMBERS_MAX" 100 (fun () -> SageFsConfig.ListMembersMax)
       count WaitsAndLimits "limits.referencesProjectCache" "Projects kept checked for list_references"
@@ -453,10 +369,6 @@ module EnvBackedRows =
   let all : EnvBacked list =
     EnvBackedSettings.firstBatch @ [ devReload; editor; referencesResidentCeiling ] @ waitRows @ ageRows @ countRows
 
-  /// A row for a variable the page does not edit. It reads the same variable, so the row shows the value in use.
-  let private shownOnly (reason: ReadOnlyReason) (category: SettingCategory) (setting: EnvBacked) : SettingDescriptor =
-    { setting.Descriptor with Applicability = ReadOnly reason; Category = category }
-
   let private watchdogRow (key: string) (name: string) (help: string) (variable: string) (def: SettingValue) (parse: string -> Result<SettingValue, ConfigError>) (render: SettingValue -> string) (current: unit -> SettingValue) : SettingDescriptor =
     { Key = key
       Name = name
@@ -473,31 +385,7 @@ module EnvBackedRows =
 
   /// The variables shown and never edited here, each with the reason on its row.
   let readOnly : SettingDescriptor list =
-    [ shownOnly TestHarnessOnly TestHarness
-        (seconds "testDaemonReadySeconds" "Test daemon ready deadline"
-          "How long a test waits for a daemon it started to reach a readable Ready state."
-          "SAGEFS_TEST_DAEMON_READY_SECONDS" 120.0 false (fun () -> Timeouts.integrationDaemonReady))
-      shownOnly TestHarnessOnly TestHarness
-        (seconds "testWorkerRestartSeconds" "Test worker restart deadline"
-          "How long the crash and restart smoke test waits for a killed worker to come back on a new process."
-          "SAGEFS_TEST_WORKER_RESTART_SECONDS" 60.0 false (fun () -> Timeouts.integrationWorkerRestart))
-      shownOnly TestHarnessOnly TestHarness
-        (seconds "testBrowserWarmupSeconds" "Test browser warm-up deadline"
-          "How long a browser journey waits for its dashboard session to warm up."
-          "SAGEFS_TEST_BROWSER_WARMUP_SECONDS" 300.0 false (fun () -> Timeouts.browserJourneyWarmup))
-      shownOnly TestHarnessOnly TestHarness
-        (seconds "testWebAppBuildSeconds" "Test web app build deadline"
-          "How long the hot reload verification waits for its web app sample to build."
-          "SAGEFS_TEST_WEBAPP_BUILD_SECONDS" 180.0 false (fun () -> Timeouts.webAppHotReloadBuild))
-      shownOnly TestHarnessOnly TestHarness
-        (seconds "testWebAppPortSeconds" "Test web app port deadline"
-          "How long the hot reload verification waits for its web app sample to bind its port and report ready."
-          "SAGEFS_TEST_WEBAPP_PORT_SECONDS" 120.0 false (fun () -> Timeouts.webAppPortReady))
-      shownOnly Superseded DaemonSettings
-        (count DaemonSettings "waits.workerStartupTimeoutMs" "Worker start-up timeout (milliseconds)"
-          "The flat wait for a worker's port that the warm-up inactivity limit and ceiling replaced."
-          "SAGEFS_WORKER_STARTUP_TIMEOUT_MS" 120000 (fun () -> SageFsConfig.WorkerStartupTimeoutMs))
-      watchdogRow "daemon.supervised" "Running under the watchdog"
+    [ watchdogRow "daemon.supervised" "Running under the watchdog"
         "On when the watchdog started this daemon, so it restarts after a crash."
         "SAGEFS_SUPERVISED" (VToggle Off) toggleOf renderToggle
         (fun () -> VToggle (Toggle.ofBool SageFsConfig.IsSupervised))
