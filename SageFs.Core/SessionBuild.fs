@@ -291,7 +291,17 @@ module SessionBuild =
       WorkingDirectory = workingDir)
     for arg in args do
       psi.ArgumentList.Add(arg)
-    applyTo psi buildEnvironment
+    // Where the directory's config says the build writes: what the daemon read for this directory, or, in a worker,
+    // what the daemon told it in its own environment.
+    let artifacts =
+      match SessionOptionsRegistry.artifactsFor workingDir with
+      | ProjectChooses -> ArtifactsChannel.pathOf Environment.GetEnvironmentVariable
+      | chosen -> chosen
+    let artifactsEnvironment =
+      match artifacts with
+      | ArtifactsIn path -> [ ArtifactsChannel.msbuildProperty, path ]
+      | ProjectChooses -> []
+    applyTo psi (buildEnvironment @ artifactsEnvironment)
     psi
 
   /// Whether a failed build's output says a NuGet restore is required, so the

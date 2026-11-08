@@ -63,6 +63,16 @@ type GcMode =
   | WorkstationGc
   | ServerGc
 
+/// One environment variable for a session's FSI host, written `EnvEntry("NAME", "value")`. A union and not a tuple, because
+/// a config is carried back from the host that evaluated it over a wire that has no tuples.
+type EnvEntry = EnvEntry of name: string * value: string
+
+/// Where a session's own builds write `bin` and `obj`. A config.fsx writes it (`Artifacts = ArtifactsIn "/abs/path"`). The
+/// default leaves the project to say, as it always did.
+type ArtifactsDir =
+  | ProjectChooses
+  | ArtifactsIn of path: string
+
 /// Specifies how projects/solutions should be loaded for a session.
 type LoadStrategy =
   /// Load a specific solution file (.sln/.slnx)
@@ -90,7 +100,9 @@ type DirectoryConfig =
     /// The collector the session's FSI host runs under.
     Gc: GcMode
     /// Environment variables for the session's FSI host and nothing else. `SessionOptions.ofConfig` checks them.
-    SessionEnv: (string * string) list
+    SessionEnv: EnvEntry list
+    /// Where the session's builds write `bin` and `obj` (an absolute path).
+    Artifacts: ArtifactsDir
     /// How much of a value the live-bindings pane may run to show it. Safe unless the config says otherwise.
     ValueWalk: ValueWalk }
 
@@ -103,4 +115,5 @@ module DirectoryConfigDefaults =
       AutoOpenNamespaces = true
       Gc = WorkstationGc
       SessionEnv = []
+      Artifacts = ProjectChooses
       ValueWalk = ValueWalk.standard }

@@ -112,6 +112,7 @@
         <!-- Dependency-free (it needs only LiveValueTree, for the walk mode a config can choose) and also compiled into the isolated
              FSI host (config.fsx is evaluated there): it must precede the protocol, which carries a DirectoryConfig. -->
         <Compile Include="DirectoryConfigTypes.fs" />
+        <Compile Include="ArtifactsChannel.fs" />
         <!-- Dependency-free like LiveValueTree, and also compiled into the host (it runs a getter on a filtered thread there). -->
         <Compile Include="ThreadSandbox.fs" />
         <!-- Layer 2 of getter containment: guards for the code a clicked getter can reach. Dependency-free (System and
@@ -512,6 +513,8 @@
         <Compile Include="HatchUse.fs" />
         <Compile Include="Features\HatchWatch.fs" />
         <Compile Include="ProcessEnvironment.fs" />
+        <Compile Include="SessionOptions.fs" />
+        <Compile Include="SessionOptionsRegistry.fs" />
         <Compile Include="SessionBuild.fs" />
         <!-- What a caller waiting on a session is told, and when. After WorkerProtocol and RebuildOutcome; the session
              manager settles its parked callers with it and the status tool decides to park with it. -->
@@ -609,7 +612,6 @@
         <Compile Include="EvalActorDecision.fs" />
         <Compile Include="FsiSession.fs" />
         <Compile Include="RemoteFsiSession.fs" />
-        <Compile Include="SessionOptions.fs" />
         <Compile Include="IsolatedFsiSession.fs" />
         <!-- The daemon's side of "debug this test": choose the test, ask the worker to hold it, say what the editor
              can attach to. After SessionMode (the ops) and HostAgent (the hold's types). -->

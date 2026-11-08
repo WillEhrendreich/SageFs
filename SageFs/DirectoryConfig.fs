@@ -61,11 +61,21 @@ module DirectoryConfig =
       Log.warn "Failed to load %s: %s (using defaults)" path msg
       empty
 
+  /// What the daemon remembers of a directory's options for the builds and the worker it starts there (see
+  /// `SessionOptionsRegistry`). A directory with no config, or one that no longer asks for anything, is forgotten.
+  let private remember (workingDir: string) (config: DirectoryConfig option) : DirectoryConfig option =
+    let options =
+      match config with
+      | Some cfg -> fst (SessionOptions.ofConfig cfg)
+      | None -> SessionOptions.none
+    SessionOptionsRegistry.remember workingDir options
+    config
+
   let load (workingDir: string) : DirectoryConfig option =
     let path = configPath workingDir
     match File.Exists path with
-    | true -> Some(configOfEvaluation path (evaluateIn workingDir (File.ReadAllText path)))
-    | false -> None
+    | true -> remember workingDir (Some(configOfEvaluation path (evaluateIn workingDir (File.ReadAllText path))))
+    | false -> remember workingDir None
 
   /// `load`, awaiting the evaluation of the config instead of blocking on it. The answer lands in the same cache, so a
   /// synchronous `load` of the same config straight after returns at once.
@@ -75,8 +85,8 @@ module DirectoryConfig =
       match File.Exists path with
       | true ->
         let! evaluated = ConfigHost.evaluateAsync workingDir (File.ReadAllText path)
-        return Some(configOfEvaluation path (evaluated |> Result.mapError ConfigHost.describeError))
-      | false -> return None
+        return remember workingDir (Some(configOfEvaluation path (evaluated |> Result.mapError ConfigHost.describeError)))
+      | false -> return remember workingDir None
     }
 
   let autoOpenNamespacesForDirectory (workingDir: string) =
@@ -129,6 +139,7 @@ module DirectoryConfig =
             && cfg.DefaultArgs = empty.DefaultArgs
             && cfg.Gc = empty.Gc
             && cfg.SessionEnv = empty.SessionEnv
+            && cfg.Artifacts = empty.Artifacts
             && cfg.ValueWalk = empty.ValueWalk
           match isBareOptOut with
           | true ->

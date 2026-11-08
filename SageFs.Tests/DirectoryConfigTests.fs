@@ -32,9 +32,9 @@ let evaluateTests = Integration.hostList "DirectoryConfig.evaluate" [
     config.Load |> Expect.equal "should parse AutoDetect" AutoDetect)
 
   testCase "loads the garbage collector and the session environment" (fun () ->
-    let config = evalOk """{ DirectoryConfig.empty with Gc = ServerGc; SessionEnv = [ "DOTNET_TieredPGO", "0" ] }"""
+    let config = evalOk """{ DirectoryConfig.empty with Gc = ServerGc; SessionEnv = [ EnvEntry("DOTNET_TieredPGO", "0") ] }"""
     config.Gc |> Expect.equal "should parse Gc" ServerGc
-    config.SessionEnv |> Expect.equal "should parse SessionEnv" [ "DOTNET_TieredPGO", "0" ])
+    config.SessionEnv |> Expect.equal "should parse SessionEnv" [ EnvEntry("DOTNET_TieredPGO", "0") ])
 
   testCase "loads defaultArgs" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with DefaultArgs = ["--no-warn:1182"; "--bare"] }"""
@@ -221,7 +221,7 @@ let configHostTests =
 
     testCase "the full record round-trips: every field reaches the daemon" (fun () ->
       let script =
-        """{ DirectoryConfig.empty with Load = Projects ["A.fsproj"]; DefaultArgs = ["--x"]; AutoOpenNamespaces = false; Gc = ServerGc; SessionEnv = [ "A", "1" ]; ValueWalk = WalkEverything }"""
+        """{ DirectoryConfig.empty with Load = Projects ["A.fsproj"]; DefaultArgs = ["--x"]; AutoOpenNamespaces = false; Gc = ServerGc; SessionEnv = [ EnvEntry("A", "1") ]; Artifacts = ArtifactsIn "/tmp/art"; ValueWalk = WalkEverything }"""
       match ConfigHost.evaluate Environment.CurrentDirectory script with
       | Ok config ->
         config
@@ -231,7 +231,8 @@ let configHostTests =
                DefaultArgs = [ "--x" ]
                AutoOpenNamespaces = false
                Gc = ServerGc
-               SessionEnv = [ "A", "1" ]
+               SessionEnv = [ EnvEntry("A", "1") ]
+               Artifacts = ArtifactsIn "/tmp/art"
                ValueWalk = WalkEverything }
       | Error error -> failtest (ConfigHost.describeError error))
 

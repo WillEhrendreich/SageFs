@@ -12,6 +12,9 @@ module SessionOptions =
     | EnvNameEmpty
     | EnvNameInvalid of name: string
     | EnvNamePoisoned of name: string
+    | ArtifactsPathEmpty
+    | ArtifactsPathNotAbsolute of path: string
+    | ArtifactsPathUnderProc of path: string
 
   let describe (refusal: Refusal) : string =
     match refusal with
@@ -21,6 +24,10 @@ module SessionOptions =
       sprintf "'%s' cannot be an environment variable name (it holds '=' or a NUL), so it was dropped. → Rename it in SessionEnv." name
     | EnvNamePoisoned name ->
       sprintf "%s is one of the variables SageFs removes from every process it starts, because it makes `dotnet` load the wrong SDK, so it was dropped. → Remove it from SessionEnv." name
+    | ArtifactsPathEmpty -> "Artifacts names an empty path, so it was ignored. → Give an absolute directory, or remove the setting."
+    | ArtifactsPathNotAbsolute path ->
+      sprintf "Artifacts path '%s' is not absolute, so it was ignored. → Give the whole path, for example /home/me/artifacts/app." path
+    | ArtifactsPathUnderProc path -> sprintf "Artifacts path %s is under /proc, which nothing can build into, so it was ignored. → Pick a directory on disk." path
 
   /// A user variable that has the same name as one SageFs sets. SageFs's value is the one the host gets.
   type Clash =
@@ -35,6 +42,8 @@ module SessionOptions =
     { Gc: GcMode
       /// The user's variables that passed the checks, in the order written, the last of a repeated name kept.
       Env: (string * string) list
+      /// Where the session's builds write `bin` and `obj`; absolute, or the project's own choice.
+      Artifacts: ArtifactsDir
       /// Extra arguments for the FSI host, after the ones SageFs builds.
       FsiArgs: string list }
 
@@ -42,6 +51,7 @@ module SessionOptions =
   let none : Options =
     { Gc = WorkstationGc
       Env = []
+      Artifacts = ProjectChooses
       FsiArgs = [] }
 
   let private invalidNameChars = [| '='; '\000' |]
@@ -57,9 +67,21 @@ module SessionOptions =
         | true -> Error(EnvNamePoisoned name)
         | false -> Ok name
 
+  let private checkArtifacts (path: string) : Result<string, Refusal> =
+    match String.IsNullOrWhiteSpace path with
+    | true -> Error ArtifactsPathEmpty
+    | false ->
+      let trimmed = path.Trim()
+      match Path.IsPathRooted trimmed with
+      | false -> Error(ArtifactsPathNotAbsolute path)
+      | true ->
+        match trimmed = "/proc" || trimmed.StartsWith("/proc/", StringComparison.Ordinal) with
+        | true -> Error(ArtifactsPathUnderProc path)
+        | false -> Ok trimmed
+
   /// The options a directory's config asks for, and the entries that were refused (said, never silent).
   let ofConfig (config: DirectoryConfig) : Options * Refusal list =
-    let checkedEnv = config.SessionEnv |> List.map (fun (name, value) -> checkEnvName name |> Result.map (fun n -> n, value))
+    let checkedEnv = config.SessionEnv |> List.map (fun (EnvEntry(name, value)) -> checkEnvName name |> Result.map (fun n -> n, value))
     let refusedEnv = checkedEnv |> List.choose (function Error r -> Some r | Ok _ -> None)
     let keptEnv =
       checkedEnv
@@ -67,16 +89,30 @@ module SessionOptions =
       |> List.rev
       |> List.distinctBy fst
       |> List.rev
+    let artifacts, refusedArtifacts =
+      match config.Artifacts with
+      | ProjectChooses -> ProjectChooses, []
+      | ArtifactsIn path ->
+        match checkArtifacts path with
+        | Ok kept -> ArtifactsIn kept, []
+        | Error refusal -> ProjectChooses, [ refusal ]
     { Gc = config.Gc
       Env = keptEnv
+      Artifacts = artifacts
       FsiArgs = config.DefaultArgs },
-    refusedEnv
+    refusedEnv @ refusedArtifacts
 
   /// The environment variables the choice of garbage collector needs. SageFs owns these names.
   let gcEnvironment (gc: GcMode) : (string * string) list =
     match gc with
     | ServerGc -> [ "DOTNET_gcServer", "1" ]
     | WorkstationGc -> []
+
+  /// The environment the worker is started with for these options: the one variable the artifacts path travels in.
+  let workerEnvironment (options: Options) : (string * string) list =
+    match options.Artifacts with
+    | ArtifactsIn path -> [ ArtifactsChannel.variable, path ]
+    | ProjectChooses -> []
 
   /// The host's environment: what SageFs built (`sageFsEnv`), then the collector's, then the user's, where a
   /// name SageFs sets keeps SageFs's value and is reported as a clash.
@@ -109,4 +145,5 @@ module SessionOptions =
       "ValueWalk", LiveValuePane
       "DefaultArgs", SessionHost
       "Gc", SessionHost
-      "SessionEnv", SessionHost ]
+      "SessionEnv", SessionHost
+      "Artifacts", SessionHost ]

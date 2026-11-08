@@ -127,7 +127,7 @@ module WorkerSpawn =
     // host's start, its own probes) agrees with the daemon's instead of reading the machine again.
     SageFs.ProcessEnvironment.applyToWithForwarding
       psi
-      (envVars @ RuntimeCompat.rollForwardEnv runtimeChoice @ [ (MachineTier.envVar, MachineTier.toString Timeouts.machineTier) ])
+      (envVars @ SessionOptionsRegistry.workerEnvironment workingDir @ RuntimeCompat.rollForwardEnv runtimeChoice @ [ (MachineTier.envVar, MachineTier.toString Timeouts.machineTier) ])
 
     let proc = new Process()
     proc.StartInfo <- psi

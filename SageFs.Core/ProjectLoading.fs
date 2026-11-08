@@ -962,7 +962,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
         logger.LogInfo "Initializing build tooling..."
         let toolsPath = Init.init (DirectoryInfo directory) None
         logger.LogInfo (sprintf "  MSBuild/tools path: %A" toolsPath)
-        let defaultLoader: IWorkspaceLoader = WorkspaceLoader.Create(toolsPath, [])
+        let defaultLoader: IWorkspaceLoader = WorkspaceLoader.Create(toolsPath, ArtifactsChannel.properties Environment.GetEnvironmentVariable)
         // Fold Ionide's own per-project notifications through ProjectLoadProgress
         // so "project 34 of 61" is real, live progress from inside LoadSln/
         // LoadProjects — not a guess computed before or after the call.
@@ -1069,7 +1069,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
             sprintf "  Reloading %s at %s (the framework that has a build, or that the referencing project builds it at)"
               (paths |> List.map Path.GetFileName |> String.concat ", ") tfm)
           try
-            (WorkspaceLoader.Create(toolsPath, [ ("TargetFramework", tfm) ])).LoadProjects paths
+            (WorkspaceLoader.Create(toolsPath, ArtifactsChannel.properties Environment.GetEnvironmentVariable @ [ ("TargetFramework", tfm) ])).LoadProjects paths
             |> Seq.toList
           with ex ->
             logger.LogWarning (sprintf "  Reloading at %s failed: %s" tfm ex.Message)

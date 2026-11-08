@@ -7,6 +7,7 @@ open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
 open SageFs
+open SageFs.Tests.TestInfrastructure
 
 let private configWith (edit: DirectoryConfig -> DirectoryConfig) : DirectoryConfig = edit DirectoryConfigDefaults.empty
 
@@ -42,7 +43,7 @@ let sessionOptionsTests =
       (Prop.forAll (Arb.fromGen (Gen.zip (Gen.nonEmptyListOf genPoisonedName) (Gen.nonEmptyListOf genPlainName))) (fun (poisoned, plain) ->
         let plain = List.distinct plain
         let entries = (poisoned |> List.map (fun n -> n, "x")) @ (plain |> List.map (fun n -> n, "v"))
-        let options, refusals = SessionOptions.ofConfig (configWith (fun c -> { c with SessionEnv = entries }))
+        let options, refusals = SessionOptions.ofConfig (configWith (fun c -> { c with SessionEnv = List.map EnvEntry entries }))
         let refusedNames = refusals |> List.choose (function SessionOptions.EnvNamePoisoned n -> Some n | _ -> None) |> List.distinct |> List.sort
         refusedNames = (List.distinct poisoned |> List.sort)
         && (options.Env |> List.map fst |> List.sort) = (List.sort plain)))
@@ -53,18 +54,18 @@ let sessionOptionsTests =
       text |> Expect.stringContains "gives the next step" "→"
 
     testCase "WHY - an empty variable name and one with an equals sign are refused" <| fun _ ->
-      let _, refusals = SessionOptions.ofConfig (configWith (fun c -> { c with SessionEnv = [ "", "x"; "A=B", "y" ] }))
+      let _, refusals = SessionOptions.ofConfig (configWith (fun c -> { c with SessionEnv = [ EnvEntry("", "x"); EnvEntry("A=B", "y") ] }))
       refusals |> Expect.equal "both refused" [ SessionOptions.EnvNameEmpty; SessionOptions.EnvNameInvalid "A=B" ]
 
     testCase "WHY - a user variable that clashes with one SageFs sets is reported and SageFs's value wins" <| fun _ ->
-      let config = configWith (fun c -> { c with SessionEnv = [ "SAGEFS_PROJECT_OUTPUT", "/mine"; "OTHER", "1" ] })
+      let config = configWith (fun c -> { c with SessionEnv = [ EnvEntry("SAGEFS_PROJECT_OUTPUT", "/mine"); EnvEntry("OTHER", "1") ] })
       let env, clashes = hostEnv [ "SAGEFS_PROJECT_OUTPUT", "/p/bin" ] config
       env |> List.filter (fun (n, _) -> n = "SAGEFS_PROJECT_OUTPUT") |> Expect.equal "one entry, SageFs's" [ "SAGEFS_PROJECT_OUTPUT", "/p/bin" ]
       env |> List.contains ("OTHER", "1") |> Expect.isTrue "the other entry is kept"
       clashes |> Expect.equal "reported" [ { SessionOptions.Name = "SAGEFS_PROJECT_OUTPUT"; UserValue = "/mine"; SageFsValue = "/p/bin" } ]
 
     testCase "WHY - Server GC wins over a user's DOTNET_gcServer=0 and the clash is reported" <| fun _ ->
-      let config = configWith (fun c -> { c with Gc = ServerGc; SessionEnv = [ "DOTNET_gcServer", "0" ] })
+      let config = configWith (fun c -> { c with Gc = ServerGc; SessionEnv = [ EnvEntry("DOTNET_gcServer", "0") ] })
       let env, clashes = hostEnv [] config
       env |> List.filter (fun (n, _) -> n = "DOTNET_gcServer") |> Expect.equal "Server's value" [ "DOTNET_gcServer", "1" ]
       clashes |> List.map (fun c -> c.Name) |> Expect.equal "reported" [ "DOTNET_gcServer" ]
@@ -74,7 +75,7 @@ let sessionOptionsTests =
       options.FsiArgs |> Expect.equal "carried" [ "--no-warn:1182" ]
 
     testCase "WHY - an option set for one directory does not reach another" <| fun _ ->
-      let a, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Gc = ServerGc; SessionEnv = [ "A", "1" ] }))
+      let a, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Gc = ServerGc; SessionEnv = [ EnvEntry("A", "1") ] }))
       let b, _ = SessionOptions.ofConfig DirectoryConfigDefaults.empty
       a.Gc |> Expect.equal "a is Server" ServerGc
       b |> Expect.equal "b is the default" SessionOptions.none
@@ -92,7 +93,7 @@ let sessionOptionsTests =
       let changes =
         [ "DefaultArgs", configWith (fun c -> { c with DefaultArgs = [ "--x" ] })
           "Gc", configWith (fun c -> { c with Gc = ServerGc })
-          "SessionEnv", configWith (fun c -> { c with SessionEnv = [ "A", "1" ] })
+          "SessionEnv", configWith (fun c -> { c with SessionEnv = [ EnvEntry("A", "1") ] })
           "Artifacts", configWith (fun c -> { c with Artifacts = ArtifactsIn "/tmp/art" }) ]
       let hostFields =
         SessionOptions.fieldReaders
@@ -149,6 +150,7 @@ let sessionOptionsTests =
         let options, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn artifacts }))
         SessionOptionsRegistry.remember project options
         let psi = SessionBuild.buildStartInfo [ "build"; "Small.fsproj"; "-nodeReuse:false" ] project
+        ProcessEnvironment.applyTo psi []
         use proc = Diagnostics.Process.Start psi
         let output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd()
         proc.WaitForExit()
