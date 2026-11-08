@@ -65,6 +65,16 @@ let tests =
           String.IsNullOrWhiteSpace(UsageRefusal.describe expected) |> Expect.isFalse "and it says something")
       }
 
+      test "WHY - a list of scope prefixes is refused before any daemon call, and the refusal says what to pass instead" {
+        match parse "mint --role Implementer --dir /repo --scope SageFs.Core/,SageFs/,docs/" with
+        | Ok args -> failtestf "a token with this scope claims nothing, but it parsed: %A" args.Request
+        | Error refusal ->
+          let text = UsageRefusal.describe refusal
+          text |> Expect.stringContains "says a comma is not a separator" "comma"
+          text |> Expect.stringContains "says the scope is one directory" "one directory"
+          text |> Expect.stringContains "names the next action" "whole repo"
+      }
+
       test "WHY - a variable name is letters, digits and underscores, and does not start with a digit" {
         isVariableName "SAGEFS_MEMBER_TOKEN" |> Expect.isTrue "plain"
         isVariableName "_x1" |> Expect.isTrue "underscore first"

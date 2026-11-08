@@ -137,6 +137,24 @@ let scopeTests =
       let prefixSegments = (ScopePrefix.value p).Split('/', StringSplitOptions.RemoveEmptyEntries) |> List.ofArray
       let expected = List.truncate prefixSegments.Length segments = prefixSegments
       ScopePrefix.covers p (ClaimScope.File path) = expected
+
+    testCase "WHY - a comma or semicolon list is refused: it names several directories and one prefix can cover none of them" <| fun () ->
+      for raw in [ "SageFs.Core/,SageFs/,docs/"; "src/Foo,src/Bar"; "src/Foo, src/Bar"; "a/;b/"; "src/Foo/," ] do
+        ScopePrefix.tryParse raw |> Result.isError |> Expect.isTrue (sprintf "'%s' is a list, not a prefix" raw)
+
+    testPropertyWithConfig capConfig "any text with a list separator in it is refused, and any other accepted prefix covers a file under its own directory" <| fun (seed: PositiveInt) ->
+      let names = [| "src"; "Foo"; "SageFs.Core"; "docs"; "a b"; "x-y"; "Bar2" |]
+      let rng = Random(seed.Get)
+      let segments = [ for _ in 1 .. 1 + rng.Next 4 -> names.[rng.Next names.Length] ]
+      let separator = [| ","; ";"; ", " |].[rng.Next 3]
+      let list = String.concat separator [ String.concat "/" segments; String.concat "/" (List.rev segments) ] + (if rng.Next 2 = 0 then "/" else "")
+      let listIsRefused = Result.isError (ScopePrefix.tryParse list)
+      let single = String.concat "/" segments
+      let singleCoversItsOwn =
+        match ScopePrefix.tryParse single with
+        | Ok p -> ScopePrefix.covers p (ClaimScope.File(single + "/x.fs"))
+        | Error _ -> false
+      listIsRefused && singleCoversItsOwn
   ]
 
 [<Tests>]
