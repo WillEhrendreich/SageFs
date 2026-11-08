@@ -174,6 +174,31 @@ let ownershipTests =
       let dirSessions = Map.ofList [ dir1 + "/", [ s1 ]; nested + "/", [ s2 ] ]
       sessionsForPath dirSessions (System.IO.Path.Combine(nested, "Lib.fs"))
       |> Expect.equal "nested/ is deeper than proj1/" [ s2 ]
+
+    testCase "two spellings of one directory both contain the path, and the first in the map's order owns it" <| fun _ ->
+      let dirSessions = Map.ofList [ dir1, [ s1 ]; dir1 + "/", [ s2 ] ]
+      sessionsForPath dirSessions filePath
+      |> Expect.equal "equal depth keeps the first" [ s1 ]
+
+    testCase "WHY — finding the owner of a path splits that path once, not once for every watched directory" <| fun _ ->
+      // Every save in a watched tree asks this, and a daemon with sixty-four sessions asked it with 128 path splits.
+      // Bytes allocated by the calling thread are the measure: they do not move with a busy machine.
+      let dirs = [ for i in 1 .. 64 -> System.IO.Path.GetFullPath(sprintf "/tmp/sagefs-watcher-alloc/proj%d" i) ]
+      let dirSessions = dirs |> List.map (fun dir -> dir, [ s1 ]) |> Map.ofList
+      let path = System.IO.Path.Combine(dirs.[31], "src", "Lib.fs")
+      let allocated (work: unit -> unit) : int64 =
+        work ()
+        let before = System.GC.GetAllocatedBytesForCurrentThread()
+        work ()
+        System.GC.GetAllocatedBytesForCurrentThread() - before
+      let splitPath = allocated (fun () -> PathContainment.fullSegments path |> ignore)
+      let splitRoot = allocated (fun () -> PathContainment.fullSegments dirs.[0] |> ignore)
+      let lookup = allocated (fun () -> sessionsForPath dirSessions path |> ignore)
+      // One split of each root and one of the path, and half again for the walk itself. Measured in the REPL on 2026-11-08:
+      // one split of each costs 24 KB, two of each cost 65 KB, and this budget is 35 KB.
+      let budget = (int64 dirs.Length * splitRoot + splitPath) * 3L / 2L
+      (lookup <= budget)
+      |> Expect.isTrue (sprintf "the lookup allocated %d bytes, over the %d it needs for %d root splits and one path split" lookup budget dirs.Length)
   ]
 
 let propertyTests =
