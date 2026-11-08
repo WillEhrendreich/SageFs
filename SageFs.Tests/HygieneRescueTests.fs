@@ -20,7 +20,7 @@ let private show (sb: Sandbox) (spec: string) : string = git sb.Repo [ "show"; s
 
 let private rescued (result: RescueResult) : string * string * Replay * BaseHas =
   match result with
-  | RescueResult.Rescued(branch, sha, replay, has) -> branch, sha, replay, has
+  | RescueResult.Rescued(branch, sha, replay, has, _) -> branch, sha, replay, has
   | RescueResult.NoSuchWorktree _
   | RescueResult.CouldNotRescue _ -> failtestf "expected Rescued, got %A" result
 
@@ -94,7 +94,7 @@ let rescueTests =
       let _, sha, replay, _ = rescued result
       (match replay with | Replay.ConflictedAt _ -> true | Replay.OntoBase _ | Replay.NothingToReplay -> false) |> Expect.isTrue "the conflict is reported"
       sha |> Expect.equal "the branch is the worktree's own tip" tip
-      (RescueResult.Rescued("rescue/clash", sha, replay, BaseHas.NotAll 1) |> describe) |> Expect.stringContains "says how to go on" "rebase"
+      (RescueResult.Rescued("rescue/clash", sha, replay, BaseHas.NotAll 1, TempWorktree.Removed) |> describe) |> Expect.stringContains "says how to go on" "rebase"
       // The temporary worktree is gone: only the main checkout and the one under test remain.
       (git sb.Repo [ "worktree"; "list"; "--porcelain" ]).Split([| "worktree " |], StringSplitOptions.RemoveEmptyEntries).Length
       |> Expect.equal "no temporary worktree is left behind" 2

@@ -1,19 +1,25 @@
 namespace SageFs.Simulation
 
 open System
+open System.IO
 open SageFs
 open SageFs.WorkspaceHygiene
 open SageFs.HygieneLedger
 
 /// Deterministic Simulation Testing for the hygiene SWEEP (docs/plans/hygiene-that-runs-itself.md, step 7): seeded worlds of
-/// agent worktrees that appear, get busy, commit, collect uncommitted work, get merged by history, by patch or by content, and
-/// sit while the clock moves, with a sweep landing between any two of those. The subject is the REAL decision code the sweep
-/// runs: `Ledger.transitions`, `Ledger.holdBack`, `HygieneAuto.plan`, `Confirmation.safeOnly` and `Executor.run`. The world around
-/// it models what git would answer and what the edge's own checks do (git refusing a worktree with changes, the edge keeping a
-/// restore point before it drops a commit the base only has by content, the salvage commit).
+/// agent worktrees that appear, get busy, commit, collect uncommitted and ignored files, get locked by a person or by the harness,
+/// get merged by history, by patch or by content, get removed by hand and made again, and sit while the clock moves, with a
+/// sweep landing between any two of those.
 ///
-/// The invariant the plan names: the sweep never loses a commit or an uncommitted byte. Twins reintroduce one bug each, so a green
-/// run means the invariant has teeth.
+/// The subject is the REAL decision code the sweep runs: `Ledger.transitions`, `Ledger.vanished`, `Ledger.holdBack`,
+/// `HygieneAuto.plan`, `Confirmation.safeOnly` and `Executor.run`. The operations those decisions produce are carried out by a
+/// `Performer` the caller supplies. This project cannot see the daemon's edge, so the test project hands in the REAL
+/// `HygieneEdge` driven over a fake git that answers from the model world and can fail on a schedule (`HygieneSweepSimEdge`).
+/// Nothing here re-implements what the edge checks: its fail-open, its restore points and its lock rule are the product's.
+///
+/// The invariant the plan names: the sweep never loses a commit, an uncommitted byte or an ignored file that is not
+/// regenerated, and never overrides a lock a person made. Twins reintroduce one bug each, so a green run means the invariants
+/// have teeth.
 module HygieneSweepSim =
 
   /// What `git worktree lock` says about a worktree, by who made it and whether what it names is alive.
@@ -34,6 +40,8 @@ module HygieneSweepSim =
     { Id: int
       Busy: HygieneSim.Use
       Lock: Lock
+      /// When the worktree was made: a ledger record older than this is a record of another worktree.
+      Born: DateTime
       /// Uncommitted work, by unit id. Real work, not build output.
       Dirty: Set<int>
       /// Ignored files no rule says are regenerated (a local `.env`, a `*.db`), by unit id. `git worktree remove` deletes them
@@ -48,7 +56,7 @@ module HygieneSweepSim =
       Branches: Map<string, int list>
       /// How each commit reached the base. A commit merged by patch or content is NOT in the base's history: only its content is.
       Base: Map<int, MergeHow>
-      /// Uncommitted units saved by a salvage, by salvage branch.
+      /// Uncommitted units saved by a salvage, by salvage ref.
       Salvaged: Map<string, Set<int>>
       /// Commits kept by `refs/sagefs/removed/...`.
       Restore: Set<int>
@@ -56,6 +64,9 @@ module HygieneSweepSim =
       CommitsMade: Set<int>
       DirtMade: Set<int>
       IgnoredMade: Set<int>
+      /// Worktrees a person removed by hand that no sweep has noticed yet, and those one has.
+      Vacated: Set<int>
+      VacatedSeen: Set<int>
       Lines: LedgerLine list
       Clock: DateTime
       NextId: int }
@@ -70,6 +81,10 @@ module HygieneSweepSim =
     | IgnoreFile of nth: int
     | LockIt of nth: int * Lock
     | Merge of nth: int * MergeHow
+    /// A person removes a worktree with `git worktree remove` (its branch stays).
+    | RemoveByHand of nth: int
+    /// An agent makes a worktree at the path of one removed by hand, after a sweep noticed it was gone.
+    | Reuse of nth: int
     | Wait of hours: int
     | Sweep
 
@@ -78,9 +93,11 @@ module HygieneSweepSim =
   [<RequireQualifiedAccess>]
   type Behavior =
     | Real
+    /// The real edge while git fails on a schedule (the commands that decide whether work reached the base, the one that reads a tip).
+    | GitFaults
     /// TWIN: removes a worktree that has uncommitted work (a forced removal) and has not saved it first.
     | ForcesAndSkipsSalvage
-    /// TWIN: deletes a branch merged only by patch or content without keeping its commits reachable.
+    /// TWIN: a restore point that reports success and keeps nothing, so a commit the base only has by content is dropped.
     | NoRestorePoint
     /// TWIN: believes git's age and ignores the ledger: a worktree never seen before is tidied at once.
     | IgnoresLedger
@@ -88,16 +105,34 @@ module HygieneSweepSim =
     | UnlocksAnyLock
     /// TWIN: does not look at ignored files (the old status), so a worktree with a `.env` reads clean and is removed unsaved.
     | RemovesIgnoredFiles
+    /// TWIN: never writes a `Vanished` line, so a worktree made at the path of one removed by hand inherits its quiet record.
+    | ForgetsVanished
 
   /// One worktree removal the sweep made, with what the ledger knew when the sweep started and the lock it had.
-  type Removal = { WorktreeId: int; Known: WorktreeRecord option; At: DateTime; LockAtRemoval: Lock }
+  type Removal =
+    { WorktreeId: int
+      Known: WorktreeRecord option
+      At: DateTime
+      LockAtRemoval: Lock
+      Born: DateTime }
 
   type Step = { Op: Op; After: World; Removals: Removal list }
 
   type Trace = { Scenario: Scenario; Steps: Step list }
 
-  /// The grace the product holds a finished worktree for, so the sim's waits are laid out against the real number.
-  let grace = DataRetention.finishedWorktreeGrace
+  /// What the edge did with one operation over the model world it was handed: the outcome, the world afterwards, and the worktree
+  /// it removed, if it removed one.
+  type EdgeResult =
+    { Outcome: Outcome
+      World: World
+      Removed: int option }
+
+  /// Carries one operation out against the model. The test project supplies the REAL edge over a fake git (`HygieneSweepSimEdge`).
+  type Performer = Behavior -> World -> Operation -> EdgeResult
+
+  /// The grace a finished worktree is held for in the sim: a day, spelled here so the sim never reads it from the environment.
+  let private graceHours = 24
+  let grace : TimeSpan = TimeSpan.FromHours(float graceHours)
 
   let private start = DateTime(2026, 11, 7, 12, 0, 0, DateTimeKind.Utc)
 
@@ -110,23 +145,40 @@ module HygieneSweepSim =
       CommitsMade = Set.empty
       DirtMade = Set.empty
       IgnoredMade = Set.empty
+      Vacated = Set.empty
+      VacatedSeen = Set.empty
       Lines = []
       Clock = start
       NextId = 1 }
+
+  /// Real directories: the edge asks the file system whether a worktree is there, so the model's worktrees live in a temp area.
+  let private scratch : Lazy<string> = lazy (Path.Combine(Path.GetTempPath(), sprintf "sagefs-sweepsim-%s" (Guid.NewGuid().ToString "N")))
+  let worktreeRoot () : string = Path.Combine(scratch.Value, ".claude", "worktrees")
+  let pathOf (id: int) : string = Path.Combine(worktreeRoot (), sprintf "agent-%d" id)
+  let repoPath () : string = Path.Combine(scratch.Value, "repo")
+  let roots () : Roots = { Entries = [ RootKind.AgentWorktrees, worktreeRoot () ]; NamePrefixes = [] }
 
   let private nth (m: Map<'k, 'v>) (n: int) : 'v option =
     match Map.count m with
     | 0 -> None
     | count -> m |> Map.toList |> List.item (n % count) |> snd |> Some
 
-  let private salvageBranch (id: int) : string = sprintf "salvage/agent-%d" id
+  let private nthOf (items: Set<int>) (n: int) : int option =
+    match Set.count items with
+    | 0 -> None
+    | count -> items |> Set.toList |> List.item (n % count) |> Some
+
+  let private salvageRef (id: int) : string = sprintf "refs/sagefs/salvage/agent-%d" id
+
+  let private branchOf (id: int) : string = HygieneSim.branchOf id
 
   // ─── What gathering would say ────────────────────────────────────────
 
   let private unmerged (world: World) (commits: int list) : int list =
     commits |> List.filter (fun c -> not (Map.containsKey c world.Base))
 
-  let private evidenceOf (world: World) (commits: int list) : MergeEvidence =
+  /// How a branch's commits have reached the base, from the model: the same reading the fake git answers from.
+  let evidenceOf (world: World) (commits: int list) : MergeEvidence =
     match unmerged world commits with
     | [] ->
       match commits with
@@ -143,7 +195,7 @@ module HygieneSweepSim =
       // Git says it is old: the ledger's rule is what has to hold a worktree back.
       LastTouched = world.Clock - grace * 3.0
       Owner = Owner.OwnerUnrecorded
-      Repo = RepoLink.InRepo HygieneSim.repo
+      Repo = RepoLink.InRepo(repoPath ())
       Branch = BranchLabel.NoBranch
       Display = ""
       Uses = []
@@ -152,17 +204,19 @@ module HygieneSweepSim =
       Git = GitEvidence.NoGitEvidence }
 
   let private worktreeSubject (behavior: Behavior) (world: World) (wt: Worktree) : Subject =
-    let name = HygieneSim.branchOf wt.Id
+    let name = branchOf wt.Id
     let commits = Map.tryFind name world.Branches |> Option.defaultValue []
     // The old status never listed ignored files; the twin reads the world that way.
     let ignoredCounts =
       match behavior with
       | Behavior.RemovesIgnoredFiles -> false
       | Behavior.Real
+      | Behavior.GitFaults
       | Behavior.ForcesAndSkipsSalvage
       | Behavior.NoRestorePoint
       | Behavior.IgnoresLedger
-      | Behavior.UnlocksAnyLock -> true
+      | Behavior.UnlocksAnyLock
+      | Behavior.ForgetsVanished -> true
     let changes =
       [ if not (Set.isEmpty wt.Dirty) then { Path = "src/work.fs"; Origin = ChangeOrigin.Real }
         if ignoredCounts && not (Set.isEmpty wt.Ignored) then { Path = ".env"; Origin = ChangeOrigin.Real }
@@ -177,7 +231,7 @@ module HygieneSweepSim =
       | Lock.PersonPidLike, _ -> [ InUseReason.LockedByPerson "keep" ]
       | Lock.AgentDead, _
       | Lock.NoLock, _ -> []
-    { baseSubject world (Target.Directory(HygieneSim.pathOf wt.Id)) LeftoverKind.AgentWorktree with
+    { baseSubject world (Target.Directory(pathOf wt.Id)) LeftoverKind.AgentWorktree with
         Branch = BranchLabel.OnBranch name
         Retention = Retention.KeepFor grace
         Uses =
@@ -188,7 +242,7 @@ module HygieneSweepSim =
         Git = GitEvidence.Worktree(evidenceOf world commits, changes) }
 
   let private branchSubject (world: World) (name: string) (commits: int list) : Subject =
-    { baseSubject world (Target.GitBranch(HygieneSim.repo, name)) LeftoverKind.StaleBranch with
+    { baseSubject world (Target.GitBranch(repoPath (), name)) LeftoverKind.StaleBranch with
         Branch = BranchLabel.OnBranch name
         Git = GitEvidence.Branch(evidenceOf world commits) }
 
@@ -199,7 +253,7 @@ module HygieneSweepSim =
   let private subjectOfTarget (behavior: Behavior) (world: World) (target: Target) : Subject option =
     match target with
     | Target.Directory path ->
-      world.Worktrees |> Map.toList |> List.tryPick (fun (id, wt) -> if HygieneSim.pathOf id = path then Some(worktreeSubject behavior world wt) else None)
+      world.Worktrees |> Map.toList |> List.tryPick (fun (id, wt) -> if pathOf id = path then Some(worktreeSubject behavior world wt) else None)
     | Target.GitBranch(_, name) -> Map.tryFind name world.Branches |> Option.map (branchSubject world name)
     | Target.File _
     | Target.RunningProcess _ -> None
@@ -211,14 +265,23 @@ module HygieneSweepSim =
     | None -> world
     | Some wt -> { world with Worktrees = Map.add wt.Id (f wt) world.Worktrees }
 
+  let private freshWorktree (id: int) (born: DateTime) : Worktree =
+    { Id = id
+      Busy = HygieneSim.Use.Idle
+      Lock = Lock.NoLock
+      Born = born
+      Dirty = Set.empty
+      Ignored = Set.empty
+      HasGenerated = false }
+
   let applyOp (world: World) (op: Op) : World =
     match op with
     | Op.Appear ->
       let id = world.NextId
       let commit = id * 1000
       { world with
-          Worktrees = Map.add id { Id = id; Busy = HygieneSim.Use.Idle; Lock = Lock.NoLock; Dirty = Set.empty; Ignored = Set.empty; HasGenerated = false } world.Worktrees
-          Branches = Map.add (HygieneSim.branchOf id) [ commit ] world.Branches
+          Worktrees = Map.add id (freshWorktree id world.Clock) world.Worktrees
+          Branches = Map.add (branchOf id) [ commit ] world.Branches
           CommitsMade = Set.add commit world.CommitsMade
           NextId = id + 1 }
     | Op.BecomeBusy n -> updateWorktree world n (fun w -> { w with Busy = HygieneSim.Use.Busy })
@@ -227,7 +290,7 @@ module HygieneSweepSim =
       match nth world.Worktrees n with
       | None -> world
       | Some wt ->
-        let name = HygieneSim.branchOf wt.Id
+        let name = branchOf wt.Id
         let commits = Map.tryFind name world.Branches |> Option.defaultValue []
         let c = wt.Id * 1000 + List.length commits
         { world with Branches = Map.add name (commits @ [ c ]) world.Branches; CommitsMade = Set.add c world.CommitsMade }
@@ -252,6 +315,30 @@ module HygieneSweepSim =
       match nth world.Branches n with
       | None -> world
       | Some commits -> { world with Base = commits |> List.fold (fun acc c -> Map.add c how acc) world.Base }
+    | Op.RemoveByHand n ->
+      // A person removes a worktree that holds nothing of value: git itself refuses one with changes, so only a clean one goes.
+      match nth world.Worktrees n with
+      | Some wt when Set.isEmpty wt.Dirty && Set.isEmpty wt.Ignored && wt.Lock = Lock.NoLock && wt.Busy = HygieneSim.Use.Idle ->
+        { world with Worktrees = Map.remove wt.Id world.Worktrees; Vacated = Set.add wt.Id world.Vacated }
+      | Some _
+      | None -> world
+    | Op.Reuse n ->
+      match nthOf world.VacatedSeen n with
+      | None -> world
+      | Some id ->
+        // The new worktree checks out the branch that is still there, as it was; a branch that is gone is made again.
+        let name = branchOf id
+        let commit = id * 1000 + 900
+        let branches, made =
+          match Map.tryFind name world.Branches with
+          | Some _ -> world.Branches, world.CommitsMade
+          | None -> Map.add name [ commit ] world.Branches, Set.add commit world.CommitsMade
+        { world with
+            Worktrees = Map.add id (freshWorktree id world.Clock) world.Worktrees
+            Branches = branches
+            CommitsMade = made
+            Vacated = Set.remove id world.Vacated
+            VacatedSeen = Set.remove id world.VacatedSeen }
     | Op.Wait hours -> { world with Clock = world.Clock + TimeSpan.FromHours(float hours) }
     | Op.Sweep -> world
 
@@ -261,20 +348,14 @@ module HygieneSweepSim =
     world.Worktrees
     |> Map.toList
     |> List.map (fun (id, wt) ->
-      { Path = HygieneSim.pathOf id
-        Branch = BranchLabel.OnBranch(HygieneSim.branchOf id)
+      { Path = pathOf id
+        Branch = BranchLabel.OnBranch(branchOf id)
         Tip = sprintf "tip%d" id
         Maker = Maker.HarnessAgent(string id)
         Activity =
           (match wt.Busy with
            | HygieneSim.Use.Busy -> Activity.InUse
            | HygieneSim.Use.Idle -> Activity.Quiet) })
-
-  let private commitsOfBranch (world: World) (name: string) : int list = Map.tryFind name world.Branches |> Option.defaultValue []
-
-  /// Whether a branch's commits are all in the base's history (an ancestor), so dropping the ref loses nothing.
-  let private allAncestors (world: World) (commits: int list) : bool =
-    commits |> List.forall (fun c -> Map.tryFind c world.Base = Some MergeHow.Ancestor)
 
   /// TWIN support: a tidy that takes a worktree with uncommitted work for a clean one.
   let private believeDirtyIsClean (leftover: Leftover) : Leftover =
@@ -283,19 +364,33 @@ module HygieneSweepSim =
       Leftover.AgentWorktree({ entry with Standing = Standing.Merged MergeHow.Ancestor }, detail)
     | other -> other
 
-  let private sweepWith (behavior: Behavior) (world: World) : World * Removal list =
+  let private sweepWith (performer: Performer) (behavior: Behavior) (world: World) : World * Removal list =
     let known = Ledger.fold world.Lines
-    let lines = Ledger.transitions world.Clock known (observed world)
-    let afterObserving = { world with Lines = world.Lines @ lines }
-    // Salvage: uncommitted work of a worktree nobody is using goes to a branch of its own.
+    let seen = observed world
+    // A worktree the ledger had on disk that is not among the ones just seen was removed by hand; the twin never says so.
+    let vanished =
+      match behavior with
+      | Behavior.ForgetsVanished -> []
+      | Behavior.Real
+      | Behavior.GitFaults
+      | Behavior.ForcesAndSkipsSalvage
+      | Behavior.NoRestorePoint
+      | Behavior.IgnoresLedger
+      | Behavior.UnlocksAnyLock
+      | Behavior.RemovesIgnoredFiles -> Ledger.vanished world.Clock known seen
+    let lines = Ledger.transitions world.Clock known seen @ vanished
+    let afterObserving = { world with Lines = world.Lines @ lines; VacatedSeen = Set.union world.VacatedSeen world.Vacated }
+    // Salvage: uncommitted work of a worktree nobody is using goes to a ref of its own.
     let afterSalvage =
       match behavior with
       | Behavior.ForcesAndSkipsSalvage -> afterObserving
       | Behavior.Real
+      | Behavior.GitFaults
       | Behavior.NoRestorePoint
       | Behavior.IgnoresLedger
       | Behavior.UnlocksAnyLock
-      | Behavior.RemovesIgnoredFiles ->
+      | Behavior.RemovesIgnoredFiles
+      | Behavior.ForgetsVanished ->
         afterObserving.Worktrees
         |> Map.fold (fun (w: World) id wt ->
           // The twin that does not look at ignored files does not save them either.
@@ -303,26 +398,30 @@ module HygieneSweepSim =
             match behavior with
             | Behavior.RemovesIgnoredFiles -> wt.Dirty
             | Behavior.Real
+            | Behavior.GitFaults
             | Behavior.ForcesAndSkipsSalvage
             | Behavior.NoRestorePoint
             | Behavior.IgnoresLedger
-            | Behavior.UnlocksAnyLock -> Set.union wt.Dirty wt.Ignored
+            | Behavior.UnlocksAnyLock
+            | Behavior.ForgetsVanished -> Set.union wt.Dirty wt.Ignored
           match wt.Busy, Set.isEmpty toSave with
           | HygieneSim.Use.Idle, false ->
-            let saved = Map.tryFind (salvageBranch id) w.Salvaged |> Option.defaultValue Set.empty
-            { w with Salvaged = Map.add (salvageBranch id) (Set.union saved toSave) w.Salvaged }
+            let saved = Map.tryFind (salvageRef id) w.Salvaged |> Option.defaultValue Set.empty
+            { w with Salvaged = Map.add (salvageRef id) (Set.union saved toSave) w.Salvaged }
           | HygieneSim.Use.Idle, true
           | HygieneSim.Use.Busy, _ -> w) afterObserving
-    // Tidy: the plan the daemon makes over what the ledger has cleared, run through the real executor.
+    // Tidy: the plan the daemon makes over what the ledger has cleared, run through the real executor and the real edge.
     let leftovers = gather behavior afterSalvage
     let held =
       match behavior with
       | Behavior.IgnoresLedger -> leftovers
       | Behavior.ForcesAndSkipsSalvage -> Ledger.holdBack grace world.Clock known leftovers |> List.map believeDirtyIsClean
       | Behavior.Real
+      | Behavior.GitFaults
       | Behavior.NoRestorePoint
       | Behavior.UnlocksAnyLock
-      | Behavior.RemovesIgnoredFiles -> Ledger.holdBack grace world.Clock known leftovers
+      | Behavior.RemovesIgnoredFiles
+      | Behavior.ForgetsVanished -> Ledger.holdBack grace world.Clock known leftovers
     let plan = HygieneAuto.plan held
     match Confirmation.safeOnly plan plan.Id with
     | Result.Error _ -> afterSalvage, []
@@ -339,100 +438,56 @@ module HygieneSweepSim =
                 match behavior with
                 | Behavior.ForcesAndSkipsSalvage -> Rechecked.Fresh(believeDirtyIsClean fresh)
                 | Behavior.Real
+                | Behavior.GitFaults
                 | Behavior.NoRestorePoint
                 | Behavior.IgnoresLedger
                 | Behavior.UnlocksAnyLock
-                | Behavior.RemovesIgnoredFiles -> Rechecked.Fresh fresh
+                | Behavior.RemovesIgnoredFiles
+                | Behavior.ForgetsVanished -> Rechecked.Fresh fresh
               | None -> Rechecked.Gone
           Resolve = Result.Ok
           Perform =
             fun operation ->
               let current = cell.Value
-              match operation with
-              | Operation.RemoveWorktree(accepted, _, force) ->
-                let path = Guard.path accepted
-                match current.Worktrees |> Map.toList |> List.tryFind (fun (id, _) -> HygieneSim.pathOf id = path) with
-                | None -> Outcome.Done 0L
-                | Some(id, wt) ->
-                  // git worktree remove refuses a worktree with changes unless forced; the edge only forces when only build
-                  // output differs.
-                  let refuses =
-                    match behavior, force, Set.isEmpty wt.Dirty with
-                    | Behavior.ForcesAndSkipsSalvage, _, _ -> false
-                    | _, _, true -> false
-                    | _, _, false -> true
-                  // The edge releases only the harness's own lock, and only for a dead process; a person's lock is never
-                  // released. The twin releases whatever it finds.
-                  let lockRefuses =
-                    match wt.Lock, behavior with
-                    | Lock.PersonNoPid, Behavior.UnlocksAnyLock
-                    | Lock.PersonPidLike, Behavior.UnlocksAnyLock -> false
-                    | Lock.PersonNoPid, _
-                    | Lock.PersonPidLike, _
-                    | Lock.AgentLive, _ -> true
-                    | Lock.AgentDead, _
-                    | Lock.NoLock, _ -> false
-                  match refuses, lockRefuses with
-                  | true, _ -> Outcome.Failed "git refuses: the worktree has uncommitted changes"
-                  | _, true -> Outcome.Failed "the worktree is locked"
-                  | false, false ->
-                    let name = HygieneSim.branchOf id
-                    let commits = commitsOfBranch current name
-                    // The edge keeps a commit the base only has by content reachable before it lets go of the worktree.
-                    let restore =
-                      match behavior, allAncestors current commits with
-                      | Behavior.NoRestorePoint, _ -> current.Restore
-                      | _, true -> current.Restore
-                      | _, false -> Set.union current.Restore (Set.ofList commits)
-                    removals.Add { WorktreeId = id; Known = Map.tryFind (HygieneSim.pathOf id) known; At = current.Clock; LockAtRemoval = wt.Lock }
-                    cell.Value <- { current with Worktrees = Map.remove id current.Worktrees; Restore = restore }
-                    Outcome.Done 100L
-              | Operation.DeleteBranch(_, name, how) ->
-                match Map.tryFind name current.Branches with
-                | None -> Outcome.Done 0L
-                | Some commits ->
-                  let checkedOut = current.Worktrees |> Map.exists (fun id _ -> HygieneSim.branchOf id = name)
-                  let merged = List.isEmpty (unmerged current commits)
-                  match checkedOut, merged with
-                  | true, _ -> Outcome.Failed "branch is checked out in a worktree"
-                  | _, false -> Outcome.Failed "the branch is no longer merged"
-                  | false, true ->
-                    let restore =
-                      match behavior, how with
-                      | Behavior.NoRestorePoint, _ -> current.Restore
-                      | _, BranchDeletion.IfMerged -> current.Restore
-                      | _, BranchDeletion.BecauseMergedBy _ -> Set.union current.Restore (Set.ofList commits)
-                    cell.Value <- { current with Branches = Map.remove name current.Branches; Restore = restore }
-                    Outcome.Done 0L
-              | Operation.RemoveTree _
-              | Operation.RemoveFile _
-              | Operation.Terminate _ -> Outcome.Done 0L }
-      Executor.run effects HygieneSim.roots confirmation plan |> ignore
+              let result = performer behavior current operation
+              cell.Value <- result.World
+              match result.Removed with
+              | Some id ->
+                let before = Map.tryFind id current.Worktrees
+                removals.Add
+                  { WorktreeId = id
+                    Known = Map.tryFind (pathOf id) known
+                    At = current.Clock
+                    LockAtRemoval = (match before with | Some wt -> wt.Lock | None -> Lock.NoLock)
+                    Born = (match before with | Some wt -> wt.Born | None -> current.Clock) }
+              | None -> ()
+              result.Outcome }
+      Executor.run effects (roots ()) confirmation plan |> ignore
       cell.Value, List.ofSeq removals
 
   // ─── Running a scenario ──────────────────────────────────────────────
 
-  let step (behavior: Behavior) (world: World) (op: Op) : Step * World =
+  let step (performer: Performer) (behavior: Behavior) (world: World) (op: Op) : Step * World =
     match op with
     | Op.Sweep ->
-      let after, removals = sweepWith behavior world
+      let after, removals = sweepWith performer behavior world
       { Op = op; After = after; Removals = removals }, after
     | other ->
       let after = applyOp world other
       { Op = op; After = after; Removals = [] }, after
 
-  let trace (behavior: Behavior) (scenario: Scenario) : Trace =
+  let trace (performer: Performer) (behavior: Behavior) (scenario: Scenario) : Trace =
     let steps, _ =
       scenario.Ops
       |> List.fold (fun (acc: Step list, world: World) op ->
-        let s, next = step behavior world op
+        let s, next = step performer behavior world op
         s :: acc, next) ([], initial)
     { Scenario = scenario; Steps = List.rev steps }
 
   let private randomOp (rng: Random) : Op =
     let how () = [| MergeHow.Ancestor; MergeHow.PatchEquivalent; MergeHow.TreeEqual |].[rng.Next 3]
     let lock () = [| Lock.AgentDead; Lock.AgentLive; Lock.PersonNoPid; Lock.PersonPidLike |].[rng.Next 4]
-    match rng.Next 24 with
+    match rng.Next 28 with
     | 0 | 1 | 2 -> Op.Appear
     | 3 -> Op.BecomeBusy(rng.Next 8)
     | 4 | 5 -> Op.BecomeIdle(rng.Next 8)
@@ -443,6 +498,8 @@ module HygieneSweepSim =
     | 15 | 16 -> Op.IgnoreFile(rng.Next 8)
     | 17 -> Op.LockIt(rng.Next 8, lock ())
     | 18 | 19 -> Op.LockIt(rng.Next 8, Lock.NoLock)
+    | 20 | 21 -> Op.RemoveByHand(rng.Next 8)
+    | 22 | 23 -> Op.Reuse(rng.Next 4)
     | _ -> Op.Sweep
 
   /// A pure function of `seed`: replaying a seed gives the identical trace. Every scenario ends with enough sweeps and waiting
@@ -473,7 +530,7 @@ module HygieneSweepSim =
       | false -> Some { Index = i; Why = sprintf "commits %A are reachable from nothing" (Set.toList lost) })
 
   /// NEVER-LOSE-AN-UNCOMMITTED-BYTE: after every step, every uncommitted unit ever made is in a worktree that still exists or on
-  /// a salvage branch.
+  /// a salvage ref.
   let neverLoseAnUncommittedByte (trace: Trace) : Violation list =
     trace.Steps
     |> List.indexed
@@ -484,10 +541,10 @@ module HygieneSweepSim =
       let lost = w.DirtMade |> Set.filter (fun u -> not (Set.contains u inWorktrees) && not (Set.contains u saved))
       match Set.isEmpty lost with
       | true -> None
-      | false -> Some { Index = i; Why = sprintf "uncommitted work %A is in no worktree and on no salvage branch" (Set.toList lost) })
+      | false -> Some { Index = i; Why = sprintf "uncommitted work %A is in no worktree and on no salvage ref" (Set.toList lost) })
 
   /// NEVER-LOSE-AN-IGNORED-FILE: after every step, every ignored file that no rule says is regenerated (a local `.env`) is in a
-  /// worktree that still exists or on a salvage branch. `git worktree remove` deletes ignored files without a word.
+  /// worktree that still exists or on a salvage ref. `git worktree remove` deletes ignored files without a word.
   let neverLoseAnIgnoredFile (trace: Trace) : Violation list =
     trace.Steps
     |> List.indexed
@@ -498,7 +555,7 @@ module HygieneSweepSim =
       let lost = w.IgnoredMade |> Set.filter (fun u -> not (Set.contains u inWorktrees) && not (Set.contains u saved))
       match Set.isEmpty lost with
       | true -> None
-      | false -> Some { Index = i; Why = sprintf "ignored files %A are in no worktree and on no salvage branch" (Set.toList lost) })
+      | false -> Some { Index = i; Why = sprintf "ignored files %A are in no worktree and on no salvage ref" (Set.toList lost) })
 
   /// NEVER-OVERRIDE-A-PERSONS-LOCK: a worktree a person locked was never released or removed by the sweep.
   let neverOverrideAPersonsLock (trace: Trace) : Violation list =
@@ -514,7 +571,8 @@ module HygieneSweepSim =
         | Lock.AgentDead
         | Lock.AgentLive -> None))
 
-  /// A WORKTREE IS TIDIED ONLY AFTER THE LEDGER HAS SEEN IT QUIET FOR THE GRACE: agent worktrees need a ledger entry.
+  /// A WORKTREE IS TIDIED ONLY AFTER THE LEDGER HAS SEEN IT QUIET FOR THE GRACE: agent worktrees need a ledger entry, and the
+  /// entry has to be about THIS worktree, not one that stood at the same path before.
   let removedOnlyAfterTheLedgerClearedIt (trace: Trace) : Violation list =
     trace.Steps
     |> List.indexed
@@ -524,12 +582,15 @@ module HygieneSweepSim =
         match r.Known with
         | None -> Some { Index = i; Why = sprintf "worktree %d was removed before the ledger had ever seen it" r.WorktreeId }
         | Some record ->
-          match record.Activity with
-          | RecordedActivity.RecordedInUse -> Some { Index = i; Why = sprintf "worktree %d was removed while the ledger had it in use" r.WorktreeId }
-          | RecordedActivity.RecordedQuietSince since ->
-            match r.At - since >= grace with
-            | true -> None
-            | false -> Some { Index = i; Why = sprintf "worktree %d was removed %s after the ledger saw it go quiet, inside the grace" r.WorktreeId (string (r.At - since)) }))
+          match record.FirstSeen < r.Born with
+          | true -> Some { Index = i; Why = sprintf "worktree %d was removed on the strength of a record made before it existed (another worktree's)" r.WorktreeId }
+          | false ->
+            match record.Activity with
+            | RecordedActivity.RecordedInUse -> Some { Index = i; Why = sprintf "worktree %d was removed while the ledger had it in use" r.WorktreeId }
+            | RecordedActivity.RecordedQuietSince since ->
+              match r.At - since >= grace with
+              | true -> None
+              | false -> Some { Index = i; Why = sprintf "worktree %d was removed %s after the ledger saw it go quiet, inside the grace" r.WorktreeId (string (r.At - since)) }))
 
   /// NEVER-REMOVE-IN-USE: nothing a session is using was removed.
   let neverRemoveInUse (trace: Trace) : Violation list =

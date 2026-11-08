@@ -31,9 +31,10 @@ let private identity : (string * string) list =
     "GIT_COMMITTER_NAME", "SageFs hygiene"
     "GIT_COMMITTER_EMAIL", "hygiene@sagefs.local" ]
 
-/// The branch a worktree's uncommitted files go to.
+/// The ref a worktree's uncommitted files go to: under refs/sagefs/salvage, not a branch, so `git push --all` does not publish
+/// what may be a local `.env` (`SalvageRefs`).
 let branchFor (worktreePath: string) : string =
-  "salvage/" + Path.GetFileName(worktreePath.TrimEnd('/', '\\'))
+  SalvageRefs.refPrefix + Path.GetFileName(worktreePath.TrimEnd('/', '\\'))
 
 let private text (result: GitResult) : Result<string, string> =
   match result with
@@ -47,7 +48,7 @@ let private mapT (f: 'a -> 'b) (t: Task<'a>) : Task<'b> =
     return f value
   }
 
-/// Commit the worktree's real uncommitted files to `salvage/<name>`. Never throws: a git that will not answer is a result.
+/// Commit the worktree's real uncommitted files to `refs/sagefs/salvage/<name>`. Never throws: a git that will not answer is a result.
 let salvage (git: GitWithEnv) (worktreePath: string) : Task<SalvageResult> =
   task {
     let plain args = git worktreePath [] args
@@ -76,7 +77,7 @@ let salvage (git: GitWithEnv) (worktreePath: string) : Task<SalvageResult> =
                 match! step [ "write-tree" ] with
                 | Result.Error why -> return SalvageResult.CouldNotSalvage why
                 | Result.Ok tree ->
-                  let! previous = plain [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + branch ] |> mapT text
+                  let! previous = plain [ "rev-parse"; "--verify"; "--quiet"; branch ] |> mapT text
                   let previousTip = match previous with | Result.Ok sha when sha <> "" -> Some sha | _ -> None
                   let! previousTree =
                     match previousTip with
@@ -93,8 +94,8 @@ let salvage (git: GitWithEnv) (worktreePath: string) : Task<SalvageResult> =
                     | Result.Ok sha ->
                       let move =
                         match previousTip with
-                        | Some old -> [ "update-ref"; "refs/heads/" + branch; sha; old ]
-                        | None -> [ "update-ref"; "refs/heads/" + branch; sha; "" ]
+                        | Some old -> [ "update-ref"; branch; sha; old ]
+                        | None -> [ "update-ref"; branch; sha; "" ]
                       match! step move with
                       | Result.Error why -> return SalvageResult.CouldNotSalvage why
                       | Result.Ok _ -> return SalvageResult.Salvaged(branch, sha, List.length real)
@@ -103,4 +104,27 @@ let salvage (git: GitWithEnv) (worktreePath: string) : Task<SalvageResult> =
           with
           | :? IOException
           | :? UnauthorizedAccessException -> ()
+  }
+
+/// Every salvage ref in a repository, newest information first. A git that will not answer is `NotListed`, never an empty list.
+let listRefs (git: Git) (repo: string) : Task<SalvageRefs.Listing> =
+  task {
+    match! git repo [ "for-each-ref"; "--format=%(refname)%09%(objectname)%09%(committerdate:unix)"; SalvageRefs.refPrefix ] with
+    | GitResult.Output out ->
+      let parsed =
+        out.Split([| '\n' |], StringSplitOptions.RemoveEmptyEntries)
+        |> Array.toList
+        |> List.choose (fun line ->
+          match line.Split('\t') with
+          | [| refName; sha; unix |] when refName.StartsWith(SalvageRefs.refPrefix, StringComparison.Ordinal) ->
+            let seconds = match Int64.TryParse unix with | true, s -> s | false, _ -> 0L
+            Some
+              ({ Name = refName.Substring SalvageRefs.refPrefix.Length
+                 Ref = refName
+                 Sha = sha
+                 At = DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime } : SalvageRefs.SalvageRef)
+          | _ -> None)
+      return SalvageRefs.Listing.Listed parsed
+    | GitResult.Exit(code, stderr) -> return SalvageRefs.Listing.NotListed(sprintf "git exited %d: %s" code stderr)
+    | GitResult.Unavailable detail -> return SalvageRefs.Listing.NotListed detail
   }

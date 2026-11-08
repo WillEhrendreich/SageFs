@@ -98,3 +98,114 @@ let salvageRefTests =
       File.Exists(Path.Combine(paths.["dirty-real"], "src", "precious.fs")) |> Expect.isTrue "the worktree is untouched"
     }
   ]
+
+[<Tests>]
+let moreEdgeTests =
+  testList "Workspace hygiene: what the edge does when git cannot answer" [
+
+    testTask "a branch git cannot place is not deleted" {
+      use sb = new Sandbox()
+      let paths = populate sb
+      git sb.Repo [ "worktree"; "remove"; "--force"; paths.["squashed"] ] |> ignore
+      let alive : int -> int64 option -> bool = fun _ _ -> false
+      let ctx : HygieneEdge.EdgeContext = { MakeScan = (fun () -> sb.Scan()); Git = gitThatCannotDecide; IsAlive = alive }
+      let! outcome = HygieneEdge.performWith HygieneEdge.noJournal ctx (Operation.DeleteBranch(sb.Repo, "worktree-agent-squashed", BranchDeletion.BecauseMergedBy MergeHow.PatchEquivalent))
+      (match outcome with | Outcome.Failed _ -> true | Outcome.Done _ -> false) |> Expect.isTrue "refused"
+      branchExists sb "worktree-agent-squashed" |> Expect.isTrue "the branch is still there"
+    }
+
+    testTask "merge state is Undecided when git cannot say, and a tip that cannot be read cannot be kept" {
+      use sb = new Sandbox()
+      let paths = populate sb
+      let ctx : HygieneEdge.EdgeContext = { MakeScan = (fun () -> sb.Scan()); Git = gitThatCannotDecide; IsAlive = (fun _ _ -> false) }
+      let tip = (git paths.["squashed"] [ "rev-parse"; "HEAD" ]).Trim()
+      let! state = HygieneEdge.mergeStateAt ctx sb.Repo tip
+      state |> Expect.equal "undecided, not not-merged" HygieneLedger.MergeState.Undecided
+      let! kept = HygieneEdge.keepRestorePoint ctx sb.Repo "x" HygieneLedger.Tip.TipUnknown HygieneLedger.MergeState.Undecided
+      (match kept with | Result.Error _ -> true | Result.Ok() -> false) |> Expect.isTrue "no tip, no removal"
+    }
+  ]
+
+[<Tests>]
+let salvageLifecycleTests =
+  testList "Workspace hygiene: salvage refs are listed and reaped" [
+
+    testTask "a salvage ref is listed, kept while its worktree is there, kept when the base lacks the work, and reaped once the base has it" {
+      use sb = new Sandbox()
+      let path = sb.AddWorktree "keeper"
+      write (Path.Combine(path, "src", "keeper.fs")) "module Keeper"
+      let context = contextFor sb (fun () -> LiveFacts.none)
+      let! _ = sweep context
+      let! listing = HygieneSalvage.listRefs runGit sb.Repo
+      (match listing with
+       | SalvageRefs.Listing.Listed [ r ] -> r.Name
+       | other -> failtestf "expected one salvage ref, got %A" other)
+      |> Expect.equal "listed by worktree name" "keeper"
+      // The worktree is still there: kept.
+      let! _ = sweep context
+      (match gitExit sb.Repo [ "rev-parse"; "--verify"; "--quiet"; "refs/sagefs/salvage/keeper" ] with | 0, _, _ -> true | _ -> false)
+      |> Expect.isTrue "kept while the worktree is there"
+      // The worktree goes (by hand) and the base does NOT have the file: kept.
+      git sb.Repo [ "worktree"; "remove"; "--force"; path ] |> ignore
+      let! _ = sweep context
+      (match gitExit sb.Repo [ "rev-parse"; "--verify"; "--quiet"; "refs/sagefs/salvage/keeper" ] with | 0, _, _ -> true | _ -> false)
+      |> Expect.isTrue "kept: the worktree is gone but the base lacks the work"
+      // The base gets the same file: reaped.
+      write (Path.Combine(sb.Repo, "src", "keeper.fs")) "module Keeper"
+      commitAll sb.Repo "the work reached master by hand"
+      let! report = sweep context
+      (match gitExit sb.Repo [ "rev-parse"; "--verify"; "--quiet"; "refs/sagefs/salvage/keeper" ] with | 0, _, _ -> true | _ -> false)
+      |> Expect.isFalse "reaped once the base has everything on it"
+      report.Reaped |> List.length |> Expect.equal "the reap is in the report" 1
+      let reapedLine = HygieneLedgerStore.read sb.Locations.DataDir |> List.exists (fun l -> match l.Event with | HygieneLedger.LedgerEvent.SalvageReaped _ -> true | _ -> false)
+      reapedLine |> Expect.isTrue "and in the ledger"
+    }
+
+    testCase "decide reaps only when the worktree is known to be gone, and the retention is the only other way out" <| fun _ ->
+      let now = DateTime(2026, 11, 8, 0, 0, 0, DateTimeKind.Utc)
+      let r : SalvageRefs.SalvageRef = { Name = "x"; Ref = "refs/sagefs/salvage/x"; Sha = "abc"; At = now - HygieneAges.days 3.0 }
+      let verdict w h age = SalvageRefs.decide now DataRetention.salvageRetention w h { r with At = now - age }
+      let isReap v = (match v with | SalvageRefs.Verdict.Reap _ -> true | SalvageRefs.Verdict.Keep _ -> false)
+      for holds in [ SalvageRefs.BaseHolds.EverythingOnIt; SalvageRefs.BaseHolds.NotEverything; SalvageRefs.BaseHolds.CouldNotTell ] do
+        for age in [ HygieneAges.days 3.0; HygieneAges.ancient ] do
+          verdict SalvageRefs.WorktreeOfIt.StillThere holds age |> isReap |> Expect.isFalse "a worktree that is there keeps it"
+          verdict SalvageRefs.WorktreeOfIt.NotListed holds age |> isReap |> Expect.isFalse "an unlisted worktree keeps it"
+      verdict SalvageRefs.WorktreeOfIt.Gone SalvageRefs.BaseHolds.EverythingOnIt (HygieneAges.days 3.0) |> isReap |> Expect.isTrue "gone and held by the base"
+      verdict SalvageRefs.WorktreeOfIt.Gone SalvageRefs.BaseHolds.NotEverything (HygieneAges.days 3.0) |> isReap |> Expect.isFalse "gone, not held, young"
+      verdict SalvageRefs.WorktreeOfIt.Gone SalvageRefs.BaseHolds.CouldNotTell HygieneAges.ancient |> isReap |> Expect.isTrue "gone and past the retention"
+  ]
+
+[<Tests>]
+let sweepResilienceTests =
+  testList "Workspace hygiene: a pass that fails says so and the rest go on" [
+
+    testTask "one repository whose pass throws is reported with its exception and the others still run" {
+      let sweepOne (repo: string) : Task<SweepReport> =
+        task {
+          match repo with
+          | "bad" -> return failwith "this repository's pass blew up"
+          | other -> return { Repo = other; LinesWritten = 0; Salvage = []; Tidy = TidyHalf.SwitchedOff; Reaped = []; LedgerFailures = [] }
+        }
+      let! results = sweepRepositories [ "first"; "bad"; "last" ] sweepOne
+      results |> List.map fst |> Expect.equal "every repository was tried, in order" [ "first"; "bad"; "last" ]
+      (match results |> List.find (fun (r, _) -> r = "bad") |> snd with
+       | Result.Error ex -> ex.ToString()
+       | Result.Ok _ -> failtest "the bad one should have failed")
+      |> Expect.stringContains "the whole exception, not only its message" "this repository's pass blew up"
+      (results |> List.filter (fun (_, r) -> match r with | Result.Ok _ -> true | Result.Error _ -> false) |> List.length) |> Expect.equal "the others ran" 2
+    }
+
+    testTask "a ledger that cannot be written is in the report, and the worktree is not tidied on a ledger it could not keep" {
+      use sb = new Sandbox()
+      let path = sb.AddWorktree "unwritable"
+      // The data dir is a file, so no line can be appended.
+      Directory.CreateDirectory(Path.GetDirectoryName sb.Locations.DataDir) |> ignore
+      File.WriteAllText(sb.Locations.DataDir, "not a directory")
+      let context = contextFor sb (fun () -> LiveFacts.none)
+      let! first = sweep context
+      List.isEmpty first.LedgerFailures |> Expect.isFalse "the lost lines are said"
+      let! second = sweep context
+      List.isEmpty second.LedgerFailures |> Expect.isFalse "and again"
+      Directory.Exists path |> Expect.isTrue "a worktree the ledger never recorded is not tidied"
+    }
+  ]

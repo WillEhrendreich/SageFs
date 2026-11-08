@@ -42,9 +42,17 @@ type Replay =
   /// Nothing needed replaying: the base already has every commit and there are no uncommitted files.
   | NothingToReplay
 
+/// What became of the temporary worktree the replay ran in. One that could not be removed is said, with where it is, because it
+/// is a directory the person now has to know about.
+[<RequireQualifiedAccess>]
+type TempWorktree =
+  | NoneNeeded
+  | Removed
+  | Left of path: string * why: string
+
 [<RequireQualifiedAccess>]
 type RescueResult =
-  | Rescued of branch: string * sha: string * Replay * BaseHas
+  | Rescued of branch: string * sha: string * Replay * BaseHas * TempWorktree
   | NoSuchWorktree of name: string * known: string list
   | CouldNotRescue of why: string
 
@@ -135,13 +143,14 @@ type private Replayed =
   | Failed of why: string
 
 /// Replay `shas` onto `baseRef` in a worktree of our own and say where it ended, or which commit conflicted.
-let private replay (ctx: RescueContext) (baseRef: string) (shas: string list) : Task<Replayed> =
+let private replay (ctx: RescueContext) (baseRef: string) (shas: string list) : Task<Replayed * TempWorktree> =
   task {
     let temp = Path.Combine(ctx.ScratchDir, sprintf "sagefs-rescue-%s" (Guid.NewGuid().ToString "N"))
     let step args = ctx.GitEnv temp identity args
     match! ctx.Git ctx.Repo [ "worktree"; "add"; "--detach"; temp; baseRef ] with
-    | GitResult.Exit(code, stderr) -> return Replayed.Failed(sprintf "could not make a temporary worktree (git exited %d: %s)" code stderr)
-    | GitResult.Unavailable detail -> return Replayed.Failed detail
+    | GitResult.Exit(code, stderr) ->
+      return Replayed.Failed(sprintf "could not make a temporary worktree (git exited %d: %s)" code stderr), TempWorktree.NoneNeeded
+    | GitResult.Unavailable detail -> return Replayed.Failed detail, TempWorktree.NoneNeeded
     | GitResult.Output _ ->
       let mutable outcome : Replayed option = None
       for sha in shas do
@@ -165,8 +174,13 @@ let private replay (ctx: RescueContext) (baseRef: string) (shas: string list) : 
             | GitResult.Unavailable detail -> return Replayed.Failed detail
         }
       // The temporary worktree is ours alone, and its removal is forced.
-      let! _ = ctx.Git ctx.Repo [ "worktree"; "remove"; "--force"; temp ]
-      return finished
+      let! removal = ctx.Git ctx.Repo [ "worktree"; "remove"; "--force"; temp ]
+      let cleanup =
+        match removal with
+        | GitResult.Output _ -> TempWorktree.Removed
+        | GitResult.Exit(code, stderr) -> TempWorktree.Left(temp, sprintf "git exited %d: %s" code stderr)
+        | GitResult.Unavailable detail -> TempWorktree.Left(temp, detail)
+      return finished, cleanup
   }
 
 /// Point the rescue branch at `sha`. A rescue branch that already exists somewhere else is never moved: what is on it may be
@@ -203,6 +217,13 @@ let private addUncommitted (ctx: RescueContext) (tip: string) (headSha: string) 
       | GitResult.Exit(code, stderr) -> return Result.Error(sprintf "git commit-tree exited %d: %s" code stderr)
       | GitResult.Unavailable detail -> return Result.Error detail
   }
+
+/// The sentence about a temporary worktree that is still on disk, or nothing when it is gone.
+let private leftNote (cleanup: TempWorktree) : string =
+  match cleanup with
+  | TempWorktree.NoneNeeded
+  | TempWorktree.Removed -> ""
+  | TempWorktree.Left(path, why) -> sprintf " A temporary worktree is still at %s (%s); `git worktree remove --force` it." path why
 
 /// Make `rescue/<name>` for the worktree called `name`.
 let rescue (ctx: RescueContext) (name: string) : Task<RescueResult> =
@@ -241,32 +262,33 @@ let rescue (ctx: RescueContext) (name: string) : Task<RescueResult> =
             | Result.Ok [] when uncommitted.IsNone ->
               // The base has every commit and nothing is uncommitted: the branch is the worktree's own tip.
               match! setBranch ctx branch headSha with
-              | Result.Ok() -> return RescueResult.Rescued(branch, headSha, Replay.NothingToReplay, has)
+              | Result.Ok() -> return RescueResult.Rescued(branch, headSha, Replay.NothingToReplay, has, TempWorktree.NoneNeeded)
               | Result.Error why -> return RescueResult.CouldNotRescue why
             | Result.Ok shas ->
-              match! replay ctx baseRef shas with
-              | Replayed.Failed why -> return RescueResult.CouldNotRescue why
+              let! (replayed, cleanup) = replay ctx baseRef shas
+              match replayed with
+              | Replayed.Failed why -> return RescueResult.CouldNotRescue(why + leftNote cleanup)
               | Replayed.Conflicted commit ->
                 match! setBranch ctx branch whole with
-                | Result.Ok() -> return RescueResult.Rescued(branch, whole, Replay.ConflictedAt commit, has)
-                | Result.Error why -> return RescueResult.CouldNotRescue why
+                | Result.Ok() -> return RescueResult.Rescued(branch, whole, Replay.ConflictedAt commit, has, cleanup)
+                | Result.Error why -> return RescueResult.CouldNotRescue(why + leftNote cleanup)
               | Replayed.Tip tip ->
                 match uncommitted with
                 | None ->
                   match! setBranch ctx branch tip with
-                  | Result.Ok() -> return RescueResult.Rescued(branch, tip, Replay.OntoBase baseRef, has)
-                  | Result.Error why -> return RescueResult.CouldNotRescue why
+                  | Result.Ok() -> return RescueResult.Rescued(branch, tip, Replay.OntoBase baseRef, has, cleanup)
+                  | Result.Error why -> return RescueResult.CouldNotRescue(why + leftNote cleanup)
                 | Some salvage ->
                   match! addUncommitted ctx tip headSha salvage (leaf path) with
-                  | Result.Error why -> return RescueResult.CouldNotRescue why
+                  | Result.Error why -> return RescueResult.CouldNotRescue(why + leftNote cleanup)
                   | Result.Ok None ->
                     match! setBranch ctx branch whole with
-                    | Result.Ok() -> return RescueResult.Rescued(branch, whole, Replay.ConflictedAt "the uncommitted files", has)
-                    | Result.Error why -> return RescueResult.CouldNotRescue why
+                    | Result.Ok() -> return RescueResult.Rescued(branch, whole, Replay.ConflictedAt "the uncommitted files", has, cleanup)
+                    | Result.Error why -> return RescueResult.CouldNotRescue(why + leftNote cleanup)
                   | Result.Ok(Some withFiles) ->
                     match! setBranch ctx branch withFiles with
-                    | Result.Ok() -> return RescueResult.Rescued(branch, withFiles, Replay.OntoBase baseRef, has)
-                    | Result.Error why -> return RescueResult.CouldNotRescue why
+                    | Result.Ok() -> return RescueResult.Rescued(branch, withFiles, Replay.OntoBase baseRef, has, cleanup)
+                    | Result.Error why -> return RescueResult.CouldNotRescue(why + leftNote cleanup)
   }
 
 let private describeHas (has: BaseHas) (baseRef: string) : string =
@@ -280,7 +302,7 @@ let private describeHas (has: BaseHas) (baseRef: string) : string =
 /// What `sagefs hygiene --rescue` prints.
 let describe (result: RescueResult) : string =
   match result with
-  | RescueResult.Rescued(branch, sha, replay, has) ->
+  | RescueResult.Rescued(branch, sha, replay, has, cleanup) ->
     let baseRef, how =
       match replay with
       | Replay.OntoBase b -> b, sprintf "Replayed onto %s." b
@@ -288,7 +310,7 @@ let describe (result: RescueResult) : string =
         "the base",
         sprintf "Replaying %s onto the base conflicted, so the branch is on the worktree's own tip, not rebased. Rebase it by hand: git rebase <base> %s" what branch
       | Replay.NothingToReplay -> "the base", "Nothing needed replaying."
-    String.Join("\n", [ sprintf "Rescued to %s at %s. %s" branch (sha.Substring(0, min 10 sha.Length)) how; describeHas has baseRef ])
+    String.Join("\n", [ sprintf "Rescued to %s at %s. %s%s" branch (sha.Substring(0, min 10 sha.Length)) how (leftNote cleanup); describeHas has baseRef ])
   | RescueResult.NoSuchWorktree(name, known) ->
     sprintf "No worktree is called %s. This repository has: %s." name (match known with | [] -> "none" | names -> String.Join(", ", names))
   | RescueResult.CouldNotRescue why -> sprintf "Could not rescue: %s" why

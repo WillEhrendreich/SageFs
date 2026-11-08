@@ -100,7 +100,7 @@ let ignoredTests =
       do! sweepTwice sb
       Directory.Exists path |> Expect.isTrue "the worktree is still there"
       File.ReadAllText(Path.Combine(path, ".env")) |> Expect.equal "the .env is intact" "SECRET=1"
-      let tip = (git sb.Repo [ "rev-parse"; "refs/heads/salvage/has-env" ]).Trim()
+      let tip = (git sb.Repo [ "rev-parse"; "refs/sagefs/salvage/has-env" ]).Trim()
       git sb.Repo [ "show"; tip + ":.env" ] |> Expect.equal "the .env is on the salvage branch" "SECRET=1"
       git sb.Repo [ "show"; tip + ":data/local.db" ] |> Expect.equal "so is the .db" "rows"
     }

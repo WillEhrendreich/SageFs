@@ -20,7 +20,7 @@ let private html (view: HygieneService.HygieneView) : string = renderNode (rende
 let private snapshotOf (subjects: Subject list) : HygieneService.Snapshot =
   let leftovers = subjects |> List.map (classify now)
   let plan = Planner.plan leftovers
-  { Repo = repoPath; TakenAt = DateTime.UtcNow; Leftovers = leftovers; Plan = plan; Summary = summarize leftovers plan }
+  { Repo = repoPath; TakenAt = DateTime.UtcNow; Leftovers = leftovers; Plan = plan; Summary = summarize leftovers plan; Salvage = SalvageRefs.Listing.Listed [] }
 
 let private scanned (subjects: Subject list) : HygieneService.HygieneView =
   HygieneService.HygieneView.Scanned(snapshotOf subjects, HygieneService.TidiedBefore.NothingTidiedYet)

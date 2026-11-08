@@ -386,15 +386,22 @@ let sweepCommand (kill: bool) =
     0
 
 /// What the running daemon knows that hygiene cannot read off the disk: its sessions as (id, working directory), and the
-/// checkouts a cohort holds as (path, who). Both empty when no daemon answers; a scan then relies on the process table alone.
-let private fetchDaemonFacts (info: DaemonInfo) : (string * string) list * (string * string) list =
-  try
-    use client = new System.Net.Http.HttpClient(Timeout = Timeouts.daemonSessionsProbe)
-    let resp = client.GetAsync(sprintf "http://localhost:%d/api/sessions" info.Port).Result
-    match resp.IsSuccessStatusCode with
-    | false -> [], []
-    | true -> HygieneService.parseSessionsReply (resp.Content.ReadAsStringAsync().Result)
-  with _ -> [], []
+/// checkouts a cohort holds as (path, who). A daemon that did not answer is `DidNotAnswer`, which is not "holds nothing": a tidy
+/// run on it could remove a checkout the cohort holds.
+let private fetchDaemonFacts (info: DaemonInfo) : System.Threading.Tasks.Task<HygieneService.DaemonFacts> =
+  task {
+    try
+      use client = new System.Net.Http.HttpClient(Timeout = Timeouts.daemonSessionsProbe)
+      let! resp = client.GetAsync(sprintf "http://localhost:%d/api/sessions" info.Port)
+      match resp.IsSuccessStatusCode with
+      | false -> return HygieneService.DaemonFacts.DidNotAnswer(sprintf "it answered HTTP %d" (int resp.StatusCode))
+      | true ->
+        let! body = resp.Content.ReadAsStringAsync()
+        return HygieneService.parseSessionsReply body
+    with
+    | :? System.Net.Http.HttpRequestException as ex -> return HygieneService.DaemonFacts.DidNotAnswer ex.Message
+    | :? System.Threading.Tasks.TaskCanceledException -> return HygieneService.DaemonFacts.DidNotAnswer "it did not answer in time"
+  }
 
 /// `sagefs hygiene --rescue <name>`: the work of one worktree on `rescue/<name>`, rebased on the base, and what the base
 /// already has of it.
@@ -430,17 +437,36 @@ let hygieneCommand (action: HygieneAction) (repoArg: string) (mcpPort: int) : Sy
       | HygieneAction.TidySafe ->
         let loc = HygieneService.locationsFor repo
         let daemon = DaemonState.readOnPort mcpPort
-        let sessions, cohortHeld = match daemon with | Some info -> fetchDaemonFacts info | None -> [], []
+        let! facts =
+          match daemon with
+          | Some info -> fetchDaemonFacts info
+          | None -> System.Threading.Tasks.Task.FromResult HygieneService.DaemonFacts.NoDaemon
+        let sessions, cohortHeld =
+          match facts with
+          | HygieneService.DaemonFacts.Answered(sessions, held) -> sessions, held
+          | HygieneService.DaemonFacts.NoDaemon
+          | HygieneService.DaemonFacts.DidNotAnswer _ -> [], []
         let owners = HygieneService.OwnerLedger.read loc.DataDir
         let connection = match daemon with | Some _ -> (fun (_: string) -> true) | None -> (fun (_: string) -> false)
         // This process has no capability table: what the daemon says a cohort holds is what counts here.
         let live () = { HygieneService.liveFactsOf sessions owners connection with CohortHeld = cohortHeld }
         let! snapshot = HygieneService.take loc (live ())
         printfn "%s" (WorkspaceHygieneRender.renderPlan snapshot.Leftovers snapshot.Plan)
-        match action with
-        | HygieneAction.ShowPlan
-        | HygieneAction.Rescue _ -> return 0
-        | HygieneAction.TidySafe ->
+        match SalvageRefs.describe DateTime.UtcNow snapshot.Salvage with
+        | Some line -> printfn "\n%s" line
+        | None -> ()
+        match facts with
+        | HygieneService.DaemonFacts.DidNotAnswer why ->
+          eprintfn "hygiene: the daemon on port %d did not answer (%s), so what it holds is unknown. The plan above does not know the cohort's checkouts." mcpPort why
+        | HygieneService.DaemonFacts.Answered _
+        | HygieneService.DaemonFacts.NoDaemon -> ()
+        match action, facts with
+        | HygieneAction.ShowPlan, _
+        | HygieneAction.Rescue _, _ -> return 0
+        | HygieneAction.TidySafe, HygieneService.DaemonFacts.DidNotAnswer _ ->
+          eprintfn "hygiene: nothing was tidied. Run it again once the daemon answers (`sagefs status`), or stop it first."
+          return 1
+        | HygieneAction.TidySafe, (HygieneService.DaemonFacts.Answered _ | HygieneService.DaemonFacts.NoDaemon) ->
           printfn ""
           match! HygieneService.tidy loc live snapshot.Plan.Id with
           | HygieneService.TidyOutcome.Tidied(report, _) ->

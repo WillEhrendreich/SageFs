@@ -183,7 +183,8 @@ let outsideTests =
       for path in [ unmerged; dirty; clean ] do
         Directory.Exists path |> Expect.isTrue (sprintf "%s is still there" path)
       File.ReadAllText(Path.Combine(dirty, "src", "d.fs")) |> Expect.equal "its uncommitted bytes are intact" "module D"
-      branchExists sb "salvage/dirty" |> Expect.isFalse "and nothing was committed on its behalf"
+      (match gitExit sb.Repo [ "rev-parse"; "--verify"; "--quiet"; "refs/sagefs/salvage/dirty" ] with | 0, _, _ -> true | _ -> false)
+      |> Expect.isFalse "and nothing was committed on its behalf"
     }
   ]
 
@@ -195,11 +196,13 @@ let sessionsReplyTests =
       let withHeld =
         """{"sessions":[{"id":"s1","workingDirectory":"/w/a"}],"cohortHeld":[{"path":"/w/c","holder":"member token abc"}]}"""
       HygieneService.parseSessionsReply withHeld
-      |> Expect.equal "both lists" ([ "s1", "/w/a" ], [ "/w/c", "member token abc" ])
+      |> Expect.equal "both lists" (HygieneService.DaemonFacts.Answered([ "s1", "/w/a" ], [ "/w/c", "member token abc" ]))
       HygieneService.parseSessionsReply """{"sessions":[{"id":"s1","workingDirectory":"/w/a"}]}"""
-      |> Expect.equal "no cohortHeld reads as none" ([ "s1", "/w/a" ], [])
+      |> Expect.equal "no cohortHeld reads as none" (HygieneService.DaemonFacts.Answered([ "s1", "/w/a" ], []))
 
-    testCase "a reply that is not that shape says nothing, and does not throw" <| fun _ ->
+    testCase "a reply that is not that shape is a daemon that did not answer, never a daemon that holds nothing" <| fun _ ->
       for text in [ ""; "not json"; "{}"; """{"sessions":3}""" ] do
-        HygieneService.parseSessionsReply text |> Expect.equal (sprintf "%A reads as nothing" text) ([], [])
+        match HygieneService.parseSessionsReply text with
+        | HygieneService.DaemonFacts.DidNotAnswer why -> String.IsNullOrWhiteSpace why |> Expect.isFalse (sprintf "%A says why" text)
+        | other -> failtestf "%A should be DidNotAnswer, got %A" text other
   ]

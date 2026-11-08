@@ -38,7 +38,7 @@ loop explicitly:
 12. no worktree unless the work must not touch the trunk. An agent that reads or
     edits a file or two works in the shared checkout under a claim (`acquire_claim`).
     A worktree is the exception that gets a ledger entry: the daemon records who
-    made it, saves its uncommitted files to `salvage/<name>`, and removes it only
+    made it, saves its uncommitted files to `refs/sagefs/salvage/<name>`, and removes it only
     after its work has reached the base branch and it has been quiet for a day. Work
     that exists nowhere else is listed first by `sagefs hygiene`, and
     `sagefs hygiene --rescue <name>` puts it on a branch

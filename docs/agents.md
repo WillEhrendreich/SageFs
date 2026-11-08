@@ -294,7 +294,8 @@ spawns and tidy once the work has merged:
 The daemon does not wait for you to look. It sweeps each repository it knows at
 start, every quarter of an hour and whenever a session stops: it records every
 agent worktree in a ledger (who made it, when it went quiet), saves the
-uncommitted files of a worktree nobody is using to `salvage/<name>` without
+uncommitted files of a worktree nobody is using (a local `.env` included) to
+`refs/sagefs/salvage/<name>`, a ref `git push --all` does not send, without
 touching the worktree, and, with `hygiene.autoTidy` on (the default), removes
 what is provably safe. A worktree it has never seen waits a full day from its
 first sweep, and one that holds commits the base lacks, or changes, is never

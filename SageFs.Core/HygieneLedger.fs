@@ -31,6 +31,8 @@ type Tip =
 type MergeState =
   | MergedBy of MergeHow
   | NotMerged
+  /// Git could not say, so nothing may be assumed: not merged, and not unmerged either. The edge refuses to remove on it.
+  | Undecided
   /// What was removed holds no work (a log, a temp run, a registry entry), so there is no merge to speak of.
   | NotAboutWork
 
@@ -55,6 +57,11 @@ type LedgerEvent =
   /// Uncommitted files were committed to a branch.
   | Salvaged of path: string * branch: string * sha: string * files: int
   | Removed of Removal
+  /// A worktree the ledger had on disk was not among the worktrees git listed: somebody removed it by hand. A worktree made
+  /// later at the same path is a new one and starts over.
+  | Vanished of path: string
+  /// A salvage ref was deleted because its worktree was gone and the base has everything on it, or it outlived its retention.
+  | SalvageReaped of salvageRef: string * sha: string * why: string
   /// A rescue branch was made for a worktree.
   | Rescued of path: string * branch: string * sha: string
 
@@ -89,6 +96,8 @@ type SalvageState =
 type Presence =
   | OnDisk
   | RemovedByHygiene
+  /// Not on disk and not removed by hygiene: removed by hand, noticed by a later sweep.
+  | GoneFromDisk
 
 /// What the ledger knows of one worktree, read back from its lines.
 type WorktreeRecord =
@@ -108,7 +117,9 @@ let pathOf (event: LedgerEvent) : string =
   | LedgerEvent.WentQuiet path
   | LedgerEvent.Resumed path
   | LedgerEvent.Salvaged(path, _, _, _)
+  | LedgerEvent.Vanished path
   | LedgerEvent.Rescued(path, _, _) -> path
+  | LedgerEvent.SalvageReaped(salvageRef, _, _) -> salvageRef
   | LedgerEvent.Removed removal -> removal.Target
 
 module Maker =
@@ -160,7 +171,14 @@ module Ledger =
     | LedgerEvent.WentQuiet path -> update path (fun r -> { r with Activity = RecordedActivity.RecordedQuietSince line.At })
     | LedgerEvent.Resumed path -> update path (fun r -> { r with Activity = RecordedActivity.RecordedInUse })
     | LedgerEvent.Salvaged(path, branch, _, _) -> update path (fun r -> { r with Salvage = SalvageState.SalvagedTo branch })
-    | LedgerEvent.Rescued _ -> records
+    | LedgerEvent.Rescued _
+    | LedgerEvent.SalvageReaped _ -> records
+    | LedgerEvent.Vanished path ->
+      update path (fun r ->
+        match r.Presence with
+        | Presence.OnDisk -> { r with Presence = Presence.GoneFromDisk }
+        | Presence.RemovedByHygiene
+        | Presence.GoneFromDisk -> r)
     | LedgerEvent.Removed removal ->
       // Only a removed worktree ends a record; a removed branch or log is its own line and nothing more.
       match removal.Kind = LeftoverKind.AgentWorktree with
@@ -185,13 +203,27 @@ module Ledger =
       | None -> first :: startedQuiet
       | Some record ->
         match record.Presence with
-        | Presence.RemovedByHygiene -> first :: startedQuiet
+        | Presence.RemovedByHygiene
+        | Presence.GoneFromDisk -> first :: startedQuiet
         | Presence.OnDisk ->
           match record.Activity, o.Activity with
           | RecordedActivity.RecordedInUse, Activity.Quiet -> [ line (LedgerEvent.WentQuiet o.Path) ]
           | RecordedActivity.RecordedQuietSince _, Activity.InUse -> [ line (LedgerEvent.Resumed o.Path) ]
           | RecordedActivity.RecordedInUse, Activity.InUse -> []
           | RecordedActivity.RecordedQuietSince _, Activity.Quiet -> [])
+
+  /// The lines for worktrees the ledger had on disk that are not among the ones just seen: somebody removed them by hand. Only
+  /// meaningful when `seen` came from a listing git actually answered; the caller says so by calling it.
+  let vanished (now: DateTime) (known: Map<string, WorktreeRecord>) (seen: Observed list) : LedgerLine list =
+    let present = seen |> List.map (fun o -> o.Path) |> Set.ofList
+    known
+    |> Map.toList
+    |> List.choose (fun (path, record) ->
+      match record.Presence, Set.contains path present with
+      | Presence.OnDisk, false -> Some { At = now; Event = LedgerEvent.Vanished path }
+      | Presence.OnDisk, true
+      | Presence.RemovedByHygiene, _
+      | Presence.GoneFromDisk, _ -> None)
 
   /// When the worktree was last in use, as far as the ledger knows: now while it is in use, the moment the sweep first saw it
   /// quiet otherwise. That is never earlier than the truth, so a grace measured from it only waits longer.
@@ -205,7 +237,8 @@ module Ledger =
 
   let isResumable (grace: TimeSpan) (now: DateTime) (record: WorktreeRecord) : bool =
     match record.Presence with
-    | Presence.RemovedByHygiene -> false
+    | Presence.RemovedByHygiene
+    | Presence.GoneFromDisk -> false
     | Presence.OnDisk -> now < resumableUntil grace now record
 
   /// Agent worktrees are the exception that needs a ledger entry (Will, 2026-11-07: they are why the pile exists). The
@@ -217,6 +250,7 @@ module Ledger =
     | Some record ->
       match record.Presence, record.Activity with
       | Presence.RemovedByHygiene, _
+      | Presence.GoneFromDisk, _
       | Presence.OnDisk, RecordedActivity.RecordedInUse -> Clearance.NotYet(now + grace)
       | Presence.OnDisk, RecordedActivity.RecordedQuietSince since ->
         let until = since + grace

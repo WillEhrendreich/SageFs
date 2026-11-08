@@ -26,7 +26,8 @@ let read (dataDir: string) : LedgerLine list =
   | :? IOException
   | :? UnauthorizedAccessException -> []
 
-/// Append lines. Best effort for the caller that only wants a record (`append`), and `tryAppend` for one that must know.
+/// Append lines. The answer says whether they were written: a caller that loses a line (a removal, a vanish) has to say so, since
+/// the next sweep's reading of the ledger is only as good as what is in it. There is no version that throws the answer away.
 let tryAppend (dataDir: string) (lines: LedgerLine list) : Result<unit, string> =
   match lines with
   | [] -> Result.Ok()
@@ -40,8 +41,6 @@ let tryAppend (dataDir: string) (lines: LedgerLine list) : Result<unit, string> 
     | :? IOException as ex -> Result.Error ex.Message
     | :? UnauthorizedAccessException as ex -> Result.Error ex.Message
 
-let append (dataDir: string) (lines: LedgerLine list) : unit = tryAppend dataDir lines |> ignore
-
 let records (dataDir: string) : Map<string, WorktreeRecord> = read dataDir |> Ledger.fold
 
 /// When each worktree the ledger knows (and that has not been removed) was last in use, for the scan.
@@ -51,5 +50,6 @@ let lastActive (dataDir: string) (now: DateTime) : (string * DateTime) list =
   |> List.filter (fun (_, r) ->
     match r.Presence with
     | Presence.OnDisk -> true
-    | Presence.RemovedByHygiene -> false)
+    | Presence.RemovedByHygiene
+    | Presence.GoneFromDisk -> false)
   |> List.map (fun (p, r) -> p, Ledger.lastActive now r)

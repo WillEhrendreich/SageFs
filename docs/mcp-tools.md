@@ -527,9 +527,16 @@ exists):
 1. It writes each agent worktree into `<data dir>/hygiene-ledger.jsonl` when it
    first appears and when it goes quiet or is resumed, with who made it. The file
    only grows.
-2. It commits the uncommitted files of a worktree nobody is using to
-   `salvage/<name>`, with a temporary index, so the worktree itself is untouched.
-   A second sweep with nothing changed commits nothing.
+2. It commits the uncommitted files of a worktree nobody is using, ignored files
+   that nothing regenerates (a local `.env`, a `*.db`) included, to
+   `refs/sagefs/salvage/<name>`, with a temporary index, so the worktree itself
+   is untouched. The ref is not a branch, so `git push --all` does not publish it.
+   A second sweep with nothing changed commits nothing. A salvage ref is listed by
+   `sagefs hygiene` and reaped once its worktree is gone and the base has
+   everything on it, or after 30 days.
+   A worktree locked with `git worktree lock` by a person is never unlocked or
+   removed: only the harness's own lock (`claude agent <name> (pid N start M)`),
+   and only when that process is dead, is released.
 3. When the setting `hygiene.autoTidy` is on (the default), it tidies what is
    provably safe: a worktree whose work has reached the base branch and that the
    ledger has seen quiet for `SAGEFS_FINISHED_WORKTREE_GRACE_DAYS` (1 day; `0`

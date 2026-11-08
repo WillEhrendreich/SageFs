@@ -82,11 +82,11 @@ let sweepTests =
       let wt = paths.["dirty-real"]
       let! first = sweepOnce sb noGrace On
       first.Salvage |> List.length |> Expect.equal "the first sweep saves it" 1
-      let tip = (git sb.Repo [ "rev-parse"; "refs/heads/salvage/dirty-real" ]).Trim()
+      let tip = (git sb.Repo [ "rev-parse"; "refs/sagefs/salvage/dirty-real" ]).Trim()
       (git sb.Repo [ "show"; tip + ":src/precious.fs" ]) |> Expect.equal "the file is in the commit" "module Precious"
       let! second = sweepOnce sb noGrace On
       second.Salvage |> Expect.isEmpty "nothing changed, so no second commit"
-      (git sb.Repo [ "rev-parse"; "refs/heads/salvage/dirty-real" ]).Trim() |> Expect.equal "the branch did not move" tip
+      (git sb.Repo [ "rev-parse"; "refs/sagefs/salvage/dirty-real" ]).Trim() |> Expect.equal "the ref did not move" tip
       write (Path.Combine(wt, "src", "precious.fs")) "module Precious2"
       let! third = sweepOnce sb noGrace On
       third.Salvage |> List.length |> Expect.equal "a changed file is saved again" 1
@@ -113,7 +113,8 @@ let sweepTests =
       for KeyValue(name, path) in paths do
         Directory.Exists path |> Expect.isTrue (sprintf "%s untouched" name)
       second.Tidy |> Expect.equal "the report says it was off" TidyHalf.SwitchedOff
-      branchExists sb "salvage/dirty-real" |> Expect.isTrue "the salvage branch exists"
+      (match gitExit sb.Repo [ "rev-parse"; "--verify"; "--quiet"; "refs/sagefs/salvage/dirty-real" ] with | 0, _, _ -> true | _ -> false)
+      |> Expect.isTrue "the salvage ref exists"
     }
 
     testTask "a worktree a session is using is recorded as in use and is not removed, then is resumable when it goes quiet" {

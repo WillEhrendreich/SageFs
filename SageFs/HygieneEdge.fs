@@ -12,6 +12,7 @@ open System
 open System.IO
 open System.Threading.Tasks
 open SageFs
+open SageFs.Utils
 open SageFs.WorkspaceHygiene
 open SageFs.HygieneGather
 open SageFs.HygieneLedger
@@ -35,16 +36,20 @@ let private gitStep (git: Git) (dir: string) (args: string list) : Task<Result<u
 
 /// Where the edge writes down what it did. A line is written after each success, with where the tip was, so what the daemon
 /// tidied can be put back (`HygieneLedger`).
-type Journal = LedgerLine -> unit
+type Journal = LedgerLine -> Result<unit, string>
 
 /// For a caller that keeps no record (a test that is not about the record).
-let noJournal : Journal = ignore
+let noJournal : Journal = fun _ -> Result.Ok()
 
+/// Write one line. A line that could not be written is said in the daemon's log and never dropped quietly: the removal it records
+/// has happened, and the ledger now lacks it (the sweep's own record of what vanished covers the gap).
 let private record (journal: Journal) (event: LedgerEvent) : unit =
-  journal { At = DateTime.UtcNow; Event = event }
+  match journal { At = DateTime.UtcNow; Event = event } with
+  | Result.Ok() -> ()
+  | Result.Error why -> Log.warn "[hygiene] could not write a ledger line for %A: %s" (pathOf event) why
 
 /// The commit a revision names, or that it names none.
-let private tipOf (git: Git) (dir: string) (revision: string) : Task<Tip> =
+let tipOf (git: Git) (dir: string) (revision: string) : Task<Tip> =
   task {
     match! git dir [ "rev-parse"; "--verify"; "--quiet"; revision ] with
     | GitResult.Output out when out.Trim() <> "" -> return Tip.AtTip(out.Trim())
@@ -68,15 +73,16 @@ let private findBase (ctx: EdgeContext) (repo: string) : Task<string option> =
   }
 
 /// How a revision reached the base right now, for the record and for deciding whether a restore point is needed.
-let private mergeStateAt (ctx: EdgeContext) (repo: string) (revision: string) : Task<MergeState> =
+let mergeStateAt (ctx: EdgeContext) (repo: string) (revision: string) : Task<MergeState> =
   task {
     match! findBase ctx repo with
-    | None -> return MergeState.NotMerged
+    | None -> return MergeState.Undecided
     | Some b ->
       match! mergeEvidence ctx.Git repo b revision with
       | MergeEvidence.MergedInto how -> return MergeState.MergedBy how
-      | MergeEvidence.UnmergedCommits _
-      | MergeEvidence.MergeNotDecidable _ -> return MergeState.NotMerged
+      | MergeEvidence.UnmergedCommits _ -> return MergeState.NotMerged
+      // Git could not say. That is not "not merged" and it is not "merged": nothing may be assumed either way.
+      | MergeEvidence.MergeNotDecidable _ -> return MergeState.Undecided
   }
 
 /// The ref that keeps a removed tip reachable. A name already taken by another commit gets the commit's own start added,
@@ -91,23 +97,27 @@ let private restoreRefFor (git: Git) (repo: string) (name: string) (sha: string)
     | GitResult.Unavailable _ -> return plain
   }
 
-/// Make a commit reachable by a ref of our own before the only ref that names it goes, when the base only has its CONTENT
-/// (a rebase or squash, or an identical tree) and not the commit itself. A commit the base already contains needs none.
-/// Nothing is removed unless this succeeds.
-let private keepRestorePoint (ctx: EdgeContext) (repo: string) (name: string) (tip: Tip) (merged: MergeState) : Task<Result<unit, string>> =
+/// Make a commit reachable by a ref of our own before the only ref that names it goes, unless the base's history already contains
+/// it (an ancestor) or there is nothing of anybody's in it. That covers a commit the base only has by content (a rebase, a squash,
+/// an identical tree) and, because the edge fails closed, one git could not place at all. Nothing is removed unless this
+/// succeeds, and a tip that cannot be read cannot be kept, so it is a refusal too.
+let keepRestorePoint (ctx: EdgeContext) (repo: string) (name: string) (tip: Tip) (merged: MergeState) : Task<Result<unit, string>> =
   task {
     match merged, tip with
     | MergeState.MergedBy MergeHow.Ancestor, _
-    | MergeState.NotMerged, _
     | MergeState.NotAboutWork, _ -> return Result.Ok()
     | MergeState.MergedBy MergeHow.PatchEquivalent, Tip.AtTip sha
-    | MergeState.MergedBy MergeHow.TreeEqual, Tip.AtTip sha ->
-      let! ref = restoreRefFor ctx.Git repo name sha
-      match! gitStep ctx.Git repo [ "update-ref"; ref; sha ] with
+    | MergeState.MergedBy MergeHow.TreeEqual, Tip.AtTip sha
+    | MergeState.NotMerged, Tip.AtTip sha
+    | MergeState.Undecided, Tip.AtTip sha ->
+      let! restoreRef = restoreRefFor ctx.Git repo name sha
+      match! gitStep ctx.Git repo [ "update-ref"; restoreRef; sha ] with
       | Result.Ok() -> return Result.Ok()
       | Result.Error why -> return Result.Error(sprintf "no restore point could be made (%s), so nothing was removed" why)
     | MergeState.MergedBy MergeHow.PatchEquivalent, Tip.TipUnknown
-    | MergeState.MergedBy MergeHow.TreeEqual, Tip.TipUnknown ->
+    | MergeState.MergedBy MergeHow.TreeEqual, Tip.TipUnknown
+    | MergeState.NotMerged, Tip.TipUnknown
+    | MergeState.Undecided, Tip.TipUnknown ->
       return Result.Error "the commit it points at could not be read, so no restore point could be made and nothing was removed"
   }
 
@@ -125,7 +135,7 @@ let private removeWorktreeWith (journal: Journal) (ctx: EdgeContext) (path: stri
         task {
           match tip with
           | Tip.AtTip sha -> return! mergeStateAt ctx repo sha
-          | Tip.TipUnknown -> return MergeState.NotMerged
+          | Tip.TipUnknown -> return MergeState.Undecided
         }
       let! branch =
         task {
@@ -138,7 +148,14 @@ let private removeWorktreeWith (journal: Journal) (ctx: EdgeContext) (path: stri
             | Tip.AtTip sha -> return BranchLabel.DetachedAt sha
             | Tip.TipUnknown -> return BranchLabel.NoBranch
         }
-      let! restorePoint = keepRestorePoint ctx repo (Path.GetFileName(path.TrimEnd('/', '\\'))) tip merged
+      // The executor judged this worktree merged from a look a moment ago. If git cannot confirm that now, nothing is assumed and
+      // nothing is removed: a worktree that stays costs disk, one removed on a guess can cost a commit.
+      let! restorePoint =
+        match merged with
+        | MergeState.Undecided -> Task.FromResult(Result.Error "git could not say whether the work has reached the base branch, so the worktree was not removed")
+        | MergeState.MergedBy _
+        | MergeState.NotMerged
+        | MergeState.NotAboutWork -> keepRestorePoint ctx repo (Path.GetFileName(path.TrimEnd('/', '\\'))) tip merged
       // Only the harness's own lock (`claude agent <name> (pid N start M)`) is ours to release, and only when its process is
       // gone. Any other lock is a person's `git worktree lock`, git's own "do not prune this", and is never overridden.
       let! lockOutcome =
@@ -216,6 +233,7 @@ let private deleteBranchWith (journal: Journal) (ctx: EdgeContext) (repo: string
       match merged with
       | MergeState.NotMerged
       | MergeState.NotAboutWork -> return Outcome.Failed "the branch is no longer merged"
+      | MergeState.Undecided -> return Outcome.Failed "git could not say whether the branch is merged, so it was not deleted"
       | MergeState.MergedBy _ ->
         match! keepRestorePoint ctx repo name tip merged with
         | Result.Error why -> return Outcome.Failed why

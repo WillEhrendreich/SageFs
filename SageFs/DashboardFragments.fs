@@ -4213,6 +4213,9 @@ let renderHygienePanel (view: HygieneService.HygieneView) : XmlNode =
           textEnc (sprintf "%s. `sagefs hygiene --rescue <name>` puts a worktree's work on a branch." (held.Substring(0, 1).ToUpperInvariant() + held.Substring 1))
         ]
       | None -> ()
+      match SalvageRefs.describe DateTime.UtcNow snapshot.Salvage with
+      | Some salvageLine -> meta "hygiene-salvage" salvageLine
+      | None -> ()
       meta
         "hygiene-state"
         (sprintf "Dry run: %d safe to reclaim (%s), %d need a look (%s). Scanned %s."

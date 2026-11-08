@@ -113,6 +113,7 @@
         <Compile Include="HygieneLedgerTests.fs" />
         <Compile Include="HygieneAutoTests.fs" />
         <Compile Include="HygieneSimDstTests.fs" />
+        <Compile Include="HygieneSweepSimEdge.fs" />
         <Compile Include="HygieneSweepSimTests.fs" />
         <Compile Include="HygieneSandbox.fs" />
         <Compile Include="HygieneGatherTests.fs" />

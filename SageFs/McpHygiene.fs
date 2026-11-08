@@ -57,7 +57,10 @@ let getWorkspaceHygieneAt (locate: string -> Locations) (ctx: McpContext) (worki
       let loc = locate repo
       let! snapshot = HygieneService.take loc live
       HygieneService.Cache.put snapshot
-      return renderPlan snapshot.Leftovers snapshot.Plan
+      let plan = renderPlan snapshot.Leftovers snapshot.Plan
+      match SalvageRefs.describe DateTime.UtcNow snapshot.Salvage with
+      | Some salvageLine -> return plan + "\n\n" + salvageLine
+      | None -> return plan
   }
 
 /// Run the Safe steps of the plan the caller was shown. Needs `confirm` and the plan id it was shown; a plan that
@@ -112,7 +115,7 @@ let agentWorktreeNote (repo: string) (workingDirectory: string) : string option 
     let name = directory.Substring(area.Length + 1).Split('/').[0]
     Some(
       sprintf
-        "this directory is an agent worktree (%s): the daemon records it, saves its uncommitted files to salvage/%s, and removes it only after its work has reached the base branch and it has been quiet for %s. `sagefs hygiene` lists it, and `sagefs hygiene --rescue %s` keeps its work on a branch."
+        "this directory is an agent worktree (%s): the daemon records it, saves its uncommitted files to refs/sagefs/salvage/%s (not a branch, so git push --all does not send them), and removes it only after its work has reached the base branch and it has been quiet for %s. `sagefs hygiene` lists it, and `sagefs hygiene --rescue %s` keeps its work on a branch."
         name name (formatAge DataRetention.finishedWorktreeGrace) name)
 
 /// The line for a reply about a session in `workingDirectory`: the note when it is an agent worktree, then the nudge from

@@ -15,7 +15,7 @@ open SageFs.Tests.HygieneSandbox
 
 let private salvageIn (path: string) : Task<SalvageResult> = salvage runGitEnv path
 
-let private tipOf (sb: Sandbox) (branch: string) : string = (git sb.Repo [ "rev-parse"; "refs/heads/" + branch ]).Trim()
+let private tipOf (sb: Sandbox) (branch: string) : string = (git sb.Repo [ "rev-parse"; branch ]).Trim()
 
 let private show (sb: Sandbox) (spec: string) : string = git sb.Repo [ "show"; spec ]
 
@@ -43,7 +43,7 @@ let salvageTests =
       let! result = salvageIn wt
       match result with
       | SalvageResult.Salvaged(branch, sha, files) ->
-        branch |> Expect.equal "named for the worktree" "salvage/dirty-real"
+        branch |> Expect.equal "named for the worktree, under refs/sagefs/salvage and not on a branch" "refs/sagefs/salvage/dirty-real"
         files |> Expect.equal "one file" 1
         tipOf sb branch |> Expect.equal "the branch points at the commit" sha
         (git sb.Repo [ "rev-parse"; sha + "^" ]).Trim() |> Expect.equal "the parent is the worktree's HEAD" headBefore
@@ -63,7 +63,7 @@ let salvageTests =
       match second with
       | SalvageResult.AlreadySalvaged(branch, sha) ->
         sha |> Expect.equal "the same commit" (salvagedSha first)
-        branch |> Expect.equal "the same branch" "salvage/dirty-real"
+        branch |> Expect.equal "the same ref" "refs/sagefs/salvage/dirty-real"
       | other -> failtestf "expected AlreadySalvaged, got %A" other
     }
 

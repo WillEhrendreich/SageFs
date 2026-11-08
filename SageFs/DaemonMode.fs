@@ -3916,17 +3916,26 @@ let run
         task {
           try
             try
-              for repo in hygieneRepositories () do
-                let loc = HygieneService.locationsFor repo
-                let live () = HygieneService.liveFactsWith (hygieneSessionPairs ()) (Some activityTracker)
-                let! report = HygieneSweep.sweep (HygieneSweep.realContext loc live)
-                match HygieneSweep.describe report with
-                | Some line ->
-                  log.LogInformation("{Sweep}", line)
-                  let! _ = HygieneService.Cache.refresh loc live
-                  ()
-                | None -> ()
-            with ex when not (ex :? OutOfMemoryException) -> log.LogWarning("Workspace hygiene sweep failed: {Error}", ex.Message)
+              // Each repository on its own: one whose pass throws is logged with the whole exception, and the rest still run.
+              let sweepOne (repo: string) : Task<HygieneSweep.SweepReport> =
+                task {
+                  let loc = HygieneService.locationsFor repo
+                  let live () = HygieneService.liveFactsWith (hygieneSessionPairs ()) (Some activityTracker)
+                  let! report = HygieneSweep.sweep (HygieneSweep.realContext loc live)
+                  match HygieneSweep.describe report with
+                  | Some line ->
+                    log.LogInformation("{Sweep}", line)
+                    let! _ = HygieneService.Cache.refresh loc live
+                    ()
+                  | None -> ()
+                  return report
+                }
+              let! results = HygieneSweep.sweepRepositories (hygieneRepositories ()) sweepOne
+              for (repo, result) in results do
+                match result with
+                | Result.Ok _ -> ()
+                | Result.Error ex -> log.LogWarning(ex, "Workspace hygiene sweep of {Repo} failed", repo)
+            with ex when not (ex :? OutOfMemoryException) -> log.LogWarning(ex, "Workspace hygiene sweep could not start")
           finally
             hygieneSweepGate.Release() |> ignore
         } :> Task)

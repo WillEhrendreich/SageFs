@@ -1046,3 +1046,7 @@ module DataRetention =
   /// How many of the gate's logs are kept, newest first. They are what a person reads after a red gate, and a
   /// red gate is read within the hour; twenty is a few days of runs.
   let gateLogsKept = envOrDefaultInt gateLogsKeptEnvVar 20
+  /// A salvage ref (uncommitted files the sweep saved from a worktree) whose worktree is gone is kept this long when the base
+  /// branch does not have everything on it, so somebody who comes back for the work finds it. It is held in the repository's
+  /// object store, possibly with a `.env` in it, so it does not stay for ever. A month covers a holiday.
+  let salvageRetention = System.TimeSpan.FromDays 30.
