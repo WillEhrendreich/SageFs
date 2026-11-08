@@ -359,6 +359,15 @@ module HostCoreAdoption =
           "The shape of the session project's SageFs.Core (read from %s) could not be read (%s), so it was not adopted and the worker runs the daemon's own SageFs.Core."
           (Path.GetFullPath candidatePath) why)
 
+  /// What a session's last spawn said about its project's SageFs.Core (stub).
+  let recordNote (_sessionId: string) (_note: AdoptionNote) : unit = ()
+  let noteFor (_sessionId: string) : AdoptionNote = AdoptionNote.NothingToSay
+  let forgetNote (_sessionId: string) : unit = ()
+
+  /// What a spawn for these projects would say about the project's own Core, without spawning (stub).
+  let previewNote (_sharedDaemonBaseDir: string) (_projects: string list) (_hostVersion: Version) : AdoptionNote =
+    AdoptionNote.NothingToSay
+
   /// The full decision for one worker spawn: given the shared daemon-base
   /// directory (the same one `Args.resolveHostLaunch` would otherwise use
   /// directly), the session's id and project paths, and the running

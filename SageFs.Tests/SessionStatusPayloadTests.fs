@@ -24,7 +24,8 @@ let private factsWith (restart: SessionStatusPayload.LastRestart) : SessionStatu
     LastRestart = restart
     LastReload = SessionReload.NoReloadYet
     ReplFreshness = ReplFreshness.InSync
-    SourceState = SourceState.Unknown UnknownReason.NotAssessed }
+    SourceState = SourceState.Unknown UnknownReason.NotAssessed
+    CoreAdoption = HostCoreAdoption.AdoptionNote.NothingToSay }
 
 let private allKinds =
   [ SessionStatusPayload.RestartKind.InProgress
@@ -69,6 +70,24 @@ let sourceStateTests =
       use doc = JsonDocument.Parse json
       doc.RootElement.GetProperty("sourceState").GetProperty("state").GetString() |> Expect.equal "stale" "Stale"
       doc.RootElement.GetProperty("replFreshness").GetProperty("state").GetString() |> Expect.equal "the REPL's own field is untouched" "InSync"
+  ]
+
+[<Tests>]
+let coreAdoptionTests =
+  testList "SessionStatusPayload.coreAdoption" [
+
+    testCase "WHY — a Core that was not adopted is a named state in the payload with its reason, because it went to the daemon log only and the session answered as if nothing had happened" <| fun _ ->
+      let note = HostCoreAdoption.AdoptionNote.NotAdopted "SageFs.WorkerProtocol+WorkerMessage has a different public shape"
+      let json = SessionStatusPayload.serialize { factsWith SessionStatusPayload.LastRestart.NoneRecorded with CoreAdoption = note }
+      use doc = JsonDocument.Parse json
+      let field = doc.RootElement.GetProperty "coreAdoption"
+      field.GetProperty("state").GetString() |> Expect.equal "the state is named" "NotAdopted"
+      field.GetProperty("reason").GetString() |> Expect.stringContains "the reason travels" "different public shape"
+
+    testCase "a session whose Core is adopted, or that has none of its own, carries no coreAdoption state" <| fun _ ->
+      let json = SessionStatusPayload.serialize (factsWith SessionStatusPayload.LastRestart.NoneRecorded)
+      use doc = JsonDocument.Parse json
+      doc.RootElement.GetProperty("coreAdoption").ValueKind |> Expect.equal "null" JsonValueKind.Null
   ]
 
 [<Tests>]

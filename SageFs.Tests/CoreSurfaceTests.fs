@@ -170,4 +170,48 @@ let adoptionTests =
           plan.Note |> Expect.equal "and there is no reason to give" HostCoreAdoption.AdoptionNote.NothingToSay
           (plan.LaunchRoot <> sharedRoot) |> Expect.isTrue "into a private root"
         | Error reason -> failtestf "expected a plan, got the refusal: %s" reason)
+
+    testCase "WHY — previewNote says what a spawn would say, without spawning, so the create reply can name a Core that will not be adopted" <| fun _ ->
+      withWorld writeCoreWithSwappedCases (fun sharedRoot project ->
+        match HostCoreAdoption.previewNote sharedRoot [ project ] realVersion with
+        | HostCoreAdoption.AdoptionNote.NotAdopted reason ->
+          reason |> Expect.stringContains "names the type that differs" "SageFs.WorkerProtocol+WorkerMessage"
+        | HostCoreAdoption.AdoptionNote.NothingToSay -> failtest "a Core of another shape is not adopted, and the preview must say so")
+
+    testCase "the twin of previewNote: a Core of the same shape has nothing to say" <| fun _ ->
+      withWorld writeCoreUnchanged (fun sharedRoot project ->
+        HostCoreAdoption.previewNote sharedRoot [ project ] realVersion
+        |> Expect.equal "adopted, so silent" HostCoreAdoption.AdoptionNote.NothingToSay)
+  ]
+
+/// What a person is told: in the create reply, in the status payload, and for as long as the session lives.
+[<Tests>]
+let adoptionSurfaceTests =
+  let notAdopted = HostCoreAdoption.AdoptionNote.NotAdopted "SageFs.WorkerProtocol+WorkerMessage has a different public shape"
+  testList "Core adoption, as told" [
+
+    testCase "WHY — a session's note is kept from its spawn until it is forgotten, because a Core that was not adopted went to the daemon log only" <| fun _ ->
+      let sid = sprintf "note-%s" (Guid.NewGuid().ToString("N"))
+      HostCoreAdoption.noteFor sid |> Expect.equal "nothing recorded says nothing" HostCoreAdoption.AdoptionNote.NothingToSay
+      HostCoreAdoption.recordNote sid notAdopted
+      HostCoreAdoption.noteFor sid |> Expect.equal "the reason is there" notAdopted
+      HostCoreAdoption.forgetNote sid
+      HostCoreAdoption.noteFor sid |> Expect.equal "and gone once the session's worker is" HostCoreAdoption.AdoptionNote.NothingToSay
+
+    testCase "WHY — the create reply line names the reason and the next action, and a Core that was adopted adds no line" <| fun _ ->
+      match CreateSessionUx.adoptionHint notAdopted with
+      | Some line ->
+        line |> Expect.stringContains "the reason" "has a different public shape"
+        line |> Expect.stringContains "the next action" "install-local.fsx"
+      | None -> failtest "a Core that is not adopted must be told"
+      CreateSessionUx.adoptionHint HostCoreAdoption.AdoptionNote.NothingToSay |> Expect.isNone "silent when adopted"
+
+    testCase "WHY — the surface cache keeps at most its capacity, because it was keyed by path and write time and never let an entry go" <| fun _ ->
+      withTempDir (fun dir ->
+        for i in 1 .. CoreSurface.cacheCapacity + 4 do
+          let path = Path.Combine(dir, sprintf "Fixture%d.dll" i)
+          writeSurfaceFixture path [ "A" ] [ sprintf "Method%d" i ] []
+          CoreSurface.surfaceOfFileCached path |> ignore
+        (CoreSurface.cachedCount () <= CoreSurface.cacheCapacity)
+        |> Expect.isTrue "the cache is bounded")
   ]

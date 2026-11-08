@@ -58,6 +58,10 @@ module CreateSessionUx =
   let tryCreateTarget (paths: string list) : Result<SessionProjectTarget list, string> =
     SessionProjectTarget.tryCreateMany paths
 
+  /// The line a create reply and a status payload carry when the project's own SageFs.Core is not the one the worker
+  /// runs (stub).
+  let adoptionHint (_note: HostCoreAdoption.AdoptionNote) : string option = None
+
   /// Explicit session-creation success reply. At creation time the worker has
   /// not finished resolving projects, so this states exactly what was requested
   /// and points at get_session_status to confirm what actually loaded.

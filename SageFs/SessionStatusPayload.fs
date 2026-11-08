@@ -93,6 +93,8 @@ module SessionStatusPayload =
     /// Whether the build the session runs is behind the files on disk. Not the REPL's freshness: that is the REPL behind the
     /// app, this is the disk ahead of the build.
     SourceState: SourceState
+    /// Whether the session's own SageFs.Core runs in the worker, and when it does not, why.
+    CoreAdoption: HostCoreAdoption.AdoptionNote
   }
 
   /// What a session's rebuild history says, in the payload's terms. The one

@@ -1521,7 +1521,8 @@ module McpTools =
               // never shown, so it read exactly like one still running.
               LastRestart = SessionStatusPayload.lastRestartOfSession info (Some snapshot.CoreVersion)
               LastReload = sessionInfo.Reload; ReplFreshness = sessionInfo.Freshness
-              SourceState = SourceStateProbe.ofSession sessionInfo warmup }
+              SourceState = SourceStateProbe.ofSession sessionInfo warmup
+              CoreAdoption = HostCoreAdoption.noteFor sid }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }

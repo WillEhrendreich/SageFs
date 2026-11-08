@@ -100,6 +100,12 @@ module CoreSurface =
   let readCache =
     System.Collections.Concurrent.ConcurrentDictionary<string * int64 * int64, SurfaceReading>()
 
+  /// How many readings the cache keeps (stub: it keeps all).
+  let cacheCapacity = 8
+
+  /// How many readings the cache holds now.
+  let cachedCount () : int = readCache.Count
+
   /// `surfaceOfFile`, remembered for as long as the file is the same file.
   let surfaceOfFileCached (path: string) : SurfaceReading =
     let info = FileInfo(Path.GetFullPath path)
