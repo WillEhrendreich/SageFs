@@ -1063,6 +1063,10 @@
         <Compile Include="ProjectPinOutcomeTests.fs" />
         <Compile Include="CohortAffordancesTests.fs" />
         <Compile Include="ToolAuthorityGateTests.fs" />
+        <Compile Include="SeatingFlowTests.fs" />
+        <Compile Include="SeatingSimTests.fs" />
+        <Compile Include="McpSeatingTests.fs" />
+        <Compile Include="CohortSeatDashboardTests.fs" />
         <Compile Include="CohortJoinSeatTests.fs" />
         <Compile Include="RouteBindingTests.fs" />
         <Compile Include="MemberRouteGateTests.fs" />

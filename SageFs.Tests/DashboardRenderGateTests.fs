@@ -88,7 +88,8 @@ let mkInfra () : DashboardInfra =
     ReadCohortFrame = fun () -> SageFs.Cohort.project (SageFs.Cohort.replayHead []) [||]
     ReadHolderSilence = fun () -> SageFs.Features.CohortStatusText.HolderSilence.NotSilent
     ReadCohortLedger = fun () -> []
-    ReadTrunk = fun () -> SageFs.Features.TrunkFollow.initial }
+    ReadTrunk = fun () -> SageFs.Features.TrunkFollow.initial
+    SeatConductor = fun _ -> System.Threading.Tasks.Task.FromResult(Result.Error "no cohort owner in this fixture") }
 
 [<Tests>]
 let tests = testList "Dashboard render gate — no redundant GetAllSessions per push" [

@@ -1699,6 +1699,10 @@ type DashboardInfra = {
   ReadCohortLedger: unit -> Cohort.LedgerEntry<MemberTable.MemberId> list
   /// What the trunk has done with each landing that landed (`TrunkFollowOwner.Handle.Read`): wait-free, like `ReadCohortFrame`.
   ReadTrunk: unit -> Features.TrunkFollow.TrunkMachine
+  /// Fill the empty conductor seat of the cohort the panel shows with the member named as `get_cohort_status` prints it. The
+  /// route that calls it runs only for a request that came from this page in a browser; the answer is a sentence for the
+  /// person, success or refusal alike.
+  SeatConductor: string -> Threading.Tasks.Task<Result<string, string>>
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.

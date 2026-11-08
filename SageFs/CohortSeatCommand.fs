@@ -203,6 +203,23 @@ module CohortSeatRoute =
       { Error = "cohort_refused"; Message = reason; Case = "cohort_refused"; SuggestedAction = suggestion }
     | other -> { Error = "seat_failed"; Message = SageFsError.describe other; Case = "seat_failed"; SuggestedAction = "" }
 
+  /// The dashboard's Seat button: the cohort the panel shows, one member named as `get_cohort_status` prints it. The same
+  /// rules as the command line (`commandFor`, then `Cohort.decide`), answered in a sentence for the person on the page.
+  /// The caller has already decided the request came from a person at the page.
+  let seatFromDashboard (owner: Features.CohortOwner.Handle) (name: string) : System.Threading.Tasks.Task<Result<string, string>> =
+    task {
+      let frame = owner.ReadFrame()
+      match commandFor frame frame.Scope name with
+      | Error err -> return Error(SageFsError.describeForAgent err)
+      | Ok command ->
+        let! committed = owner.Commit command
+        match committed with
+        | Ok(events, _) ->
+          let reply = seatedReply (owner.ReadFrame()) events
+          return Ok(sprintf "%s is the conductor now (ended: %s)." reply.Seated reply.Ended)
+        | Error err -> return Error(SageFsError.describeForAgent (CohortErrorMapping.toSageFsError err))
+    }
+
 /// `sagefs cohort seat [<member id>] [--dir <checkout>]`: look at a cohort's conductor seat, or fill an empty one.
 /// With no member id it lists who is present and where the seat stands. With one it seats that member, which only
 /// works while the seat is empty (the conductor left, or went silent). It reads `operator.token` from the data

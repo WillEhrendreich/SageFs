@@ -3593,6 +3593,38 @@ let createCohortScrubHandler (infra: DashboardInfra) : HttpHandler =
     | :? System.ObjectDisposedException -> ()
   }
 
+/// Whether a request came from this page in a browser: the browser sets `Sec-Fetch-Site` itself, and a page's script cannot
+/// change it. A request from a shell or an agent's HTTP client carries none unless the caller writes one, which is the whole
+/// of the evidence this route asks for: seating a conductor is a person's act, done by clicking the Seat button.
+let cohortSeatRequestIsFromThePage (secFetchSite: string option) : bool =
+  match secFetchSite with
+  | Some "same-origin" -> true
+  | Some _
+  | None -> false
+
+/// `POST /dashboard/cohort/seat?member=<id>`: the cohort panel's Seat button. Runs only for a request from this page
+/// (`cohortSeatRequestIsFromThePage`; the origin guard in front of every route already refuses another site), and the click
+/// that sent it asked the person first. What happened, and why not when it did not, is said on the page.
+let createCohortSeatHandler (infra: DashboardInfra) : HttpHandler =
+  fun ctx -> task {
+    Response.sseStartResponse ctx |> ignore
+    let secFetchSite =
+      match ctx.Request.Headers.TryGetValue "Sec-Fetch-Site" with
+      | true, values when values.Count > 0 -> Some(string values.[0])
+      | _ -> None
+    let name =
+      match ctx.Request.Query.TryGetValue "member" with
+      | true, values when values.Count > 0 -> (string values.[0]).Trim()
+      | _ -> ""
+    match cohortSeatRequestIsFromThePage secFetchSite, name with
+    | false, _ ->
+      do! ActionResult.patch ctx (ActionOutcome.Failure "Nothing was done: the conductor seat is filled by clicking Seat on this page, not by a request from elsewhere. 'sagefs cohort seat' does it from a shell.")
+    | true, "" -> do! ActionResult.patch ctx (ActionOutcome.Failure "Nothing was done: no member was named.")
+    | true, member' ->
+      let! outcome = infra.SeatConductor member'
+      do! ActionResult.patch ctx (match outcome with Ok text -> ActionOutcome.Success text | Error text -> ActionOutcome.Failure text)
+  }
+
 /// Create all dashboard routes.
 /// The page `/dashboard` serves. The page's client id, and what it asked for
 /// (`?panels=friction`, the deliberate way into the friction panel the default
@@ -3900,6 +3932,7 @@ let createEndpoints
     yield get "/api/state" (createApiStateHandler q infra)
     yield post "/api/dispatch" (createApiDispatchHandler a.Dispatch)
     yield post "/dashboard/cohort/scrub" (createCohortScrubHandler infra)
+    yield post "/dashboard/cohort/seat" (createCohortSeatHandler infra)
     // The route scan reads these as literals; `DashboardRoutes` holds the same strings for the buttons that post to them, and a
     // test (`DashboardPanelVisibilityTests`) fails when the two disagree.
     yield post "/dashboard/live-testing/enable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.EnableLiveTesting)

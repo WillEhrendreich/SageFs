@@ -83,6 +83,7 @@ let requiredParamsByTool =
     "release_claim", set ["agentName"; "claimId"; "fence"]
     "reassign_claim", set ["agentName"; "claimId"; "toMember"]
     "delegate_conductor", set ["agentName"; "toMember"]
+    "seat_conductor", set ["agentName"]
     "withdraw_landing", set ["agentName"; "landingId"]
     "veto_landing", set ["agentName"; "landingId"; "reason"]
     "resolve_veto", set ["agentName"; "landingId"]
@@ -258,7 +259,8 @@ let descriptionPropertyTests =
       // existed in the core with no tool to issue them.
       // + list_members: the progressive map's first rung (docs/progressive-map-research-2026-10-24.md).
       // + list_references: the rung below it, whose reply states its scope first.
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 72
+      // + seat_conductor: a seated member asks, and a person's yes fills an empty conductor seat.
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 73
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

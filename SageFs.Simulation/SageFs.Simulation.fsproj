@@ -331,6 +331,11 @@
              from the session id, a lease that ignores the open stream) prove the invariants' teeth. -->
         <Compile Include="BridgeIdentitySim.fs" />
         <Compile Include="BridgeIdentityInvariants.fs" />
+        <!-- A person says yes before a conductor is seated: members join, leave and ask, and a person answers or is not there,
+             through the REAL SeatingFlow and Cohort.decide; two twins (seats on the plan alone, asks and ignores the answer)
+             prove the invariants' teeth. -->
+        <Compile Include="SeatingSim.fs" />
+        <Compile Include="SeatingInvariants.fs" />
         <Compile Include="OperatorStoreSim.fs" />
         <!-- Debugging one test DST: holds, expiries, debugger attach, release, finish and a dying host, folded
              through the REAL TestDebug.step; two twins (never expires, runs unattached) prove the teeth. -->

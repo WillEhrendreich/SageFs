@@ -14,9 +14,12 @@ module CohortStatusText =
   [<Literal>]
   let seatCommandText = "sagefs cohort seat"
 
-  /// What to do about an empty conductor seat, in one sentence. No MCP tool and no token can fill it, so the answer is a person.
+  /// What to do about an empty conductor seat, in one sentence. Every way to fill it ends with a person's say: the question
+  /// `seat_conductor` puts to them, the dashboard's Seat button, or the command line with the operator credential.
   let vacantSeatAdvice : string =
-    sprintf "A person fills it: run '%s <member id>' on the machine that runs the daemon (with no member id it lists who is present)." seatCommandText
+    sprintf
+      "A person fills it: say yes when seat_conductor asks, click Seat on the dashboard's cohort panel, or run '%s <member id>' on the machine that runs the daemon (with no member id it lists who is present)."
+      seatCommandText
 
   /// The flag that names the holder a person replaces. One home, like `seatCommandText`.
   [<Literal>]

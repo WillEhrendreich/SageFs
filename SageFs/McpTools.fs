@@ -2792,6 +2792,35 @@ OUTPUT: Confirmation naming the new conductor, or a refusal: not conductor, vaca
         |> withEchoOutcome ctx "delegate_conductor"
 
     [<McpServerTool>]
+    [<Description("""Ask for an EMPTY conductor seat to be filled. The daemon asks the PERSON at your client (MCP elicitation), naming the repository, the member, who held the seat and why it is empty; only an explicit yes seats anyone. A decline, silence or a client that cannot be asked is refused and nothing changes. A seated Implementer may call it, never under a member token.
+
+WHEN TO USE: get_cohort_status says the seat is vacant and work needs a conductor. toMember defaults to you.
+
+OUTPUT: who is the conductor now, or the refusal and the other routes ('sagefs cohort seat', the dashboard's Seat button).""")>]
+    member _.seat_conductor(
+        [<Description("Your agent or model name.")>]
+        agentName: string,
+        [<Description("The member to seat, as get_cohort_status prints it. Blank means you.")>]
+        [<Optional; DefaultParameterValue("")>]
+        toMember: string,
+        [<Description("The directory you are working in. It decides WHICH cohort this is.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: seat_conductor called by {AgentName}, to={ToMember}", agentName, toMember)
+        task {
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
+          let! result = SageFs.McpSeating.run ctx agentName toMember wd
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "seat_conductor"
+
+    [<McpServerTool>]
     [<Description("""Withdraw a landing YOU requested, whatever state it is in short of Landed or already withdrawn (queued, rebasing, verifying, or blocked — including blocked by a veto). Only the landing's own requester may withdraw it; nobody else can, not even the conductor.
 
 WHEN TO USE: Your landing should not go ahead (you found a mistake, a veto was raised and you would rather resubmit, or its blocker means you will redo it).

@@ -69,6 +69,8 @@
         <Compile Include="GateCheckout.fs" />
         <Compile Include="MemberTable.fs" />
         <Compile Include="Capability.fs" />
+        <!-- A seated member asks, a person answers: the only way an MCP tool fills an empty conductor seat. -->
+        <Compile Include="SeatingFlow.fs" />
         <Compile Include="EdgeCredential.fs" />
         <Compile Include="OperatorFile.fs" />
         <Compile Include="Tutorial.fs" />

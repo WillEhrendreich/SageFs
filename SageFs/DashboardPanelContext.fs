@@ -15,6 +15,8 @@ open SageFs
 module DashboardRoutes =
   let [<Literal>] LiveTestingEnable = "/dashboard/live-testing/enable"
   let [<Literal>] LiveTestingDisable = "/dashboard/live-testing/disable"
+  /// The cohort panel's Seat button: `?member=<member id>`.
+  let [<Literal>] CohortSeat = "/dashboard/cohort/seat"
 
 /// Every panel that follows the viewer's context.
 [<RequireQualifiedAccess>]

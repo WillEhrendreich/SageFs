@@ -5100,6 +5100,7 @@ let run
     // reader wants "the cohort I am showing" and none of them has a second scope to ask about.
     ReadCohortLedger = fun () -> cohortLedgerPort.ReadAll cohortOwner.Scope
     ReadTrunk = trunkFollower.Read
+    SeatConductor = SageFs.CohortSeatRoute.seatFromDashboard cohortOwner
     GetCompletions = fun (sessionId: WorkerProtocol.SessionId) (code: string) (cursorPos: int) -> task {
       try
         let! proxy = sessionOps.GetProxy sessionId

@@ -248,6 +248,9 @@ let private gatingDomain : Map<string, ToolGate> =
     // dependence.
     "mint_member", ToolGate.AlwaysAvailable
     "revoke_member", ToolGate.AlwaysAvailable
+    // A seated member asks for an EMPTY conductor seat to be filled and a person answers (`SeatingFlow`): callable by a
+    // seated Implementer and never under a member token, and meaningful before any FSI session exists.
+    "seat_conductor", ToolGate.AlwaysAvailable
     // State-gated tools — availability derives from availableTools for the
     // session's current lifecycle state.
     "send_fsharp_code", ToolGate.StateGated
@@ -353,6 +356,8 @@ type CohortTool =
   | MintMember
   /// Revoke a member token. Conductor-only.
   | RevokeMember
+  /// Ask for an EMPTY conductor seat to be filled; a person answers. A seated Implementer's tool.
+  | SeatConductor
 
 module CohortTool =
   /// The exact MCP tool names the cohort tools are registered under
@@ -375,6 +380,7 @@ module CohortTool =
     | CohortTool.SetIntegrationRef -> "set_integration_ref"
     | CohortTool.MintMember -> "mint_member"
     | CohortTool.RevokeMember -> "revoke_member"
+    | CohortTool.SeatConductor -> "seat_conductor"
 
   let all: CohortTool list =
     [ CohortTool.Join
@@ -390,7 +396,8 @@ module CohortTool =
       CohortTool.GetStatus
       CohortTool.SetIntegrationRef
       CohortTool.MintMember
-      CohortTool.RevokeMember ]
+      CohortTool.RevokeMember
+      CohortTool.SeatConductor ]
 
 /// MCP tool names SageFs has RETIRED. Nothing may call these, and — the reason
 /// this type exists at all — no LIVE agent-facing string may tell an agent to.
@@ -502,7 +509,8 @@ let cohortTools (authority: Cohort.Authority<'m>) : Set<CohortTool> =
           CohortTool.ReleaseClaim
           CohortTool.RequestLanding
           CohortTool.WithdrawLanding
-          CohortTool.VetoLanding ]
+          CohortTool.VetoLanding
+          CohortTool.SeatConductor ]
   | Cohort.Authority.Conductor _ ->
     Set.ofList CohortTool.all
 
@@ -704,6 +712,7 @@ type ToolName =
   | SetIntegrationRef
   | MintMember
   | RevokeMember
+  | SeatConductor
   // SageFs's own files and the machine's leftover worktrees.
   | ManageLocalData
   | GetWorkspaceHygiene
@@ -783,6 +792,7 @@ module ToolName =
     | ToolName.SetIntegrationRef -> "set_integration_ref"
     | ToolName.MintMember -> "mint_member"
     | ToolName.RevokeMember -> "revoke_member"
+    | ToolName.SeatConductor -> "seat_conductor"
     | ToolName.ManageLocalData -> "manage_local_data"
     | ToolName.GetWorkspaceHygiene -> "get_workspace_hygiene"
     | ToolName.TidyWorkspace -> "tidy_workspace"
@@ -857,6 +867,7 @@ module ToolName =
       ToolName.SetIntegrationRef
       ToolName.MintMember
       ToolName.RevokeMember
+      ToolName.SeatConductor
       ToolName.ManageLocalData
       ToolName.GetWorkspaceHygiene
       ToolName.TidyWorkspace ]
@@ -891,7 +902,8 @@ module ToolName =
       ToolName.GetCohortStatus
       ToolName.SetIntegrationRef
       ToolName.MintMember
-      ToolName.RevokeMember ]
+      ToolName.RevokeMember
+      ToolName.SeatConductor ]
 
   /// The cohort verb `tool` names, or `None` for the other tools — which is
   /// how a caller knows a non-cohort tool must not be looked up in
@@ -915,6 +927,7 @@ module ToolName =
     | ToolName.SetIntegrationRef -> Some CohortTool.SetIntegrationRef
     | ToolName.MintMember -> Some CohortTool.MintMember
     | ToolName.RevokeMember -> Some CohortTool.RevokeMember
+    | ToolName.SeatConductor -> Some CohortTool.SeatConductor
     | _ -> None
 
   /// Whether `tool` is one of the cohort verbs. Derived from the mapping

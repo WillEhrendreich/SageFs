@@ -217,6 +217,8 @@
         <Compile Include="MemberMintCommand.fs" />
         <Compile Include="CohortSeatCommand.fs" />
         <Compile Include="LocalDataCommand.fs" />
+        <!-- `seat_conductor`: a seated member asks, the daemon asks the person, and only a yes seats anyone. -->
+        <Compile Include="McpSeating.fs" />
         <!-- The scratch-pad tool's body, out of Mcp.fs (the accretion hub whose line budget only goes down). -->
         <Compile Include="McpScratchPadViews.fs" />
         <Compile Include="McpTools.fs" />

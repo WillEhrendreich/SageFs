@@ -3236,13 +3236,40 @@ let rec renderCohortPanelFor (silence: Features.CohortStatusText.HolderSilence) 
         Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem;" ] [
           textEnc (sprintf "Ledger v%d" (int64 frame.Version))
         ]
-        // An empty conductor seat stays empty until a person fills it: no tool and no token can. Say so where the
-        // person looks, and name the command, so the panel is not a dead end.
+        // An empty conductor seat stays empty until a person says who fills it: seat_conductor asks the person, the
+        // command line seats on their word, and this panel is where they click. Say so where the person looks, so the
+        // panel is not a dead end.
         match frame.Conductor with
         | SageFs.Cohort.ConductorBinding.Vacant(former, since, _) ->
           Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; overflow-wrap: anywhere;" ] [
             textEnc (sprintf "Conductor seat vacant since %s (%s held it). %s" (since.ToString "u") (MemberTable.MemberId.display former) Features.CohortStatusText.vacantSeatAdvice)
           ]
+          // One Seat button per present member who could hold the seat (a member under a token cannot call the conductor's
+          // tools, so the cohort refuses it and the panel does not offer it). The words are markup text, and the click
+          // asks first, as the purge button does: seating is the authority to mint tokens.
+          Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [
+            for i in 0 .. frame.MemberIds.Length - 1 do
+              match frame.MemberSeat.[i], frame.MemberIds.[i] with
+              | SageFs.Cohort.SeatState.Present, (MemberTable.MemberId.Capability _) -> ()
+              | SageFs.Cohort.SeatState.Present, who ->
+                let name = MemberTable.MemberId.display who
+                // The name sits inside a JavaScript string in the click handler: a quote or backslash in it must not end that string.
+                let inScript = name.Replace("\\", "\\\\").Replace("'", "\\'")
+                Elem.button
+                  [ Attr.class' "eval-btn"
+                    Attr.style "font-size: 0.857rem; flex: 0 1 auto; overflow-wrap: anywhere;"
+                    testid "cohort-seat"
+                    Attr.create "data-member" name
+                    Ds.onEvent
+                      ("click",
+                       sprintf
+                         "if(confirm('Seat %s as the conductor of this cohort? The conductor mints member tokens, configures the integration and reassigns claims.')){%s}"
+                         inScript
+                         (Ds.post (sprintf "%s?member=%s" DashboardRoutes.CohortSeat (System.Uri.EscapeDataString name)))) ]
+                  [ textEnc (sprintf "Seat %s" name) ]
+              | SageFs.Cohort.SeatState.Departed _, _ -> ()
+          ]
+        | SageFs.Cohort.ConductorBinding.Bound _
         | SageFs.Cohort.ConductorBinding.Bound holder ->
           // A holder whose connection is gone keeps the seat until its lease lapses. Say so, and name the command a
           // person runs to replace it.

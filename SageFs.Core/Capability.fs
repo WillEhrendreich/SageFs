@@ -178,7 +178,8 @@ module Capability =
       | ToolClass.CohortWork -> [ "acquire_claim"; "release_claim"; "request_landing"; "withdraw_landing" ]
       | ToolClass.CohortReview -> [ "veto_landing" ]
       | ToolClass.CohortAdmin ->
-        [ "reassign_claim"; "delegate_conductor"; "resolve_veto"; "set_integration_ref"; "mint_member"; "revoke_member" ]
+        [ "reassign_claim"; "delegate_conductor"; "resolve_veto"; "set_integration_ref"; "mint_member"; "revoke_member"
+          "seat_conductor" ]
       | ToolClass.SessionRead ->
         [ "get_daemon_status"; "get_session_status"; "list_sessions"; "get_available_projects"
           "list_runnable_projects"; "get_friction_report"; "get_friction_summary"; "discover_features"
@@ -425,7 +426,7 @@ module Capability =
         RouteKind.InCohort
         [ "get_cohort_status"; "join_cohort"; "leave_cohort"; "acquire_claim"; "release_claim"
           "request_landing"; "withdraw_landing"; "veto_landing"; "reassign_claim"; "delegate_conductor"
-          "resolve_veto"; "set_integration_ref"; "mint_member"; "revoke_member" ]
+          "resolve_veto"; "set_integration_ref"; "mint_member"; "revoke_member"; "seat_conductor" ]
       @ tagged
           RouteKind.OnSession
           [ "get_session_status"; "list_runnable_projects"; "discover_features"; "get_recent_fsi_events"

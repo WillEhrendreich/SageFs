@@ -170,7 +170,7 @@ module CohortErrorMapping =
         (sprintf "This is a conductor-only action, and the conductor seat is VACANT %s." seat)
         (match former with
          | Some _ ->
-           "No MCP tool can fill an empty conductor seat: delegate_conductor hands the seat on only from a SITTING conductor, and nothing is auto-promoted into one. A person seats one, on the machine that runs the daemon, with 'sagefs cohort seat <member id>' (with no member id it lists who is present). Meanwhile do the work that needs no conductor: acquire_claim, release_claim, request_landing, withdraw_landing, veto_landing."
+           "No tool fills an empty conductor seat on its own: delegate_conductor hands the seat on only from a SITTING conductor, and nothing is auto-promoted into one. seat_conductor asks the person at your client whether to seat a present member and acts only on their yes. A person can also run 'sagefs cohort seat <member id>' on the machine that runs the daemon (with no member id it lists who is present) or click Seat on the dashboard's cohort panel. Meanwhile do the work that needs no conductor: acquire_claim, release_claim, request_landing, withdraw_landing, veto_landing."
          | None ->
            "No member has ever been conductor in this cohort. The first member to join binds the seat, so join_cohort (if you have not) is what fills it.")
 

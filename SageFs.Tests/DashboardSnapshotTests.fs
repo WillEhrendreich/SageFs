@@ -258,6 +258,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       ReadHolderSilence = fun () -> SageFs.Features.CohortStatusText.HolderSilence.NotSilent
       ReadCohortLedger = fun () -> []
       ReadTrunk = fun () -> SageFs.Features.TrunkFollow.initial
+      SeatConductor = fun _ -> System.Threading.Tasks.Task.FromResult(Result.Error "no cohort owner in this fixture")
     }
 
   let panelFor (activity: SageFs.Features.LiveTestActivity.LiveTestActivity) = task {

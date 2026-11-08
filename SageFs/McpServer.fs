@@ -487,6 +487,42 @@ let confirmCall
     return outcome |> Result.mapError (ConfirmationRefusal.describe toolName)
   }
 
+/// What a person's answer to the seating question means, as the cohort's own cases. The same reading as the confirm tier's
+/// (`answerVerdict`): Accept is the yes, and only an explicit untick of the box overrides it.
+let seatingAnswerOf (answer: ElicitResult) : SageFs.SeatingFlow.Answer =
+  match answerVerdict answer with
+  | Ok() -> SageFs.SeatingFlow.Answer.Yes
+  | Result.Error Declined -> SageFs.SeatingFlow.Answer.Declined
+  | Result.Error Cancelled -> SageFs.SeatingFlow.Answer.Cancelled
+  | Result.Error(AnsweredOther action) -> SageFs.SeatingFlow.Answer.AnsweredOther action
+  | Result.Error(NoAnswerInTime waited) -> SageFs.SeatingFlow.Answer.NoAnswerInTime waited
+  | Result.Error(CouldNotBeAsked reason) -> SageFs.SeatingFlow.Answer.CouldNotBeAsked reason
+
+/// The person at this client, for `seat_conductor`. Unlike the confirm tier, a client that did not offer elicitation is
+/// not let through: `CanAsk` is false and the seating is refused, because here the answer IS the permission.
+let seatingPerson (server: ModelContextProtocol.Server.McpServer) : SageFs.SeatingFlow.Person =
+  let caps = server.ClientCapabilities
+  { CanAsk = not (isNull caps || isNull caps.Elicitation)
+    Ask =
+      fun question ct ->
+        task {
+          try
+            let schema = ElicitRequestParams.RequestSchema()
+            let flag = ElicitRequestParams.BooleanSchema()
+            flag.Description <- "Seat them as the conductor?"
+            flag.Default <- System.Nullable true
+            schema.Properties <- dict [ "confirmed", flag ]
+            let parameters = ElicitRequestParams(Message = question, RequestedSchema = schema)
+            use window = CancellationTokenSource.CreateLinkedTokenSource(ct)
+            window.CancelAfter SageFs.Timeouts.confirmationAnswer
+            let! answer = server.ElicitAsync(parameters, window.Token).AsTask()
+            return seatingAnswerOf answer
+          with
+          | :? OperationCanceledException when not ct.IsCancellationRequested ->
+            return SageFs.SeatingFlow.Answer.NoAnswerInTime SageFs.Timeouts.confirmationAnswer
+          | ex when not (ex :? OperationCanceledException) -> return SageFs.SeatingFlow.Answer.CouldNotBeAsked ex.Message
+        } }
+
 /// The tools whose body reads a `session_id` argument. The gate reads one only from these: a client may send any
 /// argument with any call, and a `session_id` the body ignores would have the gate route to a different session from
 /// the one the body acts on.
@@ -520,6 +556,8 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
       // What the edge decided about the operator credential on this request: the person who runs the daemon may stop or
       // reset any session (`SessionAccess.decide`).
       SageFs.McpTools.currentOperatorClaim.Value <- SageFs.McpCapability.operatorClaimOf ctx.User
+      // The person at this call's client, for `seat_conductor` alone: the only tool that asks one before it acts.
+      SageFs.McpSeating.currentPerson.Value <- Some(seatingPerson ctx.Server)
       // Bind the member token this call presented, if any, the same way: a token outranks the connection,
       // and one that is presented but bad is refused below, before any tool body or gate runs, never
       // quietly downgraded to the connection's own identity.
