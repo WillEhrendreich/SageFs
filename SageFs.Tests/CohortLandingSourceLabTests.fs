@@ -320,7 +320,9 @@ let tests =
         Directory.Exists integrationWorktree |> Expect.isTrue "the integration worktree was never touched"
 
         // P16: with the queue empty the integration moves to a second repository: it gets a worktree path of its own and the
-        // first repository's worktree is removed from the first repository.
+        // first repository's worktree is removed from the first repository. The second repository is a cohort of its own, and the
+        // first member to join it is its conductor, which set_integration_ref needs: it is conductor-only in the cohort it acts in.
+        let! _ = callTool second "join_cohort" [ "agentName", box "second"; "role", box "Implementer"; "working_directory", box secondRepository ]
         let! moved =
           callToolPatient second "set_integration_ref"
             [ "agentName", box "second"; "integrationRef", box "HEAD"; "working_directory", box secondRepository ]
