@@ -1618,3 +1618,48 @@ Evidence: `SageFs.Core/MemberTable.fs` (`ClientKey`, `ConnectionIdentity`), `Sag
 `BridgeIdentityIntegrationTests.fs` (a real daemon killed and started again under two real bridges).
 Reopen it if: a client other than `sagefs mcp` needs the same survival (then the key is a documented header for HTTP clients), or the
 lease should follow something other than presence.
+
+## A conductor seat is filled by a person's yes, and the tool that asks cannot build the command without it
+
+`sagefs cohort seat` (2026-11-07, first the CLI) kept an agent from promoting itself, because an MCP tool is callable by any
+agent and the seat is the authority to mint tokens, configure the integration and reassign claims. It also made a person leave
+the conversation to type a command, and the operator credential it uses is a file any process of the same OS user can read, so
+the guard was only that no tool existed.
+
+The decision. `seat_conductor` is a tool, and the person is asked through MCP elicitation inside it. The tool never decides: it
+runs the cohort's rules (`SeatingFlow.plan`, which is `Cohort.decide` run against a copy of the state, so nobody is asked about a
+seating the cohort would refuse), puts one question to the person (the repository, who is asking, who would sit and in what role,
+who held the seat and why it is empty), and builds the command from a `SeatApproval` that only `SeatingFlow.ask` makes, and only
+for an explicit yes. `SeatApproval` has no public constructor and `commandOf` is the only function that takes one, so writing a
+seating that skips the question does not compile outside that module. Tests hold this three ways: reflection over the type and
+the module (`SeatingFlowTests`), a source check that the tool file commits once and only a command from `commandOf`, and
+`SeatingSimTests`, whose two twins (seat on the plan alone, ask and ignore the answer) must break the invariants.
+
+Fail closed, the opposite of the confirm tier. A client that does not offer elicitation passes the confirm tier, because a missing
+prompt there costs a click. Here the prompt is the permission, so a client that cannot be asked, a decline, a dismissal, silence
+and a failed question all refuse, and the refusal names the other routes. Accept is the yes; only an explicit untick of the box
+overrides it, the same reading as `manage_local_data`'s.
+
+Who may call it. A seated Implementer, and the conductor (the cohort refuses a held seat). It is not conductor-only, because the
+seat it exists to fill has no conductor. It is in the `CohortAdmin` class, which no token preset holds, so no member token can call
+it and a token's `tools/list` leaves it out; the tool refuses a call that presents a token as well, and a member that acts under a
+token is never the one seated (no token may call the conductor's tools, so the seat would be stranded). The tool list does not vary
+per connection: it varies by the authorization on the request, as `mint_member`'s does.
+
+The dashboard. The cohort panel's vacant-seat line has a Seat button per present member. The click asks first (a native confirm, as
+the purge button does) and posts to `/dashboard/cohort/seat`, which answers only a request carrying `Sec-Fetch-Site: same-origin`.
+A browser sets that header itself and a page's script cannot change it. A shell or an HTTP client sends none, and is told to use the
+command line. It is evidence that a browser sent the request, and it is no credential: a process that can forge it can also read
+`operator.token`, so this route does not claim more than the command line does.
+
+What it does not do. It does not make an agent unable to harm a daemon whose operator credential it can read; that is the stated
+limit of every operator route. It does not check that the person who answered is the one who runs the daemon: whoever is at the
+client answers, which is the person the client belongs to. A client that auto-accepts every elicitation seats on its own say, and
+that is the client's configuration; the question text says what is being approved so a human reading a log can tell.
+
+Evidence: `SageFs.Core/SeatingFlow.fs`, `SageFs/McpSeating.fs`, `SageFs/McpServer.fs` (`seatingPerson`, `seatingAnswerOf`, the call
+filter), `SageFs/CohortSeatCommand.fs` (`seatFromDashboard`), `SageFs/Dashboard.fs`, `SageFs/DashboardFragments.fs`;
+`SageFs.Tests/SeatingFlowTests.fs`, `SeatingSimTests.fs`, `McpSeatingTests.fs`, `CohortSeatDashboardTests.fs` and
+`SeatConductorIntegrationTests.fs` (a real daemon with real MCP clients, one of which answers the question).
+Reopen it if: elicitation grows an answer a person cannot give by accident (then accept can stop being the yes), or a per-call
+daemon token ships and the operator routes can tell a person from a process.

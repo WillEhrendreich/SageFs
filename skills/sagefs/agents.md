@@ -58,3 +58,17 @@ sub-agent in that state still has the loop: `sagefs call` reaches every tool fro
   stopped by the next, and `stop_session` is refused. With the token every call is the same member. Do not pass
   `--token <token>`: it prints a warning, because the token lands in the process list and the shell history.
 - The answer is on stdout. A tool error is on stderr with exit code 1. Read the exit code.
+
+## When the cohort's conductor seat is empty
+
+`get_cohort_status` says `VACANT` when the conductor left, was revoked or went silent, and nobody holds the conductor's
+tools until a person says who does. A seated member can ask: `seat_conductor` (it takes `toMember`, default yourself, and
+`working_directory` of your repository) puts the question to the person at your client, naming the repository, who would
+sit, who held the seat and why it is empty. Only their explicit yes seats anyone.
+
+- A decline, a dismissal, no answer and a client that offers no elicitation all refuse, and nothing changes. Do not ask
+  again unless the person tells you to. The refusal names the other routes: `sagefs cohort seat <member id>` from a shell on
+  the machine that runs the daemon, and the Seat button on the dashboard's cohort panel.
+- Under a member token the tool is not callable, and a member under a token is never the one seated. If you hold a token,
+  the person seats a member that joined on its own connection.
+- Meanwhile do what needs no conductor: `acquire_claim`, `release_claim`, `request_landing`, `withdraw_landing`, `veto_landing`.

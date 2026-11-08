@@ -92,7 +92,7 @@ credential (`operator.token`) and sends it as the Bearer header.
 no member token reaches it. (`sagefs stop` stops the whole daemon, not one
 session.)
 
-The full advertised set is 72 tools, grouped below. This is separate
+The full advertised set is 73 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those
 HTTP endpoints are not MCP tools.
@@ -644,6 +644,7 @@ daemon's own cohort instead of the one the call acts in. If you see that text, t
 | `release_claim` | Release a claim you hold. The presented fence must match the current one. |
 | `reassign_claim` | Conductor-only: reassign an orphaned claim to a present member. |
 | `delegate_conductor` | Conductor-only: hand the conductor seat to another **present** member. Only a sitting conductor can issue it, so it cannot fill an empty seat. Refused with the roster of present members when the target is not here, when it is yourself, and when it acts under a member token (no token may call the conductor's tools, so the seat would be stranded). |
+| `seat_conductor` | Ask for an **empty** conductor seat to be filled. The daemon asks the person at your client through MCP elicitation, naming the repository, who is asking, who would sit and in what role, who held the seat and why it is empty, and seats nobody without an explicit yes. `toMember` names the member (default: you). A decline, a dismissal, silence, a failed question and a client that offers no elicitation all refuse and change nothing, and the refusal names `sagefs cohort seat` and the dashboard's Seat button. A seated Implementer calls it; it is never callable under a member token, and a member under a token is never the one seated. |
 | `request_landing` | Queue a landing: your commits are rebased onto the integration head, verified against affected tests, and fast-forwarded in. Landings are strictly serial (one FIFO queue). |
 | `withdraw_landing` | Take back a landing **you** requested, in any state short of landed or already withdrawn (a vetoed one included). Nobody else can withdraw it, the conductor included. |
 | `veto_landing` | Object to a **live** landing (queued, rebasing or verifying) with a reason. It is blocked, awaiting the conductor, and leaves the queue so it holds nobody behind it. Allowed for a seated Implementer, Verifier or the conductor; refused for an Observer, for someone who never joined and for a member who left. A landing that landed, was withdrawn, is blocked for another reason or is already vetoed is refused, and the first veto and its reason stand. |
@@ -754,7 +755,21 @@ back on Unix. On Windows the file gets an ACL for the current user alone when it
 made, and that is not read back, because it has not been run there.
 
 **Seat a conductor.** When the conductor leaves or goes silent the seat is empty, and an empty seat stays empty until
-a person fills it. `delegate_conductor` cannot: only a sitting conductor can issue it. The person's way in is a
+a person says who fills it. `delegate_conductor` cannot: only a sitting conductor can issue it. There are three ways in,
+and each ends with a person's say.
+
+The first is the tool. A seated member calls `seat_conductor`, and the daemon asks the person at that member's client
+(MCP elicitation, the mechanism `manage_local_data` uses) whether to seat the member. Only an explicit yes seats anyone.
+Unlike `manage_local_data`, where a client that cannot be asked is let through, a client that offers no elicitation is
+refused here, because for this tool the prompt is the permission. The seat is the authority to mint tokens, configure the
+integration and reassign claims, and an MCP tool is callable by any agent, so the code is shaped so that a seating without
+a yes cannot be written: the command is built from a `SeatApproval` that only `SeatingFlow.ask` makes, after the person
+said yes. The cohort's rules run first (`SeatingFlow.plan`), so nobody is asked about a seating the cohort would refuse.
+The second is the Seat button on the dashboard's cohort panel, next to the vacant-seat line (one per present member, after
+a native confirmation). It posts to `/dashboard/cohort/seat`, which answers only a request that carries the browser's own
+`Sec-Fetch-Site: same-origin`, so a shell or an agent's HTTP client is told to use the command line. The header is
+evidence that a browser sent it and is not a credential: a process that can forge it can also read `operator.token`. The
+third is a command on the machine that runs the daemon, for a person with no client that can answer a question:
 command on the machine that runs the daemon:
 
 ```sh
@@ -775,9 +790,9 @@ refused too: no token may call the conductor's tools, so the seat would be stuck
 `ConductorSeated` with the vacancy it ended, and replay reproduces the seat after a restart.
 
 It uses the operator credential, exactly as `member mint` does: `GET` and `POST /api/cohort/seat` with
-`Authorization: Bearer sfo_...`, refused with the table of statuses above for anything else. No MCP tool builds a
-`SeatConductor`, and no member token reaches the route, which is why an agent cannot take the seat. The `POST` body is
-`{"working_directory": "...", "member": "mcp:m-..."}`.
+`Authorization: Bearer sfo_...`, refused with the table of statuses above for anything else. No member token reaches the
+route, and the only way an MCP tool reaches `SeatConductor` is through a `SeatApproval`, which is why an agent cannot take
+the seat on its own say-so. The `POST` body is `{"working_directory": "...", "member": "mcp:m-..."}`.
 
 **Replace a conductor whose connection is gone.** A conductor whose bridge changed or whose daemon restarted onto a
 different identity keeps the seat until its lease lapses, which is 30 minutes (`Timeouts.cohortLeaseWindow`), and a
@@ -872,7 +887,7 @@ class is refused, so a new tool cannot be reachable by accident.
 | `Implementer` | `send_fsharp_code`, `cancel_eval`, `manage_scratch_pad`, the session tools (`create_*_session`, `reset_fsi_session`, `hard_reset_fsi_session`, `switch_workflow`, `stop_session`, the hot reload tools), `run_app`, `stop_app`, `acquire_claim`, `release_claim`, `request_landing`, `withdraw_landing` | Implementer |
 
 No role can call `mint_member`, `revoke_member`, `reassign_claim`, `delegate_conductor`,
-`resolve_veto`, `set_integration_ref`, `manage_local_data`, `get_workspace_hygiene` or
+`seat_conductor`, `resolve_veto`, `set_integration_ref`, `manage_local_data`, `get_workspace_hygiene` or
 `tidy_workspace`. A token call also passes the cohort's own role check, so an
 Observer, Analysis or Verifier token can read the cohort but not claim a scope or
 queue a landing. `tools/list` shows a token only the tools its role allows. The

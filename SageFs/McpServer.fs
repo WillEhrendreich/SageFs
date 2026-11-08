@@ -499,10 +499,13 @@ let seatingAnswerOf (answer: ElicitResult) : SageFs.SeatingFlow.Answer =
   | Result.Error(CouldNotBeAsked reason) -> SageFs.SeatingFlow.Answer.CouldNotBeAsked reason
 
 /// The person at this client, for `seat_conductor`. Unlike the confirm tier, a client that did not offer elicitation is
-/// not let through: `CanAsk` is false and the seating is refused, because here the answer IS the permission.
+/// not let through: its `Elicitation` is `NotOffered` and the seating is refused, because here the answer IS the permission.
 let seatingPerson (server: ModelContextProtocol.Server.McpServer) : SageFs.SeatingFlow.Person =
   let caps = server.ClientCapabilities
-  { CanAsk = not (isNull caps || isNull caps.Elicitation)
+  { Elicitation =
+      (match isNull caps || isNull caps.Elicitation with
+       | true -> SageFs.SeatingFlow.Elicitation.NotOffered
+       | false -> SageFs.SeatingFlow.Elicitation.Offered)
     Ask =
       fun question ct ->
         task {

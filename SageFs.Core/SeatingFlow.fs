@@ -29,9 +29,15 @@ module SeatingFlow =
     | NoAnswerInTime of waited: TimeSpan
     | CouldNotBeAsked of reason: string
 
+  /// Whether the client offered MCP elicitation at all.
+  [<RequireQualifiedAccess>]
+  type Elicitation =
+    | Offered
+    | NotOffered
+
   /// The person at the client: whether the client offered elicitation at all, and the one call that reaches them.
   type Person =
-    { CanAsk: bool
+    { Elicitation: Elicitation
       Ask: string -> CancellationToken -> Task<Answer> }
 
   /// Why a seating did not happen. A closed set with one `describe` in the adapter, so a test matches a case.
@@ -100,9 +106,9 @@ module SeatingFlow =
   /// `SeatApproval` is made, and only for an explicit yes.
   let ask (person: Person) (question: string) (plan: Plan) : Task<Result<SeatApproval, Refusal>> =
     task {
-      match person.CanAsk with
-      | false -> return Result.Error Refusal.ClientCannotAsk
-      | true ->
+      match person.Elicitation with
+      | Elicitation.NotOffered -> return Result.Error Refusal.ClientCannotAsk
+      | Elicitation.Offered ->
         let! answer =
           task {
             try

@@ -193,7 +193,12 @@ let items : Item list =
     item "cohort-seat-a-conductor" "A person can seat a conductor" Agents Now
       (landmark "SageFs/CohortSeatCommand.fs" "CohortSeatCommand")
       [ "docs/mcp-tools.md" ]
-      "When a cohort's conductor leaves or goes silent the seat stays empty, and no tool can fill it, so a cohort whose conductor left could only be reset by wiping its ledger. `sagefs cohort seat <member id>` fills it: the person who runs the daemon names a present member, the operator credential is checked, and the ledger records `ConductorSeated` with the vacancy it ended. A held seat, an absent member and a member under a token are refused with the reason, and no MCP tool or token can build the command, so an agent cannot take the seat. With no member id the command lists who is present and where the seat stands."
+      "When a cohort's conductor leaves or goes silent the seat stays empty, and no tool could fill it, so a cohort whose conductor left could only be reset by wiping its ledger. `sagefs cohort seat <member id>` fills it: the person who runs the daemon names a present member, the operator credential is checked, and the ledger records `ConductorSeated` with the vacancy it ended. A held seat, an absent member and a member under a token are refused with the reason, and no member token reaches the route, so an agent cannot take the seat (`seat_conductor` asks the person first). With no member id the command lists who is present and where the seat stands."
+
+    item "seat-a-conductor-from-a-tool" "A seated member can ask for a conductor, and a person answers" Agents Now
+      (landmark "SageFs.Core/SeatingFlow.fs" "SeatApproval")
+      [ "docs/mcp-tools.md"; "docs/decisions.md" ]
+      "The person who had to leave their conversation to type `sagefs cohort seat` can now be asked in it. `seat_conductor` is a tool a seated Implementer calls; the daemon asks the person at the client through MCP elicitation, naming the repository, who would sit, who held the seat and why it is empty, and seats nobody without an explicit yes. A decline, a dismissal, silence, a failed question and a client that offers no elicitation all refuse and change nothing, and the refusal names the command and the dashboard's new Seat button, which asks first and answers only a request from the page. The command is built from a `SeatApproval` that only the question can make, so a seating without a yes cannot be written, and a member under a token neither asks nor is seated."
 
     item "cohort-replace-a-conductor" "A person can replace a conductor whose connection is gone" Agents Now
       (landmark "SageFs/CohortSeatCommand.fs" "commandForReplace")

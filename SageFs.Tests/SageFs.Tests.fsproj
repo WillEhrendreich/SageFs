@@ -1044,6 +1044,7 @@
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="CohortSeatIntegrationTests.fs" />
+        <Compile Include="SeatConductorIntegrationTests.fs" />
         <Compile Include="CapabilityHttpIntegrationTests.fs" />
         <Compile Include="McpCallIntegrationTests.fs" />
         <Compile Include="HardResetStartupProfileIntegrationTests.fs" />

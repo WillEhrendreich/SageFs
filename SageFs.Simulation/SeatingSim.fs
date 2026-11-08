@@ -98,7 +98,15 @@ module SeatingSim =
     let target = memberOf targetIndex
     let asked = ref 0
     let person : Person =
-      { CanAsk = (reply <> Reply.NotThere)
+      { Elicitation =
+          (match reply with
+           | Reply.NotThere -> Elicitation.NotOffered
+           | Reply.Yes
+           | Reply.No
+           | Reply.Dismiss
+           | Reply.OtherAction
+           | Reply.Silence
+           | Reply.Broken -> Elicitation.Offered)
         Ask =
           fun _ _ ->
             asked.Value <- asked.Value + 1

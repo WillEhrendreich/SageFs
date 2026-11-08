@@ -2792,7 +2792,7 @@ OUTPUT: Confirmation naming the new conductor, or a refusal: not conductor, vaca
         |> withEchoOutcome ctx "delegate_conductor"
 
     [<McpServerTool>]
-    [<Description("""Ask for an EMPTY conductor seat to be filled. The daemon asks the PERSON at your client (MCP elicitation), naming the repository, the member, who held the seat and why it is empty; only an explicit yes seats anyone. A decline, silence or a client that cannot be asked is refused and nothing changes. A seated Implementer may call it, never under a member token.
+    [<Description("""Ask for an EMPTY conductor seat to be filled. The daemon asks the PERSON at your client (MCP elicitation), naming the repository, the member and why the seat is empty; only an explicit yes seats anyone. A decline, silence or a client that cannot be asked is refused and nothing changes. Not callable under a member token.
 
 WHEN TO USE: get_cohort_status says the seat is vacant and work needs a conductor. toMember defaults to you.
 

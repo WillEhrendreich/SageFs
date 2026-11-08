@@ -46,7 +46,7 @@ type private Asked() =
   member val Question = "" with get, set
 
 let private personWho (answer: Answer) (asked: Asked) : Person =
-  { CanAsk = true
+  { Elicitation = Elicitation.Offered
     Ask =
       fun question _ ->
         asked.Calls <- asked.Calls + 1
@@ -61,8 +61,8 @@ let private planned (state: CohortState<MemberId>) (caller: MemberId) (target: M
   | Ok p -> p
   | Error refusal -> failtestf "expected a plan, got %A" refusal
 
-let private askWith (person: Person) (p: Plan) : Result<SeatApproval, Refusal> =
-  (SeatingFlow.ask person "seat bob?" p).GetAwaiter().GetResult()
+let private askWith (person: Person) (p: Plan) : Task<Result<SeatApproval, Refusal>> =
+  SeatingFlow.ask person "seat bob?" p
 
 let private answers : (string * Answer * (Refusal -> bool)) list =
   [ "a decline", Answer.Declined, (function Refusal.Declined -> true | _ -> false)
@@ -129,50 +129,65 @@ let tests =
 
     testList "only a yes makes an approval, and the command is built from it" [
 
-      testCase "WHY - a yes gives an approval, and its command is the seating of the member the plan named, in the plan's cohort" <| fun _ ->
+      testTask "WHY - a yes gives an approval, and its command is the seating of the member the plan named, in the plan's cohort" {
         let state = vacantWithBob ()
         let asked = Asked()
-        match askWith (personWho Answer.Yes asked) (planned state bob bob) with
+        let! outcome = askWith (personWho Answer.Yes asked) (planned state bob bob)
+        match outcome with
         | Ok approval ->
           SeatingFlow.commandOf approval |> Expect.equal "the command" (CohortCommand.SeatConductor(bob, machine))
           let seated = next state (SeatingFlow.commandOf approval)
           seated.Conductor |> Expect.equal "and the cohort accepts it: bob is the conductor" (ConductorBinding.Bound bob)
         | Error refusal -> failtestf "a yes must approve, got %A" refusal
         asked.Calls |> Expect.equal "the person was asked exactly once" 1
+      }
 
-      testCase "WHY - the person is shown the question the caller wrote" <| fun _ ->
+      testTask "WHY - the person is shown the question the caller wrote" {
         let asked = Asked()
-        askWith (personWho Answer.Yes asked) (planned (vacantWithBob ()) bob bob) |> ignore
+        let! _ = askWith (personWho Answer.Yes asked) (planned (vacantWithBob ()) bob bob)
         asked.Question |> Expect.equal "verbatim" "seat bob?"
+      }
 
       for (what, answer, expected) in answers do
-        testCase (sprintf "WHY - %s is a refusal, never an approval" what) <| fun _ ->
-          match askWith (personWho answer (Asked())) (planned (vacantWithBob ()) bob bob) with
+        testTask (sprintf "WHY - %s is a refusal, never an approval" what) {
+          let! outcome = askWith (personWho answer (Asked())) (planned (vacantWithBob ()) bob bob)
+          match outcome with
           | Error refusal -> expected refusal |> Expect.isTrue (sprintf "the refusal names the case: %A" refusal)
           | Ok _ -> failtestf "%s must not approve" what
+        }
 
-      testCase "WHY - a client that cannot be asked is refused, and the question is never put (the opposite of the confirm tier)" <| fun _ ->
+      testTask "WHY - a client that cannot be asked is refused, and the question is never put (the opposite of the confirm tier)" {
         let asked = Asked()
-        let silent = { personWho Answer.Yes asked with CanAsk = false }
-        askWith silent (planned (vacantWithBob ()) bob bob)
-        |> Expect.equal "no elicitation means no seating" (Error Refusal.ClientCannotAsk)
+        let silent = { personWho Answer.Yes asked with Elicitation = Elicitation.NotOffered }
+        let! outcome = askWith silent (planned (vacantWithBob ()) bob bob)
+        outcome |> Expect.equal "no elicitation means no seating" (Error Refusal.ClientCannotAsk)
         asked.Calls |> Expect.equal "nobody was asked" 0
+      }
 
-      testCase "WHY - a question that throws is a refusal that says so, never a yes" <| fun _ ->
-        let breaks = { CanAsk = true; Ask = fun _ _ -> Task.FromException<Answer>(InvalidOperationException "the transport closed") }
-        match askWith breaks (planned (vacantWithBob ()) bob bob) with
+      testTask "WHY - a question that throws is a refusal that says so, never a yes" {
+        let breaks = { Elicitation = Elicitation.Offered; Ask = fun _ _ -> Task.FromException<Answer>(InvalidOperationException "the transport closed") }
+        let! outcome = askWith breaks (planned (vacantWithBob ()) bob bob)
+        match outcome with
         | Error(Refusal.CouldNotBeAsked reason) -> reason |> Expect.stringContains "the cause is kept" "the transport closed"
         | other -> failtestf "expected CouldNotBeAsked, got %A" other
+      }
 
-      testProperty "WHY - over every answer the person can give, an approval comes out exactly when the answer is yes" <| fun (action: string) (seconds: PositiveInt) (reason: string) ->
-        let every =
-          [ Answer.Yes; Answer.Declined; Answer.Cancelled; Answer.AnsweredOther(string action)
-            Answer.NoAnswerInTime(TimeSpan.FromTicks(int64 seconds.Get)); Answer.CouldNotBeAsked(string reason) ]
+      testTask "WHY - over every answer the person can give, with any wording, an approval comes out exactly when the answer is yes" {
         let p = planned (vacantWithBob ()) bob bob
-        every
-        |> List.forall (fun answer ->
-          let approved = askWith (personWho answer (Asked())) p |> Result.isOk
-          approved = (answer = Answer.Yes))
+        let wordings = [ ""; "reject"; "accept"; "yes"; "\u0000"; String('x', 500) ]
+        let every =
+          [ yield Answer.Yes
+            yield Answer.Declined
+            yield Answer.Cancelled
+            for w in wordings do
+              yield Answer.AnsweredOther w
+              yield Answer.CouldNotBeAsked w
+            for ticks in [ 0L; 1L; Int64.MaxValue ] do
+              yield Answer.NoAnswerInTime(TimeSpan.FromTicks ticks) ]
+        for answer in every do
+          let! outcome = askWith (personWho answer (Asked())) p
+          Result.isOk outcome |> Expect.equal (sprintf "%A" answer) (answer = Answer.Yes)
+      }
     ]
 
     testList "an approval cannot be made any other way" [

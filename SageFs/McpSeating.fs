@@ -99,7 +99,7 @@ module McpSeating =
             let person =
               match currentPerson.Value with
               | Some person -> person
-              | None -> { CanAsk = false; Ask = fun _ _ -> Task.FromResult(Answer.CouldNotBeAsked "no client is bound to this call") }
+              | None -> { Elicitation = Elicitation.NotOffered; Ask = fun _ _ -> Task.FromResult(Answer.CouldNotBeAsked "no client is bound to this call") }
             match! SeatingFlow.ask person (questionText plan) plan with
             | Result.Error refusal -> return Result.Error(describe refusal)
             | Result.Ok approval ->

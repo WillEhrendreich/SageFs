@@ -191,7 +191,7 @@ let cohortAffordancesTests =
           set [ "join_cohort"; "leave_cohort"; "acquire_claim"; "release_claim"
                 "reassign_claim"; "request_landing"; "get_cohort_status"; "set_integration_ref"
                 "mint_member"; "revoke_member"; "delegate_conductor"; "withdraw_landing"
-                "veto_landing"; "resolve_veto" ]
+                "veto_landing"; "resolve_veto"; "seat_conductor" ]
         Affordances.CohortTool.all
         |> List.map Affordances.CohortTool.toToolName
         |> Set.ofList

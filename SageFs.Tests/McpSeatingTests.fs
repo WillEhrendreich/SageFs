@@ -53,7 +53,7 @@ let private withPerson (person: Person option) (body: unit -> Task<'a>) : Task<'
 }
 
 let private who (answer: Answer) (questions: List<string>) : Person =
-  { CanAsk = true
+  { Elicitation = Elicitation.Offered
     Ask =
       fun question _ ->
         questions.Add question
@@ -121,7 +121,7 @@ let tests =
     testTask "a client that cannot be asked is refused and nothing is put to anyone" {
       let! ctx = vacant ()
       let questions = List<string>()
-      let person = { who Answer.Yes questions with CanAsk = false }
+      let person = { who Answer.Yes questions with Elicitation = Elicitation.NotOffered }
       let! result = withPerson (Some person) (fun () -> McpSeating.run ctx "bob" "" wd)
       let text = refused "a client without elicitation" result
       text |> Expect.stringContains "says why" "does not offer MCP elicitation"
@@ -215,7 +215,7 @@ let tableTests =
     testCase "WHY - the description is short" <| fun _ ->
       let tool = typeof<SageFs.Server.McpTools.SageFsTools>.GetMethod "seat_conductor"
       let description = (tool.GetCustomAttributes(typeof<System.ComponentModel.DescriptionAttribute>, false) |> Array.head :?> System.ComponentModel.DescriptionAttribute).Description
-      (description.Length < 800) |> Expect.isTrue (sprintf "the description is %d characters" description.Length)
+      (description.Length < 600) |> Expect.isTrue (sprintf "the description is %d characters" description.Length)
   ]
 
 [<Tests>]
