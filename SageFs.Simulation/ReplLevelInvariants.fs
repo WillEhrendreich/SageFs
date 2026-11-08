@@ -98,8 +98,28 @@ module ReplLevelInvariants =
         | Some r -> violated t (sprintf "a level reset a host whose last reset took %A" r.CostAtAct)
         | None -> Outcome.Holds }
 
+  /// L7: a refetch from the worker that still serves the session is applied, whatever the registry reads when it arrives.
+  let refetchFromServingWorkerIsApplied : Invariant =
+    { Id = "L7-refetch-from-serving-worker-is-applied"
+      Description = "A refetched answer from the worker that still serves the session is applied, whatever the registry reads when it arrives."
+      Check = fun t ->
+        match t.Final.Refetched |> List.tryFind (fun r -> r.AskedPid = r.ServingPid && not r.Applied) with
+        | Some r -> violated t (sprintf "a refetch from pid %d, the worker serving the session, was dropped while the registry read %A" r.AskedPid r.Registry)
+        | None -> Outcome.Holds }
+
+  /// L8: the outcome the level promises. At every step where no refetch is on its way, the daemon holds the tests and maps of
+  /// the host the worker has now, so a level that said `Leveled` did not leave the daemon with the old host's.
+  let daemonHoldsTheLeveledHost : Invariant =
+    { Id = "L8-daemon-holds-the-leveled-host"
+      Description = "Once no refetch is on its way, the daemon holds the tests and maps of the host the worker has now."
+      Check = fun t ->
+        match t.States |> List.tryFind (fun w -> List.isEmpty w.Refetches && w.HeldHost <> w.Generation) with
+        | Some w -> violated t (sprintf "no refetch is on its way, the worker's host is generation %A and the daemon holds generation %A" w.Generation w.HeldHost)
+        | None -> Outcome.Holds }
+
   let all : Invariant list =
-    [ noResetUnderWork; heldRunsAreServed; noResetOverDefinitions; answersAreJudgedByPid; levelMeansLevel; noLevelOverBudget ]
+    [ noResetUnderWork; heldRunsAreServed; noResetOverDefinitions; answersAreJudgedByPid; levelMeansLevel; noLevelOverBudget
+      refetchFromServingWorkerIsApplied; daemonHoldsTheLeveledHost ]
 
   /// Every violation, as `id: message`.
   let violations (t: Trace) : string list =

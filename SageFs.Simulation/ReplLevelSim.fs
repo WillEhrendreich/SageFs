@@ -23,11 +23,16 @@ open SageFs.Features.ReloadOutcome
 ///   L4  an answer to a level ask is applied only if the worker it was asked of still serves the session
 ///   L5  the state is `InSync` only when the host was built at or after the latest save
 ///   L6  a level never resets a host whose last reset took longer than `Timeouts.replLevelCostBudget`
+///   L7  the tests and maps a host reports after a reset are applied when they come from the worker that still serves the
+///       session, whatever the registry reads at that moment (a status read writes the worker's own `Starting` into it
+///       while its host is being replaced)
+///   L8  once no refetch is on its way, the daemon holds the tests and maps of the host the worker has now
 ///
 /// Each twin breaks one of them, so a green run of the real fold means something: `runCancelsFirst` (today's
 /// `HardResetSession`: cancel the running eval, then reset), `runCheckThenAct` (read the facts, act later),
 /// `runAdmitsDuringLevel` (the gate lets a run in while a level is under way), `runIgnoresEvals`, `runNoPidJudge`
-/// (applies a stale answer) and `runLevelsBlindly` (an answer clears the state although a later save reopened the gap).
+/// (applies a stale answer), `runLevelsBlindly` (an answer clears the state although a later save reopened the gap) and
+/// `runRefetchNeedsReady` (drops a refetch from the serving worker while the registry reads Starting).
 module ReplLevelSim =
 
   /// One scripted step. Each is atomic: the real worker's handler and the actor are separate steps, which is where the races are.
@@ -61,6 +66,12 @@ module ReplLevelSim =
     | HostRebuilt
     /// The project grows until a reset of its host is slow (SageFs.Tests: 26 s where the small fixture took 3 s).
     | ProjectGrows
+    /// A status read writes the worker's own report into the registry while the worker's host is being replaced: Starting.
+    | StatusReadSaysStarting
+    /// The health probe, or the next status read, puts the registry back to what the worker says.
+    | RegistryRetires
+    /// The oldest refetch (the new host's tests and maps) reaches the manager.
+    | RefetchArrives
 
   type Scenario = { Seed: int; Ops: Op list }
 
@@ -88,6 +99,26 @@ module ReplLevelSim =
     { AskedPid: int
       ServingPid: int
       Answer: LevelAnswer }
+
+  /// What the daemon's registry reads for the serving worker. A status read writes the worker's own report into it, so it can
+  /// read `Starting` for a while after the worker is `Ready` again, until the probe or the next read puts it back.
+  [<RequireQualifiedAccess>]
+  type RegistryStanding =
+    | ReadsReady
+    | ReadsStarting
+
+  /// A refetch on its way to the manager: the tests and maps of one host, asked of one worker.
+  type RefetchInFlight =
+    { AskedPid: int
+      /// The host generation the tests and maps describe.
+      Describes: SessionGeneration }
+
+  /// One refetch as the manager judged it.
+  type RefetchRecord =
+    { AskedPid: int
+      ServingPid: int
+      Registry: RegistryStanding
+      Applied: bool }
 
   /// How big the project is, which decides what a reset of its host costs: 3 s, or 26 s (the measured small fixture and SageFs.Tests).
   [<RequireQualifiedAccess>]
@@ -118,6 +149,12 @@ module ReplLevelSim =
       // -- the daemon
       Freshness: ReplFreshness
       LevelInFlight: LevelFlight
+      /// What the registry reads for the serving worker.
+      Registry: RegistryStanding
+      /// Refetches on their way to the manager, oldest first.
+      Refetches: RefetchInFlight list
+      /// The host generation whose tests and maps the daemon holds.
+      HeldHost: SessionGeneration
       // -- ground truth
       Saves: int
       HostBuiltAt: int
@@ -127,6 +164,7 @@ module ReplLevelSim =
       // -- what the invariants read
       Resets: ResetRecord list
       Applied: AppliedRecord list
+      Refetched: RefetchRecord list
       /// A run that was on the host when a reset replaced it.
       RunsKilledByReset: int }
 
@@ -147,6 +185,9 @@ module ReplLevelSim =
       Answers = []
       Freshness = ReplFreshness.InSync
       LevelInFlight = LevelFlight.NoLevelInFlight
+      Registry = RegistryStanding.ReadsReady
+      Refetches = []
+      HeldHost = SessionGeneration.initial
       Saves = 0
       HostBuiltAt = 0
       RunsStarted = 0
@@ -154,6 +195,7 @@ module ReplLevelSim =
       RunsDropped = 0
       Resets = []
       Applied = []
+      Refetched = []
       RunsKilledByReset = 0 }
 
   /// The parts of the protocol a twin may swap. The real one is `real`.
@@ -169,13 +211,21 @@ module ReplLevelSim =
       ReReadsAtAct: bool
       /// Whether the manager judges an answer by the pid it was asked of.
       JudgesByPid: bool
+      /// What the manager does with a refetch: whether it is applied, given the pid it was asked of and what the registry holds.
+      JudgeRefetch: int -> SageFs.WorkerProtocol.SessionLifecycleStatus -> SageFs.WorkerPostReady.ReplyFate
       /// The state change an applied answer makes.
       ApplyAnswer: ReplFreshness -> LevelAnswer -> ReplFreshness
       /// Whether the runs a level held are served when it ends.
       ServesHeld: bool }
 
-  let private servingStatus (pid: int) : SageFs.WorkerProtocol.SessionLifecycleStatus =
-    SageFs.WorkerProtocol.SessionLifecycleStatus.Ready { Pid = pid; Port = None }
+  /// No swap is parked behind the serving worker: the sim has no pending replacement worker.
+  let private noSwap : SageFs.WorkerReadyCommit.ParkedSwap<obj> = SageFs.WorkerReadyCommit.ParkedSwap.NoSwap
+
+  /// What the registry holds for the serving worker: Ready, or the Starting a status read wrote while its host was replaced.
+  let private servingStatus (registry: RegistryStanding) (pid: int) : SageFs.WorkerProtocol.SessionLifecycleStatus =
+    match registry with
+    | RegistryStanding.ReadsReady -> SageFs.WorkerProtocol.SessionLifecycleStatus.Ready { Pid = pid; Port = None }
+    | RegistryStanding.ReadsStarting -> SageFs.WorkerProtocol.SessionLifecycleStatus.Starting { Pid = pid; Port = None }
 
   let private deltaPending (n: int) : SessionReload =
     SessionReload.Finished
@@ -250,6 +300,8 @@ module ReplLevelSim =
         // A run on the host a level replaces is lost by the level. (A caller's own hard reset is the caller's choice, and not counted.)
         let killed = List.length w.RunsOnHost
         let w = resetHost { w with RunsKilledByReset = w.RunsKilledByReset + killed }
+        // The new host's tests and maps are fetched from the worker that reset it, and reach the manager on their own.
+        let w = { w with Refetches = w.Refetches @ [ { AskedPid = askedPid; Describes = w.Generation } ] }
         answer askedPid LevelAnswer.Leveled w
       | EvalDecision.DeferLevel blockers -> answer askedPid (LevelAnswer.LevelDeferred blockers) w
       | _ -> answer askedPid (LevelAnswer.LevelFailed "unexpected decision") w
@@ -342,7 +394,7 @@ module ReplLevelSim =
       | [] -> w
       | (askedPid, reply) :: rest ->
         let w = { w with Answers = rest }
-        let fate = SageFs.WorkerPostReady.RefetchGate.judgeLevelAnswer askedPid (Some (servingStatus w.WorkerPid))
+        let fate = SageFs.WorkerPostReady.RefetchGate.judgeLevelAnswer askedPid (Some (servingStatus w.Registry w.WorkerPid))
         let current =
           match policy.JudgesByPid, fate with
           | false, _ -> true
@@ -379,6 +431,9 @@ module ReplLevelSim =
           LastResetCost = ResetCost.NeverReset
           Freshness = ReplFreshness.afterWorkerSwap w.Freshness
           LevelInFlight = LevelFlight.NoLevelInFlight
+          // The new worker's own start fetches its tests and maps, and the registry reads what it reports.
+          Registry = RegistryStanding.ReadsReady
+          HeldHost = SessionGeneration.next w.Generation
           HostBuiltAt = w.Saves }
     | Op.HostRebuilt ->
       // The caller's hard reset: the host is replaced whatever it held, and the manager fetches again and then says so.
@@ -386,7 +441,24 @@ module ReplLevelSim =
       { rebuilt with
           Freshness = ReplFreshness.afterHostRebuilt rebuilt.Freshness
           LevelInFlight = LevelFlight.LevelInFlight
+          Refetches = rebuilt.Refetches @ [ { AskedPid = rebuilt.WorkerPid; Describes = rebuilt.Generation } ]
           Answers = rebuilt.Answers @ [ rebuilt.WorkerPid, LevelAnswer.Leveled ] }
+    | Op.StatusReadSaysStarting -> { w with Registry = RegistryStanding.ReadsStarting }
+    | Op.RegistryRetires -> { w with Registry = RegistryStanding.ReadsReady }
+    | Op.RefetchArrives ->
+      match w.Refetches with
+      | [] -> w
+      | fetched :: rest ->
+        let w = { w with Refetches = rest }
+        let applied =
+          match policy.JudgeRefetch fetched.AskedPid (servingStatus w.Registry w.WorkerPid) with
+          | SageFs.WorkerPostReady.ReplyFate.Current -> true
+          | SageFs.WorkerPostReady.ReplyFate.Stale -> false
+        let record = { AskedPid = fetched.AskedPid; ServingPid = w.WorkerPid; Registry = w.Registry; Applied = applied }
+        let w = { w with Refetched = record :: w.Refetched }
+        match applied with
+        | true -> { w with HeldHost = fetched.Describes }
+        | false -> w
 
   /// The protocol as the product has it.
   let real : Policy =
@@ -396,6 +468,8 @@ module ReplLevelSim =
       GuardsWithGate = true
       ReReadsAtAct = true
       JudgesByPid = true
+      // The judgement the manager makes of the fetch a level (or a rebuilt host) asks for.
+      JudgeRefetch = fun askedPid status -> SageFs.WorkerPostReady.RefetchGate.judgeRefetch SageFs.WorkerPostReady.RefetchOrigin.AfterLevel askedPid (Some (status, noSwap))
       ApplyAnswer = ReplFreshness.afterLevelAnswer
       ServesHeld = true }
 
@@ -447,6 +521,13 @@ module ReplLevelSim =
 
   /// TWIN 7: the runs a level held are never served when it ends.
   let runDropsHeldPolicy : Policy = { real with Name = "twin-drops-held"; ServesHeld = false }
+
+  /// TWIN 9: a refetch is applied only while the registry reads Ready for the worker (`judgeReply`), so one that arrives while a
+  /// status read has left Starting there is dropped although its worker still serves the session.
+  let runRefetchNeedsReadyPolicy : Policy =
+    { real with
+        Name = "twin-refetch-needs-ready"
+        JudgeRefetch = fun askedPid status -> SageFs.WorkerPostReady.RefetchGate.judgeRefetch SageFs.WorkerPostReady.RefetchOrigin.OfReadyWorker askedPid (Some (status, noSwap)) }
 
   /// `States` is every world the fold passed through, the initial one first, so an invariant that must hold at every step
   /// is checked at every step and not only at the end.

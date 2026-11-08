@@ -326,6 +326,17 @@ module WorkerPostReady =
     | Current
     | Stale
 
+  /// Why the daemon asked a worker for its tests and maps again. It decides what the answer must still be true of.
+  [<RequireQualifiedAccess>]
+  type RefetchOrigin =
+    /// A refetch of a worker the daemon holds as Ready (after a reset that left it Ready): kept only while the registry still
+    /// reads that worker Ready.
+    | OfReadyWorker
+    /// The fetch a level makes after the worker replaced its host, or after the host rebuilt itself. The tests and maps describe
+    /// that worker's own new host, so which worker gave them decides: the registry may read `Starting` for a while (a status read
+    /// writes the worker's own report into it while the host is replaced) without making the answer wrong.
+    | AfterLevel
+
   /// The one decision about refetching: only a settled session whose worker is Ready is asked, and an
   /// answer is kept only while that same worker is still the one serving. Pure, so the mailbox only applies it.
   module RefetchGate =
@@ -366,3 +377,10 @@ module WorkerPostReady =
         | Ok _
         | Error _ -> ReplyFate.Stale
       | None -> ReplyFate.Stale
+
+    /// The fate of a refetched answer, by why it was asked. A level's fetch is judged exactly as the level's own answer is
+    /// (`judgeLevelAnswer`): both describe the same worker's host, so they cannot disagree about whether that worker still serves.
+    let judgeRefetch (origin: RefetchOrigin) (askedWorkerPid: int) (session: (SessionLifecycleStatus * WorkerReadyCommit.ParkedSwap<'S>) option) : ReplyFate =
+      match origin with
+      | RefetchOrigin.OfReadyWorker -> judgeReply askedWorkerPid session
+      | RefetchOrigin.AfterLevel -> judgeLevelAnswer askedWorkerPid (session |> Option.map fst)

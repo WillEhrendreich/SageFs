@@ -90,7 +90,7 @@ module SessionManager =
     /// Ask the session's Ready worker for its tests and maps again, without the watchdog. Answered once the asks are sent.
     | RefetchLiveTestingState of SessionId * AsyncReplyChannel<Result<unit, WorkerPostReady.RefetchRefusal>>
     /// A refetch's answer, tagged with the worker asked; dropped unless that worker still serves.
-    | LiveTestingStateRefetched of SessionId * askedWorkerPid: int * WorkerPostReady.RefetchedState
+    | LiveTestingStateRefetched of SessionId * askedWorkerPid: int * WorkerPostReady.RefetchOrigin * WorkerPostReady.RefetchedState
     /// What came of bringing a worker's host up to the build on disk: the worker's answer, and for `Leveled` only once the
     /// tests and maps were fetched again. Tagged with the worker asked; an answer from one that no longer serves is dropped.
     | LevelAnswered of SessionId * askedWorkerPid: int * LevelAnswer
@@ -563,12 +563,12 @@ module SessionManager =
       // the pid asked, so one that outlives its worker is dropped there.
       let refetch (id: SessionId) (workerPid: int) (proxy: SessionProxy) =
         WorkerPostReady.launchFetches
-          (WorkerPostReady.Fetches.answeringWith (SessionId.value id) proxy ct (fun answer -> inbox.Post(SessionCommand.LiveTestingStateRefetched(id, workerPid, answer))))
+          (WorkerPostReady.Fetches.answeringWith (SessionId.value id) proxy ct (fun answer -> inbox.Post(SessionCommand.LiveTestingStateRefetched(id, workerPid, WorkerPostReady.RefetchOrigin.OfReadyWorker, answer))))
 
       // Off the loop: ask the worker to level (or take it that something else just did) and fetch again (`LevelingFlow.work`),
       // then answer through the mailbox with the pid asked.
       let startLevelWork (id: SessionId) (workerPid: int) (proxy: SessionProxy) (levelWork: LevelWork) =
-        let onFetched answered = inbox.Post(SessionCommand.LiveTestingStateRefetched(id, workerPid, answered))
+        let onFetched answered = inbox.Post(SessionCommand.LiveTestingStateRefetched(id, workerPid, WorkerPostReady.RefetchOrigin.AfterLevel, answered))
         let work = LevelingFlow.work (SessionId.value id) proxy levelWork onFetched
         Async.Start(async { let! answer = work in inbox.Post(SessionCommand.LevelAnswered(id, workerPid, answer)) }, ct)
 
@@ -978,14 +978,14 @@ module SessionManager =
               Log.warn "[SessionManager] Not refetching live-testing state for session %s: %s" (SessionId.value id) (WorkerPostReady.RefetchRefusal.describe refusal)
               reply.Reply(Error refusal)
           return state
-        | SessionCommand.LiveTestingStateRefetched(id, askedWorkerPid, fetched) ->
+        | SessionCommand.LiveTestingStateRefetched(id, askedWorkerPid, origin, fetched) ->
           let serving = ManagerState.tryGetSession id state |> Option.map (fun s -> s.Info.Status, ManagerState.tryGetPendingSwap id state |> WorkerReadyCommit.ParkedSwap.ofOption)
-          match WorkerPostReady.RefetchGate.judgeReply askedWorkerPid serving, fetched with
+          match WorkerPostReady.RefetchGate.judgeRefetch origin askedWorkerPid serving, fetched with
           | WorkerPostReady.ReplyFate.Current, WorkerPostReady.RefetchedState.Discovery response -> onTestDiscovery id (TestDiscoveryReport.ofResponse response)
           | WorkerPostReady.ReplyFate.Current, WorkerPostReady.RefetchedState.DiscoveryFailed reason -> onTestDiscovery id (TestDiscoveryReport.DiscoveryFailed reason)
           | WorkerPostReady.ReplyFate.Current, WorkerPostReady.RefetchedState.InstrumentationMaps maps -> onInstrumentationMaps id maps
           | WorkerPostReady.ReplyFate.Stale, _ ->
-            Log.warn "[SessionManager] Dropping a refetched answer from worker pid %d for session %s: it is no longer the session's serving worker" askedWorkerPid (SessionId.value id)
+            Log.warn "[SessionManager] Dropping a refetched answer (%A) from worker pid %d for session %s: it is no longer the session's serving worker" origin askedWorkerPid (SessionId.value id)
           return state
 
         | SessionCommand.WorkerSpawnFailed(id, workerPid, msg) ->

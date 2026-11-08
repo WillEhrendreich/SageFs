@@ -23,7 +23,10 @@ module ReplLevelGenerators =
       4, Op.AnswerArrives
       1, Op.WorkerSwap
       1, Op.HostRebuilt
-      1, Op.ProjectGrows ]
+      1, Op.ProjectGrows
+      2, Op.StatusReadSaysStarting
+      2, Op.RegistryRetires
+      4, Op.RefetchArrives ]
 
   let private total = weighted |> List.sumBy fst
 
@@ -110,6 +113,22 @@ module ReplLevelGenerators =
   let cleanLevel : Scenario =
     { Seed = 8
       Ops = [ Op.Save; Op.DaemonAsks; Op.LevelBegin; Op.LevelAct; Op.AnswerArrives ] }
+
+  /// A status read leaves the registry reading Starting while the worker's host is replaced, and the new host's tests and maps arrive
+  /// before the probe or the next read puts it back (the trunk landing's wedge: the daemon kept the old host's state and said `Leveled`).
+  let refetchWhileRegistryReadsStarting : Scenario =
+    { Seed = 14
+      Ops = [ Op.Save; Op.DaemonAsks; Op.LevelBegin; Op.LevelAct; Op.StatusReadSaysStarting; Op.AnswerArrives; Op.RefetchArrives ] }
+
+  /// The same, once the registry has been put back before the refetch arrives: nothing was ever in the way.
+  let refetchAfterRegistryRetires : Scenario =
+    { Seed = 15
+      Ops = [ Op.Save; Op.DaemonAsks; Op.LevelBegin; Op.LevelAct; Op.StatusReadSaysStarting; Op.RegistryRetires; Op.AnswerArrives; Op.RefetchArrives ] }
+
+  /// A caller's hard reset replaces the host and the manager fetches again, with the registry reading Starting when the fetch lands.
+  let hardResetWhileRegistryReadsStarting : Scenario =
+    { Seed = 16
+      Ops = [ Op.HostRebuilt; Op.StatusReadSaysStarting; Op.RefetchArrives; Op.AnswerArrives ] }
 
   /// Runs arrive during a pending level and the level then defers (an eval ran first), and the held runs are still served.
   let deferredLevelStillServesHeld : Scenario =

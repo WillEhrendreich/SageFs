@@ -259,3 +259,56 @@ let gateMutationTests =
         | other -> real other))
       (GateStanding.LevelPending 1) TestRunGate.enter (fun (_, entry) -> entry = GateEntry.Held)
   ]
+
+/// What happens to the tests and maps a worker reports again, by why they were asked for. A level's fetch describes the worker's
+/// own new host, so which worker gave it decides; the registry may read `Starting` for a while (a status read writes the worker's
+/// own report into it while the host is replaced) without making the answer wrong.
+[<Tests>]
+let refetchFateTests =
+  let handle (pid: int) : WorkerProtocol.WorkerHandle = { Pid = pid; Port = Some 5000 }
+  let noSwap : WorkerReadyCommit.ParkedSwap<obj> = WorkerReadyCommit.ParkedSwap.NoSwap
+  let parkedSwap : WorkerReadyCommit.ParkedSwap<obj> = WorkerReadyCommit.ParkedSwap.Parked (obj ())
+  let starting (pid: int) = WorkerProtocol.SessionLifecycleStatus.Starting (handle pid)
+  let ready (pid: int) = WorkerProtocol.SessionLifecycleStatus.Ready (handle pid)
+  let judge origin pid status = WorkerPostReady.RefetchGate.judgeRefetch origin pid (Some (status, noSwap))
+  // Every shape of the registry that names a worker, and two that name none.
+  let registryReadings (pid: int) : WorkerProtocol.SessionLifecycleStatus list =
+    [ starting pid
+      ready pid
+      WorkerProtocol.SessionLifecycleStatus.Building ("rebuilding", handle pid)
+      WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report "boom")
+      WorkerProtocol.SessionLifecycleStatus.Stopped ]
+
+  testList "RefetchGate.judgeRefetch" [
+    testCase "WHY - a level's refetch from the worker that still serves is kept while the registry reads Starting, as the level's own answer is" <| fun _ ->
+      judge WorkerPostReady.RefetchOrigin.AfterLevel 4242 (starting 4242)
+      |> Expect.equal "the level's tests and maps are kept" WorkerPostReady.ReplyFate.Current
+      WorkerPostReady.RefetchGate.judgeLevelAnswer 4242 (Some (starting 4242))
+      |> Expect.equal "and so is the level's own answer" WorkerPostReady.ReplyFate.Current
+
+    testCase "a level's refetch from a worker that has been replaced is dropped" <| fun _ ->
+      judge WorkerPostReady.RefetchOrigin.AfterLevel 4242 (ready 4243)
+      |> Expect.equal "the new worker's tests and maps are not the old one's" WorkerPostReady.ReplyFate.Stale
+
+    testCase "a level's refetch for a session that is gone is dropped" <| fun _ ->
+      WorkerPostReady.RefetchGate.judgeRefetch WorkerPostReady.RefetchOrigin.AfterLevel 4242 (None: (WorkerProtocol.SessionLifecycleStatus * WorkerReadyCommit.ParkedSwap<obj>) option)
+      |> Expect.equal "nothing it was asked can still matter" WorkerPostReady.ReplyFate.Stale
+
+    testCase "a swap parked behind the worker does not make a level's refetch wrong, because it describes that worker's host" <| fun _ ->
+      WorkerPostReady.RefetchGate.judgeRefetch WorkerPostReady.RefetchOrigin.AfterLevel 4242 (Some (ready 4242, parkedSwap))
+      |> Expect.equal "kept" WorkerPostReady.ReplyFate.Current
+
+    testCase "a refetch of a Ready worker is still kept only while the registry reads that worker Ready" <| fun _ ->
+      judge WorkerPostReady.RefetchOrigin.OfReadyWorker 4242 (ready 4242)
+      |> Expect.equal "Ready, same worker" WorkerPostReady.ReplyFate.Current
+      judge WorkerPostReady.RefetchOrigin.OfReadyWorker 4242 (starting 4242)
+      |> Expect.equal "Starting is not Ready" WorkerPostReady.ReplyFate.Stale
+
+    testProperty "a level's refetch and the level's own answer are judged alike, whatever the registry reads" <| fun (asked: int) (serving: int) ->
+      [ asked; serving ]
+      |> List.collect registryReadings
+      |> List.forall (fun status ->
+        let refetch = judge WorkerPostReady.RefetchOrigin.AfterLevel asked status
+        let answer = WorkerPostReady.RefetchGate.judgeLevelAnswer asked (Some status)
+        refetch = answer)
+  ]

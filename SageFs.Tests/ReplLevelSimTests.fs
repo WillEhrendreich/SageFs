@@ -112,6 +112,22 @@ let tests =
         assertHolds t
         t.Final.Held |> Expect.equal "none left held" 0
 
+      testCase "WHY - a refetch that arrives while a status read has left Starting in the registry is applied, because its worker still serves the session" <| fun _ ->
+        let t = run ReplLevelGenerators.refetchWhileRegistryReadsStarting
+        assertHolds t
+        t.Final.HeldHost |> Expect.equal "the daemon holds the host the level made" t.Final.Generation
+        t.Final.Refetched |> List.map (fun r -> r.Applied) |> Expect.equal "the one refetch was applied" [ true ]
+
+      testCase "a refetch that arrives after the registry was put back is applied" <| fun _ ->
+        let t = run ReplLevelGenerators.refetchAfterRegistryRetires
+        assertHolds t
+        t.Final.HeldHost |> Expect.equal "the daemon holds the host the level made" t.Final.Generation
+
+      testCase "WHY - the tests and maps fetched after a caller's hard reset are applied while the registry reads Starting" <| fun _ ->
+        let t = run ReplLevelGenerators.hardResetWhileRegistryReadsStarting
+        assertHolds t
+        t.Final.HeldHost |> Expect.equal "the daemon holds the rebuilt host" t.Final.Generation
+
       testPropertyWithConfig simConfig "same seed, same trace" <| fun (seed: int) ->
         let a = run (ReplLevelGenerators.fromSeed seed)
         let b = run (ReplLevelGenerators.fromSeed seed)
@@ -128,12 +144,15 @@ let tests =
       teeth runLevelsBlindlyPolicy "L5-level-means-level" ReplLevelGenerators.saveBeforeAnswer
       teeth runDropsHeldPolicy "L2-held-runs-are-served" ReplLevelGenerators.deferredLevelStillServesHeld
       teeth runIgnoresCostPolicy "L6-no-level-over-budget" ReplLevelGenerators.largeProjectLevelsOnce
+      teeth runRefetchNeedsReadyPolicy "L7-refetch-from-serving-worker-is-applied" ReplLevelGenerators.refetchWhileRegistryReadsStarting
+      teeth runRefetchNeedsReadyPolicy "L8-daemon-holds-the-leveled-host" ReplLevelGenerators.refetchWhileRegistryReadsStarting
+      teeth runRefetchNeedsReadyPolicy "L8-daemon-holds-the-leveled-host" ReplLevelGenerators.hardResetWhileRegistryReadsStarting
 
       testCase "over 2000 seeded scenarios every twin is caught at least once, so no invariant is vacuous on the generator" <| fun _ ->
         let seeds = [ 0 .. 1999 ]
         for twin in
           [ runCancelsFirstPolicy; runCheckThenActPolicy; runAdmitsDuringLevelPolicy; runIgnoresEvalsPolicy
-            runNoPidJudgePolicy; runLevelsBlindlyPolicy; runDropsHeldPolicy; runIgnoresCostPolicy ] do
+            runNoPidJudgePolicy; runLevelsBlindlyPolicy; runDropsHeldPolicy; runIgnoresCostPolicy; runRefetchNeedsReadyPolicy ] do
           seeds
           |> List.exists (fun s -> not (List.isEmpty (violations (runWith twin (ReplLevelGenerators.fromSeed s)))))
           |> Expect.isTrue (sprintf "%s is caught somewhere in the seeded scenarios" twin.Name)
