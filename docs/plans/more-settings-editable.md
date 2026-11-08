@@ -8,7 +8,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (step 8 of 8) |
+| Status | In progress (step 8 of 8). The settings snapshot and the short list of overrides (roast 2026-11-08, item 10) are on `cohort/p18-settings-snapshot`, not landed: see "The settings snapshot and the short list" and its Resume table below |
 | Size | M |
 | Branch and worktree | `worktree-agent-aeee5e5c5dad3fa70`, `/home/will/Work/SageFs/.claude/worktrees/agent-aeee5e5c5dad3fa70` |
 | Last green commit | 1d187af6 on the branch: unfiltered default suite Trusted (15049 of 15049), ratchet lane Trusted (527 of 527), browser journey passed (filtered to its one case) |
@@ -304,6 +304,68 @@ on first read and the worker took the environment as its settings. Three mechani
 ### Verified
 
 - `SettingsSnapshotTests` (17 cases): the snapshot round trip, the refusals, the read order, the worker command line, the resolution
-  outcomes, a resolution that leaves every `SAGEFS_` variable as it was, and the environment-write ratchet. RED commit f75fcf41.
+  outcomes, a resolution that leaves every `SAGEFS_` variable as it was, and the environment-write ratchet. RED commit d783010f.
 - The FSI host project compiles with `SettingsSnapshot.fs` in it (built from a copy of its sources, with the Harmony stub from another
   host cache).
+
+### The short list
+
+Evidence, from the repo at master 4285a037: how many docs outside `configuration.md` name each variable (checked by `grep` over
+`docs/*.md`, `Readme.md` and `skills/`), how many files under `SageFs.Tests`, `scripts`, `build` and `.github` set or name it, and
+whether the troubleshooting page sends a person to it. Of the 79 env-backed settings, 45 stay and 34 are retired.
+
+What stays an override, and why:
+
+- The three the troubleshooting page and `configuration.md` send a person to first: the warm-up inactivity limit (5 mentions on the
+  troubleshooting page), the warm-up ceiling (3) and the build timeout (2), with the host build timeout beside the build timeout.
+- The machine tier (5 mentions), because it is the one knob that moves every derived wait.
+- The reaper hours, the NuGet check switch, the metadata-delta switch, dev-reload and the editor (rank 2 to 6 above).
+- Waits a test harness or a benchmark script sets: `SAGEFS_MANIFEST_SAVE_INTERVAL_SECONDS` (the resume test),
+  `SAGEFS_DASHBOARD_HEARTBEAT_SECONDS` and `SAGEFS_DASHBOARD_STALE_AFTER_SECONDS` (the disconnect-indicator browser journey), and the
+  nine that `scripts/machine-bench-tiers.fsx` raises to measure a floor (FSI host start-up, SDK query, rebuild ready, worker HTTP
+  read, graceful stop, supervisor wedge, host build, warm-up ready poll, stop-session reply).
+- Waits that a message or another doc names, so a person who reads it has the variable to set: the references check budget and the
+  stop-session reply (both named in a message a test asserts), the supervisor wedge limit, the confirmation answer, the patch
+  confirmation (2 doc mentions), the hot reload compile queue and the worker HTTP request.
+- The retention rows of rank 7, the list reply caps, the compiler memory ceiling and the hygiene sweep (the hygiene work owns its
+  neighbours, so they keep what they had).
+
+What is retired, and what decides it now (`RetiredSettings.fs`):
+
+| Reason | Count | Examples |
+|:--|--:|:--|
+| Derived from the machine tier | 14 | the git plumbing, rebase and worktree limits, the app host appear and start waits, the worker probe timeout, the Jupyter warm-up, the cohort settle wait |
+| One fixed number | 14 | the poll and sweep intervals, the update check timeout and interval, the references cache retention and sweep, the idle session threshold, the session manager queue size |
+| Superseded | 1 | the flat worker start-up timeout |
+| Test harness deadline | 5 | the `SAGEFS_TEST_*` deadlines, which the suites take from `Timeouts` |
+
+Measured on this branch (counts and line counts only, so load does not matter): rows in `SettingsCatalog.all` 89 to 55 (91 to 57
+with the two session-agent rows the page adds), env-backed descriptors 79 to 45, `EnvBackedRows.fs` 487 to 375 lines, override
+sites (`envOrDefault*` with a variable) in `Timeouts.fs` 55 to 23, distinct `SAGEFS_` names the product reads 100 to 66 (the 34
+retired names remain as literals in `RetiredSettings.fs` only). The roast counted 135 rows on the page; the catalog draws 91
+before this change and 57 after, so that figure did not reproduce from the source. `Settings.fs` (495 lines), `EnvBackedSettings.fs`
+(285) and `SettingsCatalog.fs` (532) did not shrink: they hold the value types, the first rows and the other catalogs' rows,
+and the cut was in the per-wait rows.
+
+### Nothing a person has stops loading
+
+- A saved key of a retired setting stays in `settings.json`. `SettingsBootstrap.resolveSavedWith` reports it as `IgnoredRetired` with a
+  note that names the key, the variable and what decides the wait now, and the daemon logs it.
+- A key in the `waits.`, `data.` or `limits.` families that no row and no retired setting names is reported as `IgnoredUnknown`
+  and kept. A key of any other family belongs to another catalog and is left alone.
+- A retired variable still set in the environment is named in the daemon's log once at start.
+- `SettingsRetiredTests` holds the 79 keys the page could save before as a literal and fails when any is neither a row nor retired.
+
+### The ratchet, reframed
+
+`variables without a settings row` stays at 0 and now reads as "every override has a row". The other half is
+`TimeoutScalingTests`: every duration is decided, either scaled by the machine tier (the list that says what it derives from) or
+fixed with a named reason. A duration with no override is one of those two, so a variable cannot return without a row.
+
+### Resume
+
+| Field | Now |
+|:--|:--|
+| Status | Phase A done on branch `cohort/p18-settings-snapshot`, not landed |
+| Commits | d783010f (red), 76686c56 (snapshot), 784b29bf (red), 5b172562 (retired settings), then the docs commit; rebased onto master c159f554 on 2026-11-08 |
+| Next action | Land through the cohort. The page's browser journey (`DashboardSettingsBrowserTests`) ran against the environment import and is not rerun here; run it with `--integration-browser --filter-test-case "Settings browser:"` after landing |
