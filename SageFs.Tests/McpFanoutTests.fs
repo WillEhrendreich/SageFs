@@ -181,26 +181,16 @@ let tests =
         dropped |> Expect.equal "dropped, with no exception" [| "oom" |]
       }
 
-      testTask "the failure is counted per kind, not per connection, so a thousand dead connections hold no thousand counters" {
-        EchoGuard.reset ()
-        let released = ConcurrentQueue<string>()
-        let many = [| for i in 1 .. 1000 -> target (string i) (fun _ -> Task.FromException(OperationCanceledException())) released |]
-        let! (dropped: string[]) = broadcast many
-        dropped.Length |> Expect.equal "all dropped" 1000
-        (EchoGuard.snapshot () |> List.length <= 2) |> Expect.isTrue "one row per sink, not one per connection"
-        EchoGuard.failureCount EchoSink.NotificationDelivery |> Expect.equal "every drop counted" 1000L
-      }
-
-      testTask "WHY — a ledger of its own counts exactly what was broadcast to it, whatever else in the process is counting" {
+      testTask "WHY — the failure is counted per kind, not per connection, in a ledger of the case's own that nothing else in the process moves" {
         // The connection simulation runs in parallel and its broadcasts move the daemon's shared counters, so an exact
-        // count on them is a race. A ledger the case made itself has no other writer.
+        // count on them was a race. A ledger the case made itself has no other writer, and the broadcast to the shared
+        // ledger first stands in for that other writer.
         let ledger = EchoLedger()
         let released = ConcurrentQueue<string>()
         let! (_: string[]) =
-          McpFanout.broadcast Timeouts.mcpNotificationSend Timeouts.mcpConnectionRelease
-            [| target "elsewhere" (fun _ -> Task.FromException(OperationCanceledException())) released |]
+          broadcast [| target "elsewhere" (fun _ -> Task.FromException(OperationCanceledException())) released |]
         let many = [| for i in 1 .. 1000 -> target (string i) (fun _ -> Task.FromException(OperationCanceledException())) released |]
-        let! (dropped: string[]) = McpFanout.broadcastTo ledger Timeouts.mcpNotificationSend Timeouts.mcpConnectionRelease many
+        let! (dropped: string[]) = McpFanout.broadcastTo ledger policy (FanoutLedger()) Timeouts.mcpConnectionRelease many
         dropped.Length |> Expect.equal "all dropped" 1000
         (ledger.Snapshot() |> List.length <= 2) |> Expect.isTrue "one row per sink, not one per connection"
         ledger.FailureCount EchoSink.NotificationDelivery |> Expect.equal "exactly the thousand it was given" 1000L

@@ -34,23 +34,22 @@ module EchoSink =
     | EchoSink.ConnectionRelease -> "connection-release"
     | EchoSink.ModelChangeDelivery -> "model-change-delivery"
 
-/// A decoration on a tool call (the friction record, the audit line, the event banner) is best effort: when it
-/// fails, the call it decorates still returns its own result. `attempt` runs the decoration and swallows
-/// whatever it throws, `OutOfMemoryException` included, because a daemon that has run out of heap would
-/// otherwise fail every tool call twice, once for the decoration and once for the call. The failure is counted per
-/// (sink, exception type) and written to the log once per pair, never once per call.
-[<RequireQualifiedAccess>]
-module EchoGuard =
+/// The failures counted, by sink and exception type, and which kinds have been written to the log. The daemon has one,
+/// `EchoLedger.Shared`, which `EchoGuard` reads. A case that asserts an exact count makes a ledger of its own, because the
+/// shared one is moved by every other case in the process that fails an echo, the connection simulation among them.
+type EchoLedger() =
+  let counts = ConcurrentDictionary<struct (EchoSink * string), int64 ref>()
 
-  let private counts = ConcurrentDictionary<struct (EchoSink * string), int64 ref>()
+  /// The daemon's ledger.
+  static member val Shared : EchoLedger = EchoLedger() with get
 
   /// Count a failure. True when it is the first of its (sink, exception type): the caller logs only then.
-  let note (sink: EchoSink) (ex: exn) : bool =
+  member _.Note(sink: EchoSink, ex: exn) : bool =
     let cell = counts.GetOrAdd(struct (sink, ex.GetType().Name), fun _ -> ref 0L)
     Interlocked.Increment(&cell.contents) = 1L
 
   /// How many times `sink` has failed, over every exception type.
-  let failureCount (sink: EchoSink) : int64 =
+  member _.FailureCount(sink: EchoSink) : int64 =
     counts
     |> Seq.filter (fun kvp ->
       let struct (counted, _) = kvp.Key
@@ -58,7 +57,7 @@ module EchoGuard =
     |> Seq.sumBy (fun kvp -> Volatile.Read(&kvp.Value.contents))
 
   /// Every sink with its failure count, for a status surface. Sinks that never failed are left out.
-  let snapshot () : (EchoSink * int64) list =
+  member _.Snapshot() : (EchoSink * int64) list =
     counts
     |> Seq.map (fun kvp ->
       let struct (sink, _) = kvp.Key
@@ -67,17 +66,43 @@ module EchoGuard =
     |> Seq.map (fun (sink, rows) -> sink, rows |> Seq.sumBy snd)
     |> Seq.toList
 
-  /// Clear the counters (tests).
-  let reset () : unit = counts.Clear()
+  /// Clear the counters.
+  member _.Reset() : unit = counts.Clear()
 
   /// Count a failure and log it when it is the first of its kind. Never throws.
-  let record (sink: EchoSink) (ex: exn) : unit =
-    match note sink ex with
+  member this.Record(sink: EchoSink, ex: exn) : unit =
+    match this.Note(sink, ex) with
     | true ->
       SageFs.Utils.Log.warn
         "[echo] %s failed (%s: %s); later failures of this kind are counted, not logged"
         (EchoSink.name sink) (ex.GetType().Name) ex.Message
     | false -> ()
+
+/// A decoration on a tool call (the friction record, the audit line, the event banner) is best effort: when it
+/// fails, the call it decorates still returns its own result. `attempt` runs the decoration and swallows
+/// whatever it throws, `OutOfMemoryException` included, because a daemon that has run out of heap would
+/// otherwise fail every tool call twice, once for the decoration and once for the call. The failure is counted per
+/// (sink, exception type) and written to the log once per pair, never once per call.
+[<RequireQualifiedAccess>]
+module EchoGuard =
+
+  /// Count a failure in the shared ledger. True when it is the first of its (sink, exception type): the caller logs only then.
+  let note (sink: EchoSink) (ex: exn) : bool = EchoLedger.Shared.Note(sink, ex)
+
+  /// How many times `sink` has failed in the daemon's shared ledger, over every exception type.
+  let failureCount (sink: EchoSink) : int64 = EchoLedger.Shared.FailureCount sink
+
+  /// Every sink with its failure count in the shared ledger, for a status surface. Sinks that never failed are left out.
+  let snapshot () : (EchoSink * int64) list = EchoLedger.Shared.Snapshot()
+
+  /// Clear the shared ledger (tests that only look at what they themselves fail).
+  let reset () : unit = EchoLedger.Shared.Reset()
+
+  /// Count a failure in `ledger` and log it when it is the first of its kind. Never throws.
+  let recordIn (ledger: EchoLedger) (sink: EchoSink) (ex: exn) : unit = ledger.Record(sink, ex)
+
+  /// `recordIn` the shared ledger.
+  let record (sink: EchoSink) (ex: exn) : unit = recordIn EchoLedger.Shared sink ex
 
   /// Run `work` and say how it ended: `None` when it completed, `Some` with what it threw (a synchronous throw, a faulted
   /// task, or a cancelled one). Never throws itself. The catch is `Guarded.call`'s, so this module adds no handler of its own.
@@ -96,19 +121,17 @@ module EchoGuard =
           | false, false -> None),
         TaskContinuationOptions.ExecuteSynchronously)
 
-  /// Run `work`; whatever it throws is counted and logged once, and then dropped.
-  let attempt (sink: EchoSink) (work: unit -> Task) : Task =
+  /// Run `work`; whatever it throws is counted in `ledger` and logged once, and then dropped.
+  let attemptIn (ledger: EchoLedger) (sink: EchoSink) (work: unit -> Task) : Task =
     observe work
-    |> fun outcome -> outcome.ContinueWith((fun (finished: Task<exn option>) -> finished.Result |> Option.iter (record sink)), TaskContinuationOptions.ExecuteSynchronously)
+    |> fun outcome -> outcome.ContinueWith((fun (finished: Task<exn option>) -> finished.Result |> Option.iter (recordIn ledger sink)), TaskContinuationOptions.ExecuteSynchronously)
+
+  /// `attemptIn` the shared ledger.
+  let attempt (sink: EchoSink) (work: unit -> Task) : Task = attemptIn EchoLedger.Shared sink work
 
   /// `attempt` for a synchronous decoration.
   let attemptSync (sink: EchoSink) (work: unit -> unit) : unit =
     Guarded.call (record sink) work
-
-/// The failures counted, by sink and exception type.
-type EchoLedger() =
-  member _.FailureCount(sink: EchoSink) : int64 = EchoGuard.failureCount sink
-  member _.Snapshot() : (EchoSink * int64) list = EchoGuard.snapshot ()
 
 /// One connected MCP client as the notification fan-out sees it.
 type FanoutTarget =
@@ -224,8 +247,8 @@ module McpFanout =
   /// Send to every target in parallel. A target whose send throws, or whose unfinished bytes pass the policy, is released
   /// (within `release`, whatever it takes) and its id is returned. A send still going after `policy.Look` and under the
   /// ceiling is left to finish, and its failure, if it comes, drops the connection at the next broadcast. Nothing a target
-  /// does can throw out of here.
-  let broadcast (policy: FanoutPolicy) (ledger: FanoutLedger) (release: TimeSpan) (targets: FanoutTarget[]) : Task<string[]> =
+  /// does can throw out of here. What fails is counted in `echo`; `ledger` holds the unfinished sends.
+  let broadcastTo (echo: EchoLedger) (policy: FanoutPolicy) (ledger: FanoutLedger) (release: TimeSpan) (targets: FanoutTarget[]) : Task<string[]> =
     task {
       let! results =
         targets
@@ -251,12 +274,12 @@ module McpFanout =
                 | None -> return None
                 | Some ex ->
                   // One sink for every connection: a counter per connection would grow with every connection ever seen.
-                  EchoGuard.record EchoSink.NotificationDelivery ex
+                  EchoGuard.recordIn echo EchoSink.NotificationDelivery ex
                   return Some target
               | false ->
                 match FanoutBacklog.decide policy (ledger.Unfinished target.Id) with
                 | Some _ ->
-                  EchoGuard.record EchoSink.NotificationDelivery (OperationCanceledException "the connection's unfinished notifications passed the backlog ceiling")
+                  EchoGuard.recordIn echo EchoSink.NotificationDelivery (OperationCanceledException "the connection's unfinished notifications passed the backlog ceiling")
                   return Some target
                 | None ->
                   // Still going and under the ceiling: leave it. If it fails later, the next broadcast drops the connection.
@@ -264,7 +287,7 @@ module McpFanout =
                     (fun (late: Task<exn option>) ->
                       match late.Result with
                       | Some ex ->
-                        EchoGuard.record EchoSink.NotificationDelivery ex
+                        EchoGuard.recordIn echo EchoSink.NotificationDelivery ex
                         ledger.MarkFaulted target.Id
                       | None -> ()),
                     TaskContinuationOptions.ExecuteSynchronously
@@ -279,11 +302,11 @@ module McpFanout =
         |> Array.map (fun target ->
           ledger.CancelAll target.Id
           ledger.Forget target.Id
-          EchoGuard.attempt EchoSink.ConnectionRelease (fun () -> target.Release().WaitAsync(release)))
+          EchoGuard.attemptIn echo EchoSink.ConnectionRelease (fun () -> target.Release().WaitAsync(release)))
         |> Task.WhenAll
       return dropped |> Array.map (fun target -> target.Id)
     }
 
-  /// `broadcast`, counting what fails in `ledger`.
-  let broadcastTo (_ledger: EchoLedger) (budget: TimeSpan) (release: TimeSpan) (targets: FanoutTarget[]) : Task<string[]> =
-    broadcast budget release targets
+  /// `broadcastTo` the daemon's shared echo ledger.
+  let broadcast (policy: FanoutPolicy) (ledger: FanoutLedger) (release: TimeSpan) (targets: FanoutTarget[]) : Task<string[]> =
+    broadcastTo EchoLedger.Shared policy ledger release targets
