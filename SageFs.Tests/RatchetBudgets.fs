@@ -420,7 +420,6 @@ let analyzerFindings : (string * int) list =
     "SageFs.Host/SAGE-004", 2
     "SageFs.Host/SAGE-005", 2
     "SageFs.Host/SAGE-006", 1
-    "SageFs.Host/SAGE-007", 0
     "SageFs.Host/SAGE-009", 13
     "SageFs/SAGE-001", 7
     "SageFs/SAGE-003", 13
