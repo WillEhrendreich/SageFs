@@ -24,8 +24,8 @@ let private everyRefusal : (string * Refusal) list =
   [ "stuck in startup", stuckRefusal "5bb94271" (starting "loading project 7 of 11") window
     "stuck restarting", stuckRefusal "5bb94271" restarting window
     "stuck building", stuckRefusal "5bb94271" compiling window
-    "dead: faulted", deadRefusal "5bb94271" (describePhase (Phase.Faulted "out of memory"))
-    "dead: refused", deadRefusal "5bb94271" "the rebuild failed: FS0001"
+    "dead: faulted", deadRefusal "5bb94271" (DeathCause.LeftIn(Phase.Faulted "out of memory"))
+    "dead: refused", deadRefusal "5bb94271" (DeathCause.RefusedBecause "the rebuild failed: FS0001")
     "repointed", repointedRefusal ]
 
 [<Tests>]

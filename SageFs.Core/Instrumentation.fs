@@ -535,8 +535,13 @@ module Instrumentation =
       return result
     }
 
+  /// Who an FSI eval is for: the agent that sent it and the session it runs in.
+  type EvalCaller = { AgentName: string; SessionId: string }
+
   /// Wrap an FSI eval call with tracing and counting.
-  let tracedFsiEval (agentName: string) (statementCount: int) (sessionId: string) (f: unit -> System.Threading.Tasks.Task<string>) : System.Threading.Tasks.Task<string> =
+  let tracedFsiEval (caller: EvalCaller) (statementCount: int) (f: unit -> System.Threading.Tasks.Task<string>) : System.Threading.Tasks.Task<string> =
+    let agentName = caller.AgentName
+    let sessionId = caller.SessionId
     task {
       fsiEvals.Add(1L)
       fsiStatements.Add(int64 statementCount)

@@ -179,7 +179,7 @@ let errorMessagesTests =
       }
 
       test "summary leads with type, message, and the user frame" {
-        let s = runtimeExceptionSummary "System.DivideByZeroException" "Attempted to divide by zero." userStack
+        let s = runtimeExceptionSummary { TypeName = "System.DivideByZeroException"; Message = "Attempted to divide by zero." } userStack
         s |> Expect.stringContains "leads with the exception type" "System.DivideByZeroException"
         s |> Expect.stringContains "leads with the message" "Attempted to divide by zero."
         s |> Expect.stringContains "surfaces the user code location" "Stats.fs(12)"
@@ -187,7 +187,7 @@ let errorMessagesTests =
       }
 
       test "summary without a user frame still leads with type and message" {
-        let s = runtimeExceptionSummary "System.Exception" "boom" "System.Exception: boom\n   at Foo() in FSI_0001.fsx:line 1"
+        let s = runtimeExceptionSummary { TypeName = "System.Exception"; Message = "boom" } "System.Exception: boom\n   at Foo() in FSI_0001.fsx:line 1"
         s |> Expect.stringContains "type present" "System.Exception"
         s |> Expect.stringContains "message present" "boom"
       }

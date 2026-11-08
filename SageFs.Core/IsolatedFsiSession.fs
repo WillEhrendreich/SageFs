@@ -291,10 +291,10 @@ module ProjectFSharpCoreIdentity =
   /// #141's own `TaskBuilderBase.Using` overload). Never throws: an unreadable file (bad image, IO error)
   /// answers "nothing provably missing" (empty set) — the same fail-closed-to-no-op posture as
   /// `detectFSharpCoreMismatchWith`.
-  let missingMethodKeys (hostFSharpCoreDll: string) (projectFSharpCoreDll: string) : Set<string> =
+  let missingMethodKeys (mismatch: FSharpCoreMismatch) : Set<string> =
     try
-      use hostAsm = Mono.Cecil.AssemblyDefinition.ReadAssembly(hostFSharpCoreDll)
-      use projectAsm = Mono.Cecil.AssemblyDefinition.ReadAssembly(projectFSharpCoreDll)
+      use hostAsm = Mono.Cecil.AssemblyDefinition.ReadAssembly(mismatch.HostCopy)
+      use projectAsm = Mono.Cecil.AssemblyDefinition.ReadAssembly(mismatch.ProjectCopy)
       Set.difference (publicMethodKeysOf projectAsm.MainModule) (publicMethodKeysOf hostAsm.MainModule)
     with _ -> Set.empty
 
@@ -508,7 +508,7 @@ let rewriteProjectFSharpCoreReferences
           // project's build has that the host's LACKS are candidates for redirecting; see
           // `ProjectFSharpCoreIdentity.rewriteReferenceWith`'s own doc comment for why redirecting
           // anything wider than that breaks calls into third parties (Expecto and friends).
-          let missing = ProjectFSharpCoreIdentity.missingMethodKeys mismatch.HostCopy mismatch.ProjectCopy
+          let missing = ProjectFSharpCoreIdentity.missingMethodKeys mismatch
           match ProjectFSharpCoreIdentity.rewriteFileReference missing po.TargetPath with
           | ProjectFSharpCoreIdentity.RewriteResult.NothingToRewrite -> ()
           | ProjectFSharpCoreIdentity.RewriteResult.Failed detail -> failed po detail

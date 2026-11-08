@@ -108,9 +108,9 @@ let clearingTests =
           (fun root ->
             mkdir root "Core/bin"; mkdir root "Core/obj"; touch root "Core/Core.fsproj"; touch root "Core/Lib.fs"
             mkdir root "node_modules/pkg/bin"; touch root "node_modules/pkg/pkg.csproj"
-            record state root (CheckoutBuild.Interrupted sha1) |> Expect.isOk "the record is written")
+            record (StateDir state) root (CheckoutBuild.Interrupted sha1) |> Expect.isOk "the record is written")
           (fun root ->
-            let result = prepare state root
+            let result = prepare (StateDir state) root
             result.Cleared |> List.map (fun dir -> Path.GetRelativePath(root, dir)) |> List.sort
             |> Expect.equal "both output directories went" [ "Core/bin"; "Core/obj" ]
             result.Failed |> Expect.isEmpty "nothing refused to go"
@@ -126,9 +126,9 @@ let clearingTests =
         withTree
           (fun root ->
             mkdir root "Core/bin"; touch root "Core/Core.fsproj"
-            record state root (CheckoutBuild.Finished sha1) |> Expect.isOk "the record is written")
+            record (StateDir state) root (CheckoutBuild.Finished sha1) |> Expect.isOk "the record is written")
           (fun root ->
-            let result = prepare state root
+            let result = prepare (StateDir state) root
             result.Decision |> Expect.equal "kept" OutputDecision.Keep
             result.Cleared |> Expect.isEmpty "nothing was cleared"
             Directory.Exists(Path.Combine(root, "Core/bin")) |> Expect.isTrue "the output stays")
@@ -140,7 +140,7 @@ let clearingTests =
       withTree
         (fun root -> mkdir root "Core/obj"; touch root "Core/Core.fsproj")
         (fun root ->
-          let result = prepare state root
+          let result = prepare (StateDir state) root
           result.Cleared |> List.length |> Expect.equal "the output went" 1
           Directory.Exists(Path.Combine(root, "Core/obj")) |> Expect.isFalse "the output is gone")
   ]

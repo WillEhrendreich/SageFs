@@ -132,15 +132,18 @@ module WorkerConfig =
     let on = allFiles || raw = "1" || raw = "true" || raw = "yes"
     on, allFiles
 
+  /// Whether hot reload is on for a worker, and whether it also watches every file rather than only the session's own.
+  type HotReloadFlags = { On: bool; AllFiles: bool }
+
   /// The hot-reload environment a worker is started with: the flow's own variable, and the
   /// watch-all half under its own name.
   ///
   /// The watch-all travels separately because the flow's variable says "1" by the time the
   /// worker reads it, and a worker that inherited "all" would read that as a value the flow
   /// cannot parse.
-  let hotReloadWorkerEnvironment (on: bool) (allFiles: bool) : (string * string) list =
-    [ if on then hotReloadEnvVar, "1"
-      if allFiles then hotReloadAllFilesEnvVar, "1" ]
+  let hotReloadWorkerEnvironment (flags: HotReloadFlags) : (string * string) list =
+    [ if flags.On then hotReloadEnvVar, "1"
+      if flags.AllFiles then hotReloadAllFilesEnvVar, "1" ]
 
   /// PID of the daemon process that spawned this worker. Workers monitor this
   /// so they can exit when the daemon is killed hard (Task Manager, taskkill /F,
@@ -259,7 +262,7 @@ let buildWorkerSpawnConfigWith
     // time the worker reads it, and a worker that inherited "all" would read it as a value the
     // flow cannot parse.
     let _, allFiles = WorkerConfig.hotReloadChoice Environment.GetEnvironmentVariable
-    yield! WorkerConfig.hotReloadWorkerEnvironment (WorkflowTypes.SessionWorkflow.isHotReloadActive workflow) allFiles
+    yield! WorkerConfig.hotReloadWorkerEnvironment { On = WorkflowTypes.SessionWorkflow.isHotReloadActive workflow; AllFiles = allFiles }
     yield! SageFs.Features.MetadataDelta.MetadataDeltaMode.workerEnvironment (WorkflowTypes.SessionWorkflow.isHotReloadActive workflow) deltaMode
   ]
   args, envVars

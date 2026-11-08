@@ -147,7 +147,7 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
           Result.Error(AutoCompletion.CompletionUnavailable.CompilerError AutoCompletion.FsCompletions.compilerErrorMessage)
         | Answered(Result.Error(CheckRaised message)) -> Result.Error(AutoCompletion.CompletionUnavailable.CheckThrew message)
         | HostGone reason -> Result.Error(AutoCompletion.CompletionUnavailable.HostLost reason)
-      AutoCompletion.getCompletionsWith fromHost limit text caret word
+      AutoCompletion.getCompletionsWith fromHost limit text caret (AutoCompletion.EnteredWord word)
 
     member _.Diagnose(text) =
       match wait (host.Check text) with

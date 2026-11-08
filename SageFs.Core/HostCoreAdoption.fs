@@ -331,13 +331,18 @@ module HostCoreAdoption =
     | Compatible
     | Incompatible of reason: string
 
+  /// The path of a project's own build of the Core that is up for adoption, as against the daemon's own copy it is
+  /// compared with.
+  type CandidateCore = CandidateCore of path: string
+
   /// The daemon's host directory holds a SageFs.Host.dll that was compiled against the SageFs.Core beside it. A Core of
   /// another public shape is not a drop-in for it, whatever its version says: the version moves on a release push and a
   /// worktree's Core, edited since, carries the same one. A union whose cases moved has new tags, the host's `match` on the
   /// old tags casts a message to the wrong case, and every route of the worker answers 500 (reproduced 2026-11-07 with two
   /// `WorkerMessage` cases swapped). So the two surfaces are compared, and a Core that differs, or whose shape cannot be
   /// read, is left out: the worker runs the daemon's own Core and the REPL still loads the project's.
-  let surfaceVerdict (hostCorePath: string) (candidatePath: string) : SurfaceVerdict =
+  let surfaceVerdict (hostCorePath: string) (candidate: CandidateCore) : SurfaceVerdict =
+    let (CandidateCore candidatePath) = candidate
     match CoreSurface.surfaceOfFileCached hostCorePath, CoreSurface.surfaceOfFileCached candidatePath with
     | CoreSurface.SurfaceReading.Read host, CoreSurface.SurfaceReading.Read candidate ->
       match CoreSurface.compareSurfaces host candidate with
@@ -411,7 +416,7 @@ module HostCoreAdoption =
       match decide (factsOf hostCorePath hostVersion) best (factsOf best candidateVersion) with
       | Adoption.Refused reason -> Judgement.Refused reason
       | Adoption.Adopted path ->
-        match surfaceVerdict (Path.Combine(sharedDaemonBaseDir, "host", assemblyName + ".dll")) path with
+        match surfaceVerdict (Path.Combine(sharedDaemonBaseDir, "host", assemblyName + ".dll")) (CandidateCore path) with
         | SurfaceVerdict.Incompatible reason -> Judgement.LeaveOut reason
         | SurfaceVerdict.Compatible -> Judgement.Adopt(path, candidateVersion)
 

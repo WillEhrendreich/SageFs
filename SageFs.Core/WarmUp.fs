@@ -266,19 +266,22 @@ module WarmupProgressLine =
   [<Literal>]
   let Prefix = "WARMUP_PROGRESS="
 
-  let private hasValidCounts step total =
-    step > 0 && total > 0 && step <= total
+  /// Where a warmup is: the step it has reached out of the total it will take. A record so the two never swap.
+  type ProgressCounts = { Step: int; Total: int }
+
+  let private hasValidCounts (counts: ProgressCounts) =
+    counts.Step > 0 && counts.Total > 0 && counts.Step <= counts.Total
 
   let private hasValidMessage (message: string) =
     not (String.IsNullOrWhiteSpace message)
 
-  let tryFormatPayload step total (message: string) =
-    match hasValidCounts step total && hasValidMessage message with
-    | true -> Some (sprintf "%d/%d %s" step total message)
+  let tryFormatPayload (counts: ProgressCounts) (message: string) =
+    match hasValidCounts counts && hasValidMessage message with
+    | true -> Some (sprintf "%d/%d %s" counts.Step counts.Total message)
     | false -> None
 
-  let tryFormatLine step total (message: string) =
-    tryFormatPayload step total message
+  let tryFormatLine (counts: ProgressCounts) (message: string) =
+    tryFormatPayload counts message
     |> Option.map (fun payload -> Prefix + payload)
 
   let tryParsePayload (payload: string) =
@@ -294,7 +297,7 @@ module WarmupProgressLine =
             Int32.TryParse(payload[..slashIdx - 1]),
             Int32.TryParse(payload[slashIdx + 1..spaceIdx - 1])
           with
-          | (true, step), (true, total) when hasValidCounts step total && hasValidMessage message ->
+          | (true, step), (true, total) when hasValidCounts { Step = step; Total = total } && hasValidMessage message ->
             Some (step, total, message)
           | _ -> None
         | _ -> None

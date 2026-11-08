@@ -38,15 +38,22 @@ type WarmupContext = {
   StartedAt: System.DateTimeOffset
 }
 
+/// The elapsed milliseconds, since warmup began, at which each phase finished. Cumulative, not per-phase durations.
+type WarmupMilestones = {
+  ScanDoneMs: int64
+  AssembliesDoneMs: int64
+  OpensDoneMs: int64
+}
+
 module WarmupContext =
   let private nonNegative durationMs =
     max 0L durationMs
 
-  let private phaseTimingFromMilestones scanPhaseMs assemblyPhaseMs openPhaseMs = {
-    ScanSourceFilesMs = nonNegative scanPhaseMs
-    ScanAssembliesMs = nonNegative (assemblyPhaseMs - scanPhaseMs)
-    OpenNamespacesMs = nonNegative (openPhaseMs - assemblyPhaseMs)
-    TotalMs = nonNegative openPhaseMs
+  let private phaseTimingFromMilestones (milestones: WarmupMilestones) = {
+    ScanSourceFilesMs = nonNegative milestones.ScanDoneMs
+    ScanAssembliesMs = nonNegative (milestones.AssembliesDoneMs - milestones.ScanDoneMs)
+    OpenNamespacesMs = nonNegative (milestones.OpensDoneMs - milestones.AssembliesDoneMs)
+    TotalMs = nonNegative milestones.OpensDoneMs
   }
 
   let empty =
@@ -66,14 +73,12 @@ module WarmupContext =
     assembliesLoaded
     namespacesOpened
     failedOpens
-    scanPhaseMs
-    assemblyPhaseMs
-    openPhaseMs = {
+    (milestones: WarmupMilestones) = {
     SourceFilesScanned = sourceFilesScanned
     AssembliesLoaded = assembliesLoaded
     NamespacesOpened = namespacesOpened
     FailedOpens = failedOpens
-    PhaseTiming = phaseTimingFromMilestones scanPhaseMs assemblyPhaseMs openPhaseMs
+    PhaseTiming = phaseTimingFromMilestones milestones
     StartedAt = startedAt
   }
 

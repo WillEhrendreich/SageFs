@@ -80,13 +80,20 @@ type Cleanup =
     Cleared: string list
     Failed: (string * string) list }
 
+/// The directory the gate keeps its per-checkout build records in. A named type so it is never passed where the
+/// checkout path belongs.
+type StateDir = StateDir of string
+
+module StateDir =
+  let value (StateDir dir) = dir
+
 /// The record file for one checkout, under `stateDir`, which is outside the checkout so `git clean` and a reset can
 /// never touch it.
-let recordPath (stateDir: string) (checkout: string) : string = Path.Combine(stateDir, Path.GetFileName(checkout.TrimEnd('/', '\\')))
+let recordPath (stateDir: StateDir) (checkout: string) : string = Path.Combine(StateDir.value stateDir, Path.GetFileName(checkout.TrimEnd('/', '\\')))
 
 /// What the last run recorded for `checkout`. A record that is missing or cannot be read is `NeverRecorded`, which
 /// the decision clears on: only the two failures a file read can have are caught, so any other fault is not hidden.
-let readRecord (stateDir: string) (checkout: string) : CheckoutBuild =
+let readRecord (stateDir: StateDir) (checkout: string) : CheckoutBuild =
   let path = recordPath stateDir checkout
   match File.Exists path with
   | false -> CheckoutBuild.NeverRecorded
@@ -98,7 +105,7 @@ let readRecord (stateDir: string) (checkout: string) : CheckoutBuild =
 
 /// Read what the last run recorded for `checkout`, decide, and clear the build output when the decision says to. A
 /// directory that cannot be removed is reported and left: the pipeline's own build then says what is wrong.
-let prepare (stateDir: string) (checkout: string) : Cleanup =
+let prepare (stateDir: StateDir) (checkout: string) : Cleanup =
   let previous = readRecord stateDir checkout
   match decide previous with
   | OutputDecision.Keep -> { Decision = OutputDecision.Keep; Cleared = []; Failed = [] }
@@ -119,10 +126,10 @@ type RecordError = RecordNotWritten of path: string * reason: string
 
 /// Write what this run is doing, or what it left. The first goes down before the pipeline starts and the second once
 /// it has ended on its own, so a run that is killed never writes the second, which is how the next one knows.
-let record (stateDir: string) (checkout: string) (state: CheckoutBuild) : Result<unit, RecordError> =
+let record (stateDir: StateDir) (checkout: string) (state: CheckoutBuild) : Result<unit, RecordError> =
   let path = recordPath stateDir checkout
   try
-    Directory.CreateDirectory stateDir |> ignore
+    Directory.CreateDirectory(StateDir.value stateDir) |> ignore
     File.WriteAllText(path, recordOf state)
     Ok()
   with ex -> Error(RecordNotWritten(path, ex.Message))

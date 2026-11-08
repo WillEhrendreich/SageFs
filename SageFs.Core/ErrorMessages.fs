@@ -154,16 +154,19 @@ module ErrorMessages =
             Some (sprintf "%s(%s)" (System.IO.Path.GetFileName filePath) lineNo)
           | _ -> None)
 
+  /// The exception's type name and its message: the two lines of a summary that lead.
+  type ExceptionHeadline = { TypeName: string; Message: string }
+
   /// Summarize a runtime exception from a failed eval so the ACTIONABLE bits —
   /// the exception type, its message, and the first line of the USER's own code
   /// in the stack — lead, instead of being buried under framework frames (roast
   /// UX-3). `full` is the raw exception text (ex.ToString()); it is kept below
   /// the summary so nothing is lost.
-  let runtimeExceptionSummary (typeName: string) (message: string) (full: string) : string =
+  let runtimeExceptionSummary (headline: ExceptionHeadline) (full: string) : string =
     let head =
       match firstUserSourceFrame full with
-      | Some frame -> sprintf "%s: %s\n  ↳ in your code at %s" typeName message frame
-      | None -> sprintf "%s: %s" typeName message
+      | Some frame -> sprintf "%s: %s\n  ↳ in your code at %s" headline.TypeName headline.Message frame
+      | None -> sprintf "%s: %s" headline.TypeName headline.Message
     sprintf "%s\n\n%s" head full
 
   /// Phrases Expecto's own assertion failures actually emit (`Expect.equal`,

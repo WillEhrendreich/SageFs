@@ -125,8 +125,11 @@ module Summaries =
         LatestAlternative = latestAlternative })
     |> List.sortByDescending (fun item -> item.Count)
 
-  let suggestedFixTarget blocked abandoned explicitFeedback blocker followUp alternative =
-    match blocker, followUp, alternative, explicitFeedback > 0, blocked > 0, abandoned > 0 with
+  /// How often a tool's calls ended each unhappy way.
+  type FrictionCounts = { Blocked: int; Abandoned: int; ExplicitFeedback: int }
+
+  let suggestedFixTarget (counts: FrictionCounts) blocker followUp alternative =
+    match blocker, followUp, alternative, counts.ExplicitFeedback > 0, counts.Blocked > 0, counts.Abandoned > 0 with
     | Some BlockerKind.ExactTestNotFound, Some tool, _, _, _, _ ->
       sprintf "Tighten exact-test workflow and point agents toward %s first." (ToolName.value tool)
     | _, _, Some tool, true, _, _ ->
@@ -207,7 +210,7 @@ module Summaries =
         MostCommonBlocker = mostCommonBlocker
         MostCommonFollowUp = mostCommonFollowUp
         MostCommonAlternative = mostCommonAlternative
-        SuggestedFixTarget = suggestedFixTarget blockedCount abandonedCount explicitFeedbackCount mostCommonBlocker mostCommonFollowUp mostCommonAlternative })
+        SuggestedFixTarget = suggestedFixTarget { Blocked = blockedCount; Abandoned = abandonedCount; ExplicitFeedback = explicitFeedbackCount } mostCommonBlocker mostCommonFollowUp mostCommonAlternative })
     |> List.filter (fun item -> isActionableTool item.Tool)
     |> List.sortByDescending (fun item -> (item.ExplicitFeedbackCount * 3) + (item.BlockedCount * 2) + item.AbandonedCount)
 

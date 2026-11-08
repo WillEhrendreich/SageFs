@@ -249,7 +249,7 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     ActivitySource.AddActivityListener(listener)
 
     let result =
-      Instrumentation.tracedFsiEval "test-agent" 3 "sess-123" (fun () ->
+      Instrumentation.tracedFsiEval { AgentName = "test-agent"; SessionId = "sess-123" } 3 (fun () ->
         System.Threading.Tasks.Task.FromResult "evaluated")
       |> fun t -> t.Result
 

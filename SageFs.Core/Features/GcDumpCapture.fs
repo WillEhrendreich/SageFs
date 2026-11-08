@@ -43,6 +43,9 @@ module GcDumpCapture =
       | HealthAnomaly.SignalId.WorkerRss, HealthAnomaly.Verdict.Broken _ -> true
       | _ -> false
 
+  /// The two memory figures a capture decision reads: what the process holds and what the machine still has free.
+  type CaptureMemory = { ProcessRssBytes: int64; MachineAvailableBytes: int64 }
+
   /// Enough machine memory left to safely attempt a dump without being the
   /// thing that finally starves the box. `dotnet-gcdump` walks the live
   /// managed heap of the target process, which in the worst case needs
@@ -52,8 +55,8 @@ module GcDumpCapture =
   /// left) skip the dump rather than risk taking the machine down trying to
   /// prove why it's huge. A process with zero recorded RSS has nothing
   /// meaningful to gate on either way.
-  let hasHeadroomToCapture (processRssBytes: int64) (machineAvailableBytes: int64) : bool =
-    processRssBytes > 0L && machineAvailableBytes > processRssBytes
+  let hasHeadroomToCapture (memory: CaptureMemory) : bool =
+    memory.ProcessRssBytes > 0L && memory.MachineAvailableBytes > memory.ProcessRssBytes
 
   /// `dotnet-gcdump collect` on a process this size can legitimately take
   /// tens of seconds; generous without being an unbounded hang on an already

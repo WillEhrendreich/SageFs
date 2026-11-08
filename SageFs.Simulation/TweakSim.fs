@@ -344,7 +344,7 @@ module TweakSim =
           { s with Source = newSource }
       | SimEvent.Reformat ->
         let newSource = insertReformatComment s.Source
-        let s = appendEvent s (TweakLog.observeReformat s.Settings s.Source newSource)
+        let s = appendEvent s (TweakLog.observeReformat s.Settings { FileBefore = s.Source; FileAfter = newSource })
         { s with Source = newSource }
       | SimEvent.RollbackLast -> applyRollback rollbackBehavior s
       | SimEvent.Crash ->

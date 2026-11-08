@@ -169,7 +169,7 @@ let private toWorkerError (fallback: string -> SageFsError) (ex: exn) : SageFsEr
     // runtime failure reads like an actionable location, not a raw stack dump
     // (roast UX-3). The full ex.ToString() (with inner stacks) is kept below.
     let root = rootCause ex
-    fallback (ErrorMessages.runtimeExceptionSummary (root.GetType().Name) root.Message (ex.ToString()))
+    fallback (ErrorMessages.runtimeExceptionSummary { TypeName = root.GetType().Name; Message = root.Message } (ex.ToString()))
 
 /// The cancellation source of every `EvalCode` call in flight on this worker, by the request id the call carried. A timeout's
 /// `CancelEvalRequest` cancels the source of ITS request only: the cancel reaches that eval's own token, so it can never touch the
@@ -734,7 +734,7 @@ let run (sessionId: string) (requestedPort: int) = async {
   let onEvent (evt: Features.Events.SageFsEvent) =
     match evt with
     | Features.Events.SageFsEvent.SessionWarmUpProgress p ->
-      match WarmupProgressLine.tryFormatLine p.Step p.Total p.Message with
+      match WarmupProgressLine.tryFormatLine { Step = p.Step; Total = p.Total } p.Message with
       | Some line ->
         Console.Out.WriteLine line
         Console.Out.Flush()

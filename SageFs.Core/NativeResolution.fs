@@ -33,18 +33,33 @@ open System.Text.Json
 [<RequireQualifiedAccess>]
 module NativeResolution =
 
+  /// The native-library naming convention of the machine: Windows `.dll`, macOS `lib*.dylib`, anything else `lib*.so`.
+  [<RequireQualifiedAccess>]
+  type HostPlatform =
+    | Windows
+    | Osx
+    | Posix
+
+  module HostPlatform =
+    /// The platform this process runs on.
+    let current () : HostPlatform =
+      match RuntimeInformation.IsOSPlatform OSPlatform.Windows, RuntimeInformation.IsOSPlatform OSPlatform.OSX with
+      | true, _ -> HostPlatform.Windows
+      | _, true -> HostPlatform.Osx
+      | _ -> HostPlatform.Posix
+
   /// Platform-decorated file-name candidates for a DllImport library name,
   /// most-decorated first so `libraylib.so` is preferred over a bare `raylib`.
   /// `libraryName` is exactly what the P/Invoke requested (e.g. "raylib").
-  let fileNameCandidates (isWindows: bool) (isOsx: bool) (libraryName: string) : string list =
+  let fileNameCandidates (platform: HostPlatform) (libraryName: string) : string list =
     match String.IsNullOrWhiteSpace libraryName with
     | true -> []
     | false ->
       let ext, prefix =
-        match isWindows, isOsx with
-        | true, _ -> ".dll", ""
-        | false, true -> ".dylib", "lib"
-        | false, false -> ".so", "lib"
+        match platform with
+        | HostPlatform.Windows -> ".dll", ""
+        | HostPlatform.Osx -> ".dylib", "lib"
+        | HostPlatform.Posix -> ".so", "lib"
       // Strip a trailing known extension so we can re-decorate consistently.
       let core =
         match libraryName.EndsWith(ext, StringComparison.OrdinalIgnoreCase) with
@@ -67,14 +82,13 @@ module NativeResolution =
   let candidatePaths
     (roots: string list)
     (rids: string list)
-    (isWindows: bool)
-    (isOsx: bool)
+    (platform: HostPlatform)
     (libraryName: string)
     : string list =
     match not (String.IsNullOrWhiteSpace libraryName) && Path.IsPathRooted libraryName with
     | true -> [ libraryName ]
     | false ->
-      let names = fileNameCandidates isWindows isOsx libraryName
+      let names = fileNameCandidates platform libraryName
       let subdirs =
         "" :: (rids |> List.map (fun rid -> Path.Combine("runtimes", rid, "native")))
       [ for root in roots do
@@ -140,8 +154,7 @@ module NativeResolution =
     match System.Threading.Interlocked.CompareExchange(registered, 1, 0) = 0 with
     | false -> ()
     | true ->
-      let isWindows = RuntimeInformation.IsOSPlatform OSPlatform.Windows
-      let isOsx = RuntimeInformation.IsOSPlatform OSPlatform.OSX
+      let platform = HostPlatform.current ()
       let rids = currentRids ()
       let handler =
         Func<Assembly, string, IntPtr>(fun (asm: Assembly) (name: string) ->
@@ -157,7 +170,7 @@ module NativeResolution =
             let roots =
               (currentRoots () @ (asmDir |> Option.toList))
               |> List.filter (fun s -> not (String.IsNullOrWhiteSpace s))
-            let candidates = candidatePaths roots rids isWindows isOsx name
+            let candidates = candidatePaths roots rids platform name
             let rec tryLoad remaining =
               match remaining with
               | [] -> IntPtr.Zero
@@ -220,14 +233,18 @@ module NativeAssets =
   [<Literal>]
   let EnvironmentVariable = "SAGEFS_PROJECT_ASSETS"
 
+  /// What identifies a machine to the runtime graph: the runtime identifier it is running, its OS family (`win`, `osx`,
+  /// `linux`) and its architecture (`x64`, `arm64`).
+  type MachineRuntime = { Running: string; Os: string; Arch: string }
+
   /// The runtime identifiers a native file may be for on this machine, most specific first: the running one, then the
   /// portable `<os>-<arch>`, then the bare OS and, off Windows, the `unix` family NuGet's runtime graph also names.
-  let compatibleRuntimes (running: string) (os: string) (arch: string) : string list =
+  let compatibleRuntimes (machine: MachineRuntime) : string list =
     let family =
-      match os with
+      match machine.Os with
       | "win" -> []
-      | _ -> [ sprintf "unix-%s" arch; "unix" ]
-    [ [ running; sprintf "%s-%s" os arch; os ]; family ]
+      | _ -> [ sprintf "unix-%s" machine.Arch; "unix" ]
+    [ [ machine.Running; sprintf "%s-%s" machine.Os machine.Arch; machine.Os ]; family ]
     |> List.concat
     |> List.filter (fun id -> not (String.IsNullOrWhiteSpace id))
     |> List.distinct
@@ -374,9 +391,7 @@ module NativeAssets =
   let factsFrom
     (readText: string -> string)
     (directoryExists: string -> bool)
-    (running: string)
-    (os: string)
-    (arch: string)
+    (machine: MachineRuntime)
     (assetsFiles: string list)
     : NativeFacts * string list =
     let readings =
@@ -398,7 +413,7 @@ module NativeAssets =
       |> List.choose (function
         | Unreadable why -> Some why
         | PackagesRead _ -> None)
-    { Runtime = running; Compatible = compatibleRuntimes running os arch; Packages = packages }, problems
+    { Runtime = machine.Running; Compatible = compatibleRuntimes machine; Packages = packages }, problems
 
   /// This machine's facts for the assets files the daemon named, reading the real filesystem.
   let currentFacts (assetsFiles: string list) : NativeFacts * string list =
@@ -408,7 +423,7 @@ module NativeAssets =
       | _, true -> "osx"
       | _ -> "linux"
     let arch = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()
-    factsFrom File.ReadAllText Directory.Exists RuntimeInformation.RuntimeIdentifier os arch assetsFiles
+    factsFrom File.ReadAllText Directory.Exists { Running = RuntimeInformation.RuntimeIdentifier; Os = os; Arch = arch } assetsFiles
 
   /// Names the daemon passes the assets files in, separated by the platform's path separator.
   let splitFileList (value: string) : string list =

@@ -405,18 +405,18 @@ module McpBridge =
   /// The re-handshake gave no session. The messages that waited for it are answered with the reason (a queue that
   /// outlives its cause is a tool that never answers), and the bridge goes back to waiting for a daemon that can
   /// give it one, still holding the stale id.
-  let rehandshakeFailed (state: State) (stale: string) (reason: string) : State * Action list =
+  let rehandshakeFailed (state: State) (held: HeldSession) (reason: string) : State * Action list =
     let answer =
       sprintf "the daemon came back but did not give the bridge a session (%s); ask again in a few seconds" reason
     let rejections = state.Pending |> Backlog.toList |> List.map (fun m -> Action.RejectMessage(m, answer))
-    { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id stale)); Pending = Backlog.empty },
+    { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, held)); Pending = Backlog.empty },
     rejections @ [ Action.Probe ]
 
   /// The new session exists: the push stream opens on it (replacing the stale session's), then everything held goes
   /// out under it, in arrival order.
-  let rehandshaken (state: State) (stale: string) (fresh: string) : State * Action list =
+  let rehandshaken (state: State) (succession: StreamSuccession) (fresh: string) : State * Action list =
     let drained = state.Pending |> Backlog.toList |> List.map Action.ForwardToDaemon
-    { Transport = TransportState.Ready(Some fresh); Pending = Backlog.empty }, Action.OpenPushStream(fresh, StreamSuccession.Replaces stale) :: drained
+    { Transport = TransportState.Ready(Some fresh); Pending = Backlog.empty }, Action.OpenPushStream(fresh, succession) :: drained
 
   /// The one pure transition. `Action list` (not a single `Action`) because
   /// reaching `Ready` for the first time atomically drains everything
@@ -498,7 +498,7 @@ module McpBridge =
       state, [ Action.RejectMessage(msg, sprintf "bridge is fatally stopped: %s" reason) ]
 
     // ---- Session id capture (idempotent: captured exactly once) ----
-    | TransportState.Rehandshaking stale, Event.SessionIdCaptured fresh -> rehandshaken state stale fresh
+    | TransportState.Rehandshaking stale, Event.SessionIdCaptured fresh -> rehandshaken state (StreamSuccession.Replaces stale) fresh
 
     | TransportState.Ready None, Event.SessionIdCaptured sid ->
       { state with Transport = TransportState.Ready(Some sid) }, [ Action.OpenPushStream(sid, StreamSuccession.First) ]
@@ -598,7 +598,7 @@ module McpBridge =
     | TransportState.Fatal _, Event.ProbeResult _ -> state, []
 
     // ---- The re-handshake's own outcome ----
-    | TransportState.Rehandshaking stale, Event.RehandshakeFailed reason -> rehandshakeFailed state stale reason
+    | TransportState.Rehandshaking stale, Event.RehandshakeFailed reason -> rehandshakeFailed state (HeldSession.Id stale) reason
 
     // Not minting a session now: a stale report of one that ended, or the bridge moved on.
     | TransportState.AwaitingDaemon _, Event.RehandshakeFailed _

@@ -72,7 +72,7 @@ type SetCase =
     Value: NudgeValue
     Address: TweakAddress }
 
-let plan (c: SetCase) = planSet sourcePath c.Source c.Log c.Address (seenOf c.Seen) c.Value
+let plan (c: SetCase) = planSet { TargetFile = sourcePath; TargetSource = c.Source } c.Log c.Address (seenOf c.Seen) c.Value
 
 let staleCase =
   { Source = tuningSource.Replace("9.8", "9.81"); Log = EventLog.empty; Seen = "9.8"; Value = NudgeValue.LiteralText "12.5"; Address = gravity }

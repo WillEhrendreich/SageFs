@@ -20,37 +20,37 @@ open SageFs
 let tests = testList "NativeResolution" [
 
   testCase "WHY — libraylib.so is the preferred (decorated) candidate on Linux" <| fun () ->
-    NativeResolution.fileNameCandidates false false "raylib"
+    NativeResolution.fileNameCandidates NativeResolution.HostPlatform.Posix "raylib"
     |> List.head
     |> Expect.equal "linux decorates as lib<name>.so first" "libraylib.so"
 
   testCase "WHY — Linux name candidates cover decorated, ext-only, and bare forms" <| fun () ->
-    NativeResolution.fileNameCandidates false false "raylib"
+    NativeResolution.fileNameCandidates NativeResolution.HostPlatform.Posix "raylib"
     |> Expect.equal "expected the three linux shapes" [ "libraylib.so"; "raylib.so"; "raylib" ]
 
   testCase "WHY — Windows uses .dll with no lib prefix" <| fun () ->
-    NativeResolution.fileNameCandidates true false "raylib"
+    NativeResolution.fileNameCandidates NativeResolution.HostPlatform.Windows "raylib"
     |> Expect.equal "windows shapes" [ "raylib.dll"; "raylib" ]
 
   testCase "WHY — macOS uses lib*.dylib" <| fun () ->
-    NativeResolution.fileNameCandidates false true "raylib"
+    NativeResolution.fileNameCandidates NativeResolution.HostPlatform.Osx "raylib"
     |> Expect.equal "osx shapes" [ "libraylib.dylib"; "raylib.dylib"; "raylib" ]
 
   testCase "WHY — an already-decorated name is not double-decorated" <| fun () ->
-    NativeResolution.fileNameCandidates false false "libraylib.so"
+    NativeResolution.fileNameCandidates NativeResolution.HostPlatform.Posix "libraylib.so"
     |> List.head
     |> Expect.equal "keeps a single lib prefix and .so" "libraylib.so"
 
   testCase "WHY — candidatePaths probes runtimes/<rid>/native under each root" <| fun () ->
     let root = Path.Combine("/proj", "bin", "Release", "net10.0")
     let expected = Path.GetFullPath(Path.Combine(root, "runtimes", "linux-x64", "native", "libraylib.so"))
-    NativeResolution.candidatePaths [ root ] [ "linux-x64" ] false false "raylib"
+    NativeResolution.candidatePaths [ root ] [ "linux-x64" ] NativeResolution.HostPlatform.Posix "raylib"
     |> List.contains expected
     |> Expect.isTrue "must include the runtimes/<rid>/native path where the build copies the lib"
 
   testCase "WHY — the flat root dir is probed before the runtimes subdir" <| fun () ->
     let root = Path.GetFullPath(Path.Combine("/proj", "out"))
-    let paths = NativeResolution.candidatePaths [ root ] [ "linux-x64" ] false false "raylib"
+    let paths = NativeResolution.candidatePaths [ root ] [ "linux-x64" ] NativeResolution.HostPlatform.Posix "raylib"
     let flat = Path.GetFullPath(Path.Combine(root, "libraylib.so"))
     let nested = Path.GetFullPath(Path.Combine(root, "runtimes", "linux-x64", "native", "libraylib.so"))
     (List.findIndex ((=) flat) paths < List.findIndex ((=) nested) paths)
@@ -58,7 +58,7 @@ let tests = testList "NativeResolution" [
 
   testCase "WHY — a rooted library name is returned verbatim (no re-decoration)" <| fun () ->
     let abs = Path.GetFullPath("/opt/native/libcustom.so")
-    NativeResolution.candidatePaths [ "/proj/out" ] [ "linux-x64" ] false false abs
+    NativeResolution.candidatePaths [ "/proj/out" ] [ "linux-x64" ] NativeResolution.HostPlatform.Posix abs
     |> Expect.equal "rooted passthrough" [ abs ]
 
   testCase "WHY — every produced candidate is an absolute, de-duplicated path" <| fun () ->
@@ -66,14 +66,14 @@ let tests = testList "NativeResolution" [
       NativeResolution.candidatePaths
         [ Path.Combine("/a", "b"); Path.Combine("/a", "b") ]   // duplicate root
         [ "linux-x64"; "linux-x64" ]                            // duplicate rid
-        false false "raylib"
+        NativeResolution.HostPlatform.Posix "raylib"
     paths |> List.forall Path.IsPathRooted
     |> Expect.isTrue "all candidates are rooted"
     (List.length paths = List.length (List.distinct paths))
     |> Expect.isTrue "no duplicate candidates"
 
   testCase "WHY — a blank library name yields no candidates (never throws)" <| fun () ->
-    NativeResolution.candidatePaths [ "/proj/out" ] [ "linux-x64" ] false false ""
+    NativeResolution.candidatePaths [ "/proj/out" ] [ "linux-x64" ] NativeResolution.HostPlatform.Posix ""
     |> Expect.isEmpty "blank name is a no-op, not a crash"
 
   // Integration: the resolver, given an output dir laid out the way a build of
@@ -114,15 +114,14 @@ let tests = testList "NativeResolution" [
       restore.ExitCode |> Expect.equal (sprintf "restoring the sample succeeds. Output: %s %s" output.Result errors.Result) 0
     Directory.Exists package |> Expect.isTrue (sprintf "the Raylib-cs %s package is restored at %s" version package)
     let rids = NativeResolution.currentRids ()
-    let isWindows = RuntimeInformation.IsOSPlatform OSPlatform.Windows
-    let isOsx = RuntimeInformation.IsOSPlatform OSPlatform.OSX
+    let platform = NativeResolution.HostPlatform.current ()
     let outDir = Path.Combine(Path.GetTempPath(), "sagefs-raylib-out-" + Guid.NewGuid().ToString "N")
     try
       Directory.CreateDirectory outDir |> ignore
       let shipped =
         rids |> List.tryFind (fun rid -> Directory.Exists(Path.Combine(package, "runtimes", rid, "native")))
       let found () =
-        NativeResolution.candidatePaths [ outDir ] rids isWindows isOsx "raylib"
+        NativeResolution.candidatePaths [ outDir ] rids platform "raylib"
         |> List.exists File.Exists
       match shipped with
       | Some rid ->

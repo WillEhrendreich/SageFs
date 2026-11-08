@@ -158,6 +158,21 @@ module ManualProjectParse =
         with _ ->
           acc, visited'
 
+  /// Which of an Arcade-style repo's `artifacts` subdirectories to look in.
+  [<RequireQualifiedAccess>]
+  type ArcadeKind =
+    | Bin
+    | Obj
+
+  module ArcadeKind =
+    let directoryName (kind: ArcadeKind) : string =
+      match kind with
+      | ArcadeKind.Bin -> "bin"
+      | ArcadeKind.Obj -> "obj"
+
+  /// A project as the Arcade-layout walk sees it: the directory it starts from and the project file's name.
+  type ArcadeProject = { StartDirectory: string; ProjectFile: string }
+
   /// Arcade-style repos (fsharp/fsharp-compiler-services, dotnet/runtime,
   /// dotnet/sdk, and other .NET-eng-templated repos) route ALL build output
   /// through `<repoRoot>/artifacts/bin/<ProjectName>/<Config>/<Tfm>/` and
@@ -169,13 +184,14 @@ module ManualProjectParse =
   /// directory looking for an ancestor `artifacts/bin/<ProjectName>/` —
   /// bounded (8 levels) so a project with no Arcade layout anywhere in its
   /// ancestry (the common case) doesn't walk to the filesystem root.
-  let arcadeDir (kind: string) (projDir: string) (projectFileName: string) : string option =
-    let projectName = Path.GetFileNameWithoutExtension projectFileName
+  let arcadeDir (kind: ArcadeKind) (project: ArcadeProject) : string option =
+    let projectName = Path.GetFileNameWithoutExtension project.ProjectFile
+    let kindDirectory = ArcadeKind.directoryName kind
     let rec walk (dir: string) (depth: int) =
       match depth > 8 with
       | true -> None
       | false ->
-        let candidate = Path.Combine(dir, "artifacts", kind, projectName)
+        let candidate = Path.Combine(dir, "artifacts", kindDirectory, projectName)
         match Directory.Exists candidate with
         | true -> Some candidate
         | false ->
@@ -184,11 +200,11 @@ module ManualProjectParse =
           | "" -> None
           | parent when parent = dir -> None
           | parent -> walk parent (depth + 1)
-    walk projDir 0
+    walk project.StartDirectory 0
 
   /// `artifacts/bin/<ProjectName>` of an Arcade-style repo, found from the project's directory (see `arcadeDir`).
-  let arcadeBinDir (projDir: string) (projectFileName: string) : string option =
-    arcadeDir "bin" projDir projectFileName
+  let arcadeBinDir (project: ArcadeProject) : string option =
+    arcadeDir ArcadeKind.Bin project
 
   /// The restore's `project.assets.json` for `projPath`: the conventional `<projectDir>/obj/` one, or the Arcade-style
   /// `artifacts/obj/<ProjectName>/` one found in an ancestor directory. `None` when the project was never restored.
@@ -198,7 +214,7 @@ module ManualProjectParse =
     match File.Exists conventional with
     | true -> Some conventional
     | false ->
-      arcadeDir "obj" projDir projPath
+      arcadeDir ArcadeKind.Obj { StartDirectory = projDir; ProjectFile = projPath }
       |> Option.map (fun dir -> Path.Combine(dir, "project.assets.json"))
       |> Option.filter File.Exists
 
@@ -248,7 +264,7 @@ module ManualProjectParse =
     let conventional = Path.Combine(projDir, "bin")
     match Directory.Exists conventional with
     | true -> Some conventional
-    | false -> arcadeBinDir projDir projPath
+    | false -> arcadeBinDir { StartDirectory = projDir; ProjectFile = projPath }
 
   /// Collect the built assembly and its dependencies for a project that was
   /// already compiled (bin/<config>/<tfm>/, or the Arcade-style

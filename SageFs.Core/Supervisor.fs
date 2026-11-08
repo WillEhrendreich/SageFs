@@ -35,7 +35,8 @@ module Supervisor =
   /// Classify a host stdout line as the ready signal. Fail-closed: only a
   /// loopback URL is acceptable; anything else (or a host that never printed
   /// the line) is an Error naming why.
-  let classifyHostReadyLine (prefix: string) (line: string) : Result<string, HostReadyRejection> =
+  let classifyHostReadyLine (line: string) : Result<string, HostReadyRejection> =
+    let prefix = hostReadyLine
     match line.StartsWith(prefix, StringComparison.Ordinal) with
     | false -> Result.Error(HostReadyRejection.NotAReadyLine (prefix, line))
     | true ->
@@ -51,8 +52,8 @@ module Supervisor =
       | false -> Result.Error(HostReadyRejection.NotLoopback url)
 
   /// `classifyHostReadyLine` with the reason as text, for callers that only report it.
-  let validateHostReadyLine (prefix: string) (line: string) : Result<string, string> =
-    classifyHostReadyLine prefix line |> Result.mapError describeHostReadyRejection
+  let validateHostReadyLine (line: string) : Result<string, string> =
+    classifyHostReadyLine line |> Result.mapError describeHostReadyRejection
 
   /// The host exited before printing the ready line. Carries the exit code.
   type HostExitBeforeReady = HostExitBeforeReady of exitCode: int

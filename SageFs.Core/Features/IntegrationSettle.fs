@@ -212,8 +212,18 @@ module IntegrationSettle =
           "session '%s' has been %s for at least %.0f s with nothing new from its worker. A loaded machine stretches a phase, so look at the load first (a worker still compiling shows CPU in its process), then at the worker's log in the daemon log. If it is hung, hard_reset_fsi_session on '%s' starts a fresh worker; landings that arrive meanwhile wait for it."
           sessionId (describePhase phase) window.TotalSeconds sessionId }
 
+  /// Why the wait ended without a session: it died in a phase, or the session manager refused the wait with a reason.
+  [<RequireQualifiedAccess>]
+  type DeathCause =
+    | LeftIn of Phase
+    | RefusedBecause of string
+
   /// The session is dead, or the session manager refused the wait with a reason.
-  let deadRefusal (sessionId: string) (why: string) : Refusal =
+  let deadRefusal (sessionId: string) (cause: DeathCause) : Refusal =
+    let why =
+      match cause with
+      | DeathCause.LeftIn phase -> describePhase phase
+      | DeathCause.RefusedBecause reason -> reason
     { What = sprintf "The landing was not verified: integration session '%s' is not coming back by waiting: %s." sessionId why
       ForMember =
         "withdraw this landing (withdraw_landing). Nothing a member runs revives the integration session, so ask the conductor, and request the landing again after get_cohort_status shows the session started."
@@ -233,5 +243,5 @@ module IntegrationSettle =
     match outcome with
     | Outcome.Settled -> None
     | Outcome.StuckIn (phase, window) -> Some (render (stuckRefusal sessionId phase window))
-    | Outcome.DiedAs phase -> Some (render (deadRefusal sessionId (describePhase phase)))
-    | Outcome.Refused reason -> Some (render (deadRefusal sessionId reason))
+    | Outcome.DiedAs phase -> Some (render (deadRefusal sessionId (DeathCause.LeftIn phase)))
+    | Outcome.Refused reason -> Some (render (deadRefusal sessionId (DeathCause.RefusedBecause reason)))

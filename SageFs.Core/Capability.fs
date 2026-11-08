@@ -529,14 +529,17 @@ module Capability =
       | RouteRefusal.UnclassifiedRouting tool ->
         sprintf "Use the conductor's own connection, or report this: every registered tool must have a routing kind (%s has none)." tool
 
+  /// A session as routing sees it: its id and the directory it is rooted at.
+  type RoutedSession = { RoutedId: string; RoutedDirectory: string }
+
   module Route =
-    /// May a caller bound by `binding` act on the session `sessionId`, rooted at `sessionDirectory`?
+    /// May a caller bound by `binding` act on `session`?
     /// The one rule the confinement of the registry and the gate share.
-    let permitsSession (binding: RouteBinding) (within: string -> string -> bool) (sessionId: string) (sessionDirectory: string) : bool =
+    let permitsSession (binding: RouteBinding) (within: string -> string -> bool) (session: RoutedSession) : bool =
       match binding with
       | RouteBinding.Unbound -> true
-      | RouteBinding.BoundToSession bound -> sessionId = bound
-      | RouteBinding.BoundToCheckout root -> within (CheckoutRoot.value root) sessionDirectory
+      | RouteBinding.BoundToSession bound -> session.RoutedId = bound
+      | RouteBinding.BoundToCheckout root -> within (CheckoutRoot.value root) session.RoutedDirectory
 
     /// The directory a binding confines directories to. `Unbound` has none: every directory is inside it.
     let private regionOf (binding: RouteBinding) (facts: RouteFacts) : Result<string option, RouteRefusal> =

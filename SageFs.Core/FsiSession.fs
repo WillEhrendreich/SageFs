@@ -223,7 +223,7 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
       Volatile.Write(&walkMode.contents, mode)
       WalkModeNow mode
 
-    member _.Completions(text, caret, word, limit) = AutoCompletion.getCompletions session limit text caret word
+    member _.Completions(text, caret, word, limit) = AutoCompletion.getCompletions session limit text caret (AutoCompletion.EnteredWord word)
 
     member _.Diagnose(text) = Diagnostics.getDiagnostics session text
 

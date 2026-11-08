@@ -101,9 +101,12 @@ let runningGate (fs: GateFs) (gateDir: string) (ignoring: int option) : int opti
       | _ -> None
     | _ -> None
 
+/// The directory name of a gate checkout (`<prefix><repo key>`), as against the gate directory it sits in.
+type CheckoutName = CheckoutName of string
+
 /// The repo a checkout was made for: the gate records it (`owners/<checkout>`, first line), else the repo whose
 /// path hashes to the checkout's name when it is one of `knownRepos`.
-let ownerRepo (fs: GateFs) (gateDir: string) (knownRepos: string list) (checkoutName: string) : string option =
+let ownerRepo (fs: GateFs) (gateDir: string) (knownRepos: string list) (CheckoutName checkoutName) : string option =
   let recorded = fs.FirstLine(gateDir + "/" + Names.ownersDir + "/" + checkoutName)
   match recorded with
   | Some repo -> Some repo
@@ -128,7 +131,7 @@ let describe
   let name = Path.GetFileName dir
   let ownerName = (match entry with | GateEntry.TierClone _ -> Path.GetFileName(Path.GetDirectoryName dir) | _ -> name).Replace(Names.tiersSuffix, "")
   let running = runningGate fs gateDir (invoker |> Option.map (fun i -> i.Pid))
-  let owner = ownerRepo fs gateDir knownRepos ownerName
+  let owner = ownerRepo fs gateDir knownRepos (CheckoutName ownerName)
   let invoking =
     match invoker, entry with
     | Some i, (GateEntry.Checkout _ | GateEntry.TierClone _) when ownerName = Names.checkoutPrefix + repoKey i.Repo -> [ InUseReason.InvokingGate i.Repo ]

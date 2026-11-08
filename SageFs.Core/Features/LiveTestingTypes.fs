@@ -1605,9 +1605,14 @@ module FailureNarrativeBuilder =
       | false -> None)
 
   let buildPropertyViolation
-    (failureMsg: string)
+    (failure: TestFailure)
     (counterexample: string)
     : PropertyViolationDetail =
+    let failureMsg =
+      match failure with
+      | TestFailure.AssertionFailed msg -> msg
+      | TestFailure.ExceptionThrown (msg, _) -> msg
+      | TestFailure.TimedOut _ -> ""
     let propName = extractPropertyName failureMsg
     let category = propName |> Option.bind detectAlgebraicCategory
     { PropertyName = propName
@@ -1638,12 +1643,7 @@ module FailureNarrativeBuilder =
     let propertyViolation =
       match flakyClassification with
       | FlakyClassification.PropertyCounterexample counterexample ->
-        let failureMsg =
-          match currentFailure with
-          | TestFailure.AssertionFailed msg -> msg
-          | TestFailure.ExceptionThrown (msg, _) -> msg
-          | TestFailure.TimedOut _ -> ""
-        Some (buildPropertyViolation failureMsg counterexample)
+        Some (buildPropertyViolation currentFailure counterexample)
       | _ -> None
 
     let timePart =

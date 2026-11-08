@@ -843,14 +843,17 @@ let observeUserEdit
     | ReplayScope.EverythingAsDiffs -> FileContent.Recorded fileAfter
   TweakLogEvent.UserEditObserved(address, textNow, contentHash textNow, content)
 
+/// A whole file as it was and as it is now.
+type FileChange = { FileBefore: string; FileAfter: string }
+
 /// Build the `ReformatObserved` event for a whitespace/comment-only
 /// change, carrying a whole-file snapshot only under `EverythingAsDiffs`.
-let observeReformat (settings: TweakLogSettings) (fileBefore: string) (fileAfter: string) : TweakLogEvent =
+let observeReformat (settings: TweakLogSettings) (change: FileChange) : TweakLogEvent =
   let content =
     match settings.ReplayScope with
     | ReplayScope.SageFsWritesOnly -> FileContent.NotRecorded ReplayScope.SageFsWritesOnly
-    | ReplayScope.EverythingAsDiffs -> FileContent.Recorded fileAfter
-  TweakLogEvent.ReformatObserved(contentHash fileBefore, contentHash fileAfter, content)
+    | ReplayScope.EverythingAsDiffs -> FileContent.Recorded change.FileAfter
+  TweakLogEvent.ReformatObserved(contentHash change.FileBefore, contentHash change.FileAfter, content)
 
 /// Reproduces the WHOLE file, byte for byte, replaying every mutating
 /// event in order, only available under `ReplayScope.EverythingAsDiffs`:

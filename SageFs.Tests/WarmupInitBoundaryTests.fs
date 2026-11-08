@@ -32,6 +32,8 @@ let warmupInitBoundaryTests =
   testList "WarmupInitBoundary" [
     testCase "completeWarmup stops total timing at the namespace-open boundary" <| fun _ ->
       let boundaryMs = FixtureDurations.warmupBoundaryMs
+      let scanDone = 25L
+      let assembliesDone = 80L
       let ctx : WarmupContext =
         WarmupContext.completeWarmup
           warmupStartedAt
@@ -39,9 +41,7 @@ let warmupInitBoundaryTests =
           []
           []
           []
-          25L
-          80L
-          boundaryMs
+          { ScanDoneMs = scanDone; AssembliesDoneMs = assembliesDone; OpensDoneMs = boundaryMs }
 
       ctx.StartedAt
       |> Expect.equal "warmup should keep the original start timestamp" warmupStartedAt

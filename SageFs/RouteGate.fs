@@ -128,7 +128,7 @@ module RouteGate =
   /// `SessionManagementOps` serves every caller of the daemon and each is held to its own binding.
   let confine (route: unit -> RouteBinding) (within: string -> string -> bool) (ops: SessionManagementOps) : SessionManagementOps =
     let permits (binding: RouteBinding) (info: SessionInfo) : bool =
-      Route.permitsSession binding within (SessionId.value info.Id) info.WorkingDirectory
+      Route.permitsSession binding within { RoutedId = SessionId.value info.Id; RoutedDirectory = info.WorkingDirectory }
 
     /// Whether the session `sid` is one the caller may see. A session with no record is not.
     let visible (sid: SessionId) : Task<bool> =

@@ -74,25 +74,25 @@ let tests =
 
     testCase "WHY — a source that failed is an unavailable answer, not an empty one, so no caller reads a failure as 'no members'" <| fun _ ->
       let failing _ _ _ = Result.Error(CompletionUnavailable.CompilerError "boom")
-      match getCompletionsWith failing CompletionLimit.EveryMember "System.IO.Path." 15 "" with
+      match getCompletionsWith failing CompletionLimit.EveryMember "System.IO.Path." 15 (EnteredWord "") with
       | CompletionAnswer.Unavailable(CompletionUnavailable.CompilerError "boom") -> ()
       | other -> failtestf "expected the failure to surface, got %A" other
 
     testCase "WHY — a source that listed nothing is an exact zero, because nobody failed to look" <| fun _ ->
       let empty _ _ _ = Result.Ok Seq.empty
-      match getCompletionsWith empty CompletionLimit.EveryMember "System.IO.Path.Combine." 23 "" with
+      match getCompletionsWith empty CompletionLimit.EveryMember "System.IO.Path.Combine." 23 (EnteredWord "") with
       | CompletionAnswer.Answered([], CompletionTotal.Exact 0) -> ()
       | other -> failtestf "expected an empty exact answer, got %A" other
 
     testCase "WHY — getCompletionsWith ranks everything before it cuts, so the limit takes the best and the total counts all" <| fun _ ->
       let source _ _ _ = Result.Ok(numbered 120 |> Seq.ofList)
-      let items, total = getCompletionsWith source (CompletionLimit.UpTo 10) "x." 2 "" |> itemsAndTotal
+      let items, total = getCompletionsWith source (CompletionLimit.UpTo 10) "x." 2 (EnteredWord "") |> itemsAndTotal
       items |> Expect.hasLength "ten shown" 10
       total |> Expect.equal "all counted" (CompletionTotal.Exact 120)
 
     testCase "WHY — directive input never reaches the F# source and still states a total" <| fun _ ->
       let source _ _ _ = Result.Error(CompletionUnavailable.CheckThrew "must not be called")
-      match getCompletionsWith source (CompletionLimit.UpTo EditorCandidates) "#" 1 "" with
+      match getCompletionsWith source (CompletionLimit.UpTo EditorCandidates) "#" 1 (EnteredWord "") with
       | CompletionAnswer.Answered(items, CompletionTotal.Exact total) -> total |> Expect.equal "every directive is counted" items.Length
       | other -> failtestf "expected the directive list, got %A" other
 

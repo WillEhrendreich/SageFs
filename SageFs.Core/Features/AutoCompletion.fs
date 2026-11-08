@@ -240,6 +240,12 @@ let select (limit: CompletionLimit) (ranked: 'item list) : CompletionAnswer<'ite
     | true -> CompletionAnswer.Answered(List.truncate WireCeiling ranked, CompletionTotal.AtLeast WireCeiling)
     | false -> CompletionAnswer.Answered(ranked, CompletionTotal.Exact known)
 
+/// The word at the caret that a completion would replace, as the editor typed it.
+type EnteredWord = EnteredWord of string
+
+module EnteredWord =
+  let value (EnteredWord word) : string = word
+
 let scoreCandidate (enteredWord: string) (candidate: string) =
   seq {
     match candidate.StartsWith(enteredWord, System.StringComparison.Ordinal) with
@@ -305,13 +311,13 @@ module DirectiveCompletions =
 
     entry.Substring(sharedPrefix)
 
-  let commandCompletions (text: string) carret (wordToReplace: string) =
+  let commandCompletions (text: string) carret (wordToReplace: EnteredWord) =
     match text.Contains(' ') with
     | false ->
       directives
       |> Seq.map (fun keyword -> {
         CompletionItem.DisplayText = keyword
-        ReplacementText = mkReplacement wordToReplace keyword
+        ReplacementText = mkReplacement (EnteredWord.value wordToReplace) keyword
         Kind = CompletionKind.Keyword
         GetDescription = None
       })
@@ -362,21 +368,21 @@ module DirectiveCompletions =
 let getCompletionsWith
   (fsCompletions: string -> int -> string -> Result<CompletionItem seq, CompletionUnavailable>)
   (limit: CompletionLimit)
-  text
-  carret
-  word
+  (text: string)
+  (carret: int)
+  (word: EnteredWord)
   : CompletionAnswer<CompletionItem> =
   let ranked (candidates: CompletionItem seq) : CompletionItem list =
-    candidates |> Seq.sortByDescending (fun c -> scoreCandidate word c.ReplacementText) |> Seq.toList
+    candidates |> Seq.sortByDescending (fun c -> scoreCandidate (EnteredWord.value word) c.ReplacementText) |> Seq.toList
 
   match text |> Seq.tryHead with
   | Some ':'
   | Some '#' -> DirectiveCompletions.commandCompletions text carret word |> ranked |> select limit
   | Some _ ->
-    match fsCompletions text carret word with
+    match fsCompletions text carret (EnteredWord.value word) with
     | Result.Ok candidates -> candidates |> ranked |> select limit
     | Result.Error reason -> CompletionAnswer.Unavailable reason
   | None -> CompletionAnswer.Answered([], CompletionTotal.Exact 0)
 
-let getCompletions session limit text carret word =
+let getCompletions session limit (text: string) (carret: int) (word: EnteredWord) =
   getCompletionsWith (FsCompletions.getFsCompletions session) limit text carret word

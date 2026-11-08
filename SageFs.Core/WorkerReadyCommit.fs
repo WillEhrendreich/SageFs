@@ -105,7 +105,7 @@ module WorkerReadyCommit =
           match parked with
           | ParkedSwap.Parked old -> Rejected.RestoreOld old
           | ParkedSwap.NoSwap -> Rejected.NoSwapParked
-        Plan.RejectTransport (ReadyTransport.describeInvalid "Worker" baseUrl proxy, rejected)
+        Plan.RejectTransport (ReadyTransport.describeInvalid ReadyTransport.TransportKind.Worker baseUrl proxy, rejected)
       | true ->
         let continuity, retire =
           match parked with

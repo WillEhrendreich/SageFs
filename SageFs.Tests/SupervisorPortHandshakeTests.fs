@@ -24,7 +24,6 @@ let tests =
 
       let result =
         Supervisor.validateHostReadyLine
-          Supervisor.hostReadyLine
           stdoutLine
 
       match result with
@@ -37,7 +36,6 @@ let tests =
 
       let result =
         Supervisor.validateHostReadyLine
-          Supervisor.hostReadyLine
           stdoutLine
 
       match result with

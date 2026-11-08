@@ -931,9 +931,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
         loadedAssemblies
         succeeded
         failedWithWarnings
-        scanPhaseMs
-        assemblyPhaseMs
-        openPhaseMs
+        { ScanDoneMs = scanPhaseMs; AssembliesDoneMs = assemblyPhaseMs; OpensDoneMs = openPhaseMs }
 
     logger.LogInfo (sprintf "  Warm-up complete in %dms (scan=%dms, asm=%dms, open=%dms)"
       warmupCtx.PhaseTiming.TotalMs

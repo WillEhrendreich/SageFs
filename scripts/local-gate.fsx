@@ -50,7 +50,7 @@ let logsRoot = Path.Combine(gateHome, "logs")
 let ownersRoot = Path.Combine(gateHome, "owners")
 /// Where SageFs.GateCheckout keeps its record of how each checkout's build output was last left. Not a checkout- or
 /// tier-named directory, so the reaper does not mistake it for one.
-let buildStateRoot = Path.Combine(gateHome, "build-state")
+let buildStateRoot = SageFs.GateCheckout.StateDir(Path.Combine(gateHome, "build-state"))
 let lockPath = Path.Combine(gateHome, "lock")
 let currentPath = Path.Combine(gateHome, "current")
 let dataDir = Path.Combine(gateHome, "data")

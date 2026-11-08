@@ -4042,8 +4042,7 @@ let run
     SageFs.Features.GcDumpWatch.maybeCapture
       (System.Diagnostics.Process.GetCurrentProcess().Id)
       (System.IO.Path.Combine(DaemonState.SageFsDir, "diagnostics"))
-      rssBytes
-      machineMemory.AvailableBytes
+      { ProcessRssBytes = rssBytes; MachineAvailableBytes = machineMemory.AvailableBytes }
       SageFs.Features.HealthAnomaly.SignalId.WorkerRss
       rssVerdict
     sampleMailboxQueueDepth observeMailboxQueueDepthToHealthWatch (fun () -> sessionManager.CurrentQueueLength)

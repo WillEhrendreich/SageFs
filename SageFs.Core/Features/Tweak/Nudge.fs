@@ -622,11 +622,13 @@ let journalBudget (log: EventLog) : Result<unit, NudgeRefusal> =
   | true -> Error(NudgeRefusal.JournalAtBudget(held, TweakLogLimits.maxEventsPerSession))
   | false -> Ok()
 
+/// The file a plan is made against: its path and the text it holds now.
+type PlanTarget = { TargetFile: string; TargetSource: string }
+
 /// Decide a `Set` against the file as it is and the journal as it is. Pure: no
 /// disk, no clock. The receipt's `EventId` is the id the journal will assign.
 let planSet
-  (file: string)
-  (source: string)
+  ({ TargetFile = file; TargetSource = source }: PlanTarget)
   (log: EventLog)
   (address: TweakAddress)
   (seen: SeenHash)
@@ -697,7 +699,7 @@ type MoveDirection =
 /// applies only when the expression still hashes to what that record wrote, and says all
 /// three texts when it does not. The record that describes the move is the engine's own
 /// `RolledBack`, and the receipt is read from the effect it has.
-let rollBackRecord (target: int) (file: string) (source: string) (log: EventLog) : Result<PlannedWrite, NudgeRefusal> =
+let rollBackRecord (target: int) ({ TargetFile = file; TargetSource = source }: PlanTarget) (log: EventLog) : Result<PlannedWrite, NudgeRefusal> =
   match rollback log Snapshot.empty target source with
   | Error(RollbackError.BlockedByOpenConflict address) -> Error(NudgeRefusal.BlockedByOpenConflict address)
   | Error other -> Error(NudgeRefusal.HistoryRefused other)
@@ -726,17 +728,17 @@ let rollBackRecord (target: int) (file: string) (source: string) (log: EventLog)
 /// Undo rolls back the newest write that is still applied, and redo rolls back the
 /// newest undo, so repeated undo walks back through exactly the writes that are in the
 /// file, however many undos and writes came between.
-let planMove (direction: MoveDirection) (file: string) (source: string) (log: EventLog) : Result<PlannedWrite, NudgeRefusal> =
+let planMove (direction: MoveDirection) (target: PlanTarget) (log: EventLog) : Result<PlannedWrite, NudgeRefusal> =
   let history = historyOf log
   match direction with
   | MoveDirection.Backward ->
     match List.tryLast history.Applied with
     | None -> Error NudgeRefusal.NothingToUndo
-    | Some target -> rollBackRecord target file source log
+    | Some record -> rollBackRecord record target log
   | MoveDirection.Forward ->
     match history.Undone with
     | [] -> Error NudgeRefusal.NothingToRedo
-    | newest :: _ -> rollBackRecord newest file source log
+    | newest :: _ -> rollBackRecord newest target log
 
 /// What a crash left behind, if anything: the journal says a write landed that the
 /// file does not show. The answer is the event to append that marks it undone.
@@ -930,7 +932,7 @@ let runWith (strategy: Strategy) (ports: Ports) (request: NudgeRequest) : Result
       | Error refusal -> Error refusal
       | Ok(log, notes) ->
         let move direction outcome =
-          planMove direction path image.Text log
+          planMove direction { TargetFile = path; TargetSource = image.Text } log
           |> Result.bind (fun planned -> commit strategy ports path journal image log planned)
           |> Result.map (fun receipt -> landed outcome notes receipt)
         match request with
@@ -944,7 +946,7 @@ let runWith (strategy: Strategy) (ports: Ports) (request: NudgeRequest) : Result
             | NudgeValue.ExpressionText _ -> [ RunNote.ExpressionNotTypeChecked ]
             | NudgeValue.LiteralText _ -> []
           journalBudget log
-          |> Result.bind (fun () -> planSet path image.Text log address seen value)
+          |> Result.bind (fun () -> planSet { TargetFile = path; TargetSource = image.Text } log address seen value)
           |> Result.bind (fun plan ->
             match plan with
             | SetPlan.NothingToChange(unchangedAddress, text) ->

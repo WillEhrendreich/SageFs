@@ -92,19 +92,19 @@ let headroomTests =
   testList "GcDumpCapture.hasHeadroomToCapture" [
 
     testCase "the 55GB-daemon-1GB-free incident: no headroom, skip the dump" <| fun () ->
-      GcDumpCapture.hasHeadroomToCapture (55L * gigabyte) gigabyte
+      GcDumpCapture.hasHeadroomToCapture { ProcessRssBytes = 55L * gigabyte; MachineAvailableBytes = gigabyte }
       |> Expect.isFalse "attempting a dump here risks finishing the machine off"
 
     testCase "a healthy daemon with plenty of available memory has headroom" <| fun () ->
-      GcDumpCapture.hasHeadroomToCapture (500L * megabyte) (40L * gigabyte)
+      GcDumpCapture.hasHeadroomToCapture { ProcessRssBytes = 500L * megabyte; MachineAvailableBytes = 40L * gigabyte }
       |> Expect.isTrue "small process, huge headroom"
 
     testCase "available memory exactly equal to the process RSS is NOT enough headroom" <| fun () ->
-      GcDumpCapture.hasHeadroomToCapture gigabyte gigabyte
+      GcDumpCapture.hasHeadroomToCapture { ProcessRssBytes = gigabyte; MachineAvailableBytes = gigabyte }
       |> Expect.isFalse "the floor is strictly more than the process's own size"
 
     testCase "a zero or negative recorded RSS never counts as having headroom" <| fun () ->
-      GcDumpCapture.hasHeadroomToCapture 0L (40L * gigabyte) |> Expect.isFalse "nothing meaningful to gate on"
+      GcDumpCapture.hasHeadroomToCapture { ProcessRssBytes = 0L; MachineAvailableBytes = 40L * gigabyte } |> Expect.isFalse "nothing meaningful to gate on"
   ]
 
 [<Tests>]

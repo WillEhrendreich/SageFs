@@ -130,7 +130,7 @@ module WorkerStartup =
               | true ->
                 // The worker binds 127.0.0.1, so any other host is not a worker we started. Refused through the same
                 // path as an absolute-deadline stop: the worker is killed and the start fails, never reports ready.
-                let verdict = Supervisor.classifyHostReadyLine Supervisor.hostReadyLine line
+                let verdict = Supervisor.classifyHostReadyLine line
                 match verdict with
                 | Result.Ok url -> found <- Some url
                 | Result.Error rejection ->

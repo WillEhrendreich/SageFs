@@ -26,8 +26,7 @@ module GcDumpWatch =
   let maybeCapture
     (pid: int)
     (outputDir: string)
-    (processRssBytes: int64)
-    (machineAvailableBytes: int64)
+    (memory: GcDumpCapture.CaptureMemory)
     (signal: HealthAnomaly.SignalId)
     (verdict: HealthAnomaly.Verdict)
     : unit =
@@ -36,7 +35,7 @@ module GcDumpWatch =
         match GcDumpCapture.shouldCapture captured signal verdict with
         | false -> false
         | true ->
-          match GcDumpCapture.hasHeadroomToCapture processRssBytes machineAvailableBytes with
+          match GcDumpCapture.hasHeadroomToCapture memory with
           | false ->
             // Not enough headroom: recorded as the outcome so a client can
             // see WHY no dump exists, but does not consume the one-shot —

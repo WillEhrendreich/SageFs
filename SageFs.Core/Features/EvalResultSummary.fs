@@ -64,8 +64,11 @@ type BoundedResult =
 [<Literal>]
 let OutputBinding = "lastEvalOutput"
 
+/// The characters a clip cut out of the original: where the cut starts and how long it is.
+type CutSpan = { CutStart: int; CutLength: int }
+
 /// The expression that gives back exactly the characters a clip cut: the cut starts at `headLength` and is `cut` long.
-let readingTheCut (headLength: int) (cut: int) : string = sprintf "%s.Substring(%d, %d)" OutputBinding headLength cut
+let readingTheCut (span: CutSpan) : string = sprintf "%s.Substring(%d, %d)" OutputBinding span.CutStart span.CutLength
 
 /// Bound `raw` to at most `maxChars` kept characters: its start, a notice that says exactly how many characters were
 /// cut from the middle, and its end. `maxChars <= 0` is treated as 0 (an all-notice response) rather than raising — a
@@ -94,7 +97,7 @@ let boundHolding (held: bool) (maxChars: int) (raw: string) : BoundedResult =
     let counted = sprintf "cut %d characters from the middle: kept the first %d and the last %d of %d." cut headLength (raw.Length - tailStart) raw.Length
     let notice =
       match held with
-      | true -> sprintf "\n… [%s The whole text is bound as `%s` in this session: read the middle with `%s`.]\n" counted OutputBinding (readingTheCut headLength cut)
+      | true -> sprintf "\n… [%s The whole text is bound as `%s` in this session: read the middle with `%s`.]\n" counted OutputBinding (readingTheCut { CutStart = headLength; CutLength = cut })
       | false -> sprintf "\n… [%s If the last statement was an expression, its value is still bound as `it`: slice it (`it |> List.truncate 20`, `it.SomeField`).]\n" counted
     { Text = raw.Substring(0, headLength) + notice + raw.Substring tailStart
       WasTruncated = true
@@ -139,7 +142,7 @@ let bindingCode (raw: string) : string =
 /// The expression that gives back exactly the characters a clipped reply cut, when there was a cut.
 let suggestedExpression (bounded: BoundedResult) : string option =
   match bounded.WasTruncated with
-  | true -> Some(readingTheCut bounded.HeadLength (bounded.OriginalLength - bounded.KeptLength))
+  | true -> Some(readingTheCut { CutStart = bounded.HeadLength; CutLength = bounded.OriginalLength - bounded.KeptLength })
   | false -> None
 
 /// A reply's text, and the bound of the eval's own output inside it.

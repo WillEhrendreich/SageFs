@@ -16,7 +16,7 @@ let private dispatchedWarmupEvents progress =
 let warmupProgressContractTests =
   testList "WarmupProgressContract" [
     testCase "legacy line shape is preserved for valid progress" <| fun _ ->
-      WarmupProgressLine.tryFormatLine 2 4 "Opening namespaces"
+      WarmupProgressLine.tryFormatLine { Step = 2; Total = 4 } "Opening namespaces"
       |> Expect.equal
         "valid progress should keep the legacy WARMUP_PROGRESS line shape"
         (Some "WARMUP_PROGRESS=2/4 Opening namespaces")

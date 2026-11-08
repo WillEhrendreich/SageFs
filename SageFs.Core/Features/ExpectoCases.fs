@@ -143,14 +143,16 @@ module ExpectoCases =
     List.ofSeq collected
 
   /// True when `outer` covers the given source range and is larger than it.
-  let spanStrictlyHolds (outer: Node) (startIndex: int) (endIndex: int) : bool =
+  let spanStrictlyHolds (outer: Node) (inner: Node) : bool =
+    let startIndex = int inner.StartIndex
+    let endIndex = int inner.EndIndex
     int outer.StartIndex <= startIndex
     && int outer.EndIndex >= endIndex
     && (int outer.StartIndex < startIndex || int outer.EndIndex > endIndex)
 
   /// True when `outer` covers the given source range at all.
-  let spanHolds (outer: Node) (startIndex: int) (endIndex: int) : bool =
-    int outer.StartIndex <= startIndex && int outer.EndIndex >= endIndex
+  let spanHolds (outer: Node) (inner: Node) : bool =
+    int outer.StartIndex <= int inner.StartIndex && int outer.EndIndex >= int inner.EndIndex
 
   /// The innermost application that holds a captured builder identifier: the
   /// builder and its name argument, before any body the grammar adds around it.
@@ -158,7 +160,7 @@ module ExpectoCases =
     nodes
     |> List.filter (fun node ->
       node.Type = "application_expression"
-      && spanHolds node (int identifier.StartIndex) (int identifier.EndIndex))
+      && spanHolds node identifier)
     |> List.sortBy (fun node -> int node.EndIndex - int node.StartIndex)
     |> List.tryHead
 
@@ -172,7 +174,7 @@ module ExpectoCases =
         (node.Type = "application_expression"
          || node.Type = "infix_expression"
          || node.Type = "ce_expression")
-        && spanStrictlyHolds node (int inner.StartIndex) (int inner.EndIndex))
+        && spanStrictlyHolds node inner)
       |> List.sortBy (fun node -> int node.EndIndex - int node.StartIndex)
       |> List.tryHead
     match larger with
@@ -231,7 +233,7 @@ module ExpectoCases =
             (fun known (inner, expression) ->
               let enclosing =
                 known
-                |> List.filter (fun (node, _) -> spanHolds node (int expression.StartIndex) (int expression.EndIndex))
+                |> List.filter (fun (node, _) -> spanHolds node expression)
                 |> List.sortBy (fun (node, _) -> int node.EndIndex - int node.StartIndex)
               // Every known path already holds its own ancestors, so the innermost
               // enclosing list is the whole chain above this one.
@@ -258,7 +260,7 @@ module ExpectoCases =
           |> List.map (fun (inner, expression) ->
             let enclosing =
               listPaths
-              |> List.filter (fun (node, _) -> spanHolds node (int expression.StartIndex) (int expression.EndIndex))
+              |> List.filter (fun (node, _) -> spanHolds node expression)
               |> List.sortBy (fun (node, _) -> int node.EndIndex - int node.StartIndex)
             let parentPath =
               match List.tryHead enclosing with

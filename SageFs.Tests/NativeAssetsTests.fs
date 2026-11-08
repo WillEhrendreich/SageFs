@@ -49,7 +49,7 @@ let read (json: string) : NativePackage list =
   | PackagesRead packages -> packages
   | Unreadable why -> failtestf "the assets file should read: %s" why
 
-let linux = NativeAssets.compatibleRuntimes "linux-x64" "linux" "x64"
+let linux = NativeAssets.compatibleRuntimes { Running = "linux-x64"; Os = "linux"; Arch = "x64" }
 
 let namedPackage (name: string) (packages: NativePackage list) : NativePackage =
   packages |> List.find (fun p -> p.Name = name)
@@ -65,15 +65,15 @@ let tests =
   testList "NativeAssets" [
 
     testCase "WHY — the runtimes a native file may be for on Linux include the running one, os-arch, the bare os and the unix family, because that is the order NuGet's runtime graph resolves them in" <| fun _ ->
-      NativeAssets.compatibleRuntimes "linux-x64" "linux" "x64"
+      NativeAssets.compatibleRuntimes { Running = "linux-x64"; Os = "linux"; Arch = "x64" }
       |> Expect.equal "most specific first" [ "linux-x64"; "linux"; "unix-x64"; "unix" ]
 
     testCase "WHY — Windows has no unix family, so a unix asset is never offered to a Windows process" <| fun _ ->
-      NativeAssets.compatibleRuntimes "win-x64" "win" "x64"
+      NativeAssets.compatibleRuntimes { Running = "win-x64"; Os = "win"; Arch = "x64" }
       |> Expect.equal "windows only" [ "win-x64"; "win" ]
 
     testCase "WHY — a distro runtime id that differs from os-arch is kept first and the portable one still follows" <| fun _ ->
-      NativeAssets.compatibleRuntimes "linux-musl-x64" "linux" "x64"
+      NativeAssets.compatibleRuntimes { Running = "linux-musl-x64"; Os = "linux"; Arch = "x64" }
       |> Expect.equal "musl first, then portable" [ "linux-musl-x64"; "linux-x64"; "linux"; "unix-x64"; "unix" ]
 
     testCase "WHY — a library's stem drops the directory, the lib prefix, the extension and a version suffix, so libSkiaSharp.so and SkiaSharp.dll are one library" <| fun _ ->
@@ -160,7 +160,7 @@ let tests =
         match Map.tryFind path files with
         | Some text -> text
         | None -> raise (FileNotFoundException path)
-      let facts, problems = NativeAssets.factsFrom readText everyFolderExists "linux-x64" "linux" "x64" [ "/good/project.assets.json"; "/missing/project.assets.json" ]
+      let facts, problems = NativeAssets.factsFrom readText everyFolderExists { Running = "linux-x64"; Os = "linux"; Arch = "x64" } [ "/good/project.assets.json"; "/missing/project.assets.json" ]
       facts.Packages |> List.length |> Expect.equal "the good file's two packages" 2
       problems |> List.length |> Expect.equal "the missing file is reported" 1
       problems |> List.head |> Expect.stringContains "and names the file" "/missing/project.assets.json"

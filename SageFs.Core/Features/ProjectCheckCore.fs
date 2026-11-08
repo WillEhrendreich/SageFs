@@ -20,6 +20,21 @@ module ProjectCheckCore =
 
   // ---- paths ----
 
+  /// The directory a project file sits in.
+  type ProjectDirectory = ProjectDirectory of string
+
+  module ProjectDirectory =
+    let value (ProjectDirectory directory) : string = directory
+
+  /// The MSBuild configuration a project is read and built in (`Debug`, `Release`, or a name the project defines).
+  type BuildConfiguration = BuildConfiguration of string
+
+  module BuildConfiguration =
+    let value (BuildConfiguration name) : string = name
+
+  /// The directory the overlay files of every project are written under.
+  type OverlayRoot = OverlayRoot of string
+
   let pathComparison : StringComparison =
     match OperatingSystem.IsWindows() with
     | true -> StringComparison.OrdinalIgnoreCase
@@ -385,8 +400,8 @@ module ProjectCheckCore =
 
     /// A file under the project's own `obj` directory is written by the evaluation (the assembly info, the attributes file),
     /// not edited, so it is not something the output can be behind.
-    let isGeneratedIn (projectDirectory: string) (path: string) : bool =
-      let objDirectory = Path.Combine(projectDirectory, "obj") + string Path.DirectorySeparatorChar
+    let isGeneratedIn (projectDirectory: ProjectDirectory) (path: string) : bool =
+      let objDirectory = Path.Combine(ProjectDirectory.value projectDirectory, "obj") + string Path.DirectorySeparatorChar
       path.StartsWith(objDirectory, pathComparison)
 
     /// The projects to build, deepest first. A project is built when it is stale itself or when anything it references
@@ -453,7 +468,7 @@ module ProjectCheckCore =
     /// The overlay file for the source at `index` in compile order. The same project and position always give the same
     /// path, so the compiler's per-file cache sees only a changed timestamp, and the file keeps its name because an
     /// implicit module is named for it.
-    let overlayPath (root: string) (projectFile: string) (index: int) (source: string) : string =
+    let overlayPath (OverlayRoot root) (projectFile: string) (index: int) (source: string) : string =
       Path.Combine(root, projectKey projectFile, string index, Path.GetFileName source)
 
     let resolve (root: string) (arguments: CompilerArguments) (overlays: Overlay list) : Result<OverlayPlan, OverlayRefusal> =
@@ -474,7 +489,7 @@ module ProjectCheckCore =
           |> List.mapi (fun index source ->
             match named |> List.tryFind (fun (p, _) -> samePath p source) with
             | Some(_, text) ->
-              let overlay = overlayPath root arguments.ProjectFile index source
+              let overlay = overlayPath (OverlayRoot root) arguments.ProjectFile index source
               overlay, Some(source, overlay, text)
             | None -> source, None)
         Ok
@@ -505,10 +520,10 @@ module ProjectCheckCore =
     let defaultConfiguration = "Debug"
 
     /// The configuration to check, or Debug when the caller named none.
-    let configurationOf (given: string) : string =
+    let configurationOf (given: string) : BuildConfiguration =
       match String.IsNullOrWhiteSpace given with
-      | true -> defaultConfiguration
-      | false -> given.Trim()
+      | true -> BuildConfiguration defaultConfiguration
+      | false -> BuildConfiguration(given.Trim())
 
     /// The overlays as the tool receives them: a JSON array of `{ "path": ..., "text": ... }`, or nothing for none.
     let parseOverlays (json: string) : Result<Overlay list, CheckRefusal> =

@@ -386,10 +386,10 @@ let tests =
 
       testCase "WHY — what the evaluation writes under the project's obj directory is not an edit, and nothing else is treated as generated" <| fun _ ->
         let objFile = Path.Combine("/work/p", "obj", "Debug", "net10.0", "P.AssemblyInfo.fs")
-        Staleness.isGeneratedIn "/work/p" objFile |> Expect.isTrue "under obj"
-        Staleness.isGeneratedIn "/work/p" "/work/p/Program.fs" |> Expect.isFalse "a source"
-        Staleness.isGeneratedIn "/work/p" "/work/p/objects/X.fs" |> Expect.isFalse "a directory that only starts with obj"
-        Staleness.isGeneratedIn "/work/p" "/work/q/obj/X.fs" |> Expect.isFalse "another project's obj"
+        Staleness.isGeneratedIn (ProjectDirectory "/work/p") objFile |> Expect.isTrue "under obj"
+        Staleness.isGeneratedIn (ProjectDirectory "/work/p") "/work/p/Program.fs" |> Expect.isFalse "a source"
+        Staleness.isGeneratedIn (ProjectDirectory "/work/p") "/work/p/objects/X.fs" |> Expect.isFalse "a directory that only starts with obj"
+        Staleness.isGeneratedIn (ProjectDirectory "/work/p") "/work/q/obj/X.fs" |> Expect.isFalse "another project's obj"
     ]
 
     testList "what a caller sends" [
@@ -405,8 +405,8 @@ let tests =
         | Ok other -> failtestf "expected an error, got %A" other
 
       testCase "WHY — no configuration means Debug, a named one is used as given, and the MSBuild run carries it" <| fun _ ->
-        Request.configurationOf "" |> Expect.equal "default" "Debug"
-        Request.configurationOf " Release " |> Expect.equal "trimmed" "Release"
+        Request.configurationOf "" |> Expect.equal "default" (BuildConfiguration "Debug")
+        Request.configurationOf " Release " |> Expect.equal "trimmed" (BuildConfiguration "Release")
         MsBuildFacts.msbuildArgumentsFor "Release" |> Expect.contains "carries the configuration" "-p:Configuration=Release"
     ]
   ]

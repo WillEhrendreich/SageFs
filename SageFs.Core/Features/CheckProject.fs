@@ -112,10 +112,10 @@ module CheckProject =
     | FactsFailure.Stopped ended -> outcomeOfStop Stopped.ArgumentsRun ended
 
   /// One design-time MSBuild run for `projectFile`.
-  let readFacts (projectFile: string) (configuration: string) (cancel: CancellationToken) : Task<Result<MsBuildFacts, FactsFailure>> =
+  let readFacts (projectFile: string) (configuration: BuildConfiguration) (cancel: CancellationToken) : Task<Result<MsBuildFacts, FactsFailure>> =
     task {
       let directory = Path.GetDirectoryName projectFile
-      let args = "msbuild" :: Path.GetFileName projectFile :: MsBuildFacts.msbuildArgumentsFor configuration
+      let args = "msbuild" :: Path.GetFileName projectFile :: MsBuildFacts.msbuildArgumentsFor (BuildConfiguration.value configuration)
       let! ended = runDotnet directory args Timeouts.projectArgumentsRun cancel
       match ended with
       | ProcessEnd.Exited(0, stdout, _) -> return MsBuildFacts.read projectFile stdout |> Result.mapError FactsFailure.Refused
@@ -183,9 +183,9 @@ module CheckProject =
 
   /// The arguments for a project: the kept ones when nothing that shaped them moved, and otherwise a design-time run that
   /// every simultaneous call for the same key shares.
-  let argumentsFor (projectFile: string) (configuration: string) (cancel: CancellationToken) : Task<Result<MsBuildFacts * ArgumentsSource, FactsFailure>> =
+  let argumentsFor (projectFile: string) (configuration: BuildConfiguration) (cancel: CancellationToken) : Task<Result<MsBuildFacts * ArgumentsSource, FactsFailure>> =
     task {
-      let key = { Project = projectFile; Configuration = configuration }
+      let key = { Project = projectFile; Configuration = BuildConfiguration.value configuration }
       match ArgumentCache.decide (kept.Entry key) currentStamp with
       | CacheDecision.Reuse facts -> return Ok(facts, ArgumentsSource.Kept)
       | CacheDecision.Refresh reason ->
@@ -220,7 +220,7 @@ module CheckProject =
 
   // ---- referenced projects ----
 
-  let private isGeneratedIn (projectFile: string) (path: string) : bool = Staleness.isGeneratedIn (Path.GetDirectoryName projectFile) path
+  let private isGeneratedIn (projectFile: string) (path: string) : bool = Staleness.isGeneratedIn (ProjectDirectory(Path.GetDirectoryName projectFile)) path
 
   let private writeTicks (path: string) : int64 option =
     match currentStamp path with
@@ -241,9 +241,9 @@ module CheckProject =
     Staleness.decide state inputs
 
   /// Builds one referenced project without its own references (they are built first, in order) and without a restore.
-  let private buildProject (projectFile: string) (configuration: string) (cancel: CancellationToken) : Task<Result<unit, ProcessEnd>> =
+  let private buildProject (projectFile: string) (configuration: BuildConfiguration) (cancel: CancellationToken) : Task<Result<unit, ProcessEnd>> =
     task {
-      let args = [ "build"; projectFile; "-c"; configuration; "--no-dependencies"; "--no-restore"; "-nodeReuse:false"; "--disable-build-servers" ]
+      let args = [ "build"; projectFile; "-c"; BuildConfiguration.value configuration; "--no-dependencies"; "--no-restore"; "-nodeReuse:false"; "--disable-build-servers" ]
       let! ended = runDotnet (Path.GetDirectoryName projectFile) args Timeouts.projectReferenceBuild cancel
       match ended with
       | ProcessEnd.Exited(0, _, _) -> return Ok()
@@ -253,7 +253,7 @@ module CheckProject =
   /// What the referenced projects need before the check: their facts (read the same way, and kept the same way), and the
   /// order to build the ones that are behind.
   let rec gatherFacts
-    (configuration: string)
+    (configuration: BuildConfiguration)
     (cancel: CancellationToken)
     (pending: ReferencedProject list)
     (seen: Map<string, MsBuildFacts * string>)
@@ -271,7 +271,7 @@ module CheckProject =
 
   let referencesToBuild
     (parent: MsBuildFacts)
-    (configuration: string)
+    (configuration: BuildConfiguration)
     (cancel: CancellationToken)
     : Task<Result<string list, CheckOutcome>> =
     task {
@@ -382,7 +382,7 @@ module CheckProject =
     }
 
   /// Builds the projects in the order given, stopping at the first one that does not build.
-  let rec buildAll (configuration: string) (cancel: CancellationToken) (remaining: string list) (built: string list) : Task<Result<string list, CheckOutcome>> =
+  let rec buildAll (configuration: BuildConfiguration) (cancel: CancellationToken) (remaining: string list) (built: string list) : Task<Result<string list, CheckOutcome>> =
     task {
       match remaining with
       | [] -> return Ok built
@@ -396,7 +396,7 @@ module CheckProject =
 
   /// The whole check: arguments (kept or read), the referenced projects that are behind built once and in order, then the
   /// compiler over the project with the overlays in place. Never builds the project itself and never uses a session.
-  let run (projectFile: string) (configuration: string) (overlays: Overlay list) (cancel: CancellationToken) : Task<CheckOutcome> =
+  let run (projectFile: string) (configuration: BuildConfiguration) (overlays: Overlay list) (cancel: CancellationToken) : Task<CheckOutcome> =
     task {
       let full = Path.GetFullPath projectFile
       match! argumentsFor full configuration cancel with

@@ -41,12 +41,17 @@ type EditOutcome =
   /// done that was not.
   | SomeFailed of applied: Applied list * refused: Applied list
 
+/// One requested replacement: the text to find and the text that takes its place.
+type Replacement = { Find: string; With: string }
+
 [<RequireQualifiedAccess>]
 module Contract =
 
   /// The single, specific edit. It reports rather than assuming, and that is
   /// the whole contract — which is why a bulk rewrite cannot stand in for it.
-  let replaceOnce (text: string) (find: string) (repl: string) : Applied =
+  let replaceOnce (text: string) (replacement: Replacement) : Applied =
+    let find = replacement.Find
+    let repl = replacement.With
     let occurrences = text.Split([| find |], StringSplitOptions.None).Length - 1
     if occurrences = 1 then Applied.MatchedOnce (text.Replace(find, repl))
     elif occurrences = 0 then Applied.NothingMatched find
@@ -60,7 +65,7 @@ module Contract =
       match remaining with
       | [] -> EditOutcome.AllApplied(List.rev applied)
       | (find, repl) :: rest ->
-        match replaceOnce current find repl with
+        match replaceOnce current { Find = find; With = repl } with
         | Applied.MatchedOnce next -> go next rest (Applied.MatchedOnce repl :: applied)
         | refused -> EditOutcome.SomeFailed(List.rev applied, refused :: List.map (fun (f, _) -> Applied.NothingMatched f) rest)
 

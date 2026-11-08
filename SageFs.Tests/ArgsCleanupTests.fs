@@ -314,7 +314,7 @@ let hotReloadWorkerConfigTests =
       allFiles |> Expect.isFalse "not watching everything"
 
     testCase "the watch-all half travels to the worker under its own name, because the flow's variable says 1 by then" <| fun () ->
-      let carried = WorkerConfig.hotReloadWorkerEnvironment true true
+      let carried = WorkerConfig.hotReloadWorkerEnvironment { On = true; AllFiles = true }
       carried
       |> List.map fst
       |> Expect.contains "the worker is told to watch every file, under the name that says one thing"
@@ -325,7 +325,7 @@ let hotReloadWorkerConfigTests =
         (WorkerConfig.hotReloadEnvVar, "1")
 
     testCase "a worker that watches only the session's own files is told so" <| fun () ->
-      let carried = WorkerConfig.hotReloadWorkerEnvironment true false
+      let carried = WorkerConfig.hotReloadWorkerEnvironment { On = true; AllFiles = false }
       carried
       |> List.map fst
       |> List.contains WorkerConfig.hotReloadAllFilesEnvVar

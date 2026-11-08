@@ -48,8 +48,20 @@ let format (address: TweakAddress) : string =
   | [] -> head
   | steps -> head + "/" + (steps |> List.map formatStep |> String.concat "/")
 
+/// The steps that carry an index in their text: `Tuple.3`, `List.3` and `Arg.3`.
+[<RequireQualifiedAccess>]
+type IndexedStepKind =
+  | Tuple
+  | List
+  | Arg
+
 /// A step that carries an index: `Tuple.3` is `build 3`. Digits only, so `Tuple.-1` and `Tuple.3x` are refused.
-let indexedStep (step: string) (prefix: string) (build: int -> PathStep) : Result<PathStep, AddressTextRefusal> =
+let indexedStep (step: string) (kind: IndexedStepKind) : Result<PathStep, AddressTextRefusal> =
+  let prefix, build =
+    match kind with
+    | IndexedStepKind.Tuple -> "Tuple.", PathStep.TupleItem
+    | IndexedStepKind.List -> "List.", PathStep.ListItem
+    | IndexedStepKind.Arg -> "Arg.", PathStep.AppArg
   let digits = step.Substring prefix.Length
   match digits.Length > 0 && digits |> Seq.forall Char.IsAsciiDigit with
   | false -> Error(AddressTextRefusal.BadIndex step)
@@ -67,9 +79,9 @@ let tryParseStep (step: string) : Result<PathStep, AddressTextRefusal> =
   | "BinOp.Right" -> Ok PathStep.BinOpRight
   | field when field.Length > 2 && field.StartsWith("{", StringComparison.Ordinal) && field.EndsWith("}", StringComparison.Ordinal) ->
     Ok(PathStep.RecordField(field.Substring(1, field.Length - 2)))
-  | tuple when tuple.StartsWith("Tuple.", StringComparison.Ordinal) -> indexedStep tuple "Tuple." PathStep.TupleItem
-  | list when list.StartsWith("List.", StringComparison.Ordinal) -> indexedStep list "List." PathStep.ListItem
-  | app when app.StartsWith("Arg.", StringComparison.Ordinal) -> indexedStep app "Arg." PathStep.AppArg
+  | tuple when tuple.StartsWith("Tuple.", StringComparison.Ordinal) -> indexedStep tuple IndexedStepKind.Tuple
+  | list when list.StartsWith("List.", StringComparison.Ordinal) -> indexedStep list IndexedStepKind.List
+  | app when app.StartsWith("Arg.", StringComparison.Ordinal) -> indexedStep app IndexedStepKind.Arg
   | other -> Error(AddressTextRefusal.UnknownStep other)
 
 /// Parse every step, stopping at the first one that is not a step.
