@@ -1612,7 +1612,7 @@ module Cohort =
           | LandingState.Verifying _ ->
             // Pops the queue like every other verdict, so a landing that does not compile never jams it.
             let advanced, advEvents, advEffects =
-              blockAndPop state id req (LandingBlocker.Inconclusive text) NextAction.RebaseAndResubmit
+              blockAndPop state id req (LandingBlocker.CompileErrorInLanding text) NextAction.FixTheBuild
             Ok(advanced, advEvents, advEffects)
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 

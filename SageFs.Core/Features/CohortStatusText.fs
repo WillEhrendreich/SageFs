@@ -90,6 +90,10 @@ module CohortStatusText =
         "Blocked(vetoed by %s: \"%s\") awaiting the conductor: resolve_veto clears it, withdraw_landing takes it back"
         (SageFs.MemberTable.MemberId.display by)
         reason
+    | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.CompileErrorInLanding text, _) ->
+      sprintf "Blocked(the landing does not compile: %s) fix it in your commit and request the landing again" text
+    | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.Inconclusive reason, _) ->
+      sprintf "Blocked(verification inconclusive: %s) nothing is known to be wrong with your commit: request the landing again" reason
     // default policy: every other state keeps its structural rendering; only a veto carries a member and a
     // free-text reason that the structural form prints badly.
     | other -> sprintf "%A" other

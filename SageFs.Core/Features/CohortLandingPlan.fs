@@ -139,9 +139,28 @@ module CohortLandingPlan =
     || name.EndsWith(".props", StringComparison.OrdinalIgnoreCase)
     || name.EndsWith(".targets", StringComparison.OrdinalIgnoreCase)
 
-  /// What a changed file is to the integration session. FAIL-CLOSED: a source file whose project cannot be found while the
-  /// index is empty (nothing was read) counts as compiled source, and an empty `loaded` counts every project as loaded,
-  /// because a rebuild is slower than a re-evaluation and never wrong.
+  let private extensionOf (lower: string) : string =
+    match lower.LastIndexOf '.' with
+    | -1 -> ""
+    | i -> lower.Substring i
+
+  let private isProjectFile (lower: string) : bool =
+    [ ".fsproj"; ".csproj"; ".vbproj" ] |> List.contains (extensionOf lower)
+
+  /// Source the session can only get from a compiled assembly: F# and its signatures, and the other .NET languages a loaded
+  /// project may be written in.
+  let private isCompiledSourceExtension (lower: string) : bool =
+    [ ".fs"; ".fsi"; ".cs"; ".vb" ] |> List.contains (extensionOf lower)
+
+  /// Files in a project's folder that no build reads: documents, scripts, notes. Everything else a project folder holds (a
+  /// resource, a content file, a data file copied to the output) can change what the build makes.
+  let private isInertExtension (lower: string) : bool =
+    [ ".md"; ".txt"; ".fsx"; ".sh"; ".ps1"; ".yml"; ".yaml"; ".gitignore" ] |> List.contains (extensionOf lower)
+
+  /// What a changed file is to the integration session. FAIL-CLOSED: a source file whose project cannot be found (the index
+  /// is empty, or it missed the project) counts as compiled source, a project file the index does not know is a build input,
+  /// a resource or content file of a project in the closure is a build input, and an empty `loaded` counts every project as
+  /// loaded, because a rebuild is slower than a re-evaluation and never wrong.
   let classify (index: ProjectInfo list) (loaded: string list) (path: string) (generated: string -> bool) : ChangedFile =
     let p = normalize path
     let inClosure =
@@ -154,30 +173,33 @@ module CohortLandingPlan =
     | true -> ChangedFile.Generated p
     | false ->
       let lower = p.ToLowerInvariant()
-      match lower.EndsWith ".fsproj" with
+      match isProjectFile lower with
       | true ->
-        match inClosure p || List.isEmpty index with
+        let known = index |> List.exists (fun project -> project.Path = p)
+        match inClosure p || not known with
         | true -> ChangedFile.BuildInput p
         | false -> ChangedFile.Other p
       | false ->
         match isBuildInputByName p with
         | true -> ChangedFile.BuildInput p
         | false ->
-          match lower.EndsWith ".fs" || lower.EndsWith ".fsi" with
-          | false -> ChangedFile.Other p
-          | true ->
-            match ownerOf index p with
-            | None ->
-              match List.isEmpty index with
-              | true -> ChangedFile.CompiledSource(p, "(unknown project)")
-              | false -> ChangedFile.Other p
-            | Some owner ->
-              match inClosure owner.Path with
-              | false -> ChangedFile.Other p
-              | true ->
+          match ownerOf index p with
+          | None ->
+            match isCompiledSourceExtension lower with
+            | true -> ChangedFile.CompiledSource(p, "(unknown project)")
+            | false -> ChangedFile.Other p
+          | Some owner ->
+            match inClosure owner.Path with
+            | false -> ChangedFile.Other p
+            | true ->
+              match lower.EndsWith ".fs" || lower.EndsWith ".fsi", isCompiledSourceExtension lower, isInertExtension lower with
+              | true, _, _ ->
                 match owner.Role with
                 | ProjectRole.Test -> ChangedFile.TestSource p
                 | ProjectRole.Production -> ChangedFile.CompiledSource(p, owner.Path)
+              | false, true, _ -> ChangedFile.CompiledSource(p, owner.Path)
+              | false, false, true -> ChangedFile.Other p
+              | false, false, false -> ChangedFile.BuildInput p
 
   // ── What to do with the landing ──
 
@@ -255,11 +277,28 @@ module CohortLandingPlan =
 
   /// The project files the integration worktree's index reads, as `git ls-files` patterns. A project the index misses is a
   /// project whose files classify as unowned, so every project language the session can load is listed.
-  let projectFilePatterns : string list = [ "*.fsproj" ]
+  let projectFilePatterns : string list = [ "*.fsproj"; "*.csproj"; "*.vbproj" ]
 
   /// A refused build, told as the one of two kinds it is (P16, roast priority 7): a compiler error in the landing's own source
   /// is the member's to fix; a restore that could not reach its feed (NU1301), a locked file (MSB3027), a missing SDK or any
   /// failure that is not a compiler error says nothing about the member's commit. The text carries the first error and the
   /// action that fits its kind.
   let classifyBuildFailure (error: SageFs.SageFsError) : CohortOwner.VerificationFault =
-    CohortOwner.VerificationFault.Environment(describeBuildFailure error)
+    let said = describeBuildFailure error
+    let environment () =
+      CohortOwner.VerificationFault.Environment(sprintf "%s That says nothing about your commit: request the landing again." said)
+    match error with
+    | SageFs.SageFsError.BuildFailed(_, diagnostics) ->
+      let blocking = diagnostics |> List.filter (fun d -> d.Severity = SageFs.BuildDiagnosticSeverity.Blocking)
+      let codeStarts (prefix: string) (d: SageFs.BuildDiagnostic) =
+        match d.Code with
+        | Some code -> code.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+        | None -> false
+      // A restore that failed (NU...) means the compile ran, if it ran, against a package set that is not the commit's.
+      let restoreFailed = blocking |> List.exists (codeStarts "NU")
+      let compilerPrefixes = [ "FS"; "CS"; "BC" ]
+      let compilerError = blocking |> List.exists (fun d -> d.File.IsSome && compilerPrefixes |> List.exists (fun prefix -> codeStarts prefix d))
+      match restoreFailed, compilerError with
+      | false, true -> CohortOwner.VerificationFault.CompileErrorInLanding(sprintf "%s Fix it in your commit and request the landing again." said)
+      | _ -> environment ()
+    | _ -> environment ()

@@ -2976,8 +2976,12 @@ let run
   /// Every project file the worktree tracks, read. A file that cannot be read or parsed is left out.
   let integrationProjectIndex (worktree: string) : Async<Features.CohortLandingPlan.ProjectInfo list> =
     async {
-      let! tracked = Features.CohortGit.trackedFiles worktree "*.fsproj"
-      let relatives = match tracked with Ok found -> found | Error _ -> []
+      // Every project language the session can load: a project the index misses makes its files unowned.
+      let! tracked =
+        Features.CohortLandingPlan.projectFilePatterns
+        |> List.map (Features.CohortGit.trackedFiles worktree)
+        |> Async.Sequential
+      let relatives = tracked |> Array.toList |> List.collect (function Ok found -> found | Error _ -> [])
       return
         relatives
         |> List.choose (fun relative ->
@@ -3147,8 +3151,7 @@ let run
           |> List.choose (fun page ->
             match Features.ClaimExempt.regeneration page with
             | Features.ClaimExempt.Regeneration.Script script -> Some (page, script, [])
-            | Features.ClaimExempt.Regeneration.ScriptWithCommit script -> Some (page, script, [ rebasedHead ])
-            | Features.ClaimExempt.Regeneration.NoneYet -> None)
+            | Features.ClaimExempt.Regeneration.ScriptWithCommit script -> Some (page, script, [ rebasedHead ]))
           |> List.filter (fun (_, script, _) -> System.IO.File.Exists(System.IO.Path.Combine(worktree, script)))
         match runners with
         | [] -> return Ok rebasedHead
@@ -3484,9 +3487,10 @@ let run
     | Features.CohortIntegrationScope.BindingFit.ConfiguredForOther other ->
       Some (
         sprintf
-          "this cohort (%s) has no integration: the daemon's integration is configured for %s — call set_integration_ref with working_directory set to this repository to move it here"
+          "this cohort (%s) has no integration: the daemon's integration is configured for %s — %s"
           (SageFs.Scope.label scope)
-          (SageFs.Scope.label other))
+          (SageFs.Scope.label other)
+          (Features.CohortIntegrationScope.moveAdvice (SageFs.Scope.label other)))
 
   let cohortOwners =
     Features.CohortOwners.create (fun scope ->
