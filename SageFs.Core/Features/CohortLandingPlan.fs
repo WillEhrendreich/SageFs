@@ -300,5 +300,6 @@ module CohortLandingPlan =
       let compilerError = blocking |> List.exists (fun d -> d.File.IsSome && compilerPrefixes |> List.exists (fun prefix -> codeStarts prefix d))
       match restoreFailed, compilerError with
       | false, true -> CohortOwner.VerificationFault.CompileErrorInLanding(sprintf "%s Fix it in your commit and request the landing again." said)
-      | _ -> environment ()
-    | _ -> environment ()
+      | false, false
+      | true, _ -> environment ()
+    | other -> CohortOwner.VerificationFault.Environment(sprintf "%s That says nothing about your commit: request the landing again." (describeBuildFailure other))

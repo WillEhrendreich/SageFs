@@ -1614,7 +1614,11 @@ module Cohort =
             let advanced, advEvents, advEffects =
               blockAndPop state id req (LandingBlocker.CompileErrorInLanding text) NextAction.FixTheBuild
             Ok(advanced, advEvents, advEffects)
-          | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
+          | LandingState.Queued
+          | LandingState.Rebasing _
+          | LandingState.Blocked _
+          | LandingState.Landed _
+          | LandingState.Withdrawn -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
     | CohortCommand.FastForwardCompleted(id, committedSha, scope) ->
       match checkScope scope with
