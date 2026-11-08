@@ -107,13 +107,11 @@ let private runBetweenCallsTest () : Task<unit> =
 
         // A thread in the user's code that prints once a file appears, then writes a second file to say it did. Both files are how
         // this test learns the line has been written; no clock decides it.
-        let poll = int TestTimeouts.pollTight.TotalMilliseconds
         let! started =
           eval (
             sprintf
-              "let backgroundThread = System.Threading.Thread((fun () -> (while not (System.IO.File.Exists @\"%s\") do System.Threading.Thread.Sleep %d); printfn \"BG-LINE-FROM-THREAD\"; System.IO.File.WriteAllText(@\"%s\", \"x\")), IsBackground = true);;\nbackgroundThread.Start();;"
+              "let backgroundThread = System.Threading.Thread((fun () -> System.Threading.SpinWait.SpinUntil(fun () -> System.IO.File.Exists @\"%s\") |> ignore; printfn \"BG-LINE-FROM-THREAD\"; System.IO.File.WriteAllText(@\"%s\", \"x\")), IsBackground = true);;\nbackgroundThread.Start();;"
               goFile
-              poll
               printedFile
           )
         (toolText started).Contains "BG-LINE-FROM-THREAD" |> Expect.isFalse "nothing has been printed yet"
@@ -134,6 +132,12 @@ let private runBetweenCallsTest () : Task<unit> =
         let! third = eval "2 + 2;;"
         (toolText third).Contains "BG-LINE-FROM-THREAD" |> Expect.isFalse "and it is handed over once"
 
+        // The same session end to end for the cost: a 200 MB allocation earns a line on its reply, and the timeline shows the bytes beside its duration.
+        let! heavy = eval "Array.zeroCreate<byte> 200000000 |> ignore;;"
+        (toolText heavy) |> Expect.stringContains "a heavy eval ends with its cost line" "MB allocated · GCs gen0"
+        let! timeline = tool TestTimeouts.patience "get_eval_timeline" "{}"
+        (toolText timeline) |> Expect.stringContains "get_eval_timeline shows the bytes beside the duration" "MB allocated"
+
         let! _ = tool TestTimeouts.patience "stop_session" (sprintf """{"session_id":"%s"}""" sessionId)
         ()
       finally
@@ -153,7 +157,7 @@ let private runBetweenCallsTest () : Task<unit> =
 [<Tests>]
 let tests =
   testList "Eval output between calls over the bridge" [
-    Integration.hostCase
+    Integration.hostCaseTask
       "WHY — a background thread's output written between two evals is in the second reply under a label, and the bridge's stdout stays JSON-RPC"
-      (fun () -> runBetweenCallsTest () |> _.GetAwaiter() |> _.GetResult())
+      runBetweenCallsTest
   ]

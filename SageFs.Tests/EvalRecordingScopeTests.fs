@@ -50,13 +50,13 @@ let tests =
     testCase "WHY — an /exec eval (no MCP connection bound) lands in its session's store, so the analysis tools see an editor's evals" <| fun _ ->
       let ctx = ctxRecordingInto (ref 0)
       let sid = freshSession ()
-      recordEvalForSession ctx sid "let edX = 1" "Result: val edX: int = 1" 3L
+      recordEvalForSession ctx sid "let edX = 1" "Result: val edX: int = 1" 3L SageFs.EvalCost.unmeasured
       recordedFor ctx sid |> Expect.equal "the session's own store holds the eval" (Some 1)
 
     testCase "WHY — the /exec door keeps feeding the global store the dashboard's push reads" <| fun _ ->
       let globalWrites = ref 0
       let ctx = ctxRecordingInto globalWrites
-      recordEvalForSession ctx (freshSession ()) "let edY = 2" "Result: val edY: int = 2" 3L
+      recordEvalForSession ctx (freshSession ()) "let edY = 2" "Result: val edY: int = 2" 3L SageFs.EvalCost.unmeasured
       globalWrites.Value |> Expect.equal "one write to the global store" 1
 
     testCase "an MCP eval is recorded per session and does not also write the global store" <| fun _ ->
@@ -64,7 +64,7 @@ let tests =
       let ctx = ctxRecordingInto globalWrites
       let sid = freshSession ()
       currentTransportSessionId.Value <- Some "eval-recording-scope-test"
-      try recordEvalForSession ctx sid "let mcpZ = 3" "Result: val mcpZ: int = 3" 3L
+      try recordEvalForSession ctx sid "let mcpZ = 3" "Result: val mcpZ: int = 3" 3L SageFs.EvalCost.unmeasured
       finally currentTransportSessionId.Value <- None
       recordedFor ctx sid |> Expect.equal "the session's store holds it" (Some 1)
       globalWrites.Value |> Expect.equal "the global store was not written" 0
@@ -72,9 +72,9 @@ let tests =
     testCase "two sessions' evals stay apart" <| fun _ ->
       let ctx = ctxRecordingInto (ref 0)
       let a, b = freshSession (), freshSession ()
-      recordEvalForSession ctx a "let one = 1" "Result: val one: int = 1" 3L
-      recordEvalForSession ctx a "let two = 2" "Result: val two: int = 2" 3L
-      recordEvalForSession ctx b "let three = 3" "Result: val three: int = 3" 3L
+      recordEvalForSession ctx a "let one = 1" "Result: val one: int = 1" 3L SageFs.EvalCost.unmeasured
+      recordEvalForSession ctx a "let two = 2" "Result: val two: int = 2" 3L SageFs.EvalCost.unmeasured
+      recordEvalForSession ctx b "let three = 3" "Result: val three: int = 3" 3L SageFs.EvalCost.unmeasured
       recordedFor ctx a |> Expect.equal "session a holds its two" (Some 2)
       recordedFor ctx b |> Expect.equal "session b holds its one" (Some 1)
   ]

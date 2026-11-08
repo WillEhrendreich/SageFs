@@ -991,13 +991,13 @@ module FixtureDurations =
   /// duration (and the order the entries are recorded in) differ between the entries of a case.
   let timelineEntry (cellId: int) (durationMs: int64) (status: SageFs.Features.EvalTimeline.EvalStatus)
     : SageFs.Features.EvalTimeline.TimelineEntry =
-    { CellId = cellId; StartMs = unmeasuredMs; DurationMs = durationMs; Status = status }
+    { CellId = cellId; StartMs = unmeasuredMs; DurationMs = durationMs; Status = status; Cost = SageFs.EvalCost.unmeasured }
 
   /// An eval timeline entry that starts `startMs` after the first, for a case that reads the
   /// start offsets back.
   let timelineEntryStartingAt (startMs: int64) (cellId: int) (durationMs: int64) (status: SageFs.Features.EvalTimeline.EvalStatus)
     : SageFs.Features.EvalTimeline.TimelineEntry =
-    { CellId = cellId; StartMs = startMs; DurationMs = durationMs; Status = status }
+    { CellId = cellId; StartMs = startMs; DurationMs = durationMs; Status = status; Cost = SageFs.EvalCost.unmeasured }
 
   /// A warmup phase breakdown a case spells out phase by phase.
   let warmupPhaseTiming (scanSourceFilesMs: int64) (scanAssembliesMs: int64) (openNamespacesMs: int64) (totalMs: int64)

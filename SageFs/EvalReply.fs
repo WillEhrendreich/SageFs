@@ -4,6 +4,23 @@ namespace SageFs
 [<RequireQualifiedAccess>]
 module EvalReply =
 
+  /// The cost the host measured, read from an eval reply's metadata. A reply with no cost, or one that does not read back, is
+  /// `EvalCost.unmeasured`: the timeline then shows no bytes for it rather than a wrong figure.
+  let costOf (metadata: Map<string, string>) : EvalCost =
+    metadata
+    |> Map.tryFind EvalCost.MetadataKey
+    |> Option.bind (fun json ->
+      match WorkerProtocol.Serialization.tryDeserialize<EvalCost> json with
+      | Result.Ok cost -> Some cost
+      | Result.Error _ -> None)
+    |> Option.defaultValue EvalCost.unmeasured
+
+  /// What `get_eval_timeline` adds after an entry's duration: the bytes the eval allocated, and nothing when it was not measured.
+  let timelineSuffix (cost: EvalCost) : string =
+    match cost.Allocated > 0L with
+    | true -> sprintf " · %s allocated" (EvalCost.describeBytes cost.Allocated)
+    | false -> ""
+
   /// The cost line an eval's reply metadata earns: the time in the host, the bytes allocated and the GC counts, when the eval was
   /// slow or allocation-heavy enough (`EvalCost.productThresholds`). A fast, light eval, a reply with no cost, and a cost that
   /// does not read back all earn none.

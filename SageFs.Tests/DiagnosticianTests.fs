@@ -39,6 +39,7 @@ let private mkTimelineEntry cellId durationMs status = {
   StartMs = FixtureDurations.timelineOrigin
   DurationMs = durationMs
   Status = status
+  Cost = SageFs.EvalCost.unmeasured
 }
 
 let private mkScopeBinding name typeSig = {

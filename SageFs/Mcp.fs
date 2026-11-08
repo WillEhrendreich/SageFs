@@ -124,9 +124,9 @@ module McpTools =
   /// analysis tools read that store, so an eval that only reached the global one (an editor's `/exec`,
   /// which has no MCP connection bound) was invisible to them. A call with no connection bound is the
   /// `/exec` door, and it also feeds the global store, which the dashboard's push reads.
-  let recordEvalForSession (ctx: McpContext) sessionId code result durationMs =
+  let recordEvalForSession (ctx: McpContext) sessionId code result durationMs (cost: EvalCost) =
     let state = featureStates.GetOrAdd(sessionId, fun _ -> ref Features.FeatureHooks.FeaturePushState.empty)
-    state.Value <- Features.FeatureHooks.recordEval code result durationMs state.Value
+    state.Value <- Features.FeatureHooks.recordEvalWithCost code result durationMs cost state.Value
     match currentTransportSessionId.Value with
     | Some _ -> ()
     | None -> ctx.RecordEval |> Option.iter (fun record -> record code result durationMs)
@@ -994,7 +994,7 @@ module McpTools =
   /// structured content instead of re-parsing `formatted` (roast-7 §2) —
   /// every branch below already has `diags`/`err` in hand from the same
   /// match that built `formatted`, so this costs nothing new to compute.
-  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option> = task {
+  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option * EvalCost> = task {
     notifyElm ctx (TuiEvent.EvalStarted (sid, statement))
     let workflow = getWorkflowForSession ctx sid
     let! routeResult =
@@ -1059,8 +1059,8 @@ module McpTools =
             with ex -> Log.warn "Failed to deserialize assembly load errors: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
           // Success — the typed Ok outcome, not string sniffing, decides truth.
-          (formatted, Evaluated false, diags, None)
-        | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, diags, _) ->
+          (formatted, Evaluated false, diags, None, EvalReply.costOf metadata)
+        | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, diags, metadata) ->
           let errText = SageFsError.describe err
           // Track TypeLoadException so targeted_verify can flag the session as compromised.
           match ErrorMessages.categorize errText with
@@ -1073,18 +1073,18 @@ module McpTools =
           // The eval RAN — it's a compile/runtime failure in the user's code,
           // not an infra failure. Keeps the truthful-200 contract: /exec
           // stays 200 with the error text in `result`.
-          (formatted, Evaluated true, diags, Some err)
+          (formatted, Evaluated true, diags, Some err, EvalReply.costOf metadata)
         | WorkerProtocol.WorkerResponse.WorkerError err ->
           // The worker replied but could not run the eval at all (e.g. still
           // starting up) — this already IS a classified SageFsError, so
           // route it through the algebra instead of flattening it to a bool.
           notifyElm ctx (TuiEvent.EvalFailed (sid, SageFsError.describe err))
-          (formatted, InfraFailure err, [], Some err)
-        | _ -> (formatted, Evaluated false, [], None)
+          (formatted, InfraFailure err, [], Some err, EvalCost.unmeasured)
+        | _ -> (formatted, Evaluated false, [], None, EvalCost.unmeasured)
       | Error msg ->
         let err = routeErrorToSageFsError sid msg
         notifyElm ctx (TuiEvent.EvalFailed (sid, routeErrorMessage msg))
-        (sprintf "Error: %s" (routeErrorMessage msg), InfraFailure err, [], Some err)
+        (sprintf "Error: %s" (routeErrorMessage msg), InfraFailure err, [], Some err, EvalCost.unmeasured)
   }
 
   /// Evaluate F# code. Returns (formatted output, outcome, diagnostics with
@@ -1156,14 +1156,14 @@ module McpTools =
           let mutable outcome = Evaluated false
           let mutable allDiags : WorkerProtocol.WorkerDiagnostic list = []
           let mutable lastError : SageFsError option = None
+          let mutable totalCost = EvalCost.unmeasured
           for statement in statements do
-            let! output, stmtOutcome, diags, errOpt = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
+            let! output, stmtOutcome, diags, errOpt, cost = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
             allOutputs <- output :: allOutputs
             outcome <- EvalExecOutcome.combine outcome stmtOutcome
             allDiags <- allDiags @ diags
-            match errOpt with
-            | Some _ -> lastError <- errOpt
-            | None -> ()
+            totalCost <- EvalCost.sum totalCost cost
+            lastError <- (match errOpt with Some _ -> errOpt | None -> lastError)
 
           let finalOutput =
             match format with
@@ -1180,7 +1180,7 @@ module McpTools =
           // exactly as the /exec bridge already does (roast-7 §2/§3). None in
           // tests. Uses the raw finalOutput (not the advisory-enriched text) to
           // match what /exec stores.
-          recordEvalForSession ctx sid code finalOutput evalSw.ElapsedMilliseconds
+          recordEvalForSession ctx sid code finalOutput evalSw.ElapsedMilliseconds totalCost
           Instrumentation.succeedSpan span
           // Compute file-overlap advisory AFTER caching raw output
           let enrichedOutput =
@@ -3016,7 +3016,7 @@ module McpTools =
                     | Features.EvalTimeline.Succeeded -> "✓"
                     | Features.EvalTimeline.Failed -> "✗"
                     | Features.EvalTimeline.Cancelled -> "○"
-                  sprintf "  [%d] %s %dms" e.CellId icon e.DurationMs) ]
+                  sprintf "  [%d] %s %dms%s" e.CellId icon e.DurationMs (EvalReply.timelineSuffix e.Cost)) ]
             |> String.concat "\n"
     }
 

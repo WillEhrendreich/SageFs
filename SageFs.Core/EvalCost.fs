@@ -56,6 +56,14 @@ module EvalCost =
       Gen1 = 0
       Gen2 = 0 }
 
+  /// Two costs added: what a send of several statements cost altogether.
+  let sum (a: EvalCost) (b: EvalCost) : EvalCost =
+    { Elapsed = a.Elapsed + b.Elapsed
+      Allocated = a.Allocated + b.Allocated
+      Gen0 = a.Gen0 + b.Gen0
+      Gen1 = a.Gen1 + b.Gen1
+      Gen2 = a.Gen2 + b.Gen2 }
+
   /// The cost of an eval from the readings taken before and after it. A reading that went backwards (a counter that
   /// restarted, a clock that was stepped) is a zero, never a negative figure.
   let measured (elapsed: TimeSpan) (allocatedBefore: int64, allocatedAfter: int64) (gen0: int * int) (gen1: int * int) (gen2: int * int) : EvalCost =
@@ -171,7 +179,8 @@ module EvalCost =
     | true, Some unit ->
       let number = Double.Parse(m.Groups["n"].Value, inv)
       Some
-        { Elapsed = TimeSpan.FromSeconds(Double.Parse(m.Groups["s"].Value, inv))
+        // Through ticks and a rounding: converting 0.57 with FromSeconds gives 5,699,999 ticks, a tick short of the 0.57 s the line printed.
+        { Elapsed = TimeSpan.FromTicks(int64 (Math.Round(Double.Parse(m.Groups["s"].Value, inv) * float TimeSpan.TicksPerSecond)))
           Allocated = int64 (Math.Round(number * float (bytesIn unit)))
           Gen0 = int m.Groups["g0"].Value
           Gen1 = int m.Groups["g1"].Value

@@ -8,11 +8,11 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (step 5 of 6) |
+| Status | In progress (step 6 of 6) |
 | Size | S for head and tail, M for the print limits in both session kinds |
 | Branch and worktree | `cohort/p2-eval-output`, `/home/will/scratch/cohort/p2-eval-output` |
 | Last green commit | see `git log master..cohort/p2-eval-output`; the red commit is `77e2ca01` |
-| Next action | Built and committed on the branch, not landed (2026-11-07): head and tail, print limits in both session kinds, the between-calls output. Land through the cohort. Then write the bridge-level test (plan test 4): drive the real `sagefs mcp` with a background `printfn`, read until the response id, and assert the label and valid JSON-RPC. Then give `DirectoryConfig` a field for the limits once `session-options` has its shape. |
+| Next action | Built and committed on the branch, not landed (2026-11-07): head and tail, print limits in both session kinds, the between-calls output. The bridge-level test (plan test 4, `EvalBetweenCallsBridgeTests`) is written: a real daemon, `sagefs mcp`, a bare session and a thread in the user's code; it ran red with the watch switched off and green with it on. Land through the cohort. Then give `DirectoryConfig` a field for the limits once `session-options` has its shape, and describe a clipped reply in the skill's loop doc. |
 | Decisions made | `let` keeps its value under the limits (`EvalPrintSettings.forAgent`); `TypeOnly` is built and tested as `forAgentTypeOnly` and nothing turns it on. Width is 78, not FsiMcp's 140. Between-calls output rides the next successful reply under a label. |
 | Surprises | The worker never forwarded `resultTruncated`, `resultOriginalLength` or `resultKeptLength` to the daemon (`WorkerMain` copies only typed DTOs from the metadata), so they exist inside the worker and nowhere else; the reply text carries the exact cut. A background thread's output between calls was dropped entirely (the worker's recorder writes to `TextWriter.Null` when no eval records). Width 140 makes FSI print a list in more characters, not fewer. |
 

@@ -458,7 +458,7 @@ no test reaches an analysed symbol, so it will not fill by itself) or `mapped`.
 | `export_notebook` | Export the session as a notebook-style `.fsx` with cell metadata. |
 | `export_session_transcript` | Export the session as a clean, topologically sorted `.fsx` transcript. |
 | `get_session_filmstrip` | Visual history of evaluations: each a frame with code, bindings, and duration. |
-| `get_eval_timeline` | Eval-duration sparkline and P50/P95/P99 statistics. |
+| `get_eval_timeline` | Eval-duration sparkline and P50/P95/P99 statistics, and for each of the last 20 evals the bytes the host measured it allocating (`312.4 MB allocated`, the same figure as the reply's [cost line](#what-an-eval-reply-looks-like)), left off when the eval was not measured. |
 | `get_eval_diff` | Before/after diff of recent evaluation outputs. |
 | `get_message_journal` | Audit log of eval events, filterable by severity and source. |
 | `manage_scratch_pad` | View, export, or promote ephemeral snippets from session history. |

@@ -116,3 +116,66 @@ let evalCostReplyTests =
       let at (needle: string) = text.IndexOf(needle, StringComparison.Ordinal)
       (at "val it" < at "[2.00 s" && at "[2.00 s" < at "Diagnostics:") |> Expect.isTrue (sprintf "order in: %s" text)
   ]
+
+/// A context whose only job is to hand `get_eval_timeline` a feature state.
+let private ctxWithState (state: SageFs.Features.FeatureHooks.FeaturePushState) : SageFs.McpTools.McpContext =
+  { FrictionStore = None
+    DiagnosticsChanged = (Event<SageFs.Features.DiagnosticsStore.T>()).Publish
+    StateChanged = None
+    SessionOps = SessionManagementOps.stub
+    SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+    McpPort = 0
+    Dispatch = None
+    GetElmModel = None
+    GetElmRegions = None
+    GetWarmupContext = None
+    GetFeatureState = Some(fun () -> state)
+    RecordEval = None
+    ActivityTracker = AgentActivityTracker.create ()
+    LiveBindings = None
+    CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
+    GetDaemonHealth = fun () -> None
+    GetProcessTelemetry = fun () -> None }
+
+[<Tests>]
+let evalCostTimelineTests =
+  testList "Eval cost in the timeline" [
+
+    testProperty "WHY - the timeline entry holds the cost the host measured, so get_eval_timeline and the reply's line cannot disagree" <| fun (seed: PositiveInt) (extra: PositiveInt) ->
+      let cost = notableCost seed extra
+      let daemonMs = int64 extra.Get
+      let state = SageFs.Features.FeatureHooks.recordEvalWithCost "1 + 1" "val it: int = 2" daemonMs cost SageFs.Features.FeatureHooks.FeaturePushState.empty
+      match state.CachedTimeline.Entries with
+      | [ entry ] -> entry.Cost = cost && entry.DurationMs = daemonMs
+      | _ -> false
+
+    testCase "WHY - an eval recorded with no cost holds the unmeasured cost, never a made-up one" <| fun _ ->
+      let state = SageFs.Features.FeatureHooks.recordEval "1 + 1" "val it: int = 2" 7L SageFs.Features.FeatureHooks.FeaturePushState.empty
+      state.CachedTimeline.Entries |> List.map (fun e -> e.Cost) |> Expect.equal "unmeasured" [ EvalCost.unmeasured ]
+
+    testProperty "WHY - the cost of several statements is their sum, and an unmeasured one adds nothing" <| fun (a: PositiveInt) (b: PositiveInt) (c: PositiveInt) ->
+      let x, y = notableCost a b, lightCost c
+      EvalCost.sum x EvalCost.unmeasured = x
+      && EvalCost.sum x y = EvalCost.sum y x
+      && (EvalCost.sum x y).Allocated = x.Allocated + y.Allocated
+
+    testProperty "WHY - the cost the worker wrote into the reply metadata reads back as the same cost" <| fun (seed: PositiveInt) (extra: PositiveInt) ->
+      let cost = notableCost seed extra
+      EvalReply.costOf (metadataOf cost) = cost
+
+    testCase "WHY - a reply with no cost, or one that does not read back, is the unmeasured cost" <| fun _ ->
+      EvalReply.costOf Map.empty |> Expect.equal "none" EvalCost.unmeasured
+      EvalReply.costOf (Map.ofList [ EvalCost.MetadataKey, "not json" ]) |> Expect.equal "garbage" EvalCost.unmeasured
+
+    testTask "WHY - get_eval_timeline shows the bytes beside the duration for a measured eval, and nothing for an unmeasured one" {
+      let measured = { EvalCost.unmeasured with Allocated = 312400000L }
+      let state =
+        SageFs.Features.FeatureHooks.FeaturePushState.empty
+        |> SageFs.Features.FeatureHooks.recordEvalWithCost "a" "ra" 5L measured
+        |> SageFs.Features.FeatureHooks.recordEval "b" "rb" 6L
+      let! (text: string) = SageFs.McpTools.getEvalTimeline (ctxWithState state) None
+      let lines = text.Split '\n'
+      lines |> Array.exists (fun l -> l.Contains "5ms" && l.Contains "312.4 MB allocated") |> Expect.isTrue (sprintf "the measured eval shows its bytes: %s" text)
+      lines |> Array.exists (fun l -> l.Contains "6ms" && not (l.Contains "allocated")) |> Expect.isTrue (sprintf "the unmeasured one shows none: %s" text)
+    }
+  ]
