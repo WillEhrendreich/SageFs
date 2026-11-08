@@ -42,9 +42,10 @@ let private evalWith (result: ActorResult) (token: CancellationToken) (code: str
   result.Actor.PostAndAsyncReply(fun reply -> Eval({ Code = code; Args = Map.empty }, token, reply))
   |> Started.asTask
 
-/// A legitimate long eval: it waits on an event nobody sets for a few seconds, then returns the value it defines.
-let private slowButLegitimate =
-  "let aDefined = ((new System.Threading.ManualResetEvent(false)).WaitOne(8000) |> ignore; 42);;"
+/// A legitimate long eval: it writes a marker file the moment the host starts it (so the test knows it is the running eval, not one
+/// still on its way), waits on an event nobody sets for a few seconds, then returns the value it defines.
+let private slowButLegitimate (marker: string) =
+  sprintf "let aDefined = (System.IO.File.WriteAllText(@\"%s\", \"started\"); (new System.Threading.ManualResetEvent(false)).WaitOne(8000) |> ignore; 42);;" marker
 
 let private cancel (result: ActorResult) : Task<bool> =
   result.Actor.PostAndAsyncReply(fun reply -> CancelEval reply) |> Started.asTask
@@ -116,8 +117,13 @@ let tests =
 
     testTask "agent B queued behind agent A's long eval times out: B is cancelled before it ran, A finishes, and A's definitions survive" {
       let! session = startSession ()
-      let a = evalWith session CancellationToken.None slowButLegitimate
-      do! untilEvaluating session
+      let marker = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-eval-a-%s.started" (Guid.NewGuid().ToString "N"))
+      let a = evalWith session CancellationToken.None (slowButLegitimate marker)
+      // A is the eval the host is running before B is submitted, however slowly a loaded machine gets the call to it.
+      let deadline = DateTime.UtcNow + TestTimeouts.patience
+      while not (System.IO.File.Exists marker) && DateTime.UtcNow < deadline do
+        do! Task.Delay TestTimeouts.pollQuick
+      System.IO.File.Exists marker |> Expect.isTrue "A started on the host"
       let timeoutOfB = new CancellationTokenSource()
       let b = evalWith session timeoutOfB.Token "let bDefined = 1;;"
       // B reaches the host's queue behind A before its timeout fires.

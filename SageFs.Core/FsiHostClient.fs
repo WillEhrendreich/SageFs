@@ -304,11 +304,16 @@ type FsiHostSession
   /// Evaluate a submission. Cancelling the token interrupts the running eval.
   member _.Eval(code: string, cancellationToken: CancellationToken) : Async<EvalCall> =
     async {
-      match! roundTripWith (KillAfter Timeouts.evalCancelGrace) cancellationToken (fun id -> Eval(id, code)) with
-      | Got(EvalResult(_, outcome, diagnostics, cost)) -> return Completed(outcome, diagnostics, cost)
-      | Got other -> return HostLost(unexpected "eval" other)
-      | Gone(Crashed crash) -> return HostCrashed crash
-      | Gone Retired -> return HostLost(describeEnd Retired)
+      // Cancelled before it was sent (the caller's timeout fired while the worker was still on its way to the host, behind another
+      // eval's reads): it never runs, and nothing is sent that would have to be taken back.
+      match cancellationToken.IsCancellationRequested with
+      | true -> return Completed(EvalNeverRan, [], EvalCost.unmeasured)
+      | false ->
+        match! roundTripWith (KillAfter Timeouts.evalCancelGrace) cancellationToken (fun id -> Eval(id, code)) with
+        | Got(EvalResult(_, outcome, diagnostics, cost)) -> return Completed(outcome, diagnostics, cost)
+        | Got other -> return HostLost(unexpected "eval" other)
+        | Gone(Crashed crash) -> return HostCrashed crash
+        | Gone Retired -> return HostLost(describeEnd Retired)
     }
 
   /// Read a boolean feature gate bound in the session.
