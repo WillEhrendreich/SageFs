@@ -118,6 +118,7 @@
         <Compile Include="HygieneGatherTests.fs" />
         <Compile Include="HygieneOwnershipTests.fs" />
         <Compile Include="HygieneSweepTests.fs" />
+        <Compile Include="HygieneLockAndIgnoredTests.fs" />
         <Compile Include="HygieneRescueTests.fs" />
         <Compile Include="HygieneSalvageTests.fs" />
         <Compile Include="HygieneAsyncScanTests.fs" />
