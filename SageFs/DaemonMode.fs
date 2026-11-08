@@ -2657,7 +2657,7 @@ let run
         return Error (sprintf "could not reset the integration session: %s" ex.Message)
     }
 
-  let awaitIntegrationSessionTrusted (sessionId: string) : Async<Result<Features.Verification.SessionTrust.SessionObservation, string>> =
+  let awaitIntegrationSessionTrustedWithin (settleTimeout: System.TimeSpan) (sessionId: string) : Async<Result<Features.Verification.SessionTrust.SessionObservation, string>> =
     async {
       let observe () =
         async {
@@ -2675,7 +2675,7 @@ let run
       // that owner were on another machine. Then classify ONCE (a pure decision
       // over the observed status) to distinguish a genuinely trustworthy session
       // from one that registered Ready but is Faulted/Stale.
-      match! sessionOps.AwaitReady (toSessionId sessionId) integrationSettleTimeout |> Async.AwaitTask with
+      match! sessionOps.AwaitReady (toSessionId sessionId) settleTimeout |> Async.AwaitTask with
       | Error e -> return Error (sprintf "integration session '%s' did not become ready: %s" sessionId (SageFsError.describeForAgent e))
       | Ok () ->
         let! obs = observe ()
@@ -2685,6 +2685,8 @@ let run
         | Features.Verification.SessionTrust.SettleDecision.Retry ->
           return Error (sprintf "integration session '%s' registered Ready but is not yet trustworthy" sessionId)
     }
+
+  let awaitIntegrationSessionTrusted (sessionId: string) = awaitIntegrationSessionTrustedWithin integrationSettleTimeout sessionId
 
   /// Bring the integration session to the head, respawning it only when it holds a source the head
   /// has moved on from, and report whether this landing may be verified against it.
@@ -2958,9 +2960,241 @@ let run
             return Error (sprintf "post-rebase conservative verification run did not complete: %s — resubmit once the integration session settles" reason)
     }
 
+  // ── Verification of a landing that carries production source (P14, C6 to C8) ─────────────────────────────────────
+
+  /// One step at a time in the integration worktree: a landing's steps and the reset that follows a landing which did not
+  /// land both move it (`McpCohortIntegration.integrationWorktreeGate`).
+  let withWorktreeGate (work: Async<'a>) : Async<'a> =
+    async {
+      do! SageFs.McpCohortIntegration.integrationWorktreeGate.WaitAsync() |> Async.AwaitTask
+      try
+        return! work
+      finally
+        SageFs.McpCohortIntegration.integrationWorktreeGate.Release() |> ignore
+    }
+
+  /// Every project file the worktree tracks, read. A file that cannot be read or parsed is left out.
+  let integrationProjectIndex (worktree: string) : Async<Features.CohortLandingPlan.ProjectInfo list> =
+    async {
+      let! tracked = Features.CohortGit.trackedFiles worktree "*.fsproj"
+      let relatives = match tracked with Ok found -> found | Error _ -> []
+      return
+        relatives
+        |> List.choose (fun relative ->
+          try Features.CohortLandingPlan.parseProject relative (System.IO.File.ReadAllText(System.IO.Path.Combine(worktree, relative)))
+          with :? System.IO.IOException | :? UnauthorizedAccessException -> None)
+    }
+
+  /// The projects the integration session loads, relative to the worktree.
+  let integrationLoadedProjects (sessionId: string) (worktree: string) : Async<string list> =
+    async {
+      let! info = sessionOps.GetSessionInfo(toSessionId sessionId) |> Async.AwaitTask
+      return
+        match info with
+        | None -> []
+        | Some session ->
+          session.Projects
+          |> List.map (fun project ->
+            match System.IO.Path.IsPathRooted project with
+            | true -> System.IO.Path.GetRelativePath(worktree, project)
+            | false -> project)
+    }
+
+  /// How this landing is verified, and the files it changes. Fails CLOSED when the diff cannot be read: verifying without
+  /// knowing what changed is the bug the verifier exists to prevent.
+  let planVerification (sessionId: string) (worktree: string) (baseSha: string) (headSha: string)
+    : Async<Result<Features.CohortLandingPlan.Strategy * string list, string>> =
+    async {
+      match! Features.CohortGit.diffNames worktree baseSha headSha with
+      | Error reason ->
+        Log.warn "[cohort-landing] could not diff the rebased files for session %s: %s — failing closed" sessionId reason
+        return Error (sprintf "could not diff the rebased files to plan their verification; cannot trust verification: %s — resubmit" reason)
+      | Ok changed ->
+        let! index = integrationProjectIndex worktree
+        let! loaded = integrationLoadedProjects sessionId worktree
+        let classified =
+          changed |> List.map (fun file -> Features.CohortLandingPlan.classify index loaded file Features.ClaimExempt.isExemptPath)
+        let! offHead =
+          match SageFs.McpCohortIntegration.sessionRebuiltForCommit () with
+          | None -> async { return None }
+          | Some commit ->
+            async {
+              let! inHistory = Features.CohortGit.isAncestor worktree commit baseSha
+              return Features.CohortLandingPlan.buildOffHead (fun _ -> inHistory) (Some commit)
+            }
+        return Ok (Features.CohortLandingPlan.strategy offHead classified, changed)
+    }
+
+  /// Which of `allTests` the changed files can affect, from the session's own coverage: a test whose coverage names none of
+  /// the files is left out, and a test with no usable coverage is kept. NEVER empty on a real diff: a narrow that selects
+  /// nothing runs the whole suite, because an unverified landing is worse than a slow one.
+  let affectedTestsFor (sessionId: string) (changedFiles: string list) (allTests: Features.LiveTesting.TestId list) : Features.LiveTesting.TestId list =
+    let cycle = SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())
+    let state = cycle.TestState
+    let maps =
+      match Map.tryFind sessionId cycle.InstrumentationMaps with
+      | Some m when m.Length > 0 -> m
+      | _ -> cycle.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+    let merged = Features.LiveTesting.InstrumentationMap.merge maps
+    let blind = SageFs.McpCohortIntegration.filesEvaluatedOverBuild ()
+    let coveredFilesOf (tid: Features.LiveTesting.TestId) : string list option =
+      match merged.Slots.Length with
+      | 0 -> None
+      | _ ->
+        match Map.tryFind tid state.TestCoverageBitmaps with
+        | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
+          Some(Features.LiveTesting.InputHashCoverage.selectionFiles blind merged bm)
+        | _ -> None
+    let affectedTests = Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
+    // FAIL-CLOSED gate. A landing that carries real file changes but narrows to ZERO affected tests would run nothing and land
+    // trivially "green". It happens when coverage cannot be trusted (the integration worktree inherits the main repo's prebuilt
+    // PDB, so a test's covered-file paths point at the wrong build and never match the diff).
+    match affectedTests with
+    | [] when not (List.isEmpty changedFiles) && not (List.isEmpty allTests) -> allTests
+    | _ -> affectedTests
+
+  /// Rebuild the integration worktree at the rebased commit and restart the session on what the build made. The daemon's own
+  /// build path does the build (one build at a time through its build slot, and a failed build leaves the session serving
+  /// the build it had). A failed build refuses the landing with the FIRST compiler error and its file. The session's tests
+  /// are then asked of the new worker, so a test the landing added or removed is the session's view and not the old one.
+  let rebuildIntegrationAtRebasedHead (sessionId: string) (worktree: string) (headSha: string) : Async<Result<unit, string>> =
+    async {
+      match! sessionOps.RestartSession (toSessionId sessionId) (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) |> Async.AwaitTask with
+      | Error err ->
+        let said = Features.CohortLandingPlan.describeBuildFailure err
+        Log.warn "[cohort-landing] the rebuild of session %s at %s did not succeed: %s" sessionId headSha said
+        return Error (sprintf "%s Fix it in your commit and request the landing again." said)
+      | Ok _ ->
+        // A worker that loads a freshly built project is a cold warmup, which a build's own bound covers: a session that cannot
+        // come up fails fast through `settleDecision`, so this only bounds one that is genuinely warming.
+        match! awaitIntegrationSessionTrustedWithin Timeouts.buildCompletion sessionId with
+        | Error reason -> return Error reason
+        | Ok _ ->
+          // The session now holds a build of the rebased commit: nothing is evaluated over it, and the records of what it holds
+          // are the worktree's own text.
+          SageFs.McpCohortIntegration.noteSessionRebuiltFor headSha
+          SageFs.McpCohortIntegration.forgetFilesEvaluatedOverBuild ()
+          let! snapshot = integrationSourceSnapshot worktree
+          for (full, blob) in snapshot do noteIntegrationSourceBound full blob
+          noteIntegrationSourceBound (integrationTreeKey worktree) "seed"
+          elmRuntime.Dispatch(SageFsMsg.EnableLiveTestingForSession sessionId)
+          let replyId = sprintf "cohort-rebuild-discovery-%s" (System.Guid.NewGuid().ToString("N"))
+          let! discovery =
+            proxyToSession getProxyStr notifyWorkerDiedStr sessionId (WorkerProtocol.WorkerMessage.GetTestDiscovery replyId)
+            |> Async.AwaitTask
+          match discovery with
+          | Ok (WorkerProtocol.WorkerResponse.InitialTestDiscovery (tests, _providers)) ->
+            elmRuntime.Dispatch(SageFsMsg.Event (TuiEvent.LiveDiscoveryMerged (sessionId, tests)))
+            return Ok ()
+          | Ok other -> return Error (sprintf "the rebuilt integration session answered the test discovery with %A" other)
+          | Error err -> return Error (sprintf "could not ask the rebuilt integration session which tests it has: %s" (SageFsError.describe err))
+    }
+
+  /// Verify a landing of compiled source: rebuild at the rebased commit, then the tests the diff can affect (judged by the
+  /// session's coverage BEFORE the rebuild replaces it) plus every test the rebuild discovered that was not known before.
+  let verifyByRebuild
+    (sessionId: string)
+    (worktree: string)
+    (headSha: string)
+    (reasons: Features.CohortLandingPlan.RebuildReason list)
+    (changedFiles: string list)
+    : Async<Result<Cohort.TestId list, string>> =
+    async {
+      Log.info "[cohort-landing] session %s is rebuilt at %s: %s" sessionId headSha (reasons |> List.map Features.CohortLandingPlan.describeReason |> String.concat "; ")
+      let knownIds () =
+        Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
+        |> Array.map (fun entry -> entry.TestId)
+        |> Array.toList
+      let knownBefore = knownIds ()
+      let affectedBefore = affectedTestsFor sessionId changedFiles knownBefore |> Set.ofList
+      let known = Set.ofList knownBefore
+      match! rebuildIntegrationAtRebasedHead sessionId worktree headSha with
+      | Error reason -> return Error reason
+      | Ok () ->
+        let allNow = knownIds ()
+        let toRun = allNow |> List.filter (fun id -> Set.contains id affectedBefore || not (Set.contains id known))
+        // Never empty on a real diff, as everywhere else in the gate.
+        let chosen =
+          match toRun with
+          | [] when not (List.isEmpty changedFiles) -> allNow
+          | _ -> toRun
+        return Ok (chosen |> List.map Features.CohortTestProjection.toCohortTestId)
+    }
+
+  /// After a rebase, regenerate the pages a script generates whose inputs the landing touched (ClaimExempt), and commit what
+  /// changed on top of the rebased head, which is the head the landing then verifies and lands. A script that is not in the
+  /// tree (another repository) is skipped. A script that fails refuses the landing and names the command to run.
+  let regenerateGeneratedPages (worktree: string) (baseSha: string) (rebasedHead: string) : Async<Result<string, string list>> =
+    async {
+      match! Features.CohortGit.diffNames worktree baseSha rebasedHead with
+      | Error reason ->
+        return Error (Features.CohortGit.infraFailureOf (sprintf "could not list the rebased files to see which generated pages are stale: %s" reason))
+      | Ok changed ->
+        let runners =
+          Features.ClaimExempt.pagesToRegenerate changed
+          |> List.choose (fun page ->
+            match Features.ClaimExempt.regeneration page with
+            | Features.ClaimExempt.Regeneration.Script script -> Some (page, script, [])
+            | Features.ClaimExempt.Regeneration.ScriptWithCommit script -> Some (page, script, [ rebasedHead ])
+            | Features.ClaimExempt.Regeneration.NoneYet -> None)
+          |> List.filter (fun (_, script, _) -> System.IO.File.Exists(System.IO.Path.Combine(worktree, script)))
+        match runners with
+        | [] -> return Ok rebasedHead
+        | _ ->
+          let rec run (remaining: (Features.ClaimExempt.Page * string * string list) list) : Async<Result<unit, string>> =
+            async {
+              match remaining with
+              | [] -> return Ok ()
+              | (page, script, extra) :: rest ->
+                let! outcome = Features.CohortGit.runTool worktree Timeouts.buildCompletion "dotnet" ("fsi" :: script :: extra)
+                match outcome with
+                | Error reason ->
+                  return Error (sprintf "regenerating %s after the rebase failed. Run %s yourself and commit the page. %s" (Features.ClaimExempt.path page) (Features.ClaimExempt.command page) reason)
+                | Ok _ -> return! run rest
+            }
+          match! run runners with
+          | Error reason -> return Error (Features.CohortGit.infraFailureOf reason)
+          | Ok () ->
+            let pages = runners |> List.map (fun (page, _, _) -> Features.ClaimExempt.path page)
+            match! Features.CohortGit.commitPaths worktree pages "chore(docs): regenerate the generated pages after the rebase" with
+            | Error reason -> return Error (Features.CohortGit.infraFailureOf (sprintf "could not commit the regenerated pages: %s" reason))
+            | Ok None -> return Ok rebasedHead
+            | Ok (Some regeneratedHead) ->
+              Log.info "[cohort-landing] regenerated %s on top of the rebased head, now %s" (String.concat ", " pages) regeneratedHead
+              return Ok regeneratedHead
+    }
+
+  /// Put the integration worktree back at the integration branch's tip when no landing is in flight (C7). A landing that was
+  /// refused or withdrawn leaves the worktree on its rebased commit; the session's build is brought back lazily, by the
+  /// next verification (`CohortLandingPlan.buildOffHead`).
+  let resetIntegrationWorktreeWhenIdle (queueIsEmpty: unit -> bool) : unit =
+    Async.Start(
+      async {
+        match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
+        | None -> ()
+        | Some binding ->
+          do! SageFs.McpCohortIntegration.integrationWorktreeGate.WaitAsync() |> Async.AwaitTask
+          // Every git call below answers with a `Result` and never throws, so there is nothing to catch: the gate is the
+          // only thing that must be given back.
+          try
+            let! tip = Features.CohortGit.revParse binding.WorktreePath (sprintf "refs/heads/%s" binding.Branch)
+            let! here = Features.CohortGit.currentHead binding.WorktreePath
+            match tip, here with
+            | Ok head, Ok at ->
+              match Features.CohortLandingPlan.idleResetTarget (queueIsEmpty ()) at head with
+              | None -> ()
+              | Some target ->
+                match! Features.CohortGit.moveCheckoutTo binding.WorktreePath target with
+                | Ok () -> Log.info "[cohort-landing] the integration worktree is back at the integration head %s (it was at %s)" target at
+                | Error reason -> Log.warn "[cohort-landing] could not put the integration worktree back at %s: %s" target reason
+            | _ -> ()
+          finally
+            SageFs.McpCohortIntegration.integrationWorktreeGate.Release() |> ignore
+      })
+
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
     { Rebase = fun _landingId onto commits ->
-        async {
+        withWorktreeGate <| async {
           match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error(cohortIntegrationNotConfigured ())
           | Some binding ->
@@ -2968,10 +3202,10 @@ let run
             // Bring the member's OWN commits onto the integration head — the
             // realistic model: a member's commits live on their own branch, not
             // pre-positioned in the integration worktree.
-            let! result = Features.CohortGit.rebaseCommitsOnto binding.WorktreePath onto commits
+            let! result = Features.CohortGit.rebaseCommitsOntoSettling Features.ClaimExempt.conflictIsOnlyGeneratedPages binding.WorktreePath onto commits
             Log.info "[cohort-landing] Rebase result=%A" result
             match result with
-            | Ok realNewHead -> return Ok realNewHead
+            | Ok rebasedHead -> return! regenerateGeneratedPages binding.WorktreePath onto rebasedHead
             | Error files -> return Error files
         }
       // v1 conservative (design decision, sagefs-multiagent-vision.md item
@@ -2982,7 +3216,7 @@ let run
       // via `CohortGit.diffNames baseSha headSha` is a viable later
       // optimization — deferred, not this item.
       ComputeAffected = fun _landingId baseSha headSha ->
-        async {
+        withWorktreeGate <| async {
           match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
           | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
@@ -2996,6 +3230,14 @@ let run
             match! awaitIntegrationSessionTrusted sessionId with
             | Error reason -> return Error reason
             | Ok _settledObservation ->
+            // Which way this landing is verified is decided from what it carries (CohortLandingPlan): source of a project the session
+            // loads from its compiled assemblies is verified by a REBUILD at the rebased commit, because a re-evaluation cannot stand
+            // beside the types the build already holds (C8). A test project's own files keep the cheap path.
+            match! planVerification sessionId binding.WorktreePath baseSha headSha with
+            | Error reason -> return Error reason
+            | Ok (Features.CohortLandingPlan.Strategy.RebuildAtHead reasons, changedFiles) ->
+              return! verifyByRebuild sessionId binding.WorktreePath headSha reasons changedFiles
+            | Ok (Features.CohortLandingPlan.Strategy.EvalOverBuild, _) ->
             // The session is REUSED across landings, so reuse is the cheap common path. It goes wrong
             // in one direction only: a verification that did NOT land left its change bound, and a
             // re-eval cannot unbind a name. Bring the session to the head before reading it, which
@@ -3034,35 +3276,7 @@ let run
             let narrowed =
               match diff with
               | Error _ -> allTests
-              | Ok changedFiles ->
-                let maps =
-                  match Map.tryFind sessionId cycle.InstrumentationMaps with
-                  | Some m when m.Length > 0 -> m
-                  | _ -> cycle.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-                let merged = Features.LiveTesting.InstrumentationMap.merge maps
-                let blind = SageFs.McpCohortIntegration.filesEvaluatedOverBuild ()
-                let coveredFilesOf (tid: Features.LiveTesting.TestId) : string list option =
-                  match merged.Slots.Length with
-                  | 0 -> None
-                  | _ ->
-                    match Map.tryFind tid state.TestCoverageBitmaps with
-                    | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
-                      Some(Features.LiveTesting.InputHashCoverage.selectionFiles blind merged bm)
-                    | _ -> None
-                let affectedTests =
-                  Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
-                // FAIL-CLOSED gate. A landing that carries real file changes but
-                // narrows to ZERO affected tests would run nothing and land
-                // trivially "green" — the fail-OPEN that lets a test-breaking
-                // change through the gate. It happens when coverage can't be
-                // trusted: the integration worktree inherits the main repo's
-                // prebuilt PDB, so a test's covered-file paths point at the wrong
-                // build and never match the diff. Never trust an empty narrow on a
-                // real diff — run the whole suite. Running everything is always
-                // correct; an unverified landing is not.
-                match affectedTests with
-                | [] when not (List.isEmpty changedFiles) && not (List.isEmpty allTests) -> allTests
-                | _ -> affectedTests
+              | Ok changedFiles -> affectedTestsFor sessionId changedFiles allTests
             return Ok (narrowed |> List.map Features.CohortTestProjection.toCohortTestId)
         }
       // `CohortLandingVerify` reads and writes the integration session's OWN
@@ -3076,7 +3290,7 @@ let run
       // "N of N not attributed" landing-gate flake. Reads/writes route by
       // sessionId regardless of the active pointer, so the switch is gone.
       RunTests = fun _landingId tests ->
-        async {
+        withWorktreeGate <| async {
           match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
           | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
@@ -3153,7 +3367,7 @@ let run
       // (the real commit `Rebase` returned, now that `Verifying` carries base
       // and rebasedHead separately). Fast-forward the integration branch to it.
       FastForward = fun _landingId toSha ->
-        async {
+        withWorktreeGate <| async {
           match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
           // In the integration worktree, which is a worktree of the repository the integration is for and shares its refs. The
@@ -3434,7 +3648,18 @@ let run
         for ev in events do
           match Features.TrunkFollow.ofCohortEvent ev with
           | Some trunkEvent -> trunkFollower.Post trunkEvent
-          | None -> ()))
+          | None -> ()
+        // A landing that was refused, or withdrawn, ends with the worktree on ITS commit. Put it back at the head once nothing
+        // else is in flight (C7).
+        let endedWithoutLanding =
+          events
+          |> List.exists (function
+            | SageFs.Cohort.CohortEvent.LandingStateChanged (_, SageFs.Cohort.LandingState.Blocked _)
+            | SageFs.Cohort.CohortEvent.LandingWithdrawn _ -> true
+            | _ -> false)
+        match endedWithoutLanding with
+        | true -> resetIntegrationWorktreeWhenIdle (fun () -> List.isEmpty (owner.ReadCohortState().Queue))
+        | false -> ()))
   // A session's reload row finishing a save is the later word on a patch the trunk recorded as pending.
   stateChangedEvent.Publish.Add(fun change ->
     match change with

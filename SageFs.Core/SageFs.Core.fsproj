@@ -428,6 +428,9 @@
         <Compile Include="ProjectCompatibility.fs" />
         <Compile Include="FsiHostCrash.fs" />
         <Compile Include="SageFsError.fs" />
+        <!-- After SageFsError (it words a refused build) and after CohortIntegrationScope (it reads a project file as a test project). Pure. -->
+        <Compile Include="Features\CohortLandingPlan.fs" />
+        <Compile Include="Features\ClaimExempt.fs" />
         <Compile Include="RebuildOutcome.fs" />
         <!-- Before SessionReload: the freshness state names the blockers that stop a session leveling its own host. Pure. -->
         <Compile Include="ReplLeveling.fs" />

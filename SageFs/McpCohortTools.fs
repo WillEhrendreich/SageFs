@@ -271,6 +271,9 @@ module McpCohortTools =
     task {
       match parseClaimScope scope with
       | Error e -> return Error e
+      | Ok claimScope when (Features.ClaimExempt.ofScope claimScope).IsSome ->
+        // A page a script generates needs no claim (P14, C6): nothing is taken, so no member waits on it.
+        return Ok (Features.ClaimExempt.claimAnswer (Features.ClaimExempt.ofScope claimScope).Value)
       | Ok claimScope ->
         // A call under a member token may only claim inside the token's scope prefix.
         let withinGrant =

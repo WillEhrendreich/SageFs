@@ -576,7 +576,7 @@ daemon's own cohort instead of the one the call acts in. If you see that text, t
 | `join_cohort` | Join your repository's coordination session. The first joiner **of that repository** becomes its conductor. Takes `working_directory`: cohorts are per repository, so an agent in a second repository joins a second cohort with its own conductor seat instead of colliding with a cohort it never asked for. The reply always says which seat you hold: that you are the conductor, who the conductor is, or that the seat is vacant and why (the conductor left, its lease lapsed, or it was revoked). Through `sagefs mcp` your identity survives a daemon restart (it comes from the bridge's client key), so you are still the conductor afterwards. A client that talks HTTP directly gets a new identity after a restart, and a reply naming a conductor that is not you means your old self still holds the seat until its lease lapses. |
 | `leave_cohort` | Leave. Any claims you still hold are orphaned (the conductor must reassign them). |
 | `get_cohort_status` | Members, claims and fences, the test matrix, the landing queue, and what the trunk did with each landing (see below). Wait-free: reads a published snapshot. The `cohort://status` MCP resource is the frame as JSON for subscription, and doesn't carry the trunk lines. Takes an optional `working_directory`: one daemon holds one cohort **per repository**, so pass the directory you are working in to read that repository's cohort. Omit it and you read the cohort of the directory the daemon itself started in. |
-| `acquire_claim` | Take an exclusive claim over a file or project (`file:<path>` or `project:<path>`) so others know it's yours to edit. |
+| `acquire_claim` | Take an exclusive claim over a file or project (`file:<path>` or `project:<path>`) so others know it's yours to edit. A page a script generates (`docs/roadmap.md`, `docs/configuration.md`, `docs/client-setup.md`) needs no claim: the reply says so and takes none. See [how a landing is verified](#how-a-landing-is-verified). |
 | `release_claim` | Release a claim you hold. The presented fence must match the current one. |
 | `reassign_claim` | Conductor-only: reassign an orphaned claim to a present member. |
 | `delegate_conductor` | Conductor-only: hand the conductor seat to another **present** member. Only a sitting conductor can issue it, so it cannot fill an empty seat. Refused with the roster of present members when the target is not here, when it is yourself, and when it acts under a member token (no token may call the conductor's tools, so the seat would be stranded). |
@@ -923,6 +923,38 @@ same retry.
 
 The repository's own SageFs (a cohort for SageFs itself) also needs the daemon and the integration worktree to be one build:
 see "Self-hosting skew" in `AGENTS.md`.
+
+### How a landing is verified
+
+A landing is rebased onto the integration head in the integration worktree, then verified, then fast-forwarded in. What
+verification does depends on what the landing carries (`SageFs.Features.CohortLandingPlan`, which decides, and the daemon,
+which acts):
+
+- **Only a test project's own files** (and documents, scripts, data): the files are re-evaluated into the integration session
+  over its build and the tests the diff can affect run. This is the cheap path and it is unchanged.
+- **Source of a project the session loads that is not a test project** (the code the tests call into), or anything that changes
+  what the build makes (a project file, props, targets, a lock file, `global.json`): the integration worktree is rebuilt at the
+  rebased commit, the session restarts on what the build made, the session's tests are asked of the new worker, and the
+  tests run against the rebuilt assemblies. A re-evaluation cannot do this job: the session's project already holds the file's
+  types from its compiled assembly, and the first landing of `SageFs.Core/AppState.fs` was blocked three times on exactly that.
+  The tests that run are the ones the session's coverage says the diff can affect, plus every test the rebuild found that was
+  not known before; a diff that selects nothing runs the whole suite.
+- **A rebuild that fails** refuses the landing with the first compiler error and its file (`Blocked`, `Inconclusive`, reason
+  `the build of the rebased commit failed. First error: <file>(<line>,<col>): error FS....`). The session keeps serving the
+  build it had.
+- **After a landing that was refused or withdrawn**, once nothing else is queued, the integration worktree is put back at the
+  integration branch's tip. The session may still hold the build of the refused commit; the next verification sees that the
+  commit is not in the head's history and rebuilds before it trusts the session, even when that landing only touches tests.
+  Calling `set_integration_ref` is not needed.
+- **Generated pages** (`docs/roadmap.md`, `docs/configuration.md`, `docs/client-setup.md`) need no claim, so no member waits on
+  one. After the rebase the daemon regenerates the pages whose inputs the landing touched (`dotnet fsi scripts/gen-roadmap.fsx`,
+  `dotnet fsi scripts/gen-configuration-doc.fsx <rebased head>`) and commits the result on top of the rebased head, which is the
+  head that is verified and landed. A rebase conflict that touches only generated pages is settled by taking the integration
+  head's page and regenerating. A generator that fails refuses the landing and names the command to run yourself.
+- **Claims** a landing names are released when it lands.
+- **The queue:** `get_cohort_status` says where a queued landing stands and what is in front of it (`position 2 in queue,
+  behind l-... (Verifying ...)`), so a member that waits can sleep instead of polling. A member token's lease still lapses
+  after thirty minutes without a call.
 
 ### The trunk
 

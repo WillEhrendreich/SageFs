@@ -51,8 +51,29 @@ module McpCohortIntegration =
   let filesEvaluatedOverBuild () : string list =
     lock evaluatedOverBuildLock (fun () -> Set.toList evaluatedOverBuild.Value)
 
-  let private forgetFilesEvaluatedOverBuild () : unit =
+  let forgetFilesEvaluatedOverBuild () : unit =
     lock evaluatedOverBuildLock (fun () -> evaluatedOverBuild.Value <- Set.empty)
+
+  /// The commit the integration session's build was last REBUILT from (a landing of compiled source rebuilds the
+  /// worktree at the rebased commit). Whether that commit is in the head's history is asked at verification time
+  /// (`CohortLandingPlan.buildOffHead`): a refused landing's commit is not, and the session then holds a build the
+  /// head does not have. Process-local like the binding; a new integration tree is a new session, so it starts empty.
+  let private sessionRebuiltFor : string option ref = ref None
+  let private sessionRebuiltForLock = obj ()
+
+  let noteSessionRebuiltFor (commit: string) : unit =
+    lock sessionRebuiltForLock (fun () -> sessionRebuiltFor.Value <- Some commit)
+
+  let sessionRebuiltForCommit () : string option =
+    lock sessionRebuiltForLock (fun () -> sessionRebuiltFor.Value)
+
+  let forgetSessionRebuiltFor () : unit =
+    lock sessionRebuiltForLock (fun () -> sessionRebuiltFor.Value <- None)
+
+  /// One step at a time in the integration worktree. A landing's steps (rebase, verify, fast-forward) and the reset that
+  /// puts the worktree back at the head when a landing ends without landing both move it, and two git checkouts at once
+  /// would leave it on neither. The landing queue is serial; the reset is the second party.
+  let integrationWorktreeGate = new System.Threading.SemaphoreSlim(1, 1)
 
   /// The one process-global trunk owner, which the daemon starts and the status tools read. Process-local like the binding.
   let trunkFollowRef : Features.TrunkFollowOwner.Handle option ref = ref None
@@ -158,8 +179,9 @@ module McpCohortIntegration =
             return Error (SageFsError.SessionCreationFailed (sprintf "projects not found in the integration worktree %s: %s. Name them relative to the repository root (for example SageFs.Tests/SageFs.Tests.fsproj), or leave projects empty to load the repository's test projects." worktreePath (String.concat ", " missingProjects)))
           | [] ->
           cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Pending }
-          // A new integration tree is a new session to build: nothing is evaluated over it yet.
+          // A new integration tree is a new session to build: nothing is evaluated over it yet, and nothing was rebuilt for a landing.
           forgetFilesEvaluatedOverBuild ()
+          forgetSessionRebuiltFor ()
           let who = memberIdFor agentName
           let! commitResult =
             commitCohort ctx (

@@ -94,6 +94,21 @@ module CohortStatusText =
     // free-text reason that the structural form prints badly.
     | other -> sprintf "%A" other
 
+  /// Where landing `i` stands in the queue and what is in front of it (P14, C9): a member that waits for a long landing can
+  /// tell it is second behind a verification and sleep, instead of polling a position. The landing directly ahead is named with
+  /// its state; how many are ahead is the position itself.
+  let queuePositionText (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) (i: int) : string =
+    match frame.LandingQueuePosition.[i] with
+    | -1 -> "not queued"
+    | 0 -> "front of queue"
+    | p ->
+      let ahead = if p = 1 then "1 landing ahead" else sprintf "%d landings ahead" p
+      match frame.LandingQueuePosition |> Array.tryFindIndex (fun position -> position = p - 1) with
+      | Some j ->
+        let (SageFs.Cohort.LandingId inFront) = frame.LandingIds.[j]
+        sprintf "position %d in queue (%s, next in front: %s, %s)" p ahead inFront (landingStateText frame.LandingState.[j])
+      | None -> sprintf "position %d in queue (%s)" p ahead
+
   let render (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) : string =
     let sb = System.Text.StringBuilder()
     let conductorText =
@@ -169,11 +184,7 @@ module CohortStatusText =
         let requester =
           if frame.LandingRequesterIndex.[i] >= 0 then MemberTable.MemberId.display frame.MemberIds.[frame.LandingRequesterIndex.[i]]
           else "(unknown member)"
-        let queuePos =
-          match frame.LandingQueuePosition.[i] with
-          | -1 -> "not queued"
-          | 0 -> "front of queue"
-          | p -> sprintf "position %d in queue" p
+        let queuePos = queuePositionText frame i
         let commits = String.concat "," frame.LandingCommits.[i]
         sb.AppendLine(
           sprintf

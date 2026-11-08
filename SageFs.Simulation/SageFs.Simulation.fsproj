@@ -55,6 +55,7 @@
         <Compile Include="CohortLandingSim.fs" />
         <Compile Include="CohortLandingInvariants.fs" />
         <Compile Include="CohortLandingGenerators.fs" />
+        <Compile Include="IntegrationTreeSim.fs" />
         <!-- Phase 1 exhaustive spec proof: BFS the ENTIRE bounded reachable
              CohortState space through the REAL Cohort.decide and prove the named
              rules (not sample them); a Faults twin reintroduces the RebaseConflict

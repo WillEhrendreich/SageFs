@@ -54,13 +54,13 @@ let private mapOk (f: 'a -> 'b) (result: Async<Result<'a, 'e>>) : Async<Result<'
 /// (exitCode, stdout, stderr) — never throws. exitCode -1 marks a timeout or
 /// a process-start failure (git missing, `repoDir` unreadable, etc); the
 /// stderr slot always carries a human-readable reason in that case.
-let private runGitExitCode (repoDir: string) (timeout: TimeSpan) (args: string list) : Async<int * string * string> =
+let private runExeExitCode (exe: string) (repoDir: string) (timeout: TimeSpan) (args: string list) : Async<int * string * string> =
   async {
-    let argsText = String.concat " " args
+    let argsText = exe + " " + String.concat " " args
     try
       let psi =
         ProcessStartInfo(
-          "git",
+          exe,
           RedirectStandardOutput = true,
           RedirectStandardError = true,
           UseShellExecute = false,
@@ -92,13 +92,16 @@ let private runGitExitCode (repoDir: string) (timeout: TimeSpan) (args: string l
       match Object.ReferenceEquals(completed, timeoutTask) with
       | true ->
         do (try proc.Kill(entireProcessTree = true) with _ -> ())
-        return -1, "", sprintf "git %s timed out after %A in %s" argsText timeout repoDir
+        return -1, "", sprintf "%s timed out after %A in %s" argsText timeout repoDir
       | false ->
         let! _ = Task.WhenAll(stdoutTask, stderrTask) |> Async.AwaitTask
         return proc.ExitCode, stdoutText.Value, stderrText.Value
     with ex ->
-      return -1, "", sprintf "failed to run git %s in %s: %s" argsText repoDir ex.Message
+      return -1, "", sprintf "failed to run %s in %s: %s" argsText repoDir ex.Message
   }
+
+let private runGitExitCode (repoDir: string) (timeout: TimeSpan) (args: string list) : Async<int * string * string> =
+  runExeExitCode "git" repoDir timeout args
 
 /// Runs `git <args>` in `repoDir`, collapsing a nonzero exit (or a timeout /
 /// start failure) into `Error` carrying stderr (falling back to stdout, then
@@ -381,7 +384,7 @@ let rebase (repoDir: string) (onto: string) : Async<Result<string, string list>>
 /// replayed — never `onto`'s own history. Returns the new head sha (the
 /// FastForward target) or the conflicting files, exactly like `rebase`. A
 /// landing with no commits is a caller error, never a silent no-op land.
-let rebaseCommitsOnto (repoDir: string) (onto: string) (commits: string list) : Async<Result<string, string list>> =
+let rebaseCommitsOntoSettling (settles: string list -> bool) (repoDir: string) (onto: string) (commits: string list) : Async<Result<string, string list>> =
   async {
     match commits |> List.tryLast with
     | None -> return Error(infraError "landing carries no commits to replay onto the integration head")
@@ -407,16 +410,57 @@ let rebaseCommitsOnto (repoDir: string) (onto: string) (commits: string list) : 
             match inProgress with
             | false -> return Error(infraError rebaseReason)
             | true ->
-              let! conflictResult = runGit repoDir shortTimeout [ "diff"; "--name-only"; "--diff-filter=U" ]
-              let conflictFiles =
-                match conflictResult with
-                | Ok text -> splitLines text
-                | Error _ -> []
-              let! _abort = runGit repoDir shortTimeout [ "rebase"; "--abort" ]
-              match conflictFiles with
-              | [] -> return Error(infraError (sprintf "rebase --onto %s left a rebase in progress with no conflicting files: %s" onto rebaseReason))
-              | files -> return Error files
+              // A conflict in files that are all generated pages is settled by taking the side being rebased onto: the page is
+              // regenerated from the merged tree afterwards, so neither side's text of it survives. Any other conflict is the
+              // member's to resolve. Bounded by the number of commits being replayed, since each can conflict once.
+              let rec settle (attemptsLeft: int) (reason: string) : Async<Result<string, string list>> =
+                async {
+                  let! conflictResult = runGit repoDir shortTimeout [ "diff"; "--name-only"; "--diff-filter=U" ]
+                  let conflictFiles =
+                    match conflictResult with
+                    | Ok text -> splitLines text
+                    | Error _ -> []
+                  let! settled =
+                    match attemptsLeft > 0 && settles conflictFiles with
+                    | false -> async { return false }
+                    | true ->
+                      async {
+                        let ok = ref true
+                        for file in conflictFiles do
+                          match ok.Value with
+                          | false -> ()
+                          | true ->
+                            let! taken = runGit repoDir shortTimeout [ "checkout"; "--ours"; "--"; file ]
+                            let! added = runGit repoDir shortTimeout [ "add"; "--"; file ]
+                            ok.Value <- Result.isOk taken && Result.isOk added
+                        return ok.Value
+                      }
+                  match settled with
+                  | false ->
+                    let! _abort = runGit repoDir shortTimeout [ "rebase"; "--abort" ]
+                    match conflictFiles with
+                    | [] -> return Error(infraError (sprintf "rebase --onto %s left a rebase in progress with no conflicting files: %s" onto reason))
+                    | files -> return Error files
+                  | true ->
+                    let! continued = runGit repoDir rebaseTimeout [ "-c"; "core.editor=true"; "rebase"; "--continue" ]
+                    match continued with
+                    | Ok _ ->
+                      let! head = revParse repoDir "HEAD"
+                      match head with
+                      | Ok sha -> return Ok sha
+                      | Error r -> return Error(infraError r)
+                    | Error again ->
+                      let! stillInProgress = isRebaseInProgress repoDir
+                      match stillInProgress with
+                      | true -> return! settle (attemptsLeft - 1) again
+                      | false -> return Error(infraError (sprintf "rebase --continue failed: %s" again))
+                }
+              return! settle (List.length commits) rebaseReason
   }
+
+/// Replay the member's commits onto `onto`; any conflict refuses the landing. See `rebaseCommitsOntoSettling`.
+let rebaseCommitsOnto (repoDir: string) (onto: string) (commits: string list) : Async<Result<string, string list>> =
+  rebaseCommitsOntoSettling (fun _ -> false) repoDir onto commits
 
 /// Fast-forwards `refs/heads/<branch>` to `toSha` without ever creating a
 /// merge commit and without requiring `branch` to be checked out: resolves
@@ -476,3 +520,58 @@ let removeWorktree (repoDir: string) (worktreePath: string) : Async<Result<unit,
 let branchNamesUnder (repoDir: string) (prefix: string) : Async<Result<Set<string>, string>> =
   runGit repoDir shortTimeout [ "for-each-ref"; "--format=%(refname:short)"; sprintf "refs/heads/%s" prefix ]
   |> mapOk (splitLines >> List.map trim >> Set.ofList)
+
+/// Is `commit` in the history of `descendant` (`git merge-base --is-ancestor`)? A commit that is not reachable, or one git
+/// cannot resolve, is not: the caller reads "no" as "the head does not have it".
+let isAncestor (repoDir: string) (commit: string) (descendant: string) : Async<bool> =
+  async {
+    let! exitCode, _, _ = runGitExitCode repoDir shortTimeout [ "merge-base"; "--is-ancestor"; commit; descendant ]
+    return exitCode = 0
+  }
+
+/// The files git tracks in `repoDir` that match `pattern`, as paths relative to it (`git ls-files <pattern>`).
+let trackedFiles (repoDir: string) (pattern: string) : Async<Result<string list, string>> =
+  runGit repoDir shortTimeout [ "ls-files"; "--full-name"; pattern ]
+  |> mapOk splitLines
+
+/// A rebase's error channel carries an infrastructure failure as a marked single-element list (see `classifyRebaseFailure`).
+/// This builds that list for a caller that failed a step of the rebase it is part of (regenerating a page, say).
+let infraFailureOf (reason: string) : string list = infraError reason
+
+/// Run `exe args` in `dir` and answer its exit code and combined output, bounded by `timeout`. For the one external tool a
+/// landing runs after a rebase: the script that regenerates a page. Total: a failure to start is an `Error`.
+let runTool (dir: string) (timeout: TimeSpan) (exe: string) (args: string list) : Async<Result<string, string>> =
+  async {
+    let! exitCode, stdout, stderr = runExeExitCode exe dir timeout args
+    match exitCode with
+    | 0 -> return Ok stdout
+    | _ ->
+      let tail (text: string) =
+        let lines = splitLines text
+        lines |> List.skip (max 0 (List.length lines - 20)) |> String.concat "\n"
+      let said = [ stderr; stdout ] |> List.tryFind (String.IsNullOrWhiteSpace >> not) |> Option.map tail |> Option.defaultValue "no output"
+      return Error(sprintf "%s %s exited %d: %s" exe (String.concat " " args) exitCode said)
+  }
+
+/// Commit the working-tree changes to `paths` on the checked-out (detached) HEAD and answer the new head. `Ok None` when
+/// nothing changed, so the caller can tell a page that was already right from one that had to be rewritten.
+let commitPaths (dir: string) (paths: string list) (message: string) : Async<Result<string option, string>> =
+  async {
+    let! status = runGit dir shortTimeout ([ "status"; "--porcelain"; "--" ] @ paths)
+    match status with
+    | Error reason -> return Error reason
+    | Ok text when String.IsNullOrWhiteSpace text -> return Ok None
+    | Ok _ ->
+      let! added = runGit dir shortTimeout ([ "add"; "--" ] @ paths)
+      match added with
+      | Error reason -> return Error reason
+      | Ok _ ->
+        let! committed =
+          runGit dir worktreeTimeout
+            [ "-c"; "user.name=SageFs"; "-c"; "user.email=sagefs@localhost"; "commit"; "--quiet"; "--no-verify"; "-m"; message ]
+        match committed with
+        | Error reason -> return Error reason
+        | Ok _ ->
+          let! head = revParse dir "HEAD"
+          return head |> Result.map Some
+  }
