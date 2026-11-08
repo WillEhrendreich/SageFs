@@ -434,10 +434,12 @@ let analyzerFindings : (string * int) list =
 /// schema, with escaping left alone, so the figure is what a model reads). Characters, not tokens: divide by four for the
 /// figure the plan quotes, and say so when you do. Judged by `ToolListBudgetTests`, which builds the tools in process the way
 /// `.WithTools<SageFsTools>()` does. Lowering is `--ratchets --tighten`, never by hand; a budget above the real weight fails.
-/// Measured 2026-11-08 on master 4285a037: 72 tools, 112,840 characters before the diet, 37,937 after, and the nine
-/// starter tools 5,521. FsiMcp 0.3.0's seven tools are 5,606.
+/// Measured 2026-11-08: 72 tools and 112,840 characters on master 4285a037 before the diet, 37,937 after it. Master then
+/// gained `seat_conductor` and the `timeout_seconds`, `session_id` and `scope` parameters from other packets, and the
+/// full catalog is 38,379 with 73 tools (the one raise, for tools other packets added). The nine starter tools stay at
+/// 5,521. FsiMcp 0.3.0's seven tools are 5,606.
 let toolList : (string * int) list =
-  [ "full catalog characters", 37937
+  [ "full catalog characters", 38379
     "starter list characters", 5521 ]
 
 let lineCount (repoRoot: string) (rel: string) : int =

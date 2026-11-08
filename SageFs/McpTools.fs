@@ -839,13 +839,13 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Source file this code came from, for module context. With block_start_line it also writes the redefined declaration back to this file.")>]
+        [<Description("Source file this code came from. With block_start_line it writes the redefined declaration back to it.")>]
         [<Optional; DefaultParameterValue("")>]
         file_path: string,
         [<Description("'file' or 'block'; detected from the code when omitted.")>]
         [<Optional; DefaultParameterValue("")>]
         eval_mode: string,
-        [<Description("1-based line where the block starts. Picks the declaration in file_path that a write replaces; 0 writes nothing.")>]
+        [<Description("1-based start line of the block; picks the declaration a write replaces. 0 writes nothing.")>]
         [<Optional; DefaultParameterValue(0)>]
         block_start_line: int,
         [<Description("What this code is for, shown in the dashboard. Kept until you send a new one.")>]
@@ -854,7 +854,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string,
-        [<Description("How long to wait for the eval, in seconds. Past it the eval is cancelled and you are told so. Omit it for the default (120). The most it takes is 600; a larger number is cut to that. The limit covers the whole call, not each ';;' statement.")>]
+        [<Description("Seconds allowed (default 120, at most 600), then the eval is cancelled.")>]
         [<Optional; DefaultParameterValue(0)>]
         timeout_seconds: int
     ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
@@ -1005,7 +1005,7 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
         [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string,
-        [<Description("Seconds to wait (at most 60) for Ready; 0 answers at once. The reply's `wait` field says how it ended.")>]
+        [<Description("Seconds to wait (at most 60) for Ready; 0 answers at once.")>]
         [<Optional; DefaultParameterValue(0)>]
         wait_seconds: int
     ) : Task<string> =
@@ -1267,7 +1267,7 @@ BEHAVIOR:
         [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string
     ) : Task<string> =
@@ -2849,12 +2849,12 @@ WHEN TO USE: get_cohort_status says the seat is vacant and work needs a conducto
 
 OUTPUT: who is the conductor now, or the refusal and the other routes ('sagefs cohort seat', the dashboard's Seat button).""")>]
     member _.seat_conductor(
-        [<Description("Your agent or model name.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
-        [<Description("The member to seat, as get_cohort_status prints it. Blank means you.")>]
+        [<Description("The member to seat, as get_cohort_status prints it; defaults to you.")>]
         [<Optional; DefaultParameterValue("")>]
         toMember: string,
-        [<Description("The directory you are working in. It decides WHICH cohort this is.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -3069,7 +3069,7 @@ The token is returned ONCE and never stored: SageFs keeps only its hash, so it c
 
 A token IS a cohort member (cap:<id> in get_cohort_status) and outranks the connection it arrives on, so sub-agents sharing one connection are as many members as they have tokens, each with real claim exclusivity. It is bound to:
 - a role, one of a closed set: Observer (read the cohort and status), Analysis (Observer plus read-only analysis of code and history; no eval, no tests), Verifier (Analysis plus run_tests and build/test leases; no eval), Implementer (everything a working member does: eval, sessions, apps, claims, landings). No role can mint, revoke, reassign claims, configure the integration, clear local data or tidy the workspace.
-- a scope: a repo-relative directory prefix. The token can claim only inside it; src/Foo/../Bar counts as src/Bar. A scope is policy, not a sandbox: it refuses claims, it does not stop a process from writing files.
+- a scope: ONE repo-relative directory prefix, never a list (a comma or a semicolon is refused). The token can claim only inside it; src/Foo/../Bar counts as src/Bar. A scope is policy, not a sandbox: it refuses claims, it does not stop a process from writing files.
 - a route: the ONE place it may act, which you name with working_directory (an absolute path to the checkout the run works in: every session rooted in it, a git worktree nested under it excluded) or with session_id (one session). Name exactly one; naming neither or both is refused, and no token is ever unbound. A call from the token that names another session or directory is refused with what the token is bound to, and the sessions outside the route are not listed to it at all. A token bound to a session creates none; one bound to a checkout creates sessions inside it. Like the scope this is policy for the tool surface, not a sandbox: an Implementer token can run code.
 - an expiry: ttl_minutes from now (0 = 120, at most 480), and it also lapses after 30 minutes without a call, the way a silent member's seat does.
 
@@ -3083,7 +3083,7 @@ OUTPUT: The member id (cap:<id>), the grant, the token (once), and how to presen
         agentName: string,
         [<Description("The role: 'Observer', 'Analysis', 'Verifier' or 'Implementer'.")>]
         role: string,
-        [<Description("Repo-relative directory prefix the token may claim inside, e.g. 'src/Foo/'. Empty or '.' = the whole repo.")>]
+        [<Description("ONE repo-relative directory prefix the token may claim inside, e.g. 'src/Foo/'; never a list. Empty or '.' = the whole repo.")>]
         [<Optional; DefaultParameterValue("")>]
         scope: string,
         [<Description("Minutes the token lives. 0 = the default (120). At most 480.")>]

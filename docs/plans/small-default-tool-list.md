@@ -71,8 +71,8 @@ has not been run over either list.
 
 | | Before | After | FsiMcp 0.3.0 |
 |:--|--:|--:|--:|
-| Full catalog, 72 tools (characters) | 112,840 | 37,937 | 5,606 (7 tools) |
-| Full catalog (tokens, characters / 4) | about 28,200 | about 9,500 | about 1,400 |
+| Full catalog (characters) | 112,840 (72 tools) | 38,379 (73 tools; 37,937 for the same 72) | 5,606 (7 tools) |
+| Full catalog (tokens, characters / 4) | about 28,200 | about 9,600 | about 1,400 |
 | Starter list, 9 tools (characters) | 22,365 for the plan's ten tools | 5,521 | |
 | Starter list (tokens, characters / 4) | | about 1,380 | |
 
