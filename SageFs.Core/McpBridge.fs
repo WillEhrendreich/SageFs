@@ -317,6 +317,15 @@ module McpBridge =
     | RehandshakeFailed of reason: string
     | StdinClosed
 
+  /// What a new push stream follows: the bridge's first session, or the session it takes the place of.
+  [<RequireQualifiedAccess>]
+  type StreamSuccession =
+    | First
+    /// The stale session's stream, if still open, is cancelled, so one bridge never holds two push streams and the
+    /// client never reads a notification twice. The client is also told its lists may have changed, because the
+    /// daemon behind it is a new MCP session.
+    | Replaces of staleSessionId: string
+
   /// What the bridge should DO. A DU, never a tuple of independent flags —
   /// "probe and also start the daemon" can't be represented, so `decide`
   /// choosing one IS choosing only one.
@@ -334,12 +343,9 @@ module McpBridge =
     /// The daemon is back and the bridge holds the id of a session it no longer has: mint a fresh one with the
     /// client's own `initialize` parameters, open the push stream on it and tell the client its lists may have
     /// changed. Runs before the messages queued while the daemon was away, so they go out under the new id.
-    | Rehandshake
-    /// A session id was captured: open the server-push stream on it. `replacing` is the id it took the place of,
-    /// whose stream (if still open) is cancelled, so one bridge never holds two push streams and the client
-    /// never reads a notification twice. A `Some` also means the client is told its lists may have changed,
-    /// because the daemon behind it is a new MCP session.
-    | OpenPushStream of sessionId: string * replacing: string option
+    | Rehandshake of stale: string
+    /// A session id was captured: open the server-push stream on it, and end the stream of the session it replaces.
+    | OpenPushStream of sessionId: string * succession: StreamSuccession
     | Shutdown
 
   type Policy =
@@ -383,6 +389,35 @@ module McpBridge =
     let rejections = state.Pending |> Backlog.toList |> List.map (fun m -> Action.RejectMessage(m, reason))
     { Transport = TransportState.Fatal reason; Pending = Backlog.empty }, (Action.ReportFatal reason :: rejections) @ [ Action.Shutdown ]
 
+  /// What the client is told when the queue is full and its message is not queued.
+  let queueFullReason (policy: Policy) : string =
+    sprintf
+      "the bridge is waiting for the daemon and its queue is full (%d messages are already held); this message was not queued, ask again once the daemon answers"
+      policy.QueueCap
+
+  /// Hold `msg` until the daemon can take it, or answer it with an error when the queue is at its cap. Either way
+  /// the message is accounted for exactly once.
+  let enqueueOrRefuse (policy: Policy) (state: State) (msg: RpcMessage) : State * Action list =
+    match Backlog.count state.Pending >= policy.QueueCap with
+    | true -> state, [ Action.RejectMessage(msg, queueFullReason policy) ]
+    | false -> { state with Pending = Backlog.enqueue msg state.Pending }, []
+
+  /// The re-handshake gave no session. The messages that waited for it are answered with the reason (a queue that
+  /// outlives its cause is a tool that never answers), and the bridge goes back to waiting for a daemon that can
+  /// give it one, still holding the stale id.
+  let rehandshakeFailed (state: State) (stale: string) (reason: string) : State * Action list =
+    let answer =
+      sprintf "the daemon came back but did not give the bridge a session (%s); ask again in a few seconds" reason
+    let rejections = state.Pending |> Backlog.toList |> List.map (fun m -> Action.RejectMessage(m, answer))
+    { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id stale)); Pending = Backlog.empty },
+    rejections @ [ Action.Probe ]
+
+  /// The new session exists: the push stream opens on it (replacing the stale session's), then everything held goes
+  /// out under it, in arrival order.
+  let rehandshaken (state: State) (stale: string) (fresh: string) : State * Action list =
+    let drained = state.Pending |> Backlog.toList |> List.map Action.ForwardToDaemon
+    { Transport = TransportState.Ready(Some fresh); Pending = Backlog.empty }, Action.OpenPushStream(fresh, StreamSuccession.Replaces stale) :: drained
+
   /// The one pure transition. `Action list` (not a single `Action`) because
   /// reaching `Ready` for the first time atomically drains everything
   /// queued during the race — draining is part of the SAME transition that
@@ -409,14 +444,12 @@ module McpBridge =
       { state with Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(n + 1, held)) }, [ Action.Probe ]
 
     | TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(_, held)), Event.ProbeResult true ->
-      // A held id is the id of a session the new daemon never minted. `Rehandshake` replaces it before the queue
-      // drains, so the queued messages go out under the new one.
-      let next, drained = drain state
-      let transport, first =
-        match held with
-        | HeldSession.Id sid -> TransportState.Ready(Some sid), [ Action.Rehandshake ]
-        | HeldSession.Never -> next.Transport, []
-      { next with Transport = transport }, first @ drained
+      // A held id is the id of a session the new daemon never minted. The bridge mints one before anything is sent:
+      // the queue (and any line that arrives meanwhile) waits in `Rehandshaking` until the capture, so nothing goes
+      // out under the stale id and no heal has a second session to mint.
+      match held with
+      | HeldSession.Id sid -> { state with Transport = TransportState.Rehandshaking sid }, [ Action.Rehandshake sid ]
+      | HeldSession.Never -> drain state
 
     | TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(n, _)), Event.ProbeResult false ->
       match n >= policy.MaxReconnectProbes with
@@ -452,8 +485,10 @@ module McpBridge =
 
     // ---- Message flow ----
     | TransportState.AwaitingDaemon _, Event.StdinLine msg ->
-      // Never lost: queued for the drain the moment the daemon is Ready.
-      { state with Pending = Backlog.enqueue msg state.Pending }, []
+      // Never lost: queued for the drain the moment the daemon is Ready, or answered when the queue is full.
+      enqueueOrRefuse policy state msg
+
+    | TransportState.Rehandshaking _, Event.StdinLine msg -> enqueueOrRefuse policy state msg
 
     | TransportState.Ready _, Event.StdinLine msg -> state, [ Action.ForwardToDaemon msg ]
 
@@ -463,7 +498,10 @@ module McpBridge =
       state, [ Action.RejectMessage(msg, sprintf "bridge is fatally stopped: %s" reason) ]
 
     // ---- Session id capture (idempotent: captured exactly once) ----
-    | TransportState.Ready None, Event.SessionIdCaptured sid -> { state with Transport = TransportState.Ready(Some sid) }, []
+    | TransportState.Rehandshaking stale, Event.SessionIdCaptured fresh -> rehandshaken state stale fresh
+
+    | TransportState.Ready None, Event.SessionIdCaptured sid ->
+      { state with Transport = TransportState.Ready(Some sid) }, [ Action.OpenPushStream(sid, StreamSuccession.First) ]
 
     | TransportState.Ready(Some held), Event.SessionIdCaptured sid ->
       // The same id again (the IO edge reads the header off more than one response) changes nothing. A DIFFERENT
@@ -471,7 +509,7 @@ module McpBridge =
       // carry the new one.
       match sid = held with
       | true -> state, []
-      | false -> { state with Transport = TransportState.Ready(Some sid) }, []
+      | false -> { state with Transport = TransportState.Ready(Some sid) }, [ Action.OpenPushStream(sid, StreamSuccession.Replaces held) ]
 
     | TransportState.AwaitingDaemon _, Event.SessionIdCaptured _
     | TransportState.Closed, Event.SessionIdCaptured _
@@ -484,12 +522,13 @@ module McpBridge =
     // with your request" shape. The bridge stays exactly where it was.
     | TransportState.Ready _, Event.RequestRejected(msg, reason) -> state, [ Action.RejectMessage(msg, reason) ]
 
-    | TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting _), Event.RequestRejected(msg, reason) ->
+    | TransportState.AwaitingDaemon _, Event.RequestRejected(msg, reason)
+    | TransportState.Rehandshaking _, Event.RequestRejected(msg, reason) ->
       // A request that was in flight when the daemon went away: its failure can arrive after the push stream's
-      // end already moved the bridge here, and the client is still owed an answer.
+      // end already moved the bridge here (or on to starting a daemon of its own, or minting a new session), and the
+      // client is still owed an answer.
       state, [ Action.RejectMessage(msg, reason) ]
 
-    | TransportState.AwaitingDaemon _, Event.RequestRejected _
     | TransportState.Closed, Event.RequestRejected _
     | TransportState.Fatal _, Event.RequestRejected _ ->
       // Can't happen — nothing is ever forwarded before Ready — but a stray
@@ -516,6 +555,8 @@ module McpBridge =
     | TransportState.Closed, Event.ServerStreamClosed _
     | TransportState.Fatal _, Event.ServerStreamClosed _ -> state, []
 
+    | TransportState.Rehandshaking _, Event.HttpFailed _
+    | TransportState.Rehandshaking _, Event.ServerStreamClosed _
     | TransportState.AwaitingDaemon _, Event.HttpFailed _ ->
       // A probe's own failure arrives as `ProbeResult false`, not
       // `HttpFailed` — a stray report here is a no-op.
@@ -538,6 +579,12 @@ module McpBridge =
       let rejections = state.Pending |> Backlog.toList |> List.map (fun m -> Action.RejectMessage(m, "stdin closed before the daemon became reachable"))
       { Transport = TransportState.Closed; Pending = Backlog.empty }, Action.Shutdown :: rejections
 
+    | TransportState.Rehandshaking _, Event.StdinClosed ->
+      // The client is gone while the new session is being minted: what it had queued is accounted for, not left.
+      let rejections =
+        state.Pending |> Backlog.toList |> List.map (fun m -> Action.RejectMessage(m, "stdin closed before the new session was ready"))
+      { Transport = TransportState.Closed; Pending = Backlog.empty }, Action.Shutdown :: rejections
+
     | TransportState.Closed, Event.StdinClosed
     | TransportState.Fatal _, Event.StdinClosed -> state, []
 
@@ -550,9 +597,19 @@ module McpBridge =
     | TransportState.Closed, Event.ProbeResult _
     | TransportState.Fatal _, Event.ProbeResult _ -> state, []
 
-    // STUB (red): `Rehandshaking` is declared and nothing enters it yet.
-    | TransportState.Rehandshaking _, _
-    | _, Event.RehandshakeFailed _ -> state, []
+    // ---- The re-handshake's own outcome ----
+    | TransportState.Rehandshaking stale, Event.RehandshakeFailed reason -> rehandshakeFailed state stale reason
+
+    // Not minting a session now: a stale report of one that ended, or the bridge moved on.
+    | TransportState.AwaitingDaemon _, Event.RehandshakeFailed _
+    | TransportState.Ready _, Event.RehandshakeFailed _
+    | TransportState.Closed, Event.RehandshakeFailed _
+    | TransportState.Fatal _, Event.RehandshakeFailed _ -> state, []
+
+    // ---- Minting a session: nothing else moves the bridge until the capture or the failure ----
+    | TransportState.Rehandshaking _, Event.Probe
+    | TransportState.Rehandshaking _, Event.ProbeResult _
+    | TransportState.Rehandshaking _, Event.DaemonStartFailed _ -> state, []
 
   /// True once the bridge will never move again on its own — the caller
   /// (real or simulated) has either connected or been told why not.

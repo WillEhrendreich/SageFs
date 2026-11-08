@@ -175,7 +175,7 @@ let tests =
         actions |> List.contains Action.StartDaemon |> Expect.isFalse "the bridge does not start a daemon while one may still come back"
         actions |> List.contains Action.Shutdown |> Expect.isFalse "the bridge never shuts down over a lost daemon"
         let positionOf predicate = actions |> List.tryFindIndex predicate
-        match positionOf ((=) Action.Rehandshake), positionOf (function Action.ForwardToDaemon _ -> true | _ -> false) with
+        match positionOf (function Action.Rehandshake _ -> true | _ -> false), positionOf (function Action.ForwardToDaemon _ -> true | _ -> false) with
         | Some handshake, Some firstForward -> handshake < firstForward |> Expect.isTrue "the re-handshake is decided before the first queued request is forwarded"
         | Some _, None -> ()
         | None, _ -> failtest "a bridge that held a session id re-handshakes when the daemon is back"

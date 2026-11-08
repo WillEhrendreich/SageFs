@@ -76,8 +76,6 @@ module TestTimeouts =
   /// The deadline a test gives an HTTP client whose stub daemon answers only after it has passed. It has to
   /// EXPIRE for the case to pass, so it is short; the production deadline is `SageFs.Timeouts.workerHttpRequest`.
   let clientDeadlineShort = ms 300.
-  /// How long a stub daemon holds an answer back so a client with `clientDeadlineShort` gives up first.
-  let stubAnswerLate = secs 3.
 
   // Settles: a short, fixed window where nothing can be awaited.
 

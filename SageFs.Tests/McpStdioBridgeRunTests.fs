@@ -76,7 +76,7 @@ type Signals() =
   let signalFor (key: string) =
     signals.GetOrAdd(key, fun _ -> TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously))
   member _.Raise(key: string) = (signalFor key).TrySetResult() |> ignore
-  member _.Wait(key: string) : Task<bool> =
+  member _.Await(key: string) : Task<bool> =
     task {
       let! finished = Task.WhenAny([| (signalFor key).Task :> Task; Task.Delay TestTimeouts.patience |])
       return obj.ReferenceEquals(finished, (signalFor key).Task)
@@ -139,7 +139,7 @@ type FakeDaemon() =
               return Error "the stream was cancelled"
           }
       Rehandshake =
-        fun capture ->
+        fun _ capture ->
           task {
             signals.Raise "rehandshake started"
             match! rehandshakeRelease.Task with
@@ -164,9 +164,9 @@ let connected (fake: FakeDaemon) : Task<SignalingStream * Task<int> * (Event -> 
     let exit = run defaultPolicy fake.Io (StdoutWriter stdout)
     let! post = fake.Stdin
     post (Event.StdinLine(request 1 "initialize"))
-    let! initialized = fake.Signals.Wait "forwarded 1"
+    let! initialized = fake.Signals.Await "forwarded 1"
     initialized |> Expect.isTrue "the initialize reached the daemon"
-    let! streamOpened = fake.Signals.Wait "stream s0"
+    let! streamOpened = fake.Signals.Await "stream s0"
     streamOpened |> Expect.isTrue "the push stream opened on the first session"
     return stdout, exit, post
   }
@@ -191,14 +191,14 @@ let tests =
       let! stdout, exit, post = connected fake
       // The upgrade: the first daemon's push stream ends and a new daemon already answers probes.
       post (Event.ServerStreamClosed("s0", "server stream closed"))
-      let! started = fake.Signals.Wait "rehandshake started"
+      let! started = fake.Signals.Await "rehandshake started"
       started |> Expect.isTrue "the bridge began the re-handshake"
       // The gap: the client sends while the re-handshake is still on the wire.
       post (Event.StdinLine(request 2 "tools/list"))
       fake.FinishRehandshake(Ok "s1")
-      let! forwarded = fake.Signals.Wait "forwarded 2"
+      let! forwarded = fake.Signals.Await "forwarded 2"
       forwarded |> Expect.isTrue "the line was forwarded once the session existed"
-      let! streamed = fake.Signals.Wait "stream s1"
+      let! streamed = fake.Signals.Await "stream s1"
       streamed |> Expect.isTrue "the push stream opened on the new session"
       fake.Forwards
       |> Array.filter (fun (_, msg) -> idKey msg = "2")
@@ -215,7 +215,7 @@ let tests =
       let fake = FakeDaemon()
       let! stdout, exit, post = connected fake
       post (Event.SessionIdCaptured "s9")
-      let! streamed = fake.Signals.Wait "stream s9"
+      let! streamed = fake.Signals.Await "stream s9"
       streamed |> Expect.isTrue "the push stream opened on the healed session"
       let oldToken = fake.Streams |> Array.find (fun (sid, _) -> sid = "s0") |> snd
       oldToken.IsCancellationRequested |> Expect.isTrue "the replaced session's stream is cancelled"
@@ -228,7 +228,7 @@ let tests =
       let fake = FakeDaemon()
       let! stdout, exit, post = connected fake
       post (Event.ServerStreamClosed("s0", "server stream closed"))
-      let! started = fake.Signals.Wait "rehandshake started"
+      let! started = fake.Signals.Await "rehandshake started"
       started |> Expect.isTrue "the bridge began the re-handshake"
       post (Event.StdinLine(request 2 "tools/list"))
       // The daemon went away again while the session was being minted; the bridge keeps waiting for it.
@@ -257,7 +257,7 @@ let tests =
       let! answer = awaitLine stdout (fun line -> line.Contains "\"id\":3" && line.Contains "\"error\"")
       answer |> Expect.isSome "the client got an error for the request that timed out"
       post (Event.StdinLine(request 4 "tools/list"))
-      let! forwarded = fake.Signals.Wait "forwarded 4"
+      let! forwarded = fake.Signals.Await "forwarded 4"
       forwarded |> Expect.isTrue "the next request was forwarded"
       fake.Forwards
       |> Array.filter (fun (_, msg) -> idKey msg = "4")

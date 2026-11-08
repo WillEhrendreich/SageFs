@@ -61,6 +61,13 @@ let tests =
         assertHolds t
         t.Daemon.Minted |> Map.find 2 |> Expect.equal "one session minted by the heal" 1
 
+      testCase "WHY — a request in flight when the new daemon answers and the bridge's own re-handshake share ONE session (found by the seeded sweep, seed 218752)" <| fun _ ->
+        let t = run healRacesRehandshake
+        assertHolds t
+        t.Daemon.Minted |> Map.find 2 |> Expect.equal "one session minted on the new daemon" 1
+        let ungated = run { healRacesRehandshake with Heal = Heal.Ungated }
+        idsOf ungated |> Expect.contains "without the shared gate the two mint one each" "one-session-per-daemon-incarnation"
+
       testCase "WHY — a client that outruns a daemon that stays down hits the cap: the queue stops at it and every line past it is answered" <| fun _ ->
         let t = run floodWhileDown
         assertHolds t
@@ -70,10 +77,13 @@ let tests =
 
     testList "the twins have teeth" [
       testCase "the bridge before the fix (atomic re-handshake, no stream cancel) forwards under the stale id on the roast's case" <| fun _ ->
-        let t = runTwinAtomicRehandshake lineDuringRehandshake
-        idsOf t
+        idsOf (runTwinAtomicRehandshake lineDuringRehandshake)
+        |> Expect.contains "the forward under the stale id is caught" "no-request-under-a-session-the-new-daemon-does-not-know"
+        // With the heal ungated as well (the whole of the old behaviour) the second session, the second push
+        // stream and the doubled notification all show.
+        idsOf (runWith Twin.decideAtomicRehandshake { lineDuringRehandshake with Heal = Heal.Ungated })
         |> Expect.containsAll
-          "the stale-id forward is caught, and so are the second session and the second stream"
+          "the stale-id forward, the second session, the second stream and the doubled notification are all caught"
           [ "no-request-under-a-session-the-new-daemon-does-not-know"
             "one-session-per-daemon-incarnation"
             "never-two-push-streams"

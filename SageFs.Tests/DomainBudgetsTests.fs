@@ -459,7 +459,7 @@ let budgets : (string * int) list =
     "SageFs.Core: named catch-all", 201
     "SageFs: option fields", 83
     "SageFs: bool fields", 22
-    "SageFs: wildcard over owned union", 64
+    "SageFs: wildcard over owned union", 63
     "SageFs: with wildcard", 77
     "SageFs: named catch-all", 159
     "SageFs.Host: option fields", 0

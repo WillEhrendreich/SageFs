@@ -131,7 +131,7 @@ module McpStdioBridgeInvariants =
               | Action.StartDaemon
               | Action.ReportFatal _
               | Action.TerminateSession _
-              | Action.Rehandshake
+              | Action.Rehandshake _
               | Action.OpenPushStream _
               | Action.Shutdown -> false)
             |> List.length

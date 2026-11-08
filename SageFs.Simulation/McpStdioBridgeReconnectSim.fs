@@ -140,19 +140,22 @@ module McpStdioBridgeReconnectSim =
                 Minted = Map.add d.Incarnation mintedHere d.Minted } },
       sid
 
+    // What the heal gate hands a caller that was refused under `stale`: the session the bridge already holds, if
+    // it is newer than the refused one and the daemon still knows it.
+    let reusable (w: World) (stale: string option) : string option =
+      match scenario.Heal, w.GateLatest with
+      | Heal.Gated, Some latest when Some latest <> stale && Set.contains latest w.Daemon.Live -> Some latest
+      | _ -> None
+
     let completeForward (msg: RpcMessage) (sid: string option) (w: World) : World * Event list =
       match w.Daemon.Up, sid with
       | false, _ -> w, [ Event.RequestRejected(msg, "the daemon became unreachable"); Event.HttpFailed "unreachable" ]
       | true, Some s when Set.contains s w.Daemon.Live -> { w with Answered = msg :: w.Answered }, []
       | true, _ ->
         // The daemon answered 404 for the id the request carried: the heal.
-        let reuse =
-          match scenario.Heal, w.GateLatest with
-          | Heal.Gated, Some latest when Some latest <> sid && Set.contains latest w.Daemon.Live -> true
-          | _ -> false
-        match reuse with
-        | true -> { w with Answered = msg :: w.Answered }, []
-        | false ->
+        match reusable w sid with
+        | Some existing -> { w with Answered = msg :: w.Answered }, [ Event.SessionIdCaptured existing ]
+        | None ->
           let minted, fresh = mint w
           { minted with GateLatest = Some fresh; Answered = msg :: minted.Answered }, [ Event.SessionIdCaptured fresh ]
 
@@ -169,21 +172,22 @@ module McpStdioBridgeReconnectSim =
                | Some s -> Set.contains s w.Daemon.Live
                | None -> false) }
         schedule (lat scenario.Latencies.Forward) (completeForward msg sidNow) { w with Forwards = record :: w.Forwards }
-      | Action.Rehandshake ->
+      | Action.Rehandshake stale ->
         schedule
           (lat scenario.Latencies.Rehandshake)
           (fun w ->
-            match w.Daemon.Up with
-            | false -> w, [ Event.RehandshakeFailed "the daemon is down" ]
-            | true ->
+            match w.Daemon.Up, reusable w (Some stale) with
+            | false, _ -> w, [ Event.RehandshakeFailed "the daemon is down" ]
+            | true, Some existing -> w, [ Event.SessionIdCaptured existing ]
+            | true, None ->
               let minted, fresh = mint w
               { minted with GateLatest = Some fresh }, [ Event.SessionIdCaptured fresh ])
           w
-      | Action.OpenPushStream(sid, replacing) ->
+      | Action.OpenPushStream(sid, succession) ->
         let withoutReplaced =
-          match replacing with
-          | Some replaced -> Set.remove replaced w.Streams
-          | None -> w.Streams
+          match succession with
+          | StreamSuccession.Replaces replaced -> Set.remove replaced w.Streams
+          | StreamSuccession.First -> w.Streams
         match w.Daemon.Up && Set.contains sid w.Daemon.Live with
         | true ->
           let streams = Set.add sid withoutReplaced
@@ -284,7 +288,10 @@ module McpStdioBridgeReconnectSim =
 
     let rec loop (w: World) : World =
       let due, later = w.Dues |> List.partition (fun d -> d.At <= w.Tick)
-      let ordered = due |> List.sortBy (fun d -> d.Seq) |> shuffled
+      // The script is the world's own timeline and keeps its order; only the completions of the bridge's effects,
+      // which really do race one another, are shuffled.
+      let scripted, completions = due |> List.sortBy (fun d -> d.Seq) |> List.partition (fun d -> d.Seq < List.length scenario.Script)
+      let ordered = scripted @ shuffled completions
       let ran =
         ordered
         |> List.fold
@@ -396,13 +403,13 @@ module McpStdioBridgeReconnectSim =
       match state.Transport, event with
       | TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(_, HeldSession.Id stale)), Event.ProbeResult true ->
         { Transport = TransportState.Ready(Some stale); Pending = Backlog.empty },
-        Action.Rehandshake :: (state.Pending |> Backlog.toList |> List.map Action.ForwardToDaemon)
+        Action.Rehandshake stale :: (state.Pending |> Backlog.toList |> List.map Action.ForwardToDaemon)
       | _ ->
         let next, actions = decide policy state event
         next,
         actions
         |> List.map (function
-          | Action.OpenPushStream(sid, _) -> Action.OpenPushStream(sid, None)
+          | Action.OpenPushStream(sid, _) -> Action.OpenPushStream(sid, StreamSuccession.First)
           | other -> other)
 
     /// The queue as it was: no cap.
@@ -450,6 +457,22 @@ module McpStdioBridgeReconnectSim =
           2, Outside.ClientSends(line 1)
           2, Outside.ClientSends(line 2)
           30, Outside.DaemonNotifies 1 ] }
+
+  /// Found by the seeded sweep (seed 218752) once the re-handshake held its queue: a request dispatched just before
+  /// the daemon went away is still in flight when the new daemon answers, so its 404 heal and the bridge's own
+  /// re-handshake both want a session. They have to share one.
+  let healRacesRehandshake: Scenario =
+    { Seed = -4
+      Policy = bridgePolicy
+      Heal = Heal.Gated
+      Latencies = { Probe = 1; Forward = 3; Rehandshake = 3; StreamEnd = 2; Jitter = 0 }
+      ProbeEvery = 1
+      Script =
+        [ 4, Outside.DaemonDies
+          6, Outside.ClientSends(line 3)
+          7, Outside.DaemonReturns
+          9, Outside.ClientSends(line 2)
+          25, Outside.DaemonNotifies 1 ] }
 
   /// A client that sends far more than the cap while the daemon is down.
   let floodWhileDown: Scenario =

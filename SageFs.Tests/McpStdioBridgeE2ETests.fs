@@ -465,16 +465,16 @@ type UpgradableDaemon(mcpPort: int) =
       | _ -> do! reply ctx.Response 404 "not here"
     }
 
+  /// The accept loop starts hot and awaits `GetContextAsync`; each request runs on until its first await. No pool
+  /// thread is parked, and a held `initialize` does not hold up the next request.
   let serve (listener: Net.HttpListener) (handle: Net.HttpListenerContext -> Task) : unit =
-    Task.Run(fun () ->
-      task {
-        while listener.IsListening do
-          try
-            let! ctx = listener.GetContextAsync()
-            Task.Run(fun () -> (try handle ctx with _ -> Task.CompletedTask)) |> ignore
-          with _ -> ()
-      }
-      :> Task)
+    task {
+      while listener.IsListening do
+        try
+          let! ctx = listener.GetContextAsync()
+          (try handle ctx with _ -> Task.CompletedTask) |> ignore
+        with _ -> ()
+    }
     |> ignore
 
   do
@@ -554,18 +554,16 @@ let runRehandshakeRaceTest () : Task<unit> =
     // Everything the bridge writes to stdout, in order, with a signal per line, so the test waits for what it expects.
     let seen = Collections.Concurrent.ConcurrentQueue<string>()
     let wrote = new Threading.SemaphoreSlim(0)
-    Task.Run(fun () ->
-      task {
-        let mutable reading = true
-        while reading do
-          let! line = bridge.StandardOutput.ReadLineAsync()
-          match line with
-          | null -> reading <- false
-          | text ->
-            seen.Enqueue text
-            wrote.Release() |> ignore
-      }
-      :> Task)
+    task {
+      let mutable reading = true
+      while reading do
+        let! line = bridge.StandardOutput.ReadLineAsync()
+        match line with
+        | null -> reading <- false
+        | text ->
+          seen.Enqueue text
+          wrote.Release() |> ignore
+    }
     |> ignore
 
     let describe () =

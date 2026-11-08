@@ -108,6 +108,18 @@ let withStubDaemon (answer: int -> string option -> int * string) (body: StubDae
       daemon.Stop ()
   }
 
+/// A peer on a real loopback socket that accepts a connection and never answers it. `body` gets its port and the
+/// task that completes when a connection arrives.
+let withSilentPeer (body: int -> Task<TcpClient> -> Task<unit>) : Task<unit> =
+  task {
+    let silent = new TcpListener(IPAddress.Loopback, 0)
+    silent.Start()
+    try
+      do! body (silent.LocalEndpoint :?> IPEndPoint).Port (silent.AcceptTcpClientAsync())
+    finally
+      silent.Stop()
+  }
+
 /// Records the moment of every write reaching the underlying stream, so a test
 /// can put client-visible writes and session-id captures on ONE timeline. It
 /// sits under a real `StdoutWriter`, so what is recorded is the production
@@ -351,27 +363,24 @@ let tests =
             })
     }
 
-    testTask "WHY — a daemon that answers after the client's own deadline is a TimedOut, not an outage: nothing says it is gone or that the session is stale" {
+    testTask "WHY — a daemon that does not answer within the client's own deadline is a TimedOut, not an outage: nothing says it is gone or that the session is stale" {
+      // A peer that accepts the connection and never answers: the deadline is the only thing that ends the request.
       do!
-        withStubDaemon
-          (fun _ _ ->
-            Thread.Sleep TestTimeouts.stubAnswerLate
-            200, okBody 1)
-          (fun daemon ->
-            task {
-              use stdoutStream = new MemoryStream()
-              let stdout = SageFs.Server.McpStdioBridge.StdoutWriter(stdoutStream)
-              use client = new HttpClient(Timeout = TestTimeouts.clientDeadlineShort)
-              let msg = RpcMessage.Request(RpcId.N 2L, "tools/call", """{"jsonrpc":"2.0","id":2,"method":"tools/call"}""")
+        withSilentPeer (fun port accepted ->
+          task {
+            use stdoutStream = new MemoryStream()
+            let stdout = SageFs.Server.McpStdioBridge.StdoutWriter(stdoutStream)
+            use client = new HttpClient(Timeout = TestTimeouts.clientDeadlineShort)
+            let msg = RpcMessage.Request(RpcId.N 2L, "tools/call", """{"jsonrpc":"2.0","id":2,"method":"tools/call"}""")
 
-              let! result =
-                SageFs.Server.McpStdioBridge.forward client daemon.Port stdout.WriteLine ignore (Some "sid-1") None msg
+            let! result = SageFs.Server.McpStdioBridge.forward client port stdout.WriteLine ignore (Some "sid-1") None msg
 
-              match result with
-              | Error(SageFs.Server.McpStdioBridge.ForwardError.TimedOut reason) ->
-                reason |> Expect.stringContains "the reason says the daemon did not answer" "answer"
-              | other -> failtestf "a slow answer must be TimedOut, not Unreachable or a rejection: %A" other
-            })
+            match result with
+            | Error(SageFs.Server.McpStdioBridge.ForwardError.TimedOut reason) ->
+              reason |> Expect.stringContains "the reason says the daemon did not answer" "answer"
+            | other -> failtestf "a slow answer must be TimedOut, not Unreachable or a rejection: %A" other
+            accepted.IsCompleted |> Expect.isTrue "the request did reach the peer, so the deadline ended it"
+          })
     }
 
     testTask "WHY — two requests refused under the same stale id mint ONE session between them, because a second heal takes what the first minted" {

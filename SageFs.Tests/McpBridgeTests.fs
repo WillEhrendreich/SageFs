@@ -244,7 +244,7 @@ let tests =
         let readyNoSid = { Transport = TransportState.Ready None; Pending = Backlog.empty }
         let state, actions = decide policy readyNoSid (Event.SessionIdCaptured "abc")
         state.Transport |> Expect.equal "session id is now set" (TransportState.Ready(Some "abc"))
-        actions |> Expect.equal "the push stream opens on the first session, replacing nothing" [ Action.OpenPushStream("abc", None) ]
+        actions |> Expect.equal "the push stream opens on the first session, replacing nothing" [ Action.OpenPushStream("abc", StreamSuccession.First) ]
 
       testCase "the same id captured again changes nothing" <| fun _ ->
         let readyWithSid = { Transport = TransportState.Ready(Some "abc"); Pending = Backlog.empty }
@@ -257,7 +257,7 @@ let tests =
         let state, actions = decide policy readyWithSid (Event.SessionIdCaptured "zzz")
         state.Transport |> Expect.equal "every later request carries the new id" (TransportState.Ready(Some "zzz"))
         actions
-        |> Expect.equal "the new session's stream opens and the old one's is cancelled" [ Action.OpenPushStream("zzz", Some "abc") ]
+        |> Expect.equal "the new session's stream opens and the old one's is cancelled" [ Action.OpenPushStream("zzz", StreamSuccession.Replaces "abc") ]
     ]
 
     testList "a protocol-level rejection stays alive (issue #138, defect 2)" [
@@ -316,7 +316,7 @@ let tests =
         let state, actions = decide policy waiting (Event.ProbeResult true)
         state.Transport |> Expect.equal "minting a session, not Ready under the id the new daemon never issued" (TransportState.Rehandshaking "stale")
         Backlog.toList state.Pending |> Expect.equal "the queued request is still queued" [ req 7 "tools/list" ]
-        actions |> Expect.equal "only the re-handshake goes out" [ Action.Rehandshake ]
+        actions |> Expect.equal "only the re-handshake goes out" [ Action.Rehandshake "stale" ]
 
       testCase "a lost daemon is waited for, and one that never returns is started after MaxReconnectProbes probes" <| fun _ ->
         let lost = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")); Pending = Backlog.empty }
@@ -395,7 +395,7 @@ let tests =
         actions
         |> Expect.equal
           "the stream replaces the stale session's, then the queue goes out"
-          [ Action.OpenPushStream("fresh", Some "stale")
+          [ Action.OpenPushStream("fresh", StreamSuccession.Replaces "stale")
             Action.ForwardToDaemon(req 1 "tools/list")
             Action.ForwardToDaemon(notif "notifications/x")
             Action.ForwardToDaemon(req 2 "tools/call") ]
