@@ -663,10 +663,19 @@ let private AnswerShapeNote = """
 ANSWER: structuredContent.answer is 'Measured' or 'NotAvailable'. Only 'Measured' carries data, and a Measured empty list is a real zero. 'NotAvailable' carries a closed `reason` token, a plain `message` and a `whatToDo`, and means the data was not there: it is never a zero. The text block is the measurement as before, or one sentence saying what is missing."""
 
 [<Literal>]
-let private WorkingDirectoryParam = "Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, call switch_session first or pass session_id explicitly. The daemon will not guess."
+let private WorkingDirectoryParam = SageFs.SharedParameters.WorkingDirectory.Route
 
 [<Literal>]
-let private SessionIdParam = "Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory. Omit it to answer for the session this connection is working in."
+let private SessionIdParam = SageFs.SharedParameters.SessionId.Route
+
+[<Literal>]
+let private RepositoryParam = SageFs.SharedParameters.WorkingDirectory.Repository
+
+[<Literal>]
+let private AgentNameMemberParam = SageFs.SharedParameters.AgentName.Member
+
+[<Literal>]
+let private AgentNameIdentifyParam = SageFs.SharedParameters.AgentName.Identify
 
 /// What the lease tools tell an agent about who a lease belongs to. Claude sub-agents of one session
 /// share ONE MCP connection, so the connection alone cannot tell them apart: a lease belongs to the
@@ -676,10 +685,10 @@ module private LeaseHolderNote =
   let Identity = " A lease belongs to the connection, agent_name and working_directory it was asked for under, so sub-agents that share one connection must each pass their own agent_name (and their own working_directory) to get their own lease. Asking again under the same three returns the lease you already hold (grant already_held, same leaseId, expiry not renewed). If the pool is full the answer is decision wait: it names who holds it (agent, connection, directory, kind, granted, expires), your position in line and when to ask again, and asking again keeps your place. A lease that is never released lapses at its expiry."
 
   [<Literal>]
-  let AgentName = "Your own agent name, distinct from any sibling sub-agent's. Names your lease in get_daemon_status and in other agents' refusals. Omit it only if you are the one agent on this connection."
+  let AgentName = SageFs.SharedParameters.AgentName.Lease
 
   [<Literal>]
-  let WorkingDirectory = "The directory you are working in (your worktree). Part of the lease's identity and shown to anyone queued behind you."
+  let WorkingDirectory = SageFs.SharedParameters.WorkingDirectory.Lease
 
   [<Literal>]
   let FullBuild = "Acquire a lease for a caller-owned full build. The lease kind is fixed by this tool; use it only when SageFs will not run the build itself." + Identity
@@ -707,6 +716,12 @@ let private keptStateClient =
   new System.Net.Http.HttpClient(
     Timeout = System.TimeSpan.FromMilliseconds(float SageFs.DevReload.DevReloadConfig.defaults.CompileBudgetMs))
 
+/// Why a tool's manual was not given.
+[<RequireQualifiedAccess>]
+type ManualRefusal =
+  /// No registered tool has this name. Carries the names there are, so a typo is answered with the real ones.
+  | UnknownTool of requested: string * known: string list
+
 /// The tool set the daemon registers, read the way `.WithTools<SageFsTools>()` reads it: every public
 /// instance method carrying `[<McpServerTool>]`. This is the one source of truth for "which tools exist":
 /// `discover_features` is built from it, and the guard tests compare every other list of tool names to it.
@@ -733,6 +748,29 @@ module RegisteredTools =
           RequiredParameters = m.GetParameters() |> Array.filter (fun p -> not p.IsOptional) |> Array.map (fun p -> p.Name) |> Array.toList }
       tool)
     |> Array.toList
+
+  let private parameterDescriptionOf (p: System.Reflection.ParameterInfo) =
+    match p.GetCustomAttributes(typeof<DescriptionAttribute>, false) |> Array.tryHead with
+    | Some (:? DescriptionAttribute as d) -> d.Description
+    | _ -> ""
+
+  /// One tool's manual: its name, the full description its registration carries (the rules, the shape of the answer,
+  /// what a wrong call costs) and every parameter with its description. `tools/list` carries one sentence per tool
+  /// (`ToolSummaries`); this is where the rest is read, through `discover_features` with `tool`.
+  let manual (toolsType: System.Type) (name: string) : Result<string, ManualRefusal> =
+    let tools = toolsType.GetMethods flags |> Array.filter isTool
+    match tools |> Array.tryFind (fun m -> m.Name = name) with
+    | None -> Result.Error(ManualRefusal.UnknownTool(name, tools |> Array.map (fun m -> m.Name) |> Array.sort |> Array.toList))
+    | Some m ->
+      let parameterLine (p: System.Reflection.ParameterInfo) =
+        let need = match p.IsOptional with | true -> "optional" | false -> "required"
+        sprintf "- %s (%s): %s" p.Name need (parameterDescriptionOf p)
+      let parameters = m.GetParameters() |> Array.map parameterLine |> Array.toList
+      let body =
+        match parameters with
+        | [] -> [ "No parameters." ]
+        | _ -> "Parameters:" :: parameters
+      Result.Ok(System.String.Join("\n", [ m.Name; ""; descriptionOf m; "" ] @ body))
 
   /// The registered tools that declare a parameter with this wire name.
   let takingParameter (toolsType: System.Type) (parameterName: string) : Set<string> =
@@ -795,25 +833,25 @@ RETURN VALUE:
 
 WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your compiler and runtime.""")>]
     member _.send_fsharp_code(
-        [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Shown in event logs and get_recent_fsi_events output so you can trace which agent submitted which code. Use a short, stable identifier.")>]
+        [<Description(AgentNameIdentifyParam)>]
         agentName: string,
         code: string,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Absolute path to the source file this code came from. Gives module context, so SageFs wraps the code in the correct module/namespace for FSI evaluation. It also asks for a write: with block_start_line set, a successful eval that redefines one declaration in this file replaces that declaration in the file. See WRITING TO YOUR SOURCE FILE in the tool description.")>]
+        [<Description("Source file this code came from, for module context. With block_start_line it also writes the redefined declaration back to this file.")>]
         [<Optional; DefaultParameterValue("")>]
         file_path: string,
-        [<Description("How the code is being evaluated: 'file' for whole-file send, 'block' for a selected region. When omitted, auto-detected from code content.")>]
+        [<Description("'file' or 'block'; detected from the code when omitted.")>]
         [<Optional; DefaultParameterValue("")>]
         eval_mode: string,
-        [<Description("1-based line number where the selected block starts in the source file. Helps resolve which module the block belongs to in multi-module files. It also picks the declaration in file_path that a write replaces: the one that contains this line. Without it (omit it or pass 0) nothing is written to the file.")>]
+        [<Description("1-based line where the block starts. Picks the declaration in file_path that a write replaces; 0 writes nothing.")>]
         [<Optional; DefaultParameterValue(0)>]
         block_start_line: int,
-        [<Description("Optional description of what this code is for (e.g. 'refactoring warmup pipeline', 'writing property tests'). Shown in the dashboard so humans and other agents can see what you're working on. Preserved across calls until overwritten by a new non-empty value.")>]
+        [<Description("What this code is for, shown in the dashboard. Kept until you send a new one.")>]
         [<Optional; DefaultParameterValue("")>]
         intent: string,
-        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string,
         [<Description("How long to wait for the eval, in seconds. Past it the eval is cancelled and you are told so. Omit it for the default (120). The most it takes is 600; a larger number is cut to that. The limit covers the whole call, not each ';;' statement.")>]
@@ -904,13 +942,13 @@ PATH:
 - filePath should be an absolute path. Relative paths are resolved against the session's working directory.
 - The file must exist on disk at call time — it is read, not streamed.""")>]
     member _.load_fsharp_script(
-        [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Shown in event logs for attribution.")>]
+        [<Description(AgentNameIdentifyParam)>]
         agentName: string,
         filePath: string,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string
     ) : Task<string> =
@@ -939,7 +977,7 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
         [<Description("Number of recent events to return (default 10)")>]
         [<Optional; DefaultParameterValue(10)>]
         count: int,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> = 
@@ -961,13 +999,13 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
     [<McpServerTool>]
     [<Description("Get one session's status: explicit target, loaded projects, lifecycle, worker, workflow, evaluation state, health, and session-scoped facts. Use this to decide whether session-scoped work is safe; machine-wide facts are available from get_daemon_status.")>]
     member _.get_session_status(
-        [<Description("Working directory of the MCP client. Routes to the matching session when exactly one session uses it; if multiple sessions match, switch_session first.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string,
-        [<Description("Seconds to wait for a warming session (Starting, Building or Restarting), or one whose rebuild is still running, to become Ready before answering. Default 0 answers at once; values above 60 are clamped to 60. A Ready session with no rebuild running, a Faulted one and a Stopped one never wait. The `wait` field in the reply says how it ended: NotNeeded, BecameReady, Faulted (including a rebuild that failed) or TimedOut, and `wait.lastRebuild` says what the last rebuild did.")>]
+        [<Description("Seconds to wait (at most 60) for Ready; 0 answers at once. The reply's `wait` field says how it ended.")>]
         [<Optional; DefaultParameterValue(0)>]
         wait_seconds: int
     ) : Task<string> =
@@ -1031,7 +1069,7 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
 
 This compatibility formatter is no longer a registered MCP tool. Use get_daemon_status for daemon-wide facts and get_session_status for live session facts.""")>]
     member _.get_startup_info(
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -1050,7 +1088,7 @@ WHEN TO USE:
 
 NOTE: This does NOT load anything — it only lists what is available on disk. Pass one explicit .fsproj to create_project_session, one .sln/.slnx to create_solution_session, or use create_bare_session explicitly.""")>]
     member _.get_available_projects(
-        [<Description("Directory to scan for .fsproj/.sln/.slnx files. This tool does NOT route to any session — it only walks this directory on disk. Defaults to the working directory of your one active session if you have exactly one, otherwise the current directory.")>]
+        [<Description(SageFs.SharedParameters.WorkingDirectory.Scan)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -1084,10 +1122,10 @@ WHEN NOT TO USE (common mistake):
 
 This is a SOFT reset — DLL locks are retained. Use hard_reset_fsi_session only if modules failed to load during warm-up.""")>]
     member _.reset_fsi_session(
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string
     ) : Task<string> =
@@ -1144,13 +1182,13 @@ In-process hot reload cannot do this for SageFs.Core itself (the running worker'
 SageFs.Core is a Trusted-Platform-Assembly resolved by the native binder before any
 in-process trick gets a say) — rebuild+respawn is the real, honest mechanism.""")>]
     member _.hard_reset_fsi_session(
-        [<Description("Set rebuild=true to run 'dotnet build' before reloading (default false)")>]
+        [<Description("true runs 'dotnet build' first.")>]
         [<Optional; DefaultParameterValue(false)>]
         rebuild: bool,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string
     ) : Task<string> =
@@ -1188,10 +1226,10 @@ WHEN NOT TO USE:
 - Full project type-checking: use hard_reset_fsi_session with rebuild=true for that.""")>]
     member _.check_fsharp_code(
         code: string,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string
     ) : Task<string> =
@@ -1226,7 +1264,7 @@ BEHAVIOR:
 - A tight loop and most native calls do not stop. The FSI host is then killed 10 seconds after the cancel, and the session says its state and definitions are gone (call hard_reset_fsi_session).
 - Returns 'true' if a running eval was found and cancelled, 'false' if nothing was running.""")>]
     member _.cancel_eval(
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
         [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
@@ -1271,7 +1309,7 @@ If the env var SAGEFS_DEVRELOAD=0 is set, the tool returns `disabledByEnvVar:
 true` and does NOT install patches. This is intentional — the env var is the
 process-wide kill switch for hot reload.""")>]
     member _.enable_hot_reload(
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
@@ -1352,7 +1390,7 @@ WORKFLOW:
 This is the runtime analog of the SAGEFS_DEVRELOAD=0 env var. Unlike the env
 var, this is per-session and reversible. The env var, if set, takes precedence.""")>]
     member _.disable_hot_reload(
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
@@ -1408,7 +1446,7 @@ to reset. The dashboard's Hot Reload panel shows the same list with a Reset butt
         [<Description("Qualified binding to reset, e.g. App.State.count. Leave empty to list what's kept.")>]
         [<Optional; DefaultParameterValue("")>]
         binding: string,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
@@ -1485,7 +1523,7 @@ The mode new sessions start in is the `hotreload.reflectionReadMode` setting."""
         [<Description("exact-every-read, mark-on-reflect or probe-callers. Leave empty to see the current mode and any questions.")>]
         [<Optional; DefaultParameterValue("")>]
         mode: string,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -1564,10 +1602,10 @@ SAFETY:
         [<Description("For set: a new F# expression for the whole value, like gravity * 2.0. Give this or `literal`, not both.")>]
         [<Optional; DefaultParameterValue("")>]
         expression: string,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string
     ) : Task<string> =
@@ -1582,9 +1620,9 @@ SAFETY:
     [<McpServerTool>]
     [<Description("Create a new isolated FSI session for one explicit .fsproj project. The project path is a primitive string; empty arrays and auto-discovery are not accepted. Use get_available_projects first, then get_session_status until the session is Ready or Faulted.")>]
     member _.create_project_session(
-        [<Description("Absolute or working-directory-relative path to one .fsproj project")>] project: string,
-        [<Description("Working directory for the session")>] working_directory: string,
-        [<Description("Session mode: 'interactive' (default), 'livetesting', or 'hotreload'")>]
+        [<Description("Path to one .fsproj.")>] project: string,
+        [<Description(SageFs.SharedParameters.WorkingDirectory.Create)>] working_directory: string,
+        [<Description("'interactive' (default), 'livetesting' or 'hotreload'.")>]
         [<Optional; DefaultParameterValue("")>]
         workflow: string
     ) : Task<string> =
@@ -1600,8 +1638,8 @@ SAFETY:
     [<Description("Create a new isolated FSI session for one explicit .sln or .slnx solution. The solution path is a primitive string; empty arrays and auto-discovery are not accepted. Use get_available_projects first, then get_session_status until the session is Ready or Faulted.")>]
     member _.create_solution_session(
         [<Description("Absolute or working-directory-relative path to one .sln or .slnx solution")>] solution: string,
-        [<Description("Working directory for the session")>] working_directory: string,
-        [<Description("Session mode: 'interactive' (default), 'livetesting', or 'hotreload'")>]
+        [<Description(SageFs.SharedParameters.WorkingDirectory.Create)>] working_directory: string,
+        [<Description("'interactive' (default), 'livetesting' or 'hotreload'.")>]
         [<Optional; DefaultParameterValue("")>]
         workflow: string
     ) : Task<string> =
@@ -1616,8 +1654,8 @@ SAFETY:
     [<McpServerTool>]
     [<Description("Create a new isolated FSI session with no project or solution loaded. Bare is explicit and never triggers project discovery. Use get_session_status until the session is Ready or Faulted.")>]
     member _.create_bare_session(
-        [<Description("Working directory for the session")>] working_directory: string,
-        [<Description("Session mode: 'interactive' (default), 'livetesting', or 'hotreload'")>]
+        [<Description(SageFs.SharedParameters.WorkingDirectory.Create)>] working_directory: string,
+        [<Description("'interactive' (default), 'livetesting' or 'hotreload'.")>]
         [<Optional; DefaultParameterValue("")>]
         workflow: string
     ) : Task<string> =
@@ -1652,7 +1690,7 @@ WHEN TO USE:
 
 NOTE: Stopping the last (or only) session will leave no active session. Create a new one with create_project_session, create_solution_session, or create_bare_session, or restart SageFs. Use list_sessions to see available session IDs before stopping.""")>]
     member _.stop_session(
-        [<Description("The session ID to stop (from list_sessions)")>] session_id: string
+        [<Description(SageFs.SharedParameters.SessionId.Target)>] session_id: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: stop_session called: id={Id}", session_id)
         task {
@@ -1675,7 +1713,7 @@ ROUTING BEHAVIOR:
 - On the tools that take a session_id parameter (send_fsharp_code, check_fsharp_code, get_session_status, reset_fsi_session, hard_reset_fsi_session, run_tests and the session-analysis tools), session_id always wins over working_directory routing. The other tools route by working_directory or the active session.
 - Use list_sessions to see available session IDs.""")>]
     member _.switch_session(
-        [<Description("Session ID to switch to (from list_sessions)")>] session_id: string
+        [<Description(SageFs.SharedParameters.SessionId.Target)>] session_id: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: switch_session called: id={Id}", session_id)
         switchSession ctx "mcp" session_id |> withEcho ctx "switch_session"
@@ -1691,7 +1729,7 @@ Switching creates a new session — REPL definitions and cell state are lost."""
     member _.switch_workflow(
         [<Description("Target workflow: 'interactive' (full REPL), 'livetesting' (full REPL + tests re-run as you type, debounced), or 'hotreload' (app hot reload; aliases: 'weblive', 'live', 'web'). Switching recreates the session, so REPL state is lost.")>]
         target: string,
-        [<Description("Working directory of the MCP client. Omit to target the active session.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
         [<Description("Preview only — returns transition cost without switching. Default: false")>]
@@ -1739,7 +1777,7 @@ TRUST MODEL:
         [<Description("Optional exact full test name to use as the regression guard after local proof.")>]
         [<Optional; DefaultParameterValue("")>]
         exact_guard: string,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -1768,7 +1806,7 @@ Retention runs on its own: friction keeps only the running version's rows, insid
         [<Description("For clear: friction, cohort or all (default)")>]
         [<Optional; DefaultParameterValue("all")>]
         store: string,
-        [<Description("The repository whose cohort's conductor you are: an absolute path to it or to any checkout of it. Only the conductor of that cohort may clear. Pass it unless the daemon itself was started in that repository.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -1803,7 +1841,7 @@ OUTPUT: the plan, split into safe to reclaim (merged, build output only, orphane
 
 To act on the safe part call tidy_workspace with confirm=true and that plan id. Nothing with unmerged commits or uncommitted work is ever removed by tidy.""")>]
     member _.get_workspace_hygiene(
-        [<Description("A path inside the repository to look at. Optional when your sessions are all in one repository.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -1823,7 +1861,7 @@ NEVER touches: anything a session or process is using, a worktree with uncommitt
         [<Description("Must be true. Without it nothing is done.")>]
         [<Optional; DefaultParameterValue(false)>]
         confirm: bool,
-        [<Description("A path inside the repository, as given to get_workspace_hygiene.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2362,25 +2400,25 @@ Incomplete is not green. It means nothing failed but not every test passed in th
 
 If the run is still going when wait_seconds ends, the result carries a receipt_id. Call run_tests again with it (and wait_seconds) instead of polling anything else.""")>]
     member _.run_tests(
-        [<Description("Optional substring filter on test name")>]
+        [<Description("Substring of the test name.")>]
         [<Optional; DefaultParameterValue("")>]
         pattern: string,
-        [<Description("Optional source file path filter")>]
+        [<Description("Source file of the tests.")>]
         [<Optional; DefaultParameterValue("")>]
         file_path: string,
-        [<Description("Optional category: unit, integration, browser, benchmark, architecture, property, or a custom name")>]
+        [<Description("Test category, e.g. unit or integration.")>]
         [<Optional; DefaultParameterValue("")>]
         category: string,
-        [<Description("Seconds to wait for the run to finish (default 30, at most 60). When it runs out, the result carries a receipt_id to continue with.")>]
+        [<Description("Seconds to wait (default 30, at most 60), then you get a receipt_id.")>]
         [<Optional; DefaultParameterValue(30)>]
         wait_seconds: int,
-        [<Description("A receipt_id from an earlier run_tests call that was still running. Re-reads that run instead of starting a new one.")>]
+        [<Description("receipt_id of a run still going; re-reads it.")>]
         [<Optional; DefaultParameterValue("")>]
         receipt_id: string,
-        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing.")>]
+        [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string,
-        [<Description("Working directory of the MCP client, used to find the session when session_id is not given.")>]
+        [<Description(WorkingDirectoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
@@ -2469,12 +2507,13 @@ It ranks by that session's own evals and tests (failing tests, eval count, disco
 
 Parameters:
 - topic: optional focus keyword (e.g. "testing", "performance", "export") to narrow suggestions
+- tool: optional tool name. Returns that tool's full manual (its rules and every parameter) instead of ranking. `tools/list` carries one sentence per tool, so this is where the rest of a tool is read. Every registered tool can be called by name whether or not the list shows it.
 
-OUTPUT: JSON with ContextSummary, TotalKnownFeatures, Returned count, and Suggestions ranked Essential > High > Medium > Contextual. Each suggestion includes ToolName, ShortDescription, ExampleUsage, WhyNow and Relevance.
+OUTPUT: JSON with ContextSummary, TotalKnownFeatures, Returned count, and Suggestions ranked Essential > High > Medium > Contextual. Each suggestion includes ToolName, ShortDescription, ExampleUsage, WhyNow and Relevance. With `tool`, plain text: the tool's name, its description and its parameters.
 
 WORKFLOW: Call this at the start of a session to see what to do next, or any time you feel lost.""")>]
     member _.discover_features(
-        [<Description("Optional topic keyword to focus suggestions (e.g. 'testing', 'performance', 'export'). Empty for all features.")>]
+        [<Description("A focus keyword such as 'testing' or 'export'.")>]
         [<Optional; DefaultParameterValue("")>]
         topic: string,
         [<Description(WorkingDirectoryParam)>]
@@ -2482,13 +2521,25 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         working_directory: string,
         [<Description(SessionIdParam)>]
         [<Optional; DefaultParameterValue("")>]
-        session_id: string
+        session_id: string,
+        [<Description("A tool name: returns its manual.")>]
+        [<Optional; DefaultParameterValue("")>]
+        tool: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
-        logger.LogDebug("MCP-TOOL: discover_features called, topic={Topic}", topic)
+        logger.LogDebug("MCP-TOOL: discover_features called, topic={Topic}, tool={Tool}", topic, tool)
         let topicOpt = match topic with | "" | null -> None | s -> Some s
-        SageFs.McpAnalysis.discoverFeatures ctx (RegisteredTools.describe typeof<SageFsTools>) topicOpt sid wd |> withEcho ctx "discover_features"
+        match System.String.IsNullOrWhiteSpace tool with
+        | false ->
+          let answer =
+            match RegisteredTools.manual typeof<SageFsTools> (tool.Trim()) with
+            | Result.Ok manual -> manual
+            | Result.Error(ManualRefusal.UnknownTool(requested, known)) ->
+              sprintf "Error: no tool is named '%s'. The tools are: %s." requested (System.String.Join(", ", known))
+          Task.FromResult answer |> withEcho ctx "discover_features"
+        | true ->
+          SageFs.McpAnalysis.discoverFeatures ctx (RegisteredTools.describe typeof<SageFsTools>) topicOpt sid wd |> withEcho ctx "discover_features"
 
     [<McpServerTool>]
     [<Description("""The members of a qualified name (a namespace, module or type): one rung of the symbol ladder. Names only, never bodies, so a walk stays bounded. The reply gives the total (an exact count, or "at least" when the list was cut at the worker's bound) and a count per kind (modules, methods, types and so on, the kind the compiler gave each member) before the names, lists drillable kinds first, and ends with the offset for the next page. A name with no members says why: a leaf such as a method, a name that does not resolve, or a session that could not be asked. Ask a drillable child's qualified name next to descend.""")>]
@@ -2602,11 +2653,11 @@ WHEN TO USE: Once per agent per repository, before acquiring claims or requestin
 
 OUTPUT: Confirmation text, naming the cohort you joined, whether you became its conductor, and which session (if any) you were bound to for the per-session test matrix.""")>]
     member _.join_cohort(
-        [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Identifies you in cohort membership and claim ownership.")>]
+        [<Description(AgentNameIdentifyParam)>]
         agentName: string,
         [<Description("Your role: 'Implementer', 'Verifier', or 'Observer'.")>]
         role: string,
-        [<Description("The repository you are working in. It decides WHICH cohort you join (two agents in two repositories have two conductor seats and never contend), so pass the same directory to every later cohort tool. It is also resolved to a session id (the routing send_fsharp_code uses) so the cohort's per-session test matrix can attribute that checkout's test outcomes to you. Omit it and you join the cohort of the repository the daemon was started in.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2628,9 +2679,9 @@ WHEN TO USE: When you are done working in this daemon for this session.
 
 OUTPUT: Confirmation text.""")>]
     member _.leave_cohort(
-        [<Description("Your agent or model name — must match the name you joined with.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
-        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2666,13 +2717,13 @@ WHEN TO USE: Before editing a file/project another cohort member might also touc
 
 OUTPUT: Confirmation text with the new claim id and fence, or a conflict error naming the current holder.""")>]
     member _.acquire_claim(
-        [<Description("Your agent or model name — must match the name you joined with.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The scope to claim: 'file:<repo-relative-path>' or 'project:<repo-relative-.fsproj-path>'.")>]
         scope: string,
         [<Description("One-line reason for the claim (max 200 chars, no newlines) — shown to other cohort members.")>]
         purpose: string,
-        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2700,13 +2751,13 @@ The presented fence must match the claim's current fence exactly (from acquire_c
 
 OUTPUT: Confirmation text, or an error naming why the release was refused.""")>]
     member _.release_claim(
-        [<Description("Your agent or model name — must match the name you joined with.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The claim id to release (from acquire_claim's output or get_cohort_status).")>]
         claimId: string,
         [<Description("The claim's current fence (from acquire_claim's output or get_cohort_status) — a stale value is refused.")>]
         fence: int64,
-        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2734,13 +2785,13 @@ WHEN TO USE: You are the conductor, a claim shows as Orphaned in get_cohort_stat
 
 OUTPUT: Confirmation text, or an error (not conductor / claim not orphaned / target not present / scope conflict).""")>]
     member _.reassign_claim(
-        [<Description("Your agent or model name — must be the cohort's current conductor.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The orphaned claim's id (from get_cohort_status).")>]
         claimId: string,
         [<Description("The recipient's display name exactly as get_cohort_status prints it (e.g. 'mcp:...' or a plain agent name).")>]
         toMember: string,
-        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2770,11 +2821,11 @@ WHEN TO USE: You are the conductor and are leaving, or another member should run
 
 OUTPUT: Confirmation naming the new conductor, or a refusal: not conductor, vacant seat, the target is not present (the reply lists the members who are), the target is yourself, or the target holds a member token.""")>]
     member _.delegate_conductor(
-        [<Description("Your agent or model name — must be the cohort's current conductor.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The new conductor's display name exactly as get_cohort_status prints it (e.g. 'mcp:...' or a plain agent name). Must be a present member.")>]
         toMember: string,
-        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2827,11 +2878,11 @@ WHEN TO USE: Your landing should not go ahead (you found a mistake, a veto was r
 
 OUTPUT: Confirmation, or a refusal: not the requester, no such landing, or the landing is already over. The landing id comes from request_landing's output or get_cohort_status.""")>]
     member _.withdraw_landing(
-        [<Description("Your agent or model name — must be the one that requested the landing.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The landing id (from request_landing's output or get_cohort_status).")>]
         landingId: string,
-        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2857,13 +2908,13 @@ WHEN TO USE: The landing is wrong or premature and you can say why in a sentence
 
 OUTPUT: Confirmation, or a refusal naming the rule: no seat, read-only role, blank or over-long reason, unknown landing, or the landing is not live.""")>]
     member _.veto_landing(
-        [<Description("Your agent or model name — must match the name you joined with.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The landing id to veto (from request_landing's output or get_cohort_status).")>]
         landingId: string,
         [<Description("Why the landing should not go ahead (1-1000 chars). The requester and the conductor read it in get_cohort_status.")>]
         reason: string,
-        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2889,11 +2940,11 @@ WHEN TO USE: get_cohort_status shows a landing blocked by a veto, and you have r
 
 OUTPUT: Confirmation, or a refusal: not the conductor, no such landing, or the landing is not vetoed.""")>]
     member _.resolve_veto(
-        [<Description("Your agent or model name — must be the cohort's current conductor.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The vetoed landing's id (from get_cohort_status).")>]
         landingId: string,
-        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2915,7 +2966,7 @@ OUTPUT: Confirmation, or a refusal: not the conductor, no such landing, or the l
 
 OUTPUT: Confirmation text with the new landing id, or a validation error (invalid statement, unknown/stale claim).""")>]
     member _.request_landing(
-        [<Description("Your agent or model name — must match the name you joined with.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("Comma-separated 'claimId:fence' pairs backing this landing (from acquire_claim's output). Empty string if none.")>]
         claims: string,
@@ -2923,7 +2974,7 @@ OUTPUT: Confirmation text with the new landing id, or a validation error (invali
         commits: string,
         [<Description("Why this landing should happen (max 1000 chars) — becomes the merge/squash message body.")>]
         statement: string,
-        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -2953,7 +3004,7 @@ OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing 
 
 Once an integration is configured it ends with the trunk: one `trunk <landing id>: ...` line per landing that landed, saying what the trunk session's running app did with it (the file, the outcome such as PatchPending, Patched or Restarted, the mechanism such as metadata-delta or detour, and the cause of a restart), or that there is no running app to update.""")>]
     member _.get_cohort_status(
-        [<Description("The directory you are working in. It decides WHICH cohort is reported: one daemon holds one cohort per repository, so an agent working in a second repository must pass it or it reads the cohort of the directory the daemon itself started in.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         // `working_directory`, SNAKE CASE, like every other tool in this file. The MCP SDK
         // matches the parameter by name, so a camelCase `workingDirectory` here was never
@@ -2988,11 +3039,11 @@ WHEN TO USE: Once per cohort, before the first request_landing, by whoever is th
 
 OUTPUT: Confirmation text naming the resolved head sha, worktree path, branch, trunk checkout path (trunk=), and session id — or an error naming what failed (an unresolvable ref, a worktree that could not be created, or — non-fatal — an integration session that failed to start).""")>]
     member _.set_integration_ref(
-        [<Description("Your agent or model name — must be the cohort's current conductor.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("A branch, tag, or commit sha in the repository named by working_directory to configure as the integration head.")>]
         integrationRef: string,
-        [<Description("The repository this integration is for: an absolute path to it or to any checkout of it. It decides which cohort is configured. Pass it unless the daemon itself was started in that repository.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
         [<Description("The projects the integration session loads, repository-relative, comma separated (for example SageFs.Tests/SageFs.Tests.fsproj). Empty loads every test project the repository's solution declares, or the repository's projects when it declares no test project. Name the one project your landings are verified by when the solution lists samples that are slow to build.")>]
@@ -3028,7 +3079,7 @@ WHEN TO USE: An orchestrator starting an agent run that should be a distinct mem
 
 OUTPUT: The member id (cap:<id>), the grant, the token (once), and how to present it. Set SAGEFS_IDENTITY_POLICY=TokenRequired on the daemon so a connection with no token can only read status.""")>]
     member _.mint_member(
-        [<Description("Your agent or model name. You must be the cohort's conductor.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The role: 'Observer', 'Analysis', 'Verifier' or 'Implementer'.")>]
         role: string,
@@ -3038,10 +3089,10 @@ OUTPUT: The member id (cap:<id>), the grant, the token (once), and how to presen
         [<Description("Minutes the token lives. 0 = the default (120). At most 480.")>]
         [<Optional; DefaultParameterValue(0)>]
         ttl_minutes: int,
-        [<Description("The checkout this run works in, as an ABSOLUTE path: the token may act only on sessions rooted inside it (a git worktree nested under it is its own checkout) and the member is seated in that repository's cohort. Name this OR session_id, not both.")>]
+        [<Description(SageFs.SharedParameters.WorkingDirectory.Checkout)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string,
-        [<Description("One session the token may act on, instead of a checkout: the member is seated in that session's repository. Name this OR working_directory, not both.")>]
+        [<Description(SageFs.SharedParameters.SessionId.Mint)>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string
     ) : Task<string> =
@@ -3066,11 +3117,11 @@ WHEN TO USE: An agent run is finished, leaked its token, or must be cut off with
 
 OUTPUT: Confirmation text, or an error saying why (not the conductor, no such member token, already revoked).""")>]
     member _.revoke_member(
-        [<Description("Your agent or model name. You must be the cohort's conductor.")>]
+        [<Description(AgentNameMemberParam)>]
         agentName: string,
         [<Description("The member id exactly as get_cohort_status or mint_member printed it: 'cap:<id>'.")>]
         member_id: string,
-        [<Description("The repository whose cohort the member is in: an absolute path to it or to any checkout of it. Pass it unless the daemon itself was started in that repository.")>]
+        [<Description(RepositoryParam)>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =

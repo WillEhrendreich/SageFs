@@ -550,7 +550,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 **Multi-Session**: Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
-**MCP Tools**: 73 tools for session trust, code execution, running and listing tests, verification, failure explanation, analysis, local friction reporting, leases for expensive work, workspace hygiene, and coordinating several agents on one repo. They're affordance-gated at call time: the list is always complete, but a call to a tool that doesn't apply to the current session state is rejected with a structured error. [Full reference →](docs/mcp-tools.md)
+**MCP Tools**: 73 tools for session trust, code execution, running and listing tests, verification, failure explanation, analysis, local friction reporting, leases for expensive work, workspace hygiene, and coordinating several agents on one repo. They're affordance-gated at call time: the list is complete unless you start the daemon with `SAGEFS_TOOL_LIST=Starter` (nine tools for a first session, every other tool still callable by name), and a call to a tool that doesn't apply to the current session state is rejected with a structured error. [Full reference →](docs/mcp-tools.md)
 
 **SSE Events**: All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 

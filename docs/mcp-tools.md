@@ -25,7 +25,40 @@ the status tools and `join_cohort`, and shows the caller that presents the daemo
 operator credential everything. The list does not change when a connection joins
 the cohort or takes the conductor seat. The MCP revision of 2026-07-28 says a tool
 list must not vary per connection or as a side effect of another request, and may
-vary by the authorization presented, so that is the only input.
+vary by the authorization presented, so that is the only input, with one setting
+of the daemon beside it (next section).
+
+### The size of the list, and the starter list
+
+`tools/list` is the largest cost an agent pays on every session, so it has a
+weight budget. `ToolListBudgetTests` builds the registered tools in process, sums
+the minified JSON of each tool's name, description and input schema, and holds
+the total to `RatchetBudgets.toolList`, a number that only goes down (`--ratchets
+--tighten`). The count is characters. Divide by four for tokens: that is a rule of
+thumb, and nobody has run the API's token counter over these lists yet.
+
+Three things keep it small.
+
+- **One sentence per tool.** The list carries `ToolSummaries.sentenceOf`, at most
+  160 characters. The rest of a tool, its rules and the shape of its answer, is
+  its manual, and `discover_features` with `tool` returns it (the description the
+  tool is registered with, then every parameter and its description).
+- **Shared parameters are described once.** `working_directory` was described 18
+  ways across fifty tools, `session_id` six ways across 19 and the agent name six ways
+  across 17. `SharedParameters` holds a few named sentences per parameter, one for
+  each role it plays, and a test fails for a tool that carries a private variant.
+  A JSON Schema in `tools/list` cannot point at a shared definition, so each tool
+  still carries its short sentence. The sentence is written once in the source.
+- **A starter list, opt-in.** A daemon started with `SAGEFS_TOOL_LIST=Starter`
+  shows a caller that presents nothing nine tools: `create_project_session`,
+  `get_session_status`, `list_sessions`, `send_fsharp_code`, `check_fsharp_code`,
+  `run_tests`, `cancel_eval`, `hard_reset_fsi_session` and `discover_features`,
+  which names the rest (`get_available_projects` and `stop_session` among them). A member token keeps its role's list and the operator credential keeps
+  the full list. Every tool outside the starter list is still callable by name.
+  The setting is read once at start, so the list is the same for every connection
+  and does not move when a session is created or a member joins. `Full` is the
+  default until a measured pass rate on a fixed task set shows no loss with the
+  starter list.
 
 Every tool in the catalog also says what calling it does to your work.
 Eighteen of them stop, reset, discard or land something you already have, and
@@ -388,7 +421,7 @@ the final gate before you push.
 | `preview_what_if` | Preview what would change if a binding had a different value, without executing. |
 | `decompose_pipeline` | Break an F# pipeline into stages, each classified pure / effectful / unknown. |
 | `get_cell_dependencies` | The cell dependency graph of one session: what each eval produced and consumed, and the edges between them. Reports staleness as `NotMeasured`. |
-| `discover_features` | Ranks the tools this daemon registers by the session's state. The list is read from the registered set, so it cannot name a tool that is not there. |
+| `discover_features` | Ranks the tools this daemon registers by the session's state. The list is read from the registered set, so it cannot name a tool that is not there. With `tool` it returns that one tool's full manual (its rules and every parameter), which `tools/list` no longer carries. |
 
 ### Measured, or not available
 

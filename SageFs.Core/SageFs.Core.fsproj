@@ -484,6 +484,9 @@
         <Compile Include="ResultEx.fs" />
         <Compile Include="EvalPipeline.fs" />
         <Compile Include="Affordances.fs" />
+        <Compile Include="ToolSummaries.fs" />
+        <Compile Include="ToolList.fs" />
+        <Compile Include="SharedParameters.fs" />
         <Compile Include="ConfirmationPolicy.fs" />
         <Compile Include="SessionAccess.fs" />
         <Compile Include="WorkerProtocol.fs" />

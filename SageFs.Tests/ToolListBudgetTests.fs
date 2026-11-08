@@ -75,16 +75,18 @@ let private budgetTable =
 [<Tests>]
 let weightBudgets =
   testList "Tool list weight (ratchet down, never raise)" [
-    for (key, budget) in budgetTable.Budgets ->
-      testCase (sprintf "WHY - %s stays within %d, so the list a first session pays for can only get lighter" key budget) <| fun () ->
-        let live = actual () |> List.find (fun (k, _) -> k = key) |> snd
-        (live <= budget)
-        |> Expect.isTrue (sprintf "%s is %d, over its budget of %d. Shorten a description or a parameter sentence; never raise the budget." key live budget)
+    for (key, budget) in budgetTable.Budgets do
+      yield
+        testCase (sprintf "WHY - %s stays within %d, so the list a first session pays for can only get lighter" key budget) <| fun () ->
+          let live = actual () |> List.find (fun (k, _) -> k = key) |> snd
+          (live <= budget)
+          |> Expect.isTrue (sprintf "%s is %d, over its budget of %d. Shorten a description or a parameter sentence; never raise the budget." key live budget)
 
-    for (key, budget) in budgetTable.Budgets ->
-      testCase (sprintf "WHY - the budget for %s is no higher than its weight, so room that was won is not left for a description to grow back into" key) <| fun () ->
-        let live = actual () |> List.find (fun (k, _) -> k = key) |> snd
-        (budget <= live)
-        |> Expect.isTrue (sprintf "%s weighs %d and its budget is %d: run `dotnet SageFs.Tests.dll --ratchets --tighten` to lower it" key live budget)
+    for (key, budget) in budgetTable.Budgets do
+      yield
+        testCase (sprintf "WHY - the budget for %s is no higher than its weight, so room that was won is not left for a description to grow back into" key) <| fun () ->
+          let live = actual () |> List.find (fun (k, _) -> k = key) |> snd
+          (budget <= live)
+          |> Expect.isTrue (sprintf "%s weighs %d and its budget is %d: run `dotnet SageFs.Tests.dll --ratchets --tighten` to lower it" key live budget)
   ]
   |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant

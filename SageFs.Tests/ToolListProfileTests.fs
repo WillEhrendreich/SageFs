@@ -73,10 +73,10 @@ let private manualOf (name: string) = RegisteredTools.manual typeof<SageFsTools>
 let profileTests =
   testList "The starter tool list" [
 
-    testCase "WHY - the starter list is the eleven tools a first session needs, in registered order, and nothing else" <| fun () ->
+    testCase "WHY - the starter list is the nine tools a first session needs, in registered order, and nothing else" <| fun () ->
       let listed = starter ToolListProfile.Starter
       listed |> Expect.equal "exactly the starter set" (registered |> List.filter (fun tool -> Set.contains tool ToolList.starterNames))
-      listed.Length |> Expect.equal "eleven tools" 11
+      listed.Length |> Expect.equal "nine tools" 9
       listed |> Expect.contains "eval is there" "send_fsharp_code"
       listed |> Expect.contains "and the doorway to the rest" "discover_features"
       Set.isSubset ToolList.starterNames (Set.ofList registered)
@@ -100,7 +100,7 @@ let profileTests =
 
     testCase "WHY - every tool outside the starter list is still admitted when a caller that presented nothing names it" <| fun () ->
       let hidden = registered |> List.filter (fun tool -> not (Set.contains tool ToolList.starterNames))
-      hidden.Length |> Expect.isGreaterThan "the starter list does leave tools out" 50
+      (hidden.Length > 50) |> Expect.isTrue "the starter list does leave tools out"
       for tool in hidden do
         for seat in [ ConductorSeat.NotBoundYet; ConductorSeat.Bound ] do
           admitTokenless IdentityPolicy.ConnectionsAllowed seat Cohort.Authority.Anonymous tool

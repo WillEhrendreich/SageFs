@@ -214,6 +214,7 @@
         <Compile Include="McpCohortTools.fs" />
         <Compile Include="McpCohortIntegration.fs" />
         <Compile Include="McpCapability.fs" />
+        <Compile Include="McpToolCatalog.fs" />
         <Compile Include="McpMintRoute.fs" />
         <Compile Include="McpHttpAccess.fs" />
         <Compile Include="MemberMintCommand.fs" />

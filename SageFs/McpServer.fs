@@ -793,9 +793,15 @@ let applyDestructiveHints (tools: IList<Tool>) =
 /// MAY vary by the authorization presented. A member token lists its role's tools; the daemon's operator credential lists
 /// everything; nothing presented lists everything under `ConnectionsAllowed` and status plus the join tool under
 /// `TokenRequired`, before and after any join. Who holds the conductor seat is judged when a tool is called, not here.
+/// The one other input is the daemon's own `SAGEFS_TOOL_LIST` setting (`ToolListProfile`): `Starter` shows a caller that
+/// presented nothing the nine tools a first session needs, and cuts no token's or the operator's list. Every tool is
+/// listed with its one sentence (`McpToolCatalog.present`), and every tool stays callable by name.
 /// A caller whose member token or operator credential is bad sees one tool, `credential_status`, whose description is
 /// the refusal. Every call it made would be refused, and an empty list hid the reason from the model (#182).
 let createToolListFilter () =
+  // What a caller that presents nothing is shown is a setting of the daemon (`SAGEFS_TOOL_LIST`), read once here, so it
+  // is the same for every connection and moves for none of them.
+  let profile = SageFs.ToolListProfile.fromEnvironment (fun name -> Environment.GetEnvironmentVariable name)
   McpRequestFilter<ListToolsRequestParams, ListToolsResult>(fun next ->
     McpRequestHandler<ListToolsRequestParams, ListToolsResult>(fun ctx ct ->
       ValueTask<ListToolsResult>(
@@ -821,10 +827,11 @@ let createToolListFilter () =
               result.Tools
               |> Seq.map (fun tool -> tool.Name)
               |> List.ofSeq
-              |> SageFs.Capability.listedTools store.Policy (SageFs.McpCapability.listedForOf operatorClaim presented)
+              |> SageFs.ToolList.listed profile store.Policy (SageFs.McpCapability.listedForOf operatorClaim presented)
               |> Set.ofList
             for i in result.Tools.Count - 1 .. -1 .. 0 do
               if not (Set.contains result.Tools.[i].Name listed) then result.Tools.RemoveAt i
+          SageFs.McpToolCatalog.present result.Tools
           applyDestructiveHints result.Tools
           return result
         })))
