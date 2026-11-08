@@ -1696,6 +1696,19 @@ h2 {
   }
 }
 
+/* ── What a value was at the last green settle, on the Since green tab (SinceGreen) ── */
+.live-was {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+  font-size: 0.857rem;
+}
+
+.live-since-green-left {
+  padding: 0.5em 0;
+  color: var(--fg-dim);
+  font-size: 0.857rem;
+}
+
 /* ── How current the values are, from the test loop (LoopFreshness) ──
    A square dot in the state's semantic colour and the state in a word. Red is the failed rebuild only. */
 .live-freshness {

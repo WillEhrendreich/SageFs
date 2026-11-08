@@ -160,12 +160,14 @@ type WatchTab =
   | Pinned
   /// The bindings that hold a tweak, or a value the program changed.
   | Changes
+  /// The bindings with a node that moved since the tests last settled with no failures (`SinceGreen`).
+  | SinceGreen
   /// The person's own list of expressions (`WatchExpression`), each one a row. It lists no binding as such.
   | Watch
 
 [<RequireQualifiedAccess>]
 module WatchTab =
-  let all : WatchTab list = [ WatchTab.All; WatchTab.Pinned; WatchTab.Changes; WatchTab.Watch ]
+  let all : WatchTab list = [ WatchTab.All; WatchTab.Pinned; WatchTab.Changes; WatchTab.SinceGreen; WatchTab.Watch ]
 
   /// The word a page stores for the open tab, and the one place it is read back.
   let token (tab: WatchTab) : string =
@@ -173,6 +175,7 @@ module WatchTab =
     | WatchTab.All -> "all"
     | WatchTab.Pinned -> "pinned"
     | WatchTab.Changes -> "changes"
+    | WatchTab.SinceGreen -> "since-green"
     | WatchTab.Watch -> "watch"
 
   let label (tab: WatchTab) : string =
@@ -180,6 +183,7 @@ module WatchTab =
     | WatchTab.All -> "All"
     | WatchTab.Pinned -> "Pinned"
     | WatchTab.Changes -> "Changes"
+    | WatchTab.SinceGreen -> "Since green"
     | WatchTab.Watch -> "Watch"
 
   let ofToken (text: string) : Result<WatchTab, ConfigError> =
@@ -193,6 +197,7 @@ module WatchTab =
     | WatchTab.All -> "No values are bound in this session yet."
     | WatchTab.Pinned -> "Nothing is pinned. Pin a value with the pin at the end of its row."
     | WatchTab.Changes -> "Nothing has changed: no value was tried and not saved, and the program has not changed one."
+    | WatchTab.SinceGreen -> "Nothing has moved since the tests last settled green."
     | WatchTab.Watch -> "Nothing is watched. Type an expression above and press Add."
 
 [<RequireQualifiedAccess>]
@@ -384,6 +389,7 @@ module ViewPreset =
     match tab with
     | WatchTab.All -> recommendedFor workflow
     | WatchTab.Pinned
+    | WatchTab.SinceGreen
     | WatchTab.Watch -> ViewPreset.WatchWindow
     | WatchTab.Changes -> ViewPreset.Tuner
 
@@ -451,6 +457,7 @@ module ViewSettings =
     | WatchTab.All -> sprintf "bindings.view.%s.%s" (ViewWorkflow.token workflow) (ViewAxis.token axis)
     | WatchTab.Pinned
     | WatchTab.Changes
+    | WatchTab.SinceGreen
     | WatchTab.Watch -> sprintf "bindings.view.%s.%s.%s" (ViewWorkflow.token workflow) (WatchTab.token tab) (ViewAxis.token axis)
 
   /// The settings key for one axis of a workflow's All tab.
@@ -501,6 +508,7 @@ module ViewSettings =
         | WatchTab.All -> sprintf "%s: %s" (ViewWorkflow.label workflow) (ViewAxis.label axis)
         | WatchTab.Pinned
         | WatchTab.Changes
+        | WatchTab.SinceGreen
         | WatchTab.Watch -> sprintf "%s, %s tab: %s" (ViewWorkflow.label workflow) (WatchTab.label tab) (ViewAxis.label axis)
       Description = ViewAxis.description axis
       Category = LiveBindingsView

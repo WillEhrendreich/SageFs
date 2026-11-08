@@ -339,26 +339,29 @@ let private filteredOutExpr (binding: string) : string =
 
 /// True while the open tab does not list this binding: `WatchTabs.lists` for each tab that is not All, with the binding's pin read from
 /// the signal and whether it holds a change written in by the server (a change is a fact of the rows, which the page does not hold).
-let private tabHidesExpr (binding: string) (changed: bool) : string =
+let private tabHidesExpr (binding: string) (changed: bool) (moved: bool) : string =
   let open' (tab: WatchTab) = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
-  let changedLiteral = match changed with | true -> "true" | false -> "false"
-  [ WatchTab.Pinned; WatchTab.Changes; WatchTab.Watch ]
-  |> List.map (fun tab -> sprintf "(%s && !(%s))" (open' tab) (Tweak.WatchTabs.listsJs tab (isPinnedExpr binding) changedLiteral))
+  let literal (value: bool) = match value with | true -> "true" | false -> "false"
+  [ WatchTab.Pinned; WatchTab.Changes; WatchTab.SinceGreen; WatchTab.Watch ]
+  |> List.map (fun tab -> sprintf "(%s && !(%s))" (open' tab) (Tweak.WatchTabs.listsJs tab (isPinnedExpr binding) (literal changed) (literal moved)))
   |> String.concat " || "
 
 /// True while the filter is set and this name does not contain it, or the open tab does not list it.
-let private hiddenExpr (binding: string) (changed: bool) : string =
-  sprintf "(%s) || %s" (filteredOutExpr binding) (tabHidesExpr binding changed)
+let private hiddenExpr (binding: string) (changed: bool) (moved: bool) : string =
+  sprintf "(%s) || %s" (filteredOutExpr binding) (tabHidesExpr binding changed moved)
 
 /// True while the open tab is `tab` and none of the bindings is listed on it.
-let private tabEmptyExpr (tab: WatchTab) (bindings: string list) (changedNames: Set<string>) : string =
+let private tabEmptyExpr (tab: WatchTab) (bindings: string list) (changedNames: Set<string>) (movedNames: Set<string>) : string =
   let open' = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
   match tab with
   | WatchTab.All
   // the Watch tab has its own empty words, drawn with its rows
   | WatchTab.Watch -> "false"
   | WatchTab.Changes ->
-    let any = bindings |> List.exists (fun name -> Tweak.WatchTabs.lists tab false (Set.contains name changedNames))
+    let any = bindings |> List.exists (fun name -> Tweak.WatchTabs.lists tab false (Set.contains name changedNames) false)
+    sprintf "%s && %s" open' (match any with | true -> "false" | false -> "true")
+  | WatchTab.SinceGreen ->
+    let any = bindings |> List.exists (fun name -> Tweak.WatchTabs.lists tab false false (Set.contains name movedNames))
     sprintf "%s && %s" open' (match any with | true -> "false" | false -> "true")
   | WatchTab.Pinned ->
     let tokens = bindings |> List.map (fun name -> jsStringLiteral (pinToken name)) |> String.concat ", "
@@ -538,9 +541,16 @@ let modeRows (sessionId: string) (current: ValueWalk) : XmlNode list =
       yield! ValueWalk.all |> List.map modeButton ]
     renderLegend ]
 
-let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (formats: Map<string, Tweak.RowFormatting.FormatChoice>) (view: LiveBindingsPane.PaneView) (watchTab: XmlNode list) : XmlNode list =
+let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (formats: Map<string, Tweak.RowFormatting.FormatChoice>) (green: LiveBindingsViewPanel.GreenSaid) (view: LiveBindingsPane.PaneView) (watchTab: XmlNode list) : XmlNode list =
   // The bindings the Changes tab lists: a fact of the rows, so the server writes it into each binding's expression.
   let changedNames = changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)
+  // What moved since the tests last settled green, by place, and the bindings it belongs to.
+  let moves =
+    match green with
+    | LiveBindingsViewPanel.GreenSaid.Moved moved -> moved
+    | LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet -> Map.empty
+  let movedNames = Tweak.SinceGreen.movedBindings moves
+  let sinceGreenOpen = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token WatchTab.SinceGreen)
   let evaluateEndpoint = sprintf "/api/sessions/%s/live-values/evaluate" (Uri.EscapeDataString sessionId)
   let kindBadge (node: LiveValueTree.LiveValueNode) =
     match node.Kind with
@@ -611,6 +621,13 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
       | NumberLabels.RunningAndFile ->
         [ Elem.span [ Attr.class' "live-number-tag"; Attr.title NumberLabels.runningMeaning; testid "tweak-running-tag" ] [ textEnc NumberLabels.runningWord ] ]
       | NumberLabels.OneNumber -> []
+  let wasNote (words: string) : XmlNode =
+    Elem.span
+      [ Attr.class' "live-was live-hidden"
+        testid "live-was"
+        Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" sinceGreenOpen))
+        Ds.preserveAttr "class" ]
+      [ textEnc words ]
   let heldRow (binding: string) (path: string list) (node: LiveValueTree.LiveValueNode) (reason: LiveValueTree.NotEvaluatedReason) =
     let action = LiveBindingsPane.rowActionOf reason
     let rowClass =
@@ -701,6 +718,12 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
         glyphCell node
         nameCell node
         yield! valueCells
+        // What the value was at the last green settle, on the Since green tab only.
+        match Map.tryFind (Tweak.SinceGreen.pathKey binding path) moves with
+        | Some(Tweak.SinceGreen.Moved.Differs(before, _)) -> wasNote (sprintf "was %s" before)
+        | Some(Tweak.SinceGreen.Moved.Appeared _) -> wasNote "new since green"
+        | Some(Tweak.SinceGreen.Moved.Left _)
+        | None -> ()
         yield! runningTag binding path
         yield! typeCells node
         yield! tweakCells binding path
@@ -823,7 +846,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
           |> List.map (fun b ->
             Elem.div
               ( Attr.id (DockIds.binding b.Name) :: signalClasses "live-binding"
-                @ [ Ds.class' ("live-hidden", attrEnc (hiddenExpr b.Name (Set.contains b.Name changedNames)))
+                @ [ Ds.class' ("live-hidden", attrEnc (hiddenExpr b.Name (Set.contains b.Name changedNames) (Set.contains b.Name movedNames)))
                     Ds.class' ("live-pinned", isPinnedExpr b.Name) ])
               [ Elem.button
                   [ Attr.id (DockIds.bindingPin b.Name)
@@ -846,15 +869,38 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
           [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.NoNameMatchesFilter) ]
         // An open tab with nothing on it says so, in words, instead of showing an empty pane.
         yield!
-          [ WatchTab.Pinned; WatchTab.Changes ]
+          [ WatchTab.Pinned; WatchTab.Changes; WatchTab.SinceGreen ]
           |> List.map (fun tab ->
             Elem.div
               [ Attr.id (sprintf "live-tab-empty-%s" (WatchTab.token tab))
                 Attr.class' "live-empty live-hidden"
                 testid (sprintf "live-tab-empty-%s" (WatchTab.token tab))
-                Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" (tabEmptyExpr tab names changedNames)))
+                Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" (tabEmptyExpr tab names changedNames movedNames)))
                 Ds.preserveAttr "class" ]
-              [ textEnc (WatchTab.emptyWords tab) ])
+              [ textEnc
+                  (match tab, green with
+                   | WatchTab.SinceGreen, LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet -> "The tests have not settled green yet, so there is nothing to compare with."
+                   | _ -> WatchTab.emptyWords tab) ])
+        // A binding that was there at the last green settle and is not now has no row to show it on, so it is named here.
+        yield!
+          moves
+          |> Map.toList
+          |> List.choose (fun (key, moved) ->
+            match moved with
+            | Tweak.SinceGreen.Moved.Left before when Tweak.SinceGreen.bindingOf key = key -> Some(key, before)
+            | Tweak.SinceGreen.Moved.Left _
+            | Tweak.SinceGreen.Moved.Differs _
+            | Tweak.SinceGreen.Moved.Appeared _ -> None)
+          |> function
+            | [] -> []
+            | gone ->
+              [ Elem.div
+                  [ Attr.id "live-since-green-left"
+                    Attr.class' "live-since-green-left live-hidden"
+                    testid "live-since-green-left"
+                    Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" sinceGreenOpen))
+                    Ds.preserveAttr "class" ]
+                  [ textEnc ("No longer bound: " + (gone |> List.map (fun (name, before) -> sprintf "%s (was %s)" name before) |> String.concat ", ")) ] ]
         match view.Snapshot.Truncated with
         | true -> Elem.div [ Attr.class' "live-truncated live-truncated-note" ] [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ValuesCutShort) ]
         | false -> ()
@@ -865,7 +911,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
 /// The tab bar: All, Pinned and Changes, each with how many it lists. The open tab is a signal, so a push never closes it, and the pressed
 /// state is read from the signal and said in the markup (`aria-pressed`) as well as in the fill. The Pinned count is the page's own, from
 /// the pins it holds; the other two are the server's.
-let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
+let tabBar (bindingCount: int) (changedCount: int) (movedCount: int) (watchCount: int) : XmlNode =
   let open' (tab: WatchTab) = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
   Elem.div
     [ Attr.class' "live-tabs"
@@ -877,6 +923,7 @@ let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
           match tab with
           | WatchTab.All -> [ textEnc (string bindingCount) ]
           | WatchTab.Changes -> [ textEnc (string changedCount) ]
+          | WatchTab.SinceGreen -> [ textEnc (string movedCount) ]
           | WatchTab.Watch -> [ textEnc (string watchCount) ]
           | WatchTab.Pinned -> [ textEnc "0" ]
         Elem.button
@@ -884,7 +931,7 @@ let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
             Attr.class' "session-btn session-btn-labeled live-tab"
             Attr.type' "button"
             testid (sprintf "live-tab-%s" (WatchTab.token tab))
-            Attr.create "aria-pressed" (match tab with | WatchTab.All -> "true" | WatchTab.Pinned | WatchTab.Changes | WatchTab.Watch -> "false")
+            Attr.create "aria-pressed" (match tab with | WatchTab.All -> "true" | WatchTab.Pinned | WatchTab.Changes | WatchTab.SinceGreen | WatchTab.Watch -> "false")
             Ds.attr' ("aria-pressed", sprintf "%s ? 'true' : 'false'" (open' tab))
             Ds.class' ("session-btn-on", open' tab)
             Ds.preserveAttr "class aria-pressed"
@@ -898,6 +945,7 @@ let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
                   | WatchTab.Pinned -> [ Ds.text (sprintf "$%s.split(',').filter(Boolean).length" DockSignals.LivePins) ]
                   | WatchTab.All
                   | WatchTab.Changes
+                  | WatchTab.SinceGreen
                   | WatchTab.Watch -> []))
               count ] ]
 
@@ -934,7 +982,11 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
         match controls with
         | Some viewControls -> viewControls.Formats
         | None -> Map.empty
-      match renderTree look sessionId tweaks formats view watchTab with
+      let green =
+        match controls with
+        | Some viewControls -> viewControls.SinceGreen
+        | None -> LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet
+      match renderTree look sessionId tweaks formats green view watchTab with
       | head :: rest -> [ head ], rest
       | [] -> [], []
     | PrintedBindings scope -> [], [ treeElement look [ renderBindingsPanel (Some scope) ] ]
@@ -1012,7 +1064,14 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
     match source with
     | WalkedBindings view ->
       let watchCount = match controls with | Some c -> c.Watch.Count | None -> 0
-      tabBar view.Snapshot.Bindings.Length (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count watchCount
+      let movedCount =
+        match controls with
+        | Some c ->
+          match c.SinceGreen with
+          | LiveBindingsViewPanel.GreenSaid.Moved moved -> (Tweak.SinceGreen.movedBindings moved).Count
+          | LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet -> 0
+        | None -> 0
+      tabBar view.Snapshot.Bindings.Length (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count movedCount watchCount
     | PrintedBindings _
     | NothingBound -> ()
     yield! headNodes

@@ -134,6 +134,8 @@
         <!-- The view panel: the pane bar's button and the panel of choices it opens. Posts one request per click. -->
         <Compile Include="LiveBindingsViewPanel.fs" />
         <Compile Include="LiveBindingsWatch.fs" />
+        <!-- The Since green tab's comparison point, kept for each session. -->
+        <Compile Include="LiveBindingsSinceGreen.fs" />
         <!-- The picker on a row: how a whole number is shown (as it is, hex, binary, colour, range) and the page's choice of it. -->
         <Compile Include="LiveBindingsRowFormat.fs" />
         <Compile Include="LiveBindingsDock.fs" />

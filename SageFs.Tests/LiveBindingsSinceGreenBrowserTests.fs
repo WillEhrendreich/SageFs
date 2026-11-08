@@ -96,11 +96,13 @@ let private serve (html: string) (page: IPage) = task {
 /// What the page shows once the tab is open: which binding rows are visible, what each says it was, the tab's count and its words.
 let private tabReport : string =
   """() => {
+    // A record's fields are inside a details that is closed until a person opens it; open them, so their rows can be read.
+    document.querySelectorAll('details.live-node').forEach(d => { d.open = true; });
     const visible = el => !!el && el.checkVisibility();
     const rows = [...document.querySelectorAll('.live-binding-node')].map(row => {
-      const name = row.querySelector(':scope > .live-name')?.innerText ?? '';
+      const name = row.querySelector(':scope > .live-name')?.textContent ?? '';
       const was = row.querySelector('[data-testid=live-was]');
-      return { name, visible: visible(row), was: was ? was.innerText.trim() : '' };
+      return { name, visible: visible(row), was: was ? was.textContent.trim() : '' };
     });
     const empty = document.querySelector('[data-testid=live-tab-empty-since-green]');
     const left = document.querySelector('[data-testid=live-since-green-left]');
@@ -108,6 +110,8 @@ let private tabReport : string =
     const outside = rows.length && [...document.querySelectorAll('.live-binding-node')].some(r => r.checkVisibility() && (r.getBoundingClientRect().right > tree.right + 1));
     return JSON.stringify({
       rows,
+      pressed: document.querySelector('[data-testid=live-tab-since-green]').getAttribute('aria-pressed'),
+      allPressed: document.querySelector('[data-testid=live-tab-all]').getAttribute('aria-pressed'),
       count: document.querySelector('[data-testid=live-tab-count-since-green]')?.innerText.trim() ?? '(no count)',
       empty: visible(empty) ? empty.innerText.trim() : '',
       left: visible(left) ? left.innerText.trim() : '',
@@ -145,15 +149,21 @@ let private journey () : Task<unit> = task {
           [ for row in report.GetProperty("rows").EnumerateArray() ->
               row.GetProperty("name").GetString(), row.GetProperty("visible").GetBoolean(), row.GetProperty("was").GetString() ]
         let visibleNames = rows |> List.filter (fun (_, v, _) -> v) |> List.map (fun (n, _, _) -> n)
+        let rowNamed (wanted: string) =
+          match rows |> List.tryFind (fun (n, _, _) -> n = wanted) with
+          | Some row -> row
+          | None -> Tests.failtestf "no row named %s (%s); the rows are: %s" wanted what (rows |> List.map (fun (n, v, w) -> sprintf "%s visible=%b was='%s'" n v w) |> String.concat ", ")
+        report.GetProperty("pressed").GetString() |> Expect.equal (sprintf "the Since green tab is the pressed one (%s)" what) "true"
+        report.GetProperty("allPressed").GetString() |> Expect.equal (sprintf "and All is not (%s)" what) "false"
         report.GetProperty("outside").GetBoolean() |> Expect.isFalse (sprintf "no row sticks out of the tree (%s)" what)
         report.GetProperty("pageScrollsSideways").GetBoolean() |> Expect.isFalse (sprintf "the page does not scroll sideways (%s)" what)
         match name with
         | "moved" ->
-          rows |> List.find (fun (n, _, _) -> n = "score") |> fun (_, v, was) ->
+          rowNamed "score" |> fun (_, v, was) ->
             v |> Expect.isTrue (sprintf "score moved, so it is listed (%s)" what)
             was |> Expect.equal (sprintf "score says what it was (%s)" what) "was 10"
-          rows |> List.find (fun (n, _, _) -> n = "lives") |> fun (_, v, _) -> v |> Expect.isFalse (sprintf "lives did not move, so it is not listed (%s)" what)
-          rows |> List.find (fun (n, _, _) -> n = "Health") |> fun (_, v, was) ->
+          rowNamed "lives" |> fun (_, v, _) -> v |> Expect.isFalse (sprintf "lives did not move, so it is not listed (%s)" what)
+          rowNamed "Health" |> fun (_, v, was) ->
             v |> Expect.isTrue (sprintf "a field of a record that moved is listed (%s)" what)
             was |> Expect.equal (sprintf "the field says what it was (%s)" what) "was 100"
           visibleNames |> List.contains "player" |> Expect.isTrue (sprintf "the record holding it is listed (%s)" what)

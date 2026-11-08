@@ -21,7 +21,7 @@ let catalogTests =
       let expected = ViewWorkflow.all.Length * WatchTab.all.Length * ViewAxis.all.Length
       ViewSettings.descriptors |> List.length |> Expect.equal "every workflow by every tab by every axis" expected
       ViewSettings.descriptors |> List.map (fun d -> d.Key) |> List.distinct |> List.length |> Expect.equal "all keys distinct" expected
-      expected |> Expect.equal "three workflows by four tabs by nine axes: the eight of the plan and the changes strip" 108
+      expected |> Expect.equal "three workflows by five tabs by nine axes: the eight of the plan and the changes strip" 135
       ViewSettings.descriptors
       |> List.forall (fun d -> d.Key.StartsWith "bindings.view.")
       |> Expect.isTrue "all under one prefix, so the panel can group them"

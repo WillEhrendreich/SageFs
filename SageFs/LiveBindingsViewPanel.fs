@@ -217,6 +217,7 @@ let renderFor (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (reso
                  | WatchTab.All -> sprintf "Binding display settings for %s mode" (ViewWorkflow.label workflow)
                  | WatchTab.Pinned
                  | WatchTab.Changes
+                 | WatchTab.SinceGreen
                  | WatchTab.Watch -> sprintf "Binding display settings for %s mode, %s tab" (ViewWorkflow.label workflow) (WatchTab.label tab)) ]
           // A way to close it where it is: the panel floats over the table, and the only other way was to find the View button again.
           Elem.button
