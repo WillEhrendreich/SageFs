@@ -4,9 +4,9 @@ open System
 
 /// The Live Bindings view as settings (docs/plans/live-bindings-watch-view.md, phase 1, step 1).
 ///
-/// A view is a handful of independent axes: which optional columns show, whether rows group by origin, whether a pinned strip and an
-/// inspector show, how much of a value prints, and how tall a row is. The four layouts the roast of the pane produced are presets of
-/// this one component. Each (workflow, axis) pair is a setting in the unified catalog (`Settings.fs`), so the layers, the provenance
+/// A view is a handful of independent axes: which optional columns show, whether the changes strip shows, how much of a value prints, and
+/// how tall a row is. Two presets of the three columns are offered. Row grouping, a pinned strip and an inspector were axes once and nothing
+/// drew them; a settings file that still holds their keys loads, and the keys are left in it untouched. Each (workflow, axis) pair is a setting in the unified catalog (`Settings.fs`), so the layers, the provenance
 /// and the file store that already exist do the persisting: a value is stored only where someone chose it, and an axis nobody
 /// touched follows the recommended view for its workflow.
 ///
@@ -27,17 +27,9 @@ type ViewAxis =
   | TypeColumn
   | StateColumn
   | SourceColumn
-  | GroupBy
-  | PinnedStrip
-  | Inspector
   | ChangesStrip
   | ValueMode
   | RowHeight
-
-[<RequireQualifiedAccess>]
-type GroupMode =
-  | NoGrouping
-  | ByOrigin
 
 /// How much of a value a row prints. `Full` wraps instead of clipping.
 [<RequireQualifiedAccess>]
@@ -50,14 +42,11 @@ type RowHeight =
   | Compact
   | Roomy
 
-/// The six axes a preset sets. Value printing and row height are personal and stay out of it.
+/// The three columns a preset sets. Value printing and row height are personal and stay out of it.
 type Layout =
   { Type: Toggle
     State: Toggle
-    Source: Toggle
-    Group: GroupMode
-    Strip: Toggle
-    Inspector: Toggle }
+    Source: Toggle }
 
 type View =
   { Layout: Layout
@@ -73,9 +62,6 @@ type AxisValue =
   | TypeColumn of Toggle
   | StateColumn of Toggle
   | SourceColumn of Toggle
-  | GroupBy of GroupMode
-  | PinnedStrip of Toggle
-  | Inspector of Toggle
   | ChangesStrip of Toggle
   | ValueMode of ValueMode
   | RowHeight of RowHeight
@@ -83,9 +69,6 @@ type AxisValue =
 [<RequireQualifiedAccess>]
 type ViewPreset =
   | WatchWindow
-  | TreeAndInspector
-  | PinnedStrip
-  | GroupedByOrigin
   | Tuner
 
 /// Whether a layout is the recommended one for its workflow, a named preset, or neither.
@@ -206,9 +189,6 @@ module ViewAxis =
     [ ViewAxis.TypeColumn
       ViewAxis.StateColumn
       ViewAxis.SourceColumn
-      ViewAxis.GroupBy
-      ViewAxis.PinnedStrip
-      ViewAxis.Inspector
       ViewAxis.ChangesStrip
       ViewAxis.ValueMode
       ViewAxis.RowHeight ]
@@ -229,9 +209,6 @@ module ViewAxis =
     | ViewAxis.TypeColumn -> "type"
     | ViewAxis.StateColumn -> "state"
     | ViewAxis.SourceColumn -> "source"
-    | ViewAxis.GroupBy -> "group"
-    | ViewAxis.PinnedStrip -> "strip"
-    | ViewAxis.Inspector -> "inspector"
     | ViewAxis.ChangesStrip -> "changes"
     | ViewAxis.ValueMode -> "values"
     | ViewAxis.RowHeight -> "row"
@@ -241,9 +218,6 @@ module ViewAxis =
     | ViewAxis.TypeColumn -> "Show type"
     | ViewAxis.StateColumn -> "Show state"
     | ViewAxis.SourceColumn -> "Show source"
-    | ViewAxis.GroupBy -> "Group by"
-    | ViewAxis.PinnedStrip -> "Pinned strip"
-    | ViewAxis.Inspector -> "Inspector"
     | ViewAxis.ChangesStrip -> "Changes strip"
     | ViewAxis.ValueMode -> "Long values"
     | ViewAxis.RowHeight -> "Row height"
@@ -253,9 +227,6 @@ module ViewAxis =
     | ViewAxis.TypeColumn -> "Show each value's type in its own column."
     | ViewAxis.StateColumn -> "Show how each value relates to its source: source, tweaked, formula, evolved or live only."
     | ViewAxis.SourceColumn -> "Show the file and line each value comes from."
-    | ViewAxis.GroupBy -> "Group rows by where the value lives: in a file, REPL only, or not evaluated."
-    | ViewAxis.PinnedStrip -> "Keep pinned values in a strip above the tree so they stay in view while it scrolls."
-    | ViewAxis.Inspector -> "Show the selected row's type, origin, full value and controls in a panel beside the tree."
     | ViewAxis.ChangesStrip -> "Show a strip above the tree that counts the values you tried and have not saved, and the values the program changed on its own."
     | ViewAxis.ValueMode -> "Clip each value to one line, or print it in full and wrap it."
     | ViewAxis.RowHeight -> "How tall a row is."
@@ -267,9 +238,6 @@ module AxisValue =
     | AxisValue.TypeColumn _ -> ViewAxis.TypeColumn
     | AxisValue.StateColumn _ -> ViewAxis.StateColumn
     | AxisValue.SourceColumn _ -> ViewAxis.SourceColumn
-    | AxisValue.GroupBy _ -> ViewAxis.GroupBy
-    | AxisValue.PinnedStrip _ -> ViewAxis.PinnedStrip
-    | AxisValue.Inspector _ -> ViewAxis.Inspector
     | AxisValue.ChangesStrip _ -> ViewAxis.ChangesStrip
     | AxisValue.ValueMode _ -> ViewAxis.ValueMode
     | AxisValue.RowHeight _ -> ViewAxis.RowHeight
@@ -285,11 +253,7 @@ module AxisValue =
     | AxisValue.TypeColumn t
     | AxisValue.StateColumn t
     | AxisValue.SourceColumn t
-    | AxisValue.PinnedStrip t
-    | AxisValue.Inspector t
     | AxisValue.ChangesStrip t -> toggleToken t
-    | AxisValue.GroupBy GroupMode.NoGrouping -> "none"
-    | AxisValue.GroupBy GroupMode.ByOrigin -> "origin"
     | AxisValue.ValueMode ValueMode.Clipped -> "clipped"
     | AxisValue.ValueMode ValueMode.Full -> "full"
     | AxisValue.RowHeight RowHeight.Compact -> "compact"
@@ -301,14 +265,10 @@ module AxisValue =
     | AxisValue.TypeColumn t
     | AxisValue.StateColumn t
     | AxisValue.SourceColumn t
-    | AxisValue.PinnedStrip t
-    | AxisValue.Inspector t
     | AxisValue.ChangesStrip t ->
       match t with
       | On -> "On"
       | Off -> "Off"
-    | AxisValue.GroupBy GroupMode.NoGrouping -> "None"
-    | AxisValue.GroupBy GroupMode.ByOrigin -> "By origin"
     | AxisValue.ValueMode ValueMode.Clipped -> "Clipped"
     | AxisValue.ValueMode ValueMode.Full -> "Full"
     | AxisValue.RowHeight RowHeight.Compact -> "Compact"
@@ -320,9 +280,6 @@ module AxisValue =
     | ViewAxis.TypeColumn -> [ AxisValue.TypeColumn On; AxisValue.TypeColumn Off ]
     | ViewAxis.StateColumn -> [ AxisValue.StateColumn On; AxisValue.StateColumn Off ]
     | ViewAxis.SourceColumn -> [ AxisValue.SourceColumn On; AxisValue.SourceColumn Off ]
-    | ViewAxis.GroupBy -> [ AxisValue.GroupBy GroupMode.NoGrouping; AxisValue.GroupBy GroupMode.ByOrigin ]
-    | ViewAxis.PinnedStrip -> [ AxisValue.PinnedStrip On; AxisValue.PinnedStrip Off ]
-    | ViewAxis.Inspector -> [ AxisValue.Inspector On; AxisValue.Inspector Off ]
     | ViewAxis.ChangesStrip -> [ AxisValue.ChangesStrip On; AxisValue.ChangesStrip Off ]
     | ViewAxis.ValueMode -> [ AxisValue.ValueMode ValueMode.Clipped; AxisValue.ValueMode ValueMode.Full ]
     | ViewAxis.RowHeight -> [ AxisValue.RowHeight RowHeight.Compact; AxisValue.RowHeight RowHeight.Roomy ]
@@ -338,44 +295,29 @@ module AxisValue =
 module ViewPreset =
   let all : ViewPreset list =
     [ ViewPreset.WatchWindow
-      ViewPreset.TreeAndInspector
-      ViewPreset.PinnedStrip
-      ViewPreset.GroupedByOrigin
       ViewPreset.Tuner ]
 
   let label (preset: ViewPreset) : string =
     match preset with
     | ViewPreset.WatchWindow -> "Watch window"
-    | ViewPreset.TreeAndInspector -> "Tree and inspector"
-    | ViewPreset.PinnedStrip -> "Pinned strip"
-    | ViewPreset.GroupedByOrigin -> "Grouped by origin"
     | ViewPreset.Tuner -> "Tuner"
 
   /// Name, Value and Type on one line, nothing else.
   let flat : Layout =
     { Type = On
       State = Off
-      Source = Off
-      Group = GroupMode.NoGrouping
-      Strip = Off
-      Inspector = Off }
+      Source = Off }
 
   let layout (preset: ViewPreset) : Layout =
     match preset with
     | ViewPreset.WatchWindow -> flat
-    | ViewPreset.TreeAndInspector -> { flat with Type = Off; Inspector = On }
-    | ViewPreset.PinnedStrip -> { flat with Type = Off; Strip = On }
-    | ViewPreset.GroupedByOrigin -> { flat with Group = GroupMode.ByOrigin }
     | ViewPreset.Tuner ->
       { Type = On
         State = On
-        Source = On
-        Group = GroupMode.NoGrouping
-        Strip = On
-        Inspector = On }
+        Source = On }
 
-  /// Watch window for REPL and Live testing, where nothing is tweaked. Tuner for Hot reload, where tweaking needs State and Source,
-  /// the strip and the inspector together.
+  /// Watch window for REPL and Live testing, where nothing is tweaked. Tuner for Hot reload, where tweaking needs State and Source
+  /// together.
   let recommendedFor (workflow: ViewWorkflow) : ViewPreset =
     match workflow with
     | ViewWorkflow.Repl
@@ -411,9 +353,6 @@ module View =
     | ViewAxis.TypeColumn -> AxisValue.TypeColumn view.Layout.Type
     | ViewAxis.StateColumn -> AxisValue.StateColumn view.Layout.State
     | ViewAxis.SourceColumn -> AxisValue.SourceColumn view.Layout.Source
-    | ViewAxis.GroupBy -> AxisValue.GroupBy view.Layout.Group
-    | ViewAxis.PinnedStrip -> AxisValue.PinnedStrip view.Layout.Strip
-    | ViewAxis.Inspector -> AxisValue.Inspector view.Layout.Inspector
     | ViewAxis.ChangesStrip -> AxisValue.ChangesStrip view.Changes
     | ViewAxis.ValueMode -> AxisValue.ValueMode view.Values
     | ViewAxis.RowHeight -> AxisValue.RowHeight view.Row
@@ -424,9 +363,6 @@ module View =
     | AxisValue.TypeColumn t -> { view with Layout = { view.Layout with Type = t } }
     | AxisValue.StateColumn t -> { view with Layout = { view.Layout with State = t } }
     | AxisValue.SourceColumn t -> { view with Layout = { view.Layout with Source = t } }
-    | AxisValue.GroupBy g -> { view with Layout = { view.Layout with Group = g } }
-    | AxisValue.PinnedStrip t -> { view with Layout = { view.Layout with Strip = t } }
-    | AxisValue.Inspector t -> { view with Layout = { view.Layout with Inspector = t } }
     | AxisValue.ChangesStrip t -> { view with Changes = t }
     | AxisValue.ValueMode m -> { view with Values = m }
     | AxisValue.RowHeight h -> { view with Row = h }
@@ -434,7 +370,7 @@ module View =
   /// Every axis of a view, in the order the view panel lists them.
   let axisValues (view: View) : AxisValue list = ViewAxis.all |> List.map (valueOf view)
 
-  /// A preset sets the six layout axes and leaves value printing and row height as they are.
+  /// A preset sets the three columns and leaves value printing and row height as they are.
   let withPreset (preset: ViewPreset) (view: View) : View = { view with Layout = ViewPreset.layout preset }
 
   let detectIn (workflow: ViewWorkflow) (tab: WatchTab) (layout: Layout) : DetectedPreset =
@@ -469,10 +405,7 @@ module ViewSettings =
     | AxisValue.TypeColumn t
     | AxisValue.StateColumn t
     | AxisValue.SourceColumn t
-    | AxisValue.PinnedStrip t
-    | AxisValue.Inspector t
     | AxisValue.ChangesStrip t -> VToggle t
-    | AxisValue.GroupBy _
     | AxisValue.ValueMode _
     | AxisValue.RowHeight _ ->
       let allowed = AxisValue.allFor (AxisValue.axisOf value) |> List.map AxisValue.token
@@ -563,7 +496,7 @@ type ViewEdit =
   | Set of AxisValue
   /// Drop this layer's choice for one axis, so it follows the layer below again.
   | Reset of ViewAxis
-  /// Take a preset's six layout axes. Value printing and row height are left as they are.
+  /// Take a preset's three columns. Value printing and row height are left as they are.
   | Preset of ViewPreset
   /// Drop every choice this layer holds for the workflow.
   | ResetAll
@@ -629,16 +562,13 @@ type PostedViewEdit =
 
 [<RequireQualifiedAccess>]
 module ViewEdit =
-  /// The word a preset button posts. `recommended` is not one of the five presets: it means the workflow's own.
+  /// The word a preset button posts. `recommended` is not one of the presets: it means the workflow's own.
   [<Literal>]
   let RecommendedToken = "recommended"
 
   let presetToken (preset: ViewPreset) : string =
     match preset with
     | ViewPreset.WatchWindow -> "watchwindow"
-    | ViewPreset.TreeAndInspector -> "treeandinspector"
-    | ViewPreset.PinnedStrip -> "pinnedstrip"
-    | ViewPreset.GroupedByOrigin -> "groupedbyorigin"
     | ViewPreset.Tuner -> "tuner"
 
   /// The edit a posted request means, for one tab of one workflow: the axis and value tokens are read only for the actions that use
@@ -670,10 +600,7 @@ module ViewEdit =
   let private layoutAxes : ViewAxis list =
     [ ViewAxis.TypeColumn
       ViewAxis.StateColumn
-      ViewAxis.SourceColumn
-      ViewAxis.GroupBy
-      ViewAxis.PinnedStrip
-      ViewAxis.Inspector ]
+      ViewAxis.SourceColumn ]
 
   /// The writes an edit comes to for one layer, given the view the layer below would give. Only an override is stored: a value equal
   /// to what the layer below gives is cleared, so a layer file never holds a choice that changes nothing.
