@@ -744,33 +744,49 @@ The route refuses with a JSON body of `error`, `message`, `case` and `suggestedA
 
 A credential that was presented and cannot be used is a 403, like a member token the
 daemon cannot resolve, because that is the status that makes a client's header helper
-run again. Every other route still takes no credential.
+run again. Every other route still takes no credential, except `POST /api/local-data/clear`,
+which takes this one.
 
 The limit, in plain words: the operator file is readable by every process running as
-the same user, so against a hostile process of your own user this adds nothing. What it
-stops is a caller that can reach loopback and cannot read your home directory: a
-sandboxed agent (bwrap, a container with host networking), another OS user on a shared
-machine, a forwarded dev-container port. The file's owner-only mode is set and read
-back on Unix. On Windows the file gets an ACL for the current user alone when it is
-made, and that is not read back, because it has not been run there.
+the same user, so against a hostile process of your own user this adds nothing: it can
+read the file and use the routes. It also does not keep out a caller that only reaches
+loopback. `/exec`, the evaluation tools and every other route but the mint, seat and
+local-data routes take no credential today, so a caller that can reach the daemon's port can run
+code in a session, and where the worker is not sandboxed that code can read
+`operator.token`. What the credential stops is a caller that can reach loopback and can
+neither read your home directory nor run code through the daemon: another OS user on a
+shared machine, or a forwarded dev-container port whose callers have no eval. The
+`a-token-for-every-daemon-call` item on the roadmap is what closes the open routes. The
+file's owner-only mode is set and read back on Unix. On Windows the file gets an ACL for
+the current user alone when it is made, and that is not read back, because it has not
+been run there.
 
 **Seat a conductor.** When the conductor leaves or goes silent the seat is empty, and an empty seat stays empty until
-a person says who fills it. `delegate_conductor` cannot: only a sitting conductor can issue it. There are three ways in,
-and each ends with a person's say.
+a person says who fills it. `delegate_conductor` cannot: only a sitting conductor can issue it. There are three ways in.
+No MCP tool builds the seating command without a question being put to the person, and no member token can take the seat.
+A process running as the same operating-system user as the daemon can still use the second and third ways (see the limit
+above), so none of them is a guarantee against a hostile process of that user. What differs is what each asks first.
 
 The first is the tool. A seated member calls `seat_conductor`, and the daemon asks the person at that member's client
-(MCP elicitation, the mechanism `manage_local_data` uses) whether to seat the member. Only an explicit yes seats anyone.
+(MCP elicitation, the mechanism `manage_local_data` uses) whether to seat the member. Only an accept with the box ticked
+is a yes: the form starts unticked, so a client that applies defaults and accepts, or accepts with no content, seats nobody.
 Unlike `manage_local_data`, where a client that cannot be asked is let through, a client that offers no elicitation is
-refused here, because for this tool the prompt is the permission. The seat is the authority to mint tokens, configure the
-integration and reassign claims, and an MCP tool is callable by any agent, so the code is shaped so that a seating without
-a yes cannot be written: the command is built from a `SeatApproval` that only `SeatingFlow.ask` makes, after the person
-said yes. The cohort's rules run first (`SeatingFlow.plan`), so nobody is asked about a seating the cohort would refuse.
+refused here, because for this tool the prompt is the permission. The daemon cannot know that a person answered. It knows
+the client accepted, and a client that accepts every question by itself seats on its own say, which is why the reply says
+"the client at <member> accepted". The seat is the authority to mint tokens, configure the integration and reassign claims,
+and an MCP tool is callable by any agent, so the code is shaped so that a seating without a yes cannot be written: the
+command is built from a `SeatApproval` that only `SeatingFlow.ask` makes, after the client said yes. The cohort's rules run
+first (`SeatingFlow.plan`), so nobody is asked about a seating the cohort would refuse.
+
 The second is the Seat button on the dashboard's cohort panel, next to the vacant-seat line (one per present member, after
-a native confirmation). It posts to `/dashboard/cohort/seat`, which answers only a request that carries the browser's own
-`Sec-Fetch-Site: same-origin`, so a shell or an agent's HTTP client is told to use the command line. The header is
-evidence that a browser sent it and is not a credential: a process that can forge it can also read `operator.token`. The
-third is a command on the machine that runs the daemon, for a person with no client that can answer a question:
-command on the machine that runs the daemon:
+a native confirmation). It posts to `/dashboard/cohort/seat` with a one-use ticket the page was rendered with. The daemon
+holds the ticket, for that member, for 30 minutes (`Timeouts.dashboardSeatNonceLifetime`), and the first presentation
+spends it, right or wrong. A request with no ticket, a used or expired one, or one issued for another member's button is
+refused, and so is one without the `Sec-Fetch-Site: same-origin` header a browser sets, which is checked as well and
+proves nothing alone. The dashboard has no credential, so a process that can load the page can read a ticket out of it:
+the ticket stops blind, replayed and stale requests, and does not authenticate a person.
+
+The third is a command on the machine that runs the daemon, for a person with no client that can answer a question:
 
 ```sh
 sagefs cohort seat                                   # who is present, and where the seat stands
@@ -791,8 +807,9 @@ refused too: no token may call the conductor's tools, so the seat would be stuck
 
 It uses the operator credential, exactly as `member mint` does: `GET` and `POST /api/cohort/seat` with
 `Authorization: Bearer sfo_...`, refused with the table of statuses above for anything else. No member token reaches the
-route, and the only way an MCP tool reaches `SeatConductor` is through a `SeatApproval`, which is why an agent cannot take
-the seat on its own say-so. The `POST` body is `{"working_directory": "...", "member": "mcp:m-..."}`.
+route and no MCP tool builds the command without a `SeatApproval`. The credential is a file the operating-system user can
+read, so a process running as that user, an agent with a shell included, can run `sagefs cohort seat` and seat itself.
+The `POST` body is `{"working_directory": "...", "member": "mcp:m-..."}`.
 
 **Replace a conductor whose connection is gone.** A conductor whose bridge changed or whose daemon restarted onto a
 different identity keeps the seat until its lease lapses, which is 30 minutes (`Timeouts.cohortLeaseWindow`), and a
@@ -823,8 +840,9 @@ seat <member id> --replace X`), and so does the dashboard's cohort panel. A hold
 and the refusal says it renewed its lease lately, so a live conductor is not replaced by habit.
 
 It is the same route and the same operator credential: `POST /api/cohort/seat` takes an optional `"replace": "mcp:m-..."`
-in the body. No MCP tool builds a `ReplaceConductor` and no member token reaches the route, so an agent cannot unseat a
-conductor.
+in the body. No MCP tool builds a `ReplaceConductor` and no member token reaches the route. The credential is a file the
+operating-system user can read, so a process running as that user can replace a conductor; replacing one by asking the
+person at a client is the `seat-replace-by-asking` item.
 
 **Route.** Every token names the one place it may act, and you say where with
 exactly one of two parameters:

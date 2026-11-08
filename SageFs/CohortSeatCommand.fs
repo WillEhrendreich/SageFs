@@ -21,8 +21,8 @@ module SeatKind =
     | SeatKind.Bound -> "bound"
 
 /// `GET` and `POST /api/cohort/seat`: a person looks at a cohort's conductor seat and fills it when it is empty.
-/// Both need the operator credential (`operator.token`, the one `sagefs member mint` uses), so the route is the
-/// one place a `Cohort.SeatConductor` is built and no MCP tool and no member token reaches it. This module holds
+/// Both need the operator credential (`operator.token`, the one `sagefs member mint` uses), which no member token
+/// holds. The dashboard's Seat button (`seatFromDashboard`) builds the command through the same `commandFor`. This module holds
 /// what is decided without a server: how the request is read, which member the name means, what a refusal says
 /// and what the reply holds. McpServer.fs registers the route and runs it.
 module CohortSeatRoute =
@@ -223,8 +223,9 @@ module CohortSeatRoute =
 /// `sagefs cohort seat [<member id>] [--dir <checkout>]`: look at a cohort's conductor seat, or fill an empty one.
 /// With no member id it lists who is present and where the seat stands. With one it seats that member, which only
 /// works while the seat is empty (the conductor left, or went silent). It reads `operator.token` from the data
-/// directory, which only the person who runs the daemon can read, and calls `/api/cohort/seat` with it. The seat is
-/// never filled by an MCP tool or by a token: that is why an agent cannot take it.
+/// directory, a file the operating-system user can read, and calls `/api/cohort/seat` with it. No MCP tool builds the
+/// command without a client's accepted question and no member token can take the seat. A process running as that user,
+/// an agent with a shell included, can read the credential and use this command, so it is not a guard against one.
 module CohortSeatCommand =
 
   let usage = "usage: sagefs cohort seat [<member id> [--replace <holder id>]] [--dir <checkout>] [--mcp-port <port>]"

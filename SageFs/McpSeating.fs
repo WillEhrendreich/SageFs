@@ -108,8 +108,10 @@ module McpSeating =
                 committed
                 |> Result.map (fun (events, _) ->
                   let reply = CohortSeatRoute.seatedReply (owner.ReadFrame()) events
+                  // The daemon knows the client accepted. It cannot know that a person did the accepting.
                   sprintf
-                    "%s is the conductor now (ended: %s). A person said yes."
+                    "%s is the conductor now (ended: %s). The client at %s accepted the question."
                     reply.Seated
-                    reply.Ended)
+                    reply.Ended
+                    (MemberTable.MemberId.display caller))
     }

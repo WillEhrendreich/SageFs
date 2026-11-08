@@ -487,11 +487,22 @@ let confirmCall
     return outcome |> Result.mapError (ConfirmationRefusal.describe toolName)
   }
 
-/// What a person's answer to the seating question means, as the cohort's own cases. The same reading as the confirm tier's
-/// (`answerVerdict`): Accept is the yes, and only an explicit untick of the box overrides it.
+/// What a person's answer to the seating question means, as the cohort's own cases. Stricter than the confirm tier's
+/// (`answerVerdict`, where Accept is the yes): a seating is a yes only when the form came back with its box ticked. The form
+/// starts unticked, so a client that applies the form's defaults and accepts, or accepts with no content at all, seats nobody.
 let seatingAnswerOf (answer: ElicitResult) : SageFs.SeatingFlow.Answer =
+  let boxTicked =
+    match answer.Content with
+    | null -> false
+    | content ->
+      match content.TryGetValue "confirmed" with
+      | true, value -> value.ValueKind = System.Text.Json.JsonValueKind.True
+      | false, _ -> false
   match answerVerdict answer with
-  | Ok() -> SageFs.SeatingFlow.Answer.Yes
+  | Ok() ->
+    match boxTicked with
+    | true -> SageFs.SeatingFlow.Answer.Yes
+    | false -> SageFs.SeatingFlow.Answer.AnsweredOther "accepted without ticking the box"
   | Result.Error Declined -> SageFs.SeatingFlow.Answer.Declined
   | Result.Error Cancelled -> SageFs.SeatingFlow.Answer.Cancelled
   | Result.Error(AnsweredOther action) -> SageFs.SeatingFlow.Answer.AnsweredOther action
@@ -512,8 +523,9 @@ let seatingPerson (server: ModelContextProtocol.Server.McpServer) : SageFs.Seati
           try
             let schema = ElicitRequestParams.RequestSchema()
             let flag = ElicitRequestParams.BooleanSchema()
-            flag.Description <- "Seat them as the conductor?"
-            flag.Default <- System.Nullable true
+            flag.Description <- "Tick to seat them as the conductor"
+            // Unticked: a client that applies the defaults and accepts answers no. Only a person who ticks the box says yes.
+            flag.Default <- System.Nullable false
             schema.Properties <- dict [ "confirmed", flag ]
             let parameters = ElicitRequestParams(Message = question, RequestedSchema = schema)
             use window = CancellationTokenSource.CreateLinkedTokenSource(ct)
@@ -3775,9 +3787,10 @@ let mapMemberRoutes (operatorAccess: SageFs.OperatorStore.OperatorAccess) (app: 
   ) |> ignore
 
 /// Look at a cohort's conductor seat and fill an empty one (`sagefs cohort seat`), for the person who runs the daemon.
-/// This is the only place a `Cohort.SeatConductor` is built: the operator credential is checked first (the same
-/// check as the mint route), no MCP tool builds the command and no member token reaches the route, so an agent cannot
-/// take the seat. The rules are `Cohort.decide`'s; the route resolves the name, dispatches and says what happened.
+/// The operator credential is checked first (the same check as the mint route) and no member token reaches the route. The
+/// credential is a file the operating-system user can read, so a process running as that user can use this route. The
+/// other ways to a `SeatConductor` are the dashboard's Seat button and `SeatingFlow.commandOf`. The rules are
+/// `Cohort.decide`'s; the route resolves the name, dispatches and says what happened.
 let mapCohortSeatRoutes (operatorAccess: SageFs.OperatorStore.OperatorAccess) (app: WebApplication) (rctx: RouteContext) =
   let authorizationOf (ctx: Microsoft.AspNetCore.Http.HttpContext) =
     match ctx.Request.Headers.TryGetValue "Authorization" with

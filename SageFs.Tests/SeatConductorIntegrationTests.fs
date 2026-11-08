@@ -37,7 +37,12 @@ let private connectAnswering (port: int) (answer: (string ref * List<string>) op
     options.Handlers.ElicitationHandler <-
       Func<ElicitRequestParams, CancellationToken, ValueTask<ElicitResult>>(fun request _ ->
         questions.Add request.Message
-        ValueTask<ElicitResult>(ElicitResult(Action = action.Value)))
+        // A person who says yes ticks the box. The form starts unticked, so an accept with nothing in it is not a yes.
+        let content =
+          match action.Value with
+          | "accept" -> Dictionary<string, Text.Json.JsonElement>(dict [ "confirmed", Text.Json.JsonDocument.Parse("true").RootElement ])
+          | _ -> null
+        ValueTask<ElicitResult>(ElicitResult(Action = action.Value, Content = content)))
   | None -> ()
   McpClient.CreateAsync(transport, options, null, CancellationToken.None)
 
@@ -51,14 +56,17 @@ let private callTool (client: McpClient) (name: string) (args: (string * obj) li
       |> Option.defaultValue ""
   }
 
+// No working_directory on any call: every call acts in the cohort of the repository the daemon was started in, which is the
+// cohort the dashboard's panel shows. (A directory inside a git worktree resolves to the repository's common root, and the
+// panel reads the daemon's own cohort, so the two would be different cohorts in the checkout this test runs from.)
 let private join (client: McpClient) (name: string) =
-  callTool client "join_cohort" [ "agentName", box name; "role", box "Implementer"; "working_directory", box repoRoot ]
+  callTool client "join_cohort" [ "agentName", box name; "role", box "Implementer" ]
 
 let private status (client: McpClient) =
-  callTool client "get_cohort_status" [ "working_directory", box repoRoot ]
+  callTool client "get_cohort_status" []
 
 let private ask (client: McpClient) (name: string) (toMember: string) =
-  callTool client "seat_conductor" [ "agentName", box name; "toMember", box toMember; "working_directory", box repoRoot ]
+  callTool client "seat_conductor" [ "agentName", box name; "toMember", box toMember ]
 
 let private idsIn (text: string) : Set<string> = memberIdPattern.Matches text |> Seq.map (fun m -> m.Value) |> Set.ofSeq
 
@@ -88,7 +96,7 @@ let tests =
         let! _ = join carol "carol"
         let! afterCarol = status alice
         let carolId = Set.difference (idsIn afterCarol) (Set.ofList [ aliceId; bobId ]) |> Seq.exactlyOne
-        let! _ = callTool alice "leave_cohort" [ "agentName", box "alice"; "working_directory", box repoRoot ]
+        let! _ = callTool alice "leave_cohort" [ "agentName", box "alice" ]
         let! vacant = status bob
         conductorLine vacant |> Expect.stringContains "the seat is empty" "VACANT"
 
@@ -122,6 +130,16 @@ let tests =
         let! afterShell = status carol
         conductorLine afterShell |> Expect.stringContains "still empty after a request from a shell" "VACANT"
 
+        // The browser's header without a ticket proves nothing: any local process can send it.
+        let headerOnly = new HttpRequestMessage(HttpMethod.Post, seatUrl carolId, Content = new StringContent("{}", Text.Encoding.UTF8, "application/json"))
+        headerOnly.Headers.Add("Sec-Fetch-Site", "same-origin")
+        let! (fromHeader: HttpResponseMessage) = http.SendAsync headerOnly
+        let! headerBody = fromHeader.Content.ReadAsStringAsync()
+        headerBody |> Expect.stringContains "the header alone is refused" "Nothing was done"
+        headerBody |> Expect.stringContains "and says the ticket is missing" "no ticket"
+        let! afterHeader = status carol
+        conductorLine afterHeader |> Expect.stringContains "still empty after the header alone" "VACANT"
+
         // The person changes their mind and says yes: bob is seated.
         bobSays.Value <- "accept"
         let! seated = ask bob "bob" ""
@@ -136,15 +154,18 @@ let tests =
         again |> Expect.stringContains "names the holder" bobId
         bobQuestions.Count |> Expect.equal "nobody was asked about a seating the cohort would refuse" 2
 
-        // From the page: bob leaves, the seat is empty, and a request that carries the browser's own header seats carol.
-        let! _ = callTool bob "leave_cohort" [ "agentName", box "bob"; "working_directory", box repoRoot ]
-        let pageRequest = new HttpRequestMessage(HttpMethod.Post, seatUrl carolId, Content = new StringContent("{}", Text.Encoding.UTF8, "application/json"))
-        pageRequest.Headers.Add("Sec-Fetch-Site", "same-origin")
-        let! (fromPage: HttpResponseMessage) = http.SendAsync pageRequest
-        let! pageBody = fromPage.Content.ReadAsStringAsync()
-        pageBody |> Expect.stringContains "the page is told carol is the conductor" "is the conductor now"
-        let! final = status carol
-        conductorLine final |> Expect.stringContains "carol holds the seat" carolId
+        // Bob leaves, so the seat is empty again.
+        let! _ = callTool bob "leave_cohort" [ "agentName", box "bob" ]
+        // The header and a ticket this daemon never issued: refused. (The success path with a ticket the page was rendered with
+        // is `seatRequestVerdict` plus `seatFromDashboard` in the default suite: the cohort panel is part of a session's view,
+        // and this test has no session open.)
+        let guessed = new HttpRequestMessage(HttpMethod.Post, seatUrl carolId + "&nonce=not-a-ticket-this-daemon-issued", Content = new StringContent("{}", Text.Encoding.UTF8, "application/json"))
+        guessed.Headers.Add("Sec-Fetch-Site", "same-origin")
+        let! (fromGuess: HttpResponseMessage) = http.SendAsync guessed
+        let! guessBody = fromGuess.Content.ReadAsStringAsync()
+        guessBody |> Expect.stringContains "a ticket nobody issued is refused" "not one this daemon issued"
+        let! afterGuess = status carol
+        conductorLine afterGuess |> Expect.stringContains "the seat is still empty" "VACANT"
       finally
         SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
     }

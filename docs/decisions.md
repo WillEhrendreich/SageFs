@@ -1621,10 +1621,10 @@ lease should follow something other than presence.
 
 ## A conductor seat is filled by a person's yes, and the tool that asks cannot build the command without it
 
-`sagefs cohort seat` (2026-11-07, first the CLI) kept an agent from promoting itself, because an MCP tool is callable by any
+`sagefs cohort seat` (2026-11-07, first the CLI) kept an MCP tool from promoting an agent, because an MCP tool is callable by any
 agent and the seat is the authority to mint tokens, configure the integration and reassign claims. It also made a person leave
 the conversation to type a command, and the operator credential it uses is a file any process of the same OS user can read, so
-the guard was only that no tool existed.
+it never stopped an agent with a shell: the guard was only that no tool existed.
 
 The decision. `seat_conductor` is a tool, and the person is asked through MCP elicitation inside it. The tool never decides: it
 runs the cohort's rules (`SeatingFlow.plan`, which is `Cohort.decide` run against a copy of the state, so nobody is asked about a
@@ -1637,8 +1637,11 @@ the module (`SeatingFlowTests`), a source check that the tool file commits once 
 
 Fail closed, the opposite of the confirm tier. A client that does not offer elicitation passes the confirm tier, because a missing
 prompt there costs a click. Here the prompt is the permission, so a client that cannot be asked, a decline, a dismissal, silence
-and a failed question all refuse, and the refusal names the other routes. Accept is the yes; only an explicit untick of the box
-overrides it, the same reading as `manage_local_data`'s.
+and a failed question all refuse, and the refusal names the other routes. Only an accept with the box ticked is the yes, and the
+form starts unticked: a client that applies the form's defaults and accepts, or accepts with no content, seats nobody. (The first
+version read an accept as the yes, as `manage_local_data` does, and set the default to ticked, so a client that auto-accepts
+approved.) The reply says "the client at <member> accepted", because the daemon knows the client accepted and cannot know that a
+person did the accepting.
 
 Who may call it. A seated Implementer, and the conductor (the cohort refuses a held seat). It is not conductor-only, because the
 seat it exists to fill has no conductor. It is in the `CohortAdmin` class, which no token preset holds, so no member token can call
@@ -1647,19 +1650,24 @@ token is never the one seated (no token may call the conductor's tools, so the s
 per connection: it varies by the authorization on the request, as `mint_member`'s does.
 
 The dashboard. The cohort panel's vacant-seat line has a Seat button per present member. The click asks first (a native confirm, as
-the purge button does) and posts to `/dashboard/cohort/seat`, which answers only a request carrying `Sec-Fetch-Site: same-origin`.
-A browser sets that header itself and a page's script cannot change it. A shell or an HTTP client sends none, and is told to use the
-command line. It is evidence that a browser sent the request, and it is no credential: a process that can forge it can also read
-`operator.token`, so this route does not claim more than the command line does.
+the purge button does) and posts to `/dashboard/cohort/seat` with a one-use ticket the page was rendered with: held by the daemon
+for that member, good for `Timeouts.dashboardSeatNonceLifetime`, spent by the first presentation right or wrong, bounded in
+number (`SeatNonces`). A request with the right `Sec-Fetch-Site: same-origin` header and no ticket is refused, as are a used
+ticket, a stale one and one for another member's button. The first version took that header alone as proof, and any local
+process can send it. The header is now a closed `FetchSite` set and an extra check. The dashboard has no credential, so a process
+that can load the page can read a ticket out of it: the ticket stops blind, replayed and stale requests, and it does not
+authenticate a person. This route is no stronger than the dashboard's other open routes, and the docs say so.
 
-What it does not do. It does not make an agent unable to harm a daemon whose operator credential it can read; that is the stated
-limit of every operator route. It does not check that the person who answered is the one who runs the daemon: whoever is at the
-client answers, which is the person the client belongs to. A client that auto-accepts every elicitation seats on its own say, and
-that is the client's configuration; the question text says what is being approved so a human reading a log can tell.
+What it does not do. It does not make an agent unable to harm a daemon whose operator credential it can read: the credential is a
+file the operating-system user can read, so an agent with a shell can run `sagefs cohort seat`, and `/exec` and most routes take no
+credential today, so a caller that reaches the port can run code that reads the file. The `a-token-for-every-daemon-call` item is what
+closes that. It does not check that the person who answered is the one who runs the daemon: the daemon knows the client accepted. A
+client that auto-accepts every elicitation and ticks the box seats on its own say; the question text says what is being approved so a
+human reading a log can tell.
 
 Evidence: `SageFs.Core/SeatingFlow.fs`, `SageFs/McpSeating.fs`, `SageFs/McpServer.fs` (`seatingPerson`, `seatingAnswerOf`, the call
 filter), `SageFs/CohortSeatCommand.fs` (`seatFromDashboard`), `SageFs/Dashboard.fs`, `SageFs/DashboardFragments.fs`;
 `SageFs.Tests/SeatingFlowTests.fs`, `SeatingSimTests.fs`, `McpSeatingTests.fs`, `CohortSeatDashboardTests.fs` and
 `SeatConductorIntegrationTests.fs` (a real daemon with real MCP clients, one of which answers the question).
-Reopen it if: elicitation grows an answer a person cannot give by accident (then accept can stop being the yes), or a per-call
-daemon token ships and the operator routes can tell a person from a process.
+Reopen it if: a per-call daemon token ships and the dashboard route can ask for it (then the ticket stops being the strongest check
+it has), or elicitation grows a way to tell a person from a client that answers for them.

@@ -627,9 +627,11 @@ module Cohort =
     /// `ReassignClaim`.
     | DelegateConductor of by: 'm * toMember: 'm * scope: CohortScope
     /// A PERSON fills an empty conductor seat. There is no `by`: the pure machine cannot tell who is asking, so the
-    /// authority is the one place that builds this command, the daemon's operator route (`POST /api/cohort/seat`,
-    /// which checks the operator credential before it constructs anything). No MCP tool builds it and no member
-    /// token reaches it, which is why an agent cannot take the seat. Valid only when the seat is `Vacant` or
+    /// authority is whoever builds this command: the daemon's operator route (`POST /api/cohort/seat`, which checks the
+    /// operator credential first), the dashboard's Seat button (a one-use ticket), and `SeatingFlow.commandOf`, which needs
+    /// a `SeatApproval` that only a client's accepted question makes. No member token reaches any of them. A process
+    /// running as the daemon's operating-system user can read the operator credential and use the first. Valid only when
+    /// the seat is `Vacant` or
     /// `NeverBound`, and only for a member who is `Present` (the `Bound` invariant). A seat that is bound is
     /// refused: moving it is `DelegateConductor`, by the conductor.
     | SeatConductor of toMember: 'm * scope: CohortScope

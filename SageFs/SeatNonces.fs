@@ -37,11 +37,63 @@ module SeatNonces =
       | NonceRefusal.ForAnotherMember -> "the ticket was issued for another member's Seat button."
       | NonceRefusal.Expired -> "the ticket has expired; the page was open too long."
 
-  /// RED stub: issues nothing real and accepts everything.
+  /// One issued ticket: whose button it is for, when it was issued, when it stops being good, and its place in the order
+  /// they were issued (the oldest goes first when the store is full).
+  type Ticket = { Member: string; Issued: DateTime; Expires: DateTime; Order: int64 }
+
+  /// The tickets, behind one lock. `clock` is the daemon's clock and a test's own; `lifetime` is how long a ticket is good;
+  /// `capacity` bounds how many are held.
   type Store(clock: unit -> DateTime, lifetime: TimeSpan, capacity: int) =
-    member _.Issue(memberName: string) : string = ""
-    member _.Redeem(nonce: string, memberName: string) : Result<unit, NonceRefusal> = Result.Ok()
-    member _.Outstanding : int = 0
+    let gate = obj ()
+    let tickets = Dictionary<string, Ticket>()
+    let mutable issuedSoFar = 0L
+
+    let fresh () : string =
+      Security.Cryptography.RandomNumberGenerator.GetBytes 16
+      |> Convert.ToBase64String
+      |> fun text -> text.TrimEnd('=').Replace('+', '-').Replace('/', '_')
+
+    /// The ticket to show for `memberName`: the one already issued while it has more than half its life left, otherwise a
+    /// new one (the old stays good until its own end). Expired tickets are cleared first, and the oldest go when full.
+    member _.Issue(memberName: string) : string =
+      lock gate (fun () ->
+        let now = clock ()
+        for expired in tickets |> Seq.filter (fun kv -> kv.Value.Expires <= now) |> Seq.map (fun kv -> kv.Key) |> List.ofSeq do
+          tickets.Remove expired |> ignore
+        let halfLife = lifetime / 2.0
+        let reusable =
+          tickets
+          |> Seq.filter (fun kv -> kv.Value.Member = memberName && now - kv.Value.Issued < halfLife)
+          |> Seq.sortByDescending (fun kv -> kv.Value.Order)
+          |> Seq.tryHead
+        match reusable with
+        | Some kv -> kv.Key
+        | None ->
+          let nonce = fresh ()
+          issuedSoFar <- issuedSoFar + 1L
+          tickets.[nonce] <- { Member = memberName; Issued = now; Expires = now + lifetime; Order = issuedSoFar }
+          while tickets.Count > capacity do
+            let oldest = tickets |> Seq.minBy (fun kv -> kv.Value.Order)
+            tickets.Remove oldest.Key |> ignore
+          nonce)
+
+    /// Spend a ticket. The presenting spends it whether or not it was right, so a guess costs the guesser the ticket.
+    member _.Redeem(nonce: string, memberName: string) : Result<unit, NonceRefusal> =
+      lock gate (fun () ->
+        match String.IsNullOrWhiteSpace nonce with
+        | true -> Result.Error NonceRefusal.Missing
+        | false ->
+          match tickets.TryGetValue nonce with
+          | false, _ -> Result.Error NonceRefusal.NotIssuedOrUsed
+          | true, ticket ->
+            tickets.Remove nonce |> ignore
+            match clock () >= ticket.Expires, ticket.Member = memberName with
+            | true, _ -> Result.Error NonceRefusal.Expired
+            | false, false -> Result.Error NonceRefusal.ForAnotherMember
+            | false, true -> Result.Ok())
+
+    /// How many tickets are held.
+    member _.Outstanding : int = lock gate (fun () -> tickets.Count)
 
   /// How many tickets may be outstanding at once. A render issues one per present member and reuses a good one, so this is
   /// a bound on memory and not a number a page reaches.

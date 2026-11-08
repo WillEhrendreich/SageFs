@@ -194,5 +194,6 @@ let renderTests =
           frame
         |> renderNode
       issued |> List.ofSeq |> Expect.equal "a ticket was asked for the one present member, and only for them" [ "bob" ]
-      html |> Expect.stringContains "the post carries the member and its ticket" "member=bob&amp;nonce=T%2Fbob"
+      html |> Expect.stringContains "the post names the member" "member=bob"
+      html |> Expect.stringContains "and carries the ticket issued for that member, escaped" "nonce=T%2Fbob"
   ]

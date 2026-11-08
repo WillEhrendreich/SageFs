@@ -78,7 +78,7 @@ let tests =
       let text = ok "seating bob" result
       text |> Expect.stringContains "names the new conductor" "bob"
       text |> Expect.stringContains "names the vacancy it ended" "alice"
-      text |> Expect.stringContains "says which client accepted, and does not claim to know who was at it" "the client at bob accepted"
+      text |> Expect.stringContains "says which client accepted, and does not claim to know who was at it" "client at bob accepted"
       text.Contains "A person said yes" |> Expect.isFalse "the daemon cannot know that a person answered"
       questions.Count |> Expect.equal "the person was asked once" 1
       let! line = conductorLine ctx
