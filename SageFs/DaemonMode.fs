@@ -4803,6 +4803,20 @@ let run
     IsCreatingSession = fun () -> elmRuntime.GetModel().CreatingSession
   }
 
+  // Live binding watch window: pulled AFTER the eval reply, never
+  // attached to it (roast-4 #2) — fire-and-forget so a slow or failed
+  // reflection walk can never delay the caller's eval result. Fed into
+  // the adaptive store; subscribers fire only on real change, and the
+  // existing EvalCompleted → ModelChanged morph re-renders the panel.
+  // A submission pulls once, after its last statement: a walk reads every value of the session, and a paste of thirty
+  // statements started thirty of them.
+  let pullLiveBindings (sid: WorkerProtocol.SessionId) : unit =
+    let sidStr = WorkerProtocol.SessionId.value sid
+    let ask : SageFs.Features.LiveBindingsPane.Feed.Ask =
+      fun message -> proxyToSession getProxyStr notifyWorkerDiedStr sidStr message |> Async.AwaitTask
+    Async.Start (
+      SageFs.Features.LiveBindingsPane.Feed.pull ask liveBindingsHub.Adaptive liveBindingsHub.Notes sidStr (fun () -> liveBindingsHub.ConfiguredWalk sidStr))
+
   // One statement, as one interaction: the worker runs the first `;;` interaction of the text it is given and answers Ok.
   let evalOneStatement (sid: WorkerProtocol.SessionId) (code: string) : Threading.Tasks.Task<Result<string, string>> = task {
       let sidStr = WorkerProtocol.SessionId.value sid
@@ -4816,15 +4830,6 @@ let run
             sidStr
             (SageFsMsg.Event (
               TuiEvent.EvalCompleted (sidStr, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
-        // Live binding watch window: pulled AFTER the eval reply, never
-        // attached to it (roast-4 #2) — fire-and-forget so a slow or failed
-        // reflection walk can never delay the caller's eval result. Fed into
-        // the adaptive store; subscribers fire only on real change, and the
-        // existing EvalCompleted → ModelChanged morph re-renders the panel.
-        let ask : SageFs.Features.LiveBindingsPane.Feed.Ask =
-          fun message -> proxyToSession getProxyStr notifyWorkerDiedStr sidStr message |> Async.AwaitTask
-        Async.Start (
-          SageFs.Features.LiveBindingsPane.Feed.pull ask liveBindingsHub.Adaptive liveBindingsHub.Notes sidStr (fun () -> liveBindingsHub.ConfiguredWalk sidStr))
         return Ok msg
       | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
         let msg = SageFsError.describe err
@@ -4839,18 +4844,31 @@ let run
       | Error e -> return Error (SageFsError.describe e)
     }
 
+  // One submission at a time for each session, so a Try or a Revert cannot run between the statements of a paste.
+  let submissionGates = SubmissionGates()
+
   // The one place every dashboard caller evaluates through (the Evaluate box, eval-file, and the live bindings' Try, Reset and
-  // Revert): a submission of several statements runs them one at a time, in order, and a failure names the statement it was.
+  // Revert): a submission of several statements runs them one at a time, in order, holding the session's gate for all of them,
+  // and a failure names the statement it was.
   let evalSubmission (sid: WorkerProtocol.SessionId) (code: string) : Threading.Tasks.Task<Result<string, string>> = task {
+    let sidStr = WorkerProtocol.SessionId.value sid
     match McpAdapter.splitStatements code with
     | []
-    | [ _ ] -> return! evalOneStatement sid code
+    | [ _ ] ->
+      return!
+        submissionGates.Run(sidStr, fun () ->
+          task {
+            let! answer = evalOneStatement sid code
+            match answer with
+            | Ok _ -> pullLiveBindings sid
+            | Error _ -> ()
+            return answer
+          })
     | statements ->
-      let! outcome = EvalSequence.evalInOrder (evalOneStatement sid) statements
+      let! outcome = EvalSequence.submit submissionGates sidStr (fun () -> pullLiveBindings sid) (evalOneStatement sid) statements
       match outcome with
       | EvalSequence.SequenceOutcome.Ran messages -> return Ok(String.concat "\n" messages)
       | EvalSequence.SequenceOutcome.StoppedAt(position, total, statement, reason, _) ->
-        let sidStr = WorkerProtocol.SessionId.value sid
         let message = EvalSequence.describeStop position total statement reason
         let! _ =
           dispatchOutputAndWait

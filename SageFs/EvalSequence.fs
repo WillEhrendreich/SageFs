@@ -1,13 +1,26 @@
 namespace SageFs
 
 open System
+open System.Collections.Concurrent
+open System.Threading
 open System.Threading.Tasks
 
 /// One submission at a time for each session. A submission of several statements is one thing a person did: another
-/// submission (a Try, a Revert, a second paste) that ran between its statements would run against half of it.
+/// submission (a Try, a Revert, a second paste) that ran between its statements would run against half of it. A gate
+/// is a semaphore per session key, made on first use, so a session never waits for another session's submission.
 type SubmissionGates() =
+  let gates = ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal)
+
   /// Run `work` when no other submission to `sessionKey` is running, and let the next one in after it.
-  member _.Run(sessionKey: string, work: unit -> Task<'T>) : Task<'T> = work ()
+  member _.Run(sessionKey: string, work: unit -> Task<'T>) : Task<'T> =
+    task {
+      let gate = gates.GetOrAdd(sessionKey, fun _ -> new SemaphoreSlim(1, 1))
+      do! gate.WaitAsync()
+      try
+        return! work ()
+      finally
+        gate.Release() |> ignore
+    }
 
 /// A submission of several statements, evaluated one at a time. The worker runs the first `;;` interaction of the text it is given and
 /// answers Ok, so a submission handed over whole drops every later statement without a word. The dashboard's shared eval (the
@@ -67,16 +80,13 @@ module EvalSequence =
     (statements: string list)
     : Task<SequenceOutcome> =
     gates.Run(sessionKey, fun () ->
-      // RED: the old behaviour, a pull after every statement that ran.
-      let pullAfter (statement: string) : Task<Result<string, string>> =
-        task {
-          let! answer = evalOne statement
-          match answer with
-          | Ok _ -> pullBindings ()
-          | Error _ -> ()
-          return answer
-        }
-      evalInOrder pullAfter statements)
+      task {
+        let! outcome = evalInOrder evalOne statements
+        match ranAnything outcome with
+        | true -> pullBindings ()
+        | false -> ()
+        return outcome
+      })
 
   /// What a person is told when a statement of several failed: which one, what it was, what it said, and what did not run.
   let describeStop (position: int) (total: int) (statement: string) (reason: string) : string =
