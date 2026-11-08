@@ -37,6 +37,26 @@ module McpCohortIntegration =
   /// performer and the MCP status/setup tools.
   let cohortIntegrationRef : CohortIntegrationBinding option ref = ref None
 
+  /// Raised after every write of `cohortIntegrationRef` through `setBinding`: the moment a pending integration starts or fails.
+  let integrationBindingChanged = Event<unit>()
+
+  /// Write the binding and wake whoever waits for it to stop being pending.
+  let setBinding (binding: CohortIntegrationBinding option) : unit =
+    cohortIntegrationRef.Value <- binding
+    integrationBindingChanged.Trigger ()
+
+  /// Is the integration still being built? A landing that arrives while it is waits in the queue (finding C-pending).
+  let isPending (binding: CohortIntegrationBinding option) : bool =
+    match binding with
+    | Some { Session = IntegrationSession.Pending } -> true
+    | Some _
+    | None -> false
+
+  /// The binding once it is no longer pending: started, failed, or never configured. Parks on the change signal and does not
+  /// poll, so a landing requested while `set_integration_ref` is still building the session starts the moment the session does.
+  let awaitIntegrationNotPending () : Async<CohortIntegrationBinding option> =
+    Features.IntegrationSettle.awaitChange integrationBindingChanged.Publish (fun () -> cohortIntegrationRef.Value) (isPending >> not)
+
   /// The files evaluated into the integration session over its build, one per rebased file of a landing. They run as evaluated code,
   /// which is not instrumented, so no test's coverage names them again: a test's cache key and the affected-test selection must be
   /// told about them or an edit to one is invisible (`InputHashCoverage.trustBeyond`). Process-local like the binding. The landing

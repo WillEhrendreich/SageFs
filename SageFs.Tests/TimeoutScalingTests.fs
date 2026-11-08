@@ -94,7 +94,7 @@ let private machineScaled : Set<string> =
         "gateStatusProbe"; "healthCheck"; "shutdownHttpClient"; "daemonSessionsProbe"; "memberMintRequest"; "callHandshakeRequest"; "perTestTimeoutFallback"
         "liveTestConfirmationDeadline"; "liveValueBindingBudget"; "memberEvaluationDeadline"
         "liveTestWatcherShutdown"; "rebuildReadyWait"; "buildCompletion"; "hostBuildRun"; "gitQuick"; "gitRebase"
-        "gitWorktreeAdd"; "cohortIntegrationSettle"; "testRunAwaitSlack"; "leaseTtlSessionCreate"
+        "gitWorktreeAdd"; "cohortIntegrationSettle"; "cohortIntegrationStallWindow";"testRunAwaitSlack"; "leaseTtlSessionCreate"
         "leaseTtlTestSuite"; "frictionSlowFirstSuccess"; "compileQueueWait"; "compileBudget"; "reloadPlanningCheck"
         "appHostAppearGrace"; "appHostStart"; "appHostStop"; "appEntryFinishGrace"; "appRunnerShutdown"
         "debugHold"; "debugAttachGrace"; "hygieneScan"; "restartStartupCrashWindow"; "watchdogGracePeriod"; "workerHealthProbeTimeout"

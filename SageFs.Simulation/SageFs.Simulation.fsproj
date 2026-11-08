@@ -273,6 +273,11 @@
         <Compile Include="WarmupSim.fs" />
         <Compile Include="WarmupInvariants.fs" />
         <Compile Include="WarmupGenerators.fs" />
+        <!-- The landing gate's wait on the integration session: the real IntegrationSettle.await over a seeded script on a
+             virtual clock; the twin is the fixed 120 s deadline it replaced (finding C-restart). -->
+        <Compile Include="IntegrationSettleSim.fs" />
+        <Compile Include="IntegrationSettleInvariants.fs" />
+        <Compile Include="IntegrationSettleGenerators.fs" />
         <Compile Include="StartEscalationSim.fs" />
         <Compile Include="StartEscalationInvariants.fs" />
         <Compile Include="StartEscalationGenerators.fs" />

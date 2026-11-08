@@ -94,6 +94,15 @@ module CohortStatusText =
     // free-text reason that the structural form prints badly.
     | other -> sprintf "%A" other
 
+  /// `landingStateText` for a landing whose failing tests the daemon recorded the names of (finding C-names).
+  /// RED STUB: ignores the report, as the status did before.
+  let landingStateTextWith
+    (_reportFor: string -> FailingTestsText.Report option)
+    (_landingId: string)
+    (state: SageFs.Cohort.LandingState<SageFs.MemberTable.MemberId>)
+    : string =
+    landingStateText state
+
   /// Where landing `i` stands in the queue and what is in front of it (P14, C9): a member that waits for a long landing can
   /// tell it is second behind a verification and sleep, instead of polling a position. The landing directly ahead is named with
   /// its state; how many are ahead is the position itself.

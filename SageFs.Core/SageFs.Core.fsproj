@@ -327,6 +327,8 @@
         <Compile Include="Features\CohortMatrixRender.fs" />
         <Compile Include="Features\CohortTerritory.fs" />
         <Compile Include="Features\CohortBoundedView.fs" />
+        <!-- What a landing Blocked on failing tests says about them: names, a count, and the file with the whole list. Pure. -->
+        <Compile Include="Features\FailingTestsText.fs" />
         <Compile Include="Features\CohortStatusText.fs" />
         <Compile Include="Features\CohortLanes.fs" />
         <Compile Include="Features\CohortScrubber.fs" />
@@ -458,6 +460,8 @@
         <Compile Include="Features\TrunkSessions.fs" />
         <Compile Include="Features\CohortLedgerExport.fs" />
         <Compile Include="CrossCheckoutOverlap.fs" />
+        <!-- What the landing gate does while the integration session is not ready, and what it says when it stops waiting. Pure; no dependencies. -->
+        <Compile Include="Features\IntegrationSettle.fs" />
         <Compile Include="Features\Verification.fs" />
         <!-- Is the build this session runs behind the files on disk? A pure decision over what an edge read. -->
         <Compile Include="Features\SourceState.fs" />

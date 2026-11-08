@@ -393,11 +393,19 @@ module Timeouts =
   let gitWorktreeAdd = envOrDefaultMachineMinutes "SAGEFS_GIT_WORKTREE_ADD_MINUTES" 2.0
 
   // -- Cohort landing gate --
-  /// How long the landing gate waits for the integration session to settle to a
-  /// trustworthy state after a rebase before giving up (a terminal/dead session
-  /// fails fast via SessionTrust.settleDecision; this bounds only a genuinely
-  /// warming session). Env-overridable.
+  /// How long the trunk follower waits for a session that works in the trunk checkout to settle after the checkout moved to a
+  /// landed commit, and how long the cohort dogfood journey waits for a landing to reach a landed sha. The landing gate's own
+  /// wait on the integration session has no deadline: see `cohortIntegrationStallWindow`. Env-overridable.
   let cohortIntegrationSettle = envOrDefaultMachine "SAGEFS_COHORT_SETTLE_SECONDS" 120.0
+  /// How long the integration session may sit in ONE phase (restarting, starting up, building, the same progress text) before the
+  /// landing gate calls it stuck and Blocks the landing with the phase it stuck in. The gate parks on the session's ready
+  /// signal in slices this long and looks at the phase after each, so a restart that changes phase is waited for however long
+  /// it takes (a restart of the integration session loads the whole test project: minutes when eighteen builds share a machine),
+  /// and the same phase at two looks in a row ends the wait, between one and two windows after the worker went quiet. The
+  /// session manager faults a silent warmup at `warmupInactivityLimit` (30 s) itself, so this is the second look, twice that,
+  /// for the phases the manager does not watch. A rebuild in flight is not judged by it: the build runner bounds that with
+  /// `buildCompletion`. Scaled for the machine.
+  let cohortIntegrationStallWindow = forMachine (TimeSpan.FromSeconds(60.0))
   // `cohortRediscover` (a shared-generation settle-window ceiling) retired by
   // the F17 attributable-settle close: `rediscoverRebasedFiles`
   // (SageFs/DaemonMode.fs) no longer waits on a generation counter that
