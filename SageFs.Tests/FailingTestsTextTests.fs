@@ -17,7 +17,10 @@ let private failure (n: int) : Failure =
 let private failures (count: int) : Failure list = [ for n in 1 .. count -> failure n ]
 
 let private reportFor (count: int) : Report =
-  { Failures = failures count; File = Some "/data/cohort-integration/test-results/cohort-landing-l-1-failing-tests.txt" }
+  { Failures = failures count
+    Reasons = Map.empty
+    NotRun = []
+    File = Some "/data/cohort-integration/test-results/cohort-landing-l-1-failing-tests.txt" }
 
 let private idsOf (items: Failure list) : string list = items |> List.map (fun f -> f.Id)
 
@@ -122,4 +125,85 @@ let statusTests =
     testCase "WHY — other states keep the wording they had, so only the failing-tests line changed" <| fun _ ->
       CohortStatusText.landingStateTextWith (fun _ -> None) "l-1" (LandingState.Landed "abc123")
       |> Expect.equal "landed" (CohortStatusText.landingStateText (LandingState.Landed "abc123"))
+  ]
+
+let private timedOut = "timed out after 5s"
+
+/// A report where the first `couldNotRun` of `count` failures timed out in the session and the rest failed their assertions.
+let private reportWithTimeouts (count: int) (couldNotRun: int) : Report =
+  let reasons = failures couldNotRun |> List.map (fun f -> f.Id, timedOut) |> Map.ofList
+  { reportFor count with Reasons = reasons }
+
+let private integrationTests (count: int) : Failure list =
+  [ for n in 1 .. count -> { Id = sprintf "%016X" (n * 104729); Name = sprintf "[Integration] SageFs.Tests.Spawn.case %03d" n } ]
+
+[<Tests>]
+let couldNotRunTests =
+  testList "FailingTestsText: a test that could not run is not a failing test (finding C-failing)" [
+
+    testCase "WHY — tests that timed out in the session are counted as could not run, apart from the ones that failed" <| fun _ ->
+      let text = render namesShownInStatus (Some (reportWithTimeouts 100 97)) (idsOf (failures 100))
+      text |> Expect.stringContains "the split" "100 tests did not pass: 3 failed, 97 could not run"
+
+    testCase "WHY — a test that could not run says why next to its name, in the words the executor gave" <| fun _ ->
+      let text = render namesShownInStatus (Some (reportWithTimeouts 3 3)) (idsOf (failures 3))
+      text |> Expect.stringContains "the reason on the name" "SageFs.Tests.Suite.case 001 (could not run: timed out after 5s)"
+
+    testCase "WHY — a test that failed its assertions is shown plain, with no 'could not run' beside it" <| fun _ ->
+      let text = render namesShownInStatus (Some (reportWithTimeouts 3 1)) (idsOf (failures 3))
+      (text.Contains "case 003 (could not run") |> Expect.isFalse "the failed test has no reason beside it"
+      (text.Contains "case 001 (could not run") |> Expect.isTrue "the one that could not run has"
+      text |> Expect.stringContains "the split" "3 tests did not pass: 2 failed, 1 could not run"
+
+    testCase "WHY — with no reasons recorded the text keeps the plain 'failing tests' count" <| fun _ ->
+      render namesShownInStatus (Some (reportFor 4)) (idsOf (failures 4)) |> Expect.stringContains "plain" "4 failing tests"
+
+    testCase "WHY — a failing test is still named when only some of the failures could not run, so nothing blocks unseen" <| fun _ ->
+      let text = render namesShownInStatus (Some (reportWithTimeouts 2 1)) (idsOf (failures 2))
+      text |> Expect.stringContains "both named" "case 001"
+      text |> Expect.stringContains "both named" "case 002"
+  ]
+
+[<Tests>]
+let notRunTests =
+  testList "FailingTestsText: the tests the landing gate left to the release gate are named (finding C-failing)" [
+
+    testCase "WHY — the sentence says how many were left out, why, who runs them, and where the names are" <| fun _ ->
+      let report = { reportFor 0 with NotRun = integrationTests 12 }
+      let text = notRunSentence (Some report)
+      text |> Expect.stringContains "the count" "12 [Integration] tests were not run by the landing gate"
+      text |> Expect.stringContains "who runs them" "--integration-host"
+      text |> Expect.stringContains "where the names are" "cohort-landing-l-1-failing-tests.txt"
+
+    testCase "WHY — no tests left out, no sentence, so a landing that ran everything says nothing extra" <| fun _ ->
+      notRunSentence (Some (reportFor 3)) |> Expect.equal "none" ""
+      notRunSentence None |> Expect.equal "no report" ""
+
+    testCase "WHY — the file names every test left out and every failure with its reason, by name" <| fun _ ->
+      let report = { reportWithTimeouts 3 2 with NotRun = integrationTests 5 }
+      let text = fullListing "l-1" report
+      text |> Expect.stringContains "a failure with its reason" "SageFs.Tests.Suite.case 001  [" 
+      text |> Expect.stringContains "the reason" timedOut
+      for n in 1 .. 5 do text |> Expect.stringContains "each test left out" (sprintf "[Integration] SageFs.Tests.Spawn.case %03d" n)
+      text |> Expect.stringContains "the section says why" "not run by the landing gate"
+
+    testCase "WHY — a Landed landing says which tests were left to the release gate, so a green status hides nothing" <| fun _ ->
+      let report = { reportFor 0 with NotRun = integrationTests 7 }
+      let line = CohortStatusText.landingStateTextWith (fun _ -> Some report) "l-1" (LandingState.Landed "abc123")
+      line |> Expect.stringContains "still landed" "Landed at abc123"
+      line |> Expect.stringContains "the left-out tests" "7 [Integration] tests were not run by the landing gate"
+
+    testCase "WHY — a Landed landing the gate ran in full reads as it always did" <| fun _ ->
+      CohortStatusText.landingStateTextWith (fun _ -> Some (reportFor 0)) "l-1" (LandingState.Landed "abc123")
+      |> Expect.equal "landed" (CohortStatusText.landingStateText (LandingState.Landed "abc123"))
+
+    testCase "WHY — a Blocked landing also says which tests were left to the release gate" <| fun _ ->
+      let report = { reportWithTimeouts 2 0 with NotRun = integrationTests 3 }
+      let line = CohortStatusText.landingStateTextWith (fun _ -> Some report) "l-1" (frameBlocked (idsOf (failures 2)))
+      line |> Expect.stringContains "the left-out tests" "3 [Integration] tests were not run by the landing gate"
+
+    testCase "WHY — an id the session cannot name is left out of the failures, so the status marks it unnamed" <| fun _ ->
+      let known = failures 2 |> List.map (fun f -> f.Id, f.Name) |> Map.ofList
+      let made = failuresOf (fun id -> Map.tryFind id known) (idsOf (failures 3))
+      made |> List.map (fun f -> f.Name) |> Expect.equal "only the named" (failures 2 |> List.map (fun f -> f.Name))
   ]

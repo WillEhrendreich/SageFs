@@ -328,6 +328,8 @@
         <Compile Include="Features\CohortTerritory.fs" />
         <Compile Include="Features\CohortBoundedView.fs" />
         <!-- What a landing Blocked on failing tests says about them: names, a count, and the file with the whole list. Pure. -->
+        <!-- Which affected tests the landing gate asks the session to run and which it names as left to the release gate; why a test did not pass. Pure. -->
+        <Compile Include="Features\CohortLandingScope.fs" />
         <Compile Include="Features\FailingTestsText.fs" />
         <Compile Include="Features\CohortStatusText.fs" />
         <Compile Include="Features\CohortLanes.fs" />

@@ -19,10 +19,15 @@ module FailingTestsText =
     Name: string
   }
 
-  /// What the daemon recorded when a landing's run failed: every failing test with its name, and the file that holds the whole
-  /// list (absent when it could not be written).
+  /// What the daemon recorded about a landing's run: every test that did not pass with its name, why each one that could not
+  /// run did not (by id: "timed out after 5s"), the tests the landing gate left to the release gate, and the file that holds
+  /// all of it (absent when it could not be written).
   type Report = {
     Failures: Failure list
+    /// A test in `Failures` that could not run, with why. A failure with no entry here failed its assertions.
+    Reasons: Map<string, string>
+    /// The `[Integration]` tests the gate did not ask the session to run, so nothing is hidden (`CohortLandingScope`).
+    NotRun: Failure list
     File: string option
   }
 
@@ -65,7 +70,38 @@ module FailingTestsText =
   /// The reason a landing is Blocked on failing tests, in words the member can act on: how many, the first `limit` by name, how
   /// many more there are, and where the whole list is.
   let render (limit: int) (report: Report option) (ids: string list) : string =
-    // RED STUB: what the status said before, every id and nothing else.
     match ids with
     | [] -> "no failing tests"
-    | _ -> sprintf "Failing tests: %s" (String.concat ", " ids)
+    | _ ->
+      let count = List.length ids
+      let named = namedByIds report ids
+      let shown = named |> List.truncate (max 1 limit)
+      let hidden = count - List.length shown
+      let first = shown |> List.map fst |> String.concat "; "
+      let unnamed = named |> List.filter (fun (_, known) -> not known) |> List.length
+      let headline =
+        match hidden with
+        | 0 -> sprintf "%s: %s" (countText count) first
+        | more -> sprintf "%s, first %d by name: %s; and %d more" (countText count) (List.length shown) first more
+      let where =
+        match report |> Option.bind (fun recorded -> recorded.File) with
+        | Some file -> sprintf " All %d with their names: %s" count file
+        | None when hidden > 0 -> " The whole list is not on disk."
+        | None -> ""
+      let caveat =
+        match unnamed with
+        | 0 -> ""
+        | n when n = count -> " The names were not recorded (the daemon restarted since the run); run the landing's tests in your own session to see them."
+        | n -> sprintf " %d of them show an id because their names were not recorded." n
+      headline + "." + where + caveat
+
+  /// The failures of a run with the names the session knows them by: an id the session cannot name is left out, so the status
+  /// marks it as unnamed instead of inventing a name.
+  let failuresOf (nameOf: string -> string option) (ids: string list) : Failure list =
+    ids |> List.choose (fun id -> nameOf id |> Option.map (fun name -> { Id = id; Name = name }))
+
+  /// RED STUB: the sentence that says which tests the landing gate left to the release gate.
+  let notRunSentence (_report: Report option) : string = ""
+
+  /// RED STUB: the file's whole text, the failures with why and the tests not run.
+  let fullListing (landingId: string) (report: Report) : string = listing landingId report.Failures

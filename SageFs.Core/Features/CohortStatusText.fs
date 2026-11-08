@@ -94,19 +94,31 @@ module CohortStatusText =
     // free-text reason that the structural form prints badly.
     | other -> sprintf "%A" other
 
-  /// `landingStateText` for a landing whose failing tests the daemon recorded the names of (finding C-names).
-  /// RED STUB: ignores the report, as the status did before.
+  /// `landingStateText` for a landing whose failing tests the daemon recorded the names of (finding C-names). A landing Blocked
+  /// on failing tests says how many, the first ten by name and where the whole list is, instead of printing every test id;
+  /// `reportFor` answers with what was recorded for that landing, or nothing. Every other state reads as `landingStateText`.
   let landingStateTextWith
-    (_reportFor: string -> FailingTestsText.Report option)
-    (_landingId: string)
+    (reportFor: string -> FailingTestsText.Report option)
+    (landingId: string)
     (state: SageFs.Cohort.LandingState<SageFs.MemberTable.MemberId>)
     : string =
-    landingStateText state
+    match state with
+    | SageFs.Cohort.LandingState.Blocked(SageFs.Cohort.LandingBlocker.FailingTests tests, _) ->
+      let ids = tests |> List.map (fun (SageFs.Cohort.TestId id) -> id)
+      sprintf
+        "Blocked(%s) Fix those tests in your commits and request the landing again; withdraw_landing takes this one back"
+        (FailingTestsText.render FailingTestsText.namesShownInStatus (reportFor landingId) ids)
+    // default policy: only a landing Blocked on failing tests carries ids that need names.
+    | other -> landingStateText other
 
   /// Where landing `i` stands in the queue and what is in front of it (P14, C9): a member that waits for a long landing can
   /// tell it is second behind a verification and sleep, instead of polling a position. The landing directly ahead is named with
   /// its state; how many are ahead is the position itself.
-  let queuePositionText (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) (i: int) : string =
+  let queuePositionTextWith
+    (reportFor: string -> FailingTestsText.Report option)
+    (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>)
+    (i: int)
+    : string =
     match frame.LandingQueuePosition.[i] with
     | -1 -> "not queued"
     | 0 -> "front of queue"
@@ -115,10 +127,18 @@ module CohortStatusText =
       match frame.LandingQueuePosition |> Array.tryFindIndex (fun position -> position = p - 1) with
       | Some j ->
         let (SageFs.Cohort.LandingId inFront) = frame.LandingIds.[j]
-        sprintf "position %d in queue (%s, next in front: %s, %s)" p ahead inFront (landingStateText frame.LandingState.[j])
+        sprintf "position %d in queue (%s, next in front: %s, %s)" p ahead inFront (landingStateTextWith reportFor inFront frame.LandingState.[j])
       | None -> sprintf "position %d in queue (%s)" p ahead
 
-  let render (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) : string =
+  /// `queuePositionTextWith` for a frame with no failure reports.
+  let queuePositionText (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) (i: int) : string =
+    queuePositionTextWith (fun _ -> None) frame i
+
+  /// The cohort status text. `reportFor` gives what the daemon recorded about a landing's failing tests, by landing id.
+  let renderWith
+    (reportFor: string -> FailingTestsText.Report option)
+    (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>)
+    : string =
     let sb = System.Text.StringBuilder()
     let conductorText =
       // `frame.Conductor` (Slice 3, item 11) — read straight off the
@@ -193,14 +213,14 @@ module CohortStatusText =
         let requester =
           if frame.LandingRequesterIndex.[i] >= 0 then MemberTable.MemberId.display frame.MemberIds.[frame.LandingRequesterIndex.[i]]
           else "(unknown member)"
-        let queuePos = queuePositionText frame i
+        let queuePos = queuePositionTextWith reportFor frame i
         let commits = String.concat "," frame.LandingCommits.[i]
         sb.AppendLine(
           sprintf
             "  - %s requester=%s state=%s %s statement=\"%s\" commits=[%s]"
             lid
             requester
-            (landingStateText frame.LandingState.[i])
+            (landingStateTextWith reportFor lid frame.LandingState.[i])
             queuePos
             (Cohort.Statement.value frame.LandingStatement.[i])
             commits
@@ -208,3 +228,7 @@ module CohortStatusText =
       if landingView.HiddenTotal > 0 then
         sb.AppendLine(sprintf "  %s" (CohortBoundedView.landingOverflowLabel landingView)) |> ignore
     sb.ToString()
+
+  /// The cohort status text with no failure reports: every landing Blocked on failing tests reads by count and id.
+  let render (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) : string =
+    renderWith (fun _ -> None) frame
