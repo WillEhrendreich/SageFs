@@ -382,6 +382,37 @@ module SettingsCatalog =
         InUseFromConsumer (fun () ->
           valueOf (Capability.CapabilityTransport.policyFromEnvironment (fun name -> match Environment.GetEnvironmentVariable name with | null -> "" | v -> v))) }
 
+  /// Read-only: whether `tools/list` shows a connection that presents no credential the starter list (nine tools) or the full
+  /// one. A switch, because it has two states and a switch needs no value that could fail to be built. The environment says
+  /// `Starter` or `Full`; the daemon reads it once when it starts, so it is not a thing a page can flip under a connection.
+  let starterToolList : SettingDescriptor =
+    let render (v: SettingValue) : string =
+      match SettingValue.toggle v with
+      | Some On -> ToolListProfile.toToken ToolListProfile.Starter
+      | Some Off | None -> ToolListProfile.toToken ToolListProfile.Full
+    let ofProfile (profile: ToolListProfile) : SettingValue =
+      match profile with
+      | ToolListProfile.Starter -> VToggle On
+      | ToolListProfile.Full -> VToggle Off
+    { Key = "daemon.starterToolList"
+      Name = "Starter tool list for a connection with no credential"
+      Description = "On shows a connection that presents no credential the nine tools a first session needs, and every other tool is still callable by name; off shows every tool. A member token and the operator credential keep their own lists. Set SAGEFS_TOOL_LIST to Starter or Full where you start the daemon. A value that is neither is Full."
+      Category = DaemonSettings
+      Scope = Global
+      Applicability = ReadOnly EnvironmentOnly
+      Default = ofProfile ToolListProfile.defaultProfile
+      Parse =
+        fun raw ->
+          match ToolListProfile.tryParse raw with
+          | Ok profile -> Ok (ofProfile profile)
+          | Error unknown -> Error (NotAMember(unknown.Given, unknown.Expected))
+      Render = render
+      Apply = ignore
+      External = FromEnvironment ToolListProfile.envVar
+      Current =
+        InUseFromConsumer (fun () ->
+          ofProfile (ToolListProfile.fromEnvironment (fun name -> match Environment.GetEnvironmentVariable name with | null -> "" | v -> v))) }
+
   /// A credential shown as set or not set, never as itself: it has no external source for the resolver to read, because
   /// a refused parse of a secret would quote it. The row only asks whether the variable is there.
   let private credential (key: string) (name: string) (help: string) (variable: string) : SettingDescriptor =
@@ -477,7 +508,7 @@ module SettingsCatalog =
   /// environment variable when a process starts, and the read-only rows. The two session-agent settings are added by
   /// the page, because they are declared in `SessionAgent`, which compiles after this file.
   let all : SettingDescriptor list =
-    pilots @ EnvBackedRows.descriptors @ [ dataDirectory; noResume; identityPolicy; memberToken; operatorToken; hygieneAutoTidy ]
+    pilots @ EnvBackedRows.descriptors @ [ dataDirectory; noResume; identityPolicy; starterToolList; memberToken; operatorToken; hygieneAutoTidy ]
 
   /// The Live Bindings view a workflow shows for the app at `paths`: each axis resolved across the layers, and an axis nobody set
   /// follows the workflow's recommended view. An axis whose stored value will not parse (a layer file edited by hand) also falls

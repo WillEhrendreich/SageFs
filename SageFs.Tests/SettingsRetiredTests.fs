@@ -117,6 +117,6 @@ let retiredTests =
       EnvBackedRows.descriptors |> List.length |> Expect.equal "rows (79 before: 71 editable and 8 read-only)" 45
 
     testCase "WHY — the Settings page draws one row per setting a person plausibly sets, and the count is the evidence for the short list" <| fun _ ->
-      SettingsCatalog.all |> List.length |> Expect.equal "Core rows (89 before: 5 pilots, 79 env-backed, 5 others; master added hygiene.autoTidy after that count)" 56
+      SettingsCatalog.all |> List.length |> Expect.equal "Core rows (89 before: 5 pilots, 79 env-backed, 5 others; master added hygiene.autoTidy after that count, and the starter tool list switch is the 57th)" 57
   ]
   |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant

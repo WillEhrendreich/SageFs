@@ -69,6 +69,7 @@ over both.
 | How long local data is kept, and how many of each, in the "Local data" group | the variables in [Local data retention](#local-data-retention) | restart |
 | Set by SageFs: the watchdog flag and restart count | `SAGEFS_SUPERVISED`, `SAGEFS_RESTART_COUNT` | read-only |
 | Identity policy, member token, operator token | `SAGEFS_IDENTITY_POLICY`, `SAGEFS_MEMBER_TOKEN`, `SAGEFS_OPERATOR_TOKEN` | read-only |
+| Starter tool list for a connection with no credential | `SAGEFS_TOOL_LIST` | read-only (read when the daemon starts) |
 
 Every variable `Timeouts.fs` and `SageFsConfig.fs` read has a row, and a test fails when a new one does not. A row
 that is read-only says why in its own words: the bind host and the identity policy stay where the daemon starts

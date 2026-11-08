@@ -384,6 +384,8 @@ and ReadOnlyReason =
   | SetBySageFs
   /// Only a flag on the command line sets it, so it is read when the daemon is started.
   | LaunchOnly
+  /// Only the daemon's environment sets it, and the daemon reads it once when it starts (the starter tool list).
+  | EnvironmentOnly
   /// Only the test runner sets it, to shorten a wait a test has to prove.
   | TestHarnessOnly
   /// Replaced by newer settings; still read so an old environment does not break.
@@ -400,6 +402,7 @@ module ReadOnlyReason =
     | Secret -> "read-only here: it is a credential, so its value is never shown."
     | SetBySageFs -> "read-only here: SageFs sets it for the processes it starts."
     | LaunchOnly -> "read-only here: only a flag on the command line sets it. Start the daemon with the flag."
+    | EnvironmentOnly -> "read-only here: the daemon reads its environment once when it starts. Set the variable where you start the daemon."
 
 /// Where a setting can also be set from outside the settings files. The environment variable and the flag are
 /// the names a person types, and the row shows them when one of them wins.
