@@ -82,6 +82,8 @@ type FrontStep =
   | PassTests
   | FailTests
   | Inconclusive
+  /// The rebuild the verification needs failed with a compiler error in the landing's own source.
+  | CompileError
   | FastForwardFails
 
 /// An intent is resolved against the CURRENT harness state at fold time (a
@@ -130,6 +132,7 @@ let genFrontStep =
     2, Gen.constant FrontStep.PassTests
     1, Gen.constant FrontStep.FailTests
     1, Gen.constant FrontStep.Inconclusive
+    1, Gen.constant FrontStep.CompileError
     1, Gen.constant FrontStep.FastForwardFails
   ]
 
@@ -381,7 +384,7 @@ let resolveIntent<'m when 'm: comparison>
         match request.State, step with
         | LandingState.Rebasing _, FrontStep.Conflict -> now (CohortCommand.RebaseCompleted(front, Error [ "conflict.fs" ], machine))
         | LandingState.Rebasing _,
-          (FrontStep.Succeed | FrontStep.ComputeAffected | FrontStep.PassTests | FrontStep.FailTests | FrontStep.Inconclusive | FrontStep.FastForwardFails) ->
+          (FrontStep.Succeed | FrontStep.ComputeAffected | FrontStep.PassTests | FrontStep.FailTests | FrontStep.Inconclusive | FrontStep.CompileError | FrontStep.FastForwardFails) ->
           now (CohortCommand.RebaseCompleted(front, Ok(sprintf "sha-%d" entropyN), machine))
         | LandingState.Verifying _, FrontStep.Succeed -> now (CohortCommand.FastForwardCompleted(front, sprintf "landed-%d" entropyN, machine))
         | LandingState.Verifying _, FrontStep.Conflict -> now (CohortCommand.AffectedComputed(front, testIdsOf 2 "t", machine))
@@ -389,6 +392,7 @@ let resolveIntent<'m when 'm: comparison>
         | LandingState.Verifying _, FrontStep.PassTests -> now (CohortCommand.TestsCompleted(front, [], machine))
         | LandingState.Verifying _, FrontStep.FailTests -> now (CohortCommand.TestsCompleted(front, [ TestId "f1" ], machine))
         | LandingState.Verifying _, FrontStep.Inconclusive -> now (CohortCommand.VerificationInconclusive(front, "session still warming", machine))
+        | LandingState.Verifying _, FrontStep.CompileError -> now (CohortCommand.LandingFailedToCompile(front, "Greeting.fs(3,5): error FS0001: type mismatch", machine))
         | LandingState.Verifying _, FrontStep.FastForwardFails -> now (CohortCommand.FastForwardFailed(front, "ref moved under us", machine))
         | (LandingState.Queued | LandingState.Blocked _ | LandingState.Landed _ | LandingState.Withdrawn), _ -> None
 
