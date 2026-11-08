@@ -96,6 +96,8 @@ let tests =
       let inHex = picker (rowId "flags" []) [ FormatChoice.AsIs; FormatChoice.Hex; FormatChoice.Binary ] FormatChoice.Hex "flags" |> decoded
       inHex |> Expect.stringContains "in hex the press is for binary" ">Show as Binary<"
       inHex |> Expect.stringContains "and the tooltip says both" "Shown as Hex. Press to show it as Binary."
+      let backToPlain = picker (rowId "flags" []) [ FormatChoice.AsIs; FormatChoice.Hex ] FormatChoice.Hex "flags" |> decoded
+      backToPlain |> Expect.stringContains "the press that goes back never reads 'Show as As is'" ">Show as it is<"
       (stateNote FormatChoice.AsIs |> decodedAll).Contains "live-fmt-state" |> Expect.isFalse "a row shown as it is names no format"
       let stateHtml = stateNote FormatChoice.Hex |> decodedAll
       stateHtml |> Expect.stringContains "the state is words" ">shown as Hex<"

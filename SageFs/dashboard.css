@@ -1744,6 +1744,23 @@ h2 {
   background: var(--color-fail);
 }
 
+.live-fmt-state {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+  font-size: 0.857rem;
+}
+
+/* A row with a format chosen carries the state's words and the button, which are wider than the room the value leaves. The value keeps
+   a width of its own and the controls drop to the next line when the row has no room for both, so the value is never squeezed to an ellipsis. */
+.live-binding-node[data-format]:not([data-format="as-is"]) {
+  flex-wrap: wrap;
+}
+
+.live-binding-node[data-format]:not([data-format="as-is"]) > .live-preview {
+  flex: 1 1 12ch;
+  min-width: 12ch;
+}
+
 .live-swatch {
   flex: 0 0 auto;
   align-self: center;

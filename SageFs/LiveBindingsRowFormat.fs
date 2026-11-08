@@ -76,16 +76,31 @@ let valueNodes (cssClass: string) (rowFormat: RowFormat) (typeName: string) (pre
       Elem.span [ Attr.class' "live-fmt-note"; testid "live-fmt-note" ] [ textEnc (FormatRefusal.describe refusal) ] ]
 
 /// The words that say how a row is shown now, beside the button that says what a press does. A row shown as it is says nothing.
-let stateNote (current: FormatChoice) : XmlNode list = []
+let stateNote (current: FormatChoice) : XmlNode list =
+  match current with
+  | FormatChoice.AsIs -> []
+  | FormatChoice.Hex
+  | FormatChoice.Binary
+  | FormatChoice.Colour
+  | FormatChoice.Slider ->
+    [ Elem.span [ Attr.class' "live-fmt-state"; testid "live-fmt-state" ] [ textEnc (sprintf "shown as %s" (FormatChoice.label current)) ] ]
 
-/// The button on a row: its word is the format the row is in, and a press moves to the next one.
+/// The button on a row: its word is what a press does, which is to show the value as the next format. The state is `stateNote`'s words.
 let picker (row: string) (offeredChoices: FormatChoice list) (current: FormatChoice) (label: string) : XmlNode =
   let next = nextChoice offeredChoices current
+  // the words that follow "as": the format's name, or "it is" for the value as it is, so a press never reads "Show as As is"
+  let nextWords =
+    match next with
+    | FormatChoice.AsIs -> "it is"
+    | FormatChoice.Hex
+    | FormatChoice.Binary
+    | FormatChoice.Colour
+    | FormatChoice.Slider -> FormatChoice.label next
   Elem.button
     [ Attr.class' "session-btn session-btn-labeled live-fmt-btn"
       Attr.type' "button"
       testid "live-fmt-button"
-      Attr.create "aria-label" (attrEnc (sprintf "Show %s as %s instead of %s" label (FormatChoice.label next) (FormatChoice.label current)))
-      Attr.title (attrEnc (sprintf "Shown as %s. Press for %s." (FormatChoice.label current) (FormatChoice.label next)))
+      Attr.create "aria-label" (attrEnc (sprintf "Show %s as %s instead of %s" label nextWords (FormatChoice.label current)))
+      Attr.title (attrEnc (sprintf "Shown as %s. Press to show it as %s." (FormatChoice.label current) nextWords))
       Ds.onClick (Ds.post (sprintf "%s?r=%s&f=%s" Endpoint (Uri.EscapeDataString row) (FormatChoice.token next))) ]
-    [ Elem.span [ Attr.class' "session-btn-word" ] [ textEnc (FormatChoice.label current) ] ]
+    [ Elem.span [ Attr.class' "session-btn-word" ] [ textEnc (sprintf "Show as %s" nextWords) ] ]

@@ -710,7 +710,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (for
           | Tweak.RowFormatting.RowFormat.Binary
           | Tweak.RowFormatting.RowFormat.Colour
           | Tweak.RowFormatting.RowFormat.Slider _ -> LiveBindingsRowFormat.valueNodes valueClass chosen.Current node.TypeName node.Preview
-        [ Attr.create "data-format" (Tweak.RowFormatting.FormatChoice.token choice) ], cells @ [ button ]
+        [ Attr.create "data-format" (Tweak.RowFormatting.FormatChoice.token choice) ], cells @ LiveBindingsRowFormat.stateNote choice @ [ button ]
     let row =
       // Text.create escapes: labels, type names and previews are FSI-derived DATA, not trusted markup. A string
       // preview holding <script> must never inject into the dashboard DOM.
@@ -1166,7 +1166,8 @@ let renderDock (session: SessionInView) (sessionId: string) (source: BindingsSou
 
 /// A brief highlight on a value that changed. It is drawn from what the SSE morph really rewrote, so only a changed value
 /// flashes and nothing polls: the browser's own mutation record says a `.live-preview` text node was replaced, and that cell
-/// gets a short fade from the accent colour. It uses the Web Animations API, not a class, because the morph owns `class` and
+/// gets an underline in the accent colour that fades. An underline and no background fill: a fill of the accent colour put the value's
+/// own colours (and the dim words beside it) on a light band, where they could not be read. It uses the Web Animations API, not a class, because the morph owns `class` and
 /// would cut a class-driven animation short. A value that is merely added (a new row) does not flash, and a reload does not
 /// replay old changes.
 let flashScript () : XmlNode =
@@ -1183,7 +1184,7 @@ let flashScript () : XmlNode =
           if (!preview || !preview.animate) return;
           var accent = getComputedStyle(document.documentElement).getPropertyValue('--color-info') || '#7fb4ca';
           preview.getAnimations().forEach(function(running) { running.cancel(); });
-          preview.animate([{ backgroundColor: accent }, { backgroundColor: 'transparent' }], { duration: 1000, easing: 'ease-out' });
+          preview.animate([{ boxShadow: 'inset 0 -0.2em 0 0 ' + accent }, { boxShadow: 'inset 0 -0.2em 0 0 transparent' }], { duration: 1000, easing: 'ease-out' });
         });
       }).observe(document.body, { subtree: true, childList: true, characterData: true });
     })();

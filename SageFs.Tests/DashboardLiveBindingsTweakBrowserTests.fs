@@ -922,8 +922,8 @@ let formatJourney () : Task<unit> = task {
     hexState |> Expect.equal "the state is its own words, beside the action" "shown as Hex"
     // the state's words are readable: at least 4.5 to 1 against what they sit on
     let! stateContrast =
-      readRow "flags" "const s = row.querySelector(':scope > [data-testid=live-fmt-state]'); const parse = c => c.match(/[\\d.]+/g).map(Number); const luminance = ([r, g, b]) => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); }; let bg = s; while (bg && (parse(getComputedStyle(bg).backgroundColor)[3] ?? 1) === 0) bg = bg.parentElement; const a = luminance(parse(getComputedStyle(s).color)), b = luminance(parse(getComputedStyle(bg).backgroundColor)); return String((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05));"
-    (float stateContrast >= 4.5) |> Expect.isTrue (sprintf "the state's words have at least 4.5 to 1 contrast, measured %s" stateContrast)
+      readRow "flags" "const s = row.querySelector(':scope > [data-testid=live-fmt-state]'); const toRgb = c => { const x = document.createElement('canvas').getContext('2d'); x.fillStyle = '#000'; x.fillStyle = c; x.fillRect(0, 0, 1, 1); return [...x.getImageData(0, 0, 1, 1).data]; }; const luminance = ([r, g, b]) => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); }; const layers = []; for (let e = s; e; e = e.parentElement) layers.unshift(toRgb(getComputedStyle(e).backgroundColor)); let under = [255, 255, 255]; for (const [r, g, b, alpha] of layers) { const k = alpha / 255; under = [r * k + under[0] * (1 - k), g * k + under[1] * (1 - k), b * k + under[2] * (1 - k)]; } const a = luminance(toRgb(getComputedStyle(s).color)), b = luminance(under); return String((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) + ' text=' + getComputedStyle(s).color + ' on=rgb(' + under.map(Math.round).join(',') + ')';"
+    (float (stateContrast.Split(' ').[0]) >= 4.5) |> Expect.isTrue (sprintf "the state's words have at least 4.5 to 1 contrast, measured %s" stateContrast)
     do! pick "flags"
     do! waitValue "flags" "= 0b11111111"
     do! pick "flags"
@@ -1015,9 +1015,13 @@ let formatJourney () : Task<unit> = task {
               if (r.width === 0 && r.height === 0) continue;
               if (r.right > tree.right + 1 || r.left < tree.left - 1) out.push((el.className || el.tagName) + ' sticks out: ' + Math.round(r.left) + '..' + Math.round(r.right) + ' vs ' + Math.round(tree.left) + '..' + Math.round(tree.right));
             }
+            // a value with a format chosen keeps all its text: the state's words and the button must not squeeze it to an ellipsis
+            for (const v of document.querySelectorAll('.live-binding-node[data-format]:not([data-format="as-is"]) > .live-preview')) {
+              if (v.scrollWidth > v.clientWidth + 1) out.push('the value ' + v.textContent.trim() + ' is cut off: ' + v.scrollWidth + ' in ' + v.clientWidth);
+            }
             return out.join(' | ');
           }""")
-      rowProblems |> Expect.equal (sprintf "at %dpx wide every cell of a row is inside the tree: %s" width rowProblems) ""
+      rowProblems |> Expect.equal (sprintf "at %dpx wide every cell of a row is inside the tree and no value is cut off: %s" width rowProblems) ""
       do! shot page (sprintf "16-format-%s" name)
     do! page.SetViewportSizeAsync(1400, 1000)
     expectNoErrors errors "across three widths"
