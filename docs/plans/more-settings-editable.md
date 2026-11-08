@@ -340,7 +340,7 @@ What is retired, and what decides it now (`RetiredSettings.fs`):
 | Test harness deadline | 5 | the `SAGEFS_TEST_*` deadlines, which the suites take from `Timeouts` |
 
 Measured on this branch (counts and line counts only, so load does not matter): rows in `SettingsCatalog.all` 89 to 55 (91 to 57
-with the two session-agent rows the page adds), env-backed descriptors 79 to 45, `EnvBackedRows.fs` 487 to 375 lines, override
+with the two session-agent rows the page adds; the hygiene work then added `hygiene.autoTidy`, so 56 now), env-backed descriptors 79 to 45, `EnvBackedRows.fs` 487 to 375 lines, override
 sites (`envOrDefault*` with a variable) in `Timeouts.fs` 55 to 23, distinct `SAGEFS_` names the product reads 100 to 66 (the 34
 retired names remain as literals in `RetiredSettings.fs` only). The roast counted 135 rows on the page; the catalog draws 91
 before this change and 57 after, so that figure did not reproduce from the source. `Settings.fs` (495 lines), `EnvBackedSettings.fs`
