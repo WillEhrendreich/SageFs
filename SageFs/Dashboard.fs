@@ -3593,18 +3593,72 @@ let createCohortScrubHandler (infra: DashboardInfra) : HttpHandler =
     | :? System.ObjectDisposedException -> ()
   }
 
-/// Whether a request came from this page in a browser: the browser sets `Sec-Fetch-Site` itself, and a page's script cannot
-/// change it. A request from a shell or an agent's HTTP client carries none unless the caller writes one, which is the whole
-/// of the evidence this route asks for: seating a conductor is a person's act, done by clicking the Seat button.
-let cohortSeatRequestIsFromThePage (secFetchSite: string option) : bool =
-  match secFetchSite with
-  | Some "same-origin" -> true
-  | Some _
-  | None -> false
+/// What a request's `Sec-Fetch-Site` header says, as a closed set. A browser sets it on every request and a page's script
+/// cannot change it; a shell sends none unless its caller writes one. An extra check on the Seat route and never proof:
+/// any process can send `same-origin`, so the route's proof is the one-use ticket (`SeatNonces`).
+[<RequireQualifiedAccess>]
+type FetchSite =
+  | SameOrigin
+  | SameSite
+  | CrossSite
+  /// A navigation the person made themselves (typing the address, a bookmark).
+  | UserInitiated
+  /// A value the header may not have.
+  | Unrecognized of value: string
+  /// The header was not sent.
+  | NotSent
 
-/// `POST /dashboard/cohort/seat?member=<id>`: the cohort panel's Seat button. Runs only for a request from this page
-/// (`cohortSeatRequestIsFromThePage`; the origin guard in front of every route already refuses another site), and the click
-/// that sent it asked the person first. What happened, and why not when it did not, is said on the page.
+module FetchSite =
+  let ofHeader (value: string option) : FetchSite =
+    match value with
+    | None -> FetchSite.NotSent
+    | Some "same-origin" -> FetchSite.SameOrigin
+    | Some "same-site" -> FetchSite.SameSite
+    | Some "cross-site" -> FetchSite.CrossSite
+    | Some "none" -> FetchSite.UserInitiated
+    | Some other -> FetchSite.Unrecognized other
+
+/// Why the dashboard's Seat route did nothing.
+[<RequireQualifiedAccess>]
+type SeatRequestRefusal =
+  | NoMemberNamed
+  | NotFromABrowser
+  | Ticket of SeatNonces.NonceRefusal
+
+module SeatRequestRefusal =
+  /// The sentence the page shows. Says that nothing was done and what to do instead.
+  let describe (refusal: SeatRequestRefusal) : string =
+    let tail = "Reload the page and click Seat again, or run 'sagefs cohort seat' from a shell."
+    match refusal with
+    | SeatRequestRefusal.NoMemberNamed -> "Nothing was done: no member was named."
+    | SeatRequestRefusal.NotFromABrowser ->
+      sprintf "Nothing was done: the conductor seat is filled by clicking Seat on this page. %s" tail
+    | SeatRequestRefusal.Ticket why ->
+      sprintf "Nothing was done: %s %s" (SeatNonces.NonceRefusal.describe why) tail
+
+/// What the Seat route lets through: a member named, the browser's header (an extra check), and a ticket this daemon issued for
+/// that member's button, unused and unexpired. The ticket is spent by the presenting, right or wrong. The header alone is
+/// never enough.
+let seatRequestVerdict
+  (tickets: SeatNonces.Store)
+  (site: FetchSite)
+  (memberName: string)
+  (nonce: string)
+  : Result<unit, SeatRequestRefusal> =
+  match System.String.IsNullOrWhiteSpace memberName, site with
+  | true, _ -> Result.Error SeatRequestRefusal.NoMemberNamed
+  | false, FetchSite.SameOrigin -> tickets.Redeem(nonce, memberName) |> Result.mapError SeatRequestRefusal.Ticket
+  | false, FetchSite.SameSite
+  | false, FetchSite.CrossSite
+  | false, FetchSite.UserInitiated
+  | false, FetchSite.Unrecognized _
+  | false, FetchSite.NotSent -> Result.Error SeatRequestRefusal.NotFromABrowser
+
+/// `POST /dashboard/cohort/seat?member=<id>&nonce=<ticket>`: the cohort panel's Seat button. Runs for a request that passes
+/// `seatRequestVerdict`: the ticket the page was rendered with, spent once. The origin guard in front of every route already
+/// refuses another site, and the click that sent the request asked the person first. A process that can read the dashboard can
+/// read a ticket out of it, so this route is no stronger than the dashboard's other open routes; what it refuses is a blind,
+/// replayed or stale request. What happened, and why not when it did not, is said on the page.
 let createCohortSeatHandler (infra: DashboardInfra) : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
@@ -3612,16 +3666,15 @@ let createCohortSeatHandler (infra: DashboardInfra) : HttpHandler =
       match ctx.Request.Headers.TryGetValue "Sec-Fetch-Site" with
       | true, values when values.Count > 0 -> Some(string values.[0])
       | _ -> None
-    let name =
-      match ctx.Request.Query.TryGetValue "member" with
+    let queryValue (key: string) =
+      match ctx.Request.Query.TryGetValue key with
       | true, values when values.Count > 0 -> (string values.[0]).Trim()
       | _ -> ""
-    match cohortSeatRequestIsFromThePage secFetchSite, name with
-    | false, _ ->
-      do! ActionResult.patch ctx (ActionOutcome.Failure "Nothing was done: the conductor seat is filled by clicking Seat on this page, not by a request from elsewhere. 'sagefs cohort seat' does it from a shell.")
-    | true, "" -> do! ActionResult.patch ctx (ActionOutcome.Failure "Nothing was done: no member was named.")
-    | true, member' ->
-      let! outcome = infra.SeatConductor member'
+    let name = queryValue "member"
+    match seatRequestVerdict SeatNonces.shared (FetchSite.ofHeader secFetchSite) name (queryValue "nonce") with
+    | Result.Error refusal -> do! ActionResult.patch ctx (ActionOutcome.Failure(SeatRequestRefusal.describe refusal))
+    | Result.Ok() ->
+      let! outcome = infra.SeatConductor name
       do! ActionResult.patch ctx (match outcome with Ok text -> ActionOutcome.Success text | Error text -> ActionOutcome.Failure text)
   }
 

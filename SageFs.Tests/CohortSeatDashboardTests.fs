@@ -75,11 +75,15 @@ let panelTests =
 let routeTests =
   testList "The dashboard's seat route" [
 
-    testCase "WHY - only a request from the page in a browser is let through" <| fun _ ->
-      SageFs.Server.Dashboard.cohortSeatRequestIsFromThePage (Some "same-origin") |> Expect.isTrue "a browser's own page"
-      for other in [ "cross-site"; "same-site"; "none"; "" ] do
-        SageFs.Server.Dashboard.cohortSeatRequestIsFromThePage (Some other) |> Expect.isFalse (sprintf "'%s' is not this page" other)
-      SageFs.Server.Dashboard.cohortSeatRequestIsFromThePage None |> Expect.isFalse "a shell or an HTTP client sends none"
+    testCase "WHY - the header is read into a closed set, every value a case of its own" <| fun _ ->
+      let site = SageFs.Server.Dashboard.FetchSite.ofHeader
+      let cases = SageFs.Server.Dashboard.FetchSite.SameOrigin, SageFs.Server.Dashboard.FetchSite.SameSite
+      site (Some "same-origin") |> Expect.equal "same-origin" (fst cases)
+      site (Some "same-site") |> Expect.equal "same-site" (snd cases)
+      site (Some "cross-site") |> Expect.equal "cross-site" SageFs.Server.Dashboard.FetchSite.CrossSite
+      site (Some "none") |> Expect.equal "none" SageFs.Server.Dashboard.FetchSite.UserInitiated
+      site (Some "") |> Expect.equal "a blank value is not a known one" (SageFs.Server.Dashboard.FetchSite.Unrecognized "")
+      site None |> Expect.equal "a shell or an HTTP client sends none" SageFs.Server.Dashboard.FetchSite.NotSent
 
     testCase "WHY - the literal the button posts to is the one the dashboard registers" <| fun _ ->
       let registered =

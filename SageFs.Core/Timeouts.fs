@@ -467,6 +467,10 @@ module Timeouts =
   /// window as `cohortLeaseWindow` on purpose: a member's seat and the claims
   /// that name it age out together.
   let cohortSettledRetention = cohortLeaseWindow
+  /// How long a dashboard Seat button's one-use ticket is good. Long enough for a person to read that the seat is empty
+  /// and decide, short enough that a page left open overnight cannot seat anyone. The page renders a fresh one once the
+  /// old one is half spent, so a page that is being updated never carries a ticket close to its end.
+  let dashboardSeatNonceLifetime = TimeSpan.FromMinutes(30.0)
   /// How long a minted member token lives when the conductor does not say: one
   /// agent run. The token also lapses on its own after `cohortLeaseWindow` of not
   /// being used, the way a silent member's seat does, so this is the ceiling of a

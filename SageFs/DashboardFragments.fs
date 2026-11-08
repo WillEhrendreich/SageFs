@@ -3188,10 +3188,18 @@ let private cohortLandingStateLabel (state: SageFs.Cohort.LandingState<MemberTab
 /// never a `Map` walk.
 ///
 /// `silence` is the standing of the conductor seat's holder, which a frame cannot say (it carries no lease): a holder
-/// that went silent is named in the seat line with the command that replaces it (text only; a button for it is
-/// P12's `SeatApproval`, which will take the replace mode and the person's yes). `now` is the clock the silence is
-/// measured against.
-let rec renderCohortPanelFor (silence: Features.CohortStatusText.HolderSilence) (now: DateTime) (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
+/// that went silent is named in the seat line with the command that replaces it (text only; a button for it comes with
+/// the `seat-replace-by-asking` item, which takes the replace mode and the person's yes). `now` is the clock the silence
+/// is measured against.
+///
+/// `seatTicket` gives the one-use ticket a member's Seat button carries (`SeatNonces.Store.Issue`). It is a parameter so
+/// this stays a render over its inputs: the caller decides which store the tickets come from.
+let rec renderCohortPanelCore
+  (seatTicket: string -> string)
+  (silence: Features.CohortStatusText.HolderSilence)
+  (now: DateTime)
+  (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>)
+  : XmlNode =
   // MEMBERS PRESENT, not members ever known. `frame.MemberIds` is every id the cohort has
   // ever seen — a departed member stays in it with `SeatState.Departed`, which is what the
   // ledger keeps and what `ClaimHolderIndex` must still resolve. Counting that array said
@@ -3265,7 +3273,7 @@ let rec renderCohortPanelFor (silence: Features.CohortStatusText.HolderSilence) 
                        sprintf
                          "if(confirm('Seat %s as the conductor of this cohort? The conductor mints member tokens, configures the integration and reassigns claims.')){%s}"
                          inScript
-                         (Ds.post (sprintf "%s?member=%s" DashboardRoutes.CohortSeat (System.Uri.EscapeDataString name)))) ]
+                         (Ds.post (sprintf "%s?member=%s&nonce=%s" DashboardRoutes.CohortSeat (System.Uri.EscapeDataString name) (System.Uri.EscapeDataString (seatTicket name))))) ]
                   [ textEnc (sprintf "Seat %s" name) ]
               | SageFs.Cohort.SeatState.Departed _, _ -> ()
           ]
@@ -3379,6 +3387,15 @@ let rec renderCohortPanelFor (silence: Features.CohortStatusText.HolderSilence) 
         renderCohortTerritory frame
       ]
   ]
+
+/// The panel with the tickets of the daemon's own store (`SeatNonces.shared`), which is what the page shows, and the standing
+/// of the holder the caller read.
+and renderCohortPanelFor (silence: Features.CohortStatusText.HolderSilence) (now: DateTime) (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
+  renderCohortPanelCore SeatNonces.shared.Issue silence now frame
+
+/// The panel with tickets from `seatTicket` and no holder called silent: a test's own store.
+and renderCohortPanelWith (seatTicket: string -> string) (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
+  renderCohortPanelCore seatTicket Features.CohortStatusText.HolderSilence.NotSilent DateTime.UtcNow frame
 
 /// §6.5 "Matrix view — a picture, with a text fallback": the cohort test
 /// matrix rendered from the frame's own bitplanes

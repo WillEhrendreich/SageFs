@@ -78,6 +78,8 @@ let tests =
       let text = ok "seating bob" result
       text |> Expect.stringContains "names the new conductor" "bob"
       text |> Expect.stringContains "names the vacancy it ended" "alice"
+      text |> Expect.stringContains "says which client accepted, and does not claim to know who was at it" "the client at bob accepted"
+      text.Contains "A person said yes" |> Expect.isFalse "the daemon cannot know that a person answered"
       questions.Count |> Expect.equal "the person was asked once" 1
       let! line = conductorLine ctx
       line |> Expect.stringContains "the seat is bob's" "bob"
@@ -222,10 +224,20 @@ let tableTests =
 let answerTests =
   testList "what a person's answer to the question means" [
 
-    testCase "WHY - accept is the yes, and only an explicit untick overrides it" <| fun _ ->
-      SageFs.Server.McpServer.seatingAnswerOf (elicited "accept" None) |> Expect.equal "accept" Answer.Yes
-      SageFs.Server.McpServer.seatingAnswerOf (elicited "accept" (Some true)) |> Expect.equal "accept, ticked" Answer.Yes
-      SageFs.Server.McpServer.seatingAnswerOf (elicited "accept" (Some false)) |> Expect.equal "accept with the box unticked" Answer.Declined
+    testCase "WHY - only an accept with the box ticked is the yes: a client that accepts without content, or with the default, does not seat anyone" <| fun _ ->
+      let answer = SageFs.Server.McpServer.seatingAnswerOf
+      answer (elicited "accept" (Some true)) |> Expect.equal "accept, ticked" Answer.Yes
+      answer (elicited "accept" (Some false)) |> Expect.equal "accept with the box unticked" Answer.Declined
+      (match answer (elicited "accept" None) with
+       | Answer.AnsweredOther _ -> true
+       | _ -> false)
+      |> Expect.isTrue "an accept that carries no answer is not a yes (a client that accepts everything would otherwise seat)"
+
+    testCase "WHY - the box the person is shown starts unticked, so a client that applies defaults and accepts answers no" <| fun _ ->
+      let text = IO.File.ReadAllText(IO.Path.Combine(RepoPaths.repoPathFull [||], "SageFs", "McpServer.fs"))
+      let start = text.IndexOf "let seatingPerson"
+      let body = text.Substring(start, 1800)
+      body |> Expect.stringContains "the seating form's default is false" "flag.Default <- System.Nullable false"
 
     testCase "WHY - decline, cancel and anything else are not a yes" <| fun _ ->
       SageFs.Server.McpServer.seatingAnswerOf (elicited "decline" None) |> Expect.equal "decline" Answer.Declined

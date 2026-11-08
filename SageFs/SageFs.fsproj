@@ -122,6 +122,8 @@
         <Compile Include="TeardownRegistry.fs" />
         <!-- Before DashboardTypes: the pure decision of which panels follow the viewer's context (types and rules, no markup). -->
         <Compile Include="DashboardPanelContext.fs" />
+        <!-- The one-use tickets the dashboard's Seat button carries; before DashboardFragments, which renders them, and Dashboard, which redeems them. -->
+        <Compile Include="SeatNonces.fs" />
         <Compile Include="DashboardTypes.fs" />
         <Compile Include="DashboardConnection.fs" />
         <Compile Include="DockPanes.fs" />
