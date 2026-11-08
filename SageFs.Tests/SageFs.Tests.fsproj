@@ -276,6 +276,8 @@
         <Compile Include="DashboardLiveBindingsTweakBrowserTests.fs" />
         <!-- The pane's bar says how current its values are, from the test loop. -->
         <Compile Include="LiveBindingsFreshnessBrowserTests.fs" />
+        <!-- The Since green tab lists what moved after the tests last settled green. -->
+        <Compile Include="LiveBindingsSinceGreenBrowserTests.fs" />
         <Compile Include="HygieneBrowserTests.fs" />
         <Compile Include="DashboardSettingsBrowserTests.fs" />
         <Compile Include="DashboardDisconnectIndicatorBrowserTests.fs" />
@@ -580,6 +582,7 @@
         <Compile Include="WatchExpressionTests.fs" />
         <Compile Include="RowFormatTests.fs" />
         <Compile Include="LoopFreshnessTests.fs" />
+        <Compile Include="SinceGreenTests.fs" />
         <Compile Include="LiveBindingsRowFormatTests.fs" />
         <Compile Include="DockCompactionTests.fs" />        <Compile Include="LiveBindingsTweakServiceTests.fs" />
         <Compile Include="LiveBindingsTweakViewTests.fs" />

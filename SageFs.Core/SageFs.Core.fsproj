@@ -596,6 +596,8 @@
         <Compile Include="Features\Tweak\RowFormatting.fs" />
         <!-- How current the pane's values are, said from what the test loop is doing. Pure. -->
         <Compile Include="Features\Tweak\LoopFreshness.fs" />
+        <!-- What moved after the tests last settled with no failures. Pure. -->
+        <Compile Include="Features\Tweak\SinceGreen.fs" />
         <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
         <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —
