@@ -62,6 +62,25 @@ let evalQueueSimTests =
         firesFor runStaleGrace "KILL-ONLY-FOR-OWN-IGNORER" |> Expect.isTrue "stale-grace is caught"
     ]
 
+    testList "the host's rule for an interrupt" [
+      testCase "the running eval is interrupted only by an interrupt that names it" <| fun _ ->
+        SageFs.FsiHost.FsiProtocol.EvalInterrupts.planInterrupt (ValueSome 1L) [ 2L ] 1L |> Expect.equal "its own" SageFs.FsiHost.FsiProtocol.EvalInterrupts.Plan.InterruptRunning
+        SageFs.FsiHost.FsiProtocol.EvalInterrupts.planInterrupt (ValueSome 1L) [ 2L ] 2L |> Expect.equal "a queued one is dropped, the running one left alone" SageFs.FsiHost.FsiProtocol.EvalInterrupts.Plan.DropQueued
+        SageFs.FsiHost.FsiProtocol.EvalInterrupts.planInterrupt (ValueSome 1L) [ 2L ] 9L |> Expect.equal "an unknown one is nothing" SageFs.FsiHost.FsiProtocol.EvalInterrupts.Plan.NothingToInterrupt
+        SageFs.FsiHost.FsiProtocol.EvalInterrupts.planInterrupt ValueNone [] 1L |> Expect.equal "nothing running, nothing queued" SageFs.FsiHost.FsiProtocol.EvalInterrupts.Plan.NothingToInterrupt
+
+      testProperty "an interrupt never names the running eval's neighbour: whatever is asked, only the named id is ever acted on" <| fun (running: int) (queued: int list) (target: int) ->
+        let plan = SageFs.FsiHost.FsiProtocol.EvalInterrupts.planInterrupt (ValueSome(int64 running)) (queued |> List.map int64) (int64 target)
+        match plan with
+        | SageFs.FsiHost.FsiProtocol.EvalInterrupts.Plan.InterruptRunning -> running = target
+        | SageFs.FsiHost.FsiProtocol.EvalInterrupts.Plan.DropQueued -> running <> target && List.contains target queued
+        | SageFs.FsiHost.FsiProtocol.EvalInterrupts.Plan.NothingToInterrupt -> running <> target && not (List.contains target queued)
+
+      testCase "a grace keeps the host once the request has answered" <| fun _ ->
+        SageFs.FsiHost.FsiProtocol.EvalInterrupts.graceExpired false |> Expect.equal "answered" SageFs.FsiHost.FsiProtocol.EvalInterrupts.GraceVerdict.KeepHost
+        SageFs.FsiHost.FsiProtocol.EvalInterrupts.graceExpired true |> Expect.equal "still waiting" SageFs.FsiHost.FsiProtocol.EvalInterrupts.GraceVerdict.KillHost
+    ]
+
     testList "determinism / replay" [
       testProperty "same seed => identical trace" <| fun (seed: int) -> run (fromSeed seed) = run (fromSeed seed)
     ]

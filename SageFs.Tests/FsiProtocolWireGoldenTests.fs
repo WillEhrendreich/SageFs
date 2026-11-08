@@ -251,7 +251,8 @@ let private requestInputs =
   [ "null"; "123"; "\"str\""; "[1,2,3]"; "{}"; "true"; ""; "   "; "{nope"; "{\"case\":"
     """{"case":42}"""; """{"case":null}"""; """{"case":["Eval"]}"""; """{"case":"eval"}"""; """{"case":"dance"}"""; """{"case":""}"""
     """{"Case":"Interrupt"}"""
-    // the case alone is enough for a case with no fields; extras are ignored
+    // an Interrupt names the request it is for; without the id it is refused, and extras are ignored
+    """{"case":"Interrupt","fields":{"id":7}}"""; """{"case":"Interrupt","fields":{"id":7,"extra":1}}"""; """{"case":"Interrupt","fields":{"id":"7"}}"""
     """{"case":"Interrupt"}"""; """{"case":"Shutdown"}"""; """{"case":"Shutdown","fields":5}"""; """{"case":"Shutdown","other":[1,{"a":null}]}"""
     // an escaped property name is the same name
     "{\"c\\u0061se\":\"Interrupt\"}"; "{\"case\":\"Interr\\u0075pt\"}"
@@ -309,6 +310,7 @@ let private responseInputs =
     """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalInterrupted","fields":3},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}"""
     // a reply with no cost at all: the cost is a field of the protocol, not an optional extra
     """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalSucceeded"},"diagnostics":[]}}"""
+    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalNeverRan"},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}"""
     """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{"message":"bad"}}}}"""
     // an odd nesting: a bool, a struct union, a tuple-like record, a timespan and a moment
     """{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasBool","fields":{"value":true}}}}"""

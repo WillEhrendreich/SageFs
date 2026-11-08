@@ -274,6 +274,7 @@ let private sampleMessages : WorkerMessage list = [
   WorkerMessage.TypeCheckWithSymbols("1", "a.fs", "r")
   WorkerMessage.GetCompletions("S", 1, CompletionFixtures.editorLimit, "r")
   WorkerMessage.CancelEval
+  WorkerMessage.CancelEvalRequest "r"
   WorkerMessage.LoadScript("a.fsx", "r")
   WorkerMessage.ResetSession "r"
   WorkerMessage.HardResetSession(false, "r")

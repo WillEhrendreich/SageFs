@@ -347,6 +347,9 @@ module WorkerProtocol =
     /// budget (`Timeouts.referencesCheck`). The answer says which projects it covers.
     | GetReferences of qualifiedName: string * replyId: string
     | CancelEval
+    /// Cancel the eval of ONE request, named by the `replyId` its `EvalCode` carried: a timeout's cancel, which must never touch another
+    /// caller's eval. If that eval is running it is interrupted, if it is queued it never runs, if it has answered nothing happens.
+    | CancelEvalRequest of replyId: string
     | LoadScript of filePath: string * replyId: string
     | ResetSession of replyId: string
     | HardResetSession of rebuild: bool * replyId: string
@@ -548,6 +551,7 @@ module WorkerProtocol =
       | WorkerMessage.ApplySaves _
       | WorkerMessage.DebugTestBegin _ -> true
       | WorkerMessage.CancelEval
+      | WorkerMessage.CancelEvalRequest _
       | WorkerMessage.ResetSession _
       | WorkerMessage.HardResetSession _
       | WorkerMessage.LevelRepl _

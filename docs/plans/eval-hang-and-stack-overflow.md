@@ -32,6 +32,19 @@ Roadmap item: `eval-hang-and-stack-overflow` (Repl, Built). Plan written 2026-11
 - `HostExit.OverflowedStack`: `HostOutputTail` keeps the first four lines of the runtime's report apart from the tail, and the session says "stack overflow", names the repeating frame and how often, says the state is gone, and says to make the recursion tail-recursive or loop.
 - The host's eval thread has a 256 MB stack (`HostLimits.EvalStackBytes`), the same as FsiMcp. So does the eval thread of an in-process session.
 
+## Several callers, one host (found by the roast of 2026-11-08, fixed on top of the first two commits)
+
+The first version cancelled "whatever eval the host is running". Agent B's eval waiting in the host's queue behind agent A's long, legitimate eval timed out at B's 120 seconds, B's cancel interrupted A's eval, and ten seconds later the host was killed with every client's definitions. A reply that landed as the grace ended was killed too. Now:
+
+- `WorkerMessage.CancelEvalRequest replyId` (`POST /cancel-request`) names the request. The worker keeps the cancellation source of every `EvalCode` in flight by its id (`WorkerMain.inFlightEvals`); the timeout's cancel in `Mcp.fs` carries the id its own `EvalCode` carried.
+- `Request.Interrupt` carries the id of the eval request. The host acts through `EvalInterrupts.planInterrupt`: the running eval is interrupted only if the id is its own; a queued one is answered `EvalNeverRan` at once and skipped when its turn comes; an unknown one does nothing (an interrupt that names an eval which just left the queue is remembered and answers `EvalNeverRan` when that eval starts).
+- The client kills the host only through `EvalInterrupts.graceExpired`, and the question "is the request still waiting" is answered by taking it off the pending table in one step: a reply that took it first has answered, so there is no window in which a reply and the kill both happen.
+- A call that times out while queued is answered with the text the worker gives for `EvalNeverRan` ("queued behind another eval ... never ran and nothing was evaluated") under the timeout note; the other eval is not touched.
+- A cancel that itself fails is logged with its exception (`EvalWait.logCancelFailure`), not dropped.
+- `cancel_eval` (the tool and the dashboard) still cancels the newest eval the worker received, as before; it is a person's or agent's explicit act on a session, not a timeout.
+
+`SageFs.Simulation/EvalQueueSim.fs` runs several callers against one host with a queue and folds the real decisions; its twins (an interrupt with no request id, a grace the reply does not disarm) are caught. `EvalHangHostTests` has the two-caller case against a real host.
+
 ## Tests
 
 - `SageFs.Tests/EvalBoundTests.fs`: the limit, the decision, the wait against a real clock, the messages, the output tail.

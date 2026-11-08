@@ -117,7 +117,9 @@ let private liveValues (session: FsiEvaluationSession) (mode: LiveValueTree.Walk
 
 /// The eval currently running, so Interrupt can reach it.
 type private Running =
-  { Cancel: CancellationTokenSource
+  { /// The request id the eval was submitted with: an `Interrupt` reaches it only when it names this id.
+    Id: int64
+    Cancel: CancellationTokenSource
     Thread: Thread }
 
 /// #142: AppContext.BaseDirectory otherwise reports THIS process's own directory (the isolated host's
@@ -213,6 +215,10 @@ let private run (fsiArgs: string list) : int =
   let lastCompletions = ref (0L, ([||]: DeclarationListItem[]))
   let runningLock = obj ()
   let mutable running: Running option = None
+  // Both guarded by `runningLock`. Queued evals answered `EvalNeverRan` when their caller cancelled them (skipped when dequeued),
+  // and interrupts that named an eval that was neither running nor queued at that moment (it had just left the queue).
+  let neverRun = System.Collections.Generic.HashSet<int64>()
+  let interruptEarly = System.Collections.Generic.HashSet<int64>()
   // The agent (hot reload + live testing) that lives beside the user's code. Written on the session thread, read by test runs.
   let agentState = ref AgentNotStarted
   // How much of a class the live-values walk may run: one value for the whole session, read by the walk and by a click's
@@ -321,9 +327,13 @@ let private run (fsiArgs: string list) : int =
         | RunAgentLoadedAssemblies id -> withAgent id (fun agent -> send (AgentLoadedAssembliesResult(id, agent.LoadedAssemblyNames())))
         | RunAgentDiscover id -> withAgent id (fun agent -> send (AgentDiscoveryResult(id, agent.DiscoverLoaded())))
         | RunAgentValueReads(id, values) -> withAgent id (fun agent -> send (AgentValueReadsResult(id, agent.ValueReads values)))
+        // Its caller cancelled it while it was queued and has been answered already: skip it without a second answer.
+        | RunEval(id, _) when lock runningLock (fun () -> neverRun.Remove id) -> ()
+        // An interrupt for it arrived between its leaving the queue and its starting: it never ran.
+        | RunEval(id, _) when lock runningLock (fun () -> interruptEarly.Remove id) -> send (EvalResult(id, EvalNeverRan, [], EvalCost.unmeasured))
         | RunEval(id, code) ->
           use cancel = new CancellationTokenSource()
-          lock runningLock (fun () -> running <- Some { Cancel = cancel; Thread = Thread.CurrentThread })
+          lock runningLock (fun () -> running <- Some { Id = id; Cancel = cancel; Thread = Thread.CurrentThread })
           // What the eval cost, read around the eval alone: not the queue wait, not the wire. A failed eval is measured too.
           let before = EvalCost.take ()
           let outcome, diagnostics =
@@ -339,7 +349,10 @@ let private run (fsiArgs: string list) : int =
             | :? ThreadInterruptedException -> EvalInterrupted, []
             | ex -> EvalFailed ex.Message, []
           let cost = EvalCost.between before (EvalCost.take ())
-          lock runningLock (fun () -> running <- None)
+          lock runningLock (fun () ->
+            running <- None
+            // An interrupt that named an eval which had already answered is of no use to any later one.
+            interruptEarly.RemoveWhere(fun staleId -> staleId <= id) |> ignore)
           outWriter.Flush()
           errWriter.Flush()
           send (EvalResult(id, outcome, diagnostics, cost))
@@ -444,13 +457,20 @@ let private run (fsiArgs: string list) : int =
               with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
             }
           )
-      | Result.Ok Interrupt ->
+      | Result.Ok(Interrupt target) ->
         lock runningLock (fun () ->
-          match running with
-          | Some current ->
-            current.Cancel.Cancel()
-            current.Thread.Interrupt()
-          | None -> ())
+          let queued = requests.ToArray() |> Array.choose (fun work -> match work with RunEval(queuedId, _) -> Some queuedId | _ -> None) |> Array.toList
+          match EvalInterrupts.planInterrupt (running |> Option.map (fun current -> current.Id) |> Option.toValueOption) queued target with
+          | EvalInterrupts.Plan.InterruptRunning ->
+            match running with
+            | Some current ->
+              current.Cancel.Cancel()
+              current.Thread.Interrupt()
+            | None -> ()
+          | EvalInterrupts.Plan.DropQueued ->
+            neverRun.Add target |> ignore
+            send (EvalResult(target, EvalNeverRan, [], EvalCost.unmeasured))
+          | EvalInterrupts.Plan.NothingToInterrupt -> interruptEarly.Add target |> ignore)
       | Result.Ok Shutdown ->
         // A test held for a debugger ends as lost, so whoever waits on it hears that now instead of waiting out the bound.
         match Volatile.Read(&agentState.contents) with

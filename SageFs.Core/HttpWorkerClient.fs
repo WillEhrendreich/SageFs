@@ -39,6 +39,9 @@ module HttpWorkerClient =
       Some (Serialization.serialize {| qualifiedName = qualifiedName; replyId = rid |})
     | WorkerMessage.CancelEval ->
       "POST", "/cancel", None
+    | WorkerMessage.CancelEvalRequest rid ->
+      "POST", "/cancel-request",
+      Some (Serialization.serialize {| replyId = rid |})
     | WorkerMessage.LoadScript(filePath, rid) ->
       "POST", "/load-script",
       Some (Serialization.serialize {| filePath = filePath; replyId = rid |})

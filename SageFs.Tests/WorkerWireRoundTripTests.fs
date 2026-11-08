@@ -46,6 +46,7 @@ let samplesWith (text: string) : WorkerMessage list =
     WorkerMessage.GetCompletions(text, 7, SageFs.Features.AutoCompletion.CompletionLimit.EveryMember, text + "-4")
     WorkerMessage.GetReferences(text, text + "-4b")
     WorkerMessage.CancelEval
+    WorkerMessage.CancelEvalRequest "r"
     WorkerMessage.LoadScript(text + ".fsx", text + "-5")
     WorkerMessage.ResetSession(text + "-6")
     WorkerMessage.HardResetSession(true, text + "-7")

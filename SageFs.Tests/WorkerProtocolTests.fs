@@ -659,6 +659,7 @@ let workerProtocolTests =
 
       testCase "WHY — status/read-only/control messages classify false — a poll must never look like activity" <| fun _ ->
         [ WorkerMessage.CancelEval
+          WorkerMessage.CancelEvalRequest "r0"
           WorkerMessage.ResetSession "r1"
           WorkerMessage.HardResetSession(true, "r2")
           WorkerMessage.GetStatus "r3"
@@ -668,7 +669,7 @@ let workerProtocolTests =
           WorkerMessage.AwaitAppChange("run1", "r7")
           WorkerMessage.Shutdown ]
         |> List.map WorkerMessage.isActivity
-        |> Expect.equal "all nine must classify as NOT activity" (List.replicate 9 false)
+        |> Expect.equal "all ten must classify as NOT activity" (List.replicate 10 false)
     ]
 
     testList "SessionProxy.touching" [

@@ -43,7 +43,7 @@ module EvalBoundMessage =
   /// The eval was cancelled at the limit and has answered. The answer follows this text.
   let cancelledAtLimit (limit: TimeSpan) : string =
     sprintf
-      "The eval ran past timeout_seconds (%s s) and was cancelled. Nothing it defined was kept and the definitions from before it are intact, unless the text below says the host was stopped. %s"
+      "The call reached timeout_seconds (%s s) and its eval was cancelled: nothing it defined was kept and the definitions from before it are intact, unless the text below says the host was stopped. If the eval was queued behind another one, it never ran and the other eval was not touched. %s"
       (seconds limit)
       longer
 
@@ -104,12 +104,22 @@ module EvalWait =
     /// The limit was already spent, so the eval was never started.
     | NotStarted
 
-  /// What is done with a cancel that failed. RED stub: nothing, which is the bug (the failure is lost).
-  let logCancelFailure (_: exn) : unit = ()
+  /// What is done with a cancel that failed: it is logged with its whole exception, and the caller's wait goes on.
+  let logCancelFailure (failure: exn) : unit =
+    SageFs.Utils.Log.warn "[EvalWait] the cancel of a timed-out eval failed: %s" (failure.ToString())
 
   let private startCancel (observe: exn -> unit) (cancel: unit -> Task) : unit =
-    // On the pool, so a thunk that throws before it returns a task becomes a faulted task nobody reads.
-    Task.Run(System.Func<Task>(fun () -> cancel ())) |> ignore
+    // On the pool, so a thunk that throws before it returns a task becomes a faulted task; either way the failure is handed to
+    // `observe` and not lost.
+    let started = Task.Run(System.Func<Task>(fun () -> cancel ()))
+    started.ContinueWith(
+      (fun (finished: Task) ->
+        match finished.IsFaulted with
+        | true -> observe (finished.Exception.GetBaseException())
+        | false -> ()),
+      TaskContinuationOptions.ExecuteSynchronously
+    )
+    |> ignore
 
   let private waitFor
     (limit: TimeSpan)

@@ -155,6 +155,7 @@ module WorkerHttpTransport =
     /// Runs the compiler over the session's projects, so it is a POST like the other routes that ask the compiler.
     let references = WorkerRoute.Post "/references"
     let cancel = WorkerRoute.Post "/cancel"
+    let cancelRequest = WorkerRoute.Post "/cancel-request"
     let loadScript = WorkerRoute.Post "/load-script"
     let reset = WorkerRoute.Post "/reset"
     let hardReset = WorkerRoute.Post "/hard-reset"
@@ -207,7 +208,7 @@ module WorkerHttpTransport =
 
   let routes : WorkerRoute list = [
     Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.liveValuesEvaluate; Routes.liveValuesMode; Routes.eval; Routes.check
-    Routes.typecheckSymbols; Routes.completions; Routes.references; Routes.cancel; Routes.loadScript
+    Routes.typecheckSymbols; Routes.completions; Routes.references; Routes.cancel; Routes.cancelRequest; Routes.loadScript
     Routes.reset; Routes.hardReset; Routes.levelRepl; Routes.runTests; Routes.runTestsStream
     Routes.testDiscovery; Routes.evalLiveTestFile; Routes.instrumentationMaps; Routes.shutdown
     Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle; Routes.hotReloadResetState; Routes.hotReloadReflectionMode
@@ -517,6 +518,13 @@ module WorkerHttpTransport =
 
       map Routes.cancel (Func<HttpContext, Task>(fun ctx ->
         respond' ctx WorkerMessage.CancelEval)) |> ignore
+
+      map Routes.cancelRequest (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.CancelEvalRequest rid)
+      })) |> ignore
 
       map Routes.loadScript (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx

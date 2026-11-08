@@ -127,7 +127,7 @@ let tests =
       aResult.EvaluationResult |> Result.isOk |> Expect.isTrue "A's eval was not touched by B's cancel"
       let! bResult = within escalationBound b
       match bResult.EvaluationResult with
-      | Result.Error error -> error.Message |> Expect.stringContains "B is told it was queued and never ran" "before it ran"
+      | Result.Error error -> error.Message |> Expect.stringContains "B is told it was queued behind another eval and never ran" "queued behind another eval"
       | Result.Ok _ -> failtest "B was cancelled while queued and must not have run"
       session.GetSessionStatus() |> Expect.equal "the host was not killed" SessionStatus.Ready
       let! survived = within TestTimeouts.patience (eval session "aDefined;;")

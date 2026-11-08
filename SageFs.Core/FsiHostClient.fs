@@ -181,6 +181,16 @@ type FsiHostSession
     markEnded (Crashed(HostCrash.ofTail (StoppedAfterCancel waited) (output.Lines())))
     proc.Kill()
 
+  /// The grace of request `id` ran out. Taking the request off `pending` is what decides it, in one step: a reply that took it
+  /// first has answered, so the host is left alone; if this takes it, no reply can complete it any more, and the host is stopped.
+  let graceRanOut (id: int64) (waiting: TaskCompletionSource<Reply>) (waited: TimeSpan) =
+    let stillWaiting, _ = pending.TryRemove id
+    match EvalInterrupts.graceExpired stillWaiting with
+    | EvalInterrupts.GraceVerdict.KeepHost -> ()
+    | EvalInterrupts.GraceVerdict.KillHost ->
+      stopUnresponsive waited
+      waiting.TrySetResult(Gone lost.Task.Result) |> ignore
+
   let complete (id: int64) (response: Response) =
     match pending.TryRemove id with
     | true, waiting -> waiting.TrySetResult(Got response) |> ignore
@@ -260,12 +270,12 @@ type FsiHostSession
           use answered = new CancellationTokenSource()
           use _ =
             cancellationToken.Register(fun () ->
-              send Interrupt |> ignore
+              send (Interrupt id) |> ignore
               match grace with
               | NoKill -> ()
               | KillAfter wait ->
                 Task.Delay(wait, answered.Token).ContinueWith(
-                  (fun (delay: Task) -> if not delay.IsCanceled then stopUnresponsive wait),
+                  (fun (delay: Task) -> if not delay.IsCanceled then graceRanOut id waiting wait),
                   TaskContinuationOptions.ExecuteSynchronously
                 )
                 |> ignore)
@@ -512,9 +522,6 @@ type FsiHostSession
       | Got other -> return HostGone(unexpected "agent debug-continue" other)
       | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
-
-  /// Interrupt whatever is running (no effect when idle).
-  member _.Interrupt() = send Interrupt |> ignore
 
   interface IDisposable with
     member _.Dispose() =

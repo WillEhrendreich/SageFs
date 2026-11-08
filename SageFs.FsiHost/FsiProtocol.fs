@@ -47,6 +47,8 @@ type EvalOutcome =
   | EvalSucceeded
   | EvalFailed of message: string
   | EvalInterrupted
+  /// The eval was still queued behind another one when its caller cancelled it: it never ran, nothing was evaluated.
+  | EvalNeverRan
 
 type OutputStream =
   | StdOut
@@ -181,7 +183,9 @@ type Request =
   /// Wait until every probe has been sighted (the patched function's new body ran, or a newer save replaced it) or the
   /// bound passes, then say what is known. Answered beside the session thread: a wait must never hold up a save.
   | AgentAwaitEntries of id: int64 * probes: int64 list * bound: TimeSpan
-  | Interrupt
+  /// Interrupt the eval of this request (the id its `Eval` carried), and no other: if it is the running one it is cancelled, if it
+  /// is still queued it is answered `EvalNeverRan` and skipped, and if it has answered already nothing happens.
+  | Interrupt of id: int64
   | Shutdown
 
 type Response =
@@ -800,9 +804,10 @@ module EvalInterrupts =
   /// `running` is the id of the eval on the session thread, `queued` the ids waiting behind it, `target` the request the
   /// interrupt names.
   let planInterrupt (running: int64 voption) (queued: int64 list) (target: int64) : Plan =
-    match running with
-    | ValueSome _ -> Plan.InterruptRunning
-    | ValueNone -> Plan.NothingToInterrupt
+    match running, List.contains target queued with
+    | ValueSome current, _ when current = target -> Plan.InterruptRunning
+    | _, true -> Plan.DropQueued
+    | _, false -> Plan.NothingToInterrupt
 
   /// What to do when an interrupted request's grace has run out.
   type GraceVerdict =
@@ -810,4 +815,7 @@ module EvalInterrupts =
     | KillHost
 
   /// `stillWaiting`: the request has not been answered.
-  let graceExpired (stillWaiting: bool) : GraceVerdict = KillHost
+  let graceExpired (stillWaiting: bool) : GraceVerdict =
+    match stillWaiting with
+    | true -> KillHost
+    | false -> KeepHost

@@ -997,10 +997,11 @@ module McpTools =
   let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (asked: System.TimeSpan) (left: System.TimeSpan) (statement: string) : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option * EvalCost> = task {
     notifyElm ctx (TuiEvent.EvalStarted (sid, statement))
     let workflow = getWorkflowForSession ctx sid
+    let requestId = WorkerProtocol.SessionId.value (WorkerProtocol.SessionId.newId ())
     let! routeResult, note =
       EvalWait.reply asked left Timeouts.evalCancelAnswer Message
-        (fun () -> routeToSession ctx sid (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, WorkerProtocol.SessionId.value replyId)))
-        (fun () -> routeToSession ctx sid (fun _ -> WorkerProtocol.WorkerMessage.CancelEval) :> Task)
+        (fun () -> routeToSession ctx sid (fun _ -> WorkerProtocol.WorkerMessage.EvalCode(statement, requestId)))
+        (fun () -> routeToSession ctx sid (fun _ -> WorkerProtocol.WorkerMessage.CancelEvalRequest requestId) :> Task)
     return
       match routeResult with
       | Ok rawResponse ->

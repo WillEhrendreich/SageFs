@@ -89,6 +89,9 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
             | EvalSucceeded -> FsiSucceeded
             | EvalFailed message -> FsiFailed(Exception message)
             | EvalInterrupted -> FsiInterrupted
+            // Queued behind another eval when its caller cancelled it: say so, as a named failure, not as an interrupted run.
+            | EvalNeverRan ->
+              FsiFailed(SageFsErrorException(SageFsError.EvalFailed "the eval was still queued behind another eval when its call was cancelled, so it never ran and nothing was evaluated."))
           Diagnostics = diagnostics |> List.map toDiagnostic |> List.toArray
           Cost = cost }
       | HostLost reason ->

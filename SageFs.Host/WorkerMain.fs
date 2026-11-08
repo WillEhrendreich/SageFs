@@ -171,6 +171,21 @@ let private toWorkerError (fallback: string -> SageFsError) (ex: exn) : SageFsEr
     let root = rootCause ex
     fallback (ErrorMessages.runtimeExceptionSummary (root.GetType().Name) root.Message (ex.ToString()))
 
+/// The cancellation source of every `EvalCode` call in flight on this worker, by the request id the call carried. A timeout's
+/// `CancelEvalRequest` cancels the source of ITS request only: the cancel reaches that eval's own token, so it can never touch the
+/// eval of another caller that happens to be running or queued ahead of it.
+let private inFlightEvals = System.Collections.Concurrent.ConcurrentDictionary<string, CancellationTokenSource>()
+
+/// Cancel the eval of request `replyId`. False when it is not in flight (it answered, or never arrived).
+let private cancelInFlight (replyId: string) : bool =
+  match inFlightEvals.TryGetValue replyId with
+  | true, source ->
+    try
+      source.Cancel()
+      true
+    with :? ObjectDisposedException -> false
+  | false, _ -> false
+
 /// Handle a single WorkerMessage by dispatching to the actor.
 let handleMessage
   (actor: AppActor)
@@ -194,6 +209,8 @@ let handleMessage
       // actor must not hang the eval forever even if the client disconnects
       // without cancelling. (Roast-2 item 11 worker side.)
       use cts = new CancellationTokenSource(Timeouts.workerHttpRequest)
+      inFlightEvals[replyId] <- cts
+      use _ = { new IDisposable with member _.Dispose() = inFlightEvals.TryRemove replyId |> ignore }
       let! response =
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Repl
@@ -246,6 +263,8 @@ let handleMessage
     | WorkerMessage.CancelEval ->
       let! cancelled = actor.PostAndAsyncReply(fun rc -> CancelEval rc)
       return WorkerResponse.EvalCancelled cancelled
+
+    | WorkerMessage.CancelEvalRequest replyId -> return WorkerResponse.EvalCancelled(cancelInFlight replyId)
 
     | WorkerMessage.LoadScript(filePath, replyId) ->
       let code = sprintf "#load @\"%s\"" filePath
