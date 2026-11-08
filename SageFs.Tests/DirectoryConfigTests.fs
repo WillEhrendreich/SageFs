@@ -241,9 +241,15 @@ let configHostTests =
       let first = ConfigHost.evaluate Environment.CurrentDirectory script
       let second = ConfigHost.evaluate Environment.CurrentDirectory script
       second |> Expect.equal "same result" first
-      // A cached answer is the very value the first call stored, and an evaluation builds a new one: the same object
-      // says no second host was started, whatever the machine's load and however long a host takes to start.
-      Object.ReferenceEquals(first, second) |> Expect.isTrue "no second host was started: the second answer is the first one's stored value"
+      // A cached answer carries the very config the first call stored, and an evaluation builds a new one: the same
+      // object says no second host was started, whatever the machine's load and however long a host takes to start.
+      // `Result` is a struct, so the identity is that of the config inside the `Ok`, not of the `Ok` itself (boxing
+      // a struct makes a fresh object every time).
+      let configOf (result: Result<DirectoryConfig, ConfigHost.ConfigHostError>) : obj =
+        match result with
+        | Ok config -> box config
+        | Error error -> failtest (ConfigHost.describeError error)
+      Object.ReferenceEquals(configOf first, configOf second) |> Expect.isTrue "no second host was started: the second answer is the first one's stored config"
       let third = ConfigHost.evaluate Environment.CurrentDirectory script
-      Object.ReferenceEquals(first, third) |> Expect.isTrue "and a third read is that value too")
+      Object.ReferenceEquals(configOf first, configOf third) |> Expect.isTrue "and a third read is that config too")
   ]
