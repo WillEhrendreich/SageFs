@@ -230,9 +230,53 @@ let surfaceTests =
     }
   ]
 
+/// An integration binding for repoA in the given session state.
+let private bindingIn (session: McpCohortIntegration.IntegrationSession) : McpCohortIntegration.CohortIntegrationBinding option =
+  Some { Scope = repoA
+         Repository = "/work/repo-a"
+         WorktreePath = "/data/cohort-integration"
+         Branch = "sagefs/cohort-abcdef12"
+         TrunkPath = "/data/cohort-trunk"
+         Session = session }
+
 [<Tests>]
 let statusTests =
-  testList "CohortIntegration: the status read says which cohort the integration serves (P11)" [
+  // Sequenced: these cases write the daemon-wide `cohortIntegrationRef`, the one binding the landing gate reads.
+  testSequenced <| testList "CohortIntegration: the status read says which cohort the integration serves (P11)" [
+
+    testCase "WHY — a landing requested while set_integration_ref is still building the session waits for it to start (finding C-pending)" <| fun _ ->
+      let previous = McpCohortIntegration.cohortIntegrationRef.Value
+      try
+        McpCohortIntegration.setBinding (bindingIn McpCohortIntegration.IntegrationSession.Pending)
+        let waiter = McpCohortIntegration.awaitIntegrationNotPending () |> Started.asTask
+        waiter.IsCompleted |> Expect.isFalse "a pending integration holds the landing"
+        McpCohortIntegration.setBinding (bindingIn (McpCohortIntegration.IntegrationSession.Started "sess-1"))
+        waiter.Wait TestTimeouts.patience |> Expect.isTrue "the start of the session releases the landing"
+        match waiter.Result with
+        | Some { Session = McpCohortIntegration.IntegrationSession.Started sessionId } ->
+          sessionId |> Expect.equal "the landing sees the session that started" "sess-1"
+        | other -> failtestf "expected the started binding, got %A" other
+      finally
+        McpCohortIntegration.setBinding previous
+
+    testCase "WHY — a failed integration releases a waiting landing too, so it is refused with the failure instead of held forever" <| fun _ ->
+      let previous = McpCohortIntegration.cohortIntegrationRef.Value
+      try
+        McpCohortIntegration.setBinding (bindingIn McpCohortIntegration.IntegrationSession.Pending)
+        let waiter = McpCohortIntegration.awaitIntegrationNotPending () |> Started.asTask
+        McpCohortIntegration.setBinding (bindingIn (McpCohortIntegration.IntegrationSession.Failed "the worktree build failed"))
+        waiter.Wait TestTimeouts.patience |> Expect.isTrue "the failure releases the landing"
+        match waiter.Result with
+        | Some { Session = McpCohortIntegration.IntegrationSession.Failed reason } -> reason |> Expect.stringContains "the reason travels" "worktree build"
+        | other -> failtestf "expected the failed binding, got %A" other
+      finally
+        McpCohortIntegration.setBinding previous
+
+    testCase "WHY — only a pending integration holds a landing: not configured, started and failed all answer at once" <| fun _ ->
+      McpCohortIntegration.isPending None |> Expect.isFalse "not configured"
+      McpCohortIntegration.isPending (bindingIn McpCohortIntegration.IntegrationSession.Pending) |> Expect.isTrue "pending"
+      McpCohortIntegration.isPending (bindingIn (McpCohortIntegration.IntegrationSession.Started "s")) |> Expect.isFalse "started"
+      McpCohortIntegration.isPending (bindingIn (McpCohortIntegration.IntegrationSession.Failed "x")) |> Expect.isFalse "failed"
 
     testTask "an integration configured for another repository is named, not shown as this cohort's" {
       let ctx = ToolAuthorityGateTests.mkContext ()

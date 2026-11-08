@@ -151,6 +151,25 @@ module SessionTrust =
     | SessionTrust.TypeIdentityCompromised diagnostic ->
       SettleDecision.Terminal(sprintf "integration session type identity is compromised: %s" diagnostic)
 
+  /// The phase a session is in, for `IntegrationSettle.await`: what the daemon's own record says (`None` when it has no such
+  /// session) and the last progress text the worker gave. Agrees with `ReadyWait.ofSession` on what Ready is, so a wait that
+  /// the session manager keeps parked is never read as Ready here: a rebuild in flight is `BuildInFlight`, whatever the
+  /// lifecycle says, and a stopped session is Stopped whatever the rebuild says.
+  let settlePhase (observed: (SessionLifecycleStatus * LastRebuild) option) (progressText: string option) : IntegrationSettle.Phase =
+    let progress = IntegrationSettle.WorkerSaid.ofText progressText
+    match observed with
+    | None -> IntegrationSettle.Phase.Missing
+    | Some (status, rebuild) ->
+      match status, rebuild with
+      | SessionLifecycleStatus.Stopped, _ -> IntegrationSettle.Phase.Stopped
+      | _, LastRebuild.Latest (RebuildOutcome.InProgress _) -> IntegrationSettle.Phase.BuildInFlight
+      | (SessionLifecycleStatus.Ready _ | SessionLifecycleStatus.Evaluating _), _ -> IntegrationSettle.Phase.Ready
+      | SessionLifecycleStatus.Starting _, _ -> IntegrationSettle.Phase.Starting progress
+      | SessionLifecycleStatus.Restarting _, _ -> IntegrationSettle.Phase.Restarting progress
+      | SessionLifecycleStatus.Building (reason, _), _ -> IntegrationSettle.Phase.Building (reason, progress)
+      | SessionLifecycleStatus.Faulted reason, _ -> IntegrationSettle.Phase.Faulted (FaultReason.describe reason)
+      | SessionLifecycleStatus.HostCrashed _, _ -> IntegrationSettle.Phase.HostCrashed
+
 [<RequireQualifiedAccess>]
 type VerificationMode =
   | SnippetFirst

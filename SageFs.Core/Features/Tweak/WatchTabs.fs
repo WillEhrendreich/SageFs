@@ -9,22 +9,24 @@ open SageFs.Features.Tweak.BindingTweak
 open SageFs.Features.Tweak.ChangesStrip
 
 /// Whether a binding is listed on a tab. (The tab type is in `ViewSettings`, beside the workflow a view's settings are keyed by.)
-let lists (tab: WatchTab) (pinned: bool) (changed: bool) : bool =
+let lists (tab: WatchTab) (pinned: bool) (changed: bool) (moved: bool) : bool =
   match tab with
   | WatchTab.All -> true
   | WatchTab.Pinned -> pinned
   | WatchTab.Changes -> changed
+  | WatchTab.SinceGreen -> moved
   // the Watch tab lists expressions (`WatchRows`), not bindings
   | WatchTab.Watch -> false
 
-/// `lists` as an expression the page evaluates: the same three cases, with the pin and the change given as the page's own expressions.
+/// `lists` as an expression the page evaluates: the same cases, with the pin, the change and the move given as the page's own expressions.
 /// A test puts `true` and `false` where the expressions go and holds the answer to `lists`, so the page cannot list a binding the
 /// pane's model does not.
-let listsJs (tab: WatchTab) (pinnedJs: string) (changedJs: string) : string =
+let listsJs (tab: WatchTab) (pinnedJs: string) (changedJs: string) (movedJs: string) : string =
   match tab with
   | WatchTab.All -> "true"
   | WatchTab.Pinned -> pinnedJs
   | WatchTab.Changes -> changedJs
+  | WatchTab.SinceGreen -> movedJs
   | WatchTab.Watch -> "false"
 
 /// The names of the top-level bindings that hold a tweak or a value the program changed, whether the row is the binding itself or one

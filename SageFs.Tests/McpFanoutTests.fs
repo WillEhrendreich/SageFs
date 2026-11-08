@@ -37,8 +37,14 @@ let private ctxWithFailingStore (makeException: unit -> exn) : McpContext =
 
 let private target (id: string) (send: CancellationToken -> Task) (released: ConcurrentQueue<string>) : FanoutTarget =
   { Id = id
+    Bytes = 300L
     Send = send
     Release = fun () -> released.Enqueue id; Task.CompletedTask }
+
+/// The product's policy, and a fresh ledger for each broadcast a test makes by itself.
+let private policy : FanoutPolicy = FanoutPolicy.standard Timeouts.mcpNotificationSend
+let private broadcast (targets: FanoutTarget[]) : Task<string[]> =
+  McpFanout.broadcast policy (FanoutLedger()) Timeouts.mcpConnectionRelease targets
 
 [<Tests>]
 let tests =
@@ -110,24 +116,68 @@ let tests =
         let delivered = ConcurrentQueue<string>()
         let healthy name = target name (fun _ -> delivered.Enqueue name; Task.CompletedTask) released
         let stuck = target "stuck" (fun _ -> Task.FromException(OperationCanceledException())) released
-        let! (dropped: string[]) = McpFanout.broadcast Timeouts.mcpNotificationSend Timeouts.mcpConnectionRelease [| healthy "a"; stuck; healthy "b" |]
+        let! (dropped: string[]) = broadcast [| healthy "a"; stuck; healthy "b" |]
         dropped |> Expect.equal "only the failed connection is dropped" [| "stuck" |]
         List.ofSeq released |> Expect.equal "and released exactly once" [ "stuck" ]
         List.ofSeq delivered |> List.sort |> Expect.equal "the healthy ones were notified" [ "a"; "b" ]
       }
 
-      testTask "a send that never completes is cut off at the budget and released" {
+      testTask "WHY — a send that never completes is judged by the bytes it leaves unfinished: under the ceiling it is left alone, past it the connection is released and its send cancelled" {
         let released = ConcurrentQueue<string>()
-        let hangs = target "hangs" (fun token -> Task.Delay(Timeout.Infinite, token)) released
-        let! dropped = McpFanout.broadcast Timeouts.mcpNotificationSend Timeouts.mcpConnectionRelease [| hangs |]
-        dropped |> Expect.equal "the hung connection is dropped" [| "hangs" |]
-        List.ofSeq released |> Expect.equal "and released" [ "hangs" ]
+        let cancelled = TaskCompletionSource<bool>()
+        let ledger = FanoutLedger()
+        let big = { target "hangs" (fun token -> token.Register(fun () -> cancelled.TrySetResult true |> ignore) |> ignore; Task.Delay(Timeout.Infinite, token)) released with Bytes = FanoutPolicy.StandardMaxBufferedBytes / 2L + 1L }
+        let lookAndMove = { policy with Look = TimeSpan.Zero }
+        let! first = McpFanout.broadcast lookAndMove ledger Timeouts.mcpConnectionRelease [| big |]
+        first |> Expect.isEmpty "one unfinished send is under the ceiling, so the connection stays"
+        ledger.Unfinished "hangs" |> Expect.equal "and its bytes are held against it" big.Bytes
+        let! second = McpFanout.broadcast lookAndMove ledger Timeouts.mcpConnectionRelease [| big |]
+        second |> Expect.equal "the second pushes it past the ceiling, so it is dropped" [| "hangs" |]
+        List.ofSeq released |> Expect.equal "and released once" [ "hangs" ]
+        let! sawCancel = cancelled.Task.WaitAsync TestTimeouts.patienceInProcess
+        sawCancel |> Expect.isTrue "the stuck write was cancelled, so the lock it holds is free before the connection is disposed"
+        ledger.Unfinished "hangs" |> Expect.equal "and the ledger forgot it" 0L
       }
+
+      testTask "WHY — a send slower than the look is not a fault: the connection stays, and its bytes leave the ledger when the send finishes" {
+        let released = ConcurrentQueue<string>()
+        let finish = TaskCompletionSource()
+        let ledger = FanoutLedger()
+        let slow = target "slow" (fun _ -> finish.Task) released
+        let! dropped = McpFanout.broadcast { policy with Look = TimeSpan.Zero } ledger Timeouts.mcpConnectionRelease [| slow |]
+        dropped |> Expect.isEmpty "not dropped for being slow"
+        ledger.Unfinished "slow" |> Expect.equal "still unfinished" slow.Bytes
+        finish.SetResult()
+        ledger.Unfinished "slow" |> Expect.equal "finished, so nothing is held against it" 0L
+        released.IsEmpty |> Expect.isTrue "and it was never released"
+      }
+
+      testTask "WHY — a slow send that fails later drops the connection at the next broadcast, without sending to it again" {
+        let released = ConcurrentQueue<string>()
+        let finish = TaskCompletionSource()
+        let sends = ref 0
+        let ledger = FanoutLedger()
+        let late = target "late" (fun _ -> Interlocked.Increment sends |> ignore; finish.Task) released
+        let! first = McpFanout.broadcast { policy with Look = TimeSpan.Zero } ledger Timeouts.mcpConnectionRelease [| late |]
+        first |> Expect.isEmpty "slow, not failed, so it stays for now"
+        finish.SetException(OperationCanceledException())
+        ledger.HasFaulted "late" |> Expect.isTrue "the late failure is noted"
+        let! second = McpFanout.broadcast policy ledger Timeouts.mcpConnectionRelease [| late |]
+        second |> Expect.equal "the next broadcast drops it" [| "late" |]
+        sends.Value |> Expect.equal "without a second send" 1
+        List.ofSeq released |> Expect.equal "and releases it once" [ "late" ]
+      }
+
+      testCase "WHY — the backlog decision is the ceiling and nothing else: at it the connection stays, past it the connection goes" <| fun _ ->
+        FanoutBacklog.decide policy 0L |> Expect.isNone "nothing unfinished"
+        FanoutBacklog.decide policy policy.MaxBufferedBytes |> Expect.isNone "exactly at the ceiling"
+        FanoutBacklog.decide policy (policy.MaxBufferedBytes + 1L)
+        |> Expect.equal "one byte past it" (Some(DropReason.BacklogTooLarge(policy.MaxBufferedBytes + 1L)))
 
       testTask "an OutOfMemoryException from a send or from a release never escapes the broadcast" {
         let released = ConcurrentQueue<string>()
         let oom = { target "oom" (fun _ -> Task.FromException(OutOfMemoryException())) released with Release = fun () -> Task.FromException(OutOfMemoryException()) }
-        let! dropped = McpFanout.broadcast Timeouts.mcpNotificationSend Timeouts.mcpConnectionRelease [| oom |]
+        let! dropped = broadcast [| oom |]
         dropped |> Expect.equal "dropped, with no exception" [| "oom" |]
       }
 
@@ -135,7 +185,7 @@ let tests =
         EchoGuard.reset ()
         let released = ConcurrentQueue<string>()
         let many = [| for i in 1 .. 1000 -> target (string i) (fun _ -> Task.FromException(OperationCanceledException())) released |]
-        let! (dropped: string[]) = McpFanout.broadcast Timeouts.mcpNotificationSend Timeouts.mcpConnectionRelease many
+        let! (dropped: string[]) = broadcast many
         dropped.Length |> Expect.equal "all dropped" 1000
         (EchoGuard.snapshot () |> List.length <= 2) |> Expect.isTrue "one row per sink, not one per connection"
         EchoGuard.failureCount EchoSink.NotificationDelivery |> Expect.equal "every drop counted" 1000L

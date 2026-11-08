@@ -1061,17 +1061,43 @@ let private liveBindingsViewPaths (workingDir: string) : SageFs.ConfigPaths = Li
 let private liveBindingsResolved (workflow: WorkflowTypes.SessionWorkflow) (workingDir: string) (tab: SageFs.WatchTab) : SageFs.ResolvedView =
   SageFs.SettingsCatalog.viewForTab (liveBindingsViewPaths workingDir) (SageFs.ViewWorkflow.ofSessionWorkflow workflow) tab
 
-/// The tab each page has open in the Live Bindings pane, keyed by page client id like the sort choice above: the tab-bar click posts it
-/// and the stream reads it on every push, for as long as the page lives. A page that reloads has a new client id and starts on All,
-/// which is the view its workflow gives. The page's `liveTab` signal says the same tab, so what the page hides at once and what the
-/// server draws for it agree.
-let private liveTabByClient = PageChoices<SageFs.WatchTab>(pageChoiceCapacity)
+/// What each page chose for the Live Bindings pane, keyed by page client id: the tab it has open (the tab-bar click posts it) and how it
+/// shows each row (the picker posts it), read on every push for as long as the page lives. One owner with one lock, and an absent page reads
+/// the default: a page that reloads has a new client id and starts on All with every row as it is. The page's `liveTab` signal says the same
+/// tab, so what the page hides at once and what the server draws for it agree.
+let pages = PageState.PageStore(PageState.PageCapacity)
 
-/// The tab a page has open, or All.
-let private liveTabOf (clientId: string) : SageFs.WatchTab =
-  match clientId with
-  | null | "" -> SageFs.WatchTab.All
-  | id -> liveTabByClient.Find(id, SageFs.WatchTab.All)
+/// What a page chose for how the Live Bindings pane looks.
+let private pageLookOf (clientId: string) : PageState.PageLook = pages.Look clientId
+
+/// Whether a build reads the worker or reuses what a stream kept of its last answers (`DashboardWorkerCache`).
+[<RequireQualifiedAccess>]
+type WorkerAnswers =
+  | Fetch
+  | Reuse of DashboardWorkerCache
+
+/// What `buildDashboardSnapshotWithSessions` needs, by name: the queries and infrastructure it reads through, the session in view and the
+/// one before it (to tell a switch), the working directory and theme the stream last saw, what the stream kept of the worker's answers, the
+/// session list the caller already fetched, the friction panel's opt-in, and what the page chose for the Live Bindings pane.
+type SnapshotInput =
+  { Queries: DashboardQueries
+    Infra: DashboardInfra
+    CurrentSessionId: WorkerProtocol.SessionId
+    LastSessionId: WorkerProtocol.SessionId
+    LastWorkingDir: string
+    LastThemeName: string
+    Answers: WorkerAnswers
+    Sessions: WorkerProtocol.SessionInfo list
+    FrictionOptIn: FrictionPanelOptIn
+    Look: PageState.PageLook }
+
+/// What a build made: the snapshot, the session it ended up viewing, the theme it resolved, and what it read from the worker.
+type SnapshotBuilt =
+  { Snapshot: DashboardSnapshot
+    SessionId: WorkerProtocol.SessionId
+    ThemeName: string
+    /// What the build read from the worker, for a stream to keep between ticks.
+    Worker: DashboardWorkerCache }
 
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
@@ -1089,19 +1115,22 @@ let private liveTabOf (clientId: string) : SageFs.WatchTab =
 /// push loop already fetches the session list once per tick (to reconcile
 /// the viewed session before rendering) and must not pay for a second
 /// `GetAllSessions` read just to build the sidebar cards.
-let buildDashboardSnapshotWithSessionsFor
-  (q: DashboardQueries)
-  (infra: DashboardInfra)
-  (currentSessionId: WorkerProtocol.SessionId)
-  (lastSessionId: WorkerProtocol.SessionId)
-  (lastWorkingDir: string)
-  (lastThemeName: string)
-  (cachedWorkerData: DashboardWorkerCache option)
-  (sessions: WorkerProtocol.SessionInfo list)
-  (frictionOptIn: FrictionPanelOptIn)
-  (tab: SageFs.WatchTab)
-  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
+let buildDashboardSnapshotWithSessions (input: SnapshotInput) : System.Threading.Tasks.Task<SnapshotBuilt> =
   task {
+    let q = input.Queries
+    let infra = input.Infra
+    let currentSessionId = input.CurrentSessionId
+    let lastSessionId = input.LastSessionId
+    let lastWorkingDir = input.LastWorkingDir
+    let lastThemeName = input.LastThemeName
+    let cachedWorkerData =
+      match input.Answers with
+      | WorkerAnswers.Reuse cache -> Some cache
+      | WorkerAnswers.Fetch -> None
+    let sessions = input.Sessions
+    let frictionOptIn = input.FrictionOptIn
+    let look = input.Look
+    let tab = look.Tab
     let sessionId = currentSessionId
     let sid = WorkerProtocol.SessionId.value sessionId
     let lastSid = WorkerProtocol.SessionId.value lastSessionId
@@ -1246,7 +1275,12 @@ let buildDashboardSnapshotWithSessionsFor
             | LiveBindingsDock.WalkedBindings walked -> SageFs.ValueWalk.toWalkMode walked.Notes.Mode, Some walked.Snapshot
             | LiveBindingsDock.PrintedBindings _
             | LiveBindingsDock.NothingBound -> SageFs.Features.LiveValueTree.WalkMode.Safe, None
-          Some { viewControls with Watch = LiveBindingsWatch.partsFor (WorkerProtocol.SessionId.value sessionId) (liveBindingsViewPaths workingDir) mode walk }
+          // What moved since the comparison point the loop took when it last settled green. Drawing only reads it.
+          let sinceGreen =
+            match walk with
+            | Some snapshot -> LiveBindingsSinceGreen.said (q.GetSinceGreen (WorkerProtocol.SessionId.value sessionId)) snapshot
+            | None -> LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet
+          Some { viewControls with Watch = LiveBindingsWatch.partsFor (WorkerProtocol.SessionId.value sessionId) (liveBindingsViewPaths workingDir) mode walk; Formats = look.Formats; Freshness = LiveBindingsViewPanel.LoopSaid.ofActivity (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId)); SinceGreen = sinceGreen }
         | DockPanes.NoSessionInView -> None
       LiveBindingsDock.renderDockWithRemedy
         (RebuildRemedy.paneNote remedy)
@@ -1353,54 +1387,16 @@ let buildDashboardSnapshotWithSessionsFor
               EvalToPixelP50Ms = evalToPixelP50Ms
               EvalToPixelP99Ms = evalToPixelP99Ms
             }
-    return snap, sessionId, themeName, {| EvalStats = stats; HotReloadState = hrState; WarmupContext = wCtx; FrictionPanel = frictionPanel |}
+    return { Snapshot = snap; SessionId = sessionId; ThemeName = themeName; Worker = { SessionId = sessionId; EvalStats = stats; HotReloadState = hrState; WarmupContext = wCtx; FrictionPanel = Some frictionPanel } }
   }
 
-/// The snapshot with the Live Bindings pane on its All tab, which is where a page starts.
-let buildDashboardSnapshotWithSessions
-  (q: DashboardQueries)
-  (infra: DashboardInfra)
-  (currentSessionId: WorkerProtocol.SessionId)
-  (lastSessionId: WorkerProtocol.SessionId)
-  (lastWorkingDir: string)
-  (lastThemeName: string)
-  (cachedWorkerData: DashboardWorkerCache option)
-  (sessions: WorkerProtocol.SessionInfo list)
-  (frictionOptIn: FrictionPanelOptIn)
-  =
-  buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn SageFs.WatchTab.All
-
-/// Standalone entry point for callers that do not already have a fresh
-/// session list in hand (e.g. tests, one-off callers) — fetches once, then
-/// delegates to `buildDashboardSnapshotWithSessionsFor`, for the tab the page has open.
-let buildDashboardSnapshotFor
-  (q: DashboardQueries)
-  (infra: DashboardInfra)
-  (currentSessionId: WorkerProtocol.SessionId)
-  (lastSessionId: WorkerProtocol.SessionId)
-  (lastWorkingDir: string)
-  (lastThemeName: string)
-  (cachedWorkerData: DashboardWorkerCache option)
-  (frictionOptIn: FrictionPanelOptIn)
-  (tab: SageFs.WatchTab)
-  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
+/// Standalone entry point for callers that do not already have a fresh session list in hand (tests, one-off callers): it fetches the
+/// list once, whatever `input.Sessions` holds, and builds with it.
+let buildDashboardSnapshot (input: SnapshotInput) : System.Threading.Tasks.Task<SnapshotBuilt> =
   task {
-    let! sessions = q.GetAllSessions ()
-    return! buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn tab
+    let! sessions = input.Queries.GetAllSessions ()
+    return! buildDashboardSnapshotWithSessions { input with Sessions = sessions }
   }
-
-/// The same for a page on its All tab.
-let buildDashboardSnapshot
-  (q: DashboardQueries)
-  (infra: DashboardInfra)
-  (currentSessionId: WorkerProtocol.SessionId)
-  (lastSessionId: WorkerProtocol.SessionId)
-  (lastWorkingDir: string)
-  (lastThemeName: string)
-  (cachedWorkerData: DashboardWorkerCache option)
-  (frictionOptIn: FrictionPanelOptIn)
-  =
-  buildDashboardSnapshotFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData frictionOptIn SageFs.WatchTab.All
 
 /// Build the full-shell dashboard snapshot for the "no session in play" state:
 /// the complete dashboard chrome (header, daemon health, sidebar Sessions panel,
@@ -1752,8 +1748,19 @@ let createStreamHandler
       let cached = tryGetFreshWorkerCache sessionId
       // liveSessions was already fetched above for reconciliation — reuse it
       // here instead of paying for a second GetAllSessions read.
-      let! snapRaw, newSessionId, newThemeName, rawWorkerData =
-        buildDashboardSnapshotWithSessionsFor q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions (frictionOptInFor clientId) (liveTabOf clientId)
+      let! built =
+        buildDashboardSnapshotWithSessions
+          { Queries = q
+            Infra = infra
+            CurrentSessionId = sessionId
+            LastSessionId = lastSessionId
+            LastWorkingDir = lastWorkingDir
+            LastThemeName = lastThemeName
+            Answers = (match cached with | Some cache -> WorkerAnswers.Reuse cache | None -> WorkerAnswers.Fetch)
+            Sessions = liveSessions
+            FrictionOptIn = frictionOptInFor clientId
+            Look = pageLookOf clientId }
+      let snapRaw, newSessionId, newThemeName = built.Snapshot, built.SessionId, built.ThemeName
       let snap =
         applyCohortViewing infra currentCohortViewingSeq snapRaw
         |> PanelVisibility.apply (panelFactsFor q infra (Some newSessionId) clientId)
@@ -1762,13 +1769,7 @@ let createStreamHandler
       | None ->
         // This push performed the expensive fetches — record them so the next
         // ticks within the TTL window reuse them.
-        workerCache <- Some {
-          SessionId = sessionId
-          EvalStats = rawWorkerData.EvalStats
-          HotReloadState = rawWorkerData.HotReloadState
-          WarmupContext = rawWorkerData.WarmupContext
-          FrictionPanel = Some rawWorkerData.FrictionPanel
-        }
+        workerCache <- Some built.Worker
         lastWorkerFetch <- DateTime.UtcNow
       | Some _ -> ()
       let sessionChanged = newSessionId <> lastSessionId
@@ -2041,8 +2042,19 @@ let createEvalHandler
           // The action response owns this interaction. Render the freshly
           // committed snapshot here so Datastar cannot drop an overlapping
           // long-lived stream morph while this POST is still resolving.
-          let! snapRaw, _, _, _ =
-            buildDashboardSnapshotFor q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None (frictionOptInFor (clientIdFromSignals doc)) (liveTabOf (clientIdFromSignals doc))
+          let! built =
+            buildDashboardSnapshot
+              { Queries = q
+                Infra = infra
+                CurrentSessionId = sessionId
+                LastSessionId = sessionId
+                LastWorkingDir = q.GetSessionWorkingDir sessionId
+                LastThemeName = defaultThemeName
+                Answers = WorkerAnswers.Fetch
+                Sessions = []
+                FrictionOptIn = frictionOptInFor (clientIdFromSignals doc)
+                Look = pageLookOf (clientIdFromSignals doc) }
+          let snapRaw = built.Snapshot
           // Same panel visibility the stream uses, so this morph and the next
           // stream push agree on which panels exist.
           let snap =
@@ -2561,7 +2573,7 @@ let createBindingsViewHandler (q: DashboardQueries) (infra: DashboardInfra) : Wo
       let workflow = SageFs.ViewWorkflow.ofSessionWorkflow (q.GetSessionWorkflow sessionId)
       let paths = liveBindingsViewPaths (q.GetSessionWorkingDir sessionId)
       // The choice is the open tab's: the page's own tab, as the server recorded it when the tab bar was clicked.
-      let tab = liveTabOf (clientIdFromSignals doc)
+      let tab = (pages.Look (clientIdFromSignals doc)).Tab
       let outcome =
         SageFs.ViewScope.parse (signal LiveBindingsViewPanel.ViewSignals.Scope "bv-scope")
         |> Result.bind (fun scope ->
@@ -2598,7 +2610,7 @@ let createLiveTabHandler (infra: DashboardInfra) : HttpHandler =
       | Ok tab ->
         match clientId with
         | null | "" -> ()
-        | id -> liveTabByClient.Set(id, tab)
+        | id -> pages.SetTab(id, tab)
         Response.sseStartResponse ctx |> ignore
         infra.TriggerStateChange ()
       | Error why ->
@@ -3613,7 +3625,19 @@ let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: st
       let! sessions = q.GetAllSessions ()
       match firstLiveSession sessions with
       | Some firstId ->
-        let! snapRaw, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None (frictionOptInFor clientId)
+        let! built =
+          buildDashboardSnapshot
+            { Queries = q
+              Infra = infra
+              CurrentSessionId = firstId
+              LastSessionId = WorkerProtocol.SessionId.newId ()
+              LastWorkingDir = ""
+              LastThemeName = defaultThemeName
+              Answers = WorkerAnswers.Fetch
+              Sessions = sessions
+              FrictionOptIn = frictionOptInFor clientId
+              Look = PageState.PageLook.onAll }
+        let snapRaw, resolvedId = built.Snapshot, built.SessionId
         let snap = PanelVisibility.apply (panelFactsFor q infra (Some resolvedId) clientId) snapRaw |> DashboardNewSession.apply clientId
         return renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContent snap)
       | None ->

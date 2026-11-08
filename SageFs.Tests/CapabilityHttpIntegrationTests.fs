@@ -118,6 +118,17 @@ let private caseOf (body: string) : string =
   use document = System.Text.Json.JsonDocument.Parse body
   McpMintRoute.textField document.RootElement "case"
 
+/// One POST to the local-data clear route with `authorization` as the Authorization header (none for None): the status and the body.
+let private postClear (port: int) (authorization: string option) : Task<int * string> =
+  task {
+    use client = new System.Net.Http.HttpClient(Timeout = TestTimeouts.patience)
+    use request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, sprintf "http://localhost:%d%s?store=friction" port LocalDataCommand.Path)
+    authorization |> Option.iter (fun value -> request.Headers.TryAddWithoutValidation("Authorization", value) |> ignore)
+    use! response = client.SendAsync request
+    let! text = response.Content.ReadAsStringAsync()
+    return int response.StatusCode, text
+  }
+
 /// Every text file under `dataDir`: the daemon's log and everything else it wrote, read while it runs.
 let private everythingWrittenIn (dataDir: string) : string =
   Directory.GetFiles(dataDir, "*", SearchOption.AllDirectories)
@@ -395,5 +406,33 @@ let tests =
       down.Err |> Expect.stringContains "names the port" (string freePort)
       down.Err |> Expect.stringContains "and says how to start one" "Start it with 'sagefs'"
       Directory.Delete(downDir, true)
+    }
+
+    testTask "WHY - the local-data clear needs the operator credential over HTTP, and sagefs data clear is how a person reaches it" {
+      let dataDir = freshDataDir ()
+      let! proc, port =
+        SageFs.Tests.CohortMcpToolsIntegrationTests.startIsolatedDaemonWith [ "SAGEFS_DATA_DIR", dataDir; CapabilityTransport.policyEnvVar, "TokenRequired" ]
+      try
+        let operator = operatorCredentialIn dataDir
+        let! noStatus, noBody = postClear port None
+        noStatus |> Expect.equal "no credential is unauthorized" 401
+        caseOf noBody |> Expect.equal "named" "no_credential"
+        let otherOperator = OperatorCredential.ofEntropy (Array.create OperatorCredential.entropyBytes 7uy)
+        let! wrongStatus, wrongBody = postClear port (Some(sprintf "Bearer %s" otherOperator))
+        wrongStatus |> Expect.equal "another daemon's credential is forbidden" 403
+        caseOf wrongBody |> Expect.equal "named" "operator_not_recognized"
+        let! okStatus, okBody = postClear port (Some(sprintf "Bearer %s" operator))
+        okStatus |> Expect.equal (sprintf "the operator clears: %s" okBody) 200
+        let! run = runCli dataDir [ "data"; "clear"; "--mcp-port"; string port; "--store"; "friction" ]
+        run.ExitCode |> Expect.equal (sprintf "the command works: %s" run.Err) 0
+        run.Out |> Expect.stringContains "and says what it cleared" "friction.db"
+        let emptyDir = freshDataDir ()
+        Directory.CreateDirectory emptyDir |> ignore
+        let! noFile = runCli emptyDir [ "data"; "clear"; "--mcp-port"; string port ]
+        noFile.ExitCode |> Expect.equal "no operator.token fails" 1
+        noFile.Err |> Expect.stringContains "and says where the file should be" OperatorStore.FileName
+        Directory.Delete(emptyDir, true)
+      finally
+        SageFs.Tests.CohortMcpToolsIntegrationTests.killDaemon proc
     }
   ]

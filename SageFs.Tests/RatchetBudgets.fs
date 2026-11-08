@@ -137,7 +137,10 @@ let fileSize : (string * int) list =
     // because `commitCohort`'s command already carries its scope.
     // 3201 -> 3190: the session owner record moved to SessionStakeholders.fs, beside the record of who ran code in
     // each session, and the session manager releases a removed session itself (OnSessionRemoved).
-    "SageFs/Mcp.fs", 3190 // 3273 -> 3204: the completions routes moved to McpCompletions.fs
+    // 3190 -> 3179: the caller's ambient identity (the four AsyncLocals and memberIdFor) moved to McpAmbientCaller.fs, which
+    // paid for the one session-access rule's call sites (the tool gate, stop_session) and left the file 8 lines under the
+    // 3187 it started at. Exact size.
+    "SageFs/Mcp.fs", 3179 // 3273 -> 3204: the completions routes moved to McpCompletions.fs
     // 850 -> 830: ratcheted DOWN (never up) after moving the
     // session-path-containment validator (resolveRealSessionPath/
     // isUncPath/validateSessionCreateRequest) out into its own

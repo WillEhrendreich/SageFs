@@ -173,6 +173,24 @@ let valueToneClass (tone: ValueTone) : string =
   | ValueTone.NumberTone -> " live-v-number"
   | ValueTone.PlainTone -> ""
 
+/// The class a freshness chip is drawn with, one per tone, from the theme's semantic tokens (pass, info, warn, fail).
+let freshnessClass (tone: Tweak.LoopFreshness.FreshnessTone) : string =
+  match tone with
+  | Tweak.LoopFreshness.FreshnessTone.Current -> "live-fresh-current"
+  | Tweak.LoopFreshness.FreshnessTone.Moving -> "live-fresh-moving"
+  | Tweak.LoopFreshness.FreshnessTone.Held -> "live-fresh-held"
+  | Tweak.LoopFreshness.FreshnessTone.Failed -> "live-fresh-failed"
+
+/// How current the values are, from the test loop: a square dot in the state's colour and the state in a word, with the sentence as the
+/// tooltip. The word is markup, so the state is never told by colour alone.
+let freshnessChip (chip: Tweak.LoopFreshness.Chip) : XmlNode =
+  Elem.span
+    [ Attr.class' ("live-freshness " + freshnessClass chip.Tone)
+      testid "live-freshness"
+      Attr.title (attrEnc chip.Detail) ]
+    [ Elem.span [ Attr.class' "live-freshness-dot"; Attr.create "aria-hidden" "true" ] []
+      textEnc chip.Word ]
+
 /// What a glyph stands for. The glyph drawn on a row and the line that explains it in the legend both come from this, so a glyph
 /// cannot be drawn that the legend does not name.
 [<RequireQualifiedAccess>]
@@ -321,26 +339,29 @@ let private filteredOutExpr (binding: string) : string =
 
 /// True while the open tab does not list this binding: `WatchTabs.lists` for each tab that is not All, with the binding's pin read from
 /// the signal and whether it holds a change written in by the server (a change is a fact of the rows, which the page does not hold).
-let private tabHidesExpr (binding: string) (changed: bool) : string =
+let private tabHidesExpr (binding: string) (changed: bool) (moved: bool) : string =
   let open' (tab: WatchTab) = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
-  let changedLiteral = match changed with | true -> "true" | false -> "false"
-  [ WatchTab.Pinned; WatchTab.Changes; WatchTab.Watch ]
-  |> List.map (fun tab -> sprintf "(%s && !(%s))" (open' tab) (Tweak.WatchTabs.listsJs tab (isPinnedExpr binding) changedLiteral))
+  let literal (value: bool) = match value with | true -> "true" | false -> "false"
+  [ WatchTab.Pinned; WatchTab.Changes; WatchTab.SinceGreen; WatchTab.Watch ]
+  |> List.map (fun tab -> sprintf "(%s && !(%s))" (open' tab) (Tweak.WatchTabs.listsJs tab (isPinnedExpr binding) (literal changed) (literal moved)))
   |> String.concat " || "
 
 /// True while the filter is set and this name does not contain it, or the open tab does not list it.
-let private hiddenExpr (binding: string) (changed: bool) : string =
-  sprintf "(%s) || %s" (filteredOutExpr binding) (tabHidesExpr binding changed)
+let private hiddenExpr (binding: string) (changed: bool) (moved: bool) : string =
+  sprintf "(%s) || %s" (filteredOutExpr binding) (tabHidesExpr binding changed moved)
 
 /// True while the open tab is `tab` and none of the bindings is listed on it.
-let private tabEmptyExpr (tab: WatchTab) (bindings: string list) (changedNames: Set<string>) : string =
+let private tabEmptyExpr (tab: WatchTab) (bindings: string list) (changedNames: Set<string>) (movedNames: Set<string>) : string =
   let open' = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
   match tab with
   | WatchTab.All
   // the Watch tab has its own empty words, drawn with its rows
   | WatchTab.Watch -> "false"
   | WatchTab.Changes ->
-    let any = bindings |> List.exists (fun name -> Tweak.WatchTabs.lists tab false (Set.contains name changedNames))
+    let any = bindings |> List.exists (fun name -> Tweak.WatchTabs.lists tab false (Set.contains name changedNames) false)
+    sprintf "%s && %s" open' (match any with | true -> "false" | false -> "true")
+  | WatchTab.SinceGreen ->
+    let any = bindings |> List.exists (fun name -> Tweak.WatchTabs.lists tab false false (Set.contains name movedNames))
     sprintf "%s && %s" open' (match any with | true -> "false" | false -> "true")
   | WatchTab.Pinned ->
     let tokens = bindings |> List.map (fun name -> jsStringLiteral (pinToken name)) |> String.concat ", "
@@ -520,9 +541,16 @@ let modeRows (sessionId: string) (current: ValueWalk) : XmlNode list =
       yield! ValueWalk.all |> List.map modeButton ]
     renderLegend ]
 
-let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (view: LiveBindingsPane.PaneView) (watchTab: XmlNode list) : XmlNode list =
+let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (formats: Map<string, Tweak.RowFormatting.FormatChoice>) (green: LiveBindingsViewPanel.GreenSaid) (view: LiveBindingsPane.PaneView) (watchTab: XmlNode list) : XmlNode list =
   // The bindings the Changes tab lists: a fact of the rows, so the server writes it into each binding's expression.
   let changedNames = changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)
+  // What moved since the tests last settled green, by place, and the bindings it belongs to.
+  let moves =
+    match green with
+    | LiveBindingsViewPanel.GreenSaid.Moved moved -> moved
+    | LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet -> Map.empty
+  let movedNames = Tweak.SinceGreen.movedBindings moves
+  let sinceGreenOpen = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token WatchTab.SinceGreen)
   let evaluateEndpoint = sprintf "/api/sessions/%s/live-values/evaluate" (Uri.EscapeDataString sessionId)
   let kindBadge (node: LiveValueTree.LiveValueNode) =
     match node.Kind with
@@ -593,6 +621,13 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
       | NumberLabels.RunningAndFile ->
         [ Elem.span [ Attr.class' "live-number-tag"; Attr.title NumberLabels.runningMeaning; testid "tweak-running-tag" ] [ textEnc NumberLabels.runningWord ] ]
       | NumberLabels.OneNumber -> []
+  let wasNote (words: string) : XmlNode =
+    Elem.span
+      [ Attr.class' "live-was live-hidden"
+        testid "live-was"
+        Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" sinceGreenOpen))
+        Ds.preserveAttr "class" ]
+      [ textEnc words ]
   let heldRow (binding: string) (path: string list) (node: LiveValueTree.LiveValueNode) (reason: LiveValueTree.NotEvaluatedReason) =
     let action = LiveBindingsPane.rowActionOf reason
     let rowClass =
@@ -634,15 +669,61 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
   /// `alreadySaid` is the sentence about a call that the row just before this one (its sibling) said. Rows that owe the same sentence
   /// (the fields of a record built by one call) say it once, on the first: the repeat read as clutter.
   let rec renderNode (binding: string) (path: string list) (node: LiveValueTree.LiveValueNode) (alreadySaid: string option) : XmlNode =
+    // How this page shows the value (`LiveBindingsRowFormat`): a whole number carries a picker that moves it through as it is, hex,
+    // binary and colour, and a number with a range of its own can be a bar. Every other node, and a leaf with nothing else to show,
+    // is the cell it always was.
+    let valueClass = "live-preview" + valueToneClass (valueToneOf node.Kind node.TypeName)
+    let asIs =
+      // The whole value is the tooltip: the cell clips a long one to a line with an ellipsis (always at phone width), and the
+      // rest was out of reach. The pane's own "Long values: Full" setting is the way to see it without hovering.
+      Elem.span [ Attr.class' valueClass; Attr.create "title" (attrEnc node.Preview) ] [ textEnc (sprintf "= %s" node.Preview) ]
+    let shown =
+      match node.Kind with
+      | LiveValueTree.NodeKind.Leaf ->
+        let id = LiveBindingsRowFormat.rowId binding path
+        let range =
+          TweakView.tryRow tweaks { Binding = binding; Labels = path }
+          |> Option.bind (fun rowView -> LiveBindingsRowFormat.rangeOf rowView.Limits)
+        LiveBindingsRowFormat.shownFor formats id node.TypeName range |> Option.map (fun chosen -> id, chosen)
+      | LiveValueTree.NodeKind.NotEvaluated _
+      | LiveValueTree.NodeKind.Record
+      | LiveValueTree.NodeKind.List
+      | LiveValueTree.NodeKind.Map
+      | LiveValueTree.NodeKind.Option
+      | LiveValueTree.NodeKind.Union
+      | LiveValueTree.NodeKind.Tuple
+      | LiveValueTree.NodeKind.Array
+      | LiveValueTree.NodeKind.Class
+      | LiveValueTree.NodeKind.Closure
+      | LiveValueTree.NodeKind.Cycle
+      | LiveValueTree.NodeKind.Truncated -> None
+    let formatAttrs, valueCells =
+      match shown with
+      | None -> [], [ asIs ]
+      | Some(id, chosen) ->
+        let choice = Tweak.RowFormatting.FormatChoice.ofFormat chosen.Current
+        let button = LiveBindingsRowFormat.picker id chosen.Offered choice node.Label
+        let cells =
+          match chosen.Current with
+          | Tweak.RowFormatting.RowFormat.AsIs -> [ asIs ]
+          | Tweak.RowFormatting.RowFormat.Hex
+          | Tweak.RowFormatting.RowFormat.Binary
+          | Tweak.RowFormatting.RowFormat.Colour
+          | Tweak.RowFormatting.RowFormat.Slider _ -> LiveBindingsRowFormat.valueNodes valueClass chosen.Current node.TypeName node.Preview
+        [ Attr.create "data-format" (Tweak.RowFormatting.FormatChoice.token choice) ], cells @ LiveBindingsRowFormat.stateNote choice @ [ button ]
     let row =
       // Text.create escapes: labels, type names and previews are FSI-derived DATA, not trusted markup. A string
       // preview holding <script> must never inject into the dashboard DOM.
-      Elem.div [ Attr.class' "live-binding-node" ] [
+      Elem.div (Attr.class' "live-binding-node" :: formatAttrs) [
         glyphCell node
         nameCell node
-        // The whole value is the tooltip: the cell clips a long one to a line with an ellipsis (always at phone width), and the
-        // rest was out of reach. The pane's own "Long values: Full" setting is the way to see it without hovering.
-        Elem.span [ Attr.class' ("live-preview" + valueToneClass (valueToneOf node.Kind node.TypeName)); Attr.create "title" (attrEnc node.Preview) ] [ textEnc (sprintf "= %s" node.Preview) ]
+        yield! valueCells
+        // What the value was at the last green settle, on the Since green tab only.
+        match Map.tryFind (Tweak.SinceGreen.pathKey binding path) moves with
+        | Some(Tweak.SinceGreen.Moved.Differs(before, _)) -> wasNote (sprintf "was %s" before)
+        | Some(Tweak.SinceGreen.Moved.Appeared _) -> wasNote "new since green"
+        | Some(Tweak.SinceGreen.Moved.Left _)
+        | None -> ()
         yield! runningTag binding path
         yield! typeCells node
         yield! tweakCells binding path
@@ -765,7 +846,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
           |> List.map (fun b ->
             Elem.div
               ( Attr.id (DockIds.binding b.Name) :: signalClasses "live-binding"
-                @ [ Ds.class' ("live-hidden", attrEnc (hiddenExpr b.Name (Set.contains b.Name changedNames)))
+                @ [ Ds.class' ("live-hidden", attrEnc (hiddenExpr b.Name (Set.contains b.Name changedNames) (Set.contains b.Name movedNames)))
                     Ds.class' ("live-pinned", isPinnedExpr b.Name) ])
               [ Elem.button
                   [ Attr.id (DockIds.bindingPin b.Name)
@@ -788,15 +869,38 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
           [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.NoNameMatchesFilter) ]
         // An open tab with nothing on it says so, in words, instead of showing an empty pane.
         yield!
-          [ WatchTab.Pinned; WatchTab.Changes ]
+          [ WatchTab.Pinned; WatchTab.Changes; WatchTab.SinceGreen ]
           |> List.map (fun tab ->
             Elem.div
               [ Attr.id (sprintf "live-tab-empty-%s" (WatchTab.token tab))
                 Attr.class' "live-empty live-hidden"
                 testid (sprintf "live-tab-empty-%s" (WatchTab.token tab))
-                Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" (tabEmptyExpr tab names changedNames)))
+                Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" (tabEmptyExpr tab names changedNames movedNames)))
                 Ds.preserveAttr "class" ]
-              [ textEnc (WatchTab.emptyWords tab) ])
+              [ textEnc
+                  (match tab, green with
+                   | WatchTab.SinceGreen, LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet -> "The tests have not settled green yet, so there is nothing to compare with."
+                   | _ -> WatchTab.emptyWords tab) ])
+        // A binding that was there at the last green settle and is not now has no row to show it on, so it is named here.
+        yield!
+          moves
+          |> Map.toList
+          |> List.choose (fun (key, moved) ->
+            match moved with
+            | Tweak.SinceGreen.Moved.Left before when Tweak.SinceGreen.bindingOf key = key -> Some(key, before)
+            | Tweak.SinceGreen.Moved.Left _
+            | Tweak.SinceGreen.Moved.Differs _
+            | Tweak.SinceGreen.Moved.Appeared _ -> None)
+          |> function
+            | [] -> []
+            | gone ->
+              [ Elem.div
+                  [ Attr.id "live-since-green-left"
+                    Attr.class' "live-since-green-left live-hidden"
+                    testid "live-since-green-left"
+                    Ds.class' ("live-hidden", attrEnc (sprintf "!(%s)" sinceGreenOpen))
+                    Ds.preserveAttr "class" ]
+                  [ textEnc ("No longer bound: " + (gone |> List.map (fun (name, before) -> sprintf "%s (was %s)" name before) |> String.concat ", ")) ] ]
         match view.Snapshot.Truncated with
         | true -> Elem.div [ Attr.class' "live-truncated live-truncated-note" ] [ textEnc (LiveBindingsPane.PaneNote.text LiveBindingsPane.PaneNote.ValuesCutShort) ]
         | false -> ()
@@ -807,7 +911,7 @@ let private renderTree (look: View) (sessionId: string) (tweaks: TweakView) (vie
 /// The tab bar: All, Pinned and Changes, each with how many it lists. The open tab is a signal, so a push never closes it, and the pressed
 /// state is read from the signal and said in the markup (`aria-pressed`) as well as in the fill. The Pinned count is the page's own, from
 /// the pins it holds; the other two are the server's.
-let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
+let tabBar (bindingCount: int) (changedCount: int) (movedCount: int) (watchCount: int) : XmlNode =
   let open' (tab: WatchTab) = sprintf "$%s === '%s'" DockSignals.LiveTab (WatchTab.token tab)
   Elem.div
     [ Attr.class' "live-tabs"
@@ -819,6 +923,7 @@ let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
           match tab with
           | WatchTab.All -> [ textEnc (string bindingCount) ]
           | WatchTab.Changes -> [ textEnc (string changedCount) ]
+          | WatchTab.SinceGreen -> [ textEnc (string movedCount) ]
           | WatchTab.Watch -> [ textEnc (string watchCount) ]
           | WatchTab.Pinned -> [ textEnc "0" ]
         Elem.button
@@ -826,7 +931,7 @@ let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
             Attr.class' "session-btn session-btn-labeled live-tab"
             Attr.type' "button"
             testid (sprintf "live-tab-%s" (WatchTab.token tab))
-            Attr.create "aria-pressed" (match tab with | WatchTab.All -> "true" | WatchTab.Pinned | WatchTab.Changes | WatchTab.Watch -> "false")
+            Attr.create "aria-pressed" (match tab with | WatchTab.All -> "true" | WatchTab.Pinned | WatchTab.Changes | WatchTab.SinceGreen | WatchTab.Watch -> "false")
             Ds.attr' ("aria-pressed", sprintf "%s ? 'true' : 'false'" (open' tab))
             Ds.class' ("session-btn-on", open' tab)
             Ds.preserveAttr "class aria-pressed"
@@ -840,6 +945,7 @@ let tabBar (bindingCount: int) (changedCount: int) (watchCount: int) : XmlNode =
                   | WatchTab.Pinned -> [ Ds.text (sprintf "$%s.split(',').filter(Boolean).length" DockSignals.LivePins) ]
                   | WatchTab.All
                   | WatchTab.Changes
+                  | WatchTab.SinceGreen
                   | WatchTab.Watch -> []))
               count ] ]
 
@@ -872,7 +978,15 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
   let headNodes, body =
     match source with
     | WalkedBindings view ->
-      match renderTree look sessionId tweaks view watchTab with
+      let formats =
+        match controls with
+        | Some viewControls -> viewControls.Formats
+        | None -> Map.empty
+      let green =
+        match controls with
+        | Some viewControls -> viewControls.SinceGreen
+        | None -> LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet
+      match renderTree look sessionId tweaks formats green view watchTab with
       | head :: rest -> [ head ], rest
       | [] -> [], []
     | PrintedBindings scope -> [], [ treeElement look [ renderBindingsPanel (Some scope) ] ]
@@ -891,6 +1005,10 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
       // The sentence under the title is also the title's tooltip, so a dock too short for the line still has it.
       Elem.span [ Attr.class' "live-pane-title"; Attr.title (attrEnc PaneSentence) ] [ Text.raw "Live bindings" ]
       Elem.span [ Attr.class' "live-pane-count" ] [ textEnc (OpenBecause.text because) ]
+      match controls |> Option.map (fun viewControls -> viewControls.Freshness) with
+      | Some(LiveBindingsViewPanel.LoopSaid.Said chip) -> freshnessChip chip
+      | Some LiveBindingsViewPanel.LoopSaid.NothingSaid
+      | None -> ()
       Elem.span [ Attr.class' "live-pane-stamp"; Attr.create "title" (attrEnc (stamp + ". The values are read again after every eval.")) ] [
         textEnc stamp
         // How old the reading is, ticking in the browser: an absolute UTC time alone could not tell a frozen display from a current one.
@@ -946,7 +1064,14 @@ let renderPaneWithRemedy (remedy: XmlNode) (look: View) (controls: LiveBindingsV
     match source with
     | WalkedBindings view ->
       let watchCount = match controls with | Some c -> c.Watch.Count | None -> 0
-      tabBar view.Snapshot.Bindings.Length (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count watchCount
+      let movedCount =
+        match controls with
+        | Some c ->
+          match c.SinceGreen with
+          | LiveBindingsViewPanel.GreenSaid.Moved moved -> (Tweak.SinceGreen.movedBindings moved).Count
+          | LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet -> 0
+        | None -> 0
+      tabBar view.Snapshot.Bindings.Length (changedBindings (Tweak.ChangesStrip.Changes.ofView tweaks)).Count movedCount watchCount
     | PrintedBindings _
     | NothingBound -> ()
     yield! headNodes
@@ -1041,7 +1166,8 @@ let renderDock (session: SessionInView) (sessionId: string) (source: BindingsSou
 
 /// A brief highlight on a value that changed. It is drawn from what the SSE morph really rewrote, so only a changed value
 /// flashes and nothing polls: the browser's own mutation record says a `.live-preview` text node was replaced, and that cell
-/// gets a short fade from the accent colour. It uses the Web Animations API, not a class, because the morph owns `class` and
+/// gets an underline in the accent colour that fades. An underline and no background fill: a fill of the accent colour put the value's
+/// own colours (and the dim words beside it) on a light band, where they could not be read. It uses the Web Animations API, not a class, because the morph owns `class` and
 /// would cut a class-driven animation short. A value that is merely added (a new row) does not flash, and a reload does not
 /// replay old changes.
 let flashScript () : XmlNode =
@@ -1058,7 +1184,7 @@ let flashScript () : XmlNode =
           if (!preview || !preview.animate) return;
           var accent = getComputedStyle(document.documentElement).getPropertyValue('--color-info') || '#7fb4ca';
           preview.getAnimations().forEach(function(running) { running.cancel(); });
-          preview.animate([{ backgroundColor: accent }, { backgroundColor: 'transparent' }], { duration: 1000, easing: 'ease-out' });
+          preview.animate([{ boxShadow: 'inset 0 -0.2em 0 0 ' + accent }, { boxShadow: 'inset 0 -0.2em 0 0 transparent' }], { duration: 1000, easing: 'ease-out' });
         });
       }).observe(document.body, { subtree: true, childList: true, characterData: true });
     })();

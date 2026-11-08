@@ -142,6 +142,32 @@ let tryReadOriginDir (shadowedFilePath: string) : string option =
       | dir -> Some dir
   with _ -> None
 
+/// Loads a shadow-copied assembly into `alc` for inspection (the warm-up scan that reads a project's namespaces and
+/// modules), and lets `alc` find what the assembly references. A load context loaded by path does not look beside the
+/// file, and the shadow directory holds only the project's own assemblies (see `shadowCopySolution`), so the first
+/// type that extends something a package brings failed to load and the scan skipped it: 3398 of SageFs.Tests' own
+/// types, reported as "Expecto" and "Falco.Markup" missing from the shadow copy. A reference is looked for in the
+/// shadow directory (another project of the solution) and then in the directory the file was copied from, which is
+/// where the build put the packages an executable or test project needs.
+/// An assembly already loaded into `alc`, as another project's dependency, is returned as it is.
+let loadShadowed (alc: System.Runtime.Loader.AssemblyLoadContext) (shadowedPath: string) : System.Reflection.Assembly =
+  let fullPath = Path.GetFullPath shadowedPath
+  let searched =
+    (match Path.GetDirectoryName fullPath with
+     | null -> []
+     | shadowDir -> [ shadowDir ])
+    @ (tryReadOriginDir fullPath |> Option.toList)
+  alc.add_Resolving(
+    Func<System.Runtime.Loader.AssemblyLoadContext, System.Reflection.AssemblyName, System.Reflection.Assembly>(fun loading name ->
+      searched
+      |> List.map (fun dir -> Path.Combine(dir, name.Name + ".dll"))
+      |> List.tryFind File.Exists
+      |> Option.map loading.LoadFromAssemblyPath
+      |> Option.toObj))
+  alc.Assemblies
+  |> Seq.tryFind (fun loaded -> String.Equals(loaded.Location, fullPath, StringComparison.Ordinal))
+  |> Option.defaultWith (fun () -> alc.LoadFromAssemblyPath fullPath)
+
 /// Rewrites a Solution's project TargetPaths to point at shadow copies.
 /// References (dependency DLLs) are intentionally left in place — see below.
 let shadowCopySolution (shadowDir: string) (sln: Solution) : Solution =

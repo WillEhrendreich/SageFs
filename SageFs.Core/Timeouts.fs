@@ -207,12 +207,13 @@ module Timeouts =
   /// `workerHttpRequest`'s ten minutes, which the tool call itself (a test run, a build) may need.
   let callHandshakeRequest = forMachine (TimeSpan.FromSeconds(30.0))
   let sseKeepAlive = TimeSpan.FromHours(24.0)
-  /// How long one MCP notification (a log line or a resource update) may take to reach a connected client
-  /// before that connection is dropped. A client that reads its stream answers a few hundred bytes in
-  /// milliseconds. One that does not (a bridge blocked on its own stderr pipe, a stopped process) leaves the
-  /// SDK's per-connection write buffer holding every notification sent since, and on 2026-11-07 311 such
-  /// connections held 25 GB. Half a second is long enough for a busy but live client and short enough that
-  /// a stuck one holds one notification, not a backlog.
+  /// How long a broadcast waits for one MCP notification (a log line or a resource update) to reach a connected
+  /// client before it judges the connection by its backlog instead (`McpFanout`, `FanoutPolicy`). It is not a
+  /// deadline: a send still going after it is left to finish, because a starved thread pool made a fixed half second
+  /// drop clients that were reading, and cutting a write off leaves its bytes in the SDK's buffer anyway. What drops a
+  /// connection is a failed send, or more unfinished bytes than `FanoutPolicy.StandardMaxBufferedBytes`: a client that
+  /// stopped reading (a bridge blocked on its own stderr pipe, a stopped process) leaves the SDK's per-connection write
+  /// buffer holding every notification sent since, and on 2026-11-07 311 such connections held 25 GB.
   let mcpNotificationSend = TimeSpan.FromMilliseconds(500.0)
   /// How long dropping a stuck MCP connection may take before the daemon stops waiting for it. The drop
   /// disposes the connection, which waits on the lock the stuck write released a moment ago.
@@ -393,11 +394,19 @@ module Timeouts =
   let gitWorktreeAdd = envOrDefaultMachineMinutes "SAGEFS_GIT_WORKTREE_ADD_MINUTES" 2.0
 
   // -- Cohort landing gate --
-  /// How long the landing gate waits for the integration session to settle to a
-  /// trustworthy state after a rebase before giving up (a terminal/dead session
-  /// fails fast via SessionTrust.settleDecision; this bounds only a genuinely
-  /// warming session). Env-overridable.
+  /// How long the trunk follower waits for a session that works in the trunk checkout to settle after the checkout moved to a
+  /// landed commit, and how long the cohort dogfood journey waits for a landing to reach a landed sha. The landing gate's own
+  /// wait on the integration session has no deadline: see `cohortIntegrationStallWindow`. Env-overridable.
   let cohortIntegrationSettle = envOrDefaultMachine "SAGEFS_COHORT_SETTLE_SECONDS" 120.0
+  /// How long the integration session may sit in ONE phase (restarting, starting up, building, the same progress text) before the
+  /// landing gate calls it stuck and Blocks the landing with the phase it stuck in. The gate parks on the session's ready
+  /// signal in slices this long and looks at the phase after each, so a restart that changes phase is waited for however long
+  /// it takes (a restart of the integration session loads the whole test project: minutes when eighteen builds share a machine),
+  /// and the same phase at two looks in a row ends the wait, between one and two windows after the worker went quiet. The
+  /// session manager faults a silent warmup at `warmupInactivityLimit` (30 s) itself, so this is the second look, twice that,
+  /// for the phases the manager does not watch. A rebuild in flight is not judged by it: the build runner bounds that with
+  /// `buildCompletion`. Scaled for the machine.
+  let cohortIntegrationStallWindow = forMachine (TimeSpan.FromSeconds(60.0))
   // `cohortRediscover` (a shared-generation settle-window ceiling) retired by
   // the F17 attributable-settle close: `rediscoverRebasedFiles`
   // (SageFs/DaemonMode.fs) no longer waits on a generation counter that
@@ -596,6 +605,20 @@ module Timeouts =
   /// one number and decides, so the cost of looking is nothing; the interval is the most a cache can outlive its
   /// retention by.
   let referencesCacheSweep = envOrDefault "SAGEFS_REFERENCES_CACHE_SWEEP_SECONDS" 30.0
+
+  // -- Checking a whole project (check_project) --
+  /// How long the design-time MSBuild run that reads a project's compiler arguments may take, for each project (the
+  /// project and each one it references). It evaluates the project and resolves its references and builds nothing, so it is
+  /// seconds on a quiet machine and a large solution's evaluation is most of it. No recorded reason for 2 minutes.
+  let projectArgumentsRun = forMachine (TimeSpan.FromMinutes(2.0))
+  /// How long one referenced project that is behind its sources may take to build before the check gives up on it. A
+  /// project build is the expensive step of the check and the one it exists to avoid for the project itself, so the wait is
+  /// the length of a project build on a loaded machine, not of a design-time run. No recorded reason for 10 minutes.
+  let projectReferenceBuild = forMachine (TimeSpan.FromMinutes(10.0))
+  /// How long the compiler may take to check every file of the project with the overlays in place. A person or an agent is
+  /// waiting for this answer, and a cold check of a large project reads every reference assembly first, so it is longer
+  /// than `referencesCheck`, which has the compiler's cache warm from the last ask. No recorded reason for 3 minutes.
+  let projectCheck = forMachine (TimeSpan.FromMinutes(3.0))
 
   // -- Running an app (run_app) --
   /// How long an app's entry point may run before it builds a host. If it has not by then,
@@ -810,6 +833,11 @@ module Timeouts =
   /// seconds, and a bridge that starts its own daemon in that gap leaves two. A minute covers a slow install;
   /// a person who ran `sagefs stop` and left gets a daemon again after it.
   let stdioBridgeReconnectWait = forMachine (TimeSpan.FromSeconds(60.0))
+  /// The most messages a stdio bridge holds while it waits for the daemon (a cold start, an outage, or the
+  /// re-handshake after one). A client sends a handful: the handshake, a notification, a tool list, the call it
+  /// was in the middle of. A thousand is far beyond that and still small, and a message past it is answered with
+  /// an error that says the queue was full instead of growing without bound behind a daemon that never returns.
+  let stdioBridgeQueueCap = 1000
   /// How long a Jupyter kernel socket receive (shell, and the heartbeat echo)
   /// blocks before it rechecks for cancellation. A poll; it bounds how long
   /// kernel shutdown can wait on a quiet socket.

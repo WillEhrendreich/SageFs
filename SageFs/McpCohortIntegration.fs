@@ -40,6 +40,68 @@ module McpCohortIntegration =
   /// performer and the MCP status/setup tools.
   let cohortIntegrationRef : CohortIntegrationBinding option ref = ref None
 
+  /// Raised after every write of `cohortIntegrationRef` through `setBinding`: the moment a pending integration starts or fails.
+  let integrationBindingChanged = Event<unit>()
+
+  /// Write the binding and wake whoever waits for it to stop being pending.
+  let setBinding (binding: CohortIntegrationBinding option) : unit =
+    cohortIntegrationRef.Value <- binding
+    integrationBindingChanged.Trigger ()
+
+  /// Is the integration still being built? A landing that arrives while it is waits in the queue (finding C-pending).
+  let isPending (binding: CohortIntegrationBinding option) : bool =
+    match binding with
+    | Some { Session = IntegrationSession.Pending } -> true
+    | Some _
+    | None -> false
+
+  /// The binding once it is no longer pending: started, failed, or never configured. Parks on the change signal and does not
+  /// poll, so a landing requested while `set_integration_ref` is still building the session starts the moment the session does.
+  let awaitIntegrationNotPending () : Async<CohortIntegrationBinding option> =
+    Features.IntegrationSettle.awaitChange integrationBindingChanged.Publish (fun () -> cohortIntegrationRef.Value) (isPending >> not)
+
+  /// Hold `work` until the integration is no longer pending (finding C-pending). A landing's first step is the rebase, which
+  /// rewrites the worktree the pending build is still working in, so the landing waits BEFORE it, in the queue, and starts
+  /// when the session does.
+  let whenIntegrationIsNotPending (work: Async<'a>) : Async<'a> =
+    async {
+      let! _binding = awaitIntegrationNotPending ()
+      return! work
+    }
+
+  /// What the daemon recorded when a landing's run failed, by landing id: each failing test's full name and the file with the
+  /// whole list (finding C-names). The cohort blocker holds only test ids, hashes of the names, so the names live here.
+  /// Process-local like the binding; after a daemon restart the status reads such a landing by count and id and says why.
+  let failingTestReports = System.Collections.Concurrent.ConcurrentDictionary<string, Features.FailingTestsText.Report>()
+
+  let failingTestReportFor (landingId: string) : Features.FailingTestsText.Report option =
+    match failingTestReports.TryGetValue landingId with
+    | true, report -> Some report
+    | false, _ -> None
+
+  /// Write what a landing's run found into the integration worktree's test output and remember it for the status: the tests that
+  /// did not pass with their names, why the ones that could not run did not, and the tests the gate left to the release gate.
+  /// A file that cannot be written leaves the names in the status and says there is no file.
+  let recordLandingReport
+    (worktree: string)
+    (landingId: string)
+    (failures: Features.FailingTestsText.Failure list)
+    (reasons: Map<string, string>)
+    (notRun: Features.FailingTestsText.Failure list)
+    : unit =
+    let path = Features.FailingTestsText.reportPath worktree landingId
+    let draft : Features.FailingTestsText.Report =
+      { Failures = failures; Reasons = reasons; NotRun = notRun; File = Features.FailingTestsText.ReportFile.NotWritten }
+    let file =
+      try
+        Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
+        File.WriteAllText(path, Features.FailingTestsText.fullListing landingId draft)
+        Features.FailingTestsText.ReportFile.Written path
+      with ex when (ex :? IOException || ex :? UnauthorizedAccessException) ->
+        Log.warn "[cohort-landing] could not write the report of landing %s to %s: %s" landingId path ex.Message
+        Features.FailingTestsText.ReportFile.NotWritten
+    failingTestReports.[landingId] <- { draft with File = file }
+
   /// The files evaluated into the integration session over its build, one per rebased file of a landing. They run as evaluated code,
   /// which is not instrumented, so no test's coverage names them again: a test's cache key and the affected-test selection must be
   /// told about them or an edit to one is invisible (`InputHashCoverage.trustBeyond`). Process-local like the binding. The landing
@@ -225,7 +287,7 @@ module McpCohortIntegration =
         | ReplaceOutcome.Refused text -> return Error (SageFsError.SessionCreationFailed text)
         | ReplaceOutcome.RemovalFailed text ->
           // The previous session was stopped, so the binding says so instead of naming a session that is gone.
-          cohortIntegrationRef.Value <- previous |> Option.map (fun binding -> { binding with Session = IntegrationSession.Failed text })
+          setBinding (previous |> Option.map (fun binding -> { binding with Session = IntegrationSession.Failed text }))
           return Error (SageFsError.SessionCreationFailed text)
         | ReplaceOutcome.Replaced ->
         // A branch of an earlier call may hold landings, so it is never reset or reused: a repeated call cuts a branch of its own (F7).
@@ -257,7 +319,7 @@ module McpCohortIntegration =
           | _ :: _ ->
             return Error (SageFsError.SessionCreationFailed (sprintf "projects not found in the integration worktree %s: %s. Name them relative to the repository root (for example SageFs.Tests/SageFs.Tests.fsproj), or leave projects empty to load the repository's test projects." worktreePath (String.concat ", " missingProjects)))
           | [] ->
-          cohortIntegrationRef.Value <- Some { Scope = integrationScope; Repository = repository; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Pending }
+          setBinding (Some { Scope = integrationScope; Repository = repository; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Pending })
           // A new integration tree is a new session to build: nothing is evaluated over it yet, and nothing was rebuilt for a landing.
           forgetFilesEvaluatedOverBuild ()
           forgetSessionRebuiltFor ()
@@ -266,7 +328,12 @@ module McpCohortIntegration =
             commitCohort ctx (
               Cohort.CohortCommand.SetIntegrationHead(who, sha, integrationScope))
           match commitResult with
-          | Error e -> return Error e
+          | Error e ->
+            // The integration stays Failed, not Pending: a landing that arrives while it is pending waits for it to start, and a
+            // refused call would otherwise leave that wait with nothing to end it.
+            let refusal = sprintf "set_integration_ref was refused: %s" (SageFsError.describeForAgent e)
+            setBinding (Some { Scope = integrationScope; Repository = repository; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed refusal })
+            return Error e
           | Ok _ ->
             let projects = Features.CohortIntegrationScope.chooseIntegrationProjects namedProjects (discoverProjects worktreePath)
             let! buildResult = SessionBuild.runBuildAsync projects worktreePath
@@ -277,7 +344,7 @@ module McpCohortIntegration =
             match buildOutcome with
             | Features.CohortIntegrationScope.WorktreeBuildOutcome.BuildFailed reason ->
               let failed = { Scope = integrationScope; Repository = repository; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
-              cohortIntegrationRef.Value <- Some failed
+              setBinding (Some failed)
               Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the worktree build failed before session creation: %s" sha worktreePath branch reason
               return Ok (
                 sprintf
@@ -288,10 +355,11 @@ module McpCohortIntegration =
               let! sessionResult = ctx.SessionOps.CreateSession targets worktreePath WorkflowTypes.SessionWorkflow.Interactive
               match sessionResult with
               | Ok sessionId ->
-                cohortIntegrationRef.Value <- Some { Scope = integrationScope; Repository = repository; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Started sessionId }
                 // The landing gate drives this session. Saves in its worktree must not also drive its live loop, whose confirming
-                // build would swap the worker under a verification (LiveTestFileRouting.SessionPurpose.Verifying).
+                // build would swap the worker under a verification (LiveTestFileRouting.SessionPurpose.Verifying). Said BEFORE the
+                // binding turns Started: a landing waiting for the session starts at once, and its rebase is such a save.
                 ctx.Dispatch |> Option.iter (fun dispatch -> dispatch (SageFsMsg.SessionVerifiesLandings sessionId))
+                setBinding (Some { Scope = integrationScope; Repository = repository; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Started sessionId })
                 return Ok (
                   sprintf
                     "Integration configured: head=%s worktree=%s branch=%s trunk=%s session=%s"
@@ -299,7 +367,7 @@ module McpCohortIntegration =
               | Error sessionErr ->
                 let reason = SageFsError.describeForAgent sessionErr
                 let failed = { Scope = integrationScope; Repository = repository; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
-                cohortIntegrationRef.Value <- Some failed
+                setBinding (Some failed)
                 Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the integration session failed to start: %s" sha worktreePath branch reason
                 return Ok (
                   sprintf
@@ -378,7 +446,8 @@ module McpCohortIntegration =
             match b.Session with
             | IntegrationSession.Started sid -> sprintf "Integration session: %s (started)" sid
             | IntegrationSession.Failed reason -> sprintf "Integration session: FAILED to start. %s" (failureText b reason)
-            | IntegrationSession.Pending -> "Integration session: pending"
+            // The first line is the one clients parse, so it stays exactly "pending"; the explanation is its own line.
+            | IntegrationSession.Pending -> "Integration session: pending\n  The worktree is building. A landing requested now waits in the queue and starts when the session does."
         // The trunk: where landings are carried once they land, and what became of each in the sessions that work there.
         let trunk =
           match (match fit with Features.CohortIntegrationScope.BindingFit.ForThisCohort -> binding | _ -> None), trunkFollowRef.Value with
@@ -389,5 +458,5 @@ module McpCohortIntegration =
             String.concat "\n" (header :: lines) + "\n"
           | Some _, None
           | None, _ -> ""
-        return Ok (renderCohortFrame (owner.ReadFrame()) + integration + "\n" + trunk)
+        return Ok (Features.CohortStatusText.renderWith failingTestReportFor (owner.ReadFrame()) + integration + "\n" + trunk)
     }

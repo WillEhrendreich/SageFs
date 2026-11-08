@@ -589,7 +589,7 @@ let createSessionOpsWithRecovery
                 match stillMissing with
                 | _ :: _ -> return Result.Error (SageFsError.NeedsRebuild stillMissing)
                 | [] ->
-                  let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
+                  let autoOpenNamespaces = DirectoryConfig.prepareForCreate workingDir
                   let! result =
                     sessionManager.PostAndAsyncReply(fun reply ->
                       SessionManager.SessionCommand.CreateSession(targets, workingDir, autoOpenNamespaces, workflow, reply))
@@ -600,7 +600,7 @@ let createSessionOpsWithRecovery
                     let! recorded = recordCreated info
                     return Result.map WorkerProtocol.SessionId.value recorded
           | [] ->
-            let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
+            let autoOpenNamespaces = DirectoryConfig.prepareForCreate workingDir
             let! result =
               sessionManager.PostAndAsyncReply(fun reply ->
                 SessionManager.SessionCommand.CreateSession(targets, workingDir, autoOpenNamespaces, workflow, reply))
@@ -1915,7 +1915,16 @@ let createElmRuntime
         | ChangeCounts.Counted (outputCount, diagCount) -> stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))
         | ChangeCounts.SessionListOnly -> ()),
       (fun work -> System.Threading.ThreadPool.QueueUserWorkItem(fun _ -> work ()) |> ignore),
-      ModelChangeDelivery.merge)
+      ModelChangeDelivery.merge,
+      // A subscriber that throws ends this delivery and never the daemon: an exception nothing catches on the pool ends
+      // the process. The first of each kind is logged whole, and every one is counted.
+      (fun ex ->
+        match EchoGuard.note EchoSink.ModelChangeDelivery ex with
+        | true ->
+          Log.error
+            "[model-change] a subscriber threw during a delivery, so that delivery ended and the daemon carries on. Later failures of this kind are counted, not logged: %O"
+            ex
+        | false -> ()))
   let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
     async {
       try
@@ -1990,7 +1999,7 @@ let createElmRuntime
       Error err
 
   let effectDeps =
-    { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.autoOpenNamespacesForDirectory configureWarmupAutoOpen with
+    { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.prepareForCreate configureWarmupAutoOpen with
         GetWarmupContext = Some (fun sid -> getWarmupContextForElm (WorkerProtocol.SessionId.value sid))
         GetStreamingTestProxy = fun sid ->
           let snapshot = readSnapshot()
@@ -2301,7 +2310,10 @@ let run
   // Wakes the idle live-testing tick when a model change queues a debounce;
   // assigned once the tick timer exists (below).
   let wakeLiveTestTick : (SageFsModel -> unit) ref = ref ignore
-  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef (fun model -> wakeLiveTestTick.Value model) cts.Token
+  // The Since green tab's comparison points: taken by the model hook below where the loop settles, read by the dashboard.
+  let sinceGreenPoints = LiveBindingsSinceGreen.create ()
+  let sinceGreenHook : (SageFsModel -> unit) ref = ref ignore
+  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef (fun model -> wakeLiveTestTick.Value model; sinceGreenHook.Value model) cts.Token
 
   // #82: route a run_app'd app's stdout into that session's output panel via the
   // existing OutputEmitted append path — BATCHED (#88). A continuous app (a
@@ -2456,11 +2468,13 @@ let run
   // `WarmingUp` and the run is refused; at worst discovery is transiently empty
   // and a real change looks like it affects no tests (a fail-OPEN land). So both
   // performer steps wait here for the session to settle into a trustworthy
-  // (Ready) state before they read it. Bounded: on timeout the caller signals
-  // `VerificationInconclusive` — never a false pass, never a permanent queue jam.
+  // (Ready) state before they read it. The wait ends when the session is Ready,
+  // dead, or has stayed in one phase for a stall window (Features/IntegrationSettle.fs),
+  // and never because a clock ran out on a restart that is still progressing.
+  // Dead or stuck: the caller signals `VerificationInconclusive` with the phase,
+  // never a false pass, never a permanent queue jam.
   // Runs on the effect worker (Async.Start'd off the CohortOwner mailbox), so a
   // long wait here never blocks the single writer.
-  let integrationSettleTimeout = Timeouts.cohortIntegrationSettle
 
   /// Does the integration session still hold only what a completed verification left it holding?
   ///
@@ -2657,7 +2671,7 @@ let run
         return Error (sprintf "could not reset the integration session: %s" ex.Message)
     }
 
-  let awaitIntegrationSessionTrustedWithin (settleTimeout: System.TimeSpan) (sessionId: string) : Async<Result<Features.Verification.SessionTrust.SessionObservation, string>> =
+  let awaitIntegrationSessionTrusted (sessionId: string) : Async<Result<Features.Verification.SessionTrust.SessionObservation, string>> =
     async {
       let observe () =
         async {
@@ -2675,9 +2689,36 @@ let run
       // that owner were on another machine. Then classify ONCE (a pure decision
       // over the observed status) to distinguish a genuinely trustworthy session
       // from one that registered Ready but is Faulted/Stale.
-      match! sessionOps.AwaitReady (toSessionId sessionId) settleTimeout |> Async.AwaitTask with
-      | Error e -> return Error (sprintf "integration session '%s' did not become ready: %s" sessionId (SageFsError.describeForAgent e))
-      | Ok () ->
+      //
+      // The park is one stall window long and is repeated for as long as the session
+      // keeps changing phase (Features/IntegrationSettle.fs). A restart of this session
+      // loads the whole test project, so a fixed deadline cut off restarts that were
+      // still progressing (finding C-restart); now only Ready, a dead session, or the
+      // same phase at two looks a window apart ends the wait.
+      let sid = toSessionId sessionId
+      let ports : Features.IntegrationSettle.Ports =
+        { AwaitReady =
+            fun slice ->
+              async {
+                match! sessionOps.AwaitReady sid slice |> Async.AwaitTask with
+                | Ok () -> return Features.IntegrationSettle.Wake.Ready
+                | Error (SageFsError.WorkerTimeout _) -> return Features.IntegrationSettle.Wake.SliceElapsed
+                | Error e -> return Features.IntegrationSettle.Wake.Refused (SageFsError.describe e)
+              }
+          Observe =
+            fun () ->
+              async {
+                let! info = sessionOps.GetSessionInfo sid |> Async.AwaitTask
+                let! progress = sessionOps.GetWarmupProgress sid |> Async.AwaitTask
+                return
+                  Features.Verification.SessionTrust.settlePhase
+                    (info |> Option.map (fun s -> s.Status, s.Rebuild))
+                    progress
+              } }
+      let! outcome = Features.IntegrationSettle.await Timeouts.cohortIntegrationStallWindow ports
+      match Features.IntegrationSettle.describeOutcome sessionId outcome with
+      | Some refusal -> return Error refusal
+      | None ->
         let! obs = observe ()
         match Features.Verification.SessionTrust.settleDecision (Features.Verification.SessionTrust.classify obs) with
         | Features.Verification.SessionTrust.SettleDecision.Ready _ -> return Ok obs
@@ -2685,8 +2726,6 @@ let run
         | Features.Verification.SessionTrust.SettleDecision.Retry ->
           return Error (sprintf "integration session '%s' registered Ready but is not yet trustworthy" sessionId)
     }
-
-  let awaitIntegrationSessionTrusted (sessionId: string) = awaitIntegrationSessionTrustedWithin integrationSettleTimeout sessionId
 
   /// Bring the integration session to the head, respawning it only when it holds a source the head
   /// has moved on from, and report whether this landing may be verified against it.
@@ -3081,12 +3120,12 @@ let run
                 | Ok _ -> return Ok ()
                 | Error err -> return Error err
               }
-          // A worker that loads a freshly built project is a cold warmup, which a build's own bound covers: a session that cannot
-          // come up fails fast through `settleDecision`, so this only bounds one that is genuinely warming.
+          // A worker that loads a freshly built project is a cold warmup: it is waited for while it changes phase, and a session that
+          // cannot come up fails fast (`settleDecision`) or is called stuck in the phase it stopped in.
           AwaitSettled =
             fun () ->
               async {
-                match! awaitIntegrationSessionTrustedWithin Timeouts.buildCompletion sessionId with
+                match! awaitIntegrationSessionTrusted sessionId with
                 | Ok _ -> return Ok ()
                 | Error reason -> return Error reason
               } }
@@ -3217,7 +3256,9 @@ let run
 
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
     { Rebase = fun _landingId onto commits ->
-        withWorktreeGate <| async {
+        // A landing requested while set_integration_ref is still building the session waits here, in the queue, and starts when
+        // the session does (finding C-pending). Outside the worktree gate, so the wait holds nothing.
+        (SageFs.McpCohortIntegration.whenIntegrationIsNotPending << withWorktreeGate) <| async {
           match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error(cohortIntegrationNotConfigured ())
           | Some binding ->
@@ -3245,7 +3286,7 @@ let run
           match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return environment "integration not configured — call set_integration_ref first"
           | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Failed reason } -> return environment (sprintf "integration session failed to start: %s" reason)
-          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Pending } -> return environment "integration session not started yet — retry set_integration_ref"
+          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Pending } -> return environment (Features.IntegrationSettle.render Features.IntegrationSettle.repointedRefusal)
           | Some ({ Session = SageFs.McpCohortIntegration.IntegrationSession.Started sessionId } as binding) ->
             // (Gap 3) Settle first: the rebase that just ran retriggered the
             // session's rebuild, and reading discovery mid-rebuild can see it
@@ -3314,12 +3355,12 @@ let run
       // into Primary, WIPING the discovery `ComputeAffected` just used — the
       // "N of N not attributed" landing-gate flake. Reads/writes route by
       // sessionId regardless of the active pointer, so the switch is gone.
-      RunTests = fun _landingId tests ->
+      RunTests = fun landingId tests ->
         withWorktreeGate <| async {
           match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
           | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
-          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Pending } -> return Error "integration session not started yet — retry set_integration_ref"
+          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Pending } -> return Error (Features.IntegrationSettle.render Features.IntegrationSettle.repointedRefusal)
           | Some ({ Session = SageFs.McpCohortIntegration.IntegrationSession.Started sessionId } as binding) ->
             // (Gap 3) Settle first, then verify against the SETTLED observation.
             // Verifying while the rebase-triggered rebuild is still in flight is
@@ -3329,7 +3370,18 @@ let run
             match! awaitIntegrationSessionTrusted sessionId with
             | Error reason -> return Error reason
             | Ok observation ->
-            let liveTests = tests |> List.map cohortToLiveTestId
+            // The affected set may hold `[Integration]` tests, which start real processes and daemons and cannot pass inside a
+            // session: each ended as "Skipped, timed out after 5s" and the fail-closed verdict below Blocked every landing that
+            // touched code they cover (finding C-failing). The release gate runs them; this gate names each one it leaves out,
+            // in the landing's report, and reads every other test fail-closed.
+            let testStateNow () = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
+            let fullNames =
+              Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId (testStateNow ())
+              |> Array.map (fun e -> Features.LiveTesting.TestId.value e.TestId, e.FullName)
+              |> Map.ofArray
+            let scoped =
+              Features.CohortLandingScope.scope (fun id -> Map.tryFind id fullNames) (tests |> List.map (fun (Cohort.TestId id) -> id))
+            let liveTests = scoped.Run |> List.map (Cohort.TestId >> cohortToLiveTestId)
             // Content-addressed cache lookup (§5.4). Compute each test's
             // InputHash from the integration session's OWN coverage: the merged
             // instrumentation map + the test's coverage bitmap. A test is
@@ -3376,7 +3428,28 @@ let run
               cohortLandingCacheOwner.Verify inputHashOf sessionId liveTests runMisses
               |> Async.AwaitTask
             match result with
-            | Ok failing -> return Ok (failing |> List.map Features.CohortTestProjection.toCohortTestId)
+            | Ok failing ->
+              // What the status says about this landing: the tests that did not pass by NAME (the cohort blocker carries only
+              // hashes of the names), why each one that could not run did not, and the tests left to the release gate.
+              let after = testStateNow ()
+              let reasons =
+                failing
+                |> List.choose (fun tid ->
+                  Map.tryFind tid after.LastResults
+                  |> Option.map (fun recorded -> recorded.Result)
+                  |> Features.CohortLandingScope.couldNotRun
+                  |> Option.map (fun why -> Features.LiveTesting.TestId.value tid, why))
+                |> Map.ofList
+              let notRun =
+                scoped.NotRun |> List.map (fun left -> { Features.FailingTestsText.Id = left.Id; Features.FailingTestsText.Name = left.Name })
+              match failing, notRun with
+              | [], [] -> ()
+              | _ ->
+                SageFs.McpCohortIntegration.recordLandingReport binding.WorktreePath landingId
+                  (Features.FailingTestsText.failuresOf (fun id -> Map.tryFind id fullNames) (failing |> List.map Features.LiveTesting.TestId.value))
+                  reasons
+                  notRun
+              return Ok (failing |> List.map Features.CohortTestProjection.toCohortTestId)
             | Error reason ->
               // Fail-closed AND honest (Clef mode-shift, roast-7 §7): a session
               // that can't be trusted enough to run tests in must never read as
@@ -3776,6 +3849,7 @@ let run
             | Some config -> config.ValueWalk
             | None -> ValueWalk.standard }
   let liveBindingsAdaptive = liveBindingsHub.Adaptive
+  sinceGreenHook.Value <- LiveBindingsSinceGreen.observeModel sinceGreenPoints (SageFs.Features.LiveBindingsAdaptive.tryGet liveBindingsAdaptive)
   // What the dashboard's live-bindings knob remembers per session (what it did to each row, each file's undo trail), and the file
   // reads it caches. It writes through the same nudge door `nudge_value` does, with the same shared per-file locks and journals.
   let tweakService =
@@ -4128,8 +4202,7 @@ let run
       // A member is there when it evaluated lately, made a call lately, or holds an open push stream (a bridge keeps
       // one for as long as its client lives, so an LLM conductor that is only waiting on its agents stays seated).
       let isActive (m: MemberTable.MemberId) =
-        let key = MemberTable.MemberId.display m
-        Set.contains key freshKeys || McpCapability.memberLiveness.IsLive(key, now, cohortReaperRenewWindow)
+        Set.contains (MemberTable.MemberId.display m) freshKeys || McpCapability.memberLiveness.IsLive(m, now, cohortReaperRenewWindow)
 
       // EVERY scope's cohort, not just the daemon's own. A reaper that ticked one owner
       // would leave a second repository's departed member holding its claims forever — the
@@ -4143,6 +4216,9 @@ let run
           for m in cohortMembersToRenew isActive state.Members do
             owner.Post(SageFs.Cohort.CohortCommand.RenewLease(m, scope), ignore)
           owner.Post(SageFs.Cohort.CohortCommand.Tick scope, ignore)
+      // A member that is no longer live has nothing to say to the next tick, so its record goes: the table holds the
+      // members of the last window and not every member the daemon has ever seen.
+      McpCapability.memberLiveness.Prune(now, cohortReaperRenewWindow)
     with ex ->
       log.LogWarning("Cohort reaper tick threw unexpectedly: {Error}", ex.Message)
     // reschedule after this run (one-shot pattern, guards the shutdown race)
@@ -4248,6 +4324,10 @@ let run
     |> List.iter (fun k ->
       SageFs.Features.LiveBindingsPane.PaneStore.remove liveBindingsHub.Notes k
       SageFs.Features.LiveBindingsPane.Feed.gates.TryRemove k |> ignore)
+    sinceGreenPoints.Keys
+    |> Seq.filter (fun k -> not (liveIds.Contains k))
+    |> Seq.toList
+    |> List.iter (LiveBindingsSinceGreen.forget sinceGreenPoints)
     tweakService.Memories.Keys
     |> Seq.filter (fun k -> not (liveIds.Contains k))
     |> Seq.toList
@@ -4641,6 +4721,7 @@ let run
       SageFs.LiveTestViewReads.statusBarFor viewing (elmRuntime.GetModel())
     GetLiveTestActivity = fun sessionId ->
       SageFsModel.liveTestActivityFor sessionId (elmRuntime.GetModel())
+    GetSinceGreen = LiveBindingsSinceGreen.pointOf sinceGreenPoints
     GetEvalTimeline = fun () ->
       let state = System.Threading.Volatile.Read(&sharedFeatureState.contents)
       SageFs.Features.EvalTimeline.timelineStats 20 state.CachedTimeline
@@ -4967,6 +5048,8 @@ let run
       Dashboard.mapPostRaw "/dashboard/watch/add" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsWatchRoute.handler SageFs.Server.LiveBindingsWatchRoute.WatchVerb.Add dashboardQueries dashboardInfra dashboardActions.EvalCode)
       Dashboard.mapPostRaw "/dashboard/watch/remove" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsWatchRoute.handler SageFs.Server.LiveBindingsWatchRoute.WatchVerb.Remove dashboardQueries dashboardInfra dashboardActions.EvalCode)
       Dashboard.mapPostRaw "/dashboard/watch/run" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsWatchRoute.handler SageFs.Server.LiveBindingsWatchRoute.WatchVerb.Run dashboardQueries dashboardInfra dashboardActions.EvalCode)
+      // A row's picker: how a whole number is shown (as it is, hex, binary, colour), kept for the page that pressed.
+      Dashboard.mapPostRaw "/dashboard/row-format" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsRowFormatRoute.handler Dashboard.pages dashboardInfra)
       // A number's chosen range and step, kept in .SageFs/tweak-limits.json beside the project.
       Dashboard.mapPostRaw "/dashboard/tweak/limits" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.limitsHandler dashboardQueries dashboardInfra tweakService) ]
 

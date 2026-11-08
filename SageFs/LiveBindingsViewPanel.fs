@@ -46,7 +46,36 @@ let endpoint (sessionId: string) : string = sprintf "/dashboard/bindings-view/%s
 /// (`LiveBindingsWatch.render`) because it needs the session's expressions and values, not the view's settings.
 type WatchTabParts = { Body: XmlNode; Count: int }
 
-type ViewControls = { Button: XmlNode; Panel: XmlNode; PanelWith: XmlNode list -> XmlNode; Watch: WatchTabParts }
+/// What the test loop says about the values: nothing (live testing is off, or no tests are known yet), or a chip.
+[<RequireQualifiedAccess>]
+type LoopSaid =
+  | NothingSaid
+  | Said of Features.Tweak.LoopFreshness.Chip
+
+module LoopSaid =
+  /// The chip the loop's activity gives, or nothing said.
+  let ofActivity (activity: Features.LiveTestActivity.LiveTestActivity) : LoopSaid =
+    match Features.Tweak.LoopFreshness.chipOf activity with
+    | Some chip -> LoopSaid.Said chip
+    | None -> LoopSaid.NothingSaid
+
+/// What the pane knows about the "Since green" tab: that no settle has been green yet (nothing to compare with), or what moved since the
+/// last one, by place (`SinceGreen.pathKey`).
+[<RequireQualifiedAccess>]
+type GreenSaid =
+  | NoGreenSettleYet
+  | Moved of Map<string, Features.Tweak.SinceGreen.Moved>
+
+/// `Formats` is how this page chose to show each row (`LiveBindingsRowFormat`): a row that has no entry is shown as it is. `Freshness`
+/// is what the test loop says about how current the values are (`LoopFreshness`), or nothing when the loop has no say.
+type ViewControls =
+  { Button: XmlNode
+    Panel: XmlNode
+    PanelWith: XmlNode list -> XmlNode
+    Watch: WatchTabParts
+    Formats: Map<string, Features.Tweak.RowFormatting.FormatChoice>
+    Freshness: LoopSaid
+    SinceGreen: GreenSaid }
 
 /// Where an axis's value came from, in the words a person reads.
 let sourceWords (layer: ConfigLayer) : string =
@@ -188,6 +217,7 @@ let renderFor (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (reso
                  | WatchTab.All -> sprintf "Binding display settings for %s mode" (ViewWorkflow.label workflow)
                  | WatchTab.Pinned
                  | WatchTab.Changes
+                 | WatchTab.SinceGreen
                  | WatchTab.Watch -> sprintf "Binding display settings for %s mode, %s tab" (ViewWorkflow.label workflow) (WatchTab.label tab)) ]
           // A way to close it where it is: the panel floats over the table, and the only other way was to find the View button again.
           Elem.button
@@ -208,7 +238,7 @@ let renderFor (sessionId: string) (workflow: ViewWorkflow) (tab: WatchTab) (reso
         Elem.div [ Attr.class' "live-view-note" ] [
           Text.raw "A choice is saved as you click it. \"This project\" writes .SageFs/settings.json in the project folder. \"All projects\" writes your own settings.json."
         ] ]
-  { Button = button; Panel = panelWith []; PanelWith = panelWith; Watch = { Body = Text.raw ""; Count = 0 } }
+  { Button = button; Panel = panelWith []; PanelWith = panelWith; Watch = { Body = Text.raw ""; Count = 0 }; Formats = Map.empty; Freshness = LoopSaid.NothingSaid; SinceGreen = GreenSaid.NoGreenSettleYet }
 
 /// The button and the panel for a workflow's All tab.
 let render (sessionId: string) (workflow: ViewWorkflow) (resolved: ResolvedView) : ViewControls =

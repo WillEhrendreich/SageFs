@@ -216,6 +216,12 @@ module McpCall =
     | OptionTakesNoValue of option: string
     | NotAPort of given: string
     | BlankToken
+    /// `--token-file` named a file or stdin that held nothing.
+    | BlankTokenFile of source: string
+    /// `--token-file` named a file that could not be read.
+    | TokenFileUnreadable of path: string * reason: string
+    /// More than one of `--token` and `--token-file` was given, so which member to call as is not clear.
+    | TwoTokenSources
     | FlagBeforeTool of flag: string
     | ExtraWord of word: string
     | DuplicateFlag of flag: string
@@ -230,7 +236,10 @@ module McpCall =
         ""
         "  --list           list the daemon's tools: name and first line of the description"
         "  --json <object>  the tool's arguments as one JSON object (instead of --<parameter> flags)"
-        "  --token <token>  the member token to call as (default: SAGEFS_MEMBER_TOKEN; none is anonymous)"
+        "  --token-file <path>  read the member token to call as from a file ('-' reads standard input)"
+        "                   the default is SAGEFS_MEMBER_TOKEN, and with none the call is anonymous"
+        "  --token <token>  the same, but the token is typed on the command line, where the process list and the shell"
+        "                   history keep it. Deprecated: use SAGEFS_MEMBER_TOKEN or --token-file"
         "  --port <port>    the daemon's MCP port (default: --mcp-port, SAGEFS_MCP_PORT, then 37749)"
         ""
         "A flag takes its value from the next word or after '=' (--code=--help for a value that starts with '--')."
@@ -247,6 +256,10 @@ module McpCall =
       | UsageRefusal.OptionTakesNoValue option -> sprintf "%s takes no value." option
       | UsageRefusal.NotAPort given -> sprintf "--port wants a port number from 1 to 65535, and '%s' is not one." given
       | UsageRefusal.BlankToken -> "--token is blank. Leave it out to call anonymously."
+      | UsageRefusal.BlankTokenFile source ->
+        sprintf "%s held no token. Leave --token-file out to call anonymously, or put a member token in it." source
+      | UsageRefusal.TokenFileUnreadable(path, reason) -> sprintf "--token-file could not read '%s': %s." path reason
+      | UsageRefusal.TwoTokenSources -> "give --token or --token-file, not both."
       | UsageRefusal.FlagBeforeTool flag ->
         sprintf "%s comes before the tool's name. A tool's arguments follow its name: sagefs call <tool> %s <value>." flag flag
       | UsageRefusal.ExtraWord word ->
@@ -274,11 +287,15 @@ module McpCall =
     | Configured
     | Named of port: int
 
-  /// Which member to call as: the one `--token` named, or whatever the environment holds (nothing is anonymous).
+  /// Which member to call as: the token a file or standard input holds, the one `--token` typed (deprecated, because a
+  /// token on the command line sits in the process list and the shell history), or whatever the environment holds
+  /// (nothing is anonymous).
   [<RequireQualifiedAccess>]
   type TokenChoice =
     | FromEnvironment
     | Given of token: string
+    | FromFile of path: string
+    | FromStdin
 
   type CallArgs =
     { Target: Target
@@ -300,12 +317,19 @@ module McpCall =
     | List
     | Json
     | Token
+    | TokenFile
     | Port
     | McpPort
 
   module CommandOption =
     let all : CommandOption list =
-      [ CommandOption.Help; CommandOption.List; CommandOption.Json; CommandOption.Token; CommandOption.Port; CommandOption.McpPort ]
+      [ CommandOption.Help
+        CommandOption.List
+        CommandOption.Json
+        CommandOption.Token
+        CommandOption.TokenFile
+        CommandOption.Port
+        CommandOption.McpPort ]
 
     let name (option: CommandOption) : string =
       match option with
@@ -313,6 +337,7 @@ module McpCall =
       | CommandOption.List -> "list"
       | CommandOption.Json -> "json"
       | CommandOption.Token -> "token"
+      | CommandOption.TokenFile -> "token-file"
       | CommandOption.Port -> "port"
       | CommandOption.McpPort -> "mcp-port"
 
@@ -335,6 +360,7 @@ module McpCall =
         Tools: string list
         Jsons: string list
         Tokens: string list
+        TokenFiles: string list
         Ports: int list
         Flags: RawFlag list }
 
@@ -343,8 +369,13 @@ module McpCall =
         Tools = []
         Jsons = []
         Tokens = []
+        TokenFiles = []
         Ports = []
         Flags = [] }
+
+    /// What `--token-file` is given to read standard input.
+    [<Literal>]
+    let StdinPath = "-"
 
     let isFlag (word: string) : bool = word.StartsWith("--", StringComparison.Ordinal)
 
@@ -372,6 +403,7 @@ module McpCall =
       match option with
       | CommandOption.Json -> Result.Ok { gathered with Jsons = value :: gathered.Jsons }
       | CommandOption.Token -> Result.Ok { gathered with Tokens = value :: gathered.Tokens }
+      | CommandOption.TokenFile -> Result.Ok { gathered with TokenFiles = value :: gathered.TokenFiles }
       | CommandOption.Port
       | CommandOption.McpPort -> portOf value |> Result.map (fun port -> { gathered with Ports = port :: gathered.Ports })
       | CommandOption.Help
@@ -415,11 +447,15 @@ module McpCall =
         | [] -> PortChoice.Configured
         | last :: _ -> PortChoice.Named last
       let token =
-        match gathered.Tokens with
-        | [] -> TokenChoice.FromEnvironment
-        | last :: _ -> TokenChoice.Given last
+        match gathered.Tokens, gathered.TokenFiles with
+        | [], [] -> Result.Ok TokenChoice.FromEnvironment
+        | last :: _, [] -> Result.Ok(TokenChoice.Given last)
+        | [], StdinPath :: _ -> Result.Ok TokenChoice.FromStdin
+        | [], path :: _ -> Result.Ok(TokenChoice.FromFile path)
+        | _ :: _, _ :: _ -> Result.Error UsageRefusal.TwoTokenSources
       let run (target: Target) (payload: Payload) : Result<Invocation, UsageRefusal> =
-        Result.Ok(Invocation.Run { Target = target; Port = port; Token = token; Payload = payload })
+        token
+        |> Result.map (fun token -> Invocation.Run { Target = target; Port = port; Token = token; Payload = payload })
       let listing = List.contains Want.List gathered.Wants
       match List.contains Want.Help gathered.Wants, listing, gathered.Tools, gathered.Jsons, List.rev gathered.Flags with
       | true, _, _, _, _ -> Result.Ok Invocation.Help
@@ -440,8 +476,31 @@ module McpCall =
 
   [<RequireQualifiedAccess>]
   type TokenSource =
+    /// Typed after `--token`, so it is in the process list and the shell history.
     | Flag
     | Environment
+    /// Read from the file `--token-file` named.
+    | File of path: string
+    /// Read from standard input (`--token-file -`).
+    | Stdin
+
+  /// What reading a token file came to: its text, or why it could not be read.
+  [<RequireQualifiedAccess>]
+  type TokenFileRead =
+    | Text of string
+    | Unreadable of reason: string
+
+  /// How a token that is not typed on the command line is read, passed in so the choice is decided without touching a
+  /// file or a terminal. The caller reads the file or standard input once and says why when it cannot.
+  type TokenReads =
+    { ReadFile: string -> TokenFileRead
+      ReadStdin: unit -> string }
+
+  module TokenReads =
+    /// For a caller whose choice names neither: reading one is a fault it reports instead of guessing.
+    let nothing : TokenReads =
+      { ReadFile = fun _ -> TokenFileRead.Unreadable "this command was not given a way to read files"
+        ReadStdin = fun () -> "" }
 
   [<RequireQualifiedAccess>]
   type Identity =
@@ -463,26 +522,53 @@ module McpCall =
     let hasOperator (credentials: Credentials) : bool =
       credentials.Headers |> List.exists (fun (name, _) -> name = Capability.CapabilityTransport.authorizationHeaderName)
 
-    /// A token given with `--token` wins over the environment. A blank one is refused: it was typed on purpose and means
-    /// nothing, and reading it as "anonymous" would hide the typo behind a call that works.
-    let resolve (choice: TokenChoice) (getEnv: string -> string) : Result<Credentials, UsageRefusal> =
+    /// A token given with `--token` or `--token-file` wins over the environment. A blank one is refused: it was named on
+    /// purpose and means nothing, and reading it as "anonymous" would hide the typo behind a call that works.
+    let resolve (reads: TokenReads) (choice: TokenChoice) (getEnv: string -> string) : Result<Credentials, UsageRefusal> =
       let operatorHeader = Capability.CapabilityTransport.operatorHeaderFromEnvironment getEnv
       let withOperator (memberHeader: (string * string) option) (identity: Identity) : Credentials =
         { Headers = List.choose id [ memberHeader; operatorHeader ]
           Identity = identity }
+      let memberFrom (source: TokenSource) (token: string) : Credentials =
+        withOperator (Some(Capability.CapabilityTransport.headerName, token.Trim())) (Identity.Member source)
       match choice with
       | TokenChoice.Given given when String.IsNullOrWhiteSpace given -> Result.Error UsageRefusal.BlankToken
-      | TokenChoice.Given given ->
-        Result.Ok(withOperator (Some(Capability.CapabilityTransport.headerName, given.Trim())) (Identity.Member TokenSource.Flag))
+      | TokenChoice.Given given -> Result.Ok(memberFrom TokenSource.Flag given)
+      | TokenChoice.FromFile path ->
+        match reads.ReadFile path with
+        | TokenFileRead.Unreadable reason -> Result.Error(UsageRefusal.TokenFileUnreadable(path, reason))
+        | TokenFileRead.Text text when String.IsNullOrWhiteSpace text -> Result.Error(UsageRefusal.BlankTokenFile path)
+        | TokenFileRead.Text text -> Result.Ok(memberFrom (TokenSource.File path) text)
+      | TokenChoice.FromStdin ->
+        match reads.ReadStdin() with
+        | text when String.IsNullOrWhiteSpace text -> Result.Error(UsageRefusal.BlankTokenFile "standard input")
+        | text -> Result.Ok(memberFrom TokenSource.Stdin text)
       | TokenChoice.FromEnvironment ->
         match Capability.CapabilityTransport.headerFromEnvironment getEnv with
         | Some header -> Result.Ok(withOperator (Some header) (Identity.Member TokenSource.Environment))
         | None -> Result.Ok(withOperator None Identity.Anonymous)
 
+    /// What the command says on stderr before it calls, when there is something to say: a token typed with `--token` is in the
+    /// process list and in the shell history for as long as either is kept. The token itself is never in the line.
+    let warning (credentials: Credentials) : string option =
+      match credentials.Identity with
+      | Identity.Member TokenSource.Flag ->
+        Some(
+          sprintf
+            "warning: --token puts the member token on the command line, where the process list and the shell history keep it. Set %s, or pass --token-file <path> (or --token-file - for standard input), instead."
+            Capability.CapabilityTransport.bridgeEnvVar
+        )
+      | Identity.Member TokenSource.Environment
+      | Identity.Member(TokenSource.File _)
+      | Identity.Member TokenSource.Stdin
+      | Identity.Anonymous -> None
+
     let describe (credentials: Credentials) : string =
       let who =
         match credentials.Identity with
         | Identity.Member TokenSource.Flag -> "a member token from --token"
+        | Identity.Member(TokenSource.File path) -> sprintf "a member token from the file %s" path
+        | Identity.Member TokenSource.Stdin -> "a member token from standard input"
         | Identity.Member TokenSource.Environment ->
           sprintf "a member token from %s" Capability.CapabilityTransport.bridgeEnvVar
         | Identity.Anonymous ->

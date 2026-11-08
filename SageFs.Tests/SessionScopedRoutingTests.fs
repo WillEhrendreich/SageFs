@@ -91,6 +91,7 @@ let private oldContentLengthGate (ctx: Microsoft.AspNetCore.Http.HttpContext) =
   | cl when not cl.HasValue || cl.Value <= 0L -> None
   | _ -> Some "body-was-read"
 
+[<Tests>]
 let tests = testList "session-scoped route targeting" [
 
   // ── The bug: two clients, interleaved ──────────────────────────────────────
@@ -462,3 +463,30 @@ let propertyTests = testList "session-scoped route targeting (properties)" [
         let many = (target :: others) |> List.map (fun h -> sessionInfo h 0.0)
         decide alone (Some target) = decide many (Some target))
 ]
+/// A request body whose JSON root is not an object has no properties to read. `JsonElement.TryGetProperty` THROWS on such a root
+/// (InvalidOperationException: "requires an element of type 'Object', but the target element has type 'Array'"), and neither body
+/// reader caught it, so a route that reads the optional session id or project from the body answered a stray `[1,2,3]` with a
+/// server error instead of treating it as a body that names nothing. The case "chunked and declared-length reads agree for every
+/// body" lists `[1,2,3]` and found it, but the list it sits in (`tests` above) is not registered with `[<Tests>]`, so it has
+/// never run in the suite.
+[<Tests>]
+let bodyRootShapeTests =
+  testList "session-scoped route bodies whose JSON root is not an object" [
+
+    testCase "WHY — a body that is an array, a number, a string, true or null names no session, and reading it does not throw" <| fun _ ->
+      for body in [ "[1,2,3]"; "[]"; "42"; "\"aaa00001\""; "true"; "null" ] do
+        SessionRouting.tryReadSessionIdFromBody true body |> Expect.isNone (sprintf "declared length, body %s" body)
+        SessionRouting.tryReadSessionIdFromBody false body |> Expect.isNone (sprintf "chunked, body %s" body)
+
+    testCase "WHY — the project reader treats such a body the same way, because it reads the same bodies the same way" <| fun _ ->
+      for body in [ "[1,2,3]"; "[]"; "42"; "\"x\""; "true"; "null" ] do
+        SessionRouting.tryReadProjectFromBody true body |> Expect.isNone (sprintf "declared length, body %s" body)
+        SessionRouting.tryReadProjectFromBody false body |> Expect.isNone (sprintf "chunked, body %s" body)
+
+    testCase "WHY — an object body still gives its session id and project, so the guard changes only the non-object roots" <| fun _ ->
+      SessionRouting.tryReadSessionIdFromBody true "{\"sessionId\":\"aaa00001\"}" |> Expect.equal "session id" (Some "aaa00001")
+      SessionRouting.tryReadSessionIdFromBody false "{\"session_id\":\"bbb00002\"}" |> Expect.equal "alias" (Some "bbb00002")
+      SessionRouting.tryReadProjectFromBody true "{\"project\":\"A.fsproj\"}" |> Expect.equal "project" (Some "A.fsproj")
+      SessionRouting.tryReadSessionIdFromBody true "{\"sessionId\":123}" |> Expect.isNone "a number is not a session id"
+      SessionRouting.tryReadProjectFromBody true "{\"project\":\"\"}" |> Expect.isNone "an empty project is none"
+  ]

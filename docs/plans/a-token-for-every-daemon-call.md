@@ -8,7 +8,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress. Slice 0 is built and on master (2026-11-02, not pushed): `POST /api/members/mint`, `operator.token`, `sagefs member mint`. #181 is built on top of it: `tools/list` depends on the presented credential only, and `Authorization: Bearer sfo_...` lists the full tool list. The rest of the item is not started. |
+| Status | In progress. Slice 0 is built and on master (2026-11-02, not pushed): `POST /api/members/mint`, `operator.token`, `sagefs member mint`. #181 is built on top of it: `tools/list` depends on the presented credential only, and `Authorization: Bearer sfo_...` lists the full tool list. Two more routes are operator-only (the cohort seat, and on 2026-11-07 `POST /api/local-data/clear`, which a person reaches with `sagefs data clear`), so the confirmation refusal no longer names a route round the prompt and the open-route budget is 63. `POST /api/sessions/stop`, `/api/sessions/{sid}/stop-app` and `/api/sessions/{sid}/workflow` stay open to every caller but refuse a bound member that did not make the session (`SessionAccess`). The rest of the item is not started. |
 | Size | L (slice 0 was M) |
 | Branch and worktree | none, work on master |
 | Last green commit | the commit that carries this edit; its gate results are in its message |

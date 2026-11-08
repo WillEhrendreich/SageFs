@@ -129,6 +129,7 @@ let tests =
               | SageFs.McpBridge.TransportState.Closed -> false
               | SageFs.McpBridge.TransportState.Ready _
               | SageFs.McpBridge.TransportState.Fatal _
+              | SageFs.McpBridge.TransportState.Rehandshaking _
               | SageFs.McpBridge.TransportState.AwaitingDaemon _ -> bt.UnhealthyProbeCount > 0)
           match anyBridgeStillInPlay with
           | false -> () // this particular schedule never actually probed a bridge that stayed connected — nothing to prove
@@ -155,23 +156,26 @@ let tests =
         let step (state: State, actions: Action list) (event: Event) =
           let next, more = decideFn defaultPolicy state event
           next, actions @ more
-        let lost = step ({ Transport = TransportState.Ready(Some "sid"); Pending = [] }, []) (Event.ServerStreamClosed("sid", "server stream closed"))
+        let lost = step ({ Transport = TransportState.Ready(Some "sid"); Pending = Backlog.empty }, []) (Event.ServerStreamClosed("sid", "server stream closed"))
         let queuedSends = [ for i in 1..queued -> Event.StdinLine(sent i) ]
         let downProbes = [ for _ in 1..probesDown do yield Event.Probe; yield Event.ProbeResult false ]
         List.fold step lost (queuedSends @ downProbes @ [ Event.Probe; Event.ProbeResult true ])
 
-      testPropertyWithConfig simConfig "an outage shorter than the window ends Ready, forwards every queued request once in order, and starts no daemon" <| fun () ->
+      testPropertyWithConfig simConfig "an outage shorter than the window ends Ready on the new session, forwards every queued request once in order, and starts no daemon" <| fun () ->
         let probesDown = Gen.choose (0, defaultPolicy.MaxReconnectProbes - 1) |> pick
         let queued = Gen.choose (0, 5) |> pick
-        let state, actions = outage decide probesDown queued
-        state.Transport |> Expect.equal (sprintf "Ready again for %d probes down" probesDown) (TransportState.Ready(Some "sid"))
+        let whenBack, beforeCapture = outage decide probesDown queued
+        // The daemon answers, the bridge mints a session, and the capture is what lets the queue go.
+        let state, afterCapture = decide defaultPolicy whenBack (Event.SessionIdCaptured "sid-new")
+        let actions = beforeCapture @ afterCapture
+        state.Transport |> Expect.equal (sprintf "Ready again on the new session for %d probes down" probesDown) (TransportState.Ready(Some "sid-new"))
         actions
         |> List.choose (function Action.ForwardToDaemon m -> Some m | _ -> None)
         |> Expect.equal "every queued request forwarded once, in arrival order" [ for i in 1..queued -> sent i ]
         actions |> List.contains Action.StartDaemon |> Expect.isFalse "the bridge does not start a daemon while one may still come back"
         actions |> List.contains Action.Shutdown |> Expect.isFalse "the bridge never shuts down over a lost daemon"
         let positionOf predicate = actions |> List.tryFindIndex predicate
-        match positionOf ((=) Action.Rehandshake), positionOf (function Action.ForwardToDaemon _ -> true | _ -> false) with
+        match positionOf (function Action.Rehandshake _ -> true | _ -> false), positionOf (function Action.ForwardToDaemon _ -> true | _ -> false) with
         | Some handshake, Some firstForward -> handshake < firstForward |> Expect.isTrue "the re-handshake is decided before the first queued request is forwarded"
         | Some _, None -> ()
         | None, _ -> failtest "a bridge that held a session id re-handshakes when the daemon is back"

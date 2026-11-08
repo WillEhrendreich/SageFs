@@ -16,6 +16,32 @@ module McpSessionRouting =
     | true -> trimmed.Replace('/', '\\').ToLowerInvariant()
     | false -> trimmed
 
+  /// Where a call that names no session id looks for its session: the caller's active one, or the one session that works in
+  /// a directory. It replaces a `string option` whose `None` meant "the active session" only by habit, so a reader of a
+  /// signature sees the two ways to route, and a blank directory argument cannot be taken for a directory.
+  [<RequireQualifiedAccess>]
+  type RouteTarget =
+    | ActiveSession
+    | InDirectory of workingDirectory: string
+
+  module RouteTarget =
+    /// A tool's `working_directory` argument: blank names no directory.
+    let ofArgument (workingDirectory: string) : RouteTarget =
+      match String.IsNullOrWhiteSpace workingDirectory with
+      | true -> RouteTarget.ActiveSession
+      | false -> RouteTarget.InDirectory workingDirectory
+
+    /// For the callers that still carry the optional directory (`resolveSessionId` takes one).
+    let ofOption (workingDirectory: string option) : RouteTarget =
+      match workingDirectory with
+      | Some directory -> RouteTarget.InDirectory directory
+      | None -> RouteTarget.ActiveSession
+
+    let toOption (target: RouteTarget) : string option =
+      match target with
+      | RouteTarget.InDirectory directory -> Some directory
+      | RouteTarget.ActiveSession -> None
+
   /// Sessions whose registered WorkingDirectory matches `workingDir` exactly.
   /// Public because a McpTools caller outside the deep-match helpers uses it.
   let sessionsMatchingWorkingDir (sessions: WorkerProtocol.SessionInfo list) (workingDir: string) =

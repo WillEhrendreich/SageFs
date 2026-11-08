@@ -56,6 +56,23 @@ module ValueWalk =
     | LiveValueTree.WalkMode.Everything -> WalkEverything
     | LiveValueTree.WalkMode.Off -> WalkOff
 
+/// Which garbage collector a session's FSI host runs under. A config.fsx writes it (`Gc = ServerGc`). The cases are not called `Server`: a case with that name breaks the resolution of the namespace `SageFs.Server` in patterns.
+/// Server GC commits a heap per core and is what allocation-heavy code runs under in production, so timing code
+/// in the REPL under it shows the real number. WorkstationGc is what a session gets when the config says nothing.
+type GcMode =
+  | WorkstationGc
+  | ServerGc
+
+/// One environment variable for a session's FSI host, written `EnvEntry("NAME", "value")`. A union and not a tuple, because
+/// a config is carried back from the host that evaluated it over a wire that has no tuples.
+type EnvEntry = EnvEntry of name: string * value: string
+
+/// Where a session's own builds write `bin` and `obj`. A config.fsx writes it (`Artifacts = ArtifactsIn "/abs/path"`). The
+/// default leaves the project to say, as it always did.
+type ArtifactsDir =
+  | ProjectChooses
+  | ArtifactsIn of path: string
+
 /// Specifies how projects/solutions should be loaded for a session.
 type LoadStrategy =
   /// Load a specific solution file (.sln/.slnx)
@@ -67,7 +84,9 @@ type LoadStrategy =
   /// Bare FSI session — no project loading
   | NoLoad
 
-/// Per-directory configuration via .SageFs/config.fsx: load strategy, init script, default args.
+/// Per-directory configuration via .SageFs/config.fsx: load strategy, extra FSI arguments, garbage collector and
+/// environment for the session's host. Every field has a reader (`SessionOptions.fieldReaders` names it, and a test
+/// fails for a field it does not), because a field that is accepted and ignored is worse than one that is absent.
 ///
 /// Dependency-free by design: this file is compiled into SageFs.Core AND into the isolated FSI host, because a
 /// user's config.fsx is arbitrary F# and is evaluated in the host (never in the daemon), which hands the value back
@@ -75,14 +94,15 @@ type LoadStrategy =
 /// dropped from the config surface.)
 type DirectoryConfig =
   { Load: LoadStrategy
-    InitScript: string option
+    /// Extra arguments for the session's FSI host, after the ones SageFs builds (`--no-warn:1182`).
     DefaultArgs: string list
     AutoOpenNamespaces: bool
-    /// When true, treat this directory as a session root — don't walk up to git/solution root.
-    /// Use for monorepos where each subdirectory is an independent project.
-    IsRoot: bool
-    /// Optional friendly name for auto-created sessions. Defaults to the directory name.
-    SessionName: string option
+    /// The collector the session's FSI host runs under.
+    Gc: GcMode
+    /// Environment variables for the session's FSI host and nothing else. `SessionOptions.ofConfig` checks them.
+    SessionEnv: EnvEntry list
+    /// Where the session's builds write `bin` and `obj` (an absolute path).
+    Artifacts: ArtifactsDir
     /// How much of a value the live-bindings pane may run to show it. Safe unless the config says otherwise.
     ValueWalk: ValueWalk }
 
@@ -91,9 +111,9 @@ type DirectoryConfig =
 module DirectoryConfigDefaults =
   let empty : DirectoryConfig =
     { Load = AutoDetect
-      InitScript = None
       DefaultArgs = []
       AutoOpenNamespaces = true
-      IsRoot = false
-      SessionName = None
+      Gc = WorkstationGc
+      SessionEnv = []
+      Artifacts = ProjectChooses
       ValueWalk = ValueWalk.standard }

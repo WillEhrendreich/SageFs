@@ -45,8 +45,11 @@ type McpServerTracker() =
   /// `key` as the notification fan-out sees it. Releasing it forgets the connection here and then disposes
   /// the server, which closes the SDK transport and returns the SSE write buffer it holds. A connection that
   /// is already gone from `servers` was released by an earlier failed send, so this releases it once.
-  let fanoutTargetOf (key: string) (server: McpServer) (send: CancellationToken -> Task) : FanoutTarget =
+  let fanoutLedger = FanoutLedger()
+  let fanoutPolicy = FanoutPolicy.standard SageFs.Timeouts.mcpNotificationSend
+  let fanoutTargetOf (key: string) (server: McpServer) (bytes: int64) (send: CancellationToken -> Task) : FanoutTarget =
     { Id = key
+      Bytes = bytes
       Send = send
       Release = fun () ->
         resourceSubscriptions.TryRemove(key) |> ignore
@@ -78,8 +81,8 @@ type McpServerTracker() =
 
   /// Broadcast `notifications/resources/updated` for `uri` to every
   /// connected MCP client that subscribed to it. Mirrors `NotifyLogAsync`'s
-  /// fan-out/timeout/dead-connection-pruning discipline exactly (500ms
-  /// per-send timeout, a dead connection is dropped from both `servers` and
+  /// fan-out/backlog/dead-connection-pruning discipline exactly (a failed
+  /// send or a backlog past the policy drops the connection from both `servers` and
   /// `resourceSubscriptions`), scoped down to only the sessions that
   /// actually subscribed to this URI — a client that never called
   /// `resources/subscribe` for `uri` never receives this notification.
@@ -98,30 +101,31 @@ type McpServerTracker() =
         let targets =
           subscribed
           |> Array.map (fun (key, server) ->
-            fanoutTargetOf key server (fun token ->
+            fanoutTargetOf key server (int64 (System.Text.Encoding.UTF8.GetByteCount uri)) (fun token ->
               let payload = ResourceUpdatedNotificationParams(Uri = uri)
               server.SendNotificationAsync(
                 NotificationMethods.ResourceUpdatedNotification, payload,
                 cancellationToken = token)))
-        let! _ = McpFanout.broadcast SageFs.Timeouts.mcpNotificationSend SageFs.Timeouts.mcpConnectionRelease targets
+        let! _ = McpFanout.broadcast fanoutPolicy fanoutLedger SageFs.Timeouts.mcpConnectionRelease targets
         ()
     }
 
   /// Broadcast a structured logging notification to all connected MCP clients.
-  /// Sends to all clients in parallel with a 500ms per-send timeout.
+  /// Sends to all clients in parallel; a client is dropped for a failed send or a backlog past the fan-out policy, never for a slow one.
   member _.NotifyLogAsync(level: LoggingLevel, logger: string, data: obj) =
     task {
       match servers.IsEmpty with
       | true -> return ()
       | false ->
+        let json = Json.serialize Json.standard data
+        let payloadBytes = int64 (System.Text.Encoding.UTF8.GetByteCount json)
         let jsonElement =
-          let json = Json.serialize Json.standard data
           use doc = JsonDocument.Parse(json)
           doc.RootElement.Clone()
         let targets =
           servers
           |> Seq.map (fun kvp ->
-            fanoutTargetOf kvp.Key kvp.Value (fun token ->
+            fanoutTargetOf kvp.Key kvp.Value payloadBytes (fun token ->
               let payload =
                 LoggingMessageNotificationParams(
                   Level = level, Logger = logger, Data = jsonElement)
@@ -129,7 +133,7 @@ type McpServerTracker() =
                 NotificationMethods.LoggingMessageNotification, payload,
                 cancellationToken = token)))
           |> Seq.toArray
-        let! _ = McpFanout.broadcast SageFs.Timeouts.mcpNotificationSend SageFs.Timeouts.mcpConnectionRelease targets
+        let! _ = McpFanout.broadcast fanoutPolicy fanoutLedger SageFs.Timeouts.mcpConnectionRelease targets
         ()
     }
 
@@ -316,25 +320,26 @@ type ConfirmationRefusal =
   | CouldNotBeAsked of reason: string
 
 module ConfirmationRefusal =
-  /// The daemon route that does the same job as a confirm-tier tool WITHOUT asking anyone. This is the real
-  /// alternative for a caller that has no human to answer: the route sits on the MCP port and skips the tool
-  /// filter that prompts. A tool outside the tier has none, because it is never asked about.
-  let unattendedRoute (toolName: string) : string =
+  /// The command the person who runs the daemon types to do the same job as a confirm-tier tool without the prompt.
+  /// It needs the operator credential, which no tool, member token or agent holds, so naming it hands an agent nothing
+  /// to run: it tells the agent whom to ask. A tool outside the tier has none, because it is never asked about.
+  let personsCommand (toolName: string) : string =
     match SageFs.Affordances.ToolName.tryParse toolName with
-    | Some SageFs.Affordances.ToolName.ManageLocalData -> "POST /api/local-data/clear?store=<store>"
-    | _ -> "the daemon's HTTP API, which does not ask"
+    | Some SageFs.Affordances.ToolName.ManageLocalData -> "sagefs data clear [--store friction|cohort|all]"
+    | _ -> "the daemon's operator commands (sagefs --help)"
 
   /// What was done, said first and the same for every case: the call did not run. The old text said "not
   /// confirmed", which reads as an action that failed halfway; nothing had been attempted.
   let nothingDone (toolName: string) : string =
     sprintf "Nothing was done: %s did not run, and your local data is untouched." toolName
 
-  /// The way out for a caller with no person to answer. There is no switch for the prompt, so it says so rather
-  /// than leaving the caller to look for one; the routes are on the daemon's MCP port.
+  /// What a caller with no person to answer does next. There is no switch for the prompt, so it says so rather than
+  /// leaving the caller to look for one, and it names the one thing that works: the person who runs the daemon runs the
+  /// command from a shell. No route skips the question for an agent.
   let wayOut (toolName: string) : string =
     sprintf
-      "If no person can answer this prompt, there is no setting that turns it off. The daemon's HTTP API on the same port does the same job without asking: %s."
-      (unattendedRoute toolName)
+      "If no person can answer this prompt, there is no setting that turns it off. Ask the person who runs the daemon to run this from a shell: %s."
+      (personsCommand toolName)
 
   /// The one sentence a caller reads, for each case. Exhaustive: a new refusal cannot be added without writing
   /// what the caller is told.
@@ -512,6 +517,9 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
       // The member a stdio bridge's client key names (`useClientKey` derived it at the HTTP edge and kept the key). It
       // names the same client across a re-initialize and a daemon restart, which the session id cannot.
       SageFs.McpTools.currentClientKeyMember.Value <- SageFs.McpCapability.clientKeyMemberOf ctx.User
+      // What the edge decided about the operator credential on this request: the person who runs the daemon may stop or
+      // reset any session (`SessionAccess.decide`).
+      SageFs.McpTools.currentOperatorClaim.Value <- SageFs.McpCapability.operatorClaimOf ctx.User
       // Bind the member token this call presented, if any, the same way: a token outranks the connection,
       // and one that is presented but bad is refused below, before any tool body or gate runs, never
       // quietly downgraded to the connection's own identity.
@@ -529,9 +537,7 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
       // lands what its agents send never evals).
       match presented with
       | Ok _ ->
-        SageFs.McpCapability.memberLiveness.CallMade(
-          SageFs.MemberTable.MemberId.display (SageFs.McpTools.memberIdFor "mcp"),
-          DateTime.UtcNow)
+        SageFs.McpCapability.memberLiveness.CallMade(SageFs.McpTools.memberIdFor "mcp", DateTime.UtcNow)
       | Error _ -> ()
       match presented with
       | Ok(Some capability) ->
@@ -859,13 +865,12 @@ let useClientKey (liveness: SageFs.MemberLiveness.Table) (app: WebApplication) :
           match clientKey with
           | Some member' -> member'
           | None -> SageFs.MemberTable.MemberId.ofConnectionHandle (string sessionIds.[0])
-        let key = SageFs.MemberTable.MemberId.display who
         task {
-          liveness.StreamOpened key
+          liveness.StreamOpened who
           try
             do! next.Invoke()
           finally
-            liveness.StreamClosed key
+            liveness.StreamClosed who
         }
         :> Task
       | _ -> next.Invoke()
@@ -3267,7 +3272,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
     } :> Task
   ) |> ignore
 
-let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
+let mapDiagnosticsRoutes (operatorAccess: SageFs.OperatorStore.OperatorAccess) (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let! code = readJsonProp ctx "code"
@@ -3297,21 +3302,31 @@ let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
       do! jsonResponse ctx 200 (SageFs.LocalData.toJson report)
     } :> Task
   ) |> ignore
-  // ?store=friction|cohort|all (default all). A running cohort's ledger is left alone.
+  // ?store=friction|cohort|all (default all). A running cohort's ledger is left alone. Operator only: it deletes what no
+  // session owns, so a person reaches it with `sagefs data clear` and no tool, member token or refusal text hands it to an agent.
   app.MapPost("/api/local-data/clear", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      match SageFs.LocalData.ClearTarget.parse (string ctx.Request.Query["store"]) with
-      | Error message -> do! jsonResponse ctx 400 {| success = false; error = message |}
-      | Ok target ->
-        let cohort = SageFs.LocalData.liveCohortAcross (SageFs.CohortOwnerResolution.ownersOf rctx.McpContext.CohortSupport)
-        let results = SageFs.LocalData.clear target rctx.McpContext.FrictionStore cohort DaemonState.SageFsDir
-        do! jsonResponse ctx 200
-              {| success = true
-                 results =
-                   results
-                   |> List.map (fun (store, outcome) ->
-                     {| store = SageFs.LocalData.LocalStore.fileName store
-                        outcome = SageFs.LocalData.renderClear [ store, outcome ] |}) |}
+      let authorization =
+        match ctx.Request.Headers.TryGetValue "Authorization" with
+        | true, values when values.Count > 0 -> Some(string values.[0])
+        | _ -> None
+      match SageFs.McpMintRoute.verdictOf operatorAccess authorization with
+      | SageFs.McpMintRoute.Verdict.Refused(status, body) ->
+        ctx.Response.StatusCode <- status
+        do! rawJsonResponse ctx (Json.serialize Json.camelCase body)
+      | SageFs.McpMintRoute.Verdict.Admitted ->
+        match SageFs.LocalData.ClearTarget.parse (string ctx.Request.Query["store"]) with
+        | Error message -> do! jsonResponse ctx 400 {| success = false; error = message |}
+        | Ok target ->
+          let cohort = SageFs.LocalData.liveCohortAcross (SageFs.CohortOwnerResolution.ownersOf rctx.McpContext.CohortSupport)
+          let results = SageFs.LocalData.clear target rctx.McpContext.FrictionStore cohort DaemonState.SageFsDir
+          do! jsonResponse ctx 200
+                {| success = true
+                   results =
+                     results
+                     |> List.map (fun (store, outcome) ->
+                       {| store = SageFs.LocalData.LocalStore.fileName store
+                          outcome = SageFs.LocalData.renderClear [ store, outcome ] |}) |}
     } :> Task
   ) |> ignore
 
@@ -3665,6 +3680,19 @@ let mapHatchRoutes (record: SageFs.HatchUse -> unit) (app: WebApplication) =
         do! jsonResponse ctx 400 {| success = false; error = SageFs.HatchRefusal.describe refusal |}
     } :> Task
   ) |> ignore
+
+/// Answer 403 with the refusal and its next action when `SessionAccess` forbids whoever sent this request from acting on the
+/// session (it was made by another member). True when it answered, so the route stops.
+let refuseIfForbidden (rctx: RouteContext) (ctx: Microsoft.AspNetCore.Http.HttpContext) (action: SageFs.SessionAction) (sessionId: string) : Task<bool> =
+  task {
+    let lookups = SageFs.McpTools.sessionAccessLookups rctx.McpContext
+    let! refusal = SageFs.McpHttpAccess.refusal lookups SageFs.McpTools.capabilityStore ctx.User action sessionId
+    match refusal with
+    | Some error ->
+      do! jsonResponse ctx SageFs.SessionAccess.ForbiddenStatus (structuredErrorBody error)
+      return true
+    | None -> return false
+  }
 
 /// Mint a member token with the operator credential (`sagefs member mint`), for the person who runs the daemon or a
 /// launcher they trust: the token goes from here into an environment variable and never through a model. The decision
@@ -4040,6 +4068,9 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
       match sidOpt with
       | None -> () // 400 already sent
       | Some sid ->
+        match! refuseIfForbidden rctx ctx SageFs.SessionAction.Stop (SageFs.WorkerProtocol.SessionId.value sid) with
+        | true -> ()
+        | false ->
         let! result = rctx.Config.SessionOps.StopSession (SageFs.WorkerProtocol.SessionId.value sid)
         match rctx.Dispatch with
         | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
@@ -4086,6 +4117,9 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
       | Error msg ->
         do! jsonResponse ctx 400 {| success = false; error = msg |}
       | Ok sid ->
+        match! refuseIfForbidden rctx ctx SageFs.SessionAction.StopApp (SageFs.WorkerProtocol.SessionId.value sid) with
+        | true -> ()
+        | false ->
         let! result = SageFs.AppRunOrchestration.stopApp rctx.Config.SessionOps sid
         match rctx.Dispatch with
         | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
@@ -4126,6 +4160,9 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
                 {| success = false
                    error = SageFs.CreateSessionUx.formatUnknownWorkflowError requested |}
         | Some target ->
+          match! refuseIfForbidden rctx ctx SageFs.SessionAction.SwitchWorkflow (SageFs.WorkerProtocol.SessionId.value sid) with
+          | true -> ()
+          | false ->
           let! result = rctx.Config.SessionOps.SwitchWorkflow (SageFs.WorkerProtocol.SessionId.value sid) target
           match rctx.Dispatch with
           | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
@@ -4893,7 +4930,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
 
       mapExecutionRoutes app rctx
       mapHealthRoutes app rctx
-      mapDiagnosticsRoutes app rctx
+      mapDiagnosticsRoutes operatorAccess app rctx
       mapEventsRoute app rctx
       mapStatusRoutes app rctx
       mapSessionRoutes app rctx

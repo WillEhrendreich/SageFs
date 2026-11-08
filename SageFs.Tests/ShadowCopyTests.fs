@@ -58,6 +58,31 @@ let safeDelete dir =
   | true -> Directory.Delete(dir, true)
   | false -> ()
 
+/// Writes a library `ShadowDep` with a class `Dep.Base`, and a library `ShadowApp` with a class `App.Derived` that
+/// inherits it, into `dir`. `ShadowApp` cannot load a type of its own without `ShadowDep`: the shape of a project whose
+/// types extend or implement something a package brings (a test project's closures over Expecto's types, for one).
+let writeDependentLibraries (dir: string) : string * string =
+  let depPath = Path.Combine(dir, "ShadowDep.dll")
+  let appPath = Path.Combine(dir, "ShadowApp.dll")
+  let classAttrs =
+    Mono.Cecil.TypeAttributes.Public
+    ||| Mono.Cecil.TypeAttributes.Class
+    ||| Mono.Cecil.TypeAttributes.BeforeFieldInit
+  let write (path: string) (module_: Mono.Cecil.ModuleDefinition) =
+    // The file is closed when this returns, so the next step can read it.
+    using (File.Create path) (fun stream -> module_.Write stream)
+    module_.Dispose()
+  let dep = Mono.Cecil.ModuleDefinition.CreateModule("ShadowDep", Mono.Cecil.ModuleKind.Dll)
+  dep.Types.Add(Mono.Cecil.TypeDefinition("Dep", "Base", classAttrs, dep.TypeSystem.Object))
+  write depPath dep
+  let app = Mono.Cecil.ModuleDefinition.CreateModule("ShadowApp", Mono.Cecil.ModuleKind.Dll)
+  let depForRef = Mono.Cecil.ModuleDefinition.ReadModule depPath
+  let baseRef = app.ImportReference(depForRef.GetType("Dep.Base"))
+  app.Types.Add(Mono.Cecil.TypeDefinition("App", "Derived", classAttrs, baseRef))
+  write appPath app
+  depForRef.Dispose()
+  depPath, appPath
+
 /// `pendingCleanups` is one process-wide bag and `cleanupAllPending` drains all of it,
 /// so a test that puts a dir in the bag and then asserts it is still there loses to any
 /// other test that drains it in between (the "still cannot be deleted stays pending"
@@ -389,6 +414,52 @@ let staleSweepTests =
         Directory.Exists gone |> Expect.isFalse "a dead owner's shadow dir is swept"
       finally
         safeDelete root
+
+    testCase "WHY — loadShadowed — a shadow copy's types all load, because the reflection scan lost every type that extends something a package brings (3398 of SageFs.Tests' types) and reported the package as missing from the shadow copy" <| fun _ ->
+      let srcDir = createTestDir ()
+      let shadowDir = SageFs.ShadowCopy.createShadowDir ()
+      let alc = new System.Runtime.Loader.AssemblyLoadContext("sagefs-shadow-test", true)
+      try
+        let _, appPath = writeDependentLibraries srcDir
+        // Only the project's own assembly is shadow-copied, as `shadowCopySolution` does.
+        let shadowApp = SageFs.ShadowCopy.shadowCopyFile shadowDir appPath
+        File.Exists (Path.Combine(shadowDir, "ShadowDep.dll"))
+        |> Expect.isFalse "the dependency is not in the shadow directory: that is the situation"
+        let asm = SageFs.ShadowCopy.loadShadowed alc shadowApp
+        let types = asm.GetTypes()
+        types
+        |> Array.map (fun t -> t.FullName)
+        |> Expect.contains "App.Derived loaded with its base class from the build directory" "App.Derived"
+      finally
+        alc.Unload()
+        safeDelete shadowDir
+        safeDelete srcDir
+
+    testCase "WHY — loadShadowed — a dependency the build directory does not hold is still reported, not invented" <| fun _ ->
+      let srcDir = createTestDir ()
+      let shadowDir = SageFs.ShadowCopy.createShadowDir ()
+      let alc = new System.Runtime.Loader.AssemblyLoadContext("sagefs-shadow-test-missing", true)
+      try
+        let depPath, appPath = writeDependentLibraries srcDir
+        File.Delete depPath
+        let shadowApp = SageFs.ShadowCopy.shadowCopyFile shadowDir appPath
+        let asm = SageFs.ShadowCopy.loadShadowed alc shadowApp
+        let outcome =
+          try
+            asm.GetTypes() |> ignore
+            None
+          with :? System.Reflection.ReflectionTypeLoadException as ex ->
+            ex.LoaderExceptions |> Array.choose Option.ofObj |> Array.map (fun e -> e.Message) |> Some
+        match outcome with
+        | None -> failwith "with the dependency gone from the build directory too, the type cannot load"
+        | Some messages ->
+          messages
+          |> String.concat "; "
+          |> Expect.stringContains "the missing assembly is named" "ShadowDep"
+      finally
+        alc.Unload()
+        safeDelete shadowDir
+        safeDelete srcDir
 
     bagTestCase "WHY — sweepShadowDirsIn — a shadow dir whose delete was deferred is gone after the sweep and no longer pending, because cleanupAllPending was only ever called from a test so the bag grew for the daemon's whole uptime" <| fun _ ->
       let root = Directory.CreateTempSubdirectory("sagefs-sweep-").FullName

@@ -26,7 +26,7 @@ module McpStdioBridgeGenerators =
       { AlreadyUp = rnd.Next(0, 4) = 0 // 25% already up, 75% must be started
         WarmupTicks = rnd.Next(0, 6) }
     // small, so give-up and lost-daemon paths get exercised too
-    let policy = { MaxProbeAttempts = 3 + rnd.Next(0, 6); MaxReconnectProbes = 3 + rnd.Next(0, 6) }
+    let policy = { MaxProbeAttempts = 3 + rnd.Next(0, 6); MaxReconnectProbes = 3 + rnd.Next(0, 6); QueueCap = 2 + rnd.Next(0, 12) }
     let opCount = rnd.Next(3, 30)
     let mutable tag = 0
     let nextTag () =
@@ -91,7 +91,7 @@ module McpStdioBridgeGenerators =
   /// give-up, with a message still queued when it happens.
   let daemonNeverAppears : Scenario =
     { Seed = -3
-      Policy = { MaxProbeAttempts = 4; MaxReconnectProbes = 4 }
+      Policy = { MaxProbeAttempts = 4; MaxReconnectProbes = 4; QueueCap = defaultPolicy.QueueCap }
       BridgeCount = 1
       Daemon = { AlreadyUp = false; WarmupTicks = 1000 } // never reached within the probe budget
       Ops = [ BridgeOp.ClientSend(0, taggedMessage 1) ] }

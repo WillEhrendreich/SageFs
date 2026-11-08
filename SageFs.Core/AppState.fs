@@ -553,7 +553,7 @@ let private discoverWarmupReplayPlan
           Log.warn "[Warmup] %s" msg
           discoveryWarnings.Add(msg)
         | true ->
-          let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
+          let asm = SageFs.ShadowCopy.loadShadowed reflectionAlc project.TargetPath
           // Before the reflection, so the handler below can record the assembly if it throws.
           let stableAssemblyPath =
             stableAssemblyPaths
@@ -768,7 +768,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
             logger.LogError (sprintf "  ❌ The session was refused: %s" message)
             failwith message
           let projects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
-          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects planning.Plan.Overrides (SessionAgent.agentInitOf sln hotReload webDevReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) with
+          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects planning.Plan.Overrides (SessionOptionsSource.fromCarrier logger) (SessionAgent.agentInitOf sln hotReload webDevReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) with
           | Ok session -> return session
           | Error reason ->
             let message = IsolatedFsiSession.describeStartError reason

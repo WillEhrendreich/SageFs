@@ -131,7 +131,19 @@ Details are in Claude Code's
 
 ## 3. Connect the MCP server
 
-Point your agent at `http://localhost:37749/` (streamable HTTP), or
+Register the stdio bridge. In Claude Code that is one command, for every project:
+
+```bash
+claude mcp add --scope user sagefs -- sagefs mcp
+```
+
+`sagefs setup` prints the registration for each client it finds (Claude Code, VS Code, Cursor, Claude
+Desktop), and `sagefs setup --client vscode --write` merges it into that client's config file, keeping
+every other server in it and leaving a file it cannot parse alone. The snippet for each client, and why
+the stdio form keeps its tools across a daemon restart while an HTTP one does not, are on
+[client-setup.md](client-setup.md).
+
+A client that can only speak HTTP can point at `http://localhost:37749/` (streamable HTTP), or
 `http://localhost:37749/sse` for older clients. When an agent connects, SageFs
 sends it a short version of the rules, so even an agent without the skill gets
 the core of it. The skill is the full version, and you want both.
@@ -166,7 +178,8 @@ the same member:
 eval "$(sagefs member mint --role Implementer --dir "$PWD" --print-env SAGEFS_MEMBER_TOKEN)"
 ```
 
-`--token` does the same for one call. The full description is in
+`--token-file <path>` (or `--token-file -` for standard input) does the same for one call without putting the token on
+the command line. `--token <token>` still works and prints a warning. The full description is in
 [mcp-tools.md](mcp-tools.md#reaching-the-tools-without-a-client-sagefs-call).
 
 ### What a client sees when the daemon is upgraded
@@ -194,6 +207,20 @@ stream closed, so the client showed the server as disconnected until someone rel
 - The bridge waits for the old daemon's replacement for up to a minute on a fast machine (`Timeouts.stdioBridgeReconnectWait`,
   longer on a slower one). After that it starts a daemon itself, the way it does when it finds none at
   startup, and gives up only by the rules of a cold start.
+- A request that arrives while the bridge is minting that new session waits for it and goes out under the new
+  session id, in order, after the push stream is open. The bridge forwards nothing under the old id once it has seen the
+  daemon answer. Before 2026-11-08 such a request went out under the old id, got a 404, and the bridge's repair
+  minted a second session: the client then received every notification twice, because both push streams stayed open. Now
+  a new session replaces the old one's stream, and requests that are refused for the same old id share one repair.
+- If the daemon cannot give the bridge a session (it answered without an id, or went away again), the requests
+  that were waiting are answered with an error that names the reason, and the bridge goes back to waiting for a
+  daemon. It does not hold them.
+- A request the daemon has not answered within the bridge's own deadline (`Timeouts.workerHttpRequest`, ten minutes
+  by default, so a long test run is fine) is answered with an error that says it timed out and may still be running.
+  The bridge stays on its session. Before 2026-11-08 a timeout was treated as the daemon being gone, which started a
+  needless re-handshake and left a live session behind.
+- While the daemon is down or a session is being minted the bridge holds at most `Timeouts.stdioBridgeQueueCap` (1000)
+  messages. The one past that is answered with an error that says the queue is full.
 
 The installer replaces the tool's files under a running bridge. That does not end the bridge: a process
 that already loaded its assemblies keeps them. Measured on 2026-11-07 against a throwaway daemon: the

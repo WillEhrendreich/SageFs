@@ -58,6 +58,23 @@ module CreateSessionUx =
   let tryCreateTarget (paths: string list) : Result<SessionProjectTarget list, string> =
     SessionProjectTarget.tryCreateMany paths
 
+  /// The line a create reply carries when the project's own SageFs.Core is not the one the worker runs. The reason already
+  /// says what to do about it.
+  let adoptionHint (note: HostCoreAdoption.AdoptionNote) : string option =
+    match note with
+    | HostCoreAdoption.AdoptionNote.NotAdopted reason -> Some(sprintf "Core not adopted: %s" reason)
+    | HostCoreAdoption.AdoptionNote.NothingToSay -> None
+
+  /// The create reply's adoption line for the projects a session is created on: what a spawn for them would say.
+  let adoptionHintOfTargets (targets: SessionProjectTarget list) : string option =
+    targets
+    |> List.choose (function
+      | SessionProjectTarget.Project path
+      | SessionProjectTarget.Solution path -> Some path
+      | SessionProjectTarget.Bare -> None)
+    |> HostCoreAdoption.previewNoteForDaemon
+    |> adoptionHint
+
   /// Explicit session-creation success reply. At creation time the worker has
   /// not finished resolving projects, so this states exactly what was requested
   /// and points at get_session_status to confirm what actually loaded.

@@ -108,7 +108,7 @@ let private closeStream (edge: Edge) (response: HttpResponseMessage) : Task =
   }
 
 let private isLive (edge: Edge) (who: MemberId) : bool =
-  edge.Liveness.IsLive(MemberId.display who, DateTime.UtcNow, Timeouts.agentActivityFresh)
+  edge.Liveness.IsLive(who, DateTime.UtcNow, Timeouts.agentActivityFresh)
 
 let private memberOf (key: string) : MemberId =
   match ClientKey.toMemberId key with

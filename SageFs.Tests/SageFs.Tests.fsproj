@@ -102,6 +102,8 @@
         <Compile Include="ConfirmationUnansweredTests.fs" />
         <Compile Include="ConfirmationPromptTests.fs" />
         <Compile Include="ConfirmationPolicyTests.fs" />
+        <Compile Include="SessionAccessTests.fs" />
+        <Compile Include="LocalDataCommandTests.fs" />
         <Compile Include="WorkerMainTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="CheckoutTests.fs" />
@@ -142,6 +144,8 @@
              that says who, the check that finds them, and the DST over multi-file edit histories. -->
         <Compile Include="CallerStateTests.fs" />
         <Compile Include="CallerCheckTests.fs" />
+        <Compile Include="ProjectCheckTests.fs" />
+        <Compile Include="CheckProjectCompilerTests.fs" />
         <Compile Include="CallerWireTests.fs" />
         <Compile Include="CallerPatchEmitTests.fs" />
         <Compile Include="QualifiedAccessPatchTests.fs" />
@@ -161,6 +165,7 @@
         <Compile Include="McpBridgeTests.fs" />
         <Compile Include="McpCallTests.fs" />
         <Compile Include="McpCallCommandTests.fs" />
+        <Compile Include="McpCallTokenSourceTests.fs" />
         <Compile Include="HttpOriginGuardTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />
         <Compile Include="DogfoodReplTests.fs" />
@@ -171,6 +176,10 @@
         <Compile Include="RestartJitterTests.fs" />
         <Compile Include="WarmupSupervisionTests.fs" />
         <Compile Include="WarmupSimTests.fs" />
+        <Compile Include="IntegrationSettleTests.fs" />
+        <Compile Include="IntegrationSettleSimTests.fs" />
+        <Compile Include="CohortLandingScopeTests.fs" />
+        <Compile Include="FailingTestsTextTests.fs" />
         <Compile Include="MachineTierTests.fs" />
         <Compile Include="StartEscalationTests.fs" />
         <Compile Include="StartEscalationSimTests.fs" />
@@ -199,6 +208,10 @@
         <Compile Include="DashboardParsingTests.fs" />
         <Compile Include="SessionDisplayStatusUnificationTests.fs" />
         <Compile Include="DirectoryConfigTests.fs" />
+        <Compile Include="SessionOptionsTests.fs" />
+        <Compile Include="ClientSetupTests.fs" />
+        <Compile Include="ClientSetupDocTests.fs" />
+        <Compile Include="SessionOptionsOwnerTests.fs" />
         <Compile Include="ConnectionTrackerTests.fs" />
         <Compile Include="TerminalUITests.fs" />
         <Compile Include="CellGridTests.fs" />
@@ -261,6 +274,10 @@
         <Compile Include="NewSessionDialogBrowserTests.fs" />
         <!-- The live-bindings knob: a step writes a file through the nudge door, and the file's bytes are the proof. -->
         <Compile Include="DashboardLiveBindingsTweakBrowserTests.fs" />
+        <!-- The pane's bar says how current its values are, from the test loop. -->
+        <Compile Include="LiveBindingsFreshnessBrowserTests.fs" />
+        <!-- The Since green tab lists what moved after the tests last settled green. -->
+        <Compile Include="LiveBindingsSinceGreenBrowserTests.fs" />
         <Compile Include="HygieneBrowserTests.fs" />
         <Compile Include="DashboardSettingsBrowserTests.fs" />
         <Compile Include="DashboardDisconnectIndicatorBrowserTests.fs" />
@@ -304,6 +321,7 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="CallerPendingSimTests.fs" />
+        <Compile Include="ProjectCheckSimTests.fs" />
         <Compile Include="ReferenceScopeSimTests.fs" />
         <Compile Include="ReferenceCacheSimTests.fs" />
         <Compile Include="SessionReaperSimTests.fs" />
@@ -387,6 +405,8 @@
          <Compile Include="DaemonRssReturnsToBaselineTests.fs" />
          <Compile Include="DaemonIdleRssTests.fs" />
          <Compile Include="McpStdioBridgeSimTests.fs" />
+         <Compile Include="McpStdioBridgeReconnectSimTests.fs" />
+         <Compile Include="McpStdioBridgeRunTests.fs" />
          <Compile Include="McpStdioBridgeE2ETests.fs" />
          <Compile Include="McpStdioBridgeHealTests.fs" />
          <Compile Include="WarmupContextTests.fs" />
@@ -560,6 +580,12 @@
         <Compile Include="ChangesStripTests.fs" />
         <Compile Include="WatchTabTests.fs" />
         <Compile Include="WatchExpressionTests.fs" />
+        <Compile Include="RowFormatTests.fs" />
+        <Compile Include="LoopFreshnessTests.fs" />
+        <Compile Include="SinceGreenTests.fs" />
+        <Compile Include="SinceGreenRecorderTests.fs" />
+        <Compile Include="PageStateTests.fs" />
+        <Compile Include="LiveBindingsRowFormatTests.fs" />
         <Compile Include="DockCompactionTests.fs" />        <Compile Include="LiveBindingsTweakServiceTests.fs" />
         <Compile Include="LiveBindingsTweakViewTests.fs" />
         <Compile Include="RetentionSimDstTests.fs" />
@@ -778,6 +804,7 @@
         <Compile Include="TierSchedSimTests.fs" />
         <Compile Include="BuildPlanTests.fs" />
         <Compile Include="ContentRevisionTests.fs" />
+        <Compile Include="CheckProjectMsBuildTests.fs" />
         <Compile Include="BuildStampsTests.fs" />
         <Compile Include="PassRecordTests.fs" />
         <Compile Include="PassRecordSimDstTests.fs" />
@@ -900,6 +927,7 @@
         <Compile Include="HostAdaptationTests.fs" />
         <Compile Include="HostConcernTests.fs" />
         <Compile Include="HostCoreAdoptionTests.fs" />
+        <Compile Include="CoreSurfaceTests.fs" />
         <Compile Include="HostCoreAdoptionStalenessTests.fs" />
         <Compile Include="OrphanTempDirSweepTests.fs" />
         <Compile Include="HostCoreAdoptionMarkerTests.fs" />

@@ -47,6 +47,7 @@ sub-agent in that state still has the loop: `sagefs call` reaches every tool fro
 - `sagefs call --list` shows the tools. `sagefs call <tool> --<parameter> <value>` calls one; `--json '{...}'` passes
   the arguments as an object. A name the tool does not have is refused with the names it does.
 - Put `eval "$(sagefs member mint --role Implementer --dir "$PWD" --print-env SAGEFS_MEMBER_TOKEN)"` in the brief's
-  setup, or pass `--token`. Every call is a new connection, so with no token a session one call made cannot be
-  stopped by the next, and `stop_session` is refused. With the token every call is the same member.
+  setup, or pass `--token-file <path>`. Every call is a new connection, so with no token a session one call made cannot be
+  stopped by the next, and `stop_session` is refused. With the token every call is the same member. Do not pass
+  `--token <token>`: it prints a warning, because the token lands in the process list and the shell history.
 - The answer is on stdout. A tool error is on stderr with exit code 1. Read the exit code.

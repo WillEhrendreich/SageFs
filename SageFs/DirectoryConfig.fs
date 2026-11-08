@@ -84,6 +84,19 @@ module DirectoryConfig =
     |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
     |> Option.defaultValue true
 
+  /// Resolve a directory's config for a session that is being created there, and answer whether warmup auto-opens namespaces.
+  /// This is the one place the options a session's builds and worker use are recorded (`SessionOptionsRegistry`); reading a
+  /// config (`load`, `loadAsync`, a page that shows it) never records anything. A directory with no config, or one that no longer
+  /// asks for anything, is forgotten.
+  let prepareForCreate (workingDir: string) : bool =
+    let config = load workingDir
+    let options =
+      match config with
+      | Some cfg -> fst (SessionOptions.ofConfig cfg)
+      | None -> SessionOptions.none
+    SessionOptionsRegistry.remember workingDir options
+    config |> Option.map (fun cfg -> cfg.AutoOpenNamespaces) |> Option.defaultValue true
+
   let ensureAutoOpenNamespacesOptOut (workingDir: string) =
     try
       let path = configPath workingDir
@@ -126,10 +139,10 @@ module DirectoryConfig =
           // the default except for AutoOpenNamespaces.
           let isBareOptOut =
             cfg.Load = empty.Load
-            && cfg.InitScript = empty.InitScript
             && cfg.DefaultArgs = empty.DefaultArgs
-            && cfg.IsRoot = empty.IsRoot
-            && cfg.SessionName = empty.SessionName
+            && cfg.Gc = empty.Gc
+            && cfg.SessionEnv = empty.SessionEnv
+            && cfg.Artifacts = empty.Artifacts
             && cfg.ValueWalk = empty.ValueWalk
           match isBareOptOut with
           | true ->

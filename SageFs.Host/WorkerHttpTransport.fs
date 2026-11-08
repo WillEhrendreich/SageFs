@@ -317,6 +317,30 @@ module WorkerHttpTransport =
           | 0 -> SageFs.Server.HttpOriginGuard.Body.Empty
           | _ -> SageFs.Server.HttpOriginGuard.Body.Present }
 
+  /// What a route that threw tells its caller: the route, the exception's type and its message (the message of a
+  /// failed assembly load names the assembly). The full exception, with its stack, goes to the worker log.
+  let describeRouteFailure (httpMethod: string) (path: string) (ex: exn) : string =
+    sprintf "the worker threw while handling %s %s: %s: %s" httpMethod path (ex.GetType().Name) ex.Message
+
+  /// Outermost middleware: a route that throws is logged through the worker's own log (this host has no `ILogger`
+  /// provider, so ASP.NET's own record of the exception goes nowhere) and answered as a 500 whose body says what threw.
+  /// Before this, such a request reached the daemon as a bare "500 (Internal Server Error)" with nothing in the worker log.
+  let workerFailureGuard (ctx: HttpContext) (next: Func<Task>) = task {
+    try
+      do! next.Invoke()
+    with
+    | ex when not (ex :? OperationCanceledException) ->
+      let path = ctx.Request.Path.Value |> Option.ofObj |> Option.defaultValue ""
+      let text = describeRouteFailure ctx.Request.Method path ex
+      Log.error "[WorkerHttp] %s\n%s" text (ex.ToString())
+      match ctx.Response.HasStarted with
+      | true -> ()
+      | false ->
+        ctx.Response.StatusCode <- 500
+        ctx.Response.ContentType <- "text/plain; charset=utf-8"
+        do! ctx.Response.WriteAsync text
+  }
+
   /// Origin/CSRF gate middleware for the worker HTTP surface — applies `decide`
   /// with the listener's own origins.
   let workerOriginGuard (ctx: HttpContext) (next: Func<Task>) = task {
@@ -380,6 +404,9 @@ module WorkerHttpTransport =
       // see plan: fsi-host-supervisor-isolation). The daemon owns OTel.
 
       let app = builder.Build()
+
+      app.Use(Func<HttpContext, Func<Task>, Task>(fun ctx next ->
+        workerFailureGuard ctx next :> Task)) |> ignore
 
       app.UseResponseCompression() |> ignore
 

@@ -832,6 +832,214 @@ let statesJourney () : Task<unit> = task {
   | None -> ()
 }
 
+/// How a row shows its value (step 9), in a real browser on its own daemon and the same fixture: a whole number carries a picker that moves
+/// it through As is, Hex, Binary and Colour; the choice is kept for the page across the pushes that follow a new value, a page that
+/// reloads starts with every row as it is, a number a format cannot draw says why in words, and a type with nothing else to show has no
+/// picker at all.
+///
+///   1. `flags = 255` carries a button that says `As is`, and `gravity` (a Double) carries none
+///   2. a press moves 255 to `0xFF`, then `0b11111111`, then the colour `#0000FF` with a blue swatch, then back to the number
+///   3. a value that changes (`flags = 4096`) keeps its format: `0x1000`
+///   4. a colour row (`tint = 16711680`) draws a red swatch; a number past 0xFFFFFF says it is out of range, in words, and still shows the number
+///   5. the button is the page's one button height (28px), square, and a row with nothing chosen is not made taller by it
+///   6. a reload starts with every row as it is
+///   7. at 1400, 900 and 400 wide nothing overflows sideways, with a format on two rows; screenshots are taken for each
+///
+/// Every step proves zero console errors and zero Datastar PatchElementsNoTargetsFound.
+let formatJourney () : Task<unit> = task {
+  let runDir = ref ""
+  let daemon = Sw.startDaemon ()
+  let mutable playwright: IPlaywright option = None
+  let mutable browser: IBrowser option = None
+  let mutable failure: exn option = None
+  try
+    let! built = makeRunCopy ()
+    runDir.Value <- built
+    let! healthy = Sw.waitHealthy daemon
+    if not healthy then
+      Sw.dumpLogs daemon
+      Tests.failtestf "the daemon on port %d never became healthy" daemon.McpPort
+    do! Sw.createSession daemon (Path.Combine(built, "TweakFixture.fsproj")) built
+    let! ready =
+      Sw.waitUntil (TestTimeouts.asMs SageFs.Timeouts.browserJourneyWarmup) (fun () -> task {
+        try
+          let! now = Sw.sessionsNow daemon
+          return now.Length = 1 && now |> List.forall (fun (_, status, _) -> status = "Ready")
+        with _ -> return false
+      })
+    if not ready then Sw.dumpLogs daemon
+    ready |> Expect.isTrue "the fixture session reached Ready"
+    let dashboardBase = sprintf "http://localhost:%d" daemon.DashboardPort
+    let evalIn (code: string) = Sw.post daemon TestTimeouts.requestPatience "/exec" {| code = code; working_directory = built |}
+    let! evaled = evalIn "let gravity = 9.8;;\nlet flags = 255;;\nlet tint = 16711680;;"
+    evaled |> Expect.isOk "the REPL took the bindings"
+
+    let! pw = Playwright.CreateAsync()
+    let! chromium = pw.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
+    playwright <- Some pw
+    browser <- Some chromium
+    let! ctx = chromium.NewContextAsync(BrowserNewContextOptions(ViewportSize = ViewportSize(Width = 1400, Height = 1000)))
+    let! page = ctx.NewPageAsync()
+    let errors = watchErrors page
+    let! _ = page.GotoAsync(sprintf "%s/dashboard" dashboardBase)
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
+
+    // A binding's row, found by the name in it: the picker, the value and the format the row carries.
+    let rowJs = "name => [...document.querySelectorAll('.live-binding-node')].find(n => n.querySelector(':scope > .live-name')?.innerText === name)"
+    let readRow (name: string) (read: string) =
+      page.EvaluateAsync<string>(sprintf "name => { const row = (%s)(name); if (!row) return ''; %s }" rowJs read, name)
+    let valueOf (name: string) = readRow name "const v = row.querySelector(':scope > .live-preview'); return v ? v.innerText.trim() : '';"
+    let wordOf (name: string) = readRow name "const b = row.querySelector(':scope > [data-testid=live-fmt-button]'); return b ? b.innerText.trim() : '(no button)';"
+    let waitValue (name: string) (value: string) =
+      waitJs page (sprintf "%s to read '%s'" name value) BrowserWaits.daemonWork
+        (sprintf "name => { const row = (%s)(name); const v = row && row.querySelector(':scope > .live-preview'); return !!v && v.innerText.trim() === '%s'; }" rowJs value) (box name)
+    let pick (name: string) = task {
+      let row = page.Locator(sprintf ".live-binding-node:has(> .live-name:text-is('%s'))" name)
+      do! row.HoverAsync()
+      do! row.Locator(":scope > [data-testid=live-fmt-button]").ClickAsync()
+    }
+
+    do! waitValue "flags" "= 255"
+    do! waitValue "tint" "= 16711680"
+    do! waitValue "gravity" "= 9.8"
+    expectNoErrors errors "with the rows drawn"
+
+    // ── 1. whole numbers carry the picker, a Double carries none ──────────────────────────────────────────────────────
+    let! flagsWord = wordOf "flags"
+    flagsWord |> Expect.equal "the button says what a press does" "Show as Hex"
+    let! noStateYet = readRow "flags" "return row.querySelector(':scope > [data-testid=live-fmt-state]') ? 'state' : 'none';"
+    noStateYet |> Expect.equal "a row shown as it is says nothing of a format" "none"
+    let! gravityWord = wordOf "gravity"
+    gravityWord |> Expect.equal "a Double has nothing else to show, so no picker" "(no button)"
+
+    // ── 2. a press moves through the spellings and back ───────────────────────────────────────────────────────────────
+    do! pick "flags"
+    do! waitValue "flags" "= 0xFF"
+    do! waitJs page "the button to say what a press does now" BrowserWaits.panelUpdates "() => /Show as Binary/.test(document.querySelector('[data-testid=live-fmt-button]').innerText)" null
+    let! hexWord = wordOf "flags"
+    hexWord |> Expect.equal "the button names the action: the next format" "Show as Binary"
+    let! hexState = readRow "flags" "const s = row.querySelector(':scope > [data-testid=live-fmt-state]'); return s ? s.innerText.trim() : '(no state)';"
+    hexState |> Expect.equal "the state is its own words, beside the action" "shown as Hex"
+    // the state's words are readable: at least 4.5 to 1 against what they sit on
+    let! stateContrast =
+      readRow "flags" "const s = row.querySelector(':scope > [data-testid=live-fmt-state]'); const toRgb = c => { const x = document.createElement('canvas').getContext('2d'); x.fillStyle = '#000'; x.fillStyle = c; x.fillRect(0, 0, 1, 1); return [...x.getImageData(0, 0, 1, 1).data]; }; const luminance = ([r, g, b]) => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); }; const layers = []; for (let e = s; e; e = e.parentElement) layers.unshift(toRgb(getComputedStyle(e).backgroundColor)); let under = [255, 255, 255]; for (const [r, g, b, alpha] of layers) { const k = alpha / 255; under = [r * k + under[0] * (1 - k), g * k + under[1] * (1 - k), b * k + under[2] * (1 - k)]; } const a = luminance(toRgb(getComputedStyle(s).color)), b = luminance(under); return String((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) + ' text=' + getComputedStyle(s).color + ' on=rgb(' + under.map(Math.round).join(',') + ')';"
+    (float (stateContrast.Split(' ').[0]) >= 4.5) |> Expect.isTrue (sprintf "the state's words have at least 4.5 to 1 contrast, measured %s" stateContrast)
+    do! pick "flags"
+    do! waitValue "flags" "= 0b11111111"
+    do! pick "flags"
+    do! waitValue "flags" "= #0000FF"
+    let! swatch = readRow "flags" "const s = row.querySelector(':scope > [data-testid=live-swatch]'); return s ? getComputedStyle(s).backgroundColor : '(no swatch)';"
+    swatch |> Expect.equal "the colour row draws its colour" "rgb(0, 0, 255)"
+    do! shot page "16-format-colour"
+    do! pick "flags"
+    do! waitValue "flags" "= 255"
+    let! swatchGone = readRow "flags" "return row.querySelector('[data-testid=live-swatch]') ? 'swatch' : 'none';"
+    swatchGone |> Expect.equal "back to the number, no swatch" "none"
+    expectNoErrors errors "after a press through every format"
+
+    // ── 3. a new value keeps the format ───────────────────────────────────────────────────────────────────────────────
+    do! pick "flags"
+    do! waitValue "flags" "= 0xFF"
+    // the highlight a changed value gets must leave its text readable: it starts as an underline in the accent colour, with no background
+    // fill to put the text on, so it is read from the animation itself, started before the value changes and read when it starts
+    let flashStart =
+      page.EvaluateAsync<string>(
+        sprintf "() => new Promise(resolve => { const t0 = performance.now(); const tick = () => { const row = (%s)('flags'); const cell = row && row.querySelector(':scope > .live-preview'); const animations = cell ? cell.getAnimations() : []; if (animations.length > 0) { const first = animations[0].effect.getKeyframes()[0]; resolve(JSON.stringify({ background: first.backgroundColor ?? '', shadow: first.boxShadow ?? '' })); } else if (performance.now() - t0 > 8000) resolve('none'); else requestAnimationFrame(tick); }; tick(); })" rowJs)
+    let! changed = evalIn "let flags = 4096;;"
+    changed |> Expect.isOk "the REPL took the new value"
+    do! waitValue "flags" "= 0x1000"
+    let! flash = flashStart
+    flash |> Expect.notEqual "the changed value flashed" "none"
+    let flashed = Text.Json.JsonDocument.Parse(flash).RootElement
+    [ ""; "transparent"; "rgba(0, 0, 0, 0)" ] |> List.contains (flashed.GetProperty("background").GetString()) |> Expect.isTrue (sprintf "the highlight starts with no background fill (it was '%s')" (flashed.GetProperty("background").GetString()))
+    flashed.GetProperty("shadow").GetString() |> Expect.stringContains "and is an underline drawn inside the cell" "inset"
+
+    // ── 4. a colour, and a number a colour cannot be ──────────────────────────────────────────────────────────────────
+    do! pick "tint"
+    do! pick "tint"
+    do! pick "tint"
+    do! waitValue "tint" "= #FF0000"
+    let! red = readRow "tint" "const s = row.querySelector(':scope > [data-testid=live-swatch]'); return s ? getComputedStyle(s).backgroundColor : '(no swatch)';"
+    red |> Expect.equal "red is red" "rgb(255, 0, 0)"
+    let! big = evalIn "let tint = 20000000;;"
+    big |> Expect.isOk "the REPL took a number past white"
+    do! waitJs page "the row to say a colour cannot be that number, and still show the number" BrowserWaits.daemonWork
+          (sprintf "() => { const row = (%s)('tint'); const note = row && row.querySelector('[data-testid=live-fmt-note]'); const v = row && row.querySelector(':scope > .live-preview'); return !!note && /16777215/.test(note.innerText) && !!v && v.innerText.trim() === '= 20000000'; }" rowJs) null
+    expectNoErrors errors "after a colour that does not fit"
+    let! back = evalIn "let tint = 16711680;;"
+    back |> Expect.isOk "the REPL took red again"
+    do! waitValue "tint" "= #FF0000"
+
+    // ── 5. one button, 28px, square; a row with nothing chosen is not made taller ─────────────────────────────────────
+    let! look = readRow "flags" "const b = row.querySelector(':scope > [data-testid=live-fmt-button]'); const s = getComputedStyle(b); return JSON.stringify({ h: b.getBoundingClientRect().height, radius: s.borderTopLeftRadius, label: b.getAttribute('aria-label') });"
+    let buttonLook = Text.Json.JsonDocument.Parse(look).RootElement
+    buttonLook.GetProperty("h").GetDouble() |> Expect.equal "the one button height" 28.0
+    buttonLook.GetProperty("radius").GetString() |> Expect.equal "square corners" "0px"
+    buttonLook.GetProperty("label").GetString() |> Expect.stringContains "the accessible name says what a press does" "Show flags as"
+    do! pick "flags"
+    do! pick "flags"
+    do! pick "flags"
+    do! waitValue "flags" "= 4096"
+    let! plainHeight = readRow "flags" "return String(row.getBoundingClientRect().height);"
+    (float plainHeight < 28.0) |> Expect.isTrue (sprintf "an as-is row (%s px) is not made taller than its button by the button" plainHeight)
+
+    // ── 6. a reload starts with every row as it is ────────────────────────────────────────────────────────────────────
+    do! pick "tint"
+    do! pick "flags"
+    let! _ = page.ReloadAsync()
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
+    do! waitValue "flags" "= 4096"
+    do! waitValue "tint" "= 16711680"
+    expectNoErrors errors "after a reload"
+
+    // ── 7. three widths, a format on two rows ─────────────────────────────────────────────────────────────────────────
+    do! pick "flags"
+    do! pick "tint"
+    do! pick "tint"
+    do! pick "tint"
+    do! waitValue "flags" "= 0x1000"
+    do! waitValue "tint" "= #FF0000"
+    for (width, height, name) in [ 1400, 1000, "1400"; 900, 900, "900"; 400, 800, "400" ] do
+      do! page.SetViewportSizeAsync(width, height)
+      do! waitJs page "the dock" BrowserWaits.panelUpdates "() => !!document.querySelector('#live-dock')" null
+      let! problems = layoutProblems page
+      problems |> Expect.equal (sprintf "at %dpx wide nothing overflows sideways: %s" width problems) ""
+      let! rowProblems =
+        page.EvaluateAsync<string>(
+          """() => {
+            const tree = document.querySelector('#live-tree').getBoundingClientRect();
+            const out = [];
+            // The State chip of a row is drawn in the strip's own column and is not a cell of the row's line.
+            for (const el of document.querySelectorAll('.live-binding-node > *:not(.live-state)')) {
+              const r = el.getBoundingClientRect();
+              if (r.width === 0 && r.height === 0) continue;
+              if (r.right > tree.right + 1 || r.left < tree.left - 1) out.push((el.className || el.tagName) + ' sticks out: ' + Math.round(r.left) + '..' + Math.round(r.right) + ' vs ' + Math.round(tree.left) + '..' + Math.round(tree.right));
+            }
+            // a value with a format chosen keeps all its text: the state's words and the button must not squeeze it to an ellipsis
+            for (const v of document.querySelectorAll('.live-binding-node[data-format]:not([data-format="as-is"]) > .live-preview')) {
+              if (v.scrollWidth > v.clientWidth + 1) out.push('the value ' + v.textContent.trim() + ' is cut off: ' + v.scrollWidth + ' in ' + v.clientWidth);
+            }
+            return out.join(' | ');
+          }""")
+      rowProblems |> Expect.equal (sprintf "at %dpx wide every cell of a row is inside the tree and no value is cut off: %s" width rowProblems) ""
+      do! shot page (sprintf "16-format-%s" name)
+    do! page.SetViewportSizeAsync(1400, 1000)
+    expectNoErrors errors "across three widths"
+    try do! ctx.CloseAsync() with _ -> ()
+  with ex ->
+    Sw.dumpLogs daemon
+    failure <- Some ex
+  match browser with
+  | Some b -> do! Sw.closeBrowserSafely b
+  | None -> ()
+  playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
+  Sw.killDaemon daemon
+  removeRunCopy runDir.Value
+  match failure with
+  | Some ex -> return raise ex
+  | None -> ()
+}
+
 [<Tests>]
 let tests =
   testSequenced <|
@@ -843,5 +1051,9 @@ let tests =
 
     testTask "[Integration] Dashboard knob browser: a tried value is tweaked until saved, a value the program assigned is evolved and asks before it is written, and Save all and Revert all act on tweaks only" {
       do! statesJourney () }
+    |> Integration.register (Integration.Dedicated "--integration-browser")
+
+    testTask "[Integration] Dashboard row format browser: a whole number is shown as it is, in hex, in binary or as a colour, the choice survives a new value and not a reload, and a number a format cannot draw says why" {
+      do! formatJourney () }
     |> Integration.register (Integration.Dedicated "--integration-browser")
   ]

@@ -111,7 +111,13 @@ module McpStdioBridgeSim =
         let bt = bridges.[b]
         let afterProbe = apply bt Event.Probe
         let healthy = daemonHealthy scenario.Daemon startedAtTick tick
-        let afterResult = apply afterProbe (Event.ProbeResult healthy)
+        let afterProbeResult = apply afterProbe (Event.ProbeResult healthy)
+        // This sim takes every effect as instant, so the re-handshake the probe started finishes at once.
+        // `McpStdioBridgeReconnectSim` is the one where it does not.
+        let afterResult =
+          match afterProbeResult.State.Transport with
+          | TransportState.Rehandshaking _ -> apply afterProbeResult (Event.SessionIdCaptured(sprintf "rehandshaken-%d" tick))
+          | _ -> afterProbeResult
         let startedAtTick' =
           match startedAtTick, afterResult.StartDaemonCount > bt.StartDaemonCount with
           | Some t, _ -> Some t
@@ -134,6 +140,7 @@ module McpStdioBridgeSim =
         |> List.choose (fun (b, bt) ->
           match bt.State.Transport with
           | TransportState.AwaitingDaemon _ -> Some b
+          | TransportState.Rehandshaking _
           | TransportState.Ready _
           | TransportState.Closed
           | TransportState.Fatal _ -> None)
@@ -274,7 +281,7 @@ module McpStdioBridgeSim =
             | _ -> acc)
           forwards
       state', forwards'
-    let _, forwards = events |> List.fold step ({ Transport = TransportState.Ready None; Pending = [] }, [])
+    let _, forwards = events |> List.fold step ({ Transport = TransportState.Ready None; Pending = Backlog.empty }, [])
     List.rev forwards
 
   /// True if `next` — sent in reaction to the response that carried `sid` —

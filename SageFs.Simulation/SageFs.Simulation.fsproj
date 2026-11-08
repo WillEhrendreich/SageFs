@@ -120,6 +120,11 @@
         <Compile Include="CallerPendingSim.fs" />
         <Compile Include="CallerPendingInvariants.fs" />
         <Compile Include="CallerPendingGenerators.fs" />
+        <!-- check_project DST: folds the real ProjectCheckCore decisions (the kept compiler arguments and their fingerprint,
+             the shared run, the referenced projects that are behind) over a three-project disk of file versions; the
+             truth is an independent comparison of versions. Twins ignore the package versions, keep a cancelled run, start
+             a run for every call, never find a reference behind and build every reference. -->
+        <Compile Include="ProjectCheckSim.fs" />
         <!-- References rung DST: folds the real ReferenceGather.run (one budget for every project of a session) and
              ReferenceReply.ofAnswer over a simulated clock and checker; the truth is an independent walk of the budget
              against the project costs. Twins call a partial look project-wide, give every project the whole budget, and
@@ -253,6 +258,7 @@
         <Compile Include="McpStdioBridgeSim.fs" />
         <Compile Include="McpStdioBridgeInvariants.fs" />
         <Compile Include="McpStdioBridgeGenerators.fs" />
+        <Compile Include="McpStdioBridgeReconnectSim.fs" />
         <!-- File-watcher lifecycle DST: folds the real LiveTestWatcherCore
              claim/reconcile core (for watch-count bookkeeping, not routing)
              and the real FileWatcher.fileChangeAction; twins reintroduce a
@@ -274,6 +280,11 @@
         <Compile Include="WarmupSim.fs" />
         <Compile Include="WarmupInvariants.fs" />
         <Compile Include="WarmupGenerators.fs" />
+        <!-- The landing gate's wait on the integration session: the real IntegrationSettle.await over a seeded script on a
+             virtual clock; the twin is the fixed 120 s deadline it replaced (finding C-restart). -->
+        <Compile Include="IntegrationSettleSim.fs" />
+        <Compile Include="IntegrationSettleInvariants.fs" />
+        <Compile Include="IntegrationSettleGenerators.fs" />
         <Compile Include="StartEscalationSim.fs" />
         <Compile Include="StartEscalationInvariants.fs" />
         <Compile Include="StartEscalationGenerators.fs" />

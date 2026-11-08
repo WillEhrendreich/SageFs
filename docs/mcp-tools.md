@@ -57,9 +57,18 @@ runs in where nobody is sitting there to click, and `run_app` is listed as
 destructive but not asked about, because running the app is what you asked for
 and the REPL loss is written on the tool itself.
 
-Asking is separate from refusing. `stop_session` still refuses a session another
-bound MCP connection created, and says so (see the `stop_session` row); that
-check never prompts anyone.
+Asking is separate from refusing. `stop_session`, `reset_fsi_session`,
+`hard_reset_fsi_session`, `switch_workflow` and `stop_app` (and the editor routes
+`POST /api/sessions/stop`, `/api/sessions/{sid}/stop-app` and
+`/api/sessions/{sid}/workflow`) refuse a session another member made. One rule,
+`SessionAccess.decide`, decides all of them: the member that made the session, the
+conductor of the cohort it sits in, and the operator may act, and a different bound
+member is refused with a reason and a next action. Nobody is asked. A session
+with no maker on record (made from the dashboard or the CLI, or one a restarted
+daemon resumed) and a call on no bound identity (the dashboard, an editor, the CLI)
+are open, as before. Like the roles, this keeps well-mannered agents out of each
+other's sessions and does not contain a hostile one: `send_fsharp_code` can run
+anything the daemon's user can.
 
 The part worth knowing: a client that never advertised elicitation is neither
 prompted nor refused. The prompt is skipped, and the four gates ahead of it
@@ -75,10 +84,13 @@ A client that advertises elicitation but cannot answer (a headless agent, or a
 UI whose prompt never takes an answer) waits the full 60 seconds on
 `manage_local_data` and then gets "needs a person to confirm it, and no answer
 came within 00:01:00", with the way out spelled out. There is no setting that
-turns the prompt off, so a caller with nobody to answer uses the daemon's HTTP
-API on the same port, which does not ask:
-`POST /api/local-data/clear?store=<store>`. (`sagefs stop` stops the whole
-daemon, not one session.)
+turns the prompt off, and no route skips it for an agent: the person who runs
+the daemon clears the stores from a shell with
+`sagefs data clear [--store friction|cohort|all]`, which reads the operator
+credential (`operator.token`) and sends it as the Bearer header.
+`POST /api/local-data/clear` takes that credential and nothing else, so no tool and
+no member token reaches it. (`sagefs stop` stops the whole daemon, not one
+session.)
 
 The full advertised set is 72 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
@@ -169,13 +181,13 @@ goes to stderr with exit code 1, its full text kept: a refusal by a gate names t
 next action. A usage mistake is exit code 2. A daemon that is not running gets the
 words `sagefs status` uses and exit code 1. `--port` or `SAGEFS_MCP_PORT` picks the
 daemon (`--mcp-port` works too). The command's own options (`--list`, `--json`,
-`--token`, `--port`, `--mcp-port`, `--help`) are never tool parameters, and no tool
-has a parameter with one of those names.
+`--token`, `--token-file`, `--port`, `--mcp-port`, `--help`) are never tool parameters,
+and no tool has a parameter with one of those names.
 
 **Who is calling.** Every `sagefs call` is a new process, so the daemon sees a new
 connection each time, and what one call makes (a session, a claim) belongs to that
 connection. With no token the next call cannot stop the session the last one made:
-`stop_session` answers an error, "owned by another bound MCP connection". A member
+`stop_session` answers an error, "made by another member". A member
 token outranks the connection (see "Member tokens" below), so pass one and every
 call is the same member:
 
@@ -185,11 +197,13 @@ sagefs call create_bare_session --working_directory "$PWD"
 sagefs call stop_session --session_id 1a2b3c4d      # the same member, so it is allowed
 ```
 
-`--token <token>` does the same for one call; the environment variable keeps the
-token out of the process list. A token lapses after 30 minutes with no call (see
-"Expiry" below), and a session it made can then only be stopped by a token that is
-the same member, which a new mint is not: stop such a session before you leave a
-token idle. `SAGEFS_OPERATOR_TOKEN` is sent too, so `--list` shows
+`--token-file <path>` reads the token from a file (`--token-file -` reads standard
+input), and the environment variable works the same way: neither puts the token in
+the process list or the shell history. `--token <token>` still works for one call
+and prints a warning, because the token sits on the command line. A token lapses
+after 30 minutes with no call (see "Expiry" below), and a session it made can then
+only be stopped by the conductor, the operator or a token that is the same member,
+which a new mint is not: stop such a session before you leave a token idle. `SAGEFS_OPERATOR_TOKEN` is sent too, so `--list` shows
 the full tool list under `TokenRequired`. With neither, `--list` starts with
 `identity: anonymous` and any refusal ends with what to do about it.
 
@@ -956,6 +970,32 @@ which acts):
   types from its compiled assembly, and the first landing of `SageFs.Core/AppState.fs` was blocked three times on exactly that.
   The tests that run are the ones the session's coverage says the diff can affect, plus every test the rebuild found that was
   not known before; a diff that selects nothing runs the whole suite.
+- **A landing that arrives while the integration is still being built** (`Integration session: pending` in `get_cohort_status`,
+  the minutes `set_integration_ref` spends building the worktree) waits in the queue and starts when the session does. It is
+  not Blocked, and a member does nothing. If `set_integration_ref` fails or is refused, the integration reads `FAILED` and the
+  waiting landing is refused with that reason.
+- **The wait on the integration session has no deadline.** A restart of the session loads the whole test project, which takes
+  minutes when many builds share the machine, so the gate waits for as long as the session keeps changing phase (restarting,
+  starting up, the worker's own progress text). It stops when the session is Ready, when it is dead, or when it has stayed in
+  one phase for a stall window (`Timeouts.cohortIntegrationStallWindow`, 60 s on the default tier, scaled for the machine) and
+  Blocks the landing with the phase it stuck in. A rebuild of the project is not judged by the window: the build runner
+  bounds it with `Timeouts.buildCompletion`. The refusal text has a part for each party. A member is told to
+  `withdraw_landing` and request again once `get_cohort_status` shows the session started; the conductor is told what the
+  session is doing, for how long, and which tool revives it. It never tells a member to run a conductor's tool.
+- **Tests the session cannot run are left to the release gate, and named.** A test whose full name carries the
+  `[Integration]` tag (the tag `TestInfrastructure.Integration.register` puts on every registered integration suite) starts
+  real processes, daemons and ports, and inside the session ended as `Skipped "Timed out after 5s"`. The verdict is
+  fail-closed, so each such test Blocked every landing that touched code it covers. The gate no longer asks the session to run
+  them: the release gate's `--integration-host` and dedicated tiers do. Each test left out is named in the landing's report
+  file (below) and the landing's status line says how many (`N [Integration] tests were not run by the landing gate`),
+  whether it landed or was Blocked. Every other test is still read fail-closed: anything but a confirmed pass blocks.
+- **A landing Blocked on tests names them.** The blocker holds only test ids, hashes of the names, so the daemon records the
+  names when the run ends. The status line says how many tests did not pass, separates the ones that failed from the ones that
+  could not run (`3 failed, 97 could not run`, with `could not run: timed out after 5s` beside each such name), shows the
+  first ten by name and how many more there are, and gives the path of a file in the integration worktree's
+  git-ignored `test-results/` (`cohort-landing-<id>-failing-tests.txt`) that lists all of them with their ids. The names are
+  held in the daemon's memory: after a restart the status shows the ids and says the names were not recorded, and the file
+  is still on disk.
 - **The rebuild trusts nothing it did not check.** It reads the integration worktree's head first and refuses (Inconclusive,
   `the integration worktree is at <sha>, not at the rebased commit <sha>`) when something moved it since the rebase. It records
   the attempt before it builds, success or not: a build that fails still writes the refused commit's output, so from that

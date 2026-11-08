@@ -270,6 +270,38 @@ let httpRoundTripTests =
 
   ]
 
+// ─── A handler that throws: the caller is told what threw ─────────
+
+/// A handler whose every answer throws, the way a worker does when a type it needs cannot be loaded.
+let throwingHandler (message: string) (_: WorkerMessage) : Async<WorkerResponse> = async { return failwith message }
+
+[<Tests>]
+let handlerFailureTests =
+  testList "WorkerHttpTransport.handlerFailure" [
+    testTask "WHY — a request whose handler throws reaches the daemon with the exception's own text and the route, because a bare 500 left a faulted session nothing to read" {
+      let cause = "Could not load file or assembly 'Expecto, Version=11.0.0.0'"
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer (throwingHandler cause) (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+      try
+        let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
+        let! outcome =
+          async {
+            try
+              let! _ = proxy (WorkerMessage.GetTestDiscovery "d1")
+              return None
+            with :? HttpRequestException as ex -> return Some ex.Message
+          }
+          |> Started.asTask
+        match outcome with
+        | None -> failwith "a handler that throws must not answer as if it had worked"
+        | Some text ->
+          text |> Expect.stringContains "the exception's message is in what the caller reads" cause
+          text |> Expect.stringContains "the route is named" "/test-discovery"
+          text |> Expect.stringContains "the status is named" "500"
+      finally
+        disposeServer server
+    }
+  ]
+
 // ─── THE critical test: concurrent status during eval ──────────────
 
 [<Tests>]

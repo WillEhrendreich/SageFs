@@ -368,9 +368,307 @@ let private runDaemonUpgradeTest () : Task<unit> =
         with _ -> ()
   }
 
+/// A daemon the test can upgrade on cue, and hold in the middle of minting the session that follows. Streamable
+/// HTTP as the SDK speaks it (the bytes `McpStdioBridgeHealTests` pins): a 2xx `initialize` carries an
+/// `Mcp-Session-Id`, an id the daemon never minted is a 404 `-32001 Session not found`, a GET with a live id is
+/// an event stream that stays open. The dashboard port answers the bridge's health probe.
+///
+/// `Restart` is the upgrade: every session and every open stream goes, and the next `initialize` is held until
+/// `ReleaseInitialize`, so a test can put stdin lines into the re-handshake's gap on purpose instead of hoping
+/// to hit it.
+type UpgradableDaemon(mcpPort: int) =
+  let mcp = new Net.HttpListener()
+  let dashboard = new Net.HttpListener()
+  let live = Collections.Concurrent.ConcurrentDictionary<string, unit>()
+  let streams = Collections.Concurrent.ConcurrentDictionary<Guid, string * Net.HttpListenerResponse>()
+  let log = Collections.Concurrent.ConcurrentQueue<string * string option * int>()
+  let streamOpened = new Threading.SemaphoreSlim(0)
+  let mutable generation = 1
+  let mutable minted = 0
+  let mutable hold =
+    let open' = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+    open'.SetResult()
+    open'
+  let mutable arrived = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+  let sessionNotFound = """{"error":{"code":-32001,"message":"Session not found"},"id":"","jsonrpc":"2.0"}"""
+
+  let reply (response: Net.HttpListenerResponse) (status: int) (body: string) : Task =
+    task {
+      let bytes = Encoding.UTF8.GetBytes body
+      response.StatusCode <- status
+      response.ContentType <- "application/json"
+      response.ContentLength64 <- int64 bytes.Length
+      do! response.OutputStream.WriteAsync(bytes, 0, bytes.Length)
+      response.Close()
+    }
+
+  let handleMcp (ctx: Net.HttpListenerContext) : Task =
+    task {
+      let request = ctx.Request
+      let response = ctx.Response
+      let sessionId = request.Headers.["Mcp-Session-Id"] |> Option.ofObj
+      let isLive =
+        match sessionId with
+        | Some sid -> live.ContainsKey sid
+        | None -> false
+      match request.HttpMethod with
+      | "POST" ->
+        use reader = new IO.StreamReader(request.InputStream)
+        let! body = reader.ReadToEndAsync()
+        use doc = Text.Json.JsonDocument.Parse body
+        let root = doc.RootElement
+        let methodName =
+          match root.TryGetProperty "method" with
+          | true, m -> m.GetString()
+          | false, _ -> ""
+        let id =
+          match root.TryGetProperty "id" with
+          | true, value -> Some(value.GetRawText())
+          | false, _ -> None
+        log.Enqueue(methodName, sessionId, generation)
+        match methodName, id with
+        | "initialize", Some id ->
+          arrived.TrySetResult() |> ignore
+          do! hold.Task
+          let fresh = sprintf "fake-%d" (lock live (fun () -> minted <- minted + 1; minted))
+          live.[fresh] <- ()
+          response.Headers.["Mcp-Session-Id"] <- fresh
+          do!
+            reply
+              response
+              200
+              (sprintf
+                """{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"UpgradableDaemon","version":"1"}}}"""
+                id)
+        | _, _ when not isLive -> do! reply response 404 sessionNotFound
+        | _, None -> do! reply response 202 ""
+        | _, Some id -> do! reply response 200 (sprintf """{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}""" id)
+      | "GET" when isLive ->
+        response.ContentType <- "text/event-stream"
+        response.SendChunked <- true
+        let bytes = Encoding.UTF8.GetBytes ": open\n\n"
+        do! response.OutputStream.WriteAsync(bytes, 0, bytes.Length)
+        do! response.OutputStream.FlushAsync()
+        streams.[Guid.NewGuid()] <- (sessionId.Value, response)
+        streamOpened.Release() |> ignore
+      | "DELETE" ->
+        sessionId |> Option.iter (fun sid -> live.TryRemove sid |> ignore)
+        do! reply response 200 ""
+      | _ -> do! reply response 404 sessionNotFound
+    }
+
+  let handleDashboard (ctx: Net.HttpListenerContext) : Task =
+    task {
+      match ctx.Request.Url.AbsolutePath with
+      | "/dashboard" -> do! reply ctx.Response 200 "ok"
+      | _ -> do! reply ctx.Response 404 "not here"
+    }
+
+  /// The accept loop starts hot and awaits `GetContextAsync`; each request runs on until its first await. No pool
+  /// thread is parked, and a held `initialize` does not hold up the next request.
+  let serve (listener: Net.HttpListener) (handle: Net.HttpListenerContext -> Task) : unit =
+    task {
+      while listener.IsListening do
+        try
+          let! ctx = listener.GetContextAsync()
+          (try handle ctx with _ -> Task.CompletedTask) |> ignore
+        with _ -> ()
+    }
+    |> ignore
+
+  do
+    mcp.Prefixes.Add(sprintf "http://localhost:%d/" mcpPort)
+    dashboard.Prefixes.Add(sprintf "http://localhost:%d/" (mcpPort + 1))
+    mcp.Start()
+    dashboard.Start()
+    serve mcp handleMcp
+    serve dashboard handleDashboard
+
+  /// Every POST the daemon has answered: method, the session id it carried, and the daemon generation it hit.
+  member _.Requests = log.ToArray()
+  member _.Generation = generation
+  member _.LiveSessions = live.Keys |> Seq.sort |> List.ofSeq
+  member _.OpenStreams = streams.Values |> Seq.map fst |> Seq.sort |> List.ofSeq
+  member _.StreamOpened = streamOpened
+  /// Completes when an `initialize` has arrived since the last `Restart`.
+  member _.InitializeArrived: Task = arrived.Task
+
+  /// The upgrade: every session and every open stream ends, and the next `initialize` is held.
+  member _.Restart() : unit =
+    generation <- generation + 1
+    hold <- TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+    arrived <- TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+    live.Clear()
+    for entry in streams.Values do
+      try (snd entry).Abort() with _ -> ()
+    streams.Clear()
+
+  member _.ReleaseInitialize() : unit = hold.TrySetResult() |> ignore
+
+  /// Push a notification into every open stream of a session the daemon still knows.
+  member _.Push(json: string) : Task =
+    task {
+      let bytes = Encoding.UTF8.GetBytes(sprintf "event: message\ndata: %s\n\n" json)
+      for sid, response in streams.Values do
+        match live.ContainsKey sid with
+        | true ->
+          do! response.OutputStream.WriteAsync(bytes, 0, bytes.Length)
+          do! response.OutputStream.FlushAsync()
+        | false -> ()
+    }
+
+  interface IDisposable with
+    member _.Dispose() =
+      for listener in [ mcp; dashboard ] do
+        try listener.Close() with _ -> ()
+
+/// P17, with a real bridge process: stdin lines arrive while the bridge is minting its new session after a
+/// daemon upgrade. The daemon is held in the middle of that `initialize`, so the gap is as long as the test
+/// wants. Exactly one session is minted, exactly one push stream is open at the end, each pushed notification
+/// reaches the client once, and every request the client sent in the gap is answered under the new session.
+let runRehandshakeRaceTest () : Task<unit> =
+  task {
+    let mcpPort, _dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
+    use daemon = new UpgradableDaemon(mcpPort)
+
+    let psi = ProcessStartInfo()
+    psi.FileName <- sageFsExe
+    psi.ArgumentList.Add("mcp")
+    psi.ArgumentList.Add("--mcp-port")
+    psi.ArgumentList.Add(string mcpPort)
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    psi.RedirectStandardInput <- true
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.StandardOutputEncoding <- Encoding.UTF8
+    psi.StandardInputEncoding <- Encoding.UTF8
+    psi.Environment["SAGEFS_DATA_DIR"] <- IO.Path.Combine(IO.Path.GetTempPath(), "sagefs-test", "mcp-stdio-race", Guid.NewGuid().ToString("N"))
+    SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
+    use bridge = Process.Start(psi)
+    let stderrBuf = Text.StringBuilder()
+    bridge.ErrorDataReceived.Add(fun e -> match e.Data with null -> () | line -> stderrBuf.AppendLine(line) |> ignore)
+    bridge.BeginErrorReadLine()
+
+    // Everything the bridge writes to stdout, in order, with a signal per line, so the test waits for what it expects.
+    let seen = Collections.Concurrent.ConcurrentQueue<string>()
+    let wrote = new Threading.SemaphoreSlim(0)
+    task {
+      let mutable reading = true
+      while reading do
+        let! line = bridge.StandardOutput.ReadLineAsync()
+        match line with
+        | null -> reading <- false
+        | text ->
+          seen.Enqueue text
+          wrote.Release() |> ignore
+    }
+    |> ignore
+
+    let describe () =
+      sprintf
+        "stdout: %A\nstderr:\n%s\ndaemon requests (method, session, generation): %A\nlive sessions: %A\nopen streams: %A"
+        (List.ofSeq seen)
+        (stderrBuf.ToString())
+        daemon.Requests
+        daemon.LiveSessions
+        daemon.OpenStreams
+    let awaitLine (found: string -> bool) : Task<string option> =
+      task {
+        let deadline = DateTime.UtcNow + TestTimeouts.daemonFirstOutput
+        let mutable result = None
+        let mutable looking = true
+        while looking do
+          match seen.ToArray() |> Array.tryFind found with
+          | Some line ->
+            result <- Some line
+            looking <- false
+          | None ->
+            let remaining = deadline - DateTime.UtcNow
+            match remaining > TimeSpan.Zero with
+            | false -> looking <- false
+            | true ->
+              let! signalled = wrote.WaitAsync remaining
+              looking <- signalled
+        return result
+      }
+    let send (line: string) =
+      task {
+        do! bridge.StandardInput.WriteLineAsync line
+        do! bridge.StandardInput.FlushAsync()
+      }
+    let answerTo (id: int) = awaitLine (fun line -> line.Contains(sprintf "\"id\":%d," id) || line.Contains(sprintf "\"id\":%d}" id))
+    let count (text: string) = seen.ToArray() |> Array.filter (fun line -> line.Contains text) |> Array.length
+
+    try
+        do! send """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"race-e2e","version":"0.0.1"}}}"""
+        let! initialized = answerTo 1
+        initialized |> Expect.isSome (sprintf "initialize was answered\n%s" (describe ()))
+        do! send """{"jsonrpc":"2.0","method":"notifications/initialized"}"""
+        do! send """{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"""
+        let! listed = answerTo 2
+        listed |> Expect.isSome (sprintf "tools/list was answered by the first daemon\n%s" (describe ()))
+        let! streamed = daemon.StreamOpened.WaitAsync TestTimeouts.daemonFirstOutput
+        streamed |> Expect.isTrue (sprintf "the bridge opened its push stream\n%s" (describe ()))
+
+        // The upgrade. The new daemon answers the health probe at once; its first `initialize` is held.
+        daemon.Restart()
+        let! arrived = Task.WhenAny([| daemon.InitializeArrived; Task.Delay TestTimeouts.daemonFirstOutput |])
+        obj.ReferenceEquals(arrived, daemon.InitializeArrived)
+        |> Expect.isTrue (sprintf "the bridge began minting a session on the new daemon\n%s" (describe ()))
+
+        // The gap: the client keeps working while the bridge's `initialize` is still unanswered.
+        do! send """{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}"""
+        do! send """{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{}}"""
+        do! Task.Delay TestTimeouts.processSettle
+        daemon.Requests
+        |> Array.filter (fun (_, _, generation) -> generation = daemon.Generation)
+        |> Array.map (fun (name, _, _) -> name)
+        |> Expect.equal (sprintf "nothing but the bridge's own initialize reached the new daemon while the session was being minted\n%s" (describe ())) [| "initialize" |]
+
+        daemon.ReleaseInitialize()
+        let! third = answerTo 3
+        third |> Expect.isSome (sprintf "the request sent in the gap was answered\n%s" (describe ()))
+        let! fourth = answerTo 4
+        fourth |> Expect.isSome (sprintf "so was the second\n%s" (describe ()))
+
+        // Exactly one session was minted on the new daemon, and both requests rode it.
+        daemon.Requests
+        |> Array.filter (fun (name, _, generation) -> generation = daemon.Generation && name = "initialize")
+        |> Array.length
+        |> Expect.equal (sprintf "one session was minted for this bridge, not a second by a heal\n%s" (describe ())) 1
+        daemon.Requests
+        |> Array.filter (fun (name, _, generation) -> generation = daemon.Generation && name = "tools/list")
+        |> Array.forall (fun (_, sid, _) -> sid = Some "fake-2")
+        |> Expect.isTrue (sprintf "every request after the upgrade carried the new session id\n%s" (describe ()))
+
+        // One push stream, so one copy of each notification.
+        let! reopened = daemon.StreamOpened.WaitAsync TestTimeouts.daemonFirstOutput
+        reopened |> Expect.isTrue (sprintf "the bridge opened a push stream on the new session\n%s" (describe ()))
+        do! Task.Delay TestTimeouts.processSettle
+        daemon.OpenStreams |> Expect.equal (sprintf "exactly one push stream is open\n%s" (describe ())) [ "fake-2" ]
+        do! daemon.Push """{"jsonrpc":"2.0","method":"notifications/message","params":{"data":"p17-once"}}"""
+        let! pushed = awaitLine (fun line -> line.Contains "p17-once")
+        pushed |> Expect.isSome (sprintf "the pushed notification reached the client\n%s" (describe ()))
+        do! Task.Delay TestTimeouts.processSettle
+        count "p17-once" |> Expect.equal (sprintf "and reached it once\n%s" (describe ())) 1
+        count "notifications/tools/list_changed" |> Expect.equal "the client was told once that its tool list may have changed" 1
+    finally
+      try bridge.StandardInput.Close() with _ -> ()
+      bridge.WaitForExit(TestTimeouts.patience) |> ignore
+      match bridge.HasExited with
+      | false -> (try bridge.Kill() with _ -> ())
+      | true -> ()
+  }
+
 [<Tests>]
 let tests =
   testList "McpStdioBridge E2E" [
+    Integration.hostCase
+      "sagefs mcp: stdin lines arriving while the new session is minted after a daemon upgrade wait for it, and one session and one push stream result"
+      (fun () -> runRehandshakeRaceTest () |> _.GetAwaiter() |> _.GetResult())
+
     Integration.hostCase
       "sagefs mcp: cold start with no daemon running answers initialize and tools/list on stdout"
       (fun () -> runBridgeSmokeTest () |> _.GetAwaiter() |> _.GetResult())

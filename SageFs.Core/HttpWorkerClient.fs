@@ -85,6 +85,19 @@ module HttpWorkerClient =
     | WorkerMessage.Shutdown ->
       "POST", "/shutdown", None
 
+  /// How much of a worker's explanation an exception carries.
+  let refusalDetailLimit = 1000
+
+  /// What a worker's non-success answer says, for the exception the proxy raises. A worker that threw while handling a route
+  /// answers with the route, the exception's type and its message in the body, and a bare "500 (Internal Server Error)" left
+  /// a faulted session with nothing to act on. A body that is empty or very long is cut to what a log line can hold.
+  let describeRefusal (httpMethod: string) (path: string) (status: System.Net.HttpStatusCode) (body: string) : string =
+    let detail = (match body with | null -> "" | text -> text.Trim())
+    let shown = (match detail.Length > refusalDetailLimit with | true -> detail.Substring(0, refusalDetailLimit) + "..." | false -> detail)
+    match shown with
+    | "" -> sprintf "the worker answered %d (%s) to %s %s with no explanation" (int status) (string status) httpMethod path
+    | text -> sprintf "the worker answered %d (%s) to %s %s: %s" (int status) (string status) httpMethod path text
+
   /// Create a SessionProxy backed by HTTP to the given base URL.
   let httpProxy (baseUrl: string) : SessionProxy =
     let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
@@ -103,11 +116,13 @@ module HttpWorkerClient =
                 new StringContent(b, Encoding.UTF8, "application/json") :> HttpContent)
               |> Option.defaultValue null
             client.PostAsync(path, content) |> Async.AwaitTask
-        resp.EnsureSuccessStatusCode() |> ignore
         let! json = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
-        match Serialization.tryDeserialize<WorkerResponse> json with
-        | Ok response -> return response
-        | Error error -> return WorkerResponse.WorkerError error
+        match resp.IsSuccessStatusCode with
+        | false -> return raise (HttpRequestException(describeRefusal method path resp.StatusCode json, null, resp.StatusCode))
+        | true ->
+          match Serialization.tryDeserialize<WorkerResponse> json with
+          | Ok response -> return response
+          | Error error -> return WorkerResponse.WorkerError error
       }
 
   /// Cached proxy factory — reuses HttpClient instances per worker URL.
@@ -214,7 +229,11 @@ module HttpWorkerClient =
         use content = new StringContent(body, Encoding.UTF8, "application/json")
         use msg = new HttpRequestMessage(HttpMethod.Post, "/run-tests-stream", Content = content)
         use! resp = client.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead, caller)
-        resp.EnsureSuccessStatusCode() |> ignore
+        match resp.IsSuccessStatusCode with
+        | true -> ()
+        | false ->
+          let! detail = resp.Content.ReadAsStringAsync(caller)
+          raise (HttpRequestException(describeRefusal "POST" "/run-tests-stream" resp.StatusCode detail, null, resp.StatusCode))
         use! stream = resp.Content.ReadAsStreamAsync(caller)
         use reader = new IO.StreamReader(stream)
         use window = new InactivityWindow(readTimeout, caller)

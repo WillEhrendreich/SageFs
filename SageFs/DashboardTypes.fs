@@ -149,6 +149,17 @@ module SessionRouting =
   /// The `sessionId` property names accepted on the wire, in priority order.
   let sessionIdAliases = [ "sessionId"; "session_id"; "session" ]
 
+  /// A string property of a body's root, when the root is an object. A root that is an array, a number, a string, true or null
+  /// has no properties, and `TryGetProperty` THROWS on it (InvalidOperationException), which both body readers below let
+  /// through as a server error for a stray `[1,2,3]`. A property that is missing, not a string or null is nothing too.
+  let tryRootStringProperty (root: System.Text.Json.JsonElement) (name: string) : string option =
+    match root.ValueKind with
+    | System.Text.Json.JsonValueKind.Object ->
+      match root.TryGetProperty(name) with
+      | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String -> Option.ofObj (prop.GetString())
+      | _ -> None
+    | _ -> None
+
   /// Read the optional `sessionId` from an already-read request body.
   ///
   /// `declaredLength` says whether the request carried a Content-Length. It is
@@ -165,13 +176,10 @@ module SessionRouting =
         use doc = System.Text.Json.JsonDocument.Parse(body)
         sessionIdAliases
         |> List.tryPick (fun alias ->
-          match doc.RootElement.TryGetProperty(alias) with
-          | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String ->
-            match prop.GetString() with
-            | null -> None
-            | s when System.String.IsNullOrWhiteSpace s -> None
-            | s -> Some s
-          | _ -> None)
+          match tryRootStringProperty doc.RootElement alias with
+          | Some s when not (System.String.IsNullOrWhiteSpace s) -> Some s
+          | Some _
+          | None -> None)
       with
       | :? System.Text.Json.JsonException -> None
       | :? ArgumentException -> None
@@ -184,13 +192,10 @@ module SessionRouting =
     else
       try
         use doc = System.Text.Json.JsonDocument.Parse(body)
-        match doc.RootElement.TryGetProperty("project") with
-        | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String ->
-          match prop.GetString() with
-          | "" -> None
-          | null -> None
-          | s -> Some s
-        | _ -> None
+        match tryRootStringProperty doc.RootElement "project" with
+        | Some "" -> None
+        | Some s -> Some s
+        | None -> None
       with
       | :? System.Text.Json.JsonException -> None
       | :? ArgumentException -> None
@@ -1523,6 +1528,10 @@ type DashboardQueries = {
   GetLiveTestingStatus: WorkerProtocol.SessionId -> string
   /// The one live-testing state for a session ("" when no session is viewed).
   GetLiveTestActivity: string -> Features.LiveTestActivity.LiveTestActivity
+  /// The "Since green" comparison point of a session: the walk's values at the last settle of the test loop with a pass and no failure.
+  /// It is taken where the loop settles (the daemon's model hook), never while this snapshot is drawn, so a read answers the same
+  /// whether or not a browser was open when the tests went green and then red.
+  GetSinceGreen: string -> Features.Tweak.SinceGreen.Green
   /// Read current EvalTimeline stats from the shared feature push state.
   GetEvalTimeline: unit -> Features.EvalTimeline.TimelineStats
   /// Read current daemon health snapshot from the shared feature push state.

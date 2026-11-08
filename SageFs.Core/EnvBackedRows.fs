@@ -172,8 +172,8 @@ module EnvBackedRows =
       minutes "gitWorktreeAddMinutes" "Git worktree add limit"
         "How long `git worktree add`, which checks out a whole tree, may take."
         "SAGEFS_GIT_WORKTREE_ADD_MINUTES" 2.0 true (fun () -> Timeouts.gitWorktreeAdd)
-      seconds "cohortSettleSeconds" "Cohort landing settle wait"
-        "How long the cohort landing gate waits for the integration session to settle after a rebase before it gives up. A dead session fails at once."
+      seconds "cohortSettleSeconds" "Cohort trunk settle wait"
+        "How long the trunk follower waits for a session in the trunk checkout to settle after the checkout moves to a landed commit. The landing gate's own wait on the integration session has no deadline: it ends when the session is ready, dead, or stuck in one phase."
         "SAGEFS_COHORT_SETTLE_SECONDS" 120.0 true (fun () -> Timeouts.cohortIntegrationSettle)
       seconds "patchConfirmSeconds" "Patch confirmation wait"
         "How long a patched function may go without its new body running before the save reports it as never entered."

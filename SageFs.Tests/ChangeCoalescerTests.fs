@@ -197,3 +197,97 @@ let tests =
       lock delivered (fun () -> List.ofSeq delivered) |> Expect.equal "the slow one, then only the newest" [ 1; burst ]
     }
   ]
+
+// ── A delivery that throws, on the thread pool ──
+//
+// The daemon runs `start` as `ThreadPool.QueueUserWorkItem`. An exception nothing catches there ends the process, and the
+// comment on `Coalescer` said it only ended the work item. The daemon now gives the coalescer an `onFault` that logs the
+// whole exception and counts it, so a subscriber that throws costs one delivery and never the daemon.
+
+/// Run every work item `start` queued, the way a scheduler with no concurrency would, and say what escaped.
+let private drainEscapes (pending: Queue<unit -> unit>) : exn list =
+  [ while pending.Count > 0 do
+      let work = pending.Dequeue ()
+      match (try work (); None with ex -> Some ex) with
+      | Some ex -> yield ex
+      | None -> () ]
+
+[<Tests>]
+let faultTests =
+  testList "change coalescer: a delivery that throws" [
+
+    test "WHY — a delivery that throws is handed to onFault with the exception itself, and nothing escapes the work item" {
+      let delivered = List<int>()
+      let faults = List<exn>()
+      let pending = Queue<unit -> unit>()
+      let boom = System.InvalidOperationException "a subscriber threw"
+      let coalescer =
+        Coalescer<int>(
+          (fun value ->
+            delivered.Add value
+            raise boom),
+          pending.Enqueue,
+          (fun _ newer -> newer),
+          faults.Add)
+      coalescer.Post 1
+      drainEscapes pending |> Expect.isEmpty "no exception left the work item, so the pool thread lives"
+      List.ofSeq faults |> Expect.equal "the whole exception, not its message" [ boom :> exn ]
+      List.ofSeq delivered |> Expect.equal "the value was delivered once" [ 1 ]
+    }
+
+    test "WHY — the value that waited behind a delivery that threw is still delivered" {
+      let delivered = List<int>()
+      let faults = List<exn>()
+      let pending = Queue<unit -> unit>()
+      let holder = ref Unchecked.defaultof<Coalescer<int>>
+      holder.Value <-
+        Coalescer<int>(
+          (fun value ->
+            delivered.Add value
+            if value = 1 then
+              holder.Value.Post 2
+              failwith "the first delivery fails"),
+          pending.Enqueue,
+          (fun _ newer -> newer),
+          faults.Add)
+      holder.Value.Post 1
+      drainEscapes pending |> Expect.isEmpty "nothing escaped"
+      List.ofSeq delivered |> Expect.equal "the waiting value got its own delivery" [ 1; 2 ]
+      faults.Count |> Expect.equal "and the one throw was counted once" 1
+    }
+
+    testProperty "WHY — over any posts and any subscriber that throws on some values, nothing escapes, every throw is handed over once, and the newest post is delivered" <| fun (posts: (int * bool) list) ->
+      // Each step posts a value (the second part says whether delivering it throws) and then runs whatever is queued.
+      let throwsOn = Map.ofList posts
+      let delivered = List<int>()
+      let faults = List<exn>()
+      let pending = Queue<unit -> unit>()
+      let escapes = List<exn>()
+      let coalescer =
+        Coalescer<int>(
+          (fun value ->
+            delivered.Add value
+            match Map.tryFind value throwsOn with
+            | Some true -> failwithf "delivery of %d fails" value
+            | Some false
+            | None -> ()),
+          pending.Enqueue,
+          (fun _ newer -> newer),
+          faults.Add)
+      for (value, _) in posts do
+        coalescer.Post value
+        escapes.AddRange(drainEscapes pending)
+      escapes.Count |> Expect.equal "no exception escaped a work item" 0
+      faults.Count
+      |> Expect.equal "every delivery that threw was handed over once" (delivered |> Seq.filter (fun value -> Map.find value throwsOn) |> Seq.length)
+      match List.rev posts with
+      | [] -> delivered |> Expect.isEmpty "nothing posted, nothing delivered"
+      | (newest, _) :: _ -> Seq.last delivered |> Expect.equal "the newest post was delivered last" newest
+
+    test "WHY — the constructors that take no onFault still let the exception out of the work item, which is the twin that shows the test above has teeth" {
+      let pending = Queue<unit -> unit>()
+      let coalescer = Coalescer<int>((fun _ -> failwith "no handler"), pending.Enqueue)
+      coalescer.Post 1
+      drainEscapes pending |> List.length |> Expect.equal "the exception escaped, as it did before onFault existed" 1
+    }
+  ]

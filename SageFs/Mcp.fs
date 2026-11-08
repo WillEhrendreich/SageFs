@@ -70,59 +70,26 @@ module McpTools =
   let cohortOwnerFor (ctx: McpContext) (wd: string option) =
     CohortOwnerResolution.ownerFor ctx.CohortSupport wd
 
-  /// The MCP transport's per-connection identity, bound by the request
-  /// filter (McpServer.createServerCaptureFilter) before a tool body runs —
-  /// never by the tool's self-declared `agentName` argument. AsyncLocal, not
-  /// a parameter: it flows through the same await chain Activity.Current
-  /// already rides in this codebase (Instrumentation.fs), so the ~40 MCP
-  /// tool method signatures (whose only caller-supplied "identity" is
-  /// agentName) never need touching to close the identity-spoofing gap.
-  /// None outside any bound connection (direct in-process calls, and every
-  /// Expecto unit test that calls these functions directly rather than
-  /// through the ASP.NET Core / MCP SDK pipeline) — see `memberIdFor`.
-  let currentTransportSessionId = new System.Threading.AsyncLocal<string option>()
-
-  /// The member token this call presented and that resolved, bound by the request
-  /// filter exactly as `currentTransportSessionId` is. A token outranks the
-  /// connection: it is the member, and sub-agents sharing one connection are as
-  /// many members as they have tokens. None for a call that presented no token.
-  let currentCapability = new System.Threading.AsyncLocal<ResolvedCapability option>()
-
-  /// The member a stdio bridge's client key names (`MemberTable.ClientKey`), bound by the request filter like the two above.
-  let currentClientKeyMember = new System.Threading.AsyncLocal<MemberTable.MemberId option>()
+  // Who is calling, bound per call by the request filter (McpAmbientCaller.fs, out of this file's line budget). These are the
+  // same objects under the names the filter and the tests already use.
+  let currentTransportSessionId = McpAmbientCaller.currentTransportSessionId
+  let currentCapability = McpAmbientCaller.currentCapability
+  let currentClientKeyMember = McpAmbientCaller.currentClientKeyMember
+  let currentOperatorClaim = McpAmbientCaller.currentOperatorClaim
 
   /// The daemon's one capability table and identity policy. The policy is `SAGEFS_IDENTITY_POLICY`:
   /// unset is `ConnectionsAllowed` (nothing existing changes), and a value that is set but unreadable
   /// is `TokenRequired`, so a typo cannot open the door the setting was meant to shut.
   let capabilityStore = CapabilityStore(Capability.CapabilityTransport.policyFromEnvironment Environment.GetEnvironmentVariable)
 
-  /// Resolve the BOUND identity for a self-declared agent name
-  /// (sagefs-multiagent-vision.md §4.1: "identity is bound to the
-  /// connection, not declared"). When a real MCP connection is bound, the
-  /// ambient transport session id wins — a caller can never spoof or evict
-  /// another connection's presence just by choosing the same agentName,
-  /// because the key is the connection, not the name. With no bound
-  /// connection (tests, direct calls), falls back to a Minted identity keyed
-  /// on the name itself, whose resolved key renders IDENTICAL to the plain
-  /// name (MemberTable.MemberId.display) — every existing name-keyed test
-  /// and call site keeps working unchanged.
-  let memberIdFor (agentName: string) : MemberTable.MemberId =
-    // A token IS the member (a bad one never gets here: the request filter refuses it first), then a stdio bridge's
-    // client key (the same client across a reconnect or restart), then the session id. Each is a fingerprint, never the handle.
-    MemberTable.ConnectionIdentity.resolve
-      (currentCapability.Value |> Option.map (fun capability -> Capability.memberIdOf capability.Id))
-      currentClientKeyMember.Value currentTransportSessionId.Value agentName
+  /// The BOUND identity for a self-declared agent name, never the name itself (`McpAmbientCaller.memberIdFor` says how).
+  let memberIdFor (agentName: string) : MemberTable.MemberId = McpAmbientCaller.memberIdFor agentName
 
   /// The resolved routing/presence key for a self-declared agent name — see
   /// `memberIdFor`. This is what SessionMap and ActivityTracker are keyed by,
   /// NOT the raw agentName.
   let resolvedKey (agentName: string) : string =
     MemberTable.MemberId.display (memberIdFor agentName)
-
-  /// Whose a session is to stop, from the creator record (`SessionOwners`, in SessionOwners.fs).
-  let sessionOwnership sessionId : ConfirmationPolicy.SessionOwnership =
-    ConfirmationPolicy.SessionOwnership.decide
-      (Option.isSome currentTransportSessionId.Value) (SessionOwners.ownerOf sessionId) (memberIdFor "mcp")
 
   /// Get the active session ID for a specific agent/client.
   let activeSessionId (ctx: McpContext) (agent: string) =
@@ -547,8 +514,8 @@ module McpTools =
     }
 
   /// Overload without sessionId parameter (uses None).
-  let withSessionWd (ctx: McpContext) (agent: string) (workingDirectory: string option) (f: string -> Task<string>) : Task<string> =
-    withSession ctx agent None workingDirectory f
+  let withSessionWd (ctx: McpContext) (agent: string) (target: RouteTarget) (f: string -> Task<string>) : Task<string> =
+    withSession ctx agent None (RouteTarget.toOption target) f
 
   /// Result-returning sibling of withSessionWd, for callers (the plain HTTP
   /// surface) that need to branch on success/failure structurally instead of
@@ -556,9 +523,9 @@ module McpTools =
   /// becomes SessionNotRoutable carrying the exact same message
   /// formatSessionResolution already produces — no information lost, just
   /// not flattened to a bare string before the caller ever sees it.
-  let withSessionWdResult (ctx: McpContext) (agent: string) (workingDirectory: string option) (f: string -> Task<Result<string, SageFsError>>) : Task<Result<string, SageFsError>> =
+  let withSessionWdResult (ctx: McpContext) (agent: string) (target: RouteTarget) (f: string -> Task<Result<string, SageFsError>>) : Task<Result<string, SageFsError>> =
     task {
-      let! resolution = resolveSessionId ctx agent None workingDirectory
+      let! resolution = resolveSessionId ctx agent None (RouteTarget.toOption target)
       match resolution with
       | Routable sid -> return! f sid
       | other -> return Error (SageFsError.SessionNotRoutable (formatSessionResolution other))
@@ -742,6 +709,23 @@ module McpTools =
     | ToolAuthorityGate.Decision.Admitted -> Ok ()
     | ToolAuthorityGate.Decision.Refused(reason, _) -> Error reason
 
+  /// What `McpSessionAccess.refusal` looks up: a session's record and a member's authority in the cohort that owns a directory.
+  let sessionAccessLookups (ctx: McpContext) : McpSessionAccess.Lookups =
+    { SessionInfo =
+        fun sessionId ->
+          match WorkerProtocol.SessionId.validate sessionId with
+          | Ok valid -> ctx.SessionOps.GetSessionInfo valid
+          | Error _ -> Task.FromResult None
+      AuthorityIn =
+        fun workingDirectory who ->
+          match cohortOwnerFor ctx (Some workingDirectory) with
+          | Some owner -> Affordances.authorityOfMember who (owner.ReadFrame())
+          | None -> Cohort.Authority.Anonymous }
+
+  /// `McpSessionAccess.refusal` for the call running on this async flow.
+  let sessionAccessRefusalForCall (ctx: McpContext) (action: SessionAction) (sessionId: string) : Task<SageFsError option> =
+    McpSessionAccess.refusal (sessionAccessLookups ctx) (McpAmbientCaller.operatorOnThisCall ()) (McpAmbientCaller.boundMemberOfCall ()) action sessionId
+
   /// The identity layer of the gate, ahead of the cohort's role check and the session-state
   /// gate (a call must pass all three): who is calling, and may that caller call this tool at all.
   ///   - A call that presented a member token is held to the token's role: a tool outside the
@@ -817,6 +801,17 @@ module McpTools =
         return Ok (admission GateResolution.NotResolved)
       | Some Affordances.ToolGate.StateGated ->
         let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+        // The four guarded tools that route to a session (reset, hard reset, switch workflow, stop app) are refused here
+        // when another member made it. `stop_session` is checked in its own body, because its gate class lets it reach a
+        // session that never became ready.
+        let! refusal =
+          match Affordances.ToolName.tryParse toolName |> Option.bind SessionAction.ofTool, resolution with
+          | Some action, Routable sid -> sessionAccessRefusalForCall ctx action sid
+          | Some _, (WarmingUp _ | Unroutable _ | FaultedSession _ | Gone _)
+          | None, (Routable _ | WarmingUp _ | Unroutable _ | FaultedSession _ | Gone _) -> Task.FromResult None
+        match refusal with
+        | Some error -> return Error(SageFsError.describeForAgent error)
+        | None ->
         let! verdict =
           match resolution with
           // Worker-authoritative state for the routable session.
@@ -1250,7 +1245,7 @@ module McpTools =
   /// either way: real events when they exist, a plain "no events yet" when they
   /// do not — never a lie.
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
+    withSessionWd ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       match featureStateForSession ctx sid with
       | None ->
         return "Feature state not available — no active session."
@@ -1452,7 +1447,7 @@ module McpTools =
              target = targets |> List.map SessionProjectTarget.toWire
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid status
-             workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status
+             workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid)
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
@@ -1466,7 +1461,7 @@ module McpTools =
           {| state = "Faulted"
              scope = "Session"
              sessionId = sid
-             faultReason = FaultCause.describe cause
+             faultReason = FaultCause.describe cause; coreAdoption = SessionStatusPayload.coreAdoptionJson (HostCoreAdoption.noteFor sid)
              target = targets |> List.map SessionProjectTarget.toWire
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
@@ -1521,7 +1516,7 @@ module McpTools =
               // never shown, so it read exactly like one still running.
               LastRestart = SessionStatusPayload.lastRestartOfSession info (Some snapshot.CoreVersion)
               LastReload = sessionInfo.Reload; ReplFreshness = sessionInfo.Freshness
-              SourceState = SourceStateProbe.ofSession sessionInfo warmup }
+              SourceState = SourceStateProbe.ofSession sessionInfo warmup; CoreAdoption = HostCoreAdoption.noteFor sid }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
@@ -1597,7 +1592,7 @@ module McpTools =
     getSessionStatusAwaiting ctx agent sessionId workingDirectory 0
 
   let getStartupInfo (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
+    withSessionWd ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       match info with
       | Some sessionInfo ->
@@ -2080,7 +2075,7 @@ module McpTools =
     })
 
   let cancelEval (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
+    withSessionWd ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       let! routeResult =
         routeToSession ctx sid
           (fun _ -> WorkerProtocol.WorkerMessage.CancelEval)
@@ -2101,7 +2096,7 @@ module McpTools =
   /// instead of formatting it into a display string and then re-parsing
   /// that string's prefix one layer up.
   let cancelEvalResult (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
-    withSessionWdResult ctx agent workingDirectory (fun sid -> task {
+    withSessionWdResult ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       let! routeResult =
         routeToSession ctx sid
           (fun _ -> WorkerProtocol.WorkerMessage.CancelEval)
@@ -2208,7 +2203,7 @@ module McpTools =
         let packageRefs = perProject |> List.map snd |> WorkflowTypes.WorkflowDetection.extractPackageNames
         let lines =
           Option.toList (formatDetectionHint packageRefs workflow)
-          @ ProjectCompatibility.formatToolchainAdvisories perProject
+          @ ProjectCompatibility.formatToolchainAdvisories perProject @ Option.toList (CreateSessionUx.adoptionHintOfTargets targets)
         let hint = match lines with [] -> None | ls -> Some(String.concat "\n\n" ls)
         return CreateSessionUx.formatCreateSessionReply sid targets hint
       | Result.Error err -> return SageFsError.describeForAgent err
@@ -2257,16 +2252,13 @@ module McpTools =
       | Result.Error err -> return SageFsError.describeForAgent err, Some err
     }
 
-  /// `stop_session`'s answer: a session another connection or member made is refused with the failure named, so the tool answers `isError`.
+  /// `stop_session`'s answer: a session another member made is refused (`sessionAccessRefusal`, the one rule the other four
+  /// guarded calls share), with the reason and the next action, so the tool answers `isError`.
   let stopSessionOutcome (ctx: McpContext) (sessionId: string) : Task<string * SageFsError option> =
     task {
-      match sessionOwnership sessionId with
-      | ConfirmationPolicy.SessionOwnership.RecordedToAnother ->
-        let refusal = SageFsError.SessionStopFailed (sessionId, "the session is owned by another bound MCP connection; use the connection that created it or stop it through a privileged daemon control")
-        return SageFsError.describeForAgent refusal, Some refusal
-      | ConfirmationPolicy.SessionOwnership.RecordedToCaller
-      | ConfirmationPolicy.SessionOwnership.NoRecord
-      | ConfirmationPolicy.SessionOwnership.NotOnAConnection -> return! stopSession ctx sessionId
+      match! sessionAccessRefusalForCall ctx SessionAction.Stop sessionId with
+      | Some refusal -> return SageFsError.describeForAgent refusal, Some refusal
+      | None -> return! stopSession ctx sessionId
     }
 
   /// Switch the active session for a specific agent. Validates the target exists.
@@ -2778,7 +2770,7 @@ module McpTools =
     (behavior: string)
     (exactGuard: string option)
     : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
+    withSessionWd ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       let! loadedState, sessionObservation = sessionTrustObservation ctx sid behavior
       let exactGuardRef =
         exactGuard
@@ -3096,7 +3088,7 @@ module McpTools =
   let private appStateJson (state: AppRun.AppRunState) = AppRun.toView state
 
   let runApp (ctx: McpContext) (project: string) : Task<string> =
-    withSessionWd ctx "mcp" None (fun sid -> task {
+    withSessionWd ctx "mcp" RouteTarget.ActiveSession (fun sid -> task {
       let request =
         match String.IsNullOrWhiteSpace project with
         | true -> AppRun.RunRequest.DefaultTarget
@@ -3110,7 +3102,7 @@ module McpTools =
     })
 
   let stopApp (ctx: McpContext) : Task<string> =
-    withSessionWd ctx "mcp" None (fun sid -> task {
+    withSessionWd ctx "mcp" RouteTarget.ActiveSession (fun sid -> task {
       let! result = AppRunOrchestration.stopApp ctx.SessionOps (toSessionId sid)
       return
         match result with
@@ -3119,7 +3111,7 @@ module McpTools =
     })
 
   let listRunnableProjects (ctx: McpContext) : Task<string> =
-    withSessionWd ctx "mcp" None (fun sid -> task {
+    withSessionWd ctx "mcp" RouteTarget.ActiveSession (fun sid -> task {
       let! infoOpt = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       match infoOpt with
       | None -> return sprintf "Session %s not found." sid

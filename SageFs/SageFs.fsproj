@@ -84,8 +84,9 @@
         <Compile Include="LiveTestViewReads.fs" />
         <Compile Include="DependencyGraphRoute.fs" />
         <Compile Include="LiveCheckRelay.fs" />
-        <!-- SessionOwners: Mcp.fs records who created each session, and `stop_session` refuses another connection's. -->
+        <!-- SessionOwners: Mcp.fs records who created each session, and `SessionAccess` refuses stopping or resetting another member's. -->
         <Compile Include="SessionOwners.fs" />
+        <Compile Include="McpSessionAccess.fs" />
         <Compile Include="SageFsEffectHandler.fs" />
         <Compile Include="SageFsSseDedup.fs" />
         <Compile Include="SageFsDispatchReduction.fs" />
@@ -133,6 +134,12 @@
         <!-- The view panel: the pane bar's button and the panel of choices it opens. Posts one request per click. -->
         <Compile Include="LiveBindingsViewPanel.fs" />
         <Compile Include="LiveBindingsWatch.fs" />
+        <!-- The Since green tab's comparison point, kept for each session. -->
+        <Compile Include="LiveBindingsSinceGreen.fs" />
+        <!-- What a browser page chose for the pane (its tab, how it shows each row): one owner, one lock, absent means the default. -->
+        <Compile Include="PageState.fs" />
+        <!-- The picker on a row: how a whole number is shown (as it is, hex, binary, colour, range) and the page's choice of it. -->
+        <Compile Include="LiveBindingsRowFormat.fs" />
         <Compile Include="LiveBindingsDock.fs" />
         <Compile Include="NewSessionDialogView.fs" />
         <Compile Include="DashboardNewSession.fs" />
@@ -151,6 +158,7 @@
         <Compile Include="SessionStatusPayload.fs" />
         <Compile Include="CohortErrorMapping.fs" />
         <Compile Include="CapabilityStore.fs" />
+        <Compile Include="McpAmbientCaller.fs" />
         <Compile Include="OperatorStore.fs" />
         <Compile Include="LiveTestStatusView.fs" />
         <Compile Include="McpAnalysisViews.fs" />
@@ -174,6 +182,7 @@
         <Compile Include="LiveBindingsTweakService.fs" />
         <Compile Include="LiveBindingsTweakRoute.fs" />
         <Compile Include="LiveBindingsWatchRoute.fs" />
+        <Compile Include="LiveBindingsRowFormatRoute.fs" />
         <Compile Include="McpRunTests.fs" />
         <!-- The completions routes, out of Mcp.fs: the symbol ladder (McpListMembers) and the editors' HTTP routes share them. -->
         <Compile Include="McpCompletions.fs" />
@@ -201,8 +210,10 @@
         <Compile Include="McpCohortIntegration.fs" />
         <Compile Include="McpCapability.fs" />
         <Compile Include="McpMintRoute.fs" />
+        <Compile Include="McpHttpAccess.fs" />
         <Compile Include="MemberMintCommand.fs" />
         <Compile Include="CohortSeatCommand.fs" />
+        <Compile Include="LocalDataCommand.fs" />
         <!-- The scratch-pad tool's body, out of Mcp.fs (the accretion hub whose line budget only goes down). -->
         <Compile Include="McpScratchPadViews.fs" />
         <Compile Include="McpTools.fs" />
@@ -217,6 +228,7 @@
         <Compile Include="JupyterDaemonBridge.fs" />
         <Compile Include="EnvCheck.fs" />
         <Compile Include="SkillInstallCommand.fs" />
+        <Compile Include="SetupCommand.fs" />
         <Compile Include="CohortPlay.fs" />
         <Compile Include="CohortExportCommand.fs" />
         <Compile Include="McpStdioBridge.fs" />

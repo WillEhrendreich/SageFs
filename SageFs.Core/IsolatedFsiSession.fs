@@ -686,6 +686,7 @@ let start
   (workingDir: string)
   (projects: string list)
   (overrides: HostAdaptation.Override list)
+  (readSessionOptions: Async<SessionOptions.Options>)
   (agent: HostAgent.AgentInit)
   : Async<Result<IFsiSession, IsolatedStartError>> =
   async {
@@ -766,12 +767,21 @@ let start
                   "  Isolated FSI host loads the project's own %s in place of its own"
                   (overrides |> List.map (fun o -> sprintf "%s %O" o.Name o.Version) |> String.concat ", "))
               HostAdaptation.HostLibraries.WithProjectCopies(hostMajor, overrides)
+          let! sessionOptions = readSessionOptions
+          // What the directory's config asked of the host (`SessionOptions`): its collector, its environment, its extra
+          // arguments. A user variable that has the name of one SageFs sets loses, and the log says so.
+          let hostEnvironment, clashes =
+            SessionOptions.hostEnvironment
+              (projectOutputEnv @ nativeEnv @ RuntimeCompat.rollForwardEnv choice @ Middleware.ValueReadTracking.processEnvironment agent.ValueReads)
+              sessionOptions
+          for clash in clashes do
+            logger.LogWarning("  " + SessionOptions.describeClash clash)
           let options =
             { HostDll = dll
               Dotnet = dotnet
-              FsiArgs = fsiArgs
+              FsiArgs = fsiArgs @ sessionOptions.FsiArgs
               WorkingDir = workingDir
-              Environment = projectOutputEnv @ nativeEnv @ RuntimeCompat.rollForwardEnv choice @ Middleware.ValueReadTracking.processEnvironment agent.ValueReads
+              Environment = hostEnvironment
               Libraries = libraries
               OnOutput =
                 fun stream text ->

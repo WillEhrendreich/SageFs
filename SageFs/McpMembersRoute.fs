@@ -15,10 +15,10 @@ module McpMembersRoute =
     (agent: string)
     (qualifiedName: string)
     (offset: int)
-    (workingDirectory: string option)
+    (target: McpSessionRouting.RouteTarget)
     : Task<string> =
     if System.String.IsNullOrWhiteSpace qualifiedName then
       task { return "Give a qualified_name to list members of, e.g. 'SageFs.SessionManager'." }
     else
       let name = qualifiedName.TrimEnd '.'
-      withSessionWd ctx agent workingDirectory (fun sid -> membersReply (membersOf ctx sid) name offset)
+      withSessionWd ctx agent target (fun sid -> membersReply (membersOf ctx sid) name offset)

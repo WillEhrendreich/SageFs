@@ -165,8 +165,8 @@ let tests =
     testTask "WHY — the whole session shell is byte-identical a clock step later, for the same reason" {
       let sid = WorkerProtocol.SessionId.validate "0a000001" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
       let shell sample = task {
-        let! snap, _, _, _ = buildDashboardSnapshotWithSessions (Idle.queriesAt sample) (mkInfra ()) sid sid "" "default" None [] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
-        return renderMainContent snap |> renderNode }
+        let! built = buildDashboardSnapshotWithSessions (SageFs.Tests.DashboardSnapshotTests.snapshotInput (Idle.queriesAt sample) (mkInfra ()) sid sid None [] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn)
+        return renderMainContent built.Snapshot |> renderNode }
       let! first = shell Idle.sampleEarlier
       let! second = shell Idle.sampleLater
       second |> Expect.equal "the shell for the same idle state is the same bytes" first

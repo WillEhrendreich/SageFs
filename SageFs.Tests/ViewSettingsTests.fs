@@ -21,13 +21,13 @@ let catalogTests =
       let expected = ViewWorkflow.all.Length * WatchTab.all.Length * ViewAxis.all.Length
       ViewSettings.descriptors |> List.length |> Expect.equal "every workflow by every tab by every axis" expected
       ViewSettings.descriptors |> List.map (fun d -> d.Key) |> List.distinct |> List.length |> Expect.equal "all keys distinct" expected
-      expected |> Expect.equal "three workflows by four tabs by nine axes: the eight of the plan and the changes strip" 108
+      expected |> Expect.equal "three workflows by five tabs by six axes: the three columns, the changes strip, the value mode and the row height" 90
       ViewSettings.descriptors
       |> List.forall (fun d -> d.Key.StartsWith "bindings.view.")
       |> Expect.isTrue "all under one prefix, so the panel can group them"
 
     testCase "a key names the workflow and the axis, and the workflow and axis come from closed sets with one spelling each" <| fun _ ->
-      ViewSettings.key ViewWorkflow.HotReload ViewAxis.Inspector |> Expect.equal "hot reload inspector" "bindings.view.hotreload.inspector"
+      ViewSettings.key ViewWorkflow.HotReload ViewAxis.ChangesStrip |> Expect.equal "hot reload changes strip" "bindings.view.hotreload.changes"
       ViewSettings.key ViewWorkflow.Repl ViewAxis.ValueMode |> Expect.equal "repl values" "bindings.view.repl.values"
 
     testCase "WHY — every legal value of every axis survives parse then render unchanged, because a value that changed on its way through a file would silently change the view" <| fun _ ->
@@ -41,8 +41,8 @@ let catalogTests =
         | Error why -> failtestf "%s refused its own value '%s': %A" descriptor.Key raw why
 
     testCase "a value outside an axis's set is refused with the set it should have been" <| fun _ ->
-      let descriptor = ViewSettings.descriptor ViewWorkflow.Repl ViewAxis.GroupBy
-      descriptor.Parse "sideways" |> Expect.equal "named, with the legal ones" (Error(NotAMember("sideways", [ "none"; "origin" ])))
+      let descriptor = ViewSettings.descriptor ViewWorkflow.Repl ViewAxis.ValueMode
+      descriptor.Parse "sideways" |> Expect.equal "named, with the legal ones" (Error(NotAMember("sideways", [ "clipped"; "full" ])))
       (ViewSettings.descriptor ViewWorkflow.Repl ViewAxis.TypeColumn).Parse "maybe" |> Expect.isError "a toggle is on or off"
 
     testCase "WHY — a setting that was never written resolves to the recommended view's value, because the default is what an untouched axis follows" <| fun _ ->
@@ -128,7 +128,7 @@ let resolutionTests =
 let presetTests =
   testList "ViewSettings presets" [
 
-    testCase "WHY — the five presets are five different layouts, because two presets that were the same would make the menu a lie" <| fun _ ->
+    testCase "WHY — the presets are different layouts, because two presets that were the same would make the menu a lie" <| fun _ ->
       ViewPreset.all |> List.map ViewPreset.layout |> List.distinct |> List.length |> Expect.equal "all distinct" ViewPreset.all.Length
 
     testCase "WHY — Watch window is recommended for REPL and Live testing and Tuner for Hot reload, because tweaking is where the extra columns and the inspector pay" <| fun _ ->
@@ -146,7 +146,7 @@ let presetTests =
           View.detect workflow (ViewPreset.layout preset) |> Expect.equal (sprintf "%A in %A" preset workflow) expected
       View.detect ViewWorkflow.Repl { ViewPreset.flat with State = On } |> Expect.equal "a flat layout with State on is nobody's preset" DetectedPreset.IsCustom
 
-    testCase "WHY — picking a preset sets the six layout axes and leaves value printing and row height alone, because those are personal" <| fun _ ->
+    testCase "WHY — picking a preset sets the three columns and leaves value printing and row height alone, because those are personal" <| fun _ ->
       let mine = { View.recommended ViewWorkflow.Repl with Values = ValueMode.Full; Row = RowHeight.Roomy }
       let picked = View.withPreset ViewPreset.Tuner mine
       picked.Layout |> Expect.equal "the preset's layout" (ViewPreset.layout ViewPreset.Tuner)
@@ -360,7 +360,7 @@ let viewEditTests =
       View.valueOf after axis = value
       && (ViewAxis.all |> List.filter ((<>) axis) |> List.forall (fun other -> View.valueOf after other = View.valueOf before other))
 
-    testProperty "WHY — a preset sets the six layout axes and leaves value printing and row height alone" <| fun (seed: int) ->
+    testProperty "WHY — a preset sets the three columns and leaves value printing and row height alone" <| fun (seed: int) ->
       let below, layer = situation seed
       let preset = ViewPreset.all.[System.Random(seed).Next ViewPreset.all.Length]
       let before = resolve below layer
@@ -484,6 +484,20 @@ let applyViewEditTests =
         (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View.Row |> Expect.equal "the app's own choice wins" RowHeight.Compact
         applied paths ViewWorkflow.Repl ViewScope.ThisApp (ViewEdit.Set(AxisValue.RowHeight RowHeight.Roomy))
         repoFile paths |> Map.isEmpty |> Expect.isTrue "roomy is what everywhere gives, so the app stores nothing")
+
+    testCase "WHY — a settings file written when the view had grouping, a pinned strip and an inspector still loads: those keys are unknown now and are left alone, and the ones that remain apply" <| fun _ ->
+      withApp (fun paths ->
+        match paths.Repo with
+        | RepoRootAt root ->
+          System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(SettingsStore.repoPath root)) |> ignore
+          System.IO.File.WriteAllText(SettingsStore.repoPath root, """{ "bindings.view.repl.group": "origin", "bindings.view.repl.strip": "on", "bindings.view.repl.inspector": "on", "bindings.view.repl.type": "off", "bindings.view.repl.row": "roomy" }""")
+        | NoRepoCheckout -> failtest "the app has a repo layer"
+        let view = (SettingsCatalog.viewFor paths ViewWorkflow.Repl).View
+        view.Layout.Type |> Expect.equal "the key that remains applies" Off
+        view.Row |> Expect.equal "and so does the row height" RowHeight.Roomy
+        let stored = repoFile paths
+        Map.containsKey "bindings.view.repl.group" stored |> Expect.isTrue "the person's old key is still in their file"
+        ViewSettings.descriptors |> List.exists (fun d -> d.Key = "bindings.view.repl.group") |> Expect.isFalse "but it is no setting any more")
 
     testCase "WHY — resetting an axis clears the layer that holds it, whichever scope the panel shows" <| fun _ ->
       withApp (fun paths ->

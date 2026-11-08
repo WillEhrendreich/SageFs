@@ -1208,6 +1208,11 @@ type AuthorityRefusal =
 /// Held to `[<McpServerTool>]` by `McpToolGateTests`, so a renamed tool cannot
 /// leave a stale name in here, and published on `tools/list` as MCP's own
 /// `destructiveHint`, which is what lets a client keep a list of its own.
+///
+/// This set is information and decides nothing. What does decide is
+/// `confirmationLosses` (the one prompt) and `SessionAccess` (the refusal of
+/// another member's session); `SessionAccess.fs` is where the three are
+/// explained together.
 let destructiveTools : Set<ToolName> =
   set
     [ ToolName.StopSession
@@ -1258,8 +1263,9 @@ let destructiveTools : Set<ToolName> =
 ///     nearly every time and cost an agent a timeout. A prompt on a routine
 ///     step trains people to click through. They stay in `destructiveTools`,
 ///     so a client that wants its own prompt still reads the hint. The refusal
-///     that stops a connection stopping a session another connection made
-///     (`SessionOwnership`) is a different mechanism and stays.
+///     that stops a member acting on a session another member made
+///     (`SessionAccess`) is a different mechanism and stays; `SessionAccess.fs`
+///     says how this table, `destructiveTools` and that refusal fit together.
 ///   * `tidy_workspace` deletes, but it already demands `confirm=true` AND the
 ///     plan id from `get_workspace_hygiene`. Asking again would confirm one
 ///     action twice.

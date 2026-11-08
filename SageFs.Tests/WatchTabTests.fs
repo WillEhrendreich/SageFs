@@ -25,19 +25,23 @@ let tests =
       | Error why -> ConfigError.describe why |> Expect.stringContains "names the word" "starred"
       | Ok tab -> failtestf "'starred' read as %A" tab
 
-    testCase "WHY — All lists every binding, Pinned lists exactly the pinned ones, Changes lists exactly the ones that hold a change" <| fun _ ->
+    testCase "WHY — All lists every binding, Pinned lists exactly the pinned ones, Changes the ones that hold a change, Since green the ones that moved" <| fun _ ->
       for pinned in [ false; true ] do
         for changed in [ false; true ] do
-          lists WatchTab.All pinned changed |> Expect.isTrue "All lists everything"
-          lists WatchTab.Pinned pinned changed |> Expect.equal "Pinned follows the pin" pinned
-          lists WatchTab.Changes pinned changed |> Expect.equal "Changes follows the change" changed
+          for moved in [ false; true ] do
+            lists WatchTab.All pinned changed moved |> Expect.isTrue "All lists everything"
+            lists WatchTab.Pinned pinned changed moved |> Expect.equal "Pinned follows the pin" pinned
+            lists WatchTab.Changes pinned changed moved |> Expect.equal "Changes follows the change" changed
+            lists WatchTab.SinceGreen pinned changed moved |> Expect.equal "Since green follows the move" moved
 
     testCase "WHY — the expression the page evaluates is the function: with true and false put where the page's own expressions go, it answers what `lists` answers" <| fun _ ->
       let literal (value: bool) = match value with | true -> "true" | false -> "false"
       for tab in WatchTab.all do
         for pinned in [ false; true ] do
           for changed in [ false; true ] do
-            listsJs tab (literal pinned) (literal changed) |> Expect.equal (sprintf "%s pinned=%b changed=%b" (WatchTab.token tab) pinned changed) (literal (lists tab pinned changed))
+            for moved in [ false; true ] do
+              listsJs tab (literal pinned) (literal changed) (literal moved)
+              |> Expect.equal (sprintf "%s pinned=%b changed=%b moved=%b" (WatchTab.token tab) pinned changed moved) (literal (lists tab pinned changed moved))
 
     testCase "an empty tab has words, so it is never a blank pane" <| fun _ ->
       for tab in WatchTab.all do

@@ -40,7 +40,8 @@ let sessionId(hex: string) : WorkerProtocol.SessionId =
 /// The activity each session id answers, and Off for any id the table does not name (the empty id included).
 let queriesAnswering(sessions: WorkerProtocol.SessionInfo list) (answers: Map<string, Activity>) : DashboardQueries =
   { mkQueries (ref 0) sessions with
-      GetLiveTestActivity = fun id -> answers |> Map.tryFind id |> Option.defaultValue Activity.Off }
+      GetLiveTestActivity = fun id -> answers |> Map.tryFind id |> Option.defaultValue Activity.Off
+      GetSinceGreen = fun _ -> SageFs.Features.Tweak.SinceGreen.Green.NoGreenYet }
 
 let landingPanel(sessions: WorkerProtocol.SessionInfo list) (answers: Map<string, Activity>) =
   task {

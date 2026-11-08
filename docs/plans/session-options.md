@@ -8,13 +8,17 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress (step 4 of 6) |
 | Size | M |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run the first "Measure first" probe (do `DefaultArgs` and the config's `InitScript` reach a session at all?), then write the first failing test: `SessionOptionsTests`, a Server GC choice becomes `DOTNET_gcServer=1` in the host's environment. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | cohort member `p3-setup`, branch `cohort/p3-setup`, checkout `/home/will/scratch/cohort/p3-setup` |
+| Last green commit | see `git log` on that branch: the commit after `test(setup): session options and one-command client setup, red` |
+| Next action | Done so far (2026-11-07): the probe (step 1), the pure types (step 2), the environment path with Server GC as its first user (step 3), the artifacts path (step 4) and the dead fields (step 6). Left: the settings catalog and dashboard rows (step 5), and the outcome gate (test 6): a real session reports `GCSettings.IsServerGC = true` and an environment value from inside the host. The artifacts path is proved by a real build and a real project load (test 4, integration tier); the end-to-end proof through a daemon and a worker needs a daemon built from this tree, which is not installed here. |
+| Decisions made | `InitScript` is deleted, in favour of the file-name discovery that works (`.SageFs/init.fsx`). `IsRoot` and `SessionName` are deleted with it: the Readme said they were parsed and stored and "not wired to anything", and a grep finds no reader. `DefaultArgs` is wired. `Gc` and `SessionEnv` are config-only, as recommended. The GC cases are `WorkstationGc` and `ServerGc`: a case named `Server` makes the compiler resolve `SageFs.Server.HttpOriginGuard...` in patterns as the case, and `SageFs.Host/WorkerHttpTransport.fs` stopped compiling. |
+| Surprises | All the options travel one way, and a roast (2026-11-08) said the first version had three: the daemon resolves a directory's config once, when a session is created (`DirectoryConfig.prepareForCreate`, the only writer of `SessionOptionsRegistry`, counted by a ratchet), the daemon's own builds read that entry, the worker is spawned with the whole options value in one variable (`SAGEFS_SESSION_OPTIONS`), and the worker, its rebuilds and its project loader read that variable and nothing else (the worker no longer evaluates `config.fsx`, which also removed one FSI host start per session). `DirectoryConfig.load` returns the config and writes nothing, so a dashboard render cannot change what a build uses. The registry is keyed by directory, since a session has no id before it is spawned: two sessions created in one directory share the later create's options. The artifacts path must be absolute: a relative one is refused with its reason instead of guessed against a directory. A project that sets `ArtifactsPath` itself in `Directory.Build.props` keeps winning for its builds, but not for the loader, which passes the property globally; I did not test that mix. The same wire lesson as before: the FSI host's protocol has no tuples, so anything in `DirectoryConfig` is a record, a union or a list of them. |
+
+### The probe, 2026-11-07
+
+Question: do `InitScript` and `DefaultArgs` reach a session? Answer from the tree: no. A grep of every `.fs` and `.fsx` file for both names finds the type, the default, the equality check in `DirectoryConfig.ensureAutoOpenNamespacesOptIn` and tests that set them and read them back. The only place the FSI host's arguments are made is `AppState.createFsiSession` (`solutionToFsiArgs`), and it never read a config. The Readme already said `InitScript`, `DefaultArgs`, `IsRoot` and `SessionName` "are parsed and stored but not wired to anything yet". That is a defect by the plan's own rule (accepted and ignored is worse than absent). The guard is `SessionOptionsTests`: every field of `DirectoryConfig` has a row in `SessionOptions.fieldReaders` naming who reads it, and a field that the session host reads must change what the host gets.
 
 ## Why this item exists
 

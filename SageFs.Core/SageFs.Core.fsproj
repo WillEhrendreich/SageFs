@@ -179,6 +179,8 @@
         <EmbeddedResource Include="../SageFs.FsiHost/Program.fs" LogicalName="FsiHost/Program.fs" />
         <Compile Include="BuildOptimization.fs" />
         <Compile Include="PackageRuntimeAssets.fs" />
+        <Compile Include="ProcessEnvironment.fs" />
+        <Compile Include="SessionOptions.fs" />
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="Holder.fs" />
         <Compile Include="TypeShapeMigration.fs" />
@@ -225,6 +227,9 @@
         <!-- After ReloadPlanning: finds the callers of a re-signed or removed declaration in the project's other files, by the
              compiler's symbol resolution over the whole project or by name. -->
         <Compile Include="Features\CallerCheck.fs" />
+        <!-- The decisions behind check_project (compiler arguments kept per project, overlays, stale references, the
+             report). Pure: it needs only Json.fs. -->
+        <Compile Include="Features\ProjectCheckCore.fs" />
         <!-- The references rung of the progressive map. SymbolReferences is pure (what scope a reply may claim, and the
              budget shared by a session's projects), before WorkerProtocol, which carries the answer. The compiler call,
              SymbolReferenceCheck, compiles after MemoryPressure.fs, with the retention rule it asks. -->
@@ -327,6 +332,10 @@
         <Compile Include="Features\CohortMatrixRender.fs" />
         <Compile Include="Features\CohortTerritory.fs" />
         <Compile Include="Features\CohortBoundedView.fs" />
+        <!-- What a landing Blocked on failing tests says about them: names, a count, and the file with the whole list. Pure. -->
+        <!-- Which affected tests the landing gate asks the session to run and which it names as left to the release gate; why a test did not pass. Pure. -->
+        <Compile Include="Features\CohortLandingScope.fs" />
+        <Compile Include="Features\FailingTestsText.fs" />
         <Compile Include="Features\CohortStatusText.fs" />
         <Compile Include="Features\CohortLanes.fs" />
         <Compile Include="Features\CohortScrubber.fs" />
@@ -365,6 +374,9 @@
              and MachineMemory. SymbolReferenceCheck, the compiler call, holds its checker through it. -->
         <Compile Include="Features\ReferenceCacheRetention.fs" />
         <Compile Include="Features\SymbolReferenceCheck.fs" />
+        <!-- check_project's effects: the MSBuild process, the build of a stale referenced project, the overlay files and
+             the same ParseAndCheckProject call the two checks above make. The decisions are ProjectCheckCore's. -->
+        <Compile Include="Features\CheckProject.fs" />
         <!-- The supervisor's health DU and the daemon's reading of it, ahead
              of DaemonHealth.fs so overallStatus can degrade the daemon for a
              wedged session manager. The watchdog itself needs WorkerSpawn and
@@ -454,11 +466,14 @@
         <Compile Include="EvalPipeline.fs" />
         <Compile Include="Affordances.fs" />
         <Compile Include="ConfirmationPolicy.fs" />
+        <Compile Include="SessionAccess.fs" />
         <Compile Include="WorkerProtocol.fs" />
         <Compile Include="RestartBoundaries.fs" />
         <Compile Include="Features\TrunkSessions.fs" />
         <Compile Include="Features\CohortLedgerExport.fs" />
         <Compile Include="CrossCheckoutOverlap.fs" />
+        <!-- What the landing gate does while the integration session is not ready, and what it says when it stops waiting. Pure; no dependencies. -->
+        <Compile Include="Features\IntegrationSettle.fs" />
         <Compile Include="Features\Verification.fs" />
         <!-- Is the build this session runs behind the files on disk? A pure decision over what an edge read. -->
         <Compile Include="Features\SourceState.fs" />
@@ -473,6 +488,7 @@
         <Compile Include="HostManifest.fs" />
         <Compile Include="HostAdaptation.fs" />
         <Compile Include="OrphanTempDirSweep.fs" />
+        <Compile Include="CoreSurface.fs" />
         <Compile Include="HostCoreAdoption.fs" />
         <Compile Include="Supervisor.fs" />
         <Compile Include="Features\RestartSubjectDecision.fs" />
@@ -499,7 +515,7 @@
              HatchUse.fs depends on nothing past FSharp.Core because the hook (tools/agent-hooks) compiles the same file. -->
         <Compile Include="HatchUse.fs" />
         <Compile Include="Features\HatchWatch.fs" />
-        <Compile Include="ProcessEnvironment.fs" />
+        <Compile Include="SessionOptionsRegistry.fs" />
         <Compile Include="SessionBuild.fs" />
         <!-- What a caller waiting on a session is told, and when. After WorkerProtocol and RebuildOutcome; the session
              manager settles its parked callers with it and the status tool decides to park with it. -->
@@ -576,7 +592,14 @@
         <Compile Include="Features\Tweak\BindingTweakRows.fs" />
         <Compile Include="Features\Tweak\ChangesStrip.fs" />
         <Compile Include="Features\Tweak\WatchTabs.fs" />
-        <Compile Include="Features\Tweak\WatchRows.fs" />        <Compile Include="FsiHostBuild.fs" />
+        <Compile Include="Features\Tweak\WatchRows.fs" />
+        <!-- How a row shows its value: as it is, in hex, in binary, as a colour, on a range. Pure. -->
+        <Compile Include="Features\Tweak\RowFormatting.fs" />
+        <!-- How current the pane's values are, said from what the test loop is doing. Pure. -->
+        <Compile Include="Features\Tweak\LoopFreshness.fs" />
+        <!-- What moved after the tests last settled with no failures. Pure. -->
+        <Compile Include="Features\Tweak\SinceGreen.fs" />
+        <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
         <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —
              placed beside it because they're both directory-walk primitives,
@@ -603,6 +626,8 @@
         <Compile Include="DebugTestRequest.fs" />
         <Compile Include="WalkModeKeeper.fs" />
         <Compile Include="ConfigHost.fs" />
+        <Compile Include="ClientSetup.fs" />
+        <Compile Include="SessionOptionsSource.fs" />
         <Compile Include="SessionAgent.fs" />
         <!-- Pure warmup open-replay decision core (extractOpensFromLines/
              ReflectedModuleFact/resolveWarmupOpens) — compiled BEFORE

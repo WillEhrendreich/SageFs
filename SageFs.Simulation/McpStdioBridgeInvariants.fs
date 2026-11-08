@@ -49,6 +49,7 @@ module McpStdioBridgeInvariants =
               | TransportState.Fatal _, _
               | TransportState.Closed, true -> None
               | TransportState.AwaitingDaemon _, _ -> Some(sprintf "bridge %d is still AwaitingDaemon after settling — it would hang forever" b)
+              | TransportState.Rehandshaking _, _ -> Some(sprintf "bridge %d is still Rehandshaking after settling — its queue would never be released" b)
               | TransportState.Closed, false -> Some(sprintf "bridge %d closed on its own — nothing told it to" b))
           match violations with
           | [] -> Outcome.Holds
@@ -97,6 +98,7 @@ module McpStdioBridgeInvariants =
                 | TransportState.Closed -> false
                 | TransportState.Ready _
                 | TransportState.Fatal _
+                | TransportState.Rehandshaking _
                 | TransportState.AwaitingDaemon _ -> bt.UnhealthyProbeCount > 0 && bt.StartDaemonCount = 0)
             match offenders with
             | [] -> Outcome.Holds
@@ -129,7 +131,8 @@ module McpStdioBridgeInvariants =
               | Action.StartDaemon
               | Action.ReportFatal _
               | Action.TerminateSession _
-              | Action.Rehandshake
+              | Action.Rehandshake _
+              | Action.OpenPushStream _
               | Action.Shutdown -> false)
             |> List.length
           let violations =

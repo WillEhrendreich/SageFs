@@ -100,15 +100,15 @@ let decisionTests =
       routingSessionId "switch_workflow" (Some "named") |> Expect.equal "switch_workflow has no session_id, so one sent is dropped" None
   ]
 
-/// #184: `stop_session` refused "owned by another bound MCP connection" for a session that no connection had a record for.
+/// #184: `stop_session` refused a session for a caller when no connection had a record of making it.
 /// The record (`SessionOwners`) lives in memory and is written when a connection creates a session, so a daemon
 /// restart empties it, and so does a session made from the dashboard or the CLI. Nothing could ever satisfy the check for a
-/// session the restart resumed. Only a session recorded to a DIFFERENT connection is another connection's to stop; one with
-/// no record is stoppable, and nobody is asked first.
+/// session the restart resumed. Only a session recorded to a DIFFERENT member is another member's to stop; one with
+/// no record is stoppable, and nobody is asked first. The rule itself is `SessionAccess.decide`, tested in `SessionAccessTests`.
 [<Tests>]
 let stopSessionOwnershipTests =
   testList "stop_session ownership" [
-    let refusal = "owned by another bound MCP connection"
+    let refusal = "made by another member"
 
     let onConnection (handle: string) (body: unit -> Task<string>) : Task<string> =
       task {
@@ -129,14 +129,6 @@ let stopSessionOwnershipTests =
 
     let ownerOn (handle: string) : MemberId =
       SageFs.MemberTable.MemberId.ofConnectionHandle handle
-
-    testCase "WHY — only a session recorded to a different member is refused; no record is not an owner" <| fun _ ->
-      let who = MemberId.Mcp "m-1111111111111111"
-      let other = MemberId.Mcp "m-2222222222222222"
-      SessionOwnership.decide true None who |> Expect.equal "no record" SessionOwnership.NoRecord
-      SessionOwnership.decide true (Some who) who |> Expect.equal "the caller's own" SessionOwnership.RecordedToCaller
-      SessionOwnership.decide true (Some other) who |> Expect.equal "someone else's" SessionOwnership.RecordedToAnother
-      SessionOwnership.decide false (Some other) who |> Expect.equal "off a connection there is no one to compare" SessionOwnership.NotOnAConnection
 
     testTask "WHY — a session with no owner on record can be stopped from a new connection, because a restart empties the record" {
       let sessionId = "no-owner-on-record-184"
@@ -174,10 +166,11 @@ let stopSessionOwnershipTests =
         let! text, failure = SageFs.McpTools.stopSessionOutcome (SageFs.Tests.TestInfrastructure.sharedCtx ()) sessionId
         text |> Expect.stringContains "the text still says whose it is" refusal
         match failure with
-        | Some(SageFsError.SessionStopFailed(stopped, reason)) ->
-          stopped |> Expect.equal "naming the session" sessionId
+        | Some(SageFsError.CohortActionFailed(reason, next)) ->
+          reason |> Expect.stringContains "naming the session" sessionId
           reason |> Expect.stringContains "and why" refusal
-        | other -> failtestf "the refusal should be a named SessionStopFailed, not %A" other
+          next |> Expect.stringContains "and what to do next" "operator"
+        | other -> failtestf "the refusal should be an authority refusal with a next action, not %A" other
       finally
         SageFs.McpTools.currentTransportSessionId.Value <- previous
         SessionOwners.release sessionId

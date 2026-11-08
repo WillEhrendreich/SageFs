@@ -13,6 +13,28 @@ open SageFs.Server.Dashboard
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 
+/// The input of one build, with what a test does not care about left as a first push would have it: no working directory, the default theme,
+/// and a page that chose nothing.
+let snapshotInput
+  (queries: DashboardQueries)
+  (infra: DashboardInfra)
+  (current: WorkerProtocol.SessionId)
+  (last: WorkerProtocol.SessionId)
+  (cached: DashboardWorkerCache option)
+  (sessions: WorkerProtocol.SessionInfo list)
+  (optIn: SageFs.Server.DashboardPanelContext.FrictionPanelOptIn)
+  : SnapshotInput =
+  { Queries = queries
+    Infra = infra
+    CurrentSessionId = current
+    LastSessionId = last
+    LastWorkingDir = ""
+    LastThemeName = "default"
+    Answers = (match cached with | Some cache -> WorkerAnswers.Reuse cache | None -> WorkerAnswers.Fetch)
+    Sessions = sessions
+    FrictionOptIn = optIn
+    Look = SageFs.Server.PageState.PageLook.onAll }
+
 let verifyDashboard (name: string) (html: string) =
   // The dashboard shell seeds a LIVE Unix-ms heartbeat timestamp
   // (data-signals:ds-heartbeat-at = DateTimeOffset.UtcNow…) so the disconnect
@@ -195,6 +217,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetBindingScopeSnapshot = fun () -> None
       GetLiveTestingStatus = fun _ -> ""
       GetLiveTestActivity = fun _ -> activity
+      GetSinceGreen = fun _ -> SageFs.Features.Tweak.SinceGreen.Green.NoGreenYet
       GetEvalTimeline =
         fun () -> SageFs.Features.EvalTimeline.TimelineState.empty |> SageFs.Features.EvalTimeline.timelineStats 20
       GetDaemonHealth = fun () -> None
@@ -237,9 +260,9 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     }
 
   let panelFor (activity: SageFs.Features.LiveTestActivity.LiveTestActivity) = task {
-    let! snap, _, _, _ =
-      buildDashboardSnapshot (mkQueries activity) (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
-    return snap.LiveTestingPanel |> renderNode
+    let! built =
+      buildDashboardSnapshot (snapshotInput (mkQueries activity) (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) None [] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn)
+    return built.Snapshot.LiveTestingPanel |> renderNode
   }
 
   testTask "buildDashboardSnapshot carries rebuilding status into the live testing panel" {
@@ -333,14 +356,14 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       FrictionPanel = None
     }
     // Uncached: all three fetches run.
-    let! _, _, _, _ =
-      buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" None SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
+    let! _ =
+      buildDashboardSnapshot (snapshotInput queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) None [] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn)
     evalFetches |> Expect.equal "uncached push fetches eval stats" 1
     hrFetches |> Expect.equal "uncached push fetches hot-reload state" 1
     wCtxFetches |> Expect.equal "uncached push fetches warmup context" 1
     // Cached (same session): all three fetches are skipped.
-    let! _, _, _, _ =
-      buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" (Some cache) SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn
+    let! _ =
+      buildDashboardSnapshot (snapshotInput queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) (Some cache) [] SageFs.Server.DashboardPanelContext.FrictionPanelOptIn.NotOptedIn)
     evalFetches |> Expect.equal "cached push must not re-fetch eval stats" 1
     hrFetches |> Expect.equal "cached push must not re-fetch hot-reload state" 1
     wCtxFetches |> Expect.equal "cached push must not re-fetch warmup context" 1

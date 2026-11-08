@@ -149,40 +149,90 @@ let tests =
 
       let window = Timeouts.agentActivityFresh
       let live key now state = MemberLiveness.isLive key now window state
+      let memberA = MemberId.Minted "a"
+      let memberB = MemberId.Minted "b"
 
       testCase "WHY - nobody is live before they were seen" <| fun _ ->
-        live "mcp:m-0000000000000001" t0 MemberLiveness.empty |> Expect.isFalse "a stranger"
+        live (MemberId.Mcp "m-0000000000000001") t0 MemberLiveness.empty |> Expect.isFalse "a stranger"
 
       testCase "WHY - a member with an open stream is live however long it has been quiet" <| fun _ ->
-        let state = MemberLiveness.empty |> MemberLiveness.streamOpened "a"
-        live "a" (t0 + Cohort.leaseWindow + Cohort.leaseWindow) state |> Expect.isTrue "two lease windows later, stream still open"
+        let state = MemberLiveness.empty |> MemberLiveness.streamOpened memberA
+        live memberA (t0 + Cohort.leaseWindow + Cohort.leaseWindow) state |> Expect.isTrue "two lease windows later, stream still open"
 
       testCase "WHY - once the stream closes the member is live only for the window after its last call" <| fun _ ->
         let state =
           MemberLiveness.empty
-          |> MemberLiveness.streamOpened "a"
-          |> MemberLiveness.callMade "a" t0
-          |> MemberLiveness.streamClosed "a"
-        live "a" (t0 + window - TestTimeouts.clockMargin) state |> Expect.isTrue "inside the window of the call"
-        live "a" (t0 + window + TestTimeouts.clockMargin) state |> Expect.isFalse "past it"
+          |> MemberLiveness.streamOpened memberA
+          |> MemberLiveness.callMade memberA t0
+          |> MemberLiveness.streamClosed memberA
+        live memberA (t0 + window - TestTimeouts.clockMargin) state |> Expect.isTrue "inside the window of the call"
+        live memberA (t0 + window + TestTimeouts.clockMargin) state |> Expect.isFalse "past it"
 
       testCase "WHY - a bridge that reopens its stream before the old one is noticed dead is live until both are closed" <| fun _ ->
         let opened =
-          MemberLiveness.empty |> MemberLiveness.streamOpened "a" |> MemberLiveness.streamOpened "a" |> MemberLiveness.streamClosed "a"
-        live "a" (t0 + Cohort.leaseWindow) opened |> Expect.isTrue "one stream is still open"
-        live "a" (t0 + Cohort.leaseWindow) (MemberLiveness.streamClosed "a" opened) |> Expect.isFalse "none is"
+          MemberLiveness.empty |> MemberLiveness.streamOpened memberA |> MemberLiveness.streamOpened memberA |> MemberLiveness.streamClosed memberA
+        live memberA (t0 + Cohort.leaseWindow) opened |> Expect.isTrue "one stream is still open"
+        live memberA (t0 + Cohort.leaseWindow) (MemberLiveness.streamClosed memberA opened) |> Expect.isFalse "none is"
 
       testCase "WHY - a stream that closes more often than it opened never leaves a debt that hides the next one" <| fun _ ->
         let state =
           MemberLiveness.empty
-          |> MemberLiveness.streamClosed "a"
-          |> MemberLiveness.streamClosed "a"
-          |> MemberLiveness.streamOpened "a"
-        live "a" (t0 + Cohort.leaseWindow) state |> Expect.isTrue "the stream that is open counts"
+          |> MemberLiveness.streamClosed memberA
+          |> MemberLiveness.streamClosed memberA
+          |> MemberLiveness.streamOpened memberA
+        live memberA (t0 + Cohort.leaseWindow) state |> Expect.isTrue "the stream that is open counts"
 
       testCase "WHY - one member's stream says nothing about another" <| fun _ ->
-        let state = MemberLiveness.empty |> MemberLiveness.streamOpened "a"
-        live "b" t0 state |> Expect.isFalse "b has no stream"
+        let state = MemberLiveness.empty |> MemberLiveness.streamOpened memberA
+        live memberB t0 state |> Expect.isFalse "b has no stream"
+
+      testCase "WHY - the key is the member id, so two ids that print the same are two members" <| fun _ ->
+        // A raw connection handle wrapped by hand prints as its fingerprint, which is also what `ofConnectionHandle` builds.
+        // Keyed by the printed text they were one member, and a stream opened under either kept the other live.
+        let handle = "a-raw-handle-0000000000000000"
+        let fingerprinted = MemberId.ofConnectionHandle handle
+        let wrapped = MemberId.Mcp handle
+        MemberId.display wrapped |> Expect.equal "they print the same" (MemberId.display fingerprinted)
+        let state = MemberLiveness.empty |> MemberLiveness.streamOpened fingerprinted
+        live fingerprinted t0 state |> Expect.isTrue "the member the stream was opened for"
+        live wrapped t0 state |> Expect.isFalse "an id that only prints the same is not that member"
+
+      testCase "WHY - a member that is not live is forgotten, so the table holds the last window and not every member ever seen" <| fun _ ->
+        let state =
+          MemberLiveness.empty
+          |> MemberLiveness.callMade memberA t0
+          |> MemberLiveness.callMade memberB (t0 + window)
+        MemberLiveness.tracked state |> Expect.equal "both are held until someone prunes" 2
+        let pruned = MemberLiveness.pruned (t0 + window + window) window state
+        MemberLiveness.tracked pruned |> Expect.equal "the one silent for a whole window is gone, the one inside it stays" 1
+        live memberB (t0 + window + window) pruned |> Expect.isTrue "the member still inside its window is still live"
+
+      testCase "WHY - a member with an open stream is never pruned, however quiet it has been" <| fun _ ->
+        let state = MemberLiveness.empty |> MemberLiveness.streamOpened memberA |> MemberLiveness.callMade memberA t0
+        let later = t0 + Cohort.leaseWindow + Cohort.leaseWindow
+        let pruned = MemberLiveness.pruned later window state
+        live memberA later pruned |> Expect.isTrue "the stream is still open"
+
+      testProperty "WHY - pruning never changes who is live, for any events and any moment" <| fun (events: (int * bool * int) list) (probe: int) ->
+        // (member 0..2, true = stream open/close and false = a call, n): the same shape as the oracle property below.
+        let members = [| memberA; memberB; MemberId.Minted "c" |]
+        let clock (seconds: int) = t0.AddSeconds(float ((seconds % 600 + 600) % 600))
+        let state =
+          List.fold
+            (fun state (who, isStream, n) ->
+              let key = members.[((who % 3) + 3) % 3]
+              match isStream, n % 2 = 0 with
+              | true, false -> MemberLiveness.streamOpened key state
+              | true, true -> MemberLiveness.streamClosed key state
+              | false, _ -> MemberLiveness.callMade key (clock n) state)
+            MemberLiveness.empty
+            events
+        let now = t0.AddSeconds(float ((probe % 900 + 900) % 900))
+        let pruned = MemberLiveness.pruned now window state
+        members |> Array.iter (fun key ->
+          live key now pruned |> Expect.equal (sprintf "%A is live exactly as before" key) (live key now state))
+        (MemberLiveness.tracked pruned, MemberLiveness.tracked state)
+        |> Expect.isLessThanOrEqual "pruning never adds a record"
 
       testProperty "WHY - liveness is exactly an open stream or a call inside the window, over any order of events" <| fun (events: (bool * int) list) (probe: int) ->
         // `true` opens (n odd) or closes (n even) a stream; `false` is a call n seconds in. Oracle: a count and a latest time.
@@ -193,17 +243,17 @@ let tests =
         for (isStream, n) in events do
           match isStream, n % 2 = 0 with
           | true, false ->
-            state <- MemberLiveness.streamOpened "a" state
+            state <- MemberLiveness.streamOpened memberA state
             open' <- open' + 1
           | true, true ->
-            state <- MemberLiveness.streamClosed "a" state
+            state <- MemberLiveness.streamClosed memberA state
             open' <- max 0 (open' - 1)
           | false, _ ->
-            state <- MemberLiveness.callMade "a" (clock n) state
+            state <- MemberLiveness.callMade memberA (clock n) state
             lastCall <- Some(match lastCall with Some previous when previous > clock n -> previous | _ -> clock n)
         let now = t0.AddSeconds(float ((probe % 900 + 900) % 900))
         let expected =
           open' > 0 || (match lastCall with Some at -> now - at <= window | None -> false)
-        live "a" now state |> Expect.equal "agrees with the oracle" expected
+        live memberA now state |> Expect.equal "agrees with the oracle" expected
     ]
   ]

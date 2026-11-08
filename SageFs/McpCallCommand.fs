@@ -36,7 +36,8 @@ let outcomeOfForward (error: ForwardError) : Outcome =
   match error with
   | ForwardError.Rejected reason
   | ForwardError.SessionInvalid reason -> Outcome.DaemonRefused reason
-  | ForwardError.Unreachable reason -> Outcome.DaemonGone reason
+  | ForwardError.Unreachable reason
+  | ForwardError.TimedOut reason -> Outcome.DaemonGone reason
 
 /// Send a request and read the answer to its id.
 let ask (conversation: Conversation) (client: HttpClient) (id: int) (raw: string) : Task<Result<string, Outcome>> =
@@ -117,6 +118,18 @@ let write (writer: TextWriter) (text: string) : unit =
   | _ when text.EndsWith '\n' -> writer.Write text
   | _ -> writer.WriteLine text
 
+/// How a token named by `--token-file` is read: a file from disk, or standard input for `--token-file -`.
+let realTokenReads : TokenReads =
+  { ReadFile =
+      fun path ->
+        try
+          TokenFileRead.Text(File.ReadAllText path)
+        with
+        | :? IOException as ex -> TokenFileRead.Unreadable ex.Message
+        | :? UnauthorizedAccessException as ex -> TokenFileRead.Unreadable ex.Message
+        | :? ArgumentException as ex -> TokenFileRead.Unreadable ex.Message
+    ReadStdin = fun () -> Console.In.ReadToEnd() }
+
 let emit (out: TextWriter) (err: TextWriter) (emission: Emission) : int =
   write out emission.Stdout
   write err emission.Stderr
@@ -139,9 +152,11 @@ let execute
       write out usage
       return 0
     | Result.Ok(Invocation.Run args) ->
-      match Credentials.resolve args.Token getEnv with
+      match Credentials.resolve realTokenReads args.Token getEnv with
       | Result.Error refusal -> return emit out err (Emission.ofOutcome Credentials.anonymous (Outcome.UsageRefused refusal))
       | Result.Ok credentials ->
+        // Said before the call, so it is on screen even when the call fails.
+        Credentials.warning credentials |> Option.iter (fun line -> write err line)
         let port =
           match args.Port with
           | PortChoice.Configured -> homePort ()

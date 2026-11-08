@@ -108,6 +108,18 @@ let withStubDaemon (answer: int -> string option -> int * string) (body: StubDae
       daemon.Stop ()
   }
 
+/// A peer on a real loopback socket that accepts a connection and never answers it. `body` gets its port and the
+/// task that completes when a connection arrives.
+let withSilentPeer (body: int -> Task<TcpClient> -> Task<unit>) : Task<unit> =
+  task {
+    let silent = new TcpListener(IPAddress.Loopback, 0)
+    silent.Start()
+    try
+      do! body (silent.LocalEndpoint :?> IPEndPoint).Port (silent.AcceptTcpClientAsync())
+    finally
+      silent.Stop()
+  }
+
 /// Records the moment of every write reaching the underlying stream, so a test
 /// can put client-visible writes and session-id captures on ONE timeline. It
 /// sits under a real `StdoutWriter`, so what is recorded is the production
@@ -348,6 +360,55 @@ let tests =
               timeline
               |> Seq.toList
               |> Expect.equal "every capture precedes every client-visible write" [ "capture:sid-stub-1"; "write" ]
+            })
+    }
+
+    testTask "WHY — a daemon that does not answer within the client's own deadline is a TimedOut, not an outage: nothing says it is gone or that the session is stale" {
+      // A peer that accepts the connection and never answers: the deadline is the only thing that ends the request.
+      do!
+        withSilentPeer (fun port accepted ->
+          task {
+            use stdoutStream = new MemoryStream()
+            let stdout = SageFs.Server.McpStdioBridge.StdoutWriter(stdoutStream)
+            use client = new HttpClient(Timeout = TestTimeouts.clientDeadlineShort)
+            let msg = RpcMessage.Request(RpcId.N 2L, "tools/call", """{"jsonrpc":"2.0","id":2,"method":"tools/call"}""")
+
+            let! result = SageFs.Server.McpStdioBridge.forward client port stdout.WriteLine ignore (Some "sid-1") None msg
+
+            match result with
+            | Error(SageFs.Server.McpStdioBridge.ForwardError.TimedOut reason) ->
+              reason |> Expect.stringContains "the reason says the daemon did not answer" "answer"
+            | other -> failtestf "a slow answer must be TimedOut, not Unreachable or a rejection: %A" other
+            accepted.IsCompleted |> Expect.isTrue "the request did reach the peer, so the deadline ended it"
+          })
+    }
+
+    testTask "WHY — two requests refused under the same stale id mint ONE session between them, because a second heal takes what the first minted" {
+      do!
+        withStubDaemon
+          (fun _ sid ->
+            match sid with
+            | Some held when held = mintedSessionId -> 200, okBody 1
+            | Some _ -> 404, sessionNotFoundBody
+            | None -> 200, okBody 0)
+          (fun daemon ->
+            task {
+              use stdoutStream = new MemoryStream()
+              let stdout = SageFs.Server.McpStdioBridge.StdoutWriter(stdoutStream)
+              let captured = ConcurrentQueue<string>()
+              use client = new HttpClient(Timeout = TestTimeouts.daemonRequest)
+              let gate = SageFs.Server.McpStdioBridge.HealGate()
+              let send (id: int) =
+                let msg = RpcMessage.Request(RpcId.N(int64 id), "tools/call", sprintf """{"jsonrpc":"2.0","id":%d,"method":"tools/call"}""" id)
+                SageFs.Server.McpStdioBridge.forwardWith gate client daemon.Port stdout.WriteLine captured.Enqueue (Some "stale") None msg
+
+              let! results = Task.WhenAll [| send 1; send 2 |]
+
+              results |> Array.forall ((=) (Ok())) |> Expect.isTrue "both requests were answered"
+              daemon.Requests
+              |> Seq.filter (fun (body, _) -> body.Contains "\"method\":\"initialize\"")
+              |> Seq.length
+              |> Expect.equal "the daemon was asked for one session, not one per request" 1
             })
     }
 
