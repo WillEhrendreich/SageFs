@@ -227,3 +227,47 @@ module CohortIntegrationScope =
       (reason.TrimEnd('.', ' '))
       worktreePath
       repositoryLabel
+
+  // ── P16 — replacing the integration worktree under a landing ────────────
+
+  /// Whether the integration worktree may be replaced now. Replacing it stops the session that verifies landings and deletes
+  /// the sources that session reads, so a landing in the queue (queued, rebasing or verifying) forbids it.
+  [<RequireQualifiedAccess>]
+  type Replacement =
+    | Allowed
+    | Refused of landings: string list
+
+  let replacementDecision (landingsInFront: string list) : Replacement =
+    ignore landingsInFront
+    Replacement.Allowed
+
+  /// What a refused replacement says: which landings are in front, why that forbids it, and the two ways out.
+  let replacementRefusal (scopeLabel: string) (landings: string list) : string =
+    ignore scopeLabel
+    ignore landings
+    ""
+
+  /// The directory name (under the data dir) of the integration worktree for one cohort. One per cohort: two repositories
+  /// never share a path.
+  let integrationWorktreeName (scopeLabel: string) : string =
+    ignore scopeLabel
+    "cohort-integration"
+
+  /// The directory name of the trunk checkout for one cohort, by the same rule.
+  let trunkCheckoutName (scopeLabel: string) : string =
+    ignore scopeLabel
+    "cohort-trunk"
+
+  /// The integration a new call replaces: the repository its worktree was cut from and where the worktree is.
+  type PreviousIntegration = { Repository: string; WorktreePath: string }
+
+  /// Every worktree to remove before the new one is cut, as (repository to run git in, worktree path). A worktree is removed
+  /// from the repository that created it: git refuses to remove another repository's worktree.
+  let removalTargets (previous: PreviousIntegration option) (newRepository: string) (newWorktreePath: string) : (string * string) list =
+    ignore previous
+    [ newRepository, newWorktreePath ]
+
+  /// What a cohort that is not the one the integration serves is told to do to move it.
+  let moveAdvice (configuredFor: string) : string =
+    ignore configuredFor
+    "call set_integration_ref with working_directory set to this repository to move it here"

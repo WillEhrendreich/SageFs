@@ -132,6 +132,7 @@ let private nextActionLabel = function
   | NextAction.RebaseAndResubmit -> "Rebase and resubmit"
   | NextAction.AwaitConductor -> "Await conductor"
   | NextAction.FixTests tests -> sprintf "Fix tests: %s" (testIdsLabel tests)
+  | NextAction.FixTheBuild -> "Fix the build"
   | NextAction.Withdraw -> "Withdraw"
 
 let private blockerLabel = function
@@ -141,6 +142,7 @@ let private blockerLabel = function
   | LandingBlocker.HeadMoved(from_, to_) -> sprintf "Head moved from %s to %s" from_ to_
   | LandingBlocker.VetoedBy(by, reason) -> sprintf "Vetoed by %s: %s" (MemberId.display by) reason
   | LandingBlocker.Inconclusive reason -> sprintf "Verification inconclusive: %s" reason
+  | LandingBlocker.CompileErrorInLanding text -> sprintf "The landing does not compile: %s" text
 
 let private landingStateLabel = function
   | LandingState.Queued -> "Queued"

@@ -3057,22 +3057,34 @@ let run
   /// build path does the build (one build at a time through its build slot, and a failed build leaves the session serving
   /// the build it had). A failed build refuses the landing with the FIRST compiler error and its file. The session's tests
   /// are then asked of the new worker, so a test the landing added or removed is the session's view and not the old one.
-  let rebuildIntegrationAtRebasedHead (sessionId: string) (worktree: string) (headSha: string) : Async<Result<unit, string>> =
+  let rebuildIntegrationAtRebasedHead (sessionId: string) (worktree: string) (headSha: string) : Async<Result<unit, Features.CohortOwner.VerificationFault>> =
     async {
-      match! sessionOps.RestartSession (toSessionId sessionId) (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) |> Async.AwaitTask with
-      | Error err ->
-        let said = Features.CohortLandingPlan.describeBuildFailure err
-        Log.warn "[cohort-landing] the rebuild of session %s at %s did not succeed: %s" sessionId headSha said
-        return Error (sprintf "%s Fix it in your commit and request the landing again." said)
-      | Ok _ ->
-        // A worker that loads a freshly built project is a cold warmup, which a build's own bound covers: a session that cannot
-        // come up fails fast through `settleDecision`, so this only bounds one that is genuinely warming.
-        match! awaitIntegrationSessionTrustedWithin Timeouts.buildCompletion sessionId with
-        | Error reason -> return Error reason
-        | Ok _ ->
+      let ports : Features.CohortRebuildGate.Ports =
+        { WorktreeHead = fun () -> Features.CohortGit.currentHead worktree
+          NoteAttempt = SageFs.McpCohortIntegration.noteSessionRebuiltFor
+          Restart =
+            fun () ->
+              async {
+                match! sessionOps.RestartSession (toSessionId sessionId) (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) |> Async.AwaitTask with
+                | Ok _ -> return Ok ()
+                | Error err -> return Error err
+              }
+          // A worker that loads a freshly built project is a cold warmup, which a build's own bound covers: a session that cannot
+          // come up fails fast through `settleDecision`, so this only bounds one that is genuinely warming.
+          AwaitSettled =
+            fun () ->
+              async {
+                match! awaitIntegrationSessionTrustedWithin Timeouts.buildCompletion sessionId with
+                | Ok _ -> return Ok ()
+                | Error reason -> return Error reason
+              } }
+      match! Features.CohortRebuildGate.restartAt ports headSha with
+      | Error fault ->
+        Log.warn "[cohort-landing] the rebuild of session %s at %s did not succeed: %A" sessionId headSha fault
+        return Error fault
+      | Ok () ->
           // The session now holds a build of the rebased commit: nothing is evaluated over it, and the records of what it holds
           // are the worktree's own text.
-          SageFs.McpCohortIntegration.noteSessionRebuiltFor headSha
           SageFs.McpCohortIntegration.forgetFilesEvaluatedOverBuild ()
           let! snapshot = integrationSourceSnapshot worktree
           for (full, blob) in snapshot do noteIntegrationSourceBound full blob
@@ -3086,8 +3098,8 @@ let run
           | Ok (WorkerProtocol.WorkerResponse.InitialTestDiscovery (tests, _providers)) ->
             elmRuntime.Dispatch(SageFsMsg.Event (TuiEvent.LiveDiscoveryMerged (sessionId, tests)))
             return Ok ()
-          | Ok other -> return Error (sprintf "the rebuilt integration session answered the test discovery with %A" other)
-          | Error err -> return Error (sprintf "could not ask the rebuilt integration session which tests it has: %s" (SageFsError.describe err))
+          | Ok other -> return Error (Features.CohortOwner.VerificationFault.Environment (sprintf "the rebuilt integration session answered the test discovery with %A" other))
+          | Error err -> return Error (Features.CohortOwner.VerificationFault.Environment (sprintf "could not ask the rebuilt integration session which tests it has: %s" (SageFsError.describe err)))
     }
 
   /// Verify a landing of compiled source: rebuild at the rebased commit, then the tests the diff can affect (judged by the
@@ -3098,7 +3110,7 @@ let run
     (headSha: string)
     (reasons: Features.CohortLandingPlan.RebuildReason list)
     (changedFiles: string list)
-    : Async<Result<Cohort.TestId list, string>> =
+    : Async<Result<Cohort.TestId list, Features.CohortOwner.VerificationFault>> =
     async {
       Log.info "[cohort-landing] session %s is rebuilt at %s: %s" sessionId headSha (reasons |> List.map Features.CohortLandingPlan.describeReason |> String.concat "; ")
       let knownIds () =
@@ -3217,10 +3229,12 @@ let run
       // optimization — deferred, not this item.
       ComputeAffected = fun _landingId baseSha headSha ->
         withWorktreeGate <| async {
+          // Everything that is not a compiler error in the landing is the environment's: it says nothing about the member's commit.
+          let environment (reason: string) = Error(Features.CohortOwner.VerificationFault.Environment reason)
           match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
-          | None -> return Error "integration not configured — call set_integration_ref first"
-          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
-          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Pending } -> return Error "integration session not started yet — retry set_integration_ref"
+          | None -> return environment "integration not configured — call set_integration_ref first"
+          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Failed reason } -> return environment (sprintf "integration session failed to start: %s" reason)
+          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Pending } -> return environment "integration session not started yet — retry set_integration_ref"
           | Some ({ Session = SageFs.McpCohortIntegration.IntegrationSession.Started sessionId } as binding) ->
             // (Gap 3) Settle first: the rebase that just ran retriggered the
             // session's rebuild, and reading discovery mid-rebuild can see it
@@ -3228,13 +3242,13 @@ let run
             // land the change with nothing verified (fail-open). Wait for the
             // session to become trustworthy, then read.
             match! awaitIntegrationSessionTrusted sessionId with
-            | Error reason -> return Error reason
+            | Error reason -> return environment reason
             | Ok _settledObservation ->
             // Which way this landing is verified is decided from what it carries (CohortLandingPlan): source of a project the session
             // loads from its compiled assemblies is verified by a REBUILD at the rebased commit, because a re-evaluation cannot stand
             // beside the types the build already holds (C8). A test project's own files keep the cheap path.
             match! planVerification sessionId binding.WorktreePath baseSha headSha with
-            | Error reason -> return Error reason
+            | Error reason -> return environment reason
             | Ok (Features.CohortLandingPlan.Strategy.RebuildAtHead reasons, changedFiles) ->
               return! verifyByRebuild sessionId binding.WorktreePath headSha reasons changedFiles
             | Ok (Features.CohortLandingPlan.Strategy.EvalOverBuild, _) ->
@@ -3246,10 +3260,10 @@ let run
             match! ensureIntegrationSessionIsClean sessionId binding.WorktreePath with
             | Error reason ->
               Log.warn "[cohort-landing] could not bring the integration session to the head for verification — %s — failing closed" reason
-              return Error (sprintf "%s — resubmit" reason)
+              return environment (sprintf "%s — resubmit" reason)
             | Ok () ->
             match! awaitIntegrationSessionTrusted sessionId with
-            | Error reason -> return Error reason
+            | Error reason -> return environment reason
             | Ok _afterResetObservation ->
             // The rebase rewrote the worktree source; recompile + rediscover it
             // (fast FSI hot-eval, not a full rebuild) and wait for discovery to
@@ -3259,7 +3273,7 @@ let run
             // owner maps this Error to VerificationInconclusive (never a false
             // "0 failing"), so a landing can never fast-forward on stale discovery.
             match! rediscoverRebasedFiles sessionId binding.WorktreePath baseSha headSha with
-            | Error reason -> return Error reason
+            | Error reason -> return environment reason
             | Ok () ->
             let cycle = SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())
             let state = cycle.TestState

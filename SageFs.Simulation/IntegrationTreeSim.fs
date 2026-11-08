@@ -16,8 +16,10 @@ open SageFs.Features
 ///  - IDLE AT THE HEAD: when no landing is in flight, the worktree is at the integration head, whatever the last landing did.
 ///  - THE CHEAP PATH SURVIVES: a run of test-only landings, with nothing refused, never rebuilds.
 ///
-/// Two twins carry the pre-fix behaviour so the invariants show their teeth: `NeverChecksTheBuild` (verification trusts the
-/// session's build whatever it was made from) and `NeverResets` (a refused landing leaves the worktree where it was).
+/// Three twins carry the pre-fix behaviour so the invariants show their teeth: `NeverChecksTheBuild` (verification trusts the
+/// session's build whatever it was made from), `NeverResets` (a refused landing leaves the worktree where it was) and
+/// `NotesSuccessOnly` (a build that fails is not recorded, though it wrote the refused commit's DLLs: P16, roast improvement 6).
+/// The rebuild itself runs through the daemon's own `CohortRebuildGate.restartAt`, so the order it records in is the real one.
 module IntegrationTreeSim =
 
   [<RequireQualifiedAccess>]
@@ -45,6 +47,7 @@ module IntegrationTreeSim =
     | Real
     | NeverChecksTheBuild
     | NeverResets
+    | NotesSuccessOnly
 
   /// A commit, by name, with the version of compiled content its tree holds.
   type Commit = { Name: string; Compiled: int }
@@ -91,20 +94,49 @@ module IntegrationTreeSim =
       match behaviour with
       | Behaviour.NeverChecksTheBuild -> None
       | Behaviour.Real
-      | Behaviour.NeverResets ->
+      | Behaviour.NeverResets
+      | Behaviour.NotesSuccessOnly ->
         CohortLandingPlan.buildOffHead (fun name -> Set.contains name world.History) (world.RebuiltFor |> Option.map (fun c -> c.Name))
     let rebuild =
       match CohortLandingPlan.strategy offHead (classified landing.Kind) with
       | CohortLandingPlan.Strategy.RebuildAtHead _ -> true
       | CohortLandingPlan.Strategy.EvalOverBuild -> false
-    // The rebuild: a build that breaks leaves the session serving the build it had and refuses the landing.
+    // The rebuild runs through the daemon's own gate. A build that breaks still wrote the refused commit's DLLs, which the session
+    // loads the next time it restarts, so what the session holds follows the attempt, success or not.
     let broken = rebuild && landing.Outcome = Outcome.BuildBreaks && landing.Kind = Kind.SourceChange
-    match broken with
-    | true -> { world with Rebuilds = world.Rebuilds + 1 }
-    | false ->
+    let rebuilt (world: World) : World * bool =
+      let noted = ref world.RebuiltFor
+      let holds = ref world.SessionHolds
+      let ports : CohortRebuildGate.Ports =
+        { WorktreeHead = fun () -> async { return Ok rebased.Name }
+          NoteAttempt =
+            fun _ ->
+              match behaviour with
+              | Behaviour.NotesSuccessOnly -> ()
+              | _ -> noted.Value <- Some rebased
+          Restart =
+            fun () ->
+              async {
+                holds.Value <- rebased.Compiled
+                match broken with
+                | true -> return Error(SageFs.SageFsError.BuildFailed(1, [ { File = Some "Core/File.fs"; Line = Some 1; Column = Some 1; Severity = SageFs.BuildDiagnosticSeverity.Blocking; Code = Some "FS0001"; Message = "type mismatch" } ]))
+                | false -> return Ok()
+              }
+          AwaitSettled = fun () -> async { return Ok() } }
+      let result = CohortRebuildGate.restartAt ports rebased.Name |> Async.RunSynchronously
+      let succeeded = Result.isOk result
+      // The behaviour that noted only successes records the commit once the build has succeeded.
+      let rebuiltFor =
+        match behaviour, succeeded with
+        | Behaviour.NotesSuccessOnly, true -> Some rebased
+        | _ -> noted.Value
+      { world with SessionHolds = holds.Value; RebuiltFor = rebuiltFor; Rebuilds = world.Rebuilds + 1 }, succeeded
+    match rebuild with
+    | true when broken -> fst (rebuilt world)
+    | _ ->
       let afterBuild =
         match rebuild with
-        | true -> { world with SessionHolds = rebased.Compiled; RebuiltFor = Some rebased; Rebuilds = world.Rebuilds + 1 }
+        | true -> fst (rebuilt world)
         | false -> world
       let verified =
         { afterBuild with
@@ -123,7 +155,8 @@ module IntegrationTreeSim =
     match behaviour with
     | Behaviour.NeverResets -> world
     | Behaviour.Real
-    | Behaviour.NeverChecksTheBuild ->
+    | Behaviour.NeverChecksTheBuild
+    | Behaviour.NotesSuccessOnly ->
       match CohortLandingPlan.idleResetTarget queueIsEmpty world.WorktreeAt.Name world.Head.Name with
       | Some _ -> { world with WorktreeAt = world.Head }
       | None -> world
@@ -203,4 +236,10 @@ module IntegrationTreeSim =
   let onlyTestsLanding : Landing list =
     [ { Kind = Kind.TestOnly; Outcome = Outcome.Good }
       { Kind = Kind.TestOnly; Outcome = Outcome.Good }
+      { Kind = Kind.TestOnly; Outcome = Outcome.Good } ]
+
+  /// A landing whose build fails, then a test-only landing: the failed build wrote the refused commit's DLLs, so the second must
+  /// be verified against a rebuild.
+  let refusedBuildThenTestOnly : Landing list =
+    [ { Kind = Kind.SourceChange; Outcome = Outcome.BuildBreaks }
       { Kind = Kind.TestOnly; Outcome = Outcome.Good } ]

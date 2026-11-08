@@ -350,6 +350,8 @@ module Cohort =
     | RebaseAndResubmit
     | AwaitConductor
     | FixTests of TestId list
+    /// The landing's commit does not compile: fix the source it carries and request the landing again.
+    | FixTheBuild
     | Withdraw
 
   /// Trimmed to the blockers `decide` (this item) can actually produce.
@@ -380,6 +382,10 @@ module Cohort =
     /// a transient into a definitive failure and told the requester to fix code
     /// that was never broken.
     | Inconclusive of reason: string
+    /// The build of the rebased commit failed with a compiler error in the landing's own source. Unlike `Inconclusive`, this
+    /// is a statement about the member's commit: the environment was fine and the code does not compile. `text` is the first
+    /// compiler error with its file and code.
+    | CompileErrorInLanding of text: string
 
   [<RequireQualifiedAccess>]
   type LandingState<'m> =
@@ -644,6 +650,10 @@ module Cohort =
     /// `decide` records it as `Blocked(Inconclusive ...)` and un-jams the queue
     /// rather than treating a transient as a permanent test failure.
     | VerificationInconclusive of LandingId * reason: string * CohortScope
+    /// The rebuild the verification needs failed with a compiler error in the landing's own source (`text`: the first error,
+    /// with its file and code). `decide` records `Blocked(CompileErrorInLanding ...)` with `NextAction.FixTheBuild`: the
+    /// member's commit is what to fix, where `VerificationInconclusive` says the environment was not ready.
+    | LandingFailedToCompile of LandingId * text: string * CohortScope
     | FastForwardCompleted of LandingId * committedSha: string * CohortScope
     /// The FastForward EFFECT itself failed — an infra error (the branch
     /// moved concurrently under a raw git command, a transient I/O error,
@@ -841,6 +851,7 @@ module Cohort =
     | CohortCommand.AffectedComputed(_, _, scope)
     | CohortCommand.TestsCompleted(_, _, scope)
     | CohortCommand.VerificationInconclusive(_, _, scope)
+    | CohortCommand.LandingFailedToCompile(_, _, scope)
     | CohortCommand.FastForwardCompleted(_, _, scope)
     | CohortCommand.FastForwardFailed(_, _, scope)
     | CohortCommand.WithdrawLanding(_, _, scope)
@@ -1585,6 +1596,24 @@ module Cohort =
           // default policy: VerificationInconclusive only advances a landing
           // that is actually Verifying — every other LandingState is refused
           // as out-of-order, by construction, for any case the DU ever grows to.
+          | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
+
+    | CohortCommand.LandingFailedToCompile(id, text, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
+      match Map.tryFind id state.Landings with
+      | None -> Error(CohortError.UnknownLanding id)
+      | Some req ->
+        match requireAtFrontOfQueue state id with
+        | Error e -> Error e
+        | Ok () ->
+          match req.State with
+          | LandingState.Verifying _ ->
+            // Pops the queue like every other verdict, so a landing that does not compile never jams it.
+            let advanced, advEvents, advEffects =
+              blockAndPop state id req (LandingBlocker.Inconclusive text) NextAction.RebaseAndResubmit
+            Ok(advanced, advEvents, advEffects)
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
     | CohortCommand.FastForwardCompleted(id, committedSha, scope) ->

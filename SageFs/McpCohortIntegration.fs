@@ -25,6 +25,9 @@ module McpCohortIntegration =
   type CohortIntegrationBinding = {
     /// The cohort this integration serves: the repository `set_integration_ref` was called for.
     Scope: SageFs.CohortScope
+    /// The repository the integration worktree was cut from (its common git root). Replacing the worktree removes it from HERE:
+    /// git refuses to remove one repository's worktree from another.
+    Repository: string
     WorktreePath: string
     Branch: string
     /// The trunk checkout: where the cohort's landings are carried to, and the working directory of a trunk session. Detached,
@@ -78,11 +81,45 @@ module McpCohortIntegration =
   /// The one process-global trunk owner, which the daemon starts and the status tools read. Process-local like the binding.
   let trunkFollowRef : Features.TrunkFollowOwner.Handle option ref = ref None
 
-  let private integrationWorktreePath () =
-    Path.Combine(DaemonState.SageFsDir, "cohort-integration")
+  /// The integration worktree of one cohort, under the data dir. One path per cohort, so two repositories never share it.
+  let integrationWorktreePathFor (dataDir: string) (scope: SageFs.CohortScope) : string =
+    Path.Combine(dataDir, Features.CohortIntegrationScope.integrationWorktreeName (Scope.label scope))
 
-  let private trunkCheckoutPath () =
-    Path.Combine(DaemonState.SageFsDir, "cohort-trunk")
+  /// The trunk checkout of one cohort, by the same rule.
+  let trunkCheckoutPathFor (dataDir: string) (scope: SageFs.CohortScope) : string =
+    Path.Combine(dataDir, Features.CohortIntegrationScope.trunkCheckoutName (Scope.label scope))
+
+  /// What replacing the integration worktree touches, as ports so the order of the steps can be proven against real git without a
+  /// daemon: which landings are in the queue, how the verifying session is stopped, and the one git act (run in a repository).
+  type ReplacePorts = {
+    /// The landings in the queue of the cohort the CURRENT integration serves.
+    LandingsInFront: unit -> string list
+    StopSession: string -> Task<unit>
+    RemoveWorktree: string -> string -> Async<Result<unit, string>>
+    DirectoryExists: string -> bool
+  }
+
+  [<RequireQualifiedAccess>]
+  type ReplaceOutcome =
+    | Replaced
+    /// A landing is in the queue: nothing was stopped or removed. The text says which and what to do.
+    | Refused of text: string
+    /// Git would not remove a worktree. The text names the path and what git said; the integration is left failed, never half.
+    | RemovalFailed of text: string
+
+  /// Replace the integration worktree: refuse while a landing is queued, stop the verifying session, then remove every old
+  /// worktree from the repository that made it and READ what git said. The caller holds `integrationWorktreeGate`.
+  let replaceIntegrationWorktree
+    (ports: ReplacePorts)
+    (previous: CohortIntegrationBinding option)
+    (newRepository: string)
+    (newWorktreePath: string)
+    : Task<ReplaceOutcome> =
+    ignore ports
+    ignore previous
+    ignore newRepository
+    ignore newWorktreePath
+    Task.FromResult ReplaceOutcome.Replaced
 
   let private discoverProjects (dir: string) : string list =
     let walked =
@@ -137,7 +174,7 @@ module McpCohortIntegration =
       | Error reason ->
         return Error (SageFsError.SessionCreationFailed (sprintf "could not resolve '%s' to a commit in %s: %s" integrationRef mainRepoDir reason))
       | Ok sha ->
-        let worktreePath = integrationWorktreePath ()
+        let worktreePath = integrationWorktreePathFor DaemonState.SageFsDir integrationScope
         // A session still running in the worktree about to be replaced would be left with its sources deleted, and its project would
         // refuse the new session ("a session for this project already exists", F4). Stopping it is what makes calling this again, the
         // retry a faulted integration asks for, work.
@@ -156,7 +193,7 @@ module McpCohortIntegration =
         let! addResult = Features.CohortGit.addWorktree mainRepoDir worktreePath branch sha
         // The trunk checkout: where landings are carried to once they land. Detached, so the integration branch stays free for the
         // landing step to move, and made fresh here for the same reason the integration worktree is.
-        let trunkPath = trunkCheckoutPath ()
+        let trunkPath = trunkCheckoutPathFor DaemonState.SageFsDir integrationScope
         let! trunkResult =
           match addResult with
           | Error _ -> async { return Ok () }
@@ -178,7 +215,7 @@ module McpCohortIntegration =
           | _ :: _ ->
             return Error (SageFsError.SessionCreationFailed (sprintf "projects not found in the integration worktree %s: %s. Name them relative to the repository root (for example SageFs.Tests/SageFs.Tests.fsproj), or leave projects empty to load the repository's test projects." worktreePath (String.concat ", " missingProjects)))
           | [] ->
-          cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Pending }
+          cohortIntegrationRef.Value <- Some { Scope = integrationScope; Repository = mainRepoDir; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Pending }
           // A new integration tree is a new session to build: nothing is evaluated over it yet, and nothing was rebuilt for a landing.
           forgetFilesEvaluatedOverBuild ()
           forgetSessionRebuiltFor ()
@@ -197,7 +234,7 @@ module McpCohortIntegration =
               |> Features.CohortIntegrationScope.worktreeBuildOutcome
             match buildOutcome with
             | Features.CohortIntegrationScope.WorktreeBuildOutcome.BuildFailed reason ->
-              let failed = { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
+              let failed = { Scope = integrationScope; Repository = mainRepoDir; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
               cohortIntegrationRef.Value <- Some failed
               Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the worktree build failed before session creation: %s" sha worktreePath branch reason
               return Ok (
@@ -209,7 +246,7 @@ module McpCohortIntegration =
               let! sessionResult = ctx.SessionOps.CreateSession targets worktreePath WorkflowTypes.SessionWorkflow.Interactive
               match sessionResult with
               | Ok sessionId ->
-                cohortIntegrationRef.Value <- Some { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Started sessionId }
+                cohortIntegrationRef.Value <- Some { Scope = integrationScope; Repository = mainRepoDir; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Started sessionId }
                 // The landing gate drives this session. Saves in its worktree must not also drive its live loop, whose confirming
                 // build would swap the worker under a verification (LiveTestFileRouting.SessionPurpose.Verifying).
                 ctx.Dispatch |> Option.iter (fun dispatch -> dispatch (SageFsMsg.SessionVerifiesLandings sessionId))
@@ -219,7 +256,7 @@ module McpCohortIntegration =
                     sha worktreePath branch trunkPath sessionId)
               | Error sessionErr ->
                 let reason = SageFsError.describeForAgent sessionErr
-                let failed = { Scope = integrationScope; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
+                let failed = { Scope = integrationScope; Repository = mainRepoDir; WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Failed reason }
                 cohortIntegrationRef.Value <- Some failed
                 Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the integration session failed to start: %s" sha worktreePath branch reason
                 return Ok (

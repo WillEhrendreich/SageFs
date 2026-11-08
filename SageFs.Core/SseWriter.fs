@@ -594,12 +594,15 @@ let private landingBlockerToWire (blocker: Cohort.LandingBlocker<MemberTable.Mem
     {| Kind = "vetoed_by"; Files = []; Tests = []; ClaimId = ""; From = ""; To = ""; By = displayMember by; Reason = reason |}
   | Cohort.LandingBlocker.Inconclusive reason ->
     {| Kind = "inconclusive"; Files = []; Tests = []; ClaimId = ""; From = ""; To = ""; By = ""; Reason = reason |}
+  | Cohort.LandingBlocker.CompileErrorInLanding text ->
+    {| Kind = "compile_error_in_landing"; Files = []; Tests = []; ClaimId = ""; From = ""; To = ""; By = ""; Reason = text |}
 
 let private nextActionToWire (action: Cohort.NextAction) =
   match action with
   | Cohort.NextAction.RebaseAndResubmit -> {| Kind = "rebase_and_resubmit"; Tests = [] |}
   | Cohort.NextAction.AwaitConductor -> {| Kind = "await_conductor"; Tests = [] |}
   | Cohort.NextAction.FixTests tests -> {| Kind = "fix_tests"; Tests = tests |> List.map (fun (Cohort.TestId t) -> t) |}
+  | Cohort.NextAction.FixTheBuild -> {| Kind = "fix_the_build"; Tests = [] |}
   | Cohort.NextAction.Withdraw -> {| Kind = "withdraw"; Tests = [] |}
 
 let private landingStateKind (state: Cohort.LandingState<MemberTable.MemberId>) =

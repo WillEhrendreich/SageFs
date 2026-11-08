@@ -241,6 +241,7 @@ let statusTests =
       try
         McpCohortIntegration.cohortIntegrationRef.Value <-
           Some { Scope = other
+                 Repository = "/work/other-repo"
                  WorktreePath = "/data/cohort-integration"
                  Branch = "sagefs/cohort-abcdef12"
                  TrunkPath = "/data/cohort-trunk"
@@ -275,7 +276,7 @@ let guardTests =
       let! tests = guarded.RunTests "l" []
       let! forward = guarded.FastForward "l" "sha"
       rebase |> Expect.equal "rebase says why" (Error [ "no integration for this cohort" ])
-      affected |> Expect.equal "affected says why" (Error "no integration for this cohort")
+      affected |> Expect.equal "affected says why" (Error (CohortOwner.VerificationFault.Environment "no integration for this cohort"))
       tests |> Expect.equal "tests say why" (Error "no integration for this cohort")
       forward |> Expect.equal "fast-forward says why" (Error "no integration for this cohort")
       calls.Value |> Expect.equal "the real performer was never called" 0

@@ -1056,6 +1056,9 @@
         <Compile Include="CohortIntegrationLabTests.fs" />
         <Compile Include="CohortLandingPlanTests.fs" />
         <Compile Include="IntegrationTreeSimTests.fs" />
+        <Compile Include="IntegrationReplaceSimTests.fs" />
+        <Compile Include="CohortIntegrationReplaceTests.fs" />
+        <Compile Include="CohortVerificationFaultTests.fs" />
         <Compile Include="CohortSettlingRebaseTests.fs" />
         <Compile Include="CohortLandingSourceLabTests.fs" />
         <Compile Include="CohortLedgerExportTests.fs" />

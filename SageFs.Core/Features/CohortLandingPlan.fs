@@ -252,3 +252,14 @@ module CohortLandingPlan =
       | Some d -> sprintf "the build of the rebased commit failed. First error: %s" (SageFs.BuildDiagnostic.describe [ d ])
       | None -> sprintf "the build of the rebased commit failed: %s" (SageFs.SageFsError.describeForAgent error)
     | other -> sprintf "the build of the rebased commit did not run: %s" (SageFs.SageFsError.describeForAgent other)
+
+  /// The project files the integration worktree's index reads, as `git ls-files` patterns. A project the index misses is a
+  /// project whose files classify as unowned, so every project language the session can load is listed.
+  let projectFilePatterns : string list = [ "*.fsproj" ]
+
+  /// A refused build, told as the one of two kinds it is (P16, roast priority 7): a compiler error in the landing's own source
+  /// is the member's to fix; a restore that could not reach its feed (NU1301), a locked file (MSB3027), a missing SDK or any
+  /// failure that is not a compiler error says nothing about the member's commit. The text carries the first error and the
+  /// action that fits its kind.
+  let classifyBuildFailure (error: SageFs.SageFsError) : CohortOwner.VerificationFault =
+    CohortOwner.VerificationFault.Environment(describeBuildFailure error)

@@ -38,6 +38,12 @@ let tests =
         trace.Final.WorktreeAt |> Expect.equal "back at the head" trace.Final.Head
       }
 
+      test "a landing whose build failed, then a test-only landing: the second is verified against a rebuild, not the refused commit's DLLs (P16, roast improvement 6)" {
+        let trace = run Behaviour.Real refusedBuildThenTestOnly
+        assertHolds trace
+        trace.Final.Verifications |> List.last |> fun v -> v.Rebuilt |> Expect.isTrue "the session was rebuilt for the second landing"
+      }
+
       test "landings that only touch tests never rebuild" {
         let trace = run Behaviour.Real onlyTestsLanding
         assertHolds trace
@@ -46,6 +52,11 @@ let tests =
     ]
 
     testList "the twins break them, so the invariants have teeth" [
+      test "a gate that notes only the builds that succeeded verifies the next landing against a refused commit's DLLs (P16, roast improvement 6)" {
+        let trace = run Behaviour.NotesSuccessOnly refusedBuildThenTestOnly
+        violatedIds trace |> Expect.contains "sound verification is violated" "sound-verification"
+      }
+
       test "a verifier that trusts the session's build whatever it was made from verifies against a failed landing's build" {
         let trace = run Behaviour.NeverChecksTheBuild refusedSourceThenTestOnly
         violatedIds trace |> Expect.contains "sound verification is violated" "sound-verification"

@@ -42,6 +42,16 @@ module CohortOwner =
     | Apply of CohortCommand<MemberId> * reply: (Result<CohortEvent<MemberId> list * CohortEffect<MemberId> list, CohortError<MemberId>> -> unit)
     | Flush of AsyncReplyChannel<unit>
 
+  /// Why the affected set could not be computed, in the two kinds a requester must tell apart (P16, roast priority 7). A
+  /// compiler error in the landing's own source is the member's to fix; anything else (an offline restore, a locked file, a
+  /// session that is not ready, a worktree that moved) says nothing about the member's commit, and a retry is the answer.
+  [<RequireQualifiedAccess>]
+  type VerificationFault =
+    /// The first compiler error of the rebased commit's build, with its file and code.
+    | CompileErrorInLanding of text: string
+    /// The environment could not give a verdict. `reason` says what.
+    | Environment of reason: string
+
   /// The injectable seam for actually PERFORMING a landing effect (item 14b
   /// of sagefs-multiagent-vision.md). `decide` (Cohort.fs) never runs git,
   /// never runs a test — it returns `CohortEffect<'m>` values as data; this
@@ -82,7 +92,7 @@ module CohortOwner =
     /// set is unknowable right now. Returning `Ok []` in that case would be
     /// fail-OPEN — an empty affected set lands with nothing verified — so the
     /// dispatcher maps `Error` to `VerificationInconclusive` instead.
-    ComputeAffected: string -> string -> string -> Async<Result<TestId list, string>>
+    ComputeAffected: string -> string -> string -> Async<Result<TestId list, VerificationFault>>
     /// `Ok failing` = the run reached a verdict; `failing` is the subset of the
     /// requested tests that did NOT pass (empty = all passed). `Error reason` =
     /// the run could NOT reach a verdict (the session couldn't be trusted enough
@@ -109,7 +119,7 @@ module CohortOwner =
     /// performer.
     let stub<'m> : LandingPerformer<'m> =
       { Rebase = fun _ _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string list>>().Task)
-        ComputeAffected = fun _ _ _ -> Async.AwaitTask(TaskCompletionSource<Result<TestId list, string>>().Task)
+        ComputeAffected = fun _ _ _ -> Async.AwaitTask(TaskCompletionSource<Result<TestId list, VerificationFault>>().Task)
         RunTests = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<TestId list, string>>().Task)
         FastForward = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string>>().Task)
         Notify = fun _ _ -> () }
@@ -128,7 +138,7 @@ module CohortOwner =
         ComputeAffected =
           fun landingId baseSha headSha ->
             match refusal () with
-            | Some why -> async { return Error why }
+            | Some why -> async { return Error(VerificationFault.Environment why) }
             | None -> inner.ComputeAffected landingId baseSha headSha
         RunTests =
           fun landingId tests ->
@@ -259,7 +269,12 @@ module CohortOwner =
             | Ok tests ->
               logger.LogInfo(sprintf "[cohort-owner] ComputeAffected(%s) -> %d tests" id (List.length tests))
               complete (CohortCommand.AffectedComputed(LandingId id, tests, scope))
-            | Error reason ->
+            | Error (VerificationFault.CompileErrorInLanding text) ->
+              // The landing's own source does not compile. That is the member's to fix, so it is recorded as such and never as
+              // an inconclusive verification that tells the member to retry.
+              logger.LogWarning(sprintf "[cohort-owner] landing %s does not compile: %s — re-entering Cohort.decide via LandingFailedToCompile" id text)
+              complete (CohortCommand.LandingFailedToCompile(LandingId id, text, scope))
+            | Error (VerificationFault.Environment reason) ->
               // The affected set could not be computed against a trustworthy
               // session. Never fall through to `AffectedComputed []` (which would
               // land the change with nothing verified) — report it as
