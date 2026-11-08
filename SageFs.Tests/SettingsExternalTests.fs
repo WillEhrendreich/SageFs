@@ -253,63 +253,11 @@ let roundTripTests =
         d.Parse (d.Render d.Default) |> Expect.equal (sprintf "%s default round-trips" d.Key) (Ok d.Default)
   ]
 
-/// The import the daemon runs first thing, before `Timeouts` is read.
+/// The flags a daemon was started with, and the names that tie a row to its variable. The start-up resolution
+/// itself is in `SettingsSnapshotTests`.
 [<Tests>]
 let bootstrapTests =
-  testList "Settings — the start-up import" [
-
-    let run (saved: (string * string) list) (set: (string * string) list) (f: ImportOutcome list -> (string * string) list -> unit) =
-      withTempDir (fun dir ->
-        for key, raw in saved do saveGlobal dir key raw
-        let written = ResizeArray<string * string>()
-        let outcomes =
-          SettingsBootstrap.importSavedWith
-            (fun name -> match List.tryFind (fun (n, _) -> n = name) set with Some (_, v) -> EnvSet v | None -> EnvUnset)
-            (fun name text -> written.Add((name, text)))
-            dir
-            EnvBackedRows.all
-        f outcomes (List.ofSeq written))
-
-    testCase "WHY — a saved wait becomes the variable when the person set none, so Timeouts reads what the page saved" <| fun _ ->
-      run [ "waits.warmupInactivitySeconds", "90" ] [] (fun outcomes written ->
-        written |> Expect.equal "the variable is set to the saved text" [ "SAGEFS_WARMUP_INACTIVITY_SECONDS", "90" ]
-        outcomes |> Expect.equal "and the import says so" [ ImportOutcome.Imported("SAGEFS_WARMUP_INACTIVITY_SECONDS", "90") ])
-
-    testCase "WHY — a variable the person set wins over the saved value and is left alone" <| fun _ ->
-      run [ "waits.warmupMaxMinutes", "25" ] [ "SAGEFS_WARMUP_MAX_MINUTES", "15" ] (fun outcomes written ->
-        written |> Expect.isEmpty "nothing written"
-        outcomes |> Expect.equal "the import says the environment kept it" [ ImportOutcome.LeftToEnvironment "SAGEFS_WARMUP_MAX_MINUTES" ])
-
-    testCase "WHY — a saved value that does not parse is reported and the variable is left as it was" <| fun _ ->
-      run [ "waits.buildTimeoutMinutes", "abc" ] [] (fun outcomes written ->
-        written |> Expect.isEmpty "nothing written"
-        match outcomes with
-        | [ ImportOutcome.NotUsable(variable, reason) ] ->
-          variable |> Expect.equal "names the variable" "SAGEFS_BUILD_TIMEOUT_MINUTES"
-          reason |> Expect.stringContains "says which key and why" "waits.buildTimeoutMinutes"
-        | other -> failtestf "expected one NotUsable, got %A" other)
-
-    testCase "WHY — a saved auto tier leaves the variable unset, because auto means let SageFs measure the machine" <| fun _ ->
-      run [ "waits.machineTier", "auto" ] [] (fun outcomes written ->
-        written |> Expect.isEmpty "nothing written"
-        outcomes |> Expect.equal "the import says it means unset" [ ImportOutcome.SavedMeansUnset MachineTier.envVar ])
-
-    testCase "WHY — a saved tier is the variable a person would have set, so the machine tier reads it as theirs" <| fun _ ->
-      run [ "waits.machineTier", "constrained" ] [] (fun _ written ->
-        written |> Expect.equal "the tier variable" [ MachineTier.envVar, "constrained" ])
-
-    testCase "WHY — a saved reaper bound of 0 is written as 0, the spelling the variable's reader treats as off" <| fun _ ->
-      run [ "waits.abandonedSessionHours", "0" ] [] (fun _ written ->
-        written |> Expect.equal "zero hours" [ "SAGEFS_ABANDONED_SESSION_HOURS", "0" ])
-
-    testCase "WHY — an unreadable layer file is one report, not a row per setting" <| fun _ ->
-      withTempDir (fun dir ->
-        File.WriteAllText(SettingsStore.globalPath dir, "{ this is not json")
-        let outcomes =
-          SettingsBootstrap.importSavedWith (fun _ -> EnvUnset) (fun _ _ -> failtest "nothing may be written") dir EnvBackedRows.all
-        match outcomes with
-        | [ ImportOutcome.NotUsable(_, reason) ] -> reason |> Expect.stringContains "names the file" "settings.json"
-        | other -> failtestf "expected one NotUsable, got %A" other)
+  testList "Settings — the flags and the variable names" [
 
     testCase "WHY — flagsOf reads the two flags that set a setting and ignores the rest of the line" <| fun _ ->
       SettingsBootstrap.flagsOf [ "--mcp-port"; "4000"; "--no-resume"; "--ttl"; "30m" ]
