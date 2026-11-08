@@ -103,11 +103,15 @@ module BridgeIdentitySim =
   /// One reaper tick: renew every Present member that is live, then tick the cohort.
   let private reaperTick (renewable: (MemberId -> bool) -> Map<MemberId, MemberRecord> -> MemberId list) (window: TimeSpan) (state: State) : State =
     let clock = state.Clock + tick
-    let live (who: MemberId) = MemberLiveness.isLive (MemberId.display who) clock window state.Liveness
+    let live (who: MemberId) = MemberLiveness.isLive who clock window state.Liveness
     let renewed =
       renewable live state.Cohort.Members
       |> List.fold (fun cohort who -> decideOrKeep clock cohort (CohortCommand.RenewLease(who, machine))) state.Cohort
-    { state with Clock = clock; Cohort = decideOrKeep clock renewed (CohortCommand.Tick machine) }
+    // The daemon's reaper prunes the liveness table after each tick, so the sim does too: leasing has to hold with it.
+    { state with
+        Clock = clock
+        Cohort = decideOrKeep clock renewed (CohortCommand.Tick machine)
+        Liveness = MemberLiveness.pruned clock window state.Liveness }
 
   let private connect (behavior: Behavior) (state: State) (index: int) (key: string) : State =
     let session = sprintf "session-%d" (state.Sessions + 1)
@@ -117,7 +121,7 @@ module BridgeIdentitySim =
       | Behavior.CallsOnlyLeaseTwin -> state.Liveness
       | Behavior.Real
       | Behavior.SessionIdIdentityTwin ->
-        MemberLiveness.streamOpened (MemberId.display (idOf behavior bridge session)) state.Liveness
+        MemberLiveness.streamOpened (idOf behavior bridge session) state.Liveness
     { state with Bridges = Map.add index bridge state.Bridges; Sessions = state.Sessions + 1; Liveness = liveness }
 
   let private call (behavior: Behavior) (state: State) (index: int) : State =
@@ -139,7 +143,7 @@ module BridgeIdentitySim =
         | None -> decideOrKeep healed.Clock healed.Cohort (CohortCommand.Join(who, JoinableRole.Implementer, None, machine))
       { healed with
           Cohort = cohort
-          Liveness = MemberLiveness.callMade (MemberId.display who) healed.Clock healed.Liveness
+          Liveness = MemberLiveness.callMade who healed.Clock healed.Liveness
           FirstId = (match Map.tryFind index healed.FirstId with Some _ -> healed.FirstId | None -> Map.add index who healed.FirstId)
           LastId = Map.add index who healed.LastId }
 
@@ -165,7 +169,7 @@ module BridgeIdentitySim =
           match behavior with
           | Behavior.CallsOnlyLeaseTwin -> stepped.Liveness
           | Behavior.Real
-          | Behavior.SessionIdIdentityTwin -> MemberLiveness.streamClosed (MemberId.display (idOf behavior bridge session)) stepped.Liveness
+          | Behavior.SessionIdIdentityTwin -> MemberLiveness.streamClosed (idOf behavior bridge session) stepped.Liveness
         { stepped with Bridges = Map.add index { bridge with StreamOpen = false } stepped.Bridges; Liveness = liveness }
       | Some _
       | None -> stepped

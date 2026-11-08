@@ -4163,8 +4163,7 @@ let run
       // A member is there when it evaluated lately, made a call lately, or holds an open push stream (a bridge keeps
       // one for as long as its client lives, so an LLM conductor that is only waiting on its agents stays seated).
       let isActive (m: MemberTable.MemberId) =
-        let key = MemberTable.MemberId.display m
-        Set.contains key freshKeys || McpCapability.memberLiveness.IsLive(key, now, cohortReaperRenewWindow)
+        Set.contains (MemberTable.MemberId.display m) freshKeys || McpCapability.memberLiveness.IsLive(m, now, cohortReaperRenewWindow)
 
       // EVERY scope's cohort, not just the daemon's own. A reaper that ticked one owner
       // would leave a second repository's departed member holding its claims forever — the
@@ -4178,6 +4177,9 @@ let run
           for m in cohortMembersToRenew isActive state.Members do
             owner.Post(SageFs.Cohort.CohortCommand.RenewLease(m, scope), ignore)
           owner.Post(SageFs.Cohort.CohortCommand.Tick scope, ignore)
+      // A member that is no longer live has nothing to say to the next tick, so its record goes: the table holds the
+      // members of the last window and not every member the daemon has ever seen.
+      McpCapability.memberLiveness.Prune(now, cohortReaperRenewWindow)
     with ex ->
       log.LogWarning("Cohort reaper tick threw unexpectedly: {Error}", ex.Message)
     // reschedule after this run (one-shot pattern, guards the shutdown race)

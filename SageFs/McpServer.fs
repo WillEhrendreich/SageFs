@@ -529,9 +529,7 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
       // lands what its agents send never evals).
       match presented with
       | Ok _ ->
-        SageFs.McpCapability.memberLiveness.CallMade(
-          SageFs.MemberTable.MemberId.display (SageFs.McpTools.memberIdFor "mcp"),
-          DateTime.UtcNow)
+        SageFs.McpCapability.memberLiveness.CallMade(SageFs.McpTools.memberIdFor "mcp", DateTime.UtcNow)
       | Error _ -> ()
       match presented with
       | Ok(Some capability) ->
@@ -859,13 +857,12 @@ let useClientKey (liveness: SageFs.MemberLiveness.Table) (app: WebApplication) :
           match clientKey with
           | Some member' -> member'
           | None -> SageFs.MemberTable.MemberId.ofConnectionHandle (string sessionIds.[0])
-        let key = SageFs.MemberTable.MemberId.display who
         task {
-          liveness.StreamOpened key
+          liveness.StreamOpened who
           try
             do! next.Invoke()
           finally
-            liveness.StreamClosed key
+            liveness.StreamClosed who
         }
         :> Task
       | _ -> next.Invoke()
