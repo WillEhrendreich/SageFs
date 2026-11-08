@@ -1061,6 +1061,7 @@
         <Compile Include="EdgeAccessBudgetTests.fs" />
         <Compile Include="CapabilityWireTests.fs" />
         <Compile Include="ToolListByCredentialTests.fs" />
+        <Compile Include="ToolListBudgetTests.fs" />
         <Compile Include="AgentGuidanceIntegrationTests.fs" />
         <Compile Include="ProjectPinFixtures.fs" />
         <Compile Include="ProjectPinOutcomeTests.fs" />
