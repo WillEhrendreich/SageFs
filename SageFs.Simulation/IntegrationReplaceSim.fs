@@ -18,9 +18,9 @@ open SageFs.Features
 ///    from disk and from git's registry.
 ///  - TWO REPOSITORIES NEVER SHARE A PATH: no worktree path ever serves two repositories.
 ///
-/// Three twins carry the pre-fix behaviour so each invariant shows its teeth: `ReplacesDuringVerification` (the call ignores the
-/// queue), `RemovesFromTheWrongRepository` (git runs in the new call's repository and nothing reads the answer), and `SharedPath`
-/// (one fixed path for every repository).
+/// Four twins carry the pre-fix behaviour so each invariant shows its teeth: `ReplacesDuringVerification` (the call ignores the
+/// queue), `RemovesFromTheWrongRepository` (git runs in the new call's repository and nothing reads the answer), `SharedPath`
+/// (one fixed path for every repository) and `StopsTheSessionBeforeRefusing` (the session is stopped before the queue is read).
 module IntegrationReplaceSim =
 
   [<RequireQualifiedAccess>]
@@ -50,6 +50,7 @@ module IntegrationReplaceSim =
     | ReplacesDuringVerification
     | RemovesFromTheWrongRepository
     | SharedPath
+    | StopsTheSessionBeforeRefusing
 
   /// `Epoch` names one incarnation of the worktree and its session: a landing that began verifying under one epoch cannot finish under another.
   type Binding = { Repo: Repo; Path: string; SessionAlive: bool; Epoch: int }
@@ -141,7 +142,12 @@ module IntegrationReplaceSim =
       | Behaviour.ReplacesDuringVerification -> CohortIntegrationScope.Replacement.Allowed
       | _ -> CohortIntegrationScope.replacementDecision inFront
     match decision with
-    | CohortIntegrationScope.Replacement.Refused _ -> record Reply.Refused world
+    | CohortIntegrationScope.Replacement.Refused _ ->
+      match behaviour with
+      | Behaviour.StopsTheSessionBeforeRefusing ->
+        // The pre-fix order: the previous session is stopped first, and the queue is looked at afterwards.
+        record Reply.Refused { world with Binding = world.Binding |> Option.map (fun b -> { b with SessionAlive = false }) }
+      | _ -> record Reply.Refused world
     | CohortIntegrationScope.Replacement.Allowed ->
       let newPath = pathFor behaviour repo
       // The previous session is stopped, then the old worktrees removed.

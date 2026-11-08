@@ -238,25 +238,47 @@ module CohortIntegrationScope =
     | Refused of landings: string list
 
   let replacementDecision (landingsInFront: string list) : Replacement =
-    ignore landingsInFront
-    Replacement.Allowed
+    match landingsInFront with
+    | [] -> Replacement.Allowed
+    | landings -> Replacement.Refused landings
 
   /// What a refused replacement says: which landings are in front, why that forbids it, and the two ways out.
   let replacementRefusal (scopeLabel: string) (landings: string list) : string =
-    ignore scopeLabel
-    ignore landings
-    ""
+    sprintf
+      "The integration for %s is verifying %s: %s. Replacing it now would stop the session that verifies them and delete the sources it reads, so nothing was changed. Wait for them to land, or have each requester take theirs back with withdraw_landing, then call set_integration_ref again."
+      scopeLabel
+      (match List.length landings with 1 -> "1 landing" | n -> sprintf "%d landings" n)
+      (String.concat ", " landings)
+
+  /// A readable slug of a cohort label (its last path segment) and a hash of the whole label: the slug is for the person who
+  /// lists the data dir, the hash is what keeps two cohorts apart.
+  let private cohortSuffix (scopeLabel: string) : string =
+    let lastSegment =
+      match scopeLabel.LastIndexOfAny [| '/'; '\\'; ':' |] with
+      | -1 -> scopeLabel
+      | i -> scopeLabel.Substring(i + 1)
+    let slug =
+      lastSegment
+      |> Seq.filter (fun c -> Char.IsLetterOrDigit c || c = '-' || c = '_')
+      |> Seq.truncate 24
+      |> Seq.toArray
+      |> String
+    let hash =
+      System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes scopeLabel)
+      |> Convert.ToHexString
+      |> fun hex -> hex.Substring(0, 12).ToLowerInvariant()
+    match slug with
+    | "" -> hash
+    | _ -> sprintf "%s-%s" slug hash
 
   /// The directory name (under the data dir) of the integration worktree for one cohort. One per cohort: two repositories
   /// never share a path.
   let integrationWorktreeName (scopeLabel: string) : string =
-    ignore scopeLabel
-    "cohort-integration"
+    sprintf "cohort-integration-%s" (cohortSuffix scopeLabel)
 
   /// The directory name of the trunk checkout for one cohort, by the same rule.
   let trunkCheckoutName (scopeLabel: string) : string =
-    ignore scopeLabel
-    "cohort-trunk"
+    sprintf "cohort-trunk-%s" (cohortSuffix scopeLabel)
 
   /// The integration a new call replaces: the repository its worktree was cut from and where the worktree is.
   type PreviousIntegration = { Repository: string; WorktreePath: string }
@@ -264,10 +286,14 @@ module CohortIntegrationScope =
   /// Every worktree to remove before the new one is cut, as (repository to run git in, worktree path). A worktree is removed
   /// from the repository that created it: git refuses to remove another repository's worktree.
   let removalTargets (previous: PreviousIntegration option) (newRepository: string) (newWorktreePath: string) : (string * string) list =
-    ignore previous
-    [ newRepository, newWorktreePath ]
+    match previous with
+    | None -> [ newRepository, newWorktreePath ]
+    | Some old when old.WorktreePath = newWorktreePath -> [ old.Repository, old.WorktreePath ]
+    | Some old -> [ old.Repository, old.WorktreePath; newRepository, newWorktreePath ]
 
   /// What a cohort that is not the one the integration serves is told to do to move it.
   let moveAdvice (configuredFor: string) : string =
-    ignore configuredFor
-    "call set_integration_ref with working_directory set to this repository to move it here"
+    sprintf
+      "call set_integration_ref with working_directory set to this repository to move it here. That stops %s's integration session and removes its worktree, and it is refused while %s has landings in its queue (the requesters take them back with withdraw_landing)"
+      configuredFor
+      configuredFor

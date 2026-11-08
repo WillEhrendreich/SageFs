@@ -50,7 +50,12 @@ let tests =
       test "a call that ignores the queue replaces the worktree under a verification" {
         let trace = run Behaviour.ReplacesDuringVerification retryDuringVerification
         violatedIds trace |> Expect.contains "verification loses its sources" "verification-keeps-its-sources"
-        violatedIds trace |> Expect.contains "and the call reported a replacement it should have refused" "refusal-changes-nothing"
+      }
+
+      test "a call that stops the session before it reads the queue is refused with the world already changed" {
+        let trace = run Behaviour.StopsTheSessionBeforeRefusing retryDuringVerification
+        violatedIds trace |> Expect.contains "the refusal changed the world" "refusal-changes-nothing"
+        violatedIds trace |> Expect.contains "and the verification lost its session" "verification-keeps-its-sources"
       }
 
       test "git run in the new repository leaves the old worktree and nothing reads the answer" {
