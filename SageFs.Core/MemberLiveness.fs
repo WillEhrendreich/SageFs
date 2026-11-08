@@ -52,7 +52,8 @@ module MemberLiveness =
   /// Forget the members that are not live at `now`: a call older than `window` says nothing `isLive` would act on,
   /// and the record of a member that has left was never removed. A member with an open stream keeps its record.
   /// `isLive` answers the same for every member before and after.
-  let pruned (now: DateTime) (window: TimeSpan) (state: Liveness) : Liveness = state
+  let pruned (now: DateTime) (window: TimeSpan) (state: Liveness) : Liveness =
+    { state with LastCall = state.LastCall |> Map.filter (fun _ at -> now - at <= window) }
 
   /// How many members the state holds a record for, streams and calls together.
   let tracked (state: Liveness) : int =
