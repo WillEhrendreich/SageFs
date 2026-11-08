@@ -304,7 +304,7 @@ on first read and the worker took the environment as its settings. Three mechani
 ### Verified
 
 - `SettingsSnapshotTests` (17 cases): the snapshot round trip, the refusals, the read order, the worker command line, the resolution
-  outcomes, a resolution that leaves every `SAGEFS_` variable as it was, and the environment-write ratchet. RED commit d783010f.
+  outcomes, a resolution that leaves every `SAGEFS_` variable as it was, and the environment-write ratchet. The RED commit comes first on the branch.
 - The FSI host project compiles with `SettingsSnapshot.fs` in it (built from a copy of its sources, with the Harmony stub from another
   host cache).
 
@@ -367,5 +367,5 @@ fixed with a named reason. A duration with no override is one of those two, so a
 | Field | Now |
 |:--|:--|
 | Status | Phase A done on branch `cohort/p18-settings-snapshot`, not landed |
-| Commits | d783010f (red), 76686c56 (snapshot), 784b29bf (red), 5b172562 (retired settings), then the docs commit; rebased onto master c159f554 on 2026-11-08 |
+| Commits | a red test commit and its green commit for the snapshot, the same pair for the retired settings, the docs commit and two small follow-ups (`git log --grep "settings"`); rebased onto master on 2026-11-08 |
 | Next action | Land through the cohort. The page's browser journey (`DashboardSettingsBrowserTests`) ran against the environment import and is not rerun here; run it with `--integration-browser --filter-test-case "Settings browser:"` after landing |
