@@ -122,15 +122,25 @@ module LiveTestWatcherCore =
   /// segments after the platform resolves `.`, `..` and a trailing separator,
   /// compared with the platform's case rule. `/a/repo2/x.fs` is not inside
   /// `/a/repo`; a text prefix test said it was.
+  ///
+  /// Every save in a watched tree asks this. The path is split once and each directory once, and the walk keeps the
+  /// deepest match as it goes: it used to split the path again for every directory, split each match again to sort by
+  /// depth, and build a sequence. Two spellings of one directory are the same depth, and the first in the map's order
+  /// keeps the path (the sort was stable).
   let sessionsForPath (dirSessions: Map<string, SessionId list>) (path: string) : SessionId list =
     let pathCase = PathContainment.PathCase.ofCurrentOs ()
-    dirSessions
-    |> Map.toSeq
-    |> Seq.filter (fun (dir, _) -> PathContainment.isWithin pathCase dir path)
-    |> Seq.sortByDescending (fun (dir, _) -> PathContainment.depth dir)
-    |> Seq.tryHead
-    |> Option.map snd
-    |> Option.defaultValue []
+    let pathSegments = PathContainment.fullSegments path
+    let struct (_, owners) =
+      dirSessions
+      |> Map.fold
+        (fun (struct (deepest, _) as best) dir sessions ->
+          let rootSegments = PathContainment.fullSegments dir
+          let depth = List.length rootSegments
+          match depth > deepest && PathContainment.segmentsWithin pathCase rootSegments pathSegments with
+          | true -> struct (depth, sessions)
+          | false -> best)
+        (struct (-1, []))
+    owners
 
   /// Whether `path` is under a directory that is CURRENTLY watched (a claimed
   /// session dir OR the session-less fallback dir). The shell uses this, not
