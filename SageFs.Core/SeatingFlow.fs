@@ -65,18 +65,59 @@ module SeatingFlow =
   /// The person's yes. Only `ask` makes one, and `commandOf` is the only function that turns it into a command.
   type SeatApproval = private { Target: MemberId; Scope: CohortScope }
 
-  /// Check the seating against the cohort's rules, before anybody is asked. RED stub: checks nothing.
-  let plan (now: DateTime) (state: CohortState<MemberId>) (scope: CohortScope) (caller: MemberId) (target: MemberId) : Result<Plan, Refusal> =
-    Result.Ok
-      { Caller = caller
-        Target = target
-        TargetRole = JoinableRole.Implementer
-        Scope = scope
-        Seat = state.Conductor }
+  let private isToken (who: MemberId) =
+    match who with
+    | MemberId.Capability _ -> true
+    | MemberId.Browser _
+    | MemberId.Mcp _
+    | MemberId.Minted _
+    | MemberId.Operator -> false
 
-  /// Put the question to the person and turn their answer into an approval, or a refusal. RED stub: approves without asking.
+  /// Check the seating against the cohort's rules, before anybody is asked. A caller under a token is refused first, then a
+  /// target under one, then a caller with no seat, and the rest is `Cohort.decide`'s own verdict on the seating (run against a
+  /// copy of the state and thrown away: nothing is committed here).
+  let plan (now: DateTime) (state: CohortState<MemberId>) (scope: CohortScope) (caller: MemberId) (target: MemberId) : Result<Plan, Refusal> =
+    match isToken caller, isToken target with
+    | true, _ -> Result.Error Refusal.CallerHoldsToken
+    | false, true -> Result.Error(Refusal.TargetHoldsToken target)
+    | false, false ->
+      match Map.tryFind caller state.Members with
+      | Some { Presence = MemberPresence.Present } ->
+        match decide now [||] state (CohortCommand.SeatConductor(target, scope)) with
+        | Result.Error error -> Result.Error(Refusal.CohortRefused error)
+        | Result.Ok _ ->
+          Result.Ok
+            { Caller = caller
+              Target = target
+              TargetRole = state.Members.[target].Role
+              Scope = scope
+              Seat = state.Conductor }
+      | Some { Presence = MemberPresence.Departed _ }
+      | None -> Result.Error(Refusal.CallerNotPresent caller)
+
+  /// Put the question to the person and turn their answer into an approval, or a refusal. A client that never offered
+  /// elicitation is refused without a question. A question that throws is a refusal that keeps the cause. The one place a
+  /// `SeatApproval` is made, and only for an explicit yes.
   let ask (person: Person) (question: string) (plan: Plan) : Task<Result<SeatApproval, Refusal>> =
-    Task.FromResult(Result.Ok { Target = plan.Target; Scope = plan.Scope })
+    task {
+      match person.CanAsk with
+      | false -> return Result.Error Refusal.ClientCannotAsk
+      | true ->
+        let! answer =
+          task {
+            try
+              return! person.Ask question CancellationToken.None
+            with ex when not (ex :? OperationCanceledException) ->
+              return Answer.CouldNotBeAsked ex.Message
+          }
+        match answer with
+        | Answer.Yes -> return Result.Ok { Target = plan.Target; Scope = plan.Scope }
+        | Answer.Declined -> return Result.Error Refusal.Declined
+        | Answer.Cancelled -> return Result.Error Refusal.Cancelled
+        | Answer.AnsweredOther action -> return Result.Error(Refusal.AnsweredOther action)
+        | Answer.NoAnswerInTime waited -> return Result.Error(Refusal.NoAnswerInTime waited)
+        | Answer.CouldNotBeAsked reason -> return Result.Error(Refusal.CouldNotBeAsked reason)
+    }
 
   /// The command an approval stands for. The only function that takes one.
   let commandOf (approval: SeatApproval) : CohortCommand<MemberId> = CohortCommand.SeatConductor(approval.Target, approval.Scope)
