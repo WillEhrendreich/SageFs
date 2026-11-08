@@ -64,6 +64,11 @@ let private startDaemon (sb: Sandbox) : Daemon =
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
   SageFs.Tests.TestInfrastructure.SpawnEnvironment.apply psi
+  // A merged agent worktree waits out `DataRetention.finishedWorktreeGrace` (a day) before the daemon calls it safe, because the agent
+  // that made it may be resumed. This journey is about the panel's own flow, and its worktrees are seconds old, so the daemon here
+  // has no grace (the in-process Sandbox does the same: `WorktreeGrace = TimeSpan.Zero`). The grace has its own cases
+  // (HygieneGraceTests, HygieneSweepTests). Written after the strip, as the process-environment ratchet requires of a named variable.
+  psi.Environment[DataRetention.finishedWorktreeGraceEnvVar] <- "0"
   let proc = Diagnostics.Process.Start psi
   let outLog = Path.Combine(sb.Root, "daemon.stdout.log")
   let errLog = Path.Combine(sb.Root, "daemon.stderr.log")
@@ -243,9 +248,12 @@ let private journey () : Task<unit> = task {
     do! DashboardDom.throughPanelReset (fun () -> openPanel page) 3 (fun () -> task {
       do! (tidyButton page).ClickAsync()
       do! PlaywrightExpect.waitForText BrowserWaits.daemonWork (page.Locator "#hygiene-tidied") "Tidied:" })
+    // What the panel says it did, so a worktree that stays says why in the failure: a merged worktree inside its grace is kept, and
+    // this daemon runs with none (`startDaemon`), so one that stays was not judged safe or its removal was refused.
+    let! tidiedLine = (page.Locator "#hygiene-tidied").TextContentAsync()
     for name in [ "clean-merged"; "ff-merged"; "squashed"; "dirty-generated" ] do
-      Expect.isFalse (Directory.Exists paths.[name]) (sprintf "%s was safe and should be gone" name)
-      Expect.isFalse (branchExists sb ("worktree-agent-" + name)) (sprintf "the merged branch of %s should be gone" name)
+      Expect.isFalse (Directory.Exists paths.[name]) (sprintf "%s was safe and should be gone. The panel said: %s" name tidiedLine)
+      Expect.isFalse (branchExists sb ("worktree-agent-" + name)) (sprintf "the merged branch of %s should be gone. The panel said: %s" name tidiedLine)
     for name in [ "unmerged"; "dirty-real" ] do
       Expect.isTrue (Directory.Exists paths.[name]) (sprintf "%s needs a look and must stay" name)
       Expect.isTrue (branchExists sb ("worktree-agent-" + name)) (sprintf "the branch of %s must stay" name)
