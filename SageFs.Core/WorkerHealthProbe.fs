@@ -67,15 +67,19 @@ type RegistryUpdate =
   | NoChange
   | Replace of SessionLifecycleStatus
 
-/// The probe is not a second status writer: it only carries one fact the registry has no other way to learn on
-/// its own, that the worker's FSI host died while the worker stayed up (the worker process never exits, so no
-/// `WorkerExited` comes), and the host coming back after a reset. Everything else a worker reports is left to the
-/// paths that already own it. A Faulted or Stopped session is terminal and is never touched.
+/// The probe is not a second status writer: it only carries the facts the registry has no other way to learn on
+/// its own. One is that the worker's FSI host died while the worker stayed up (the worker process never exits, so no
+/// `WorkerExited` comes), and the host coming back after a reset. The other is that a worker the registry holds as
+/// Starting is settled: this probe only runs for a worker the registry already declared Ready, so a Starting on the
+/// same worker is a transient (a status read wrote the worker's own report while its FSI host was being replaced in
+/// place, by a level or a reset) and nothing else retires it. Everything else a worker reports is left to the paths
+/// that already own it, a rebuild's Building and a restart's Restarting included. A Faulted or Stopped session is
+/// terminal and is never touched.
 let registryUpdate (current: SessionLifecycleStatus) (reported: SessionStatus) : RegistryUpdate =
   match current, reported with
   | SessionLifecycleStatus.HostCrashed(_, known), SessionStatus.HostCrashed seen when known = seen -> RegistryUpdate.NoChange
   | (SessionLifecycleStatus.Ready _ | SessionLifecycleStatus.Evaluating _ | SessionLifecycleStatus.HostCrashed _), SessionStatus.HostCrashed _
-  | SessionLifecycleStatus.HostCrashed _, (SessionStatus.Ready | SessionStatus.Evaluating) ->
+  | (SessionLifecycleStatus.HostCrashed _ | SessionLifecycleStatus.Starting _), (SessionStatus.Ready | SessionStatus.Evaluating) ->
     RegistryUpdate.Replace(SessionLifecycleStatus.ofWorkerReport current reported)
   | _ -> RegistryUpdate.NoChange
 

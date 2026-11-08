@@ -148,6 +148,25 @@ let tests =
         sync (SessionLifecycleStatus.HostCrashed(handle, crash)) SessionStatus.Ready
         |> Expect.equal "Ready again" (WorkerHealthProbe.RegistryUpdate.Replace(SessionLifecycleStatus.Ready handle))
 
+      // A status read writes the worker's own report into the registry (get_session_status does, so the registry agrees
+      // with the worker). A worker whose FSI host is being replaced in place (a level, a reset) says Starting for a
+      // moment, and that moment was kept: no path owns retiring a Starting an established worker's report left behind,
+      // so the registry said Starting for a worker that was Ready, and the trunk waited on it for its whole settle.
+      testCase "a registry left Starting by a transient report learns the same worker is settled" <| fun _ ->
+        sync (SessionLifecycleStatus.Starting handle) SessionStatus.Ready
+        |> Expect.equal "Ready again, on the same worker" (WorkerHealthProbe.RegistryUpdate.Replace(SessionLifecycleStatus.Ready handle))
+        sync (SessionLifecycleStatus.Starting handle) SessionStatus.Evaluating
+        |> Expect.equal "evaluating is settled too" (WorkerHealthProbe.RegistryUpdate.Replace(SessionLifecycleStatus.Evaluating handle))
+
+      testCase "a Starting registry whose worker still says Starting stays as it is" <| fun _ ->
+        sync (SessionLifecycleStatus.Starting handle) SessionStatus.Starting
+        |> Expect.equal "still warming" WorkerHealthProbe.RegistryUpdate.NoChange
+
+      testCase "only Starting is retired this way: a rebuild and a restart own their own statuses" <| fun _ ->
+        for status in [ SessionLifecycleStatus.Building("dotnet build", handle); SessionLifecycleStatus.Restarting(PreviousWorker.ofPid (Some handle.Pid)) ] do
+          sync status SessionStatus.Ready
+          |> Expect.equal (sprintf "%A is left to the path that set it" status) WorkerHealthProbe.RegistryUpdate.NoChange
+
       testCase "an ordinary report changes nothing: the probe is not a second status writer" <| fun _ ->
         for reported in [ SessionStatus.Ready; SessionStatus.Evaluating; SessionStatus.Starting; SessionStatus.Building "dotnet build" ] do
           sync (SessionLifecycleStatus.Ready handle) reported
