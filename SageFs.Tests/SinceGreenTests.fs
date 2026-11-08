@@ -122,6 +122,12 @@ let tests =
       |> Expect.equal "Mana appeared and Speed left"
         (Map.ofList [ pathKey "player" [ "Mana" ], Moved.Appeared "5"; pathKey "player" [ "Speed" ], Moved.Left "4.5" ])
 
+    testCase "WHY — the flags the session binds for itself come and go with its setup and are never a move: the live run showed them as no longer bound" <| fun _ ->
+      let flag (name: string) : LiveBindingValue = { Name = name; TypeSignature = "bool"; Root = leaf name "true" }
+      let before = { snapshot "10" "100" with Bindings = flag "_SageFsHotReload" :: flag "_SageFsCompExpr" :: (snapshot "10" "100").Bindings }
+      let after = { snapshot "10" "100" with Bindings = (snapshot "10" "100").Bindings @ [ flag "_SageFsAnother" ] }
+      moves (Green.GreenAt(1L, before)) after |> Expect.equal "the flags that left or came are not moves" Map.empty
+
     testProperty "WHY — the side-by-side comparison finds exactly the nodes the flattened comparison found: the same places that show something else" <| fun (a: byte) (b: byte) (c: byte) (d: byte) ->
       let before = snapshot (string a) (string b)
       let after = snapshot (string c) (string d)

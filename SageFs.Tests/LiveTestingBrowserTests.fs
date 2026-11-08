@@ -145,7 +145,7 @@ let tests =
         (sprintf "header should be all-green after restore, was: %s" header)
     })
 
-    ltPlaywrightTest "the bindings pane follows the loop: the chip says current, and Since green lists what moved while a test was red" (fun page -> task {
+    ltPlaywrightTest "the bindings pane follows the loop: the chip says current, and Since green compares against the green settle even when nobody was watching" (fun page -> task {
       do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
       do! ensureLiveTestingOn page
       let panel = page.Locator("#live-testing-panel")
@@ -169,13 +169,46 @@ let tests =
         do! PlaywrightFixture.takeScreenshot page false (IO.Path.Combine(PlaywrightFixture.screenshotDir, sprintf "lt-chip-current-%d.png" width))
       do! page.SetViewportSizeAsync(1400, 900)
       let original = readHello ()
-      let edited = original.Replace(canonicalAdd, brokenAdd)
+      // What the live-testing loop says right now, read over HTTP without a browser holding a stream: the generation of the last run
+      // and how many tests failed in it. A generation past the one last seen is a run that has settled since.
+      use http = new Net.Http.HttpClient()
+      let statusUrl = sprintf "http://localhost:%d/api/live-testing/status" PlaywrightFixture.mcpPort
+      let status () = task {
+        let! text = http.GetStringAsync statusUrl
+        use doc = Text.Json.JsonDocument.Parse text
+        let generation = doc.RootElement.GetProperty("Generation").GetInt32()
+        let failed =
+          match Text.RegularExpressions.Regex.Match(text, "\"[Ff]ailed\"\\s*:\\s*(\\d+)") with
+          | m when m.Success -> int m.Groups.[1].Value
+          | _ -> -1
+        return generation, failed
+      }
+      let waitForRun (after: int) (failedTests: int) = task {
+        let mutable settled = false
+        let sw = Diagnostics.Stopwatch.StartNew()
+        while not settled && sw.ElapsedMilliseconds < int64 BrowserWaits.liveTestsRerun do
+          let! generation, failed = status ()
+          settled <- generation > after && failed = failedTests
+          if not settled then do! Task.Delay(TestTimeouts.pollInterval)
+        Expect.isTrue settled (sprintf "a run with %d failed tests should settle after generation %d" failedTests after)
+      }
+      let! generation0, _ = status ()
       try
-        writeHello edited
-        do! PlaywrightExpect.waitForText BrowserWaits.liveTestsRerun panel "1✗"
-        // A test went red and the value moved after it: Since green names it with what it was when the tests last passed.
-        do! evaluate "let marker = 2;;" "marker: int = 2"
+        // Nobody is watching: no browser holds the dashboard open while the tests settle green again, with `marker` bound, and then red.
+        let! _ = page.GotoAsync "about:blank"
+        writeHello (original.Replace(canonicalAdd, canonicalAdd + " + 0"))
+        do! waitForRun generation0 0
+        let! generation1, _ = status ()
+        writeHello (original.Replace(canonicalAdd, brokenAdd))
+        do! waitForRun generation1 1
+        let! _ = page.GotoAsync(sprintf "%s/dashboard" PlaywrightFixture.dashboardUrl)
+        do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#bindings-panel" "marker"
+        // The point was taken at the green settle nobody saw, so nothing has moved since it. A point taken only when somebody looked would
+        // be the baseline's, from before `marker` was bound, and the tab would say the binding is new.
         do! page.Locator("[data-testid=live-tab-since-green]").ClickAsync()
+        do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "[data-testid=live-tab-empty-since-green]" "Nothing has moved"
+        // Then the value moves while a test is red: Since green names it with what it was at the green settle.
+        do! evaluate "let marker = 2;;" "marker: int = 2"
         let was = page.Locator("[data-testid=live-was]")
         do! PlaywrightExpect.waitForText BrowserWaits.daemonWork was "was 1"
         for width in [ 1400; 900; 400 ] do
@@ -184,7 +217,7 @@ let tests =
         do! page.SetViewportSizeAsync(1400, 900)
       finally
         writeHello original
-      // The tests pass again: the comparison point is now, so nothing has moved since it.
+      // The tests pass again: the next green settle takes the point, so nothing has moved since it.
       do! PlaywrightExpect.waitForText BrowserWaits.liveTestsRerun panel "11✓"
       do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "[data-testid=live-tab-empty-since-green]" "Nothing has moved"
     })

@@ -27,7 +27,17 @@ type SettleEvent =
 
 /// What the loop's activity is, as an event for the run it is reading.
 let settleEvent (generation: int64) (activity: LiveTestActivity) : SettleEvent =
-  SettleEvent.NotSettled
+  match activity with
+  | LiveTestActivity.Settled tally when tally.Failed = 0 && tally.Passed > 0 -> SettleEvent.GreenSettled generation
+  | LiveTestActivity.Settled _ -> SettleEvent.RedSettled generation
+  | LiveTestActivity.Off
+  | LiveTestActivity.Discovering
+  | LiveTestActivity.DiscoveryFailed _
+  | LiveTestActivity.NoTestsFound _
+  | LiveTestActivity.BlockedByCompileErrors _
+  | LiveTestActivity.BlockedByFailedRebuild _
+  | LiveTestActivity.Rebuilding _
+  | LiveTestActivity.Running _ -> SettleEvent.NotSettled
 
 /// How one node differs from the last green settle.
 [<RequireQualifiedAccess>]
@@ -55,7 +65,11 @@ let bindingOf (key: string) : string =
 /// the same generation read again (the values moved since, a rebuild finished) takes nothing, so the point is the walk at the settle and
 /// not the walk at whenever somebody last looked. Any other event leaves it where it was.
 let settle (green: Green) (event: SettleEvent) (walk: LiveValueSnapshot) : Green =
-  green
+  match event, green with
+  | SettleEvent.GreenSettled generation, Green.GreenAt(taken, _) when taken = generation -> green
+  | SettleEvent.GreenSettled generation, _ -> Green.GreenAt(generation, walk)
+  | SettleEvent.RedSettled _, _
+  | SettleEvent.NotSettled, _ -> green
 
 /// The child of `children` that has `label`, trying the same position first because a walk has the same shape from one push to the next.
 let private childLabeled (index: int) (label: string) (children: LiveValueNode list) : LiveValueNode option =
@@ -88,16 +102,22 @@ let rec private diffNodes (binding: string) (path: string list) (before: LiveVal
       | None -> (pathKey binding (List.rev (was.Label :: path)), Moved.Left was.Preview) :: acc)
     afterwards
 
+/// The feature-gate flags the session binds for itself (`_SageFsHotReload`, `_SageFsCompExpr`) come and go with the session's own setup. They
+/// are not the person's values, so they are never a move.
+let private isInternal (binding: LiveBindingValue) : bool =
+  binding.Name.StartsWith("_SageFs", System.StringComparison.Ordinal)
+
 /// What moved between the last green settle and now, by place: the topmost node of a subtree that appeared or left, and every node that
-/// shows something else. Nothing before the first green settle.
+/// shows something else. Nothing before the first green settle. The session's own flags are left out.
 let moves (green: Green) (current: LiveValueSnapshot) : Map<string, Moved> =
   match green with
   | Green.NoGreenYet -> Map.empty
   | Green.GreenAt(_, before) ->
-    let was = before.Bindings |> List.map (fun b -> b.Name, b) |> Map.ofList
-    let now = current.Bindings |> List.map (fun b -> b.Name, b) |> Map.ofList
+    let theirs (snapshot: LiveValueSnapshot) = snapshot.Bindings |> List.filter (fun b -> not (isInternal b))
+    let was = theirs before |> List.map (fun b -> b.Name, b) |> Map.ofList
+    let now = theirs current |> List.map (fun b -> b.Name, b) |> Map.ofList
     let changed =
-      current.Bindings
+      theirs current
       |> List.fold
         (fun acc b ->
           match Map.tryFind b.Name was with
@@ -105,7 +125,7 @@ let moves (green: Green) (current: LiveValueSnapshot) : Map<string, Moved> =
           | None -> (pathKey b.Name [], Moved.Appeared b.Root.Preview) :: acc)
         []
     let gone =
-      before.Bindings
+      theirs before
       |> List.filter (fun b -> not (Map.containsKey b.Name now))
       |> List.map (fun b -> pathKey b.Name [], Moved.Left b.Root.Preview)
     Map.ofList (changed @ gone)
