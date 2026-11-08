@@ -75,6 +75,16 @@ let private emptyFrame : CohortFrame<MemberId> =
 let cohortPanelTests =
   testList "Cohort dashboard panel" [
 
+    testCase "WHY — a conductor whose connection is gone is named in the seat line with the command that replaces it" <| fun _ ->
+      let frame =
+        frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+                     CohortCommand.Join(bob, JoinableRole.Implementer, None, machine) ]
+      let silent = Features.CohortStatusText.HolderSilence.SilentSince(epoch, epoch.Add Timeouts.cohortLeaseWindow)
+      let html = renderCohortPanelFor silent (epoch.AddMinutes 12.0) frame |> render
+      html |> Expect.stringContains "the holder is named as silent" "silent for 12 min"
+      html |> Expect.stringContains "and the command to replace it is on the panel" (sprintf "--replace %s" (MemberId.display alice))
+      (renderCohortPanel frame |> render).Contains "--replace" |> Expect.isFalse "a holder nobody calls silent gets no replace advice"
+
     testCase "WHY — an empty cohort renders a tasteful empty state, never a blank or broken panel" <| fun _ ->
       let html = renderCohortPanel emptyFrame |> render
       html |> Expect.stringContains "shows the panel heading with zero members" "Agent team — 0 members"

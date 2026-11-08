@@ -3174,6 +3174,6 @@ module McpTools =
         | Error err -> return Error (CohortErrorMapping.toSageFsError err)
     }
 
-  let internal renderCohortFrame (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
-    Features.CohortStatusText.render frame
+  let internal renderCohortFrame (silence: Features.CohortStatusText.HolderSilence) (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
+    Features.CohortStatusText.renderWithSilence silence frame
 

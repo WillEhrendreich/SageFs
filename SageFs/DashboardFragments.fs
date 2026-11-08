@@ -3186,7 +3186,12 @@ let private cohortLandingStateLabel (state: SageFs.Cohort.LandingState<MemberTab
 /// Pure render of one cohort frame. `frame`'s arrays are index-aligned
 /// (`CohortFrame` doc, Cohort.fs) — every lookup here is a plain array index,
 /// never a `Map` walk.
-let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
+///
+/// `silence` is the standing of the conductor seat's holder, which a frame cannot say (it carries no lease): a holder
+/// that went silent is named in the seat line with the command that replaces it (text only; a button for it is
+/// P12's `SeatApproval`, which will take the replace mode and the person's yes). `now` is the clock the silence is
+/// measured against.
+let rec renderCohortPanelFor (silence: Features.CohortStatusText.HolderSilence) (now: DateTime) (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
   // MEMBERS PRESENT, not members ever known. `frame.MemberIds` is every id the cohort has
   // ever seen — a departed member stays in it with `SeatState.Departed`, which is what the
   // ledger keeps and what `ClaimHolderIndex` must still resolve. Counting that array said
@@ -3238,7 +3243,16 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
           Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; overflow-wrap: anywhere;" ] [
             textEnc (sprintf "Conductor seat vacant since %s (%s held it). %s" (since.ToString "u") (MemberTable.MemberId.display former) Features.CohortStatusText.vacantSeatAdvice)
           ]
-        | SageFs.Cohort.ConductorBinding.Bound _
+        | SageFs.Cohort.ConductorBinding.Bound holder ->
+          // A holder whose connection is gone keeps the seat until its lease lapses. Say so, and name the command a
+          // person runs to replace it.
+          match silence with
+          | Features.CohortStatusText.HolderSilence.SilentSince _ ->
+            let holderId = MemberTable.MemberId.display holder
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; overflow-wrap: anywhere;" ] [
+              textEnc (sprintf "Conductor %s is %s. A person can replace it: %s" holderId (Features.CohortStatusText.HolderSilence.text now silence) (Features.CohortStatusText.replaceCommandText "<member id>" holderId))
+            ]
+          | Features.CohortStatusText.HolderSilence.NotSilent -> ()
         | SageFs.Cohort.ConductorBinding.NeverBound -> ()
         Elem.div [] [
           Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.857rem; margin-bottom: 0.2rem;" ] [
@@ -3425,6 +3439,11 @@ and private renderCohortTerritory (frame: SageFs.Cohort.CohortFrame<MemberTable.
         ]
       ]
     ]
+
+/// The panel for a frame whose conductor nobody calls silent: the scrubbed (past) views, which have no clock to
+/// measure silence against, and every caller that has no lease to read.
+let renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
+  renderCohortPanelFor Features.CohortStatusText.HolderSilence.NotSilent DateTime.UtcNow frame
 
 let private cohortSpanOutcomeLabel (outcome: Features.CohortLanes.SpanOutcome) : string =
   match outcome with

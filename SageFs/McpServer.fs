@@ -3760,7 +3760,10 @@ let mapCohortSeatRoutes (operatorAccess: SageFs.OperatorStore.OperatorAccess) (a
           | _ -> ""
         match SageFs.McpTools.cohortOwnerFor rctx.McpContext (SageFs.McpMintRoute.given directory) with
         | None -> do! refuse ctx 503 noOwner
-        | Some owner -> do! rawJsonResponse ctx (Json.serialize Json.camelCase (SageFs.CohortSeatRoute.viewOf (owner.ReadFrame())))
+        | Some owner ->
+          let now = DateTime.UtcNow
+          let silence = SageFs.Features.CohortStatusText.HolderSilence.ofState (owner.ReadCohortState()) now
+          do! rawJsonResponse ctx (Json.serialize Json.camelCase (SageFs.CohortSeatRoute.viewWithSilence silence now (owner.ReadFrame())))
     } :> Task
   ) |> ignore
   app.MapPost("/api/cohort/seat", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -3782,12 +3785,22 @@ let mapCohortSeatRoutes (operatorAccess: SageFs.OperatorStore.OperatorAccess) (a
               match directory with
               | Some _ -> SageFs.ScopeOf.ofWorkingDirectory directory
               | None -> frame.Scope
-            match SageFs.CohortSeatRoute.commandFor frame scope request.Member with
+            // A plain seating fills an empty seat. A request that names a holder replaces that holder, and is refused
+            // when it is no longer the holder: both are built here and nowhere else.
+            let built =
+              match request.Replace with
+              | "" -> SageFs.CohortSeatRoute.commandFor frame scope request.Member
+              | holder -> SageFs.CohortSeatRoute.commandForReplace frame scope request.Member holder
+            match built with
             | Error err -> do! refuse ctx (SageFsError.toHttpStatus err) (SageFs.CohortSeatRoute.edgeBodyOf err)
             | Ok command ->
-              let! committed = SageFs.McpTools.commitCohort rctx.McpContext command
+              // The owner's own commit, so a refusal is the cohort's and not already flattened: a held seat says who
+              // holds it, whether it is silent, and the command to run, from the state it was refused by.
+              let! committed = owner.Commit command
               match committed with
-              | Error err -> do! refuse ctx (SageFsError.toHttpStatus err) (SageFs.CohortSeatRoute.edgeBodyOf err)
+              | Error refusal ->
+                let err = SageFs.CohortSeatRoute.refusalFor (owner.ReadCohortState()) DateTime.UtcNow request refusal
+                do! refuse ctx (SageFsError.toHttpStatus err) (SageFs.CohortSeatRoute.edgeBodyOf err)
               | Ok(events, _) ->
                 do! rawJsonResponse ctx (Json.serialize Json.camelCase (SageFs.CohortSeatRoute.seatedReply (owner.ReadFrame()) events))
     } :> Task

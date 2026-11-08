@@ -90,6 +90,13 @@ implying the command closes it.
   Pass one prefix (`--scope src/Foo/`), or leave `--scope` out for the whole repo. Before
   2026-11-08 the mint succeeded and every `acquire_claim` by the token was refused with
   "confined to 'a/,b'"; a token minted that way has to be revoked and minted again.
+- **A conductor-only tool is refused because the conductor is a member whose connection is
+  gone.** `get_cohort_status` says so on its `Conductor:` line (`held by X, silent for N min,
+  lapses at T`). No tool can move the seat: the person who runs the daemon replaces the holder
+  with `sagefs cohort seat <member id> --replace <holder id>`, which names the holder so it
+  cannot move a seat that changed. Do not wait the 30 minutes and do not try to seat yourself;
+  tell the person the command (docs/mcp-tools.md, "Replace a conductor whose connection is
+  gone").
 - **A call is refused with "This member token is bound to ...".** Your token routes to ONE
   session or ONE checkout, and the call named another session or another directory. The
   refusal says what the token is bound to and what to pass instead. It is not a role

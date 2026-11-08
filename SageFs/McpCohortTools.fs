@@ -169,6 +169,7 @@ module McpCohortTools =
     | Cohort.VacancyReason.LeaseLapsed -> "the conductor's lease lapsed"
     | Cohort.VacancyReason.Revoked -> "the conductor was revoked"
     | Cohort.VacancyReason.NeverBound -> "no conductor was ever bound"
+    | Cohort.VacancyReason.Replaced -> "a person replaced the conductor"
 
   /// What a join says about the conductor seat, from the cohort's binding AFTER the join. Total, so a caller
   /// is always told which seat it holds. A rejoin that finds the caller still seated used to say nothing, and

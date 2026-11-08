@@ -113,6 +113,9 @@ type Intent =
   | IDelegate of by: int * toAgent: int
   /// A person seats `toAgent` (5 is never a member). The operator route is the one issuer of `SeatConductor`.
   | ISeat of toAgent: int
+  /// A person replaces the holder of a bound seat with `toAgent` (5 is never a member). `holder` 0 names whoever holds
+  /// the seat when the intent runs; 1 to 4 name that agent, who may no longer hold it (a stale name must be refused).
+  | IReplace of holder: int * toAgent: int
   | IResolveVeto of by: int * landingIdx: int
   | IAdvance of FrontStep
   /// `OpenCohort`: the cohort's own scope (an idempotent no-op that is still a ledger entry) or another one (refused).
@@ -179,6 +182,16 @@ let genDelegatingIntent =
     2, Gen.map2 (fun a l -> IWithdraw(a, l)) (Gen.choose (1, 4)) (Gen.choose (0, 10))
   ]
 
+/// The delegating intents plus a person's replacement of the holder, half of them naming whoever holds the seat now
+/// and half naming an agent who may not (the stale name a person types after the seat moved).
+let genReplacingIntent =
+  Gen.frequency [
+    8, genDelegatingIntent
+    5, Gen.map2 (fun h t -> IReplace(h, t)) (Gen.choose (0, 4)) (Gen.choose (1, 5))
+    2, Gen.map IDepart (Gen.choose (1, 4))
+    2, Gen.map IRenewLease (Gen.choose (1, 4))
+  ]
+
 /// Four agents seated first (1 joins first, so it is the conductor; 2 and 1 implement, 3 verifies, 4 observes), so a
 /// generated history spends its steps on the commands under test and not on getting anyone into the cohort.
 let seating = [ IJoin(1, JoinableRole.Implementer); IJoin(2, JoinableRole.Implementer); IJoin(3, JoinableRole.Verifier); IJoin(4, JoinableRole.Observer) ]
@@ -204,6 +217,14 @@ let seatHistory =
   @ [ IDepart 1   // the conductor leaves: the seat is vacant
       ISeat 2 ]   // a person seats a member who is still here
 
+/// The ONE history that replaces a conductor whose connection is gone, written out for the reason `seatHistory` is: the
+/// seat is bound to 1, who stays present (their lease has not lapsed), and a person names 1 as the holder and puts 2 in
+/// the seat.
+let replaceHistory =
+  seating
+  @ [ IAcquire(1, 0)    // the conductor holds a claim, which stays theirs
+      IReplace(0, 2) ]  // a person replaces whoever holds the seat with a member who is here
+
 /// The ordinary intents, leaning hard on the landing pipeline: claims by the two implementers, landings requested by
 /// them, and the front landing pushed along. Seated first, as the delegating histories are. This is the history the
 /// properties that need a landing to HAPPEN (5, 6, 7, 13) run over; the plain `genIntent` histories reach a landing in
@@ -228,6 +249,13 @@ type DelegatingHistory = DelegatingHistory of Intent list
 type DelegatingGenerators =
   static member History() =
     Arb.fromGen (Gen.choose (10, 60) |> Gen.bind (fun n -> Gen.listOfLength n genDelegatingIntent) |> Gen.map (fun intents -> DelegatingHistory(seating @ intents)))
+
+/// A history that also includes a person's replacement of the holder.
+type ReplacingHistory = ReplacingHistory of Intent list
+
+type ReplacingGenerators =
+  static member History() =
+    Arb.fromGen (Gen.choose (10, 60) |> Gen.bind (fun n -> Gen.listOfLength n genReplacingIntent) |> Gen.map (fun intents -> ReplacingHistory(seating @ intents)))
 
 type private CohortGenerators =
   static member Intent() = Arb.fromGen genIntent
@@ -371,6 +399,13 @@ let resolveIntent<'m when 'm: comparison>
   // `toAgent` 5 is an agent that never joins (`agentOf` maps 1..4), so absent targets are generated too.
   | IDelegate(by, toA) -> now (CohortCommand.DelegateConductor(who by, (if toA = 5 then absent else who toA), machine))
   | ISeat toA -> now (CohortCommand.SeatConductor((if toA = 5 then absent else who toA), machine))
+  | IReplace(h, toA) ->
+    let named =
+      match h, state.Conductor with
+      | 0, ConductorBinding.Bound holder -> holder
+      | 0, (ConductorBinding.NeverBound | ConductorBinding.Vacant _) -> absent
+      | _ -> who h
+    now (CohortCommand.ReplaceConductor(named, (if toA = 5 then absent else who toA), machine))
   | IResolveVeto(by, l) -> onLanding l (fun lid -> CohortCommand.ResolveVeto(who by, lid, machine))
   | IAdvance step ->
     // The landing at the front of the queue, and the command ITS stage calls for. A landing that is not at the front
@@ -1114,7 +1149,7 @@ let cohortPropertyTests =
         let delegating = Gen.sample 300 (Arb.toGen (DelegatingGenerators.History())) |> Array.map (fun (DelegatingHistory intents) -> run intents)
         // The deterministic history LAST, so the corpus is the generated one plus the one path a
         // random draw cannot be relied on to reach (`reassignHistory`).
-        let histories = Array.concat [ pipeline; plain; delegating; [| run reassignHistory; run seatHistory |] ]
+        let histories = Array.concat [ pipeline; plain; delegating; [| run reassignHistory; run seatHistory; run replaceHistory |] ]
         let accepted = histories |> Array.collect (fun h -> h.Steps |> List.map (fun s -> caseOf s.Command) |> Array.ofList) |> Set.ofArray
         // The deterministic history earns its place or it is not there. If `decide` ever stops
         // accepting this path, the corpus falls back on the draw and the claim below becomes a
@@ -1127,6 +1162,10 @@ let cohortPropertyTests =
         |> fun h -> h.Steps |> List.map (fun s -> caseOf s.Command)
         |> List.contains "SeatConductor"
         |> Expect.isTrue "the deterministic history really seats a conductor, so the coverage does not rest on the draw"
+        run replaceHistory
+        |> fun h -> h.Steps |> List.map (fun s -> caseOf s.Command)
+        |> List.contains "ReplaceConductor"
+        |> Expect.isTrue "the deterministic history really replaces a conductor, so the coverage does not rest on the draw"
         Set.difference allCases accepted
         |> Set.toList
         |> Expect.equal "every CohortCommand case is accepted in some generated history; the ones listed never were" []
@@ -1496,6 +1535,88 @@ let cohortPropertyTests =
           |> Array.sumBy (fun (DelegatingHistory intents) ->
             (run intents).Steps |> List.filter (fun s -> match s.Command with CohortCommand.SeatConductor _ -> true | _ -> false) |> List.length)
         Expect.isGreaterThan "seatings are accepted in generated histories" (seatings, 5)
+    ]
+
+    testList "a person replaces a conductor whose connection is gone (36-39)" [
+
+      let replaceConfig = { cohortConfig with arbitrary = [ typeof<ReplacingGenerators> ]; replay = Some(0x5EEDUL, 0x4E91ACFUL, None) }
+      let isPresentIn (state: CohortState<Agent>) (m: Agent) =
+        match Map.tryFind m state.Members with
+        | Some { Presence = MemberPresence.Present } -> true
+        | _ -> false
+      let roster (state: CohortState<Agent>) =
+        state.Members |> Map.toList |> List.choose (fun (m, r) -> match r.Presence with MemberPresence.Present -> Some m | MemberPresence.Departed _ -> None) |> List.sort
+      let everyone = [ for i in 1 .. 5 -> if i = 5 then absentAgent else agentOf i ]
+      let conductorsOf (state: CohortState<Agent>) : Agent list =
+        state.Members |> Map.toList |> List.map fst |> List.filter (fun m -> Authority.present m state = Authority.Conductor m)
+
+      testPropertyWithConfig replaceConfig "36: an accepted replacement names the sitting holder, seats a different present member, records who was replaced, leaves exactly one conductor and touches no member and no claim" <| fun (ReplacingHistory intents) ->
+        let h = run intents
+        h.Steps
+        |> List.forall (fun step ->
+          match step.Command with
+          | CohortCommand.ReplaceConductor(holder, target, _) ->
+            step.Before.Conductor = ConductorBinding.Bound holder
+            && holder <> target
+            && isPresentIn step.Before target
+            && step.After.Conductor = ConductorBinding.Bound target
+            && step.Events = [ CohortEvent.ConductorReplaced(target, ConductorBinding.Vacant(holder, step.StepClock, VacancyReason.Replaced)) ]
+            && Authority.present target step.After = Authority.Conductor target
+            && Authority.present holder step.After <> Authority.Conductor holder
+            && List.length (conductorsOf step.After) = 1
+            && step.After.Members = step.Before.Members
+            && step.After.Claims = step.Before.Claims
+          | _ -> true)
+
+      testPropertyWithConfig replaceConfig "37: at the end of any history a replacement is refused for a stale holder (naming the seat as it stands), for the holder itself and for an absent member (with the roster), and accepted otherwise" <| fun (ReplacingHistory intents) ->
+        let h = run intents
+        everyone
+        |> List.forall (fun named ->
+          everyone
+          |> List.forall (fun target ->
+            let result = decide h.Clock [| 9uy |] h.State (CohortCommand.ReplaceConductor(named, target, machine))
+            match h.State.Conductor, result with
+            | ConductorBinding.Bound sitting, _ when sitting <> named ->
+              result = Error(CohortError.ConductorHolderChanged(named, h.State.Conductor))
+            | (ConductorBinding.NeverBound | ConductorBinding.Vacant _), _ ->
+              result = Error(CohortError.ConductorHolderChanged(named, h.State.Conductor))
+            | ConductorBinding.Bound _, Error(CohortError.ReplaceByHolder who) -> who = named && target = named
+            | ConductorBinding.Bound _, Error(CohortError.SeatTargetAbsent(refused, listed)) ->
+              refused = target && not (isPresentIn h.State target) && List.sort listed = roster h.State
+            | ConductorBinding.Bound _, Ok(after, _, _) -> target <> named && isPresentIn h.State target && after.Conductor = ConductorBinding.Bound target
+            | ConductorBinding.Bound _, Error _ -> false))
+
+      testPropertyWithConfig replaceConfig "38: no step ever leaves more than one conductor, and a bound seat moves to another member only by the holder's delegation or a person's replacement" <| fun (ReplacingHistory intents) ->
+        let h = run intents
+        h.Steps
+        |> List.forall (fun step ->
+          let movedByOthers =
+            match step.Before.Conductor, step.After.Conductor with
+            | ConductorBinding.Bound before, ConductorBinding.Bound after when before <> after ->
+              (match step.Command with
+               | CohortCommand.DelegateConductor _
+               | CohortCommand.ReplaceConductor _ -> true
+               | _ -> false)
+            | _ -> true
+          List.length (conductorsOf step.After) <= 1 && movedByOthers)
+
+      testPropertyWithConfig replaceConfig "39: a ledger with replacements in it replays to the live seat, drops no row and loses no recorded event" <| fun (ReplacingHistory intents) ->
+        let h = run intents
+        let audit = replayAuditIn machine (ledgerOf h)
+        audit.Dropped.IsEmpty && audit.Diverged.IsEmpty && audit.Head.State.Conductor = h.State.Conductor
+
+      testCase "39 (coverage): the generated replacing histories actually replace a conductor, and refuse a stale holder, so 36-39 are not vacuous" <| fun _ ->
+        let histories = Gen.sample 300 (Arb.toGen (ReplacingGenerators.History())) |> Array.map (fun (ReplacingHistory intents) -> run intents)
+        let replaced =
+          histories |> Array.sumBy (fun h -> h.Steps |> List.filter (fun s -> match s.Command with CohortCommand.ReplaceConductor _ -> true | _ -> false) |> List.length)
+        let stale =
+          histories
+          |> Array.sumBy (fun h ->
+            h.Attempts
+            |> List.filter (fun a -> match a.Verdict with Result.Error(CohortError.ConductorHolderChanged _) -> true | _ -> false)
+            |> List.length)
+        Expect.isGreaterThan "replacements are accepted in generated histories" (replaced, 5)
+        Expect.isGreaterThan "stale holders are refused in generated histories" (stale, 5)
     ]
 
     testList "read model (10)" [

@@ -111,6 +111,36 @@ let membershipTests =
       r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
       r.Violations |> Expect.contains "seating over a bound conductor breaks the empty-seat rule" "SEATING-FILLS-ONLY-AN-EMPTY-SEAT"
 
+    testCase "FAULTS — a replacement that does not name the holder VIOLATES REPLACE-NAMES-THE-HOLDER, so the stale-holder rule has teeth" <| fun _ ->
+      let r = CohortVacancySpec.replaceFaultsStale ()
+      r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
+      r.Violations |> Expect.contains "replacing whoever holds the seat, whatever the person named, breaks the naming rule" "REPLACE-NAMES-THE-HOLDER"
+
+    testCase "FAULTS — a replacement that seats an absent member VIOLATES BOUND-IS-PRESENT and REPLACE-MOVES-ONLY-THE-SEAT, so the presence rule has teeth" <| fun _ ->
+      let r = CohortVacancySpec.replaceFaultsAbsent ()
+      r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
+      r.Violations |> Expect.contains "an absent conductor breaks the bound-implies-present rule" "BOUND-IS-PRESENT"
+      r.Violations |> Expect.contains "and the replacement rule" "REPLACE-MOVES-ONLY-THE-SEAT"
+
+    testCase "FAULTS — a replacement that sends the old holder away VIOLATES REPLACE-MOVES-ONLY-THE-SEAT, so the ordinary-member rule has teeth" <| fun _ ->
+      let r = CohortVacancySpec.replaceFaultsDeparts ()
+      r.Complete |> Expect.isTrue "the twin's bounded space must fully enumerate"
+      r.Violations |> Expect.contains "a replacement that departs the holder moves more than the seat" "REPLACE-MOVES-ONLY-THE-SEAT"
+
+    testCase "the replacement states are REACHABLE — the proof's alphabet really replaces a conductor, so its silence about ReplaceConductor is not vacuous" <| fun _ ->
+      let machine = SageFs.CohortScope.Machine
+      let at = System.DateTime(2020, 1, 1)
+      let run (s: Cohort.CohortState<string>) (c: Cohort.CohortCommand<string>) =
+        match Cohort.decide at [| 1uy |] s c with
+        | Ok(next, _, _) -> next
+        | Error e -> failwithf "unexpected refusal %A" e
+      let two =
+        [ Cohort.CohortCommand.Join("a", Cohort.JoinableRole.Implementer, None, machine)
+          Cohort.CohortCommand.Join("b", Cohort.JoinableRole.Implementer, None, machine) ]
+        |> List.fold run (Cohort.CohortState.empty ())
+      (run two (Cohort.CohortCommand.ReplaceConductor("a", "b", machine))).Conductor
+      |> Expect.equal "a replacement over a bound seat is accepted by the real decide" (Cohort.ConductorBinding.Bound "b")
+
     testCase "the seating states are REACHABLE — the proof's alphabet really seats a member, so its silence about SeatConductor is not vacuous" <| fun _ ->
       let seats =
         [ for clock in [ System.DateTime(2020, 1, 1) ] do

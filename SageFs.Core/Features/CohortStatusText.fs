@@ -18,6 +18,44 @@ module CohortStatusText =
   let vacantSeatAdvice : string =
     sprintf "A person fills it: run '%s <member id>' on the machine that runs the daemon (with no member id it lists who is present)." seatCommandText
 
+  /// The flag that names the holder a person replaces. One home, like `seatCommandText`.
+  [<Literal>]
+  let replaceFlagText = "--replace"
+
+  /// The command that replaces `holder` with `target`, exactly as a person types it. Either may be a placeholder
+  /// such as `<member id>` when the text is advice and not yet a command for a named member.
+  let replaceCommandText (target: string) (holder: string) : string =
+    sprintf "%s %s %s %s" seatCommandText target replaceFlagText holder
+
+  /// Whether the holder of a BOUND conductor seat is gone, read from the cohort's own ledger: the reaper renews a holder
+  /// that has an open stream or made a call on every pass, so a lease that has not been renewed for
+  /// `Timeouts.cohortHolderSilentAfter` belongs to a connection that is not there. `lapsesAt` is the instant the lease
+  /// window ends (the reaper departs the member on its first tick at or after it); until then the seat stays bound.
+  [<RequireQualifiedAccess>]
+  type HolderSilence =
+    | NotSilent
+    | SilentSince of since: DateTime * lapsesAt: DateTime
+
+  module HolderSilence =
+    /// The standing of the seat's holder at `now`. A seat that is not bound has no holder to be silent.
+    let ofState (state: SageFs.Cohort.CohortState<'m>) (now: DateTime) : HolderSilence =
+      match state.Conductor with
+      | SageFs.Cohort.ConductorBinding.Bound holder ->
+        match Map.tryFind holder state.Members with
+        | Some record when now - record.LastRenewal >= Timeouts.cohortHolderSilentAfter ->
+          HolderSilence.SilentSince(record.LastRenewal, record.LastRenewal + Timeouts.cohortLeaseWindow)
+        | Some _
+        | None -> HolderSilence.NotSilent
+      | SageFs.Cohort.ConductorBinding.NeverBound
+      | SageFs.Cohort.ConductorBinding.Vacant _ -> HolderSilence.NotSilent
+
+    /// "silent for 42 min, lapses at 2026-11-07 19:30:00Z": how long, and when the seat empties by itself.
+    let text (now: DateTime) (silence: HolderSilence) : string =
+      match silence with
+      | HolderSilence.NotSilent -> ""
+      | HolderSilence.SilentSince(since, lapsesAt) ->
+        sprintf "silent for %d min, lapses at %s" (int (now - since).TotalMinutes) (lapsesAt.ToString "u")
+
   /// A DURATION, in the minutes a lease is reasoned about in: "27m", "1h03m".
   /// `hh\:mm` wall-clock stamps and bare second counts are both the wrong unit
   /// for "how long have I got" — a reader has to subtract one from the other by
@@ -143,12 +181,28 @@ module CohortStatusText =
   let queuePositionText (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) (i: int) : string =
     queuePositionTextWith (fun _ -> None) frame i
 
-  /// The cohort status text. `reportFor` gives what the daemon recorded about a landing's failing tests, by landing id.
-  let renderWith
+  /// The conductor line for a seat that is held by `who`. A holder that has gone silent is said to be, with how long
+  /// and when its lease lapses, and the line names the command a person runs to replace it: the seat otherwise stays
+  /// bound to a connection that is not there until the lease lapses.
+  let heldSeatText (now: DateTime) (silence: HolderSilence) (who: MemberTable.MemberId) : string =
+    let holder = MemberTable.MemberId.display who
+    match silence with
+    | HolderSilence.NotSilent -> holder
+    | HolderSilence.SilentSince _ ->
+      sprintf "held by %s, %s; a person can replace it: %s" holder (HolderSilence.text now silence) (replaceCommandText "<member id>" holder)
+
+  /// The cohort status text. `silence` is the standing of the seat's holder, which a frame cannot say (it carries no
+  /// lease): the caller reads it off the cohort's state with `HolderSilence.ofState`. `reportFor` gives what the daemon
+  /// recorded about a landing's failing tests, by landing id.
+  let renderWithSilenceAndReports
+    (silence: HolderSilence)
     (reportFor: string -> FailingTestsText.Report option)
     (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>)
     : string =
     let sb = System.Text.StringBuilder()
+    // The clock every lease stamp on this page is measured against: read once,
+    // at render, so all the rows on one page agree with each other.
+    let now = DateTime.UtcNow
     let conductorText =
       // `frame.Conductor` (Slice 3, item 11) — read straight off the
       // published frame, correct across daemon restarts (replaced the
@@ -159,14 +213,11 @@ module CohortStatusText =
       // over a seat alice left 13 days ago — what `get_cohort_status`
       // actually reported — is precisely the confusion this now removes.
       match frame.Conductor with
-      | Cohort.ConductorBinding.Bound who -> MemberTable.MemberId.display who
+      | Cohort.ConductorBinding.Bound who -> heldSeatText now silence who
       | Cohort.ConductorBinding.Vacant(former, since, why) ->
         sprintf "(VACANT since %s — %s held it and left; nobody holds conductor authority. %s)"
           (since.ToString "u") (MemberTable.MemberId.display former) vacantSeatAdvice
       | Cohort.ConductorBinding.NeverBound -> "(none yet — no member has ever joined this cohort)"
-    // The clock every lease stamp on this page is measured against: read once,
-    // at render, so all the rows on one page agree with each other.
-    let now = DateTime.UtcNow
     sb.AppendLine(sprintf "Cohort ledger head: v%d" (int64 frame.Version)) |> ignore
     // WHICH cohort this is, and why it is on the page at all.
     //
@@ -238,6 +289,18 @@ module CohortStatusText =
         sb.AppendLine(sprintf "  %s" (CohortBoundedView.landingOverflowLabel landingView)) |> ignore
     sb.ToString()
 
+  /// The cohort status text for a holder nobody calls silent. `reportFor` gives what the daemon recorded about a landing's
+  /// failing tests, by landing id.
+  let renderWith
+    (reportFor: string -> FailingTestsText.Report option)
+    (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>)
+    : string =
+    renderWithSilenceAndReports HolderSilence.NotSilent reportFor frame
+
   /// The cohort status text with no failure reports: every landing Blocked on failing tests reads by count and id.
+  let renderWithSilence (silence: HolderSilence) (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) : string =
+    renderWithSilenceAndReports silence (fun _ -> None) frame
+
+  /// The cohort status text with no failure reports and a holder nobody calls silent.
   let render (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) : string =
     renderWith (fun _ -> None) frame

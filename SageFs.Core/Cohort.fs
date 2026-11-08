@@ -274,6 +274,10 @@ module Cohort =
     /// from a vacancy: there is nobody who left, so there is no one to
     /// reinstate and nothing to reassign.
     | NeverBound
+    /// A person replaced a holder whose connection was gone (`ReplaceConductor`). It is the reason carried by the
+    /// seat that ended, in `ConductorReplaced`'s `ended`; the seat itself is never empty, it moves to the
+    /// replacement in the same step.
+    | Replaced
 
   /// The conductor binding (§4.2) as a CLOSED SET rather than an `'m option`.
   ///
@@ -629,6 +633,14 @@ module Cohort =
     /// `NeverBound`, and only for a member who is `Present` (the `Bound` invariant). A seat that is bound is
     /// refused: moving it is `DelegateConductor`, by the conductor.
     | SeatConductor of toMember: 'm * scope: CohortScope
+    /// A PERSON replaces the conductor of a BOUND seat whose connection is gone. Built in the same single place as
+    /// `SeatConductor` (the operator route; no MCP tool, no token). It names the holder it replaces, and is refused
+    /// when that is no longer the holder, so a person who looked at the seat cannot move one that changed under
+    /// them (the same compare-and-swap discipline as a fence). The target must be present. The replaced holder
+    /// becomes an ordinary member: its presence is untouched, and the claims it holds stay its own and follow the
+    /// normal orphan rules when it departs. It is a separate case, not a mode of `SeatConductor`, so the commands
+    /// already written to a persisted ledger keep the shape they were recorded in.
+    | ReplaceConductor of holder: 'm * toMember: 'm * scope: CohortScope
     /// The member's own watcher observed a save; warn (never block — a claim
     /// cannot stop an edit, §5.1) if it landed inside someone else's claim.
     | ObserveSave of who: 'm * path: string * scope: CohortScope
@@ -706,6 +718,10 @@ module Cohort =
     /// `Vacant(former, since, why)` names who held the seat, since when and why it emptied, `NeverBound` says no
     /// conductor had ever sat. The ledger keeps what the cohort looked like when a person stepped in.
     | ConductorSeated of seated: 'm * ended: ConductorBinding<'m>
+    /// A person replaced the holder of a bound seat (`ReplaceConductor`). `ended` is the seat the former holder
+    /// lost, as `Vacant(former, now, Replaced)`, so the ledger names who was replaced and when. `seated` holds the
+    /// seat from this event on.
+    | ConductorReplaced of seated: 'm * ended: ConductorBinding<'m>
     | ClaimAcquired of ClaimId * ClaimScope * holder: 'm * fence: int64<fence>
     | ClaimReleased of ClaimId * by: 'm * fence: int64<fence>
     | ClaimOrphaned of ClaimId * previousHolder: 'm * fence: int64<fence>
@@ -803,6 +819,12 @@ module Cohort =
     /// `SeatConductor` found the seat already held by `sitting`. A person fills an EMPTY seat; moving a held one is
     /// the conductor's `DelegateConductor`.
     | ConductorSeatTaken of sitting: 'm
+    /// `ReplaceConductor` named `named` as the holder, and the seat is not held by them: it is held by someone
+    /// else, or empty. Carries the binding as it stands, so the person sees who holds it now and can run the
+    /// command again with the right name.
+    | ConductorHolderChanged of named: 'm * actual: ConductorBinding<'m>
+    /// `ReplaceConductor` named the holder as its own replacement: the seat would not move.
+    | ReplaceByHolder of 'm
     /// A veto from a caller who may not veto: a seat-less caller, or an observer. Carries the rule it broke.
     | VetoRefused of by: 'm * VetoRefusal
     /// A veto names a reason, and the reason it was given is blank or longer than a statement may be.
@@ -845,6 +867,7 @@ module Cohort =
     | CohortCommand.ReassignClaim(_, _, _, scope)
     | CohortCommand.DelegateConductor(_, _, scope)
     | CohortCommand.SeatConductor(_, scope)
+    | CohortCommand.ReplaceConductor(_, _, scope)
     | CohortCommand.ObserveSave(_, _, scope)
     | CohortCommand.RequestLanding(_, _, _, _, scope)
     | CohortCommand.RebaseCompleted(_, _, scope)
@@ -1426,6 +1449,34 @@ module Cohort =
           // `toMember` is Present by that guard, which is the `Bound` invariant. The event keeps the vacancy it ended.
           let newState = { state with Conductor = ConductorBinding.Bound toMember }
           Ok(newState, [ CohortEvent.ConductorSeated(toMember, state.Conductor) ], [])
+
+    | CohortCommand.ReplaceConductor(holder, toMember, scope) ->
+      // A PERSON replaces the holder of a BOUND seat. The command names the holder, and the seat must still be bound to
+      // exactly that member: a person who looked at the seat cannot move one that changed under them, and an empty seat
+      // is filled by `SeatConductor`, not replaced. The same operator route is the only place that builds it.
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
+      match state.Conductor with
+      | ConductorBinding.NeverBound
+      | ConductorBinding.Vacant _ -> Error(CohortError.ConductorHolderChanged(holder, state.Conductor))
+      | ConductorBinding.Bound sitting when sitting <> holder -> Error(CohortError.ConductorHolderChanged(holder, state.Conductor))
+      | ConductorBinding.Bound _ when toMember = holder -> Error(CohortError.ReplaceByHolder holder)
+      | ConductorBinding.Bound _ ->
+        if not (isPresent state toMember) then
+          let roster =
+            state.Members
+            |> Map.toList
+            |> List.choose (fun (m, r) ->
+              match r.Presence with
+              | MemberPresence.Present -> Some m
+              | MemberPresence.Departed _ -> None)
+          Error(CohortError.SeatTargetAbsent(toMember, roster))
+        else
+          // `toMember` is Present by that guard, which keeps the `Bound` invariant. Nothing else moves: the former holder
+          // stays Present (or Departed) as it was, and the claims it holds stay its own.
+          let newState = { state with Conductor = ConductorBinding.Bound toMember }
+          Ok(newState, [ CohortEvent.ConductorReplaced(toMember, ConductorBinding.Vacant(holder, clock, VacancyReason.Replaced)) ], [])
 
     | CohortCommand.ObserveSave(who, path, scope) ->
       match checkScope scope with

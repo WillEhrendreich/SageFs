@@ -160,6 +160,7 @@ module CohortLanes =
     | CohortEvent.ConductorBound _
     | CohortEvent.ConductorDelegated _
     | CohortEvent.ConductorSeated _
+    | CohortEvent.ConductorReplaced _
     | CohortEvent.ClaimViolationObserved _
     | CohortEvent.LandingStateChanged _
     | CohortEvent.IntegrationConfigured _

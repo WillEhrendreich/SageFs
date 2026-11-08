@@ -195,6 +195,11 @@ let items : Item list =
       [ "docs/mcp-tools.md" ]
       "When a cohort's conductor leaves or goes silent the seat stays empty, and no tool can fill it, so a cohort whose conductor left could only be reset by wiping its ledger. `sagefs cohort seat <member id>` fills it: the person who runs the daemon names a present member, the operator credential is checked, and the ledger records `ConductorSeated` with the vacancy it ended. A held seat, an absent member and a member under a token are refused with the reason, and no MCP tool or token can build the command, so an agent cannot take the seat. With no member id the command lists who is present and where the seat stands."
 
+    item "cohort-replace-a-conductor" "A person can replace a conductor whose connection is gone" Agents Now
+      (landmark "SageFs/CohortSeatCommand.fs" "commandForReplace")
+      [ "docs/mcp-tools.md"; "docs/agents.md" ]
+      "A conductor whose connection is gone keeps the seat until its lease lapses, 30 minutes, and a seating over a bound seat is refused, so the person at the machine could only wait. `sagefs cohort seat <member id> --replace <holder id>` replaces the holder: it names the holder it replaces and is refused when that is no longer the holder, the target must be present and not under a token, and the replaced holder becomes an ordinary member (presence and claims untouched). The ledger records `ConductorReplaced` with the former holder. Without `--replace` a bound seat is still refused, and the refusal says who holds it, whether it is silent and for how long, when its lease lapses and the exact command; `get_cohort_status` and the dashboard panel say the same for a silent holder. No MCP tool or token can build the command. The dashboard button is P12's `SeatApproval`, which takes the replace mode with the person's yes."
+
     item "more-settings-editable" "More settings editable from the dashboard" Dashboard Next
       NoLandmarkYet
       [ "docs/configuration.md"; "docs/plans/more-settings-editable.md" ]

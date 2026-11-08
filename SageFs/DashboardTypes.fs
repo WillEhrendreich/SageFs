@@ -1684,6 +1684,9 @@ type DashboardInfra = {
   /// session-scoped, so this is called on every render regardless of
   /// which (or whether any) session is being viewed.
   ReadCohortFrame: unit -> Cohort.CohortFrame<MemberTable.MemberId>
+  /// Whether the conductor seat's holder has gone silent, read off the cohort's state at call time (a frame carries no
+  /// lease). The panel names the replace command for a silent holder.
+  ReadHolderSilence: unit -> Features.CohortStatusText.HolderSilence
   /// Every recorded cohort ledger entry, in `Seq` order (§6.5's lane view —
   /// `CohortLanes.project`'s input). `CohortFrame` carries no timing data at
   /// all (see `CohortLanes.fs`'s module doc), so the lane view reads the

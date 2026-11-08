@@ -86,6 +86,7 @@ let mkInfra () : DashboardInfra =
     ActivityTracker = None
     LiveBindingsAdaptive = None
     ReadCohortFrame = fun () -> SageFs.Cohort.project (SageFs.Cohort.replayHead []) [||]
+    ReadHolderSilence = fun () -> SageFs.Features.CohortStatusText.HolderSilence.NotSilent
     ReadCohortLedger = fun () -> []
     ReadTrunk = fun () -> SageFs.Features.TrunkFollow.initial }
 
