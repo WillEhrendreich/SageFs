@@ -953,6 +953,7 @@
         <Compile Include="SettingsPanelTests.fs" />
         <Compile Include="SettingsExternalTests.fs" />
         <Compile Include="SettingsSnapshotTests.fs" />
+        <Compile Include="SettingsRetiredTests.fs" />
         <Compile Include="SettingsStoreSimDstTests.fs" />
         <Compile Include="SupervisorPortHandshakeTests.fs" />
         <Compile Include="WebAppHotReloadVerificationTests.fs" />
