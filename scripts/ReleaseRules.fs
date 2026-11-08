@@ -322,16 +322,19 @@ let freshnessOfForce (force: bool) : PassReuse =
   | true -> ForceFresh
   | false -> AllowReuse
 
-/// The arguments `dotnet` gets to run the pipeline: every stage, the release bundle, `--fresh` when asked and `--keep-going`
-/// when asked.
-let pipelineArgs (reuse: PassReuse) (mode: FailureMode) : string list =
+/// The arguments `dotnet` gets to run the pipeline: every stage, the release bundle, and `--fresh` when asked.
+let pipelineArgs (reuse: PassReuse) : string list =
   [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release" ]
   @ (match reuse with
      | AllowReuse -> []
      | ForceFresh -> [ "--fresh" ])
-  @ (match mode with
-     | StopAtFirstRed -> []
-     | KeepGoing -> [ "--keep-going" ])
+
+/// What the pipeline reads for `FailureMode`: `SAGEFS_KEEP_GOING=1` (ci-pipeline.fsx). It is the environment and not an
+/// argument because the pipeline's command-line parser declares its options and refuses `--keep-going` after `ci release`.
+let failureModeEnvironment (mode: FailureMode) : (string * string) list =
+  match mode with
+  | StopAtFirstRed -> []
+  | KeepGoing -> [ "SAGEFS_KEEP_GOING", "1" ]
 
 /// Where the pipeline keeps its tier pass records: beside the gate's passes, outside every checkout.
 let tierPassesDirectory (gateHome: string) : string = gateHome.TrimEnd('/') + "/tier-passes"

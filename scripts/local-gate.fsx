@@ -368,7 +368,10 @@ let runPipeline (wt: string) (sha: string) (log: string) (reuse: ReleaseRules.Pa
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
-  ReleaseRules.pipelineArgs reuse mode |> List.iter psi.ArgumentList.Add
+  ReleaseRules.pipelineArgs reuse |> List.iter psi.ArgumentList.Add
+  // `--keep-going` reaches the pipeline as SAGEFS_KEEP_GOING: its command line refuses the option.
+  for name, value in ReleaseRules.failureModeEnvironment mode do
+    psi.Environment[name] <- value
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   // A tier that already went green on this commit with these exact bytes is not run again; `--force` and
   // `ship --fresh` (SAGEFS_FRESH) run every tier.
