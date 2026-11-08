@@ -206,6 +206,20 @@ stream closed, so the client showed the server as disconnected until someone rel
 - The bridge waits for the old daemon's replacement for up to a minute on a fast machine (`Timeouts.stdioBridgeReconnectWait`,
   longer on a slower one). After that it starts a daemon itself, the way it does when it finds none at
   startup, and gives up only by the rules of a cold start.
+- A request that arrives while the bridge is minting that new session waits for it and goes out under the new
+  session id, in order, after the push stream is open. The bridge forwards nothing under the old id once it has seen the
+  daemon answer. Before 2026-11-08 such a request went out under the old id, got a 404, and the bridge's repair
+  minted a second session: the client then received every notification twice, because both push streams stayed open. Now
+  a new session replaces the old one's stream, and requests that are refused for the same old id share one repair.
+- If the daemon cannot give the bridge a session (it answered without an id, or went away again), the requests
+  that were waiting are answered with an error that names the reason, and the bridge goes back to waiting for a
+  daemon. It does not hold them.
+- A request the daemon has not answered within the bridge's own deadline (`Timeouts.workerHttpRequest`, ten minutes
+  by default, so a long test run is fine) is answered with an error that says it timed out and may still be running.
+  The bridge stays on its session. Before 2026-11-08 a timeout was treated as the daemon being gone, which started a
+  needless re-handshake and left a live session behind.
+- While the daemon is down or a session is being minted the bridge holds at most `Timeouts.stdioBridgeQueueCap` (1000)
+  messages. The one past that is answered with an error that says the queue is full.
 
 The installer replaces the tool's files under a running bridge. That does not end the bridge: a process
 that already loaded its assemblies keeps them. Measured on 2026-11-07 against a throwaway daemon: the
