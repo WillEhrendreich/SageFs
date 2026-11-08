@@ -190,6 +190,9 @@
         <!-- Eval-bound DST: folds the real EvalWait.next through an eval that finishes, stops when cancelled or never
              answers; twins never cancel, cancel before the limit, and wait forever after the cancel. -->
         <Compile Include="EvalBoundSim.fs" />
+        <!-- Eval-queue DST: several callers, one host that runs their evals in turn; folds the real EvalInterrupts decisions;
+             twins carry no request id and do not disarm the grace on a reply. -->
+        <Compile Include="EvalQueueSim.fs" />
         <!-- Source state DST: folds the real SourceState decision through edits, builds that end or fail,
              workers that load the build on disk or keep an older one, outside builds, files that cannot be
              read, a rebuild record delivered in any order, and a worker that goes silent; twins ignore write

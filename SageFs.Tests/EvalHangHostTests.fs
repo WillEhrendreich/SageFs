@@ -38,6 +38,14 @@ let private eval (result: ActorResult) (code: string) : Task<EvalResponse> =
   result.Actor.PostAndAsyncReply(fun reply -> Eval({ Code = code; Args = Map.empty }, CancellationToken.None, reply))
   |> Started.asTask
 
+let private evalWith (result: ActorResult) (token: CancellationToken) (code: string) : Task<EvalResponse> =
+  result.Actor.PostAndAsyncReply(fun reply -> Eval({ Code = code; Args = Map.empty }, token, reply))
+  |> Started.asTask
+
+/// A legitimate long eval: it waits on an event nobody sets for a few seconds, then returns the value it defines.
+let private slowButLegitimate =
+  "let aDefined = ((new System.Threading.ManualResetEvent(false)).WaitOne(8000) |> ignore; 42);;"
+
 let private cancel (result: ActorResult) : Task<bool> =
   result.Actor.PostAndAsyncReply(fun reply -> CancelEval reply) |> Started.asTask
 
@@ -104,6 +112,28 @@ let tests =
       session.GetSessionStatus() |> Expect.equal "Ready again" SessionStatus.Ready
       let! again = within TestTimeouts.patience (eval session "1 + 1;;")
       again.EvaluationResult |> Result.isOk |> Expect.isTrue "the fresh host evaluates"
+    }
+
+    testTask "agent B queued behind agent A's long eval times out: B is cancelled before it ran, A finishes, and A's definitions survive" {
+      let! session = startSession ()
+      let a = evalWith session CancellationToken.None slowButLegitimate
+      do! untilEvaluating session
+      let timeoutOfB = new CancellationTokenSource()
+      let b = evalWith session timeoutOfB.Token "let bDefined = 1;;"
+      // B reaches the host's queue behind A before its timeout fires.
+      do! Task.Delay TestTimeouts.startSettle
+      timeoutOfB.Cancel()
+      let! aResult = within escalationBound a
+      aResult.EvaluationResult |> Result.isOk |> Expect.isTrue "A's eval was not touched by B's cancel"
+      let! bResult = within escalationBound b
+      match bResult.EvaluationResult with
+      | Result.Error error -> error.Message |> Expect.stringContains "B is told it was queued and never ran" "before it ran"
+      | Result.Ok _ -> failtest "B was cancelled while queued and must not have run"
+      session.GetSessionStatus() |> Expect.equal "the host was not killed" SessionStatus.Ready
+      let! survived = within TestTimeouts.patience (eval session "aDefined;;")
+      match survived.EvaluationResult with
+      | Result.Ok text -> text |> Expect.stringContains "A's definition is still in the session" "42"
+      | Result.Error error -> failtestf "A's definition was lost: %A" error
     }
 
     testTask "cancelling a wait stops it in the host, the session is Ready, and the next eval runs" {

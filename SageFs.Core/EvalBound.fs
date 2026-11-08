@@ -104,13 +104,17 @@ module EvalWait =
     /// The limit was already spent, so the eval was never started.
     | NotStarted
 
-  let private startCancel (cancel: unit -> Task) : unit =
+  /// What is done with a cancel that failed. RED stub: nothing, which is the bug (the failure is lost).
+  let logCancelFailure (_: exn) : unit = ()
+
+  let private startCancel (observe: exn -> unit) (cancel: unit -> Task) : unit =
     // On the pool, so a thunk that throws before it returns a task becomes a faulted task nobody reads.
     Task.Run(System.Func<Task>(fun () -> cancel ())) |> ignore
 
   let private waitFor
     (limit: TimeSpan)
     (answerWait: TimeSpan)
+    (observe: exn -> unit)
     (call: Task<'answer>)
     (cancel: unit -> Task)
     : Task<Waited<'answer>> =
@@ -132,7 +136,7 @@ module EvalWait =
         | false, EvalWaitStep.AskCancel ->
           stage <- EvalWaitStage.CancelAsked clock.Elapsed
           // A cancel that itself fails or hangs must not cost the caller its answer: the wait below is already bounded.
-          startCancel cancel
+          startCancel observe cancel
         | false, EvalWaitStep.GiveUp -> outcome <- ValueSome Waited.GaveUp
       return outcome.Value
     }
@@ -142,12 +146,13 @@ module EvalWait =
   let run
     (limit: TimeSpan)
     (answerWait: TimeSpan)
+    (observe: exn -> unit)
     (start: unit -> Task<'answer>)
     (cancel: unit -> Task)
     : Task<Waited<'answer>> =
     match limit > TimeSpan.Zero with
     | false -> Task.FromResult Waited.NotStarted
-    | true -> waitFor limit answerWait (start ()) cancel
+    | true -> waitFor limit answerWait observe (start ()) cancel
 
   /// `run`, settled into what an eval caller reads: the answer (and the note to put before it when it came after a
   /// cancel at the limit), or the refusal text when there was no answer, built with `refuse`.
@@ -160,7 +165,7 @@ module EvalWait =
     (cancel: unit -> Task)
     : Task<Result<'answer, 'refusal> * string> =
     task {
-      let! waited = run left answerWait start cancel
+      let! waited = run left answerWait logCancelFailure start cancel
       return
         match waited with
         | Waited.Finished answer -> answer, ""

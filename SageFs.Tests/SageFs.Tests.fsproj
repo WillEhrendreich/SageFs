@@ -405,6 +405,7 @@
         <Compile Include="HostCrashRecoveryTests.fs" />
         <Compile Include="EvalBoundTests.fs" />
         <Compile Include="EvalBoundSimTests.fs" />
+        <Compile Include="EvalQueueSimTests.fs" />
         <Compile Include="EvalHangHostTests.fs" />
         <Compile Include="FsiHostLimitsTests.fs" />
         <Compile Include="IsolatedFsiSessionTests.fs" />

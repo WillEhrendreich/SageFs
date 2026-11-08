@@ -71,14 +71,14 @@ let tests =
     testList "the wait" [
       testTask "an eval that answers in time is passed through and never cancelled" {
         let cancelled = ref 0
-        let! waited = EvalWait.run (secs 5.) (secs 5.) (fun () -> Task.FromResult 7) (fun () -> cancelled.Value <- cancelled.Value + 1; Task.CompletedTask)
+        let! waited = EvalWait.run (secs 5.) (secs 5.) ignore (fun () -> Task.FromResult 7) (fun () -> cancelled.Value <- cancelled.Value + 1; Task.CompletedTask)
         waited |> Expect.equal "finished" (EvalWait.Waited.Finished 7)
         cancelled.Value |> Expect.equal "no cancel" 0
       }
 
       testTask "an eval that stops when cancelled answers after the cancel, which is named" {
         let call = TaskCompletionSource<int>()
-        let! waited = EvalWait.run (millis 100.) (secs 5.) (fun () -> call.Task) (fun () -> call.TrySetResult 42 |> ignore; Task.CompletedTask)
+        let! waited = EvalWait.run (millis 100.) (secs 5.) ignore (fun () -> call.Task) (fun () -> call.TrySetResult 42 |> ignore; Task.CompletedTask)
         waited |> Expect.equal "finished after cancel" (EvalWait.Waited.FinishedAfterCancel 42)
       }
 
@@ -86,7 +86,7 @@ let tests =
         let call = TaskCompletionSource<int>()
         let cancelled = ref 0
         let clock = Diagnostics.Stopwatch.StartNew()
-        let! waited = EvalWait.run (millis 100.) (millis 200.) (fun () -> call.Task) (fun () -> cancelled.Value <- cancelled.Value + 1; Task.CompletedTask)
+        let! waited = EvalWait.run (millis 100.) (millis 200.) ignore (fun () -> call.Task) (fun () -> cancelled.Value <- cancelled.Value + 1; Task.CompletedTask)
         waited |> Expect.equal "gave up" EvalWait.Waited.GaveUp
         cancelled.Value |> Expect.equal "asked once" 1
         Expect.isTrue "not before the limit and the answer bound" (clock.Elapsed >= millis 290.)
@@ -94,7 +94,7 @@ let tests =
 
       testTask "a call with no time left is never started" {
         let started = ref 0
-        let! waited = EvalWait.run TimeSpan.Zero (secs 5.) (fun () -> started.Value <- started.Value + 1; Task.FromResult 1) (fun () -> Task.CompletedTask)
+        let! waited = EvalWait.run TimeSpan.Zero (secs 5.) ignore (fun () -> started.Value <- started.Value + 1; Task.FromResult 1) (fun () -> Task.CompletedTask)
         waited |> Expect.equal "not started" EvalWait.Waited.NotStarted
         started.Value |> Expect.equal "the eval never began" 0
       }
@@ -118,9 +118,27 @@ let tests =
         | Result.Ok _ -> failtest "a spent budget runs nothing"
       }
 
+      testTask "a cancel that throws before it returns a task is observed, not lost" {
+        let seen = TaskCompletionSource<string>()
+        let call = TaskCompletionSource<int>()
+        let! _ = EvalWait.run (millis 50.) (millis 100.) (fun ex -> seen.TrySetResult ex.Message |> ignore) (fun () -> call.Task) (fun () -> failwith "the worker is gone")
+        let! first = Task.WhenAny(seen.Task :> Task, Task.Delay TestTimeouts.patience)
+        obj.ReferenceEquals(first, seen.Task) |> Expect.isTrue "the failure reached the observer"
+        seen.Task.Result |> Expect.stringContains "with its own text" "the worker is gone"
+      }
+
+      testTask "a cancel whose task faults is observed, not lost" {
+        let seen = TaskCompletionSource<string>()
+        let call = TaskCompletionSource<int>()
+        let! _ = EvalWait.run (millis 50.) (millis 100.) (fun ex -> seen.TrySetResult ex.Message |> ignore) (fun () -> call.Task) (fun () -> Task.FromException(exn "the connection dropped"))
+        let! first = Task.WhenAny(seen.Task :> Task, Task.Delay TestTimeouts.patience)
+        obj.ReferenceEquals(first, seen.Task) |> Expect.isTrue "the failure reached the observer"
+        seen.Task.Result |> Expect.stringContains "with its own text" "the connection dropped"
+      }
+
       testTask "a cancel that throws costs the caller nothing" {
         let call = TaskCompletionSource<int>()
-        let! waited = EvalWait.run (millis 50.) (millis 100.) (fun () -> call.Task) (fun () -> failwith "the worker is gone")
+        let! waited = EvalWait.run (millis 50.) (millis 100.) ignore (fun () -> call.Task) (fun () -> failwith "the worker is gone")
         waited |> Expect.equal "still answered" EvalWait.Waited.GaveUp
       }
     ]

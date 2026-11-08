@@ -782,3 +782,32 @@ module HostLimits =
       match (try Result.Ok(File.ReadAllLines path) with ex -> Result.Error(ArgsFileUnreadable(path, ex.Message))) with
       | Result.Error error -> Result.Error error
       | Result.Ok lines -> validateArgs path lines
+
+/// What an interrupt does, and when an interrupted host is killed: the decisions that make a cancel the business of the
+/// request that asked for it. Pure, and compiled into both the host and SageFs.Core, so the host acts on them and the
+/// simulation folds them.
+module EvalInterrupts =
+
+  /// What an interrupt naming a request does.
+  type Plan =
+    /// The request is the eval the host is running: cancel it and interrupt its thread.
+    | InterruptRunning
+    /// The request is still queued behind another eval: answer it at once and skip it when its turn comes.
+    | DropQueued
+    /// The request is not the running one and not queued (it already answered): nothing to do.
+    | NothingToInterrupt
+
+  /// `running` is the id of the eval on the session thread, `queued` the ids waiting behind it, `target` the request the
+  /// interrupt names.
+  let planInterrupt (running: int64 voption) (queued: int64 list) (target: int64) : Plan =
+    match running with
+    | ValueSome _ -> Plan.InterruptRunning
+    | ValueNone -> Plan.NothingToInterrupt
+
+  /// What to do when an interrupted request's grace has run out.
+  type GraceVerdict =
+    | KeepHost
+    | KillHost
+
+  /// `stillWaiting`: the request has not been answered.
+  let graceExpired (stillWaiting: bool) : GraceVerdict = KillHost
