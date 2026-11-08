@@ -23,6 +23,15 @@ let private genPlainName : Gen<string> =
 
 let private genPoisonedName : Gen<string> = Gen.elements ProcessEnvironment.poisonedVariables
 
+let private genConfig : Gen<DirectoryConfig> =
+  gen {
+    let! gc = Gen.elements [ WorkstationGc; ServerGc ]
+    let! names = Gen.listOf genPlainName
+    let! args = Gen.listOf (Gen.elements [ "--no-warn:1182"; "--langversion:preview" ])
+    let! artifacts = Gen.oneof [ Gen.constant ProjectChooses; genPlainName |> Gen.map (fun n -> ArtifactsIn("/tmp/" + n)) ]
+    return { DirectoryConfigDefaults.empty with Gc = gc; SessionEnv = names |> List.map (fun n -> EnvEntry(n, "v")); DefaultArgs = args; Artifacts = artifacts }
+  }
+
 [<Tests>]
 let sessionOptionsTests =
   testList "SessionOptions" [
@@ -46,7 +55,7 @@ let sessionOptionsTests =
         let options, refusals = SessionOptions.ofConfig (configWith (fun c -> { c with SessionEnv = List.map EnvEntry entries }))
         let refusedNames = refusals |> List.choose (function SessionOptions.EnvNamePoisoned n -> Some n | _ -> None) |> List.distinct |> List.sort
         refusedNames = (List.distinct poisoned |> List.sort)
-        && (options.Env |> List.map fst |> List.sort) = (List.sort plain)))
+        && (options.Env |> List.map (fun (EnvEntry(name, _)) -> name) |> List.sort) = (List.sort plain)))
 
     testCase "WHY - a refusal says what it refused and what to do" <| fun _ ->
       let text = SessionOptions.describe (SessionOptions.EnvNamePoisoned "DOTNET_ROOT")
@@ -116,29 +125,62 @@ let sessionOptionsTests =
         refusals |> Expect.equal (sprintf "%s is named" given) [ refusal ]
         SessionOptions.describe refusal |> Expect.stringContains "says the next step" "→"
 
-    testCase "WHY - the artifacts path reaches the worker as one SageFs variable, and the loader turns that variable into the MSBuild property" <| fun _ ->
+    testProperty "WHY - the options a worker reads from its environment are the options the daemon holds, so the build, the loader and the worker cannot disagree"
+      (Prop.forAll (Arb.fromGen genConfig) (fun config ->
+        let options, _ = SessionOptions.ofConfig config
+        let environment = SessionOptions.workerEnvironment options
+        let lookup (name: string) = environment |> List.tryFind (fun (n, _) -> n = name) |> Option.map snd |> Option.toObj
+        List.length environment <= 1
+        && SessionOptions.fromEnvironment lookup = Ok options
+        && (SessionOptions.fromEnvironment lookup |> Result.map SessionOptions.buildProperties) = Ok(SessionOptions.buildProperties options)))
+
+    testCase "WHY - no carrier is no options, and a garbled carrier is refused with a reason, not read as no options" <| fun _ ->
+      SessionOptions.fromEnvironment (fun _ -> null) |> Expect.equal "absent" (Ok SessionOptions.none)
+      SessionOptions.fromEnvironment (fun _ -> "") |> Expect.equal "empty" (Ok SessionOptions.none)
+      SessionOptions.fromEnvironment (fun _ -> "{nope") |> Expect.isError "garbled"
+      SessionOptions.workerEnvironment SessionOptions.none |> Expect.isEmpty "none sends nothing"
+
+    testCase "WHY - the artifacts path becomes the MSBuild property the loader and the builds pass" <| fun _ ->
       let options, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn "/tmp/art" }))
-      SessionOptions.workerEnvironment options |> Expect.equal "the worker's variable" [ ArtifactsChannel.variable, "/tmp/art" ]
-      SessionOptions.workerEnvironment SessionOptions.none |> Expect.isEmpty "none, nothing"
-      ArtifactsChannel.properties (fun name -> if name = ArtifactsChannel.variable then "/tmp/art" else null)
-      |> Expect.equal "the property the loader passes" [ "ArtifactsPath", "/tmp/art" ]
-      ArtifactsChannel.properties (fun _ -> null) |> Expect.isEmpty "unset is no property"
-      ArtifactsChannel.properties (fun _ -> "") |> Expect.isEmpty "empty is no property"
+      SessionOptions.buildProperties options |> Expect.equal "the property" [ "ArtifactsPath", "/tmp/art" ]
+      SessionOptions.buildProperties SessionOptions.none |> Expect.isEmpty "none, no property"
 
     testCase "WHY - a directory's options are remembered by the daemon for its builds and its worker, and another directory does not see them" <| fun _ ->
       let a = Path.Combine(Path.GetTempPath(), "registry-a")
       let b = Path.Combine(Path.GetTempPath(), "registry-b")
       let options, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn "/tmp/art-a" }))
       SessionOptionsRegistry.remember a options
-      SessionOptionsRegistry.artifactsFor a |> Expect.equal "a has it" (ArtifactsIn "/tmp/art-a")
-      SessionOptionsRegistry.artifactsFor b |> Expect.equal "b does not" ProjectChooses
-      SessionOptionsRegistry.workerEnvironment a |> Expect.equal "a's worker gets the variable" [ ArtifactsChannel.variable, "/tmp/art-a" ]
+      SessionOptionsRegistry.optionsFor a |> Expect.equal "a has it" options
+      SessionOptionsRegistry.optionsFor b |> Expect.equal "b does not" SessionOptions.none
+      SessionOptionsRegistry.workerEnvironment a |> Expect.equal "a's worker gets the one carrier" (SessionOptions.workerEnvironment options)
       SessionOptionsRegistry.workerEnvironment b |> Expect.isEmpty "b's worker gets nothing"
       let psi = SessionBuild.buildStartInfo [ "build" ] a
       psi.Environment["ArtifactsPath"] |> Expect.equal "a's build builds under the artifacts path" "/tmp/art-a"
       (SessionBuild.buildStartInfo [ "build" ] b).Environment.ContainsKey "ArtifactsPath" |> Expect.isFalse "b's build is the project's own"
       SessionOptionsRegistry.remember a SessionOptions.none
-      SessionOptionsRegistry.artifactsFor a |> Expect.equal "a config that stops asking is forgotten" ProjectChooses
+      SessionOptionsRegistry.optionsFor a |> Expect.equal "a config that stops asking is forgotten" SessionOptions.none
+
+    testCase "WHY - a worker's own build reads the carrier it was started with, so its rebuild goes where the daemon's build went" <| fun _ ->
+      let options, _ = SessionOptions.ofConfig (configWith (fun c -> { c with Artifacts = ArtifactsIn "/tmp/art-worker" }))
+      let carrier = SessionOptions.workerEnvironment options |> List.head
+      TestInfrastructure.withEnvVar (fst carrier) (Some(snd carrier)) (fun () ->
+        let psi = SessionBuild.buildStartInfo [ "build" ] (Path.Combine(Path.GetTempPath(), "registry-nobody-knows"))
+        psi.Environment["ArtifactsPath"] |> Expect.equal "the worker's build builds under the artifacts path" "/tmp/art-worker")
+
+    Integration.hostCase "WHY - reading a directory's config returns it and writes nothing, and only preparing a session writes the options its builds and worker use" (fun () ->
+      let dir = Path.Combine(Path.GetTempPath(), "sagefs-pure-load-" + Guid.NewGuid().ToString "N")
+      Directory.CreateDirectory(Path.Combine(dir, ".SageFs")) |> ignore
+      try
+        File.WriteAllText(Path.Combine(dir, ".SageFs", "config.fsx"), "{ DirectoryConfig.empty with Artifacts = ArtifactsIn \"/tmp/pure-art\" }")
+        (DirectoryConfig.load dir |> Option.map (fun c -> c.Artifacts)) |> Expect.equal "load returns the config" (Some(ArtifactsIn "/tmp/pure-art"))
+        SessionOptionsRegistry.optionsFor dir |> Expect.equal "load wrote nothing" SessionOptions.none
+        (DirectoryConfig.loadAsync dir |> Async.RunSynchronously |> Option.map (fun c -> c.Artifacts)) |> Expect.equal "loadAsync returns the config" (Some(ArtifactsIn "/tmp/pure-art"))
+        SessionOptionsRegistry.optionsFor dir |> Expect.equal "loadAsync wrote nothing" SessionOptions.none
+        DirectoryConfig.prepareForCreate dir |> Expect.isTrue "auto-open is still on"
+        (SessionOptionsRegistry.optionsFor dir).Artifacts |> Expect.equal "preparing the session wrote them" (ArtifactsIn "/tmp/pure-art")
+      finally
+        SessionOptionsRegistry.remember dir SessionOptions.none
+        try Directory.Delete(dir, true) with :? IOException -> ())
 
     Integration.hostCase "WHY - a real build of a small project with the session's artifacts path writes its output there and leaves the project's bin and obj untouched" (fun () ->
       let project = Path.Combine(Path.GetTempPath(), "sagefs-artifacts-" + Guid.NewGuid().ToString "N")
@@ -159,7 +201,8 @@ let sessionOptionsTests =
         Directory.Exists(Path.Combine(project, "bin")) |> Expect.isFalse "the project has no bin"
         Directory.Exists(Path.Combine(project, "obj")) |> Expect.isFalse "the project has no obj"
         // The loader must look where the build wrote: it is given the same path as an MSBuild property.
-        TestInfrastructure.withEnvVar ArtifactsChannel.variable (Some artifacts) (fun () ->
+        let carrier = SessionOptions.workerEnvironment options |> List.head
+        TestInfrastructure.withEnvVar (fst carrier) (Some(snd carrier)) (fun () ->
           let loaded = ProjectLoading.loadSolution TestInfrastructure.quietLogger { Targets = [ SessionProjectTarget.Project(Path.Combine(project, "Small.fsproj")) ]; WorkingDir = project } (fun _ _ _ -> ())
           loaded.Projects |> List.map (fun p -> p.TargetPath.StartsWith(artifacts, StringComparison.Ordinal))
           |> Expect.equal "the loaded project's output is under the artifacts path" [ true ])

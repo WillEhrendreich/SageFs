@@ -208,6 +208,7 @@
         <Compile Include="SessionOptionsTests.fs" />
         <Compile Include="ClientSetupTests.fs" />
         <Compile Include="ClientSetupDocTests.fs" />
+        <Compile Include="SessionOptionsOwnerTests.fs" />
         <Compile Include="ConnectionTrackerTests.fs" />
         <Compile Include="TerminalUITests.fs" />
         <Compile Include="CellGridTests.fs" />
