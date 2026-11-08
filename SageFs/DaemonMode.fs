@@ -446,13 +446,9 @@ let private checkMemoryAdmission (readSnapshot: unit -> SessionManager.QuerySnap
   let sessions =
     SessionManager.QuerySnapshot.allSessions (readSnapshot())
     |> List.map (memorySessionSnapshotOf now (fun _ -> false))
-  let rss = Features.MachineMemory.heldBytes (Features.MachineMemory.ownFootprint ())
-  let machineMemory = Features.MachineMemory.current ()
-  let machine : MemorySupervisor.MachineStats =
-    { DaemonRssBytes = rss
-      MachineAvailableBytes = machineMemory.AvailableBytes
-      MachineTotalBytes = machineMemory.TotalBytes }
-  let decision = Features.MemoryPressureWatch.evaluate MemorySupervisor.defaultThresholds machine sessions
+  let reading = Features.MemoryPressureWatch.live ()
+  let machine = Features.MemoryPressureWatch.machineStatsOf reading
+  let decision = Features.MemoryPressureWatch.evaluate reading MemorySupervisor.defaultThresholds machine sessions
   decision.Actions
   |> List.tryPick (function MemorySupervisor.ShedAction.RefuseNewSessions reason -> Some reason | _ -> None)
   |> function
@@ -3905,7 +3901,9 @@ let run
       | SageFs.LiveTestViewReads.DaemonLiveTesting.Totals summary -> Some summary
       | SageFs.LiveTestViewReads.DaemonLiveTesting.NoSessionHasItOn
       | SageFs.LiveTestViewReads.DaemonLiveTesting.OnWithNoTestsYet -> None
-    let machineMemory = SageFs.Features.MachineMemory.current ()
+    // One read of the daemon's footprint and the machine's memory serves the size, the level and the headroom below.
+    let observed = SageFs.Features.MemoryPressureWatch.observe SageFs.Features.MemoryPressureWatch.live
+    let machineMemory = observed.Reading.Machine
     let telemetry =
       SageFs.Server.DaemonTelemetry.sample (
         (System.Diagnostics.Process.GetCurrentProcess().Id, "daemon")
@@ -3914,7 +3912,7 @@ let run
              WorkerProtocol.SessionLifecycleStatus.workerPid session.Status
              |> Option.map (fun pid -> pid, "worker:" + WorkerProtocol.SessionId.value session.Id))))
     // Resident plus swapped: the daemon's resident size alone read 640 MB while it held 25 GB, 20 GB of it in swap.
-    let rssBytes = SageFs.Features.MachineMemory.heldBytes (SageFs.Features.MachineMemory.ownFootprint ())
+    let rssBytes = SageFs.Features.MachineMemory.heldBytes observed.Reading.Footprint
     let memoryMB = int (rssBytes / 1_048_576L)
     let rssVerdict =
       SageFs.Features.HealthWatch.observe
@@ -3938,7 +3936,7 @@ let run
             MemoryMB = memoryMB
             Anomalies = SageFs.Features.HealthWatch.troubled ()
             GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome ()
-            MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel ()
+            MemoryPressure = observed.Level
             SupervisorHealth = SupervisorHealthWatch.current ()
             ComponentFailures = SageFs.Features.ComponentWatch.current () }
       : SageFs.Features.HealthSnapshot)
@@ -4324,13 +4322,9 @@ let run
     let sessions =
       SessionManager.QuerySnapshot.allSessions (readSnapshot())
       |> List.map (memorySessionSnapshotOf now isUserActive)
-    let rss = Features.MachineMemory.heldBytes (Features.MachineMemory.ownFootprint ())
-    let machineMemory = Features.MachineMemory.current ()
-    let machine : MemorySupervisor.MachineStats =
-      { DaemonRssBytes = rss
-        MachineAvailableBytes = machineMemory.AvailableBytes
-        MachineTotalBytes = machineMemory.TotalBytes }
-    let decision = Features.MemoryPressureWatch.evaluate MemorySupervisor.defaultThresholds machine sessions
+    let reading = Features.MemoryPressureWatch.live ()
+    let machine = Features.MemoryPressureWatch.machineStatsOf reading
+    let decision = Features.MemoryPressureWatch.evaluate reading MemorySupervisor.defaultThresholds machine sessions
     decision.Actions
     |> List.iter (function
       | MemorySupervisor.ShedAction.StopIdleSessions ids ->

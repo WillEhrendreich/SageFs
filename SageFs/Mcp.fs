@@ -1366,7 +1366,7 @@ module McpTools =
         componentFailures = health |> Option.map (fun h -> SageFs.Features.ComponentWatch.wire h.ComponentFailures) |> Option.defaultValue Array.empty
         memoryPressure =
           health |> Option.map (fun h -> SageFs.MemoryPressure.describe h.MemoryPressure) |> Option.defaultValue (SageFs.MemoryPressure.describe SageFs.MemoryPressure.Normal)
-        memoryPressureNote = health |> Option.map (fun h -> SageFs.MemoryPressure.explainWith h.MemoryPressure (SageFs.Features.MemoryPressureWatch.currentNote ())) |> Option.defaultValue ""
+        memoryPressureNote = health |> Option.map (fun h -> SageFs.MemoryPressure.explainWith h.MemoryPressure (SageFs.Features.MemoryPressureWatch.noteFor h.MemoryPressure)) |> Option.defaultValue ""
         machineMemory =
           {| totalBytes = machineMemory.TotalBytes
              availableBytes = machineMemory.AvailableBytes |}

@@ -3102,7 +3102,9 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
         |> System.Threading.Tasks.Task.WhenAll
       let sessionSummaries = sessionPairs |> Array.map fst |> Array.toList
       let sessionStates = sessionPairs |> Array.map snd
-      let footprint = SageFs.Features.MachineMemory.ownFootprint ()
+      // One read for the footprint, the level and the note below: it walks every mapping of the process.
+      let observed = SageFs.Features.MemoryPressureWatch.observe SageFs.Features.MemoryPressureWatch.live
+      let footprint = observed.Reading.Footprint
       let healthSnapshot : SageFs.Features.HealthSnapshot =
         { DaemonPid = Environment.ProcessId
           DaemonPort = 0
@@ -3121,7 +3123,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           // Same authoritative, hysteresis-tracked level DaemonMode's own
           // health tick reads — see the field's doc comment on why shape
           // alone (`Anomalies`) missed both real incidents.
-          MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel ()
+          MemoryPressure = observed.Level
           // Written by the daemon when the session manager's watchdog reports.
           SupervisorHealth = SageFs.SupervisorHealthWatch.current ()
           // The same list `/api/daemon-info` and `sagefs status` read. It is in the snapshot so `overall` below, the dashboard
@@ -3200,7 +3202,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
                // MACHINE's available memory, independent of whether
                // `anomalies` above has anything to say about shape.
                memoryPressure = SageFs.MemoryPressure.describe healthSnapshot.MemoryPressure
-               memoryPressureNote = SageFs.MemoryPressure.explainWith healthSnapshot.MemoryPressure (SageFs.Features.MemoryPressureWatch.currentNote ())
+               memoryPressureNote = SageFs.MemoryPressure.explainWith healthSnapshot.MemoryPressure observed.Note
                error = sessionError
                version = version
                apiVersion = SageFs.EndpointContracts.apiVersion
