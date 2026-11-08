@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | Done (the opt-in starter list and the diet; the default flip is Will's call and waits on the pass-rate measurement, see Next action) |
 | Size | M for the ratchet and the shorter descriptions, M for the authorization-keyed starter list |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Step 1: count tokens for both lists with the API's counter (needs an API key from Will), then write the first failing test (the tool-list size ratchet). |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | cohort member `p1-toollist`, `/home/will/scratch/cohort/p1-toollist`, branch `cohort/p1-toollist`, until it lands |
+| Last green commit | the commit that carries this block (red commits: `test(tools): the tool list has a weight budget...` and `test(tools): a starter tool list...`) |
+| Next action | Two things need a person. (1) Run the API's token counter over both lists (needs an API key from Will) and write the figures under "Measured" in place of characters / 4. (2) Run the pass-rate guard from the FS Advent experiment (a fixed task set, at least five runs per task) with `SAGEFS_TOOL_LIST=Starter` against the full list, and flip `ToolListProfile.defaultProfile` to `Starter` only if the starter pass rate is not lower, and Will agrees. |
+| Decisions made | 2026-11-08, by the `p1-toollist` agent under the cohort brief, for Will to confirm: the starter list is nine tools (`create_project_session`, `get_session_status`, `list_sessions`, `send_fsharp_code`, `check_fsharp_code`, `run_tests`, `cancel_eval`, `hard_reset_fsi_session`, `discover_features`); a stranger gets it through a daemon setting, `SAGEFS_TOOL_LIST` (option A below), and it is opt-in; the bar is the whole catalog under 55,000 characters and the starter list under FsiMcp's 5,606 (both met, see "Measured"); the manual of a tool is the description it is registered with, listed one sentence per tool by `ToolSummaries`. |
+| Surprises | `discover_features`, the doorway to every hidden tool, was state-gated: with no session it answered "No active session", so the first real-process run of the starter list found the doorway shut for exactly the client that needs it. It is `AlwaysAvailable` now (`Affordances.fs`), with the Uninitialized and WarmingUp peer sizes in `McpAffordanceHardeningTests` moved from 15 and 14 to 16 and 15. The plan counted `working_directory` described six ways; it is 18 ways across 50 tools, with `session_id` six ways across 19 and the agent name six ways across 17. The weight was 112,840 characters on this checkout, not 111,052 (the plan's figure was one tool and a few days older). `get_available_projects` and `stop_session` are not in the starter list: the plan listed them, and with them the starter list weighed 6,397 characters, over FsiMcp's 5,606. |
 
 ## Why this item exists
 
@@ -60,6 +60,31 @@ Other numbers this item needs before code:
 - The bar. I propose the starter list at no more than one and a half times FsiMcp's declared characters, 8,400, so about 2,100 tokens, and the full catalog under half of today's 111,052. These are proposals; Will sets them. The honest cost of the bar is that guidance now in descriptions moves to the skill, `instructions` and `discover_features`.
 - Whether shorter descriptions hurt. The Haiku-on-FCS onboarding trial (`project_onboarding_haiku_bar`) is the check: a small model with only the public docs still has to succeed at a first session.
 - Which harnesses already defer tools. Claude Code loads names and instructions first by default (research doc, section 3), so the saving there is smaller than the character count says. The lever there is the `instructions` text. The clients that do not defer pay in full.
+
+## Measured after the work (2026-11-08)
+
+Counted by `ToolListBudgetTests`: each registered tool built in process the way `.WithTools<SageFsTools>()` builds it, given the
+hints the list filter gives it, serialized as the wire serializer writes a tool with escaping relaxed (so an apostrophe is one
+character), and the characters of the JSON array summed. Master 4285a037 plus this branch, no timing involved, so the machine's
+load does not matter. Tokens are characters divided by four, a rule of thumb. No API key was available, so the API's token counter
+has not been run over either list.
+
+| | Before | After | FsiMcp 0.3.0 |
+|:--|--:|--:|--:|
+| Full catalog, 72 tools (characters) | 112,840 | 37,937 | 5,606 (7 tools) |
+| Full catalog (tokens, characters / 4) | about 28,200 | about 9,500 | about 1,400 |
+| Starter list, 9 tools (characters) | 22,365 for the plan's ten tools | 5,521 | |
+| Starter list (tokens, characters / 4) | | about 1,380 | |
+
+Where the weight went. 68,356 characters were descriptions and 36,902 were input schemas. Descriptions are now one sentence each
+(`ToolSummaries`, 72 of them, none over 160 characters). The schemas lost most of their weight to `working_directory` (50 tools,
+12,486 characters of schema before), `session_id` and the agent name, which now carry one of a few named sentences each
+(`SharedParameters`).
+
+How it is held. `RatchetBudgets.toolList` records both figures and `--ratchets --tighten` is the only thing that lowers them.
+A budget above the real weight fails, so a description cannot grow back into room that was won. The cases are in
+`ToolListBudgetTests` and `ToolListProfileTests`; the real-process case is in `CapabilityHttpIntegrationTests`
+(`The starter tool list over HTTP`).
 
 ## The failing test to write first
 
