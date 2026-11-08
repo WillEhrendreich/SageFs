@@ -1915,7 +1915,16 @@ let createElmRuntime
         | ChangeCounts.Counted (outputCount, diagCount) -> stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))
         | ChangeCounts.SessionListOnly -> ()),
       (fun work -> System.Threading.ThreadPool.QueueUserWorkItem(fun _ -> work ()) |> ignore),
-      ModelChangeDelivery.merge)
+      ModelChangeDelivery.merge,
+      // A subscriber that throws ends this delivery and never the daemon: an exception nothing catches on the pool ends
+      // the process. The first of each kind is logged whole, and every one is counted.
+      (fun ex ->
+        match EchoGuard.note EchoSink.ModelChangeDelivery ex with
+        | true ->
+          Log.error
+            "[model-change] a subscriber threw during a delivery, so that delivery ended and the daemon carries on. Later failures of this kind are counted, not logged: %O"
+            ex
+        | false -> ()))
   let getWarmupContextForElm (sessionId: string) : Async<SessionContext option> =
     async {
       try

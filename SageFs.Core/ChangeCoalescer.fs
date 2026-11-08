@@ -60,7 +60,7 @@ type Coalescer<'a>(deliver: 'a -> unit, start: (unit -> unit) -> unit, merge: 'a
 
   let rec run (current: 'a) : unit =
     try
-      deliver current
+      Guarded.call onFault (fun () -> deliver current)
     finally
       // What waited behind this delivery gets its own work item, whether this one finished or threw: a
       // delivery that throws is handed to `onFault`, and the value behind it is not stranded. One hop

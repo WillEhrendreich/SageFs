@@ -19,6 +19,8 @@ type EchoSink =
   | NotificationDelivery
   /// Disposing a connection whose notification could not be delivered.
   | ConnectionRelease
+  /// A subscriber of the daemon's model-change hook threw while a delivery ran on the thread pool.
+  | ModelChangeDelivery
 
 [<RequireQualifiedAccess>]
 module EchoSink =
@@ -30,6 +32,7 @@ module EchoSink =
     | EchoSink.Span -> "span"
     | EchoSink.NotificationDelivery -> "notification-delivery"
     | EchoSink.ConnectionRelease -> "connection-release"
+    | EchoSink.ModelChangeDelivery -> "model-change-delivery"
 
 /// A decoration on a tool call (the friction record, the audit line, the event banner) is best effort: when it
 /// fails, the call it decorates still returns its own result. `attempt` runs the decoration and swallows
