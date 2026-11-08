@@ -21,7 +21,7 @@ let operatorOnlyRoutes () : (HttpMethod * string) list =
 
 /// The table as data, so `--ratchets --tighten` can lower it.
 let budgets : (string * int) list =
-  [ "routes open to every caller", 64 ]
+  [ "routes open to every caller", 63 ]
 
 let _table =
   TestInfrastructure.Ratchet.table
@@ -47,7 +47,10 @@ let tests =
     ]
     |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
 
-    test "WHY - the member mint and the cohort seat are the operator-only routes" {
-      operatorOnlyRoutes () |> Expect.equal "only the mint and the seat" [ POST, "/api/members/mint"; GET, "/api/cohort/seat"; POST, "/api/cohort/seat" ]
+    test "WHY - the member mint, the cohort seat and the local-data clear are the operator-only routes" {
+      operatorOnlyRoutes ()
+      |> Expect.equal
+        "only the mint, the seat and the clear"
+        [ POST, "/api/members/mint"; GET, "/api/cohort/seat"; POST, "/api/cohort/seat"; POST, "/api/local-data/clear" ]
     }
   ]

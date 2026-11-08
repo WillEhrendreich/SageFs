@@ -1,8 +1,8 @@
 namespace SageFs
 
-/// Which MCP connection (or member token) created each session. `stop_session` refuses a session recorded to another
-/// connection (`McpTools.sessionOwnership`, #184). Nothing here decides whether a person is asked: no tool that asks acts
-/// on one session.
+/// Which MCP connection (or member token) created each session. `SessionAccess.decide` reads it: stopping, resetting,
+/// hard-resetting, switching the workflow of or stopping the app of a session recorded to another member is refused
+/// (`McpTools.sessionAccessRefusal`, #184). Nothing here decides whether a person is asked.
 module SessionOwners =
 
   /// Sessions created by MCP, keyed by session id and owned by the bound transport MemberId. This is separate from

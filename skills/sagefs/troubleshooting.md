@@ -59,7 +59,7 @@ That works for any client that spawns a command, not just Claude Code. See
 **Need the tools right now?** `sagefs call --list` lists them and `sagefs call <tool> --<parameter> <value>` calls
 one, from a shell, with no client in between. Give it a member token (`--token-file <path>`, or `SAGEFS_MEMBER_TOKEN` from
 `sagefs member mint --print-env`) so each call is the same member: every call is a new connection, and a session
-one call made is refused to the next with "owned by another bound MCP connection" when there is no token. A daemon
+one call made is refused to the next with "made by another member" when there is no token. A daemon
 that is not running gets the words `sagefs status` uses.
 
 **Say which side the fix is on.** Reconnecting is something to RUN. Whether the
@@ -142,11 +142,12 @@ implying the command closes it.
 - **A call that waits a minute and then says "needs a person to confirm".** Only
   `manage_local_data` asks (clearing the local stores that belong to no session).
   `stop_session`, `reset_fsi_session`, `hard_reset_fsi_session`, `switch_workflow` and
-  `stop_app` never ask, for any session. A `stop_session` on a session another bound
-  connection created is refused with a message saying so, which is a different thing
-  from a prompt. If you must clear local data with nobody to answer, the daemon's HTTP
-  route on the same port does not ask: `POST /api/local-data/clear?store=<store>`. The
-  list is in `docs/mcp-tools.md`.
+  `stop_app` never ask, for any session. A call on a session another member made is
+  refused with a message that names the maker and what to do next (ask the maker, the
+  cohort conductor or the operator), which is a different thing from a prompt. If local
+  data must be cleared with nobody to answer, ask the person who runs the daemon to run
+  `sagefs data clear` from a shell: no route skips the prompt for an agent. The list is
+  in `docs/mcp-tools.md`.
 - **Clean up.** `stop_session` on every session you created; it does not ask.
   Kill only processes you started, by exact PID, never by name.
 

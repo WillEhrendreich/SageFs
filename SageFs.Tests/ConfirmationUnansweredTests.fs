@@ -49,7 +49,8 @@ let tests =
         let text = ConfirmationRefusal.describe "manage_local_data" refusal
         text |> Expect.stringContains "it says nothing was done" "Nothing was done"
         text |> Expect.stringContains "it says the local data is untouched" "untouched"
-        text |> Expect.stringContains "it names the way out that asks nobody" "POST /api/local-data/clear"
+        text |> Expect.stringContains "it names the command the person who runs the daemon types" "sagefs data clear"
+        text.Contains "/api/local-data/clear" |> Expect.isFalse "and no route an agent could call round the prompt"
     }
 
     testCase "WHY — every refusal says nothing was done, so no outcome can be read as an action that failed halfway" <| fun _ ->
@@ -64,11 +65,12 @@ let tests =
         text |> Expect.stringContains (sprintf "%A says nothing was done" refusal) "Nothing was done"
         text |> Expect.stringContains (sprintf "%A says the local data is untouched" refusal) "untouched")
 
-    testCase "WHY — when nobody can answer, each confirm-tier tool names the daemon route that does the same job without asking" <| fun _ ->
+    testCase "WHY — when nobody can answer, each confirm-tier tool names the command the person who runs the daemon types, and no route" <| fun _ ->
       confirmTier
       |> List.iter (fun tool ->
         let text = ConfirmationRefusal.describe tool (NoAnswerInTime TestTimeouts.confirmationBudget)
-        text |> Expect.stringContains (sprintf "%s names a route a script can call" tool) "POST /"
+        text |> Expect.stringContains (sprintf "%s names a command to ask the operator for" tool) "sagefs "
+        text.Contains "POST /" |> Expect.isFalse (sprintf "%s hands an agent no route to call" tool)
         text |> Expect.stringContains (sprintf "%s says there is no switch for the prompt" tool) "no setting"
         text |> Expect.stringContains (sprintf "%s says how long it waited" tool) (string TestTimeouts.confirmationBudget))
 

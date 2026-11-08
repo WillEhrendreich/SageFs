@@ -102,6 +102,8 @@
         <Compile Include="ConfirmationUnansweredTests.fs" />
         <Compile Include="ConfirmationPromptTests.fs" />
         <Compile Include="ConfirmationPolicyTests.fs" />
+        <Compile Include="SessionAccessTests.fs" />
+        <Compile Include="LocalDataCommandTests.fs" />
         <Compile Include="WorkerMainTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="CheckoutTests.fs" />

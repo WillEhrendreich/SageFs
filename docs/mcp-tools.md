@@ -57,9 +57,18 @@ runs in where nobody is sitting there to click, and `run_app` is listed as
 destructive but not asked about, because running the app is what you asked for
 and the REPL loss is written on the tool itself.
 
-Asking is separate from refusing. `stop_session` still refuses a session another
-bound MCP connection created, and says so (see the `stop_session` row); that
-check never prompts anyone.
+Asking is separate from refusing. `stop_session`, `reset_fsi_session`,
+`hard_reset_fsi_session`, `switch_workflow` and `stop_app` (and the editor routes
+`POST /api/sessions/stop`, `/api/sessions/{sid}/stop-app` and
+`/api/sessions/{sid}/workflow`) refuse a session another member made. One rule,
+`SessionAccess.decide`, decides all of them: the member that made the session, the
+conductor of the cohort it sits in, and the operator may act, and a different bound
+member is refused with a reason and a next action. Nobody is asked. A session
+with no maker on record (made from the dashboard or the CLI, or one a restarted
+daemon resumed) and a call on no bound identity (the dashboard, an editor, the CLI)
+are open, as before. Like the roles, this keeps well-mannered agents out of each
+other's sessions and does not contain a hostile one: `send_fsharp_code` can run
+anything the daemon's user can.
 
 The part worth knowing: a client that never advertised elicitation is neither
 prompted nor refused. The prompt is skipped, and the four gates ahead of it
@@ -75,10 +84,13 @@ A client that advertises elicitation but cannot answer (a headless agent, or a
 UI whose prompt never takes an answer) waits the full 60 seconds on
 `manage_local_data` and then gets "needs a person to confirm it, and no answer
 came within 00:01:00", with the way out spelled out. There is no setting that
-turns the prompt off, so a caller with nobody to answer uses the daemon's HTTP
-API on the same port, which does not ask:
-`POST /api/local-data/clear?store=<store>`. (`sagefs stop` stops the whole
-daemon, not one session.)
+turns the prompt off, and no route skips it for an agent: the person who runs
+the daemon clears the stores from a shell with
+`sagefs data clear [--store friction|cohort|all]`, which reads the operator
+credential (`operator.token`) and sends it as the Bearer header.
+`POST /api/local-data/clear` takes that credential and nothing else, so no tool and
+no member token reaches it. (`sagefs stop` stops the whole daemon, not one
+session.)
 
 The full advertised set is 72 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
@@ -175,7 +187,7 @@ and no tool has a parameter with one of those names.
 **Who is calling.** Every `sagefs call` is a new process, so the daemon sees a new
 connection each time, and what one call makes (a session, a claim) belongs to that
 connection. With no token the next call cannot stop the session the last one made:
-`stop_session` answers an error, "owned by another bound MCP connection". A member
+`stop_session` answers an error, "made by another member". A member
 token outranks the connection (see "Member tokens" below), so pass one and every
 call is the same member:
 

@@ -118,7 +118,7 @@ module EndpointContracts =
     Endpoint.create POST "/api/cancel-eval" "Diagnostics" "Cancel current eval"
     Endpoint.create GET "/diag/threadpool" "Diagnostics" "Thread pool diagnostics"
     Endpoint.create GET "/api/local-data" "Diagnostics" "What SageFs stores locally, how big it is, and how long it is kept"
-    Endpoint.create POST "/api/local-data/clear" "Diagnostics" "Clear locally stored friction data or a finished cohort ledger"
+    Endpoint.createOperatorOnly POST "/api/local-data/clear" "Diagnostics" "Clear locally stored friction data or a finished cohort ledger with the operator credential (sagefs data clear)"
   ]
 
   let hotReloadEndpoints = [
