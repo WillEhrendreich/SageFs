@@ -90,6 +90,9 @@ type InUseReason =
   /// A cohort knows it as a member's checkout (a member token is bound to it, or it is the cohort's own integration or
   /// trunk checkout), so the conductor manages it and nothing else may tidy it.
   | HeldByCohort of holder: string
+  /// A person locked it with `git worktree lock --reason ...`, git's own "do not prune this". A lock in the harness's own format
+  /// is a different case (`LockedByLiveProcess`, or nothing once its process is gone); this is never released by SageFs.
+  | LockedByPerson of reason: string
 
 /// What the world says about who made a leftover and whether they are still around.
 [<RequireQualifiedAccess>]
@@ -480,6 +483,8 @@ module InUseReason =
     | InUseReason.RunsFrom(pid, name) -> sprintf "%s (pid %d) is running from it" name pid
     | InUseReason.InvokingGate repo -> sprintf "the gate run for %s is about to use it" repo
     | InUseReason.HeldByCohort holder -> sprintf "a cohort holds it (%s), so the conductor manages it" holder
+    | InUseReason.LockedByPerson reason ->
+      sprintf "a person locked it with git worktree lock (reason: \"%s\"); SageFs never releases that, `git worktree unlock <path>` does" reason
 
 module MergeHow =
   let describe (how: MergeHow) : string =
@@ -506,7 +511,8 @@ module Generated =
     | _ when inDirectory "node_modules" -> Some "installed packages"
     | _ when inDirectory "TestResults" || inDirectory "test-results" -> Some "test results"
     | _ when inDirectory ".fable" || inDirectory "fable_modules" -> Some "Fable output"
-    | _ when inDirectory ".vs" || inDirectory ".ionide" -> Some "editor state"
+    | _ when inDirectory ".vs" || inDirectory ".ionide" || inDirectory ".idea" -> Some "editor state"
+    | _ when inDirectory ".cache" || inDirectory "__pycache__" || inDirectory ".paket" || inDirectory ".fake" || inDirectory ".nuget" -> Some "tool cache"
     | _ when inDirectory ".SageFs" -> Some "SageFs's own warmup state"
     | _ -> None
 

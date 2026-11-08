@@ -139,16 +139,19 @@ let private removeWorktreeWith (journal: Journal) (ctx: EdgeContext) (path: stri
             | Tip.TipUnknown -> return BranchLabel.NoBranch
         }
       let! restorePoint = keepRestorePoint ctx repo (Path.GetFileName(path.TrimEnd('/', '\\'))) tip merged
-      // A lock that names a live process is a use; one whose process is gone is unlocked first.
+      // Only the harness's own lock (`claude agent <name> (pid N start M)`) is ours to release, and only when its process is
+      // gone. Any other lock is a person's `git worktree lock`, git's own "do not prune this", and is never overridden.
       let! lockOutcome =
         task {
           match! ctx.Git repo [ "worktree"; "list"; "--porcelain" ] with
           | GitResult.Output text ->
             match Parse.worktreeList text |> List.tryFind (fun e -> Guard.normalize e.Path = Guard.normalize path) with
             | Some { Lock = LockState.LockedWith reason } ->
-              match Parse.lockPid reason with
-              | Some pid when ctx.IsAlive pid None -> return Result.Error(sprintf "locked by a live process (pid %d): %s" pid reason)
-              | _ -> return! gitStep ctx.Git repo [ "worktree"; "unlock"; path ]
+              match Parse.lockMaker reason with
+              | LockMaker.Agent pid when ctx.IsAlive pid None -> return Result.Error(sprintf "locked by a live process (pid %d): %s" pid reason)
+              | LockMaker.Agent _ -> return! gitStep ctx.Git repo [ "worktree"; "unlock"; path ]
+              | LockMaker.Person ->
+                return Result.Error(sprintf "locked by a person (%s): `git worktree unlock %s` releases it" reason path)
             | _ -> return Result.Ok()
           | _ -> return Result.Ok()
         }

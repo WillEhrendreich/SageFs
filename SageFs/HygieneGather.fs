@@ -97,6 +97,14 @@ type LockState =
   | Unlocked
   | LockedWith of reason: string
 
+/// Who made a worktree lock. The harness locks an agent's worktree with `claude agent <name> (pid N start M)`; that exact shape is
+/// the harness's. Any other reason, even one that mentions a pid, is a person's `git worktree lock`, which is git's own "do not
+/// prune this" and is never ours to release.
+[<RequireQualifiedAccess>]
+type LockMaker =
+  | Agent of pid: int
+  | Person
+
 type WorktreeEntry =
   { Path: string
     Head: string
@@ -178,6 +186,17 @@ module Parse =
       match Int32.TryParse digits with
       | true, pid when pid > 0 -> Some pid
       | _ -> None
+
+  /// Whose lock this is: the harness's (the exact `claude agent <name> (pid N start M)` shape, with the pid) or a person's.
+  let lockMaker (reason: string) : LockMaker =
+    let text = reason.Trim()
+    let harnessShape =
+      text.StartsWith("claude agent ", StringComparison.Ordinal) && text.EndsWith(")", StringComparison.Ordinal) && text.Contains " start "
+    match harnessShape, lockPid text with
+    | true, Some pid -> LockMaker.Agent pid
+    | true, None
+    | false, Some _
+    | false, None -> LockMaker.Person
 
 // ─── What is running ───────────────────────────────────────────────────
 
@@ -449,15 +468,19 @@ let mergeEvidence (git: Git) (repo: string) (baseRef: string) (head: string) : T
           | GitResult.Exit(_, stderr) -> return undecidable "diff" stderr
   }
 
-/// What differs in a worktree, each file told apart as build output or work.
+/// What differs in a worktree, each file told apart as build output or work. Ignored files are listed too: `git worktree remove`
+/// deletes them, and a local `.env` or `*.db` is somebody's work even though git ignores it. Only a rule that says a file is
+/// regenerated (build output, caches) makes it `Generated`.
 let changedFiles (git: Git) (worktree: string) : Task<Result<ChangedFile list, UnknownReason>> =
   task {
-    match! git worktree [ "status"; "--porcelain=v1"; "-z"; "--untracked-files=normal" ] with
+    match! git worktree [ "status"; "--porcelain=v1"; "-z"; "--untracked-files=normal"; "--ignored=traditional" ] with
     | GitResult.Output text ->
       return
         Parse.statusPaths text
         |> List.map (fun path ->
-          match Generated.ruleFor path with
+          // An ignored directory is listed as `dir/`; the rules look at the directories above a file, so give it one inside.
+          let probe = match path.EndsWith "/" with | true -> path + "_" | false -> path
+          match Generated.ruleFor probe with
           | Some rule -> ({ Path = path; Origin = ChangeOrigin.Generated rule } : ChangedFile)
           | None -> ({ Path = path; Origin = ChangeOrigin.Real } : ChangedFile))
         |> Result.Ok
@@ -534,9 +557,12 @@ let private lockUse (scan: Scan) (lock: LockState) : InUseReason list =
   match lock with
   | LockState.Unlocked -> []
   | LockState.LockedWith reason ->
-    match Parse.lockPid reason with
-    | Some pid when scan.IsAlive pid None -> [ InUseReason.LockedByLiveProcess(pid, reason) ]
-    | _ -> []
+    match Parse.lockMaker reason with
+    | LockMaker.Agent pid ->
+      match scan.IsAlive pid None with
+      | true -> [ InUseReason.LockedByLiveProcess(pid, reason) ]
+      | false -> []
+    | LockMaker.Person -> [ InUseReason.LockedByPerson reason ]
 
 let private worktreeCandidate (scan: Scan) (baseRef: Lazy<Task<string option>>) (entry: WorktreeEntry) (kind: LeftoverKind) : Candidate =
   let target = Target.Directory(normalize entry.Path)

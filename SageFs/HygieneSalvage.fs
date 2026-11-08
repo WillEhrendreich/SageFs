@@ -69,7 +69,8 @@ let salvage (git: GitWithEnv) (worktreePath: string) : Task<SalvageResult> =
             match! step [ "read-tree"; head ] with
             | Result.Error why -> return SalvageResult.CouldNotSalvage why
             | Result.Ok _ ->
-              match! step ([ "add"; "-A"; "--" ] @ real) with
+              // -f: an ignored file (a local .env) is work too, and a plain add would skip it.
+              match! step ([ "add"; "-A"; "-f"; "--" ] @ real) with
               | Result.Error why -> return SalvageResult.CouldNotSalvage why
               | Result.Ok _ ->
                 match! step [ "write-tree" ] with

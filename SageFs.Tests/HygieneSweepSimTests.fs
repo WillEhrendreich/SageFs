@@ -57,11 +57,17 @@ let hygieneSweepSimTests =
 
       testCase "NEVER-REMOVE-IN-USE" <| fun _ ->
         violationsFor Behavior.Real neverRemoveInUse |> expectNone "a worktree with a session in it was removed"
+
+      testCase "NEVER-LOSE-AN-IGNORED-FILE" <| fun _ ->
+        violationsFor Behavior.Real neverLoseAnIgnoredFile |> expectNone "an ignored file that no rule regenerates was lost"
+
+      testCase "NEVER-OVERRIDE-A-PERSONS-LOCK" <| fun _ ->
+        violationsFor Behavior.Real neverOverrideAPersonsLock |> expectNone "a lock a person made was released and the worktree removed"
     ]
 
     testList "the seeds reach the interesting cases, so a green run means something" [
       testCase "plenty of worktrees get removed after their grace" <| fun _ ->
-        removalsHappened (tracesFor Behavior.Real) |> fun n -> (n > 100) |> Expect.isTrue (sprintf "only %d removals" n)
+        removalsHappened (tracesFor Behavior.Real) |> fun n -> (n > 50) |> Expect.isTrue (sprintf "only %d removals" n)
 
       testCase "some seeds salvage uncommitted work, and some of it is in a worktree that is then left alone" <| fun _ ->
         tracesFor Behavior.Real
@@ -72,6 +78,12 @@ let hygieneSweepSimTests =
         tracesFor Behavior.Real
         |> List.exists (fun t -> t.Steps |> List.exists (fun s -> not (Set.isEmpty s.After.Restore)))
         |> Expect.isTrue "a restore point exists somewhere"
+
+      testCase "some seeds put a person's lock on a worktree, and some put an ignored file in one" <| fun _ ->
+        let any (pick: World -> bool) = tracesFor Behavior.Real |> List.exists (fun t -> t.Steps |> List.exists (fun s -> pick s.After))
+        any (fun w -> w.Worktrees |> Map.exists (fun _ wt -> wt.Lock = Lock.PersonNoPid || wt.Lock = Lock.PersonPidLike))
+        |> Expect.isTrue "a person's lock exists somewhere"
+        any (fun w -> not (Set.isEmpty w.IgnoredMade)) |> Expect.isTrue "an ignored file exists somewhere"
     ]
 
     testCase "TWIN: tidying a worktree with uncommitted work, with no salvage first, loses bytes" <| fun _ ->
@@ -85,4 +97,12 @@ let hygieneSweepSimTests =
     testCase "TWIN: believing git's age and ignoring the ledger tidies a worktree the ledger never saw" <| fun _ ->
       violationsFor Behavior.IgnoresLedger removedOnlyAfterTheLedgerClearedIt
       |> expectCaught "the ledger rule catches a worktree tidied on its first sweep"
+
+    testCase "TWIN: reading every lock without a live pid as stale releases a person's lock" <| fun _ ->
+      violationsFor Behavior.UnlocksAnyLock neverOverrideAPersonsLock
+      |> expectCaught "NEVER-OVERRIDE-A-PERSONS-LOCK catches the old unlock-anything rule"
+
+    testCase "TWIN: not looking at ignored files removes a worktree with a .env unsaved" <| fun _ ->
+      violationsFor Behavior.RemovesIgnoredFiles neverLoseAnIgnoredFile
+      |> expectCaught "NEVER-LOSE-AN-IGNORED-FILE catches a removal that deletes an ignored file"
   ]

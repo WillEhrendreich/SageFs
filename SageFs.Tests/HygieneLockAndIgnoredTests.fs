@@ -125,3 +125,28 @@ let ignoredTests =
       | other -> failtestf "expected DirtyReal, got %A" other
     }
   ]
+
+[<Tests>]
+let lockMakerTests =
+  testList "Workspace hygiene: whose lock it is" [
+
+    testCase "only the harness's exact format, with its pid, is the harness's; everything else is a person's" <| fun _ ->
+      Parse.lockMaker "claude agent agent-1 (pid 314668 start 793942)" |> Expect.equal "the harness's" (LockMaker.Agent 314668)
+      for reason in [ "keep"; ""; "  "; "see ticket (pid 12 was the old one)"; "claude agent agent-1 (pid 5)"; "claude agent agent-1"; "my claude agent (pid 5 start 1) note" ] do
+        Parse.lockMaker reason |> Expect.equal (sprintf "%A is a person's" reason) LockMaker.Person
+
+    testCase "a lock a person made is said in words, with the reason quoted and the way to release it" <| fun _ ->
+      let text = InUseReason.describe (InUseReason.LockedByPerson "keep until the demo")
+      text |> Expect.stringContains "quotes the reason" "keep until the demo"
+      text |> Expect.stringContains "names the next action" "git worktree unlock"
+
+    testTask "the gather reads a person's lock as a use, whatever the pid in its text" {
+      use sb = new Sandbox()
+      let path = sb.AddWorktree "person"
+      git sb.Repo [ "worktree"; "lock"; "--reason"; "keep"; path ] |> ignore
+      let! leftovers = gather (sb.Scan()) None
+      match standingOfPath leftovers path with
+      | Standing.InUse(InUseReason.LockedByPerson "keep", _) -> ()
+      | other -> failtestf "expected InUse LockedByPerson, got %A" other
+    }
+  ]
