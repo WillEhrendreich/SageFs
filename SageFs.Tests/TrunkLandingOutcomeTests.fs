@@ -677,7 +677,7 @@ let tests =
             "carol: alice stops speaking as alice, and defines a helper"
         let! blocked = awaitSettled w blockedId
         blocked |> Expect.stringContains "carol's landing is blocked" "state=Blocked"
-        blocked |> Expect.stringContains "because a test failed" "FailingTests"
+        blocked |> Expect.stringContains "because a test failed" "failing test"
         do! releaseClaimsOn "Alice.fs"
         // Bob's landing is based on the head, where the helper does not exist, and its code calls it. The tests it would run are
         // green if the helper is still there, so only a verifying session that starts from the head can refuse it.
@@ -702,7 +702,7 @@ let tests =
         let! blockedId = land w w.Carol "Bob.fs" tip [ bobLine, "let bobMessage () : string = \"broken\"" ] "carol: bob stops speaking as bob"
         let! blocked = awaitSettled w blockedId
         blocked |> Expect.stringContains "carol's landing is blocked" "state=Blocked"
-        blocked |> Expect.stringContains "because a test failed" "FailingTests"
+        blocked |> Expect.stringContains "because a test failed" "failing test"
         do! releaseClaimsOn "Bob.fs"
         // A landing in another file, with nothing wrong with it. The test that went red for carol's landing is green at the head.
         let! goodId = land w w.Bob "Rude.fs" tip [ "\"rude:v2\"", "\"rude:v3\"" ] "bob: the shape's message moves on"
@@ -732,7 +732,7 @@ let tests =
         let! landingId = land w w.Carol "Bob.fs" tipBefore [ "bob:v2", "broken" ] "carol: bob stops speaking as bob"
         let! settled = awaitSettled w landingId
         settled |> Expect.stringContains "the landing is blocked" "state=Blocked"
-        settled |> Expect.stringContains "because a test failed" "FailingTests"
+        settled |> Expect.stringContains "because a test failed" "failing test"
         let! status = statusOf w
         (trunkLine status landingId) |> Expect.isNone "the trunk was told nothing about it"
         File.ReadAllText(Path.Combine(w.TrunkPath, "Bob.fs"))
