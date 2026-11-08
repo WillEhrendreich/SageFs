@@ -398,6 +398,8 @@
          <Compile Include="DaemonRssReturnsToBaselineTests.fs" />
          <Compile Include="DaemonIdleRssTests.fs" />
          <Compile Include="McpStdioBridgeSimTests.fs" />
+         <Compile Include="McpStdioBridgeReconnectSimTests.fs" />
+         <Compile Include="McpStdioBridgeRunTests.fs" />
          <Compile Include="McpStdioBridgeE2ETests.fs" />
          <Compile Include="McpStdioBridgeHealTests.fs" />
          <Compile Include="WarmupContextTests.fs" />

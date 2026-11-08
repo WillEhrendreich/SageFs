@@ -832,6 +832,11 @@ module Timeouts =
   /// seconds, and a bridge that starts its own daemon in that gap leaves two. A minute covers a slow install;
   /// a person who ran `sagefs stop` and left gets a daemon again after it.
   let stdioBridgeReconnectWait = forMachine (TimeSpan.FromSeconds(60.0))
+  /// The most messages a stdio bridge holds while it waits for the daemon (a cold start, an outage, or the
+  /// re-handshake after one). A client sends a handful: the handshake, a notification, a tool list, the call it
+  /// was in the middle of. A thousand is far beyond that and still small, and a message past it is answered with
+  /// an error that says the queue was full instead of growing without bound behind a daemon that never returns.
+  let stdioBridgeQueueCap = 1000
   /// How long a Jupyter kernel socket receive (shell, and the heartbeat echo)
   /// blocks before it rechecks for cancellation. A poll; it bounds how long
   /// kernel shutdown can wait on a quiet socket.

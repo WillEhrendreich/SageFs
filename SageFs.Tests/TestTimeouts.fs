@@ -73,12 +73,20 @@ module TestTimeouts =
   /// The wait a confirmation test gives a client that never answers. It has to EXPIRE for the case to pass, so it
   /// is short; the production wait is `SageFs.Timeouts.confirmationAnswer`, a person reading a sentence.
   let confirmationBudget = ms 150.
+  /// The deadline a test gives an HTTP client whose stub daemon answers only after it has passed. It has to
+  /// EXPIRE for the case to pass, so it is short; the production deadline is `SageFs.Timeouts.workerHttpRequest`.
+  let clientDeadlineShort = ms 300.
+  /// How long a stub daemon holds an answer back so a client with `clientDeadlineShort` gives up first.
+  let stubAnswerLate = secs 3.
 
   // Settles: a short, fixed window where nothing can be awaited.
 
   /// A window for in-process work to drain, or for a negative assertion ("nothing more
   /// happened") where waiting is the only way to look for an absent event.
   let settle = ms 50.
+  /// A window for another PROCESS to deliver something that must not arrive (a second copy of a notification, a
+  /// request sent before it should have been), where waiting is the only way to look for an absent event.
+  let processSettle = secs 1.
   /// A gap long enough for a stopwatch to read a positive elapsed time, and no longer.
   let measurableGap = ms 2.
   /// A wait that uses no CPU, for the perf budget clock's case: long enough that a clock which counted the wait would

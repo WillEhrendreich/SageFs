@@ -4,7 +4,7 @@ open Expecto
 open Expecto.Flip
 open SageFs.McpBridge
 
-let private policy = { MaxProbeAttempts = 3; MaxReconnectProbes = 4 }
+let private policy = { MaxProbeAttempts = 3; MaxReconnectProbes = 4; QueueCap = 5 }
 
 let private req id method =
   RpcMessage.Request(RpcId.N(int64 id), method, sprintf """{"jsonrpc":"2.0","id":%d,"method":"%s"}""" id method)
@@ -172,9 +172,9 @@ let tests =
 
       testCase "isTerminal is true only once Fatal or Closed" <| fun _ ->
         initial |> isTerminal |> Expect.isFalse "AwaitingDaemon is not terminal"
-        { Transport = TransportState.Ready None; Pending = [] } |> isTerminal |> Expect.isFalse "Ready is not terminal"
-        { Transport = TransportState.Closed; Pending = [] } |> isTerminal |> Expect.isTrue "Closed is terminal"
-        { Transport = TransportState.Fatal "x"; Pending = [] } |> isTerminal |> Expect.isTrue "Fatal is terminal"
+        { Transport = TransportState.Ready None; Pending = Backlog.empty } |> isTerminal |> Expect.isFalse "Ready is not terminal"
+        { Transport = TransportState.Closed; Pending = Backlog.empty } |> isTerminal |> Expect.isTrue "Closed is terminal"
+        { Transport = TransportState.Fatal "x"; Pending = Backlog.empty } |> isTerminal |> Expect.isTrue "Fatal is terminal"
 
       testCase "giving up rejects every message still queued from the race — it never just rots in Pending" <| fun _ ->
         // Regression: the first version of giveUp only set Transport=Fatal
@@ -185,10 +185,10 @@ let tests =
         // it in the SAME transition that gives up.
         let waiting =
           { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Probing policy.MaxProbeAttempts)
-            Pending = [ req 1 "initialize"; notif "notifications/x" ] }
+            Pending = Backlog.ofList [ req 1 "initialize"; notif "notifications/x" ] }
         let final, actions = decide policy waiting Event.Probe
         final.Transport |> (function TransportState.Fatal _ -> () | other -> failtestf "expected Fatal, got %A" other)
-        final.Pending |> Expect.isEmpty "nothing is left dangling in Pending"
+        Backlog.toList final.Pending |> Expect.isEmpty "nothing is left dangling in Pending"
         actions
         |> Expect.equal
           "ReportFatal first, then a RejectMessage for every queued message, then Shutdown last — Fatal is terminal, not something the caller has to wait for stdin to close to escape"
@@ -202,7 +202,7 @@ let tests =
       testCase "a message that arrives while waiting is queued, not forwarded yet" <| fun _ ->
         let s1, _ = decide policy initial Event.Probe
         let s2, actions = decide policy s1 (Event.StdinLine(req 1 "initialize"))
-        s2.Pending |> Expect.equal "queued exactly once" [ req 1 "initialize" ]
+        Backlog.toList s2.Pending |> Expect.equal "queued exactly once" [ req 1 "initialize" ]
         actions |> Expect.equal "not forwarded while still waiting" []
 
       testCase "every queued message is drained exactly once, in arrival order, the moment the daemon is Ready" <| fun _ ->
@@ -210,20 +210,20 @@ let tests =
         let s2, _ = decide policy s1 (Event.StdinLine(req 1 "initialize"))
         let s3, _ = decide policy s2 (Event.StdinLine(notif "notifications/x"))
         let final, actions = decide policy s3 (Event.ProbeResult true)
-        final.Pending |> Expect.isEmpty "the queue is empty once drained"
+        Backlog.toList final.Pending |> Expect.isEmpty "the queue is empty once drained"
         actions
         |> Expect.equal
           "drained in arrival order, each forwarded exactly once"
           [ Action.ForwardToDaemon(req 1 "initialize"); Action.ForwardToDaemon(notif "notifications/x") ]
 
       testCase "once Ready, a message forwards immediately with no queueing" <| fun _ ->
-        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = [] }
+        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = Backlog.empty }
         let state, actions = decide policy readyState (Event.StdinLine(req 1 "tools/list"))
-        state.Pending |> Expect.isEmpty "nothing queued once Ready"
+        Backlog.toList state.Pending |> Expect.isEmpty "nothing queued once Ready"
         actions |> Expect.equal "forwarded immediately" [ Action.ForwardToDaemon(req 1 "tools/list") ]
 
       testCase "a message arriving after Closed is rejected, never silently dropped" <| fun _ ->
-        let closed = { Transport = TransportState.Closed; Pending = [] }
+        let closed = { Transport = TransportState.Closed; Pending = Backlog.empty }
         let _, actions = decide policy closed (Event.StdinLine(req 1 "tools/list"))
         match actions with
         | [ Action.RejectMessage(m, reason) ] ->
@@ -232,7 +232,7 @@ let tests =
         | other -> failtestf "expected a single RejectMessage, got %A" other
 
       testCase "a message arriving after Fatal is rejected with the fatal reason" <| fun _ ->
-        let fatal = { Transport = TransportState.Fatal "daemon gone"; Pending = [] }
+        let fatal = { Transport = TransportState.Fatal "daemon gone"; Pending = Backlog.empty }
         let _, actions = decide policy fatal (Event.StdinLine(req 1 "tools/list"))
         match actions with
         | [ Action.RejectMessage(_, reason) ] -> reason |> Expect.stringContains "carries the fatal reason" "daemon gone"
@@ -241,41 +241,42 @@ let tests =
 
     testList "session id capture" [
       testCase "the first capture is recorded" <| fun _ ->
-        let readyNoSid = { Transport = TransportState.Ready None; Pending = [] }
+        let readyNoSid = { Transport = TransportState.Ready None; Pending = Backlog.empty }
         let state, actions = decide policy readyNoSid (Event.SessionIdCaptured "abc")
         state.Transport |> Expect.equal "session id is now set" (TransportState.Ready(Some "abc"))
-        actions |> Expect.equal "capture has no side effect of its own" []
+        actions |> Expect.equal "the push stream opens on the first session, replacing nothing" [ Action.OpenPushStream("abc", None) ]
 
       testCase "the same id captured again changes nothing" <| fun _ ->
-        let readyWithSid = { Transport = TransportState.Ready(Some "abc"); Pending = [] }
+        let readyWithSid = { Transport = TransportState.Ready(Some "abc"); Pending = Backlog.empty }
         let state, actions = decide policy readyWithSid (Event.SessionIdCaptured "abc")
         state |> Expect.equal "the state is untouched" readyWithSid
         actions |> Expect.equal "no action from a repeat capture" []
 
       testCase "a different id replaces the held one, because it is the daemon's answer to a re-handshake" <| fun _ ->
-        let readyWithSid = { Transport = TransportState.Ready(Some "abc"); Pending = [] }
+        let readyWithSid = { Transport = TransportState.Ready(Some "abc"); Pending = Backlog.empty }
         let state, actions = decide policy readyWithSid (Event.SessionIdCaptured "zzz")
         state.Transport |> Expect.equal "every later request carries the new id" (TransportState.Ready(Some "zzz"))
-        actions |> Expect.equal "no action of its own" []
+        actions
+        |> Expect.equal "the new session's stream opens and the old one's is cancelled" [ Action.OpenPushStream("zzz", Some "abc") ]
     ]
 
     testList "a protocol-level rejection stays alive (issue #138, defect 2)" [
       testCase "Ready + RequestRejected answers just that message and stays Ready" <| fun _ ->
-        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = [] }
+        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = Backlog.empty }
         let msg = req 2 "tools/list"
         let state, actions = decide policy readyState (Event.RequestRejected(msg, "daemon answered 400: bad request"))
         state.Transport |> Expect.equal "still Ready, still holding its session id — a 400 is not the daemon going away" (TransportState.Ready(Some "sid"))
         actions |> Expect.equal "reuses RejectMessage — the same shape any other unforwardable message gets" [ Action.RejectMessage(msg, "daemon answered 400: bad request") ]
 
       testCase "RequestRejected with no session id yet still stays Ready" <| fun _ ->
-        let readyState = { Transport = TransportState.Ready None; Pending = [] }
+        let readyState = { Transport = TransportState.Ready None; Pending = Backlog.empty }
         let msg = req 1 "initialize"
         let state, _ = decide policy readyState (Event.RequestRejected(msg, "daemon answered 400: bad request"))
         state.Transport |> Expect.equal "Ready None, not Fatal" (TransportState.Ready None)
 
       testCase "a stray RequestRejected outside Ready is a no-op, same posture as a stray HttpFailed" <| fun _ ->
         let msg = req 1 "tools/list"
-        let fatal = { Transport = TransportState.Fatal "already gone"; Pending = [] }
+        let fatal = { Transport = TransportState.Fatal "already gone"; Pending = Backlog.empty }
         let state, actions = decide policy fatal (Event.RequestRejected(msg, "irrelevant"))
         state |> Expect.equal "unchanged" fatal
         actions |> Expect.equal "nothing to do" []
@@ -283,43 +284,42 @@ let tests =
 
     testList "the daemon dies mid-session" [
       testCase "an HttpFailed while Ready waits for the daemon and keeps the session id it held" <| fun _ ->
-        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = [] }
+        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = Backlog.empty }
         let state, actions = decide policy readyState (Event.HttpFailed "connection reset")
         state.Transport
         |> Expect.equal "the bridge is reconnecting, not Fatal" (TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")))
         actions |> Expect.equal "it probes at once" [ Action.Probe ]
 
       testCase "the end of the push stream of the held session is the daemon going away" <| fun _ ->
-        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = [] }
+        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = Backlog.empty }
         let state, _ = decide policy readyState (Event.ServerStreamClosed("sid", "server stream closed"))
         state.Transport
         |> Expect.equal "reconnecting, holding the id" (TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")))
 
       testCase "the end of an OLDER session's push stream says nothing about the daemon" <| fun _ ->
-        let readyState = { Transport = TransportState.Ready(Some "new"); Pending = [] }
+        let readyState = { Transport = TransportState.Ready(Some "new"); Pending = Backlog.empty }
         let state, actions = decide policy readyState (Event.ServerStreamClosed("old", "server stream closed"))
         state |> Expect.equal "unchanged" readyState
         actions |> Expect.equal "nothing to do" []
 
       testCase "a request that was in flight when the daemon went away is still answered, even when the stream's end got there first" <| fun _ ->
-        let lost = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")); Pending = [] }
+        let lost = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")); Pending = Backlog.empty }
         let msg = req 5 "tools/call"
         let state, actions = decide policy lost (Event.RequestRejected(msg, "the daemon became unreachable"))
         state |> Expect.equal "still reconnecting" lost
         actions |> Expect.equal "the client gets its error" [ Action.RejectMessage(msg, "the daemon became unreachable") ]
 
-      testCase "a daemon that answers again gets a re-handshake first, then the queued messages, under the new id" <| fun _ ->
+      testCase "a daemon that answers again starts the re-handshake, and the queue waits for the new session" <| fun _ ->
         let waiting =
           { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(2, HeldSession.Id "stale"))
-            Pending = [ req 7 "tools/list" ] }
+            Pending = Backlog.ofList [ req 7 "tools/list" ] }
         let state, actions = decide policy waiting (Event.ProbeResult true)
-        state.Transport |> Expect.equal "ready, still holding the stale id until the re-handshake replaces it" (TransportState.Ready(Some "stale"))
-        state.Pending |> Expect.isEmpty "the queue drained"
-        actions
-        |> Expect.equal "re-handshake runs before the queued request" [ Action.Rehandshake; Action.ForwardToDaemon(req 7 "tools/list") ]
+        state.Transport |> Expect.equal "minting a session, not Ready under the id the new daemon never issued" (TransportState.Rehandshaking "stale")
+        Backlog.toList state.Pending |> Expect.equal "the queued request is still queued" [ req 7 "tools/list" ]
+        actions |> Expect.equal "only the re-handshake goes out" [ Action.Rehandshake ]
 
       testCase "a lost daemon is waited for, and one that never returns is started after MaxReconnectProbes probes" <| fun _ ->
-        let lost = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")); Pending = [] }
+        let lost = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid")); Pending = Backlog.empty }
         let probeOnce (s: State, started: int) =
           let s1, a1 = decide policy s Event.Probe
           let s2, a2 = decide policy s1 (Event.ProbeResult false)
@@ -333,7 +333,7 @@ let tests =
         |> Expect.equal "now in the cold start's Starting state" (TransportState.AwaitingDaemon(DaemonReadiness.Starting 0))
 
       testCase "a DaemonStartFailed while Starting becomes a clear Fatal naming the failure" <| fun _ ->
-        let starting = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Starting 1); Pending = [] }
+        let starting = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Starting 1); Pending = Backlog.empty }
         let state, _ = decide policy starting (Event.DaemonStartFailed "port in use")
         match state.Transport with
         | TransportState.Fatal reason -> reason |> Expect.stringContains "carries the underlying reason" "port in use"
@@ -342,13 +342,13 @@ let tests =
 
     testList "shutdown" [
       testCase "stdin closing with a captured session id terminates it, then shuts down" <| fun _ ->
-        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = [] }
+        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = Backlog.empty }
         let state, actions = decide policy readyState Event.StdinClosed
         state.Transport |> Expect.equal "Closed" TransportState.Closed
         actions |> Expect.equal "terminate then shut down, in order" [ Action.TerminateSession "sid"; Action.Shutdown ]
 
       testCase "stdin closing with no session id just shuts down" <| fun _ ->
-        let readyState = { Transport = TransportState.Ready None; Pending = [] }
+        let readyState = { Transport = TransportState.Ready None; Pending = Backlog.empty }
         let state, actions = decide policy readyState Event.StdinClosed
         state.Transport |> Expect.equal "Closed" TransportState.Closed
         actions |> Expect.equal "shut down only" [ Action.Shutdown ]
@@ -367,15 +367,115 @@ let tests =
         let waiting, _ = decide policy s1 (Event.StdinLine(req 1 "initialize"))
         let final, actions = decide policy waiting Event.StdinClosed
         final.Transport |> Expect.equal "Closed" TransportState.Closed
-        final.Pending |> Expect.isEmpty "nothing left dangling"
+        Backlog.toList final.Pending |> Expect.isEmpty "nothing left dangling"
         match actions with
         | [ Action.Shutdown; Action.RejectMessage(m, _) ] -> m |> Expect.equal "the exact queued message is rejected" (req 1 "initialize")
         | other -> failtestf "expected Shutdown then a RejectMessage, got %A" other
 
       testCase "isConnected reflects Ready and nothing else" <| fun _ ->
         initial |> isConnected |> Expect.isFalse "AwaitingDaemon is not connected"
-        { Transport = TransportState.Ready None; Pending = [] } |> isConnected |> Expect.isTrue "Ready is connected"
-        { Transport = TransportState.Closed; Pending = [] } |> isConnected |> Expect.isFalse "Closed is not connected"
+        { Transport = TransportState.Ready None; Pending = Backlog.empty } |> isConnected |> Expect.isTrue "Ready is connected"
+        { Transport = TransportState.Closed; Pending = Backlog.empty } |> isConnected |> Expect.isFalse "Closed is not connected"
+    ]
+
+    testList "the re-handshake is not atomic (P17)" [
+      let rehandshaking = { Transport = TransportState.Rehandshaking "stale"; Pending = Backlog.empty }
+
+      testCase "WHY — a line that arrives while the new session is being minted is queued, never sent under the id the new daemon does not know" <| fun _ ->
+        let state, actions = decide policy rehandshaking (Event.StdinLine(req 1 "tools/call"))
+        actions |> Expect.equal "nothing goes to the daemon yet" []
+        Backlog.toList state.Pending |> Expect.equal "the line is held" [ req 1 "tools/call" ]
+        state.Transport |> Expect.equal "still minting" (TransportState.Rehandshaking "stale")
+
+      testCase "the capture ends the wait: one push stream on the new id, then every held line in arrival order" <| fun _ ->
+        let held = Backlog.ofList [ req 1 "tools/list"; notif "notifications/x"; req 2 "tools/call" ]
+        let state, actions = decide policy { rehandshaking with Pending = held } (Event.SessionIdCaptured "fresh")
+        state.Transport |> Expect.equal "Ready under the new id" (TransportState.Ready(Some "fresh"))
+        Backlog.toList state.Pending |> Expect.isEmpty "the queue is empty"
+        actions
+        |> Expect.equal
+          "the stream replaces the stale session's, then the queue goes out"
+          [ Action.OpenPushStream("fresh", Some "stale")
+            Action.ForwardToDaemon(req 1 "tools/list")
+            Action.ForwardToDaemon(notif "notifications/x")
+            Action.ForwardToDaemon(req 2 "tools/call") ]
+
+      testCase "a failed re-handshake answers what is queued, and goes back to waiting for a daemon that can give it a session" <| fun _ ->
+        let held = Backlog.ofList [ req 1 "tools/list"; notif "notifications/x" ]
+        let state, actions = decide policy { rehandshaking with Pending = held } (Event.RehandshakeFailed "the daemon answered without a session id")
+        state.Transport
+        |> Expect.equal "waiting again, still holding the stale id" (TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "stale")))
+        Backlog.toList state.Pending |> Expect.isEmpty "nothing is left held"
+        match actions with
+        | [ Action.RejectMessage(first, reason); Action.RejectMessage(second, _); Action.Probe ] ->
+          first |> Expect.equal "the request is answered" (req 1 "tools/list")
+          second |> Expect.equal "so is the notification, in order" (notif "notifications/x")
+          reason |> Expect.stringContains "the reason names what failed" "the daemon answered without a session id"
+        | other -> failtestf "expected two rejections and a probe, got %A" other
+
+      testCase "a request that was in flight when the daemon died is still answered while the new session is minted" <| fun _ ->
+        let msg = req 5 "tools/call"
+        let state, actions = decide policy rehandshaking (Event.RequestRejected(msg, "the daemon became unreachable"))
+        state |> Expect.equal "unchanged" rehandshaking
+        actions |> Expect.equal "the client gets its error" [ Action.RejectMessage(msg, "the daemon became unreachable") ]
+
+      testCase "a request in flight when the reconnect window ended and the bridge started its own daemon is still answered" <| fun _ ->
+        let starting = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Starting 1); Pending = Backlog.empty }
+        let msg = req 5 "tools/call"
+        let state, actions = decide policy starting (Event.RequestRejected(msg, "the daemon became unreachable"))
+        state |> Expect.equal "unchanged" starting
+        actions |> Expect.equal "the client gets its error" [ Action.RejectMessage(msg, "the daemon became unreachable") ]
+
+      testCase "a late failure report does not restart the re-handshake" <| fun _ ->
+        let state, actions = decide policy rehandshaking (Event.HttpFailed "connection reset")
+        state |> Expect.equal "unchanged" rehandshaking
+        actions |> Expect.equal "nothing to do" []
+
+      testCase "stdin closing while the session is minted rejects what is queued and shuts down" <| fun _ ->
+        let held = Backlog.ofList [ req 1 "tools/list" ]
+        let state, actions = decide policy { rehandshaking with Pending = held } Event.StdinClosed
+        state.Transport |> Expect.equal "Closed" TransportState.Closed
+        match actions with
+        | [ Action.Shutdown; Action.RejectMessage(m, _) ] -> m |> Expect.equal "the held request is answered" (req 1 "tools/list")
+        | other -> failtestf "expected Shutdown then a RejectMessage, got %A" other
+
+      testProperty "WHY — however many lines arrive during the re-handshake, each is forwarded exactly once, in order, after the capture" <| fun (count: byte) ->
+        let n = int count % (policy.QueueCap + 1)
+        let lines = [ for i in 1..n -> req i "tools/call" ]
+        let queued =
+          lines |> List.fold (fun (s: State) line -> fst (decide policy s (Event.StdinLine line))) rehandshaking
+        let forwardedBefore =
+          lines |> List.fold (fun acc line -> acc @ snd (decide policy rehandshaking (Event.StdinLine line))) []
+        let _, released = decide policy queued (Event.SessionIdCaptured "fresh")
+        forwardedBefore = []
+        && (released |> List.choose (function Action.ForwardToDaemon m -> Some m | _ -> None)) = lines
+
+      testCase "WHY — a client that outpaces a daemon that never returns hits a cap, and the message past it is answered with an error that says why" <| fun _ ->
+        let full =
+          { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Reconnecting(0, HeldSession.Id "sid"))
+            Pending = Backlog.ofList [ for i in 1 .. policy.QueueCap -> req i "tools/call" ] }
+        let overflowing = req 99 "tools/call"
+        let state, actions = decide policy full (Event.StdinLine overflowing)
+        state |> Expect.equal "the queue did not grow" full
+        match actions with
+        | [ Action.RejectMessage(m, reason) ] ->
+          m |> Expect.equal "the overflowing request is the one answered" overflowing
+          reason |> Expect.stringContains "says the queue was full" "full"
+          reason |> Expect.stringContains "names the cap" (string policy.QueueCap)
+        | other -> failtestf "expected one RejectMessage, got %A" other
+
+      testCase "the cap holds while the new session is minted too" <| fun _ ->
+        let full = { rehandshaking with Pending = Backlog.ofList [ for i in 1 .. policy.QueueCap -> req i "tools/call" ] }
+        let state, actions = decide policy full (Event.StdinLine(req 99 "tools/call"))
+        state |> Expect.equal "the queue did not grow" full
+        match actions with
+        | [ Action.RejectMessage _ ] -> ()
+        | other -> failtestf "expected one RejectMessage, got %A" other
+
+      testProperty "the backlog hands messages back oldest first and counts them without walking them" <| fun (count: byte) ->
+        let messages = [ for i in 1 .. int count -> req i "tools/list" ]
+        let backlog = messages |> List.fold (fun b m -> Backlog.enqueue m b) Backlog.empty
+        Backlog.toList backlog = messages && Backlog.count backlog = messages.Length && backlog = Backlog.ofList messages
     ]
 
     testList "a re-handshake keeps what the client declared" [

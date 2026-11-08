@@ -36,7 +36,8 @@ let outcomeOfForward (error: ForwardError) : Outcome =
   match error with
   | ForwardError.Rejected reason
   | ForwardError.SessionInvalid reason -> Outcome.DaemonRefused reason
-  | ForwardError.Unreachable reason -> Outcome.DaemonGone reason
+  | ForwardError.Unreachable reason
+  | ForwardError.TimedOut reason -> Outcome.DaemonGone reason
 
 /// Send a request and read the answer to its id.
 let ask (conversation: Conversation) (client: HttpClient) (id: int) (raw: string) : Task<Result<string, Outcome>> =

@@ -63,9 +63,13 @@ type ForwardError =
   /// re-sending. Distinct from `Rejected`, which is the daemon's real answer
   /// about THIS request and must reach the client untouched.
   | SessionInvalid of reason: string
-  /// No usable response — connection refused, timed out, the stream tore
-  /// down mid-read. This is "the daemon is gone."
+  /// No usable response — connection refused, the stream tore down mid-read.
+  /// This is "the daemon is gone."
   | Unreachable of reason: string
+  /// The client's own deadline (`Timeouts.workerHttpRequest`) passed while the daemon had not answered yet. A
+  /// slow answer is not an outage: nothing says the daemon is gone or that the session id is stale, so the
+  /// request alone is answered with an error and the bridge stays where it is.
+  | TimedOut of reason: string
 
 /// The exact daemon answer that means "the session id you are holding is one
 /// I have never minted", and therefore the only rejection this bridge heals.
@@ -81,6 +85,40 @@ type ForwardError =
 /// reaches the client.
 let internal isSessionInvalid (statusCode: int) (body: string) : bool =
   statusCode = 404 && body.Contains("-32001") && body.Contains("Session not found")
+
+/// Lets one request at a time mint a replacement for a session id the daemon refused, and lets the others reuse
+/// what it minted.
+///
+/// A daemon that restarted refuses EVERY request under the id the bridge holds. Two requests in flight at that
+/// moment would each mint a session, and the bridge would end up with two: two captures, two push streams, and
+/// an idle session on the daemon nobody ends. The gate remembers the id the bridge most recently got (from any
+/// capture: the client's own handshake, a heal, a re-handshake). A request that was refused under an id older
+/// than that one takes it instead of minting.
+type HealGate() =
+  let turn = new SemaphoreSlim(1, 1)
+  let sync = obj ()
+  let mutable newest: string option = None
+
+  /// Record an id the bridge now holds, whichever path minted it.
+  member _.Note(sessionId: string) : unit = lock sync (fun () -> newest <- Some sessionId)
+
+  /// The id to retry a request under that was refused under `stale`: a newer one the bridge already holds, or
+  /// the one `mint` makes. `None` when `mint` made none.
+  member _.Heal(stale: string, mint: unit -> Task<string option>) : Task<string option> =
+    task {
+      do! turn.WaitAsync()
+      try
+        match lock sync (fun () -> newest) with
+        | Some held when held <> stale -> return Some held
+        | _ ->
+          let! minted = mint ()
+          match minted with
+          | Some fresh -> lock sync (fun () -> newest <- Some fresh)
+          | None -> ()
+          return minted
+      finally
+        turn.Release() |> ignore
+    }
 
 /// The real-world effects the bridge performs, injected so the pure
 /// orchestration loop (`run`, below) can be driven by fakes in tests without
@@ -121,8 +159,9 @@ type Io =
     /// is exactly the "a human has to reload" failure this replaces.
     Forward: (string -> unit) -> string option -> RpcMessage -> Task<Result<unit, ForwardError>>
     /// Open the server-push SSE stream (GET) once a session id exists, and
-    /// write every message it carries to stdout until it closes or errors.
-    OpenServerStream: string -> Task<Result<unit, string>>
+    /// write every message it carries to stdout until it closes, errors, or the token is cancelled (the bridge
+    /// cancels it when a new session takes this one's place, so only one stream ever writes to stdout).
+    OpenServerStream: string -> CancellationToken -> Task<Result<unit, string>>
     /// Mint a session on the daemon that is back (`Action.Rehandshake`), calling the capture callback with its
     /// id; the bridge then opens the push stream on it and tells the client its lists may have changed.
     Rehandshake: (string -> unit) -> Task<Result<unit, string>>
@@ -221,6 +260,9 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
             // failure, because the failure moves the bridge to Reconnecting, where a rejection is a no-op.
             post mailbox (Event.RequestRejected(msg, sprintf "the daemon became unreachable while this request was in flight (%s); the bridge is waiting for it, ask again in a few seconds" reason))
             post mailbox (Event.HttpFailed reason)
+          | Error(ForwardError.TimedOut reason) ->
+            post mailbox (Event.RequestRejected(msg, sprintf "the daemon did not answer this request in time (%s); it may still be working on it" reason))
+        | Action.OpenPushStream _ -> () // STUB (red): the mailbox loop still opens the stream inline
         | Action.Rehandshake ->
           // The result needs no event of its own: success is the capture callback, which the mailbox turns into a
           // new session id, and a failure leaves the held id stale, which the next request heals.
@@ -237,6 +279,7 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
         | Action.Probe
         | Action.ForwardToDaemon _ -> post mailbox (Event.HttpFailed ex.Message)
         | Action.Rehandshake
+        | Action.OpenPushStream _
         | Action.RejectMessage _
         | Action.ReportFatal _
         | Action.TerminateSession _
@@ -263,7 +306,7 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
           | TransportState.Ready held, TransportState.Ready(Some sid) when held <> Some sid ->
             Task.Run<unit>(fun () ->
               task {
-                match! io.OpenServerStream sid with
+                match! io.OpenServerStream sid CancellationToken.None with
                 | Ok() -> ()
                 | Error reason -> post inbox (Event.ServerStreamClosed(sid, reason))
               })
@@ -290,6 +333,7 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
             match state'.Transport with
             | TransportState.Ready sid -> sid
             | TransportState.AwaitingDaemon _
+            | TransportState.Rehandshaking _
             | TransportState.Closed
             | TransportState.Fatal _ -> None
           // One `Task.Run` for the WHOLE batch, actions awaited in order —
@@ -543,7 +587,8 @@ let rehandshake
 /// its stdout writer, so the client reads them as they come; `sagefs call` passes a collector and reads the
 /// answer to the request it sent. Both get the capture-before-emit ordering and the heal, because both are this
 /// function.
-let forward
+let forwardWith
+  (gate: HealGate)
   (client: HttpClient)
   (port: int)
   (emit: string -> unit)
@@ -585,6 +630,18 @@ let forward
     with ex ->
       return Error(ForwardError.Unreachable ex.Message)
   }
+
+/// `forwardWith` for a caller that has no other request in flight to share a heal with (`sagefs call`).
+let forward
+  (client: HttpClient)
+  (port: int)
+  (emit: string -> unit)
+  (captureSessionId: string -> unit)
+  (sessionId: string option)
+  (heldInitializeParams: string option)
+  (msg: RpcMessage)
+  : Task<Result<unit, ForwardError>> =
+  forwardWith (HealGate()) client port emit captureSessionId sessionId heldInitializeParams msg
 
 /// The long-lived GET stream for server-initiated messages (notifications,
 /// server-to-client requests) not tied to any one POST. Runs until it
@@ -686,7 +743,7 @@ let runMcpStdio (mcpPort: int) : Task<int> =
             | Some declared -> heldInitializeParams.Value <- Some declared
             | None -> ()
             forward client mcpPort stdout.WriteLine captureSessionId sessionId heldInitializeParams.Value msg
-        OpenServerStream = openServerStream client mcpPort stdout
+        OpenServerStream = fun sid _ -> openServerStream client mcpPort stdout sid
         Rehandshake = fun captureSessionId -> rehandshake client mcpPort captureSessionId heldInitializeParams.Value
         TerminateSession = terminateSession client mcpPort
         PumpStdin = pumpStdin
