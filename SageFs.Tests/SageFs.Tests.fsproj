@@ -415,6 +415,7 @@
          <Compile Include="McpStdioBridgeReconnectSimTests.fs" />
          <Compile Include="McpStdioBridgeRunTests.fs" />
          <Compile Include="McpStdioBridgeE2ETests.fs" />
+         <Compile Include="EvalBetweenCallsBridgeTests.fs" />
          <Compile Include="McpStdioBridgeHealTests.fs" />
          <Compile Include="WarmupContextTests.fs" />
          <Compile Include="WarmupOpenReplayTests.fs" />
