@@ -34,12 +34,12 @@ let parsed (words: string) : Result<Invocation, UsageRefusal> =
 let flag (name: string) (value: string option) : RawFlag = { Name = name; Value = value }
 
 let anonymous : Credentials =
-  match Credentials.resolve TokenChoice.FromEnvironment (fun _ -> null) with
+  match Credentials.resolve TokenReads.nothing TokenChoice.FromEnvironment (fun _ -> null) with
   | Result.Ok credentials -> credentials
   | Result.Error refusal -> failtestf "anonymous should resolve: %A" refusal
 
 let asMember : Credentials =
-  match Credentials.resolve (TokenChoice.Given "sfm_abc") (fun _ -> null) with
+  match Credentials.resolve TokenReads.nothing (TokenChoice.Given "sfm_abc") (fun _ -> null) with
   | Result.Ok credentials -> credentials
   | Result.Error refusal -> failtestf "a token should resolve: %A" refusal
 
@@ -291,7 +291,7 @@ let tests =
     testList "who is calling" [
       test "WHY - a token from the flag wins over the environment, and neither is anonymous" {
         let env name = match name with "SAGEFS_MEMBER_TOKEN" -> " sfm_env " | _ -> null
-        match Credentials.resolve TokenChoice.FromEnvironment env, Credentials.resolve (TokenChoice.Given " sfm_flag ") env, Credentials.resolve TokenChoice.FromEnvironment (fun _ -> null) with
+        match Credentials.resolve TokenReads.nothing TokenChoice.FromEnvironment env, Credentials.resolve TokenReads.nothing (TokenChoice.Given " sfm_flag ") env, Credentials.resolve TokenReads.nothing TokenChoice.FromEnvironment (fun _ -> null) with
         | Result.Ok fromEnv, Result.Ok fromFlag, Result.Ok none ->
           fromEnv.Identity |> Expect.equal "from the environment" (Identity.Member TokenSource.Environment)
           fromEnv.Headers |> Expect.equal "trimmed, in the member header" [ Capability.CapabilityTransport.headerName, "sfm_env" ]
@@ -303,7 +303,7 @@ let tests =
       }
 
       test "WHY - a blank --token is refused, never read as anonymous" {
-        Credentials.resolve (TokenChoice.Given "  ") (fun _ -> null) |> Expect.equal "blank" (Result.Error UsageRefusal.BlankToken)
+        Credentials.resolve TokenReads.nothing (TokenChoice.Given "  ") (fun _ -> null) |> Expect.equal "blank" (Result.Error UsageRefusal.BlankToken)
       }
 
       test "WHY - the operator credential rides as Authorization beside the member token" {
@@ -312,7 +312,7 @@ let tests =
           | "SAGEFS_MEMBER_TOKEN" -> "sfm_m"
           | "SAGEFS_OPERATOR_TOKEN" -> "sfo_op"
           | _ -> null
-        match Credentials.resolve TokenChoice.FromEnvironment env with
+        match Credentials.resolve TokenReads.nothing TokenChoice.FromEnvironment env with
         | Result.Ok credentials ->
           Credentials.hasOperator credentials |> Expect.isTrue "present"
           credentials.Headers |> List.map fst |> Expect.equal "both headers" [ Capability.CapabilityTransport.headerName; "Authorization" ]
@@ -323,7 +323,7 @@ let tests =
       testPropertyWithConfig propConfig "WHY - no description of who is calling ever holds the token" (
         Prop.forAll (Arb.fromGen genText) (fun text ->
           let token = "sfm_" + text.Trim() + "Z"
-          match Credentials.resolve (TokenChoice.Given token) (fun _ -> null) with
+          match Credentials.resolve TokenReads.nothing (TokenChoice.Given token) (fun _ -> null) with
           | Result.Ok credentials -> not ((Credentials.describe credentials).Contains token) && (credentials.Headers |> List.exists (fun (_, value) -> value = token.Trim()))
           | Result.Error _ -> false)
       )

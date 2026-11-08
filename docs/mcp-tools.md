@@ -169,8 +169,8 @@ goes to stderr with exit code 1, its full text kept: a refusal by a gate names t
 next action. A usage mistake is exit code 2. A daemon that is not running gets the
 words `sagefs status` uses and exit code 1. `--port` or `SAGEFS_MCP_PORT` picks the
 daemon (`--mcp-port` works too). The command's own options (`--list`, `--json`,
-`--token`, `--port`, `--mcp-port`, `--help`) are never tool parameters, and no tool
-has a parameter with one of those names.
+`--token`, `--token-file`, `--port`, `--mcp-port`, `--help`) are never tool parameters,
+and no tool has a parameter with one of those names.
 
 **Who is calling.** Every `sagefs call` is a new process, so the daemon sees a new
 connection each time, and what one call makes (a session, a claim) belongs to that
@@ -185,11 +185,13 @@ sagefs call create_bare_session --working_directory "$PWD"
 sagefs call stop_session --session_id 1a2b3c4d      # the same member, so it is allowed
 ```
 
-`--token <token>` does the same for one call; the environment variable keeps the
-token out of the process list. A token lapses after 30 minutes with no call (see
-"Expiry" below), and a session it made can then only be stopped by a token that is
-the same member, which a new mint is not: stop such a session before you leave a
-token idle. `SAGEFS_OPERATOR_TOKEN` is sent too, so `--list` shows
+`--token-file <path>` reads the token from a file (`--token-file -` reads standard
+input), and the environment variable works the same way: neither puts the token in
+the process list or the shell history. `--token <token>` still works for one call
+and prints a warning, because the token sits on the command line. A token lapses
+after 30 minutes with no call (see "Expiry" below), and a session it made can then
+only be stopped by the conductor, the operator or a token that is the same member,
+which a new mint is not: stop such a session before you leave a token idle. `SAGEFS_OPERATOR_TOKEN` is sent too, so `--list` shows
 the full tool list under `TokenRequired`. With neither, `--list` starts with
 `identity: anonymous` and any refusal ends with what to do about it.
 

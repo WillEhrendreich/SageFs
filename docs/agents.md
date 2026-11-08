@@ -178,7 +178,8 @@ the same member:
 eval "$(sagefs member mint --role Implementer --dir "$PWD" --print-env SAGEFS_MEMBER_TOKEN)"
 ```
 
-`--token` does the same for one call. The full description is in
+`--token-file <path>` (or `--token-file -` for standard input) does the same for one call without putting the token on
+the command line. `--token <token>` still works and prints a warning. The full description is in
 [mcp-tools.md](mcp-tools.md#reaching-the-tools-without-a-client-sagefs-call).
 
 ### What a client sees when the daemon is upgraded

@@ -163,6 +163,7 @@
         <Compile Include="McpBridgeTests.fs" />
         <Compile Include="McpCallTests.fs" />
         <Compile Include="McpCallCommandTests.fs" />
+        <Compile Include="McpCallTokenSourceTests.fs" />
         <Compile Include="HttpOriginGuardTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />
         <Compile Include="DogfoodReplTests.fs" />

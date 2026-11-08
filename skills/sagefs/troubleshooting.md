@@ -57,7 +57,7 @@ That works for any client that spawns a command, not just Claude Code. See
 "Connect" in `docs/mcp-tools.md`, which covers this in full for a human.
 
 **Need the tools right now?** `sagefs call --list` lists them and `sagefs call <tool> --<parameter> <value>` calls
-one, from a shell, with no client in between. Give it a member token (`--token`, or `SAGEFS_MEMBER_TOKEN` from
+one, from a shell, with no client in between. Give it a member token (`--token-file <path>`, or `SAGEFS_MEMBER_TOKEN` from
 `sagefs member mint --print-env`) so each call is the same member: every call is a new connection, and a session
 one call made is refused to the next with "owned by another bound MCP connection" when there is no token. A daemon
 that is not running gets the words `sagefs status` uses.
