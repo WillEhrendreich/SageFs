@@ -37,9 +37,19 @@ module EventId =
 type Replayable = { Id: EventId; Frame: SseFrame; Bytes: int }
 
 module Replayable =
+  /// The text of each frame the log has handed out, built by the first connection that writes it. A frame is a
+  /// megabyte at times and every connection writes it, so one copy is shared. Keyed by the record's identity
+  /// (a copy of it under another id is another key) and held only as long as the record is.
+  let texts = System.Runtime.CompilerServices.ConditionalWeakTable<Replayable, string>()
+
+  let build =
+    System.Runtime.CompilerServices.ConditionalWeakTable<Replayable, string>.CreateValueCallback(fun item ->
+      System.String.Concat("id: ", EventId.toWire item.Id, "\n", item.Frame.Wire))
+
   /// The frame as a client reads it: its id on the line before its own text, which the
-  /// EventSource format allows in any order and which leaves the frame's text whole.
-  let toWire (item: Replayable) : string = sprintf "id: %s\n%s" (EventId.toWire item.Id) item.Frame.Wire
+  /// EventSource format allows in any order and which leaves the frame's text whole. The same string for
+  /// every connection that writes this frame.
+  let toWire (item: Replayable) : string = texts.GetValue(item, build)
 
 /// How far the daemon's numbering has got, and the id to name it by.
 [<RequireQualifiedAccess>]
@@ -104,12 +114,15 @@ module SseReplay =
 
   /// Spends the next seq on this frame and keeps it if the limits allow. A frame bigger than
   /// the byte bound evicts itself, and its seq stays spent so a client that saw it is not lied to.
-  let record (frame: SseFrame) (buffer: Buffer) : Replayable * Buffer =
+  ///
+  /// `bytes` is the frame's size on the wire, measured by the caller: counting it walks the whole text, and a caller
+  /// that holds a lock while it records measures before it takes the lock.
+  let recordSized (bytes: int) (frame: SseFrame) (buffer: Buffer) : Replayable * Buffer =
     let seq = buffer.Latest + 1L
     let item =
       { Id = { Epoch = buffer.Epoch; Seq = seq }
         Frame = frame
-        Bytes = System.Text.Encoding.UTF8.GetByteCount frame.Wire }
+        Bytes = bytes }
     item,
     trim
       { buffer with
@@ -117,6 +130,9 @@ module SseReplay =
           Count = buffer.Count + 1
           Bytes = buffer.Bytes + item.Bytes
           Latest = seq }
+
+  let record (frame: SseFrame) (buffer: Buffer) : Replayable * Buffer =
+    recordSized (SseFrame.wireBytes frame) frame buffer
 
   /// The newest id issued, or `Empty` before the first frame.
   let position (buffer: Buffer) : LogPosition =

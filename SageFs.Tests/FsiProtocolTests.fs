@@ -123,7 +123,7 @@ let tests =
     testPropertyWithConfig config "adversarial text round-trips through every text-carrying message"
     <| Prop.forAll (Arb.fromGen genDiagnosticsAndText) (fun (text, diagnostics) ->
       let messages =
-        [ EvalResult(7L, EvalFailed text, diagnostics)
+        [ EvalResult(7L, EvalFailed text, diagnostics, SageFs.EvalCost.unmeasured)
           Output(StdOut, text)
           Ready(text, text) ]
       messages |> List.forall (fun message -> decodeResponse (encodeResponse message) = Result.Ok message)
@@ -131,7 +131,7 @@ let tests =
 
     testPropertyWithConfig config "an encoded message is one line: it never contains a raw newline"
     <| Prop.forAll (Arb.fromGen genDiagnosticsAndText) (fun (text, diagnostics) ->
-      let line = encodeResponse (EvalResult(1L, EvalFailed text, diagnostics))
+      let line = encodeResponse (EvalResult(1L, EvalFailed text, diagnostics, SageFs.EvalCost.unmeasured))
       not (line.Contains '\n') && not (line.Contains '\r'))
 
     // Drift guards: the derived generators must actually exercise EVERY case of every protocol union.

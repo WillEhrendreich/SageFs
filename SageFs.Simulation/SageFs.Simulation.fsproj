@@ -344,6 +344,10 @@
              with side effects and count a removal twice. -->
         <Compile Include="HygieneSim.fs" />
         <Compile Include="HygieneSimInvariants.fs" />
+        <!-- Hygiene sweep DST: seeded worlds through the real ledger gate, automatic plan and executor. The invariant is that the
+             sweep never loses a commit or an uncommitted byte; twins skip salvage and force, drop a branch with no restore
+             point, and ignore the ledger. -->
+        <Compile Include="HygieneSweepSim.fs" />
         <!-- Same-commit tier reuse DST: folds the real PassRecord.decide, serialize and parse (build/PassRecord.fs,
              the gate's own rules, linked here so the simulation and the pipeline read the same file) through seeded
              histories of commits, byte-different rebuilds, a dirty tree, flaky tiers and a damaged store; twins ignore

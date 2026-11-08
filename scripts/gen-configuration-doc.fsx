@@ -183,7 +183,8 @@ let retentionVars =
 
 let retentionRows =
   [ for i in retentionStart .. lines.Length - 1 do
-      let m = Regex.Match(lines.[i], @"^\s*let\s+(\w+)\s*=\s*envOrDefault(Days|Int)\s+(\w+EnvVar)\s+([0-9_.]+)\s*$")
+      // `graceDaysOf (Environment.GetEnvironmentVariable xEnvVar) 1.0` is the finished-worktree grace: a number of days that may be 0.
+      let m = Regex.Match(lines.[i], @"^\s*let\s+(\w+)\s*=\s*(?:envOrDefault(Days|Int)\s+|graceDaysOf\s+\(Environment\.GetEnvironmentVariable\s+)(\w+EnvVar)\)?\s+([0-9_.]+)\s*$")
       if m.Success then
         let var = Map.find m.Groups.[3].Value retentionVars
         yield
@@ -191,7 +192,7 @@ let retentionRows =
             Name = m.Groups.[1].Value
             Area = "Local data retention"
             Default = float (m.Groups.[4].Value.Replace("_", ""))
-            Unit = (match m.Groups.[2].Value with "Days" -> Days | _ -> Count)
+            Unit = (match m.Groups.[2].Value with "Days" | "" -> Days | _ -> Count)
             Comment = docAbove i
             Scaled = false
             Line = i + 1 } ]

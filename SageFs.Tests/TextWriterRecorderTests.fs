@@ -7,7 +7,7 @@ open System.Threading
 open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
-open SageFs.AppState
+open SageFs
 
 /// The recorder sits between a session's output and the eval that reads it back. Output reaches it on whatever
 /// thread produced it (the isolated host's reply loop forwards the user app's stdout, and an app writes from its

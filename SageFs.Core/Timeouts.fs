@@ -363,6 +363,11 @@ module Timeouts =
   /// How long disposing an FSI host session waits for the host to exit after the
   /// shutdown request before it kills the process. Was a bare 5000 ms, kept at that.
   let fsiHostShutdownGrace = TimeSpan.FromSeconds(5.0)
+  /// How long an eval has to run before its reply ends with a cost line (`EvalCost.line`). Under half a
+  /// second an agent does not need to be told the time, and a line on every reply would cost tokens on all
+  /// of them. FsiMcp 0.3.0 uses the same 0.5 s; it is a first guess until `get_eval_timeline` history says
+  /// what share of real evals it marks (docs/plans/eval-cost-line.md).
+  let evalCostSlow = TimeSpan.FromSeconds(0.5)
   /// How long the `dotnet build` of the FSI host (a cold build, once per host
   /// version and SDK) may run before FsiHostBuild gives up. No recorded reason
   /// for 5 minutes.
@@ -966,6 +971,18 @@ module DataRetention =
       | true, v when v > 0 -> v
       | _ -> defaultValue
 
+  /// A grace period in days, from the text of an environment variable. Zero is an answer (no grace: what it holds back is
+  /// released the moment it qualifies), so unlike every other age here it is accepted. Nothing set, text that is not a
+  /// number, a negative number and one longer than `settingAgeLongestDays` all give `defaultDays`.
+  let graceDaysOf (raw: string) (defaultDays: float) : TimeSpan =
+    match raw with
+    | null
+    | "" -> TimeSpan.FromDays defaultDays
+    | value ->
+      match Double.TryParse(value, Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture) with
+      | true, days when Double.IsFinite days && days >= 0.0 && days <= Timeouts.settingAgeLongestDays -> TimeSpan.FromDays days
+      | _ -> TimeSpan.FromDays defaultDays
+
   let private envOrDefaultDays (varName: string) (defaultDays: float) =
     match Environment.GetEnvironmentVariable(varName) with
     | null | "" -> TimeSpan.FromDays(defaultDays)
@@ -1025,8 +1042,8 @@ module DataRetention =
   let workerLogMaxAge = envOrDefaultDays workerLogMaxAgeEnvVar 14.0
   /// A merged agent worktree is kept this long after it was last in use, because the agent that made it may be resumed:
   /// the release gate often finds a flake in what an agent wrote, and a resume needs the worktree it was in. A day covers a
-  /// merge, a gate run and the fix that follows. Work that is not merged is never removed, whatever this says.
-  let finishedWorktreeGrace = envOrDefaultDays finishedWorktreeGraceEnvVar 1.0
+  /// merge, a gate run and the fix that follows. 0 means no grace. Work that is not merged is never removed, whatever this says.
+  let finishedWorktreeGrace = graceDaysOf (Environment.GetEnvironmentVariable finishedWorktreeGraceEnvVar) 1.0
   /// How many of the local gate's pass records are kept, newest first. A record holds a commit's release bundle
   /// (about 270 MB each), and the pre-push hook only ever looks up the commit being pushed, so ten covers a day
   /// of shipping; 75 of them were 20 GB.
@@ -1034,3 +1051,7 @@ module DataRetention =
   /// How many of the gate's logs are kept, newest first. They are what a person reads after a red gate, and a
   /// red gate is read within the hour; twenty is a few days of runs.
   let gateLogsKept = envOrDefaultInt gateLogsKeptEnvVar 20
+  /// A salvage ref (uncommitted files the sweep saved from a worktree) whose worktree is gone is kept this long when the base
+  /// branch does not have everything on it, so somebody who comes back for the work finds it. It is held in the repository's
+  /// object store, possibly with a `.env` in it, so it does not stay for ever. A month covers a holiday.
+  let salvageRetention = System.TimeSpan.FromDays 30.

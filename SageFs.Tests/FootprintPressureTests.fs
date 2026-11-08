@@ -92,15 +92,44 @@ let tests =
       |> Expect.equal "18 of 62 GB free is Normal" MemoryPressure.Normal
 
     testCase "WHY — the level every status surface reads is never better than the footprint says" <| fun _ ->
-      let previous = MemoryPressureWatch.footprintProbe
+      let incident () : MemoryPressureWatch.Reading =
+        { Footprint = incidentFootprint; Machine = { TotalBytes = machineTotal; AvailableBytes = gib 18L } }
       try
         MemoryPressureWatch.reset ()
-        MemoryPressureWatch.footprintProbe <- fun () -> incidentFootprint, machineTotal
-        MemoryPressureWatch.currentLevel () |> Expect.equal "Critical with no sweep having run" MemoryPressure.Critical
-        MemoryPressure.explainWith (MemoryPressureWatch.currentLevel ()) (MemoryPressureWatch.currentNote ())
+        let observed = MemoryPressureWatch.observe incident
+        observed.Level |> Expect.equal "Critical with no sweep having run" MemoryPressure.Critical
+        MemoryPressure.explainWith observed.Level observed.Note
         |> fun note -> note.Contains "MB swapped" |> Expect.isTrue "the note says how much is swapped"
       finally
-        MemoryPressureWatch.footprintProbe <- previous
+        MemoryPressureWatch.reset ()
+
+    testCase "a sweep judges the reading it is handed, and the machine stats come from that same reading" <| fun _ ->
+      let reading : MemoryPressureWatch.Reading =
+        { Footprint = incidentFootprint; Machine = { TotalBytes = machineTotal; AvailableBytes = gib 18L } }
+      let machine = MemoryPressureWatch.machineStatsOf reading
+      machine.DaemonRssBytes |> Expect.equal "what the daemon holds, resident plus swapped" (MachineMemory.heldBytes incidentFootprint)
+      machine.MachineAvailableBytes |> Expect.equal "what the machine has" (gib 18L)
+      try
+        MemoryPressureWatch.reset ()
+        let decision = MemoryPressureWatch.evaluate reading defaultThresholds machine []
+        decision.Level |> Expect.equal "Critical although the machine has room" MemoryPressure.Critical
+      finally
+        MemoryPressureWatch.reset ()
+
+    testCase "WHY — one sample reads the footprint once and gives the level and the note from that read" <| fun _ ->
+      // /proc/self/smaps_rollup walks every mapping of the process: on a 25 GB daemon that is a measurable stall, and the level
+      // and the note each walked it again.
+      let reads = ref 0
+      let source () : MemoryPressureWatch.Reading =
+        reads.Value <- reads.Value + 1
+        { Footprint = incidentFootprint; Machine = { TotalBytes = machineTotal; AvailableBytes = gib 18L } }
+      MemoryPressureWatch.reset ()
+      try
+        let observed = MemoryPressureWatch.observe source
+        reads.Value |> Expect.equal "the footprint was read once" 1
+        observed.Level |> Expect.equal "Critical from that read" MemoryPressure.Critical
+        observed.Note.Contains "MB swapped" |> Expect.isTrue "and the note says how much is swapped, from the same read"
+      finally
         MemoryPressureWatch.reset ()
 
     testProperty "the floor is monotone: more swap or more heap never lowers the level" <| fun (heap: uint16) (swap: uint16) (extra: uint16) ->

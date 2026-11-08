@@ -108,6 +108,8 @@
         <Compile Include="HygieneLedgerStore.fs" />
         <Compile Include="HygieneEdge.fs" />
         <Compile Include="HygieneService.fs" />
+        <Compile Include="HygieneRescue.fs" />
+        <Compile Include="HygieneSweep.fs" />
         <Compile Include="FrictionReviewView.fs" />
         <Compile Include="McpFrictionRecorder.fs" />
         <Compile Include="PageChoices.fs" />
@@ -175,6 +177,7 @@
              per-file lock / journal location it and McpNudge both write through has to exist before
              either. McpNudge (after Mcp.fs, because it needs McpContext) re-exports its bindings. -->
         <Compile Include="EvalWriteBackWire.fs" />
+        <Compile Include="EvalReply.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpHygiene.fs" />
         <Compile Include="McpNudge.fs" />

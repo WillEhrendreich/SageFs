@@ -205,7 +205,8 @@ let toolTests =
           TakenAt = DateTime.UtcNow
           Leftovers = []
           Plan = Planner.plan []
-          Summary = buried }
+          Summary = buried
+          Salvage = SalvageRefs.Listing.Listed [] }
       let withLine = McpHygiene.withHygieneLine context sb.Repo reply
       withLine |> Expect.stringStarts "keeps the reply as it was" reply
       withLine |> Expect.stringContains "adds the line" "call get_workspace_hygiene"
@@ -221,7 +222,8 @@ let toolTests =
           TakenAt = DateTime.UtcNow
           Leftovers = []
           Plan = Planner.plan []
-          Summary = summaryWith (Thresholds.leftoverWorktreeNudge + 3) 0L }
+          Summary = summaryWith (Thresholds.leftoverWorktreeNudge + 3) 0L
+          Salvage = SalvageRefs.Listing.Listed [] }
       let! (buried: string) = McpHygiene.withHygieneForSession context "" sb.Repo json
       let doc = System.Text.Json.JsonDocument.Parse buried
       doc.RootElement.GetProperty("state").GetString() |> Expect.equal "the other fields are kept" "Ready"

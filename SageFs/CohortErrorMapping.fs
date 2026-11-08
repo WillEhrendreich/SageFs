@@ -215,6 +215,23 @@ module CohortErrorMapping =
         (sprintf "'%s' climbs out of the repo: a '..' goes above the root." path)
         "Write the path relative to the repo root, for example 'file:src/Foo/Bar.fs', without '..' that leave it."
 
+  /// Why a token's scope was refused, and what to pass instead. The `mint_member` tool, `POST /api/members/mint`
+  /// and `sagefs member mint --scope` all say this, because all three decide through `ScopePrefix.tryParse`.
+  let scopeParseRefusalToSageFsError (refusal: Capability.ScopeParseRefusal) : SageFsError =
+    match refusal with
+    | Capability.ScopeParseRefusal.ListOfPrefixes given ->
+      failed
+        (sprintf "the scope '%s' is a list, and a comma (or a semicolon) is not a path separator. A token's scope is one directory prefix, so a list could never cover a path and every claim by that token would be refused." given)
+        "Pass one directory prefix, for example 'src/Foo/', or leave the scope out for the whole repo (a file claim is exclusive per file whatever the scope). For several directories use their common parent."
+    | Capability.ScopeParseRefusal.Path(Cohort.PathRefusal.Absolute path) ->
+      failed
+        (sprintf "the scope '%s' is an absolute path, and a token's scope is a directory relative to the repo root." path)
+        "Pass one directory prefix relative to the repo root, for example 'src/Foo/', or leave the scope out for the whole repo."
+    | Capability.ScopeParseRefusal.Path(Cohort.PathRefusal.EscapesRoot path) ->
+      failed
+        (sprintf "the scope '%s' climbs out of the repo: a '..' goes above the root." path)
+        "Pass one directory prefix inside the repo, for example 'src/Foo/', or leave the scope out for the whole repo."
+
   let toolRefusalToSageFsError (refusal: Capability.ToolRefusal) : SageFsError =
     match refusal with
     | Capability.ToolRefusal.NotInRole(tool, toolClass, preset) ->

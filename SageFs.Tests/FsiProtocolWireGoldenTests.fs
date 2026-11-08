@@ -302,11 +302,13 @@ let private responseInputs =
     """{"case":"CheckResult","fields":{"id":1,"diagnostics":[{"Severity":{"case":"DiagInfo"},"ErrorNumber":"1","Subcategory":"s","Message":"m","StartLine":1,"StartColumn":2,"EndLine":3,"EndColumn":4}]}}"""
     """{"case":"CheckResult","fields":{"id":1,"diagnostics":[{"Severity":{"case":"DiagInfo"},"ErrorNumber":1,"Subcategory":"s","Message":"m","StartLine":1,"StartColumn":2,"EndLine":3}]}}"""
     // a union case carrying fields, reached through another union
-    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{"message":"bad"}},"diagnostics":[]}}"""
-    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed"},"diagnostics":[]}}"""
-    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{}},"diagnostics":[]}}"""
+    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{"message":"bad"}},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}"""
+    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed"},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}"""
+    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{}},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}"""
+    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalSucceeded"},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}"""
+    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalInterrupted","fields":3},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}"""
+    // a reply with no cost at all: the cost is a field of the protocol, not an optional extra
     """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalSucceeded"},"diagnostics":[]}}"""
-    """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalInterrupted","fields":3},"diagnostics":[]}}"""
     """{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{"message":"bad"}}}}"""
     // an odd nesting: a bool, a struct union, a tuple-like record, a timespan and a moment
     """{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasBool","fields":{"value":true}}}}"""

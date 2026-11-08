@@ -13,7 +13,7 @@ open System.Threading.Tasks
 module MemberMintCommand =
 
   let usage =
-    "usage: sagefs member mint --role <Observer|Analysis|Verifier|Implementer> (--dir <checkout> | --session <id>) [--scope <prefix>] [--ttl <minutes>] [--print-env <VAR>]"
+    "usage: sagefs member mint --role <Observer|Analysis|Verifier|Implementer> (--dir <checkout> | --session <id>) [--scope <one-directory-prefix>] [--ttl <minutes>] [--print-env <VAR>]"
 
   /// What the command prints for a token that was minted.
   [<RequireQualifiedAccess>]
@@ -37,6 +37,9 @@ module MemberMintCommand =
     | NotANumber of flag: string * given: string
     | NotAVariableName of given: string
     | UnknownFlag of flag: string
+    /// `--scope` is not one directory prefix. The daemon refuses it too, through the same `ScopePrefix.tryParse`;
+    /// the command says so first, before it reads the credential or calls anything.
+    | BadScope of Capability.ScopeParseRefusal
 
   module UsageRefusal =
     let describe (refusal: UsageRefusal) : string =
@@ -48,6 +51,7 @@ module MemberMintCommand =
       | UsageRefusal.NotANumber(flag, given) -> sprintf "%s wants a whole number of minutes, and '%s' is not one." flag given
       | UsageRefusal.NotAVariableName given -> sprintf "--print-env wants an environment variable name such as SAGEFS_MEMBER_TOKEN, and '%s' is not one." given
       | UsageRefusal.UnknownFlag flag -> sprintf "%s is not a flag of 'member mint'." flag
+      | UsageRefusal.BadScope scopeRefusal -> sprintf "--scope: %s" (SageFsError.describeForAgent (CohortErrorMapping.scopeParseRefusalToSageFsError scopeRefusal))
 
   let isVariableName (name: string) : bool =
     not (String.IsNullOrEmpty name)
@@ -78,6 +82,13 @@ module MemberMintCommand =
     | Some name when isVariableName name -> Ok(MintOutput.Export name)
     | Some name -> Error(UsageRefusal.NotAVariableName name)
 
+  /// `--scope` when it was given: one directory prefix, by the decision the daemon makes. Not given is the whole repo.
+  let scopeOf (found: Map<string, string>) : Result<unit, UsageRefusal> =
+    match Map.tryFind "--scope" found with
+    | None -> Ok()
+    | Some "" -> Ok()
+    | Some text -> Capability.ScopePrefix.tryParse text |> Result.map ignore |> Result.mapError UsageRefusal.BadScope
+
   /// The arguments after `member`. Total: a mistake is a named refusal.
   let parseArgs (args: string list) : Result<MintArgs, UsageRefusal> =
     match args with
@@ -86,13 +97,14 @@ module MemberMintCommand =
       | Error refusal -> Error refusal
       | Ok found ->
         let text flag = Map.tryFind flag found |> Option.defaultValue ""
-        match text "--role", text "--dir", text "--session", ttlOf found, outputOf found with
-        | "", _, _, _, _ -> Error UsageRefusal.MissingRole
-        | _, _, _, Error refusal, _ -> Error refusal
-        | _, _, _, _, Error refusal -> Error refusal
-        | _, "", "", _, _ -> Error UsageRefusal.NamesNeitherOrBoth
-        | _, directory, session, _, _ when directory <> "" && session <> "" -> Error UsageRefusal.NamesNeitherOrBoth
-        | role, directory, session, Ok ttl, Ok output ->
+        match text "--role", text "--dir", text "--session", ttlOf found, outputOf found, scopeOf found with
+        | "", _, _, _, _, _ -> Error UsageRefusal.MissingRole
+        | _, _, _, Error refusal, _, _ -> Error refusal
+        | _, _, _, _, Error refusal, _ -> Error refusal
+        | _, _, _, _, _, Error refusal -> Error refusal
+        | _, "", "", _, _, _ -> Error UsageRefusal.NamesNeitherOrBoth
+        | _, directory, session, _, _, _ when directory <> "" && session <> "" -> Error UsageRefusal.NamesNeitherOrBoth
+        | role, directory, session, Ok ttl, Ok output, Ok() ->
           Ok
             { Request = { Role = role; Scope = text "--scope"; TtlMinutes = ttl; WorkingDirectory = directory; SessionId = session }
               Output = output }

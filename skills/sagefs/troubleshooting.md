@@ -85,6 +85,11 @@ implying the command closes it.
   to 0.6.891 told you "your role is Working: that needs the Working role" after you joined
   as Implementer in a repository that is not the daemon's own, that was a daemon bug, fixed
   after 0.6.891 (docs/mcp-tools.md, "If a cohort tool says you have not joined").
+- **`sagefs member mint --scope a/,b/` (or `mint_member` with a list) is refused: "a comma is not a path
+  separator".** A token's scope is one directory prefix, so a list could never cover a path.
+  Pass one prefix (`--scope src/Foo/`), or leave `--scope` out for the whole repo. Before
+  2026-11-08 the mint succeeded and every `acquire_claim` by the token was refused with
+  "confined to 'a/,b'"; a token minted that way has to be revoked and minted again.
 - **A call is refused with "This member token is bound to ...".** Your token routes to ONE
   session or ONE checkout, and the call named another session or another directory. The
   refusal says what the token is bound to and what to pass instead. It is not a role

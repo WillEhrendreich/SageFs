@@ -205,6 +205,7 @@ let handleMessage
           match v with
           | :? SageFs.Features.LiveTesting.LiveTestHookResultDto as dto ->
             acc |> Map.add k (WorkerProtocol.Serialization.serialize dto)
+          | :? EvalCost as cost -> acc |> Map.add k (WorkerProtocol.Serialization.serialize cost)
           | _ -> acc) Map.empty
       // Capture RunTest closure from the latest discovery
       let metaKeys = response.Metadata |> Map.toList |> List.map fst |> String.concat ", "

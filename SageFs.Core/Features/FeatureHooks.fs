@@ -67,15 +67,20 @@ module FeaturePushState =
 
   let empty = withCap EvalStore.HistoryCap.standard
 
-let recordEval (code: string) (result: string) (durationMs: int64) (state: FeaturePushState) =
+/// Record an eval with what the host measured around it, so `get_eval_timeline` can show bytes beside the duration.
+let recordEvalWithCost (code: string) (result: string) (durationMs: int64) (cost: SageFs.EvalCost) (state: FeaturePushState) =
   let history = EvalStore.record code result durationMs System.DateTimeOffset.UtcNow state.History
   let timelineEntry: EvalTimeline.TimelineEntry =
-    { CellId = state.History.NextId; StartMs = int64 SageFs.Timeouts.notRun.TotalMilliseconds; DurationMs = durationMs; Status = EvalTimeline.Succeeded }
+    { CellId = state.History.NextId; StartMs = int64 SageFs.Timeouts.notRun.TotalMilliseconds; DurationMs = durationMs; Status = EvalTimeline.Succeeded; Cost = cost }
   { state with
       History = history
       Scope = lazy (EvalStore.materializeScope history)
       CellGraph = lazy (EvalStore.materializeGraph history)
       CachedTimeline = EvalTimeline.TimelineState.record timelineEntry state.CachedTimeline }
+
+/// Record an eval that carries no cost (an editor's `/exec` door).
+let recordEval (code: string) (result: string) (durationMs: int64) (state: FeaturePushState) =
+  recordEvalWithCost code result durationMs SageFs.EvalCost.unmeasured state
 
 /// The binding scope of the retained history (empty before the first eval).
 let scope (state: FeaturePushState) : BindingExplorer.BindingScopeSnapshot =

@@ -5,8 +5,12 @@ type EvalStatus = Succeeded | Failed | Cancelled
 type TimelineEntry = {
   CellId: int
   StartMs: int64
+  /// What the daemon measured around the whole send, wire and queue included.
   DurationMs: int64
   Status: EvalStatus
+  /// What the host measured around the eval itself: time, bytes allocated, GC counts. `EvalCost.unmeasured` when the entry
+  /// was recorded without one (an editor's `/exec` door, an old record).
+  Cost: SageFs.EvalCost
 }
 
 type TimelineState = {

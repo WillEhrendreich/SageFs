@@ -56,8 +56,8 @@ let private hostDll : Lazy<string> =
      | Result.Ok(Reused dll) -> dll
      | Result.Error reason -> failwith (describeBuildError reason))
 
-/// A fresh session backed by an isolated FSI host process.
-let private newRemote () : Async<IFsiSession> =
+/// A fresh session backed by an isolated FSI host process, handing what the host prints to `onOutput`.
+let private newRemoteListening (onOutput: SageFs.FsiHost.FsiProtocol.OutputStream -> string -> unit) () : Async<IFsiSession> =
   async {
     let options =
       { HostDll = hostDll.Force()
@@ -66,7 +66,7 @@ let private newRemote () : Async<IFsiSession> =
         WorkingDir = repoRoot
         Environment = []
         Libraries = SageFs.HostAdaptation.HostLibraries.AsBuilt
-        OnOutput = fun _ _ -> ()
+        OnOutput = onOutput
         OnLog = ignore
         StartupTimeoutMs = TestTimeouts.asMs TestTimeouts.processStartPatience }
     match! start options with
@@ -76,6 +76,9 @@ let private newRemote () : Async<IFsiSession> =
       | Result.Error reason -> return failtest (describeAttachError reason)
     | Result.Error reason -> return failtest (describeStartError reason)
   }
+
+/// A fresh session backed by an isolated FSI host process.
+let private newRemote () : Async<IFsiSession> = newRemoteListening (fun _ _ -> ()) ()
 
 let private eval (session: IFsiSession) (code: string) = session.Eval(code, CancellationToken.None)
 
@@ -144,6 +147,16 @@ let contract (label: string) (create: unit -> Async<IFsiSession>) : Test =
       match (eval session "(failwith \"boom\" : unit);;").Outcome with
       | FsiFailed ex -> Expect.stringContains "message" "boom" ex.Message
       | other -> failtestf "expected a failure, got %A" other)
+
+    case "WHY — an eval reports what it cost: a 200 MB allocation reads at least 200 MB, a trivial eval stays under the heavy threshold, and a failed eval carries a cost too" (fun session ->
+      let heavy = eval session "Array.zeroCreate<byte> 200000000 |> ignore;;"
+      Expect.equal "the allocation succeeded" FsiSucceeded heavy.Outcome
+      Expect.isGreaterThanOrEqual "the bytes the eval allocated" (heavy.Cost.Allocated, 200000000L)
+      Expect.isSome "an allocation that size earns a cost line" (SageFs.EvalCost.line SageFs.EvalCost.productThresholds heavy.Cost)
+      let trivial = eval session "1 + 1;;"
+      Expect.isLessThan "a trivial eval allocates far less than the heavy threshold" (trivial.Cost.Allocated, SageFs.EvalCost.HeavyAllocationBytes)
+      let failed = eval session "(failwith \"boom\" : unit);;"
+      Expect.isGreaterThan "a failed eval was timed" (failed.Cost.Elapsed, TimeSpan.Zero))
 
     case "state persists across submissions and BoundValue reads it as text" (fun session ->
       mustSucceed session "let x = 21 * 2;;"
@@ -382,6 +395,27 @@ let tests =
     Integration.hostList "isolated host session" [
       // The whole contract runs against the isolated host, agent included. No case is excused.
       contract "RemoteFsiSession" newRemote
+
+      // The host takes its printing from the same FsiPrintConfig as the in-process session. The twin is EvalOutputShapeTests, which
+      // shows FSI's own defaults print all 24 records where the agent limits stop at 20.
+      testAsync "WHY — the isolated host prints under the agent limits: a let's echo and a bare expression both stop at 20 items" {
+        let printed = System.Text.StringBuilder()
+        let listen (stream: SageFs.FsiHost.FsiProtocol.OutputStream) (text: string) =
+          match stream with
+          | SageFs.FsiHost.FsiProtocol.StdOut -> lock printed (fun () -> printed.Append text |> ignore)
+          | SageFs.FsiHost.FsiProtocol.StdErr -> ()
+        let itemsShown () = lock printed (fun () -> System.Text.RegularExpressions.Regex.Matches(printed.ToString(), "person-").Count)
+        do!
+          withSession (newRemoteListening listen) (fun session ->
+            mustSucceed session "type Addr = { Street: string; City: string; Zip: int };;"
+            mustSucceed session "type Person = { Name: string; Age: int; Home: Addr; Tags: string list };;"
+            mustSucceed session "let people = [ for i in 1..24 -> { Name = sprintf \"person-%d\" i; Age = 20 + i; Home = { Street = \"s\"; City = \"c\"; Zip = i }; Tags = [ \"a\" ] } ];;"
+            Expect.isLessThanOrEqual "the let's echo stops at the limit's length" (itemsShown (), SageFs.EvalPrintSettings.agentLimits.Length)
+            lock printed (fun () -> printed.Clear() |> ignore)
+            mustSucceed session "people;;"
+            Expect.isGreaterThan "a bare expression prints items" (itemsShown (), 0)
+            Expect.isLessThanOrEqual "and stops at the limit's length" (itemsShown (), SageFs.EvalPrintSettings.agentLimits.Length))
+      }
 
       // #180: the host used to be built with InvariantGlobalization, so user code in a session saw `Normalize(FormD)` leave "é" whole and
       // `CultureInfo "de-DE"` throw, while the same code passes under `dotnet fsi` and `dotnet test`. The host is the user's process, so it takes

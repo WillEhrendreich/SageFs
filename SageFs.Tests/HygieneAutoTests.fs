@@ -53,3 +53,62 @@ let autoTests =
             | Standing.Newest _ -> false
             | _ -> true))
   ]
+
+[<Tests>]
+let ledgerGateTests =
+  let grace = HygieneAges.oneDay
+  let path = worktreeRoot + "/a"
+  let record (activity: SageFs.HygieneLedger.RecordedActivity) : SageFs.HygieneLedger.WorktreeRecord =
+    { Path = path
+      Branch = BranchLabel.NoBranch
+      Tip = "abc"
+      Maker = SageFs.HygieneLedger.Maker.MakerUnrecorded
+      FirstSeen = now - HygieneAges.days 3.0
+      Activity = activity
+      Salvage = SageFs.HygieneLedger.SalvageState.NotSalvaged
+      Presence = SageFs.HygieneLedger.Presence.OnDisk }
+  let known (activity: SageFs.HygieneLedger.RecordedActivity) = Map.ofList [ path, record activity ]
+  let merged () = classify now (worktree "a")
+  let standingOf (l: Leftover) = (Leftover.entry l).Standing
+
+  testList "Workspace hygiene: agent worktrees need a ledger entry before the daemon tidies them" [
+
+    testCase "a worktree the ledger has never seen is held for a full grace from now, however merged git says it is" <| fun _ ->
+      match SageFs.HygieneLedger.Ledger.holdBack grace now Map.empty [ merged () ] with
+      | [ held ] ->
+        match standingOf held with
+        | Standing.WithinRetention until -> until |> Expect.equal "kept until now plus the grace" (now + grace)
+        | other -> failtestf "expected WithinRetention, got %A" other
+      | other -> failtestf "expected one leftover, got %A" other
+
+    testCase "a worktree in use at the last sweep is held, a quiet one is held until the grace since it went quiet, then cleared" <| fun _ ->
+      let wentQuiet = now - HygieneAges.anHour * 5.0
+      let still = SageFs.HygieneLedger.Ledger.holdBack grace now (known SageFs.HygieneLedger.RecordedActivity.RecordedInUse) [ merged () ]
+      standingOf still.Head |> function | Standing.WithinRetention _ -> () | other -> failtestf "in use: expected held, got %A" other
+      match SageFs.HygieneLedger.Ledger.holdBack grace now (known (SageFs.HygieneLedger.RecordedActivity.RecordedQuietSince wentQuiet)) [ merged () ] |> List.head |> standingOf with
+      | Standing.WithinRetention until -> until |> Expect.equal "until the grace after it went quiet" (wentQuiet + grace)
+      | other -> failtestf "expected held, got %A" other
+      let long = now - HygieneAges.anHour * 30.0
+      standingOf (SageFs.HygieneLedger.Ledger.holdBack grace now (known (SageFs.HygieneLedger.RecordedActivity.RecordedQuietSince long)) [ merged () ]).Head
+      |> Expect.equal "cleared after the whole grace" (Standing.Merged MergeHow.Ancestor)
+
+    testCase "no grace means a recorded quiet worktree is cleared at once, and an unrecorded one waits for the next sweep" <| fun _ ->
+      standingOf (SageFs.HygieneLedger.Ledger.holdBack TimeSpan.Zero now (known (SageFs.HygieneLedger.RecordedActivity.RecordedQuietSince now)) [ merged () ]).Head
+      |> Expect.equal "cleared" (Standing.Merged MergeHow.Ancestor)
+      match standingOf (SageFs.HygieneLedger.Ledger.holdBack TimeSpan.Zero now Map.empty [ merged () ]).Head with
+      | Standing.WithinRetention _ -> ()
+      | other -> failtestf "expected held, got %A" other
+
+    testPropertyWithConfig cfg "PROPERTY: the ledger gate never makes a leftover more reclaimable, and changes nothing but merged agent worktrees" <| fun (subjects: Subject list) ->
+      let leftovers = subjects |> List.map (classify now)
+      let held = SageFs.HygieneLedger.Ledger.holdBack grace now Map.empty leftovers
+      List.length held = List.length leftovers
+      && List.zip leftovers held
+         |> List.forall (fun (before, after) ->
+           let b = Leftover.entry before
+           let a = Leftover.entry after
+           match Standing.reclaimability a.Standing, Standing.reclaimability b.Standing with
+           | Reclaimability.Reclaimable, Reclaimability.Reclaimable -> true
+           | Reclaimability.Reclaimable, _ -> false
+           | _ -> true)
+  ]

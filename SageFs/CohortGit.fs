@@ -413,6 +413,18 @@ let rebaseCommitsOntoSettling (settles: string list -> bool) (repoDir: string) (
               // A conflict in files that are all generated pages is settled by taking the side being rebased onto: the page is
               // regenerated from the merged tree afterwards, so neither side's text of it survives. Any other conflict is the
               // member's to resolve. Bounded by the number of commits being replayed, since each can conflict once.
+              // Takes our side of each file and stages it, in order, and stops at the first file that cannot be taken or staged.
+              let rec takeOurs (files: string list) : Async<bool> =
+                async {
+                  match files with
+                  | [] -> return true
+                  | file :: rest ->
+                    let! taken = runGit repoDir shortTimeout [ "checkout"; "--ours"; "--"; file ]
+                    let! added = runGit repoDir shortTimeout [ "add"; "--"; file ]
+                    match Result.isOk taken && Result.isOk added with
+                    | false -> return false
+                    | true -> return! takeOurs rest
+                }
               let rec settle (attemptsLeft: int) (reason: string) : Async<Result<string, string list>> =
                 async {
                   let! conflictResult = runGit repoDir shortTimeout [ "diff"; "--name-only"; "--diff-filter=U" ]
@@ -423,18 +435,7 @@ let rebaseCommitsOntoSettling (settles: string list -> bool) (repoDir: string) (
                   let! settled =
                     match attemptsLeft > 0 && settles conflictFiles with
                     | false -> async { return false }
-                    | true ->
-                      async {
-                        let ok = ref true
-                        for file in conflictFiles do
-                          match ok.Value with
-                          | false -> ()
-                          | true ->
-                            let! taken = runGit repoDir shortTimeout [ "checkout"; "--ours"; "--"; file ]
-                            let! added = runGit repoDir shortTimeout [ "add"; "--"; file ]
-                            ok.Value <- Result.isOk taken && Result.isOk added
-                        return ok.Value
-                      }
+                    | true -> takeOurs conflictFiles
                   match settled with
                   | false ->
                     let! _abort = runGit repoDir shortTimeout [ "rebase"; "--abort" ]

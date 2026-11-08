@@ -25,6 +25,12 @@
         <Compile Include="MachineTier.fs" />
         <Compile Include="RepoPaths.fs" />
     <Compile Include="Timeouts.fs" />
+        <!-- What an eval cost and the one line that says so. BCL and Timeouts only, so it is also compiled into the isolated FSI host. -->
+        <Compile Include="EvalCost.fs" />
+        <!-- How much of a value F# Interactive prints, and the session configuration that applies it. Both are also compiled
+             into the isolated FSI host, so the two session kinds print under one definition. -->
+        <Compile Include="PrintLimits.fs" />
+        <Compile Include="FsiPrintConfig.fs" />
         <Compile Include="Editing.fs" />
         <Compile Include="TestProviderTypes.fs" />
         <Compile Include="WorkflowTypes.fs" />
@@ -69,6 +75,7 @@
         <Compile Include="SageFsConfig.fs" />
         <Compile Include="Json.fs" />
         <Compile Include="HygieneLedger.fs" />
+        <Compile Include="SalvageRefs.fs" />
         <Compile Include="MachineCalibration.fs" />
         <Compile Include="MachineProfile.fs" />
         <Compile Include="StartLedger.fs" />
@@ -77,6 +84,7 @@
         <Compile Include="WatchExpression.fs" />
         <Compile Include="Settings.fs" />
         <Compile Include="SettingsStore.fs" />
+        <Compile Include="HygieneSwitch.fs" />
         <!-- Before DaemonState.fs on purpose: the data directory has to be found without running its static
              initialiser, which reads Timeouts (see the file). Up here so the Settings catalog can show it. -->
         <Compile Include="DataDirChoice.fs" />
@@ -138,6 +146,9 @@
         <EmbeddedResource Include="FsiNaming.fs" LogicalName="FsiHost/FsiNaming.fs" />
         <EmbeddedResource Include="MachineTier.fs" LogicalName="FsiHost/MachineTier.fs" />
         <EmbeddedResource Include="Timeouts.fs" LogicalName="FsiHost/Timeouts.fs" />
+        <EmbeddedResource Include="EvalCost.fs" LogicalName="FsiHost/EvalCost.fs" />
+        <EmbeddedResource Include="PrintLimits.fs" LogicalName="FsiHost/PrintLimits.fs" />
+        <EmbeddedResource Include="FsiPrintConfig.fs" LogicalName="FsiHost/FsiPrintConfig.fs" />
         <EmbeddedResource Include="DevReloadMode.fs" LogicalName="FsiHost/DevReloadMode.fs" />
         <EmbeddedResource Include="EditorLink.fs" LogicalName="FsiHost/EditorLink.fs" />
         <EmbeddedResource Include="NativeResolution.fs" LogicalName="FsiHost/NativeResolution.fs" />
@@ -639,6 +650,8 @@
              for the reason given on the line below: one coherent block, its own testable file, and
              the budget goes DOWN instead of up. -->
         <Compile Include="AssemblyLoadVerification.fs" />
+        <Compile Include="TextWriterRecorder.fs" />
+        <Compile Include="OutputHold.fs" />
         <Compile Include="AppState.fs" />
         <!-- After AppState (it asks the eval actor): the worker's test-run gate and the level that waits for it. -->
         <Compile Include="LevelKeeper.fs" />

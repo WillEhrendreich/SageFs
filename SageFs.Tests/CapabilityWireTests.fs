@@ -443,6 +443,11 @@ let mintTests =
         errorText badRole |> Expect.stringContains "no free-form role" "Analysis"
         let! badScope = mintAs ctx store handleConductor "Analysis" "../Other" 60
         errorText badScope |> Expect.stringContains "a scope that escapes the repo" "repo"
+        let! listScope = mintAs ctx store handleConductor "Implementer" "SageFs.Core/,SageFs/,docs/" 60
+        let listText = errorText listScope
+        listText |> Expect.stringContains "says a comma is not a separator" "comma"
+        listText |> Expect.stringContains "says the scope is one directory" "one directory"
+        listText |> Expect.stringContains "names the next action: leave the scope out for the whole repo" "whole repo"
         let! negative = mintAs ctx store handleConductor "Analysis" "" -5
         errorText negative |> Expect.stringContains "a negative lifetime" "minutes"
         let tooLong = int Timeouts.capabilityMaxLifetime.TotalMinutes + 1

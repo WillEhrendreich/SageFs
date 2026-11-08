@@ -9,7 +9,7 @@ open SageFs
 /// caller (the HTTP lease endpoints, the MCP lease tools, and the daemon's
 /// own internal expensive-work call sites) reads and writes through.
 ///
-/// `MemoryPressureWatch.currentLevel()` — the SAME persisted pressure
+/// `MemoryPressureWatch.observe` — the SAME persisted pressure
 /// `MemorySupervisor`'s session shedding reads — is what every `request`
 /// call here is admitted against, so the pool and the shedding policy can
 /// never disagree about how bad things are right now.
@@ -23,7 +23,7 @@ module LeaseWatch =
   /// `ExpensiveWorkLease.request`'s own doc comment for why.
   let request (holder: ExpensiveWorkLease.Holder) (kind: ExpensiveWorkLease.Kind) : ExpensiveWorkLease.Decision =
     lock gate (fun () ->
-      let pressure = MemoryPressureWatch.currentLevel ()
+      let pressure = (MemoryPressureWatch.observe MemoryPressureWatch.live).Level
       let pool', decision = ExpensiveWorkLease.request DateTimeOffset.UtcNow pressure pool holder kind
       pool <- pool'
       decision)

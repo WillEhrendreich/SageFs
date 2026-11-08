@@ -5,6 +5,7 @@ open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.Tests.TestInfrastructure
 
 let epoch = "run-1"
 
@@ -128,6 +129,52 @@ let sseLogTests =
       test "an id-only frame moves a client's last id and carries nothing else" {
         let id = { Epoch = epoch; Seq = 9L }
         EventId.toIdOnlyFrame id |> Expect.equal "just the id" (sprintf "id: %s\n\n" (EventId.toWire id))
+      }
+
+      test "WHY — the text of a frame is built once and every connection writes that same string" {
+        // A megabyte frame was copied once per connection, each copy a megabyte of garbage on the large object heap.
+        let log = newLog ()
+        let first = ResizeArray<Replayable>()
+        let second = ResizeArray<Replayable>()
+        log.Attach(StreamScope.EverySession, None, first.Add) |> ignore
+        log.Attach(StreamScope.EverySession, None, second.Add) |> ignore
+        log.Publish { Scope = FrameScope.Daemon; Wire = System.String('x', 4096) } |> ignore
+        let written = [ Replayable.toWire first.[0]; Replayable.toWire second.[0] ]
+        obj.ReferenceEquals(written.[0], written.[1])
+        |> Expect.isTrue "two connections, one string"
+        written.[0] |> Expect.equal "and it is still the id, then the frame" (sprintf "id: %s\n%s" (EventId.toWire first.[0].Id) first.[0].Frame.Wire)
+      }
+
+      test "a copy of a frame under another id is written under that id, never under the id of the one it was copied from" {
+        let item = { Id = { Epoch = epoch; Seq = 7L }; Frame = daemonFrame 1; Bytes = 0 }
+        Replayable.toWire item |> ignore
+        let moved = { item with Id = { item.Id with Seq = 8L } }
+        Replayable.toWire moved |> Expect.equal "seq 8" (sprintf "id: %s\n%s" (EventId.toWire moved.Id) moved.Frame.Wire)
+      }
+    ]
+
+    testList "measuring a frame" [
+      testTask "WHY — a frame is measured before the log's lock is taken, so a megabyte frame holds no other publisher" {
+        let measuredSecond = new ManualResetEventSlim(false)
+        let insideObserver = new ManualResetEventSlim(false)
+        let letGo = new ManualResetEventSlim(false)
+        let measure (frame: SseFrame) : int =
+          match frame.Wire.Contains "second" with
+          | true -> measuredSecond.Set()
+          | false -> ()
+          SseFrame.wireBytes frame
+        let log = SseLog(epoch, roomy, measure)
+        // The observer runs under the log's lock, on the first publisher's own dedicated thread, and holds the publish
+        // there until the test lets it go (or the ceiling passes, so a failing case cannot hang the thread for ever).
+        log.Attach(StreamScope.EverySession, None, fun _ -> insideObserver.Set(); letGo.Wait TestTimeouts.patience |> ignore) |> ignore
+        let first = DedicatedThread.run "sse-first-publisher" (fun () -> log.Publish { Scope = FrameScope.Daemon; Wire = "first" } |> ignore)
+        insideObserver.Wait TestTimeouts.patience |> Expect.isTrue "the first publish is inside the observer, holding the lock"
+        let second = DedicatedThread.run "sse-second-publisher" (fun () -> log.Publish { Scope = FrameScope.Daemon; Wire = "second" } |> ignore)
+        let measuredWhileHeld = measuredSecond.Wait TestTimeouts.patience
+        letGo.Set()
+        do! first
+        do! second
+        measuredWhileHeld |> Expect.isTrue "the second frame was measured while the first still held the lock"
       }
     ]
 

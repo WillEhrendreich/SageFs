@@ -38,7 +38,7 @@ module McpCapability =
 
   let private parseScope (raw: string) : Result<ScopePrefix, SageFsError> =
     ScopePrefix.tryParse (if isNull raw then "" else raw)
-    |> Result.mapError CohortErrorMapping.pathRefusalToSageFsError
+    |> Result.mapError CohortErrorMapping.scopeParseRefusalToSageFsError
 
   /// 0 is the default lifetime. A negative lifetime is a mistake, and is refused rather than read as the default.
   let private lifetimeOf (ttlMinutes: int) : Result<TimeSpan, SageFsError> =

@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | In progress (step 5 of 5) |
 | Size | S |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Write the first failing test: `EvalCostLineTests`, a fast small eval carries no line. Then the "Measure first" comparison of process-wide and thread-local allocation counts. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | `cohort/p2-eval-output`, `/home/will/scratch/cohort/p2-eval-output` |
+| Last green commit | see `git log master..cohort/p2-eval-output`; the red commit is `77e2ca01` |
+| Next action | Built and committed on the branch, not landed (2026-11-07): the host measures every eval, the wire carries it, the reply ends with the line past a threshold, a failed eval carries it too. Land through the cohort. The session's timeline now holds each eval's cost and `get_eval_timeline` shows bytes beside duration (a real-bridge case checks both). Left: the cost on the global store the dashboard's push reads (`McpContext.RecordEval` still takes three arguments), the failed-eval status (the timeline records every eval as Succeeded, which predates this item), and the thresholds from a day of history once a daemon has kept one. |
+| Decisions made | Bytes are the whole process's (`GC.GetTotalAllocatedBytes false`). The line is written by the daemon from a typed `EvalCost` the host measured, carried in the reply metadata as JSON under `evalCost`. `tracedFsiEval` is left as it is; deleting it is still Will's call. |
+| Surprises | The eval reply never carried the host's time: the daemon's stopwatch includes the queue and the wire. The worker forwarded nothing but typed live-testing DTOs in the reply metadata, so adding a typed value meant a new case there. Adding a field to `FsiProtocol.EvalResult` shifted every sample in `SageFs.Tests/fixtures/FsiProtocol/wire-golden.tsv`, which is regenerated. |
 
 ## Why this item exists
 
@@ -65,8 +65,30 @@ Wire impact: `FsiProtocol.fs`, `McpTools.fs`, `SessionOperations.fs` if the stru
 ## Measure first
 
 - Process-wide against thread-local bytes: run the same three evals (a 100 MB array, a list of ten million boxed ints, a string builder loop) under both counters in a host with the live-testing agent idle and then active, and write both figures here. Pick the counter that is stable and honest, or report both.
+- Measured 2026-11-07, in an isolated host with nothing else running, the machine under load (bytes do not depend on load, times are not recorded). Process-wide / eval thread, in bytes:
+
+  | Eval | Process-wide | Thread-local |
+  |:--|--:|--:|
+  | `Array.zeroCreate<byte> 100000000` | 100,000,024 | 100,000,368 |
+  | `List.init 10000000 box` | 559,987,384 (35 / 33 / 1 collections) | 560,001,256 |
+  | `StringBuilder` loop of 2,000,000 appends | 71,710,040 | 59,774,464 |
+  | `Parallel.For`, four tasks of 25 MB | 100,008,296 | 2,296 |
+  | `1 + 1` | 0 | 368 |
+
+  For code on the eval thread the two agree. The thread-local counter misses what an eval's own tasks allocate (100 MB read as 2 KB), and the process-wide one charges the eval for whatever else allocates meanwhile (12 MB of 72 MB in the string-builder loop, with the host idle). Process-wide is the one in use, because an eval that fans out is the case where an agent most wants the number. Not measured: the live-testing agent active.
+- What overlaps an eval in the host (read from `SageFs.FsiHost/Program.fs`, 2026-11-07): the eval, a hot-reload save (`RunAgentAfterEval`) and the live-values walk all run on the one `fsihost-eval` thread, so they queue behind the eval and are never charged to it. A live-testing test run (`AgentRunTest`) and a debug begin or continue run on the pool and can overlap. A bare isolated session, an eval allocating 10 x 10 MB while a pool task allocated the stated amount at the same time, MB charged to the eval, process-wide / eval thread:
+
+  | Allocated meanwhile by another task | Process-wide | Thread-local |
+  |--:|--:|--:|
+  | 0 | 99 | 100 |
+  | 100 | 189 | 100 |
+  | 300 | 200 | 100 |
+  | 1,000 | 219 | 100 |
+
+  The overcharge is what the other task allocated while the eval ran, up to the eval's own length, so an eval that overlaps a test run reads high. The line cannot tell the eval's own tasks from someone else's, and neither counter can. It stays process-wide, and this is the case to say when a figure looks too high. A way to remove it is to have the host hold off test runs while an eval is in flight, which is a change to the live-testing agent and not to this item.
 - The overhead of the two counters. Expected negligible; check it with the benchmark harness on a quiet machine rather than here, because the machine is loaded.
 - The thresholds. FsiMcp uses 0.5 s and 100 MB. Check what share of real evals they would annotate in `get_eval_timeline` history from a day of agent work, so the line stays rare. Too many lines is the cost of this feature.
+  - Checked 2026-11-07: there is no history to check against. The timeline is in memory, 1,000 entries per session, and a daemon restart empties it; `~/.SageFs` holds a friction database, the cohort ledger and the session manifest, and none of them keeps eval durations. `get_eval_timeline` on the running daemon answered "No active session" for an anonymous caller. So the thresholds stay at FsiMcp's 0.5 s and 100 MB as a first guess, and the bytes now in the timeline are what a later read of a day's history can use.
 
 ## Risks and dependencies
 

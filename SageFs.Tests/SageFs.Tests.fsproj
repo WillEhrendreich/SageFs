@@ -113,8 +113,15 @@
         <Compile Include="HygieneLedgerTests.fs" />
         <Compile Include="HygieneAutoTests.fs" />
         <Compile Include="HygieneSimDstTests.fs" />
+        <Compile Include="HygieneSweepSimEdge.fs" />
+        <Compile Include="HygieneSweepSimTests.fs" />
         <Compile Include="HygieneSandbox.fs" />
         <Compile Include="HygieneGatherTests.fs" />
+        <Compile Include="HygieneOwnershipTests.fs" />
+        <Compile Include="HygieneSweepTests.fs" />
+        <Compile Include="HygieneLockAndIgnoredTests.fs" />
+        <Compile Include="HygieneRoastTests.fs" />
+        <Compile Include="HygieneRescueTests.fs" />
         <Compile Include="HygieneSalvageTests.fs" />
         <Compile Include="HygieneAsyncScanTests.fs" />
         <Compile Include="HygieneExecuteTests.fs" />
@@ -408,6 +415,7 @@
          <Compile Include="McpStdioBridgeReconnectSimTests.fs" />
          <Compile Include="McpStdioBridgeRunTests.fs" />
          <Compile Include="McpStdioBridgeE2ETests.fs" />
+         <Compile Include="EvalBetweenCallsBridgeTests.fs" />
          <Compile Include="McpStdioBridgeHealTests.fs" />
          <Compile Include="WarmupContextTests.fs" />
          <Compile Include="WarmupOpenReplayTests.fs" />
@@ -913,6 +921,9 @@
         <Compile Include="CliFirstRunTests.fs" />
         <Compile Include="FsiOutputParserTests.fs" />
         <Compile Include="EvalResultSummaryTests.fs" />
+        <Compile Include="EvalOutputShapeTests.fs" />
+        <Compile Include="EvalOutputClipTests.fs" />
+        <Compile Include="EvalCostLineTests.fs" />
         <Compile Include="SseReplayTests.fs" />
         <Compile Include="PerfTests.fs" />
         <Compile Include="SsePropertyTests.fs" />

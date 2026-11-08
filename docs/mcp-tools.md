@@ -283,6 +283,15 @@ the daemon talking. Agents still get the echo, because their client shows every 
 Positions in a reply (`line`, `column`, `endLine`, `endColumn`) are the parser's own: lines count from 1,
 columns from 0 (counted in characters, not bytes), and `endColumn` is one past the last character.
 
+### What an eval reply looks like
+
+The reply of `send_fsharp_code` is sized for the agent that reads it ([`EvalPrintSettings`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/PrintLimits.fs), applied by both session kinds through `FsiPrintConfig`).
+
+- A printed value is held to 20 list items, depth 6, width 78 and size 600, for a `let` (`val people: Person list = [...]`) and for a bare expression (`val it: ...`) alike. A `let` of 24 nested records echoes about 780 characters where FSI's defaults echo about 4,500. To see more of a value, evaluate a slice of it as an expression. A `let` that echoes only its type is a setting (`EvalPrintSettings.forAgentTypeOnly`) that nothing turns on yet, because the editors show the value beside a `let`.
+- A reply longer than 4,000 characters keeps its first 2,666 and its last 1,334, with a line between them that says how many characters were cut. That count is of the eval's own printed output; the between-calls block below is added after it and counted apart. The session also binds the whole printed text to `lastEvalOutput`, and the line gives the expression that reads the cut, `lastEvalOutput.Substring(2666, 2025)` for a 6,025 character output: it returns exactly the characters that were left out. A text over a million characters is clipped and counted but not bound, and the line then says so by not naming the binding.
+- Output that a background thread wrote between two calls (a timer, an app's log line) comes back with the next successful reply, after its own result, under `[output written since your last call]`. The session keeps the last 2,000 characters of it. Every production session runs its FSI in an isolated host, which is where that output is caught.
+- An eval that took 0.5 s or more, or allocated 100 MB or more, ends with one line: `[0.84 s · 312.4 MB allocated · GCs gen0 14 / gen1 3 / gen2 1]`. The time is taken around the eval in the process that ran it, without the queue wait or the wire. The bytes are the whole process's, so the tasks the eval starts are counted, and so is anything a background thread allocated meanwhile. A failed eval carries the line too. A quick, light eval carries none. The thresholds are `Timeouts.evalCostSlow` and `EvalCost.HeavyAllocationBytes`.
+
 ## Execution and status
 
 | Tool | What it does |
@@ -449,7 +458,7 @@ no test reaches an analysed symbol, so it will not fill by itself) or `mapped`.
 | `export_notebook` | Export the session as a notebook-style `.fsx` with cell metadata. |
 | `export_session_transcript` | Export the session as a clean, topologically sorted `.fsx` transcript. |
 | `get_session_filmstrip` | Visual history of evaluations: each a frame with code, bindings, and duration. |
-| `get_eval_timeline` | Eval-duration sparkline and P50/P95/P99 statistics. |
+| `get_eval_timeline` | Eval-duration sparkline and P50/P95/P99 statistics, and for each of the last 20 evals the bytes the host measured it allocating (`312.4 MB allocated`, the same figure as the reply's [cost line](#what-an-eval-reply-looks-like)), left off when the eval was not measured. |
 | `get_eval_diff` | Before/after diff of recent evaluation outputs. |
 | `get_message_journal` | Audit log of eval events, filterable by severity and source. |
 | `manage_scratch_pad` | View, export, or promote ephemeral snippets from session history. |
@@ -516,7 +525,48 @@ standing in.
 `create_*_session`, `get_session_status` and `get_daemon_status` add one line
 when a repo has more than a handful of leftover worktrees or the gate dir has
 grown past a threshold: `workspace: N leftover worktrees (X GB), M safe to
-reclaim: call get_workspace_hygiene`.
+reclaim: call get_workspace_hygiene`. Work that exists nowhere else leads the
+line: `workspace: 3 worktrees hold work that is nowhere else, oldest idle 38d`.
+
+The daemon does not wait to be asked. At start, every `SAGEFS_HYGIENE_SWEEP_MINUTES`
+(15 by default) and whenever a session stops, it sweeps each repository it has a
+record of (a live session, or a session it made once, if the directory still
+exists):
+
+1. It writes each agent worktree into `<data dir>/hygiene-ledger.jsonl` when it
+   first appears and when it goes quiet or is resumed, with who made it. The file
+   only grows.
+2. It commits the uncommitted files of a worktree nobody is using, ignored files
+   that nothing regenerates (a local `.env`, a `*.db`) included, to
+   `refs/sagefs/salvage/<name>`, with a temporary index, so the worktree itself
+   is untouched. The ref is not a branch, so `git push --all` does not publish it.
+   A second sweep with nothing changed commits nothing. A salvage ref is listed by
+   `sagefs hygiene` and reaped once its worktree is gone and the base has
+   everything on it, or after 30 days.
+   A worktree locked with `git worktree lock` by a person is never unlocked or
+   removed: only the harness's own lock (`claude agent <name> (pid N start M)`),
+   and only when that process is dead, is released.
+3. When the setting `hygiene.autoTidy` is on (the default), it tidies what is
+   provably safe: a worktree whose work has reached the base branch and that the
+   ledger has seen quiet for `SAGEFS_FINISHED_WORKTREE_GRACE_DAYS` (1 day; `0`
+   means no grace), expired worker logs and temp runs, orphaned registry entries
+   and merged agent branches. A worktree the ledger has never seen waits a full
+   grace from the first sweep, however old git says it is. A commit the base only
+   has by content (a rebase or squash) is kept reachable at
+   `refs/sagefs/removed/<name>` first, and each removal is a ledger line with the
+   tip it had. A worktree that holds commits the base lacks or uncommitted
+   changes, one a session, lease, process or cohort is using, and anything outside
+   the managed directories is never removed.
+
+A checkout a cohort holds (a member token is bound to it, or it is the cohort's
+integration or trunk checkout) reads as `in use: a cohort holds it`, and a
+`<repo>.tiers` directory beside a repository that nothing uses (the CI
+pipeline's tier work) is listed as needing a look. `sagefs hygiene` lists both and
+removes neither.
+
+`sagefs hygiene --rescue <name>` puts a worktree's work on `rescue/<name>`:
+its branch and salvage commit, rebased on the base, and it says whether the base
+already has the change, by patch id and by content.
 
 ## Cohort and multi-agent coordination
 
@@ -820,8 +870,17 @@ so it departs from that, in one function with a test that pins the status. The
 refusal applies to a token in the `X-SageFs-Member-Token` header. A token in
 `_meta` is refused per call inside the JSON-RPC reply.
 
-**Scope.** A prefix such as `src/Foo/`. The token can claim only inside it, and
-the path is canonicalized first, so `src/Foo/../Bar` counts as `src/Bar`. This is
+**Scope.** ONE directory prefix such as `src/Foo/`. The token can claim only inside it, and
+the path is canonicalized first, so `src/Foo/../Bar` counts as `src/Bar`. Leave the scope
+out for the whole repo. A list (`SageFs.Core/,SageFs/,docs/`, or one split by `;`) is
+refused by `mint_member`, by `POST /api/members/mint` and by `sagefs member mint --scope`
+before any token exists: a comma is not a path separator, so a list read as one prefix
+would cover no path and every claim by the token would be refused. A token carries one
+prefix on purpose (decided 2026-11-08): the grant order (`isWithin`, the "never wider than
+its minter" rule, the simulation's invariants) is defined over one directory, and a
+run that needs two directories can take their common parent or the whole repo, because a
+file claim stays exclusive per file whatever the scope. A directory whose name holds a
+comma or a semicolon cannot be a scope for that reason. This is
 policy, not a sandbox: it refuses claims, and it does not stop a process from
 writing a file. Containment is the sandbox's job. And `Implementer` includes
 `send_fsharp_code`, which runs arbitrary F# as the daemon's OS user, so against a

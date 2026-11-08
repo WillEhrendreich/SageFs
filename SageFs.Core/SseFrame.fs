@@ -57,6 +57,9 @@ module SseFrame =
     | Some _
     | None -> daemon wire
 
+  /// What a frame's text weighs on the wire, in UTF-8 bytes. Walks the whole text, which can be a megabyte.
+  let wireBytes (frame: SseFrame) : int = System.Text.Encoding.UTF8.GetByteCount frame.Wire
+
   /// The one place that decides who gets a frame. Exhaustive on purpose: a new scope has to
   /// be answered here before anything compiles.
   let visibleTo (stream: StreamScope) (frame: SseFrame) : bool =

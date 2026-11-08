@@ -18,61 +18,6 @@ type FilePath = string
 
 open System.Text
 
-/// Records session output during an eval and passes it on with CRLF endings. Output arrives on whatever thread wrote
-/// it (the host's reply loop, the app's request threads) while the eval thread starts and stops the recording, and
-/// `StringBuilder.ToString` racing `Append` throws `ArgumentOutOfRangeException (Parameter 'chunkLength')`. So every
-/// member takes `gate`, which also covers `lastCharWasCR`.
-type TextWriterRecorder(writerToRecord: TextWriter) =
-  inherit TextWriter()
-
-  let gate = obj ()
-  let mutable recording: StringBuilder option = None
-  let mutable lastCharWasCR = false
-  // Both helpers run with `gate` held.
-  let record (append: StringBuilder -> unit) = Option.iter append recording
-  let crlf (s: string) = s.Replace("\r\n", "\n").Replace("\n", "\r\n")
-
-  override _.Encoding = writerToRecord.Encoding
-
-  override _.Write(value: char) =
-    lock gate (fun () ->
-      record (fun recorder -> recorder.Append value |> ignore)
-      match value with
-      | '\n' ->
-        match lastCharWasCR with
-        | false -> writerToRecord.Write '\r'
-        | true -> ()
-        writerToRecord.Write '\n'
-        lastCharWasCR <- false
-      | _ ->
-        lastCharWasCR <- (value = '\r')
-        writerToRecord.Write value)
-
-  override _.Write(value: string) =
-    lock gate (fun () ->
-      record (fun recorder -> recorder.Append value |> ignore)
-      writerToRecord.Write(crlf value))
-
-  override _.Write(bufferArr: char[], index: int, count: int) =
-    lock gate (fun () ->
-      record (fun recorder -> recorder.Append(bufferArr, index, count) |> ignore)
-      writerToRecord.Write(crlf (new string(bufferArr, index, count))))
-
-  member _.Enable() = () // No longer needed but kept for compatibility
-
-  member _.StartRecording() =
-    lock gate (fun () -> recording <- Some <| new StringBuilder())
-
-  member _.StopRecording() =
-    lock gate (fun () ->
-      match recording with
-      | None -> ""
-      | Some recorder ->
-        recording <- None
-        recorder.ToString())
-
-  override _.Flush() = lock gate (fun () -> writerToRecord.Flush())
-
 type StartupConfig = {
   CommandLineArgs: string[]
   LoadedProjects: string list
@@ -386,6 +331,9 @@ let evalFn (token: CancellationToken) =
     let originalOut = Console.Out
     let stdoutCapture = new StringWriter()
     Console.SetOut(stdoutCapture)
+    // Output a background thread wrote since the last call comes back with this reply, under a label. Watching begins
+    // here, after warm-up, so the first reply is not led by warm-up's own output.
+    st.OutStream.WatchBetweenCalls()
     st.OutStream.StartRecording()
     let thread = Thread.CurrentThread
     token.Register(fun () -> thread.Interrupt()) |> ignore
@@ -397,13 +345,15 @@ let evalFn (token: CancellationToken) =
       | FsiSession.FsiSucceeded ->
         let fsiOutput = st.OutStream.StopRecording() |> Features.EvalResultSummary.startValueLinesOnTheirOwn
         let stdout = stdoutCapture.ToString() |> cleanStdout
+        // Taken only when the eval succeeded: a failed eval leaves it for the next reply.
+        let betweenCalls = st.OutStream.TakeBetweenCalls() |> cleanStdout
         let combined =
           match String.IsNullOrWhiteSpace stdout with
           | true -> fsiOutput
           | false -> sprintf "%s\n%s" fsiOutput stdout
-        // Bound the printed result — see Features/EvalResultSummary.fs.
-        let bounded = Features.EvalResultSummary.bound Features.EvalResultSummary.maxResultChars combined
-        Ok bounded.Text, Features.EvalResultSummary.metadata bounded
+        // The eval's own output is bounded first, the between-calls block follows it counted apart, and a clipped text is held in the session — see Features/EvalResultSummary.fs.
+        let reply = Features.EvalResultSummary.compose Features.EvalResultSummary.maxResultChars (OutputHold.bind st.Session st.OutStream token) combined betweenCalls
+        Ok reply.Text, Features.EvalResultSummary.metadata reply.Own
       | FsiSession.FsiFailed ex -> Error <| ex, Map.empty
       | FsiSession.FsiInterrupted -> Error <| (OperationCanceledException("the evaluation was interrupted") :> exn), Map.empty
 
@@ -413,7 +363,8 @@ let evalFn (token: CancellationToken) =
     {
       EvaluationResult = evalRes
       Diagnostics = diagnostics
-      Metadata = resultMetadata
+      // The cost travels as a typed value; the worker serializes it for the daemon, which writes the line (`EvalCost.line`).
+      Metadata = resultMetadata |> Map.add EvalCost.MetadataKey (box evaluation.Cost)
       EvaluatedCode = code
     },
     st
@@ -735,7 +686,8 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
       match kind with
       | SessionKinds.InProcess ->
         async {
-          let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
+          // The same printing limits the isolated host applies (FsiPrintConfig is compiled into both).
+          let fsiConfig = FsiPrintConfig.forSession EvalPrintSettings.forAgent
           let raw =
             try
               FsiEvaluationSession.Create(fsiConfig, args, new StreamReader(Stream.Null), recorder, fsiErrorWriter, collectible = true)

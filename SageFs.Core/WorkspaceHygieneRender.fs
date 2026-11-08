@@ -110,6 +110,19 @@ let summarize (leftovers: Leftover list) (plan: Plan) : Summary =
        | _ -> HeldWork.WorkHeld(List.length holding, holding |> List.map (fun e -> e.Age) |> List.max, holding |> List.sumBy (fun e -> e.SizeBytes)))
     PlanId = plan.Id }
 
+/// The sentence about work that exists nowhere else, said the same way on every surface: the `workspace:` line, the first line
+/// of the dashboard card and the top of `sagefs hygiene`. Nothing while no worktree holds any.
+let heldLine (summary: Summary) : string option =
+  match summary.Held with
+  | HeldWork.NothingHeld -> None
+  | HeldWork.WorkHeld(count, oldest, bytes) ->
+    Some(
+      sprintf "%d worktree%s work that is nowhere else (oldest idle %s, %s)"
+        count
+        (match count with | 1 -> " holds" | _ -> "s hold")
+        (formatAge oldest)
+        (formatBytes bytes))
+
 /// The line that goes into replies an orchestrator already reads, or nothing while the workspace is tidy enough.
 /// Past either named threshold it says what and how much, and what to call.
 let nudge (summary: Summary) : string option =
@@ -124,15 +137,9 @@ let nudge (summary: Summary) : string option =
   | false ->
     let parts =
       [ // Work that exists nowhere else leads: a pile of merged worktrees costs disk, this costs work.
-        match summary.Held with
-        | HeldWork.WorkHeld(count, oldest, bytes) ->
-          yield
-            sprintf "%d worktree%s work that is nowhere else (oldest idle %s, %s)"
-              count
-              (match count with | 1 -> " holds" | _ -> "s hold")
-              (formatAge oldest)
-              (formatBytes bytes)
-        | HeldWork.NothingHeld -> ()
+        match heldLine summary with
+        | Some held -> yield held
+        | None -> ()
         if tooManyWorktrees then
           yield sprintf "%d leftover worktrees (%s)" summary.LeftoverWorktrees (formatBytes summary.LeftoverWorktreeBytes)
         if gateTooBig then
@@ -152,6 +159,10 @@ let renderPlan (leftovers: Leftover list) (plan: Plan) : string =
   let sb = Text.StringBuilder()
   let line (s: string) = sb.AppendLine s |> ignore
   line (sprintf "Workspace hygiene (dry run, plan %s)" (let (PlanId id) = plan.Id in id))
+  // Work that exists nowhere else leads, in the words the status line and the dashboard card use.
+  match heldLine summary with
+  | Some held -> line (sprintf "%s. Nothing here removes it; `sagefs hygiene --rescue <name>` puts a worktree's work on a branch." (held.Substring(0, 1).ToUpperInvariant() + held.Substring 1))
+  | None -> ()
   line (sprintf "%d leftover(s) found. %d safe to reclaim (%s), %d need a look (%s)." (List.length leftovers) summary.SafeCount (formatBytes summary.SafeBytes) summary.ReviewCount (formatBytes summary.ReviewBytes))
   for risk in Risk.all do
     let steps = plan.Steps |> List.filter (fun s -> s.Risk = risk)

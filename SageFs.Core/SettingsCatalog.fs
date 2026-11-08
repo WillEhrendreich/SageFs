@@ -451,6 +451,24 @@ module SettingsCatalog =
     Current = InUseReadEachTime
   }
 
+  /// Live: whether the daemon's hygiene sweep removes what is provably safe on its own. Off keeps the sweep's looking and its
+  /// salvage (uncommitted worktree files go to a branch either way) and stops the removing. The switch is read each time the
+  /// sweep runs, so a change applies at once.
+  let hygieneAutoTidy : SettingDescriptor = {
+    Key = "hygiene.autoTidy"
+    Name = "Tidy the workspace on its own"
+    Description = "When on, the daemon removes what agents left behind once it is provably safe: worktrees whose work has reached the base branch and that have been quiet for the grace, expired logs and temp runs, and merged agent branches. Off stops the removing; the daemon still records what it sees and saves uncommitted worktree files to a salvage branch."
+    Category = DaemonSettings
+    Scope = Global
+    Applicability = Live
+    Default = VToggle On
+    Parse = fun raw -> match raw with "on" -> Ok (VToggle On) | "off" -> Ok (VToggle Off) | other -> Error (NotAMember(other, [ "on"; "off" ]))
+    Render = fun v -> match SettingValue.toggle v with Some On -> "on" | Some Off -> "off" | None -> ""
+    Apply = fun v -> match SettingValue.toggle v with Some t -> HygieneSwitch.setAutoTidy t | None -> ()
+    External = NoExternalSource
+    Current = InUseFromConsumer (fun () -> VToggle (HygieneSwitch.autoTidyNow ()))
+  }
+
   /// The Phase-A pilot catalog.
   let pilots : SettingDescriptor list =
     [ sessionDefaultWorkingDir; perTestTimeout; globalTestRunTimeout; mcpPort; bindHost ]
@@ -459,7 +477,7 @@ module SettingsCatalog =
   /// environment variable when a process starts, and the read-only rows. The two session-agent settings are added by
   /// the page, because they are declared in `SessionAgent`, which compiles after this file.
   let all : SettingDescriptor list =
-    pilots @ EnvBackedRows.descriptors @ [ dataDirectory; noResume; identityPolicy; memberToken; operatorToken ]
+    pilots @ EnvBackedRows.descriptors @ [ dataDirectory; noResume; identityPolicy; memberToken; operatorToken; hygieneAutoTidy ]
 
   /// The Live Bindings view a workflow shows for the app at `paths`: each axis resolved across the layers, and an axis nobody set
   /// follows the workflow's recommended view. An axis whose stored value will not parse (a layer file edited by hand) also falls

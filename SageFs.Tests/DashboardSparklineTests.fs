@@ -11,7 +11,7 @@ let private makeTimeline (durationsMsAsc: int list) : Features.EvalTimeline.Time
   |> List.fold
       (fun st dur ->
         let e: Features.EvalTimeline.TimelineEntry =
-          { CellId = 0; StartMs = FixtureDurations.timelineOrigin; DurationMs = int64 dur; Status = Features.EvalTimeline.Succeeded }
+          { CellId = 0; StartMs = FixtureDurations.timelineOrigin; DurationMs = int64 dur; Status = Features.EvalTimeline.Succeeded; Cost = SageFs.EvalCost.unmeasured }
         Features.EvalTimeline.TimelineState.record e st)
       Features.EvalTimeline.TimelineState.empty
 

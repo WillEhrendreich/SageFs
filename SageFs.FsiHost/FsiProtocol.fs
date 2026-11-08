@@ -186,7 +186,8 @@ type Request =
 
 type Response =
   | Ready of runtime: string * fsharpCore: string
-  | EvalResult of id: int64 * outcome: EvalOutcome * diagnostics: FsiDiagnostic list
+  /// How a submission ended, with what it cost in the host: the time around the eval, the bytes allocated and the GC counts.
+  | EvalResult of id: int64 * outcome: EvalOutcome * diagnostics: FsiDiagnostic list * cost: EvalCost
   | FlagResult of id: int64 * reading: FlagReading
   | ValueResult of id: int64 * reading: ValueReading
   | LiveValuesResult of id: int64 * snapshot: LiveValueTree.LiveValueSnapshot
@@ -704,7 +705,7 @@ module HostLimits =
   /// is answered, never left waiting.
   let refusalResponse (asked: Asked) (id: int64) (refusal: QueueRefusal) : Response =
     match asked with
-    | AskedEval -> EvalResult(id, EvalFailed(describeRefusal refusal), [])
+    | AskedEval -> EvalResult(id, EvalFailed(describeRefusal refusal), [], EvalCost.unmeasured)
     | AskedOther -> AgentRefused(id, describeRefusal refusal)
 
   /// Why one line of the args file is not a valid argument.

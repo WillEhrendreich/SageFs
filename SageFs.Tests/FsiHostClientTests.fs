@@ -70,7 +70,7 @@ let private withHost (body: Started -> Async<unit>) : Async<unit> =
 let private evalOk (session: FsiHostSession) (code: string) : Async<unit> =
   async {
     match! session.Eval(code, CancellationToken.None) with
-    | Completed(EvalSucceeded, _) -> ()
+    | Completed(EvalSucceeded, _, _) -> ()
     | other -> failtestf "expected %s to succeed but got %A" code other
   }
 
@@ -123,7 +123,7 @@ let tests =
           withHost (fun started ->
             async {
               match! started.Session.Eval("let y : int = \"not an int\";;", CancellationToken.None) with
-              | Completed(EvalFailed _, diagnostics) ->
+              | Completed(EvalFailed _, diagnostics, _) ->
                 Expect.isNonEmpty "at least one diagnostic" diagnostics
                 let first = diagnostics |> List.find (fun d -> d.Severity = DiagError)
                 Expect.equal "points at line 1" 1 first.StartLine
@@ -138,7 +138,7 @@ let tests =
             async {
               // (failwith ... : unit) — a bare `failwith` at top level trips F#'s value restriction instead.
               match! started.Session.Eval("(failwith \"boom\" : unit);;", CancellationToken.None) with
-              | Completed(EvalFailed message, _) -> Expect.stringContains "the exception message" "boom" message
+              | Completed(EvalFailed message, _, _) -> Expect.stringContains "the exception message" "boom" message
               | other -> failtestf "expected EvalFailed, got %A" other
             })
       }
@@ -150,7 +150,7 @@ let tests =
               use cancel = new CancellationTokenSource(TestTimeouts.cancelAfter)
               // The outcome is the evidence that the sleep was cut short: a sleep that ran to its end is EvalSucceeded.
               match! started.Session.Eval(runawayEvalCode, cancel.Token) with
-              | Completed(EvalInterrupted, _) -> ()
+              | Completed(EvalInterrupted, _, _) -> ()
               | other -> failtestf "expected EvalInterrupted, got %A" other
               do! evalOk started.Session "1 + 1;;"
             })

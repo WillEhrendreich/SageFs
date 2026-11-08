@@ -4206,6 +4206,16 @@ let renderHygienePanel (view: HygieneService.HygieneView) : XmlNode =
           (sprintf "Tidy %d safe item%s (%s)" n (match n with | 1 -> "" | _ -> "s") (WorkspaceHygieneRender.formatBytes summary.SafeBytes))
           (Some(Ds.post (sprintf "/dashboard/hygiene/tidy/%s" planId)))
     panel title [
+      // Work that exists nowhere else leads the card, in the words the `workspace:` line and `sagefs hygiene` use.
+      match WorkspaceHygieneRender.heldLine summary with
+      | Some held ->
+        Elem.div [ Attr.id "hygiene-held"; Attr.class' "output-line output-info"; Attr.style "font-size: 0.857rem;" ] [
+          textEnc (sprintf "%s. `sagefs hygiene --rescue <name>` puts a worktree's work on a branch." (held.Substring(0, 1).ToUpperInvariant() + held.Substring 1))
+        ]
+      | None -> ()
+      match SalvageRefs.describe DateTime.UtcNow snapshot.Salvage with
+      | Some salvageLine -> meta "hygiene-salvage" salvageLine
+      | None -> ()
       meta
         "hygiene-state"
         (sprintf "Dry run: %d safe to reclaim (%s), %d need a look (%s). Scanned %s."

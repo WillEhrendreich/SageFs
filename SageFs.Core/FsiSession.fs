@@ -27,7 +27,10 @@ type FsiEvalOutcome =
 
 type FsiEval =
   { Outcome: FsiEvalOutcome
-    Diagnostics: Diagnostics.Diagnostic array }
+    Diagnostics: Diagnostics.Diagnostic array
+    /// What the eval cost where it ran (the session's process): time, bytes allocated, GC counts. `EvalCost.unmeasured` when the
+    /// session could not say, for instance because its host was lost.
+    Cost: EvalCost }
 
 /// Whether the process the session's FSI lives in can end on its own, and how to learn that it did.
 type HostLifetime =
@@ -178,12 +181,15 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
     member _.HostLifetime = SharesTheWorkerProcess
 
     member _.Eval(code, cancellationToken) =
+      let before = EvalCost.take ()
       let result, diagnostics = session.EvalInteractionNonThrowing(code, cancellationToken)
+      let cost = EvalCost.between before (EvalCost.take ())
       { Outcome =
           match result with
           | Choice1Of2 _ -> FsiSucceeded
           | Choice2Of2 ex -> FsiFailed ex
-        Diagnostics = diagnostics |> Array.map Diagnostics.Diagnostic.mkDiagnostic }
+        Diagnostics = diagnostics |> Array.map Diagnostics.Diagnostic.mkDiagnostic
+        Cost = cost }
 
     member _.ReadFlag(name) =
       match session.TryFindBoundValue name with

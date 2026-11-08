@@ -45,11 +45,29 @@ module Capability =
   /// a prefix is always canonical and `src/Foo/../Bar` cannot be one.
   type ScopePrefix = private ScopePrefix of string
 
+  /// Why a scope is not a prefix. The one decision every mint surface (the `mint_member` tool, `POST
+  /// /api/members/mint` and `sagefs member mint --scope`) shares, because none of them can build a
+  /// `ScopePrefix` any other way.
+  [<RequireQualifiedAccess>]
+  type ScopeParseRefusal =
+    /// A list: the text holds a `,` or `;`. A prefix is ONE directory and neither character separates paths,
+    /// so a list read as one prefix names a directory that exists nowhere and covers no claim.
+    | ListOfPrefixes of given: string
+    /// Not a repo-relative path at all (rooted, or it climbs out of the repo).
+    | Path of PathRefusal
+
   module ScopePrefix =
     let repoRoot : ScopePrefix = ScopePrefix ""
 
-    let tryParse (raw: string) : Result<ScopePrefix, PathRefusal> =
-      ClaimPath.tryCanonical raw |> Result.map ScopePrefix
+    /// The characters that make a scope a list. A directory whose name holds one cannot be a scope.
+    let listSeparators : char array = [| ','; ';' |]
+
+    /// The one canonical directory `raw` names, or why it is not one. Every prefix this returns covers at
+    /// least a file directly under its own directory.
+    let tryParse (raw: string) : Result<ScopePrefix, ScopeParseRefusal> =
+      match raw.IndexOfAny listSeparators with
+      | -1 -> ClaimPath.tryCanonical raw |> Result.map ScopePrefix |> Result.mapError ScopeParseRefusal.Path
+      | _ -> Error(ScopeParseRefusal.ListOfPrefixes raw)
 
     let value (ScopePrefix canonical) : string = canonical
 

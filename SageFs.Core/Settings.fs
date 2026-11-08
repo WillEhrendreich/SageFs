@@ -217,6 +217,12 @@ module RetentionAge =
     | true -> Ok (RetentionAge t)
     | false -> Error (OutOfRange (sprintf "an age must be more than zero and at most %g days, got %gd" Timeouts.settingAgeLongestDays t.TotalDays))
 
+  /// A grace is an age that may be zero, which says there is no grace. It is the only age that may.
+  let createAllowingZero (t: TimeSpan) : Result<RetentionAge, ConfigError> =
+    match t >= TimeSpan.Zero && t <= longest with
+    | true -> Ok (RetentionAge t)
+    | false -> Error (OutOfRange (sprintf "a grace must be zero or more and at most %g days, got %gd" Timeouts.settingAgeLongestDays t.TotalDays))
+
   let value (RetentionAge t) : TimeSpan = t
 
 /// A whole number of things (rows, versions, records, members). `least` is the smallest the setting allows, which is 1

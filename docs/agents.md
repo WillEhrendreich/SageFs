@@ -178,6 +178,9 @@ the same member:
 eval "$(sagefs member mint --role Implementer --dir "$PWD" --print-env SAGEFS_MEMBER_TOKEN)"
 ```
 
+`--scope` takes ONE directory prefix (`--scope src/Foo/`), and leaving it out means the whole repo. A
+comma list is refused with the reason, because a token's scope is a single directory.
+
 `--token-file <path>` (or `--token-file -` for standard input) does the same for one call without putting the token on
 the command line. `--token <token>` still works and prints a warning. The full description is in
 [mcp-tools.md](mcp-tools.md#reaching-the-tools-without-a-client-sagefs-call).
@@ -288,9 +291,23 @@ spawns and tidy once the work has merged:
   again first. It never touches unmerged commits, uncommitted work, anything in
   use, or anything it couldn't judge.
 
+The daemon does not wait for you to look. It sweeps each repository it knows at
+start, every quarter of an hour and whenever a session stops: it records every
+agent worktree in a ledger (who made it, when it went quiet), saves the
+uncommitted files of a worktree nobody is using (a local `.env` included) to
+`refs/sagefs/salvage/<name>`, a ref `git push --all` does not send, without
+touching the worktree, and, with `hygiene.autoTidy` on (the default), removes
+what is provably safe. A worktree it has never seen waits a full day from its
+first sweep, and one that holds commits the base lacks, or changes, is never
+removed. A checkout a cohort holds reads as in use, and a `<repo>.tiers`
+directory that nothing uses is listed as needing a look, never removed.
+`sagefs hygiene --rescue <name>` puts a worktree's work on `rescue/<name>`,
+rebased on the base, and says whether the base already has it.
+
 [`mcp-tools.md`](mcp-tools.md#workspace-hygiene) has the details. The brief you
-give a sub-agent should say to remove nothing it doesn't own and to report its
-worktree path and branch, so the orchestrator knows what to reap.
+give a sub-agent should say to remove nothing it doesn't own, to use no
+worktree unless the work must not touch the trunk, and to report its worktree
+path and branch, so the orchestrator knows what to reap.
 
 ## 7. When a ship fails its gate and you run it again
 

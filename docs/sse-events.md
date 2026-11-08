@@ -31,7 +31,7 @@ One limit worth knowing: the daemon keeps one catch-up slot per feature (`eval_d
 
 ### Resuming after a drop
 
-Every frame that arrives through the daemon's broadcasts is numbered `<epoch>:<seq>` and written with an `id:` line. The epoch is new each time the daemon starts, because the seqs start again at 1 then. The snapshots written on connect, the keepalive comments and the `/diagnostics` stream carry no id. The daemon keeps the most recent numbered frames, up to 2,000 or 16 MiB, whichever is reached first (`SseLog.productionLimits` in `SageFs.Core/SseLog.fs`).
+Every frame that arrives through the daemon's broadcasts is numbered `<epoch>:<seq>` and written with an `id:` line. The epoch is new each time the daemon starts, because the seqs start again at 1 then. The snapshots written on connect, the keepalive comments and the `/diagnostics` stream carry no id. The daemon keeps the most recent numbered frames, up to 2,000 or 16 MiB, whichever is reached first (`SseLog.productionLimits` in `SageFs.Core/SseLog.fs`). A frame can be a megabyte, so the log measures its size before it takes its lock, and builds the text a connection writes (the `id:` line and the frame) once, which every connection that writes the frame shares (`Replayable.toWire` in `SageFs.Core/SseReplay.fs`).
 
 A client that reconnects with `Last-Event-ID: <the last id it saw>` is sent, in this order:
 

@@ -106,6 +106,13 @@ let waitForDaemonReady
   | None -> Error (SageFsError.DaemonStartFailed (sprintf "Daemon started but did not become ready in %.0fs" Timeouts.daemonStartWait.TotalSeconds))
 
 
+/// What `sagefs hygiene` was asked to do: show the plan, run its safe part, or put a worktree's work on a branch.
+[<RequireQualifiedAccess>]
+type HygieneAction =
+  | ShowPlan
+  | TidySafe
+  | Rescue of worktreeName: string
+
 /// CLI command parsed from arguments — replaces if/elif chain with pattern matching.
 type CliCommand =
   | ShowHelp
@@ -126,7 +133,7 @@ type CliCommand =
   /// the tool's input schema, so none of them may be taken for the CLI's here (`-v` is a value as often as a flag).
   | Call of args: string list
   | Sweep of kill: bool
-  | Hygiene of tidy: bool * repo: string
+  | Hygiene of HygieneAction * repo: string
   | DeprecatedClient of name: string
   | Daemon of args: string array
   | Jupyter of connectionFile: string
@@ -155,7 +162,15 @@ module CliCommand =
         match args |> Array.tryFindIndex (fun a -> a = "--repo") with
         | Some i when i + 1 < args.Length -> args.[i + 1]
         | _ -> ""
-      Hygiene (hasFlag "--tidy", repo)
+      let action =
+        match args |> Array.tryFindIndex (fun a -> a = "--rescue") with
+        | Some i when i + 1 < args.Length -> HygieneAction.Rescue args.[i + 1]
+        | Some _
+        | None ->
+          match hasFlag "--tidy" with
+          | true -> HygieneAction.TidySafe
+          | false -> HygieneAction.ShowPlan
+      Hygiene (action, repo)
     | _ when args.Length > 0 && args.[0] = "play" && args.Length > 1 -> Play args.[1]
     | _ when args.Length > 0 && args.[0] = "play" -> ShowHelp
     | _ when args.Length > 0 && args.[0] = CohortExportCommand.commandName -> CohortExport (List.ofArray args.[1..])
@@ -370,23 +385,45 @@ let sweepCommand (kill: bool) =
     | _ -> ()
     0
 
-/// The running daemon's sessions as (id, working directory), for the facts hygiene cannot read off the disk.
-/// Empty when no daemon answers; a scan then relies on the process table alone.
-let private fetchSessionDirectories (info: DaemonInfo) : (string * string) list =
-  try
-    use client = new System.Net.Http.HttpClient(Timeout = Timeouts.daemonSessionsProbe)
-    let resp = client.GetAsync(sprintf "http://localhost:%d/api/sessions" info.Port).Result
-    match resp.IsSuccessStatusCode with
-    | false -> []
-    | true ->
-      let doc = System.Text.Json.JsonDocument.Parse(resp.Content.ReadAsStringAsync().Result)
-      [ for s in doc.RootElement.GetProperty("sessions").EnumerateArray() ->
-          s.GetProperty("id").GetString(), s.GetProperty("workingDirectory").GetString() ]
-  with _ -> []
+/// What the running daemon knows that hygiene cannot read off the disk: its sessions as (id, working directory), and the
+/// checkouts a cohort holds as (path, who). A daemon that did not answer is `DidNotAnswer`, which is not "holds nothing": a tidy
+/// run on it could remove a checkout the cohort holds.
+let private fetchDaemonFacts (info: DaemonInfo) : System.Threading.Tasks.Task<HygieneService.DaemonFacts> =
+  task {
+    try
+      use client = new System.Net.Http.HttpClient(Timeout = Timeouts.daemonSessionsProbe)
+      let! resp = client.GetAsync(sprintf "http://localhost:%d/api/sessions" info.Port)
+      match resp.IsSuccessStatusCode with
+      | false -> return HygieneService.DaemonFacts.DidNotAnswer(sprintf "it answered HTTP %d" (int resp.StatusCode))
+      | true ->
+        let! body = resp.Content.ReadAsStringAsync()
+        return HygieneService.parseSessionsReply body
+    with
+    | :? System.Net.Http.HttpRequestException as ex -> return HygieneService.DaemonFacts.DidNotAnswer ex.Message
+    | :? System.Threading.Tasks.TaskCanceledException -> return HygieneService.DaemonFacts.DidNotAnswer "it did not answer in time"
+  }
 
-/// `sagefs hygiene [--tidy] [--repo PATH]` — what agents left behind, as a dry-run plan. `--tidy` runs only the
-/// safe part, for the plan it just printed, and every step looks at its target again before it acts.
-let hygieneCommand (tidy: bool) (repoArg: string) (mcpPort: int) : System.Threading.Tasks.Task<int> =
+/// `sagefs hygiene --rescue <name>`: the work of one worktree on `rescue/<name>`, rebased on the base, and what the base
+/// already has of it.
+let private rescueCommand (repo: string) (name: string) : System.Threading.Tasks.Task<int> =
+  task {
+    let ctx : HygieneRescue.RescueContext =
+      { Git = HygieneGather.runGit
+        GitEnv = HygieneGather.runGitEnv
+        Repo = repo
+        ScratchDir = Path.GetTempPath() }
+    let! result = HygieneRescue.rescue ctx name
+    printfn "%s" (HygieneRescue.describe result)
+    match result with
+    | HygieneRescue.RescueResult.Rescued _ -> return 0
+    | HygieneRescue.RescueResult.NoSuchWorktree _
+    | HygieneRescue.RescueResult.CouldNotRescue _ -> return 1
+  }
+
+/// `sagefs hygiene [--tidy | --rescue NAME] [--repo PATH]` — what agents left behind, as a dry-run plan. `--tidy` runs only the
+/// safe part, for the plan it just printed, and every step looks at its target again before it acts. `--rescue` makes a branch
+/// of one worktree's work.
+let hygieneCommand (action: HygieneAction) (repoArg: string) (mcpPort: int) : System.Threading.Tasks.Task<int> =
   task {
     let start = match repoArg with | "" -> Environment.CurrentDirectory | given -> Path.GetFullPath given
     match HygieneService.mainRepoOf start with
@@ -394,25 +431,50 @@ let hygieneCommand (tidy: bool) (repoArg: string) (mcpPort: int) : System.Thread
       eprintfn "hygiene: %s is not inside a git checkout. Run it from the repository, or pass --repo PATH." start
       return 1
     | Some repo ->
-      let loc = HygieneService.locationsFor repo
-      let daemon = DaemonState.readOnPort mcpPort
-      let sessions = match daemon with | Some info -> fetchSessionDirectories info | None -> []
-      let owners = HygieneService.OwnerLedger.read loc.DataDir
-      let connection = match daemon with | Some _ -> (fun (_: string) -> true) | None -> (fun (_: string) -> false)
-      let live () = HygieneService.liveFactsOf sessions owners connection
-      let! snapshot = HygieneService.take loc (live ())
-      printfn "%s" (WorkspaceHygieneRender.renderPlan snapshot.Leftovers snapshot.Plan)
-      match tidy with
-      | false -> return 0
-      | true ->
-        printfn ""
-        match! HygieneService.tidy loc live snapshot.Plan.Id with
-        | HygieneService.TidyOutcome.Tidied(report, _) ->
-          printfn "%s" (WorkspaceHygieneRender.renderReport report)
-          return 0
-        | HygieneService.TidyOutcome.NotConfirmed _ ->
-          eprintfn "hygiene: the workspace changed while it was being looked at; run it again to see the new plan."
+      match action with
+      | HygieneAction.Rescue name -> return! rescueCommand repo name
+      | HygieneAction.ShowPlan
+      | HygieneAction.TidySafe ->
+        let loc = HygieneService.locationsFor repo
+        let daemon = DaemonState.readOnPort mcpPort
+        let! facts =
+          match daemon with
+          | Some info -> fetchDaemonFacts info
+          | None -> System.Threading.Tasks.Task.FromResult HygieneService.DaemonFacts.NoDaemon
+        let sessions, cohortHeld =
+          match facts with
+          | HygieneService.DaemonFacts.Answered(sessions, held) -> sessions, held
+          | HygieneService.DaemonFacts.NoDaemon
+          | HygieneService.DaemonFacts.DidNotAnswer _ -> [], []
+        let owners = HygieneService.OwnerLedger.read loc.DataDir
+        let connection = match daemon with | Some _ -> (fun (_: string) -> true) | None -> (fun (_: string) -> false)
+        // This process has no capability table: what the daemon says a cohort holds is what counts here.
+        let live () = { HygieneService.liveFactsOf sessions owners connection with CohortHeld = cohortHeld }
+        let! snapshot = HygieneService.take loc (live ())
+        printfn "%s" (WorkspaceHygieneRender.renderPlan snapshot.Leftovers snapshot.Plan)
+        match SalvageRefs.describe DateTime.UtcNow snapshot.Salvage with
+        | Some line -> printfn "\n%s" line
+        | None -> ()
+        match facts with
+        | HygieneService.DaemonFacts.DidNotAnswer why ->
+          eprintfn "hygiene: the daemon on port %d did not answer (%s), so what it holds is unknown. The plan above does not know the cohort's checkouts." mcpPort why
+        | HygieneService.DaemonFacts.Answered _
+        | HygieneService.DaemonFacts.NoDaemon -> ()
+        match action, facts with
+        | HygieneAction.ShowPlan, _
+        | HygieneAction.Rescue _, _ -> return 0
+        | HygieneAction.TidySafe, HygieneService.DaemonFacts.DidNotAnswer _ ->
+          eprintfn "hygiene: nothing was tidied. Run it again once the daemon answers (`sagefs status`), or stop it first."
           return 1
+        | HygieneAction.TidySafe, (HygieneService.DaemonFacts.Answered _ | HygieneService.DaemonFacts.NoDaemon) ->
+          printfn ""
+          match! HygieneService.tidy loc live snapshot.Plan.Id with
+          | HygieneService.TidyOutcome.Tidied(report, _) ->
+            printfn "%s" (WorkspaceHygieneRender.renderReport report)
+            return 0
+          | HygieneService.TidyOutcome.NotConfirmed _ ->
+            eprintfn "hygiene: the workspace changed while it was being looked at; run it again to see the new plan."
+            return 1
   }
 
 type DaemonLaunchDecision =
@@ -637,6 +699,7 @@ let main args =
     printfn "       SageFs status                   Show daemon info"
     printfn "       SageFs sweep [--kill]           Reap daemons whose owner process is gone"
     printfn "       SageFs hygiene [--tidy]         Show what agents left behind (worktrees, gate checkouts, caches, temp dirs) as a dry-run plan; --tidy runs only the safe part"
+    printfn "       SageFs hygiene --rescue <name>  Put the work of worktree <name> (commits and uncommitted files) on branch rescue/<name>, rebased on the base, and say whether the base already has it"
     printfn "       SageFs play <ledger.jsonl>      Replay a portable cohort ledger file offline"
     printfn "       SageFs %s <out.jsonl>   Write the cohort ledger to a file play can replay (%s <path>, %s <dir>)" CohortExportCommand.commandName (CohortExportCommand.Flag.text CohortExportCommand.Flag.Scope) (CohortExportCommand.Flag.text CohortExportCommand.Flag.DataDir)
     printfn ""
@@ -811,8 +874,8 @@ let main args =
   | Sweep kill ->
     sweepCommand kill
 
-  | Hygiene(tidy, repo) ->
-    hygieneCommand tidy repo (resolveMcpPort args) |> awaitAtEntryPoint
+  | Hygiene(action, repo) ->
+    hygieneCommand action repo (resolveMcpPort args) |> awaitAtEntryPoint
 
   | Mcp mcpArgs ->
     let mcpPort = resolveMcpPort mcpArgs

@@ -446,13 +446,9 @@ let private checkMemoryAdmission (readSnapshot: unit -> SessionManager.QuerySnap
   let sessions =
     SessionManager.QuerySnapshot.allSessions (readSnapshot())
     |> List.map (memorySessionSnapshotOf now (fun _ -> false))
-  let rss = Features.MachineMemory.heldBytes (Features.MachineMemory.ownFootprint ())
-  let machineMemory = Features.MachineMemory.current ()
-  let machine : MemorySupervisor.MachineStats =
-    { DaemonRssBytes = rss
-      MachineAvailableBytes = machineMemory.AvailableBytes
-      MachineTotalBytes = machineMemory.TotalBytes }
-  let decision = Features.MemoryPressureWatch.evaluate MemorySupervisor.defaultThresholds machine sessions
+  let reading = Features.MemoryPressureWatch.live ()
+  let machine = Features.MemoryPressureWatch.machineStatsOf reading
+  let decision = Features.MemoryPressureWatch.evaluate reading MemorySupervisor.defaultThresholds machine sessions
   decision.Actions
   |> List.tryPick (function MemorySupervisor.ShedAction.RefuseNewSessions reason -> Some reason | _ -> None)
   |> function
@@ -3902,6 +3898,95 @@ let run
   // Create the multi-agent coordination tracker (in-memory, daemon-lifetime)
   let activityTracker = AgentActivityTracker.create ()
 
+  // ── Workspace hygiene that runs itself (docs/plans/hygiene-that-runs-itself.md) ──
+  // The checkouts a cohort holds: a member token bound to a checkout (while its lease has not lapsed), and the cohort's own
+  // integration and trunk checkouts. Every surface that builds the hygiene live facts reads this, so a checkout the conductor
+  // manages reads as in use by a cohort and nothing tidies it.
+  HygieneService.CohortHolds.register (fun () ->
+    let now = DateTime.UtcNow
+    let bound =
+      SageFs.McpTools.capabilityStore.Records
+      |> List.choose (fun record ->
+        match record.Status, record.Grant.Route with
+        | Capability.CapabilityStatus.Active, Capability.RouteBinding.BoundToCheckout root when now < record.Grant.NotAfter && now - record.LastSeen < Cohort.leaseWindow ->
+          Some(Capability.CheckoutRoot.value root, sprintf "member token %s" (Capability.idText record.Id))
+        | Capability.CapabilityStatus.Active, Capability.RouteBinding.BoundToCheckout _
+        | Capability.CapabilityStatus.Active, Capability.RouteBinding.BoundToSession _
+        | Capability.CapabilityStatus.Active, Capability.RouteBinding.Unbound
+        | Capability.CapabilityStatus.Revoked _, _ -> None)
+    let integration =
+      match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
+      | Some binding -> [ binding.WorktreePath, "the cohort's integration checkout"; binding.TrunkPath, "the cohort's trunk checkout" ]
+      | None -> []
+    bound @ integration)
+
+  // The sweep: observe the agent worktrees, save uncommitted work to a salvage branch, and (when `hygiene.autoTidy` is on)
+  // tidy what is provably safe. Once at start, on a timer, and whenever a session stops. One at a time: a pass that is still
+  // running makes the next trigger a no-op, and the timer is rooted until shutdown.
+  let hygieneSweepGate = new System.Threading.SemaphoreSlim(1, 1)
+  let hygieneSessionPairs () : (string * string) list =
+    SessionManager.QuerySnapshot.allSessions (readSnapshot())
+    |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, s.WorkingDirectory)
+  /// The repositories the daemon has a record of: where a live session is, and where a session it made once ran, if the
+  /// directory still exists.
+  let hygieneRepositories () : string list =
+    let owners = HygieneService.OwnerLedger.read DaemonState.SageFsDir
+    (hygieneSessionPairs () |> List.map snd) @ (owners |> List.map (fun r -> r.WorkingDirectory) |> List.filter System.IO.Directory.Exists)
+    |> List.choose HygieneService.mainRepoOf
+    |> List.distinct
+  let sweepWorkspace () : unit =
+    match hygieneSweepGate.Wait 0 with
+    | false -> ()
+    | true ->
+      Task.Run(fun () ->
+        task {
+          try
+            try
+              // Each repository on its own: one whose pass throws is logged with the whole exception, and the rest still run.
+              let sweepOne (repo: string) : Task<HygieneSweep.SweepReport> =
+                task {
+                  let loc = HygieneService.locationsFor repo
+                  let live () = HygieneService.liveFactsWith (hygieneSessionPairs ()) (Some activityTracker)
+                  let! report = HygieneSweep.sweep (HygieneSweep.realContext loc live)
+                  match HygieneSweep.describe report with
+                  | Some line ->
+                    log.LogInformation("{Sweep}", line)
+                    let! _ = HygieneService.Cache.refresh loc live
+                    ()
+                  | None -> ()
+                  return report
+                }
+              let! results = HygieneSweep.sweepRepositories (hygieneRepositories ()) sweepOne
+              for (repo, result) in results do
+                match result with
+                | Result.Ok _ -> ()
+                | Result.Error ex -> log.LogWarning(ex, "Workspace hygiene sweep of {Repo} failed", repo)
+            with ex when not (ex :? OutOfMemoryException) -> log.LogWarning(ex, "Workspace hygiene sweep could not start")
+          finally
+            hygieneSweepGate.Release() |> ignore
+        } :> Task)
+      |> ignore
+  let hygieneSweepIntervalMs = int Timeouts.hygieneSweepInterval.TotalMilliseconds
+  let mutable hygieneSweepTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let hygieneSweepCallback _ =
+    try
+      sweepWorkspace ()
+    finally
+      if not (isNull hygieneSweepTimerRef) then
+        try hygieneSweepTimerRef.Change(hygieneSweepIntervalMs, System.Threading.Timeout.Infinite) |> ignore
+        with :? System.ObjectDisposedException -> ()
+  let hygieneSweepTimer =
+    let t = new System.Threading.Timer(
+      System.Threading.TimerCallback(hygieneSweepCallback),
+      null, hygieneSweepIntervalMs, System.Threading.Timeout.Infinite)
+    hygieneSweepTimerRef <- t
+    t
+  sweepWorkspace ()
+  stateChangedEvent.Publish.Add(fun change ->
+    match change with
+    | SessionStopped _ -> sweepWorkspace ()
+    | other -> ())
+
   let getDaemonHealth () : SageFs.Features.HealthSnapshot option =
     let model = elmRuntime.GetModel()
     let sessions =
@@ -3931,7 +4016,9 @@ let run
       | SageFs.LiveTestViewReads.DaemonLiveTesting.Totals summary -> Some summary
       | SageFs.LiveTestViewReads.DaemonLiveTesting.NoSessionHasItOn
       | SageFs.LiveTestViewReads.DaemonLiveTesting.OnWithNoTestsYet -> None
-    let machineMemory = SageFs.Features.MachineMemory.current ()
+    // One read of the daemon's footprint and the machine's memory serves the size, the level and the headroom below.
+    let observed = SageFs.Features.MemoryPressureWatch.observe SageFs.Features.MemoryPressureWatch.live
+    let machineMemory = observed.Reading.Machine
     let telemetry =
       SageFs.Server.DaemonTelemetry.sample (
         (System.Diagnostics.Process.GetCurrentProcess().Id, "daemon")
@@ -3940,7 +4027,7 @@ let run
              WorkerProtocol.SessionLifecycleStatus.workerPid session.Status
              |> Option.map (fun pid -> pid, "worker:" + WorkerProtocol.SessionId.value session.Id))))
     // Resident plus swapped: the daemon's resident size alone read 640 MB while it held 25 GB, 20 GB of it in swap.
-    let rssBytes = SageFs.Features.MachineMemory.heldBytes (SageFs.Features.MachineMemory.ownFootprint ())
+    let rssBytes = SageFs.Features.MachineMemory.heldBytes observed.Reading.Footprint
     let memoryMB = int (rssBytes / 1_048_576L)
     let rssVerdict =
       SageFs.Features.HealthWatch.observe
@@ -3964,7 +4051,7 @@ let run
             MemoryMB = memoryMB
             Anomalies = SageFs.Features.HealthWatch.troubled ()
             GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome ()
-            MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel ()
+            MemoryPressure = observed.Level
             SupervisorHealth = SupervisorHealthWatch.current ()
             ComponentFailures = SageFs.Features.ComponentWatch.current () }
       : SageFs.Features.HealthSnapshot)
@@ -4350,13 +4437,9 @@ let run
     let sessions =
       SessionManager.QuerySnapshot.allSessions (readSnapshot())
       |> List.map (memorySessionSnapshotOf now isUserActive)
-    let rss = Features.MachineMemory.heldBytes (Features.MachineMemory.ownFootprint ())
-    let machineMemory = Features.MachineMemory.current ()
-    let machine : MemorySupervisor.MachineStats =
-      { DaemonRssBytes = rss
-        MachineAvailableBytes = machineMemory.AvailableBytes
-        MachineTotalBytes = machineMemory.TotalBytes }
-    let decision = Features.MemoryPressureWatch.evaluate MemorySupervisor.defaultThresholds machine sessions
+    let reading = Features.MemoryPressureWatch.live ()
+    let machine = Features.MemoryPressureWatch.machineStatsOf reading
+    let decision = Features.MemoryPressureWatch.evaluate reading MemorySupervisor.defaultThresholds machine sessions
     decision.Actions
     |> List.iter (function
       | MemorySupervisor.ShedAction.StopIdleSessions ids ->
@@ -4829,6 +4912,20 @@ let run
     IsCreatingSession = fun () -> elmRuntime.GetModel().CreatingSession
   }
 
+  // Live binding watch window: pulled AFTER the eval reply, never
+  // attached to it (roast-4 #2) — fire-and-forget so a slow or failed
+  // reflection walk can never delay the caller's eval result. Fed into
+  // the adaptive store; subscribers fire only on real change, and the
+  // existing EvalCompleted → ModelChanged morph re-renders the panel.
+  // A submission pulls once, after its last statement: a walk reads every value of the session, and a paste of thirty
+  // statements started thirty of them.
+  let pullLiveBindings (sid: WorkerProtocol.SessionId) : unit =
+    let sidStr = WorkerProtocol.SessionId.value sid
+    let ask : SageFs.Features.LiveBindingsPane.Feed.Ask =
+      fun message -> proxyToSession getProxyStr notifyWorkerDiedStr sidStr message |> Async.AwaitTask
+    Async.Start (
+      SageFs.Features.LiveBindingsPane.Feed.pull ask liveBindingsHub.Adaptive liveBindingsHub.Notes sidStr (fun () -> liveBindingsHub.ConfiguredWalk sidStr))
+
   // One statement, as one interaction: the worker runs the first `;;` interaction of the text it is given and answers Ok.
   let evalOneStatement (sid: WorkerProtocol.SessionId) (code: string) : Threading.Tasks.Task<Result<string, string>> = task {
       let sidStr = WorkerProtocol.SessionId.value sid
@@ -4842,15 +4939,6 @@ let run
             sidStr
             (SageFsMsg.Event (
               TuiEvent.EvalCompleted (sidStr, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
-        // Live binding watch window: pulled AFTER the eval reply, never
-        // attached to it (roast-4 #2) — fire-and-forget so a slow or failed
-        // reflection walk can never delay the caller's eval result. Fed into
-        // the adaptive store; subscribers fire only on real change, and the
-        // existing EvalCompleted → ModelChanged morph re-renders the panel.
-        let ask : SageFs.Features.LiveBindingsPane.Feed.Ask =
-          fun message -> proxyToSession getProxyStr notifyWorkerDiedStr sidStr message |> Async.AwaitTask
-        Async.Start (
-          SageFs.Features.LiveBindingsPane.Feed.pull ask liveBindingsHub.Adaptive liveBindingsHub.Notes sidStr (fun () -> liveBindingsHub.ConfiguredWalk sidStr))
         return Ok msg
       | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
         let msg = SageFsError.describe err
@@ -4865,18 +4953,31 @@ let run
       | Error e -> return Error (SageFsError.describe e)
     }
 
+  // One submission at a time for each session, so a Try or a Revert cannot run between the statements of a paste.
+  let submissionGates = SubmissionGates()
+
   // The one place every dashboard caller evaluates through (the Evaluate box, eval-file, and the live bindings' Try, Reset and
-  // Revert): a submission of several statements runs them one at a time, in order, and a failure names the statement it was.
+  // Revert): a submission of several statements runs them one at a time, in order, holding the session's gate for all of them,
+  // and a failure names the statement it was.
   let evalSubmission (sid: WorkerProtocol.SessionId) (code: string) : Threading.Tasks.Task<Result<string, string>> = task {
+    let sidStr = WorkerProtocol.SessionId.value sid
     match McpAdapter.splitStatements code with
     | []
-    | [ _ ] -> return! evalOneStatement sid code
+    | [ _ ] ->
+      return!
+        submissionGates.Run(sidStr, fun () ->
+          task {
+            let! answer = evalOneStatement sid code
+            match answer with
+            | Ok _ -> pullLiveBindings sid
+            | Error _ -> ()
+            return answer
+          })
     | statements ->
-      let! outcome = EvalSequence.evalInOrder (evalOneStatement sid) statements
+      let! outcome = EvalSequence.submit submissionGates sidStr (fun () -> pullLiveBindings sid) (evalOneStatement sid) statements
       match outcome with
       | EvalSequence.SequenceOutcome.Ran messages -> return Ok(String.concat "\n" messages)
       | EvalSequence.SequenceOutcome.StoppedAt(position, total, statement, reason, _) ->
-        let sidStr = WorkerProtocol.SessionId.value sid
         let message = EvalSequence.describeStop position total statement reason
         let! _ =
           dispatchOutputAndWait
@@ -5259,6 +5360,9 @@ let run
   | TimerStop.Joined -> ()
   // Dispose activity cleanup timer (best-effort, no wait needed — cleanup is idempotent)
   try activityCleanupTimer.Dispose()
+  with :? System.ObjectDisposedException -> ()
+  // Dispose the hygiene sweep timer (best-effort — a pass is safe to cut short: every step looks again before it acts)
+  try hygieneSweepTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
   // Dispose the orphaned-temp-dir sweep timer (best-effort — the sweep itself is idempotent)
   try orphanTempDirSweepTimer.Dispose()

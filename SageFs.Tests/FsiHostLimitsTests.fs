@@ -38,7 +38,7 @@ let queueTests =
     testCase "WHY — a refused eval is answered as a failed eval that says why, so the caller never waits" <| fun _ ->
       let refusal = { Capacity = 64; Pending = 64 }
       match refusalResponse AskedEval 41L refusal with
-      | EvalResult(41L, EvalFailed message, []) ->
+      | EvalResult(41L, EvalFailed message, [], _) ->
         Expect.stringContains "says the queue is full" "full" message
         Expect.stringContains "says the capacity" "64" message
       | other -> failtestf "expected a failed EvalResult for id 41, got %A" other
