@@ -30,7 +30,7 @@
           if (!preview || !preview.animate) return;
           var accent = getComputedStyle(document.documentElement).getPropertyValue('--color-info') || '#7fb4ca';
           preview.getAnimations().forEach(function(running) { running.cancel(); });
-          preview.animate([{ backgroundColor: accent }, { backgroundColor: 'transparent' }], { duration: 1000, easing: 'ease-out' });
+          preview.animate([{ boxShadow: 'inset 0 -0.2em 0 0 ' + accent }, { boxShadow: 'inset 0 -0.2em 0 0 transparent' }], { duration: 1000, easing: 'ease-out' });
         });
       }).observe(document.body, { subtree: true, childList: true, characterData: true });
     })();
