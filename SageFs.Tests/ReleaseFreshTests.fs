@@ -11,8 +11,12 @@ open ReleaseRules
 let tests =
   testList "Release fresh" [
     testCase "a gate runs the pipeline with every stage, and adds --fresh only when asked" <| fun _ ->
-      pipelineArgs AllowReuse |> Expect.equal "default" [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release" ]
-      pipelineArgs ForceFresh |> Expect.equal "fresh" [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release"; "--fresh" ]
+      pipelineArgs AllowReuse StopAtFirstRed |> Expect.equal "default" [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release" ]
+      pipelineArgs ForceFresh StopAtFirstRed |> Expect.equal "fresh" [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release"; "--fresh" ]
+
+    testCase "a gate asked to keep going tells the pipeline to run every tier after a red one" <| fun _ ->
+      pipelineArgs AllowReuse KeepGoing |> Expect.equal "keep going" [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release"; "--keep-going" ]
+      pipelineArgs ForceFresh KeepGoing |> Expect.equal "fresh and keep going" [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release"; "--fresh"; "--keep-going" ]
 
     testCase "--fresh is taken from anywhere in the arguments" <| fun _ ->
       splitFresh [] |> Expect.equal "none" (AllowReuse, [])

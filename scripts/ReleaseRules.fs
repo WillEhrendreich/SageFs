@@ -277,19 +277,32 @@ let bumpPlanMessages (plan: BumpPlan) : string list =
 
 // ── the local gate ───────────────────────────────────────────────────────────
 
+/// What the gate does when a tier goes red. A release stops at the first red and cancels the rest, which is the quick answer
+/// to "can this ship". `--keep-going` lets every tier run, so one run lists every red instead of one per run, which is what
+/// fixing a pile of failures needs. It gates; it never bumps or pushes (that is `ship`).
+type FailureMode =
+  | StopAtFirstRed
+  | KeepGoing
+
 /// What `local-gate.fsx` was asked to do.
 type GateRequest =
-  | Gate of commit: string * force: bool
+  | Gate of commit: string * force: bool * mode: FailureMode
   | Promote of commit: string * into: string
   | Usage of string
 
-/// The arguments the script was started with, with fsi's own `--` already dropped. A commit defaults to HEAD.
+/// The arguments the script was started with, with fsi's own `--` already dropped. A commit defaults to HEAD, and
+/// `--keep-going` is read from anywhere.
 let parseGateArgs (argv: string list) : GateRequest =
-  match argv with
+  let args = argv |> List.filter (fun a -> a <> "--keep-going")
+  let mode =
+    match args.Length = argv.Length with
+    | true -> StopAtFirstRed
+    | false -> KeepGoing
+  match args with
   | "--promote" :: commit :: into :: _ -> Promote(commit, into)
   | "--promote" :: _ -> Usage "--promote needs a commit and a directory"
-  | "--force" :: rest -> Gate((match rest with c :: _ -> c | [] -> "HEAD"), true)
-  | rest -> Gate((match rest with c :: _ -> c | [] -> "HEAD"), false)
+  | "--force" :: rest -> Gate((match rest with c :: _ -> c | [] -> "HEAD"), true, mode)
+  | rest -> Gate((match rest with c :: _ -> c | [] -> "HEAD"), false, mode)
 
 /// Whether the pipeline may take a green tier's record from an earlier run of the same commit.
 type PassReuse =
@@ -309,12 +322,16 @@ let freshnessOfForce (force: bool) : PassReuse =
   | true -> ForceFresh
   | false -> AllowReuse
 
-/// The arguments `dotnet` gets to run the pipeline: every stage, the release bundle, and `--fresh` when asked.
-let pipelineArgs (reuse: PassReuse) : string list =
+/// The arguments `dotnet` gets to run the pipeline: every stage, the release bundle, `--fresh` when asked and `--keep-going`
+/// when asked.
+let pipelineArgs (reuse: PassReuse) (mode: FailureMode) : string list =
   [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release" ]
   @ (match reuse with
      | AllowReuse -> []
      | ForceFresh -> [ "--fresh" ])
+  @ (match mode with
+     | StopAtFirstRed -> []
+     | KeepGoing -> [ "--keep-going" ])
 
 /// Where the pipeline keeps its tier pass records: beside the gate's passes, outside every checkout.
 let tierPassesDirectory (gateHome: string) : string = gateHome.TrimEnd('/') + "/tier-passes"

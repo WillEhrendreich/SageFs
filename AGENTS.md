@@ -340,6 +340,15 @@ files. `dotnet fsi scripts/gate-tail.fsx -- --status` prints each tier, running 
 with its size and its last line; with no arguments it follows every tier live; a tier name
 follows one. It only reads, so Ctrl-C ends the viewer and never the gate.
 
+The gate stops at the first red tier and cancels the rest, so a pile of failures costs one 20-minute
+run per failure. To see every red in one run, gate HEAD with `dotnet fsi scripts/local-gate.fsx --
+--keep-going` (it only gates: `ship` still decides, bumps and pushes). A tier's `ran=N` and the trust
+table then list each red together, and a rerun reuses the tiers that went green. Fix them all, then
+`ship`. An integration case does not run in a SageFs session (the engine skips it after 5 seconds), so
+the fast loop for one is its own list through the runner, for example `dotnet
+SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary --filter-test-list
+"TrunkLanding"`.
+
 ### The analyzers
 
 `analyzers/sageAnalyzers.dll` is a custom analyzer pack (source: `WillEhrendreich/SageAnalyzers`) that checks the house

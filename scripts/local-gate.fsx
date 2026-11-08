@@ -1,5 +1,7 @@
 // scripts/local-gate.fsx [<commit>]                  gate a commit (default HEAD) on this machine
 // scripts/local-gate.fsx --force <commit>            re-gate even if it already passed, and run every tier (no pass records)
+// scripts/local-gate.fsx --keep-going [<commit>]     do not cancel the other tiers at the first red one: every tier runs and the
+//                                                    trust table lists every red in one run (it gates only, ship still decides)
 // scripts/local-gate.fsx --promote <commit> <dir>    copy a passed commit's release bundle into <dir>
 //                                                    (used by the self-hosted "main build" job)
 //
@@ -356,7 +358,7 @@ let prepareCheckout (sha: string) : string =
 /// Runs the pipeline in the checkout with its output merged into one stream: all of it to the log, and the
 /// lines worth watching (stage boundaries, one line per finished tier, failures) to the console as they happen.
 /// Returns the pipeline's exit code.
-let runPipeline (wt: string) (sha: string) (log: string) (reuse: ReleaseRules.PassReuse) : int =
+let runPipeline (wt: string) (sha: string) (log: string) (reuse: ReleaseRules.PassReuse) (mode: ReleaseRules.FailureMode) : int =
   // Data and temp state live in the gate's own home, never the user's real ~/.SageFs.
   for dir in [ dataDir; tmpDir ] do
     (try Directory.Delete(dir, true) with :? DirectoryNotFoundException -> ())
@@ -366,7 +368,7 @@ let runPipeline (wt: string) (sha: string) (log: string) (reuse: ReleaseRules.Pa
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
-  ReleaseRules.pipelineArgs reuse |> List.iter psi.ArgumentList.Add
+  ReleaseRules.pipelineArgs reuse mode |> List.iter psi.ArgumentList.Add
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   // A tier that already went green on this commit with these exact bytes is not run again; `--force` and
   // `ship --fresh` (SAGEFS_FRESH) run every tier.
@@ -397,7 +399,7 @@ let runPipeline (wt: string) (sha: string) (log: string) (reuse: ReleaseRules.Pa
   p.WaitForExit()
   p.ExitCode
 
-let gate (sha: string) (force: bool) : int =
+let gate (sha: string) (force: bool) (mode: ReleaseRules.FailureMode) : int =
   let short = ReleaseRules.shortSha sha
   let skip = not force && File.Exists(Path.Combine(passedDir sha, "ok"))
   match skip with
@@ -442,7 +444,7 @@ let gate (sha: string) (force: bool) : int =
         printfn "=== local gate: %s ===" (mustGit wt [ "log"; "--oneline"; "-1" ])
         printfn "    log: %s" log
         let clock = Stopwatch.StartNew()
-        let code = runPipeline wt sha log (ReleaseRules.freshnessOfForce force)
+        let code = runPipeline wt sha log (ReleaseRules.freshnessOfForce force) mode
         noteRecord (SageFs.GateCheckout.afterPipeline (ReleaseRules.endedByCancel code) sha)
         let elapsed = ReleaseRules.formatElapsed clock.Elapsed
         printfn ""
@@ -509,7 +511,7 @@ let code =
     match ReleaseRules.parseGateArgs argv with
     | ReleaseRules.Usage m -> fail (Usage m)
     | ReleaseRules.Promote (commit, into) -> promote commit into
-    | ReleaseRules.Gate (commit, force) -> gate (mustGit repo [ "-C"; repo; "rev-parse"; commit + "^{commit}" ]) force
+    | ReleaseRules.Gate (commit, force, mode) -> gate (mustGit repo [ "-C"; repo; "rev-parse"; commit + "^{commit}" ]) force mode
   with
   | Stop (PipelineFailed failed) -> failed
   | Stop f ->

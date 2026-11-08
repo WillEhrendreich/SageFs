@@ -299,11 +299,17 @@ let gateTests =
   testList "release rules: the local gate" [
 
     testCase "WHY — the gate's arguments: a commit defaults to HEAD, --force and --promote are read first" <| fun _ ->
-      parseGateArgs [] |> Expect.equal "default" (Gate("HEAD", false))
-      parseGateArgs [ "abc123" ] |> Expect.equal "a commit" (Gate("abc123", false))
-      parseGateArgs [ "--force" ] |> Expect.equal "force alone" (Gate("HEAD", true))
-      parseGateArgs [ "--force"; "abc123" ] |> Expect.equal "force and a commit" (Gate("abc123", true))
+      parseGateArgs [] |> Expect.equal "default" (Gate("HEAD", false, StopAtFirstRed))
+      parseGateArgs [ "abc123" ] |> Expect.equal "a commit" (Gate("abc123", false, StopAtFirstRed))
+      parseGateArgs [ "--force" ] |> Expect.equal "force alone" (Gate("HEAD", true, StopAtFirstRed))
+      parseGateArgs [ "--force"; "abc123" ] |> Expect.equal "force and a commit" (Gate("abc123", true, StopAtFirstRed))
       parseGateArgs [ "--promote"; "abc123"; "release" ] |> Expect.equal "promote" (Promote("abc123", "release"))
+
+    testCase "WHY — --keep-going is read from anywhere, so one gate run can list every red tier instead of the first" <| fun _ ->
+      parseGateArgs [ "--keep-going" ] |> Expect.equal "alone" (Gate("HEAD", false, KeepGoing))
+      parseGateArgs [ "abc123"; "--keep-going" ] |> Expect.equal "after a commit" (Gate("abc123", false, KeepGoing))
+      parseGateArgs [ "--keep-going"; "--force"; "abc123" ] |> Expect.equal "with force and a commit" (Gate("abc123", true, KeepGoing))
+      parseGateArgs [ "--force"; "--keep-going" ] |> Expect.equal "force then keep-going, no commit" (Gate("HEAD", true, KeepGoing))
 
     testCase "WHY — --promote without both its arguments is a usage error, not a guess" <| fun _ ->
       match parseGateArgs [ "--promote"; "abc123" ] with
