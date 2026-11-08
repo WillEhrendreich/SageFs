@@ -364,7 +364,9 @@ let private askWorker
         | WorkerResponse.WorkerError error -> return DebugAnswer.WorkerFailed(SageFsError.describe error)
         | other -> return DebugAnswer.WorkerFailed(sprintf "unexpected reply %A" other)
       with ex ->
-        return DebugAnswer.WorkerFailed ex.Message
+        // The whole chain, not `ex.Message`: a wrapped HTTP failure's own message is "An error occurred while sending the request",
+        // and the cause (reset by the peer, response ended early) is what says why.
+        return DebugAnswer.WorkerFailed (ExceptionChain.describe ex)
   }
 
 /// Ask the session's worker to hold `test` for a debugger.

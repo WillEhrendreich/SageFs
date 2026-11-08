@@ -800,11 +800,14 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
     resp.Dispose()
     status, body
 
-  // The copy goes with the run: nothing a case left in its Hello.fs outlives it, and nothing reaches the checkout.
+  // The copy goes with a run that passed: nothing a case left in its Hello.fs outlives it, and nothing reaches the checkout. A run
+  // that did not pass keeps both (the daemon and worker logs, and the copy the failing edit was made in), because they are the only
+  // record of why it failed. This runner used to delete them whatever the outcome, which left a failed gate case with no log.
   let exitWith (code: int) =
     stopDaemon ()
-    SageFs.Tests.RunnerDirs.remove dataDir
-    SageFs.Tests.RunnerDirs.remove sampleDir
+    let runEnd = SageFs.Tests.RunnerDirs.runEndOfExitCode code
+    SageFs.Tests.RunnerDirs.finish dataDir runEnd
+    SageFs.Tests.RunnerDirs.finish sampleDir runEnd
     code
 
   try

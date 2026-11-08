@@ -883,6 +883,7 @@
         <Compile Include="TestDebugSimTests.fs" />
         <Compile Include="DebugRecordSimTests.fs" />
         <Compile Include="DebugTestRequestTests.fs" />
+        <Compile Include="ExceptionChainTests.fs" />
         <Compile Include="DebugTestRoutesHttpTests.fs" />
         <Compile Include="DebugRunRecordTests.fs" />
         <Compile Include="HostAgentDebugCoverageTests.fs" />
