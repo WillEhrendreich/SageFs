@@ -12,7 +12,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Size | S for the snippets and the docs page, M with the command that writes client config |
 | Branch and worktree | cohort member `p3-setup`, branch `cohort/p3-setup`, checkout `/home/will/scratch/cohort/p3-setup` |
 | Last green commit | see `git log` on that branch: the commit after `test(setup): session options and one-command client setup, red` |
-| Next action | Done so far (2026-11-07): `SageFs.Core/ClientSetup.fs`, the generated page `docs/client-setup.md`, `sagefs setup` (print, or `--write` to merge), tests green (steps 2 to 4). Left: Step 1: fetch each client's own MCP page (VS Code `mcp.json`, Cursor, Claude Desktop, Claude Code scopes) and put the file, key and date in a table here. The snippets use the shapes in FsiMcp's README and what I know of the clients; nothing was fetched on 2026-11-07, and `docs/client-setup.md` says so. Then Step 5 once `sagefs call` is on the page (it is in this tree: the setup output can print `sagefs call get_daemon_status` as the one-liner that proves the registration). |
+| Next action | Done so far (2026-11-07): `SageFs.Core/ClientSetup.fs`, the generated page `docs/client-setup.md`, `sagefs setup` (print, or `--write` to merge), tests green (steps 2 to 4), and Step 1: each client's own page was read on 2026-11-07 and the snippets match it (table below). Left: Step 5 once `sagefs call` is on the page (it is in this tree: the setup output can print `sagefs call get_daemon_status` as the one-liner that proves the registration). |
 | Decisions made | `sagefs setup` registers Claude Code for the user (`--scope user`), says so, and the page explains it. Nothing is written without `--write`; with it the command writes only what it printed. A config that is not strict JSON (comments, a trailing comma) is refused and left byte-identical, because merging would drop the comments; the message names the snippet to add by hand. A `sagefs` entry that is not the stdio bridge is refused and shown, never overwritten. The skill is installed only with `--write` (`--skip-skill` leaves it). |
 | Surprises | VS Code's `mcp.json` allows comments, so the strict merge will refuse more VS Code files than the others. If that shows up in practice, the answer is a comment-preserving edit, not a looser parse. `sagefs setup` with no `--client` finds clients by the `claude` command on the path and by the config folders existing; a client with neither is skipped. |
 
@@ -65,9 +65,20 @@ Pure, `SageFs.Core/ClientSetup.fs`: `type Client = ClaudeCode | VsCode | Cursor 
 5. `WHY - the setup page is what the generator prints now`, a stale-page ratchet in the style of the configuration page.
 6. Outcome gate: in a sandbox with a fake home directory, `sagefs setup --client vscode --dir <temp>` writes a file that VS Code's schema accepts (checked against the documented shape), and a real `claude mcp add` is exercised only if `claude` is on the machine (otherwise the tier records "not run", never a skip that reads as pass).
 
+## The clients' facts, read 2026-11-07
+
+| Client | File | Key | Stdio entry | Page |
+|:--|:--|:--|:--|:--|
+| Claude Code | `.mcp.json` (project scope), `~/.claude.json` (user and local scope); `claude mcp add --scope user\|project\|local` | `mcpServers` | `command`, optional `args` and `env`; no `type` reads as stdio | https://code.claude.com/docs/en/mcp |
+| VS Code | `.vscode/mcp.json` in the workspace; the user-profile `mcp.json` through `MCP: Open User Configuration` | `servers` | `type: "stdio"` (required), `command` (required), `args` | https://code.visualstudio.com/docs/copilot/reference/mcp-configuration |
+| Cursor | `.cursor/mcp.json` in the project; `~/.cursor/mcp.json` for every project | `mcpServers` | `command`, `args`; the field table says `type: "stdio"` is required and the example omits it | https://cursor.com/docs/context/mcp |
+| Claude Desktop | macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows `%APPDATA%\Claude\claude_desktop_config.json`, Linux `~/.config/Claude/claude_desktop_config.json`; Settings, Developer, Edit Config opens it | `mcpServers` | `command`, `args` | https://modelcontextprotocol.io/quickstart/user |
+
+VS Code's Copilot page also describes a `$COPILOT_HOME/mcp-config.json` (or `~/.copilot/mcp-config.json`) for the Copilot CLI harness with a top-level `mcpServers`, and marks the workspace `mcp.json` "deprecated in the guided flow" while it stays available. I did not chase that: `sagefs setup` writes the workspace file, which still works. What each client shows when the registered command is missing from the path was not read; it stays in "Measure first".
+
 ## Steps
 
-1. Read each client's MCP documentation and fix the facts here: the file location and key for Cursor and Claude Desktop, whether VS Code takes a workspace or a user file, and what each shows when a stdio server fails to start. Put them in this plan as a table with dates. The FsiMcp docs give the VS Code and `mcpServers` shapes, and I take those as a starting point until Step 1 verifies them.
+1. Done 2026-11-07, see the table above. What each client shows when the command is missing from the path is still open (Measure first).
 2. Test 1 and `ClientSetup.fs`, then the docs page and its generator (tests 5), so the snippets land first even if the command takes longer.
 3. `sagefs setup` (tests 2 to 4, 6), including the `install-skill` and `check` calls.
 4. Put the HTTP failure explanation at the top of the setup page, one paragraph, with the link to the longer section.

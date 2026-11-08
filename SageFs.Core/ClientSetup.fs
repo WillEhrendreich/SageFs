@@ -56,7 +56,9 @@ type Snippet =
     /// The top-level key the client reads its servers under.
     Key: string
     /// The whole file when it does not exist yet.
-    Text: string }
+    Text: string
+    /// The client's own documentation page the file, key and entry were read from.
+    Source: string }
 
 type MergeRefusal =
   /// The file is not strict JSON (comments, a trailing comma, or half a file).
@@ -82,13 +84,13 @@ module ClientSetup =
   let snippet (client: Client) : Snippet =
     match client with
     | ClaudeCode ->
-      { Client = client; File = ".mcp.json in the project (or ~/.claude.json for every project)"; Key = "mcpServers"; Text = json "mcpServers" "" }
+      { Client = client; File = ".mcp.json in the project (or ~/.claude.json for every project)"; Key = "mcpServers"; Text = json "mcpServers" ""; Source = "https://code.claude.com/docs/en/mcp" }
     | VsCode ->
-      { Client = client; File = ".vscode/mcp.json in the workspace (or `MCP: Open User Configuration` for every workspace)"; Key = "servers"; Text = json "servers" "      \"type\": \"stdio\",\n" }
+      { Client = client; File = ".vscode/mcp.json in the workspace (or `MCP: Open User Configuration` for every workspace)"; Key = "servers"; Text = json "servers" "      \"type\": \"stdio\",\n"; Source = "https://code.visualstudio.com/docs/copilot/reference/mcp-configuration" }
     | Cursor ->
-      { Client = client; File = ".cursor/mcp.json in the project (or ~/.cursor/mcp.json for every project)"; Key = "mcpServers"; Text = json "mcpServers" "" }
+      { Client = client; File = ".cursor/mcp.json in the project (or ~/.cursor/mcp.json for every project)"; Key = "mcpServers"; Text = json "mcpServers" "      \"type\": \"stdio\",\n"; Source = "https://cursor.com/docs/context/mcp" }
     | ClaudeDesktop ->
-      { Client = client; File = "claude_desktop_config.json (Settings, Developer, Edit Config)"; Key = "mcpServers"; Text = json "mcpServers" "" }
+      { Client = client; File = "claude_desktop_config.json (Settings, Developer, Edit Config)"; Key = "mcpServers"; Text = json "mcpServers" ""; Source = "https://modelcontextprotocol.io/quickstart/user" }
 
   /// The command a client has for registering a server itself. Only Claude Code has one. User scope, so a second
   /// project does not open without tools.
@@ -168,6 +170,9 @@ module ClientSetup =
         | _ -> Refused(ServersNotAnObject snippet.Key)
       | Ok _ -> Refused NotAnObject
 
+  /// The day the snippets were last compared with each client's documentation page (`Snippet.Source`).
+  let checkedOn = "2026-11-07"
+
   /// The text the generated part of docs/client-setup.md holds, and what `sagefs setup` prints. One function, so the
   /// page and the command say the same thing.
   let page : string =
@@ -188,7 +193,7 @@ module ClientSetup =
       let s = snippet client
       line (sprintf "#### %s" (Client.label client))
       line ""
-      line (sprintf "File: %s. Key: `%s`." s.File s.Key)
+      line (sprintf "File: %s. Key: `%s`. Read from %s on %s." s.File s.Key s.Source checkedOn)
       line ""
       line "```json"
       line s.Text

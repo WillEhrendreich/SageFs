@@ -1,6 +1,6 @@
 # Set SageFs up in your agent client
 
-`sagefs setup` prints what is below for the clients it finds, and `sagefs setup --client <name>` prints one client's part (`claude-code`, `vscode`, `cursor`, `claude-desktop`). The part between the markers is generated from [`SageFs.Core/ClientSetup.fs`](../SageFs.Core/ClientSetup.fs) by `dotnet fsi scripts/gen-client-setup-doc.fsx`, and a test fails when it is stale. The file locations and keys were taken from each client's documentation as I know it and from FsiMcp's README on 2026-11-07. I did not re-fetch the clients' pages that day, so if a client moved its file, the snippet text is right and the location line is the one to check.
+`sagefs setup` prints what is below for the clients it finds, and `sagefs setup --client <name>` prints one client's part (`claude-code`, `vscode`, `cursor`, `claude-desktop`). The part between the markers is generated from [`SageFs.Core/ClientSetup.fs`](../SageFs.Core/ClientSetup.fs) by `dotnet fsi scripts/gen-client-setup-doc.fsx`, and a test fails when it is stale. Each client's section names the documentation page its file location, key and entry shape were read from, and the date. Cursor's page lists `type: "stdio"` as required in its field table while its example leaves it out, so the Cursor snippet carries it.
 
 <!-- GENERATED: client-setup (scripts/gen-client-setup-doc.fsx) -->
 ### Register SageFs: stdio, the form that keeps its tools
@@ -16,7 +16,7 @@ claude mcp add --scope user sagefs -- sagefs mcp
 
 #### Claude Code
 
-File: .mcp.json in the project (or ~/.claude.json for every project). Key: `mcpServers`.
+File: .mcp.json in the project (or ~/.claude.json for every project). Key: `mcpServers`. Read from https://code.claude.com/docs/en/mcp on 2026-11-07.
 
 ```json
 {
@@ -31,7 +31,7 @@ File: .mcp.json in the project (or ~/.claude.json for every project). Key: `mcpS
 
 #### VS Code
 
-File: .vscode/mcp.json in the workspace (or `MCP: Open User Configuration` for every workspace). Key: `servers`.
+File: .vscode/mcp.json in the workspace (or `MCP: Open User Configuration` for every workspace). Key: `servers`. Read from https://code.visualstudio.com/docs/copilot/reference/mcp-configuration on 2026-11-07.
 
 ```json
 {
@@ -47,12 +47,13 @@ File: .vscode/mcp.json in the workspace (or `MCP: Open User Configuration` for e
 
 #### Cursor
 
-File: .cursor/mcp.json in the project (or ~/.cursor/mcp.json for every project). Key: `mcpServers`.
+File: .cursor/mcp.json in the project (or ~/.cursor/mcp.json for every project). Key: `mcpServers`. Read from https://cursor.com/docs/context/mcp on 2026-11-07.
 
 ```json
 {
   "mcpServers": {
     "sagefs": {
+      "type": "stdio",
       "command": "sagefs",
       "args": [ "mcp" ]
     }
@@ -62,7 +63,7 @@ File: .cursor/mcp.json in the project (or ~/.cursor/mcp.json for every project).
 
 #### Claude Desktop
 
-File: claude_desktop_config.json (Settings, Developer, Edit Config). Key: `mcpServers`.
+File: claude_desktop_config.json (Settings, Developer, Edit Config). Key: `mcpServers`. Read from https://modelcontextprotocol.io/quickstart/user on 2026-11-07.
 
 ```json
 {

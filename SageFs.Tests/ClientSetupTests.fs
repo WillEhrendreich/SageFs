@@ -57,6 +57,13 @@ let clientSetupTests =
       for client in [ ClaudeCode; Cursor; ClaudeDesktop ] do
         (ClientSetup.snippet client).Key |> Expect.equal (sprintf "%A reads mcpServers" client) "mcpServers"
 
+    testCase "WHY - every snippet names the client's own documentation page it was checked against, and the page prints it with the date" <| fun _ ->
+      for client in Client.all do
+        let snippet = ClientSetup.snippet client
+        snippet.Source |> Expect.stringStarts (sprintf "%A source is a documentation URL" client) "https://"
+        ClientSetup.page |> Expect.stringContains (sprintf "%A source is on the page" client) snippet.Source
+      ClientSetup.page |> Expect.stringContains "the date is on the page" ClientSetup.checkedOn
+
     testCase "WHY - only Claude Code registers through its own command, and it registers for the user, not one project" <| fun _ ->
       ClientSetup.registrationCommand ClaudeCode
       |> Expect.equal "user scope, stdio bridge" (Some [ "claude"; "mcp"; "add"; "--scope"; "user"; "sagefs"; "--"; "sagefs"; "mcp" ])
