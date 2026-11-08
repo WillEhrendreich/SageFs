@@ -105,6 +105,11 @@ module EchoGuard =
   let attemptSync (sink: EchoSink) (work: unit -> unit) : unit =
     Guarded.call (record sink) work
 
+/// The failures counted, by sink and exception type.
+type EchoLedger() =
+  member _.FailureCount(sink: EchoSink) : int64 = EchoGuard.failureCount sink
+  member _.Snapshot() : (EchoSink * int64) list = EchoGuard.snapshot ()
+
 /// One connected MCP client as the notification fan-out sees it.
 type FanoutTarget =
   { Id: string
@@ -278,3 +283,7 @@ module McpFanout =
         |> Task.WhenAll
       return dropped |> Array.map (fun target -> target.Id)
     }
+
+  /// `broadcast`, counting what fails in `ledger`.
+  let broadcastTo (_ledger: EchoLedger) (budget: TimeSpan) (release: TimeSpan) (targets: FanoutTarget[]) : Task<string[]> =
+    broadcast budget release targets
