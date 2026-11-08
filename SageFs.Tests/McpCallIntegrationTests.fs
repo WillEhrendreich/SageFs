@@ -136,7 +136,7 @@ let tests =
             let! refused = callAs port None [ "stop_session"; "--session_id"; second ]
             refused.ExitCode |> Expect.equal "an anonymous stop is a failure" 1
             refused.Out |> Expect.equal "nothing on stdout" ""
-            refused.Err |> Expect.stringContains "the daemon's full text" "owned by another bound MCP connection"
+            refused.Err |> Expect.stringContains "the daemon's full text" "was made by another member"
             refused.Err |> Expect.stringContains "and that the call was anonymous" "carried no member token"
             refused.Err |> Expect.stringContains "and what to do" "sagefs member mint"
 
