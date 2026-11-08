@@ -959,7 +959,10 @@ which acts):
 - **The rebuild trusts nothing it did not check.** It reads the integration worktree's head first and refuses (Inconclusive,
   `the integration worktree is at <sha>, not at the rebased commit <sha>`) when something moved it since the rebase. It records
   the attempt before it builds, success or not: a build that fails still writes the refused commit's output, so from that
-  moment the session's build is off the head and the next landing rebuilds, even a test-only one.
+  moment the session's build is off the head and the next landing rebuilds, even a test-only one. A landing that carries a build
+  input (a project file, props, a lock file, `nuget.config`), and a session whose build came from a commit that did not land,
+  restores before the rebuild: the session's own rebuild is incremental and does not restore, so a package that was added, or
+  a feed that cannot be reached, would otherwise pass as a green build that never saw the package.
 - **A rebuild that fails** refuses the landing as one of two kinds, and the status line says which:
   - `Blocked(the landing does not compile: <file>(<line>,<col>): error FS....) fix it in your commit and request the landing
     again`: the first compiler error (F#, C# or Visual Basic) of the rebased commit, with its file and code. The next action is

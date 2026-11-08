@@ -43,11 +43,19 @@ module CohortRebuildGate =
               sprintf "the integration worktree is at %s, not at the rebased commit %s: something moved it since the rebase. Request the landing again." at headSha))
       | Ok _ ->
         ports.NoteAttempt headSha
-        ignore restore
-        match! ports.Restart() with
+        // A package list, props file or feed that changed only takes effect through a restore; the incremental rebuild the session
+        // runs does not restore, and would call a build that never saw the new package a green one.
+        let! restored =
+          match restore with
+          | true -> ports.Restore()
+          | false -> async { return Ok() }
+        match restored with
         | Error error -> return Error(CohortLandingPlan.classifyBuildFailure error)
         | Ok () ->
-          match! ports.AwaitSettled() with
-          | Error reason -> return Error(CohortOwner.VerificationFault.Environment reason)
-          | Ok () -> return Ok()
+          match! ports.Restart() with
+          | Error error -> return Error(CohortLandingPlan.classifyBuildFailure error)
+          | Ok () ->
+            match! ports.AwaitSettled() with
+            | Error reason -> return Error(CohortOwner.VerificationFault.Environment reason)
+            | Ok () -> return Ok()
     }

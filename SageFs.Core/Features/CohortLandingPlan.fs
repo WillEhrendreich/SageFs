@@ -240,8 +240,12 @@ module CohortLandingPlan =
   /// a session whose build was made from a commit that did not land (the restore it ran may have written that commit's
   /// package set). A landing of compiled source alone builds on the restore the session already has.
   let needsRestore (reasons: RebuildReason list) : bool =
-    ignore reasons
-    false
+    reasons
+    |> List.exists (fun reason ->
+      match reason with
+      | RebuildReason.BuildInputChanged _
+      | RebuildReason.SessionBuildIsOffHead _ -> true
+      | RebuildReason.CompiledSourceChanged _ -> false)
 
   let describeReason (reason: RebuildReason) : string =
     match reason with
@@ -302,7 +306,10 @@ module CohortLandingPlan =
         | Some code -> code.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
         | None -> false
       // A restore that failed (NU...) means the compile ran, if it ran, against a package set that is not the commit's.
-      let restoreFailed = blocking |> List.exists (codeStarts "NU")
+      // The code is on the diagnostic when MSBuild printed `path(line,col): error NUxxxx:`; a restore prints `path : error NUxxxx:`,
+      // which reaches here as a bare line, so the message is read too.
+      let restoreError = System.Text.RegularExpressions.Regex(@"\berror NU\d{4}\b")
+      let restoreFailed = blocking |> List.exists (fun d -> codeStarts "NU" d || restoreError.IsMatch d.Message)
       let compilerPrefixes = [ "FS"; "CS"; "BC" ]
       let compilerError = blocking |> List.exists (fun d -> d.File.IsSome && compilerPrefixes |> List.exists (fun prefix -> codeStarts prefix d))
       match restoreFailed, compilerError with
