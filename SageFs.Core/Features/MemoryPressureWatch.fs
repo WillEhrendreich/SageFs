@@ -21,6 +21,20 @@ module MemoryPressureWatch =
   let mutable footprintProbe : unit -> MachineMemory.Footprint * int64 =
     fun () -> MachineMemory.ownFootprint (), (MachineMemory.current ()).TotalBytes
 
+  /// One look at the daemon and the machine: the footprint and the machine's memory, read together.
+  type Reading =
+    { Footprint: MachineMemory.Footprint
+      Machine: MachineMemory.Stats }
+
+  /// Where a reading comes from. The daemon passes `live`; a test passes a fixed reading.
+  type FootprintSource = unit -> Reading
+
+  let live : FootprintSource =
+    fun () -> { Footprint = MachineMemory.ownFootprint (); Machine = MachineMemory.current () }
+
+  /// The level and the note of ONE sample.
+  type Observation = { Level: MemoryPressure; Note: string }
+
   /// What the footprint alone says right now, and why.
   let footprintFloor () : MemoryPressure * string =
     let footprint, total = footprintProbe ()
@@ -47,6 +61,16 @@ module MemoryPressureWatch =
 
   /// Why the level is what it is, from the footprint: empty when the footprint says nothing.
   let currentNote () : string = footprintFloor () |> snd
+
+  /// The level and the note of one sample.
+  let observe (source: FootprintSource) : Observation =
+    let judged () =
+      let reading = source ()
+      MemoryPressure.ofFootprint MemoryPressure.defaultFootprintThresholds reading.Footprint reading.Machine.TotalBytes,
+      MemoryPressure.describeFootprint reading.Footprint reading.Machine.TotalBytes
+    let floor, _ = judged ()
+    let _, note = judged ()
+    { Level = lock gate (fun () -> MemoryPressure.worseOf level floor); Note = note }
 
   /// For tests, and for a daemon that wants to start clean.
   let reset () : unit = lock gate (fun () -> level <- MemoryPressure.Normal)

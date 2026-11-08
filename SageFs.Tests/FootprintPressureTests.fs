@@ -103,6 +103,22 @@ let tests =
         MemoryPressureWatch.footprintProbe <- previous
         MemoryPressureWatch.reset ()
 
+    testCase "WHY — one sample reads the footprint once and gives the level and the note from that read" <| fun _ ->
+      // /proc/self/smaps_rollup walks every mapping of the process: on a 25 GB daemon that is a measurable stall, and the level
+      // and the note each walked it again.
+      let reads = ref 0
+      let source () : MemoryPressureWatch.Reading =
+        reads.Value <- reads.Value + 1
+        { Footprint = incidentFootprint; Machine = { TotalBytes = machineTotal; AvailableBytes = gib 18L } }
+      MemoryPressureWatch.reset ()
+      try
+        let observed = MemoryPressureWatch.observe source
+        reads.Value |> Expect.equal "the footprint was read once" 1
+        observed.Level |> Expect.equal "Critical from that read" MemoryPressure.Critical
+        observed.Note.Contains "MB swapped" |> Expect.isTrue "and the note says how much is swapped, from the same read"
+      finally
+        MemoryPressureWatch.reset ()
+
     testProperty "the floor is monotone: more swap or more heap never lowers the level" <| fun (heap: uint16) (swap: uint16) (extra: uint16) ->
       let footprint (h: int) (s: int) : MachineMemory.Footprint =
         { ResidentBytes = 0L; SwappedBytes = int64 s * gib 30L / 65_535L
