@@ -66,13 +66,13 @@ module McpReferencesRoute =
     (agent: string)
     (qualifiedName: string)
     (offset: int)
-    (workingDirectory: string option)
+    (target: McpSessionRouting.RouteTarget)
     : Task<string> =
     if System.String.IsNullOrWhiteSpace qualifiedName then
       task { return "Give a qualified_name to find references to, e.g. 'SageFs.Features.CallerCheck.callersAsync'." }
     else
       let name = qualifiedName.Trim().TrimEnd '.'
-      withSessionWd ctx agent workingDirectory (fun sid -> task {
+      withSessionWd ctx agent target (fun sid -> task {
         let! page =
           referencesPage (McpCompletions.membersOf ctx sid) (referencesOf ctx sid) name SageFsConfig.ListReferencesMax offset
         return McpReferencesPage.render page

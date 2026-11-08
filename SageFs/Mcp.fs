@@ -547,8 +547,8 @@ module McpTools =
     }
 
   /// Overload without sessionId parameter (uses None).
-  let withSessionWd (ctx: McpContext) (agent: string) (workingDirectory: string option) (f: string -> Task<string>) : Task<string> =
-    withSession ctx agent None workingDirectory f
+  let withSessionWd (ctx: McpContext) (agent: string) (target: RouteTarget) (f: string -> Task<string>) : Task<string> =
+    withSession ctx agent None (RouteTarget.toOption target) f
 
   /// Result-returning sibling of withSessionWd, for callers (the plain HTTP
   /// surface) that need to branch on success/failure structurally instead of
@@ -556,9 +556,9 @@ module McpTools =
   /// becomes SessionNotRoutable carrying the exact same message
   /// formatSessionResolution already produces — no information lost, just
   /// not flattened to a bare string before the caller ever sees it.
-  let withSessionWdResult (ctx: McpContext) (agent: string) (workingDirectory: string option) (f: string -> Task<Result<string, SageFsError>>) : Task<Result<string, SageFsError>> =
+  let withSessionWdResult (ctx: McpContext) (agent: string) (target: RouteTarget) (f: string -> Task<Result<string, SageFsError>>) : Task<Result<string, SageFsError>> =
     task {
-      let! resolution = resolveSessionId ctx agent None workingDirectory
+      let! resolution = resolveSessionId ctx agent None (RouteTarget.toOption target)
       match resolution with
       | Routable sid -> return! f sid
       | other -> return Error (SageFsError.SessionNotRoutable (formatSessionResolution other))
@@ -1250,7 +1250,7 @@ module McpTools =
   /// either way: real events when they exist, a plain "no events yet" when they
   /// do not — never a lie.
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
+    withSessionWd ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       match featureStateForSession ctx sid with
       | None ->
         return "Feature state not available — no active session."
@@ -1597,7 +1597,7 @@ module McpTools =
     getSessionStatusAwaiting ctx agent sessionId workingDirectory 0
 
   let getStartupInfo (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
+    withSessionWd ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       match info with
       | Some sessionInfo ->
@@ -2080,7 +2080,7 @@ module McpTools =
     })
 
   let cancelEval (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
+    withSessionWd ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       let! routeResult =
         routeToSession ctx sid
           (fun _ -> WorkerProtocol.WorkerMessage.CancelEval)
@@ -2101,7 +2101,7 @@ module McpTools =
   /// instead of formatting it into a display string and then re-parsing
   /// that string's prefix one layer up.
   let cancelEvalResult (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
-    withSessionWdResult ctx agent workingDirectory (fun sid -> task {
+    withSessionWdResult ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       let! routeResult =
         routeToSession ctx sid
           (fun _ -> WorkerProtocol.WorkerMessage.CancelEval)
@@ -2778,7 +2778,7 @@ module McpTools =
     (behavior: string)
     (exactGuard: string option)
     : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
+    withSessionWd ctx agent (RouteTarget.ofOption workingDirectory) (fun sid -> task {
       let! loadedState, sessionObservation = sessionTrustObservation ctx sid behavior
       let exactGuardRef =
         exactGuard
@@ -3096,7 +3096,7 @@ module McpTools =
   let private appStateJson (state: AppRun.AppRunState) = AppRun.toView state
 
   let runApp (ctx: McpContext) (project: string) : Task<string> =
-    withSessionWd ctx "mcp" None (fun sid -> task {
+    withSessionWd ctx "mcp" RouteTarget.ActiveSession (fun sid -> task {
       let request =
         match String.IsNullOrWhiteSpace project with
         | true -> AppRun.RunRequest.DefaultTarget
@@ -3110,7 +3110,7 @@ module McpTools =
     })
 
   let stopApp (ctx: McpContext) : Task<string> =
-    withSessionWd ctx "mcp" None (fun sid -> task {
+    withSessionWd ctx "mcp" RouteTarget.ActiveSession (fun sid -> task {
       let! result = AppRunOrchestration.stopApp ctx.SessionOps (toSessionId sid)
       return
         match result with
@@ -3119,7 +3119,7 @@ module McpTools =
     })
 
   let listRunnableProjects (ctx: McpContext) : Task<string> =
-    withSessionWd ctx "mcp" None (fun sid -> task {
+    withSessionWd ctx "mcp" RouteTarget.ActiveSession (fun sid -> task {
       let! infoOpt = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       match infoOpt with
       | None -> return sprintf "Session %s not found." sid

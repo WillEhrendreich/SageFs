@@ -1466,9 +1466,9 @@ The mode new sessions start in is the `hotreload.reflectionReadMode` setting."""
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
-        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let target = RouteTarget.ofArgument working_directory
         logger.LogDebug("MCP-TOOL: set_reflection_read_mode called: mode={Mode}", mode)
-        withSessionWd ctx "mcp" wd (fun sidStr -> task {
+        withSessionWd ctx "mcp" target (fun sidStr -> task {
             match SageFs.WorkerProtocol.SessionId.validate sidStr with
             | Error _ -> return sprintf "Error: '%s' isn't a session id I know." sidStr
             | Ok sid ->
@@ -2479,9 +2479,9 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
-        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let target = RouteTarget.ofArgument working_directory
         logger.LogDebug("MCP-TOOL: list_members called, name={Name}, offset={Offset}", qualified_name, offset)
-        SageFs.McpMembersRoute.listMembers ctx "mcp" qualified_name offset wd |> withEcho ctx "list_members"
+        SageFs.McpMembersRoute.listMembers ctx "mcp" qualified_name offset target |> withEcho ctx "list_members"
 
     [<McpServerTool>]
     [<Description("""Every definition and use of a qualified name across the session's projects, one rung below list_members on the symbol ladder. The first line of the reply is the scope: "project-wide" when the compiler checked every project of the session, "partial" naming the projects it did not reach, or "unavailable" with the reason. A count never appears without that line, so a count under "partial" covers only the projects it names. The compiler's own full name decides what matches, so a call through an alias, an open or a pipeline counts and a same-spelled name in another module does not; overloads of one method count together. One budget covers all projects together, and a failure states the budget used. Lists file, line, column and whether each is a definition or a use, a page at a time, ending with the offset for the next page.""")>]
@@ -2495,9 +2495,9 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
-        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let target = RouteTarget.ofArgument working_directory
         logger.LogDebug("MCP-TOOL: list_references called, name={Name}, offset={Offset}", qualified_name, offset)
-        SageFs.McpReferencesRoute.listReferences ctx "mcp" qualified_name offset wd |> withEcho ctx "list_references"
+        SageFs.McpReferencesRoute.listReferences ctx "mcp" qualified_name offset target |> withEcho ctx "list_references"
 
     [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.
