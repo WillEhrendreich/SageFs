@@ -632,6 +632,7 @@
         <Compile Include="DaemonOwnershipTests.fs" />
         <Compile Include="LiveValueTreeReference.fs" />
         <Compile Include="LiveValueTreeTests.fs" />
+        <Compile Include="SandboxChild.fs" />
         <Compile Include="ThreadSandboxTests.fs" />
         <Compile Include="LiveValueGetterPolicyTests.fs" />
         <Compile Include="MemberEvaluationTests.fs" />

@@ -5,7 +5,6 @@ open System.IO
 open System.Net
 open System.Net.Sockets
 open System.Runtime.InteropServices
-open System.Text.RegularExpressions
 open System.Threading
 open System.Threading.Tasks
 open Expecto
@@ -282,42 +281,11 @@ let private runSandboxedTracedWithin (patience: TimeSpan) (policy: SandboxPolicy
           patience load poolBusy ThreadPool.PendingWorkItemCount ThreadPool.ThreadCount trace.Steps
   }
 
-let private runSandboxedTraced (policy: SandboxPolicy) (work: (string -> unit) -> 'T) : Task<SandboxOutcome<'T>> =
-  runSandboxedTracedWithin TestTimeouts.patienceInProcess policy work
-
 let private runSandboxedWithin (patience: TimeSpan) (policy: SandboxPolicy) (work: unit -> 'T) : Task<SandboxOutcome<'T>> =
   runSandboxedTracedWithin patience policy (fun _ -> work ())
 
 let private runSandboxed (policy: SandboxPolicy) (work: unit -> 'T) : Task<SandboxOutcome<'T>> =
   runSandboxedWithin TestTimeouts.patienceInProcess policy work
-
-/// Blocking items queued behind the ones that fill the pool. Each needs its own injected thread, so the pool takes
-/// about half a second per item before it reaches anything queued after them.
-let private blockersBehind = 12
-
-/// Runs `body` while every pool thread is blocked and more blocking work waits behind it, then lets them all go.
-/// A caller that needs a pool thread to start waits for the pool to inject one per blocker ahead of it, about half
-/// a second each, so a caller that finishes inside a few seconds did not need one.
-let private whilePoolIsBlocked (body: unit -> Task<'T>) : Task<'T> =
-  task {
-    let release = new ManualResetEventSlim(false)
-    let blockers = ResizeArray<Task>()
-    let minWorkers, _ = ThreadPool.GetMinThreads()
-    let saturating = max ThreadPool.ThreadCount minWorkers + blockersBehind
-    for _ in 1 .. saturating do
-      let finished = TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
-      ThreadPool.UnsafeQueueUserWorkItem((fun _ -> release.WaitHandle.WaitOne() |> ignore; finished.SetResult()), null, false) |> ignore
-      blockers.Add finished.Task
-    let! ran = body () |> Async.AwaitTask |> Async.Catch
-    release.Set()
-    do! Task.WhenAll blockers
-    release.Dispose()
-    match ran with
-    | Choice1Of2 value -> return value
-    | Choice2Of2 e ->
-      System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e).Throw()
-      return Unchecked.defaultof<'T>
-  }
 
 /// What every real-filter case asserts on a host where no filter can be installed (not Linux x86-64):
 /// the sandbox says so and the work does not run, so containment is never claimed there.
@@ -340,6 +308,12 @@ let private realFilterCase (name: string) (body: unit -> Task<unit>) : Test =
     | false -> do! expectNoContainmentHere ()
   }
 
+/// One field of the line a sandbox child wrote. A child that wrote nothing died or hung, and the failure shows what it printed.
+let private childSaid (child: SandboxChild.ChildOutcome) (name: string) : string =
+  match Map.tryFind name child.Fields with
+  | Some value -> value
+  | None -> failtestf "the child said no %s (exit %d). stdout: %s stderr: %s" name child.ExitCode child.Stdout child.Stderr
+
 let private withLoopbackListener (body: int -> Task) : Task =
   task {
     let listener = new TcpListener(IPAddress.Loopback, 0)
@@ -356,39 +330,6 @@ let private connectFromPoolThread (port: int) : Task =
     use client = new TcpClient()
     do! client.ConnectAsync(IPAddress.Loopback, port).WaitAsync(TestTimeouts.patienceInProcess)
   }
-
-/// The work on the filtered thread adds 1 up to this, and the answer is n(n+1)/2.
-let private summedUpTo = 10000
-let private expectedSum = summedUpTo * (summedUpTo + 1) / 2
-
-/// Generation 0, the cheapest collection.
-let private youngestGeneration = 0
-
-/// What the runtime does that a getter takes for granted: allocate, collect, make a thread, JIT fresh code. `mark`
-/// names each step reached, so a timeout says where the work was.
-let private runtimeWork (mark: string -> unit) : int * int * bool =
-  let sum = Seq.sum (seq { for i in 1 .. summedUpTo -> i })
-  mark "summed"
-  // A young-generation collection still suspends and resumes every thread, which is what the filter
-  // must not break. A full blocking collection would pause the rest of the suite for a long time.
-  GC.Collect youngestGeneration
-  mark "collected"
-  let inner = ref 0
-  let t = Thread((fun () -> inner.Value <- sum), IsBackground = true)
-  t.Start()
-  t.Join()
-  mark "threadJoined"
-  let compiled = Regex("a+b", RegexOptions.Compiled).IsMatch "caaab"
-  mark "regexCompiled"
-  sum, inner.Value, compiled
-
-let private expectRuntimeKeptWorking (outcome: SandboxOutcome<int * int * bool>) =
-  match outcome with
-  | Completed (sum, fromThread, compiled) ->
-    sum |> Expect.equal "ordinary work" expectedSum
-    fromThread |> Expect.equal "a thread started from the filtered one ran" expectedSum
-    compiled |> Expect.isTrue "a compiled regex JITs under the filter"
-  | other -> failtestf "expected Completed, got %A" other
 
 /// A blocking connect on whichever thread calls it.
 let private connectHere (port: int) =
@@ -613,35 +554,31 @@ let realThreadTests =
           })
     }
 
-    realFilterCase "WHY — the runtime work of a sandbox call finishes while every pool thread is blocked, because neither starting the call nor its work needs a pool thread" <| fun () -> task {
-      let finished = new ManualResetEventSlim(false)
-      let! call =
-        whilePoolIsBlocked (fun () ->
-          task {
-            // The call is made from a thread of its own. A pool thread that queues work takes it back itself
-            // when it returns to the pool, so only a caller outside the pool shows whether the call needs the pool.
-            let call =
-              Task.Factory.StartNew(
-                (fun () -> runSandboxedWithin TestTimeouts.patienceInProcess NoNetworkNoWritesNoSpawn (fun () ->
-                  let result = runtimeWork ignore
-                  finished.Set()
-                  result)),
-                CancellationToken.None,
-                TaskCreationOptions.LongRunning,
-                TaskScheduler.Default).Unwrap()
-            // The answer travels back through the pool, so it is read once the pool is free. That the work
-            // finished is read from the event it sets, which no pool thread is needed to wait on.
-            finished.WaitHandle.WaitOne TestTimeouts.starvedPoolBudget
-            |> Expect.isTrue "the work finished while every pool thread was blocked"
-            return call
-          })
-      let! outcome = call
-      expectRuntimeKeptWorking outcome
+    // The cases below depend on a fact about a whole process (a collection, a pool), so each runs in a process of its own
+    // (SandboxChild) where no other case's threads are. They assert what the child READ, never how long anything took.
+    realFilterCase "WHY — a sandbox call finishes while every pool thread is blocked, because neither the thread that makes it nor the thread its work runs on is a pool thread" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.BlockedPool
+      childSaid child "callerIsPoolThread" |> Expect.equal "the caller is a thread of its own" "false"
+      childSaid child "workIsPoolThread" |> Expect.equal "so is the thread the work runs on" "false"
+      // Every worker the pool starts at once was inside a blocker when the work finished, so a call that needed the pool had none.
+      (int (childSaid child "blockersRunningAtFinish") >= int (childSaid child "poolMinWorkers"))
+      |> Expect.isTrue "the pool's workers were all blocked when the work finished"
+      childSaid child "outcome" |> Expect.equal "and the work completed" "completed"
+      childSaid child "sum" |> Expect.equal "with its answer" (string SandboxChild.expectedSum)
     }
 
-    realFilterCase "WHY — the filtered thread still allocates, collects garbage, makes threads and JITs fresh code, so the runtime keeps working under the filter" <| fun () -> task {
-      let! outcome = runSandboxedTraced NoNetworkNoWritesNoSpawn runtimeWork
-      expectRuntimeKeptWorking outcome
+    testTask "WHY — the probe the pool-independence case reads can say yes: a pool thread reports that it is one" {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.ProbeSeesAPoolThread
+      childSaid child "isPoolThread" |> Expect.equal "a work item on the pool is on a pool thread" "true"
+    }
+
+    realFilterCase "WHY — the filtered thread still allocates, collects garbage, makes threads, JITs fresh code and gets a hot method promoted, so the runtime keeps working under the filter" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.RuntimeWork
+      childSaid child "outcome" |> Expect.equal "the work completed" "completed"
+      childSaid child "sum" |> Expect.equal "ordinary work" (string SandboxChild.expectedSum)
+      childSaid child "fromThread" |> Expect.equal "a thread started from the filtered one ran" (string SandboxChild.expectedSum)
+      childSaid child "hot" |> Expect.equal "a method called past the promotion threshold still answers" (string SandboxChild.hotCalls)
+      childSaid child "compiled" |> Expect.equal "a compiled regex JITs under the filter" "true"
     }
 
     realFilterCase "WHY — creating a file is refused under NoNetworkNoWritesNoSpawn while reading one still works" <| fun () -> task {

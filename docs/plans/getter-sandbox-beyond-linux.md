@@ -139,7 +139,7 @@ No wall-clock waits: the real-filter cases already run on a pool thread with `Te
 
 ## Measure first
 
-- Does an arm64 Linux runner accept the filter at all, and does the .NET runtime run under it? The x86 test "the filtered thread still allocates, collects garbage, makes threads and JITs fresh code" is the probe. If the runtime needs a syscall the arm64 deny list refuses, that shows up here.
+- Does an arm64 Linux runner accept the filter at all, and does the .NET runtime run under it? The x86 test "the filtered thread still allocates, collects garbage, makes threads, JITs fresh code and gets a hot method promoted" is the probe. If the runtime needs a syscall the arm64 deny list refuses, that shows up here.
 - Windows: on a thread under `WindowsIdentity.RunImpersonated` with a `WRITE_RESTRICTED` token, does `File.WriteAllText` to a temp file fail, does a read succeed, does a managed thread started inside inherit the token (a .NET thread does not inherit an impersonation token by default; the x86 filter is inherited), and does `File.WriteAllText` from a pool thread the getter hands work to escape it? The second and third answers decide whether the facet is worth stating at all. If a thread started from the getter escapes, the statement must say so.
 - macOS: nothing to measure; the claim is that no thread-level tool exists. I could be wrong about a newer API. One hour of reading Apple's sandbox documentation before step 5 is enough to confirm or find one.
 - musl: `libc.so.6` is glibc's name. Alpine fails with `LibraryNotFound`. Measure on an Alpine container whether the right name is `libc` and whether the filter then works.

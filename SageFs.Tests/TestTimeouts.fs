@@ -46,6 +46,10 @@ module TestTimeouts =
   /// Ceiling on a child process that reads a 4 MB assembly twice, diffs and writes a delta for it five times, and
   /// has the runtime apply it (DeltaChild `bench`). The first pass has the JIT in it and a loaded runner is slower.
   let bigAssemblyDelta = secs 120.
+  /// Ceiling on a child process that runs one scenario of this assembly to its end (SandboxChild). It is never a measure of how
+  /// long the scenario takes: a cold start of the 30 MB assembly takes seconds, a machine at a load average of 70 takes a
+  /// minute, and a child that reaches the ceiling has hung. The wait is the process ending, which costs a passing run nothing.
+  let childScenarioCeiling = secs 240.
   /// Ceiling on a wait that completes in the test's own process (a task settling, a file watcher
   /// reporting, a long poll answering) but goes through the thread pool and can be starved. 30 s because the gate
   /// runs beside other work on a shared machine (a load average of 40 to 70 was seen), where a starved pool made
@@ -58,10 +62,6 @@ module TestTimeouts =
   /// "few milliseconds" turn well past the 5 s this used to be. Never use it as the length of a
   /// wait that is meant to elapse; that is what the settles below are for.
   let patienceBrief = secs 20.
-  /// How long a call that needs no pool thread gets while every pool thread is blocked. A trivial piece of work
-  /// on a dedicated thread finishes in milliseconds even on a loaded machine, and a pool thread cannot be injected
-  /// that quickly: the pool adds one about every half second once its threads are busy.
-  let starvedPoolBudget = secs 3.
   /// How long a case that repeats an action until an event follows (a save made again until the watcher
   /// reports it) waits for the event after each attempt before it acts again. Longer than the
   /// watcher's own debounce, so an attempt's event has time to arrive before the next attempt can reset it.

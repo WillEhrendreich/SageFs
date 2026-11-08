@@ -308,9 +308,22 @@ errno and the getter sees a SocketException, an UnauthorizedAccessException or a
 or traps.
 
 It does not stop a spin, a stack overflow, an in-memory effect, a write to a file descriptor that was already open, or a
-getter that issues 32-bit compat syscalls on purpose. A thread the work starts inherits the filter, and a task the work
-hands to a pool thread does not. There is no deadline in it: the caller owns the deadline and abandons a stuck thread,
-and the filter dies with the thread. Linux x86-64 is the only verified platform. Aarch64 is in the type and reported
+getter that issues 32-bit compat syscalls on purpose. A thread the work starts inherits the filter. There is no deadline
+in it: the caller owns the deadline and abandons a stuck thread, and the filter dies with the thread.
+
+**Open, measured 2026-11-08: a pool worker made on behalf of the filtered thread inherits the filter too.** This record used
+to say a task the work hands to a pool thread does not. That holds when an idle worker already exists. In a process whose
+pool has not grown, the pool makes the worker (and its gate thread) from the thread that queued the work, so a getter that
+queued pool work left four threads carrying the filter after the call (the kernel names them: `Seccomp: 2` in
+`/proc/self/task/<tid>/status`, with the sandbox thread's name). On those threads the host's own writes, connections and
+spawns fail for the life of the process. A thread cannot be un-filtered.
+Refusing thread creation under the filter is not the fix: the pool does not undo a request whose worker it could not make,
+never asks again, and in a process with no worker yet every later `Task.Run` waits forever (a stack dump showed the main
+thread alone, blocked in `Task.Run(...).Result`). The leak needs a design decision: a thread-level filter cannot be made
+leak-free for work that reaches the thread pool, and the options are a supervisor that answers the denied calls per thread
+(seccomp user notification), running the getter's I/O-reaching work out of process, or refusing to run a getter that queues
+pool work. Until then the evaluator's guards (deadline, abandoned-thread cap) are the protection, and the filter stops what
+it names only on the thread that carries it. Linux x86-64 is the only verified platform. Aarch64 is in the type and reported
 unverified, other OSes report `NotLinux`, and if the filter can't be installed the work does not run. The caller shows
 the reason, so the pane says "no I/O containment here" and why. The BPF is built by a pure function and run through a
 small interpreter in the tests against a separately written model.
