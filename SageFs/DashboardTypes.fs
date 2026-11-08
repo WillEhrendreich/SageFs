@@ -149,6 +149,17 @@ module SessionRouting =
   /// The `sessionId` property names accepted on the wire, in priority order.
   let sessionIdAliases = [ "sessionId"; "session_id"; "session" ]
 
+  /// A string property of a body's root, when the root is an object. A root that is an array, a number, a string, true or null
+  /// has no properties, and `TryGetProperty` THROWS on it (InvalidOperationException), which both body readers below let
+  /// through as a server error for a stray `[1,2,3]`. A property that is missing, not a string or null is nothing too.
+  let tryRootStringProperty (root: System.Text.Json.JsonElement) (name: string) : string option =
+    match root.ValueKind with
+    | System.Text.Json.JsonValueKind.Object ->
+      match root.TryGetProperty(name) with
+      | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String -> Option.ofObj (prop.GetString())
+      | _ -> None
+    | _ -> None
+
   /// Read the optional `sessionId` from an already-read request body.
   ///
   /// `declaredLength` says whether the request carried a Content-Length. It is
@@ -165,13 +176,10 @@ module SessionRouting =
         use doc = System.Text.Json.JsonDocument.Parse(body)
         sessionIdAliases
         |> List.tryPick (fun alias ->
-          match doc.RootElement.TryGetProperty(alias) with
-          | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String ->
-            match prop.GetString() with
-            | null -> None
-            | s when System.String.IsNullOrWhiteSpace s -> None
-            | s -> Some s
-          | _ -> None)
+          match tryRootStringProperty doc.RootElement alias with
+          | Some s when not (System.String.IsNullOrWhiteSpace s) -> Some s
+          | Some _
+          | None -> None)
       with
       | :? System.Text.Json.JsonException -> None
       | :? ArgumentException -> None
@@ -184,13 +192,10 @@ module SessionRouting =
     else
       try
         use doc = System.Text.Json.JsonDocument.Parse(body)
-        match doc.RootElement.TryGetProperty("project") with
-        | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String ->
-          match prop.GetString() with
-          | "" -> None
-          | null -> None
-          | s -> Some s
-        | _ -> None
+        match tryRootStringProperty doc.RootElement "project" with
+        | Some "" -> None
+        | Some s -> Some s
+        | None -> None
       with
       | :? System.Text.Json.JsonException -> None
       | :? ArgumentException -> None

@@ -91,6 +91,7 @@ let private oldContentLengthGate (ctx: Microsoft.AspNetCore.Http.HttpContext) =
   | cl when not cl.HasValue || cl.Value <= 0L -> None
   | _ -> Some "body-was-read"
 
+[<Tests>]
 let tests = testList "session-scoped route targeting" [
 
   // ── The bug: two clients, interleaved ──────────────────────────────────────
