@@ -347,7 +347,7 @@ let private run (fsiArgs: string list) : int =
       | :? ThreadInterruptedException -> () // an Interrupt that arrived between evals
       | :? InvalidOperationException -> alive <- false // requests completed: shutting down
 
-  let evalThread = Thread(evalLoop, IsBackground = true, Name = "fsihost-eval")
+  let evalThread = Thread(ThreadStart evalLoop, HostLimits.EvalStackBytes, IsBackground = true, Name = "fsihost-eval")
   evalThread.Start()
 
   /// Queue work for the session thread, or answer the caller at once that the queue is full. Only the reader

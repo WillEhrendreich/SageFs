@@ -675,6 +675,13 @@ module HostLimits =
   [<Literal>]
   let EvalQueueCapacity = 256
 
+  /// The stack of the thread every eval runs on: 256 MB, the same as FsiMcp gives each eval. A thread's default is the
+  /// process limit (8 MB on Linux), which a plain non-tail recursion exhausts at about 520,000 frames, and the runtime ends
+  /// the whole process on a stack overflow. Only the pages a deep recursion touches are ever committed, so the size costs
+  /// address space and nothing else.
+  [<Literal>]
+  let EvalStackBytes = 268435456
+
   /// The numbers behind a refused request, so the message can say how full the queue was.
   type QueueRefusal = { Capacity: int; Pending: int }
 

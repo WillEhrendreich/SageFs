@@ -77,6 +77,13 @@ let private describeEnd (hostEnd: HostEnd) : string =
   | Retired -> "the FSI host session was disposed"
   | Crashed crash -> HostCrash.describe crash
 
+/// What a cancelled request does when the host does not answer after being interrupted.
+type private CancelGrace =
+  /// Keep waiting: the request is a short read or check, and a host that is busy answers it when it can.
+  | NoKill
+  /// An eval: the host has this long to say it stopped, then it is killed so the session does not stay stuck.
+  | KillAfter of TimeSpan
+
 /// The host process, as far as a session needs it: its id, when it exits (with its code), and a way to kill it.
 type HostProcess =
   { Id: int
@@ -102,8 +109,25 @@ type HostOutputTail() =
     | Result.Ok tail -> tail
     | Result.Error error -> invalidOp (sprintf "HostCrash.maxOutputLines must be positive: %A" error)
   let finished = TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
-  member _.Add(line: string) : unit = lines.Push line
+  // The runtime's stack overflow report is a line, then a few hundred identical frames, so the tail ends in noise and
+  // has pushed the line itself out. The first lines are kept apart.
+  let overflowLock = obj ()
+  let mutable overflowReport : string list = []
+  let mutable overflowStillReading = 0
+  member _.Add(line: string) : unit =
+    lines.Push line
+    lock overflowLock (fun () ->
+      match overflowStillReading > 0, overflowReport.IsEmpty && HostCrash.isStackOverflowLine line with
+      | true, _ ->
+        overflowReport <- line :: overflowReport
+        overflowStillReading <- overflowStillReading - 1
+      | false, true ->
+        overflowReport <- [ line ]
+        overflowStillReading <- HostCrash.stackOverflowReportLines - 1
+      | false, false -> ())
   member _.Lines() : string array = lines.Snapshot()
+  /// The runtime's report of a stack overflow (its first lines), or nothing if the host never reported one.
+  member _.StackOverflowReport() : string array = lock overflowLock (fun () -> overflowReport |> List.rev |> List.toArray)
   /// Both of the host's output streams have reached the end.
   member _.Finish() : unit = finished.TrySetResult() |> ignore
   member _.Finished : Task = finished.Task
@@ -147,7 +171,15 @@ type FsiHostSession
         | true -> ExitedWith proc.Exit.Result
         | false -> ConnectionClosed
       output.Finished.Wait Timeouts.stderrDrainGrace |> ignore
-      Crashed(HostCrash.ofTail exit (output.Lines()))
+      match output.StackOverflowReport() with
+      | [||] -> Crashed(HostCrash.ofTail exit (output.Lines()))
+      | report -> Crashed(HostCrash.ofStackOverflow report)
+
+  /// An eval was cancelled and the host never said it stopped: end the host's life as stopped-after-cancel (the first end
+  /// wins, so a host that crashed in the meantime keeps its own explanation), then kill the process.
+  let stopUnresponsive (waited: TimeSpan) =
+    markEnded (Crashed(HostCrash.ofTail (StoppedAfterCancel waited) (output.Lines())))
+    proc.Kill()
 
   let complete (id: int64) (response: Response) =
     match pending.TryRemove id with
@@ -207,8 +239,9 @@ type FsiHostSession
         true
       with _ -> false)
 
-  /// Send a request carrying a fresh id and wait for its answer. Cancelling interrupts the host.
-  let roundTrip (cancellationToken: CancellationToken) (make: int64 -> Request) : Async<Reply> =
+  /// Send a request carrying a fresh id and wait for its answer. Cancelling interrupts the host, and with `KillAfter` a
+  /// host that has not answered that long after the interrupt is killed (see `stopUnresponsive`).
+  let roundTripWith (grace: CancelGrace) (cancellationToken: CancellationToken) (make: int64 -> Request) : Async<Reply> =
     async {
       match lost.Task.IsCompleted with
       | true -> return Gone lost.Task.Result
@@ -224,9 +257,25 @@ type FsiHostSession
         | true ->
           // The connection may have dropped between the check and the registration.
           if lost.Task.IsCompleted then waiting.TrySetResult(Gone lost.Task.Result) |> ignore
-          use _ = cancellationToken.Register(fun () -> send Interrupt |> ignore)
-          return! Async.AwaitTask waiting.Task
+          use answered = new CancellationTokenSource()
+          use _ =
+            cancellationToken.Register(fun () ->
+              send Interrupt |> ignore
+              match grace with
+              | NoKill -> ()
+              | KillAfter wait ->
+                Task.Delay(wait, answered.Token).ContinueWith(
+                  (fun (delay: Task) -> if not delay.IsCanceled then stopUnresponsive wait),
+                  TaskContinuationOptions.ExecuteSynchronously
+                )
+                |> ignore)
+          let! reply = Async.AwaitTask waiting.Task
+          answered.Cancel()
+          return reply
     }
+
+  /// A request whose caller never cancels, or that is not worth killing the host for if it does.
+  let roundTrip = roundTripWith NoKill
 
   let unexpected (expected: string) (response: Response) =
     sprintf "the FSI host answered a %s request with %A" expected response
@@ -245,7 +294,7 @@ type FsiHostSession
   /// Evaluate a submission. Cancelling the token interrupts the running eval.
   member _.Eval(code: string, cancellationToken: CancellationToken) : Async<EvalCall> =
     async {
-      match! roundTrip cancellationToken (fun id -> Eval(id, code)) with
+      match! roundTripWith (KillAfter Timeouts.evalCancelGrace) cancellationToken (fun id -> Eval(id, code)) with
       | Got(EvalResult(_, outcome, diagnostics, cost)) -> return Completed(outcome, diagnostics, cost)
       | Got other -> return HostLost(unexpected "eval" other)
       | Gone(Crashed crash) -> return HostCrashed crash

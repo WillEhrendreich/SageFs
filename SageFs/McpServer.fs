@@ -2739,7 +2739,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
                   rctx.SseContext.TestEventBroadcast.Trigger(SseFrame.ofSession sid hbStr)
             with :? System.OperationCanceledException -> ()
           } :> System.Threading.Tasks.Task))
-      let! result, outcome, _diags, _lastError, _, _ = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None
+      let! result, outcome, _diags, _lastError, _, _ = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None (SageFs.EvalLimit.Asked SageFs.Timeouts.evalCallCap)
       sw.Stop()
       heartbeatCts.Cancel()
       let! _ = heartbeatTask

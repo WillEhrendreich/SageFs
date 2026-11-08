@@ -741,6 +741,20 @@ module RegisteredTools =
     |> Array.map (fun m -> m.Name)
     |> Set.ofArray
 
+/// `cancel_eval` for a session the caller named, which wins over working-directory routing.
+let cancelEvalOnSession (ctx: McpContext) (sid: string) : Task<Result<string, SageFs.SageFsError>> =
+  task {
+    let! routeResult = routeToSession ctx sid (fun _ -> SageFs.WorkerProtocol.WorkerMessage.CancelEval)
+    return
+      match routeResult with
+      | Ok (SageFs.WorkerProtocol.WorkerResponse.EvalCancelled true) ->
+        notifyElm ctx (SageFs.TuiEvent.EvalCancelled sid)
+        Ok "Evaluation cancelled."
+      | Ok (SageFs.WorkerProtocol.WorkerResponse.EvalCancelled false) -> Ok "No evaluation in progress."
+      | Ok other -> Ok (sprintf "Unexpected response: %A" other)
+      | Error msg -> Error (SageFs.SageFsError.CancelFailed (SageFs.McpRouteError.routeErrorMessage msg))
+  }
+
 type SageFsTools(ctx: McpContext, logger: ILogger<SageFsTools>) =
     [<McpServerTool>]
     [<Description("""Send F# code to the FSI REPL session. Each ';;' marks a transaction boundary.
@@ -801,10 +815,14 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         intent: string,
         [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
         [<Optional; DefaultParameterValue("")>]
-        session_id: string
+        session_id: string,
+        [<Description("How long to wait for the eval, in seconds. Past it the eval is cancelled and you are told so. Omit it for the default (120). The most it takes is 600; a larger number is cut to that. The limit covers the whole call, not each ';;' statement.")>]
+        [<Optional; DefaultParameterValue(0)>]
+        timeout_seconds: int
     ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
+        let limit = SageFs.EvalLimit.ofRequest SageFs.Timeouts.evalCall SageFs.Timeouts.evalCallCap timeout_seconds
         let fp = match System.String.IsNullOrWhiteSpace file_path with | true -> None | false -> Some file_path
         let em = match System.String.IsNullOrWhiteSpace eval_mode with | true -> None | false -> Some eval_mode
         let bsl = match block_start_line with | 0 -> None | n -> Some n
@@ -827,7 +845,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
           let! text, _outcome, diags, errOpt, freshness, writeBack =
             match declaration with
             | SageFs.TopLevelDeclaration.NoDeclaration ->
-              evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt
+              evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt limit
             | found ->
               let hint = SageFs.EvalPreflight.hint found
               let err = SageFs.SageFsError.EvalFailed hint
@@ -1204,19 +1222,24 @@ WHEN TO USE:
 - The session status shows 'Evaluating' and you need it back in 'Ready' state.
 
 BEHAVIOR:
-- Cancellation is cooperative — it requests a .NET CancellationToken cancellation. Most FSI code respects this promptly.
-- Code that is stuck in unmanaged I/O or native calls may not cancel immediately.
-- After cancellation, the session returns to 'Ready'. The cancelled code's definitions are NOT added to session state.
+- A wait (sleep, lock, event) stops within a second and the session returns to 'Ready'. The cancelled code's definitions are NOT added.
+- A tight loop and most native calls do not stop. The FSI host is then killed 10 seconds after the cancel, and the session says its state and definitions are gone (call hard_reset_fsi_session).
 - Returns 'true' if a running eval was found and cancelled, 'false' if nothing was running.""")>]
     member _.cancel_eval(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
-        working_directory: string
+        working_directory: string,
+        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: cancel_eval called")
         task {
-          let! result = cancelEvalResult ctx "mcp" wd
+          let! result =
+            match System.String.IsNullOrWhiteSpace session_id with
+            | true -> cancelEvalResult ctx "mcp" wd
+            | false -> cancelEvalOnSession ctx session_id
           return
             match result with
             | Ok text -> text, None

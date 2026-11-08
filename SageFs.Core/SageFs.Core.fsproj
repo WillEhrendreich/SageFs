@@ -450,6 +450,8 @@
         <!-- Before SageFsError: ProjectFrameworkNotHostable carries its UnsupportedTfmReason. -->
         <Compile Include="ProjectCompatibility.fs" />
         <Compile Include="FsiHostCrash.fs" />
+        <!-- How long an eval call waits, and when it asks the eval to stop. BCL only. -->
+        <Compile Include="EvalBound.fs" />
         <Compile Include="SageFsError.fs" />
         <!-- After SageFsError (it words a refused build) and after CohortIntegrationScope (it reads a project file as a test project). Pure. -->
         <Compile Include="Features\CohortLandingPlan.fs" />

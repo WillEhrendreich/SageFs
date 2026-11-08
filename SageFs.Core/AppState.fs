@@ -336,7 +336,7 @@ let evalFn (token: CancellationToken) =
     st.OutStream.WatchBetweenCalls()
     st.OutStream.StartRecording()
     let thread = Thread.CurrentThread
-    token.Register(fun () -> thread.Interrupt()) |> ignore
+    token.Register(fun () -> FsiSession.interruptWorkerThread st.Session thread) |> ignore
     let evaluation = st.Session.Eval(code, token)
     let diagnostics = evaluation.Diagnostics
 
@@ -1190,13 +1190,13 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               let generation = sessionGeneration.Value
               // Run eval on a dedicated thread so the actor stays responsive
               // to CancelEval, HardReset, etc. while the eval is in progress.
-              let evalThread = Thread(fun () ->
+              let evalThread = Thread(ThreadStart(fun () ->
                 try
                   let res, newSt = pipeline (request, st)
                   mailbox.Post(EvalFinished(Ok(res, newSt), sw, request.Code, reply, generation))
                 with ex ->
                   mailbox.Post(EvalFinished(Error ex, sw, request.Code, reply, generation))
-              )
+              ), SageFs.FsiHost.FsiProtocol.HostLimits.EvalStackBytes)
               evalThread.IsBackground <- true
               evalThread.Name <- sprintf "sagefs-eval-%d" (evalStats.EvalCount + 1)
               currentEvalThread.Value <- Some evalThread
@@ -1883,7 +1883,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                 // on I/O (ReadLine, pipe read, etc.) where tokens aren't checked
                 match currentEvalThread.Value with
                 | Some thread ->
-                  try thread.Interrupt() with ex -> logger.LogWarning (sprintf "Thread interrupt during cancel failed: %s" ex.Message)
+                  try (match (System.Threading.Volatile.Read(&latestSnapshot)).Phase with Active (st, _) -> FsiSession.interruptWorkerThread st.Session thread | Initializing _ | Faulted _ -> thread.Interrupt()) with ex -> logger.LogWarning (sprintf "Thread interrupt during cancel failed: %s" ex.Message)
                 | None -> ()
                 evalActor.Post(EvalMarkCancelling)
                 true

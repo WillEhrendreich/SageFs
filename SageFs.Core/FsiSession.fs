@@ -135,6 +135,16 @@ let failureToRaise (ex: exn) (diagnostics: Diagnostics.Diagnostic array) : exn =
   | _, None -> ex
   | false, Some message -> Exception(message, ex)
 
+/// Free a worker thread that is blocked running an eval, as a cancel does. For FSI inside this process that thread IS the
+/// eval, and an interrupt frees it from a wait. For FSI in a host process the thread only waits for the host's answer, and
+/// interrupting that wait abandons it: the eval goes on running in the host, the session reads Ready, and the next eval
+/// queues behind a run nobody waits for. The cancel reaches the host through the eval's token instead, and the call ends
+/// when the host says its eval stopped (or is killed when it does not).
+let interruptWorkerThread (session: IFsiSession) (thread: System.Threading.Thread) : unit =
+  match session.HostLifetime with
+  | SharesTheWorkerProcess -> thread.Interrupt()
+  | SeparateHost _ -> ()
+
 /// Evaluate and raise on failure: the throwing form, for startup scripts whose failure must abort.
 let evalOrThrow (session: IFsiSession) (code: string) (cancellationToken: CancellationToken) : unit =
   let eval = session.Eval(code, cancellationToken)

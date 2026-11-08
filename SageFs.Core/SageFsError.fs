@@ -672,7 +672,7 @@ module SageFsError =
     | SageFsError.EvalSupersededByReset -> []
     | SageFsError.FsiHostCrashed crash ->
       let parts = System.Collections.Generic.Dictionary<string, obj>()
-      parts.["exitCode"] <- (match crash.Exit with ExitedWith code -> box code | ConnectionClosed -> null)
+      parts.["exitCode"] <- (match crash.Exit with ExitedWith code -> box code | ConnectionClosed | OverflowedStack | StoppedAfterCancel _ -> null)
       parts.["output"] <- box crash.Output
       [ "crash", box (parts :> System.Collections.Generic.IDictionary<string, obj>) ]
     | SageFsError.WarmupOpenFailed(name, reason) ->

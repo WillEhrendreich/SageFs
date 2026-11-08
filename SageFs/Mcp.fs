@@ -994,12 +994,13 @@ module McpTools =
   /// structured content instead of re-parsing `formatted` (roast-7 §2) —
   /// every branch below already has `diags`/`err` in hand from the same
   /// match that built `formatted`, so this costs nothing new to compute.
-  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option * EvalCost> = task {
+  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (asked: System.TimeSpan) (left: System.TimeSpan) (statement: string) : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option * EvalCost> = task {
     notifyElm ctx (TuiEvent.EvalStarted (sid, statement))
     let workflow = getWorkflowForSession ctx sid
-    let! routeResult =
-      routeToSession ctx sid
-        (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, WorkerProtocol.SessionId.value replyId))
+    let! routeResult, note =
+      EvalWait.reply asked left Timeouts.evalCancelAnswer Message
+        (fun () -> routeToSession ctx sid (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, WorkerProtocol.SessionId.value replyId)))
+        (fun () -> routeToSession ctx sid (fun _ -> WorkerProtocol.WorkerMessage.CancelEval) :> Task)
     return
       match routeResult with
       | Ok rawResponse ->
@@ -1007,7 +1008,7 @@ module McpTools =
         let formatted =
           match format with
           | Json -> McpAdapter.formatWorkerEvalResultJson response
-          | Text -> formatWorkerEvalResult workflow response
+          | Text -> note + formatWorkerEvalResult workflow response
         match response with
         | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags, metadata) ->
           // A successful eval proves the session can still function.
@@ -1101,7 +1102,7 @@ module McpTools =
       (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat)
       (sessionId: string option) (workingDirectory: string option)
       (filePath: string option) (evalMode: string option) (blockStartLine: int option)
-      (intent: string option)
+      (intent: string option) (limit: EvalLimit)
       : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option * ReplFreshness * EvalWriteBack.WriteBack> =
     task {
       // The session the gate already resolved for this very call, if any.
@@ -1158,7 +1159,7 @@ module McpTools =
           let mutable lastError : SageFsError option = None
           let mutable totalCost = EvalCost.unmeasured
           for statement in statements do
-            let! output, stmtOutcome, diags, errOpt, cost = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
+            let! output, stmtOutcome, diags, errOpt, cost = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset (EvalLimit.span limit) (EvalLimit.span limit - evalSw.Elapsed) statement
             allOutputs <- output :: allOutputs
             outcome <- EvalExecOutcome.combine outcome stmtOutcome
             allDiags <- allDiags @ diags
@@ -1225,7 +1226,7 @@ module McpTools =
       (intent: string option)
       : Task<string> =
     task {
-      let! output, _, _, _, _, _ = evalFSharpCodeWithOutcome ctx agentName code format sessionId workingDirectory filePath evalMode blockStartLine intent
+      let! output, _, _, _, _, _ = evalFSharpCodeWithOutcome ctx agentName code format sessionId workingDirectory filePath evalMode blockStartLine intent (EvalLimit.Default Timeouts.evalCall)
       return output
     }
 

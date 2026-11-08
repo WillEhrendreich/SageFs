@@ -85,7 +85,19 @@ The active project is shown in the status bar.
   manually (VS Code: Command Palette → `SageFs: Reconnect to Daemon`, Neovim:
   `:SageFsReconnect`).
 - **Long-running eval**: Some evaluations genuinely take time (large
-  compilations, network calls). Check the daemon console for progress.
+  compilations, network calls). `send_fsharp_code` waits 120 seconds by default
+  and then cancels the eval and says so. Pass `timeout_seconds` (at most 600)
+  for work that should take longer.
+- **An eval that will not stop**: `cancel_eval` stops a wait (a sleep, a lock, an
+  event) within a second. A tight loop does not stop, and most native calls do not
+  either (a loop that calls the runtime may or may not), so the FSI host is
+  killed 10 seconds after the cancel and the session reports that its state and
+  definitions are gone. Call `hard_reset_fsi_session` and run your definitions
+  again.
+- **A stack overflow**: every eval runs on a thread with 256 MB of stack. Code
+  that recurses past that ends the host, and the session says `stack overflow`
+  with the function that recursed and how many frames deep it went. Make the
+  recursion tail-recursive or loop, then call `hard_reset_fsi_session`.
 
 ### Stale REPL after code changes
 

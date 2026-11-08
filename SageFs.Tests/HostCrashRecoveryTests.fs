@@ -55,7 +55,9 @@ let tests =
         crash.Output |> Expect.stringContains "the unhandled exception text from the host's stderr" "host-crash-marker"
         match crash.Exit with
         | ExitedWith _ -> ()
-        | ConnectionClosed -> failtest "the host process exited, so its exit code is known"
+        | ConnectionClosed
+        | OverflowedStack
+        | StoppedAfterCancel _ -> failtest "the host process exited on its own with an exception, so its exit code is known"
       | other -> failtestf "a session whose host is dead must not report %A" other
       session.GetSessionState() |> Expect.equal "the state gates like Faulted, where reset is offered" SessionState.Faulted
 

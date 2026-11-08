@@ -182,6 +182,18 @@ module Timeouts =
   /// that takes this long means a hung or starved worker, and the caller should
   /// hear that now, not after workerHttpRequest's ten minutes.
   let gateStatusProbe = forMachine (TimeSpan.FromSeconds(5.0))
+  /// How long `send_fsharp_code` waits for its eval when the caller names no `timeout_seconds`. Past it the eval is
+  /// cancelled and the caller is told so, instead of waiting out `workerHttpRequest`. 120 seconds is what an agent
+  /// using FsiMcp is used to, long enough for a restore or a test run from the REPL and short enough that an agent
+  /// stuck behind a loop finds out within one tool call.
+  let evalCall = TimeSpan.FromSeconds(120.0)
+  /// The most a caller may ask `timeout_seconds` for: the worker's own bound on an eval, which is also what the
+  /// worker's call to a session is cut at, so a larger value could not be honoured.
+  let evalCallCap = workerHttpRequest
+  /// How long an FSI host gets, after its eval was cancelled, to say the eval has stopped before SageFs kills the host.
+  /// Cancelling frees a wait in milliseconds. An eval still running this long after is in a tight loop, a native call
+  /// that nothing can interrupt, or a deep unwind, and waiting longer only leaves the session stuck in Cancelling.
+  let evalCancelGrace = TimeSpan.FromSeconds(10.0)
   /// How long a confirmation prompt waits for the person at the client to answer
   /// before the call is refused. This is a person reading a sentence, not a
   /// process starting, so it is NOT scaled by machine tier; it takes an override
@@ -368,6 +380,10 @@ module Timeouts =
   /// of them. FsiMcp 0.3.0 uses the same 0.5 s; it is a first guess until `get_eval_timeline` history says
   /// what share of real evals it marks (docs/plans/eval-cost-line.md).
   let evalCostSlow = TimeSpan.FromSeconds(0.5)
+  /// How long a caller waits for its eval's own answer once the eval was cancelled at its `timeout_seconds`. The answer
+  /// arrives when the host confirms the stop, or when `evalCancelGrace` ran out and the host was killed and reported,
+  /// so this is that grace, plus the time to report the death, plus one status probe's worth of slack.
+  let evalCancelAnswer = evalCancelGrace + fsiHostExitReport + stderrDrainGrace + gateStatusProbe
   /// How long the `dotnet build` of the FSI host (a cold build, once per host
   /// version and SDK) may run before FsiHostBuild gives up. No recorded reason
   /// for 5 minutes.
