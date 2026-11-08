@@ -4,14 +4,14 @@ open System
 open System.Globalization
 open SageFs.Features.MetadataDelta
 
-/// A setting whose consumer reads an environment variable once, when its process starts. The Settings page
-/// saves the value to the global layer file; `SettingsBootstrap.importSaved` runs first thing in `main` and puts
-/// each saved value into the daemon's own environment (when the person set no variable) so `Timeouts`, which
-/// freezes its values the first time it is read, and every worker, which inherits the environment, agree with
-/// what the page saved.
+/// A setting whose consumer reads a variable once, when its process starts (through `SettingsInForce.read`). The
+/// Settings page saves the value to the global layer file; `SettingsBootstrap.resolveSaved` runs first thing in `main`
+/// and puts each saved value (when the person set no variable) into the settings snapshot, so `Timeouts`, which
+/// freezes its values the first time it is read, and every worker, which is handed the snapshot, agree with what the
+/// page saved. The environment is not written.
 ///
 /// This file is compiled before `SettingsCatalog` and touches nothing in `Timeouts` or `SageFsConfig` when it
-/// loads. A closure that reads them runs only when a row is drawn. That matters: the import has to run before
+/// loads. A closure that reads them runs only when a row is drawn. That matters: the resolution has to run before
 /// `Timeouts` is first read, and loading this file must not be what reads it.
 type EnvBacked = {
   Descriptor: SettingDescriptor
@@ -235,7 +235,7 @@ module EnvBackedSettings =
           Current =
             // The rule `UpdateCheckService` applies to the variable: set, and not 0 or false, opts out.
             InUseFromConsumer (fun () ->
-              match Environment.GetEnvironmentVariable variable with
+              match SettingsInForce.read variable with
               | null | "" -> VToggle Off
               | v ->
                 match v = "0" || v.Equals("false", StringComparison.OrdinalIgnoreCase) with
@@ -272,7 +272,7 @@ module EnvBackedSettings =
           | Some Off -> Some (MetadataDeltaMode.toText MetadataDeltaMode.Off)
           | None -> None) }
 
-  /// The first batch of settings that are saved as a file value and imported into the environment at start.
+  /// The first batch of settings that are saved as a file value and resolved into the settings snapshot at start.
   /// `EnvBackedRows.all` is these and the rest.
   let firstBatch : EnvBacked list =
     [ warmupInactivity

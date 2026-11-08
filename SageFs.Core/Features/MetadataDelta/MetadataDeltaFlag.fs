@@ -45,7 +45,7 @@ module MetadataDeltaMode =
       | _ -> defaultMode
 
   let fromEnvironment () : MetadataDeltaMode =
-    parse (System.Environment.GetEnvironmentVariable environmentVariable)
+    parse (SageFs.SettingsInForce.read environmentVariable)
 
   let toText (mode: MetadataDeltaMode) : string =
     match mode with

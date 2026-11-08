@@ -417,9 +417,8 @@ let startDaemonProcess (mcpPort: int) : Task<Result<unit, string>> =
           RedirectStandardOutput = true,
           RedirectStandardError = true
         )
-      // This process worked its own tier out and published it; the daemon works out its own, from the same profile.
-      MachineStartup.withoutDerivedTier psi.Environment
-      SettingsBootstrap.withoutImported psi.Environment
+      // The daemon inherits this process's environment, which holds only what a person set: it works out its own
+      // settings snapshot and tier, from the same files.
       psi.ArgumentList.Add("--mcp-port")
       psi.ArgumentList.Add(string mcpPort)
       ownerArguments (DaemonPort.configured ()) mcpPort (Process.GetCurrentProcess().Id)

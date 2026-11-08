@@ -24,10 +24,13 @@ module ValidTimeout =
 [<RequireQualifiedAccess>]
 module Timeouts =
 
-  // -- Environment variable helpers --
+  // -- Reading a setting's variable --
+  // Every override is read through `SettingsInForce.read`: the snapshot the daemon resolved at start (saved values and
+  // the machine tier), then the process environment. Nothing here reads the environment itself, so a saved value
+  // never has to be written into it.
 
   let private envOrDefault (varName: string) (defaultSeconds: float) =
-    match Environment.GetEnvironmentVariable(varName) with
+    match SettingsInForce.read varName with
     | null | "" -> TimeSpan.FromSeconds(defaultSeconds)
     | value ->
       match Double.TryParse(value) with
@@ -35,7 +38,7 @@ module Timeouts =
       | _ -> TimeSpan.FromSeconds(defaultSeconds)
 
   let private envOrDefaultMinutes (varName: string) (defaultMinutes: float) =
-    match Environment.GetEnvironmentVariable(varName) with
+    match SettingsInForce.read varName with
     | null | "" -> TimeSpan.FromMinutes(defaultMinutes)
     | value ->
       match Double.TryParse(value) with
@@ -46,7 +49,7 @@ module Timeouts =
   /// default is used, as for the other variables. Zero comes back as `TimeSpan.Zero`; the caller turns that into
   /// `SessionReaper.Bound.Disabled` at once, so no zero span travels through the domain.
   let private envOrDefaultHoursOrOff (varName: string) (defaultHours: float) =
-    match Environment.GetEnvironmentVariable(varName) with
+    match SettingsInForce.read varName with
     | null | "" -> TimeSpan.FromHours(defaultHours)
     | value ->
       match Double.TryParse(value) with
@@ -72,9 +75,9 @@ module Timeouts =
   // An environment variable always wins over the scaled value: the person who set it chose a number.
   // `TimeoutScalingTests` holds the list of which is which, and fails on a duration that is in neither.
 
-  /// The tier in force for this process, read once from `SAGEFS_MACHINE_TIER`. Unset means `Fast`, the
-  /// values as written here. The daemon works the tier out (MachineProfile.fs) and sets the variable
-  /// before anything reads this, and passes it to every worker it starts.
+  /// The tier in force for this process, read once from `SAGEFS_MACHINE_TIER` through `SettingsInForce`. Unset
+  /// means `Fast`, the values as written here. The daemon works the tier out (MachineProfile.fs) and puts it in
+  /// its snapshot before anything reads this, and hands the snapshot to every worker it starts.
   let machineTier : MachineTier = MachineTier.current ()
 
   /// No wait for the machine is scaled past this: beyond an hour a wait is a hang, not a slow machine. A
@@ -85,7 +88,7 @@ module Timeouts =
   let private forMachine (baseline: TimeSpan) : TimeSpan = MachineTier.scaleWait scaledWaitCeiling machineTier baseline
 
   let private envIsSet (varName: string) : bool =
-    match Environment.GetEnvironmentVariable(varName) with
+    match SettingsInForce.read varName with
     | null | "" -> false
     | value ->
       match Double.TryParse(value) with
@@ -989,7 +992,7 @@ module Timeouts =
 module DataRetention =
 
   let private envOrDefaultInt (varName: string) (defaultValue: int) =
-    match Environment.GetEnvironmentVariable(varName) with
+    match SettingsInForce.read varName with
     | null | "" -> defaultValue
     | value ->
       match Int32.TryParse(value) with
@@ -1009,7 +1012,7 @@ module DataRetention =
       | _ -> TimeSpan.FromDays defaultDays
 
   let private envOrDefaultDays (varName: string) (defaultDays: float) =
-    match Environment.GetEnvironmentVariable(varName) with
+    match SettingsInForce.read varName with
     | null | "" -> TimeSpan.FromDays(defaultDays)
     | value ->
       match Double.TryParse(value) with
@@ -1034,7 +1037,7 @@ module DataRetention =
   let cohortLedgerRetention = envOrDefaultDays cohortLedgerRetentionEnvVar 7.0
   /// How often a running daemon prunes friction again (it also prunes on start).
   let pruneInterval =
-    match Environment.GetEnvironmentVariable(pruneIntervalEnvVar) with
+    match SettingsInForce.read pruneIntervalEnvVar with
     | null | "" -> TimeSpan.FromHours(1.0)
     | value ->
       match Double.TryParse(value) with

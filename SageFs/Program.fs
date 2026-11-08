@@ -6,8 +6,10 @@ open System.Reflection
 open SageFs
 open SageFs.Server
 
-// The first thing this executable does: work out what machine it is on, and publish the tier in this process's
-// environment BEFORE anything reads `Timeouts`, which fixes every scaled wait the moment it is first read. A
+// The first thing this executable does: work out which saved settings apply and what machine it is on, and put both
+// in the process's settings snapshot BEFORE anything reads `Timeouts`, which fixes every scaled wait the moment it is
+// first read. Nothing is written to the environment: workers get the snapshot as an argument, and a daemon this
+// process starts inherits only what a person set. A
 // top-level `do` in the last file runs at entry, in order, ahead of every binding below it and ahead of `main`.
 // (A first version did this inside `main`, and the daemon's own log said so: "Timeouts were read before the
 // machine tier was established". A top-level `do` in an EARLIER file did not run at all: those files initialise
@@ -23,11 +25,17 @@ do
   match asksForNothing with
   | true -> ()
   | false ->
-    // What the Settings page saved becomes the environment this process and its workers start from, before the tier
+    // What the Settings page saved is resolved against the environment (a person's variable wins), before the tier
     // is worked out (a saved tier is a person's choice, like the variable) and before `Timeouts` is first read.
     // It reads the layer file and nothing else: `SettingsBootstrap` and `EnvBackedSettings` do not touch `Timeouts`.
-    SettingsBootstrap.importSaved (DataDirChoice.dataDirectory ()) |> ignore
-    MachineStartup.establish (DataDirChoice.dataDirectory ()) |> ignore
+    let dataDir = DataDirChoice.dataDirectory ()
+    let saved = SettingsBootstrap.resolveSaved dataDir
+    let forcedTier = SettingsInForce.lookup Environment.GetEnvironmentVariable saved.Snapshot MachineTier.envVar
+    let resolution = MachineStartup.establish dataDir forcedTier
+    let tierName, tierText = MachineStartup.tierEntry resolution
+    match SettingsSnapshot.add tierName tierText saved.Snapshot with
+    | Ok snapshot -> SettingsInForce.establish snapshot |> ignore
+    | Error why -> eprintfn "sagefs: the machine tier could not be added to the settings snapshot: %A" why
 
 /// Wraps a TextWriter to normalize lone LF to CRLF.
 /// Some console modes on Windows cause \n alone to not carriage-return.

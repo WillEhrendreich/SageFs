@@ -42,6 +42,8 @@
          makes the host fail to COMPILE, which surfaces only as
          `HostUnavailable` and a silent fall back to default config. -->
     <Compile Include="FsiNaming.fs" />
+    <!-- The snapshot of resolved settings the daemon hands the host, and the one reader of a setting's variable. BCL only. -->
+    <Compile Include="SettingsSnapshot.fs" />
     <Compile Include="MachineTier.fs" />
     <Compile Include="Timeouts.fs" />
     <!-- What an eval cost (measured around each eval here, carried by the protocol) and how much a value prints (the session's

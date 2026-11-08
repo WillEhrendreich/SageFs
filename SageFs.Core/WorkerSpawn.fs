@@ -123,11 +123,12 @@ module WorkerSpawn =
     // pass through to every spawn (SAGEFS_FORWARD_PREFIXES), so an external
     // agent can reach a worker it does not launch.
     //
-    // The worker is told this daemon's machine tier, so every wait it scales (the FSI host build, the
-    // host's start, its own probes) agrees with the daemon's instead of reading the machine again.
+    // The worker is told this daemon's settings snapshot (the third argument, `WorkerCommandLine`): the machine
+    // tier and the saved values, so every wait it scales (the FSI host build, the host's start, its own probes)
+    // agrees with the daemon's instead of reading the machine again. The environment it inherits is the person's.
     SageFs.ProcessEnvironment.applyToWithForwarding
       psi
-      (envVars @ SessionOptionsRegistry.workerEnvironment workingDir @ RuntimeCompat.rollForwardEnv runtimeChoice @ [ (MachineTier.envVar, MachineTier.toString Timeouts.machineTier) ])
+      (envVars @ SessionOptionsRegistry.workerEnvironment workingDir @ RuntimeCompat.rollForwardEnv runtimeChoice)
 
     let proc = new Process()
     proc.StartInfo <- psi

@@ -235,9 +235,10 @@ module ProjectLoadConfig =
 /// `daemonPid` is the PID of the daemon spawning the worker — workers monitor it
 /// so they self-exit when the daemon dies (issue #126: orphaned worker sessions).
 ///
-/// The FSI host takes POSITIONAL args: `<sessionId> <httpPort>` (see
+/// The FSI host takes POSITIONAL args: `<sessionId> <httpPort> [<snapshot>]` (`WorkerCommandLine`, read in
 /// SageFs.Host/Program.fs). The port is OS-assigned (`0` = ephemeral); the
-/// host prints `WORKER_PORT=<url>` on stdout and the supervisor validates it.
+/// host prints `WORKER_PORT=<url>` on stdout and the supervisor validates it. The snapshot is the settings this
+/// daemon runs on, so the worker resolves every wait and switch as the daemon does.
 let buildWorkerSpawnConfigWith
   (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode)
   (sessionId: string)
@@ -246,7 +247,7 @@ let buildWorkerSpawnConfigWith
   (autoOpenNamespaces: bool)
   (workflow: WorkflowTypes.SessionWorkflow)
   : string * (string * string) list =
-  let args = sprintf "%s 0" sessionId
+  let args = WorkerCommandLine.render sessionId (SettingsInForce.current ())
   let envVars = [
     WorkerConfig.envVar, (SessionProjectTarget.paths targets |> String.concat ";")
     WorkerConfig.daemonPidEnvVar, string Environment.ProcessId

@@ -13,7 +13,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 | Branch and worktree | `worktree-agent-aeee5e5c5dad3fa70`, `/home/will/Work/SageFs/.claude/worktrees/agent-aeee5e5c5dad3fa70` |
 | Last green commit | 1d187af6 on the branch: unfiltered default suite Trusted (15049 of 15049), ratchet lane Trusted (527 of 527), browser journey passed (filtered to its one case) |
 | Next action | Ship it with the next release (the gate, then `scripts/ship.fsx`, with the maintainer's go). Every `SAGEFS_*` variable `Timeouts.fs` and `SageFsConfig.fs` read has a row, and the count of those without one is 0: a budget table (`variables without a settings row`) that `--ratchets --tighten` can lower and that a new variable fails. The cells the browser journey does not yet cover are listed under "Browser journey". |
-| Decisions made | 2026-11-07, taken from this plan's recommendations by the implementing agent, Will not yet asked: (1) option A, saved values imported into the process environment at start (`SettingsBootstrap.importSaved`), because workers inherit the environment; (2) an edit under an overriding variable or flag is accepted and the row says "Saved X. Ignored while NAME is set."; (3) bind host and identity policy stay read-only, and the bind host row now reads `SAGEFS_BIND_HOST`. |
+| Decisions made | 2026-11-07, taken from this plan's recommendations by the implementing agent, Will not yet asked: (1) option A, saved values imported into the process environment at start (`SettingsBootstrap.importSaved`), because workers inherit the environment. Replaced on 2026-11-08 by option B (a settings snapshot, see "The settings snapshot and the short list" below); (2) an edit under an overriding variable or flag is accepted and the row says "Saved X. Ignored while NAME is set."; (3) bind host and identity policy stay read-only, and the bind host row now reads `SAGEFS_BIND_HOST`. |
 | Surprises | See "Surprises" below. |
 
 ## What done looks like
@@ -123,6 +123,9 @@ Start-up wiring, two options, decided by the first measurement:
   duration's variable in the daemon's own environment when it is unset, recording the names it set. The resolver treats a variable
   recorded as imported is read as the global layer and never as `LEnvironment`. Workers inherit the environment, so they agree with the daemon.
 - B. `Timeouts` gets a `layered` lookup the daemon installs once. Same ordering risk as A, no environment mutation.
+
+Option A shipped first and B replaced it on 2026-11-08 (next section): A needed a module-global set of the names it had written, a
+test for "is this variable a person's" and a strip of those names from every daemon a process starts.
 
 `SettingsCatalog.applyAtStart` runs `Apply` for every `Live` descriptor with its resolved value at start. This is the fix for
 defect 1.
@@ -268,3 +271,39 @@ The second pass added the repo-layer cells (a session in a working directory, th
 - `DevReloadMode.fs` and `EditorLink.fs` are BCL only and are also compiled by the isolated FSI host (`FsiHost.fsproj`, the embedded list in `SageFs.Core.fsproj`, and `FsiHostBuild.hostSourceNames`). The first build of this change failed in a REPL session's host build ("SageFsConfig is not defined") because the host compiles `DevReloadInjector.fs` and has no `SageFsConfig`.
 - `NotEditableBudget` is gone. `variables read without a row` is a table in `SettingsExternalTests.fs`, registered with `Ratchet.table`, so `--ratchets --tighten` can rewrite it, and it is 0.
 - The journey now has a session in a working directory: the edit target names it, a per-test timeout saved for the repo wins over the global one and lands in that directory's `.SageFs/settings.json`, and a per-test timeout saved from the page is in force after a restart.
+
+## The settings snapshot and the short list (2026-11-08)
+
+Roast 2026-11-08, item 10: the daemon wrote saved settings into its own environment (`SettingsBootstrap.importSaved`), kept a
+module-global set of the names it wrote, and removed them again from every daemon it started, because `Timeouts` freezes each value
+on first read and the worker took the environment as its settings. Three mechanisms (`importedNames`, `isPersonsVariable`,
+`withoutImported`) existed only to undo the first one. This is option B above.
+
+### What replaced it
+
+- `SettingsSnapshot` (`SageFs.Core/SettingsSnapshot.fs`, the first file Core compiles) is a value: a map of variable name to text, with
+  a private constructor so every name and text survives the `NAME=text` line format. It holds the saved values that no person's
+  variable overrides, plus the machine tier the daemon worked out.
+- `SettingsInForce.read` is the one reader. It answers from the snapshot first and the environment second. Every consumer that
+  used to call `Environment.GetEnvironmentVariable` for a row's variable (`Timeouts`, `SageFsConfig`, `MachineTier`, `DevReloadMode`,
+  `EditorLink`, `MetadataDeltaFlag`, `UpdateCheckService`) calls it. The snapshot is established once; a second, different one is
+  reported as `Establishment.Conflicting` and the first stays.
+- `SettingsBootstrap.resolveSaved` folds the saved file with the environment (a person's variable still wins) into a snapshot and
+  writes nothing to the environment. `Program.fs` establishes it in its top-level `do`, before `Timeouts` is read, together with the
+  machine tier (`MachineStartup.establish` no longer writes `SAGEFS_MACHINE_TIER`).
+- Workers get the snapshot as an argument. The FSI host's command line is `<sessionId> <httpPort> [<snapshot>]`
+  (`WorkerCommandLine`), and the worker passes the same snapshot on to the isolated FSI host as `--settings <snapshot>`
+  (`FsiHostCommandLine`). Both are base 64 text, so there is no quoting. A process started with no snapshot reads the environment only.
+  `SettingsSnapshot.fs` is compiled into the FSI host too (it is BCL only), so `FsiHost.fsproj`, the embedded list in
+  `SageFs.Core.fsproj` and `FsiHostBuild.hostSourceNames` list it.
+- The daemon's environment is the person's. A daemon that the watchdog or the stdio bridge starts inherits it and resolves its own
+  snapshot from the same files, so there is nothing to strip. `isPersonsVariable` is gone because every variable in the environment is one.
+- A test fails if a product file other than `AspireSetup.fs` and `AppRunner.fs` (both set variables for another program's code) calls
+  `SetEnvironmentVariable`.
+
+### Verified
+
+- `SettingsSnapshotTests` (17 cases): the snapshot round trip, the refusals, the read order, the worker command line, the resolution
+  outcomes, a resolution that leaves every `SAGEFS_` variable as it was, and the environment-write ratchet. RED commit f75fcf41.
+- The FSI host project compiles with `SettingsSnapshot.fs` in it (built from a copy of its sources, with the Harmony stub from another
+  host cache).

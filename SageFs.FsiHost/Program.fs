@@ -487,16 +487,30 @@ let private ArgsFileExitCode = 4
 
 [<EntryPoint>]
 let main argv =
-  match checkSupported (), argv with
+  let commandLine = FsiHostCommandLine.parse argv
+  // First, before anything reads `Timeouts`, `DevReloadMode` or `EditorLink`: the settings the worker runs on.
+  match commandLine with
+  | Result.Ok line ->
+    match SettingsInForce.establish line.HostSettings with
+    | Establishment.EstablishedAfterReads ->
+      eprintfn "fsihost: a setting was read before the snapshot was established, so that value holds the environment's."
+    | Establishment.Established
+    | Establishment.AlreadyEstablished
+    | Establishment.Conflicting _ -> ()
+  | Result.Error _ -> ()
+  match checkSupported (), commandLine with
   | Result.Error reason, _ ->
     eprintfn "fsihost: protocol check failed: %s" (describeError reason)
     3
-  | Result.Ok(), [| "--args-file"; argsFile |] ->
-    match HostLimits.readArgsFile argsFile with
+  | Result.Ok(), Result.Ok line ->
+    match HostLimits.readArgsFile line.ArgsFile with
     | Result.Error error ->
       eprintfn "fsihost: %s" (HostLimits.describeArgsFileError error)
       ArgsFileExitCode
     | Result.Ok fsiArgs -> run fsiArgs
-  | Result.Ok(), _ ->
-    eprintfn "usage: FsiHost --args-file <path>"
+  | Result.Ok(), Result.Error (InvalidHostSettings why) ->
+    eprintfn "fsihost: the settings snapshot could not be read: %A" why
+    2
+  | Result.Ok(), Result.Error NotAnArgsFileCommand ->
+    eprintfn "usage: FsiHost --args-file <path> [--settings <snapshot>]"
     2

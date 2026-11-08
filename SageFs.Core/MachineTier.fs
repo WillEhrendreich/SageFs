@@ -100,6 +100,6 @@ module MachineTier =
       | Ok tier -> tier
       | Error _ -> MachineTier.Fast
 
-  /// The tier in force for this process, from its environment.
+  /// The tier in force for this process: the daemon's snapshot, else the environment (`SettingsInForce.read`).
   let current () : MachineTier =
-    ofEnvironmentValue (Environment.GetEnvironmentVariable envVar)
+    ofEnvironmentValue (SettingsInForce.read envVar)

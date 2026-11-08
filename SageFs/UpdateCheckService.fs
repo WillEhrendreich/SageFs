@@ -95,7 +95,7 @@ module UpdateCheckService =
   let private optOutEnvVar = "SAGEFS_UPDATE_CHECK_DISABLED"
 
   let private optedOut () : bool =
-    match Environment.GetEnvironmentVariable optOutEnvVar with
+    match SettingsInForce.read optOutEnvVar with
     | null | "" -> false
     | v -> not (v = "0" || v.Equals("false", StringComparison.OrdinalIgnoreCase))
 

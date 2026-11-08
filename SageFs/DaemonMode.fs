@@ -2182,7 +2182,7 @@ let private reportMachineTierAndOpenLedger (log: Microsoft.Extensions.Logging.IL
 let private applySavedSettings (log: Microsoft.Extensions.Logging.ILogger) : unit =
   for outcome in SettingsBootstrap.lastImport () do
     match outcome with
-    | ImportOutcome.Imported(variable, text) -> log.LogInformation("Settings: {Variable}={Text} comes from the saved settings.", variable, text)
+    | ImportOutcome.InSnapshot(variable, text) -> log.LogInformation("Settings: {Variable}={Text} comes from the saved settings.", variable, text)
     | ImportOutcome.LeftToEnvironment variable -> log.LogInformation("Settings: {Variable} is set in the environment, so the saved value is not used.", variable)
     | ImportOutcome.SavedMeansUnset _ -> ()
     | ImportOutcome.NotUsable(variable, reason) -> log.LogWarning("Settings: {Variable} was left as it was: {Reason}", variable, reason)

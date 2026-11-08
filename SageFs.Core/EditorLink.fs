@@ -49,7 +49,7 @@ module EditorChoice =
     | text -> ofText text
 
   let fromEnvironment () : EditorChoice =
-    choose (Environment.GetEnvironmentVariable envVar) (Environment.GetEnvironmentVariable fallbackEnvVar)
+    choose (SettingsInForce.read envVar) (Environment.GetEnvironmentVariable fallbackEnvVar)
 
   /// The link pattern, with `{file}`, `{line}` and `{col}` for the page's script to fill in.
   let urlPattern (choice: EditorChoice) : string =

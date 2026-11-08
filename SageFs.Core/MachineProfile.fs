@@ -546,9 +546,9 @@ module MachineProbeReader =
     with ex -> Error (ProfileWriteError.CouldNotWrite (profilePath dataDir, ex.Message))
 
 /// The tier of this process, established once at the start of a process that works it out (the
-/// daemon, a command line tool): from the override, the profile in the data directory, or a probe. It
-/// sets `SAGEFS_MACHINE_TIER` in the process's own environment so `Timeouts` and every process this
-/// one starts agree, and keeps how it got there for the surfaces that say so.
+/// daemon, a command line tool): from the override, the profile in the data directory, or a probe. It writes
+/// nothing to the environment. The caller puts the tier in the settings snapshot (`tierEntry`), so `Timeouts` and every
+/// process this one starts agree, and this keeps how it got there for the surfaces that say so.
 module MachineStartup =
 
   [<RequireQualifiedAccess>]
@@ -559,9 +559,10 @@ module MachineStartup =
   let mutable private established = Established.NotYet
   let private gate = obj ()
 
-  /// Work out this process's tier and publish it in its environment. Idempotent: the first call
-  /// decides. Call it before anything reads `Timeouts`. `dataDir` is where the profile lives.
-  let establish (dataDir: string) : TierResolution =
+  /// Work out this process's tier. Idempotent: the first call decides. Call it before anything reads `Timeouts`.
+  /// `dataDir` is where the profile lives. `overrideText` is the tier a person forced, as the settings snapshot or
+  /// the environment gives it (`SettingsInForce.read MachineTier.envVar`), or null.
+  let establish (dataDir: string) (overrideText: string | null) : TierResolution =
     lock gate (fun () ->
       match established with
       | Established.Done resolution -> resolution
@@ -569,21 +570,16 @@ module MachineStartup =
         let dir = dataDir
         let resolution =
           TierResolution.resolve
-            (Environment.GetEnvironmentVariable MachineTier.envVar)
+            overrideText
             (fun () -> MachineProbeReader.readProfile dir)
             (fun () -> MachineProbeReader.read dir)
-        Environment.SetEnvironmentVariable(MachineTier.envVar, MachineTier.toString resolution.Tier)
         established <- Established.Done resolution
         resolution)
+
+  /// The snapshot entry that tells every process this one starts which tier it works at.
+  let tierEntry (resolution: TierResolution) : string * string =
+    MachineTier.envVar, MachineTier.toString resolution.Tier
 
   /// How this process's tier was reached; `NotYet` in a process that was handed its tier (a worker)
   /// and never established one itself.
   let current () : Established = established
-
-  /// The environment of a daemon this process starts. This process worked its own tier out and published it so
-  /// `Timeouts` would see it; a daemon it starts works out its own, from the same profile, and must not mistake
-  /// the published value for a person's override. A person's own override is kept.
-  let withoutDerivedTier (environment: System.Collections.Generic.IDictionary<string, string | null>) : unit =
-    match established with
-    | Established.Done { Override = OverrideUse.NotSet } -> environment.Remove MachineTier.envVar |> ignore
-    | Established.Done _ | Established.NotYet -> ()

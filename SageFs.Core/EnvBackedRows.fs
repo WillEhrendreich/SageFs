@@ -449,7 +449,7 @@ module EnvBackedRows =
           | "" -> None
           | text -> Some text) }
 
-  /// Every setting that is saved as a file value and imported into the environment at start.
+  /// Every setting that is saved as a file value and resolved into the settings snapshot at start.
   let all : EnvBacked list =
     EnvBackedSettings.firstBatch @ [ devReload; editor; referencesResidentCeiling ] @ waitRows @ ageRows @ countRows
 

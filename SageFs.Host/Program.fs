@@ -2,30 +2,39 @@ module SageFs.Host.Program
 
 /// Entry point for the SageFs.Host process — the minimal FSI host.
 ///
-/// Spawned by the daemon's supervisor. Args: <sessionId> <httpPort>.
+/// Spawned by the daemon's supervisor. Args: <sessionId> <httpPort> [<settings snapshot>]
+/// (`SageFs.WorkerCommandLine`). The snapshot is the daemon's resolved settings (saved values and the machine
+/// tier); it is established first, before anything reads `Timeouts`.
 /// The project list, bare flag, and watch flag arrive via environment
 /// variables (SAGEFS_SESSION_PROJECTS etc.), exactly as the worker received
 /// them before the host extraction.
 [<EntryPoint>]
 let main args =
-  let sessionId =
-    match args |> Array.tryItem 0 with
-    | Some id -> id
-    | None ->
+  let commandLine =
+    match SageFs.WorkerCommandLine.parse args with
+    | Ok line -> line
+    | Error SageFs.MissingSessionId ->
       eprintfn "SageFs.Host: missing sessionId argument"
       exit 2
-
-  let httpPort =
-    match args |> Array.tryItem 1 with
-    | Some p ->
-      match System.Int32.TryParse p with
-      | true, port -> port
-      | _ ->
-        eprintfn "SageFs.Host: invalid httpPort argument: %s" p
-        exit 2
-    | None ->
+    | Error SageFs.MissingHttpPort ->
       eprintfn "SageFs.Host: missing httpPort argument"
       exit 2
+    | Error (SageFs.InvalidHttpPort text) ->
+      eprintfn "SageFs.Host: invalid httpPort argument: %s" text
+      exit 2
+    | Error (SageFs.InvalidSettings why) ->
+      eprintfn "SageFs.Host: the settings snapshot argument could not be read: %A" why
+      exit 2
+
+  match SageFs.SettingsInForce.establish commandLine.Settings with
+  | SageFs.Establishment.EstablishedAfterReads ->
+    eprintfn "SageFs.Host: a setting was read before the snapshot was established, so that value holds the environment's."
+  | SageFs.Establishment.Established
+  | SageFs.Establishment.AlreadyEstablished
+  | SageFs.Establishment.Conflicting _ -> ()
+
+  let sessionId = commandLine.SessionId
+  let httpPort = commandLine.HttpPort
 
   let hostDir = System.AppContext.BaseDirectory
 

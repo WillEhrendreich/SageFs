@@ -29,4 +29,4 @@ module DevReloadMode =
       | _ -> DevReloadMode.Enabled
 
   let fromEnvironment () : DevReloadMode =
-    parse (Environment.GetEnvironmentVariable envVar)
+    parse (SettingsInForce.read envVar)

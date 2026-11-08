@@ -573,8 +573,10 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
     for option in HostAdaptation.muxerOptions overrides do
       psi.ArgumentList.Add option
     psi.ArgumentList.Add options.HostDll
-    psi.ArgumentList.Add "--args-file"
-    psi.ArgumentList.Add argsFile
+    // The settings this worker runs on go to the host as one more argument, so a wait the host scales and a switch
+    // it reads (dev-reload, the editor) are the daemon's. An empty snapshot adds nothing.
+    for argument in FsiHostCommandLine.render argsFile (SettingsInForce.current ()) do
+      psi.ArgumentList.Add argument
     psi.WorkingDirectory <- options.WorkingDir
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true

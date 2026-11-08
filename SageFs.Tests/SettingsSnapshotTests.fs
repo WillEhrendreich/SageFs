@@ -99,7 +99,7 @@ let resolveTests =
     testCase "WHY — a saved wait is in the snapshot when the person set no variable, and nothing is written to the environment" <| fun _ ->
       run [ "waits.warmupInactivitySeconds", "90" ] [] (fun resolved ->
         SettingsSnapshot.tryFind "SAGEFS_WARMUP_INACTIVITY_SECONDS" resolved.Snapshot |> Expect.equal "the snapshot holds the saved text" (Some "90")
-        resolved.Outcomes |> Expect.equal "and the resolution says so" [ ImportOutcome.Applied("SAGEFS_WARMUP_INACTIVITY_SECONDS", "90") ])
+        resolved.Outcomes |> Expect.equal "and the resolution says so" [ ImportOutcome.InSnapshot("SAGEFS_WARMUP_INACTIVITY_SECONDS", "90") ])
 
     testCase "WHY — a variable the person set wins over the saved value and is not in the snapshot" <| fun _ ->
       run [ "waits.warmupMaxMinutes", "25" ] [ "SAGEFS_WARMUP_MAX_MINUTES", "15" ] (fun resolved ->

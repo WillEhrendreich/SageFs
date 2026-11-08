@@ -1,6 +1,7 @@
 /// Centralised runtime configuration for SageFs.
-/// All environment variable reads happen here — no other module calls
-/// Environment.GetEnvironmentVariable directly (except OTEL SDK integration points).
+/// The variables of the settings rows are read here through `SettingsInForce.read`: the daemon's snapshot first,
+/// then the environment. No other module reads one of them with `Environment.GetEnvironmentVariable`
+/// (except OTEL SDK integration points).
 ///
 /// Rule: [<Literal>] for compile-time constants (usable in patterns/attributes/sprintf).
 ///       Plain let for runtime values (env-var derived, evaluated once at module init).
@@ -14,7 +15,7 @@ open System
 // ---------------------------------------------------------------------------
 
 let private envInt (name: string) (defaultValue: int) =
-  match Environment.GetEnvironmentVariable(name) with
+  match SettingsInForce.read name with
   | null | "" -> defaultValue
   | s ->
     match Int32.TryParse(s) with
@@ -26,7 +27,7 @@ let private envInt (name: string) (defaultValue: int) =
       defaultValue
 
 let private envBool (name: string) (defaultValue: bool) =
-  match Environment.GetEnvironmentVariable(name) with
+  match SettingsInForce.read name with
   | null | "" -> defaultValue
   | s ->
     match s.Trim().ToLowerInvariant() with
@@ -39,7 +40,7 @@ let private envBool (name: string) (defaultValue: bool) =
       defaultValue
 
 let private envString (name: string) (defaultValue: string) =
-  match Environment.GetEnvironmentVariable(name) with
+  match SettingsInForce.read name with
   | null | "" -> defaultValue
   | s -> s
 
@@ -131,7 +132,7 @@ module ResidentCeilingSetting =
 /// file). A flat default could not fit both a 4 GB laptop and the 64 GB workstation where the eight-project
 /// SageFs.Tests session needs 4.0 to 4.3 GB to be answered project-wide.
 let ReferencesResidentCeilingSetting : ResidentCeilingSetting =
-  let setting = ResidentCeilingSetting.parse (Environment.GetEnvironmentVariable "SAGEFS_REFERENCES_RESIDENT_CEILING_MB")
+  let setting = ResidentCeilingSetting.parse (SettingsInForce.read "SAGEFS_REFERENCES_RESIDENT_CEILING_MB")
   match setting with
   | ResidentCeilingSetting.Rejected text ->
     eprintfn
