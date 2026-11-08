@@ -20,7 +20,8 @@ type SseAttachment =
 /// would never know it had missed it. An observer is called under the lock, so it must be quick
 /// and must not throw; the daemon's queues the shared `Replayable` into a bounded channel
 /// (`SseOutbox.OfferLogged`) and builds no text, so the one thing that could throw there, formatting a
-/// large frame, happens on each connection's own writer and not under this lock.
+/// large frame, happens on each connection's own writer and not under this lock. `measure` gives a frame's size on the wire;
+/// `Publish` calls it before it takes the lock, for the same reason, and it is a parameter so a case can see when.
 type SseLog(epoch: string, limits: ReplayLimits, measure: SseFrame -> int) =
   let gate = obj ()
   let mutable buffer = SseReplay.create epoch limits
@@ -30,8 +31,11 @@ type SseLog(epoch: string, limits: ReplayLimits, measure: SseFrame -> int) =
   new(epoch: string, limits: ReplayLimits) = SseLog(epoch, limits, SseFrame.wireBytes)
 
   member _.Publish(frame: SseFrame) : Replayable =
+    // Measured before the lock: counting the bytes walks the whole text, a megabyte at times, and every other
+    // publisher waits on the lock while it is held.
+    let bytes = measure frame
     lock gate (fun () ->
-      let item, buffer' = SseReplay.recordWith measure frame buffer
+      let item, buffer' = SseReplay.recordSized bytes frame buffer
       buffer <- buffer'
       for entry in observers do
         let stream, onFrame = entry.Value

@@ -164,8 +164,9 @@ let sseLogTests =
           | false -> ()
           SseFrame.wireBytes frame
         let log = SseLog(epoch, roomy, measure)
-        // The observer runs under the log's lock. It holds the first publish there until the test lets it go.
-        log.Attach(StreamScope.EverySession, None, fun _ -> insideObserver.Set(); letGo.Wait()) |> ignore
+        // The observer runs under the log's lock, on the first publisher's own dedicated thread, and holds the publish
+        // there until the test lets it go (or the ceiling passes, so a failing case cannot hang the thread for ever).
+        log.Attach(StreamScope.EverySession, None, fun _ -> insideObserver.Set(); letGo.Wait TestTimeouts.patience |> ignore) |> ignore
         let first = DedicatedThread.run "sse-first-publisher" (fun () -> log.Publish { Scope = FrameScope.Daemon; Wire = "first" } |> ignore)
         insideObserver.Wait TestTimeouts.patience |> Expect.isTrue "the first publish is inside the observer, holding the lock"
         let second = DedicatedThread.run "sse-second-publisher" (fun () -> log.Publish { Scope = FrameScope.Daemon; Wire = "second" } |> ignore)
