@@ -40,6 +40,8 @@ module McpConnectionSim =
   type State =
     { Connections: Dictionary<int, Connection>
       Registered: HashSet<int>
+      /// What the fan-out holds against each connection (a connection that fails is dropped at once, as the SDK's does).
+      Ledger: FanoutLedger
       /// True when the event that produced this state was a broadcast.
       AfterNotify: bool
       mutable Step: int }
@@ -47,6 +49,7 @@ module McpConnectionSim =
   let private initial () : State =
     { Connections = Dictionary<int, Connection>()
       Registered = HashSet<int>()
+      Ledger = FanoutLedger()
       AfterNotify = false
       Step = 0 }
 
@@ -55,6 +58,7 @@ module McpConnectionSim =
 
   let private targetOf (behavior: Behavior) (state: State) (bytes: int) (connection: Connection) : FanoutTarget =
     { Id = string connection.Id
+      Bytes = int64 bytes
       Send = fun _ ->
         // The SDK appends first and clears only after the client took the bytes.
         connection.Buffered <- connection.Buffered + int64 bytes
@@ -94,7 +98,7 @@ module McpConnectionSim =
           | true, connection -> Some(targetOf behavior state bytes connection)
           | false, _ -> None)
         |> Seq.toArray
-      McpFanout.broadcast Timeouts.mcpNotificationSend Timeouts.mcpConnectionRelease targets
+      McpFanout.broadcast (FanoutPolicy.standard Timeouts.mcpNotificationSend) state.Ledger Timeouts.mcpConnectionRelease targets
       |> fun task -> task.GetAwaiter().GetResult()
       |> ignore
 
@@ -106,6 +110,7 @@ module McpConnectionSim =
         yield
           { Connections = Dictionary(state.Connections |> Seq.map (fun kvp -> KeyValuePair(kvp.Key, { kvp.Value with Buffered = kvp.Value.Buffered })))
             Registered = HashSet(state.Registered)
+            Ledger = state.Ledger
             AfterNotify = (match event with SimEvent.Notify _ -> true | _ -> false)
             Step = state.Step } ]
 

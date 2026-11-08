@@ -207,12 +207,13 @@ module Timeouts =
   /// `workerHttpRequest`'s ten minutes, which the tool call itself (a test run, a build) may need.
   let callHandshakeRequest = forMachine (TimeSpan.FromSeconds(30.0))
   let sseKeepAlive = TimeSpan.FromHours(24.0)
-  /// How long one MCP notification (a log line or a resource update) may take to reach a connected client
-  /// before that connection is dropped. A client that reads its stream answers a few hundred bytes in
-  /// milliseconds. One that does not (a bridge blocked on its own stderr pipe, a stopped process) leaves the
-  /// SDK's per-connection write buffer holding every notification sent since, and on 2026-11-07 311 such
-  /// connections held 25 GB. Half a second is long enough for a busy but live client and short enough that
-  /// a stuck one holds one notification, not a backlog.
+  /// How long a broadcast waits for one MCP notification (a log line or a resource update) to reach a connected
+  /// client before it judges the connection by its backlog instead (`McpFanout`, `FanoutPolicy`). It is not a
+  /// deadline: a send still going after it is left to finish, because a starved thread pool made a fixed half second
+  /// drop clients that were reading, and cutting a write off leaves its bytes in the SDK's buffer anyway. What drops a
+  /// connection is a failed send, or more unfinished bytes than `FanoutPolicy.StandardMaxBufferedBytes`: a client that
+  /// stopped reading (a bridge blocked on its own stderr pipe, a stopped process) leaves the SDK's per-connection write
+  /// buffer holding every notification sent since, and on 2026-11-07 311 such connections held 25 GB.
   let mcpNotificationSend = TimeSpan.FromMilliseconds(500.0)
   /// How long dropping a stuck MCP connection may take before the daemon stops waiting for it. The drop
   /// disposes the connection, which waits on the lock the stuck write released a moment ago.

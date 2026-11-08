@@ -45,8 +45,11 @@ type McpServerTracker() =
   /// `key` as the notification fan-out sees it. Releasing it forgets the connection here and then disposes
   /// the server, which closes the SDK transport and returns the SSE write buffer it holds. A connection that
   /// is already gone from `servers` was released by an earlier failed send, so this releases it once.
-  let fanoutTargetOf (key: string) (server: McpServer) (send: CancellationToken -> Task) : FanoutTarget =
+  let fanoutLedger = FanoutLedger()
+  let fanoutPolicy = FanoutPolicy.standard SageFs.Timeouts.mcpNotificationSend
+  let fanoutTargetOf (key: string) (server: McpServer) (bytes: int64) (send: CancellationToken -> Task) : FanoutTarget =
     { Id = key
+      Bytes = bytes
       Send = send
       Release = fun () ->
         resourceSubscriptions.TryRemove(key) |> ignore
@@ -78,8 +81,8 @@ type McpServerTracker() =
 
   /// Broadcast `notifications/resources/updated` for `uri` to every
   /// connected MCP client that subscribed to it. Mirrors `NotifyLogAsync`'s
-  /// fan-out/timeout/dead-connection-pruning discipline exactly (500ms
-  /// per-send timeout, a dead connection is dropped from both `servers` and
+  /// fan-out/backlog/dead-connection-pruning discipline exactly (a failed
+  /// send or a backlog past the policy drops the connection from both `servers` and
   /// `resourceSubscriptions`), scoped down to only the sessions that
   /// actually subscribed to this URI — a client that never called
   /// `resources/subscribe` for `uri` never receives this notification.
@@ -98,30 +101,31 @@ type McpServerTracker() =
         let targets =
           subscribed
           |> Array.map (fun (key, server) ->
-            fanoutTargetOf key server (fun token ->
+            fanoutTargetOf key server (int64 (System.Text.Encoding.UTF8.GetByteCount uri)) (fun token ->
               let payload = ResourceUpdatedNotificationParams(Uri = uri)
               server.SendNotificationAsync(
                 NotificationMethods.ResourceUpdatedNotification, payload,
                 cancellationToken = token)))
-        let! _ = McpFanout.broadcast SageFs.Timeouts.mcpNotificationSend SageFs.Timeouts.mcpConnectionRelease targets
+        let! _ = McpFanout.broadcast fanoutPolicy fanoutLedger SageFs.Timeouts.mcpConnectionRelease targets
         ()
     }
 
   /// Broadcast a structured logging notification to all connected MCP clients.
-  /// Sends to all clients in parallel with a 500ms per-send timeout.
+  /// Sends to all clients in parallel; a client is dropped for a failed send or a backlog past the fan-out policy, never for a slow one.
   member _.NotifyLogAsync(level: LoggingLevel, logger: string, data: obj) =
     task {
       match servers.IsEmpty with
       | true -> return ()
       | false ->
+        let json = Json.serialize Json.standard data
+        let payloadBytes = int64 (System.Text.Encoding.UTF8.GetByteCount json)
         let jsonElement =
-          let json = Json.serialize Json.standard data
           use doc = JsonDocument.Parse(json)
           doc.RootElement.Clone()
         let targets =
           servers
           |> Seq.map (fun kvp ->
-            fanoutTargetOf kvp.Key kvp.Value (fun token ->
+            fanoutTargetOf kvp.Key kvp.Value payloadBytes (fun token ->
               let payload =
                 LoggingMessageNotificationParams(
                   Level = level, Logger = logger, Data = jsonElement)
@@ -129,7 +133,7 @@ type McpServerTracker() =
                 NotificationMethods.LoggingMessageNotification, payload,
                 cancellationToken = token)))
           |> Seq.toArray
-        let! _ = McpFanout.broadcast SageFs.Timeouts.mcpNotificationSend SageFs.Timeouts.mcpConnectionRelease targets
+        let! _ = McpFanout.broadcast fanoutPolicy fanoutLedger SageFs.Timeouts.mcpConnectionRelease targets
         ()
     }
 
