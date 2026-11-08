@@ -278,6 +278,11 @@ let items : Item list =
       [ "docs/repl-loop-benchmarks.md"; "docs/plans/repl-benchmark-against-other-tools.md" ]
       "I want to be able to say where SageFs is ahead of another REPL server and where it is behind, with numbers I can defend. The harness drives each server over stdio on the same small project: time to ready, first and follow-up eval, rebuild and continue, a hang, a stack overflow, a failed build, tool-list tokens, and steps from nothing to a first eval. It runs only on a quiet machine, refuses to record a number without the machine, load and versions, and publishes a dated page that credits each tool's author and links each loss to its plan. FsiMcp is the first comparison. Running someone else's package needs my go and a sandbox, so the plan says how, and no timing is written until then."
 
+    item "eval-hang-and-stack-overflow" "A hung or runaway eval answers in bounded time" Repl Now
+      (landmark "SageFs.Core/EvalBound.fs" "EvalWait")
+      [ "docs/mcp-tools.md"; "docs/plans/eval-hang-and-stack-overflow.md" ]
+      "An eval that loops, waits or recurses used to leave the caller waiting for the worker's ten minutes, and cancelling it ended the call while the host kept running the code, so the next eval queued behind a run nobody waited for. Now `send_fsharp_code` takes `timeout_seconds` (default 120), cancels at the limit and says so, and a host that does not stop within ten seconds of a cancel is killed with a message that says what was lost. A stack overflow reports `stack overflow` with the recursing function, and every eval runs on a 256 MB stack like FsiMcp's."
+
     item "eval-cost-line" "A cost line on a slow or allocation-heavy eval" Repl Later
       NoLandmarkYet
       [ "docs/plans/eval-cost-line.md" ]
