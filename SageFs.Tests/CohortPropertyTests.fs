@@ -1535,7 +1535,7 @@ let cohortPropertyTests =
 
     testList "a person replaces a conductor whose connection is gone (36-39)" [
 
-      let replaceConfig = { cohortConfig with arbitrary = [ typeof<ReplacingGenerators> ]; replay = Some(0x5EEDUL, 0x4E91ACEUL, None) }
+      let replaceConfig = { cohortConfig with arbitrary = [ typeof<ReplacingGenerators> ]; replay = Some(0x5EEDUL, 0x4E91ACFUL, None) }
       let isPresentIn (state: CohortState<Agent>) (m: Agent) =
         match Map.tryFind m state.Members with
         | Some { Presence = MemberPresence.Present } -> true

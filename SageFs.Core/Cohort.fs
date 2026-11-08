@@ -1439,10 +1439,33 @@ module Cohort =
           let newState = { state with Conductor = ConductorBinding.Bound toMember }
           Ok(newState, [ CohortEvent.ConductorSeated(toMember, state.Conductor) ], [])
 
-    | CohortCommand.ReplaceConductor(holder, _, scope) ->
+    | CohortCommand.ReplaceConductor(holder, toMember, scope) ->
+      // A PERSON replaces the holder of a BOUND seat. The command names the holder, and the seat must still be bound to
+      // exactly that member: a person who looked at the seat cannot move one that changed under them, and an empty seat
+      // is filled by `SeatConductor`, not replaced. The same operator route is the only place that builds it.
       match checkScope scope with
       | Error e -> Error e
-      | Ok () -> Error(CohortError.ConductorHolderChanged(holder, state.Conductor))
+      | Ok () ->
+      match state.Conductor with
+      | ConductorBinding.NeverBound
+      | ConductorBinding.Vacant _ -> Error(CohortError.ConductorHolderChanged(holder, state.Conductor))
+      | ConductorBinding.Bound sitting when sitting <> holder -> Error(CohortError.ConductorHolderChanged(holder, state.Conductor))
+      | ConductorBinding.Bound _ when toMember = holder -> Error(CohortError.ReplaceByHolder holder)
+      | ConductorBinding.Bound _ ->
+        if not (isPresent state toMember) then
+          let roster =
+            state.Members
+            |> Map.toList
+            |> List.choose (fun (m, r) ->
+              match r.Presence with
+              | MemberPresence.Present -> Some m
+              | MemberPresence.Departed _ -> None)
+          Error(CohortError.SeatTargetAbsent(toMember, roster))
+        else
+          // `toMember` is Present by that guard, which keeps the `Bound` invariant. Nothing else moves: the former holder
+          // stays Present (or Departed) as it was, and the claims it holds stay its own.
+          let newState = { state with Conductor = ConductorBinding.Bound toMember }
+          Ok(newState, [ CohortEvent.ConductorReplaced(toMember, ConductorBinding.Vacant(holder, clock, VacancyReason.Replaced)) ], [])
 
     | CohortCommand.ObserveSave(who, path, scope) ->
       match checkScope scope with

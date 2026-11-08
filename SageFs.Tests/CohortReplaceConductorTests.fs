@@ -163,7 +163,7 @@ let holderSilenceTests =
   testList "A conductor holder's silence is read off its lease" [
 
     test "a holder renewed inside the silence threshold is not silent" {
-      silence (alicesSeat ()) (epoch + window - TimeSpan.FromSeconds 1.0)
+      silence (alicesSeat ()) (epoch + window - TimeSpan.FromTicks 1L)
       |> Expect.equal "between reaper passes" SageFs.Features.CohortStatusText.HolderSilence.NotSilent
     }
 
@@ -174,7 +174,7 @@ let holderSilenceTests =
 
     test "a renewal moves the silence forward" {
       let renewed = next (epoch.AddMinutes 10.0) (alicesSeat ()) (CohortCommand.RenewLease(alice, machine))
-      silence renewed (epoch.AddMinutes 10.0 + window - TimeSpan.FromSeconds 1.0)
+      silence renewed (epoch.AddMinutes 10.0 + window - TimeSpan.FromTicks 1L)
       |> Expect.equal "renewed ten minutes in, so not silent yet" SageFs.Features.CohortStatusText.HolderSilence.NotSilent
     }
 
