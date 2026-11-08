@@ -144,4 +144,48 @@ let tests =
       Expect.isFalse (header.Contains("1✗"))
         (sprintf "header should be all-green after restore, was: %s" header)
     })
+
+    ltPlaywrightTest "the bindings pane follows the loop: the chip says current, and Since green lists what moved while a test was red" (fun page -> task {
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
+      do! ensureLiveTestingOn page
+      let panel = page.Locator("#live-testing-panel")
+      do! PlaywrightExpect.waitForText BrowserWaits.liveTestsReport panel "11✓"
+      // A value for the bindings pane to hold, put in through the Evaluate popover as a person would.
+      let evaluate (code: string) (echoed: string) = task {
+        let! isOpen = page.EvaluateAsync<bool>("() => document.querySelector('#evaluate-section').open")
+        if not isOpen then do! page.Locator("[data-testid=evaluate-toggle]").ClickAsync()
+        do! page.Locator("#eval-textarea").FillAsync code
+        do! page.Locator("#evaluate-section .eval-btn").First.ClickAsync()
+        do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" echoed
+        do! page.Locator("[data-testid=evaluate-close]").ClickAsync()
+      }
+      let chip = page.Locator("[data-testid=live-freshness]")
+      do! evaluate "let marker = 1;;" "marker: int = 1"
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#bindings-panel" "marker"
+      // The loop settled with every test passing, so the pane says its values are current.
+      do! PlaywrightExpect.waitForText BrowserWaits.liveTestsReport chip "current"
+      for width in [ 1400; 900; 400 ] do
+        do! page.SetViewportSizeAsync(width, 900)
+        do! PlaywrightFixture.takeScreenshot page false (IO.Path.Combine(PlaywrightFixture.screenshotDir, sprintf "lt-chip-current-%d.png" width))
+      do! page.SetViewportSizeAsync(1400, 900)
+      let original = readHello ()
+      let edited = original.Replace(canonicalAdd, brokenAdd)
+      try
+        writeHello edited
+        do! PlaywrightExpect.waitForText BrowserWaits.liveTestsRerun panel "1✗"
+        // A test went red and the value moved after it: Since green names it with what it was when the tests last passed.
+        do! evaluate "let marker = 2;;" "marker: int = 2"
+        do! page.Locator("[data-testid=live-tab-since-green]").ClickAsync()
+        let was = page.Locator("[data-testid=live-was]")
+        do! PlaywrightExpect.waitForText BrowserWaits.daemonWork was "was 1"
+        for width in [ 1400; 900; 400 ] do
+          do! page.SetViewportSizeAsync(width, 900)
+          do! PlaywrightFixture.takeScreenshot page false (IO.Path.Combine(PlaywrightFixture.screenshotDir, sprintf "lt-since-green-red-%d.png" width))
+        do! page.SetViewportSizeAsync(1400, 900)
+      finally
+        writeHello original
+      // The tests pass again: the comparison point is now, so nothing has moved since it.
+      do! PlaywrightExpect.waitForText BrowserWaits.liveTestsRerun panel "11✓"
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "[data-testid=live-tab-empty-since-green]" "Nothing has moved"
+    })
   ]
