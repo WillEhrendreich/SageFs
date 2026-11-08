@@ -2310,7 +2310,10 @@ let run
   // Wakes the idle live-testing tick when a model change queues a debounce;
   // assigned once the tick timer exists (below).
   let wakeLiveTestTick : (SageFsModel -> unit) ref = ref ignore
-  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef (fun model -> wakeLiveTestTick.Value model) cts.Token
+  // The Since green tab's comparison points: taken by the model hook below where the loop settles, read by the dashboard.
+  let sinceGreenPoints = LiveBindingsSinceGreen.create ()
+  let sinceGreenHook : (SageFsModel -> unit) ref = ref ignore
+  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef (fun model -> wakeLiveTestTick.Value model; sinceGreenHook.Value model) cts.Token
 
   // #82: route a run_app'd app's stdout into that session's output panel via the
   // existing OutputEmitted append path — BATCHED (#88). A continuous app (a
@@ -3820,6 +3823,7 @@ let run
             | Some config -> config.ValueWalk
             | None -> ValueWalk.standard }
   let liveBindingsAdaptive = liveBindingsHub.Adaptive
+  sinceGreenHook.Value <- LiveBindingsSinceGreen.observeModel sinceGreenPoints (SageFs.Features.LiveBindingsAdaptive.tryGet liveBindingsAdaptive)
   // What the dashboard's live-bindings knob remembers per session (what it did to each row, each file's undo trail), and the file
   // reads it caches. It writes through the same nudge door `nudge_value` does, with the same shared per-file locks and journals.
   let tweakService =
@@ -4294,6 +4298,10 @@ let run
     |> List.iter (fun k ->
       SageFs.Features.LiveBindingsPane.PaneStore.remove liveBindingsHub.Notes k
       SageFs.Features.LiveBindingsPane.Feed.gates.TryRemove k |> ignore)
+    sinceGreenPoints.Keys
+    |> Seq.filter (fun k -> not (liveIds.Contains k))
+    |> Seq.toList
+    |> List.iter (LiveBindingsSinceGreen.forget sinceGreenPoints)
     tweakService.Memories.Keys
     |> Seq.filter (fun k -> not (liveIds.Contains k))
     |> Seq.toList
@@ -4687,6 +4695,7 @@ let run
       SageFs.LiveTestViewReads.statusBarFor viewing (elmRuntime.GetModel())
     GetLiveTestActivity = fun sessionId ->
       SageFsModel.liveTestActivityFor sessionId (elmRuntime.GetModel())
+    GetSinceGreen = LiveBindingsSinceGreen.pointOf sinceGreenPoints
     GetEvalTimeline = fun () ->
       let state = System.Threading.Volatile.Read(&sharedFeatureState.contents)
       SageFs.Features.EvalTimeline.timelineStats 20 state.CachedTimeline

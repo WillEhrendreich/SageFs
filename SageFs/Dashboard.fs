@@ -1251,10 +1251,10 @@ let buildDashboardSnapshotWithSessionsFor
             | LiveBindingsDock.WalkedBindings walked -> SageFs.ValueWalk.toWalkMode walked.Notes.Mode, Some walked.Snapshot
             | LiveBindingsDock.PrintedBindings _
             | LiveBindingsDock.NothingBound -> SageFs.Features.LiveValueTree.WalkMode.Safe, None
-          // Every push reads the loop and the walk, so the comparison point of the Since green tab follows the loop.
+          // What moved since the comparison point the loop took when it last settled green. Drawing only reads it.
           let sinceGreen =
             match walk with
-            | Some snapshot -> LiveBindingsSinceGreen.observe (WorkerProtocol.SessionId.value sessionId) (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId)) snapshot
+            | Some snapshot -> LiveBindingsSinceGreen.said (q.GetSinceGreen (WorkerProtocol.SessionId.value sessionId)) snapshot
             | None -> LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet
           Some { viewControls with Watch = LiveBindingsWatch.partsFor (WorkerProtocol.SessionId.value sessionId) (liveBindingsViewPaths workingDir) mode walk; Formats = look.Formats; Freshness = LiveBindingsViewPanel.LoopSaid.ofActivity (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId)); SinceGreen = sinceGreen }
         | DockPanes.NoSessionInView -> None

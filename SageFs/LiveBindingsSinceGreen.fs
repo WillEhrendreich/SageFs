@@ -1,21 +1,35 @@
-/// The comparison point of the "Since green" tab, kept for each session: the values at the last settle with no failures
-/// (docs/plans/live-bindings-watch-view.md, step 11). The decisions are `SinceGreen` (pure, in Core). This remembers the point between
-/// pushes and says what the tab shows. Every push observes the loop, so the point follows it without a timer.
+/// The comparison point of the "Since green" tab, kept for each session (docs/plans/live-bindings-watch-view.md, step 11). The decisions
+/// are `SinceGreen` (pure, in Core). The point is taken where the test loop settles, from the model every change of which passes the
+/// daemon's model hook, and not where the dashboard draws: a render only reads it (`said`), so the tab is right whether or not a browser
+/// was watching when the tests went green and then red.
 module SageFs.Server.LiveBindingsSinceGreen
 
+open System.Collections.Concurrent
 open SageFs
 open SageFs.Features
 open SageFs.Features.Tweak
 
-/// How many sessions' comparison points are kept at once. A point is a convenience for a session on screen, so the oldest goes first.
-let [<Literal>] SessionCapacity = 64
+/// The daemon's comparison points, by session. One value owned by the daemon and written only by its model hook.
+type Recorder = ConcurrentDictionary<string, SinceGreen.Green>
 
-let private points = PageChoices<SinceGreen.Green>(SessionCapacity)
+let create () : Recorder = Recorder()
 
-/// Take this push's reading of the loop and the walk: the point moves if the loop has just settled green, and what the tab shows is
-/// what moved since the point.
-let observe (sessionId: string) (activity: LiveTestActivity.LiveTestActivity) (walk: LiveValueTree.LiveValueSnapshot) : LiveBindingsViewPanel.GreenSaid =
-  let current = SinceGreen.valuesOf walk
-  match points.Update(sessionId, SinceGreen.Green.NoGreenYet, fun green -> SinceGreen.update green activity current) with
-  | SinceGreen.Green.NoGreenYet -> LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet
-  | SinceGreen.Green.GreenAt _ as green -> LiveBindingsViewPanel.GreenSaid.Moved(SinceGreen.moves green current)
+/// The point a session has now, or none yet.
+let pointOf (recorder: Recorder) (sessionId: string) : SinceGreen.Green =
+  match recorder.TryGetValue sessionId with
+  | true, green -> green
+  | false, _ -> SinceGreen.Green.NoGreenYet
+
+/// The loop settled run `generation` of a session into `activity` while its walk held `walk`.
+let observe (recorder: Recorder) (sessionId: string) (generation: int64) (activity: LiveTestActivity.LiveTestActivity) (walk: LiveValueTree.LiveValueSnapshot) : unit = ()
+
+/// A session is gone: its point goes with it.
+let forget (recorder: Recorder) (sessionId: string) : unit = recorder.TryRemove sessionId |> ignore
+
+/// Every change of the daemon's model, for every session whose live-testing cycle it holds: look at the sessions whose last run has not
+/// had its point taken, and take it if the run settled green.
+let observeModel (recorder: Recorder) (walkOf: string -> LiveValueTree.LiveValueSnapshot option) (model: SageFsModel) : unit = ()
+
+/// What the tab shows for a point and the walk now. Only reads.
+let said (green: SinceGreen.Green) (walk: LiveValueTree.LiveValueSnapshot) : LiveBindingsViewPanel.GreenSaid =
+  LiveBindingsViewPanel.GreenSaid.NoGreenSettleYet

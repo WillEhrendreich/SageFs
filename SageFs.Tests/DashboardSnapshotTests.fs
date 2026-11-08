@@ -195,6 +195,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetBindingScopeSnapshot = fun () -> None
       GetLiveTestingStatus = fun _ -> ""
       GetLiveTestActivity = fun _ -> activity
+      GetSinceGreen = fun _ -> SageFs.Features.Tweak.SinceGreen.Green.NoGreenYet
       GetEvalTimeline =
         fun () -> SageFs.Features.EvalTimeline.TimelineState.empty |> SageFs.Features.EvalTimeline.timelineStats 20
       GetDaemonHealth = fun () -> None

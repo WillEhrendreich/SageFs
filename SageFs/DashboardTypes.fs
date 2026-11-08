@@ -1528,6 +1528,10 @@ type DashboardQueries = {
   GetLiveTestingStatus: WorkerProtocol.SessionId -> string
   /// The one live-testing state for a session ("" when no session is viewed).
   GetLiveTestActivity: string -> Features.LiveTestActivity.LiveTestActivity
+  /// The "Since green" comparison point of a session: the walk's values at the last settle of the test loop with a pass and no failure.
+  /// It is taken where the loop settles (the daemon's model hook), never while this snapshot is drawn, so a read answers the same
+  /// whether or not a browser was open when the tests went green and then red.
+  GetSinceGreen: string -> Features.Tweak.SinceGreen.Green
   /// Read current EvalTimeline stats from the shared feature push state.
   GetEvalTimeline: unit -> Features.EvalTimeline.TimelineStats
   /// Read current daemon health snapshot from the shared feature push state.

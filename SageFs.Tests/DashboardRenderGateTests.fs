@@ -50,6 +50,7 @@ let mkQueries (getAllSessionsCount: int ref) (sessions: WorkerProtocol.SessionIn
     GetBindingScopeSnapshot = fun () -> None
     GetLiveTestingStatus = fun _ -> ""
     GetLiveTestActivity = fun _ -> SageFs.Features.LiveTestActivity.LiveTestActivity.Off
+    GetSinceGreen = fun _ -> SageFs.Features.Tweak.SinceGreen.Green.NoGreenYet
     GetEvalTimeline =
       fun () -> SageFs.Features.EvalTimeline.TimelineState.empty |> SageFs.Features.EvalTimeline.timelineStats 20
     GetDaemonHealth = fun () -> None

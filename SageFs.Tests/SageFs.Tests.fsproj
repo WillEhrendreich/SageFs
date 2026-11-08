@@ -583,6 +583,7 @@
         <Compile Include="RowFormatTests.fs" />
         <Compile Include="LoopFreshnessTests.fs" />
         <Compile Include="SinceGreenTests.fs" />
+        <Compile Include="SinceGreenRecorderTests.fs" />
         <Compile Include="LiveBindingsRowFormatTests.fs" />
         <Compile Include="DockCompactionTests.fs" />        <Compile Include="LiveBindingsTweakServiceTests.fs" />
         <Compile Include="LiveBindingsTweakViewTests.fs" />
