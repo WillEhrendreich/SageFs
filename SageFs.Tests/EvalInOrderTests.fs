@@ -5,6 +5,7 @@
 module SageFs.Tests.EvalInOrderTests
 
 open System
+open System.Threading
 open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
@@ -23,6 +24,19 @@ type FakeWorker() =
       | false ->
         ran.Add first
         return Ok(sprintf "ran %s" first)
+    }
+
+/// A worker whose every statement waits for the test to let it finish, and which records the order statements ENTERED it.
+type Turnstile() =
+  let entered = ResizeArray<string>()
+  let permits = new SemaphoreSlim(0)
+  member _.Entered : string list = lock entered (fun () -> List.ofSeq entered)
+  member _.LetThrough(count: int) : unit = permits.Release count |> ignore
+  member _.Eval(text: string) : Task<Result<string, string>> =
+    task {
+      lock entered (fun () -> entered.Add(text.Trim().TrimEnd(';')))
+      do! permits.WaitAsync()
+      return Ok text
     }
 
 /// What the Evaluate box did before: the whole text, once.
@@ -77,6 +91,56 @@ let tests =
     testCase "the words for a stop say how many did not run, and say nothing when the last one failed" <| fun _ ->
       (EvalSequence.describeStop 1 3 "x;;" "bad").Contains "The 2 statements after it did not run." |> Expect.isTrue "two"
       (EvalSequence.describeStop 3 3 "x;;" "bad").Contains "did not run" |> Expect.isFalse "the last one has nothing after it"
+
+    testList "a submission to a session" [
+
+      testTask "WHY — a paste of thirty statements pulls the live bindings once, after the last, not thirty times" {
+        let worker = FakeWorker()
+        let pulls = ref 0
+        let statements = [ for i in 1 .. 30 -> sprintf "let s%d = %d;;" i i ]
+        let! outcome = EvalSequence.submit (SubmissionGates()) "s1" (fun () -> pulls.Value <- pulls.Value + 1) worker.Eval statements
+        outcome |> EvalSequence.ranAnything |> Expect.isTrue "every statement ran"
+        pulls.Value |> Expect.equal "one pull for the whole paste" 1
+      }
+
+      testTask "a submission that stops partway still pulls once, because the statements before the failure changed the values" {
+        let worker = FakeWorker()
+        let pulls = ref 0
+        let! _ = EvalSequence.submit (SubmissionGates()) "s1" (fun () -> pulls.Value <- pulls.Value + 1) worker.Eval [ "let a = 1;;"; "let b = 2;;"; "let c = boom;;"; "let d = 4;;" ]
+        pulls.Value |> Expect.equal "once" 1
+      }
+
+      testTask "a submission whose first statement fails pulls nothing, because no value changed" {
+        let worker = FakeWorker()
+        let pulls = ref 0
+        let! _ = EvalSequence.submit (SubmissionGates()) "s1" (fun () -> pulls.Value <- pulls.Value + 1) worker.Eval [ "let a = boom;;"; "let b = 2;;" ]
+        pulls.Value |> Expect.equal "none" 0
+      }
+
+      testTask "WHY — two submissions to one session do not interleave: the second starts when the first has finished all of its statements" {
+        let gates = SubmissionGates()
+        let turnstile = Turnstile()
+        let submitting (statements: string list) : Task<EvalSequence.SequenceOutcome> =
+          Started.asTask (async { return! EvalSequence.submit gates "s1" ignore turnstile.Eval statements |> Async.AwaitTask })
+        let first = submitting [ "a1;;"; "a2;;"; "a3;;" ]
+        let second = submitting [ "b1;;"; "b2;;"; "b3;;" ]
+        turnstile.LetThrough 6
+        let! _ = Task.WhenAll([ first; second ]).WaitAsync TestTimeouts.patience
+        turnstile.Entered |> Expect.equal "all of the first, then all of the second" [ "a1"; "a2"; "a3"; "b1"; "b2"; "b3" ]
+      }
+
+      testTask "a submission to one session never waits for another session's" {
+        let gates = SubmissionGates()
+        let stuck = Turnstile()
+        let held = Started.asTask (async { return! EvalSequence.submit gates "s1" ignore stuck.Eval [ "a1;;" ] |> Async.AwaitTask })
+        let free = FakeWorker()
+        let! _ = (EvalSequence.submit gates "s2" ignore free.Eval [ "b1;;" ]).WaitAsync TestTimeouts.patience
+        free.Ran |> Expect.equal "the other session's statement ran while the first was held" [ "b1" ]
+        stuck.LetThrough 1
+        let! _ = held.WaitAsync TestTimeouts.patience
+        ()
+      }
+    ]
 
     testTask "WHY — for every length up to six and every statement that fails, exactly the ones before it ran and none after" {
       for count in 1..6 do

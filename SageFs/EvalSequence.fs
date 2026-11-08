@@ -3,6 +3,12 @@ namespace SageFs
 open System
 open System.Threading.Tasks
 
+/// One submission at a time for each session. A submission of several statements is one thing a person did: another
+/// submission (a Try, a Revert, a second paste) that ran between its statements would run against half of it.
+type SubmissionGates() =
+  /// Run `work` when no other submission to `sessionKey` is running, and let the next one in after it.
+  member _.Run(sessionKey: string, work: unit -> Task<'T>) : Task<'T> = work ()
+
 /// A submission of several statements, evaluated one at a time. The worker runs the first `;;` interaction of the text it is given and
 /// answers Ok, so a submission handed over whole drops every later statement without a word. The dashboard's shared eval (the
 /// Evaluate box, eval-file, and the live bindings' Try, Reset and Revert) splits the text at `;;` (`McpAdapter.splitStatements`, the
@@ -44,6 +50,33 @@ module EvalSequence =
         | None -> SequenceOutcome.Ran ran
         | Some(at, statement, reason) -> SequenceOutcome.StoppedAt(at, total, statement, reason, ran)
     }
+
+  /// Whether any statement of the outcome ran, which is whether anything a reader of the session's values could see has changed.
+  let ranAnything (outcome: SequenceOutcome) : bool =
+    match outcome with
+    | SequenceOutcome.Ran messages -> not (List.isEmpty messages)
+    | SequenceOutcome.StoppedAt(_, _, _, _, ranBefore) -> not (List.isEmpty ranBefore)
+
+  /// A submission of several statements for one session: the statements run in order while no other submission to that session
+  /// runs, and `pullBindings` is called once, after the last statement, when any of them ran.
+  let submit
+    (gates: SubmissionGates)
+    (sessionKey: string)
+    (pullBindings: unit -> unit)
+    (evalOne: string -> Task<Result<string, string>>)
+    (statements: string list)
+    : Task<SequenceOutcome> =
+    gates.Run(sessionKey, fun () ->
+      // RED: the old behaviour, a pull after every statement that ran.
+      let pullAfter (statement: string) : Task<Result<string, string>> =
+        task {
+          let! answer = evalOne statement
+          match answer with
+          | Ok _ -> pullBindings ()
+          | Error _ -> ()
+          return answer
+        }
+      evalInOrder pullAfter statements)
 
   /// What a person is told when a statement of several failed: which one, what it was, what it said, and what did not run.
   let describeStop (position: int) (total: int) (statement: string) (reason: string) : string =
