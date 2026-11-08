@@ -15,12 +15,15 @@ request	{"case":"eval"}	Error UnknownCase ("Request", "eval") | unknown case 'ev
 request	{"case":"dance"}	Error UnknownCase ("Request", "dance") | unknown case 'dance' of Request
 request	{"case":""}	Error UnknownCase ("Request", "") | unknown case '' of Request
 request	{"Case":"Interrupt"}	Error MissingField "case" | missing field 'case'
-request	{"case":"Interrupt"}	Ok Interrupt
+request	{"case":"Interrupt","fields":{"id":7}}	Ok Interrupt 7L
+request	{"case":"Interrupt","fields":{"id":7,"extra":1}}	Ok Interrupt 7L
+request	{"case":"Interrupt","fields":{"id":"7"}}	Error WrongShape ("an int64", "String") | expected an int64 but found String
+request	{"case":"Interrupt"}	Error MissingField "fields" | missing field 'fields'
 request	{"case":"Shutdown"}	Ok Shutdown
 request	{"case":"Shutdown","fields":5}	Ok Shutdown
 request	{"case":"Shutdown","other":[1,{"a":null}]}	Ok Shutdown
-request	{"c\u0061se":"Interrupt"}	Ok Interrupt
-request	{"case":"Interr\u0075pt"}	Ok Interrupt
+request	{"c\u0061se":"Interrupt"}	Error MissingField "fields" | missing field 'fields'
+request	{"case":"Interr\u0075pt"}	Error MissingField "fields" | missing field 'fields'
 request	{"case":"Eval","case":"Shutdown"}	Ok Shutdown
 request	{"case":"Shutdown","case":"Eval"}	Error MissingField "fields" | missing field 'fields'
 request	{"case":"Eval","fields":{"id":1,"id":2,"code":"a","code":"b"}}	Ok Eval (2L, "b")
@@ -97,6 +100,7 @@ response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","f
 response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalSucceeded"},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}	Ok EvalResult (1L, EvalSucceeded, [], { Elapsed = 00:00:00                                      Allocated = 0L                                      Gen0 = 0                                      Gen1 = 0                                      Gen2 = 0 })
 response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalInterrupted","fields":3},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}	Ok EvalResult (1L, EvalInterrupted, [], { Elapsed = 00:00:00                                        Allocated = 0L                                        Gen0 = 0                                        Gen1 = 0                                        Gen2 = 0 })
 response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalSucceeded"},"diagnostics":[]}}	Error MissingField "cost" | missing field 'cost'
+response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalNeverRan"},"diagnostics":[],"cost":{"Elapsed":0,"Allocated":0,"Gen0":0,"Gen1":0,"Gen2":0}}}	Ok EvalResult (1L, EvalNeverRan, [], { Elapsed = 00:00:00                                     Allocated = 0L                                     Gen0 = 0                                     Gen1 = 0                                     Gen2 = 0 })
 response	{"case":"EvalResult","fields":{"id":1,"outcome":{"case":"EvalFailed","fields":{"message":"bad"}}}}	Error MissingField "diagnostics" | missing field 'diagnostics'
 response	{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasBool","fields":{"value":true}}}}	Ok FlagResult (1L, FlagWasBool true)
 response	{"case":"FlagResult","fields":{"id":1,"reading":{"case":"FlagWasBool","fields":{"value":"true"}}}}	Error WrongShape ("a bool", "String") | expected a bool but found String

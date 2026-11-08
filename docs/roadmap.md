@@ -160,6 +160,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 ### The REPL
 
 - [x] **A rebuild is waited on, not skipped.** `get_session_status` with `wait_seconds` now waits for a rebuild in progress and answers when the new worker is ready, or Faulted with the build's own error. It used to answer "not needed" while the rebuild was still running, so a caller had to poll. Code: [`SageFs.Core/ReadyWait.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ReadyWait.fs)
+- [x] **A hung or runaway eval answers in bounded time.** An eval that loops, waits or recurses used to leave the caller waiting for the worker's ten minutes, and cancelling it ended the call while the host kept running the code, so the next eval queued behind a run nobody waited for. Now `send_fsharp_code` takes `timeout_seconds` (default 120), cancels at the limit and says so, and a host that does not stop within ten seconds of a cancel is killed with a message that says what was lost. A stack overflow reports `stack overflow` with the recursing function, and every eval runs on a 256 MB stack like FsiMcp's. Code: [`SageFs.Core/EvalBound.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/EvalBound.fs)
 
 ### Isolation
 
