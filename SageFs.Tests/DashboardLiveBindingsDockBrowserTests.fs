@@ -149,6 +149,7 @@ let private dockMeasureScript =
       const range = document.createRange(); range.selectNodeContents(t);
       const r = range.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) continue;
+      const box = rect => [rect.left, rect.top, rect.right, rect.bottom].map(Math.round).join(',');
       let scrolls = false;
       for (let a = el; a; a = a.parentElement) {
         const cs = getComputedStyle(a);
@@ -159,7 +160,7 @@ let private dockMeasureScript =
           const outH = r.right > ar.right + 1 || r.left < ar.left - 1;
           const outV = r.bottom > ar.bottom + 1 || r.top < ar.top - 1;
           const tipped = cs.textOverflow === 'ellipsis' && (a.getAttribute('title') || el.getAttribute('title'));
-          if (outH && !tipped) problems.push('text "' + t.textContent.trim().slice(0, 40) + '" is cut off sideways by ' + name(a));
+          if (outH && !tipped) problems.push('text "' + t.textContent.trim().slice(0, 40) + '" (in ' + name(el) + ', box ' + box(r) + ') is cut off sideways by ' + name(a) + ' (box ' + box(ar) + ', overflow-x ' + cs.overflowX + ')');
           if (outV && !scrollsY && !tipped) problems.push('text "' + t.textContent.trim().slice(0, 40) + '" is cut off vertically by ' + name(a));
         }
         if (a === dock) break;

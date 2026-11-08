@@ -1829,6 +1829,9 @@ h2 {
   flex-direction: column;
   padding: 2px 8px 6px;
   font-size: 0.857rem;
+  /* The gap between a row's columns, said once. The row grid, the column header and the place of the State badge all read it, so
+     none of them can drift from the others (12px at the 15px root). */
+  --live-col-gap: 0.8rem;
   /* Shadows at the ends of the list that fade in only when there is more to scroll to: the classic background-attachment
      trick, so a list taller than its box says so without a script. The cover gradients (local) hide the shadows (scroll)
      when the list is at that end. */
@@ -1869,7 +1872,7 @@ h2 {
   .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload))) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 11.5rem 6.5rem 21rem;
-    column-gap: 12px;
+    column-gap: var(--live-col-gap);
     align-items: center;
     min-height: 2.3rem;
   }
@@ -1891,23 +1894,19 @@ h2 {
      the first track stops, instead of running to the row's right edge with the type at the end of it. */
   .live-row:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload)) > .live-binding-node,
   .live-node-summary:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload)) > .live-binding-node {
-    max-width: calc(100% - 36rem - 36px);
+    max-width: calc(100% - 39rem - 3 * var(--live-col-gap));
   }
 
   /* A row no file defines wears its "not in a file" badge inside its name cell, which is not a grid cell of its own, so the badge
-     is placed by the same fixed track widths: it starts where the State column starts (the row's width, less the three right-hand
-     tracks and the two gaps between them, less the gap before the first) and is centred on the row's single line. */
-  .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload))),
-  .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload))) {
-    position: relative;
-  }
-
+     is placed against the name cell: `.live-binding-node` is positioned (`position: relative`, above, for the format button), which
+     makes it the badge's containing block, and its `100%` is the width of the NAME CELL and not of the row. The State column starts
+     one gap after the name cell ends, so the badge starts there, centred on the row's single line. It was written against the row's
+     width (`100% - 39rem - 24px`) before the cell became the containing block, and then put every badge about 600px left of the
+     page, off the screen, with the State column showing nothing. */
   .live-row:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload))) > .live-binding-node > .live-state,
   .live-node-summary:not(:has(> .live-tweak > :not(.live-state, .live-where, .live-knob, .live-field, .live-detail, .live-number-tag, .live-actions, .live-reload))) > .live-binding-node > .live-state {
     position: absolute;
-    /* The State track and the two after it (11.5rem, 6.5rem, 21rem) and the two gaps between them: where the State column starts. It
-       said 36rem while the State track was 8.5rem, and the badge sat 3rem right of its heading when the track grew. */
-    left: calc(100% - 39rem - 24px);
+    left: calc(100% + var(--live-col-gap));
     top: 50%;
     transform: translateY(-50%);
   }
@@ -1986,7 +1985,7 @@ h2 {
   .live-cols {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 11.5rem 6.5rem 21rem;
-    column-gap: 12px;
+    column-gap: var(--live-col-gap);
     position: sticky;
     /* The tree has 2px of top padding, and a sticky offset is measured from the scrollport's edge, so at 0 the header stops 2px
        down and a row scrolling past shows in the gap above it. */
