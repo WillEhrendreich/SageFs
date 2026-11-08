@@ -104,12 +104,12 @@ module SseReplay =
 
   /// Spends the next seq on this frame and keeps it if the limits allow. A frame bigger than
   /// the byte bound evicts itself, and its seq stays spent so a client that saw it is not lied to.
-  let record (frame: SseFrame) (buffer: Buffer) : Replayable * Buffer =
+  let recordWith (measure: SseFrame -> int) (frame: SseFrame) (buffer: Buffer) : Replayable * Buffer =
     let seq = buffer.Latest + 1L
     let item =
       { Id = { Epoch = buffer.Epoch; Seq = seq }
         Frame = frame
-        Bytes = System.Text.Encoding.UTF8.GetByteCount frame.Wire }
+        Bytes = measure frame }
     item,
     trim
       { buffer with
@@ -117,6 +117,9 @@ module SseReplay =
           Count = buffer.Count + 1
           Bytes = buffer.Bytes + item.Bytes
           Latest = seq }
+
+  let record (frame: SseFrame) (buffer: Buffer) : Replayable * Buffer =
+    recordWith SseFrame.wireBytes frame buffer
 
   /// The newest id issued, or `Empty` before the first frame.
   let position (buffer: Buffer) : LogPosition =

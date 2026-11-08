@@ -21,15 +21,17 @@ type SseAttachment =
 /// and must not throw; the daemon's queues the shared `Replayable` into a bounded channel
 /// (`SseOutbox.OfferLogged`) and builds no text, so the one thing that could throw there, formatting a
 /// large frame, happens on each connection's own writer and not under this lock.
-type SseLog(epoch: string, limits: ReplayLimits) =
+type SseLog(epoch: string, limits: ReplayLimits, measure: SseFrame -> int) =
   let gate = obj ()
   let mutable buffer = SseReplay.create epoch limits
   let mutable observers : Map<int, StreamScope * (Replayable -> unit)> = Map.empty
   let mutable nextObserver = 0
 
+  new(epoch: string, limits: ReplayLimits) = SseLog(epoch, limits, SseFrame.wireBytes)
+
   member _.Publish(frame: SseFrame) : Replayable =
     lock gate (fun () ->
-      let item, buffer' = SseReplay.record frame buffer
+      let item, buffer' = SseReplay.recordWith measure frame buffer
       buffer <- buffer'
       for entry in observers do
         let stream, onFrame = entry.Value
