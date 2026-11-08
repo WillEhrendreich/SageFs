@@ -12,33 +12,8 @@ open SageFs.Server.DashboardFragments
 
 let [<Literal>] Endpoint = "/dashboard/row-format"
 
-/// What a page chose for how the pane looks, beside what the workflow gives: the tab it has open and how each of its rows is shown.
-type PageLook = { Tab: WatchTab; Formats: Map<string, FormatChoice> }
-
-module PageLook =
-  /// A page that has chosen nothing: the All tab and every row as it is.
-  let onAll : PageLook = { Tab = WatchTab.All; Formats = Map.empty }
-
-/// How many pages' choices are kept at once. A choice is a convenience for the page that made it, so the oldest page's goes first.
-let [<Literal>] PageCapacity = 256
-
-/// The format each page picked for each row, by row. A page that reloads has a new client id and starts with every row as it is.
-let private chosen = PageChoices<Map<string, FormatChoice>>(PageCapacity)
-
 /// The name a row goes by in a request: its binding and the labels down to it, apart by a character no label holds.
 let rowId (binding: string) (path: string list) : string = binding :: path |> String.concat "\u001f"
-
-let formatsOf (clientId: string) : Map<string, FormatChoice> =
-  match clientId with
-  | null
-  | "" -> Map.empty
-  | id -> chosen.Find(id, Map.empty)
-
-let choose (clientId: string) (row: string) (choice: FormatChoice) : unit =
-  match clientId with
-  | null
-  | "" -> ()
-  | id -> chosen.Update(id, Map.empty, Map.add row choice) |> ignore
 
 /// The format a press moves a row to: the one after the current in the order the value offers them, and the first again after the last.
 /// A current format the value no longer offers moves to the first.
@@ -99,6 +74,9 @@ let valueNodes (cssClass: string) (rowFormat: RowFormat) (typeName: string) (pre
   | Formatted.CannotShow refusal ->
     [ cell preview
       Elem.span [ Attr.class' "live-fmt-note"; testid "live-fmt-note" ] [ textEnc (FormatRefusal.describe refusal) ] ]
+
+/// The words that say how a row is shown now, beside the button that says what a press does. A row shown as it is says nothing.
+let stateNote (current: FormatChoice) : XmlNode list = []
 
 /// The button on a row: its word is the format the row is in, and a press moves to the next one.
 let picker (row: string) (offeredChoices: FormatChoice list) (current: FormatChoice) (label: string) : XmlNode =

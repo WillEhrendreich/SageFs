@@ -906,16 +906,24 @@ let formatJourney () : Task<unit> = task {
 
     // ── 1. whole numbers carry the picker, a Double carries none ──────────────────────────────────────────────────────
     let! flagsWord = wordOf "flags"
-    flagsWord |> Expect.equal "flags says how it is shown now" "As is"
+    flagsWord |> Expect.equal "the button says what a press does" "Show as Hex"
+    let! noStateYet = readRow "flags" "return row.querySelector(':scope > [data-testid=live-fmt-state]') ? 'state' : 'none';"
+    noStateYet |> Expect.equal "a row shown as it is says nothing of a format" "none"
     let! gravityWord = wordOf "gravity"
     gravityWord |> Expect.equal "a Double has nothing else to show, so no picker" "(no button)"
 
     // ── 2. a press moves through the spellings and back ───────────────────────────────────────────────────────────────
     do! pick "flags"
     do! waitValue "flags" "= 0xFF"
-    do! waitJs page "the button to say Hex" BrowserWaits.panelUpdates "() => /Hex/.test(document.querySelector('[data-testid=live-fmt-button]').innerText)" null
+    do! waitJs page "the button to say what a press does now" BrowserWaits.panelUpdates "() => /Show as Binary/.test(document.querySelector('[data-testid=live-fmt-button]').innerText)" null
     let! hexWord = wordOf "flags"
-    hexWord |> Expect.equal "the button names the format the row is in" "Hex"
+    hexWord |> Expect.equal "the button names the action: the next format" "Show as Binary"
+    let! hexState = readRow "flags" "const s = row.querySelector(':scope > [data-testid=live-fmt-state]'); return s ? s.innerText.trim() : '(no state)';"
+    hexState |> Expect.equal "the state is its own words, beside the action" "shown as Hex"
+    // the state's words are readable: at least 4.5 to 1 against what they sit on
+    let! stateContrast =
+      readRow "flags" "const s = row.querySelector(':scope > [data-testid=live-fmt-state]'); const parse = c => c.match(/[\\d.]+/g).map(Number); const luminance = ([r, g, b]) => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); }; let bg = s; while (bg && (parse(getComputedStyle(bg).backgroundColor)[3] ?? 1) === 0) bg = bg.parentElement; const a = luminance(parse(getComputedStyle(s).color)), b = luminance(parse(getComputedStyle(bg).backgroundColor)); return String((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05));"
+    (float stateContrast >= 4.5) |> Expect.isTrue (sprintf "the state's words have at least 4.5 to 1 contrast, measured %s" stateContrast)
     do! pick "flags"
     do! waitValue "flags" "= 0b11111111"
     do! pick "flags"
@@ -932,9 +940,19 @@ let formatJourney () : Task<unit> = task {
     // ── 3. a new value keeps the format ───────────────────────────────────────────────────────────────────────────────
     do! pick "flags"
     do! waitValue "flags" "= 0xFF"
+    // the highlight a changed value gets must leave its text readable: it starts as an underline in the accent colour, with no background
+    // fill to put the text on, so it is read from the animation itself, started before the value changes and read when it starts
+    let flashStart =
+      page.EvaluateAsync<string>(
+        sprintf "() => new Promise(resolve => { const t0 = performance.now(); const tick = () => { const row = (%s)('flags'); const cell = row && row.querySelector(':scope > .live-preview'); const animations = cell ? cell.getAnimations() : []; if (animations.length > 0) { const first = animations[0].effect.getKeyframes()[0]; resolve(JSON.stringify({ background: first.backgroundColor ?? '', shadow: first.boxShadow ?? '' })); } else if (performance.now() - t0 > 8000) resolve('none'); else requestAnimationFrame(tick); }; tick(); })" rowJs)
     let! changed = evalIn "let flags = 4096;;"
     changed |> Expect.isOk "the REPL took the new value"
     do! waitValue "flags" "= 0x1000"
+    let! flash = flashStart
+    flash |> Expect.notEqual "the changed value flashed" "none"
+    let flashed = Text.Json.JsonDocument.Parse(flash).RootElement
+    [ ""; "transparent"; "rgba(0, 0, 0, 0)" ] |> List.contains (flashed.GetProperty("background").GetString()) |> Expect.isTrue (sprintf "the highlight starts with no background fill (it was '%s')" (flashed.GetProperty("background").GetString()))
+    flashed.GetProperty("shadow").GetString() |> Expect.stringContains "and is an underline drawn inside the cell" "inset"
 
     // ── 4. a colour, and a number a colour cannot be ──────────────────────────────────────────────────────────────────
     do! pick "tint"

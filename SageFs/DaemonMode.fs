@@ -5023,7 +5023,7 @@ let run
       Dashboard.mapPostRaw "/dashboard/watch/remove" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsWatchRoute.handler SageFs.Server.LiveBindingsWatchRoute.WatchVerb.Remove dashboardQueries dashboardInfra dashboardActions.EvalCode)
       Dashboard.mapPostRaw "/dashboard/watch/run" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsWatchRoute.handler SageFs.Server.LiveBindingsWatchRoute.WatchVerb.Run dashboardQueries dashboardInfra dashboardActions.EvalCode)
       // A row's picker: how a whole number is shown (as it is, hex, binary, colour), kept for the page that pressed.
-      Dashboard.mapPostRaw "/dashboard/row-format" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsRowFormatRoute.handler dashboardInfra)
+      Dashboard.mapPostRaw "/dashboard/row-format" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsRowFormatRoute.handler Dashboard.pages dashboardInfra)
       // A number's chosen range and step, kept in .SageFs/tweak-limits.json beside the project.
       Dashboard.mapPostRaw "/dashboard/tweak/limits" (fun _ -> ()) (fun () -> SageFs.Server.LiveBindingsTweakRoute.limitsHandler dashboardQueries dashboardInfra tweakService) ]
 

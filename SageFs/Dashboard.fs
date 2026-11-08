@@ -1061,21 +1061,14 @@ let private liveBindingsViewPaths (workingDir: string) : SageFs.ConfigPaths = Li
 let private liveBindingsResolved (workflow: WorkflowTypes.SessionWorkflow) (workingDir: string) (tab: SageFs.WatchTab) : SageFs.ResolvedView =
   SageFs.SettingsCatalog.viewForTab (liveBindingsViewPaths workingDir) (SageFs.ViewWorkflow.ofSessionWorkflow workflow) tab
 
-/// The tab each page has open in the Live Bindings pane, keyed by page client id like the sort choice above: the tab-bar click posts it
-/// and the stream reads it on every push, for as long as the page lives. A page that reloads has a new client id and starts on All,
-/// which is the view its workflow gives. The page's `liveTab` signal says the same tab, so what the page hides at once and what the
-/// server draws for it agree.
-let private liveTabByClient = PageChoices<SageFs.WatchTab>(pageChoiceCapacity)
+/// What each page chose for the Live Bindings pane, keyed by page client id: the tab it has open (the tab-bar click posts it) and how it
+/// shows each row (the picker posts it), read on every push for as long as the page lives. One owner with one lock, and an absent page reads
+/// the default: a page that reloads has a new client id and starts on All with every row as it is. The page's `liveTab` signal says the same
+/// tab, so what the page hides at once and what the server draws for it agree.
+let pages = PageState.PageStore(PageState.PageCapacity)
 
-/// The tab a page has open, or All.
-let private liveTabOf (clientId: string) : SageFs.WatchTab =
-  match clientId with
-  | null | "" -> SageFs.WatchTab.All
-  | id -> liveTabByClient.Find(id, SageFs.WatchTab.All)
-
-/// What a page chose for how the Live Bindings pane looks: its open tab and how it shows each row.
-let private pageLookOf (clientId: string) : LiveBindingsRowFormat.PageLook =
-  { Tab = liveTabOf clientId; Formats = LiveBindingsRowFormat.formatsOf clientId }
+/// What a page chose for how the Live Bindings pane looks.
+let private pageLookOf (clientId: string) : PageState.PageLook = pages.Look clientId
 
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
@@ -1103,7 +1096,7 @@ let buildDashboardSnapshotWithSessionsFor
   (cachedWorkerData: DashboardWorkerCache option)
   (sessions: WorkerProtocol.SessionInfo list)
   (frictionOptIn: FrictionPanelOptIn)
-  (look: LiveBindingsRowFormat.PageLook)
+  (look: PageState.PageLook)
   : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let tab = look.Tab
@@ -1378,7 +1371,7 @@ let buildDashboardSnapshotWithSessions
   (sessions: WorkerProtocol.SessionInfo list)
   (frictionOptIn: FrictionPanelOptIn)
   =
-  buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn LiveBindingsRowFormat.PageLook.onAll
+  buildDashboardSnapshotWithSessionsFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions frictionOptIn PageState.PageLook.onAll
 
 /// Standalone entry point for callers that do not already have a fresh
 /// session list in hand (e.g. tests, one-off callers) — fetches once, then
@@ -1392,7 +1385,7 @@ let buildDashboardSnapshotFor
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
   (frictionOptIn: FrictionPanelOptIn)
-  (look: LiveBindingsRowFormat.PageLook)
+  (look: PageState.PageLook)
   : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let! sessions = q.GetAllSessions ()
@@ -1410,7 +1403,7 @@ let buildDashboardSnapshot
   (cachedWorkerData: DashboardWorkerCache option)
   (frictionOptIn: FrictionPanelOptIn)
   =
-  buildDashboardSnapshotFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData frictionOptIn LiveBindingsRowFormat.PageLook.onAll
+  buildDashboardSnapshotFor q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData frictionOptIn PageState.PageLook.onAll
 
 /// Build the full-shell dashboard snapshot for the "no session in play" state:
 /// the complete dashboard chrome (header, daemon health, sidebar Sessions panel,
@@ -2571,7 +2564,7 @@ let createBindingsViewHandler (q: DashboardQueries) (infra: DashboardInfra) : Wo
       let workflow = SageFs.ViewWorkflow.ofSessionWorkflow (q.GetSessionWorkflow sessionId)
       let paths = liveBindingsViewPaths (q.GetSessionWorkingDir sessionId)
       // The choice is the open tab's: the page's own tab, as the server recorded it when the tab bar was clicked.
-      let tab = liveTabOf (clientIdFromSignals doc)
+      let tab = (pages.Look (clientIdFromSignals doc)).Tab
       let outcome =
         SageFs.ViewScope.parse (signal LiveBindingsViewPanel.ViewSignals.Scope "bv-scope")
         |> Result.bind (fun scope ->
@@ -2608,7 +2601,7 @@ let createLiveTabHandler (infra: DashboardInfra) : HttpHandler =
       | Ok tab ->
         match clientId with
         | null | "" -> ()
-        | id -> liveTabByClient.Set(id, tab)
+        | id -> pages.SetTab(id, tab)
         Response.sseStartResponse ctx |> ignore
         infra.TriggerStateChange ()
       | Error why ->

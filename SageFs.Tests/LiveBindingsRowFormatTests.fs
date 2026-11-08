@@ -87,12 +87,24 @@ let tests =
       refused |> Expect.stringContains "the reason, in words" "16777215"
       count "live-swatch" refused |> Expect.equal "and no swatch" 0
 
-    testCase "the button's word is the format the row is in, its name says what a press does, and a press posts the next format for that row" <| fun _ ->
+    testCase "WHY — the button's word is what a press does (the next format), and the state is its own words: 'Hex' alone read as the action" <| fun _ ->
       let button = picker (rowId "flags" []) [ FormatChoice.AsIs; FormatChoice.Hex ] FormatChoice.AsIs "flags" |> decoded
-      button |> Expect.stringContains "the word" ">As is<"
+      button |> Expect.stringContains "the word is the action" ">Show as Hex<"
       button |> Expect.stringContains "the accessible name" "Show flags as Hex instead of As is"
       button |> Expect.stringContains "the next format in the request" "f=hex"
       button |> Expect.stringContains "the row in the request" "r=flags"
+      let inHex = picker (rowId "flags" []) [ FormatChoice.AsIs; FormatChoice.Hex; FormatChoice.Binary ] FormatChoice.Hex "flags" |> decoded
+      inHex |> Expect.stringContains "in hex the press is for binary" ">Show as Binary<"
+      inHex |> Expect.stringContains "and the tooltip says both" "Shown as Hex. Press to show it as Binary."
+      (stateNote FormatChoice.AsIs |> decodedAll).Contains "live-fmt-state" |> Expect.isFalse "a row shown as it is names no format"
+      let stateHtml = stateNote FormatChoice.Hex |> decodedAll
+      stateHtml |> Expect.stringContains "the state is words" ">shown as Hex<"
+      stateHtml |> Expect.stringContains "and is found by its test id" "data-testid=\"live-fmt-state\""
+
+    testCase "WHY — a changed value's highlight is an underline that fades, never a background fill the text has to sit on: the fill made dim text unreadable" <| fun _ ->
+      let script = flashScript () |> decoded
+      script |> Expect.stringContains "an inset underline" "boxShadow"
+      script.Contains "{ backgroundColor: accent }" |> Expect.isFalse "no full-strength background start"
 
     testCase "WHY — a row in the dock carries a picker when its value can be spelled another way, and carries none otherwise" <| fun _ ->
       let html = renderDock SessionInView "abcd1234" (WalkedBindings(paneOf [ leaf "flags" "Int32" "255"; leaf "gravity" "Double" "9.8"; leaf "name" "String" "\"Ada\"" ])) |> decoded
@@ -110,10 +122,11 @@ let tests =
     testCase "a page's choice is kept for that page and for no other, and a page that never chose has every row as it is" <| fun _ ->
       let page = sprintf "page-%s" (Guid.NewGuid().ToString("N"))
       let other = sprintf "page-%s" (Guid.NewGuid().ToString("N"))
-      choose page (rowId "flags" []) FormatChoice.Binary
-      choose page (rowId "tint" []) FormatChoice.Colour
-      formatsOf page |> Map.find (rowId "flags" []) |> Expect.equal "the first row kept" FormatChoice.Binary
-      formatsOf page |> Map.find (rowId "tint" []) |> Expect.equal "the second row kept, the first not lost" FormatChoice.Colour
-      formatsOf other |> Expect.equal "another page has chosen nothing" Map.empty
-      formatsOf "" |> Expect.equal "no page id, no choices" Map.empty
+      let pages = SageFs.Server.PageState.PageStore(8)
+      pages.SetFormat(page, rowId "flags" [], FormatChoice.Binary)
+      pages.SetFormat(page, rowId "tint" [], FormatChoice.Colour)
+      (pages.Look page).Formats |> Map.find (rowId "flags" []) |> Expect.equal "the first row kept" FormatChoice.Binary
+      (pages.Look page).Formats |> Map.find (rowId "tint" []) |> Expect.equal "the second row kept, the first not lost" FormatChoice.Colour
+      (pages.Look other).Formats |> Expect.equal "another page has chosen nothing" Map.empty
+      (pages.Look "").Formats |> Expect.equal "no page id, no choices" Map.empty
   ]

@@ -24,14 +24,45 @@ type PageStore(capacity: int) =
   let looks = Dictionary<string, PageLook>()
   let arrival = Queue<string>()
 
+  do
+    match capacity > 0 with
+    | true -> ()
+    | false -> invalidArg (nameof capacity) "a store that can hold nothing evicts every choice as it is made"
+
+  /// Change what a page chose. A page with no id has nowhere to keep it, so the change is dropped. A page seen for the first time joins the
+  /// eviction order, and past `capacity` the page seen longest ago goes. The whole change is under the one lock, so two changes arriving at
+  /// once are both applied, one after the other.
+  let change (clientId: string) (apply: PageLook -> PageLook) : unit =
+    match clientId with
+    | null
+    | "" -> ()
+    | id ->
+      lock gate (fun () ->
+        match looks.TryGetValue id with
+        | true, current -> looks.[id] <- apply current
+        | false, _ ->
+          looks.[id] <- apply PageLook.onAll
+          arrival.Enqueue id
+          while looks.Count > capacity do
+            looks.Remove(arrival.Dequeue()) |> ignore)
+
   /// What the page chose, or the default.
-  member _.Look(clientId: string) : PageLook = PageLook.onAll
+  member _.Look(clientId: string) : PageLook =
+    match clientId with
+    | null
+    | "" -> PageLook.onAll
+    | id ->
+      lock gate (fun () ->
+        match looks.TryGetValue id with
+        | true, found -> found
+        | false, _ -> PageLook.onAll)
 
   /// The page opened this tab.
-  member _.SetTab(clientId: string, tab: WatchTab) : unit = ()
+  member _.SetTab(clientId: string, tab: WatchTab) : unit = change clientId (fun look -> { look with Tab = tab })
 
   /// The page chose this format for this row.
-  member _.SetFormat(clientId: string, row: string, choice: FormatChoice) : unit = ()
+  member _.SetFormat(clientId: string, row: string, choice: FormatChoice) : unit =
+    change clientId (fun look -> { look with Formats = Map.add row choice look.Formats })
 
   /// How many pages have a choice held.
-  member _.Count : int = 0
+  member _.Count : int = lock gate (fun () -> looks.Count)

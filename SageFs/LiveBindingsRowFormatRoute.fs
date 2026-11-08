@@ -30,7 +30,7 @@ let askedOf (rowText: string) (formatToken: string) (body: JsonElement) : Format
     | Ok choice -> FormatAsked.Asked(clientId, row, choice)
     | Error why -> FormatAsked.NotAsked(ConfigError.describe why)
 
-let handler (infra: DashboardInfra) : HttpHandler =
+let handler (pages: PageState.PageStore) (infra: DashboardInfra) : HttpHandler =
   fun ctx ->
     task {
       try
@@ -40,7 +40,7 @@ let handler (infra: DashboardInfra) : HttpHandler =
           ctx.Response.StatusCode <- StatusCodes.Status400BadRequest
           do! ctx.Response.WriteAsync(sprintf "The format was not changed: %s" reason)
         | FormatAsked.Asked(clientId, row, choice) ->
-          LiveBindingsRowFormat.choose clientId row choice
+          pages.SetFormat(clientId, row, choice)
           Response.sseStartResponse ctx |> ignore
           pushTo infra clientId
       with
