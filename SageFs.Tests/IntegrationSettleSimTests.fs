@@ -48,7 +48,7 @@ let tests =
       testCase "WHY — a worker that goes quiet in a startup phase is Blocked with that phase, within two windows of going quiet" <| fun _ ->
         let trace = run (IntegrationSettleGenerators.hangsAfter 5)
         match trace.Outcome with
-        | Outcome.StuckIn (Phase.Starting (Some text), window) ->
+        | Outcome.StuckIn (Phase.Starting (WorkerSaid.Said text), window) ->
           text |> Expect.equal "the phase it stuck in" "loading project 7 of 11"
           window |> Expect.equal "the window it was judged by" trace.Scenario.Window
         | other -> failtestf "expected StuckIn the startup phase, got %A" other

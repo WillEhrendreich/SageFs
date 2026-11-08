@@ -52,9 +52,17 @@ module CohortLandingScope =
   /// Split `ids` by whether the session can run them. `fullNameOf` answers with a test's full name, or nothing when the session
   /// does not know the id: an id it cannot name is run, never skipped, so the gate fails closed on what it cannot read.
   let scope (fullNameOf: string -> string option) (ids: string list) : Scope =
-    // RED STUB: every affected test is run in the session, as the gate did before.
-    ignore fullNameOf
-    { Run = ids; NotRun = [] }
+    let named = ids |> List.map (fun id -> id, fullNameOf id)
+    let isLeftOut (_, name) =
+      match name with
+      | Some fullName -> isRegisteredIntegration fullName
+      | None -> false
+    let left, kept = named |> List.partition isLeftOut
+    { Run = kept |> List.map fst
+      NotRun =
+        left
+        |> List.choose (fun (id, name) -> name |> Option.map (fun fullName -> { Id = id; Name = fullName }))
+        |> List.sortBy (fun excluded -> excluded.Name, excluded.Id) }
 
   // -- A test that did not pass, and why --
 
@@ -62,6 +70,13 @@ module CohortLandingScope =
   /// assertions has no reason here and is a failing test. A per-test timeout ends as `Skipped "Timed out after 5s"`, which is the
   /// case that blocked the two landings: it is "could not run", not a failure of the landing's code.
   let couldNotRun (result: TestResult option) : string option =
-    // RED STUB: every outcome that is not a pass is a failure, as the gate read them before.
-    ignore result
-    None
+    let lower (text: string) = match text with "" -> text | _ -> string (Char.ToLowerInvariant text.[0]) + text.Substring 1
+    match result with
+    | Some (TestResult.Passed _) -> None
+    | Some (TestResult.Failed (TestFailure.AssertionFailed _, _)) -> None
+    | Some (TestResult.Failed (TestFailure.ExceptionThrown _, _)) -> None
+    | Some (TestResult.Failed (TestFailure.TimedOut after, _)) -> Some (sprintf "timed out after %gs" after.TotalSeconds)
+    | Some (TestResult.Skipped reason) -> Some (lower reason)
+    | Some TestResult.NotRun -> Some "it was not run"
+    | Some (TestResult.NoResult why) -> Some (NoResultReason.describe why)
+    | None -> Some "no result was reported for it"

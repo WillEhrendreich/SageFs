@@ -108,7 +108,12 @@ module CohortStatusText =
       sprintf
         "Blocked(%s) Fix those tests in your commits and request the landing again; withdraw_landing takes this one back"
         (FailingTestsText.render FailingTestsText.namesShownInStatus (reportFor landingId) ids)
-    // default policy: only a landing Blocked on failing tests carries ids that need names.
+    // A landing that landed says which tests the gate left to the release gate, so a green status hides nothing.
+    | SageFs.Cohort.LandingState.Landed sha ->
+      match FailingTestsText.notRunSentence (reportFor landingId) with
+      | "" -> landingStateText state
+      | sentence -> sprintf "Landed at %s. %s" sha sentence
+    // default policy: only a landing Blocked on failing tests carries ids that need names, and only a landed one a left-out list.
     | other -> landingStateText other
 
   /// Where landing `i` stands in the queue and what is in front of it (P14, C9): a member that waits for a long landing can

@@ -939,6 +939,32 @@ which acts):
   types from its compiled assembly, and the first landing of `SageFs.Core/AppState.fs` was blocked three times on exactly that.
   The tests that run are the ones the session's coverage says the diff can affect, plus every test the rebuild found that was
   not known before; a diff that selects nothing runs the whole suite.
+- **A landing that arrives while the integration is still being built** (`Integration session: pending` in `get_cohort_status`,
+  the minutes `set_integration_ref` spends building the worktree) waits in the queue and starts when the session does. It is
+  not Blocked, and a member does nothing. If `set_integration_ref` fails or is refused, the integration reads `FAILED` and the
+  waiting landing is refused with that reason.
+- **The wait on the integration session has no deadline.** A restart of the session loads the whole test project, which takes
+  minutes when many builds share the machine, so the gate waits for as long as the session keeps changing phase (restarting,
+  starting up, the worker's own progress text). It stops when the session is Ready, when it is dead, or when it has stayed in
+  one phase for a stall window (`Timeouts.cohortIntegrationStallWindow`, 60 s on the default tier, scaled for the machine) and
+  Blocks the landing with the phase it stuck in. A rebuild of the project is not judged by the window: the build runner
+  bounds it with `Timeouts.buildCompletion`. The refusal text has a part for each party. A member is told to
+  `withdraw_landing` and request again once `get_cohort_status` shows the session started; the conductor is told what the
+  session is doing, for how long, and which tool revives it. It never tells a member to run a conductor's tool.
+- **Tests the session cannot run are left to the release gate, and named.** A test whose full name carries the
+  `[Integration]` tag (the tag `TestInfrastructure.Integration.register` puts on every registered integration suite) starts
+  real processes, daemons and ports, and inside the session ended as `Skipped "Timed out after 5s"`. The verdict is
+  fail-closed, so each such test Blocked every landing that touched code it covers. The gate no longer asks the session to run
+  them: the release gate's `--integration-host` and dedicated tiers do. Each test left out is named in the landing's report
+  file (below) and the landing's status line says how many (`N [Integration] tests were not run by the landing gate`),
+  whether it landed or was Blocked. Every other test is still read fail-closed: anything but a confirmed pass blocks.
+- **A landing Blocked on tests names them.** The blocker holds only test ids, hashes of the names, so the daemon records the
+  names when the run ends. The status line says how many tests did not pass, separates the ones that failed from the ones that
+  could not run (`3 failed, 97 could not run`, with `could not run: timed out after 5s` beside each such name), shows the
+  first ten by name and how many more there are, and gives the path of a file in the integration worktree's
+  git-ignored `test-results/` (`cohort-landing-<id>-failing-tests.txt`) that lists all of them with their ids. The names are
+  held in the daemon's memory: after a restart the status shows the ids and says the names were not recorded, and the file
+  is still on disk.
 - **A rebuild that fails** refuses the landing with the first compiler error and its file (`Blocked`, `Inconclusive`, reason
   `the build of the rebased commit failed. First error: <file>(<line>,<col>): error FS....`). The session keeps serving the
   build it had.

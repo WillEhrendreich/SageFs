@@ -29,16 +29,30 @@ module IntegrationSettle =
 
   // -- What the session is doing --
 
+  /// The last thing the worker said about what it is doing: nothing yet, or a line of progress text.
+  [<RequireQualifiedAccess>]
+  type WorkerSaid =
+    | Nothing
+    | Said of text: string
+
+  module WorkerSaid =
+    /// What the session manager keeps: the last progress payload, if the worker sent one. Blank text says nothing.
+    let ofText (text: string option) : WorkerSaid =
+      match text with
+      | Some line when not (String.IsNullOrWhiteSpace line) -> WorkerSaid.Said line
+      | Some _
+      | None -> WorkerSaid.Nothing
+
   /// The phase the integration session is in, as far as a waiter can tell. Equality is the point: two looks that read the same
   /// phase, progress text included, saw no progress between them.
   [<RequireQualifiedAccess>]
   type Phase =
-    /// A restart replaced or is replacing the worker. `progress` is the last thing the worker said about it, if anything.
-    | Restarting of progress: string option
+    /// A restart replaced or is replacing the worker. `progress` is the last thing the worker said about it.
+    | Restarting of progress: WorkerSaid
     /// The worker is warming up: loading projects, opening namespaces.
-    | Starting of progress: string option
+    | Starting of progress: WorkerSaid
     /// The worker itself reported a build step.
-    | Building of reason: string * progress: string option
+    | Building of reason: string * progress: WorkerSaid
     /// A rebuild of the session's project is running (the old worker may still be serving). Its bound lives in the build runner.
     | BuildInFlight
     | Ready
@@ -50,10 +64,10 @@ module IntegrationSettle =
     /// The session manager has no such session.
     | Missing
 
-  let withProgress (label: string) (progress: string option) : string =
+  let withProgress (label: string) (progress: WorkerSaid) : string =
     match progress with
-    | Some text when not (String.IsNullOrWhiteSpace text) -> sprintf "%s (%s)" label text
-    | _ -> label
+    | WorkerSaid.Said text -> sprintf "%s (%s)" label text
+    | WorkerSaid.Nothing -> label
 
   /// The phase in words, for the conductor.
   let describePhase (phase: Phase) : string =
@@ -94,8 +108,8 @@ module IntegrationSettle =
     | Phase.Restarting _
     | Phase.Starting _
     | Phase.Building _ ->
-      // RED STUB: the gate never looked at the phase, so nothing was ever a stall.
       match previous with
+      | Some earlier when earlier = seen -> Verdict.Stuck seen
       | Some _
       | None -> Verdict.KeepWaiting
 
@@ -130,14 +144,20 @@ module IntegrationSettle =
   /// loop ends only through `judge` or an answer, and an answer or a Ready arrives the instant it happens, because the slice is
   /// a park, not a poll.
   let await (window: TimeSpan) (ports: Ports) : Async<Outcome> =
-    // RED STUB: the wait the gate had before the fix. One park for `window`, and when it runs out the session "timed out",
-    // whatever it was doing.
-    async {
-      match! ports.AwaitReady window with
-      | Wake.Ready -> return Outcome.Settled
-      | Wake.Refused reason -> return Outcome.Refused reason
-      | Wake.SliceElapsed -> return Outcome.Refused (sprintf "Session timed out during restart after %.1fs. Try again or use hard_reset_fsi_session." window.TotalSeconds)
-    }
+    let rec loop (previous: Phase option) : Async<Outcome> =
+      async {
+        match! ports.AwaitReady window with
+        | Wake.Ready -> return Outcome.Settled
+        | Wake.Refused reason -> return Outcome.Refused reason
+        | Wake.SliceElapsed ->
+          let! seen = ports.Observe ()
+          match judge previous seen with
+          | Verdict.Settled -> return Outcome.Settled
+          | Verdict.Dead phase -> return Outcome.DiedAs phase
+          | Verdict.Stuck phase -> return Outcome.StuckIn (phase, window)
+          | Verdict.KeepWaiting -> return! loop (Some seen)
+      }
+    loop None
 
   // -- Waiting for the session to exist --
 
@@ -145,8 +165,18 @@ module IntegrationSettle =
   /// a change between the read and the park cannot be missed: it completes the very wait the read is about to start.
   /// `Async.Sleep` and polling are not used; a value that never changes never wakes this, and that is the contract.
   let awaitChange (changed: IEvent<unit>) (read: unit -> 'a) (isReady: 'a -> bool) : Async<'a> =
-    // RED STUB: the gate read the binding once and refused a landing that arrived while it was pending.
-    async { return read () }
+    let rec loop () : Async<'a> =
+      async {
+        let woke = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+        use _subscription = changed.Subscribe(fun () -> woke.TrySetResult () |> ignore)
+        let value = read ()
+        match isReady value with
+        | true -> return value
+        | false ->
+          do! Async.AwaitTask woke.Task
+          return! loop ()
+      }
+    loop ()
 
   // -- What the gate says --
 
@@ -166,8 +196,9 @@ module IntegrationSettle =
     sprintf "%s Member: %s Conductor: %s" refusal.What refusal.ForMember refusal.ForConductor
 
   let memberWithdrawAndRequest (sessionId: string) : string =
-    // RED STUB: the advice the gate gave before, meant for the person who runs the conductor's tools.
-    sprintf "retry set_integration_ref, or run hard_reset_fsi_session on '%s'." sessionId
+    sprintf
+      "withdraw this landing (withdraw_landing) and request it again after get_cohort_status shows \"Integration session: %s (started)\" and the conductor has the session ready. A request made then waits for the session's own start-up, so it is not cut off while the session is still loading."
+      sessionId
 
   /// The session stayed in one phase for a whole window.
   let stuckRefusal (sessionId: string) (phase: Phase) (window: TimeSpan) : Refusal =
@@ -185,7 +216,7 @@ module IntegrationSettle =
   let deadRefusal (sessionId: string) (why: string) : Refusal =
     { What = sprintf "The landing was not verified: integration session '%s' is not coming back by waiting: %s." sessionId why
       ForMember =
-        "retry set_integration_ref, or run hard_reset_fsi_session."
+        "withdraw this landing (withdraw_landing). Nothing a member runs revives the integration session, so ask the conductor, and request the landing again after get_cohort_status shows the session started."
       ForConductor =
         sprintf
           "session '%s' is %s. hard_reset_fsi_session on it restarts the worker; if its worktree or build is the cause, set_integration_ref with working_directory set to the repository replaces the worktree and starts a fresh session."
@@ -194,8 +225,8 @@ module IntegrationSettle =
   /// The integration was re-pointed while a landing was being verified, so the session it was verified against no longer exists.
   let repointedRefusal : Refusal =
     { What = "The landing was not verified: the conductor is setting the integration up again, so the session it was being verified against is going away."
-      ForMember = "retry set_integration_ref."
-      ForConductor ="set_integration_ref is still building the new integration session; landings requested now wait for it and start when it does." }
+      ForMember = "withdraw this landing (withdraw_landing) and request it again after get_cohort_status shows \"Integration session: ... (started)\"."
+      ForConductor = "set_integration_ref is still building the new integration session; landings requested now wait for it and start when it does." }
 
   /// What the outcome of a wait says, as the text a Blocked landing carries. `Settled` has no text: the caller carries on.
   let describeOutcome (sessionId: string) (outcome: Outcome) : string option =

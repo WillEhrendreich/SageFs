@@ -20,7 +20,7 @@ let private reportFor (count: int) : Report =
   { Failures = failures count
     Reasons = Map.empty
     NotRun = []
-    File = Some "/data/cohort-integration/test-results/cohort-landing-l-1-failing-tests.txt" }
+    File = ReportFile.Written "/data/cohort-integration/test-results/cohort-landing-l-1-failing-tests.txt" }
 
 let private idsOf (items: Failure list) : string list = items |> List.map (fun f -> f.Id)
 

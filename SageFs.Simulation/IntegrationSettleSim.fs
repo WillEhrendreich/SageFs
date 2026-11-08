@@ -61,7 +61,7 @@ module IntegrationSettleSim =
         match scenario.Ending with
         | Ending.BecomesReady -> Phase.Ready
         | Ending.Refuses reason -> Phase.Faulted reason
-        | Ending.Hangs -> last |> Option.defaultValue (Phase.Starting None)
+        | Ending.Hangs -> last |> Option.defaultValue (Phase.Starting WorkerSaid.Nothing)
       | segment :: rest ->
         match at < started + segment.Lasts with
         | true -> segment.Phase

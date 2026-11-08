@@ -16,9 +16,9 @@ module IntegrationSettleGenerators =
   /// worker says something new at each step, and a phase that reads the same twice is the signal the gate looks for.
   let phaseOfStep (step: int) : Phase =
     match step % 4 with
-    | 0 -> Phase.Restarting (Some (sprintf "step %d" step))
-    | 1 -> Phase.Starting (Some (sprintf "loading project %d" step))
-    | 2 -> Phase.Building ("dotnet build", Some (sprintf "compiling %d" step))
+    | 0 -> Phase.Restarting (WorkerSaid.Said (sprintf "step %d" step))
+    | 1 -> Phase.Starting (WorkerSaid.Said (sprintf "loading project %d" step))
+    | 2 -> Phase.Building ("dotnet build", WorkerSaid.Said (sprintf "compiling %d" step))
     | _ -> Phase.BuildInFlight
 
   /// `count` steps, each lasting `fraction` of the window.
@@ -42,7 +42,7 @@ module IntegrationSettleGenerators =
 
   /// A restart that makes progress for a while and then stops saying anything: it hangs in a startup phase.
   let hangsAfter (progressingSteps: int) : Scenario =
-    let hungPhase = Phase.Starting (Some "loading project 7 of 11")
+    let hungPhase = Phase.Starting (WorkerSaid.Said "loading project 7 of 11")
     let hung = { Phase = hungPhase; Lasts = TimeSpan.FromSeconds (window.TotalSeconds * 0.5) }
     { Seed = 100 + progressingSteps
       Window = window

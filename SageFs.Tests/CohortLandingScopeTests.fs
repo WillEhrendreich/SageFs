@@ -41,7 +41,7 @@ let scopeTests =
       let a = scope (fun id -> Map.tryFind id names) [ "d4"; "b2" ]
       let b = scope (fun id -> Map.tryFind id names) [ "b2"; "d4" ]
       b.NotRun |> Expect.equal "same order" a.NotRun
-      a.NotRun |> List.map (fun e -> e.Id) |> Expect.equal "by name" [ "b2"; "d4" ]
+      a.NotRun |> List.map (fun e -> e.Id) |> Expect.equal "by full name, ordinal" [ "d4"; "b2" ]
 
     testCase "WHY — an empty affected set stays empty on both sides" <| fun _ ->
       let scoped = scope (fun _ -> None) []
@@ -82,8 +82,9 @@ let couldNotRunTests =
       couldNotRun (Some (TestResult.Failed (TestFailure.ExceptionThrown ("boom", "at x"), TimeSpan.Zero))) |> Expect.isNone "exception"
 
     testCase "WHY — a test that timed out as a failure, never ran, or never reported could not run, each with its reason" <| fun _ ->
-      couldNotRun (Some (TestResult.Failed (TestFailure.TimedOut (TimeSpan.FromSeconds 5.0), TimeSpan.Zero)))
-      |> Expect.equal "timed out failure" (Some "timed out after 5s")
+      let after = TestTimeouts.patience
+      couldNotRun (Some (TestResult.Failed (TestFailure.TimedOut after, TimeSpan.Zero)))
+      |> Expect.equal "timed out failure" (Some (sprintf "timed out after %gs" after.TotalSeconds))
       couldNotRun (Some TestResult.NotRun) |> Expect.equal "not run" (Some "it was not run")
       couldNotRun (Some (TestResult.NoResult NoResultReason.StreamEnded))
       |> Expect.equal "no result" (Some (NoResultReason.describe NoResultReason.StreamEnded))
