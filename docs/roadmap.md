@@ -11,7 +11,7 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 10, Later 22, Exploring 20. Already built: 47.
+On the page today: Now 0, Next 10, Later 22, Exploring 20. Already built: 48.
 
 ## Next (10)
 
@@ -134,7 +134,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 - [ ] **A command palette and one timeline.** Ctrl+K for every dashboard action, and one timeline of evals, hot reloads, test runs and tweaks that you can scrub. ([command-palette-and-one-timeline.md](plans/command-palette-and-one-timeline.md))
 
-## Built (47)
+## Built (48)
 
 _These were on this page and are in the code now. Whether a build has shipped is in [the release notes](https://github.com/WillEhrendreich/SageFs/releases) and [what SageFs has become](progress.md)._
 
