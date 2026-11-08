@@ -156,9 +156,31 @@ module CohortVacancySpec =
     | CohortCommand.SeatConductor(target, _) -> isPresent before target && after.Conductor = ConductorBinding.Bound target
     | _ -> true
 
+  /// A person's replacement names the holder it replaces: it is accepted only over a seat bound to exactly that
+  /// member, so a person who looked at the seat cannot move one that changed under them, and never over a holder
+  /// that is also the replacement.
+  let replaceNamesTheHolder (before: CohortState<Member>) (command: CohortCommand<Member>) (_after: CohortState<Member>) : bool =
+    match command with
+    | CohortCommand.ReplaceConductor(holder, target, _) -> before.Conductor = ConductorBinding.Bound holder && holder <> target
+    | _ -> true
+
+  /// A replacement seats a member who was present and moves the seat and nothing else: every member keeps its
+  /// presence (the replaced holder becomes an ordinary member, neither departed nor purged) and every claim keeps its
+  /// holder.
+  let replaceMovesOnlyTheSeat (before: CohortState<Member>) (command: CohortCommand<Member>) (after: CohortState<Member>) : bool =
+    match command with
+    | CohortCommand.ReplaceConductor(_, target, _) ->
+      isPresent before target
+      && after.Conductor = ConductorBinding.Bound target
+      && after.Members = before.Members
+      && after.Claims = before.Claims
+    | _ -> true
+
   let stepRules : (string * (CohortState<Member> -> CohortCommand<Member> -> CohortState<Member> -> bool)) list =
     [ "SEATING-FILLS-ONLY-AN-EMPTY-SEAT", seatingFillsOnlyAnEmptySeat
-      "SEATING-NAMES-A-PRESENT-MEMBER", seatingNamesAPresentMember ]
+      "SEATING-NAMES-A-PRESENT-MEMBER", seatingNamesAPresentMember
+      "REPLACE-NAMES-THE-HOLDER", replaceNamesTheHolder
+      "REPLACE-MOVES-ONLY-THE-SEAT", replaceMovesOnlyTheSeat ]
 
   /// The dedup key: exactly the projection the two rules above read. See the
   /// module doc for why this is the key and not the whole state.
@@ -207,6 +229,11 @@ module CohortVacancySpec =
     // refusals are explored as well as the acceptances.
     for m in members do
       acc.Add(CohortCommand.SeatConductor(m, cohortScope), [||])
+    // A person's replacement, for EVERY holder name and EVERY target in every state: the right holder, a stale one,
+    // the holder as its own replacement, an absent target, and a seat that is empty.
+    for holder in members do
+      for m in members do
+        acc.Add(CohortCommand.ReplaceConductor(holder, m, cohortScope), [||])
     // "everything silent lapses", in one edge
     acc.Add(CohortCommand.Tick cohortScope, [||])
     List.ofSeq acc
@@ -298,6 +325,45 @@ module CohortVacancySpec =
 
   let seatFaultsAbsent () : ExploreResult = explore faultSeatsAbsentMember defaultCap
   let seatFaultsOverBound () : ExploreResult = explore faultSeatsOverBoundConductor defaultCap
+
+  /// A replacement that does not check who it replaces: whoever the person names, the seat moves. The person who
+  /// looked at the seat then moves a conductor that changed under them.
+  let faultReplacesWithoutNamingTheHolder : Decide =
+    fun clk ent state command ->
+      match command, state.Conductor with
+      | CohortCommand.ReplaceConductor(holder, target, _), ConductorBinding.Bound sitting when holder <> sitting && target <> sitting && isPresent state target ->
+        Ok(
+          { state with Conductor = ConductorBinding.Bound target },
+          [ CohortEvent.ConductorReplaced(target, ConductorBinding.Vacant(sitting, clk, VacancyReason.Replaced)) ],
+          []
+        )
+      | _ -> Cohort.decide clk ent state command
+
+  /// A replacement that seats a member who is not here: the `Bound m` invariant, broken by the person's command.
+  let faultReplaceSeatsAbsentMember : Decide =
+    fun clk ent state command ->
+      match command, state.Conductor with
+      | CohortCommand.ReplaceConductor(holder, target, _), ConductorBinding.Bound sitting when holder = sitting && target <> sitting && not (isPresent state target) ->
+        Ok(
+          { state with Conductor = ConductorBinding.Bound target },
+          [ CohortEvent.ConductorReplaced(target, ConductorBinding.Vacant(sitting, clk, VacancyReason.Replaced)) ],
+          []
+        )
+      | _ -> Cohort.decide clk ent state command
+
+  /// A replacement that also sends the replaced holder away: it is departed on the spot, so it is not the ordinary
+  /// member the rules promise (its claims would be orphaned by a command that only meant to move the seat).
+  let faultReplaceDepartsTheHolder : Decide =
+    fun clk ent state command ->
+      match Cohort.decide clk ent state command, command with
+      | Ok(after, events, effects), CohortCommand.ReplaceConductor(holder, _, _) ->
+        let departed = { after with Members = Map.add holder { after.Members.[holder] with Presence = MemberPresence.Departed clk } after.Members }
+        Ok(departed, events, effects)
+      | result, _ -> result
+
+  let replaceFaultsStale () : ExploreResult = explore faultReplacesWithoutNamingTheHolder defaultCap
+  let replaceFaultsAbsent () : ExploreResult = explore faultReplaceSeatsAbsentMember defaultCap
+  let replaceFaultsDeparts () : ExploreResult = explore faultReplaceDepartsTheHolder defaultCap
 
   /// The OLD lookup, frozen as a regression witness: the conductor binding
   /// checked BEFORE presence, which is the whole defect in four lines. NOT wired

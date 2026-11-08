@@ -94,6 +94,8 @@ module Linearizability =
     | DelegateToSelf
     | SeatTargetAbsent
     | ConductorSeatTaken
+    | ConductorHolderChanged
+    | ReplaceByHolder
     | VetoRefused
     | InvalidVetoReason
     | LandingAlreadyVetoed
@@ -122,6 +124,8 @@ module Linearizability =
     | CohortError.DelegateToSelf _ -> ErrorKind.DelegateToSelf
     | CohortError.SeatTargetAbsent _ -> ErrorKind.SeatTargetAbsent
     | CohortError.ConductorSeatTaken _ -> ErrorKind.ConductorSeatTaken
+    | CohortError.ConductorHolderChanged _ -> ErrorKind.ConductorHolderChanged
+    | CohortError.ReplaceByHolder _ -> ErrorKind.ReplaceByHolder
     | CohortError.VetoRefused _ -> ErrorKind.VetoRefused
     | CohortError.InvalidVetoReason _ -> ErrorKind.InvalidVetoReason
     | CohortError.LandingAlreadyVetoed _ -> ErrorKind.LandingAlreadyVetoed

@@ -1085,6 +1085,7 @@
         <Compile Include="CohortIntegrationHeadTests.fs" />
         <Compile Include="CohortVacancyTests.fs" />
         <Compile Include="CohortSeatConductorTests.fs" />
+        <Compile Include="CohortReplaceConductorTests.fs" />
         <Compile Include="CohortSeatCommandTests.fs" />
         <Compile Include="CohortVetoDelegationTests.fs" />
         <Compile Include="CohortVetoDelegationToolTests.fs" />

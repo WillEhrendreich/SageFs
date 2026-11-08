@@ -727,6 +727,11 @@ module Timeouts =
   /// How often the cohort reaper renews the lease of each active member and
   /// ticks the cohort so silent members depart. No recorded reason for 60s.
   let cohortReaperInterval = envOrDefault "SAGEFS_COHORT_REAPER_SECONDS" 60.0
+  /// How long a conductor's lease may go without a renewal before the status text, the CLI and the dashboard call
+  /// the holder silent. The reaper renews a member that holds an open stream or made a call lately on every pass, so
+  /// a holder that was renewed less than two passes ago is only between ticks; one that was not is gone (no stream, no
+  /// call). Two passes, so a renewal that is a tick late does not read as silence.
+  let cohortHolderSilentAfter = TimeSpan.FromTicks(cohortReaperInterval.Ticks * 2L)
   /// How often the daemon sweeps the OS temp directory for orphaned
   /// `sagefs-host-adopt-*` and `sagefs-test` directories left by processes that
   /// died. Generous, because the walk touches the temp directory and nearly

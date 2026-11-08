@@ -116,7 +116,27 @@ module CohortErrorMapping =
     | Cohort.CohortError.ConductorSeatTaken sitting ->
       failed
         (sprintf "%s already holds the conductor seat, and a person fills an EMPTY seat." (mid sitting))
-        "Ask the conductor to hand the seat on with delegate_conductor. 'sagefs cohort seat' with no member id shows who holds it."
+        (sprintf
+          "If %s's connection is gone, replace it: '%s'. Otherwise ask the conductor to hand the seat on with delegate_conductor. '%s' with no member id shows who holds it and whether it is silent."
+          (mid sitting)
+          (Features.CohortStatusText.replaceCommandText "<member id>" (mid sitting))
+          Features.CohortStatusText.seatCommandText)
+    | Cohort.CohortError.ConductorHolderChanged(named, actual) ->
+      failed
+        (match actual with
+         | Cohort.ConductorBinding.Bound now ->
+           sprintf "%s is not the conductor any more: the seat is held by %s." (mid named) (mid now)
+         | Cohort.ConductorBinding.Vacant _
+         | Cohort.ConductorBinding.NeverBound -> sprintf "%s does not hold the conductor seat: the seat is empty, so there is nobody to replace." (mid named))
+        (match actual with
+         | Cohort.ConductorBinding.Bound now ->
+           sprintf "Look at the seat again with '%s' and, if the holder is still silent, run '%s'." Features.CohortStatusText.seatCommandText (Features.CohortStatusText.replaceCommandText "<member id>" (mid now))
+         | Cohort.ConductorBinding.Vacant _
+         | Cohort.ConductorBinding.NeverBound -> sprintf "Fill the empty seat: '%s <member id>' with no %s." Features.CohortStatusText.seatCommandText Features.CohortStatusText.replaceFlagText)
+    | Cohort.CohortError.ReplaceByHolder who ->
+      failed
+        (sprintf "%s already holds the conductor seat, so it cannot replace itself." (mid who))
+        (sprintf "Name another present member. '%s' with no member id lists who is present." Features.CohortStatusText.seatCommandText)
     | Cohort.CohortError.VetoRefused(by, Cohort.VetoRefusal.NotAMember) ->
       failed
         (sprintf "%s has no seat in this cohort, and a veto is a seated member's objection." (mid by))
