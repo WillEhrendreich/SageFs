@@ -109,7 +109,7 @@ module EnvBackedRows =
     SettingValue.count v |> Option.map (WholeCount.value >> string) |> Option.defaultValue ""
 
   let private legalCount (least: int) (n: int) : WholeCount =
-    WholeCount.clamped least n
+    WholeCount.clamped (CountFloor least) n
 
   /// A cap or a count, a whole number of at least one.
   let private count
@@ -325,8 +325,8 @@ module EnvBackedRows =
   let editor : EnvBacked =
     let names = "auto" :: (EditorChoice.all |> List.map EditorChoice.name)
     let valueOf (choice: EditorChoice) : SettingValue =
-      VEnum (EnumValue.createOrElse names (EditorChoice.name choice) (EditorChoice.name choice))
-    let auto = VEnum (EnumValue.createOrElse names "auto" "auto")
+      VEnum (EnumValue.builtIn names (EditorChoice.name choice))
+    let auto = VEnum (EnumValue.builtIn names "auto")
     let parse (raw: string) : Result<SettingValue, ConfigError> =
       match raw.Trim().ToLowerInvariant() with
       | ""

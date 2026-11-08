@@ -360,7 +360,7 @@ module SettingsCatalog =
   let identityPolicy : SettingDescriptor =
     let names = Capability.IdentityPolicy.all |> List.map Capability.IdentityPolicy.toToken
     let valueOf (policy: Capability.IdentityPolicy) : SettingValue =
-      VEnum (EnumValue.createOrElse names (Capability.IdentityPolicy.toToken policy) (Capability.IdentityPolicy.toToken policy))
+      VEnum (EnumValue.builtIn names (Capability.IdentityPolicy.toToken policy))
     { Key = "daemon.identityPolicy"
       Name = "Identity policy"
       Description = "Whether a connection with no member token may act. TokenRequired lets it read status and nothing more. A value that cannot be read is treated as TokenRequired."

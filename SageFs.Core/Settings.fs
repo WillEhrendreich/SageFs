@@ -112,13 +112,11 @@ module EnumValue =
     | true -> Ok (EnumValue(allowed, raw))
     | false -> Error (NotAMember(raw, allowed))
 
-  /// A member of `allowed`, or `fallback` when `raw` is not one. `fallback` joins the allowed set when it is missing,
-  /// so the answer is always a member and a built-in choice needs no "this cannot fail" refusal.
-  let createOrElse (allowed: string list) (fallback: string) (raw: string) : EnumValue =
-    let allowed = if List.contains fallback allowed then allowed else fallback :: allowed
-    match List.contains raw allowed with
-    | true -> EnumValue(allowed, raw)
-    | false -> EnumValue(allowed, fallback)
+  /// A built-in choice of a setting. `choice` joins the allowed set when it is missing, so the answer is always a member and
+  /// a built-in default needs no "this cannot fail" refusal.
+  let builtIn (allowed: string list) (choice: string) : EnumValue =
+    let allowed = if List.contains choice allowed then allowed else choice :: allowed
+    EnumValue(allowed, choice)
 
   let value (EnumValue(_, chosen)) = chosen
   let allowed (EnumValue(a, _)) = a
@@ -250,6 +248,10 @@ module RetentionAge =
 /// for a cap and 0 for a count the daemon itself writes, so a count of zero is only constructable where it is legal.
 type WholeCount = private WholeCount of int
 
+/// The smallest count a setting accepts: 1 for a cap, 0 for a count the daemon itself writes. A type of its own so the floor
+/// and the number being checked are two different arguments to the reader and to the compiler.
+type CountFloor = CountFloor of int
+
 [<RequireQualifiedAccess>]
 module WholeCount =
   let create (least: int) (n: int) : Result<WholeCount, ConfigError> =
@@ -259,7 +261,7 @@ module WholeCount =
 
   /// The nearest legal count to `n` for a setting whose smallest is `least`. Total, so a built-in default needs no
   /// "this cannot fail" refusal.
-  let clamped (least: int) (n: int) : WholeCount = WholeCount (max least (min Timeouts.settingCountLargest n))
+  let clamped (CountFloor least) (n: int) : WholeCount = WholeCount (max least (min Timeouts.settingCountLargest n))
 
   let value (WholeCount n) : int = n
 

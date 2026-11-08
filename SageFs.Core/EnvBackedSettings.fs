@@ -132,7 +132,7 @@ module EnvBackedSettings =
     EnumValue.create tierNames (raw.Trim().ToLowerInvariant()) |> Result.map VEnum
 
   let machineTier : EnvBacked =
-    let auto = VEnum (EnumValue.createOrElse tierNames "auto" "auto")
+    let auto = VEnum (EnumValue.builtIn tierNames "auto")
     { Descriptor =
         { Key = "waits.machineTier"
           Name = "Machine tier"
