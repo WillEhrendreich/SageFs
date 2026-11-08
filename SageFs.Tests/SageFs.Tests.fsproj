@@ -922,6 +922,7 @@
         <Compile Include="FsiOutputParserTests.fs" />
         <Compile Include="EvalResultSummaryTests.fs" />
         <Compile Include="EvalOutputShapeTests.fs" />
+        <Compile Include="EvalOutputClipTests.fs" />
         <Compile Include="EvalCostLineTests.fs" />
         <Compile Include="SseReplayTests.fs" />
         <Compile Include="PerfTests.fs" />

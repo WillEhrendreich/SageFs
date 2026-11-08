@@ -56,7 +56,9 @@ type BoundedResult =
     OriginalLength: int
     /// How many characters of the original are present in `Text` (excludes
     /// the notice itself).
-    KeptLength: int }
+    KeptLength: int
+    /// How many of the kept characters are the start. The cut begins at this offset of the original.
+    HeadLength: int }
 
 /// Bound `raw` to at most `maxChars` kept characters: its start, a notice that says exactly how many characters were
 /// cut from the middle, and its end. `maxChars <= 0` is treated as 0 (an all-notice response) rather than raising — a
@@ -66,7 +68,7 @@ let bound (maxChars: int) (raw: string) : BoundedResult =
   let maxChars = max 0 maxChars
   match raw.Length <= maxChars with
   | true ->
-    { Text = raw; WasTruncated = false; OriginalLength = raw.Length; KeptLength = raw.Length }
+    { Text = raw; WasTruncated = false; OriginalLength = raw.Length; KeptLength = raw.Length; HeadLength = raw.Length }
   | false ->
     let wantedHead = headChars maxChars
     let wantedTail = maxChars - wantedHead
@@ -86,7 +88,8 @@ let bound (maxChars: int) (raw: string) : BoundedResult =
     { Text = raw.Substring(0, headLength) + notice + raw.Substring tailStart
       WasTruncated = true
       OriginalLength = raw.Length
-      KeptLength = headLength + (raw.Length - tailStart) }
+      KeptLength = headLength + (raw.Length - tailStart)
+      HeadLength = headLength }
 
 /// The eval-reply metadata for a bounded result — empty unless truncated,
 /// else the three-field record `AppState.evalFn` attaches to `EvalResponse`.
@@ -94,6 +97,27 @@ let metadata (bounded: BoundedResult) : Map<string, objnull> =
   match bounded.WasTruncated with
   | true -> Map.ofList [ "resultTruncated", box true; "resultOriginalLength", box bounded.OriginalLength; "resultKeptLength", box bounded.KeptLength ]
   | false -> Map.empty
+
+/// The name the session binds a clipped reply's whole text to.
+[<Literal>]
+let OutputBinding = "lastEvalOutput"
+
+/// F# source that binds `raw`, whole, to `OutputBinding`. RED: not written yet.
+let bindingCode (raw: string) : string = "()"
+
+/// The expression that gives back exactly the characters a clipped reply cut. RED: not written yet.
+let suggestedExpression (bounded: BoundedResult) : string option = None
+
+/// A reply's text, and the bound of the eval's own output inside it.
+type ReplyText =
+  { Text: string
+    /// The bound of the eval's own output, which is what `resultTruncated` and the lengths describe.
+    Own: BoundedResult }
+
+/// The reply for an eval: its own output bounded, then the output written between calls under its label. RED: it still bounds the two together.
+let compose (maxChars: int) (bind: string -> bool) (own: string) (between: string) : ReplyText =
+  let bounded = bound maxChars (withBetweenCalls between own)
+  { Text = bounded.Text; Own = bounded }
 
 /// What F# Interactive prints for a binding: `val it: unit = ()`, `val x: int = 3`. A program's own output and FSI's report share
 /// one stream, and `printf "5"` writes no line break, so the stream held `5val it: unit = ()` (issue #132). The report starts
