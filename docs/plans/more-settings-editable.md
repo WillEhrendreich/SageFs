@@ -8,11 +8,11 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (step 8 of 8). The settings snapshot and the short list of overrides (roast 2026-11-08, item 10) are on `cohort/p18-settings-snapshot`, not landed: see "The settings snapshot and the short list" and its Resume table below |
+| Status | Done (shipped in 0.6.940, with the settings snapshot and the short list of overrides; the browser journey has not been rerun against the snapshot, in Next action) |
 | Size | M |
-| Branch and worktree | `worktree-agent-aeee5e5c5dad3fa70`, `/home/will/Work/SageFs/.claude/worktrees/agent-aeee5e5c5dad3fa70` |
+| Branch and worktree | none; on master since 0.6.940. The agent's worktree (`worktree-agent-aeee5e5c5dad3fa70`) and the cohort checkout `cohort/p18-settings-snapshot` are merged and can be reaped. |
 | Last green commit | 1d187af6 on the branch: unfiltered default suite Trusted (15049 of 15049), ratchet lane Trusted (527 of 527), browser journey passed (filtered to its one case) |
-| Next action | Ship it with the next release (the gate, then `scripts/ship.fsx`, with the maintainer's go). Every `SAGEFS_*` variable `Timeouts.fs` and `SageFsConfig.fs` read has a row, and the count of those without one is 0: a budget table (`variables without a settings row`) that `--ratchets --tighten` can lower and that a new variable fails. The cells the browser journey does not yet cover are listed under "Browser journey". |
+| Next action | Shipped. Every `SAGEFS_*` variable `Timeouts.fs` and `SageFsConfig.fs` read has a row, and the count of those without one is 0: a budget table (`variables without a settings row`) that `--ratchets --tighten` can lower and that a new variable fails. Left: run the settings browser journey against the snapshot (the filter command is in "The settings snapshot and the short list" below), and cover the cells the journey does not yet reach, listed under "Browser journey". |
 | Decisions made | 2026-11-07, taken from this plan's recommendations by the implementing agent, Will not yet asked: (1) option A, saved values imported into the process environment at start (`SettingsBootstrap.importSaved`), because workers inherit the environment. Replaced on 2026-11-08 by option B (a settings snapshot, see "The settings snapshot and the short list" below); (2) an edit under an overriding variable or flag is accepted and the row says "Saved X. Ignored while NAME is set."; (3) bind host and identity policy stay read-only, and the bind host row now reads `SAGEFS_BIND_HOST`. |
 | Surprises | See "Surprises" below. |
 
@@ -366,6 +366,6 @@ fixed with a named reason. A duration with no override is one of those two, so a
 
 | Field | Now |
 |:--|:--|
-| Status | Phase A done on branch `cohort/p18-settings-snapshot`, not landed |
+| Status | Phase A done and landed on master (0.6.940) |
 | Commits | a red test commit and its green commit for the snapshot, the same pair for the retired settings, the docs commit and two small follow-ups (`git log --grep "settings"`); rebased onto master on 2026-11-08 |
-| Next action | Land through the cohort. The page's browser journey (`DashboardSettingsBrowserTests`) ran against the environment import and is not rerun here; run it with `--integration-browser --filter-test-case "Settings browser:"` after landing |
+| Next action | Landed. The page's browser journey (`DashboardSettingsBrowserTests`) ran against the environment import and has not been rerun against the snapshot; run it with `--integration-browser --filter-test-case "Settings browser:"` against the installed 0.6.940 daemon |

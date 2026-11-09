@@ -73,6 +73,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | Item | Size | First failing test |
 |:--|:--|:--|
 | [Debug failing tests in VS Code](debug-failing-tests-in-vscode.md) | M for the Next scope, L overall | `holdBody` carries the session id |
+| [The debug-row journeys run green](debug-row-journeys-run-green.md) | S to M | none new: `oneTestRow` and `threeTestsOneAttach` pass from the tier after one hand run against a real attach |
 | [Bound what a connection is sent on connect](bound-the-connect-catch-up.md) | S to M | a catch-up for a 10,000-file session writes a fixed number of frames |
 | [Markers on individual Expecto cases](markers-on-expecto-cases.md) | M | two cases under one `testList` get two lines |
 | [Confirm builds without restarting the worker](confirm-builds-without-restarting-the-worker.md) | L | a verifying session is always refused a venue |
@@ -108,6 +109,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [A cost line on a slow or allocation-heavy eval](eval-cost-line.md) | S | a fast small eval carries no line |
 | [A profile tool](profile-tool.md) | M | the rows of a CPU report sum to the sampled total |
 | [Session options you can set](session-options.md) | M | a Server GC choice becomes `DOTNET_gcServer=1` in the host's environment |
+| [One rule decides what a worker's report writes into the registry](session-status-reads-write-the-registry.md) | S to M | a status read for a worker that reports Starting over a Ready registry writes nothing |
 | [Check the whole project with a file replaced](project-check-with-overlays.md) | M | an overlay for a file the project does not compile is refused with the project's files |
 | [A head-to-head benchmark for REPL servers](repl-benchmark-against-other-tools.md) | M, then one run per page | a result with no machine, load or version is refused |
 
@@ -130,6 +132,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [Ask the live codebase in F#](ask-the-live-codebase-in-fsharp.md) | M to L, then S | every role's verdict equals `admitTool` for the matching tool |
 | [Drive real agents as cohort members](drive-real-agents-as-members.md) | L | an edit at `../outside.fs` is rejected `OutsideCheckout` |
 | [A small tool list for a first session](small-default-tool-list.md) | M, M | the registered tools' definitions weigh no more than the recorded budget |
+| [A conductor can clear a lapsed member's claims](lapsed-members-claims-can-be-cleared.md) | S for the command, M with the tool and the panel | a conductor releases an orphaned claim with no present member to take it |
 
 ### Dashboard
 
@@ -148,8 +151,10 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [Hot reload on Windows and macOS](hot-reload-on-windows-and-macos.md) | M | a platform nobody listed is Unproven |
 | [Start on login for Windows](start-on-login-windows.md) | S for files and tests, M with a Windows check | the task definition parses |
 | [The getter sandbox beyond Linux x86-64](getter-sandbox-beyond-linux.md) | M | an aarch64 program refuses socket and connect |
+| [A sandboxed getter leaves no filtered thread behind](sandboxed-getters-keep-the-pool-clean.md) | M once the design is chosen | after a getter that queues pool work in a child process, no thread but the sandbox's reads `Seccomp: 2` |
 | [Admit heavy work by measured cost](admit-heavy-work-by-measured-cost.md) | M | a 6 GiB build is queued with numbers when 5 GiB is free |
 | [One command to set SageFs up in your agent](one-command-stdio-setup.md) | S for snippets, M with the command | every client's snippet is valid JSON and names `sagefs mcp` |
+| [Help for one tool in sagefs call](call-help-lists-parameters.md) | S | `--help` after a tool name parses to a request to describe that tool |
 | [The daemon tidies the workspace by itself](hygiene-that-runs-itself.md) | L | a merged worktree used an hour ago is kept, one quiet for a day is not |
 
 ## Where to start for hot reload and live testing

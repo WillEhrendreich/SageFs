@@ -8,11 +8,11 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (step 5 of 6) |
+| Status | Done (shipped in 0.6.940; the `sagefs call` proof line and the shorter first minute are left, in Next action) |
 | Size | S for the snippets and the docs page, M with the command that writes client config |
-| Branch and worktree | cohort member `p3-setup`, branch `cohort/p3-setup`, checkout `/home/will/scratch/cohort/p3-setup` |
+| Branch and worktree | none; on master since 0.6.940. The cohort checkout `cohort/p3-setup` (`/home/will/scratch/cohort/p3-setup`) is merged and can be reaped. |
 | Last green commit | see `git log` on that branch: the commit after `test(setup): session options and one-command client setup, red` |
-| Next action | Done so far (2026-11-07): `SageFs.Core/ClientSetup.fs`, the generated page `docs/client-setup.md`, `sagefs setup` (print, or `--write` to merge), tests green (steps 2 to 4), and Step 1: each client's own page was read on 2026-11-07 and the snippets match it (table below). Left: Step 5 once `sagefs call` is on the page (it is in this tree: the setup output can print `sagefs call get_daemon_status` as the one-liner that proves the registration). |
+| Next action | On master and released in 0.6.940: `SageFs.Core/ClientSetup.fs`, the generated page `docs/client-setup.md`, `sagefs setup` (print, or `--write` to merge), tests green (steps 2 to 4), and step 1 (each client's own page was read on 2026-11-07 and the snippets match it, table below). Left: step 5, which is for the setup output to print `sagefs call get_daemon_status` as the one-liner that proves the registration (`sagefs call` is on master now, and no line in `ClientSetup.fs` or `SetupCommand.fs` prints it yet), step 6, a shorter first minute, which waits on the tool-list work, and the three "Measure first" runs. |
 | Decisions made | `sagefs setup` registers Claude Code for the user (`--scope user`), says so, and the page explains it. Nothing is written without `--write`; with it the command writes only what it printed. A config that is not strict JSON (comments, a trailing comma) is refused and left byte-identical, because merging would drop the comments; the message names the snippet to add by hand. A `sagefs` entry that is not the stdio bridge is refused and shown, never overwritten. The skill is installed only with `--write` (`--skip-skill` leaves it). |
 | Surprises | VS Code's `mcp.json` allows comments, so the strict merge will refuse more VS Code files than the others. If that shows up in practice, the answer is a comment-preserving edit, not a looser parse. `sagefs setup` with no `--client` finds clients by the `claude` command on the path and by the config folders existing; a client with neither is skipped. |
 

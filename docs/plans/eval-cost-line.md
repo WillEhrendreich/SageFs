@@ -8,11 +8,11 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | In progress (step 5 of 5) |
+| Status | Done (shipped in 0.6.940; the dashboard's store, the failed-eval status and the thresholds are left, in Next action) |
 | Size | S |
-| Branch and worktree | `cohort/p2-eval-output`, `/home/will/scratch/cohort/p2-eval-output` |
+| Branch and worktree | none; on master since 0.6.940. The cohort checkout `cohort/p2-eval-output` (`/home/will/scratch/cohort/p2-eval-output`) is merged and can be reaped. |
 | Last green commit | see `git log master..cohort/p2-eval-output`; the red commit is `77e2ca01` |
-| Next action | Built and committed on the branch, not landed (2026-11-07): the host measures every eval, the wire carries it, the reply ends with the line past a threshold, a failed eval carries it too. Land through the cohort. The session's timeline now holds each eval's cost and `get_eval_timeline` shows bytes beside duration (a real-bridge case checks both). Left: the cost on the global store the dashboard's push reads (`McpContext.RecordEval` still takes three arguments), the failed-eval status (the timeline records every eval as Succeeded, which predates this item), and the thresholds from a day of history once a daemon has kept one. |
+| Next action | Landed on master and released in 0.6.940: the host measures every eval, the wire carries it, the reply ends with the line past a threshold, a failed eval carries it too, and the session's timeline holds each eval's cost so `get_eval_timeline` shows bytes beside duration (a real-bridge case checks both). Left: the cost on the global store the dashboard's push reads (`McpContext.RecordEval` still takes three arguments), the failed-eval status (the timeline records every eval as Succeeded, which predates this item), and the thresholds from a day of history once a daemon has kept one. |
 | Decisions made | Bytes are the whole process's (`GC.GetTotalAllocatedBytes false`). The line is written by the daemon from a typed `EvalCost` the host measured, carried in the reply metadata as JSON under `evalCost`. `tracedFsiEval` is left as it is; deleting it is still Will's call. |
 | Surprises | The eval reply never carried the host's time: the daemon's stopwatch includes the queue and the wire. The worker forwarded nothing but typed live-testing DTOs in the reply metadata, so adding a typed value meant a new case there. Adding a field to `FsiProtocol.EvalResult` shifted every sample in `SageFs.Tests/fixtures/FsiProtocol/wire-golden.tsv`, which is regenerated. |
 
