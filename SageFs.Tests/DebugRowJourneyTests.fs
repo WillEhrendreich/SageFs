@@ -11,8 +11,12 @@ open SageFs.Tests.DebugAttachJourneyTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
-// NEVER RUN YET. Written 2026-11-07 on a machine with no debugger (dotnet-debug present, licence not accepted), so these two
-// cases compile and are registered in `--integration-lt` and have not executed. Until one has, each is a hypothesis.
+// NOT REGISTERED (2026-11-08): `LiveTestingShards.tree` does not include `journeyTests`. Written 2026-11-07 on a machine with no
+// debugger, they ran for the first time in the release gate and failed: the release answered 502 `worker_failed` because a
+// confirming build had replaced the worker under the held test (`fromRest` waits that out now, and a refused hold or release fails
+// with the daemon's answer where it used to print SKIPPED), and past that the case waits on a debugger attach that was never
+// proven to complete (`resume` tells the stopped debuggee to go on, untried against a working attach). Until one has run green by
+// hand and the tier can say so, each is a hypothesis.
 //
 // What they check is what the roadmap item promises: after a test is debugged, the row the user would see (the row behind
 // GET /api/live-testing/entries, which every client reads) shows the verdict the debugger run produced, with the provenance
@@ -101,6 +105,28 @@ let private holdAndRelease (http: HttpClient) (sid: string) (name: string) : Tas
       | _ -> return None
   }
 
+/// A debugger stops the process it attaches to until it is told to go on. The release runs the held test in that process, so the
+/// debugger is told to continue before the release, and stays attached while the test runs (that is what a debugged row means).
+let private resume (debugger: System.Diagnostics.Process) : unit =
+  debugger.StandardInput.WriteLine "continue"
+  debugger.StandardInput.Flush()
+
+/// No confirming build is still working for the session, so a journey starts from rest whatever ran before it. The journey before
+/// restores Hello.fs, which asks a build to confirm; that build replaces the worker, and a test held for a debugger dies with the
+/// worker it was held in (in the gate the release answered 502 `worker_failed`, "Connection reset by peer"). The wait is on the
+/// daemon's own status and the stream's frames, never a timer. How many tests fail is no concern of this journey (an earlier case
+/// may leave one red), so the suite's verdict is not waited for, only the confirmation phase to be `idle`.
+let private fromRest (http: HttpClient) : Task<unit> =
+  task {
+    let feed = openFeed ()
+    return!
+      ensuring (fun () -> feed.Stop()) (fun () ->
+        task {
+          let! _ = expectFrame feed "SSE feed connecting" (fun f -> f.Event = "session") TestTimeouts.patience
+          do! awaitConfirmed feed http TestTimeouts.buildConfirmation
+        })
+  }
+
 /// One test, debugged: its row shows the verdict the debugger run gave it, from the code the hold named.
 let private oneTestRow () : Task<unit> =
   task {
@@ -108,6 +134,7 @@ let private oneTestRow () : Task<unit> =
     | None -> ()
     | Some debugger ->
       use http = client ()
+      do! fromRest http
       let! sid = sessionId http
       sid |> Expect.notEqual "the daemon has a session" ""
       let name = "add infers int"
@@ -116,6 +143,7 @@ let private oneTestRow () : Task<unit> =
       | Some (200, heldBody) ->
         let! attached = attachAndAsk debugger (number heldBody "pid")
         let proc, _, _ = attached
+        resume proc
         try
           let! released = postOrTimeout http "/api/live-testing/debug/continue" {| ticket = text heldBody "ticket"; sessionId = sid |}
           match released with
@@ -126,10 +154,12 @@ let private oneTestRow () : Task<unit> =
             |> Expect.equal
               "the row shows the debugger run's verdict and where its code came from, with no normal run in between"
               (Some(statusCaseOf (text releasedBody "outcome"), provenanceCaseOf (text heldBody "symbols")))
-          | other -> printfn "SKIPPED the row journey: the release was not answered with a verdict (%A)" (other |> Option.map fst)
+          // A refused release is a failure with the daemon's own answer, not a skip: a skip here read as a pass while the daemon
+          // answered 502 `worker_failed` to the release in the gate.
+          | other -> failtestf "the release was not answered with a verdict: %A" other
         finally
           try proc.Kill true with _ -> ()
-      | other -> printfn "SKIPPED the row journey: the hold was not granted (%A)" (other |> Option.map fst)
+      | other -> failtestf "the hold was not granted: %A" other
   }
 
 /// Three tests, debugged one after another under one attach: each row shows its own verdict.
@@ -139,6 +169,7 @@ let private threeTestsOneAttach () : Task<unit> =
     | None -> ()
     | Some debugger ->
       use http = client ()
+      do! fromRest http
       let! sid = sessionId http
       sid |> Expect.notEqual "the daemon has a session" ""
       let! entries = http.GetStringAsync(sprintf "/api/live-testing/entries?session=%s" (Uri.EscapeDataString sid))
@@ -156,6 +187,7 @@ let private threeTestsOneAttach () : Task<unit> =
       | Some (200, firstBody) ->
         let! attached = attachAndAsk debugger (number firstBody "pid")
         let proc, _, _ = attached
+        resume proc
         try
           let! firstRelease = postOrTimeout http "/api/live-testing/debug/continue" {| ticket = text firstBody "ticket"; sessionId = sid |}
           let! rest =
@@ -180,7 +212,7 @@ let private threeTestsOneAttach () : Task<unit> =
             | other -> failtestf "%s did not run under the one attach: %A" name other
         finally
           try proc.Kill true with _ -> ()
-      | other -> printfn "SKIPPED the row journey: the first hold was not granted (%A)" (other |> Option.map fst)
+      | other -> failtestf "the first hold was not granted: %A" other
   }
 
 let journeyTests =
