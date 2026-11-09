@@ -340,6 +340,11 @@ let items : Item list =
       [ "docs/decisions.md"; "docs/plans/session-status-reads-write-the-registry.md" ]
       "Reading a session's status writes to the registry. `get_session_status` takes the worker's report and, when it differs, stores it so `list_sessions` agrees. The 5 second health probe writes too, by a different rule. The read's rule can store a transient: while a level or a reset replaced the FSI host in place, a read left Starting in the registry for a worker that was Ready, and the level reported Leveled while the daemon held the old host's tests. The probe now retires that within 5 seconds and the symptom is fixed, but the second rule is still there. I would have both ask one pure function, so a read only moves the registry toward settled. The other answers are a read-only read, with `list_sessions` up to 5 seconds behind, or leaving it. It is your decision."
 
+    item "big-landings-pass-the-verifier" "A big landing waits on the run's progress and not a clock" Agents Next
+      NoLandmarkYet
+      [ "docs/mcp-tools.md"; "docs/plans/big-landings-pass-the-verifier.md" ]
+      "The cohort's landing gate runs the affected tests in the integration session and gives up after `globalTestRun` plus 30 seconds, two and a half minutes on a normal machine, and the run itself is cancelled at the same 2 minutes by the executor, so the wait is capped in two places. A test that never reported counts as failing on purpose. In the cohort run, a full run of 19067 requested tests had 18529 that did not report. A project file change makes it worse, because coverage never names a project file, so the narrow selects nothing and the floor falls back to the whole discovered suite. I want the wait to end when the results stop arriving, the way the wait on the integration session already does, and a project file change that only adds a source file not to run the whole assembly. Before building either I want to time the whole non-integration set in a session, because I have only seen it run directly, at 4 minutes 24 seconds."
+
     // ---- Later: months to a year ----
 
     item "type-change-keeps-state" "Type changes keep your running state" HotReload Later

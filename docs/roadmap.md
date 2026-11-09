@@ -11,9 +11,9 @@ Every item that is not built yet links to a plan in [docs/plans](plans/README.md
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 11, Later 21, Exploring 20. Already built: 56.
+On the page today: Now 0, Next 12, Later 21, Exploring 20. Already built: 56.
 
-## Next (11)
+## Next (12)
 
 _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
@@ -39,6 +39,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 ### Agents and cohorts
 
 - [ ] **A seated member can ask to replace a silent conductor, and a person answers.** `seat_conductor` fills an empty seat. A conductor whose connection is gone still holds a bound seat until its lease lapses, and replacing it needs `sagefs cohort seat --replace` from a shell. I plan to give the tool a `replaces` parameter that names the holder, put the same question to the person with the holder and how long it has been silent, and build `ReplaceConductor` from a `SeatApproval` that carries the holder, so it takes the person's ticked yes and no agent can replace a conductor on its own say-so. The dashboard's panel, which already names the command for a silent holder, gets a Replace button with its own one-use ticket. The cohort's compare-and-swap on the holder stays. ([seat-replace-by-asking.md](plans/seat-replace-by-asking.md), [mcp-tools.md](mcp-tools.md))
+- [ ] **A big landing waits on the run's progress and not a clock.** The cohort's landing gate runs the affected tests in the integration session and gives up after `globalTestRun` plus 30 seconds, two and a half minutes on a normal machine, and the run itself is cancelled at the same 2 minutes by the executor, so the wait is capped in two places. A test that never reported counts as failing on purpose. In the cohort run, a full run of 19067 requested tests had 18529 that did not report. A project file change makes it worse, because coverage never names a project file, so the narrow selects nothing and the floor falls back to the whole discovered suite. I want the wait to end when the results stop arriving, the way the wait on the integration session already does, and a project file change that only adds a source file not to run the whole assembly. Before building either I want to time the whole non-integration set in a session, because I have only seen it run directly, at 4 minutes 24 seconds. ([mcp-tools.md](mcp-tools.md), [big-landings-pass-the-verifier.md](plans/big-landings-pass-the-verifier.md))
 
 ### Dashboard
 
