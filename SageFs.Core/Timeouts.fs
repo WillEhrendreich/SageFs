@@ -332,6 +332,17 @@ module Timeouts =
   /// How long a getter that was interrupted gets to leave its wait before its thread is given up on. An interrupt
   /// frees a blocked wait at once, so this only bounds a getter that ignores it. No recorded reason for 250ms.
   let memberEvaluationGrace = TimeSpan.FromMilliseconds(250.0)
+  /// The longest the thread pool's limits stay held for one sandboxed getter (see `SandboxPool`). A click gives up on a getter
+  /// after the deadline and the grace, so a call still running a second past that is an abandoned one, and holding the pool for
+  /// it would freeze the host's pool for good. It must also stay under the 20 s after which an idle pool worker exits, because
+  /// the hold is only safe while the workers it counted still exist, so a slow machine's scaled deadline cannot take it past 15 s.
+  /// No recorded reason for a second of margin.
+  let sandboxPoolHoldCeiling =
+    let wanted = memberEvaluationDeadline + memberEvaluationGrace + TimeSpan.FromSeconds(1.0)
+    let cap = TimeSpan.FromSeconds(15.0)
+    match wanted > cap with
+    | true -> cap
+    | false -> wanted
   /// How many clicked getters a host tolerates never returning. Each keeps its thread for the life of the process,
   /// so past this the host refuses more and says to restart. No recorded reason for 8.
   let maxAbandonedMembers = 8

@@ -112,7 +112,8 @@ let private derivedFromMachine : (string * string) list =
     "workflowSwitchRequest", "buildCompletion"
     "leaseTtlRebuild", "buildCompletion"
     "leaseTtlFullBuild", "buildCompletion"
-    "callerCheck", "reloadPlanningCheck" ]
+    "callerCheck", "reloadPlanningCheck"
+    "sandboxPoolHoldCeiling", "memberEvaluationDeadline" ]
 
 /// Declared as another fixed duration, or as no time at all, so there is no TimeSpan on their own line.
 let private derivedFromFixed : Set<string> = set [ "cohortSettledRetention"; "notRun" ]

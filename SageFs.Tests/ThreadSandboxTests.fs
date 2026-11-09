@@ -162,19 +162,23 @@ let private model (policy: SandboxPolicy) (d: SeccompData) : Expected =
     match List.contains d.Nr networkNrs with
     | true -> ExpectErrno eperm
     | false ->
-      match writesAndSpawn with
-      | false -> ExpectAllow
-      | true ->
-        match d.Nr with
-        | nr when List.contains nr deniedOutrightNrs -> ExpectErrno eperm
-        | nr when nr = nrOpen ->
-          (match low32 d.Args[1] &&& writeFlagsMask with 0UL -> ExpectAllow | _ -> ExpectErrno eperm)
-        | nr when nr = nrOpenat ->
-          (match low32 d.Args[2] &&& writeFlagsMask with 0UL -> ExpectAllow | _ -> ExpectErrno eperm)
-        | nr when nr = nrClone ->
-          (match low32 d.Args[0] &&& cloneThread with 0UL -> ExpectErrno eperm | _ -> ExpectAllow)
-        | nr when nr = nrClone3 -> ExpectErrno enosys
-        | _ -> ExpectAllow
+      match d.Nr with
+      // A thread the filtered one made would inherit the filter for the life of the process, and the runtime makes its pool,
+      // gate and timer threads on behalf of whichever thread asks. So no policy lets the filtered thread make one.
+      | nr when nr = nrClone && (low32 d.Args[0] &&& cloneThread) <> 0UL -> ExpectErrno eperm
+      | nr when nr = nrClone3 -> ExpectErrno enosys
+      | _ ->
+        match writesAndSpawn with
+        | false -> ExpectAllow
+        | true ->
+          match d.Nr with
+          | nr when List.contains nr deniedOutrightNrs -> ExpectErrno eperm
+          | nr when nr = nrOpen ->
+            (match low32 d.Args[1] &&& writeFlagsMask with 0UL -> ExpectAllow | _ -> ExpectErrno eperm)
+          | nr when nr = nrOpenat ->
+            (match low32 d.Args[2] &&& writeFlagsMask with 0UL -> ExpectAllow | _ -> ExpectErrno eperm)
+          | nr when nr = nrClone -> ExpectErrno eperm
+          | _ -> ExpectAllow
 
 let private verdictOf (e: Expected) =
   match e with
@@ -237,6 +241,10 @@ let private dataFor (nr: int) (args: uint64 list) =
 
 let private verdictIs (policy: SandboxPolicy) (nr: int) (args: uint64 list) =
   runBpf (Seccomp.denyProgram X86_64 policy) (dataFor nr args)
+
+/// The same, for the program as it was before thread creation was refused (the twin).
+let private verdictBefore (policy: SandboxPolicy) (nr: int) (args: uint64 list) =
+  runBpf (Seccomp.denyProgramFor Seccomp.ThreadCreation.Allowed X86_64 policy) (dataFor nr args)
 
 // ---- the platform guard for the tests that install a real filter ----
 
@@ -427,17 +435,127 @@ let seccompProgramTests =
         verdictIs NoNetworkNoWritesNoSpawn nrOpenat [ 0UL; 0UL; flag ] |> Expect.equal (sprintf "openat flag 0x%x" flag) (VErrno eperm)
         verdictIs NoNetworkNoWritesNoSpawn nrOpen [ 0UL; flag ] |> Expect.equal (sprintf "open flag 0x%x" flag) (VErrno eperm)
 
-    testCase "WHY — clone is allowed with CLONE_THREAD and refused without it, so the runtime can make threads but not processes" <| fun _ ->
-      verdictIs NoNetworkNoWritesNoSpawn nrClone [ cloneThread ] |> Expect.equal "clone with CLONE_THREAD" VAllow
+    testCase "WHY — no policy lets the filtered thread make a thread, because a thread it made would inherit the filter for the life of the process" <| fun _ ->
+      for policy in allPolicies do
+        verdictIs policy nrClone [ cloneThread ] |> Expect.equal (sprintf "clone with CLONE_THREAD under %A" policy) (VErrno eperm)
+
+    testCase "WHY — NoNetworkNoWritesNoSpawn refuses a clone without CLONE_THREAD too, so it makes no process either" <| fun _ ->
       verdictIs NoNetworkNoWritesNoSpawn nrClone [ 0UL ] |> Expect.equal "clone without CLONE_THREAD" (VErrno eperm)
 
-    testCase "WHY — clone3 answers ENOSYS, because its flags are in a struct the filter cannot read and glibc then falls back to clone" <| fun _ ->
-      verdictIs NoNetworkNoWritesNoSpawn nrClone3 [ 0UL ] |> Expect.equal "clone3" (VErrno enosys)
+    testCase "WHY — clone3 answers ENOSYS under every policy, because its flags are in a struct the filter cannot read and glibc then falls back to clone" <| fun _ ->
+      for policy in allPolicies do
+        verdictIs policy nrClone3 [ 0UL ] |> Expect.equal (sprintf "clone3 under %A" policy) (VErrno enosys)
+
+    testCase "WHY — the twin: the program before thread creation was refused let the filtered thread make a thread, which is the leak" <| fun _ ->
+      for policy in allPolicies do
+        verdictBefore policy nrClone [ cloneThread ] |> Expect.equal (sprintf "clone with CLONE_THREAD under %A, before" policy) VAllow
+        verdictIs policy nrClone [ cloneThread ] |> Expect.notEqual (sprintf "and now under %A" policy) VAllow
 
     testCase "WHY — NoNetwork leaves file writes and process creation alone, so the two policies are different tiers" <| fun _ ->
       verdictIs NoNetwork nrOpenat [ 0UL; 0UL; oCreat ||| oWronly ] |> Expect.equal "openat O_CREAT under NoNetwork" VAllow
       verdictIs NoNetwork nrClone [ 0UL ] |> Expect.equal "clone without CLONE_THREAD under NoNetwork" VAllow
       verdictIs NoNetwork nrSocket [ 2UL; 1UL; 0UL ] |> Expect.equal "socket under NoNetwork" (VErrno eperm)
+
+    testCase "WHY — the pool is ready with any worker thread, and not ready with none, because with none there is nothing to serve what a getter queues" <| fun _ ->
+      SandboxPool.readinessOf 0 |> Expect.equal "no worker" PoolReadiness.NoWorker
+      for workers in [ 1; 2; 16; 184 ] do
+        SandboxPool.readinessOf workers |> Expect.equal (sprintf "%d workers" workers) PoolReadiness.Ready
+
+    testPropertyWithConfig manyRuns "WHY — however calls overlap, enter and leave and expire, the pool's limits are never lowered under one worker or raised above what the host set, and are back exactly when nothing is held"
+      (fun (ops: byte list) (existing: byte) ->
+        let host = { MinWorkers = 8; MaxWorkers = 32767; MinIo = 8; MaxIo = 1000 }
+        let mutable limits = host
+        let mutable hold = PoolHold.Free 0
+        let mutable tickets : int list = []
+        let move (m: PoolMove) =
+          match m with
+          | PoolMove.Keep -> ()
+          | PoolMove.Pin pinned -> limits <- pinned
+          | PoolMove.Restore saved -> limits <- saved
+        let mutable ok = true
+        let check () =
+          ok <- ok && limits.MinWorkers >= 1 && limits.MinWorkers <= limits.MaxWorkers && limits.MaxWorkers <= host.MaxWorkers
+          match hold with
+          | PoolHold.Free _ -> ok <- ok && limits = host
+          | PoolHold.Held _ -> ()
+        for op in ops do
+          match int op % 4 with
+          | 0 ->
+            let next, m, epoch = PoolHold.enter hold limits (int existing)
+            hold <- next
+            tickets <- epoch :: tickets
+            move m
+          | 1 ->
+            // The oldest call to enter leaves, which may be a call of an epoch that already expired.
+            (match List.rev tickets with
+             | [] -> ()
+             | oldest :: rest ->
+               tickets <- List.rev rest
+               let next, m = PoolHold.leave hold oldest
+               hold <- next
+               move m)
+          | 2 ->
+            (match tickets with
+             | [] -> ()
+             | newest :: rest ->
+               tickets <- rest
+               let next, m = PoolHold.leave hold newest
+               hold <- next
+               move m)
+          | _ ->
+            (match hold with
+             | PoolHold.Held (epoch, _, _) ->
+               let next, m = PoolHold.expire hold epoch
+               hold <- next
+               move m
+             | PoolHold.Free _ -> ())
+          check ()
+        // Every call that is left ends: the limits are the host's again.
+        for ticket in tickets do
+          let next, m = PoolHold.leave hold ticket
+          hold <- next
+          move m
+        (match hold with
+         | PoolHold.Held (epoch, _, _) ->
+           let next, m = PoolHold.expire hold epoch
+           hold <- next
+           move m
+         | PoolHold.Free _ -> ())
+        ok && limits = host)
+
+    testCase "WHY — a call that overlaps another does not save the other's lowered limits as the ones to restore, and an expired call's late leave changes nothing" <| fun _ ->
+      let host = { MinWorkers = 16; MaxWorkers = 32767; MinIo = 16; MaxIo = 1000 }
+      let first, firstMove, firstEpoch = PoolHold.enter (PoolHold.Free 0) host 5
+      firstMove |> Expect.equal "the first call pins to the 5 threads that exist" (PoolMove.Pin { host with MinWorkers = 1; MaxWorkers = 5 })
+      let second, secondMove, secondEpoch = PoolHold.enter first (PoolHold.pinnedFor host 5) 5
+      secondMove |> Expect.equal "the second call joins and moves nothing" PoolMove.Keep
+      secondEpoch |> Expect.equal "in the same epoch" firstEpoch
+      let afterFirstLeaves, moveOnFirstLeaving = PoolHold.leave second firstEpoch
+      moveOnFirstLeaving |> Expect.equal "the first one out leaves the limits pinned for the second" PoolMove.Keep
+      let afterSecondLeaves, moveOnLast = PoolHold.leave afterFirstLeaves secondEpoch
+      moveOnLast |> Expect.equal "the last one out restores what the host had before the first" (PoolMove.Restore host)
+      afterSecondLeaves |> Expect.equal "and nothing is held" (PoolHold.Free firstEpoch)
+      // An epoch that expired while its call ran on: the call leaves late, after another epoch began.
+      let held, _, abandonedEpoch = PoolHold.enter (PoolHold.Free 0) host 5
+      let expired, expiredMove = PoolHold.expire held abandonedEpoch
+      expiredMove |> Expect.equal "expiry restores" (PoolMove.Restore host)
+      let later, _, laterEpoch = PoolHold.enter expired host 5
+      let afterLate, lateMove = PoolHold.leave later abandonedEpoch
+      lateMove |> Expect.equal "the abandoned call's leave moves nothing" PoolMove.Keep
+      afterLate |> Expect.equal "and does not end the later epoch's hold" later
+      laterEpoch |> Expect.notEqual "the later hold is a new epoch" abandonedEpoch
+
+    testCase "WHY — the pinned limits never exceed what the host set and never fall under one worker, whatever the pool holds" <| fun _ ->
+      let host = { MinWorkers = 8; MaxWorkers = 4; MinIo = 8; MaxIo = 1000 }
+      (PoolHold.pinnedFor host 100).MaxWorkers |> Expect.equal "a host maximum of 4 is kept when 100 threads exist" 4
+      (PoolHold.pinnedFor host 0).MaxWorkers |> Expect.equal "no threads still leaves one worker's room" 1
+      (PoolHold.pinnedFor host 3).MinWorkers |> Expect.equal "the minimum is one" 1
+
+    testCase "WHY — a pool that could not be prepared says so on the row: the getter was not run, and the reason names the pool" <| fun _ ->
+      let text = SandboxUnavailable.describe (PoolNotReady "no worker thread exists")
+      text |> Expect.stringContains "says the getter was not run" "was not run"
+      text |> Expect.stringContains "names the thread pool" "thread pool"
+      text |> Expect.stringContains "carries the reason" "no worker thread exists"
 
     testCase "WHY — an Aarch64 process is reported unavailable, because its syscall numbers are not verified on this host" <| fun _ ->
       match Seccomp.support Aarch64 with
@@ -572,13 +690,80 @@ let realThreadTests =
       childSaid child "isPoolThread" |> Expect.equal "a work item on the pool is on a pool thread" "true"
     }
 
-    realFilterCase "WHY — the filtered thread still allocates, collects garbage, makes threads, JITs fresh code and gets a hot method promoted, so the runtime keeps working under the filter" <| fun () -> task {
+    realFilterCase "WHY — the filtered thread still allocates, collects garbage, JITs fresh code and gets a hot method promoted, so the runtime keeps working under the filter" <| fun () -> task {
       let! child = SandboxChild.run SandboxChild.SandboxScenario.RuntimeWork
       childSaid child "outcome" |> Expect.equal "the work completed" "completed"
       childSaid child "sum" |> Expect.equal "ordinary work" (string SandboxChild.expectedSum)
-      childSaid child "fromThread" |> Expect.equal "a thread started from the filtered one ran" (string SandboxChild.expectedSum)
       childSaid child "hot" |> Expect.equal "a method called past the promotion threshold still answers" (string SandboxChild.hotCalls)
       childSaid child "compiled" |> Expect.equal "a compiled regex JITs under the filter" "true"
+    }
+
+    realFilterCase "WHY — a getter that queues pool work and waits for it leaves no thread under the filter in a fresh process, and a pool thread still writes and spawns" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.PoolWorkNoLeak
+      childSaid child "filteredBefore" |> Expect.equal "no thread carried a filter before" "0"
+      childSaid child "outcome" |> Expect.equal "the getter got its answer from the pool" "completed:72"
+      // The kernel names the thread: a pool worker made on behalf of the filtered thread inherits the filter for good.
+      childSaid child "filteredAfter" |> Expect.equal (sprintf "no thread still carries the filter (%s)" (childSaid child "filteredNames")) "0"
+      childSaid child "poolWrite" |> Expect.equal "a pool thread writes a file" "wrote"
+      childSaid child "poolSpawn" |> Expect.equal "a pool thread starts a process" "spawned"
+    }
+
+    realFilterCase "WHY — after sandbox calls that queue pool work, no pool item fails a file cycle (create a directory, write, read back), because no worker carries the filter" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.PoolFileCycles
+      childSaid child "completedCalls" |> Expect.equal "every sandbox call completed" (childSaid child "rounds")
+      childSaid child "errors" |> Expect.equal (sprintf "no file cycle failed (first: %s)" (childSaid child "firstError")) "0"
+      childSaid child "filteredAfter" |> Expect.equal "and no thread carries the filter" "0"
+    }
+
+    realFilterCase "WHY — a thread cannot be made on the filtered thread: starting one is refused inside the work, and the call still completes" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.ThreadCreationRefused
+      childSaid child "outcome" |> Expect.equal "the call completed" "completed"
+      (childSaid child "thread").StartsWith "refused:" |> Expect.isTrue (sprintf "starting a thread was refused (%s)" (childSaid child "thread"))
+      childSaid child "filteredAfter" |> Expect.equal "and no thread carries the filter afterwards" "0"
+    }
+
+    realFilterCase "WHY — the twin: with the filter as it was before thread creation was refused, the same getter leaves the pool workers it made under the filter" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.PoolWorkNoLeakBefore
+      childSaid child "outcome" |> Expect.equal "the old call completed too" "completed:72"
+      (int (childSaid child "filteredAfter") > 0)
+      |> Expect.isTrue (sprintf "the kernel names a thread still under the filter (%s)" (childSaid child "filteredNames"))
+    }
+
+    realFilterCase "WHY — the pool is held at the threads it has while a call runs, so it never tries to make a thread on the filtered one even when every worker is busy, and its limits are back after" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.PoolBusy
+      childSaid child "outcome" |> Expect.equal "the getter got its answer once the workers were let go" "completed:1"
+      childSaid child "minDuring" |> Expect.equal "the minimum was lowered to one during the call" "1"
+      (int (childSaid child "maxDuring") >= 1) |> Expect.isTrue "the maximum was held at the threads that existed"
+      childSaid child "maxDuring" |> Expect.notEqual "under what the host had set" (childSaid child "maxBefore")
+      childSaid child "minAfter" |> Expect.equal "the minimum is back" (childSaid child "minBefore")
+      childSaid child "maxAfter" |> Expect.equal "the maximum is back" (childSaid child "maxBefore")
+      childSaid child "filteredAfter" |> Expect.equal "no thread carries the filter" "0"
+      childSaid child "servedAfter" |> Expect.equal "and the pool serves afterwards" "72"
+    }
+
+    realFilterCase "WHY — the twin: with the thread refused but the pool's limits not held, a busy pool tries to make a thread on the filtered one and the getter gets the exception" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.PoolBusyBefore
+      (childSaid child "outcome").StartsWith "threw:"
+      |> Expect.isTrue (sprintf "the pool's request for a thread was refused into the getter (%s)" (childSaid child "outcome"))
+    }
+
+    realFilterCase "WHY — a hold whose call never ends is let go by its ceiling, and the call's late leave changes nothing" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.PoolHoldExpires
+      childSaid child "outcome" |> Expect.equal "the hold expired" "expired"
+      childSaid child "maxHeld" |> Expect.notEqual "the limits were lowered while held" (childSaid child "maxBefore")
+      childSaid child "minExpired" |> Expect.equal "expiry put the minimum back" (childSaid child "minBefore")
+      childSaid child "maxExpired" |> Expect.equal "expiry put the maximum back" (childSaid child "maxBefore")
+      childSaid child "minLate" |> Expect.equal "the late leave left the minimum" (childSaid child "minBefore")
+      childSaid child "maxLate" |> Expect.equal "the late leave left the maximum" (childSaid child "maxBefore")
+      childSaid child "moves" |> Expect.equal "one pin then one restore" "pin,restore"
+    }
+
+    realFilterCase "WHY — a getter that queues far more pool work than there are workers leaves nothing under the filter, and the pool still serves and still grows" <| fun () -> task {
+      let! child = SandboxChild.run SandboxChild.SandboxScenario.PoolExhausted
+      childSaid child "outcome" |> Expect.equal "the getter got every answer" "completed:300"
+      childSaid child "filteredAfter" |> Expect.equal (sprintf "no thread carries the filter (%s)" (childSaid child "filteredNames")) "0"
+      childSaid child "servedAfter" |> Expect.equal "the pool serves after it" "72"
+      childSaid child "grewWhenBlocked" |> Expect.equal "the pool adds a worker when every one is blocked" "ran"
     }
 
     realFilterCase "WHY — creating a file is refused under NoNetworkNoWritesNoSpawn while reading one still works" <| fun () -> task {

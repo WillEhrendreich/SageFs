@@ -308,25 +308,74 @@ errno and the getter sees a SocketException, an UnauthorizedAccessException or a
 or traps.
 
 It does not stop a spin, a stack overflow, an in-memory effect, a write to a file descriptor that was already open, or a
-getter that issues 32-bit compat syscalls on purpose. A thread the work starts inherits the filter. There is no deadline
-in it: the caller owns the deadline and abandons a stuck thread, and the filter dies with the thread.
-
-**Open, measured 2026-11-08: a pool worker made on behalf of the filtered thread inherits the filter too.** This record used
-to say a task the work hands to a pool thread does not. That holds when an idle worker already exists. In a process whose
-pool has not grown, the pool makes the worker (and its gate thread) from the thread that queued the work, so a getter that
-queued pool work left four threads carrying the filter after the call (the kernel names them: `Seccomp: 2` in
-`/proc/self/task/<tid>/status`, with the sandbox thread's name). On those threads the host's own writes, connections and
-spawns fail for the life of the process. A thread cannot be un-filtered.
-Refusing thread creation under the filter is not the fix: the pool does not undo a request whose worker it could not make,
-never asks again, and in a process with no worker yet every later `Task.Run` waits forever (a stack dump showed the main
-thread alone, blocked in `Task.Run(...).Result`). The leak needs a design decision: a thread-level filter cannot be made
-leak-free for work that reaches the thread pool, and the options are a supervisor that answers the denied calls per thread
-(seccomp user notification), running the getter's I/O-reaching work out of process, or refusing to run a getter that queues
-pool work. Until then the evaluator's guards (deadline, abandoned-thread cap) are the protection, and the filter stops what
-it names only on the thread that carries it. Linux x86-64 is the only verified platform. Aarch64 is in the type and reported
-unverified, other OSes report `NotLinux`, and if the filter can't be installed the work does not run. The caller shows
-the reason, so the pane says "no I/O containment here" and why. The BPF is built by a pure function and run through a
+getter that issues 32-bit compat syscalls on purpose. There is no deadline in it: the caller owns the deadline and abandons
+a stuck thread, and the filter dies with the thread. Linux x86-64 is the only verified platform. Aarch64 is in the type and
+reported unverified, other OSes report `NotLinux`, and if the filter can't be installed the work does not run. The caller
+shows the reason, so the pane says "no I/O containment here" and why. The BPF is built by a pure function and run through a
 small interpreter in the tests against a separately written model.
+
+### The filter can never stay on a thread that is not the sandbox's own (2026-11-09)
+
+A filter is inherited by every thread its owner creates, and the runtime makes pool workers, the pool's gate thread and its
+timer and tiering threads on behalf of whichever thread asks. Until 2026-11-09 the filter let the sandbox thread make a
+thread, so a getter that queued pool work in a process whose pool had not grown made the pool create a worker on the filtered
+thread, and that worker kept the filter for the life of the process. Measured in fresh processes: after one call on net11 the
+kernel named five threads with `Seccomp: 2` (`/proc/self/task/<tid>/status`, carrying the sandbox thread's name). On net10,
+across 12 rounds of sandbox calls each followed by 64 pool items that create a directory and write a file, 17 threads were
+left under the filter and all 768 of the items failed with `UnauthorizedAccessException: Operation not permitted`, in five
+runs out of five. This record used to say a task the work hands to a pool thread does not inherit the filter. That held only
+while an idle worker existed.
+
+What it does now:
+
+1. **Every policy refuses `clone(CLONE_THREAD)`** (EPERM; `clone3` answers ENOSYS, as before, so glibc falls back to `clone`).
+   A thread the filtered one could make cannot exist, so no thread but the sandbox's own can carry the filter. The program
+   comes from a pure builder (`Seccomp.denyProgramFor`, with `ThreadCreation.Refused | Allowed`), and `Allowed` is kept as the
+   twin that shows the leak.
+2. **Refusing is not enough, because the pool counts a thread before it makes it.** Read from the CoreLib of the installed
+   net11 (RC2): `MaybeAddWorkingWorker` raises the pool's existing-thread and processing counts, then `CreateWorkerThread`
+   starts the thread, and a refused start throws out of `QueueUserWorkItem` with the counts left raised and no rollback.
+   `_hasOutstandingThreadRequest` also stays set, so later requests are not even made. The pool is then wrong about how many
+   threads it has, and it stops making them: a child that queued 300 items from the filtered thread, then blocked every worker
+   and asked for one more, hung until its ceiling in 9 runs of 40 (stack dump: two workers blocked, the gate thread idle, the
+   main thread waiting on `Task.Run`). Failing to make the gate thread is `Environment.FailFast`. So the filtered thread must
+   never be the one that asks the pool for a thread. That takes two things.
+3. **The pool is prepared before the call** (`SandboxPool.prepare`, from the caller's unfiltered thread): it asks for a worker,
+   which the pool makes synchronously on the calling thread, which also starts the gate thread, and sets and drops a timer so
+   the timer thread exists. It checks that a worker exists (`SandboxPool.readinessOf`) and otherwise refuses the call as
+   `PoolNotReady` with the reason on the row. It does not wait for the pool.
+4. **The pool's limits are held while the call runs** (`PoolHold`, applied by `SandboxPool.Guard` under one lock). The pool
+   makes a worker only when every existing one is busy and its goal is above how many exist, and its goal cannot exceed its
+   maximum. So for the length of the call the minimum is 1 and the maximum is the threads that exist (never above what the host
+   set): the pool wakes an idle worker or leaves the work queued for a busy one, and never starts a thread. Calls that overlap
+   share one hold, and the last one out restores the limits the host had before the first. A hold that outlives
+   `Timeouts.sandboxPoolHoldCeiling` (the click's deadline and grace, a second more, never over 15 s) is let go by a timer, so a
+   getter that never returns cannot keep the host's pool from growing; its late leave does nothing, because each stretch of
+   overlap is an epoch and a leave names its epoch. If the pool will not take the lower limits (a host that forced them with
+   environment variables) the call is refused as `PoolNotReady`.
+
+What a getter loses: it cannot start a thread (`Thread.Start` throws an OutOfMemoryException inside the getter, the call still
+completes), and while it runs the pool cannot grow, so a getter that queues more pool work than the pool has workers is served
+more slowly, never wrongly. For the call's length the host's own pool work cannot grow the pool either. Measured on net11 in
+fresh processes: with the limits held, a getter that takes every worker and asks for one more completes, the limits are back
+afterwards and the pool still serves; the same child with the thread refused and the limits not held throws an
+`OutOfMemoryException` from `Thread.StartCore` inside `UnsafeQueueUserWorkItem`, 4 runs of 4. A getter that queued 300 pool items
+and waited for all of them completed them, left nothing under the filter, and the pool afterwards served and still grew when
+every worker was blocked (30 runs of 30).
+
+The other designs lost for these reasons. Running the getter out of process cannot work: the getter runs on a live object of the
+user's process, which a helper process does not have, and `fork` hangs on CoreCLR. Identity-based supervision (seccomp user
+notification, answering denied calls per thread) leaves the filter on the pool workers and lets them through, which makes a
+getter's own threads escape containment, and it adds a supervisor whose failure blocks syscalls on every filtered thread. Making
+the pool's workers before the call and nothing more (the first attempt) left the accounting hole above.
+
+Not shown: the tiering thread. The runtime asks for its background compiler thread from whichever thread promotes a method, and
+a refusal there is not handled by anything this code controls. A getter that gets a method promoted completed in every run
+(`RuntimeWork`), so the refusal is survivable there, and one run in about forty of an earlier build threw an
+`InvalidCastException` out of the getter that has not come back in 100 runs since.
+
+`ThreadSandboxTests` pins all of it from the kernel's report and the pool's own limits, each case in a process of its own with a
+fresh pool (`SandboxChild`), including the twins, the exhaustion case, the busy-pool case and the expiry.
 
 Evidence: `SageFs.Core/ThreadSandbox.fs`, `SageFs.Tests/ThreadSandboxTests.fs`.
 Reopen it if: arm64 gets a machine to verify on, or a getter that does I/O through an fd opened before the filter turns

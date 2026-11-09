@@ -16,13 +16,19 @@ type SandboxArchitecture =
   | Aarch64
 
 /// What a sandboxed thread is stopped from doing. The filter is a deny list, so everything not named here
-/// (reads, mmap, futex, madvise, thread creation) keeps working.
+/// (reads, mmap, futex, madvise) keeps working.
+///
+/// EVERY policy stops the sandboxed thread from making a thread (clone with CLONE_THREAD fails with EPERM, clone3 with ENOSYS).
+/// A filter is inherited by every thread its owner creates, and the runtime makes pool workers, the pool's gate thread and its
+/// timer and tiering threads on behalf of whichever thread asks, so a thread made under the filter would keep it for the life of
+/// the process. Work that needs another thread gets the refusal (an OutOfMemoryException from Thread.Start), and a pool item it
+/// queues is served by a worker that already exists (`SandboxPool.prepare` makes sure of one before the call).
 type SandboxPolicy =
   /// socket, connect, accept, bind, listen, send* and socketpair fail with EPERM.
   | NoNetwork
   /// NoNetwork, plus: opening a file for write, create, truncate or append; unlink, rename, mkdir, rmdir,
-  /// truncate, chmod, chown, symlink and link; fork, vfork, execve, execveat and any clone that does not make
-  /// a thread. All of these fail with EPERM (clone3 fails with ENOSYS, see Seccomp.denyProgram).
+  /// truncate, chmod, chown, symlink and link; fork, vfork, execve, execveat and every clone. All of these fail with
+  /// EPERM (clone3 fails with ENOSYS, see Seccomp.denyProgram).
   | NoNetworkNoWritesNoSpawn
 
 /// Why no filter was installed. The caller shows this, so "no I/O containment here" always comes with a reason.
@@ -31,6 +37,9 @@ type SandboxUnavailable =
   | UnverifiedArchitecture of string
   | InstallFailed of step: string * errno: int
   | LibraryNotFound of string
+  /// The thread pool could not be shown to have a worker before the call. Without one, a getter that queues pool work would make
+  /// the pool create a worker on the filtered thread, and that worker would keep the filter for the life of the process.
+  | PoolNotReady of reason: string
 
 /// What a sandboxed run came to.
 type SandboxOutcome<'T> =
@@ -50,6 +59,7 @@ module SandboxUnavailable =
     | UnverifiedArchitecture arch -> sprintf "the syscall filter is only verified on x86-64, and this process is %s" arch
     | InstallFailed (step, errno) -> sprintf "the syscall filter could not be installed (%s failed, errno %d)" step errno
     | LibraryNotFound name -> sprintf "the syscall filter could not be installed because %s could not be loaded" name
+    | PoolNotReady why -> sprintf "the getter was not run: the thread pool has no worker to serve work it queues, and the filter would be left on a thread the pool made for it (%s)" why
 
 /// Classic-BPF programs for seccomp, built as pure bytes so every OS can test them.
 module Seccomp =
@@ -203,12 +213,37 @@ module Seccomp =
       Load (argLow argIndex)
       JumpSet (mask, onHit, onMiss) ]
 
-  let private x86_64Body (policy: SandboxPolicy) : Insn list =
+  /// Whether the filtered thread may make a thread. A filter is inherited by every thread its owner creates, and the runtime
+  /// makes pool workers, the pool's gate thread and its timer and tiering threads on behalf of whichever thread asks, so a thread
+  /// made under the filter keeps it for the life of the process and fails the host's own writes, connections and spawns later.
+  /// `Refused` is the product. `Allowed` is the behaviour before 2026-11-09, kept so a test can show the leak it had.
+  [<RequireQualifiedAccess>]
+  type ThreadCreation =
+    | Refused
+    | Allowed
+
+  let private x86_64Body (threads: ThreadCreation) (policy: SandboxPolicy) : Insn list =
     let network = denyEach networkSyscalls
+    // clone3 answers ENOSYS (its flags sit in a struct the filter cannot read), so glibc falls back to clone, which it can read.
+    // The flag test leaves the argument in the accumulator, so the syscall number is loaded again after it.
+    let threadCreation =
+      match threads with
+      | ThreadCreation.Allowed -> []
+      | ThreadCreation.Refused ->
+        [ JumpEq (sysClone3, ToEnosys, Next) ]
+        @ flagCheck sysClone cloneFlagsArg cloneThread ToEperm Next
+        @ [ Load offsetNr ]
     let writesAndSpawns =
-      match policy with
-      | NoNetwork -> []
-      | NoNetworkNoWritesNoSpawn ->
+      match policy, threads with
+      | NoNetwork, _ -> []
+      | NoNetworkNoWritesNoSpawn, ThreadCreation.Refused ->
+        denyEach fileMutationSyscalls
+        @ denyEach spawnSyscalls
+        // A clone without CLONE_THREAD makes a process, which this policy refuses too.
+        @ denyEach [ sysClone ]
+        @ flagCheck sysOpen openFlagsArg openWriteMask ToEperm ToAllow
+        @ flagCheck sysOpenat openatFlagsArg openWriteMask ToEperm ToAllow
+      | NoNetworkNoWritesNoSpawn, ThreadCreation.Allowed ->
         denyEach fileMutationSyscalls
         @ denyEach spawnSyscalls
         @ [ JumpEq (sysClone3, ToEnosys, Next) ]
@@ -221,6 +256,7 @@ module Seccomp =
       Load offsetNr
       JumpGe (x32SyscallBit, ToEperm, Next) ]
     @ network
+    @ threadCreation
     @ writesAndSpawns
 
   /// The classic-BPF program (sock_filter array, little endian) that denies what the policy names and allows
@@ -230,10 +266,14 @@ module Seccomp =
   ///
   /// Aarch64 has no deny list: its syscall numbers are not verified, `support` reports it unavailable, and the
   /// program is one ALLOW so that no unchecked list of numbers exists to be installed by mistake.
-  let denyProgram (arch: SandboxArchitecture) (policy: SandboxPolicy) : byte[] =
+  let denyProgramFor (threads: ThreadCreation) (arch: SandboxArchitecture) (policy: SandboxPolicy) : byte[] =
     match arch with
-    | X86_64 -> assemble (x86_64Body policy)
+    | X86_64 -> assemble (x86_64Body threads policy)
     | Aarch64 -> assemble []
+
+  /// The product's program: every policy refuses thread creation.
+  let denyProgram (arch: SandboxArchitecture) (policy: SandboxPolicy) : byte[] =
+    denyProgramFor ThreadCreation.Refused arch policy
 
   /// Whether a filter for this architecture has been verified on a real machine. Only x86-64 has.
   let support (arch: SandboxArchitecture) : Result<unit, SandboxUnavailable> =
@@ -258,6 +298,188 @@ module private SandboxNative =
   [<DllImport(LibcName, SetLastError = true)>]
   extern int prctl(int option, uint64 arg2, uint64 arg3, uint64 arg4, uint64 arg5)
 
+
+/// Whether the thread pool can serve work a getter queues without making a worker on the filtered thread.
+[<RequireQualifiedAccess>]
+type PoolReadiness =
+  | Ready
+  | NoWorker
+
+/// The pool's limits, the four numbers `ThreadPool` lets a process set.
+type PoolSettings =
+  { MinWorkers: int
+    MaxWorkers: int
+    MinIo: int
+    MaxIo: int }
+
+/// Whether the pool's limits are lowered for sandbox calls. Each stretch of overlapping calls is an epoch, so a call that
+/// outlived its hold cannot end a later one.
+[<RequireQualifiedAccess>]
+type PoolHold =
+  | Free of epoch: int
+  /// `holders` calls of this epoch are running, and `restore` is what the pool's limits were before the first of them.
+  | Held of epoch: int * holders: int * restore: PoolSettings
+
+/// What to do to the pool's limits when a call starts or ends.
+[<RequireQualifiedAccess>]
+type PoolMove =
+  | Keep
+  /// Lower the minimum, then the maximum (the pool refuses a maximum under its minimum).
+  | Pin of PoolSettings
+  /// Raise the maximum, then the minimum.
+  | Restore of PoolSettings
+
+module PoolHold =
+
+  /// The limits that keep the pool from ever making a worker: its goal cannot exceed the maximum, and a worker is made only when
+  /// every existing one is busy and the goal is above how many exist, so with a maximum of the threads that exist the pool wakes
+  /// an idle worker or waits for a busy one and never starts a thread. Never above what the host had set, never under one.
+  let pinnedFor (current: PoolSettings) (existing: int) : PoolSettings =
+    { current with
+        MinWorkers = 1
+        MaxWorkers = max 1 (min existing current.MaxWorkers) }
+
+  /// A call joins the hold, starting one when none is held. The epoch it gets is the one it must leave.
+  let enter (hold: PoolHold) (current: PoolSettings) (existing: int) : PoolHold * PoolMove * int =
+    match hold with
+    | PoolHold.Free epoch -> PoolHold.Held (epoch + 1, 1, current), PoolMove.Pin (pinnedFor current existing), epoch + 1
+    | PoolHold.Held (epoch, holders, restore) -> PoolHold.Held (epoch, holders + 1, restore), PoolMove.Keep, epoch
+
+  /// A call leaves the epoch it entered; the last one out puts the limits back. A call of an epoch that already ended (expired)
+  /// has nothing to undo, so it cannot raise the limits above what the host set, or end the next epoch's hold.
+  let leave (hold: PoolHold) (epoch: int) : PoolHold * PoolMove =
+    match hold with
+    | PoolHold.Held (current, 1, restore) when current = epoch -> PoolHold.Free current, PoolMove.Restore restore
+    | PoolHold.Held (current, holders, restore) when current = epoch -> PoolHold.Held (current, holders - 1, restore), PoolMove.Keep
+    | PoolHold.Held _
+    | PoolHold.Free _ -> hold, PoolMove.Keep
+
+  /// The epoch has run past its ceiling: whatever is still in it is abandoned, and the limits go back.
+  let expire (hold: PoolHold) (epoch: int) : PoolHold * PoolMove =
+    match hold with
+    | PoolHold.Held (current, _, restore) when current = epoch -> PoolHold.Free current, PoolMove.Restore restore
+    | PoolHold.Held _
+    | PoolHold.Free _ -> hold, PoolMove.Keep
+
+/// What the sandbox needs from the thread pool before it filters a thread. The filter refuses thread creation (see
+/// `Seccomp.ThreadCreation`), and the pool is not ready for that on its own: it makes a worker inside `QueueUserWorkItem`, on
+/// the calling thread, whenever every existing worker is busy, and it counts the worker (as existing and as processing work)
+/// BEFORE it makes it and never takes the count back when the system refuses. A refusal therefore leaves the pool believing in
+/// a thread that does not exist, and after enough of them it makes no more workers at all. The gate thread is worse: failing to
+/// make it ends the process. So the filtered thread must never be the one that asks the pool for a thread, which takes two
+/// things. The pool has a worker and a gate thread before the filter goes on (`prepare`, on the caller's own unfiltered thread),
+/// and for the length of the call its limits are held at the threads it has, so it never decides to make another
+/// (`PoolHold`, applied under a lock and counted across calls that overlap).
+module SandboxPool =
+
+  /// Ready when the pool has at least one worker thread, whatever it is doing: with none there would be nothing to serve what a
+  /// getter queues, and the pool would have to make one.
+  let readinessOf (workerThreads: int) : PoolReadiness =
+    match workerThreads >= 1 with
+    | true -> PoolReadiness.Ready
+    | false -> PoolReadiness.NoWorker
+
+  let private current () : PoolSettings =
+    let minWorkers, minIo = ThreadPool.GetMinThreads()
+    let maxWorkers, maxIo = ThreadPool.GetMaxThreads()
+    { MinWorkers = minWorkers; MaxWorkers = maxWorkers; MinIo = minIo; MaxIo = maxIo }
+
+  let private refused (what: string) : Result<unit, SandboxUnavailable> =
+    Error (PoolNotReady (sprintf "the pool did not accept %s" what))
+
+  let private apply (move: PoolMove) : Result<unit, SandboxUnavailable> =
+    match move with
+    | PoolMove.Keep -> Ok ()
+    | PoolMove.Pin settings ->
+      match ThreadPool.SetMinThreads(settings.MinWorkers, settings.MinIo) with
+      | false -> refused "a lower minimum"
+      | true ->
+        match ThreadPool.SetMaxThreads(settings.MaxWorkers, settings.MaxIo) with
+        | true -> Ok ()
+        | false -> refused "a lower maximum"
+    | PoolMove.Restore settings ->
+      match ThreadPool.SetMaxThreads(settings.MaxWorkers, settings.MaxIo) with
+      | false -> refused "its maximum back"
+      | true ->
+        match ThreadPool.SetMinThreads(settings.MinWorkers, settings.MinIo) with
+        | true -> Ok ()
+        | false -> refused "its minimum back"
+
+  /// Holds the pool's limits for the calls that are running. One lock covers reading the limits, deciding and applying, so two
+  /// calls that overlap cannot each save the other's lowered limits as the ones to restore. A hold that outlives `ceiling` is
+  /// ended by a timer, so a getter that never returns cannot keep the host's pool from growing. `applied` is told each move
+  /// after it was made (the product passes `ignore`; a test waits on it instead of polling).
+  type Guard(ceiling: TimeSpan, applied: PoolMove -> unit) =
+    let sync = obj ()
+    let mutable hold = PoolHold.Free 0
+    let mutable expiry : Timer option = None
+
+    let stopExpiry () =
+      match expiry with
+      | Some timer ->
+        timer.Dispose()
+        expiry <- None
+      | None -> ()
+
+    let expire (epoch: int) =
+      lock sync (fun () ->
+        let next, move = PoolHold.expire hold epoch
+        hold <- next
+        stopExpiry ()
+        apply move |> ignore
+        applied move)
+
+    /// Lowers the limits for this call and returns the epoch it must leave, or says why the pool would not let them be lowered
+    /// (the call is then not run).
+    member _.Enter() : Result<int, SandboxUnavailable> =
+      lock sync (fun () ->
+        let before = current ()
+        let next, move, epoch = PoolHold.enter hold before ThreadPool.ThreadCount
+        match apply move with
+        | Ok () ->
+          hold <- next
+          applied move
+          (match move with
+           | PoolMove.Pin _ -> expiry <- Some (new Timer(TimerCallback(fun _ -> expire epoch), null, ceiling, Timeout.InfiniteTimeSpan))
+           | PoolMove.Keep
+           | PoolMove.Restore _ -> ())
+          Ok epoch
+        | Error reason ->
+          // The pool took the lower minimum and then refused the lower maximum: put back what was taken.
+          apply (PoolMove.Restore before) |> ignore
+          Error reason)
+
+    /// Ends this call's part in its epoch; the last one out puts the limits back as they were before the first one in.
+    member _.Leave(epoch: int) : unit =
+      lock sync (fun () ->
+        let next, move = PoolHold.leave hold epoch
+        hold <- next
+        (match hold with
+         | PoolHold.Free _ -> stopExpiry ()
+         | PoolHold.Held _ -> ())
+        apply move |> ignore
+        applied move)
+
+  /// The one guard of this process: the pool's limits are the process's.
+  let heldDuringCalls = Guard(Timeouts.sandboxPoolHoldCeiling, ignore)
+
+  /// Makes sure the pool has a worker and its helper threads, from the calling thread, the way a getter's own queued work would.
+  /// The caller is not filtered, so what the pool makes here is not filtered either. Does not wait for the pool: the worker
+  /// exists when the call returns, because the pool makes it synchronously. The timer thread is made here too, because a getter
+  /// that sets a timer (a delay, a timeout) would otherwise ask for it.
+  let prepare () : Result<unit, SandboxUnavailable> =
+    try
+      for _ in 1 .. 2 do
+        ThreadPool.UnsafeQueueUserWorkItem(WaitCallback(fun _ -> ()), null) |> ignore
+      use timer = new Timer(TimerCallback(fun _ -> ()), null, 1, Timeout.Infinite)
+      match readinessOf ThreadPool.ThreadCount with
+      | PoolReadiness.Ready -> Ok ()
+      | PoolReadiness.NoWorker -> Error (PoolNotReady "no worker thread exists after the pool was asked for one")
+    with
+    // What the pool throws when the operating system will not give it a thread.
+    | :? OutOfMemoryException
+    | :? ThreadStartException as e -> Error (PoolNotReady (sprintf "%s: %s" (e.GetType().Name) e.Message))
+
 /// Runs one piece of work on a dedicated thread under a seccomp filter, so evaluating a user's property getter
 /// cannot use the network, change files or start processes.
 ///
@@ -271,13 +493,16 @@ module private SandboxNative =
 ///  - a getter that deliberately issues 32-bit compat syscalls (int 0x80), because a syscall from an
 ///    architecture the program was not written for is allowed rather than killed.
 ///
-/// A thread the work starts INHERITS the filter, so work cannot escape it by starting a thread. A thread that
-/// is already running (a pool thread the work hands a task to) does not have it, so a task queued from the
-/// work and run elsewhere is not contained.
+/// The filtered thread cannot make a thread (the filter refuses it), so no thread but the sandbox's own ever carries the filter,
+/// and work cannot escape it by starting a thread: `Thread.Start` inside the work throws. A pool thread that exists already
+/// does not have the filter, so a task queued from the work and run there is not contained. The pool is held at the threads it
+/// has while the call runs, so it cannot grow to serve a getter's work, and a getter that needs more parallelism than the pool
+/// has simply gets less of it.
 ///
 /// There is no deadline here: the CALLER owns the deadline. If the work never returns, `run` never returns, so
 /// call it from a thread you can abandon and stop waiting on your own timer. An abandoned thread keeps running
-/// and keeps its filter until it ends; the filter dies with the thread and never touches any other thread.
+/// and keeps its filter until it ends; the filter dies with the thread and never touches any other thread. The pool's limits
+/// are let go after `Timeouts.sandboxPoolHoldCeiling` whether or not the call has ended.
 module ThreadSandbox =
 
   let private prSetNoNewPrivs = 38 // PR_SET_NO_NEW_PRIVS, include/uapi/linux/prctl.h
@@ -362,10 +587,26 @@ module ThreadSandbox =
       outcome.Value
     with _ -> Unavailable (InstallFailed ("start sandbox thread", 0))
 
+  /// The install step for a program with the given thread-creation rule. `run` uses `Refused`; a test uses `Allowed` to show the
+  /// leak the product had before.
+  let installerFor (threads: Seccomp.ThreadCreation) (arch: SandboxArchitecture) (policy: SandboxPolicy) : unit -> Result<unit, SandboxUnavailable> =
+    fun () -> installOnThisThread (Seccomp.denyProgramFor threads arch policy)
+
   /// Runs `work` on a fresh dedicated background thread that installs the policy's filter first, waits for it,
-  /// and returns what happened. If the filter cannot be installed the work does not run and the result is
-  /// Unavailable, with the reason. Nothing the work throws escapes.
+  /// and returns what happened. If the filter cannot be installed, or the pool cannot be shown to have a worker, the work does
+  /// not run and the result is Unavailable, with the reason. Nothing the work throws escapes. The filtered thread cannot make a
+  /// thread, so no thread of the process can end up carrying the filter but the sandbox's own.
   let run (policy: SandboxPolicy) (work: unit -> 'T) : SandboxOutcome<'T> =
     match availability () with
     | Error reason -> Unavailable reason
-    | Ok arch -> runWithInstaller (fun () -> installOnThisThread (Seccomp.denyProgram arch policy)) work
+    | Ok arch ->
+      match SandboxPool.prepare () with
+      | Error reason -> Unavailable reason
+      | Ok () ->
+        match SandboxPool.heldDuringCalls.Enter() with
+        | Error reason -> Unavailable reason
+        | Ok epoch ->
+          try
+            runWithInstaller (installerFor Seccomp.ThreadCreation.Refused arch policy) work
+          finally
+            SandboxPool.heldDuringCalls.Leave epoch

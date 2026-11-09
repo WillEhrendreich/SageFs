@@ -50,6 +50,9 @@ module TestTimeouts =
   /// long the scenario takes: a cold start of the 30 MB assembly takes seconds, a machine at a load average of 70 takes a
   /// minute, and a child that reaches the ceiling has hung. The wait is the process ending, which costs a passing run nothing.
   let childScenarioCeiling = secs 240.
+  /// How long a test's pretend sandbox call may hold the thread pool's limits before the guard lets them go on its own. The test
+  /// waits for the guard to say it did (an event), so the value only has to be small; it is never a deadline on anything.
+  let abandonedHoldCeiling = ms 50.
   /// Ceiling on a wait that completes in the test's own process (a task settling, a file watcher
   /// reporting, a long poll answering) but goes through the thread pool and can be starved. 30 s because the gate
   /// runs beside other work on a shared machine (a load average of 40 to 70 was seen), where a starved pool made
