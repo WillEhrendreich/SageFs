@@ -230,7 +230,8 @@ let startServerWith (model: SageFsModel option) (staleSlot: SseFrame option) = t
       FeaturePushState =
         ref { SageFs.Features.FeatureHooks.FeaturePushState.empty with LastEvalDiffSse = staleSlot }
       LastFeatureOutputCount = ref 0
-      LastEvalContext = ref None }
+      LastEvalContext = ref None
+      HeldDebugTargets = SageFs.McpDebugTest.HeldTargets() }
 
   let app = builder.Build()
   McpServer.mapEventsRoute app rctx

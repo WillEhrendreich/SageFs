@@ -154,7 +154,8 @@ let private startServer (worker: Worker) (discovered: TestCase list) (dispatch: 
       FsiBindings = ref Map.empty
       FeaturePushState = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
       LastFeatureOutputCount = ref 0
-      LastEvalContext = ref None }
+      LastEvalContext = ref None
+      HeldDebugTargets = SageFs.McpDebugTest.HeldTargets() }
 
   let app = builder.Build()
   SageFs.Server.McpServer.mapLiveTestingRoutes app rctx
@@ -331,6 +332,23 @@ let tests =
             record.Verdict.TestId |> Expect.equal "the test the hold was taken on" adds.Id
             record.CodeBasis |> Expect.equal "the target's code was defined by eval" ResultProvenance.Evaluated
           | other -> failtestf "expected exactly one DebugRunFinished, got %d" other.Length
+        })
+    }
+
+    testTask "WHY: the holds a daemon granted are its own, so a ticket that another daemon in the same process granted puts nothing on this one's rows" {
+      // The table of holds was one per process. A process with one daemon cannot tell, and a process that starts several (a test run does,
+      // with the same session id and ticket in each) had them steal one another's holds, so a verdict landed on the wrong daemon or on none.
+      let worker = Worker((fun _ -> DebugBegin.Held target), (fun _ -> DebugProgress.Ended(DebugEnd.Attached failedUnderDebugger)))
+      do!
+        withDispatching worker [ adds; removes ] (fun daemonA _ -> task {
+          let! _ = post (daemonA + "/api/live-testing/debug") (JsonSerializer.Serialize {| testId = TestId.value adds.Id; sessionId = sidText |})
+          do!
+            withDispatching worker [ adds; removes ] (fun daemonB sentB -> task {
+              let release = JsonSerializer.Serialize {| ticket = "debug-4242-1"; sessionId = sidText |}
+              let! status, _ = post (daemonB + "/api/live-testing/debug/continue") release
+              status |> Expect.equal "the host's answer is still told to the editor" 200
+              recordsOf sentB |> Expect.isEmpty "daemon B never granted that hold, so no verdict lands on its rows"
+            })
         })
     }
 

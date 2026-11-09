@@ -113,7 +113,8 @@ let private startTestServer (ops: SessionManagementOps) = task {
       FsiBindings = ref Map.empty
       FeaturePushState = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
       LastFeatureOutputCount = ref 0
-      LastEvalContext = ref None }
+      LastEvalContext = ref None
+      HeldDebugTargets = SageFs.McpDebugTest.HeldTargets() }
 
   let app = builder.Build()
   SageFs.Server.McpServer.mapSessionRoutes app rctx

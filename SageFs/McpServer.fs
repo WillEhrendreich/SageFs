@@ -2528,6 +2528,8 @@ type RouteContext = {
   LastFeatureOutputCount: int ref
   /// Last (filePath, blockStartLine) from an /exec call; used to stamp bindings_snapshot events.
   LastEvalContext: (string * int) option ref
+  /// The holds this daemon granted to debug a test. Built with the context, so each daemon in a process has its own.
+  HeldDebugTargets: McpDebugTest.HeldTargets
 }
 
 let configureOtel (builder: WebApplicationBuilder) (port: int) (version: string) (otelConfigured: bool) =
@@ -4670,7 +4672,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
           { SessionId = tryGetJsonStringAliases root [ "sessionId"; "session_id"; "session" ]
             WorkingDirectory = tryGetJsonStringAliases root [ "workingDirectory"; "working_directory" ]
             Selector = selector }
-        let! answer = McpDebugTest.beginDebug rctx.McpContext request
+        let! answer = McpDebugTest.beginDebug rctx.HeldDebugTargets rctx.McpContext request
         do! respondDebug ctx answer
     } :> Task
   ) |> ignore
@@ -4686,7 +4688,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
           { SessionId = tryGetJsonStringAliases root [ "sessionId"; "session_id"; "session" ]
             WorkingDirectory = tryGetJsonStringAliases root [ "workingDirectory"; "working_directory" ]
             Ticket = ticket }
-        let! answer = McpDebugTest.continueDebug rctx.McpContext request
+        let! answer = McpDebugTest.continueDebug rctx.HeldDebugTargets rctx.McpContext request
         do! respondDebug ctx answer
     } :> Task
   ) |> ignore
@@ -4987,6 +4989,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
         FeaturePushState = featurePushState
         LastFeatureOutputCount = lastFeatureOutputCount
         LastEvalContext = lastEvalContext
+        HeldDebugTargets = McpDebugTest.HeldTargets()
       }
 
       match cfg.StateChanged with

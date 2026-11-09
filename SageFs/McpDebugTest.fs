@@ -22,7 +22,9 @@ module McpDebugTest =
       WorkingDirectory: string option
       Ticket: string }
 
-  /// The daemon's one table of holds it has granted (`HeldTable`, pure), behind a lock because routes run on many threads.
+  /// A daemon's table of the holds it has granted (`HeldTable`, pure), behind a lock because routes run on many threads. One per
+  /// daemon, carried by its route context: a process that runs several daemons (a test run does, with the same session id and ticket
+  /// in each) must not have one take another's hold.
   [<Sealed>]
   type HeldTargets() =
     let gate = obj ()
@@ -35,8 +37,6 @@ module McpDebugTest =
         let rest, record = verdictFor table session ticket ended System.DateTimeOffset.UtcNow
         table <- rest
         record)
-
-  let heldTargets = HeldTargets()
 
   let private selectorText (selector: TestSelector) : string =
     match selector with
@@ -53,7 +53,7 @@ module McpDebugTest =
     }
 
   /// Hold the chosen test in the session's host. The test must have been discovered into THIS session's own cycle.
-  let beginDebug (ctx: McpContext) (request: DebugRequest) : Task<int * DebugWire> =
+  let beginDebug (held: HeldTargets) (ctx: McpContext) (request: DebugRequest) : Task<int * DebugWire> =
     task {
       match ctx.GetElmModel with
       | None -> return toWire (DebugAnswer.NoSession "This process has no live-testing engine to ask. Debugging a test needs the SageFs daemon.")
@@ -71,13 +71,13 @@ module McpDebugTest =
             | Resolution.Resolved test ->
               let! answer = DebugTestRequest.beginDebug ctx.SessionOps (toSessionId sid) test
               match answer with
-              | DebugAnswer.Begun(SageFs.HostAgent.TestDebug.DebugBegin.Held target) -> heldTargets.Add(sid, target)
+              | DebugAnswer.Begun(SageFs.HostAgent.TestDebug.DebugBegin.Held target) -> held.Add(sid, target)
               | _ -> ()
               return toWire answer
     }
 
   /// Release the held test and wait (up to the park bound) for it to finish.
-  let continueDebug (ctx: McpContext) (request: ContinueRequest) : Task<int * DebugWire> =
+  let continueDebug (held: HeldTargets) (ctx: McpContext) (request: ContinueRequest) : Task<int * DebugWire> =
     task {
       match! route ctx request.SessionId request.WorkingDirectory with
       | Error answer -> return toWire answer
@@ -86,7 +86,7 @@ module McpDebugTest =
         // The hold ended with a verdict: it goes on the test's row, where a normal run's would, without a normal run.
         match answer, ctx.Dispatch with
         | DebugAnswer.Progress(SageFs.HostAgent.TestDebug.DebugProgress.Ended ended), Some dispatch ->
-          match heldTargets.Verdict(sid, request.Ticket, ended) with
+          match held.Verdict(sid, request.Ticket, ended) with
           | Some record -> dispatch (SageFsMsg.Event(TuiEvent.DebugRunFinished record))
           | None -> ()
         | _ -> ()
