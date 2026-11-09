@@ -22,7 +22,7 @@ let private idsOf (t: Trace) : string list = violations t |> List.map (fun v -> 
 
 /// The twin must break `invariantId` on `scenario`, which the real fold must not.
 let private teeth (twin: Policy) (invariantId: string) (scenario: Scenario) : Test =
-  testCase (sprintf "WHY - %s breaks %s on its scenario, so the invariant has teeth" twin.Name invariantId) <| fun _ ->
+  testCase (sprintf "WHY - %s breaks %s on its scenario (seed %d), so the invariant has teeth" twin.Name invariantId scenario.Seed) <| fun _ ->
     assertHolds (run scenario)
     idsOf (runWith twin scenario) |> Expect.contains (sprintf "the twin violates %s" invariantId) invariantId
 
