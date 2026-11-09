@@ -409,10 +409,30 @@ module SandboxPool =
   /// calls that overlap cannot each save the other's lowered limits as the ones to restore. A hold that outlives `ceiling` is
   /// ended by a timer, so a getter that never returns cannot keep the host's pool from growing. `applied` is told each move
   /// after it was made (the product passes `ignore`; a test waits on it instead of polling).
-  type Guard(ceiling: TimeSpan, applied: PoolMove -> unit) =
+  type Guard(ceiling: TimeSpan, applied: PoolMove -> unit, setLimits: PoolMove -> Result<unit, SandboxUnavailable>, readLimits: unit -> PoolSettings) =
     let sync = obj ()
     let mutable hold = PoolHold.Free 0
     let mutable expiry : Timer option = None
+    /// The limits the pool owes the host because it refused them back. The next call settles this before it does anything else,
+    /// and is refused while the pool still will not take them, so a pool left lowered is never run on and never forgotten.
+    let mutable unrestored : PoolSettings option = None
+
+    /// Makes one move and keeps the books: a restore the pool took clears the debt, one it refused becomes the debt.
+    let settle (move: PoolMove) : Result<unit, SandboxUnavailable> =
+      match setLimits move with
+      | Ok () ->
+        (match move with
+         | PoolMove.Restore _ -> unrestored <- None
+         | PoolMove.Keep
+         | PoolMove.Pin _ -> ())
+        applied move
+        Ok ()
+      | Error reason ->
+        (match move with
+         | PoolMove.Restore settings -> unrestored <- Some settings
+         | PoolMove.Keep
+         | PoolMove.Pin _ -> ())
+        Error reason
 
     let stopExpiry () =
       match expiry with
@@ -426,28 +446,38 @@ module SandboxPool =
         let next, move = PoolHold.expire hold epoch
         hold <- next
         stopExpiry ()
-        apply move |> ignore
-        applied move)
+        // A refused restore is recorded in `unrestored`, and the next `Enter` answers for it.
+        match settle move with
+        | Ok () -> ()
+        | Error _ -> ())
 
     /// Lowers the limits for this call and returns the epoch it must leave, or says why the pool would not let them be lowered
     /// (the call is then not run).
     member _.Enter() : Result<int, SandboxUnavailable> =
       lock sync (fun () ->
-        let before = current ()
-        let next, move, epoch = PoolHold.enter hold before ThreadPool.ThreadCount
-        match apply move with
+        let owed =
+          match unrestored with
+          | Some settings -> settle (PoolMove.Restore settings)
+          | None -> Ok ()
+        match owed with
+        | Error reason -> Error reason
         | Ok () ->
-          hold <- next
-          applied move
-          (match move with
-           | PoolMove.Pin _ -> expiry <- Some (new Timer(TimerCallback(fun _ -> expire epoch), null, ceiling, Timeout.InfiniteTimeSpan))
-           | PoolMove.Keep
-           | PoolMove.Restore _ -> ())
-          Ok epoch
-        | Error reason ->
-          // The pool took the lower minimum and then refused the lower maximum: put back what was taken.
-          apply (PoolMove.Restore before) |> ignore
-          Error reason)
+          let before = readLimits ()
+          let next, move, epoch = PoolHold.enter hold before ThreadPool.ThreadCount
+          match settle move with
+          | Ok () ->
+            hold <- next
+            (match move with
+             | PoolMove.Pin _ -> expiry <- Some (new Timer(TimerCallback(fun _ -> expire epoch), null, ceiling, Timeout.InfiniteTimeSpan))
+             | PoolMove.Keep
+             | PoolMove.Restore _ -> ())
+            Ok epoch
+          | Error reason ->
+            // The pool took the lower minimum and then refused the lower maximum: put back what was taken. If it will not
+            // take that back either, `unrestored` holds the debt and the next call is refused until it is paid.
+            match settle (PoolMove.Restore before) with
+            | Ok () -> Error reason
+            | Error _ -> Error reason)
 
     /// Ends this call's part in its epoch; the last one out puts the limits back as they were before the first one in.
     member _.Leave(epoch: int) : unit =
@@ -457,8 +487,13 @@ module SandboxPool =
         (match hold with
          | PoolHold.Free _ -> stopExpiry ()
          | PoolHold.Held _ -> ())
-        apply move |> ignore
-        applied move)
+        // A refused restore is recorded in `unrestored`, and the next `Enter` answers for it.
+        match settle move with
+        | Ok () -> ()
+        | Error _ -> ())
+
+    /// The guard over the real thread pool.
+    new(ceiling: TimeSpan, applied: PoolMove -> unit) = Guard(ceiling, applied, apply, current)
 
   /// The one guard of this process: the pool's limits are the process's.
   let heldDuringCalls = Guard(Timeouts.sandboxPoolHoldCeiling, ignore)

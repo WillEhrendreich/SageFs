@@ -557,6 +557,34 @@ let seccompProgramTests =
       text |> Expect.stringContains "names the thread pool" "thread pool"
       text |> Expect.stringContains "carries the reason" "no worker thread exists"
 
+    testCase "WHY — a restore the pool refuses is not forgotten: the next call tries it again, and until the pool takes it that call is refused with the pool named" <| fun _ ->
+      let host = { MinWorkers = 4; MaxWorkers = 8; MinIo = 4; MaxIo = 8 }
+      // A one-element array stands for "the pool is refusing" so the pretend pool can change its answer between calls.
+      let refusing = [| true |]
+      let tried = ResizeArray<PoolMove>()
+      let pool (move: PoolMove) : Result<unit, SandboxUnavailable> =
+        tried.Add move
+        match move, refusing[0] with
+        | PoolMove.Restore _, true -> Error (PoolNotReady "the pool did not accept its maximum back")
+        | _ -> Ok ()
+      let guard = SandboxPool.Guard(TestTimeouts.patience, ignore, pool, (fun () -> host))
+      let first = guard.Enter()
+      first |> Expect.isOk "the first call enters"
+      let epoch = match first with Ok e -> e | Error _ -> -1
+      guard.Leave epoch
+      // The last one out asked for the limits back and the pool said no. The next call must not run on a pool left lowered.
+      match guard.Enter() with
+      | Ok _ -> failtest "a call ran while the pool still held the lowered limits the last call left"
+      | Error (PoolNotReady why) -> why |> Expect.stringContains "the refusal names the restore the pool would not take" "its maximum back"
+      | Error other -> failtestf "the refusal named the wrong thing: %A" other
+      refusing[0] <- false
+      let again = guard.Enter()
+      again |> Expect.isOk "once the pool takes the limits back the call runs"
+      tried
+      |> Seq.filter (function PoolMove.Restore settings -> settings = host | _ -> false)
+      |> Seq.length
+      |> Expect.equal "the restore of the host's own limits was tried at each of the three calls" 3
+
     testCase "WHY — an Aarch64 process is reported unavailable, because its syscall numbers are not verified on this host" <| fun _ ->
       match Seccomp.support Aarch64 with
       | Error (UnverifiedArchitecture _) -> ()
