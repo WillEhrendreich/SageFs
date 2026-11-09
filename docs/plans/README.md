@@ -152,7 +152,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [Hot reload on Windows and macOS](hot-reload-on-windows-and-macos.md) | M | a platform nobody listed is Unproven |
 | [Start on login for Windows](start-on-login-windows.md) | S for files and tests, M with a Windows check | the task definition parses |
 | [The getter sandbox beyond Linux x86-64](getter-sandbox-beyond-linux.md) | M | an aarch64 program refuses socket and connect |
-| [A sandboxed getter leaves no filtered thread behind](sandboxed-getters-keep-the-pool-clean.md) | M once the design is chosen | after a getter that queues pool work in a child process, no thread but the sandbox's reads `Seccomp: 2` |
+| [A sandboxed getter leaves no filtered thread behind](sandboxed-getters-keep-the-pool-clean.md) | M | after a getter that queues pool work in a child process, no thread but the sandbox's reads `Seccomp: 2` (done in 97252b11) |
 | [Admit heavy work by measured cost](admit-heavy-work-by-measured-cost.md) | M | a 6 GiB build is queued with numbers when 5 GiB is free |
 | [One command to set SageFs up in your agent](one-command-stdio-setup.md) | S for snippets, M with the command | every client's snippet is valid JSON and names `sagefs mcp` |
 | [Help for one tool in sagefs call](call-help-lists-parameters.md) | S | `--help` after a tool name parses to a request to describe that tool |
