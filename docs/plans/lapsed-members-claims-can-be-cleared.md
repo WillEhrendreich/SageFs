@@ -8,7 +8,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Built on master, 2026-11-09, awaiting the release gate. Pure command, simulation, tool, status text, docs and the Neovim view are done. The dashboard Clear control and a `sagefs cohort` clear command are not built. |
+| Status | Done on master, 2026-11-09, awaiting the release gate. Pure command, simulation, tool, status text, docs and the Neovim view are done. The dashboard Clear control and a `sagefs cohort` clear command are not built. |
 | Size | S for the pure command, M with the tool, the dashboard control and the docs |
 | Branch and worktree | none: committed on master in the shared checkout. sagefs.nvim commit `dddec14` is local and not pushed. |
 | Last green commit | `41adfbe9` (built with HEAD plus its files in a private copy, because the shared tree did not compile with other agents' in-flight edits: 12 pure cases, 2 properties, 3 status cases, 3 refusal cases, 14 membership cases with the three twins, the `--ratchets` lane green except the VS Code docs-title case, analyzer counts within budget, and the real-daemon case below). The REPL proofs are in "What was proved". |
