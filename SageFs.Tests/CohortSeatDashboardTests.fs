@@ -23,6 +23,9 @@ let private bob = MemberId.Minted "bob"
 let private carol = MemberId.Minted "carol"
 let private token = MemberId.Capability "0123456789abcdef"
 
+let pairOf (holder: string) (target: string) : SageFs.Server.SeatNonces.ReplacePair =
+  { HolderName = holder; TargetName = target }
+
 let private frameAfter (commands: CohortCommand<MemberId> list) : CohortFrame<MemberId> =
   let state, seq =
     commands
@@ -203,8 +206,8 @@ let replacePanelTests =
       |> List.sort
       |> Expect.equal
         "one ticket per pair, and none for a Seat button"
-        ([ SageFs.Server.SeatNonces.replaceSubject "alice" "bob"; SageFs.Server.SeatNonces.replaceSubject "alice" "carol" ] |> List.sort)
-      html |> Expect.stringContains "the post carries the ticket for the pair, escaped" (sprintf "nonce=%s" (Uri.EscapeDataString("T/" + SageFs.Server.SeatNonces.replaceSubject "alice" "bob")))
+        ([ SageFs.Server.SeatNonces.replaceSubject (pairOf "alice" "bob"); SageFs.Server.SeatNonces.replaceSubject (pairOf "alice" "carol") ] |> List.sort)
+      html |> Expect.stringContains "the post carries the ticket for the pair, escaped" (sprintf "nonce=%s" (Uri.EscapeDataString("T/" + SageFs.Server.SeatNonces.replaceSubject (pairOf "alice" "bob"))))
 
     testCase "WHY - a holder or member name with a quote in it cannot end the script string in the click handler" <| fun _ ->
       let odd = MemberId.Minted "o'brien\\x"
@@ -221,7 +224,7 @@ let replaceFromDashboardTests =
       do! seated ctx "alice"
       do! seated ctx "bob"
       let owner = (cohortOwnerFor ctx wd).Value
-      let! outcome = CohortSeatRoute.replaceFromDashboard owner "bob" "alice"
+      let! outcome = CohortSeatRoute.replaceFromDashboard owner (pairOf "alice" "bob")
       match outcome with
       | Ok text ->
         text |> Expect.stringContains "names bob" "bob"
@@ -236,7 +239,7 @@ let replaceFromDashboardTests =
       do! seated ctx "bob"
       do! seated ctx "carol"
       let owner = (cohortOwnerFor ctx wd).Value
-      let! outcome = CohortSeatRoute.replaceFromDashboard owner "bob" "carol"
+      let! outcome = CohortSeatRoute.replaceFromDashboard owner (pairOf "carol" "bob")
       match outcome with
       | Error text -> text |> Expect.stringContains "names the actual holder" "alice"
       | Ok text -> failtestf "a stale holder must be refused, got: %s" text
@@ -248,7 +251,7 @@ let replaceFromDashboardTests =
       do! seated ctx "alice"
       let owner = (cohortOwnerFor ctx wd).Value
       let! _ = owner.Commit(CohortCommand.Join(token, JoinableRole.Implementer, None, owner.Scope))
-      let! outcome = CohortSeatRoute.replaceFromDashboard owner (MemberId.display token) "alice"
+      let! outcome = CohortSeatRoute.replaceFromDashboard owner (pairOf "alice" (MemberId.display token))
       match outcome with
       | Error _ -> ()
       | Ok text -> failtestf "a token holder must be refused, got: %s" text

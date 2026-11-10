@@ -3090,8 +3090,8 @@ let run
             match isProjectFile path with
             | false -> return [ Features.ProjectFileChange.Change.OtherBuildInput path ]
             | true ->
-              let! was = Features.CohortGit.fileAt worktree baseSha path
-              let! now = Features.CohortGit.fileAt worktree headSha path
+              let! was = Features.CohortGit.fileAt worktree { AtCommit = baseSha; FilePath = path }
+              let! now = Features.CohortGit.fileAt worktree { AtCommit = headSha; FilePath = path }
               match was, now with
               | Ok before, Ok after -> return Features.ProjectFileChange.diff path before after
               | _ -> return [ Features.ProjectFileChange.Change.Unreadable path ]
@@ -3375,7 +3375,7 @@ let run
                   | _ -> None)
               let! existedBefore =
                 sourceFilesChanged
-                |> List.map (fun path -> async { return! Features.CohortGit.existsAt binding.WorktreePath baseSha path })
+                |> List.map (fun path -> async { return! Features.CohortGit.existsAt binding.WorktreePath { AtCommit = baseSha; FilePath = path } })
                 |> Async.Sequential
               let sourceFiles = List.zip sourceFilesChanged (Array.toList existedBefore) |> List.filter snd |> List.map fst
               let! selection = selectionForBuildInputs binding.WorktreePath baseSha headSha classified

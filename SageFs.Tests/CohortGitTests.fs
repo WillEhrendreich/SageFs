@@ -138,15 +138,15 @@ let tests =
           do! writeAndCommit repo "App.fsproj" "<Project Sdk=\"x\" />" "edit the project"
           do! writeAndCommit repo "New.fs" "module New" "add a source file"
           let! headSha = git repo [ "rev-parse"; "HEAD" ]
-          let! was = CohortGit.fileAt repo baseSha "App.fsproj"
-          let! now = CohortGit.fileAt repo headSha "App.fsproj"
+          let! was = CohortGit.fileAt repo { AtCommit = baseSha; FilePath = "App.fsproj" }
+          let! now = CohortGit.fileAt repo { AtCommit = headSha; FilePath = "App.fsproj" }
           was |> Expect.equal "the base's text" (Ok (Some "<Project />"))
           now |> Expect.equal "the head's text" (Ok (Some "<Project Sdk=\"x\" />"))
-          let! absent = CohortGit.fileAt repo baseSha "New.fs"
+          let! absent = CohortGit.fileAt repo { AtCommit = baseSha; FilePath = "New.fs" }
           absent |> Expect.equal "the base has no New.fs" (Ok None)
-          let! presentAtBase = CohortGit.existsAt repo baseSha "App.fsproj"
-          let! presentAtHead = CohortGit.existsAt repo headSha "New.fs"
-          let! missingAtBase = CohortGit.existsAt repo baseSha "New.fs"
+          let! presentAtBase = CohortGit.existsAt repo { AtCommit = baseSha; FilePath = "App.fsproj" }
+          let! presentAtHead = CohortGit.existsAt repo { AtCommit = headSha; FilePath = "New.fs" }
+          let! missingAtBase = CohortGit.existsAt repo { AtCommit = baseSha; FilePath = "New.fs" }
           presentAtBase |> Expect.isTrue "App.fsproj is in the base"
           presentAtHead |> Expect.isTrue "New.fs is in the head"
           missingAtBase |> Expect.isFalse "New.fs is not in the base"

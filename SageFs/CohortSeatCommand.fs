@@ -220,17 +220,16 @@ module CohortSeatRoute =
         | Error err -> return Error(SageFsError.describeForAgent (CohortErrorMapping.toSageFsError err))
     }
 
-  /// The dashboard's Replace button: `holderName` loses the seat to `targetName`, as the command line's `--replace` does
+  /// The dashboard's Replace button: the pair's holder loses the seat to its target, as the command line's `--replace` does
   /// (`commandForReplace`, then `Cohort.decide`, which refuses a holder that is no longer the holder with the seat as it
   /// stands). The caller has already decided the request came from a person at the page, with a ticket for this pair.
   let replaceFromDashboard
     (owner: Features.CohortOwner.Handle)
-    (targetName: string)
-    (holderName: string)
+    (pair: SageFs.Server.SeatNonces.ReplacePair)
     : System.Threading.Tasks.Task<Result<string, string>> =
     task {
       let frame = owner.ReadFrame()
-      match commandForReplace frame frame.Scope targetName holderName with
+      match commandForReplace frame frame.Scope pair.TargetName pair.HolderName with
       | Error err -> return Error(SageFsError.describeForAgent err)
       | Ok command ->
         let! committed = owner.Commit command

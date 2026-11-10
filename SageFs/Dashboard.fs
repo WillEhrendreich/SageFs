@@ -3676,14 +3676,13 @@ let seatRequestVerdict
 let replaceRequestVerdict
   (tickets: SeatNonces.Store)
   (site: FetchSite)
-  (memberName: string)
-  (holderName: string)
+  (pair: SeatNonces.ReplacePair)
   (nonce: string)
   : Result<unit, SeatRequestRefusal> =
-  match System.String.IsNullOrWhiteSpace memberName, System.String.IsNullOrWhiteSpace holderName with
+  match System.String.IsNullOrWhiteSpace pair.TargetName, System.String.IsNullOrWhiteSpace pair.HolderName with
   | true, _ -> Result.Error SeatRequestRefusal.NoMemberNamed
   | false, true -> Result.Error SeatRequestRefusal.NoHolderNamed
-  | false, false -> seatRequestVerdict tickets site (SeatNonces.replaceSubject holderName memberName) nonce
+  | false, false -> seatRequestVerdict tickets site (SeatNonces.replaceSubject pair) nonce
 
 /// `POST /dashboard/cohort/seat?member=<id>&nonce=<ticket>`: the cohort panel's Seat button. Runs for a request that passes
 /// `seatRequestVerdict`: the ticket the page was rendered with, spent once. The origin guard in front of every route already
@@ -3708,8 +3707,8 @@ let createCohortSeatHandler (infra: DashboardInfra) : HttpHandler =
     let verdict, act =
       match ctx.Request.Query.ContainsKey "replace" with
       | true ->
-        let holder = queryValue "replace"
-        replaceRequestVerdict SeatNonces.shared site name holder (queryValue "nonce"), (fun () -> infra.ReplaceConductor name holder)
+        let pair : SeatNonces.ReplacePair = { HolderName = queryValue "replace"; TargetName = name }
+        replaceRequestVerdict SeatNonces.shared site pair (queryValue "nonce"), (fun () -> infra.ReplaceConductor pair)
       | false -> seatRequestVerdict SeatNonces.shared site name (queryValue "nonce"), (fun () -> infra.SeatConductor name)
     match verdict with
     | Result.Error refusal -> do! ActionResult.patch ctx (ActionOutcome.Failure(SeatRequestRefusal.describe refusal))

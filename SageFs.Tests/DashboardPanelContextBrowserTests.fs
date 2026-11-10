@@ -295,7 +295,7 @@ let tests =
         let query = System.Web.HttpUtility.ParseQueryString url.Query
         Expect.equal "naming the member who takes the seat" "bob" query.["member"]
         Expect.equal "and the holder it replaces" "alice" query.["replace"]
-        Expect.equal "with the ticket issued for that pair" ("T/" + Server.SeatNonces.replaceSubject "alice" "bob") query.["nonce"]
+        Expect.equal "with the ticket issued for that pair" ("T/" + Server.SeatNonces.replaceSubject { HolderName = "alice"; TargetName = "bob" }) query.["nonce"]
         Expect.equal "after one question" 1 dialogs.Count
         Expect.stringContains "the question names the holder" "alice" dialogs.[0]
         Expect.stringContains "and how long it has been silent" (sprintf "silent for %d min" (int Timeouts.cohortLeaseWindow.TotalMinutes)) dialogs.[0]

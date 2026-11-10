@@ -3299,7 +3299,7 @@ let rec renderCohortPanelCore
                 | SageFs.Cohort.SeatState.Present, who when who <> holder ->
                   let name = MemberTable.MemberId.display who
                   let inScript = name.Replace("\\", "\\\\").Replace("'", "\\'")
-                  let ticket = seatTicket (SeatNonces.replaceSubject holderId name)
+                  let ticket = seatTicket (SeatNonces.replaceSubject { HolderName = holderId; TargetName = name })
                   Elem.button
                     [ Attr.class' "eval-btn"
                       Attr.style "font-size: 0.857rem; flex: 0 1 auto; overflow-wrap: anywhere;"
