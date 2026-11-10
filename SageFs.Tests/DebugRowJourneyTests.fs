@@ -11,41 +11,43 @@ open SageFs.Tests.DebugAttachJourneyTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
-// NOT REGISTERED (2026-11-08): `LiveTestingShards.tree` does not include `journeyTests`. Written 2026-11-07 on a machine with no
-// debugger, they ran for the first time in the release gate and failed: the release answered 502 `worker_failed` because a
-// confirming build had replaced the worker under the held test (`fromRest` waits that out now, and a refused hold or release fails
-// with the daemon's answer where it used to print SKIPPED), and past that the case waits on a debugger attach that was never
-// proven to complete (`resume` tells the stopped debuggee to go on, untried against a working attach). Until one has run green by
-// hand and the tier can say so, each is a hypothesis.
+// NOT REGISTERED (2026-11-08, cause found 2026-11-09): `LiveTestingShards.tree` does not include `journeyTests`. Written
+// 2026-11-07 on a machine with no debugger, they ran for the first time in the release gate and failed: the release answered 502
+// `worker_failed` because a confirming build had replaced the worker under the held test (`fromRest` waits that out now, and a
+// refused hold or release fails with the daemon's answer where it used to print SKIPPED).
+//
+// Past that, the cause is the debugger. The only one on this machine, `dotnet-debug`, is an inspector (the console of
+// `dotnet-dump analyze`): it has no `continue`, so `resume` below was a line the console answers with "Unrecognized SOS command",
+// it suspends the host's runtime while attached, and it never makes `Debugger.IsAttached` true, which is what the host reads when
+// the test is released. A released test with an inspector attached ends in `released_without_debugger` and does not run, so no
+// verdict reaches the row. `DebuggerKind` in DebugAttachJourneyTests says which debugger can do this. These journeys need a
+// managed debugger (netcoredbg), and its console protocol (`resume`, the attach arguments) has not been run: the hand run on
+// 2026-11-09 had no netcoredbg. The gate machine has none either, so registering them there fails the tier.
 //
 // What they check is what the roadmap item promises: after a test is debugged, the row the user would see (the row behind
 // GET /api/live-testing/entries, which every client reads) shows the verdict the debugger run produced, with the provenance
 // the daemon named when it held the test, and no normal run happened in between. The HTTP answers are the means.
 //
 // Run with:  dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-lt --summary
-// The debugger must be installed and its licence accepted once: `dotnet-debug attach --accept-license-agreement 1`.
-// With SAGEFS_REQUIRE_DEBUGGER=1 a machine without one FAILS with that command, where otherwise it says SKIPPED.
+// A managed debugger (netcoredbg) must be on PATH. With SAGEFS_REQUIRE_DEBUGGER=1 a machine without one FAILS with where to get
+// it, where otherwise it says SKIPPED. `dotnet-debug` is not accepted: it is an inspector (see the header above).
 
-/// The one switch that turns a missing debugger from a skip into a failure (the self-hosted gate sets it).
+/// The one switch that turns a missing debugger from a skip into a failure.
 let private debuggerRequired () : bool = Environment.GetEnvironmentVariable "SAGEFS_REQUIRE_DEBUGGER" = "1"
 
-let private installCommand = "dotnet tool install -g dotnet-debug, then dotnet-debug attach --accept-license-agreement 1"
+let private installCommand = "install netcoredbg (https://github.com/Samsung/netcoredbg/releases) and put it on PATH"
 
-/// The debugger this machine can attach with, or None after saying why not (and failing, when one is required).
+/// The managed debugger this machine can attach with, or None after saying why not (and failing, when one is required). The
+/// inspector `dotnet-debug` never qualifies: attached, it freezes the host and the release ends without a debugger.
 let private debuggerOrNone () : string option =
-  match debuggerOnPath (), licenceAccepted () with
-  | Some debugger, true -> Some debugger
-  | None, _ ->
+  let managed = debuggerOnPath () |> Option.filter (fun name -> DebuggerKind.ofCommand name = ManagedDebugger)
+  match managed with
+  | Some debugger -> Some debugger
+  | None ->
     match debuggerRequired () with
-    | true -> failtestf "prerequisite missing: no dotnet-debug or netcoredbg on PATH. Install it: %s" installCommand
+    | true -> failtestf "prerequisite missing: no managed debugger on PATH (dotnet-debug is an inspector and cannot run a released test). Fix: %s" installCommand
     | false ->
-      printfn "SKIPPED the row journey: no debugger on PATH (%s)" installCommand
-      None
-  | Some _, false ->
-    match debuggerRequired () with
-    | true -> failtestf "prerequisite missing: the debugger's licence is not accepted. Run: %s" installCommand
-    | false ->
-      printfn "SKIPPED the row journey: the debugger's licence is not accepted (%s)" installCommand
+      printfn "SKIPPED the row journey: no managed debugger on PATH (%s)" installCommand
       None
 
 let private sessionId (http: HttpClient) : Task<string> =
@@ -105,8 +107,10 @@ let private holdAndRelease (http: HttpClient) (sid: string) (name: string) : Tas
       | _ -> return None
   }
 
-/// A debugger stops the process it attaches to until it is told to go on. The release runs the held test in that process, so the
-/// debugger is told to continue before the release, and stays attached while the test runs (that is what a debugged row means).
+/// A managed debugger stops the process it attaches to until it is told to go on. The release runs the held test in that process,
+/// so the debugger is told to continue before the release, and stays attached while the test runs (that is what a debugged row
+/// means). UNTRIED: written for netcoredbg's console, never run against one. `dotnet-debug` answers this line with "Unrecognized
+/// SOS command 'continue'" (hand run, 2026-11-09).
 let private resume (debugger: System.Diagnostics.Process) : unit =
   debugger.StandardInput.WriteLine "continue"
   debugger.StandardInput.Flush()

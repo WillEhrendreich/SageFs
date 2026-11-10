@@ -39,6 +39,33 @@ let debuggerOnPath () : string option =
       | true -> Some name
       | false -> None)
 
+/// What a debugger on this machine can do to a held host, from running each against a real hold on 2026-11-09 (the plan is
+/// docs/plans/debug-row-journeys-run-green.md).
+///
+/// `dotnet-debug attach <pid>` is a read-only inspector (the console of `dotnet-dump analyze`: `threads`, `clrstack`, `dumpheap`,
+/// no `continue`, no breakpoints). While it is attached the host's runtime is suspended and answers nothing, it gives the host back
+/// when it quits, and a debugger that is killed instead leaves the host frozen for good. It never makes `Debugger.IsAttached`
+/// true, so a release with it attached ends in `released_without_debugger` and the test does not run.
+///
+/// A managed debugger (netcoredbg) takes over the process through the runtime's debugger transport, which is what the host
+/// looks for, so a test released under one runs and has a verdict.
+type DebuggerKind =
+  | Inspector
+  | ManagedDebugger
+
+module DebuggerKind =
+  /// The kind of the debugger a command name starts. A name that is not netcoredbg is the inspector this machine has.
+  let ofCommand (command: string) : DebuggerKind =
+    match command with
+    | "netcoredbg" -> ManagedDebugger
+    | _ -> Inspector
+
+  /// The status the daemon's release answers for a test released with this kind of debugger attached and let go cleanly.
+  let releaseStatus (kind: DebuggerKind) : string =
+    match kind with
+    | Inspector -> "released_without_debugger"
+    | ManagedDebugger -> "attached"
+
 /// The tool asks for its licence the first time it runs. A machine that has not accepted it has
 /// nothing to check here, and the test says which file would say so.
 let licenceAccepted () =
@@ -100,6 +127,22 @@ let attachAndAsk (debugger: string) (pid: int) : Task<Process * string * string 
     return (proc, answer, List.ofSeq said)
   }
 
+/// End a debugger the way it asks to be ended: `quit` on its console, then wait for it to exit. The inspector holds the host's
+/// runtime suspended until then, so killing it first leaves the host frozen and the release that follows never answers. The kill
+/// is only for a debugger that did not exit after `quit`.
+let detach (proc: Process) : Task<unit> =
+  task {
+    try
+      proc.StandardInput.WriteLine "quit"
+      proc.StandardInput.Flush()
+      use cts = new System.Threading.CancellationTokenSource(TestTimeouts.childExit)
+      do! proc.WaitForExitAsync cts.Token
+    with _ -> ()
+    try
+      if not proc.HasExited then proc.Kill true
+    with _ -> ()
+  }
+
 let text (body: string) (name: string) : string =
   use doc = JsonDocument.Parse body
   match doc.RootElement.TryGetProperty name with
@@ -146,10 +189,8 @@ let private tryAttach (debugger: string) (pid: int) : Task<(string * string list
   task {
     try
       let! proc, answer, said = attachAndAsk debugger pid
-      try
-        return Some(answer, said)
-      finally
-        try proc.Kill true with _ -> ()
+      do! detach proc
+      return Some(answer, said)
     with _ -> return None
   }
 
@@ -179,6 +220,21 @@ let machineCondition (status: int) (body: string) : bool =
     | "host_unavailable"
     | "host_lost" -> true
     | _ -> false
+
+/// Release a held test and ask again for as long as the daemon says `still_running`. A release waits up to
+/// `Timeouts.debugContinuePark` for the verdict and answers `still_running` when that passes; a released test with no managed
+/// debugger waits `Timeouts.debugAttachGrace` for one first, which can be longer than one park on a slow machine. Each answer is
+/// the daemon's own event, so the count of asks comes from the two durations and never from a clock.
+let releaseUntilAnswered (http: HttpClient) (sid: string) (ticket: string) : Task<(int * string) option> =
+  let asks = int (Math.Ceiling(SageFs.Timeouts.debugAttachGrace.TotalSeconds / SageFs.Timeouts.debugContinuePark.TotalSeconds)) + 2
+  let rec ask (left: int) =
+    task {
+      let! released = postOrTimeout http "/api/live-testing/debug/continue" {| ticket = ticket; sessionId = sid |}
+      match released with
+      | Some (200, body) when text body "status" = "still_running" && left > 1 -> return! ask (left - 1)
+      | other -> return other
+    }
+  ask asks
 
 /// Hold a real test in the real host, attach a real debugger to the process the daemon names,
 /// and let the test run.
@@ -252,8 +308,10 @@ and private fullAttach' (http: HttpClient) : Task<unit> =
           // The attach is asked first, then the release runs the held test, and the assertions
           // come after both. The order matters: the release is what frees the host, so a hold is
           // never left open for the cases that follow in this tier, whatever the assertions say.
+          // The debugger quits before the release (see `detach`): the inspector holds the host's runtime suspended while it
+          // is attached, and a release sent to a suspended host gets no answer.
           let! attached = attachOrNothing pid
-          let! released = postOrTimeout http "/api/live-testing/debug/continue" {| ticket = ticket; sessionId = sid |}
+          let! released = releaseUntilAnswered http sid ticket
 
           match attached with
           | None -> ()
@@ -267,23 +325,44 @@ and private fullAttach' (http: HttpClient) : Task<unit> =
               "0x"
 
           // The daemon's own answer to the release says whether a debugger was really attached: it
-          // checks `Debugger.IsAttached` itself.
+          // checks `Debugger.IsAttached` itself, which only a managed debugger makes true. What the answer is for each kind
+          // is `DebuggerKind.releaseStatus`. No answer at all is a defect, not a busy machine: this case used to print
+          // SKIPPED for it, and that hid a host left frozen by a killed inspector.
           match released with
           | None ->
-            printfn
-              "SKIPPED the attach: the daemon did not answer the release in %ds. The release waits for the host's agent, and this machine is busy."
+            failtestf
+              "the daemon did not answer the release in %ds, after the debugger had quit. A host that answers nothing is frozen or lost."
               (int TestTimeouts.debugHoldRequest.TotalSeconds)
           | Some (releasedStatus, releasedBody) when machineCondition releasedStatus releasedBody ->
             printfn
               "SKIPPED the attach: the daemon could not reach the worker to release the hold (%s)."
               (text releasedBody "message")
           | Some (releasedStatus, releasedBody) ->
-            releasedStatus |> Expect.equal "the release answers" 200
-            text releasedBody "status" |> Expect.equal "the debugger was attached" "attached"
-            text releasedBody "outcome" |> Expect.notEqual "the test ran and had a verdict" ""
+            match attached, debuggerOnPath () |> Option.map DebuggerKind.ofCommand with
+            | Some _, Some kind ->
+              text releasedBody "status" |> Expect.equal (sprintf "the release of a test held for a %A debugger" kind) (DebuggerKind.releaseStatus kind)
+              match kind with
+              | ManagedDebugger ->
+                releasedStatus |> Expect.equal "the release answers" 200
+                text releasedBody "outcome" |> Expect.notEqual "the test ran and had a verdict" ""
+              | Inspector ->
+                releasedStatus |> Expect.equal "a test released with no managed debugger is a conflict" 409
+            | _ ->
+              // Nothing attached, so nothing says what the release should have answered. It answered, and that frees the hold.
+              ()
   }
+
+[<Tests>]
+let debuggerKindTests =
+  testList
+    "Debug attach: what each debugger on a machine can do to a held host"
+    [ testCase "WHY: dotnet-debug is an inspector and netcoredbg is a managed debugger, and only the second can run a released test" <| fun _ ->
+        DebuggerKind.ofCommand "dotnet-debug" |> Expect.equal "the dotnet tool is the inspector" Inspector
+        DebuggerKind.ofCommand "netcoredbg" |> Expect.equal "netcoredbg is managed" ManagedDebugger
+        DebuggerKind.releaseStatus Inspector |> Expect.equal "an inspector's release ends without a debugger" "released_without_debugger"
+        DebuggerKind.releaseStatus ManagedDebugger |> Expect.equal "a managed debugger's release runs the test" "attached" ]
 
 let journeyTests =
   testList
     "LT debug: a debugger attaches to the process the daemon holds a test in"
-    [ Integration.dedicatedCaseTask "--integration-lt" "LT debug: a real debugger attaches to a held test, and the test runs when it lets go" fullAttach ]
+    [ Integration.dedicatedCaseTask "--integration-lt" "LT debug: a real debugger lists the threads of a held host, and the release says whether the test ran under it" fullAttach ]
