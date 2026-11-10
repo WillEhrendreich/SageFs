@@ -8,7 +8,7 @@ open System.Threading
 let createEffectDeps
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
-  (prepareForCreate: string -> bool)
+  (prepareForCreate: string list -> string -> bool)
   (configureWarmupAutoOpen: string -> Result<OutputLine, string>)
   : EffectDeps =
   {
@@ -29,7 +29,7 @@ let createEffectDeps
         sessionManager.Post(SessionManager.SessionCommand.TouchSession sessionId)))
     CreateSession = fun targets workingDir workflow ->
       async {
-        let autoOpenNamespaces = prepareForCreate workingDir
+        let autoOpenNamespaces = prepareForCreate (SessionProjectTarget.paths targets) workingDir
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.CreateSession(

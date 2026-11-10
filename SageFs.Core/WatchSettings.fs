@@ -25,7 +25,8 @@ module WatchSettings =
     | VOptionalCount _
     | VBindHost _
     | VEnum _
-    | VDir _ -> []
+    | VDir _
+    | VNamedValues _ -> []
 
   let descriptor : SettingDescriptor = {
     Key = Key

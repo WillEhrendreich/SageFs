@@ -63,6 +63,37 @@ type GcMode =
   | WorkstationGc
   | ServerGc
 
+/// A name that is not one of the collectors, as an editor or a person typed it.
+type UnknownGcMode = UnknownGcMode of given: string
+
+module GcMode =
+  /// Every choice, in the order a row offers them.
+  let all : GcMode list = [ WorkstationGc; ServerGc ]
+
+  /// What a session gets when nothing says otherwise.
+  let standard : GcMode = WorkstationGc
+
+  /// The one spelling of a choice, shared by config, the settings file and the page.
+  let name (choice: GcMode) : string =
+    match choice with
+    | WorkstationGc -> "Workstation"
+    | ServerGc -> "Server"
+
+  /// What choosing it means, for a row's help line.
+  let consequence (choice: GcMode) : string =
+    match choice with
+    | WorkstationGc -> "The runtime's default collector. Uses the least memory."
+    | ServerGc -> "One heap and one collector thread per core, which is what allocation-heavy code runs under in production. It commits much more memory."
+
+  /// Read a choice from its name, ignoring case.
+  let parse (text: string) : Result<GcMode, UnknownGcMode> =
+    match all |> List.tryFind (fun choice -> System.String.Equals(name choice, text, System.StringComparison.OrdinalIgnoreCase)) with
+    | Some choice -> Result.Ok choice
+    | None -> Result.Error(UnknownGcMode text)
+
+  let describeUnknown (UnknownGcMode given: UnknownGcMode) : string =
+    sprintf "'%s' is not a garbage collector. The choices are: %s." given (all |> List.map name |> String.concat ", ")
+
 /// One environment variable for a session's FSI host, written `EnvEntry("NAME", "value")`. A union and not a tuple, because
 /// a config is carried back from the host that evaluated it over a wire that has no tuples.
 type EnvEntry = EnvEntry of name: string * value: string

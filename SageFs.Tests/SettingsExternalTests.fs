@@ -336,6 +336,7 @@ let rowTextTests =
             match d.Applicability with
             | Live -> ">live<"
             | RestartRequired -> ">restart<"
+            | NextSession -> ">next session<"
             | ReadOnly _ -> ">read-only<"
           (html.Contains word || html.Contains ("live<")) |> Expect.isTrue (sprintf "%s shows its chip" d.Key))
   ]
@@ -358,7 +359,7 @@ let moreRowsTests =
         d.Description.EndsWith "." |> Expect.isTrue (sprintf "the help line of %s is a sentence" d.Key)
 
     testCase "WHY — a row that is read-only says why, and the reason is one of the closed set" <| fun _ ->
-      let readOnly = SettingsCatalog.all |> List.choose (fun d -> match d.Applicability with ReadOnly reason -> Some (d, reason) | Live | RestartRequired -> None)
+      let readOnly = SettingsCatalog.all |> List.choose (fun d -> match d.Applicability with ReadOnly reason -> Some (d, reason) | Live | RestartRequired | NextSession -> None)
       (List.length readOnly > 5) |> Expect.isTrue "there are read-only rows"
       for d, reason in readOnly do
         ReadOnlyReason.describe reason |> Expect.stringStarts (sprintf "%s says read-only" d.Key) "read-only here:"

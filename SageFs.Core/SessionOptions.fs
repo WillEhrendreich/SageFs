@@ -12,12 +12,43 @@ module SessionOptions =
     | EnvNameEmpty
     | EnvNameInvalid of name: string
     | EnvNamePoisoned of name: string
+    /// Text in an environment setting that is not `NAME=value`.
+    | EnvEntryNotAssignment of text: string
     | ArtifactsPathEmpty
     | ArtifactsPathNotAbsolute of path: string
     | ArtifactsPathUnderProc of path: string
+    /// The session asked for an artifacts path and the project's own build files already set one, which stays.
+    | ArtifactsClaimedByProject of asked: string * projectSets: string
+    /// A saved setting that could not be read back, so the default stands for that option.
+    | SettingUnreadable of option: OptionName * reason: string
+
+  /// The three options a person can set for a session, named once so a refusal, a source and a row all say which one they mean.
+  and OptionName =
+    | GcOption
+    | EnvOption
+    | ArtifactsOption
+
+  /// The option a refusal is about.
+  let optionOf (refusal: Refusal) : OptionName =
+    match refusal with
+    | EnvNameEmpty
+    | EnvNameInvalid _
+    | EnvNamePoisoned _
+    | EnvEntryNotAssignment _ -> EnvOption
+    | ArtifactsPathEmpty
+    | ArtifactsPathNotAbsolute _
+    | ArtifactsPathUnderProc _
+    | ArtifactsClaimedByProject _ -> ArtifactsOption
+    | SettingUnreadable(option, _) -> option
 
   let describe (refusal: Refusal) : string =
     match refusal with
+    | EnvEntryNotAssignment text ->
+      sprintf "'%s' is not written as NAME=value, so it was dropped. → Write each entry as NAME=value and separate entries with ';'. A value that holds ';' goes in SessionEnv in config.fsx." text
+    | ArtifactsClaimedByProject(asked, projectSets) ->
+      sprintf "The session asked for artifacts path %s, and this project's own build files already set ArtifactsPath to %s, so the project's choice stays and the session's was ignored. The project's files win because they are shared with your team and CI, and the build and the project load then read the same folder. → Remove ArtifactsPath from the project's props to use the session's, or remove the Artifacts setting." asked projectSets
+    | SettingUnreadable(option, reason) ->
+      sprintf "The saved %s setting could not be read (%s), so the default was used. → Save a new value from the Settings page, or fix the settings file." (match option with GcOption -> "garbage collector" | EnvOption -> "environment" | ArtifactsOption -> "artifacts path") reason
     | EnvNameEmpty ->
       "A session environment entry has an empty name, so it was dropped. → Give the variable a name in SessionEnv."
     | EnvNameInvalid name ->
@@ -103,6 +134,99 @@ module SessionOptions =
       FsiArgs = config.DefaultArgs },
     refusedEnv @ refusedArtifacts
 
+  /// Environment entries as the settings file and the page write them: `NAME=value`, separated by `;`. Every entry is checked
+  /// by the same rules as `SessionEnv` in config.fsx, and a text with any bad entry is refused whole, naming each, so a typo
+  /// is not saved as something shorter than what was typed.
+  let parseEnvText (text: string) : Result<EnvEntry list, Refusal list> =
+    let pieces =
+      (match text with null -> "" | t -> t).Split(';', StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries)
+      |> Array.toList
+    let checkedPieces =
+      pieces
+      |> List.map (fun piece ->
+        match piece.IndexOf '=' with
+        | -1 -> Error(EnvEntryNotAssignment piece)
+        | at ->
+          let name = piece.Substring(0, at).Trim()
+          checkEnvName name |> Result.map (fun kept -> EnvEntry(kept, piece.Substring(at + 1))))
+    match checkedPieces |> List.choose (function Error refusal -> Some refusal | Ok _ -> None) with
+    | [] -> Ok(checkedPieces |> List.choose (function Ok entry -> Some entry | Error _ -> None))
+    | refusals -> Error refusals
+
+  /// The text `parseEnvText` reads back to the same entries.
+  let renderEnvText (entries: EnvEntry list) : string =
+    entries |> List.map (fun (EnvEntry(name, value)) -> name + "=" + value) |> String.concat ";"
+
+  /// An artifacts path as the settings file and the page write it: empty leaves the choice to the project.
+  let parseArtifactsText (text: string) : Result<ArtifactsDir, Refusal> =
+    match String.IsNullOrWhiteSpace text with
+    | true -> Ok ProjectChooses
+    | false -> checkArtifacts text |> Result.map ArtifactsIn
+
+  let renderArtifactsText (artifacts: ArtifactsDir) : string =
+    match artifacts with
+    | ProjectChooses -> ""
+    | ArtifactsIn path -> path
+
+  /// What a project's own build files say about where its output goes, found by asking MSBuild with nothing of the session's
+  /// in the way.
+  type ProjectClaim =
+    | ProjectLeavesArtifacts
+    | ProjectSetsArtifacts of path: string
+
+  /// A project that already sets `ArtifactsPath` keeps it. The session's request is dropped with the reason, because the build
+  /// and the project load must read the same folder and the project's files are the ones shared with the team and CI. An
+  /// equal path is no conflict.
+  let reconcileArtifacts (claim: ProjectClaim) (options: Options) : Options * Refusal list =
+    match options.Artifacts, claim with
+    | ArtifactsIn asked, ProjectSetsArtifacts theirs when not (String.Equals(Path.TrimEndingDirectorySeparator asked, Path.TrimEndingDirectorySeparator theirs, StringComparison.Ordinal)) ->
+      { options with Artifacts = ProjectChooses }, [ ArtifactsClaimedByProject(asked, theirs) ]
+    | ArtifactsIn _, ProjectSetsArtifacts _
+    | ArtifactsIn _, ProjectLeavesArtifacts
+    | ProjectChooses, _ -> options, []
+
+  /// Where one option's value came from.
+  type OptionSource =
+    | FromConfigFile
+    | FromSettings
+    | FromNothing
+
+  /// The options a session will run with, with where each came from and what was refused on the way.
+  type Resolution =
+    { Options: Options
+      GcFrom: OptionSource
+      EnvFrom: OptionSource
+      ArtifactsFrom: OptionSource
+      Refusals: Refusal list }
+
+  let sourceOf (resolution: Resolution) (option: OptionName) : OptionSource =
+    match option with
+    | GcOption -> resolution.GcFrom
+    | EnvOption -> resolution.EnvFrom
+    | ArtifactsOption -> resolution.ArtifactsFrom
+
+  /// Options that came from no file and no setting.
+  let unresolved : Resolution =
+    { Options = none; GcFrom = FromNothing; EnvFrom = FromNothing; ArtifactsFrom = FromNothing; Refusals = [] }
+
+  /// The options of a directory: what `config.fsx` sets wins, option by option, over what the settings layers hold. The file is
+  /// the more specific of the two, written by hand beside the project. A file option left at its default says nothing, so the
+  /// settings value stands; that is also why `config.fsx` cannot ask for the default over a saved Server choice.
+  let overlay (settings: Options) (file: Options) (refusals: Refusal list) : Resolution =
+    let pick (fromFile: 'a) (fromSettings: 'a) (nothing: 'a) : 'a * OptionSource =
+      match fromFile <> nothing, fromSettings <> nothing with
+      | true, _ -> fromFile, FromConfigFile
+      | false, true -> fromSettings, FromSettings
+      | false, false -> nothing, FromNothing
+    let gc, gcFrom = pick file.Gc settings.Gc none.Gc
+    let env, envFrom = pick file.Env settings.Env none.Env
+    let artifacts, artifactsFrom = pick file.Artifacts settings.Artifacts none.Artifacts
+    { Options = { Gc = gc; Env = env; Artifacts = artifacts; FsiArgs = file.FsiArgs }
+      GcFrom = gcFrom
+      EnvFrom = envFrom
+      ArtifactsFrom = artifactsFrom
+      Refusals = refusals }
+
   /// The environment variables the choice of garbage collector needs. SageFs owns these names.
   let gcEnvironment (gc: GcMode) : (string * string) list =
     match gc with
@@ -138,11 +262,27 @@ module SessionOptions =
     | ArtifactsIn path -> [ "ArtifactsPath", path ]
     | ProjectChooses -> []
 
+  /// A value as MSBuild's `-p:` switch reads it: `%`, `;` and `,` are separators or escapes there.
+  let escapeSwitchValue (value: string) : string =
+    value.Replace("%", "%25").Replace(";", "%3B").Replace(",", "%2C")
+
+  /// The properties as `-p:` arguments for `dotnet build`. A global property overrides what the project's own files set, which
+  /// an environment variable does not, so the build agrees with the project load (which passes the same properties as global
+  /// ones). A project that sets the property itself is handled before this: `reconcileArtifacts` drops the session's request.
+  let buildArguments (options: Options) : string list =
+    buildProperties options |> List.map (fun (name, value) -> sprintf "-p:%s=%s" name (escapeSwitchValue value))
+
   /// `buildProperties` of the carrier in a process's environment; none when there is no carrier or it cannot be read (the worker
   /// reports an unreadable one when it starts, in `SessionOptionsSource`).
   let propertiesFromEnvironment (lookup: string -> string) : (string * string) list =
     match fromEnvironment lookup with
     | Ok options -> buildProperties options
+    | Error _ -> []
+
+  /// `buildArguments` of the carrier in a process's environment, for the builds a worker starts.
+  let argumentsFromEnvironment (lookup: string -> string) : string list =
+    match fromEnvironment lookup with
+    | Ok options -> buildArguments options
     | Error _ -> []
 
   /// The host's environment: what SageFs built (`sageFsEnv`), then the collector's, then the user's, where a

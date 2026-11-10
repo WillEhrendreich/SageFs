@@ -430,7 +430,8 @@ module ViewSettings =
     | VOptionalCount _
     | VBindHost _
     | VDir _
-    | VExpressions _ -> None
+    | VExpressions _
+    | VNamedValues _ -> None
 
   /// The descriptor of one axis of one workflow's view. The default is the recommended view's value, so an untouched axis
   /// follows the recommendation and nothing is stored.

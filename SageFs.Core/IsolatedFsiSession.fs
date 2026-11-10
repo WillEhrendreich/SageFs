@@ -78,7 +78,8 @@ let ProjectOutputEnvironmentVariable = "SAGEFS_PROJECT_OUTPUT"
 /// already complained about for `Assembly.Location`, not the project's real build output. Reading straight
 /// from disk, independent of what FSI was told to load, is what makes this answer actually different from
 /// the bug it's fixing.
-let primaryProjectOutputDirWith
+let primaryProjectOutputDirWithin
+    (artifacts: ArtifactsDir)
     (directoryExists: string -> bool)
     (matchingFiles: string -> string -> string list)
     (writeTimeUtc: string -> DateTime)
@@ -88,8 +89,12 @@ let primaryProjectOutputDirWith
   | [] -> None
   | primary :: _ ->
     let projectDir = Path.GetDirectoryName(primary: string)
-    let binDir = Path.Combine(projectDir, "bin")
     let expectedName = Path.GetFileNameWithoutExtension(primary: string) + ".dll"
+    // A session built under an artifacts path writes `<artifacts>/bin/<project>/<config>/`, and nothing under the project.
+    let binDir =
+      match artifacts with
+      | ArtifactsIn root -> Path.Combine(root, "bin", Path.GetFileNameWithoutExtension(primary: string))
+      | ProjectChooses -> Path.Combine(projectDir, "bin")
     match directoryExists binDir with
     | false -> None
     | true ->
@@ -98,8 +103,17 @@ let primaryProjectOutputDirWith
       |> List.tryHead
       |> Option.bind (Path.GetDirectoryName >> Option.ofObj)
 
-let primaryProjectOutputDir (projects: string list) : string option =
-  primaryProjectOutputDirWith
+let primaryProjectOutputDirWith
+    (directoryExists: string -> bool)
+    (matchingFiles: string -> string -> string list)
+    (writeTimeUtc: string -> DateTime)
+    (projects: string list)
+    : string option =
+  primaryProjectOutputDirWithin ProjectChooses directoryExists matchingFiles writeTimeUtc projects
+
+let primaryProjectOutputDir (artifacts: ArtifactsDir) (projects: string list) : string option =
+  primaryProjectOutputDirWithin
+    artifacts
     Directory.Exists
     (fun dir pattern -> Directory.EnumerateFiles(dir, pattern, SearchOption.AllDirectories) |> Seq.toList)
     File.GetLastWriteTimeUtc
@@ -112,10 +126,19 @@ let primaryProjectOutputDir (projects: string list) : string option =
 ///
 /// The two layouts are named in ONE place, `PackageRuntimeAssets.assetsFilesOf`, because the manual-parse
 /// fallback needs the same record and must not learn the layouts again.
-let projectAssetsFilesWith (fileExists: string -> bool) (projects: string list) : string list =
+let projectAssetsFilesWithin (artifacts: ArtifactsDir) (fileExists: string -> bool) (projects: string list) : string list =
   projects
-  |> List.collect (fun project -> PackageRuntimeAssets.assetsFilesOf project fileExists)
+  |> List.collect (fun project ->
+    let underArtifacts =
+      match artifacts with
+      | ArtifactsIn root ->
+        [ Path.Combine(root, "obj", Path.GetFileNameWithoutExtension project, "project.assets.json") ] |> List.filter fileExists
+      | ProjectChooses -> []
+    PackageRuntimeAssets.assetsFilesOf project fileExists @ underArtifacts)
   |> List.distinct
+
+let projectAssetsFilesWith (fileExists: string -> bool) (projects: string list) : string list =
+  projectAssetsFilesWithin ProjectChooses fileExists projects
 
 /// The isolated host's own FSharp.Core.dll (`typeof<unit>` lives there) — a sibling of the host's own entry
 /// assembly, since `ensureBuiltWith` copies the SDK toolset's FSharp.Core into the same build output
@@ -724,15 +747,18 @@ let start
           match choice with
           | RuntimeCompat.RollForward _ -> logger.LogInfo(sprintf "  Isolated FSI host: %s" (RuntimeCompat.describe choice))
           | _ -> ()
+          // What the directory's config asked of the host (`SessionOptions`), read first: where the session's builds write
+          // decides where its output and its restore records are looked for.
+          let! sessionOptions = readSessionOptions
           // #142: give the project's own code a way back to its real build output directory — the host
           // process sets AppContext.BaseDirectory from this at startup (see FsiHost/Program.fs).
           let projectOutputEnv =
-            match primaryProjectOutputDir projects with
+            match primaryProjectOutputDir sessionOptions.Artifacts projects with
             | Some dir -> [ ProjectOutputEnvironmentVariable, dir ]
             | None -> []
           // A package's native library lives in the NuGet cache, where the loader never looks: name the projects'
           // restore records so the host can say where, and warn now about a package that ships none for this machine.
-          let assetsFiles = projectAssetsFilesWith File.Exists projects
+          let assetsFiles = projectAssetsFilesWithin sessionOptions.Artifacts File.Exists projects
           let nativeEnv =
             match assetsFiles with
             | [] -> []
@@ -767,7 +793,6 @@ let start
                   "  Isolated FSI host loads the project's own %s in place of its own"
                   (overrides |> List.map (fun o -> sprintf "%s %O" o.Name o.Version) |> String.concat ", "))
               HostAdaptation.HostLibraries.WithProjectCopies(hostMajor, overrides)
-          let! sessionOptions = readSessionOptions
           // What the directory's config asked of the host (`SessionOptions`): its collector, its environment, its extra
           // arguments. A user variable that has the name of one SageFs sets loses, and the log says so.
           let hostEnvironment, clashes =

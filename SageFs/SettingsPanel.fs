@@ -30,7 +30,13 @@ module SettingsPanel =
     InUse: InUse
     /// Whether an environment variable or a flag wins over what was saved, and which.
     Override: SettingsCatalog.OverrideNote
+    /// Sentences about this row that the layers cannot say: what a file beside the project set, and what was refused
+    /// when the last session started. Empty for most rows.
+    Notes: string list
   }
+
+  /// The row with sentences under its value.
+  let withNotes (notes: string list) (row: SettingRow) : SettingRow = { row with Notes = notes }
 
   /// A row for one descriptor: resolved across the files, the environment and the flags, with the in-use value read
   /// from its consumer. The IO is the layer file reads and the consumer read; the inputs are the caller's.
@@ -41,9 +47,10 @@ module SettingsPanel =
       { Descriptor = d
         Resolved = resolved
         InUse = SettingsCatalog.inUse d p
-        Override = SettingsCatalog.overrideNote d p }
+        Override = SettingsCatalog.overrideNote d p
+        Notes = [] }
     | Error _ ->
-      { Descriptor = d; Resolved = resolved; InUse = InUseSameAsSaved; Override = SettingsCatalog.NotOverridden }
+      { Descriptor = d; Resolved = resolved; InUse = InUseSameAsSaved; Override = SettingsCatalog.NotOverridden; Notes = [] }
 
   /// The outcome of the last edit, shown as a banner after a morph. A DU (not a
   /// bool/string option) so success and rejection each carry their own detail.
@@ -81,6 +88,7 @@ module SettingsPanel =
       match a with
       | Live -> (Glyphs.lead Glyph.Live + "live"), "settings-chip settings-chip-live", "Takes effect immediately."
       | RestartRequired -> "restart", "settings-chip settings-chip-restart", "Saved now; applies on the next restart."
+      | NextSession -> "next session", "settings-chip settings-chip-next-session", "Saved now; applies to the next session started in this directory. A session that is already running keeps what it started with."
       | ReadOnly reason -> "read-only", "settings-chip settings-chip-readonly", ReadOnlyReason.describe reason
     Elem.span [ Attr.class' cls; Attr.title tip ] [ Text.enc label ]
 
@@ -89,6 +97,7 @@ module SettingsPanel =
     match a with
     | Live -> "Saving applies it now."
     | RestartRequired -> "Saving keeps it. It applies after the daemon restarts."
+    | NextSession -> "Saving keeps it. It applies to the next session you start in this directory; a running session keeps what it started with."
     | ReadOnly reason -> ReadOnlyReason.describe reason
 
   /// A provenance badge naming the layer the effective value came from.
@@ -116,6 +125,11 @@ module SettingsPanel =
         [ Attr.class' "settings-override" ]
         [ Text.enc (sprintf "Saved %s. Ignored %s." (render saved) how) ]
 
+  /// A sentence about a row from outside the layers, such as a refusal with its next step. It carries a warning mark and the
+  /// words, so it does not rest on colour.
+  let private noteLine (note: string) : XmlNode =
+    Elem.div [ Attr.class' "settings-override settings-note" ] [ Text.enc (Glyphs.lead Glyph.Warn + note) ]
+
   /// The sentence that says what the subsystem is using when that differs from what the layers resolve to.
   let private inUseLine (d: SettingDescriptor) (p: Provenance) (inUse: InUse) : XmlNode =
     match inUse with
@@ -126,6 +140,7 @@ module SettingsPanel =
         | LDefault, _ -> sprintf "In use now: %s." (d.Render value)
         | _, Live -> sprintf "In use now: %s." (d.Render value)
         | _, (RestartRequired | ReadOnly _) -> sprintf "In use now: %s. The saved value applies after a restart." (d.Render value)
+        | _, NextSession -> sprintf "In use now: %s. The saved value applies to the next session." (d.Render value)
       Elem.div [ Attr.class' "settings-inuse" ] [ Text.enc text ]
 
   /// The per-layer base-vs-override line: when more than one layer sets a
@@ -164,7 +179,7 @@ module SettingsPanel =
       | None -> d.Render p.Effective
     match d.Applicability with
     | ReadOnly _ -> Elem.span [] []
-    | Live | RestartRequired ->
+    | Live | RestartRequired | NextSession ->
       let resetButton =
         match savedInFiles with
         | None -> Elem.span [] []
@@ -212,7 +227,7 @@ module SettingsPanel =
         Elem.div [ Attr.class' "settings-effect" ] [ Text.enc (effectLine d.Applicability) ] ]
     Elem.div
       [ Attr.class' "settings-row"; Attr.create "data-setting-key" d.Key ]
-      (head @ valueAndEdit)
+      (head @ valueAndEdit @ (row.Notes |> List.map noteLine))
 
   /// The last-edit banner. `Quiet` renders nothing.
   let private noticeBanner (notice: PanelNotice) : XmlNode =

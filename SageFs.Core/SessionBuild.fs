@@ -282,23 +282,30 @@ module SessionBuild =
   /// session's own build resolves the SDK from `workingDir` and not from whichever project SageFs last loaded
   /// internally (see SageFs.ProcessEnvironment), plus `buildEnvironment`. Public so a test can read the
   /// environment a real rebuild would start with, without starting one.
-  let buildStartInfoWith (lookup: string -> string) (args: string list) (workingDir: string) : ProcessStartInfo =
+  let buildStartInfoFor (lookup: string -> string) (projects: string list) (args: string list) (workingDir: string) : ProcessStartInfo =
     let psi = ProcessStartInfo(
       "dotnet",
       RedirectStandardOutput = true,
       RedirectStandardError = true,
       UseShellExecute = false,
       WorkingDirectory = workingDir)
-    for arg in args do
+    // What the session's options say about the build: what the daemon holds for the session of these projects in this
+    // directory, or, in a worker (which holds nothing), the carrier the daemon started it with. Either way it is the set of
+    // options the session started with. They go as `-p:` arguments, which beat the project's own properties; an environment
+    // variable would lose to a project that sets ArtifactsPath itself, while the project load passes it as a global property,
+    // so the build would write where the load did not look.
+    let optionArguments =
+      match SessionOptionsRegistry.forBuild projects workingDir with
+      | held when held <> SessionOptions.none -> SessionOptions.buildArguments held
+      | _ -> SessionOptions.argumentsFromEnvironment lookup
+    for arg in args @ optionArguments do
       psi.ArgumentList.Add(arg)
-    // What the session's options say about the build: what the daemon holds for this directory, or, in a worker (which holds
-    // nothing), the carrier the daemon started it with. Either way it is the one set of options resolved at create.
-    let properties =
-      match SessionOptionsRegistry.optionsFor workingDir with
-      | held when held <> SessionOptions.none -> SessionOptions.buildProperties held
-      | _ -> SessionOptions.propertiesFromEnvironment lookup
-    applyTo psi (buildEnvironment @ properties)
+    applyTo psi buildEnvironment
     psi
+
+  /// `buildStartInfoFor` for a build that names no projects, which reads the options pending for the directory.
+  let buildStartInfoWith (lookup: string -> string) (args: string list) (workingDir: string) : ProcessStartInfo =
+    buildStartInfoFor lookup [] args workingDir
 
   /// `buildStartInfoWith`, reading this process's own environment.
   let buildStartInfo (args: string list) (workingDir: string) : ProcessStartInfo =
@@ -492,7 +499,7 @@ module SessionBuild =
           // (`BuildFailure`), with stdout/stderr for diagnostics and the retry.
           let runOnce (args: string list) : Async<Result<string, BuildFailure>> =
             async {
-              let psi = buildStartInfo args workingDir
+              let psi = buildStartInfoFor Environment.GetEnvironmentVariable projects args workingDir
               // Starting the process can throw (dotnet not on the daemon's PATH,
               // or the working directory is gone). That is a build that did not
               // run, and it has to come back as one: the caller answers through a

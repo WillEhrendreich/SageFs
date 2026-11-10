@@ -477,10 +477,11 @@ let private productionBuildRecovery
         match built with
         | Error err -> return Result.Error err
         | Ok _ ->
+          let artifacts = (SessionOptionsRegistry.optionsFor workingDir).Artifacts
           let missing =
             targets
             |> List.collect (fun target ->
-              match BuildPreflight.checkIn System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
+              match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
               | BuildPreflight.NeedsRebuild missing -> missing
               | BuildPreflight.Ready
               | BuildPreflight.Unknown _ -> [])
@@ -556,10 +557,14 @@ let createSessionOpsWithRecovery
           // A project's own copy of SageFs.Core that is an older build of this daemon's is removed here, so the rebuild below
           // writes back a matching one. The spawn would otherwise refuse the session and leave the rebuild to the caller.
           let removedStale = HostCoreAdoption.removeStaleCopiesFor (SessionProjectTarget.projects targets)
+          // The session's options are resolved first: the recovery build below reads them, and the preflight looks where
+          // the session's builds write, which an artifacts path moves out from under the project.
+          let autoOpenNamespaces = DirectoryConfig.prepareForCreateOf (SessionProjectTarget.paths targets) workingDir
+          let artifacts = (SessionOptionsRegistry.optionsFor workingDir).Artifacts
           let missing =
             targets
             |> List.collect (fun target ->
-              match BuildPreflight.checkIn System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
+              match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
               | BuildPreflight.NeedsRebuild missing -> missing
               | BuildPreflight.Ready
               | BuildPreflight.Unknown _ -> [])
@@ -577,7 +582,7 @@ let createSessionOpsWithRecovery
                 let stillMissing =
                   targets
                   |> List.collect (fun target ->
-                    match BuildPreflight.checkIn System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
+                    match BuildPreflight.checkInUnder artifacts System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
                     | BuildPreflight.NeedsRebuild missing -> missing
                     | BuildPreflight.Ready
                     | BuildPreflight.Unknown _ -> [])
@@ -585,7 +590,6 @@ let createSessionOpsWithRecovery
                 match stillMissing with
                 | _ :: _ -> return Result.Error (SageFsError.NeedsRebuild stillMissing)
                 | [] ->
-                  let autoOpenNamespaces = DirectoryConfig.prepareForCreate workingDir
                   let! result =
                     sessionManager.PostAndAsyncReply(fun reply ->
                       SessionManager.SessionCommand.CreateSession(targets, workingDir, autoOpenNamespaces, workflow, reply))
@@ -596,7 +600,6 @@ let createSessionOpsWithRecovery
                     let! recorded = recordCreated info
                     return Result.map WorkerProtocol.SessionId.value recorded
           | [] ->
-            let autoOpenNamespaces = DirectoryConfig.prepareForCreate workingDir
             let! result =
               sessionManager.PostAndAsyncReply(fun reply ->
                 SessionManager.SessionCommand.CreateSession(targets, workingDir, autoOpenNamespaces, workflow, reply))
@@ -1995,7 +1998,7 @@ let createElmRuntime
       Error err
 
   let effectDeps =
-    { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.prepareForCreate configureWarmupAutoOpen with
+    { ElmDaemon.createEffectDeps sessionManager readSnapshot DirectoryConfig.prepareForCreateOf configureWarmupAutoOpen with
         GetWarmupContext = Some (fun sid -> getWarmupContextForElm (WorkerProtocol.SessionId.value sid))
         GetStreamingTestProxy = fun sid ->
           let snapshot = readSnapshot()

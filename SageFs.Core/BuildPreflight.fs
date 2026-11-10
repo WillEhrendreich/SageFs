@@ -41,7 +41,17 @@ module BuildPreflight =
       if conventional |> List.exists (fun path -> List.contains path present) then conventional
       else arcade
 
-  let check
+  /// Where restore writes under a session's own artifacts path: `<artifacts>/obj/<project>/`, the layout the SDK uses when
+  /// `ArtifactsPath` is set. A session built there has nothing under the project's own `obj`.
+  let private sessionArtifactsGeneratedPaths (artifactsRoot: string) (projectPath: string) =
+    let name = Path.GetFileNameWithoutExtension projectPath
+    [ Path.Combine(artifactsRoot, "obj", name, "project.assets.json")
+      Path.Combine(artifactsRoot, "obj", name, name + ".fsproj.nuget.g.props") ]
+
+  /// `check` for a session whose builds write under `artifacts`: a project built into its artifacts path has its restore output
+  /// there, so the files that prove it was built are looked for there and not under the project's own `obj`.
+  let checkUnder
+    (artifacts: ArtifactsDir)
     (fileExists: string -> bool)
     (readText: string -> string)
     (target: SessionProjectTarget)
@@ -54,7 +64,10 @@ module BuildPreflight =
       | false -> BuildPreflight.NeedsRebuild [ Path.GetFullPath projectPath ]
       | true when hasCustomOutputPath projectPath readText -> BuildPreflight.Unknown "the project declares a custom OutputPath"
       | true ->
-        let required = preferredGeneratedPaths projectPath fileExists
+        let required =
+          match artifacts with
+          | ArtifactsIn root -> sessionArtifactsGeneratedPaths root projectPath
+          | ProjectChooses -> preferredGeneratedPaths projectPath fileExists
         let missing =
           required
           |> List.filter (fileExists >> not)
@@ -63,7 +76,16 @@ module BuildPreflight =
         | [] -> BuildPreflight.Ready
         | missing -> BuildPreflight.NeedsRebuild missing
 
-  let checkIn
+  let check
+    (fileExists: string -> bool)
+    (readText: string -> string)
+    (target: SessionProjectTarget)
+    : BuildPreflight =
+    checkUnder ProjectChooses fileExists readText target
+
+  /// `checkIn` for a session whose builds write under `artifacts`.
+  let checkInUnder
+    (artifacts: ArtifactsDir)
     (fileExists: string -> bool)
     (readText: string -> string)
     (workingDir: string)
@@ -71,8 +93,16 @@ module BuildPreflight =
     : BuildPreflight =
     match target with
     | SessionProjectTarget.Project path when not (Path.IsPathRooted path) ->
-      check fileExists readText (SessionProjectTarget.Project (Path.Combine(workingDir, path)))
-    | _ -> check fileExists readText target
+      checkUnder artifacts fileExists readText (SessionProjectTarget.Project (Path.Combine(workingDir, path)))
+    | _ -> checkUnder artifacts fileExists readText target
+
+  let checkIn
+    (fileExists: string -> bool)
+    (readText: string -> string)
+    (workingDir: string)
+    (target: SessionProjectTarget)
+    : BuildPreflight =
+    checkInUnder ProjectChooses fileExists readText workingDir target
 
   let describe = function
     | BuildPreflight.Ready -> "ready"

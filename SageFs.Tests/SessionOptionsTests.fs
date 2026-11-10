@@ -152,11 +152,13 @@ let sessionOptionsTests =
       SessionOptionsRegistry.remember a options
       SessionOptionsRegistry.optionsFor a |> Expect.equal "a has it" options
       SessionOptionsRegistry.optionsFor b |> Expect.equal "b does not" SessionOptions.none
-      SessionOptionsRegistry.workerEnvironment a |> Expect.equal "a's worker gets the one carrier" (SessionOptions.workerEnvironment options)
-      SessionOptionsRegistry.workerEnvironment b |> Expect.isEmpty "b's worker gets nothing"
+      SessionOptionsRegistry.workerEnvironmentOf "reg-session-a" [] a |> Expect.equal "a's worker gets the one carrier" (SessionOptions.workerEnvironment options)
+      SessionOptionsRegistry.workerEnvironmentOf "reg-session-b" [] b |> Expect.isEmpty "b's worker gets nothing"
       let psi = SessionBuild.buildStartInfo [ "build" ] a
-      psi.Environment["ArtifactsPath"] |> Expect.equal "a's build builds under the artifacts path" "/tmp/art-a"
-      (SessionBuild.buildStartInfo [ "build" ] b).Environment.ContainsKey "ArtifactsPath" |> Expect.isFalse "b's build is the project's own"
+      psi.ArgumentList |> Seq.toList |> Expect.contains "a's build builds under the artifacts path, as a global property" "-p:ArtifactsPath=/tmp/art-a"
+      (SessionBuild.buildStartInfo [ "build" ] b).ArgumentList |> Seq.toList |> Expect.equal "b's build is the project's own" [ "build" ]
+      SessionOptionsRegistry.release "reg-session-a"
+      SessionOptionsRegistry.release "reg-session-b"
       SessionOptionsRegistry.remember a SessionOptions.none
       SessionOptionsRegistry.optionsFor a |> Expect.equal "a config that stops asking is forgotten" SessionOptions.none
 
@@ -165,7 +167,7 @@ let sessionOptionsTests =
       let carrier = SessionOptions.workerEnvironment options |> List.head
       let lookup (name: string) = if name = fst carrier then snd carrier else null
       let psi = SessionBuild.buildStartInfoWith lookup [ "build" ] (Path.Combine(Path.GetTempPath(), "registry-nobody-knows"))
-      psi.Environment["ArtifactsPath"] |> Expect.equal "the worker's build builds under the artifacts path" "/tmp/art-worker"
+      psi.ArgumentList |> Seq.toList |> Expect.contains "the worker's build builds under the artifacts path" "-p:ArtifactsPath=/tmp/art-worker"
 
     Integration.hostCaseTask "WHY - reading a directory's config returns it and writes nothing, and only preparing a session writes the options its builds and worker use" (fun () -> task {
       let dir = Path.Combine(Path.GetTempPath(), "sagefs-pure-load-" + Guid.NewGuid().ToString "N")

@@ -37,7 +37,7 @@ isn't a slow machine, tell me, because then the default is the bug.
 `/dashboard/settings` has a row for each setting below. A row shows the value in use, which layer it came from
 (default, global file, repo file, environment variable or command-line flag), the value you saved when that differs,
 and a word for when a change applies: `live` takes effect on save, `restart` applies after the daemon restarts,
-`read-only` is shown and never edited there.
+`next session` applies to the next session started in that directory, `read-only` is shown and never edited there.
 
 A saved value is written to `settings.json` in the data directory (`~/.SageFs`, or `SAGEFS_DATA_DIR`). The next
 `sagefs` process reads it first thing and keeps it in its settings snapshot, unless you set the variable yourself, so
@@ -76,6 +76,40 @@ that is read-only says why in its own words: the bind host and the identity poli
 because a loopback bind and a token policy are what stand between SageFs, which evaluates F#, and the network, and
 changing them from a page the daemon serves points the trust the wrong way. A token's row says only whether it is
 set, never its value.
+
+## Session options: garbage collector, environment and artifacts folder
+
+Three options are set per directory and read when a session is created there. Each has a row in the "Session" group of
+the Settings page (open the page from a session, and pick "This repo" as the edit target to save into that directory's
+`.SageFs/settings.json`) and a field in that directory's `.SageFs/config.fsx`.
+
+| Option | Row | `config.fsx` field | What it does |
+|:---|:---|:---|:---|
+| Garbage collector | `session.gc`: `Workstation` or `Server` | `Gc = ServerGc` | Starts the session's FSI host with `DOTNET_gcServer=1`, so code you time in the REPL runs under the collector it will run with. Server GC commits a heap per core. |
+| Environment | `session.environment`: `NAME=value;NAME=value` | `SessionEnv = [ EnvEntry("NAME", "value") ]` | Environment variables for the session's FSI host and nothing else. A name SageFs removes from every process it starts is refused. A name SageFs sets itself keeps SageFs's value, and the session's worker log says so. A value that holds `;` goes in `config.fsx`. |
+| Artifacts folder | `session.artifactsPath`: an absolute folder, or empty | `Artifacts = ArtifactsIn "/abs/dir"` | Moves `bin` and `obj` of the session's own builds and its project load there (MSBuild's `ArtifactsPath`), so nothing is written under the project. |
+
+A refused value shows its reason where you typed it, with what to do next: a relative artifacts path, a variable name on
+the poisoned list and an entry with no `=` are refused when you press Save, and nothing is saved. A value a hand-edited
+file holds that cannot be read back is named in the log and the default stands.
+
+**Who wins.** Option by option: a field `config.fsx` sets to something other than its default wins over the row, and the
+row stands for an option the file leaves alone. The file is the more specific of the two, written by hand beside the
+project. Because "left at the default" is how the file says nothing, `config.fsx` cannot ask for `WorkstationGc` over a
+saved `Server` row: change the row. The directory's repo layer wins over the global layer, as for every other row. After a
+session starts in a directory, each row says under its value when `config.fsx` supplied that option and what was refused.
+
+**Who wins when the project sets its own folder.** If the project's own build files set `ArtifactsPath` (or
+`UseArtifactsOutput`, which gives it a default), the project's choice stays, and the session's request is dropped with a
+message that names both folders. The project's files are shared with your team and CI, and keeping them means the session's
+build and its project load read the same folder; an artifacts path that only half applied would make the build write one
+place while the load looked in another. The daemon asks MSBuild before the session starts, with nothing of the session's own
+in the way, so imports and props files count. It asks about the first project of the session. To use the session's folder
+anyway, remove `ArtifactsPath` from the project's props.
+
+**A running session keeps its options.** The options are fixed when the session's worker is first started and kept for its
+restarts, rebuilds and resets. Creating another session in the same directory later, or saving a row, changes only sessions
+created after that. The daemon holds them per session and releases them when the session stops.
 
 ## Variables that are not durations
 

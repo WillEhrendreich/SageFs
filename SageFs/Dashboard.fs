@@ -2478,13 +2478,24 @@ let mapGetRaw (route: string) (read: HttpContext -> 'T) (handler: 'T -> HttpHand
 let private settingsPaths (workingDir: string) : SageFs.ConfigPaths =
   SageFs.SettingsCatalog.pathsFor DaemonState.SageFsDir workingDir
 
-/// Every setting with a row: the catalog's own, plus the two the session agent declares.
+/// Every setting with a row: the catalog's own, the two the session agent declares, and the three session options.
 let private settingsCatalog () : SageFs.SettingDescriptor list =
-  SageFs.SettingsCatalog.all @ [ SageFs.SessionAgent.reflectionReadModeSetting; SageFs.SessionAgent.tieredCompilationSetting ]
+  SageFs.SettingsCatalog.all
+  @ [ SageFs.SessionAgent.reflectionReadModeSetting; SageFs.SessionAgent.tieredCompilationSetting ]
+  @ SageFs.SessionOptionSettings.all
 
 let private settingsRows (paths: SageFs.ConfigPaths) : SettingsPanel.SettingRow list =
   let inputs = SageFs.SettingsBootstrap.processInputs ()
-  settingsCatalog () |> List.map (SettingsPanel.rowFor inputs paths)
+  // What the last session started in this directory resolved (a `config.fsx` that won, a refused entry), said under the
+  // rows it is about. A page with no directory has no session options to say anything about.
+  let resolution =
+    match paths.Repo with
+    | SageFs.RepoRootAt directory -> SageFs.SessionOptionsRegistry.resolutionFor directory
+    | SageFs.NoRepoCheckout -> None
+  settingsCatalog ()
+  |> List.map (fun descriptor ->
+    SettingsPanel.rowFor inputs paths descriptor
+    |> SettingsPanel.withNotes (SageFs.SessionOptionSettings.notesFor resolution descriptor.Key))
 
 /// The persisted default working directory (session.defaultWorkingDirectory),
 /// resolved across the config layers, used to pre-fill the New Session form.

@@ -736,7 +736,7 @@ module SessionManager =
             // threads, so a 5 s stop never holds this loop; a caller that needs them gone parks on AwaitWorkersGone.
             let workers = session :: (ManagerState.tryGetPendingSwap id state |> Option.toList)
             let newState = reapAside id workers (ManagerState.removeSession id state)
-            reply.Reply(Ok ())
+            reply.Reply(Ok(SessionOptionsRegistry.release (SessionId.value id))) // the options the session started with go with it
             Instrumentation.sessionsStopped.Add(1L)
             Instrumentation.activeSessions.Add(-1L)
             Instrumentation.succeedSpan span

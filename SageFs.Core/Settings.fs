@@ -277,6 +277,10 @@ type OptionalLimit =
   | LimitOff
   | LimitAfter of WaitLimit
 
+/// Pairs of a name and a value, in the order they were written. A union and not a bare list, so a function that wants
+/// pairs cannot be handed any other list.
+type NamedValues = NamedValues of (string * string) list
+
 /// The unified value of any setting. Every case's payload is already a type
 /// whose only inhabitants are legal, so a `SettingValue` cannot carry an
 /// illegal configuration.
@@ -294,6 +298,9 @@ type SettingValue =
   | VDir of DirectoryPath
   /// The expressions a watch tab lists: each one the parser accepted.
   | VExpressions of WatchExpression list
+  /// NAME and value pairs, such as the environment variables a session's host is started with. The descriptor's parser is the
+  /// only place text becomes one, so it is the one that refuses a name that cannot be used.
+  | VNamedValues of NamedValues
 
 /// What a `SettingValue` holds when it is a given kind. Each function names every other case, so a new kind of value
 /// breaks the build here once and not at every descriptor that reads one kind.
@@ -302,42 +309,47 @@ module SettingValue =
   let duration (v: SettingValue) : WaitLimit option =
     match v with
     | VDuration limit -> Some limit
-    | VToggle _ | VPort _ | VTimeout _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ | VNamedValues _ -> None
 
   let limit (v: SettingValue) : OptionalLimit option =
     match v with
     | VLimit limit -> Some limit
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ | VNamedValues _ -> None
 
   let toggle (v: SettingValue) : Toggle option =
     match v with
     | VToggle t -> Some t
-    | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
+    | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ | VNamedValues _ -> None
 
   let enum (v: SettingValue) : EnumValue option =
     match v with
     | VEnum e -> Some e
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VDir _ | VExpressions _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VDir _ | VExpressions _ | VNamedValues _ -> None
 
   let dir (v: SettingValue) : DirectoryPath option =
     match v with
     | VDir d -> Some d
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VExpressions _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VExpressions _ | VNamedValues _ -> None
 
   let age (v: SettingValue) : RetentionAge option =
     match v with
     | VAge a -> Some a
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ | VNamedValues _ -> None
 
   let count (v: SettingValue) : WholeCount option =
     match v with
     | VCount c -> Some c
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ | VNamedValues _ -> None
+
+  let namedValues (v: SettingValue) : NamedValues option =
+    match v with
+    | VNamedValues pairs -> Some pairs
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VOptionalCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
 
   let optionalCount (v: SettingValue) : OptionalCount option =
     match v with
     | VOptionalCount c -> Some c
-    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ -> None
+    | VToggle _ | VPort _ | VTimeout _ | VDuration _ | VLimit _ | VAge _ | VCount _ | VBindHost _ | VEnum _ | VDir _ | VExpressions _ | VNamedValues _ -> None
 
 /// The resolved value plus its provenance: which layer supplied the effective
 /// value, and the value present at every layer that set one (so the UI can
@@ -396,6 +408,9 @@ type SettingApplicability =
   | Live
   /// Persisted now, applied on the next restart.
   | RestartRequired
+  /// Persisted now, and read when the next session starts in the directory. A session already running keeps what it started
+  /// with, so saving never changes it.
+  | NextSession
   /// Shown with its value and where the value came from, and never edited here.
   | ReadOnly of ReadOnlyReason
 

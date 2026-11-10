@@ -3953,6 +3953,7 @@ body[data-connected="false"] .statusline-info {
 .settings-badge-session { color: var(--fg-yellow); border-color: var(--fg-yellow); }
 .settings-chip-live { color: var(--fg-green); border-color: var(--fg-green); }
 .settings-chip-restart { color: var(--fg-yellow); border-color: var(--fg-yellow); }
+.settings-chip-next-session { color: var(--fg-yellow); border-color: var(--fg-yellow); }
 .settings-badge-environment { color: var(--fg-yellow); border-color: var(--fg-yellow); }
 .settings-badge-flag { color: var(--fg-yellow); border-color: var(--fg-yellow); }
 .settings-chip-readonly { color: var(--fg-dim); }

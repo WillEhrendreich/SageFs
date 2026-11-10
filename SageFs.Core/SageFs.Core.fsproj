@@ -659,6 +659,10 @@
         <Compile Include="ConfigHost.fs" />
         <Compile Include="ClientSetup.fs" />
         <Compile Include="SessionOptionsSource.fs" />
+        <!-- Does a project's own build files set ArtifactsPath: asked of MSBuild before a session is created with one. -->
+        <Compile Include="ProjectArtifactsProbe.fs" />
+        <!-- The session options as rows of the settings layers (garbage collector, environment, artifacts folder). -->
+        <Compile Include="SessionOptionSettings.fs" />
         <Compile Include="SessionAgent.fs" />
         <!-- Pure warmup open-replay decision core (extractOpensFromLines/
              ReflectedModuleFact/resolveWarmupOpens) — compiled BEFORE

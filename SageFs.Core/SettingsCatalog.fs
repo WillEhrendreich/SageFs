@@ -65,7 +65,7 @@ module SettingsCatalog =
     let readsFiles =
       match descriptor.Applicability with
       | ReadOnly _ -> false
-      | Live | RestartRequired -> true
+      | Live | RestartRequired | NextSession -> true
     let globalRaw =
       match readsFiles with
       | true -> rawAt LGlobal (SettingsStore.globalPath paths.GlobalDir) descriptor.Key
@@ -157,6 +157,7 @@ module SettingsCatalog =
           | LGlobal | LRepo | LSession | LEnvironment | LCommandLine -> descriptor.Apply provenance.Effective
         | Error _ -> ()
       | RestartRequired
+      | NextSession
       | ReadOnly _ -> ()
 
   /// Edit a setting at a persisted layer: parse the raw input (the sole
@@ -188,7 +189,7 @@ module SettingsCatalog =
       | Ok () ->
         match descriptor.Applicability with
         | Live -> descriptor.Apply value
-        | RestartRequired | ReadOnly _ -> ()
+        | RestartRequired | NextSession | ReadOnly _ -> ()
         resolve paths descriptor
 
   /// Clear a persisted override at a layer so the value falls back to the

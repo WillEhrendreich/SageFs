@@ -84,18 +84,48 @@ module DirectoryConfig =
     |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
     |> Option.defaultValue true
 
-  /// Resolve a directory's config for a session that is being created there, and answer whether warmup auto-opens namespaces.
+  /// Resolve the options for a session that is being created in a directory, and answer whether warmup auto-opens namespaces.
+  /// The options are what `config.fsx` sets, option by option, over what the settings layers hold (the directory's own
+  /// `.SageFs/settings.json` over the global one in `globalDir`). When the options ask for an artifacts path, `askClaim` is
+  /// asked whether the projects already set one, and the project's choice stays (`SessionOptions.reconcileArtifacts`).
+  /// Everything refused on the way is logged and kept with the resolution, so the Settings page can say it.
+  ///
   /// This is the one place the options a session's builds and worker use are recorded (`SessionOptionsRegistry`); reading a
-  /// config (`load`, `loadAsync`, a page that shows it) never records anything. A directory with no config, or one that no longer
-  /// asks for anything, is forgotten.
-  let prepareForCreate (workingDir: string) : bool =
+  /// config (`load`, `loadAsync`, a page that shows it) never records anything. A directory that asks for nothing and refused
+  /// nothing is forgotten. The record is the PENDING one: a session fixes its own options when its worker is first spawned,
+  /// so creating another session here later cannot change one that is running.
+  let prepareSession
+    (globalDir: string)
+    (askClaim: string list -> SessionOptions.ProjectClaim * string list)
+    (projects: string list)
+    (workingDir: string)
+    : bool =
     let config = load workingDir
-    let options =
+    let fromFile, fileRefusals =
       match config with
-      | Some cfg -> fst (SessionOptions.ofConfig cfg)
-      | None -> SessionOptions.none
-    SessionOptionsRegistry.remember workingDir options
+      | Some cfg -> SessionOptions.ofConfig cfg
+      | None -> SessionOptions.none, []
+    let fromSettings, settingRefusals = SessionOptionSettings.optionsAt (SettingsCatalog.pathsFor globalDir workingDir)
+    let overlaid = SessionOptions.overlay fromSettings fromFile (fileRefusals @ settingRefusals)
+    let options, claimRefusals =
+      match overlaid.Options.Artifacts with
+      | ProjectChooses -> overlaid.Options, []
+      | ArtifactsIn _ ->
+        let claim, couldNotAsk = askClaim projects
+        couldNotAsk |> List.iter (fun why -> Log.warn "[session options] %s" why)
+        SessionOptions.reconcileArtifacts claim overlaid.Options
+    let resolution = { overlaid with Options = options; Refusals = overlaid.Refusals @ claimRefusals }
+    resolution.Refusals |> List.iter (fun refusal -> Log.warn "[session options] %s: %s" workingDir (SessionOptions.describe refusal))
+    SessionOptionsRegistry.rememberResolution workingDir resolution
     config |> Option.map (fun cfg -> cfg.AutoOpenNamespaces) |> Option.defaultValue true
+
+  /// `prepareSession` against the daemon's own settings folder and MSBuild, for the projects of the session being created.
+  let prepareForCreateOf (projects: string list) (workingDir: string) : bool =
+    prepareSession DaemonState.SageFsDir (ProjectArtifactsProbe.claimOf ProjectArtifactsProbe.ask) projects workingDir
+
+  /// `prepareForCreateOf` for a session whose projects are not known to the caller (no artifacts conflict is looked for).
+  let prepareForCreate (workingDir: string) : bool =
+    prepareForCreateOf [] workingDir
 
   let ensureAutoOpenNamespacesOptOut (workingDir: string) =
     try

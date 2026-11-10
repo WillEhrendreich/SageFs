@@ -220,6 +220,8 @@
         <Compile Include="SessionDisplayStatusUnificationTests.fs" />
         <Compile Include="DirectoryConfigTests.fs" />
         <Compile Include="SessionOptionsTests.fs" />
+        <Compile Include="SessionOptionSettingsTests.fs" />
+        <Compile Include="SessionOptionsOutcomeTests.fs" />
         <Compile Include="ClientSetupTests.fs" />
         <Compile Include="ClientSetupDocTests.fs" />
         <Compile Include="SessionOptionsOwnerTests.fs" />
