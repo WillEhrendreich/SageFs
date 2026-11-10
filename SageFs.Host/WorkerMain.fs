@@ -383,6 +383,11 @@ let handleMessage
     | WorkerMessage.GetReferences(_, replyId) ->
       return WorkerResponse.ReferencesResult(replyId, Features.ReferencesAnswer.NoProjectLoaded)
 
+    // The session's agent knows which process the user's code runs in, and `run`'s ready handler answers this before a
+    // message gets here. A host with no agent has no process to record.
+    | WorkerMessage.GetHostProcess replyId ->
+      return WorkerResponse.HostProcessResult(replyId, HostProcess.NotRunning)
+
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
   }
@@ -2414,6 +2419,7 @@ let run (sessionId: string) (requestedPort: int) = async {
     | WorkerMessage.GetReferences(qualifiedName, replyId) ->
       let! answer = Features.SymbolReferenceCheck.answerAsync Timeouts.referencesCheck result.CheckOptions qualifiedName
       return WorkerResponse.ReferencesResult(replyId, answer)
+    | WorkerMessage.GetHostProcess replyId -> return WorkerResponse.HostProcessResult(replyId, result.Agent.HostProcess())
     | _ -> return! handler msg
   }
 

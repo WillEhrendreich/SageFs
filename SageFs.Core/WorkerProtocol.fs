@@ -337,6 +337,16 @@ module WorkerProtocol =
       | SessionStatus.Stopped -> SessionLifecycleStatus.Stopped
 
   /// All messages the daemon can send to a worker process.
+  /// Where the session's code runs, as far as a profiler is concerned: the process to attach to.
+  [<RequireQualifiedAccess>]
+  type HostProcess =
+    /// In a host process of its own, with this process id.
+    | Isolated of pid: int
+    /// Inside the worker process itself, so there is no process that holds only the user's code.
+    | InWorker
+    /// The session has no running FSI (it is starting, faulted or stopped).
+    | NotRunning
+
   [<RequireQualifiedAccess>]
   type WorkerMessage =
     | EvalCode of code: string * replyId: string
@@ -346,6 +356,8 @@ module WorkerProtocol =
     /// Every definition and use of a qualified name in the session's projects, each checked by the compiler under one
     /// budget (`Timeouts.referencesCheck`). The answer says which projects it covers.
     | GetReferences of qualifiedName: string * replyId: string
+    /// The process id of the host the session's FSI runs in, for the profile tool to record.
+    | GetHostProcess of replyId: string
     | CancelEval
     /// Cancel the eval of ONE request, named by the `replyId` its `EvalCode` carried: a timeout's cancel, which must never touch another
     /// caller's eval. If that eval is running it is interrupted, if it is queued it never runs, if it has answered nothing happens.
@@ -483,6 +495,8 @@ module WorkerProtocol =
     /// Reply to GetReferences: what each project of the session said. The scope a reader may claim is derived from it
     /// (`ReferenceReply.ofAnswer`), never carried beside it.
     | ReferencesResult of replyId: string * answer: Features.ReferencesAnswer
+    /// Reply to GetHostProcess.
+    | HostProcessResult of replyId: string * host: HostProcess
     | StatusResult of replyId: string * status: WorkerStatusSnapshot
     /// Reply to GetLiveValues: the same JSON a Features.LiveValueTree.LiveValueSnapshot
     /// serializes to today (the daemon already deserializes that type).
@@ -552,6 +566,7 @@ module WorkerProtocol =
       | WorkerMessage.DebugTestBegin _ -> true
       | WorkerMessage.CancelEval
       | WorkerMessage.CancelEvalRequest _
+      | WorkerMessage.GetHostProcess _
       | WorkerMessage.ResetSession _
       | WorkerMessage.HardResetSession _
       | WorkerMessage.LevelRepl _
@@ -644,6 +659,7 @@ module WorkerProtocol =
       | WorkerResponse.TypeCheckWithSymbolsResult _
       | WorkerResponse.CompletionResult _
       | WorkerResponse.ReferencesResult _
+      | WorkerResponse.HostProcessResult _
       | WorkerResponse.StatusResult _
       | WorkerResponse.LiveValuesResult _
       | WorkerResponse.LiveMemberResult _

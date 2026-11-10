@@ -438,10 +438,12 @@ let analyzerFindings : (string * int) list =
 /// full catalog is 38,379 with 73 tools (the one raise, for tools other packets added). 2026-11-09: `seat_conductor` gained
 /// the optional `replaces` parameter (the holder a person is asked to replace) and a longer sentence, 154 characters, so the
 /// catalog is 38,533 with the same 73 tools (a second raise, for a parameter that did not exist). The nine starter tools stay
-/// at 5,521. FsiMcp 0.3.0's seven tools are 5,606.
+/// at 5,521. FsiMcp 0.3.0's seven tools are 5,606. 2026-11-10: `profile` made it 74 tools and paid for itself: the shared
+/// `working_directory` sentence and ten tool sentences are shorter, so the full catalog is 38,286 and the nine starter tools
+/// 5,395.
 let toolList : (string * int) list =
-  [ "full catalog characters", 38325
-    "starter list characters", 5521 ]
+  [ "full catalog characters", 38286
+    "starter list characters", 5395 ]
 
 let lineCount (repoRoot: string) (rel: string) : int =
   File.ReadAllLines(Path.Combine(repoRoot, rel)).Length

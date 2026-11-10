@@ -14,7 +14,7 @@ module SharedParameters =
   module WorkingDirectory =
     /// A tool that acts on a session: the one it names, or the one this connection is working in.
     [<Literal>]
-    let Route = "Working directory; picks the session that uses it."
+    let Route = "The session's working directory."
 
     /// A tool that makes a session.
     [<Literal>]

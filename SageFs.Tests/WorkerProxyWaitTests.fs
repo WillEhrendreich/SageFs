@@ -57,11 +57,11 @@ let workerProxyWaitTests =
       |> Expect.isTrue "more attempts than the policy that stranded runs"
 
     testCase "WHY — the deadline is what ends the wait, not an attempt counter" <| fun _ ->
-      WorkerProxyWait.isExpired 14999 15000
+      WorkerProxyWait.isExpired (WaitElapsedMs 14999) 15000
       |> Expect.isFalse "one millisecond short is not expired"
-      WorkerProxyWait.isExpired 15000 15000
+      WorkerProxyWait.isExpired (WaitElapsedMs 15000) 15000
       |> Expect.isTrue "the budget is the boundary"
-      WorkerProxyWait.isExpired 20000 15000
+      WorkerProxyWait.isExpired (WaitElapsedMs 20000) 15000
       |> Expect.isTrue "past the budget is expired"
 
     testCase "WHY — the first delay stays small, so a worker that is already up is picked up without a stall" <| fun _ ->

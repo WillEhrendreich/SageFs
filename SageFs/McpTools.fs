@@ -2574,6 +2574,34 @@ WORKFLOW: Call this at the start of a session to see what to do next, or any tim
         SageFs.McpReferencesRoute.listReferences ctx "mcp" (SageFs.QualifiedName qualified_name) offset target |> withEcho ctx "list_references"
 
     [<McpServerTool>]
+    [<Description("""Run F# in the session like send_fsharp_code while the daemon records the session's FSI host from outside it with an installed dotnet-trace, then reply with the eval's own output followed by a ranked table. mode=cpu (the default): where managed CPU time went, methods by self time and your own code by total time, each with its share, and what was not counted (time in native code or waiting, which is where idle threads sit). mode=alloc: the bytes the runtime sampled allocating (about one sample for every 100 KB), by type and by type at the nearest frame of your code. Bindings persist, as with send_fsharp_code. Code you type into the session is yours (FSI-ASSEMBLY frames), and so are frames of the projects the session loaded. The eval needs to run about a second or more (cpu) or allocate a few hundred KB (alloc) to be sampled; percentages are of what was sampled, and sampled time runs under the wall clock. A refusal names what to do next and the code did not run: dotnet-trace missing (the reply gives the install command), the recorder could not attach, the session has no process of its own (an in-process session) or no running FSI. A host that ends while recorded gives HostGone, and the eval's own reply is kept. Linux and macOS only. The recording and its files are removed when the call returns.""")>]
+    member _.profile(
+        [<Description(AgentNameIdentifyParam)>]
+        agentName: string,
+        code: string,
+        [<Description("'cpu' (the default) or 'alloc'.")>]
+        [<Optional; DefaultParameterValue("")>]
+        mode: string,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: profile called by {AgentName}, mode={Mode}", agentName, mode)
+        match SageFs.Features.ProfileMode.parse mode with
+        | Result.Error failure -> Task.FromResult(SageFs.Features.ProfileFailure.describe failure) |> withEcho ctx "profile"
+        | Result.Ok parsed ->
+          let call : SageFs.McpProfile.ProfileCall =
+            { Agent = agentName
+              Code = code
+              Mode = parsed
+              SessionId = session_id
+              WorkingDirectory = working_directory }
+          SageFs.McpProfile.profile ctx call |> withEcho ctx "profile"
+
+    [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.
 
 V1 does NOT suggest a new value for the binding — it surfaces the causal symbol, its current code, and the ripple of cells that would re-evaluate on any change. The developer supplies the new value.

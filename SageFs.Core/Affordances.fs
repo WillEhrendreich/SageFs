@@ -73,6 +73,7 @@ let availableTools (state: SessionState) : string list =
       "discover_features" ]
   | Ready ->
     [ "send_fsharp_code"
+      "profile"
       "get_session_status"
       "get_recent_fsi_events"
       "get_friction_report"
@@ -259,6 +260,7 @@ let private gatingDomain : Map<string, ToolGate> =
     // State-gated tools — availability derives from availableTools for the
     // session's current lifecycle state.
     "send_fsharp_code", ToolGate.StateGated
+    "profile", ToolGate.StateGated
     "get_recent_fsi_events", ToolGate.StateGated
     "check_fsharp_code", ToolGate.StateGated
     "targeted_verify", ToolGate.StateGated
@@ -663,6 +665,8 @@ type ToolName =
   | CancelEval
   // Evaluation. `send_fsharp_code` is arbitrary code as the daemon's OS user.
   | SendFsharpCode
+  /// `profile` runs the same arbitrary code, so it is an eval tool.
+  | Profile
   | ManageScratchPad
   // Static analysis — the code is read, never run.
   | CheckFsharpCode
@@ -751,6 +755,7 @@ module ToolName =
     | ToolName.StopSession -> "stop_session"
     | ToolName.CancelEval -> "cancel_eval"
     | ToolName.SendFsharpCode -> "send_fsharp_code"
+    | ToolName.Profile -> "profile"
     | ToolName.ManageScratchPad -> "manage_scratch_pad"
     | ToolName.CheckFsharpCode -> "check_fsharp_code"
     | ToolName.DecomposePipeline -> "decompose_pipeline"
@@ -826,6 +831,7 @@ module ToolName =
       ToolName.StopSession
       ToolName.CancelEval
       ToolName.SendFsharpCode
+      ToolName.Profile
       ToolName.ManageScratchPad
       ToolName.CheckFsharpCode
       ToolName.DecomposePipeline

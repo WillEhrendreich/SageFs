@@ -22,6 +22,9 @@ namespace SageFs
 // direction is preserved: a long wait only costs time, while a short one
 // strands a real run and reports a false result.
 
+/// Milliseconds a wait has already run, so it cannot be passed where the budget goes.
+type WaitElapsedMs = WaitElapsedMs of int
+
 module WorkerProxyWait =
 
   /// The ceiling on how long we will wait for a worker to register before
@@ -73,4 +76,4 @@ module WorkerProxyWait =
 
   /// Whether a wait is over. Named so a caller's intent reads, and so the
   /// deadline is the thing being reasoned about rather than a loop counter.
-  let isExpired (elapsedMs: int) (budgetMs: int) = elapsedMs >= budgetMs
+  let isExpired (WaitElapsedMs elapsedMs) (budgetMs: int) = elapsedMs >= budgetMs

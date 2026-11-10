@@ -154,6 +154,8 @@ module WorkerHttpTransport =
     let completions = WorkerRoute.Post "/completions"
     /// Runs the compiler over the session's projects, so it is a POST like the other routes that ask the compiler.
     let references = WorkerRoute.Post "/references"
+    /// Asks which process the session's FSI runs in. A POST with a body, like the other routes the daemon asks one question of.
+    let hostProcess = WorkerRoute.Post "/host-process"
     let cancel = WorkerRoute.Post "/cancel"
     let cancelRequest = WorkerRoute.Post "/cancel-request"
     let loadScript = WorkerRoute.Post "/load-script"
@@ -208,7 +210,7 @@ module WorkerHttpTransport =
 
   let routes : WorkerRoute list = [
     Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.liveValuesEvaluate; Routes.liveValuesMode; Routes.eval; Routes.check
-    Routes.typecheckSymbols; Routes.completions; Routes.references; Routes.cancel; Routes.cancelRequest; Routes.loadScript
+    Routes.typecheckSymbols; Routes.completions; Routes.references; Routes.hostProcess; Routes.cancel; Routes.cancelRequest; Routes.loadScript
     Routes.reset; Routes.hardReset; Routes.levelRepl; Routes.runTests; Routes.runTestsStream
     Routes.testDiscovery; Routes.evalLiveTestFile; Routes.instrumentationMaps; Routes.shutdown
     Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle; Routes.hotReloadResetState; Routes.hotReloadReflectionMode
@@ -518,6 +520,13 @@ module WorkerHttpTransport =
         let qualifiedName = (jsonProp doc "qualifiedName").GetString()
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.GetReferences(qualifiedName, rid))
+      })) |> ignore
+
+      map Routes.hostProcess (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.GetHostProcess rid)
       })) |> ignore
 
       map Routes.cancel (Func<HttpContext, Task>(fun ctx ->

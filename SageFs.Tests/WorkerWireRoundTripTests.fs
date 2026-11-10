@@ -45,6 +45,7 @@ let samplesWith (text: string) : WorkerMessage list =
     WorkerMessage.TypeCheckWithSymbols(text, text + ".fsx", text + "-3")
     WorkerMessage.GetCompletions(text, 7, SageFs.Features.AutoCompletion.CompletionLimit.EveryMember, text + "-4")
     WorkerMessage.GetReferences(text, text + "-4b")
+    WorkerMessage.GetHostProcess(text + "-4c")
     WorkerMessage.CancelEval
     WorkerMessage.CancelEvalRequest "r"
     WorkerMessage.LoadScript(text + ".fsx", text + "-5")

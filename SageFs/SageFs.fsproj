@@ -210,6 +210,8 @@
              the route asks the session's worker. -->
         <Compile Include="McpReferencesPage.fs" />
         <Compile Include="McpReferencesRoute.fs" />
+        <!-- The profile tool: record the session's FSI host from outside while the code runs, then the ranked table. -->
+        <Compile Include="McpProfile.fs" />
         <Compile Include="McpAnalysis.fs" />
         <Compile Include="McpDebugTest.fs" />
 

@@ -137,7 +137,9 @@ type SessionAgent =
     /// Wait until every probe has been sighted or the bound passes, then say what is known.
     AwaitEntries: int64 list -> System.TimeSpan -> Async<HostAgent.AgentReply<SageFs.Middleware.EntryProbes.EntryReading>>
     ReflectionReads: unit -> HostAgent.AgentReply<ReflectionReadsReport>
-    SetReflectionMode: ReflectionReadMode -> HostAgent.AgentReply<ReflectionReadsReport> }
+    SetReflectionMode: ReflectionReadMode -> HostAgent.AgentReply<ReflectionReadsReport>
+    /// The process the user's code runs in, for the profile tool to record.
+    HostProcess: unit -> WorkerProtocol.HostProcess }
 
 /// The agent accessors for whichever session `current` returns right now (null when none is active): the caller reads the
 /// live session on every call, so a hard reset that swaps the session is followed without re-wiring.
@@ -155,4 +157,12 @@ let ofCurrentSession (current: unit -> FsiSession.IFsiSession) : SessionAgent =
     ValueReads = fun values -> withSession (fun s -> s.ValueReads values) (HostAgent.AgentUnavailable "the session is not active")
     AwaitEntries = fun probes bound -> withSession (fun s -> s.AwaitEntries(probes, bound)) (async { return HostAgent.AgentUnavailable "the session is not active" })
     ReflectionReads = fun () -> withSession (fun s -> s.ReflectionReads()) (HostAgent.AgentUnavailable "the session is not active")
-    SetReflectionMode = fun mode -> withSession (fun s -> s.SetReflectionMode mode) (HostAgent.AgentUnavailable "the session is not active") }
+    SetReflectionMode = fun mode -> withSession (fun s -> s.SetReflectionMode mode) (HostAgent.AgentUnavailable "the session is not active")
+    HostProcess =
+      fun () ->
+        withSession
+          (fun s ->
+            match box s with
+            | :? RemoteFsiSession.RemoteFsiSession as remote -> WorkerProtocol.HostProcess.Isolated remote.Host.ProcessId
+            | _ -> WorkerProtocol.HostProcess.InWorker)
+          WorkerProtocol.HostProcess.NotRunning }

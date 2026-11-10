@@ -343,6 +343,7 @@
         <Compile Include="ReferenceScopeSimTests.fs" />
         <Compile Include="ProfileRecorderSimTests.fs" />
         <Compile Include="ProfileCollectorProcessTests.fs" />
+        <Compile Include="McpProfileTests.fs" />
         <Compile Include="ReferenceCacheSimTests.fs" />
         <Compile Include="SessionReaperSimTests.fs" />
         <Compile Include="StopOffLoopSimTests.fs" />
@@ -1072,6 +1073,8 @@
         <Compile Include="SmokeRulesTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
+        <!-- The profile tool's outcome gate: a real daemon, a real isolated host, the real recorder. -->
+        <Compile Include="ProfileIntegrationTests.fs" />
         <Compile Include="CohortSeatIntegrationTests.fs" />
         <Compile Include="SeatConductorIntegrationTests.fs" />
         <Compile Include="CapabilityHttpIntegrationTests.fs" />

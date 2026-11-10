@@ -37,6 +37,9 @@ module HttpWorkerClient =
     | WorkerMessage.GetReferences(qualifiedName, rid) ->
       "POST", "/references",
       Some (Serialization.serialize {| qualifiedName = qualifiedName; replyId = rid |})
+    | WorkerMessage.GetHostProcess rid ->
+      "POST", "/host-process",
+      Some (Serialization.serialize {| replyId = rid |})
     | WorkerMessage.CancelEval ->
       "POST", "/cancel", None
     | WorkerMessage.CancelEvalRequest rid ->

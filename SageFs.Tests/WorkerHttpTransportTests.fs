@@ -48,6 +48,13 @@ let routeMappingTests =
       path |> Expect.equal "path" "/references"
       body |> Expect.isSome "the qualified name travels in the body"
 
+    testCase "GetHostProcess maps to POST /host-process and names its reply in the body" <| fun _ ->
+      let method, path, body =
+        WorkerHttpTransport.toRoute (WorkerMessage.GetHostProcess "host-1")
+      method |> Expect.equal "method" "POST"
+      path |> Expect.equal "path" "/host-process"
+      body |> Option.get |> Expect.stringContains "the reply id travels in the body" "host-1"
+
     testCase "CancelEvalRequest maps to POST /cancel-request and names its request in the body" <| fun _ ->
       let method, path, body =
         WorkerHttpTransport.toRoute (WorkerMessage.CancelEvalRequest "req-7")
@@ -134,6 +141,8 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.CompletionResult(rid, CompletionFixtures.namesOf SageFs.Features.AutoCompletion.CompletionKind.Namespace ["System"; "String"])
   | WorkerMessage.GetReferences(_, rid) ->
     return WorkerResponse.ReferencesResult(rid, SageFs.Features.ReferencesAnswer.NoProjectLoaded)
+  | WorkerMessage.GetHostProcess rid ->
+    return WorkerResponse.HostProcessResult(rid, HostProcess.Isolated 4242)
   | WorkerMessage.CancelEval
   | WorkerMessage.CancelEvalRequest _ ->
     return WorkerResponse.EvalCancelled true

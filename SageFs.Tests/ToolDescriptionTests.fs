@@ -99,7 +99,9 @@ let requiredParamsByTool =
     // The symbol ladder's first rung: the name to list is required; the offset and the directory default.
     "list_members", set ["qualified_name"]
     // The rung below it: the name to find references to is required; the offset and the directory default.
-    "list_references", set ["qualified_name"] ]
+    "list_references", set ["qualified_name"]
+    // The profile tool: who is asking and the code are required; the mode and the routing default.
+    "profile", set ["agentName"; "code"] ]
   |> Map.ofList
 
 [<Tests>]
@@ -260,7 +262,8 @@ let descriptionPropertyTests =
       // + list_members: the progressive map's first rung (docs/progressive-map-research-2026-10-24.md).
       // + list_references: the rung below it, whose reply states its scope first.
       // + seat_conductor: a seated member asks, and a person's yes fills an empty conductor seat.
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 73
+      // + profile: run F# under a recording of the session's host and report where the CPU time went.
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 74
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->
