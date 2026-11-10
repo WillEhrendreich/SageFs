@@ -817,6 +817,68 @@ in `SageFs.Tests/LiveTestingJourneyTests.fs`.
 Reopen it if: restarting the worker for a confirmation loses something users notice. The way out is confirming in a
 second worker, which costs a second FSI host's memory.
 
+That condition was met, and the next entry is the way out.
+
+## A confirming build runs in a throwaway worker when a swap would lose something
+
+The confirming build replaced the session's worker. The new worker loads the compiled output, so everything the old one
+held went with it: a value bound in the REPL, a script loaded into it, the unsaved buffers the live loop had evaluated
+for other files, and a test held for a debugger. A person who had bound `marker` and then typed in a file lost `marker`
+two seconds later, and nothing said so.
+
+`Venue.decide` (`SageFs.Core/ConfirmationVenue.fs`) now picks where a confirmation runs, from facts the daemon reads
+when the quiet window ends: what the session's worker holds, how the session starts, and whether the machine has room.
+
+- It holds nothing a swap would lose: the worker is swapped, as before. The new worker refreshes the session's coverage
+  maps, line baseline and compiled binaries, so a session that only ever edits one file keeps all of that current.
+- It holds something: a throwaway worker. The daemon runs the project's build, starts a second worker on the output,
+  runs the confirmed tests there, and stops it when the confirmation ends. The session's own worker is not touched, so
+  its definitions, its unsaved buffers and a held test stay where they are. A build that fails starts no worker, and the
+  rows carry the compiler's message.
+- It holds something and cannot have a throwaway: the rows say `NotConfirmed` and why, and the session is left alone.
+  Two cases. The memory supervisor refuses new work, or the session's startup profile starts an app when a worker
+  loads, which would fight the first worker for its port. A swap there would cost the state this change exists to keep,
+  so the confirmation is the thing given up.
+
+What "holds something" means. Every route into a worker passes through a `SessionProxy`, and the daemon counts there,
+per worker pid: hand evals (`EvalCode`, loaded scripts) and the files whose editor buffer the live loop evaluated
+(`EvalLiveTestFile`). The file being confirmed does not count, since it is on disk and the build confirms it. A reset
+empties the count, and a swap starts at zero because the pid changes (`SessionHandWork`, `WorkPut`,
+`ConfirmWorkers.HandWorkStore`).
+
+The throwaway is owned by one mailbox (`ConfirmWorkers.start`). Whether to start, stop or answer is a pure book,
+`ThrowawayBook.step`: at most one worker per session, a newer generation retires the older one, a worker that comes up
+after its generation ended is retired at once, a failed start answers the caller, and a session going takes its worker.
+Every way a confirmation ends goes through `abandonConfirmationBuild`, which asks the owner to retire it, a session
+leaving the registry by any route reaches the owner through `OnSessionRemoved`, and the confirmation's own deadline
+bounds a start that hangs. `SageFs.Simulation/ConfirmThrowawaySim.fs` folds the real book
+under seeded scenarios with four twins (leak a late worker, keep a replaced one, strand the caller waiting on a replaced
+generation, ignore a session going), and each twin breaks the invariant it is named for.
+
+What it costs. A swap already ran two workers side by side while the replacement warmed, so the peak memory of a
+confirmation is the same as before. The host-tier case logged `[confirm] throwaway worker pid ... is Ready (working set
+274 MB)` for the throwaway's own process on the small fixture, which does not count the FSI host it starts (an idle bare
+session's worker and host together read about 480 MB resident here). The difference is that the throwaway is stopped afterwards instead of replacing the
+session's worker. A session that holds something now has its confirmation take the same warmup a swap took.
+
+What it leaves open.
+- The throwaway instrumented its own copy of the build, so its coverage readings are not applied. The session's
+  coverage markers, per-test bitmaps and line baseline stay those of the session's own worker until that worker is
+  swapped (an explicit run, a rebuild, a hard reset, or a confirmation of a session that holds nothing).
+- The session's own worker keeps the build it started on. A keystroke's run for a function you did not edit runs against
+  that build plus what the session evaluated, which is how it already behaved between two confirmations.
+- The debug-row journeys stay out of the integration tier. They wait on a managed debugger, which no machine here has.
+
+Evidence: `SageFs.Core/ConfirmationVenue.fs`, `SageFs/ConfirmWorkers.fs`, `SageFs/SageFsEffectHandler.fs`
+(`startConfirmationBuild`, `abandonConfirmationBuild`), `SageFs.Simulation/ConfirmThrowawaySim.fs`,
+`SageFs.Simulation/BuildConfirmationSim.fs` (the throwaway and refused scenarios), `SageFs.Tests/ConfirmationVenueTests.fs`,
+`SageFs.Tests/ConfirmationVenueEffectTests.fs`, `SageFs.Tests/ConfirmWorkerOwnerTests.fs`,
+`SageFs.Tests/LiveTestingProvenanceTests.fs`, and the host-tier case in `SageFs.Tests/ConfirmKeepsReplStateTests.fs`, which
+binds a value, runs two confirming builds (one good, one the compiler rejects) and reads the value back from the same
+worker.
+Reopen it if: a user reports stale coverage markers after many confirmations, a throwaway worker is found running after
+its confirmation ended, or a session that holds nothing loses something a swap should not have taken.
+
 ## Pause and an include or exclude set are enough; memory caps and battery detection are not copied
 
 Visual Studio's Live Unit Testing has playlists, an include and exclude list, a pause on battery and while debugging,

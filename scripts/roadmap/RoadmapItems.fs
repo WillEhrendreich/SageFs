@@ -96,6 +96,11 @@ let items : Item list =
       [ "docs/how-live-testing-works.md"; "docs/decisions.md" ]
       "An edit typed while the confirming build replaces the worker used to be lost. A type-check or an eval now waits for a Ready worker and believes an answer only from the worker it asked."
 
+    item "confirm-builds-without-restarting-the-worker" "Confirm builds without restarting the worker" LiveTesting Now
+      (landmark "SageFs.Core/ConfirmationVenue.fs" "ThrowawayBook")
+      [ "docs/decisions.md"; "docs/how-live-testing-works.md"; "docs/plans/confirm-builds-without-restarting-the-worker.md" ]
+      "The confirming build used to replace your worker, so a value you had bound in the REPL, a script you had loaded and the unsaved buffers of other files went with it. Now a session that holds any of that is confirmed in a throwaway worker, started on the build and stopped afterwards, and its own worker is never touched. If there is no room for a second worker, or the session's startup starts an app on a fixed port, the rows say `NotConfirmed` and why, and nothing is touched. A session that holds nothing is swapped as before, which keeps its coverage current. A throwaway worker's coverage is not applied yet, so a session that holds something keeps the coverage of its own worker until that worker is swapped."
+
     item "hygiene-that-runs-itself" "The daemon tidies the workspace by itself" Platform Now
       (landmark "SageFs/HygieneSweep.fs" "TidyHalf")
       [ "docs/agents.md"; "docs/configuration.md"; "docs/mcp-tools.md"; "docs/plans/hygiene-that-runs-itself.md" ]
@@ -421,11 +426,6 @@ let items : Item list =
       NoLandmarkYet
       [ "docs/how-live-testing-works.md"; "docs/plans/markers-on-expecto-cases.md" ]
       "Expecto test cases come from reflection and have no source line, so the gutter marks the `[<Tests>]` binding but not each testCase, and a category comes from the test's name alone. I'd read cases from source and take categories from where you put them."
-
-    item "confirm-builds-without-restarting-the-worker" "Confirm builds without restarting the worker" LiveTesting Later
-      NoLandmarkYet
-      [ "docs/decisions.md"; "docs/how-live-testing-works.md"; "docs/plans/confirm-builds-without-restarting-the-worker.md" ]
-      "The confirming build restarts the worker, so FSI state and unsaved edits in other files don't survive it. A second worker for the build would avoid that at the price of a second FSI host's memory."
 
     item "live-testing-numbers-on-bigger-projects" "Live testing numbers on bigger projects" LiveTesting Later
       NoLandmarkYet

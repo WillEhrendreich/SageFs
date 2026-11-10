@@ -8,13 +8,13 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
+| Status | Done |
 | Size | L |
-| Branch and worktree | none yet |
-| Last green commit | none yet |
-| Next action | Run what "Measure first" asks for (it can end the item), then write the first failing test: a verifying session is always refused a venue. Then take the steps below in order. |
-| Decisions made | none yet (the open ones are under "Decisions for Will") |
-| Surprises | none yet |
+| Branch and worktree | none: worked on master |
+| Last green commit | 3ce2bf0f |
+| Next action | None for this item. What is left is under "What is left" below: apply a throwaway worker's coverage, and time a confirmation in both venues once the numbers harness can. |
+| Decisions made | 2026-11-09, by the agent that built it, under the standing instruction to choose by what the code allows. (1) Swap when clean, throwaway when the session holds something, which is the plan's recommendation for decision 1. "Holds something" is counted by the daemon in the `SessionProxy` wrappers every route into a worker passes through (hand evals, evaluated buffers of other files). (2) A confirmation that would need a throwaway and cannot have one is refused with a named reason, never swapped, which is the plan's recommendation for decision 2. (3) The FSI-less test host (step 10) was not built: a throwaway is a whole worker, and a swap already runs two workers side by side, so the peak memory is what it was. A bare session's worker plus its FSI host is about 480 MB resident on this machine at idle (measured 2026-11-09 with `ps`); a project session is larger. |
+| Surprises | See "As built" below. The owner is not in `SessionManager`; the verifying-session lock is in the reducer; two file-size budgets and three domain budgets were exact and the first version went over them, so the pieces that did were moved or rewritten (`RunBasis.provenanceOf` went to `BuildConfirmation.fs`, the message classifier lists every case, the bool field is a union). |
 
 ## What done looks like
 
@@ -184,3 +184,22 @@ L. The pure venue and the simulation are days, the `SessionManager` ownership of
 1. Throwaway always for a Working session, or swap when clean? Recommendation: swap when clean. It keeps today's coverage refresh in the common case and uses the extra process only when the swap would cost you something.
 2. If memory is short, refuse the confirmation (rows stay `Evaluated` with the reason) or fall back to the swap and lose the state? Recommendation: refuse. Losing a user's REPL state is the failure this item exists to remove, and an `Evaluated` row that says why is honest.
 3. Is the FSI-less test host worth building if the numbers allow the full worker? Recommendation: only if step 1 shows memory is the problem.
+
+## As built
+
+What differs from the design above, and why.
+
+- The venue is not `ConfirmationVenue.fs` as drawn. `SageFs.Core/ConfirmationVenue.fs` holds `Venue.decide` (swap, throwaway or refused, from what the worker holds, how the session starts and how much memory is left), `SessionHandWork` (the pure count of what a worker holds) and `ThrowawayBook` (the pure book of throwaway workers). There is no `HandWork`/`UnsavedEdits` pair: the daemon counts hand evals and the files whose editor buffer the live loop evaluated, per worker pid.
+- The count lives where every route into a worker passes: `SessionProxy.notingWork` (`SageFs.Core/WorkerProtocol.fs`) wraps the two `GetProxy` closures in `DaemonMode.fs` and `ElmDaemon.fs`, and `ConfirmWorkers.HandWorkStore` keeps it. A reset empties it and a swap starts at zero because the pid changes.
+- The owner is `SageFs/ConfirmWorkers.fs`, one mailbox over `ThrowawayBook.step`, not a `SessionManager` command pair. It builds with the session's own build, starts a worker through `WorkerSpawn.startWorkerProcess` (the Interactive workflow, so it watches no files and starts no app), waits for its port and for Ready with `WorkerStartup.await` and `WorkerPostReady.watchUntilReady`, and retires it with `WorkerStop.stopProcess`. It is not a registered session, so `list_sessions` never sees it. It was not put in `SessionManager.fs` because that file is at its size budget and the manager's state is not the right owner of a process that is not a session.
+- `BuildAnswer` gained `BuiltInThrowaway` and `NotAttempted of reason`; `ConfirmationEffect.RunAgainstBuild` gained a `RunTarget` (`SessionWorker` or `Throwaway`). `BuildDisagreement` gained `NotConfirmed of reason`, shown on the wire as a `BuildDisagrees` row (`sagefs.nvim` has words for it).
+- The run in the throwaway is the ordinary `RunAffectedTests` handler, called with a deps record whose streaming proxy points at the throwaway's URL and with no instrumentation maps, so it reports no coverage. The reducer emits it as `SageFsEffect.RunInThrowaway`.
+- The verifying-session lock is in the reducer (`confirmFinishedRun` opens no confirmation for a session in `VerifyingSessions`) and not in `Venue.decide`, because the effect handler has no model and the reducer does.
+- Memory admission reuses the memory supervisor's own refusal (`checkMemoryAdmission` in `DaemonMode.fs`); no lease is taken, because a swap never took one either.
+- Every way a confirmation ends goes through `abandonConfirmationBuild`, which asks the owner to retire its worker. A session leaving the registry reaches the owner through `OnSessionRemoved`. A start that hangs is bounded by the confirmation's own deadline.
+
+## What is left
+
+- Coverage. A throwaway run applies no coverage, so a session that holds something keeps the coverage markers, per-test bitmaps and line baseline of its own worker until that worker is swapped. Phase 3 of the design (promote a clean throwaway to the session's worker) would bring coverage along; it needs the throwaway's maps to replace the session's, which the daemon does not do today.
+- Numbers. The harness of `live-testing-numbers-on-bigger-projects` does not yet time a confirmation in either venue, and peak memory of a project session on `SageFs.Core` or `SageFs.Tests` is not measured.
+- The debug-row journeys still wait on a managed debugger (see `debug-row-journeys-run-green`).
