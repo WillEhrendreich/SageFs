@@ -213,10 +213,10 @@ let venueTests =
         store.HeldBy sid 10 |> Expect.equal "released" SessionHandWork.nothing
 
       testCase "a hold nobody has mentioned for the hold's own length is not counted: the host dropped it" <| fun _ ->
-        let window = System.TimeSpan.FromMinutes 2.0
-        SessionHandWork.unlessLapsed (noon + System.TimeSpan.FromMinutes 1.0) window heldTest
+        let window = FixtureDurations.heldTestWindow
+        SessionHandWork.unlessLapsed (noon + window / 2.0) window heldTest
         |> Expect.equal "inside the window it is counted" heldTest
-        SessionHandWork.unlessLapsed (noon + System.TimeSpan.FromMinutes 3.0) window heldTest
+        SessionHandWork.unlessLapsed (noon + window * 1.5) window heldTest
         |> Expect.equal "past it, it is not" SessionHandWork.nothing
 
       testCase "a swap starts from nothing, and the new worker is counted afresh" <| fun _ ->

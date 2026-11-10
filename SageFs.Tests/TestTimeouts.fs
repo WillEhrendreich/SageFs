@@ -186,10 +186,11 @@ module TestTimeouts =
   /// land inside the daemon's own hold window, because that window is when the test can still be
   /// caught, and the window scales with the machine. A passing run never waits it out.
   let debugAttach = SageFs.Timeouts.debugHold - secs 30.
-  /// How often the debugger is asked for the threads of the process it is attached to, while the
-  /// attach is still settling. The console takes commands as it becomes ready, and the answer is
-  /// what proves the attach, so the question is asked until it is answered.
-  let debuggerPoll = ms 500.
+  /// Ceiling on the request that releases a test whose host a debugger has stopped. The daemon owes the answer by the end of
+  /// the host's park plus the grace for the wire (`SilentHost.Wait.relayCeilingFor`), so the request waits a little past that:
+  /// a release that has not been answered by then is a daemon that never answers, which is the defect, and not a slow machine.
+  let debugSilentHostRequest =
+    SageFs.SilentHost.Wait.relayCeilingFor SageFs.Timeouts.debugContinuePark SageFs.Timeouts.debugHostAnswerGrace + patienceBrief
   /// Ceiling on an evaluated verdict being confirmed by a real build: the quiet window, a rebuild that
   /// restarts the worker, and a run against what it built. A passing run never waits it out. It outlasts the
   /// product's own deadline for a confirmation (`Timeouts.liveTestConfirmationDeadline`) by the margin of one
@@ -907,6 +908,10 @@ module TestTimeouts =
 /// the type needs a duration, where the number is never read back.
 module FixtureDurations =
   // --- tests L to R ---
+
+  /// The length of a test hold's life in a pure case about when the daemon's note of a hold lapses. Made up: the case measures a
+  /// note against a window of this length and nothing waits for it.
+  let heldTestWindow = System.TimeSpan.FromMinutes 2.0
 
   /// How long a check_project run is said to have waited in the report's timed-out line. Made up, and only printed back: the
   /// case asserts the line names this many seconds.

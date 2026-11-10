@@ -213,18 +213,14 @@ module CoverageInstrumenter =
         | None -> ()
       m.Body.OptimizeMacros()
 
-  /// Where the instrumented copy of an assembly is written.
-  [<RequireQualifiedAccess>]
-  type InstrumentedPlace =
-    /// Beside the original, as `<name>.instrumented.dll` with `<name>.instrumented.pdb`.
-    | Beside
-    /// In this directory under the original's own file name, so the DLL's debug directory names `<name>.pdb`. A debugger
-    /// finds a module's symbols through that name, so a copy that is moved over the original has to carry the original's.
-    | UnderOwnName of directory: string
+  /// The directory the instrumented copy of an assembly is written in, under the original's own file name. The DLL's debug
+  /// directory then names `<name>.pdb`, and a debugger finds a module's symbols through that name, so a copy that is moved over
+  /// the original carries the name the original's pdb has.
+  type StagingDirectory = StagingDirectory of path: string
 
-  /// Instrument an assembly: inject tracker + probes at sequence points, and write the copy where `place` says.
+  /// Instrument an assembly: inject tracker + probes at sequence points, and write the copy into `staging`.
   /// Returns (InstrumentationMap, instrumentedAssemblyPath) or error.
-  let instrumentAssemblyAt (place: InstrumentedPlace) (assemblyPath: string)
+  let instrumentAssembly (StagingDirectory staging) (assemblyPath: string)
     : Result<InstrumentationMap * string, string> =
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let activity =
@@ -274,13 +270,7 @@ module CoverageInstrumenter =
         let (_, hitMethod, _) =
           injectTracker moduleDef points.Length
         insertProbes hitMethod points
-        let dir = Path.GetDirectoryName(assemblyPath)
-        let name = Path.GetFileNameWithoutExtension(assemblyPath)
-        let ext = Path.GetExtension(assemblyPath)
-        let instrPath =
-          match place with
-          | InstrumentedPlace.Beside -> Path.Combine(dir, sprintf "%s.instrumented%s" name ext)
-          | InstrumentedPlace.UnderOwnName directory -> Path.Combine(directory, Path.GetFileName assemblyPath)
+        let instrPath = Path.Combine(staging, Path.GetFileName assemblyPath)
         let writerParams = WriterParameters(WriteSymbols = hasPdb)
         asm.Write(instrPath, writerParams)
         sw.Stop()
@@ -296,14 +286,14 @@ module CoverageInstrumenter =
       SageFs.Instrumentation.failSpan activity ex.Message
       Error(sprintf "Instrumentation failed: %s" ex.Message)
 
-  /// Instrument an assembly and write the copy beside it as `<name>.instrumented.dll`.
-  let instrumentAssembly (assemblyPath: string)
-    : Result<InstrumentationMap * string, string> =
-    instrumentAssemblyAt InstrumentedPlace.Beside assemblyPath
-
-  /// Remove a staging directory. It is empty once both files are moved, so one that cannot be removed costs an empty folder and nothing else.
+  /// Remove a staging directory. It is empty once both files are moved, so one that cannot be removed costs an empty folder
+  /// and nothing else.
   let private removeStaging (staging: string) : unit =
-    try Directory.Delete(staging, true) with _ -> ()
+    try
+      Directory.Delete(staging, true)
+    with
+    | :? IOException
+    | :? UnauthorizedAccessException -> ()
 
   /// Instrument an assembly in-place by writing to a staging directory, then replacing.
   /// Returns InstrumentationMap or error. The original path is overwritten.
@@ -316,7 +306,7 @@ module CoverageInstrumenter =
     let staging = Path.Combine(Path.GetDirectoryName(assemblyPath), sprintf ".sagefs-instrument-%s" (System.Guid.NewGuid().ToString "N"))
     Directory.CreateDirectory staging |> ignore
     let outcome =
-      instrumentAssemblyAt (InstrumentedPlace.UnderOwnName staging) assemblyPath
+      instrumentAssembly (StagingDirectory staging) assemblyPath
       |> Result.bind (fun (map, instrPath) ->
         match instrPath = assemblyPath with
         | true -> Ok map
