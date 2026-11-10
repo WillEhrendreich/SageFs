@@ -116,7 +116,12 @@ jobs:
       shell: bash
       run: dotnet fsi scripts/release-bundle.fsx release
 
+    # An editor marketplace that refuses the upload (an expired token stopped 0.6.942 here) must not hold back the
+    # NuGet package and the GitHub release. The step may fail; the last step of the job turns that into a red run, so
+    # nothing reads as published that was not.
     - name: Publish VS Code extension to Marketplace
+      id: marketplace
+      continue-on-error: true
       shell: bash
       env:
         VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -192,3 +197,10 @@ jobs:
         git push origin "v${VERSION}" --force
         cd /
         rm -rf "$tmp"
+
+    - name: Fail the run when the VS Code Marketplace refused the extension
+      if: steps.marketplace.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::error::NuGet and the GitHub release are published, but the VS Code Marketplace refused the extension. If the log says the Personal Access Token is expired, make a new one (Azure DevOps, Marketplace manage scope), set it with 'gh secret set VSCE_PAT', and rerun only the Marketplace step by publishing the vsix from the release by hand: npx @vscode/vsce publish --packagePath <the vsix> --skip-duplicate."
+        exit 1
