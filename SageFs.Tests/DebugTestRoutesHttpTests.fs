@@ -69,9 +69,9 @@ type private Worker(onBegin: TestCase -> DebugBegin, onContinue: string -> Debug
         | other -> return failwithf "the debug routes must only send debug messages, sent %A" other
       }
 
-let private startServer (worker: Worker) (discovered: TestCase list) (dispatch: (SageFsMsg -> unit) option) = task {
+let private startServerFor (sid: string) (worker: Worker) (discovered: TestCase list) (dispatch: (SageFsMsg -> unit) option) = task {
   let info : SessionInfo =
-    { Id = SageFs.McpSessionRouting.toSessionId sidText
+    { Id = SageFs.McpSessionRouting.toSessionId sid
       Name = None
       Projects = []
       WorkingDirectory = "/debug"
@@ -91,7 +91,7 @@ let private startServer (worker: Worker) (discovered: TestCase list) (dispatch: 
         GetSessionInfo = fun _ -> Task.FromResult(Some info)
         GetAllSessions = fun () -> Task.FromResult [ info ] }
   let model =
-    fst (SageFsUpdate.update (SageFsMsg.Event(TuiEvent.TestsDiscovered(sidText, Array.ofList discovered))) (SageFsModel.initial ()))
+    fst (SageFsUpdate.update (SageFsMsg.Event(TuiEvent.TestsDiscovered(sid, Array.ofList discovered))) (SageFsModel.initial ()))
 
   let builder = WebApplication.CreateBuilder([||])
   builder.WebHost.UseUrls("http://127.0.0.1:0") |> ignore
@@ -165,6 +165,9 @@ let private startServer (worker: Worker) (discovered: TestCase list) (dispatch: 
   return app, baseUrl
 }
 
+let private startServer (worker: Worker) (discovered: TestCase list) (dispatch: (SageFsMsg -> unit) option) =
+  startServerFor sidText worker discovered dispatch
+
 let private httpClient = new HttpClient()
 
 let private post (url: string) (json: string) : Task<int * JsonElement> = task {
@@ -191,12 +194,25 @@ let private withServer (worker: Worker) (discovered: TestCase list) (body: strin
   finally (app :> IDisposable).Dispose()
 }
 
+/// The server for a session of its own. The daemon's note of a silent host is kept per session id for the whole process, so a
+/// case that reads it needs an id that no other case in the run is using.
+let private withServerFor (sid: string) (worker: Worker) (discovered: TestCase list) (body: string -> Task<unit>) : Task<unit> = task {
+  let! (app: WebApplication), baseUrl = startServerFor sid worker discovered None
+  try do! body baseUrl
+  finally (app :> IDisposable).Dispose()
+}
+
 let private recordsOf (sent: unit -> SageFsMsg list) : DebugRunRecord list =
   sent () |> List.choose (function SageFsMsg.Event(TuiEvent.DebugRunFinished record) -> Some record | _ -> None)
 
 let private failedUnderDebugger = TestResult.Failed(TestFailure.AssertionFailed "expected 3 but got 4", FixtureDurations.usualResult)
 
 let private holds = Worker((fun _ -> DebugBegin.Held target), (fun _ -> DebugProgress.Ended(DebugEnd.Attached passed)))
+
+let private silentHost : HostSilence =
+  { HostPid = 4242
+    Waited = SilentHost.Wait.ceilingFor Timeouts.debugContinuePark Timeouts.debugHostAnswerGrace
+    Holder = HostHolder.NamedAsTarget(9, "dotnet-debug") }
 
 [<Tests>]
 let tests =
@@ -302,6 +318,7 @@ let tests =
     testTask "WHY: continue answers still_running as a 200 so the editor asks again, and the dead ends as conflicts" {
       for progress, expectedStatus, expectedWire in
         [ DebugProgress.StillRunning, 200, "still_running"
+          DebugProgress.HostSilent silentHost, 504, "host_not_answering"
           DebugProgress.Ended(DebugEnd.NoDebuggerWithin TestTimeouts.patienceInProcess), 409, "no_debugger_within"
           DebugProgress.Ended DebugEnd.ReleasedWithoutDebugger, 409, "released_without_debugger"
           DebugProgress.Ended DebugEnd.NoSuchHold, 409, "no_such_hold"
@@ -313,6 +330,36 @@ let tests =
             status |> Expect.equal (sprintf "%s: http status" expectedWire) expectedStatus
             text "status" body |> Expect.equal "wire status" expectedWire
           })
+    }
+
+    testTask "WHY: a silent host makes the session Degraded until the host answers again, and the same ticket still gets its answer" {
+      let asked = ref 0
+      let progress (_: string) =
+        asked.Value <- asked.Value + 1
+        match asked.Value with
+        | 1 -> DebugProgress.HostSilent silentHost
+        | _ -> DebugProgress.StillRunning
+      let worker = Worker((fun _ -> DebugBegin.Held target), progress)
+      let ownSession = "5e5510a1"
+      let degraded () =
+        match SilentHost.healthOf ownSession (SessionLifecycleStatus.Ready { Pid = 42; Port = None }) SessionHealth.Healthy with
+        | SessionHealth.Degraded reason -> Some reason
+        | _ -> None
+      SilentHost.clear ownSession
+      do!
+        withServerFor ownSession worker [ adds ] (fun baseUrl -> task {
+          let release = JsonSerializer.Serialize {| ticket = "debug-4242-1"; sessionId = ownSession |}
+          let! _ = post (baseUrl + "/api/live-testing/debug") (JsonSerializer.Serialize {| testId = TestId.value adds.Id; sessionId = ownSession |})
+          let! silentStatus, silentBody = post (baseUrl + "/api/live-testing/debug/continue") release
+          silentStatus |> Expect.equal "504" 504
+          text "status" silentBody |> Expect.equal "named" "host_not_answering"
+          degraded () |> Expect.isSome "the session reads Degraded while the host is silent"
+          let! againStatus, againBody = post (baseUrl + "/api/live-testing/debug/continue") release
+          againStatus |> Expect.equal "the host answered" 200
+          text "status" againBody |> Expect.equal "its real answer" "still_running"
+          degraded () |> Expect.isNone "and Degraded goes away once it spoke"
+        })
+      SilentHost.clear ownSession
     }
 
     testTask "WHY: a verdict is dispatched once however often the editor asks, and it names the test the hold was taken on" {

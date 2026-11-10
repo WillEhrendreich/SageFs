@@ -73,6 +73,10 @@ module McpDebugTest =
               match answer with
               | DebugAnswer.Begun(SageFs.HostAgent.TestDebug.DebugBegin.Held target) -> held.Add(sid, target)
               | _ -> ()
+              match hostVoiceOf answer with
+              | HostVoice.ClearNote -> SilentHost.clear sid
+              | HostVoice.NoteSilent _
+              | HostVoice.KeepNote -> ()
               return toWire answer
     }
 
@@ -83,6 +87,14 @@ module McpDebugTest =
       | Error answer -> return toWire answer
       | Ok sid ->
         let! answer = DebugTestRequest.continueDebug ctx.SessionOps (toSessionId sid) request.Ticket Timeouts.debugContinuePark
+        // What the answer says about the host's voice goes where the session's health reads it: a silent host makes a Ready
+        // session Degraded with the reason, and the host answering again takes that back.
+        match hostVoiceOf answer with
+        | HostVoice.NoteSilent silence ->
+          let! info = ctx.SessionOps.GetSessionInfo(toSessionId sid)
+          SilentHost.note sid (info |> Option.bind (fun i -> WorkerProtocol.SessionLifecycleStatus.workerPid i.Status)) silence
+        | HostVoice.ClearNote -> SilentHost.clear sid
+        | HostVoice.KeepNote -> ()
         // The hold ended with a verdict: it goes on the test's row, where a normal run's would, without a normal run.
         match answer, ctx.Dispatch with
         | DebugAnswer.Progress(SageFs.HostAgent.TestDebug.DebugProgress.Ended ended), Some dispatch ->

@@ -64,6 +64,8 @@ let resolve (discovered: TestCase array) (selector: TestSelector) : Resolution =
 type DebugStatus =
   | Held
   | StillRunning
+  /// The host is alive and did not answer: something has stopped it. The ticket is still valid.
+  | HostNotAnswering
   | Attached
   | NoDebuggerWithin
   | ReleasedWithoutDebugger
@@ -84,6 +86,7 @@ module DebugStatus =
     match status with
     | DebugStatus.Held -> "held"
     | DebugStatus.StillRunning -> "still_running"
+    | DebugStatus.HostNotAnswering -> "host_not_answering"
     | DebugStatus.Attached -> "attached"
     | DebugStatus.NoDebuggerWithin -> "no_debugger_within"
     | DebugStatus.ReleasedWithoutDebugger -> "released_without_debugger"
@@ -262,6 +265,9 @@ let toWire (answer: DebugAnswer) : int * DebugWire =
     503, emptyWire DebugStatus.HostUnavailable (sprintf "The session's test host is not available: %s" reason)
   | DebugAnswer.Progress DebugProgress.StillRunning ->
     200, emptyWire DebugStatus.StillRunning "The test is still running under the debugger."
+  | DebugAnswer.Progress(DebugProgress.HostSilent silence) ->
+    // 504: the daemon asked the host and the host did not answer in time. The hold is intact, so this is not a dead end.
+    504, emptyWire DebugStatus.HostNotAnswering (SilentHost.describe silence)
   | DebugAnswer.Progress(DebugProgress.Ended ended) ->
     let wire = endWire ended
     let code =
@@ -291,6 +297,34 @@ let toWire (answer: DebugAnswer) : int * DebugWire =
   | DebugAnswer.BadRequest message -> 400, emptyWire DebugStatus.BadRequest message
   | DebugAnswer.WorkerFailed message ->
     502, emptyWire DebugStatus.WorkerFailed (sprintf "The worker could not be reached: %s" message)
+
+// ---- what the answer says about the host's voice ----------------------------------------------------
+
+/// What the daemon does with its note of a silent host once a request is answered.
+[<RequireQualifiedAccess>]
+type HostVoice =
+  /// The host did not answer: note it against the session.
+  | NoteSilent of HostSilence
+  /// The host answered, so whatever was noted is out of date.
+  | ClearNote
+  /// The answer says nothing about the host (the worker or the session failed, the request was malformed).
+  | KeepNote
+
+let hostVoiceOf (answer: DebugAnswer) : HostVoice =
+  match answer with
+  | DebugAnswer.Progress(DebugProgress.HostSilent silence) -> HostVoice.NoteSilent silence
+  | DebugAnswer.Progress(DebugProgress.StillRunning | DebugProgress.Ended _)
+  | DebugAnswer.Begun(DebugBegin.Held _) -> HostVoice.ClearNote
+  // A begin the host refused answered, so it spoke; one it could not be asked (HostUnavailable) did not.
+  | DebugAnswer.Begun(DebugBegin.Unsupported(UnsupportedReason.HoldAlreadyOpen _)) -> HostVoice.ClearNote
+  | DebugAnswer.Begun(DebugBegin.Unsupported(UnsupportedReason.HostUnavailable _))
+  | DebugAnswer.NotDiscovered
+  | DebugAnswer.NoTestMatched _
+  | DebugAnswer.AmbiguousTest _
+  | DebugAnswer.NoWorker _
+  | DebugAnswer.NoSession _
+  | DebugAnswer.BadRequest _
+  | DebugAnswer.WorkerFailed _ -> HostVoice.KeepNote
 
 // ---- recording the verdict --------------------------------------------------------------------------
 
@@ -351,6 +385,7 @@ let private askWorker
   (ops: SessionManagementOps)
   (sessionId: SessionId)
   (message: WorkerMessage)
+  (within: TimeSpan option)
   (read: string -> DebugAnswer)
   : Task<DebugAnswer> =
   task {
@@ -358,12 +393,27 @@ let private askWorker
     match! ops.GetProxy sessionId with
     | None -> return DebugAnswer.NoWorker sid
     | Some proxy ->
+      // A worker that never answers is a defect, not a wait: with a ceiling, the call ends at it with a named answer.
+      let call =
+        match within with
+        | None -> proxy message
+        | Some ceiling ->
+          async {
+            let! started = Async.StartChild(proxy message, int ceiling.TotalMilliseconds)
+            return! started
+          }
       try
-        match! proxy message |> Async.StartAsTask with
+        match! call |> Async.StartAsTask with
         | WorkerResponse.DebugTestAnswer(_, payload) -> return read payload
         | WorkerResponse.WorkerError error -> return DebugAnswer.WorkerFailed(SageFsError.describe error)
         | other -> return DebugAnswer.WorkerFailed(sprintf "unexpected reply %A" other)
-      with ex ->
+      with
+      | :? TimeoutException ->
+        return
+          DebugAnswer.WorkerFailed(
+            sprintf "the worker did not answer in %s. A silent test host is bounded inside the worker and answers on its own, so it is the worker that is stuck: check the session's status, and hard reset it if it stays silent" (describeSpan within.Value)
+          )
+      | ex ->
         // The whole chain, not `ex.Message`: a wrapped HTTP failure's own message is "An error occurred while sending the request",
         // and the cause (reset by the peer, response ended early) is what says why.
         return DebugAnswer.WorkerFailed (ExceptionChain.describe ex)
@@ -371,14 +421,16 @@ let private askWorker
 
 /// Ask the session's worker to hold `test` for a debugger.
 let beginDebug (ops: SessionManagementOps) (sessionId: SessionId) (test: TestCase) : Task<DebugAnswer> =
-  askWorker ops sessionId (WorkerMessage.DebugTestBegin(test, newReplyId ())) (fun payload ->
+  askWorker ops sessionId (WorkerMessage.DebugTestBegin(test, newReplyId ())) None (fun payload ->
     match Serialization.tryDeserialize<DebugBegin> payload with
     | Result.Ok answer -> DebugAnswer.Begun answer
     | Result.Error error -> DebugAnswer.WorkerFailed(SageFsError.describe error))
 
-/// Release the held test (the editor's debugger is attached) and wait for it to finish, up to `park`.
+/// Release the held test (the editor's debugger is attached) and wait for it to finish, up to `park`. The worker bounds its own
+/// wait on the host (`park` and a grace), and the daemon's wait on the worker ends one grace after that.
 let continueDebug (ops: SessionManagementOps) (sessionId: SessionId) (ticket: string) (park: TimeSpan) : Task<DebugAnswer> =
-  askWorker ops sessionId (WorkerMessage.DebugTestContinue(ticket, park, newReplyId ())) (fun payload ->
+  let ceiling = SilentHost.Wait.relayCeilingFor park Timeouts.debugHostAnswerGrace
+  askWorker ops sessionId (WorkerMessage.DebugTestContinue(ticket, park, newReplyId ())) (Some ceiling) (fun payload ->
     match Serialization.tryDeserialize<DebugProgress> payload with
     | Result.Ok progress -> DebugAnswer.Progress progress
     | Result.Error error -> DebugAnswer.WorkerFailed(SageFsError.describe error))

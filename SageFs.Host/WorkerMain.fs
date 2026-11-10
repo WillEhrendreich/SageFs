@@ -2320,7 +2320,9 @@ let run (sessionId: string) (requestedPort: int) = async {
       async {
         let! reply = result.Agent.DebugContinue ticket park
         match reply with
-        | HostAgent.AgentAnswered HostAgent.TestDebug.DebugProgress.StillRunning -> ()
+        // A silent host still holds the test, so the level keeps refusing on it: the hold is not over until the host says so.
+        | HostAgent.AgentAnswered HostAgent.TestDebug.DebugProgress.StillRunning
+        | HostAgent.AgentAnswered (HostAgent.TestDebug.DebugProgress.HostSilent _) -> ()
         | HostAgent.AgentAnswered (HostAgent.TestDebug.DebugProgress.Ended _)
         | HostAgent.AgentUnavailable _ -> levelKeeper.SetDebugHold DebugHold.HoldsNothing
         return reply

@@ -1164,7 +1164,9 @@ let buildDashboardSnapshotWithSessions (input: SnapshotInput) : System.Threading
     // "the fix that reached no human").
     let viewedHealth =
       match sessions |> List.tryFind (fun s -> s.Id = sessionId) with
-      | Some info -> SessionHealth.classify info.Status info.ProjectRoles wCtx
+      | Some info ->
+        SessionHealth.classify info.Status info.ProjectRoles wCtx
+        |> SilentHost.healthOf (WorkerProtocol.SessionId.value info.Id) info.Status
       | None -> SessionHealth.Starting
     let failureNarrativesPanel =
       let pairs = q.GetFailureNarratives sessionId

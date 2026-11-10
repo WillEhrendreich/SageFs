@@ -152,6 +152,10 @@ type FsiHostSession
   let lost = TaskCompletionSource<HostEnd>(TaskCreationOptions.RunContinuationsAsynchronously)
   let mutable nextId = 0L
   let mutable disposed = 0
+  // Whether the host is known to be silent: set when a bounded wait ended with no answer, cleared by any line the host sends.
+  let pulseLock = obj ()
+  let mutable pulse = SilentHost.Pulse.Responsive
+  let hear (event: SilentHost.PulseEvent) = lock pulseLock (fun () -> pulse <- SilentHost.Pulse.step pulse event)
 
   /// The first end wins and completes every call still waiting; later ones change nothing.
   let markEnded (hostEnd: HostEnd) =
@@ -203,6 +207,7 @@ type FsiHostSession
         match reader.ReadLine() with
         | null -> go <- false
         | line ->
+          hear SilentHost.PulseEvent.HostSpoke
           match decodeResponse line with
           | Result.Error reason -> onLog (sprintf "[fsihost] unreadable response: %s" (describeError reason))
           | Result.Ok(Ready _) -> ()
@@ -249,43 +254,79 @@ type FsiHostSession
         true
       with _ -> false)
 
+  /// A request that went out and is waiting in `pending` for its answer, or the reason it did not go out.
+  let dispatch (make: int64 -> Request) : Result<int64 * TaskCompletionSource<Reply>, Reply> =
+    match lost.Task.IsCompleted with
+    | true -> Result.Error(Gone lost.Task.Result)
+    | false ->
+      let id = Interlocked.Increment(&nextId)
+      let waiting = TaskCompletionSource<Reply>(TaskCreationOptions.RunContinuationsAsynchronously)
+      pending[id] <- waiting
+      match send (make id) with
+      | false ->
+        pending.TryRemove id |> ignore
+        markEnded (settleEnd ())
+        Result.Error(Gone lost.Task.Result)
+      | true ->
+        // The connection may have dropped between the check and the registration.
+        if lost.Task.IsCompleted then waiting.TrySetResult(Gone lost.Task.Result) |> ignore
+        Result.Ok(id, waiting)
+
   /// Send a request carrying a fresh id and wait for its answer. Cancelling interrupts the host, and with `KillAfter` a
   /// host that has not answered that long after the interrupt is killed (see `stopUnresponsive`).
   let roundTripWith (grace: CancelGrace) (cancellationToken: CancellationToken) (make: int64 -> Request) : Async<Reply> =
     async {
-      match lost.Task.IsCompleted with
-      | true -> return Gone lost.Task.Result
-      | false ->
-        let id = Interlocked.Increment(&nextId)
-        let waiting = TaskCompletionSource<Reply>(TaskCreationOptions.RunContinuationsAsynchronously)
-        pending[id] <- waiting
-        match send (make id) with
-        | false ->
-          pending.TryRemove id |> ignore
-          markEnded (settleEnd ())
-          return Gone lost.Task.Result
-        | true ->
-          // The connection may have dropped between the check and the registration.
-          if lost.Task.IsCompleted then waiting.TrySetResult(Gone lost.Task.Result) |> ignore
-          use answered = new CancellationTokenSource()
-          use _ =
-            cancellationToken.Register(fun () ->
-              send (Interrupt id) |> ignore
-              match grace with
-              | NoKill -> ()
-              | KillAfter wait ->
-                Task.Delay(wait, answered.Token).ContinueWith(
-                  (fun (delay: Task) -> if not delay.IsCanceled then graceRanOut id waiting wait),
-                  TaskContinuationOptions.ExecuteSynchronously
-                )
-                |> ignore)
-          let! reply = Async.AwaitTask waiting.Task
-          answered.Cancel()
-          return reply
+      match dispatch make with
+      | Result.Error reply -> return reply
+      | Result.Ok(id, waiting) ->
+        use answered = new CancellationTokenSource()
+        use _ =
+          cancellationToken.Register(fun () ->
+            send (Interrupt id) |> ignore
+            match grace with
+            | NoKill -> ()
+            | KillAfter wait ->
+              Task.Delay(wait, answered.Token).ContinueWith(
+                (fun (delay: Task) -> if not delay.IsCanceled then graceRanOut id waiting wait),
+                TaskContinuationOptions.ExecuteSynchronously
+              )
+              |> ignore)
+        let! reply = Async.AwaitTask waiting.Task
+        answered.Cancel()
+        return reply
     }
 
   /// A request whose caller never cancels, or that is not worth killing the host for if it does.
   let roundTrip = roundTripWith NoKill
+
+  /// A request the host owes an answer to within `ceiling`. A host that has not answered by then is silent and not gone:
+  /// the request stays in `pending`, so the answer the host gives when it can (a debugger let go of it) is read, and
+  /// counts as the host speaking. The answer wins a tie with the ceiling.
+  let roundTripWithin (ceiling: TimeSpan) (make: int64 -> Request) : Async<SilentHost.WaitEnd<Response>> =
+    async {
+      match dispatch make with
+      | Result.Error(Gone hostEnd) -> return SilentHost.WaitEnd.HostGone(describeEnd hostEnd)
+      | Result.Error(Got response) -> return SilentHost.WaitEnd.Replied response
+      | Result.Ok(_, waiting) ->
+        use spent = new CancellationTokenSource()
+        let! first = Task.WhenAny(waiting.Task, Task.Delay(ceiling, spent.Token)) |> Async.AwaitTask
+        spent.Cancel()
+        let event =
+          match obj.ReferenceEquals(first, waiting.Task) with
+          | false -> SilentHost.WaitEvent.CeilingSpent
+          | true ->
+            match waiting.Task.Result with
+            | Got response -> SilentHost.WaitEvent.Answer response
+            | Gone hostEnd -> SilentHost.WaitEvent.HostEnded(describeEnd hostEnd)
+        return SilentHost.Wait.endOf event
+    }
+
+  /// What this host is, as a silent one: its pid, how long was waited, and what can be found holding it.
+  let silenceAfter (waited: TimeSpan) : SageFs.HostAgent.TestDebug.HostSilence =
+    let silence : SageFs.HostAgent.TestDebug.HostSilence =
+      { HostPid = proc.Id; Waited = waited; Holder = SilentHost.Probe.holderOf proc.Id }
+    hear (SilentHost.PulseEvent.WentSilent silence)
+    silence
 
   let unexpected (expected: string) (response: Response) =
     sprintf "the FSI host answered a %s request with %A" expected response
@@ -511,22 +552,34 @@ type FsiHostSession
   /// Hold one test in the host for a debugger.
   member _.AgentDebugBegin(test: SageFs.Features.LiveTesting.TestCase) : Async<HostCall<SageFs.HostAgent.TestDebug.DebugBegin>> =
     async {
-      match! roundTrip CancellationToken.None (fun id -> AgentDebugBegin(id, test)) with
-      | Got(AgentDebugBeginResult(_, answer)) -> return Answered answer
-      | Got(AgentRefused(_, reason)) -> return HostGone reason
-      | Got other -> return HostGone(unexpected "agent debug-begin" other)
-      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
+      // A begin is answered at once, so the host owes it nothing beyond the grace.
+      let ceiling = SilentHost.Wait.ceilingFor TimeSpan.Zero Timeouts.debugHostAnswerGrace
+      match! roundTripWithin ceiling (fun id -> AgentDebugBegin(id, test)) with
+      | SilentHost.WaitEnd.Replied(AgentDebugBeginResult(_, answer)) -> return Answered answer
+      | SilentHost.WaitEnd.Replied(AgentRefused(_, reason)) -> return HostGone reason
+      | SilentHost.WaitEnd.Replied other -> return HostGone(unexpected "agent debug-begin" other)
+      | SilentHost.WaitEnd.NoAnswer ->
+        let silence = silenceAfter ceiling
+        return Answered(SageFs.HostAgent.TestDebug.DebugBegin.Unsupported(SageFs.HostAgent.TestDebug.UnsupportedReason.HostUnavailable(SilentHost.describe silence)))
+      | SilentHost.WaitEnd.HostGone reason -> return HostGone reason
     }
 
-  /// Release a held test and wait up to `park` for it to finish.
+  /// Release a held test and wait up to `park` for it to finish. The host owes an answer by the end of the park, so a
+  /// host that has said nothing a grace after that is silent, and the answer says so. The hold is not touched: it stays
+  /// the host's, and the ticket keeps working once the host speaks again.
   member _.AgentDebugContinue(ticket: SageFs.HostAgent.TestDebug.DebugTicket, park: TimeSpan) : Async<HostCall<SageFs.HostAgent.TestDebug.DebugProgress>> =
     async {
-      match! roundTrip CancellationToken.None (fun id -> AgentDebugContinue(id, ticket, park)) with
-      | Got(AgentDebugContinueResult(_, progress)) -> return Answered progress
-      | Got(AgentRefused(_, reason)) -> return HostGone reason
-      | Got other -> return HostGone(unexpected "agent debug-continue" other)
-      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
+      let ceiling = SilentHost.Wait.ceilingFor park Timeouts.debugHostAnswerGrace
+      match! roundTripWithin ceiling (fun id -> AgentDebugContinue(id, ticket, park)) with
+      | SilentHost.WaitEnd.Replied(AgentDebugContinueResult(_, progress)) -> return Answered progress
+      | SilentHost.WaitEnd.Replied(AgentRefused(_, reason)) -> return HostGone reason
+      | SilentHost.WaitEnd.Replied other -> return HostGone(unexpected "agent debug-continue" other)
+      | SilentHost.WaitEnd.NoAnswer -> return Answered(SageFs.HostAgent.TestDebug.DebugProgress.HostSilent(silenceAfter ceiling))
+      | SilentHost.WaitEnd.HostGone reason -> return HostGone reason
     }
+
+  /// Whether the host is known to be silent: set by a bounded wait that got no answer, cleared by any line the host sends.
+  member _.Pulse : SilentHost.Pulse = lock pulseLock (fun () -> pulse)
 
   interface IDisposable with
     member _.Dispose() =

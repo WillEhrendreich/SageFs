@@ -607,6 +607,9 @@
         <Compile Include="Middleware\QualifiedNameMatch.fs" />
         <Compile Include="Middleware\HotReloadCore.fs" />
         <Compile Include="HostAgent.fs" />
+        <!-- A host that is alive and answers nothing (a debugger or inspector has stopped it): how a wait on it ends, what holds
+             it, what to say, and how it shows in a session's health. Pure, with a /proc look at the bottom. Not embedded in the host. -->
+        <Compile Include="SilentHost.fs" />
         <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />
         <!-- What the live-bindings pane knows beyond the tree (mode, last click, held-row count). Needs the protocol's MemberOutcome. -->
         <Compile Include="Features\LiveBindingsPane.fs" />

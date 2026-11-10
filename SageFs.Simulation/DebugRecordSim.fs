@@ -128,7 +128,8 @@ module DebugRecordSim =
   /// The daemon answers a continue: ask the host, and when the hold ended, record what the daemon records.
   let private daemonAnswers (behavior: Behavior) (session: int) (ticket: string) (s: State) : State =
     match observe (DebugTicket ticket) s.Holds.[session] with
-    | DebugProgress.StillRunning -> s
+    | DebugProgress.StillRunning
+    | DebugProgress.HostSilent _ -> s
     | DebugProgress.Ended ended ->
       let ended = match behavior with Behavior.FabricatesFailureTwin -> fabricated ended | _ -> ended
       let tableSession = match behavior with Behavior.DefaultSessionTwin -> defaultSession | _ -> session

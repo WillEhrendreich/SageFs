@@ -56,6 +56,11 @@ let private allDebugStatuses : DebugStatus list =
   |> Array.map (fun case -> FSharpValue.MakeUnion(case, [||]) :?> DebugStatus)
   |> Array.toList
 
+let private silentHost : HostSilence =
+  { HostPid = 4242
+    Waited = SilentHost.Wait.ceilingFor Timeouts.debugContinuePark Timeouts.debugHostAnswerGrace
+    Holder = HostHolder.NamedAsTarget(9, "dotnet-debug") }
+
 /// One answer of every shape the endpoint can give.
 let private everyAnswer : DebugAnswer list =
   [ DebugAnswer.Begun(DebugBegin.Held target)
@@ -63,6 +68,7 @@ let private everyAnswer : DebugAnswer list =
     DebugAnswer.Begun(DebugBegin.Unsupported(UnsupportedReason.HoldAlreadyOpen target.Ticket))
     DebugAnswer.Begun(DebugBegin.Unsupported(UnsupportedReason.HostUnavailable "the host ended"))
     DebugAnswer.Progress DebugProgress.StillRunning
+    DebugAnswer.Progress(DebugProgress.HostSilent silentHost)
     DebugAnswer.Progress(DebugProgress.Ended(DebugEnd.Attached passed))
     DebugAnswer.Progress(DebugProgress.Ended(DebugEnd.NoDebuggerWithin TestTimeouts.patienceInProcess))
     DebugAnswer.Progress(DebugProgress.Ended DebugEnd.ReleasedWithoutDebugger)
@@ -199,6 +205,23 @@ let tests =
         code (DebugAnswer.AmbiguousTest [ "a"; "b" ]) |> Expect.equal "conflict" 409
         code (DebugAnswer.Progress(DebugProgress.Ended(DebugEnd.HostLost "x"))) |> Expect.equal "unavailable" 503
         code (DebugAnswer.Progress DebugProgress.StillRunning) |> Expect.equal "still going is fine" 200
+        code (DebugAnswer.Progress(DebugProgress.HostSilent silentHost)) |> Expect.equal "the host did not answer in time" 504
+
+      testCase "WHY: a silent host is its own status, and its message names the host, what holds it and the next action" <| fun _ ->
+        let _, wire = toWire (DebugAnswer.Progress(DebugProgress.HostSilent silentHost))
+        wire.Status |> Expect.equal "its own wire status, not host_lost" "host_not_answering"
+        wire.Message |> Expect.stringContains "the host" "process 4242"
+        wire.Message |> Expect.stringContains "the holder" "dotnet-debug"
+        wire.Message |> Expect.stringContains "the next action" "then ask again"
+
+      testCase "WHY: only an answer from the host clears the daemon's note of a silent host; a failure to reach the worker keeps it" <| fun _ ->
+        hostVoiceOf (DebugAnswer.Progress(DebugProgress.HostSilent silentHost)) |> Expect.equal "noted" (HostVoice.NoteSilent silentHost)
+        hostVoiceOf (DebugAnswer.Progress DebugProgress.StillRunning) |> Expect.equal "the host spoke" HostVoice.ClearNote
+        hostVoiceOf (DebugAnswer.Progress(DebugProgress.Ended DebugEnd.NoSuchHold)) |> Expect.equal "the host spoke" HostVoice.ClearNote
+        hostVoiceOf (DebugAnswer.Begun(DebugBegin.Held target)) |> Expect.equal "the host spoke" HostVoice.ClearNote
+        hostVoiceOf (DebugAnswer.WorkerFailed "refused") |> Expect.equal "says nothing about the host" HostVoice.KeepNote
+        hostVoiceOf (DebugAnswer.Begun(DebugBegin.Unsupported(UnsupportedReason.HostUnavailable "silent")))
+        |> Expect.equal "the host could not be asked" HostVoice.KeepNote
 
       testPropertyWithConfig config "WHY: a duration reads in words, seconds under two minutes and minutes after"
       <| fun (seconds: byte) ->

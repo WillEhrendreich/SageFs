@@ -1363,7 +1363,9 @@ let liveSessionCards
   |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionLifecycleStatus.Stopped)
   |> List.map (fun s ->
     let evals = evalCounts |> Map.tryFind s.Id |> Option.defaultValue 0
-    let health = SessionHealth.classify s.Status s.ProjectRoles (warmupContextFor s.Id)
+    let health =
+      SessionHealth.classify s.Status s.ProjectRoles (warmupContextFor s.Id)
+      |> SilentHost.healthOf (WorkerProtocol.SessionId.value s.Id) s.Status
     sessionCardOf now (warmupProgress s.Id) evals health s)
 
 /// The words and the class of a card's status badge. A card that read its session's build says so in the badge when the build

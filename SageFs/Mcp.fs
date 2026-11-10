@@ -1492,7 +1492,7 @@ module McpTools =
             match ctx.GetWarmupContext with
             | Some getCtx -> getCtx sid
             | None -> Task.FromResult None
-          let health = SessionHealth.classify reconciledStatus sessionInfo.ProjectRoles warmup
+          let health = SessionHealth.classify reconciledStatus sessionInfo.ProjectRoles warmup |> SilentHost.healthOf sid reconciledStatus
           // ONE reconciled status drives the top-level state AND the
           // lifecycle. The old code hard-coded `state = "Ready"` while
           // lifecycle, loadedProjects and health came from the reconciled

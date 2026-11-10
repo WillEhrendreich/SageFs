@@ -362,10 +362,33 @@ module TestDebug =
     /// The host ended while it held or ran the test.
     | HostLost of reason: string
 
-  /// The answer to "continue": still going, or over.
+  /// What is known about whatever keeps a host from answering. Looked up where the host is, and only ever a best effort:
+  /// a managed debugger that stopped the runtime leaves no trace in the process table that names the host.
+  [<RequireQualifiedAccess>]
+  type HostHolder =
+    /// A process is attached to the host with ptrace (the kernel names it).
+    | TracedBy of pid: int * name: string
+    /// A known debugger or inspector (`dotnet-debug`, `dotnet-dump`, `netcoredbg` and the like) names the host's pid in its
+    /// own command line.
+    | NamedAsTarget of pid: int * name: string
+    /// Nothing that names the host could be found.
+    | NotFound
+
+  /// A host whose process is alive and whose connection is open, and which did not answer within the bound. The runtime is
+  /// stopped, so it answers nothing and the hold it keeps is untouched.
+  type HostSilence =
+    { HostPid: int
+      /// How long the caller waited before it said so.
+      Waited: TimeSpan
+      Holder: HostHolder }
+
+  /// The answer to "continue": still going, silent, or over.
   [<RequireQualifiedAccess>]
   type DebugProgress =
     | StillRunning
+    /// The host did not answer within the bound. The hold is not over: the ticket stays valid, and asking again after
+    /// whatever stopped the host lets go finds the host's real answer.
+    | HostSilent of HostSilence
     | Ended of DebugEnd
 
   /// What the host sees when the editor says it has attached.
@@ -699,7 +722,9 @@ module TestDebug =
         | DebugProgress.StillRunning ->
           let! _ = System.Threading.Tasks.Task.WhenAny(waitOn, System.Threading.Tasks.Task.Delay park) |> Async.AwaitTask
           return lock gate (fun () -> observe ticket hold)
-        | DebugProgress.Ended _ -> return progress
+        // `observe` never says silent: only the side that waits on a host can.
+        | DebugProgress.Ended _
+        | DebugProgress.HostSilent _ -> return progress
       }
 
     /// The host is ending: whoever waits on a hold hears it ended rather than waiting out the bound.

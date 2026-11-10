@@ -731,6 +731,12 @@ module Timeouts =
   /// breakpoint can sit for as long as the person likes, so the wait is cut into
   /// pieces that stay well inside every HTTP bound between the editor and the host.
   let debugContinuePark = TimeSpan.FromSeconds(20.0)
+  /// How long past what the host owes it (the park of a continue, nothing for a begin) the daemon's side of the host
+  /// connection waits for an answer before it says the host is silent. A host answers a continue at the end of its park, so
+  /// this covers the wire and the scheduling, and a collection pause on a busy machine. A host whose runtime a debugger or an
+  /// inspector has stopped answers nothing at all, so a longer wait would only keep the person waiting for a verdict that
+  /// does not come. A guess, with no measurement behind it. It is a wait for the machine, so it scales with the tier.
+  let debugHostAnswerGrace = forMachine (TimeSpan.FromSeconds(5.0))
 
   // -- Restart / Backoff --
   /// First delay before a crashed worker is restarted; later restarts double it

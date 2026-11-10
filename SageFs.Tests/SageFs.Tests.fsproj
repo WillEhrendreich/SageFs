@@ -408,6 +408,9 @@
         <Compile Include="SdkChoiceTests.fs" />
         <Compile Include="FsiHostClientTests.fs" />
         <Compile Include="FsiHostLostTests.fs" />
+        <Compile Include="FsiHostSilentTests.fs" />
+        <Compile Include="SilentHostTests.fs" />
+        <Compile Include="SilentHostSimTests.fs" />
         <Compile Include="HostCrashTests.fs" />
         <Compile Include="HostCrashRecoveryTests.fs" />
         <Compile Include="EvalBoundTests.fs" />

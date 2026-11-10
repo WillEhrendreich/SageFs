@@ -350,6 +350,10 @@
              through the REAL TestDebug.step; two twins (never expires, runs unattached) prove the teeth. -->
         <Compile Include="TestDebugSim.fs" />
         <Compile Include="TestDebugSimInvariants.fs" />
+        <!-- A host that is alive and answers nothing (a debugger or inspector stopped it): the host freezes and thaws at any tick,
+             the REAL SilentHost.Wait and Pulse are folded over it; three twins (no ceiling, a pulse never cleared, a ceiling that
+             forgot the park) prove the teeth. -->
+        <Compile Include="SilentHostSim.fs" />
         <!-- The daemon's half of debugging a test: a verdict between the host ending a hold and a row changing, over two
              sessions and three tests, through the REAL HeldTable, verdictFor and DebugRunRecord.plan; three twins (record on
              every continue, fabricate a failure, resolve the session by default) prove the teeth. -->
