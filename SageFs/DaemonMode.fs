@@ -3194,24 +3194,24 @@ let run
 
   /// Verify a landing of compiled source: rebuild at the rebased commit, then the tests the diff can affect (judged by the
   /// session's coverage BEFORE the rebuild replaces it) plus every test the rebuild discovered that was not known before.
-  let verifyByRebuild
-    (sessionId: string)
-    (worktree: string)
   /// `sourceFiles` are the landing's existing source files (the ones coverage can name). `selection` is what its build inputs say:
   /// the whole suite when anything but a compile list changed, otherwise the tests that cover the files a compile-list edit can
   /// reach, so a landing that only adds a source file does not run the whole assembly.
+  let verifyByRebuild
+    (sessionId: string)
+    (worktree: string)
     (headSha: string)
     (reasons: Features.CohortLandingPlan.RebuildReason list)
     (changedFiles: string list)
+    (sourceFiles: string list)
+    (selection: Features.ProjectFileChange.Selection)
     : Async<Result<Cohort.TestId list, Features.CohortOwner.VerificationFault>> =
     async {
       Log.info "[cohort-landing] session %s is rebuilt at %s: %s" sessionId headSha (reasons |> List.map Features.CohortLandingPlan.describeReason |> String.concat "; ")
-    (sourceFiles: string list)
-    (selection: Features.ProjectFileChange.Selection)
+      Log.info "[cohort-landing] session %s runs %s" sessionId (Features.ProjectFileChange.describeSelection selection)
       let knownIds () =
         Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
         |> Array.map (fun entry -> entry.TestId)
-      Log.info "[cohort-landing] session %s runs %s" sessionId (Features.ProjectFileChange.describeSelection selection)
         |> Array.toList
       let knownBefore = knownIds ()
       let wholeSuite, compileListFiles =
