@@ -8,7 +8,7 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Done. Both row journeys and four more debug cases run green in `--integration-lt` against netcoredbg 3.2.0-1092: four full unfiltered runs, `TRUST ... registered=19 ran=19 passed=19 ... Trusted` each (2026-11-10). |
+| Status | Done. Both row journeys and four more debug cases run green in `--integration-lt` against netcoredbg 3.2.0-1092: three full unfiltered runs in a row, `TRUST tier=--integration-lt registered=19 ran=19 passed=19 ... Trusted` each (2026-11-10). A fourth run, on the last commit (which only moved netcoredbg's working directory to the temp area), passed all six debug cases and failed three older cases (`LT restart` twice, one browser case) while another gate started beside it and the load average was 21; those three passed in the three runs before. |
 | Size | S |
 | Branch and worktree | `dbg-rows` in the clone `/home/will/scratch/dbg-agent` (2026-11-10, merge by the orchestrator). |
 | Last green commit | the tip of `dbg-rows` when this block was written; the commits are listed in the hand-off report. |
@@ -71,7 +71,7 @@ After a test is debugged, the row the user would see (the row behind `GET /api/l
 
 ## Steps
 
-All five are done (2026-11-10). The hand run is the section "What the hand run with netcoredbg showed". `resume` is `continue` on netcoredbg's console, waited on by its `^running` line, and it comes after the attach and before the release. The journeys ran alone and then in the tier (`ran=19`, the 19 cases of the whole `--integration-lt` tree, four times). `DebugRowJourneyTests.journeyTests` is in `LiveTestingShards.tree` and its cases are registered with `Integration.dedicatedCaseTask`; the shard test agrees with the registry.
+All five are done (2026-11-10). The hand run is the section "What the hand run with netcoredbg showed". `resume` is `continue` on netcoredbg's console, waited on by its `^running` line, and it comes after the attach and before the release. The journeys ran alone and then in the tier (`ran=19`, the 19 cases of the whole `--integration-lt` tree, three Trusted runs in a row). `DebugRowJourneyTests.journeyTests` is in `LiveTestingShards.tree` and its cases are registered with `Integration.dedicatedCaseTask`; the shard test agrees with the registry.
 
 ## Tests
 
