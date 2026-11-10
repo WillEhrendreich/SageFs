@@ -647,11 +647,21 @@ module WorkerHttpTransport =
                       | HostAgent.AgentUnavailable reason -> Log.warn "[WorkerHttpTransport] no coverage for %s: %s" tc.FullName reason
                       return outcome
                     }
-              use cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted)
+              // The run ends when it finishes or when no test has reported for a stall window. It is never cut at a clock
+              // while it is still reporting: it used to be cancelled two minutes after it started, which left 18529 of a
+              // 19067-test run with no result. A stall is logged with the count that did not report.
+              let window = Features.LiveTesting.RunStall.effectiveWindow (Timeouts.testRunStallWindow ()) (Timeouts.perTestDefault ())
               try
-                do! Features.LiveTesting.TestOrchestrator.executeFiltered
-                      runTest onResult parallelism tests cts.Token
-                    |> Async.StartAsTask
+                let! ended =
+                  Features.LiveTesting.RunStall.watch window tests.Length ctx.RequestAborted (fun reported token ->
+                    Features.LiveTesting.TestOrchestrator.executeFiltered
+                      runTest (fun result -> reported (); onResult result) parallelism tests token)
+                  |> Async.StartAsTask
+                match ended with
+                | Features.LiveTesting.RunStall.RunEnd.Stalled (cause, stalledWindow) ->
+                  Log.warn "[run-tests-stream] the run was cancelled: %s" (Features.LiveTesting.RunStall.describeCause stalledWindow cause)
+                | Features.LiveTesting.RunStall.RunEnd.Completed
+                | Features.LiveTesting.RunStall.RunEnd.Cancelled -> ()
               with ex ->
                 System.Diagnostics.Activity.Current
                 |> Option.ofObj

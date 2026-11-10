@@ -1075,6 +1075,10 @@ module TestOrchestrator =
       }
     }
 
+  /// Run `tests` in chunks of `maxParallelism`, calling `onResult` as each one finishes. The run has no deadline of its own: a
+  /// hung test is bounded by the per-test timeout in `executeOne`, and a caller that wants a run ended cancels `ct`. The worker
+  /// cancels it through `RunStall.watch` when no test has reported for a stall window, which names the tests that did not.
+  /// (It used to cancel itself `Timeouts.globalTestRun` after it started, so a run that was still reporting was cut.)
   let executeFiltered
     (runTest: TestCase -> Async<TestResult>)
     (onResult: TestRunResult -> unit)
@@ -1083,15 +1087,13 @@ module TestOrchestrator =
     (ct: Threading.CancellationToken)
     : Async<unit> =
     async {
-      use globalCts = Threading.CancellationTokenSource.CreateLinkedTokenSource(ct)
-      globalCts.CancelAfter(Timeouts.globalTestRun())
       let totalSw = Stopwatch.StartNew()
       let totalChunks = (tests.Length + maxParallelism - 1) / maxParallelism
       let mutable chunkIndex = 0
       // Process in chunks to avoid scheduling all tests to ThreadPool at once
       let chunkSize = maxParallelism
       for chunkStart in 0 .. chunkSize .. tests.Length - 1 do
-        globalCts.Token.ThrowIfCancellationRequested()
+        ct.ThrowIfCancellationRequested()
         let chunkEnd = min (chunkStart + chunkSize) tests.Length
         let chunk = tests.[chunkStart .. chunkEnd - 1]
         let chunkActivity = LiveTestingInstrumentation.activitySource.StartActivity("live_testing.chunk")

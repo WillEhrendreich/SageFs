@@ -116,3 +116,14 @@ module RequestedRuns =
       | Some g, Some { Result = TestResult.Passed _ } when g = generation -> false
       | _ -> true)
 
+
+  /// How many of `tests` have a result produced by run `generation`, of any outcome: the count a progress-based wait watches.
+  /// The tests that did not report are the rest, so `tests.Length - reportedIn ...` is how many. It reads the same two maps
+  /// `failingIn` reads, so a run whose count has stopped rising has nothing more for the verdict to read.
+  let reportedIn (generation: RunGeneration) (tests: TestId list) (state: LiveTestState) : int =
+    tests
+    |> List.filter (fun id ->
+      match Map.tryFind id state.ResultGenerations, Map.tryFind id state.LastResults with
+      | Some g, Some _ -> g = generation
+      | _ -> false)
+    |> List.length

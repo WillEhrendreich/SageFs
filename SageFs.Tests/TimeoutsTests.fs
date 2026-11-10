@@ -76,20 +76,20 @@ let timeoutsTests = testList "Timeouts" [
       // Restore what it was
       Timeouts.setPerTestTimeout before
 
-    testCase "setGlobalTestRunTimeout rejects invalid value" <| fun _ ->
-      let before = Timeouts.globalTestRun ()
-      Timeouts.setGlobalTestRunTimeout TimeSpan.Zero
-      Timeouts.globalTestRun ()
+    testCase "setTestRunStallWindow rejects invalid value" <| fun _ ->
+      let before = Timeouts.testRunStallWindow ()
+      Timeouts.setTestRunStallWindow TimeSpan.Zero
+      Timeouts.testRunStallWindow ()
       |> Expect.equal "should remain unchanged" before
 
-    testCase "setGlobalTestRunTimeout accepts valid value" <| fun _ ->
-      let before = Timeouts.globalTestRun ()
-      let newVal = TestTimeouts.validGlobalRunTimeout
-      Timeouts.setGlobalTestRunTimeout newVal
-      Timeouts.globalTestRun ()
+    testCase "setTestRunStallWindow accepts valid value" <| fun _ ->
+      let before = Timeouts.testRunStallWindow ()
+      let newVal = TestTimeouts.validStallWindow
+      Timeouts.setTestRunStallWindow newVal
+      Timeouts.testRunStallWindow ()
       |> Expect.equal "should update" newVal
       // Restore what it was
-      Timeouts.setGlobalTestRunTimeout before
+      Timeouts.setTestRunStallWindow before
   ]
 
   testList "Environment variable overrides" [

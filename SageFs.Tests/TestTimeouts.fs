@@ -514,8 +514,8 @@ module TestTimeouts =
   /// A valid per-test timeout a settings test applies and then restores.
   let validPerTestTimeout = System.TimeSpan.FromSeconds 7.
 
-  /// A valid whole-run timeout a settings test applies and then restores.
-  let validGlobalRunTimeout = System.TimeSpan.FromMinutes 3.
+  /// A valid test-run stall window a settings test applies and then restores.
+  let validStallWindow = System.TimeSpan.FromMinutes 3.
 
   /// An ordinary timeout inside the range ValidTimeout accepts, neither edge.
   let ordinaryValidTimeout = System.TimeSpan.FromSeconds 30.

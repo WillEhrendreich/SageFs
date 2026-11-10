@@ -1748,3 +1748,31 @@ filter), `SageFs/CohortSeatCommand.fs` (`seatFromDashboard`), `SageFs/Dashboard.
 `SeatConductorIntegrationTests.fs` (a real daemon with real MCP clients, one of which answers the question).
 Reopen it if: a per-call daemon token ships and the dashboard route can ask for it (then the ticket stops being the strongest check
 it has), or elicitation grows a way to tell a person from a client that answers for them.
+
+## A project file change that is not a compile-list edit runs the whole suite
+
+A landing that changes a project file used to be judged against coverage, and coverage names source documents only, so the project
+file said nothing. A landing that only added a source file ran the whole assembly (the narrow selected nothing and the floor took
+over), and one that bumped a package or changed `TargetFramework` ran only the tests that covered whatever else was in the diff. The
+second case was wrong the other way: a package or a property can change what any test runs against.
+
+`ProjectFileChange` reads the project file's two texts into a closed set of changes. The compile list is the one change that is
+narrowed, because a file's meaning in F# is its text and the meanings of the files compiled before it that it can see. Everything
+else forces the whole suite: a reference, a package, a property, any other item, a project file that cannot be read, a project
+created or deleted, and any other build input (props, targets, a lock file, the SDK pin, a resource). The last group used to narrow by
+whatever else was in the diff; this is stricter on purpose, and a landing that bumps a package now costs a whole run. The run waits by
+its progress (`RunStall`), so a whole run is slow and no longer cut.
+
+For a compile-list edit the selection is the files whose visible predecessors changed, plus the files that can see those. A module
+is seen through its own name, so a file that never names an inserted module is not affected by it. A namespace that declares a type,
+an `AutoOpen` module, an extension member, or a file the daemon cannot read is opaque: everything after it counts. Two test files
+inserted in the middle of the 1096-file `SageFs.Tests` list select those two files and not the 935 after them.
+
+What it does not do. It does not look at projects that reference the changed one: a new type that shadows one a downstream file
+already opens is left to the build and the release gate. It does not remove the floor: a selection of nothing still runs every test.
+
+Evidence: `SageFs.Core/Features/ProjectFileChange.fs`; `SageFs.Tests/ProjectFileChangeTests.fs` and `CompileListSimTests.fs` (1500
+seeded edits against F#'s rule written apart from the classifier; three real mutants are caught); `SageFs/DaemonMode.fs`
+(`selectionForBuildInputs`, `verifyByRebuild`); `docs/plans/big-landings-pass-the-verifier.md`.
+Reopen it if: a landing is blocked on a whole run that a narrower selection would have been safe for, with the file that proves it
+(then the case is the one to teach the scan), or a file is found that changed another file's meaning without being named.

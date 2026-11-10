@@ -1,6 +1,6 @@
 # A big landing waits on the run's progress, and a build-input change does not select the whole assembly
 
-Roadmap item: `big-landings-pass-the-verifier` (Next, Agents). Plan written 2026-11-08 against master cfdd0eb0.
+Roadmap item: `big-landings-pass-the-verifier` (Built, Agents). Plan written 2026-11-08 against master cfdd0eb0, built 2026-11-09 against master d4a66a21.
 
 ## Resume here
 
@@ -8,65 +8,59 @@ This block is the item's own handoff. Whoever works on the item updates it in th
 
 | Field | Now |
 |:--|:--|
-| Status | Not started |
-| Size | M for the progress-based stop, S to M for the smaller affected set, once measured |
-| Branch and worktree | none yet |
-| Last green commit | none yet. It starts from `SageFs/CohortLandingVerify.fs`, `SageFs.Core/Features/LiveTestingExecutors.fs` (`executeFiltered`) and `SageFs/DaemonMode.fs` (`affectedTestsFor`) as on master. |
-| Next action | Do "Measure first": how long the whole non-Integration set takes to run in the integration session, with the results arriving. Then write the RED cases in "Tests". |
-| Decisions made | none yet |
-| Surprises | The cap is in two places. The daemon's wait is bounded (`awaitBudget`) and so is the run itself: the executor cancels it at `Timeouts.globalTestRun` wall clock. A fix to the daemon's wait alone leaves the run cancelled under it. |
+| Status | Done (the commit that adds `SageFs.Core/Features/RunStall.fs`). Step 6, a real landing through a real daemon, has not run, and what is unproven is listed at the end. |
+| Size | M for the progress-based stop, S to M for the smaller set |
+| Branch and worktree | none; on master |
+| Last green commit | the same commit. The `RunStall`, `DST the wait on a test run`, `ProjectFileChange`, `DST which files a compile-list edit can affect` and `Cohort landing verification waits on the run's progress` lists ran 26, 13, 31, 12 and 8 on the first run. Two cases were wrong in the test and are fixed; the lists are rerun in the commit's own gate (see the report that came with it). |
+| Next action | Install this build as the daemon and land a real project-file change through the cohort (step 6). Until the daemon runs this build, the worker still cancels a run two minutes after it starts: the measurement below is that. |
+| Decisions made | The stall window replaces `globalTestRun` and keeps its two-minute value. The gate looks at the run once per window and calls it stalled when the count of reported tests did not move across one window. A project file change that is not a compile-list edit runs the whole suite, and so does any other build input (props, targets, a lock file, the SDK pin, a resource). A compile-list-only edit selects the tests that cover the files whose meaning it can have changed, read from the file texts. The floor stays. |
+| Surprises | See "What the measurement found" and "The order rule is not enough". |
 
 ## What done looks like
 
 A landing that changes a project file or a shared source file such as `SageFs.Core/Timeouts.fs` is verified by the cohort's landing gate and not by hand. The gate keeps waiting for as long as tests are still reporting results, and ends a run that has stopped reporting, with the number that did and the number that did not. When a change cannot affect a test (a project file that only adds a source file), the landing does not run the whole assembly for it. Fail-closed stays: a test that is not a confirmed `Passed` still counts as failing.
 
-## What exists today
+## What shipped
 
-Read from the tree on 2026-11-08. Each line names where.
+The wait.
 
-- The wait. `CohortLandingVerify.runTestsInSession` dispatches the run and then waits twice, once for it to start and once for it to finish, each for `awaitBudget ()` (`SageFs/CohortLandingVerify.fs` lines 137 and 203 on). `awaitBudget` is `Timeouts.globalTestRun () + Timeouts.testRunAwaitSlack`. `globalTestRun` is `forMachine (TimeSpan.FromMinutes 2.0)` (`SageFs.Core/Timeouts.fs`, near line 278) and `testRunAwaitSlack` is `forMachine (30 s)`. Past it the answer is `Error "Test run timed out."`, which the performer reports as inconclusive: the landing is Blocked and does not fast-forward.
-- The run. `LiveTestingExecutors.executeFiltered` links a cancellation source and calls `globalCts.CancelAfter(Timeouts.globalTestRun())`. It runs the tests in chunks of `maxParallelism` and calls `onResult` as each test finishes. At the cap the remaining tests never run and never report.
-- The verdict. `CohortLandingVerify.failingOf` counts anything but a confirmed `Passed` as failing, a `Skipped` and "no result at all" included, on purpose (its comment says why). `Cohort.TestsCompleted of LandingId * failing * CohortScope` carries it.
-- What the conductor saw. In the cohort run notes (`finding C-integration-in-verify`, 2026-11-08 03:45Z): a full run in the integration session had 19067 tests requested and 18529 of them "did not report". The same notes say what the hundred Blocked tests of two landings were: nearly all `[Integration]` tests, each `Skipped "Timed out after 5s"`. That cause is fixed (`CohortLandingScope` leaves `[Integration]` tests to the release gate and names them, 1e9b18a3). It does not cover a run that is cut short at the cap.
-- The affected set. `AffectedTests.affected` selects a test when a file its coverage names matches a changed file, and always selects a test whose coverage is missing or empty. A project file is not a file coverage names, because coverage records source documents. So for a change to an `.fsproj` the narrow selects nothing, and the floor returns the whole discovered suite: `affectedTestsFor` (`SageFs/DaemonMode.fs`, near line 3097) and `AffectedTests.verificationTestSet` both do it on purpose ("NEVER empty on a real diff"). The build-input path, which rebuilds the integration worktree and restarts the session, runs the tests the narrow selected before the rebuild plus the tests the rebuild added, and falls back to every test when that is empty (`DaemonMode.fs` near line 3181). Right after a restart the session's coverage bitmaps are cold, so every test counts as affected there too.
-- The part of the wait that is already progress-based. The wait on the integration session settling ends on a stall, not a deadline: `IntegrationSettle.judge` and `await`, with `Timeouts.cohortIntegrationStallWindow`, and a deterministic simulation (`IntegrationSettleSimTests`). The test run's wait did not get the same treatment.
-- The size of a whole run. An unfiltered run of the default suite, directly through Expecto (not through the verifier), ran 16,333 tests in 4 minutes 24 seconds on 2026-11-08 (the machine's load at the time was not recorded). That is longer than the daemon's wait of `2 min + 30 s`, and I did not measure the run through the verifier.
-- Not found. The coordinator reported that a landing which changes an `.fsproj` or `Timeouts.fs` selects about 17,000 tests and cannot finish, and that the 18 branches of the 0.6.940 week were landed by hand for that reason. I did not find that figure or that reason in the cohort notes. They say p24 was integrated by hand because its own landing would be judged by the old verifier, and that seven landings (p24, p0, p4, p3, p17, p19 and the live-bindings branch) went in by rebase and fast-forward after Will chose it ("we need a release soon with this"), with ten more handed back to their agents to rebase after conflicts. I did not count how many tests `Timeouts.fs` selects.
+- `RunStall` (`SageFs.Core/Features/RunStall.fs`, pure over the looks, BCL only). `judge` says `Finished`, `KeepWaiting` or `Stalled` from the look at the previous slice and the look now: the same count of reported tests a window apart is a stall, a higher count is progress, and a run not started at two looks is `NeverStarted`. `await` is the loop around it with two ports, the same shape as `IntegrationSettle.await`. `watchWith` runs a real run under the watch and cancels it on a stall.
+- `Timeouts.testRunStallWindow` replaces `globalTestRun`, and `livetest.testRunStallWindowSeconds` replaces `livetest.globalTestRunTimeoutSeconds`. A run is judged by `RunStall.effectiveWindow`: never less than twice the per-test timeout, because a test may take that long to report.
+- `LiveTestingExecutors.executeFiltered` has no deadline of its own. A hung test is bounded by the per-test timeout and a caller cancels the token. The worker's two callers (`WorkerHttpTransport` for the stream and `WorkerMain` for the plain run, which also had its own `30 s plus a tenth of a second per test` cap) run it through `RunStall.watch`, so the cap that was in two places is in none.
+- `CohortLandingVerify.awaitRun` replaces the two budgeted waits in `runTestsInSession`: one loop, `RunStall.await` over `advance`, `lookAt` and `RequestedRuns.reportedIn`, which counts the requested tests with a result stamped by this run's generation. A stall answers `Error` naming how many reported and how many did not, and the landing does not fast-forward. `failingOf` and the generation stamp are unchanged, so a test that never reported still fails the landing.
 
-## Measure first
+The smaller set.
 
-1. How long the whole set, minus `[Integration]` tests, takes to run in an integration session, with a count of results as they arrive. That number decides how much the progress-based stop matters and whether the narrower set is still wanted.
-2. How many tests a change to `SageFs.Core/Timeouts.fs` selects with warm coverage, and with cold coverage after a rebuild. The coordinator's figure is not in the tree.
-3. Whether the daemon's model records each result as it arrives. `onResult` fires per test in the executor. If the model only learns at the end of the run, the stall check has nothing to read.
+- `ProjectFileChange` (`SageFs.Core/Features/ProjectFileChange.fs`, pure). `diff` turns a project file's two texts into a closed set of changes: `CompileList`, `ReferenceChanged`, `PackageChanged`, `PropertyChanged`, `OtherItemChanged`, `Unreadable`, `ProjectCreated`, `ProjectDeleted`, `OtherBuildInput`. Whitespace and comments are no change. `forcesWholeSuite` is true for every kind but `CompileList`. `select` says `WholeSuite` with the reasons, or `NarrowToFiles`.
+- `affectedFiles` is the rule for a compile-list edit. A file's meaning is its text and the meanings of the files compiled before it that it can see, in order. So a file is affected when the sequence of files before it that it can see differs between the two lists, or when it can see an affected file. `factsOfText` says what a file can be seen through: a module is reached by its own name, so a file that never names it cannot see it. A namespace that declares a type, an `AutoOpen` module, an extension or a file it cannot read is opaque and everything after it is affected.
+- `DaemonMode.verifyByRebuild` takes the selection. The whole suite runs for `WholeSuite`. For `NarrowToFiles` the tests that cover those files run, plus the tests the rebuild discovered that were not known before, plus the tests that cover the landing's existing source files with the floor they always had. The floor for the landing as a whole stays: a selection of nothing runs every test.
 
-## Decisions for Will
+## What the measurement found
 
-- A project file change. Two ways, and they can both be done: (a) classify the change, so a project file diff that only adds or removes `<Compile Include>` items selects the new tests and the tests that cover the files in that project's neighbourhood, or (b) leave a build-input change to the rebuild-verify the gate already does (the build succeeds, the new tests pass) and to the release gate's own tiers for the rest. (a) is more code and a place for a wrong narrow. (b) is a policy that a landing is not the full verification. I would do the progress-based stop first and decide after measurement 2, because a stop that follows progress may be enough on its own.
-- What `globalTestRun` means after this. Today it is a wall-clock cap on a run. Under a progress-based stop it becomes a stall window (no result for this long ends the run), so it needs a new name that says what it is for, and the setting `livetest.globalTestRunTimeoutSeconds` and `docs/configuration.md` change with it. A user's own run of a big suite hits the same cap today, so this is a change to live testing and not only to the landing gate.
+Timed on 2026-11-09 in a session on `SageFs.Tests` (category `unit`) at a load average of 45 (other agents building on the same machine), against a daemon that does not run this fix: 18886 tests requested, the run ended at the old two-minute cap with 1688 passed, 1 failed, 4 skipped and 17193 that did not report. That is the defect, measured through the session. It says the machine managed about 14 results a second at that load, so a whole run through the verifier would take about 22 minutes there and 4 minutes 24 seconds when the machine is quiet (the earlier direct timing). It was not run to the end: the daemon is the user's and only an install of this build makes the worker stop cutting at the clock.
 
-## Steps
+The daemon's model records each result as it arrives. The performer batches results (25 or 200 ms) into `TestResultsBatch`, which stamps each with the run's generation, so the count the gate watches rises during the run.
 
-1. RED, pure: `RunStall.judge` (a new module beside `IntegrationSettle`): given the count of requested tests that have reported, the count at the last look and the window, say `Advancing`, `Stalled` or `Finished`. A run that is still reporting past the old budget is `Advancing`. A run whose count did not move across one window is `Stalled`, carrying how many reported and how many did not. Commit it red.
-2. RED, simulation: `CohortLandingVerifyDstTests` gains a virtual-clock run of a long, advancing suite and of one that stalls part way. A twin that carries the fixed deadline fails the first, which is how the case shows it has teeth.
-3. `executeFiltered` cancels on a stall and not on a wall clock, using the same judgement, with each test still bounded by the per-test timeout. `runTestsInSession` waits on the same signal.
-4. Rename `globalTestRun` for what it is, move it to the stall window, and update the setting, `docs/configuration.md` (regenerated by its script) and `docs/mcp-tools.md`.
-5. Measure first item 2, then decide (a) or (b) above and build it with its own RED case in `AffectedTestsTests`.
-6. An outcome case: a real landing of a project file change through a real daemon lands without a hand rebase. `docs/decisions.md` records the answer.
+How many tests a change to `SageFs.Core/Timeouts.fs` selects was not measured. Coverage in the integration session is cold until tests have run in it, and a cold test counts as affected, so the figure depends on whether the session had run anything.
+
+## The order rule is not enough
+
+The first version of the classifier used the compile order alone: the files from the first difference on. On the real lists that was 935 of 1096 files for two test files inserted in the middle of `SageFs.Tests`, and 116 for one file inserted in the middle of `SageFs.Core`. With the file texts read, the same two edits select the new files only. The order rule stays as the upper bound (`reshapedFiles`) and `CompileListSim` checks that the classifier never goes past it.
 
 ## Tests
 
-- The pure `RunStall` cases and the simulation in steps 1 and 2. The twin with the fixed deadline must fail the advancing-run case.
-- A property over any sequence of reports: a run is never ended while its count rises, and always ended after one quiet window.
-- `AffectedTestsTests` for step 5, whichever way it goes: a landing that adds a `<Compile Include>` selects fewer tests than the assembly, and a landing that changes anything else in a project file still falls back to the floor.
-- The outcome case in step 6 is the gate. The expected landing state comes from the daemon's own answer.
+- `RunStallTests`: the judgement by example, three properties (a count that rises is never called stalled, the first look that does not rise ends it, one quiet look after any rise ends it), the loop over scripted looks, and `watchWith` with windows the test ends itself (a stall names the count that did not report, a run that reports in every window over forty windows is never cancelled, the caller's token is `Cancelled`, a failure in the work reaches the caller, and the real executor under the watch).
+- `RunStallSim` and `RunStallSimTests`: the real `RunStall.await` over seeded scripts on a virtual clock, five named invariants, the cohort's 19067-test run (2.2 windows) finishing, 538 of 19067 and then quiet naming 538 and 18529, and a twin with the fixed deadline that cuts the cohort's run at one window.
+- `CohortLandingVerifyDstTests` (new list): the real `SageFsUpdate.update` and `awaitRun` over a worker script on a virtual clock. A 2000-test run over 2.2 windows lands exact. A run that goes quiet is an `Error` naming its count and is never an `Ok`. Two twins: the old budgeted wait over a worker that cuts at the cap answers `Ok` with 1000 or more tests failing for a run whose tests all pass, and the new wait over a worker that still cuts is not exact either, which is why the cap in the worker is part of the fix.
+- `ProjectFileChangeTests`, `CompileListSimTests`: the diff kinds, the rule, the scan, three properties, and the simulation over 1500 seeded edits (append, insertion that may shadow a name, removal, move) against F#'s own rule written apart from the classifier. SAFETY holds for the real classifier. Three twins are caught (added files only, no transitive step, off by one) and the order rule is shown safe and not narrow.
+- `CohortGitTests`: `fileAt` and `existsAt` against a real repository (an `[Integration]` list, run with `--integration-host`).
 
-## Risks and dependencies
+## What is still unproven
 
-- This changes a live-testing default for everyone, since `executeFiltered` serves every run. The per-test timeout stays as the bound on a hung test, so a run cannot stall silently. A run whose tests each take the full per-test timeout is still advancing.
-- Fail-closed has to survive. A stall ends the run as inconclusive and names how many did not report, and the landing does not fast-forward.
-- A wire change if the status text or a setting key changes, so the commit carries a `Plugin:` trailer, and `sagefs.nvim` reads the landing line by its first word.
-- `IntegrationSettle` and `CohortLandingScope` (p24) are the pattern and stay as they are.
-
-## Size
-
-M for the stop, S to M for the smaller set. Measurement 1 can shrink it.
+- A real landing of a project file change through a real daemon (step 6). No landing ran.
+- Whether the daemon, running this build, finishes a 19000-test run through the verifier, and how long it takes.
+- The rule that a module is reached only by naming it. It is F#'s name resolution as I read it and the simulation proves the algorithm against that reading. The scan is regular expressions over text. A construct I did not think of that makes a file visible without its name, or a file the scan reads as a plain module that is not, would select too little. The scan errs to opaque on anything it does not recognise, and a file it cannot read is opaque.
+- Projects that reference the changed project. A new type that shadows one a downstream file already opens is left to the build and the release gate.
+- Other build inputs (props, targets, lock files, a resource) now run the whole suite. Before, they narrowed by whatever else was in the diff. This is stricter on purpose and costs run time on a landing that bumps a package.
+- `existsAt` answers "no" when git cannot resolve the commit, so a failing git call reads a changed source file as one the landing added and leaves it out of the floor.
+- Time to run `Timeouts.fs`'s selection was not measured (see above).

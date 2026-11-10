@@ -185,6 +185,10 @@
         <Compile Include="WarmupSimTests.fs" />
         <Compile Include="IntegrationSettleTests.fs" />
         <Compile Include="IntegrationSettleSimTests.fs" />
+        <Compile Include="RunStallTests.fs" />
+        <Compile Include="RunStallSimTests.fs" />
+        <Compile Include="ProjectFileChangeTests.fs" />
+        <Compile Include="CompileListSimTests.fs" />
         <Compile Include="CohortLandingScopeTests.fs" />
         <Compile Include="FailingTestsTextTests.fs" />
         <Compile Include="MachineTierTests.fs" />

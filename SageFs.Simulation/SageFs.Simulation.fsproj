@@ -291,6 +291,15 @@
         <Compile Include="IntegrationSettleSim.fs" />
         <Compile Include="IntegrationSettleInvariants.fs" />
         <Compile Include="IntegrationSettleGenerators.fs" />
+        <!-- The wait on a test run, by the count that reported and not a clock: the real RunStall.await over a seeded script on a
+             virtual clock; the twin is the fixed deadline from the start of the run that it replaced. -->
+        <Compile Include="RunStallSim.fs" />
+        <Compile Include="RunStallInvariants.fs" />
+        <Compile Include="RunStallGenerators.fs" />
+        <!-- Which files a compile-list edit can affect: the real ProjectFileChange.affectedFiles over seeded edits of a project whose
+             ground truth is F#'s own rule; the twins select only the added files, drop the transitive step, or are off by one. -->
+        <Compile Include="CompileListSim.fs" />
+        <Compile Include="CompileListGenerators.fs" />
         <Compile Include="StartEscalationSim.fs" />
         <Compile Include="StartEscalationInvariants.fs" />
         <Compile Include="StartEscalationGenerators.fs" />

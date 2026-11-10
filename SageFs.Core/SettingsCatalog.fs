@@ -262,20 +262,20 @@ module SettingsCatalog =
     Current = InUseFromConsumer (fun () -> timeoutInForce (Timeouts.perTestDefault ()))
   }
 
-  /// Live: the whole-run timeout for a live-test cycle.
-  let globalTestRunTimeout : SettingDescriptor = {
-    Key = "livetest.globalTestRunTimeoutSeconds"
-    Name = "Test-run timeout"
-    Description = "Total timeout for one live-test run (seconds, 1-600)."
+  /// Live: how long a live-test run may go with no test reporting before it is cancelled as stalled.
+  let testRunStallWindow : SettingDescriptor = {
+    Key = "livetest.testRunStallWindowSeconds"
+    Name = "Test-run stall window"
+    Description = "How long a live-test run may go with no test reporting before it is cancelled (seconds, 1-600). A run that keeps reporting is never cut."
     Category = LiveTesting
     Scope = RepoOverridable
     Applicability = Live
     Default = defaultTimeout 120.0
     Parse = secondsToTimeoutValue
     Render = renderTimeout
-    Apply = fun v -> match v with VTimeout t -> Timeouts.setGlobalTestRunTimeout (ValidTimeout.value t) | _ -> ()
+    Apply = fun v -> match v with VTimeout t -> Timeouts.setTestRunStallWindow (ValidTimeout.value t) | _ -> ()
     External = NoExternalSource
-    Current = InUseFromConsumer (fun () -> timeoutInForce (Timeouts.globalTestRun ()))
+    Current = InUseFromConsumer (fun () -> timeoutInForce (Timeouts.testRunStallWindow ()))
   }
 
   /// RestartRequired: the MCP server port. Typed as a bounded Port, so an
@@ -500,7 +500,7 @@ module SettingsCatalog =
 
   /// The Phase-A pilot catalog.
   let pilots : SettingDescriptor list =
-    [ sessionDefaultWorkingDir; perTestTimeout; globalTestRunTimeout; mcpPort; bindHost ]
+    [ sessionDefaultWorkingDir; perTestTimeout; testRunStallWindow; mcpPort; bindHost ]
 
   /// Every setting with a row on the Settings page that lives in Core: the pilots, the settings read from an
   /// environment variable when a process starts, and the read-only rows. The two session-agent settings are added by

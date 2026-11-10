@@ -268,25 +268,30 @@ module Timeouts =
 
   // -- Live Testing (configurable at runtime via MCP, thread-safe) --
   let private _perTestLock = obj ()
-  let private _globalTestLock = obj ()
+  let private _stallWindowLock = obj ()
   /// The per-test timeout when neither the environment nor a setting says
   /// otherwise. Also the value `SettingsCatalog` falls back to if a requested
   /// per-test timeout is outside ValidTimeout's range. No recorded reason for 5s.
   let perTestTimeoutFallback = forMachine (TimeSpan.FromSeconds(5.0))
   let mutable private _perTestDefault =
     envOrDefault "SAGEFS_PER_TEST_TIMEOUT_SECONDS" perTestTimeoutFallback.TotalSeconds
-  let mutable private _globalTestRun = forMachine (TimeSpan.FromMinutes(2.0))
+  /// How long a test run may go with no test reporting before it is called stalled and cancelled (`RunStall`). A run that keeps
+  /// reporting is never cut, however long it takes in all: this replaced a wall-clock cap (`globalTestRun`, 2 minutes from the
+  /// start of the run) that cut a 19067-test run after 538 had reported. A run is judged by at least twice the per-test timeout
+  /// (`RunStall.effectiveWindow`), since a test may take that long to report. The 2 minutes are the old cap's value, kept as the
+  /// quiet a run is allowed; there is no recorded reason for it beyond that. Scaled for the machine.
+  let mutable private _testRunStallWindow = forMachine (TimeSpan.FromMinutes(2.0))
   let perTestDefault () = lock _perTestLock (fun () -> _perTestDefault)
-  let globalTestRun () = lock _globalTestLock (fun () -> _globalTestRun)
+  let testRunStallWindow () = lock _stallWindowLock (fun () -> _testRunStallWindow)
 
   let setPerTestTimeout (t: TimeSpan) =
     match ValidTimeout.create t with
     | Ok _ -> lock _perTestLock (fun () -> _perTestDefault <- t)
     | Error _ -> ()
 
-  let setGlobalTestRunTimeout (t: TimeSpan) =
+  let setTestRunStallWindow (t: TimeSpan) =
     match ValidTimeout.create t with
-    | Ok _ -> lock _globalTestLock (fun () -> _globalTestRun <- t)
+    | Ok _ -> lock _stallWindowLock (fun () -> _testRunStallWindow <- t)
     | Error _ -> ()
 
   // -- Live testing as you type --
@@ -453,14 +458,13 @@ module Timeouts =
   // (SageFs/DaemonMode.fs) no longer waits on a generation counter that
   // might never move — it directly awaits each rebased file's own re-eval
   // RPC, then the conservative verification run's own attributable
-  // generation via `CohortLandingVerify.runTestsInSession`, which is bounded
-  // by `CohortLandingVerify.awaitBudget()` (globalTestRun + slack) instead.
+  // generation via `CohortLandingVerify.runTestsInSession`, which waits on
+  // the run's progress (`CohortLandingVerify.stallWindow()`) instead.
   /// Poll cadence while waiting on the settle / rediscovery generation signals.
   let cohortLandingPoll = TimeSpan.FromMilliseconds(200.0)
-  /// Added to `globalTestRun` to bound how long the landing gate awaits a test
-  /// run's verdict: the worker cancels the run at `globalTestRun`, and this is
-  /// room for daemon-side dispatch latency and result aggregation. No recorded
-  /// reason for 30s.
+  /// Added to `testRunStallWindow` for the landing gate's own look at a run: the worker cancels a run that went quiet for
+  /// `testRunStallWindow`, and this is room for daemon-side dispatch latency and result aggregation, so the gate never
+  /// calls a run stalled a moment before the worker's own cancel reaches it. No recorded reason for 30s.
   let testRunAwaitSlack = forMachine (TimeSpan.FromSeconds(30.0))
   /// How long a cohort member may be silent before the reaper departs it and
   /// orphans its claims. Silence, not busyness, costs a seat, so this is

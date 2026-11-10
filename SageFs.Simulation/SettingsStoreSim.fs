@@ -14,7 +14,7 @@ module SettingsStoreSim =
 
   /// Two Live settings and one that needs a restart, so the restart check has both kinds to look at.
   let settings : SettingDescriptor list =
-    [ SettingsCatalog.perTestTimeout; SettingsCatalog.globalTestRunTimeout; SettingsCatalog.mcpPort ]
+    [ SettingsCatalog.perTestTimeout; SettingsCatalog.testRunStallWindow; SettingsCatalog.mcpPort ]
 
   /// Values that parse for the setting at the same index in `settings`.
   let private values : string[][] =
@@ -90,11 +90,11 @@ module SettingsStoreSim =
 
   /// What the timeouts held before the schedule ran, put back when it ends and at every restart: a restart is a new
   /// process, which starts from the defaults.
-  let private baseline () = Timeouts.perTestDefault (), Timeouts.globalTestRun ()
+  let private baseline () = Timeouts.perTestDefault (), Timeouts.testRunStallWindow ()
 
   let private restore (perTest: TimeSpan, run: TimeSpan) =
     Timeouts.setPerTestTimeout perTest
-    Timeouts.setGlobalTestRunTimeout run
+    Timeouts.setTestRunStallWindow run
 
   /// Run one scenario against a fresh directory and return every state, oldest first. `Behavior.Real` runs each edit
   /// through the catalog; `UnlockedTwin` runs a pair of neighbouring edits from different tabs as read, read, write,

@@ -465,6 +465,8 @@
         <Compile Include="SageFsError.fs" />
         <!-- After SageFsError (it words a refused build) and after CohortIntegrationScope (it reads a project file as a test project). Pure. -->
         <Compile Include="Features\CohortLandingPlan.fs" />
+        <!-- What a change to a project file does to the tests a landing runs: the compile-list diff, and which files it can affect. Pure. -->
+        <Compile Include="Features\ProjectFileChange.fs" />
         <Compile Include="Features\CohortRebuildGate.fs" />
         <Compile Include="Features\ClaimExempt.fs" />
         <Compile Include="RebuildOutcome.fs" />
@@ -500,6 +502,8 @@
         <Compile Include="CrossCheckoutOverlap.fs" />
         <!-- What the landing gate does while the integration session is not ready, and what it says when it stops waiting. Pure; no dependencies. -->
         <Compile Include="Features\IntegrationSettle.fs" />
+        <!-- When a test run is over because it stopped reporting, and when it is only slow. Pure over the looks; reads only the BCL. -->
+        <Compile Include="Features\RunStall.fs" />
         <Compile Include="Features\Verification.fs" />
         <!-- Is the build this session runs behind the files on disk? A pure decision over what an edge read. -->
         <Compile Include="Features\SourceState.fs" />

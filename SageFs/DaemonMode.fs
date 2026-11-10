@@ -3047,7 +3047,7 @@ let run
   /// How this landing is verified, and the files it changes. Fails CLOSED when the diff cannot be read: verifying without
   /// knowing what changed is the bug the verifier exists to prevent.
   let planVerification (sessionId: string) (worktree: string) (baseSha: string) (headSha: string)
-    : Async<Result<Features.CohortLandingPlan.Strategy * string list, string>> =
+    : Async<Result<Features.CohortLandingPlan.Strategy * string list * Features.CohortLandingPlan.ChangedFile list, string>> =
     async {
       match! Features.CohortGit.diffNames worktree baseSha headSha with
       | Error reason ->
@@ -3066,13 +3066,43 @@ let run
               let! inHistory = Features.CohortGit.isAncestor worktree commit baseSha
               return Features.CohortLandingPlan.buildOffHead (fun _ -> inHistory) (Some commit)
             }
-        return Ok (Features.CohortLandingPlan.strategy offHead classified, changed)
+        return Ok (Features.CohortLandingPlan.strategy offHead classified, changed, classified)
+    }
+
+  /// What the landing's build inputs say about the tests to run: each project file's two texts (as the base and the rebased head
+  /// have them) become a list of changes (`ProjectFileChange.diff`), and every other build input (props, targets, a lock file,
+  /// the SDK pin, a resource) is a change that can reach any test. A project file the commits cannot give is unreadable, which
+  /// forces the whole suite. `ProjectFileChange.select` says whether the whole suite runs or only what a compile-list edit can
+  /// reach. The worktree is at the rebased head, so a source file's text is read from it.
+  let selectionForBuildInputs (worktree: string) (baseSha: string) (headSha: string) (classified: Features.CohortLandingPlan.ChangedFile list)
+    : Async<Features.ProjectFileChange.Selection> =
+    async {
+      let inputs = classified |> List.choose (function Features.CohortLandingPlan.ChangedFile.BuildInput path -> Some path | _ -> None)
+      let isProjectFile (path: string) =
+        [ ".fsproj"; ".csproj"; ".vbproj" ] |> List.exists (fun extension -> path.EndsWith(extension, System.StringComparison.OrdinalIgnoreCase))
+      let! changes =
+        inputs
+        |> List.map (fun path ->
+          async {
+            match isProjectFile path with
+            | false -> return [ Features.ProjectFileChange.Change.OtherBuildInput path ]
+            | true ->
+              let! was = Features.CohortGit.fileAt worktree baseSha path
+              let! now = Features.CohortGit.fileAt worktree headSha path
+              match was, now with
+              | Ok before, Ok after -> return Features.ProjectFileChange.diff path before after
+              | _ -> return [ Features.ProjectFileChange.Change.Unreadable path ]
+          })
+        |> Async.Sequential
+      let readText (file: string) : string option =
+        try Some (System.IO.File.ReadAllText(System.IO.Path.Combine(worktree, file)))
+        with :? System.IO.IOException | :? UnauthorizedAccessException -> None
+      return Features.ProjectFileChange.select readText (changes |> Array.toList |> List.concat)
     }
 
   /// Which of `allTests` the changed files can affect, from the session's own coverage: a test whose coverage names none of
-  /// the files is left out, and a test with no usable coverage is kept. NEVER empty on a real diff: a narrow that selects
-  /// nothing runs the whole suite, because an unverified landing is worse than a slow one.
-  let affectedTestsFor (sessionId: string) (changedFiles: string list) (allTests: Features.LiveTesting.TestId list) : Features.LiveTesting.TestId list =
+  /// the files is left out, and a test with no usable coverage is kept. May be empty: the callers that need the floor apply it.
+  let affectedTestsUnfloored (sessionId: string) (changedFiles: string list) (allTests: Features.LiveTesting.TestId list) : Features.LiveTesting.TestId list =
     let cycle = SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())
     let state = cycle.TestState
     let maps =
@@ -3089,7 +3119,12 @@ let run
         | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
           Some(Features.LiveTesting.InputHashCoverage.selectionFiles blind merged bm)
         | _ -> None
-    let affectedTests = Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
+    Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
+
+  /// Which of `allTests` the changed files can affect, from the session's own coverage. NEVER empty on a real diff: a narrow that
+  /// selects nothing runs the whole suite, because an unverified landing is worse than a slow one.
+  let affectedTestsFor (sessionId: string) (changedFiles: string list) (allTests: Features.LiveTesting.TestId list) : Features.LiveTesting.TestId list =
+    let affectedTests = affectedTestsUnfloored sessionId changedFiles allTests
     // FAIL-CLOSED gate. A landing that carries real file changes but narrows to ZERO affected tests would run nothing and land
     // trivially "green". It happens when coverage cannot be trusted (the integration worktree inherits the main repo's prebuilt
     // PDB, so a test's covered-file paths point at the wrong build and never match the diff).
@@ -3159,24 +3194,48 @@ let run
   let verifyByRebuild
     (sessionId: string)
     (worktree: string)
+  /// `sourceFiles` are the landing's existing source files (the ones coverage can name). `selection` is what its build inputs say:
+  /// the whole suite when anything but a compile list changed, otherwise the tests that cover the files a compile-list edit can
+  /// reach, so a landing that only adds a source file does not run the whole assembly.
     (headSha: string)
     (reasons: Features.CohortLandingPlan.RebuildReason list)
     (changedFiles: string list)
     : Async<Result<Cohort.TestId list, Features.CohortOwner.VerificationFault>> =
     async {
       Log.info "[cohort-landing] session %s is rebuilt at %s: %s" sessionId headSha (reasons |> List.map Features.CohortLandingPlan.describeReason |> String.concat "; ")
+    (sourceFiles: string list)
+    (selection: Features.ProjectFileChange.Selection)
       let knownIds () =
         Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
         |> Array.map (fun entry -> entry.TestId)
+      Log.info "[cohort-landing] session %s runs %s" sessionId (Features.ProjectFileChange.describeSelection selection)
         |> Array.toList
       let knownBefore = knownIds ()
-      let affectedBefore = affectedTestsFor sessionId changedFiles knownBefore |> Set.ofList
+      let wholeSuite, compileListFiles =
+        match selection with
+        | Features.ProjectFileChange.Selection.WholeSuite _ -> true, []
+        | Features.ProjectFileChange.Selection.NarrowToFiles files -> false, files
+      // The existing source files keep the floor they always had: a narrow that selects nothing for them means coverage could not
+      // be matched, and the whole suite runs. The files a compile-list edit reaches have no floor of their own (a new file has no
+      // coverage yet); the floor below still applies to the landing as a whole.
+      let fromSource =
+        match sourceFiles with
+        | [] -> []
+        | _ -> affectedTestsFor sessionId sourceFiles knownBefore
+      let fromCompileList =
+        match compileListFiles with
+        | [] -> []
+        | _ -> affectedTestsUnfloored sessionId compileListFiles knownBefore
+      let affectedBefore = Set.ofList (fromSource @ fromCompileList)
       let known = Set.ofList knownBefore
       match! rebuildIntegrationAtRebasedHead sessionId worktree headSha (Features.CohortLandingPlan.needsRestore reasons) with
       | Error reason -> return Error reason
       | Ok () ->
         let allNow = knownIds ()
-        let toRun = allNow |> List.filter (fun id -> Set.contains id affectedBefore || not (Set.contains id known))
+        let toRun =
+          match wholeSuite with
+          | true -> allNow
+          | false -> allNow |> List.filter (fun id -> Set.contains id affectedBefore || not (Set.contains id known))
         // Never empty on a real diff, as everywhere else in the gate.
         let chosen =
           match toRun with
@@ -3302,9 +3361,23 @@ let run
             // beside the types the build already holds (C8). A test project's own files keep the cheap path.
             match! planVerification sessionId binding.WorktreePath baseSha headSha with
             | Error reason -> return environment reason
-            | Ok (Features.CohortLandingPlan.Strategy.RebuildAtHead reasons, changedFiles) ->
-              return! verifyByRebuild sessionId binding.WorktreePath headSha reasons changedFiles
-            | Ok (Features.CohortLandingPlan.Strategy.EvalOverBuild, _) ->
+            | Ok (Features.CohortLandingPlan.Strategy.RebuildAtHead reasons, changedFiles, classified) ->
+              // The landing's existing source files are the ones coverage can name: a file the landing adds has no coverage yet, and
+              // its tests are the ones the rebuild discovers. Its build inputs say whether the whole suite runs.
+              let sourceFilesChanged =
+                classified
+                |> List.choose (function
+                  | Features.CohortLandingPlan.ChangedFile.TestSource path
+                  | Features.CohortLandingPlan.ChangedFile.CompiledSource (path, _) -> Some path
+                  | _ -> None)
+              let! existedBefore =
+                sourceFilesChanged
+                |> List.map (fun path -> async { return! Features.CohortGit.existsAt binding.WorktreePath baseSha path })
+                |> Async.Sequential
+              let sourceFiles = List.zip sourceFilesChanged (Array.toList existedBefore) |> List.filter snd |> List.map fst
+              let! selection = selectionForBuildInputs binding.WorktreePath baseSha headSha classified
+              return! verifyByRebuild sessionId binding.WorktreePath headSha reasons changedFiles sourceFiles selection
+            | Ok (Features.CohortLandingPlan.Strategy.EvalOverBuild, _, _) ->
             // The session is REUSED across landings, so reuse is the cheap common path. It goes wrong
             // in one direction only: a verification that did NOT land left its change bound, and a
             // re-eval cannot unbind a name. Bring the session to the head before reading it, which

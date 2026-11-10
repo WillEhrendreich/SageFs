@@ -199,6 +199,22 @@ let diffNames (repoDir: string) (baseSha: string) (headSha: string) : Async<Resu
   runGit repoDir shortTimeout [ "diff"; "--name-only"; sprintf "%s..%s" baseSha headSha ]
   |> mapOk splitLines
 
+/// Whether commit `sha` has a file at `path` (`git cat-file -e <sha>:<path>`). A commit or path git cannot resolve is "no".
+let existsAt (repoDir: string) (sha: string) (path: string) : Async<bool> =
+  async {
+    let! exitCode, _, _ = runGitExitCode repoDir shortTimeout [ "cat-file"; "-e"; sprintf "%s:%s" sha path ]
+    return exitCode = 0
+  }
+
+/// The text of `path` as commit `sha` has it (`git show <sha>:<path>`). `Ok None` when that commit has no such file, which is how a
+/// project file a landing adds (or deletes) reads on the side that lacks it; any other failure is an `Error`.
+let fileAt (repoDir: string) (sha: string) (path: string) : Async<Result<string option, string>> =
+  async {
+    match! existsAt repoDir sha path with
+    | true -> return! runGit repoDir shortTimeout [ "show"; sprintf "%s:%s" sha path ] |> mapOk Some
+    | false -> return Ok None
+  }
+
 /// The `.fs` files git tracks in `repoDir`, as paths relative to it (`git ls-files "*.fs"`).
 ///
 /// A CHECKOUT, not a commit, so the answer is the worktree's own inputs as they are right now —

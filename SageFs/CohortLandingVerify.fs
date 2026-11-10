@@ -128,14 +128,70 @@ let advance (tests: TestId list) (progress: RunProgress) (testState: LiveTestSta
       | RunProgress.Started _ -> RunProgress.Finished tests
       | _ -> progress
 
-/// Overall budget for a `runTestsInSession` call: the worker-side per-run
-/// cancellation budget (`Timeouts.globalTestRun`) plus slack for daemon-side
-/// dispatch latency and result aggregation (`Timeouts.testRunAwaitSlack`).
-/// There is no environment variable for the run budget: it starts at the
-/// machine-scaled default in `SageFs.Core/Timeouts.fs` and changes through the
-/// `livetest.globalTestRunTimeoutSeconds` setting (`SageFs.Core/SettingsCatalog.fs`).
-let awaitBudget () : TimeSpan =
-  Timeouts.globalTestRun () + Timeouts.testRunAwaitSlack
+/// The window the gate judges a run by: the worker's stall window (`Timeouts.testRunStallWindow`, never under twice the
+/// per-test timeout) plus slack for daemon-side dispatch latency and result aggregation (`Timeouts.testRunAwaitSlack`).
+/// A run that reports a test inside every window is waited for however long it takes; a run whose count did not move across
+/// one window is called stalled. There is no environment variable for it: it starts at the machine-scaled default in
+/// `SageFs.Core/Timeouts.fs` and changes through the `livetest.testRunStallWindowSeconds` setting
+/// (`SageFs.Core/SettingsCatalog.fs`).
+let stallWindow () : TimeSpan =
+  RunStall.effectiveWindow (Timeouts.testRunStallWindow ()) (Timeouts.perTestDefault ()) + Timeouts.testRunAwaitSlack
+
+/// What one look at a dispatched run sees: not started, how many of its requested tests have reported, or finished. The count
+/// is the tests with a result stamped by THIS run's generation (`RequestedRuns.reportedIn`), so another run's results never
+/// read as this run's progress.
+let lookAt (tests: TestId list) (progress: RunProgress) (testState: LiveTestState) : RunStall.Look =
+  match progress with
+  | RunProgress.Pending _ -> RunStall.Look.NotStarted
+  | RunProgress.Finished _ -> RunStall.Look.Finished
+  | RunProgress.Started rid ->
+    match Map.tryFind rid testState.RunRequests with
+    | Some run -> RunStall.Look.Reporting (RequestedRuns.reportedIn run.RequestedGeneration tests testState, tests.Length)
+    | None -> RunStall.Look.Reporting (0, tests.Length)
+
+/// What the gate says when a run stopped reporting. The run's own tests that never reported are failing in the verdict the gate
+/// would have read, so the landing is not verified and does not fast-forward.
+let stalledMessage (window: TimeSpan) (cause: RunStall.StallCause) : string =
+  sprintf "Test run stalled: %s. The landing was not verified, and a test that never reported counts as failing." (RunStall.describeCause window cause)
+
+/// Wait for a dispatched run to finish, by its progress and not by a clock. The wait parks in slices of `window` on the
+/// event-driven `awaitCondition` and, at the end of each, counts the requested tests that have reported (`lookAt`). A count
+/// that rose is progress and the wait goes on, however many slices that takes; the same count at two looks ends it as
+/// stalled, with how many reported and how many did not. Ends at once when the run's completion arrives. `stateNow` is the
+/// session's own cycle. Everything it decides is `advance`, `lookAt` and `RunStall.judge`, so the simulation folds the same
+/// code through virtual time.
+let awaitRun
+  (window: TimeSpan)
+  (awaitCondition: System.TimeSpan -> (unit -> bool) -> Async<bool>)
+  (stateNow: unit -> LiveTestState)
+  (tests: TestId list)
+  (requestId: RunRequestId)
+  : Async<Result<TestId list, string>> =
+  async {
+    // Event-driven, pure conditions over `advance`, reading this run's own durable request record. The condition can be
+    // evaluated from concurrent model-changed notifications; the step is serialised so a racing, older observation can
+    // never overwrite a newer progress value.
+    let progress = ref (RunProgress.Pending requestId)
+    let step () =
+      lock progress (fun () ->
+        progress.Value <- advance tests progress.Value (stateNow ())
+        progress.Value)
+    let ports : RunStall.Ports =
+      { Park =
+          fun slice ->
+            awaitCondition slice (fun () ->
+              match step () with
+              | RunProgress.Finished _ -> true
+              | _ -> false)
+        Observe = fun () -> async { return lookAt tests (step ()) (stateNow ()) } }
+    match! RunStall.await window ports with
+    | RunStall.Outcome.Stalled (cause, stalledWindow) -> return Error (stalledMessage stalledWindow cause)
+    | RunStall.Outcome.Finished ->
+      match progress.Value with
+      | RunProgress.Finished failing -> return Ok failing
+      | RunProgress.Pending _
+      | RunProgress.Started _ -> return Error "Test run ended without a verdict."
+  }
 
 /// Run exactly `tests` in `sessionId` and AWAIT the pass/fail verdict — the
 /// blocking async-readback primitive cohort landing needs; the existing
@@ -200,34 +256,7 @@ let runTestsInSession
           sessionId)
     | Preflight.Dispatch testCases ->
 
-    let budget = awaitBudget ()
     let requestId = RunRequestId.fresh ()
     elmRuntime.Dispatch (SageFsMsg.Event (TuiEvent.RunTestsRequested (Some sessionId, testCases, Some requestId)))
-
-    // Event-driven, pure conditions over `advance` — the SAME step function the
-    // deterministic simulation folds, reading this run's own durable request
-    // record. The condition can be evaluated from concurrent model-changed
-    // notifications; the step is serialised so a racing, older observation can
-    // never overwrite a newer progress value.
-    let progress = ref (RunProgress.Pending requestId)
-    let step () =
-      lock progress (fun () ->
-        progress.Value <- advance tests progress.Value (stateNow ())
-        progress.Value)
-    let! started =
-      awaitCondition budget (fun () ->
-        match step () with
-        | RunProgress.Pending _ -> false
-        | _ -> true)
-    match started with
-    | false -> return Error "Test run timed out before it started."
-    | true ->
-      let! completed =
-        awaitCondition budget (fun () ->
-          match step () with
-          | RunProgress.Finished _ -> true
-          | _ -> false)
-      match completed, progress.Value with
-      | true, RunProgress.Finished failing -> return Ok failing
-      | _ -> return Error "Test run timed out."
+    return! awaitRun (stallWindow ()) awaitCondition stateNow tests requestId
   }

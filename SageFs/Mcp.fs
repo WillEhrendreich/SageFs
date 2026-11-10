@@ -2541,7 +2541,7 @@ module McpTools =
           return "All test results marked stale."
     }
 
-  let setTestTimeouts(_ctx: McpContext) (perTestSeconds: float option) (globalRunSeconds: float option) : Task<string> =
+  let setTestTimeouts(_ctx: McpContext) (perTestSeconds: float option) (stallWindowSeconds: float option) : Task<string> =
     task {
       let mutable error = None
       let parts = System.Collections.Generic.List<string>()
@@ -2551,19 +2551,19 @@ module McpTools =
         parts.Add (sprintf "Per-test timeout: %.1fs" s)
       | Some s -> error <- Some (sprintf "Invalid per-test timeout: %.1f (must be > 0)" s)
       | None -> ()
-      match globalRunSeconds with
+      match stallWindowSeconds with
       | Some s when s > 0.0 ->
-        Timeouts.setGlobalTestRunTimeout (TimeSpan.FromSeconds s)
-        parts.Add (sprintf "Global run timeout: %.1fs" s)
-      | Some s -> error <- Some (sprintf "Invalid global run timeout: %.1f (must be > 0)" s)
+        Timeouts.setTestRunStallWindow (TimeSpan.FromSeconds s)
+        parts.Add (sprintf "Test-run stall window: %.1fs" s)
+      | Some s -> error <- Some (sprintf "Invalid test-run stall window: %.1f (must be > 0)" s)
       | None -> ()
       match error with
       | Some e -> return e
       | None ->
         match parts.Count with
         | 0 ->
-          return sprintf "Current timeouts — per-test: %.1fs, global run: %.1fs. Provide per_test_seconds and/or global_run_seconds to change."
-            (Timeouts.perTestDefault().TotalSeconds) (Timeouts.globalTestRun().TotalSeconds)
+          return sprintf "Current timeouts — per-test: %.1fs, test-run stall window: %.1fs. Provide per_test_seconds and/or stall_window_seconds to change."
+            (Timeouts.perTestDefault().TotalSeconds) (Timeouts.testRunStallWindow().TotalSeconds)
         | _ ->
           parts.Add (sprintf "(effective immediately for next test run)")
           return parts |> Seq.toList |> String.concat ". "

@@ -132,7 +132,7 @@ Sizes are against recent pace: S is days, M a week or two, L more. Where a plan 
 | [Ask the live codebase in F#](ask-the-live-codebase-in-fsharp.md) | M to L, then S | every role's verdict equals `admitTool` for the matching tool |
 | [Drive real agents as cohort members](drive-real-agents-as-members.md) | L | an edit at `../outside.fs` is rejected `OutsideCheckout` |
 | [A small tool list for a first session](small-default-tool-list.md) | M, M | the registered tools' definitions weigh no more than the recorded budget |
-| [A big landing waits on the run's progress](big-landings-pass-the-verifier.md) | M for the stop, S to M for the smaller set | a run that is still reporting past the old budget is `Advancing`, and one that stopped reporting for a window is `Stalled` |
+| [A big landing waits on the run's progress](big-landings-pass-the-verifier.md) | M for the stop, S to M for the smaller set | a run that keeps reporting past the old budget is never judged stalled, and one that stopped reporting for a window is `Stalled` (built; a real landing through a daemon running it is not run) |
 | [A conductor can clear a lapsed member's claims](lapsed-members-claims-can-be-cleared.md) | S for the command, M with the tool and the panel | a conductor releases an orphaned claim with no present member to take it |
 
 ### Dashboard

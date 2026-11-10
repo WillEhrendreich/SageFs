@@ -315,10 +315,18 @@ let handleMessage
     | WorkerMessage.RunTests(tests, maxParallelism, replyId) ->
       let runTest = getRunTest()
       let results = System.Collections.Concurrent.ConcurrentBag<Features.LiveTesting.TestRunResult>()
-      use cts = new CancellationTokenSource(TimeSpan.FromSeconds(float (30 + tests.Length / 10)))
-      do!
-        Features.LiveTesting.TestOrchestrator.executeFiltered
-          runTest (fun r -> results.Add r) maxParallelism tests cts.Token
+      // The run ends when it finishes or when no test has reported for a stall window, never at a clock while it is still
+      // reporting (it was cut at 30 s plus a tenth of a second per test). A stall names the tests that did not report.
+      let window = Features.LiveTesting.RunStall.effectiveWindow (Timeouts.testRunStallWindow ()) (Timeouts.perTestDefault ())
+      let! ended =
+        Features.LiveTesting.RunStall.watch window tests.Length CancellationToken.None (fun reported token ->
+          Features.LiveTesting.TestOrchestrator.executeFiltered
+            runTest (fun r -> reported (); results.Add r) maxParallelism tests token)
+      match ended with
+      | Features.LiveTesting.RunStall.RunEnd.Stalled (cause, stalledWindow) ->
+        Log.warn "[WorkerMain] a test run was cancelled: %s" (Features.LiveTesting.RunStall.describeCause stalledWindow cause)
+      | Features.LiveTesting.RunStall.RunEnd.Completed
+      | Features.LiveTesting.RunStall.RunEnd.Cancelled -> ()
       return WorkerResponse.TestRunResults(replyId, results.ToArray())
 
     | WorkerMessage.GetTestDiscovery(replyId) ->

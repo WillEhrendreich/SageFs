@@ -418,3 +418,290 @@ let tests =
       let b = run Performer.Real VerdictFn.Real (scenarioOf 42 true)
       (sprintf "%A" a.Outcome) |> Expect.equal "replayable" (sprintf "%A" b.Outcome)
   ]
+
+// ── The wait on the run's progress, through the same real reducer, on a virtual clock ──
+//
+// The landing gate used to give up `globalTestRun + 30 s` after it asked, and the worker cancelled the run at `globalTestRun`
+// after it started, so the cap was in two places. A run that was still reporting was cut, and every test it had not reached
+// counted as failing: one cohort run asked for 19067 tests and 18529 never reported. The verifier now waits by the count of
+// requested tests that have reported (`CohortLandingVerify.awaitRun`, which folds `RunStall.judge`).
+//
+// Everything here is the real code: `SageFsUpdate.update` for the model, `awaitRun` for the wait. The clock is virtual and the
+// worker is a script of when each batch of results arrives, so a run of 2.2 windows costs milliseconds and a seed replays.
+
+/// A worker's run, as a script. Batch `k` of `BatchSize` results arrives `(k + 1) * ReportEvery` after the run starts.
+type RunScript =
+  { Seed: int
+    Tests: int
+    /// The indices of the tests that truly fail.
+    Failing: Set<int>
+    BatchSize: int
+    ReportEvery: TimeSpan
+    /// The worker reports this many batches and then says nothing more and never completes. `None`: it runs to the end.
+    HangsAfterBatches: int option }
+
+/// Where the worker's run is cut by a clock, as the executor used to do. `None` is the worker as it is now.
+[<RequireQualifiedAccess>]
+type WorkerCap =
+  | Uncapped
+  /// Results after this moment never arrive; at it the daemon marks the rest NoResult and the run completes.
+  | CutAt of TimeSpan
+
+/// The wait under test.
+[<RequireQualifiedAccess>]
+type Waiter =
+  /// Production: `CohortLandingVerify.awaitRun`.
+  | Real
+  /// The wait it replaced: one park of the whole budget for the run to start and another for it to finish.
+  | FixedBudgetTwin of budget: TimeSpan
+
+type VirtualRun =
+  { Script: RunScript
+    Requested: TestId list
+    TrulyFailing: TestId list
+    Verdict: Result<TestId list, string>
+    EndedAt: TimeSpan }
+
+let virtualRun (waiter: Waiter) (cap: WorkerCap) (script: RunScript) : Async<VirtualRun> =
+  let requestedCases = cases script.Tests
+  let requested = requestedCases |> List.map _.Id
+  let trulyFailing = requested |> List.indexed |> List.filter (fun (i, _) -> Set.contains i script.Failing) |> List.map snd
+  let model = ref (SageFsModel.initial ())
+  let now = ref TimeSpan.Zero
+  let apply (m: SageFsMsg) =
+    let next, effects = SageFsUpdate.update m model.Value
+    model.Value <- next
+    effects
+  // Worker messages not yet delivered, with the virtual time each arrives, oldest first.
+  let pending = Collections.Generic.List<TimeSpan * SageFsMsg>()
+  apply (msg (TuiEvent.TestsDiscovered (integration, Array.ofList requestedCases))) |> ignore
+  let rec deliver (m: SageFsMsg) =
+    for effect in apply m do
+      match effect with
+      | SageFsEffect.TestCycle (TestCycleEffect.RunRequestedTests (req, generation)) when not (Array.isEmpty req.Tests) ->
+        let ids = req.Tests |> Array.map _.Id
+        deliver (msg (TuiEvent.TestRunStartedAt (ids, integration, generation)))
+        let started = now.Value
+        let results =
+          ids |> Array.mapi (fun i id -> started, result id (not (Set.contains i script.Failing)))
+        let batches = results |> Array.chunkBySize script.BatchSize
+        let kept =
+          match script.HangsAfterBatches with
+          | Some k -> batches |> Array.truncate k
+          | None -> batches
+        kept
+        |> Array.iteri (fun k batch ->
+          let at = started + TimeSpan.FromTicks (script.ReportEvery.Ticks * int64 (k + 1))
+          pending.Add (at, msg (TuiEvent.TestResultsBatch (Some integration, batch |> Array.map snd))))
+        match script.HangsAfterBatches with
+        | Some _ -> ()
+        | None ->
+          let lastAt = started + TimeSpan.FromTicks (script.ReportEvery.Ticks * int64 batches.Length)
+          pending.Add (lastAt, msg (TuiEvent.TestRunCompleted (Some integration)))
+        // The old executor's wall clock: nothing reported after the cap arrives, the rest are NoResult, and the run completes.
+        match cap with
+        | WorkerCap.Uncapped -> ()
+        | WorkerCap.CutAt after ->
+          let cutAt = started + after
+          let reportedBeforeCut =
+            pending |> Seq.filter (fun (at, _) -> at <= cutAt) |> Seq.toList
+          let reportedIds =
+            reportedBeforeCut
+            |> List.collect (fun (_, m) ->
+              match m with
+              | SageFsMsg.Event (TuiEvent.TestResultsBatch (_, batch)) -> batch |> Array.map _.TestId |> Array.toList
+              | _ -> [])
+            |> Set.ofList
+          let missing =
+            ids
+            |> Array.filter (fun id -> not (Set.contains id reportedIds))
+            |> Array.map (fun id ->
+              { TestId = id; TestName = TestId.value id; Result = TestResult.NoResult NoResultReason.StreamEnded
+                Timestamp = DateTimeOffset.UnixEpoch; Output = None })
+          pending.Clear ()
+          for (at, m) in reportedBeforeCut do
+            match m with
+            | SageFsMsg.Event (TuiEvent.TestRunCompleted _) -> ()
+            | _ -> pending.Add (at, m)
+          pending.Add (cutAt, msg (TuiEvent.TestResultsBatch (Some integration, missing)))
+          pending.Add (cutAt, msg (TuiEvent.TestRunCompleted (Some integration)))
+      | _ -> ()
+  let stateNow () = (SageFsModel.cycleOwnedBySession integration model.Value).TestState
+  /// Park for `slice` of virtual time: deliver the worker messages that arrive inside it, in order, and answer `true` the
+  /// moment the condition holds. The event-driven wait production injects, with the clock made of data.
+  let awaitCondition (slice: TimeSpan) (cond: unit -> bool) : Async<bool> =
+    async {
+      let sliceEnd = now.Value + slice
+      let rec pump () =
+        match cond () with
+        | true -> true
+        | false ->
+          match pending |> Seq.tryHead with
+          | Some (at, m) when at <= sliceEnd ->
+            now.Value <- max now.Value at
+            pending.RemoveAt 0
+            apply m |> ignore
+            pump ()
+          | _ ->
+            now.Value <- sliceEnd
+            false
+      return pump ()
+    }
+  let requestId = RunRequestId.fresh ()
+  deliver (msg (TuiEvent.RunTestsRequested (Some integration, Array.ofList requestedCases, Some requestId)))
+  let window = stallWindow ()
+  let verdictOf : Async<Result<TestId list, string>> =
+    match waiter with
+    | Waiter.Real ->
+      awaitRun window awaitCondition stateNow requested requestId
+    | Waiter.FixedBudgetTwin budget ->
+      async {
+        let progress = ref (RunProgress.Pending requestId)
+        let step () =
+          progress.Value <- advance requested progress.Value (stateNow ())
+          progress.Value
+        let! started = awaitCondition budget (fun () -> match step () with RunProgress.Pending _ -> false | _ -> true)
+        match started with
+        | false -> return Error "Test run timed out before it started."
+        | true ->
+          let! completed = awaitCondition budget (fun () -> match step () with RunProgress.Finished _ -> true | _ -> false)
+          match completed, progress.Value with
+          | true, RunProgress.Finished failing -> return Ok failing
+          | _ -> return Error "Test run timed out."
+      }
+  async {
+    let! verdict = verdictOf
+    return { Script = script; Requested = requested; TrulyFailing = trulyFailing; Verdict = verdict; EndedAt = now.Value }
+  }
+
+/// A run of `tests` tests that reports in batches evenly over `windows` stall windows, so its length is a multiple of the
+/// window and the window's own value changes nothing.
+let paced (seed: int) (tests: int) (batchSize: int) (windows: float) (failing: Set<int>) (hangsAfter: int option) : RunScript =
+  let batches = (tests + batchSize - 1) / batchSize
+  let window = stallWindow ()
+  { Seed = seed
+    Tests = tests
+    Failing = failing
+    BatchSize = batchSize
+    ReportEvery = TimeSpan.FromTicks (int64 (windows * float window.Ticks) / int64 batches)
+    HangsAfterBatches = hangsAfter }
+
+let runScriptOfSeed (seed: int) : RunScript =
+  let rng = Random(seed)
+  let tests = 1 + rng.Next 300
+  let batchSize = 1 + rng.Next 25
+  let failing = [ for i in 0 .. tests - 1 do if rng.Next 8 = 0 then yield i ] |> Set.ofList
+  // Evenly over up to six windows: far longer than the old cap, and a report inside every window.
+  let batches = (tests + batchSize - 1) / batchSize
+  // Never a gap of a window or more between two batches: a run that waits a whole window for its next result is a stall.
+  let windows = min (0.1 + 5.9 * rng.NextDouble()) (0.8 * float batches)
+  let hangs =
+    match rng.Next 4 with
+    | 0 -> Some (rng.Next (1 + batches))
+    | _ -> None
+  // A hang after the last batch has every result and no completion: the run still never ends.
+  paced seed tests batchSize windows failing hangs
+
+let describeRun (r: VirtualRun) =
+  sprintf "seed=%d tests=%d batch=%d every=%A hangs=%A failing=%d -> %A at %A"
+    r.Script.Seed r.Script.Tests r.Script.BatchSize r.Script.ReportEvery r.Script.HangsAfterBatches r.Script.Failing.Count
+    (match r.Verdict with Ok failing -> sprintf "Ok %d failing" failing.Length | Error reason -> sprintf "Error %s" reason) r.EndedAt
+
+/// SAFETY, fail-closed: a verdict that says Ok names every test that did not report-and-pass. A run that did not complete
+/// is an Error, never an Ok.
+let failClosed (r: VirtualRun) : bool =
+  match r.Verdict with
+  | Error _ -> true
+  | Ok failing ->
+    let truly = Set.ofList r.TrulyFailing
+    let named = Set.ofList failing
+    Set.isSubset truly named && r.Script.HangsAfterBatches.IsNone
+
+/// EXACT: a run that ran to its end ends as the tests that truly fail, however long it took. A run that went quiet (even one
+/// that reported everything and never completed) ends as an Error that names how many reported and how many did not.
+let progressExact (r: VirtualRun) : bool =
+  match r.Verdict, r.Script.HangsAfterBatches with
+  | Ok failing, None -> Set.ofList failing = Set.ofList r.TrulyFailing
+  | Error reason, Some batchesReported ->
+    let reported = min r.Script.Tests (batchesReported * r.Script.BatchSize)
+    match reported = r.Script.Tests with
+    | true -> reason.Contains (sprintf "all %d tests had reported" reported)
+    | false -> reason.Contains (sprintf "%d reported" reported) && reason.Contains (sprintf "%d did not" (r.Script.Tests - reported))
+  | _ -> false
+
+let expectNoRun (label: string) (bad: VirtualRun list) =
+  match bad with
+  | [] -> ()
+  | _ -> failtestf "%s: %d seeds.\n%s" label bad.Length (bad |> List.truncate 5 |> List.map describeRun |> String.concat "\n")
+
+[<Tests>]
+let progressTests =
+  testList "Cohort landing verification waits on the run's progress" [
+    testAsync "WHY — a 2000-test run that reports evenly over 2.2 windows lands exact: a run that is still reporting is never cut" {
+      let script = paced 1 2000 25 2.2 (Set.ofList [ 7; 1500 ])  None
+      let! r = virtualRun Waiter.Real WorkerCap.Uncapped script
+      (r.EndedAt > Timeouts.testRunStallWindow ()) |> Expect.isTrue "it ran past the old cap"
+      r.Verdict |> Expect.equal "exactly the two tests that truly fail" (Ok (r.TrulyFailing))
+    }
+
+    testAsync "WHY — a run that reports 750 of 2000 and goes quiet is an Error naming 750 reported and 1250 not, and never an Ok" {
+      let script = paced 2 2000 25 2.2 Set.empty (Some 30)
+      let! r = virtualRun Waiter.Real WorkerCap.Uncapped script
+      match r.Verdict with
+      | Error reason ->
+        reason |> Expect.stringContains "the count that reported" "750 reported"
+        reason |> Expect.stringContains "the count that did not" "1250 did not"
+      | Ok failing -> failtestf "a run that went quiet was answered Ok with %d failing" failing.Length
+    }
+
+    testAsync "SAFETY — no seeded run, quiet or not, is ever answered Ok with a failing or unreported test left out" {
+      let! runs = [ 1 .. 200 ] |> List.map (fun seed -> virtualRun Waiter.Real WorkerCap.Uncapped (runScriptOfSeed seed)) |> Async.Sequential
+      runs |> Array.toList |> List.filter (failClosed >> not) |> expectNoRun "an Ok that left a failing or unreported test out"
+    }
+
+    testAsync "EXACT — over seeded runs of up to six windows the verdict is exactly the truly failing tests, and a quiet run names its count" {
+      let! runs = [ 1 .. 400 ] |> List.map (fun seed -> virtualRun Waiter.Real WorkerCap.Uncapped (runScriptOfSeed seed)) |> Async.Sequential
+      runs
+      |> Array.toList
+      |> List.filter (progressExact >> not)
+      |> expectNoRun "a run that kept reporting was cut, or a quiet one was not named"
+    }
+
+    testAsync "TWIN — the old fixed budget over a worker that cuts at the cap answers Ok with thousands failing for a run that was reporting" {
+      let cap = Timeouts.testRunStallWindow ()
+      let script = paced 3 2000 25 2.2 Set.empty None
+      let! r = virtualRun (Waiter.FixedBudgetTwin (cap + Timeouts.testRunAwaitSlack)) (WorkerCap.CutAt cap) script
+      match r.Verdict with
+      | Ok failing -> (failing.Length > 1000) |> Expect.isTrue "most of a run whose tests all pass was read as failing"
+      | Error reason -> failtestf "expected the twin to answer Ok with the unreported failing, got %s" reason
+      progressExact r |> Expect.isFalse "EXACT separates the twin"
+    }
+
+    testAsync "TWIN — fixing the daemon's wait alone leaves the run cancelled under it, so the cap in the worker is part of the fix" {
+      let cap = Timeouts.testRunStallWindow ()
+      let script = paced 4 2000 25 2.2 Set.empty None
+      let! r = virtualRun Waiter.Real (WorkerCap.CutAt cap) script
+      progressExact r |> Expect.isFalse "a progress-based wait over a worker that still cuts at the clock is not exact"
+    }
+
+    testAsync "the seeded battery separates the twin: some seed is exact for the real pair and wrong for the twin" {
+      let cap = Timeouts.testRunStallWindow ()
+      let! separations =
+        [ 1 .. 400 ]
+        |> List.map (fun seed ->
+          async {
+            let script = runScriptOfSeed seed
+            let! real = virtualRun Waiter.Real WorkerCap.Uncapped script
+            let! twin = virtualRun (Waiter.FixedBudgetTwin (cap + Timeouts.testRunAwaitSlack)) (WorkerCap.CutAt cap) script
+            return progressExact real && not (progressExact twin)
+          })
+        |> Async.Sequential
+      separations |> Array.exists id |> Expect.isTrue "EXACT must be violated by the twin on at least one seed"
+    }
+
+    testAsync "the scenarios are deterministic: the same seed gives the same verdict and end time" {
+      let! a = virtualRun Waiter.Real WorkerCap.Uncapped (runScriptOfSeed 42)
+      let! b = virtualRun Waiter.Real WorkerCap.Uncapped (runScriptOfSeed 42)
+      (sprintf "%A %A" a.Verdict a.EndedAt) |> Expect.equal "replayable" (sprintf "%A %A" b.Verdict b.EndedAt)
+    }
+  ]

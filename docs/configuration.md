@@ -56,7 +56,7 @@ over both.
 | Stop asking NuGet for updates | `SAGEFS_UPDATE_CHECK_DISABLED` | restart |
 | Metadata-delta hot reload | `SAGEFS_METADATA_DELTA` | restart (read when a worker starts) |
 | Per-test timeout | `SAGEFS_PER_TEST_TIMEOUT_SECONDS` | live |
-| Test-run timeout | none | live |
+| Test-run stall window | none | live |
 | MCP port | `SAGEFS_MCP_PORT`, `--mcp-port` | restart |
 | Default working directory | none | live |
 | Bind host | `SAGEFS_BIND_HOST` | read-only |

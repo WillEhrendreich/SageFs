@@ -29,7 +29,7 @@ let tests =
 
     testCase "WHY — every pilot's name appears, so no setting is silently dropped from the panel" <| fun _ ->
       let html = renderAllDefault ()
-      for name in [ "Per-test timeout"; "Test-run timeout"; "MCP port"; "Bind host" ] do
+      for name in [ "Per-test timeout"; "Test-run stall window"; "MCP port"; "Bind host" ] do
         html |> Expect.stringContains (sprintf "panel shows %s" name) name
 
     testCase "WHY — settings are grouped by category, so the panel is organised not flat" <| fun _ ->
